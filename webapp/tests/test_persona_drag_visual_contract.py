@@ -43,6 +43,23 @@ class PersonaDragVisualContractTests(unittest.TestCase):
         self.assertIn("if (!drag.hasDropTarget)", SCRIPT)
         self.assertIn("if (pointerDrag.pending || pointerDrag.active) cleanupPersonaPointerDrag();", SCRIPT)
 
+    def test_touch_reordering_requires_a_long_press_without_blocking_scroll(self):
+        self.assertIn("const REORDER_LONG_PRESS_MS = 420;", SCRIPT)
+        self.assertIn("function pointerReorderNeedsLongPress(event)", SCRIPT)
+        self.assertIn("function armPointerReorderLongPress(drag, activate)", SCRIPT)
+        self.assertIn("function pointerReorderMovedBeforeLongPress(drag, clientX, clientY)", SCRIPT)
+        self.assertIn("function handleLongPressReorderTouchMove(event)", SCRIPT)
+        self.assertIn("armPointerReorderLongPress(drag, () =>", SCRIPT)
+        self.assertIn("if (pointerReorderMovedBeforeLongPress(drag, event.clientX, event.clientY))", SCRIPT)
+        self.assertIn("cleanupPersonaPointerDrag();", SCRIPT)
+        self.assertIn(
+            'document.addEventListener("touchmove", handleLongPressReorderTouchMove, { passive: false });',
+            SCRIPT,
+        )
+        draggable_rule = css_rule(".persona-draggable-card")
+        self.assertIn("touch-action: pan-y;", draggable_rule)
+        self.assertNotIn("touch-action: none;", draggable_rule)
+
 
 if __name__ == "__main__":
     unittest.main()

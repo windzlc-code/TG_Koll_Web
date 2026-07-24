@@ -255,6 +255,15 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("grabOffsetY: event.clientY - cardRect.top", self.script)
         self.assertIn("event.clientX - drag.grabOffsetX", self.script)
         self.assertIn("event.clientY - drag.grabOffsetY", self.script)
+        self.assertGreaterEqual(self.script.count("armPointerReorderLongPress(drag, () =>"), 3)
+        self.assertGreaterEqual(
+            self.script.count("pointerReorderMovedBeforeLongPress(drag, event.clientX, event.clientY)"),
+            3,
+        )
+        upload_order_styles = self.styles.split(".file-chip-order {", 1)[1].split("}", 1)[0]
+        persona_order_styles = self.styles.split(".persona-edit-media-order {", 1)[1].split("}", 1)[0]
+        self.assertIn("touch-action: pan-y;", upload_order_styles)
+        self.assertIn("touch-action: pan-y;", persona_order_styles)
 
     def test_persona_media_drag_ghost_preserves_pointer_grab_position(self):
         self.assertIn("grabOffsetX: event.clientX - sourceRect.left", self.script)
@@ -316,7 +325,7 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             1,
         )[0]
         self.assertIn("drag.captureTarget?.setPointerCapture?.(event.pointerId);", pointer_move)
-        self.assertIn("if (explicitHandle) event.preventDefault();", pointer_down)
+        self.assertIn("if (explicitHandle && !pointerReorderNeedsLongPress(event)) event.preventDefault();", pointer_down)
         self.assertIn("function handleUploadSortKeydown(event)", self.script)
         self.assertIn('document.addEventListener("keydown", handleUploadSortKeydown, true);', self.script)
 

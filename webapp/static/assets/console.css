@@ -3004,7 +3004,8 @@ textarea:focus {
   font-weight: 900;
   line-height: 1;
   cursor: grab;
-  touch-action: none;
+  touch-action: pan-y;
+  -webkit-touch-callout: none;
   user-select: none;
   box-shadow: none;
 }
@@ -3617,7 +3618,8 @@ body.upload-media-sorting {
 .persona-draggable-card {
   cursor: grab;
   will-change: transform;
-  touch-action: none;
+  touch-action: pan-y;
+  -webkit-touch-callout: none;
   user-select: none;
   -webkit-user-drag: none;
   -webkit-user-select: none;
@@ -8932,7 +8934,8 @@ body.persona-touch-dragging .persona-list-card:active {
   font-weight: 900;
   line-height: 1;
   cursor: grab;
-  touch-action: none;
+  touch-action: pan-y;
+  -webkit-touch-callout: none;
   user-select: none;
   box-shadow: none;
 }

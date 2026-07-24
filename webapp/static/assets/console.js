@@ -14,8 +14,57 @@ const TASK_QUEUE_PERSONA_PAGE_SIZE_KEY = "wk-task-queue-persona-page-size";
 const TASK_QUEUE_REGULAR_PAGE_SIZE_KEY = "wk-task-queue-regular-page-size";
 const LIVE_BROWSER_LAYOUT_KEY = "wk-live-browser-layout";
 const MOBILE_NAV_QUERY = "(max-width: 980px)";
+const REORDER_LONG_PRESS_MS = 420;
+const REORDER_LONG_PRESS_MOVE_TOLERANCE = 10;
 const ADMIN_WORKSPACE_USER_ID = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
 const ADMIN_CONSOLE_SESSION = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
+
+function pointerReorderNeedsLongPress(event) {
+  return ["touch", "pen"].includes(String(event?.pointerType || "").toLowerCase());
+}
+
+function clearPointerReorderLongPress(drag) {
+  if (drag?.longPressTimer) clearTimeout(drag.longPressTimer);
+  if (drag) drag.longPressTimer = 0;
+}
+
+function armPointerReorderLongPress(drag, activate) {
+  if (!drag?.requiresLongPress) {
+    drag.longPressReady = true;
+    return;
+  }
+  clearPointerReorderLongPress(drag);
+  drag.longPressReady = false;
+  drag.longPressTimer = window.setTimeout(() => {
+    drag.longPressTimer = 0;
+    if (!drag.pending || drag.active) return;
+    drag.longPressReady = true;
+    activate?.();
+  }, REORDER_LONG_PRESS_MS);
+}
+
+function pointerReorderMovedBeforeLongPress(drag, clientX, clientY) {
+  if (!drag?.requiresLongPress || drag.longPressReady) return false;
+  return Math.max(
+    Math.abs(Number(clientX) - Number(drag.startX)),
+    Math.abs(Number(clientY) - Number(drag.startY)),
+  ) > REORDER_LONG_PRESS_MOVE_TOLERANCE;
+}
+
+function handleLongPressReorderTouchMove(event) {
+  const drags = [
+    uploadPointerDrag,
+    state.personaPointerDrag,
+    state.personaMediaPointerDrag,
+  ];
+  if (event.cancelable && drags.some((drag) => (
+    drag?.pending
+    && drag.requiresLongPress
+    && drag.longPressReady
+  ))) {
+    event.preventDefault();
+  }
+}
 
 function adminWorkspaceRequestOptions(options = {}) {
   if (!ADMIN_WORKSPACE_USER_ID && !ADMIN_CONSOLE_SESSION) return options;
@@ -9128,6 +9177,7 @@ function uploadSortTargetIndex(zone, clientX, clientY, fallbackIndex) {
 function cleanupUploadPointerDrag() {
   if (!uploadPointerDrag) return;
   const { captureTarget, pointerId } = uploadPointerDrag;
+  clearPointerReorderLongPress(uploadPointerDrag);
   try {
     if (captureTarget?.hasPointerCapture?.(pointerId)) {
       captureTarget.releasePointerCapture(pointerId);
@@ -9139,6 +9189,7 @@ function cleanupUploadPointerDrag() {
     card.classList.remove("is-upload-drop-target");
   });
   uploadPointerDrag.ghost?.remove();
+  uploadPointerDrag.card?.classList.remove("is-reorder-armed");
   document.body.classList.remove("upload-media-sorting");
   uploadPointerDrag = null;
 }
@@ -9157,7 +9208,7 @@ function handleUploadSortPointerDown(event) {
   const input = zone?.querySelector?.(".upload-zone-input");
   const fromIndex = Number(card?.dataset?.uploadSortCard);
   if (!handle || !card || !zone || !input || !Number.isInteger(fromIndex)) return;
-  if (explicitHandle) event.preventDefault();
+  if (explicitHandle && !pointerReorderNeedsLongPress(event)) event.preventDefault();
   const cardRect = card.getBoundingClientRect();
   uploadPointerDrag = {
     pointerId: event.pointerId,
@@ -9174,12 +9225,26 @@ function handleUploadSortPointerDown(event) {
     zone,
     input,
     ghost: null,
+    pending: true,
+    requiresLongPress: pointerReorderNeedsLongPress(event),
+    longPressReady: false,
+    longPressTimer: 0,
   };
+  const drag = uploadPointerDrag;
+  armPointerReorderLongPress(drag, () => {
+    if (uploadPointerDrag !== drag) return;
+    drag.card?.classList.add("is-reorder-armed");
+  });
 }
 
 function handleUploadSortPointerMove(event) {
   const drag = uploadPointerDrag;
   if (!drag || drag.pointerId !== event.pointerId) return;
+  if (pointerReorderMovedBeforeLongPress(drag, event.clientX, event.clientY)) {
+    cleanupUploadPointerDrag();
+    return;
+  }
+  if (drag.requiresLongPress && !drag.longPressReady) return;
   const distance = Math.max(Math.abs(event.clientX - drag.startX), Math.abs(event.clientY - drag.startY));
   if (!drag.active && distance < 7) return;
   event.preventDefault();
@@ -9195,6 +9260,7 @@ function handleUploadSortPointerMove(event) {
     document.body.appendChild(ghost);
     drag.active = true;
     drag.ghost = ghost;
+    drag.card.classList.remove("is-reorder-armed");
     drag.card.classList.add("is-upload-sorting");
     drag.handle.classList.add("is-dragging");
     document.body.classList.add("upload-media-sorting");
@@ -13187,6 +13253,9 @@ function defaultPersonaPointerDrag() {
   return {
     active: false,
     pending: false,
+    requiresLongPress: false,
+    longPressReady: true,
+    longPressTimer: 0,
     id: "",
     fromGroupId: "",
     pointerId: 0,
@@ -13208,13 +13277,14 @@ function defaultPersonaPointerDrag() {
 
 function cleanupPersonaPointerDrag() {
   const drag = state.personaPointerDrag || {};
+  clearPointerReorderLongPress(drag);
   if (state.personaPointerRaf) {
     cancelAnimationFrame(state.personaPointerRaf);
     state.personaPointerRaf = 0;
   }
   if (drag.ghost?.parentNode) drag.ghost.parentNode.removeChild(drag.ghost);
   if (drag.source) {
-    drag.source.classList.remove("is-pointer-dragging", "is-dragging", "is-drag-source-hidden");
+    drag.source.classList.remove("is-pointer-dragging", "is-dragging", "is-drag-source-hidden", "is-reorder-armed");
     try {
       drag.source.releasePointerCapture?.(drag.pointerId);
     } catch {}
@@ -13297,6 +13367,10 @@ function schedulePersonaPointerDragFrame() {
 function startPersonaPointerDrag(event) {
   const drag = state.personaPointerDrag || {};
   if (!drag.pending || drag.active || drag.pointerId !== event.pointerId || !drag.source) return;
+  clearPointerReorderLongPress(drag);
+  try {
+    drag.source.setPointerCapture?.(event.pointerId);
+  } catch {}
   drag.active = true;
   drag.currentX = event.clientX;
   drag.currentY = event.clientY;
@@ -13310,6 +13384,7 @@ function startPersonaPointerDrag(event) {
     drag.grabOffsetY,
   );
   drag.source.classList.add("is-pointer-dragging", "is-dragging", "is-drag-source-hidden");
+  drag.source.classList.remove("is-reorder-armed");
   document.body.classList.add("persona-touch-dragging");
   schedulePersonaPointerDragFrame();
 }
@@ -13353,6 +13428,8 @@ function handlePersonaPointerDown(event) {
   state.personaPointerDrag = {
     ...defaultPersonaPointerDrag(),
     pending: true,
+    requiresLongPress: pointerReorderNeedsLongPress(event),
+    longPressReady: !pointerReorderNeedsLongPress(event),
     id: String(card.dataset.personaDragPersona || ""),
     fromGroupId: String(card.dataset.groupId || ""),
     pointerId: event.pointerId,
@@ -13366,21 +13443,33 @@ function handlePersonaPointerDown(event) {
     sourceHeight: rect.height,
     source: card,
   };
-  try {
-    card.setPointerCapture?.(event.pointerId);
-  } catch {}
+  const drag = state.personaPointerDrag;
+  armPointerReorderLongPress(drag, () => {
+    if (state.personaPointerDrag !== drag) return;
+    drag.source?.classList.add("is-reorder-armed");
+  });
+  if (!drag.requiresLongPress) {
+    try {
+      card.setPointerCapture?.(event.pointerId);
+    } catch {}
+  }
 }
 
 function handlePersonaPointerMove(event) {
   const drag = state.personaPointerDrag || {};
   if (!drag.pending || drag.pointerId !== event.pointerId) return;
+  drag.currentX = event.clientX;
+  drag.currentY = event.clientY;
+  if (pointerReorderMovedBeforeLongPress(drag, event.clientX, event.clientY)) {
+    cleanupPersonaPointerDrag();
+    return;
+  }
+  if (drag.requiresLongPress && !drag.longPressReady) return;
   const dx = event.clientX - drag.startX;
   const dy = event.clientY - drag.startY;
   if (!drag.active && Math.max(Math.abs(dx), Math.abs(dy)) < 8) return;
   event.preventDefault();
   if (!drag.active) startPersonaPointerDrag(event);
-  drag.currentX = event.clientX;
-  drag.currentY = event.clientY;
   schedulePersonaPointerDragFrame();
 }
 
@@ -16074,6 +16163,9 @@ function defaultPersonaMediaPointerDrag() {
   return {
     active: false,
     pending: false,
+    requiresLongPress: false,
+    longPressReady: true,
+    longPressTimer: 0,
     pointerId: 0,
     startX: 0,
     startY: 0,
@@ -16092,12 +16184,13 @@ function defaultPersonaMediaPointerDrag() {
 
 function cleanupPersonaMediaPointerDrag() {
   const drag = state.personaMediaPointerDrag || {};
+  clearPointerReorderLongPress(drag);
   try {
     if (drag.captureTarget?.hasPointerCapture?.(drag.pointerId)) {
       drag.captureTarget.releasePointerCapture(drag.pointerId);
     }
   } catch {}
-  drag.source?.classList.remove("is-media-dragging");
+  drag.source?.classList.remove("is-media-dragging", "is-reorder-armed");
   drag.handle?.classList.remove("is-dragging");
   if (drag.ghost?.parentNode) drag.ghost.parentNode.removeChild(drag.ghost);
   document.querySelectorAll(".persona-edit-media-card.is-media-drop-target").forEach((card) => {
@@ -16178,6 +16271,8 @@ function handlePersonaMediaPointerDown(event) {
   state.personaMediaPointerDrag = {
     ...defaultPersonaMediaPointerDrag(),
     pending: true,
+    requiresLongPress: pointerReorderNeedsLongPress(event),
+    longPressReady: !pointerReorderNeedsLongPress(event),
     pointerId: event.pointerId,
     startX: event.clientX,
     startY: event.clientY,
@@ -16191,18 +16286,28 @@ function handlePersonaMediaPointerDown(event) {
     handle: explicitHandle,
     captureTarget: source,
   };
+  const drag = state.personaMediaPointerDrag;
+  armPointerReorderLongPress(drag, () => {
+    if (state.personaMediaPointerDrag !== drag) return;
+    drag.source?.classList.add("is-reorder-armed");
+  });
 }
 
 function handlePersonaMediaPointerMove(event) {
   const drag = state.personaMediaPointerDrag || {};
   if (!drag.pending || drag.pointerId !== event.pointerId) return;
+  drag.currentX = event.clientX;
+  drag.currentY = event.clientY;
+  if (pointerReorderMovedBeforeLongPress(drag, event.clientX, event.clientY)) {
+    cleanupPersonaMediaPointerDrag();
+    return;
+  }
+  if (drag.requiresLongPress && !drag.longPressReady) return;
   const dx = event.clientX - drag.startX;
   const dy = event.clientY - drag.startY;
   if (!drag.active && Math.max(Math.abs(dx), Math.abs(dy)) < 7) return;
   event.preventDefault();
   if (!drag.active) startPersonaMediaPointerDrag(event);
-  drag.currentX = event.clientX;
-  drag.currentY = event.clientY;
   if (drag.ghost) {
     drag.ghost.style.transform = `translate3d(${Math.round(event.clientX - drag.grabOffsetX)}px, ${Math.round(event.clientY - drag.grabOffsetY)}px, 0)`;
   }
@@ -23109,6 +23214,7 @@ function bindEvents() {
     });
     $("accountGrid").addEventListener("pointerdown", handlePersonaPointerDown);
   }
+  document.addEventListener("touchmove", handleLongPressReorderTouchMove, { passive: false });
   document.addEventListener("pointermove", handlePersonaPointerMove, { passive: false });
   document.addEventListener("pointermove", handlePersonaMediaPointerMove, { passive: false });
   document.addEventListener("pointerup", handlePersonaPointerUp, { passive: false });
