@@ -334,6 +334,71 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             handler.index('event.target.closest("[data-workspace-view]")'),
         )
 
+    def test_mobile_persona_repeat_click_reopens_the_existing_persona_drawer(self):
+        handler_start = self.console_script.index(
+            "const handleWorkspaceModuleNavigation = async (event) => {"
+        )
+        handler_end = self.console_script.index(
+            '\n  $("moduleMenu").addEventListener', handler_start
+        )
+        handler = self.console_script[handler_start:handler_end]
+
+        self.assertIn('dockButton?.dataset.module === "personas"', handler)
+        self.assertIn(
+            'setPersonaMobileSidebarOpen(true, "personaWorkspaceSidebar");',
+            handler,
+        )
+        module_branch = handler[handler.index('const button = event.target.closest("[data-module]")'):]
+        self.assertIn(
+            'const reopenPersonaWorkspaceSidebar = isMobileNavMode() && button.dataset.module === "personas";',
+            module_branch,
+        )
+        self.assertLess(
+            module_branch.index("setModule(button.dataset.module);"),
+            module_branch.index(
+                'setPersonaMobileSidebarOpen(true, "personaWorkspaceSidebar");'
+            ),
+        )
+
+    def test_mobile_profile_header_exposes_the_existing_persona_create_action(self):
+        settings_start = self.console_script.index(
+            "function renderPersonaSettingsPanelV2("
+        )
+        settings_end = self.console_script.index(
+            "\nfunction renderPersonaAccountPanelV2", settings_start
+        )
+        settings = self.console_script[settings_start:settings_end]
+
+        self.assertIn("persona-profile-base-head", settings)
+        self.assertIn("persona-profile-new-button", settings)
+        self.assertIn("data-persona-open-create", settings)
+        self.assertIn("新建人设", settings)
+        self.assertIn(
+            "/* Mobile persona profile create shortcut. */",
+            self.styles,
+        )
+        mobile_styles = self.styles[
+            self.styles.index("/* Mobile persona profile create shortcut. */"):
+        ]
+        self.assertIn(".persona-profile-new-button", mobile_styles)
+        self.assertIn("display: inline-flex;", mobile_styles)
+
+    def test_selecting_the_current_persona_exits_persona_create_mode(self):
+        selection_start = self.console_script.index(
+            'const personaSelectButton = event.target.closest("[data-persona-select]")'
+        )
+        selection_end = self.console_script.index(
+            'if (event.target.closest("[data-persona-open-create]"))',
+            selection_start,
+        )
+        selection = self.console_script[selection_start:selection_end]
+
+        self.assertIn("const wasCreatingPersona = state.personaCreateMode;", selection)
+        self.assertIn(
+            "if (nextPersonaId !== previousPersonaId || wasCreatingPersona)",
+            selection,
+        )
+
     def test_mobile_dock_repeat_click_checks_exact_account_panel(self):
         helper_start = self.console_script.index(
             "function isCurrentMobileTaskDockTarget(button)"

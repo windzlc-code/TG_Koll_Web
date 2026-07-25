@@ -3294,6 +3294,10 @@ body.upload-media-sorting {
   gap: 4px;
 }
 
+.persona-profile-new-button {
+  display: none;
+}
+
 .persona-head-copy--split {
   display: flex;
   align-items: flex-start;
@@ -17856,6 +17860,28 @@ body.console-page {
 
   .persona-detail-summary-panel .persona-workbench-head {
     display: none;
+  }
+
+  /* Mobile persona profile create shortcut. */
+  .console-page .persona-detail .persona-profile-base-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .console-page .persona-detail .persona-profile-new-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    min-height: 32px;
+    padding: 5px 9px;
+    white-space: nowrap;
+  }
+
+  .console-page .persona-detail .persona-profile-new-button .ui-action-icon {
+    width: 16px;
+    height: 16px;
   }
 
   .publish-post-card-main {

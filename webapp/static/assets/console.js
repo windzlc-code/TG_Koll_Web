@@ -7999,9 +7999,13 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
   }
   return `
     <div class="persona-inline-panel">
-      <div class="persona-head-copy">
+      <div class="persona-head-copy persona-profile-base-head">
         <strong>基础资料</strong>
         <span class="persona-panel-intro">名称、简介、头像、链接和推文风格分别设置，保存后会立即同步当前人设。</span>
+        <button type="button" class="primary persona-profile-new-button" data-persona-open-create>
+          ${renderPlusIcon()}
+          <span>新建人设</span>
+        </button>
       </div>
       <div class="persona-profile-long-page">
         ${renderPersonaContentOverview(persona, account, profile)}
@@ -23222,6 +23226,10 @@ function bindEvents() {
     const dockButton = event.target.closest(".mobile-task-dock-button");
     if (isCurrentMobileTaskDockTarget(dockButton)) {
       event.preventDefault();
+      if (dockButton?.dataset.module === "personas") {
+        setPersonaMobileSidebarOpen(true, "personaWorkspaceSidebar");
+        return;
+      }
       scrollConsolePageToTop();
       return;
     }
@@ -23240,6 +23248,7 @@ function bindEvents() {
     }
     const button = event.target.closest("[data-module]");
     if (button) {
+      const reopenPersonaWorkspaceSidebar = isMobileNavMode() && button.dataset.module === "personas";
       if (button.dataset.module !== state.activeModule && state.view === "workspace" && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
       if (button.dataset.module !== state.activeModule && state.view === "workspace" && !(await confirmLeaveTransientWorkspaceState())) return;
       setMenuClickHighlight(button, button.closest(".module-accordion-item") || button);
@@ -23248,6 +23257,9 @@ function bindEvents() {
         setView("workspace");
       }
       setModule(button.dataset.module);
+      if (reopenPersonaWorkspaceSidebar) {
+        setPersonaMobileSidebarOpen(true, "personaWorkspaceSidebar");
+      }
     }
   };
   $("moduleMenu").addEventListener("click", handleWorkspaceModuleNavigation);
@@ -24254,8 +24266,9 @@ function bindEvents() {
       if (nextPersonaId !== String(state.selectedPersonaId || "") && !(await confirmLeaveTransientWorkspaceState())) return;
       clearMsg("commandMsg");
       const previousPersonaId = String(state.selectedPersonaId || "");
+      const wasCreatingPersona = state.personaCreateMode;
       state.selectedPersonaId = nextPersonaId;
-      if (nextPersonaId !== previousPersonaId) resetPersonaWorkspaceStateOnSwitch(nextPersonaId);
+      if (nextPersonaId !== previousPersonaId || wasCreatingPersona) resetPersonaWorkspaceStateOnSwitch(nextPersonaId);
       else setSelectedPersonaPostId("");
       state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
       renderPersonaModule();
