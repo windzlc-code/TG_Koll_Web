@@ -181,6 +181,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         cls.admin_js = (cls.static_dir / "assets" / "admin.js").read_text(encoding="utf-8")
         cls.console_js = (cls.static_dir / "assets" / "console.js").read_text(encoding="utf-8")
         cls.admin_html = (cls.static_dir / "admin.html").read_text(encoding="utf-8")
+        cls.admin_login_html = (cls.static_dir / "admin-login.html").read_text(encoding="utf-8")
         cls.auth_js = (cls.static_dir / "assets" / "auth.js").read_text(encoding="utf-8")
         cls.automation_log_html = (cls.static_dir / "persona-automation-log.html").read_text(encoding="utf-8")
         cls.server_source = Path(server.__file__).read_text(encoding="utf-8")
@@ -188,6 +189,17 @@ class PublicLoginUiSourceTests(unittest.TestCase):
     def test_backdrop_click_does_not_close_login(self):
         self.assertNotIn("if (event.target === loginModal) closeLogin()", self.script)
         self.assertIn('[data-close-login]', self.script)
+
+    def test_admin_login_return_home_exits_stale_admin_browser_context(self):
+        self.assertIn('data-auth-return-public-home', self.admin_login_html)
+        return_home_handler = self.auth_js.split(
+            'document.querySelectorAll("[data-auth-return-public-home]")',
+            1,
+        )[1].split(
+            'document.querySelectorAll("[data-auth-password-toggle]")',
+            1,
+        )[0]
+        self.assertIn("clearAdminBrowserContext();", return_home_handler)
 
     def test_home_navigation_opens_console_or_existing_login_dialog(self):
         page = (self.static_dir / "index.html").read_text(encoding="utf-8")

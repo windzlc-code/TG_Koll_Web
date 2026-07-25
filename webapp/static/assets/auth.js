@@ -214,6 +214,12 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  document.querySelectorAll("[data-auth-return-public-home]").forEach((link) => {
+    link.addEventListener("click", () => {
+      clearAdminBrowserContext();
+    });
+  });
+
   document.querySelectorAll("[data-auth-password-toggle]").forEach((button) => {
     button.addEventListener("click", () => {
       const input = document.getElementById(button.getAttribute("aria-controls") || "");
