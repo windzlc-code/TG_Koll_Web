@@ -407,8 +407,8 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             ".proxy-market-page .proxy-market-facts",
         ):
             self.assertIn(selector, self.fixed_light_styles)
-        self.assertIn("--public-cool: #356b91", self.fixed_light_styles)
-        self.assertIn("--public-warm: #fff3e8", self.fixed_light_styles)
+        self.assertIn("--public-cool: #4b6478", self.fixed_light_styles)
+        self.assertIn("--public-warm: #f5f1ec", self.fixed_light_styles)
         self.assertNotIn(".home-canvas .home-media-card img {", self.fixed_light_styles)
         self.assertNotIn(".about-canvas .about-hero-shade {", self.fixed_light_styles)
 
@@ -421,8 +421,8 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             '.site-nav a[aria-current="page"]::after',
         ):
             self.assertIn(selector, self.fixed_light_styles)
-        self.assertIn("--public-cool: #356b91", self.fixed_light_styles)
-        self.assertIn("--public-warm-accent: #c46b32", self.fixed_light_styles)
+        self.assertIn("--public-cool: #4b6478", self.fixed_light_styles)
+        self.assertIn("--public-warm-accent: #8a674d", self.fixed_light_styles)
         self.assertIn("background: var(--public-paper)", self.fixed_light_styles)
 
     def test_public_dark_theme_covers_forms_cards_and_dialogs(self):
