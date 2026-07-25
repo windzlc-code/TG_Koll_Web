@@ -2688,8 +2688,36 @@ function sanitizeTaskUserMessage(value, { fallback = "步骤已记录。" } = {}
     "Comment target was not found; continuing browse": "未定位到评论目标，继续浏览。",
     "Reply target was not found; switching target": "未定位到回复目标，继续切换目标。",
     "Reply backfill failed; switching target": "补回复失败，继续切换目标。",
+    "Task cancelled: user_cancel.": "任务已取消：用户主动取消。",
+    "Task cancelled: user_cancel_all.": "任务已取消：用户停止全部任务。",
+    "Background browser page opened for a non-disruptive check.": "已打开后台浏览器页面进行无干扰检测。",
+    "Background page unavailable; using the primary page.": "后台检测页面不可用，已改用当前浏览器页面继续检测。",
+    "Publish batch task started.": "批次发布任务已开始。",
+    "Threads media attachment preview is ready.": "Threads 媒体文件已上传并显示预览。",
+    "Threads login check failed before publishing; trying automatic recovery before manual handoff.": "发布前登录检测未通过，系统正在自动修复；仍未恢复时才会转入人工处理。",
+    "Threads authenticated UI was not detected yet": "暂未识别到 Threads 登录后的页面，正在继续确认。",
+    "Threads check-login completion node detected": "已识别 Threads 登录检测完成节点。",
   };
   if (exactMap[raw]) return exactMap[raw];
+  if (/^task cancelled:/i.test(raw)) {
+    return "任务已取消。";
+  }
+  if (lower.includes("background browser page opened")) {
+    return "已打开后台浏览器页面进行无干扰检测。";
+  }
+  if (lower.includes("background page unavailable")) {
+    return "后台检测页面不可用，已改用当前浏览器页面继续检测。";
+  }
+  if (lower.includes("login is unstable") && lower.includes("automatic recovery attempt")) {
+    const attempt = raw.match(/attempt\s+(\d+)/i)?.[1] || "";
+    return `登录状态不稳定，正在进行第 ${attempt || "1"} 次自动修复。`;
+  }
+  if (lower.includes("screenshot failed")) {
+    return "页面截图失败，系统将继续执行或按策略重试。";
+  }
+  if (lower.includes("authenticated ui") && (lower.includes("not detected") || lower.includes("not visible"))) {
+    return "暂未识别到登录后的页面，正在继续确认。";
+  }
   if (lower.startsWith("using text input mode:")) {
     const mode = raw.split(":").slice(1).join(":").trim();
     const modeLabel = { paste: "粘贴", fill: "填充", type: "逐字输入" }[mode.toLowerCase()] || mode;
@@ -2806,6 +2834,11 @@ function sanitizeTaskUserMessage(value, { fallback = "步骤已记录。" } = {}
     .trim();
   if (!text) return fallback;
   if (text.length > 180) text = `${text.slice(0, 180)}...`;
+  if (!/[\u3400-\u9fff]/.test(text) && /[A-Za-z]{3,}/.test(text)) {
+    return /(failed|error|unavailable|unable|not\s|timeout|closed)/i.test(text)
+      ? "执行步骤未完成，系统将按当前策略继续处理或重试。"
+      : fallback;
+  }
   return text;
 }
 
@@ -2900,12 +2933,43 @@ function logStageLabel(stage, level) {
     publish_next_2: "发布确认",
     publish_confirm: "确认发布结果",
     threads_publish_confirm: "确认 Threads 发布",
+    force_stop: "强制停止",
+    cancel: "任务取消",
+    cancel_all: "停止全部任务",
+    publish_login_probe: "发布前登录检测",
+    publish_batch_item_started: "批次发布进度",
+    browser_ready: "浏览器已就绪",
+    profile_lock_present: "检查浏览器会话",
+    retry: "自动重试",
+    live_browser_failed: "实时监控降级",
+    threads_publish_baseline_background: "发布前后台检测",
+    threads_publish_evidence_background: "发布结果后台检测",
+    threads_publish_confirmation_background: "发布确认后台检测",
+    threads_manual_publish_detection: "人工发布检测",
+    publish_submission_armed: "锁定发布提交",
+    threads_publish_confirmation_persisted: "保存发布确认状态",
+    threads_publish_result: "打开发布结果",
+    publish_evidence_not_ready: "发布凭证待稳定",
+    publish_evidence_retry: "重试发布凭证",
+    manual_takeover_requested: "请求人工接管",
+    manual_publish_takeover: "人工接管发布",
+    manual_publish_complete: "人工发布完成",
+    manual_takeover_resolved: "人工接管完成",
+    login_self_heal: "登录自动修复",
+    publish_submitted_unconfirmed: "发布结果待确认",
+    threads_publish_upload_ready: "媒体上传完成",
+    publish_login_repair: "发布前登录修复",
     reply_target: "定位回复目标",
     info: "日志",
     warn: "警告",
     error: "错误",
   };
-  return map[key] || statusLabel(key) || "日志";
+  if (map[key]) return map[key];
+  if (key.startsWith("threads_publish_") || key.startsWith("publish_")) return "发布执行步骤";
+  if (key.startsWith("auto_login_") || key.startsWith("login_")) return "登录执行步骤";
+  if (key.startsWith("manual_")) return "人工处理步骤";
+  if (key.startsWith("live_browser_")) return "实时浏览器步骤";
+  return "执行步骤";
 }
 
 function currentModule() {

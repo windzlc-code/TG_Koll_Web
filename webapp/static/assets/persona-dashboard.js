@@ -1444,10 +1444,32 @@ function pdAutomationLogStepText(row) {
     need_manual: "需要人工介入",
     cancel: "任务已取消",
     force_stop: "已强制关闭浏览器",
+    publish_login_probe: "发布前登录检测",
+    publish_batch_item_started: "批次发布进度",
+    publish_done: "发布完成",
+    threads_publish_open: "打开发布页面",
+    threads_publish_focus: "聚焦发布输入框",
+    threads_publish_submit: "提交发布内容",
+    manual_login_recovery_expired: "人工登录恢复已过期",
+    manual_recovery_expired: "人工恢复已过期",
   };
   if (map[stage]) return map[stage];
   if (task && stage === "queued") return `${task} 已加入队列`;
-  return String((row && row.message) || stage || "正在执行");
+  return pdAutomationPublicText((row && row.message) || "", "执行步骤");
+}
+
+function pdAutomationPublicText(value, fallback = "步骤已记录") {
+  const raw = String(value || "").trim();
+  if (!raw) return fallback;
+  const map = {
+    "Task cancelled: user_cancel.": "任务已取消：用户主动取消。",
+    "Task cancelled: user_cancel_all.": "任务已取消：用户停止全部任务。",
+    "Background browser page opened for a non-disruptive check.": "已打开后台浏览器页面进行无干扰检测。",
+    "Background page unavailable; using the primary page.": "后台检测页面不可用，已改用当前浏览器页面继续检测。",
+    "Publish batch task started.": "批次发布任务已开始。",
+  };
+  if (map[raw]) return map[raw];
+  return /[\u3400-\u9fff]/.test(raw) ? raw : fallback;
 }
 
 function pdAutomationLogDetailText(row) {
@@ -1476,6 +1498,7 @@ function pdAutomationLogDetailText(row) {
   if (!parts.length && stage === "failed") parts.push("任务失败，请查看当前步骤或截图");
   if (!parts.length && stage === "need_manual") parts.push("自动脚本已停在人工接管节点，请在打开的浏览器里完成验证或确认");
   if (!parts.length && stage === "cancel") parts.push("用户已取消任务");
+  if (!parts.length && row && row.message) parts.push(pdAutomationPublicText(row.message));
   return parts.join(" · ");
 }
 
