@@ -909,9 +909,8 @@
     if (!header || header.dataset.siteMode !== "public") return;
     const actions = header.querySelector(".header-actions");
     if (!actions) return;
-    actions.querySelectorAll("[data-open-login], .site-guest-action").forEach((node) => node.remove());
+    actions.querySelectorAll("[data-open-login]").forEach((node) => node.remove());
     actions.querySelectorAll(":scope > .site-global-controls").forEach((node) => node.remove());
-    actions.querySelectorAll(".site-mobile-menu-extra").forEach((node) => node.remove());
     installUnifiedAccountMenu(header, header.dataset.sitePage || "home");
     header.dataset.siteAuthState = "authenticated";
     bindPreferenceControls(header);

@@ -39,7 +39,6 @@
             <a href="/proxy-market.html"><span data-site-copy="proxyMarket">代理商城</span></a>
             <a href="/console.html" data-console-entry><span data-site-copy="console">控制台</span></a>
             <a href="/about-vecto.html"><span data-site-copy="aboutVecto">了解 Vecto</span></a>
-            <a class="site-mobile-menu-extra" href="#contact"><span data-site-copy="guest">遊客申請</span></a>
           </nav>
         </details>
         <a class="site-icon-button site-subscription-link" href="/subscription.html" data-site-subscription-entry aria-label="訂閱方案" title="訂閱方案">
@@ -50,8 +49,7 @@
             <svg class="site-language-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path></svg><span class="site-language-state" data-site-language-state>繁</span>
           </button>
         </div>
-        <button class="header-login" type="button" data-open-login><span data-site-copy="login">帳號登入</span></button>
-        <a class="header-action site-guest-action" href="#contact"><span data-site-copy="guest">遊客申請</span></a>
+        <button class="header-login" type="button" data-open-login><span data-site-copy="login">登入</span></button>
       </div>
     </header>
 
@@ -96,7 +94,7 @@
 
             <article class="home-hero-slide" role="group" aria-roledescription="slide" aria-label="第 8 張，共 8 張：團隊內容工作台" data-home-hero-scene data-home-hero-index="7" aria-hidden="true">
               <div class="home-hero-visual"><img class="home-hero-media" src="/assets/opc/home/legacy-workshop-team.jpg" alt="老方案中的團隊內容策略工作坊" width="1024" height="342" loading="lazy" /></div>
-              <div class="home-hero-copy"><p class="home-kicker">Content operations</p><h2>從一個人設，擴展到完整內容矩陣</h2><p class="home-hero-lede">把策略、素材、草稿、發布與結果放在同一工作流，讓個人能力變成團隊可複製的方法。</p><a class="home-hero-card-link" href="#contact">申請使用 <span aria-hidden="true">→</span></a></div>
+              <div class="home-hero-copy"><p class="home-kicker">Content operations</p><h2>從一個人設，擴展到完整內容矩陣</h2><p class="home-hero-lede">把策略、素材、草稿、發布與結果放在同一工作流，讓個人能力變成團隊可複製的方法。</p><a class="home-hero-card-link" href="/?register=1" data-open-register>註冊帳號 <span aria-hidden="true">→</span></a></div>
             </article>
           </div>
         </div>
@@ -314,35 +312,6 @@
         </div>
       </section>
 
-      <section class="home-contact-section" aria-labelledby="contact-title">
-        <div class="home-contact-copy" data-home-reveal>
-          <p class="home-kicker">Start with your workflow</p>
-          <h2 id="contact-title">把你的內容營運，<br />交給一套看得見的流程</h2>
-          <p>提交資料後由管理員審核授權。已有帳號可直接登入 Web 控制台。</p>
-          <button class="button home-button-secondary" type="button" data-open-login>登入現有帳號</button>
-        </div>
-
-        <form class="lead-form home-lead-form" id="contact" novalidate data-home-reveal>
-          <p class="form-kicker">遊客帳號申請</p>
-          <h2>提交資料，等待管理員授權</h2>
-          <div class="application-grid">
-            <label class="field" for="fullName"><span>姓名</span><input id="fullName" name="fullName" autocomplete="name" placeholder="請輸入姓名" aria-describedby="fullNameError" required /><small class="field-error" id="fullNameError"></small></label>
-            <label class="field" for="username"><span>登入帳號</span><input id="username" name="username" autocomplete="username" placeholder="3-32 位英文或數字" aria-describedby="usernameError" required /><small class="field-error" id="usernameError"></small></label>
-            <label class="field" for="applyPassword"><span>登入密碼</span><input id="applyPassword" name="password" type="password" autocomplete="new-password" minlength="8" placeholder="至少 8 位" aria-describedby="applyPasswordError" required /><small class="field-error" id="applyPasswordError"></small></label>
-            <label class="field" for="email"><span>電子信箱</span><input id="email" name="email" type="email" autocomplete="email" placeholder="name@company.com" aria-describedby="emailError" /><small class="field-error" id="emailError"></small></label>
-          </div>
-          <div class="application-grid">
-            <label class="field" for="company"><span>公司 / 團隊</span><input id="company" name="company" type="text" autocomplete="organization" placeholder="公司或團隊名稱（選填）" /><small class="field-error"></small></label>
-            <label class="field" for="phone"><span>聯絡電話</span><input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="請輸入可聯絡的電話" aria-describedby="phoneError" required /><small class="field-error" id="phoneError"></small></label>
-          </div>
-          <label class="field" for="interest"><span>預計使用情境</span><select id="interest" name="useCase"><option value="OPC導入">OPC 導入與三帳代營運</option><option value="算力計費">算力計費與預算規劃</option><option value="私域轉化">獨立站與私域轉化閉環</option><option value="企業多套">企業多套 OPC 批量部署</option></select></label>
-          <label class="consent" for="consent"><input id="consent" name="consent" type="checkbox" required /><span>我同意提交以上資料供管理員審核帳號使用權限。</span></label>
-          <button class="submit-button" type="submit"><span>提交遊客申請</span><span aria-hidden="true">→</span></button>
-          <p class="form-note">送出後不會立即登入。管理員授權後，使用申請的帳號密碼進入 Web 控制台。</p>
-          <p class="form-status" id="formStatus" role="status" aria-live="polite"></p>
-        </form>
-      </section>
-
       <section class="home-trust-strip" aria-label="合規與風控">
         <span>內容前置審查</span><span>帳號環境隔離</span><span>任務記錄可追溯</span><span>人工處理可接管</span><span>資料資產歸屬客戶</span>
       </section>
@@ -350,7 +319,7 @@
 
     <footer class="site-footer home-footer">
       <div class="footer-brand"><span class="footer-logo-frame" aria-hidden="true"><img class="footer-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" /></span><div><strong>Vecto 維拓</strong><span>AI 社媒營運駕駛艙</span></div></div>
-      <div class="home-footer-links"><a href="#solution">解決方案</a><a href="/subscription.html">訂閱方案</a><a href="/proxy-market.html">代理商城</a><a href="#contact">申請使用</a></div>
+      <div class="home-footer-links"><a href="#solution">解決方案</a><a href="/subscription.html">訂閱方案</a><a href="/proxy-market.html">代理商城</a><a href="/?register=1" data-open-register>註冊帳號</a></div>
     </footer>
 
     <div class="auth-overlay" id="loginModal" aria-hidden="true">
@@ -367,7 +336,7 @@
           <p class="form-status" id="loginStatus" role="status" aria-live="polite"></p>
           <button class="auth-takeover-button" type="button" data-login-takeover hidden>強制登入此帳號</button>
         </form>
-        <a class="auth-guest-link" href="#contact" data-close-login>尚未有帳號？提交遊客申請</a>
+        <button class="auth-guest-link auth-switch-button" type="button" data-open-register>還沒有帳號？註冊遊客帳號</button>
       </section>
     </div>
 

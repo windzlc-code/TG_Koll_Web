@@ -1090,8 +1090,8 @@ class RegistrationApprovalTests(unittest.TestCase):
     def test_admin_entry_and_page_are_server_side_role_protected(self):
         anonymous = TestClient(self.app)
         admin_entry = anonymous.get("/admin", follow_redirects=False)
-        self.assertEqual(admin_entry.status_code, 200)
-        self.assertIn('id="adminLoginForm"', admin_entry.text)
+        self.assertEqual(admin_entry.status_code, 302)
+        self.assertEqual(admin_entry.headers["location"], "/?login=1&return_url=%2Fadmin")
 
         admin_page = anonymous.get("/admin.html", follow_redirects=False)
         self.assertEqual(admin_page.status_code, 302)
@@ -1128,8 +1128,8 @@ class RegistrationApprovalTests(unittest.TestCase):
             200,
         )
         user_entry = user.get("/admin", follow_redirects=False)
-        self.assertEqual(user_entry.status_code, 200)
-        self.assertIn('id="adminLoginForm"', user_entry.text)
+        self.assertEqual(user_entry.status_code, 302)
+        self.assertEqual(user_entry.headers["location"], "/?login=1&return_url=%2Fadmin")
         user_admin_page = user.get("/admin.html", follow_redirects=False)
         self.assertEqual(user_admin_page.status_code, 302)
         self.assertEqual(user_admin_page.headers["location"], "/admin")

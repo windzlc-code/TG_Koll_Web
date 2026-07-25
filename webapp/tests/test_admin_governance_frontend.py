@@ -49,31 +49,15 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertNotIn("assigned_admin_id", security)
 
     def test_recovery_code_fields_allow_non_numeric_codes(self):
-        login_html = (ROOT / "static" / "admin-login.html").read_text(encoding="utf-8")
-        self.assertIn('id="adminMfaCode" name="mfa_code" inputmode="text"', login_html)
+        public_login = (ROOT / "static" / "assets" / "opc" / "script.js").read_text(encoding="utf-8")
+        self.assertIn('name="mfa_code" inputmode="text"', public_login)
         for field_id in ("userStepUpTotpCode", "serviceRotateTotpCode", "userPurgeTotpCode"):
             marker = self.html[self.html.index(f'id="{field_id}"') :]
             self.assertIn('inputmode="text"', marker.split(">", 1)[0])
 
-    def test_admin_login_uses_vecto_operations_layout_without_auth_contract_drift(self):
-        login_html = (ROOT / "static" / "admin-login.html").read_text(encoding="utf-8")
-        for marker in (
-            'class="auth-shell auth-admin-shell"',
-            'class="auth-stage auth-admin-stage"',
-            'class="auth-card auth-card-product auth-admin-card"',
-            'id="adminLoginForm"',
-            'data-login-role="admin"',
-            'name="username"',
-            'name="password"',
-            'name="mfa_code"',
-            'name="remember_me"',
-            'id="authMsg"',
-        ):
-            self.assertIn(marker, login_html)
-        self.assertIn('url("/assets/opc/vecto-ai-cockpit.png")', self.styles)
-        self.assertIn("body.page-admin,\nbody.page-admin-auth", self.styles)
-        self.assertIn(".page-admin-auth .auth-admin-card", self.styles)
-        self.assertIn("@media (max-width: 560px)", self.styles)
+    def test_retired_admin_login_page_and_styles_are_removed(self):
+        self.assertFalse((ROOT / "static" / "admin-login.html").exists())
+        self.assertNotIn("page-admin-auth", self.styles)
 
     def test_admin_creation_requires_and_submits_step_up_only_for_admins(self):
         for field_id in (
@@ -131,21 +115,20 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('.admin-user-batch-bar', self.styles)
         self.assertIn('@media (max-width: 720px)', self.styles)
 
-    def test_admin_preferences_reuse_shared_navigation_without_language_toggle_binding(self):
+    def test_admin_preferences_use_fixed_dark_theme_and_shared_language(self):
         st_script = '/assets/vendor/opencc-js/st-characters.js?v=1.4.1'
         navigation_script = '/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__'
         admin_script = '/assets/admin.js?v=__ADMIN_JS_VERSION__'
         stylesheet = '/assets/style.css?v=__STYLE_VERSION__'
-        self.assertLess(self.html.index('window.localStorage.getItem("wk-console-theme")'), self.html.index(stylesheet))
+        self.assertLess(self.html.index('document.documentElement.dataset.theme = "dark"'), self.html.index(stylesheet))
         self.assertLess(self.html.index(st_script), self.html.index(admin_script))
         self.assertLess(self.html.index(navigation_script), self.html.index(admin_script))
-        self.assertIn('id="adminThemeToggle"', self.html)
-        self.assertIn('data-site-theme-toggle', self.html)
+        self.assertNotIn('id="adminThemeToggle"', self.html)
+        self.assertNotIn('data-site-theme-toggle', self.html)
         language_tag = self.html[self.html.index('id="adminLanguageToggle"') :].split('>', 1)[0]
         self.assertNotIn('data-site-language-toggle', language_tag)
         self.assertIn('data-admin-language="zh-Hans"', self.html)
         self.assertIn('data-admin-language="zh-Hant"', self.html)
-        self.assertIn('window.VectoSiteNavigation?.setTheme(nextTheme)', self.script)
         self.assertIn('window.VectoSiteNavigation?.setLanguage(option.dataset.adminLanguage)', self.script)
 
     def test_admin_language_menu_accessibility_and_ui_only_translation(self):
@@ -255,13 +238,12 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('createAdminDynamicUiText("位客户")', taxonomy)
         self.assertNotIn("markAdminDynamicUiElement(name)", taxonomy)
 
-    def test_admin_preference_icons_are_centered_and_dark_theme_is_readable(self):
+    def test_admin_language_icon_is_centered_and_dark_theme_is_readable(self):
         self.assertIn('.page-admin .admin-preference-button', self.styles)
         for declaration in ('display: grid;', 'place-items: center;', 'padding: 0;', 'line-height: 0;'):
             self.assertIn(declaration, self.styles)
         self.assertIn('.page-admin .admin-language-toggle svg', self.styles)
         self.assertIn('display: block;', self.styles)
-        self.assertIn('.admin-preference-button .admin-theme-icon-sun', self.styles)
         self.assertIn('html[data-theme="dark"] body.page-admin', self.styles)
         self.assertIn('#secOverview > .admin-governance-head', self.styles)
         for surface in ('modal-card', 'admin-profile-panel', 'table th', 'input'):

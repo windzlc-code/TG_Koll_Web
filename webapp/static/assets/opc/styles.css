@@ -371,7 +371,7 @@ select:focus {
 .auth-overlay {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: 300;
   display: grid;
   place-items: center;
   padding: 20px;
@@ -399,6 +399,14 @@ select:focus {
   border: 1px solid #d9e5e1;
   border-radius: 8px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+}
+
+.auth-dialog.is-registering {
+  width: min(860px, 100%);
+}
+
+.auth-dialog [hidden] {
+  display: none !important;
 }
 
 .auth-dialog h2 {
@@ -519,6 +527,27 @@ select:focus {
   text-align: center;
   font-size: 14px;
   font-weight: 800;
+}
+
+.auth-switch-button {
+  width: 100%;
+  padding: 4px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.auth-registration-form {
+  max-width: none;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.auth-registration-form .form-note {
+  line-height: 1.55;
 }
 
 body.modal-open {
@@ -1252,6 +1281,10 @@ body.modal-open {
 
   .auth-dialog {
     padding: 26px 20px 22px;
+  }
+
+  .auth-dialog.is-registering {
+    padding-top: 24px;
   }
 }
 

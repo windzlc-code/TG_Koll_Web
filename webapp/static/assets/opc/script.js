@@ -1,14 +1,68 @@
 const header = document.querySelector("[data-header]");
-const applicationForm = document.querySelector("#contact");
-const applicationStatus = document.querySelector("#formStatus");
 const loginModal = document.querySelector("#loginModal");
+const authDialog = loginModal?.querySelector(".auth-dialog");
+
+function registrationPanelMarkup() {
+  return `
+    <section class="auth-register-view" data-auth-view="register" hidden>
+      <p class="form-kicker">帳號註冊</p>
+      <h2 id="registerTitle">註冊遊客帳號</h2>
+      <p class="auth-copy">設定登入帳號並提交基本資料。管理員審核通過後，即可使用本次設定的帳號密碼登入 Web 任務控制台。</p>
+      <form class="lead-form auth-registration-form" id="accountRegistrationForm" novalidate>
+        <div class="application-grid">
+          <label class="field" for="fullName"><span>姓名</span><input id="fullName" name="fullName" autocomplete="name" placeholder="請輸入姓名" aria-describedby="fullNameError" required /><small class="field-error" id="fullNameError"></small></label>
+          <label class="field" for="username"><span>登入帳號</span><input id="username" name="username" autocomplete="username" placeholder="3-32 位英文、數字或 ._-" aria-describedby="usernameError" required /><small class="field-error" id="usernameError"></small></label>
+          <label class="field" for="applyPassword"><span>登入密碼</span><input id="applyPassword" name="password" type="password" autocomplete="new-password" minlength="8" placeholder="至少 8 位" aria-describedby="applyPasswordError" required /><small class="field-error" id="applyPasswordError"></small></label>
+          <label class="field" for="email"><span>電子信箱</span><input id="email" name="email" type="email" autocomplete="email" placeholder="name@company.com" aria-describedby="emailError" /><small class="field-error" id="emailError"></small></label>
+        </div>
+        <div class="application-grid">
+          <label class="field" for="company"><span>公司 / 團隊</span><input id="company" name="company" type="text" autocomplete="organization" placeholder="公司或團隊名稱（選填）" /><small class="field-error"></small></label>
+          <label class="field" for="phone"><span>聯絡電話</span><input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="請輸入可聯絡的電話" aria-describedby="phoneError" required /><small class="field-error" id="phoneError"></small></label>
+        </div>
+        <label class="field" for="interest"><span>預計使用情境</span><select id="interest" name="useCase"><option value="OPC導入">OPC 導入與三帳代營運</option><option value="算力計費">算力計費與預算規劃</option><option value="私域轉化">獨立站與私域轉化閉環</option><option value="企業多套">企業多套 OPC 批量部署</option></select></label>
+        <label class="consent" for="consent"><input id="consent" name="consent" type="checkbox" required /><span>我同意提交以上資料供管理員審核帳號註冊資格。</span></label>
+        <button class="submit-button" type="submit"><span>提交註冊申請</span><span aria-hidden="true">→</span></button>
+        <p class="form-note">提交後需等待管理員審核，不會立即登入。審核通過後請返回登入頁使用本次設定的帳號密碼。</p>
+        <p class="form-status" id="formStatus" role="status" aria-live="polite"></p>
+      </form>
+      <button class="auth-guest-link auth-switch-button" type="button" data-open-login>已有帳號？返回登入</button>
+    </section>`;
+}
+
+if (authDialog && !authDialog.querySelector("[data-auth-view='register']")) {
+  authDialog.insertAdjacentHTML("beforeend", registrationPanelMarkup());
+}
+
+const applicationForm = document.querySelector("#accountRegistrationForm");
+const applicationStatus = document.querySelector("#formStatus");
 const loginForm = document.querySelector("#homeLoginForm");
 const loginStatus = document.querySelector("#loginStatus");
 const loginPassword = document.querySelector("#loginPassword");
 const loginPasswordToggle = document.querySelector("[data-login-password-toggle]");
 const loginRemember = loginForm?.elements?.remember_me || null;
 const loginTakeover = document.querySelector("[data-login-takeover]");
+const registerView = authDialog?.querySelector("[data-auth-view='register']");
+const loginViewElements = authDialog
+  ? [...authDialog.children].filter((element) => !element.matches(".auth-close, [data-auth-view='register']"))
+  : [];
 let loginReturnFocus = null;
+
+function ensureLoginMfaField() {
+  if (!loginForm) return null;
+  const existing = loginForm.querySelector("[data-login-mfa]");
+  if (existing) return existing;
+  const field = document.createElement("label");
+  field.className = "field auth-mfa-field";
+  field.dataset.loginMfa = "";
+  field.hidden = true;
+  field.innerHTML = '<span>动态验证码</span><input name="mfa_code" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" maxlength="32" placeholder="管理员已启用 MFA 时填写" />';
+  const rememberField = loginForm.querySelector("[data-login-remember]");
+  if (rememberField) rememberField.before(field);
+  else loginForm.append(field);
+  return field;
+}
+
+const loginMfaField = ensureLoginMfaField();
 
 const publicI18nTextOriginals = new WeakMap();
 const publicI18nAttributeOriginals = new WeakMap();
@@ -390,17 +444,46 @@ function loginFocusableElements() {
     .filter((node) => !node.hidden && node.getClientRects().length > 0);
 }
 
+function setAuthView(view) {
+  const registering = view === "register";
+  loginViewElements.forEach((element) => {
+    element.hidden = registering;
+  });
+  if (registerView) registerView.hidden = !registering;
+  authDialog?.classList.toggle("is-registering", registering);
+  authDialog?.setAttribute("aria-labelledby", registering ? "registerTitle" : "loginTitle");
+  if (loginStatus) loginStatus.textContent = "";
+  if (applicationStatus) applicationStatus.textContent = "";
+  if (loginTakeover) loginTakeover.hidden = true;
+}
+
 function openLogin(event) {
   if (!loginModal) return;
-  loginReturnFocus = event?.currentTarget instanceof HTMLElement
-    ? event.currentTarget
-    : document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  if (!loginModal.classList.contains("is-open")) {
+    loginReturnFocus = event?.currentTarget instanceof HTMLElement
+      ? event.currentTarget
+      : document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
+  setAuthView("login");
   loginModal.classList.add("is-open");
   loginModal.setAttribute("aria-hidden", "false");
   document.body.classList.add("modal-open");
-  loginStatus.textContent = "";
-  if (loginTakeover) loginTakeover.hidden = true;
   window.setTimeout(() => document.querySelector("#loginUsername")?.focus(), 40);
+}
+
+function openRegister(event) {
+  if (!loginModal || !registerView) return;
+  event?.preventDefault?.();
+  if (!loginModal.classList.contains("is-open")) {
+    loginReturnFocus = event?.currentTarget instanceof HTMLElement
+      ? event.currentTarget
+      : document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
+  setAuthView("register");
+  loginModal.classList.add("is-open");
+  loginModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  window.setTimeout(() => applicationForm?.elements?.fullName?.focus(), 40);
 }
 
 function setLoginPasswordRevealed(revealed) {
@@ -421,25 +504,49 @@ function closeLogin() {
   setLoginPasswordRevealed(false);
   const returnFocus = loginReturnFocus;
   loginReturnFocus = null;
-  if (returnFocus?.isConnected) returnFocus.focus();
+  if (returnFocus?.isConnected) {
+    const closedMobileMenu = returnFocus.closest("[data-site-mobile-menu]:not([open])");
+    const focusTarget = closedMobileMenu?.querySelector("[data-site-menu-toggle]")
+      || (returnFocus.getClientRects().length ? returnFocus : null);
+    focusTarget?.focus();
+  }
 }
 
 function openRequestedLogin() {
   if (!loginModal) return;
   const currentUrl = new URL(window.location.href);
-  if (currentUrl.searchParams.get("login") !== "1") return;
-  const fallback = String(document.body.dataset.loginRedirect || "/console.html");
-  document.body.dataset.loginRedirect = safeLoginReturnUrl(
-    currentUrl.searchParams.get("return_url"),
-    fallback,
-  );
+  const loginRequested = currentUrl.searchParams.get("login") === "1";
+  const registerRequested = currentUrl.searchParams.get("register") === "1";
+  if (!loginRequested && !registerRequested) return;
+  if (loginRequested) {
+    const fallback = String(document.body.dataset.loginRedirect || "/console.html");
+    document.body.dataset.loginRedirect = safeLoginReturnUrl(
+      currentUrl.searchParams.get("return_url"),
+      fallback,
+    );
+  }
   currentUrl.searchParams.delete("login");
+  currentUrl.searchParams.delete("register");
   currentUrl.searchParams.delete("return_url");
   window.history.replaceState({}, "", `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
-  openLogin();
+  if (registerRequested) openRegister();
+  else openLogin();
 }
 
-document.querySelectorAll("[data-open-login]").forEach((button) => button.addEventListener("click", openLogin));
+document.addEventListener("click", (event) => {
+  const registerTrigger = event.target instanceof Element
+    ? event.target.closest("[data-open-register]")
+    : null;
+  if (registerTrigger) {
+    event.preventDefault();
+    openRegister({ currentTarget: registerTrigger });
+    return;
+  }
+  const loginTrigger = event.target instanceof Element
+    ? event.target.closest("[data-open-login]")
+    : null;
+  if (loginTrigger) openLogin({ currentTarget: loginTrigger });
+});
 document.querySelectorAll("[data-console-entry]").forEach((link) => link.addEventListener("click", async (event) => {
   event.preventDefault();
   if (!window.VectoSiteNavigation?.openConsoleEntry) {
@@ -495,10 +602,10 @@ applicationForm?.addEventListener("submit", async (event) => {
         use_case: applicationForm.useCase.value,
       }),
     });
-    applicationStatus.textContent = result.message || "申請已提交，請等待管理員授權。";
+    applicationStatus.textContent = result.message || "註冊申請已提交，請等待管理員審核。";
     applicationForm.reset();
   } catch (error) {
-    applicationStatus.textContent = error.detail || "提交失敗，請稍後再試。";
+    applicationStatus.textContent = error.detail || "註冊申請提交失敗，請稍後再試。";
   } finally {
     submit.disabled = false;
   }
@@ -529,7 +636,7 @@ async function submitUserLogin(forceTakeover = false) {
   submit.disabled = true;
   if (loginTakeover) loginTakeover.disabled = true;
   try {
-    const result = await api("/api/auth/user-login", {
+    const result = await api("/api/auth/portal-login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -537,19 +644,29 @@ async function submitUserLogin(forceTakeover = false) {
         password: loginForm.password.value,
         remember_me: Boolean(loginForm.remember_me?.checked),
         force_takeover: Boolean(forceTakeover),
+        mfa_code: String(loginForm.mfa_code?.value || "").trim(),
       }),
     });
-    try {
-      sessionStorage.removeItem("vecto-admin-console-context");
-      sessionStorage.removeItem("vecto-admin-workspace-user-id");
-    } catch {}
+    const isAdmin = result?.is_admin === true;
+    if (!isAdmin) {
+      try {
+        sessionStorage.removeItem("vecto-admin-console-context");
+        sessionStorage.removeItem("vecto-admin-workspace-user-id");
+      } catch {}
+    }
     const pageRedirect = String(document.body.dataset.loginRedirect || "/console.html");
-    const safeRedirect = safeLoginReturnUrl(pageRedirect);
-    const passwordTarget = `/change-password.html?return_url=${encodeURIComponent(safeRedirect)}`;
+    const safeRedirect = isAdmin ? "/admin" : safeLoginReturnUrl(pageRedirect);
+    const passwordTarget = isAdmin
+      ? `/change-password.html?admin_console=1&return_url=${encodeURIComponent(safeRedirect)}`
+      : `/change-password.html?return_url=${encodeURIComponent(safeRedirect)}`;
     window.location.assign(result?.must_change_password ? passwordTarget : safeRedirect);
   } catch (error) {
     const detail = apiErrorDetail(error);
     loginStatus.textContent = detail.message || "登入失敗，請檢查帳號與密碼。";
+    if (loginMfaField && detail.code === "mfa_code_invalid") {
+      loginMfaField.hidden = false;
+      loginForm.mfa_code?.focus();
+    }
     if (loginTakeover) loginTakeover.hidden = detail.code !== "SESSION_CONFLICT";
     submit.disabled = false;
     if (loginTakeover) loginTakeover.disabled = false;

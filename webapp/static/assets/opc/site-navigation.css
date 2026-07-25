@@ -428,11 +428,6 @@ html {
   background: rgba(255, 255, 255, 0.1);
 }
 
-.site-mobile-menu-extra {
-  margin-top: 5px;
-  border-top: 1px solid rgba(255, 255, 255, 0.14);
-}
-
 .site-header .header-login,
 .site-header .header-action,
 .site-user {
@@ -997,7 +992,6 @@ html {
     white-space: nowrap;
   }
 
-  .site-header .site-guest-action,
   .site-header .header-action {
     display: none;
   }

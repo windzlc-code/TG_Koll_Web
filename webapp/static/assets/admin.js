@@ -246,14 +246,6 @@ function setAdminDocumentTitle(source) {
 
 function syncAdminPreferenceControls() {
   const language = currentAdminLanguage();
-  const isDark = document.documentElement.dataset.theme === "dark";
-  const themeToggle = el("adminThemeToggle");
-  if (themeToggle) {
-    const label = isDark ? "切换到亮色模式" : "切换到暗色模式";
-    themeToggle.setAttribute("aria-label", adminTranslatedValue(label, language));
-    themeToggle.setAttribute("title", adminTranslatedValue(label, language));
-    themeToggle.setAttribute("aria-pressed", isDark ? "true" : "false");
-  }
   const languageToggle = el("adminLanguageToggle");
   if (languageToggle) {
     const label = adminTranslatedValue("选择界面语言", language);
@@ -292,14 +284,9 @@ function applyAdminLanguage(language) {
 }
 
 function bindAdminPreferenceControls() {
-  const themeToggle = el("adminThemeToggle");
   const languageMenu = el("adminLanguageMenu");
   const languageToggle = el("adminLanguageToggle");
   const languagePanel = el("adminLanguagePanel");
-  themeToggle?.addEventListener("click", () => {
-    const nextTheme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-    window.VectoSiteNavigation?.setTheme(nextTheme);
-  });
   languageToggle?.addEventListener("click", () => {
     setAdminLanguageMenuOpen(languageToggle.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
   });
@@ -320,7 +307,6 @@ function bindAdminPreferenceControls() {
       setAdminLanguageMenuOpen(false, { restoreFocus: true });
     }
   });
-  window.addEventListener("vecto:theme-change", syncAdminPreferenceControls);
   window.addEventListener("vecto:language-change", (event) => applyAdminLanguage(event.detail?.language));
   syncAdminPreferenceControls();
 }

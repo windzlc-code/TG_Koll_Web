@@ -167,6 +167,28 @@ class PublicLoginPreferenceTests(unittest.TestCase):
         self.assertEqual(admin_query.status_code, 302, admin_query.text)
         self.assertEqual(admin_query.headers["location"], "/?login=1&return_url=%2Fconsole.html")
 
+    def test_shared_home_login_detects_admin_role_and_uses_admin_cookie(self):
+        client = TestClient(self.app)
+        response = client.post(
+            "/api/auth/portal-login",
+            json={"username": "admin", "password": "admin123secure"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["is_admin"])
+        self.assertIsNotNone(client.cookies.get("admin_session_token"))
+        self.assertIsNone(client.cookies.get("session_token"))
+
+    def test_admin_entry_redirects_anonymous_users_to_shared_home_login(self):
+        client = TestClient(self.app)
+        for path in ("/admin", "/admin-login.html"):
+            with self.subTest(path=path):
+                response = client.get(path, follow_redirects=False)
+                self.assertEqual(response.status_code, 302, response.text)
+                self.assertEqual(
+                    response.headers["location"],
+                    "/?login=1&return_url=%2Fadmin",
+                )
+
 
 class PublicLoginUiSourceTests(unittest.TestCase):
     @classmethod
@@ -181,7 +203,6 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         cls.admin_js = (cls.static_dir / "assets" / "admin.js").read_text(encoding="utf-8")
         cls.console_js = (cls.static_dir / "assets" / "console.js").read_text(encoding="utf-8")
         cls.admin_html = (cls.static_dir / "admin.html").read_text(encoding="utf-8")
-        cls.admin_login_html = (cls.static_dir / "admin-login.html").read_text(encoding="utf-8")
         cls.auth_js = (cls.static_dir / "assets" / "auth.js").read_text(encoding="utf-8")
         cls.automation_log_html = (cls.static_dir / "persona-automation-log.html").read_text(encoding="utf-8")
         cls.server_source = Path(server.__file__).read_text(encoding="utf-8")
@@ -190,16 +211,13 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertNotIn("if (event.target === loginModal) closeLogin()", self.script)
         self.assertIn('[data-close-login]', self.script)
 
-    def test_admin_login_return_home_exits_stale_admin_browser_context(self):
-        self.assertIn('data-auth-return-public-home', self.admin_login_html)
-        return_home_handler = self.auth_js.split(
-            'document.querySelectorAll("[data-auth-return-public-home]")',
-            1,
-        )[1].split(
-            'document.querySelectorAll("[data-auth-password-toggle]")',
-            1,
-        )[0]
-        self.assertIn("clearAdminBrowserContext();", return_home_handler)
+    def test_admin_login_page_is_removed_and_shared_login_handles_admins(self):
+        self.assertFalse((self.static_dir / "admin-login.html").exists())
+        self.assertNotIn("_admin_login_page", self.server_source)
+        self.assertIn('api("/api/auth/portal-login"', self.script)
+        self.assertIn("result?.is_admin === true", self.script)
+        self.assertNotIn("adminLoginForm", self.auth_js)
+        self.assertNotIn("/api/auth/admin-login", self.auth_js)
 
     def test_home_navigation_opens_console_or_existing_login_dialog(self):
         page = (self.static_dir / "index.html").read_text(encoding="utf-8")
@@ -322,7 +340,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             "`/api/tasks/${id}/download?admin_console=1`",
             self.admin_js,
         )
-        self.assertIn("function forcedPasswordChangeTarget", self.auth_js)
+        self.assertIn('safeAuthReturnUrl(admin ? "/admin" : "/console.html"', self.auth_js)
         self.assertIn('headers.set("X-Admin-Console", "1")', self.auth_js)
 
     def test_public_navigation_preserves_authenticated_account_state(self):
@@ -339,15 +357,17 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('fetch("/api/auth/logout"', self.site_nav_script)
         self.assertIn("window.location.reload()", self.site_nav_script)
 
-    def test_shared_navigation_keeps_public_language_and_scopes_theme_to_console(self):
-        for expected in ('id="themeToggle"', 'id="languageToggle"', "site-theme-icon", "site-language-icon"):
+    def test_shared_navigation_keeps_language_and_uses_fixed_dark_theme(self):
+        for expected in ('id="languageToggle"', "site-language-icon"):
             self.assertIn(expected, self.site_nav_script)
+        self.assertNotIn('id="themeToggle"', self.site_nav_script)
+        self.assertNotIn("site-theme-icon", self.site_nav_script)
         for page_name in ("index.html", "pricing.html"):
             markup = (self.static_dir / page_name).read_text(encoding="utf-8")
             self.assertNotIn("data-site-theme-toggle", markup)
             self.assertIn("data-site-language-toggle", markup)
         self.assertIn("function themeEnabled()", self.site_nav_script)
-        self.assertIn('return page === "console" || document.body?.classList.contains("page-admin")', self.site_nav_script)
+        self.assertIn("return true", self.site_nav_script)
         self.assertIn('installUnifiedAccountMenu(header, header.dataset.sitePage || "home")', self.site_nav_script)
         public_controls = self.site_nav_script.split("function renderActions", 1)[1].split("function fallbackMarkup", 1)[0]
         self.assertNotIn("data-site-theme-toggle", public_controls.split("const controls", 1)[1].split("const mobileMenu", 1)[0])
@@ -355,9 +375,10 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('function accountPreferencesMarkup(page = "console")', self.site_nav_script)
         self.assertIn('class="site-account-preferences"', self.site_nav_script)
         self.assertIn('actions.querySelectorAll(":scope > .site-global-controls")', self.site_nav_script)
-        self.assertIn('const THEME_STORAGE_KEY = "wk-console-theme"', self.site_nav_script)
         self.assertIn('const LANGUAGE_STORAGE_KEY = "wk-console-language"', self.site_nav_script)
         self.assertIn('window.addEventListener("storage"', self.site_nav_script)
+        self.assertIn('const nextTheme = "dark"', self.site_nav_script)
+        self.assertIn('setTheme("dark", { persist: false })', self.site_nav_script)
         self.assertIn('data-site-mobile-menu', self.site_nav_script)
         self.assertIn('window.addEventListener("vecto:language-change"', self.script)
         self.assertIn("applyPublicLanguage", self.script)
@@ -389,12 +410,51 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertNotIn("localStorage.setItem", self.script)
         self.assertNotIn("PasswordCredential", self.script)
 
-        for page_name in ("admin-login.html",):
+
+    def test_public_registration_moves_application_form_into_shared_auth_dialog(self):
+        home = (self.static_dir / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn('class="home-contact-section"', home)
+        self.assertNotIn('id="contact"', home)
+
+        for page_name in (
+            "index.html",
+            "pricing.html",
+            "about-vecto.html",
+            "proxy-market.html",
+        ):
             page = (self.static_dir / page_name).read_text(encoding="utf-8")
-            self.assertIn("data-auth-password-toggle", page)
-            self.assertIn('name="remember_me"', page)
-        self.assertIn("remember_me: Boolean(form.remember_me?.checked)", self.auth_js)
-        self.assertIn('api("/api/auth/policy")', self.auth_js)
+            with self.subTest(page=page_name):
+                self.assertIn("data-open-register", page)
+                self.assertNotIn('href="#contact"', page)
+                self.assertNotIn('href="/#contact"', page)
+                self.assertEqual(page.count('id="loginModal"'), 1)
+                header = page.split("</header>", 1)[0]
+                self.assertEqual(header.count("data-open-login"), 1)
+                self.assertNotIn("data-open-register", header)
+                self.assertNotIn("site-guest-action", header)
+                self.assertNotIn("site-mobile-menu-extra", header)
+
+        self.assertIn("function registrationPanelMarkup()", self.script)
+        self.assertIn('id="accountRegistrationForm"', self.script)
+        self.assertIn('data-auth-view="register"', self.script)
+        self.assertIn('event.target.closest("[data-open-register]")', self.script)
+        self.assertIn('api("/api/auth/apply"', self.script)
+        self.assertIn("註冊遊客帳號", self.script)
+        self.assertIn("管理員審核通過後", self.script)
+        self.assertNotIn("#contact", self.site_nav_script)
+        self.assertIn('login: "登录"', self.site_nav_script)
+        self.assertIn('login: "登入"', self.site_nav_script)
+        self.assertNotIn('class="header-action site-guest-action"', self.site_nav_script)
+        self.assertNotIn('className: "site-mobile-menu-extra"', self.site_nav_script)
+        self.assertIn("z-index: 300", self.styles)
+
+    def test_retired_register_page_redirects_to_shared_registration_dialog(self):
+        self.assertFalse((self.static_dir / "register.html").exists())
+        self.assertNotIn('location.href = "/register.html"', self.auth_js)
+        client = TestClient(server.create_app())
+        response = client.get("/register.html", follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["location"], "/?register=1")
 
     def test_public_language_translation_is_ui_scoped_and_keeps_dynamic_state(self):
         self.assertIn('const PUBLIC_I18N_MARKER = "data-i18n-ui"', self.script)
@@ -416,9 +476,8 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('apiErrorDetail(error)', self.script)
         self.assertNotIn('loginStatus.textContent = error.detail ||', self.script)
 
-        self.assertIn('force_takeover: loginRole === "user" && Boolean(forceTakeover)', self.auth_js)
-        self.assertIn('detail.code !== "SESSION_CONFLICT"', self.auth_js)
-        self.assertIn('apiErrorDetail(err)', self.auth_js)
+        self.assertIn('mfa_code: String(loginForm.mfa_code?.value || "").trim()', self.script)
+        self.assertIn('detail.code === "mfa_code_invalid"', self.script)
 
     def test_public_pages_use_runtime_asset_versions_and_disable_html_cache(self):
         client = TestClient(server.create_app())
@@ -433,7 +492,8 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertFalse((self.static_dir / "login.html").exists())
         self.assertNotIn('"login.html",', self.server_source)
         self.assertIn("function openRequestedLogin()", self.script)
-        self.assertIn('searchParams.get("login") !== "1"', self.script)
+        self.assertIn('searchParams.get("login") === "1"', self.script)
+        self.assertIn('searchParams.get("register") === "1"', self.script)
         self.assertIn('document.body.dataset.loginRedirect = safeLoginReturnUrl(', self.script)
 
         client = TestClient(server.create_app())

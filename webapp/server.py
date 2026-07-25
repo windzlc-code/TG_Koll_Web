@@ -4222,6 +4222,13 @@ def _html_response_with_versions(filename: str, replacements: dict[str, str] | N
     html = (STATIC_DIR / filename).read_text(encoding="utf-8")
     for key, value in (replacements or {}).items():
         html = html.replace(key, value)
+    dark_theme_version = _asset_version("assets", "dark-theme.css")
+    dark_theme_bootstrap = (
+        '<script>document.documentElement.dataset.theme="dark";</script>\n'
+        f'  <link rel="stylesheet" href="/assets/dark-theme.css?v={dark_theme_version}">'
+    )
+    if "</head>" in html:
+        html = html.replace("</head>", f"  {dark_theme_bootstrap}\n</head>", 1)
     return HTMLResponse(
         content=html,
         headers={
@@ -4234,6 +4241,11 @@ def _html_response_with_versions(filename: str, replacements: dict[str, str] | N
 
 def _public_login_location(return_url: str = "/console.html") -> str:
     candidate = _role_safe_return_url(return_url, "/console.html", admin=False)
+    return f"/?login=1&return_url={quote(candidate, safe='')}"
+
+
+def _public_admin_login_location(return_url: str = "/admin") -> str:
+    candidate = _role_safe_return_url(return_url, "/admin", admin=True)
     return f"/?login=1&return_url={quote(candidate, safe='')}"
 
 
@@ -17250,8 +17262,8 @@ def create_app() -> FastAPI:
         return FileResponse(str(STATIC_DIR / "assets" / "opc" / "vecto-logo-ui-icon.png"), media_type="image/png")
 
     @app.get("/register.html", include_in_schema=False)
-    def page_register() -> FileResponse:
-        return FileResponse(str(STATIC_DIR / "register.html"))
+    def page_register() -> RedirectResponse:
+        return RedirectResponse(url="/?register=1", status_code=302)
 
     @app.get("/index.html", include_in_schema=False)
     def page_index() -> HTMLResponse:
@@ -17483,15 +17495,6 @@ def create_app() -> FastAPI:
         )
         return response
 
-    def _admin_login_page() -> Response:
-        return _html_response_with_versions(
-            "admin-login.html",
-            replacements={
-                "__STYLE_VERSION__": _asset_version("assets", "style.css"),
-                "__AUTH_JS_VERSION__": _asset_version("assets", "auth.js"),
-            },
-        )
-
     @app.get("/admin", include_in_schema=False)
     def page_admin_entry(
         request: Request,
@@ -17504,9 +17507,9 @@ def create_app() -> FastAPI:
                 expected_admin_session=True,
             )
         except HTTPException:
-            return _admin_login_page()
+            return RedirectResponse(url=_public_admin_login_location("/admin"), status_code=302)
         if not _is_admin(user):
-            return _admin_login_page()
+            return RedirectResponse(url=_public_admin_login_location("/admin"), status_code=302)
         requested_return_url = request.query_params.get("return_url")
         return_target = _role_safe_return_url(
             requested_return_url,
@@ -17527,15 +17530,15 @@ def create_app() -> FastAPI:
 
     @app.get("/admin-login.html", include_in_schema=False)
     def page_admin_login_alias() -> RedirectResponse:
-        return RedirectResponse(url="/admin", status_code=302)
+        return RedirectResponse(url=_public_admin_login_location("/admin"), status_code=302)
 
     @app.get("/persona-automation-log.html", include_in_schema=False)
-    def page_persona_automation_log() -> FileResponse:
-        return FileResponse(str(STATIC_DIR / "persona-automation-log.html"))
+    def page_persona_automation_log() -> HTMLResponse:
+        return _html_response_with_versions("persona-automation-log.html")
 
     @app.get("/batch.html", include_in_schema=False)
-    def page_batch() -> FileResponse:
-        return FileResponse(str(STATIC_DIR / "batch.html"))
+    def page_batch() -> HTMLResponse:
+        return _html_response_with_versions("batch.html")
 
     register_social_automation_routes(app)
     register_proxy_market_routes(app)
@@ -17872,6 +17875,10 @@ def create_app() -> FastAPI:
     @app.post("/api/auth/login")
     def api_login(payload: LoginPayload, request: Request):
         return _login_response(payload, request, expected_admin=False)
+
+    @app.post("/api/auth/portal-login")
+    def api_portal_login(payload: LoginPayload, request: Request):
+        return _login_response(payload, request, expected_admin=None)
 
     @app.post("/api/auth/user-login")
     def api_user_login(payload: LoginPayload, request: Request):
