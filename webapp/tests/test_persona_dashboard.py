@@ -3,6 +3,8 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2324,12 +2326,56 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_cancel_persona_hot_candidates_endpoint(self):
         self._write_archives()
-        with mock.patch.object(server, "_cancel_persona_hot_workflow", return_value=True) as cancel:
+        with mock.patch.object(server, "_cancel_persona_hot_candidate_tasks", return_value=False), mock.patch.object(server, "_cancel_persona_hot_workflow", return_value=True) as cancel:
             response = self.client.post("/api/persona_dashboard/personas/persona-1/hot_candidates/cancel")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True, "cancelled": True})
         cancel.assert_called_once_with("persona-1")
+
+    def test_hot_candidate_task_endpoint_returns_before_worker_finishes(self):
+        self._write_archives()
+        fake_result = {
+            "ok": True,
+            "archive_name": "测试人设",
+            "keywords": ["测试"],
+            "search_mode": "strict",
+            "freshness_days": 7,
+            "freshness_policy": "strict",
+            "cookie_statuses": [],
+            "warnings": [],
+            "candidates": [{"id": "hot-1", "content": "测试热点"}],
+        }
+        release_worker = threading.Event()
+
+        def fetch_after_release(*_args, **_kwargs):
+            release_worker.wait(timeout=1)
+            return fake_result
+
+        with mock.patch.object(server, "_fetch_persona_hot_candidates", side_effect=fetch_after_release):
+            started = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates/tasks",
+                json={"refresh": True, "limit": 10},
+            )
+            self.assertEqual(started.status_code, 200)
+            task_id = started.json()["id"]
+            self.assertIn(started.json()["status"], {"queued", "running"})
+            release_worker.set()
+
+            deadline = time.time() + 2
+            status = {}
+            while time.time() < deadline:
+                response = self.client.get(
+                    f"/api/persona_dashboard/personas/persona-1/hot_candidates/tasks/{task_id}"
+                )
+                self.assertEqual(response.status_code, 200)
+                status = response.json()
+                if status.get("status") == "success":
+                    break
+                time.sleep(0.01)
+
+        self.assertEqual(status.get("status"), "success")
+        self.assertEqual(status.get("result", {}).get("candidates", [])[0]["id"], "hot-1")
 
     def test_fetch_persona_hot_candidates_calls_hot_workflow_cli(self):
         self._write_archives()

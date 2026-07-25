@@ -12172,6 +12172,8 @@ _PERSONA_HOT_BACKGROUND_PROCESS: subprocess.Popen[str] | None = None
 _PERSONA_HOT_INTERACTIVE_PROCESS: subprocess.Popen[str] | None = None
 _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID = ""
 _PERSONA_HOT_LAST_INTERACTIVE_AT = 0.0
+PERSONA_HOT_CANDIDATE_TASKS: dict[str, dict[str, Any]] = {}
+PERSONA_HOT_CANDIDATE_TASKS_LOCK = threading.Lock()
 
 
 class _PersonaHotBackgroundDeferred(RuntimeError):
@@ -12601,6 +12603,122 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
         "warnings": _persona_hot_user_warnings(result.get("warnings"), len(candidates), limit, cookie_rows),
         "candidates": candidates,
     }
+
+
+def _persona_hot_candidate_task_worker(
+    task_id: str,
+    archive_id: str,
+    payload: PersonaDashboardHotCandidatesFetchPayload,
+) -> None:
+    with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+        task = PERSONA_HOT_CANDIDATE_TASKS.get(task_id)
+        if not task or task.get("status") == "cancelled":
+            return
+        task.update({
+            "status": "running",
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        })
+    try:
+        result = _fetch_persona_hot_candidates(archive_id, payload)
+    except HTTPException as exc:
+        with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+            task = PERSONA_HOT_CANDIDATE_TASKS.get(task_id)
+            if task and task.get("status") != "cancelled":
+                task.update({
+                    "status": "failed",
+                    "error": str(exc.detail or "热点候选抓取失败。"),
+                    "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                })
+        return
+    except Exception as exc:
+        logger.exception("persona hot candidate task failed: %s", task_id)
+        with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+            task = PERSONA_HOT_CANDIDATE_TASKS.get(task_id)
+            if task and task.get("status") != "cancelled":
+                task.update({
+                    "status": "failed",
+                    "error": str(exc or "热点候选抓取失败。"),
+                    "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                })
+        return
+
+    with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+        task = PERSONA_HOT_CANDIDATE_TASKS.get(task_id)
+        if task and task.get("status") != "cancelled":
+            task.update({
+                "status": "success",
+                "result": result,
+                "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            })
+
+
+def _start_persona_hot_candidate_task(
+    archive_id: str,
+    payload: PersonaDashboardHotCandidatesFetchPayload,
+    user_id: int,
+) -> dict[str, Any]:
+    clean_archive_id = str(archive_id or "").strip()
+    owner_user_id = max(0, int(user_id or 0))
+    with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+        active = next((
+            task
+            for task in PERSONA_HOT_CANDIDATE_TASKS.values()
+            if int(task.get("user_id") or 0) == owner_user_id
+            and str(task.get("archive_id") or "") == clean_archive_id
+            and str(task.get("status") or "") in {"queued", "running"}
+        ), None)
+        if active:
+            return dict(active)
+
+        if len(PERSONA_HOT_CANDIDATE_TASKS) >= 100:
+            completed = sorted(
+                (
+                    task_id
+                    for task_id, task in PERSONA_HOT_CANDIDATE_TASKS.items()
+                    if str(task.get("status") or "") not in {"queued", "running"}
+                ),
+                key=lambda task_id: str(PERSONA_HOT_CANDIDATE_TASKS[task_id].get("created_at") or ""),
+            )
+            for stale_task_id in completed[:50]:
+                PERSONA_HOT_CANDIDATE_TASKS.pop(stale_task_id, None)
+
+        task_id = f"phc_{uuid.uuid4().hex[:16]}"
+        task = {
+            "id": task_id,
+            "user_id": owner_user_id,
+            "archive_id": clean_archive_id,
+            "status": "queued",
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        PERSONA_HOT_CANDIDATE_TASKS[task_id] = task
+
+    thread = threading.Thread(
+        target=_persona_hot_candidate_task_worker,
+        args=(task_id, clean_archive_id, copy.deepcopy(payload)),
+        name=f"persona-hot-{task_id}",
+        daemon=True,
+    )
+    thread.start()
+    return dict(task)
+
+
+def _cancel_persona_hot_candidate_tasks(archive_id: str, user_id: int) -> bool:
+    clean_archive_id = str(archive_id or "").strip()
+    owner_user_id = max(0, int(user_id or 0))
+    cancelled = False
+    with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+        for task in PERSONA_HOT_CANDIDATE_TASKS.values():
+            if (
+                int(task.get("user_id") or 0) == owner_user_id
+                and str(task.get("archive_id") or "") == clean_archive_id
+                and str(task.get("status") or "") in {"queued", "running"}
+            ):
+                task.update({
+                    "status": "cancelled",
+                    "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                })
+                cancelled = True
+    return cancelled
 
 
 def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesImportPayload) -> dict[str, Any]:
@@ -18473,9 +18591,27 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_fetch_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _fetch_persona_hot_candidates(archive_id, payload)
 
+    @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/tasks")
+    def api_persona_dashboard_start_hot_candidates_task(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
+        return _start_persona_hot_candidate_task(archive_id, payload, _workspace_user_id(_user))
+
+    @app.get("/api/persona_dashboard/personas/{archive_id}/hot_candidates/tasks/{task_id}")
+    def api_persona_dashboard_hot_candidates_task_status(archive_id: str, task_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
+        with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+            task = PERSONA_HOT_CANDIDATE_TASKS.get(str(task_id or "").strip())
+            if (
+                not task
+                or int(task.get("user_id") or 0) != _workspace_user_id(_user)
+                or str(task.get("archive_id") or "") != str(archive_id or "").strip()
+            ):
+                raise HTTPException(status_code=404, detail="热点抓取任务不存在。")
+            return dict(task)
+
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/cancel")
     def api_persona_dashboard_cancel_hot_candidates(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
-        return {"ok": True, "cancelled": _cancel_persona_hot_workflow(archive_id)}
+        task_cancelled = _cancel_persona_hot_candidate_tasks(archive_id, _workspace_user_id(_user))
+        process_cancelled = _cancel_persona_hot_workflow(archive_id)
+        return {"ok": True, "cancelled": task_cancelled or process_cancelled}
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/import")
     def api_persona_dashboard_import_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesImportPayload, _user: dict[str, Any] = Depends(require_persona_owner)):

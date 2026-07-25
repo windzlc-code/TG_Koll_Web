@@ -14971,7 +14971,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
-    const result = await apiWithTimeout(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates`, {
+    const task = await apiWithTimeout(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates/tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,
@@ -14985,7 +14985,31 @@ async function fetchPersonaHotCandidates(refresh = false) {
         // (unbounded freshness), which is also how older callers behaved.
         freshness_policy: form.hotFreshnessDays > 0 ? "strict" : "legacy",
       }),
-    }, 165000);
+    }, 15000);
+    const taskId = String(task?.id || "").trim();
+    if (!taskId) throw { detail: "热点抓取任务创建失败。", status: 500 };
+    const pollDeadline = Date.now() + 165000;
+    let result = null;
+    while (Date.now() < pollDeadline) {
+      await sleep(1000);
+      const current = await apiWithTimeout(
+        `/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates/tasks/${encodeURIComponent(taskId)}`,
+        { signal: controller.signal },
+        15000,
+      );
+      const status = String(current?.status || "").trim().toLowerCase();
+      if (status === "success") {
+        result = current.result && typeof current.result === "object" ? current.result : {};
+        break;
+      }
+      if (status === "failed") {
+        throw { detail: current.error || "热点候选抓取失败。", status: 500 };
+      }
+      if (status === "cancelled") {
+        throw { detail: "热点抓取已取消。", status: 499 };
+      }
+    }
+    if (!result) throw { detail: "热点抓取超时，请稍后重试。", status: 408 };
     state.personaHotCandidateResults[String(persona.id)] = {
       candidates: Array.isArray(result.candidates) ? result.candidates : [],
       keywords: Array.isArray(result.keywords) ? result.keywords : [],
