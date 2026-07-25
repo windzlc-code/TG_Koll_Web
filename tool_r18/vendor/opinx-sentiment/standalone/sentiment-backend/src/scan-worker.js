@@ -24,6 +24,12 @@ function parseJob() {
   }
 }
 
+function resolveWorkerTimeoutMs() {
+  const configured = Number(process.env.SENTIMENT_SCAN_TIMEOUT_MS || 90_000);
+  if (!Number.isFinite(configured)) return 90_000;
+  return Math.max(30_000, Math.min(180_000, Math.floor(configured)));
+}
+
 function writeStatus(job = {}, patch = {}) {
   const statusPath = String(job.statusPath || job.status_path || "").trim();
   if (!statusPath) return;
@@ -72,6 +78,7 @@ async function main() {
 
   const job = parseJob();
   const startedAt = Date.now();
+  const workerTimeoutMs = resolveWorkerTimeoutMs();
   writeStatus(job, {
     id: job.runId || job.run_id || null,
     status: "running",
@@ -88,6 +95,23 @@ async function main() {
     });
   }, 5000);
   heartbeat.unref?.();
+  const timeout = setTimeout(() => {
+    const finishedAt = new Date().toISOString();
+    const error = `后台情绪扫描超过 ${Math.round(workerTimeoutMs / 1000)} 秒，已终止以释放抓取资源。`;
+    writeStatus(job, {
+      status: "failed",
+      result: null,
+      finished_at: finishedAt,
+      duration_ms: Math.max(0, Date.parse(finishedAt) - startedAt),
+      heartbeat_at: finishedAt,
+      heartbeat_elapsed_ms: Math.max(0, Date.parse(finishedAt) - startedAt),
+      error,
+    });
+    log.error(error);
+    closeDb();
+    process.exit(1);
+  }, workerTimeoutMs);
+  timeout.unref?.();
   try {
     let result = null;
     if (job.type === "continuous-collection") {
@@ -152,6 +176,7 @@ async function main() {
     throw error;
   } finally {
     clearInterval(heartbeat);
+    clearTimeout(timeout);
   }
 }
 

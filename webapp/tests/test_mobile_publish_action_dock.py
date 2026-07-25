@@ -13,7 +13,7 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn('class="command-actions ${moduleId === "publishing" ? `publish-command-actions${publishSelectionExpanded ? " is-selection-expanded" : ""}` : ""}"', SCRIPT)
         self.assertIn('id="executeSimpleFlow"', SCRIPT)
         self.assertIn('renderPublishMobileSelectionStrip(selectedPersona(), publishModeForAction, publishSelectionExpanded)', SCRIPT)
-        self.assertIn('moduleId === "publishing" ? "发布" : "确认执行"', SCRIPT)
+        self.assertIn('mobilePublishingTaskPending ? "任务执行中" : "执行任务"', SCRIPT)
 
     def test_selection_strip_only_opens_after_a_long_press(self):
         self.assertIn("const PUBLISH_SELECTION_LONG_PRESS_MS = 520;", SCRIPT)
@@ -160,25 +160,21 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn("display: block", preview.group(1))
         self.assertIn("order: -2", preview.group(1))
 
-    def test_custom_mode_link_settings_use_the_same_mobile_position(self):
-        panel_start = SCRIPT.index("function renderPublishContentPanel")
-        layout = SCRIPT.index('<div class="publish-content-layout">', panel_start)
-        mobile_link = SCRIPT.index('class="publish-mobile-custom-link-settings"', layout)
-        preview = SCRIPT.index("${renderPublishContentPreview(persona, source)}", mobile_link)
-        self.assertLess(layout, mobile_link)
-        self.assertLess(mobile_link, preview)
-        self.assertIn('${source === "custom" ? `<div class="publish-mobile-custom-link-settings">${renderPublishLinkSettings(persona)}</div>` : ""}', SCRIPT)
-        media = STYLES.split("@media (max-width: 760px)", 1)[1]
-        self.assertIn(".publish-mobile-custom-link-settings", media)
-        self.assertIn(".publish-content-preview:not(.publish-content-preview--selection) > .publish-link-settings", media)
-        custom_link_rules = re.findall(
-            r"\.publish-mobile-custom-link-settings\s*\{([^}]+)\}",
-            media,
-        )
-        self.assertTrue(
-            any("order: -2" in rule for rule in custom_link_rules),
-        )
-        self.assertFalse(any("margin-bottom" in rule for rule in custom_link_rules))
+    def test_link_settings_move_from_tasks_to_the_generation_media_stack(self):
+        publish_start = SCRIPT.index("function renderPublishContentPanel")
+        publish_end = SCRIPT.index("\nfunction publishMobileSelectionItems", publish_start)
+        publish_panel = SCRIPT[publish_start:publish_end]
+        generation_start = SCRIPT.index("function renderPersonaContentPanel")
+        generation_end = SCRIPT.index("\n  if (panel === \"media\")", generation_start)
+        generation_panel = SCRIPT[generation_start:generation_end]
+
+        self.assertNotIn("renderPublishLinkSettings(persona)", publish_panel)
+        self.assertIn("<div class=\"persona-compose-media-stack\">", generation_panel)
+        link_settings = generation_panel.index("${renderPublishLinkSettings(persona)}")
+        media_composer = generation_panel.index("renderPersonaInlineMediaComposer", link_settings)
+        self.assertLess(link_settings, media_composer)
+        self.assertIn(".persona-compose-media-stack > .publish-link-settings", STYLES)
+        self.assertNotIn("publish-mobile-custom-link-settings", STYLES)
 
     def test_publish_source_modes_do_not_render_layout_shifting_helper_copy(self):
         self.assertIn('if (cleanSource === "custom") return "";', SCRIPT)
@@ -192,6 +188,18 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertLess(preflight, pending)
         self.assertIn("async function preflightSimpleFlowExecution", SCRIPT)
         self.assertIn("await promptPersonaAccountBinding(persona);", SCRIPT)
+
+    def test_mobile_publish_task_stays_on_the_task_page_until_the_second_tap(self):
+        self.assertIn('mobilePublishingTaskId: ""', SCRIPT)
+        self.assertIn("function deferMobilePublishingBrowserView(taskId = \"\")", SCRIPT)
+        self.assertIn("if (!cleanTaskId || !isMobileNavMode()) return false;", SCRIPT)
+        self.assertIn("state.mobilePublishingTaskId = cleanTaskId;", SCRIPT)
+        self.assertIn('if (moduleId === "publishing" && state.mobilePublishingTaskId)', SCRIPT)
+        self.assertIn("state.mobilePublishingTaskId = \"\";", SCRIPT)
+        self.assertIn("openLiveBrowserTaskView(taskId);", SCRIPT)
+        self.assertIn('renderBusyButtonContent(moduleId === "publishing" ? "任务执行中"', SCRIPT)
+        self.assertIn("!deferMobilePublishingBrowserView(immediateTaskId)", SCRIPT)
+        self.assertIn("!deferMobilePublishingBrowserView(firstImmediateTaskId)", SCRIPT)
 
     def test_mobile_publish_media_defers_decode_and_offscreen_paint(self):
         self.assertIn('loading="lazy" decoding="async"', SCRIPT)

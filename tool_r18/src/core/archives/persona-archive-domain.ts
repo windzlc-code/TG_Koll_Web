@@ -224,7 +224,7 @@ export function buildArchivePostFromEpisode(ep: EpisodeScript, index: number): P
   const content = sanitizeGeneratedPostContent(ep.content || "");
   return {
     id: ep.archivePostId || crypto.randomUUID(),
-    title: ep.title || `貼文 #${index + 1}`,
+    title: String(ep.title || "").trim(),
     content,
     wordCount: ep.wordCount || content.length,
     orderIndex: ep.orderIndex ?? index,
@@ -243,7 +243,7 @@ export function buildArchivePostFromEpisode(ep: EpisodeScript, index: number): P
 export function archivePostsToEpisodes(posts: PersonaArchivePost[]): EpisodeScript[] {
   return sortArchivePosts(posts).map((post, index) => ({
     number: index + 1,
-    title: `貼文 #${index + 1}`,
+    title: String(post.title || "").trim(),
     content: post.content,
     wordCount: typeof post.wordCount === "number" ? post.wordCount : post.content.length,
     orderIndex: post.orderIndex,

@@ -1114,6 +1114,32 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(setup["activeLinkEndingPresetId"], "preset-main")
         self.assertEqual(setup["linkEndingPresets"][0]["linkUrl"], "https://example.com/main")
 
+    def test_public_persona_profile_accepts_long_unified_ending_content(self):
+        self._write_archives()
+        ending_content = "了解更多： https://example.com/main\n" + ("补充说明" * 180)
+        resp = self.client.patch(
+            "/api/persona_dashboard/personas/persona-1/profile",
+            json={
+                "link_presets": [
+                    {
+                        "id": "preset-ending",
+                        "name": "结尾内容模板",
+                        "link_url": "",
+                        "ending_text": ending_content,
+                        "enabled": True,
+                    }
+                ],
+                "active_link_preset_id": "preset-ending",
+            },
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        preset = resp.json()["link_presets"][0]
+        self.assertEqual(preset["link_url"], "")
+        self.assertEqual(preset["ending_text"], ending_content)
+        persisted = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        self.assertEqual(persisted[0]["setup"]["linkEndingPresets"][0]["endingText"], ending_content)
+
     def test_public_persona_profile_allows_clearing_active_link_preset(self):
         self._write_archives()
         enabled = self.client.patch(
@@ -1561,7 +1587,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(media_only_resp.status_code, 200)
         post = media_only_resp.json()
         self.assertEqual(post["content"], "")
-        self.assertTrue(post["title"].startswith("媒体草稿 #"))
+        self.assertEqual(post["title"], "")
         self.assertTrue(post["media_items"])
 
         update_resp = self.client.patch(
@@ -1570,6 +1596,30 @@ class PersonaDashboardApiTests(unittest.TestCase):
         )
         self.assertEqual(update_resp.status_code, 200)
         self.assertEqual(update_resp.json()["content"], "")
+
+    def test_persona_post_title_is_blank_until_the_user_supplies_one(self):
+        self._write_archives()
+        create_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"content": "正文不能被自动截取成标题"},
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        post = create_resp.json()
+        self.assertEqual(post["title"], "")
+
+        update_resp = self.client.patch(
+            f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}",
+            json={"content": "更新正文仍不生成标题"},
+        )
+        self.assertEqual(update_resp.status_code, 200)
+        self.assertEqual(update_resp.json()["title"], "")
+
+        titled_resp = self.client.patch(
+            f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}",
+            json={"title": "用户填写的标题", "content": "更新正文仍不生成标题"},
+        )
+        self.assertEqual(titled_resp.status_code, 200)
+        self.assertEqual(titled_resp.json()["title"], "用户填写的标题")
 
         outside_path = self.root / "outside-media.png"
         outside_path.write_bytes(self.draft_media_path.read_bytes())
@@ -2609,6 +2659,20 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(resp.json()["generated_count"], 1)
         self.assertEqual(mocked.call_args.args[0], "persona-1")
         self.assertEqual(mocked.call_args.args[1].prompt, "围绕历史老师的通勤日常")
+
+    def test_generate_persona_posts_rejects_more_than_five_candidates(self):
+        self._write_archives()
+        with mock.patch.object(server, "_generate_persona_archive_posts") as mocked:
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/generate_posts",
+                json={
+                    "count": 6,
+                    "prompt": "批量候选",
+                    "target_words": 120,
+                },
+            )
+        self.assertEqual(resp.status_code, 422)
+        mocked.assert_not_called()
 
     def test_persona_workflow_syncs_runtime_llm_config_into_tool_api_config(self):
         runtime_payload = dict(server.DEFAULT_RUNTIME_CONFIG)

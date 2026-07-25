@@ -98,12 +98,18 @@ def mark_trusted_batch_task(
     task_id: str,
     reservation_id: str = "",
     suppress_wake: bool = True,
+    automation_plan_id: str = "",
+    automation_plan_cycle: int = 0,
+    automation_plan_sequence: int = 0,
 ) -> None:
     with _TRUSTED_BATCH_TASK_CONTEXTS_LOCK:
         _TRUSTED_BATCH_TASK_CONTEXTS[id(payload)] = {
             "task_id": str(task_id),
             "reservation_id": str(reservation_id),
             "suppress_wake": bool(suppress_wake),
+            "automation_plan_id": str(automation_plan_id or ""),
+            "automation_plan_cycle": max(0, int(automation_plan_cycle or 0)),
+            "automation_plan_sequence": max(0, int(automation_plan_sequence or 0)),
 }
 
 
@@ -188,6 +194,7 @@ def set_daily_publish_limit(limit: int) -> dict[str, Any]:
     return {"limit": normalized}
 _WORKER_WAKE = threading.Event()
 _WORKER_LOCK = threading.Lock()
+_AUTOMATION_PLAN_LOCK = threading.RLock()
 _WORKER_TASK_THREADS: dict[str, threading.Thread] = {}
 _WORKER_TASK_THREADS_LOCK = threading.Lock()
 _WORKER_STATE: dict[str, Any] = {
@@ -326,9 +333,26 @@ class SocialTaskPayload(BaseModel):
     max_retries: int = 1
 
 
+class SocialAutomationPlanItemPayload(BaseModel):
+    reservation_minutes: int = Field(default=0, ge=0, le=1410)
+    task_type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    priority: int = Field(default=50, ge=1, le=100)
+    max_retries: int = Field(default=2, ge=0, le=5)
+
+
+class SocialAutomationPlanPayload(BaseModel):
+    persona_id: str = ""
+    account_id: str
+    platform: str = "threads"
+    mode: str = "list"
+    items: list[SocialAutomationPlanItemPayload] = Field(min_length=1, max_length=48)
+
+
 class SocialAccountPatchPayload(BaseModel):
     persona_id: str | None = None
     replace_existing_binding: bool = False
+    require_unbound: bool = False
     username: str | None = None
     display_name: str | None = None
     profile_dir: str | None = None
@@ -611,6 +635,17 @@ def _validate_user_task_media_paths(payload: dict[str, Any], user: dict[str, Any
             raise HTTPException(status_code=404, detail="媒体文件不存在")
 
 
+def _reject_external_automation_plan_metadata(payload: dict[str, Any]) -> None:
+    reserved = sorted(
+        str(key)
+        for key in (payload or {})
+        if str(key).startswith("_automation_plan_")
+        or str(key) == "_automation_item_id"
+    )
+    if reserved:
+        raise HTTPException(status_code=400, detail="任务参数包含系统保留字段")
+
+
 def _require_active_owner_user(conn: Any, owner_user_id: int) -> None:
     user_id = int(owner_user_id or 0)
     if user_id <= 0:
@@ -881,6 +916,574 @@ def _create_social_task_for_user(payload: SocialTaskPayload, user: dict[str, Any
     finally:
         if waived:
             clear_admin_billing_waived_payload(payload)
+
+
+def _automation_plan_task_id(plan_id: str, cycle_index: int, sequence: int) -> str:
+    digest = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"vecto-automation-plan:{plan_id}:{int(cycle_index)}:{int(sequence)}",
+    ).hex
+    return f"plan_task_{digest}"
+
+
+def _automation_plan_items(row: Any) -> list[dict[str, Any]]:
+    items = _loads(row["items_json"], [])
+    return [dict(item) for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+
+def _automation_plan_task_rows(
+    conn: sqlite3.Connection,
+    plan_id: str,
+    *,
+    cycle_index: int | None = None,
+) -> list[Any]:
+    params: list[Any] = [str(plan_id)]
+    cycle_clause = ""
+    if cycle_index is not None:
+        cycle_clause = " AND automation_plan_cycle = ?"
+        params.append(int(cycle_index))
+    return conn.execute(
+        f"""
+        SELECT *
+        FROM social_automation_tasks
+        WHERE automation_plan_id = ?
+          {cycle_clause}
+        ORDER BY automation_plan_cycle ASC, automation_plan_sequence ASC, scheduled_at ASC, created_at ASC, id ASC
+        """,
+        tuple(params),
+    ).fetchall()
+
+
+def _automation_plan_public(row: Any, *, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    if conn is None:
+        with db() as active_conn:
+            return _automation_plan_public(row, conn=active_conn)
+    task_rows = _automation_plan_task_rows(conn, str(row["id"]))
+    terminal = {"success", "failed", "cancelled"}
+    next_run_at = min(
+        (
+            int(task["scheduled_at"] or 0)
+            for task in task_rows
+            if str(task["status"] or "") not in terminal and int(task["scheduled_at"] or 0) > 0
+        ),
+        default=0,
+    )
+    return {
+        "id": str(row["id"]),
+        "persona_id": str(row["persona_id"] or ""),
+        "account_id": str(row["account_id"] or ""),
+        "platform": str(row["platform"] or ""),
+        "mode": str(row["mode"] or "list"),
+        "status": str(row["status"] or "active"),
+        "items": _automation_plan_items(row),
+        "cycle_index": int(row["cycle_index"] or 0),
+        "last_error": str(row["last_error"] or ""),
+        "next_run_at": next_run_at,
+        "task_count": len(task_rows),
+        "active_task_count": sum(1 for task in task_rows if str(task["status"] or "") not in terminal),
+        "created_at": int(row["created_at"] or 0),
+        "updated_at": int(row["updated_at"] or 0),
+    }
+
+
+def list_social_automation_plans(*, user_id: int) -> list[dict[str, Any]]:
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM social_automation_plans
+            WHERE user_id = ?
+            ORDER BY
+              CASE status WHEN 'active' THEN 0 WHEN 'materializing' THEN 1 ELSE 2 END,
+              updated_at DESC
+            LIMIT 80
+            """,
+            (int(user_id),),
+        ).fetchall()
+        return [_automation_plan_public(row, conn=conn) for row in rows]
+
+
+def _validate_automation_plan_payload(
+    payload: SocialAutomationPlanPayload,
+    account: Any,
+    *,
+    user: dict[str, Any],
+) -> tuple[str, str, str, list[dict[str, Any]]]:
+    mode = str(payload.mode or "list").strip().lower()
+    if mode not in {"list", "loop"}:
+        raise HTTPException(status_code=400, detail="执行模式仅支持列表模式或循环模式")
+    platform = _normalize_platform(payload.platform)
+    account_platform = str(account["platform"] or "").strip().lower()
+    if platform != account_platform:
+        raise HTTPException(status_code=400, detail="计划平台必须与执行账号平台一致")
+    persona_id = str(account["persona_id"] or "").strip()
+    requested_persona_id = str(payload.persona_id or "").strip()
+    if not persona_id:
+        raise HTTPException(status_code=409, detail="请先在人设页面为执行账号绑定人设")
+    if requested_persona_id and requested_persona_id != persona_id:
+        raise HTTPException(status_code=400, detail="计划人设必须与执行账号绑定的人设一致")
+    allowed = {
+        "threads": {
+            "publish_post",
+            "browse_feed",
+            "threads_warmup",
+            "threads_auto_reply",
+        },
+        "instagram": {
+            "publish_post",
+            "browse_feed",
+            "browse_profile",
+            "comment_post",
+            "reply_comment",
+            "like_post",
+            "share_post",
+            "repost_post",
+        },
+    }.get(platform, set())
+    normalized_items: list[dict[str, Any]] = []
+    previous_minutes = -1
+    for index, item in enumerate(payload.items):
+        minutes = int(item.reservation_minutes)
+        if minutes % 30 != 0:
+            raise HTTPException(status_code=400, detail=f"第 {index + 1} 项预约时间必须以 30 分钟为间隔")
+        if previous_minutes >= 0 and minutes <= previous_minutes:
+            raise HTTPException(status_code=400, detail="预约时间必须按列表顺序向后排列")
+        previous_minutes = minutes
+        task_type = str(item.task_type or "").strip()
+        if task_type not in allowed:
+            raise HTTPException(status_code=400, detail=f"当前平台不支持第 {index + 1} 项任务：{task_type}")
+        task_payload = dict(item.payload or {})
+        _reject_external_automation_plan_metadata(task_payload)
+        _validate_user_task_media_paths(task_payload, user)
+        if task_type == "publish_post" and not str(task_payload.get("content") or "").strip():
+            raise HTTPException(status_code=400, detail=f"第 {index + 1} 项发布任务缺少发布内容")
+        if task_type == "threads_auto_reply":
+            reply_scope = str(task_payload.get("reply_scope") or "comments").strip()
+            if reply_scope not in {"comments", "hot_posts"}:
+                raise HTTPException(status_code=400, detail=f"第 {index + 1} 项自动回复范围无效")
+            task_payload["reply_scope"] = reply_scope
+        normalized_items.append(
+            {
+                "id": f"item_{index + 1}",
+                "reservation_minutes": minutes,
+                "task_type": task_type,
+                "payload": task_payload,
+                "priority": int(item.priority),
+                "max_retries": int(item.max_retries),
+            }
+        )
+    return mode, platform, persona_id, normalized_items
+
+
+def _automation_plan_materialization_lease_seconds() -> int:
+    try:
+        value = int(os.getenv("SOCIAL_AUTOMATION_PLAN_MATERIALIZATION_LEASE_SECONDS", "180") or 180)
+    except (TypeError, ValueError):
+        value = 180
+    return max(30, min(value, 900))
+
+
+def _materialize_automation_plan(plan_id: str) -> dict[str, Any]:
+    clean_plan_id = str(plan_id or "").strip()
+    if not clean_plan_id:
+        raise ValueError("automation plan id is required")
+    claim_token = uuid.uuid4().hex
+    with _AUTOMATION_PLAN_LOCK:
+        claim_now = _now()
+        previous_latest_schedule = 0
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM social_automation_plans WHERE id = ?",
+                (clean_plan_id,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="自动化计划不存在")
+            status = str(row["status"] or "")
+            if status not in {"active", "materializing"}:
+                return _automation_plan_public(row, conn=conn)
+            current_cycle_index = int(row["cycle_index"] or 0)
+            current_tasks: list[Any] = []
+            if current_cycle_index > 0:
+                current_tasks = _automation_plan_task_rows(
+                    conn,
+                    clean_plan_id,
+                    cycle_index=current_cycle_index,
+                )
+            if status == "active" and current_cycle_index > 0:
+                if not current_tasks:
+                    conn.execute(
+                        """
+                        UPDATE social_automation_plans
+                        SET status = 'paused',
+                            last_error = '当前轮次任务记录缺失，计划已暂停',
+                            updated_at = ?
+                        WHERE id = ? AND status = 'active' AND cycle_index = ?
+                        """,
+                        (claim_now, clean_plan_id, current_cycle_index),
+                    )
+                    updated = conn.execute(
+                        "SELECT * FROM social_automation_plans WHERE id = ?",
+                        (clean_plan_id,),
+                    ).fetchone()
+                    return _automation_plan_public(updated, conn=conn)
+                current_succeeded = all(str(task["status"] or "") == "success" for task in current_tasks)
+                if str(row["mode"] or "list") != "loop" or not current_succeeded:
+                    return _automation_plan_public(row, conn=conn)
+            if status == "materializing":
+                active_token = str(row["materialization_token"] or "")
+                lease_cutoff = claim_now - _automation_plan_materialization_lease_seconds()
+                if active_token and int(row["updated_at"] or 0) >= lease_cutoff:
+                    return _automation_plan_public(row, conn=conn)
+                cycle_index = int(row["materializing_cycle"] or 0) or current_cycle_index + 1
+                claimed = conn.execute(
+                    """
+                    UPDATE social_automation_plans
+                    SET materialization_token = ?, materializing_cycle = ?,
+                        last_error = '', updated_at = ?
+                    WHERE id = ? AND status = 'materializing'
+                      AND materialization_token = ? AND updated_at = ?
+                    """,
+                    (
+                        claim_token,
+                        cycle_index,
+                        claim_now,
+                        clean_plan_id,
+                        active_token,
+                        int(row["updated_at"] or 0),
+                    ),
+                ).rowcount
+            else:
+                cycle_index = current_cycle_index + 1
+                claimed = conn.execute(
+                    """
+                    UPDATE social_automation_plans
+                    SET status = 'materializing', materialization_token = ?,
+                        materializing_cycle = ?, last_error = '', updated_at = ?
+                    WHERE id = ? AND status = 'active' AND cycle_index = ?
+                    """,
+                    (claim_token, cycle_index, claim_now, clean_plan_id, current_cycle_index),
+                ).rowcount
+            if not claimed:
+                updated = conn.execute(
+                    "SELECT * FROM social_automation_plans WHERE id = ?",
+                    (clean_plan_id,),
+                ).fetchone()
+                return _automation_plan_public(updated, conn=conn)
+            if current_tasks:
+                previous_latest_schedule = max(int(task["scheduled_at"] or 0) for task in current_tasks)
+            items = _automation_plan_items(row)
+            owner_user_id = int(row["user_id"] or 0)
+            persona_id = str(row["persona_id"] or "")
+            account_id = str(row["account_id"] or "")
+            platform = str(row["platform"] or "")
+            admin_waived = bool(int(row["billing_admin_waived"] or 0))
+
+        base_at = claim_now
+        if cycle_index > 1 and previous_latest_schedule > 0:
+            base_at = max(base_at, previous_latest_schedule + 30 * 60)
+        created_ids: list[str] = []
+        cancelled_runtime_ids: list[str] = []
+        try:
+            for sequence, item in enumerate(items, start=1):
+                task_id = _automation_plan_task_id(clean_plan_id, cycle_index, sequence)
+                with db() as conn:
+                    claim = conn.execute(
+                        """
+                        SELECT status, materialization_token
+                        FROM social_automation_plans
+                        WHERE id = ?
+                        """,
+                        (clean_plan_id,),
+                    ).fetchone()
+                    exists = conn.execute(
+                        "SELECT * FROM social_automation_tasks WHERE id = ?",
+                        (task_id,),
+                    ).fetchone()
+                if (
+                    not claim
+                    or str(claim["status"] or "") != "materializing"
+                    or str(claim["materialization_token"] or "") != claim_token
+                ):
+                    break
+                if exists:
+                    if (
+                        str(exists["automation_plan_id"] or "") != clean_plan_id
+                        or int(exists["automation_plan_cycle"] or 0) != cycle_index
+                        or int(exists["automation_plan_sequence"] or 0) != sequence
+                    ):
+                        raise RuntimeError("自动化计划任务标识冲突")
+                    created_ids.append(task_id)
+                    continue
+                task_payload = dict(item.get("payload") or {})
+                task_payload.update(
+                    {
+                        "_automation_plan_id": clean_plan_id,
+                        "_automation_plan_cycle": cycle_index,
+                        "_automation_plan_sequence": sequence,
+                        "_automation_plan_item_id": str(item.get("id") or f"item_{sequence}"),
+                    }
+                )
+                task = SocialTaskPayload(
+                    persona_id=persona_id,
+                    account_id=account_id,
+                    platform=platform,
+                    task_type=str(item.get("task_type") or ""),
+                    priority=int(item.get("priority") or 50),
+                    scheduled_at=base_at + int(item.get("reservation_minutes") or 0) * 60,
+                    payload=task_payload,
+                    max_retries=int(item.get("max_retries") or 0),
+                )
+                mark_trusted_batch_task(
+                    task,
+                    task_id=task_id,
+                    suppress_wake=True,
+                    automation_plan_id=clean_plan_id,
+                    automation_plan_cycle=cycle_index,
+                    automation_plan_sequence=sequence,
+                )
+                create_social_task(task, billing_admin_waived=admin_waived)
+                created_ids.append(task_id)
+
+            now = _now()
+            with db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                current = conn.execute(
+                    "SELECT * FROM social_automation_plans WHERE id = ?",
+                    (clean_plan_id,),
+                ).fetchone()
+                claim_is_current = bool(
+                    current
+                    and str(current["status"] or "") == "materializing"
+                    and str(current["materialization_token"] or "") == claim_token
+                    and int(current["materializing_cycle"] or 0) == cycle_index
+                )
+                task_rows = _automation_plan_task_rows(
+                    conn,
+                    clean_plan_id,
+                    cycle_index=cycle_index,
+                )
+                if not claim_is_current:
+                    cancelled_runtime_ids = cancel_social_tasks_in_transaction(
+                        conn,
+                        task_rows,
+                        reason="自动化计划状态已改变，已撤销本轮任务",
+                        now=now,
+                    )
+                    public = _automation_plan_public(current, conn=conn)
+                else:
+                    if created_ids:
+                        placeholders = ",".join("?" for _ in created_ids)
+                        conn.execute(
+                            f"""
+                            UPDATE social_automation_tasks
+                            SET status = 'queued', updated_at = ?
+                            WHERE id IN ({placeholders})
+                              AND automation_plan_id = ?
+                              AND automation_plan_cycle = ?
+                              AND status = 'preparing'
+                            """,
+                            (now, *created_ids, clean_plan_id, cycle_index),
+                        )
+                    activated = conn.execute(
+                        """
+                        UPDATE social_automation_plans
+                        SET status = 'active', cycle_index = ?,
+                            materialization_token = '', materializing_cycle = 0,
+                            last_error = '', updated_at = ?
+                        WHERE id = ? AND status = 'materializing'
+                          AND materialization_token = ? AND materializing_cycle = ?
+                        """,
+                        (cycle_index, now, clean_plan_id, claim_token, cycle_index),
+                    ).rowcount
+                    if not activated:
+                        cancelled_runtime_ids = cancel_social_tasks_in_transaction(
+                            conn,
+                            task_rows,
+                            reason="自动化计划物化声明已失效，已撤销本轮任务",
+                            now=now,
+                        )
+                    updated = conn.execute(
+                        "SELECT * FROM social_automation_plans WHERE id = ?",
+                        (clean_plan_id,),
+                    ).fetchone()
+                    public = _automation_plan_public(updated, conn=conn)
+            if cancelled_runtime_ids:
+                cleanup_cancelled_social_tasks_runtime(cancelled_runtime_ids)
+            if public["status"] == "active":
+                wake_social_automation_worker()
+            return public
+        except Exception as exc:
+            now = _now()
+            with db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                task_rows = _automation_plan_task_rows(
+                    conn,
+                    clean_plan_id,
+                    cycle_index=cycle_index,
+                )
+                cancelled_runtime_ids = cancel_social_tasks_in_transaction(
+                    conn,
+                    task_rows,
+                    reason="自动化计划创建失败，已撤销本轮任务",
+                    now=now,
+                )
+                conn.execute(
+                    """
+                    UPDATE social_automation_plans
+                    SET status = 'paused', materialization_token = '',
+                        materializing_cycle = 0, last_error = ?, updated_at = ?
+                    WHERE id = ? AND status = 'materializing'
+                      AND materialization_token = ?
+                    """,
+                    (str(exc), now, clean_plan_id, claim_token),
+                )
+            if cancelled_runtime_ids:
+                cleanup_cancelled_social_tasks_runtime(cancelled_runtime_ids)
+            raise
+
+
+def create_social_automation_plan(
+    payload: SocialAutomationPlanPayload,
+    *,
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    account = _require_account_access(payload.account_id, user)
+    mode, platform, persona_id, items = _validate_automation_plan_payload(
+        payload,
+        account,
+        user=user,
+    )
+    plan_id = _NEW_ID("automation_plan")
+    now = _now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_automation_plans(
+              id, user_id, persona_id, account_id, platform, mode, status,
+              items_json, cycle_index, billing_admin_waived,
+              materialization_token, materializing_cycle,
+              last_error, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, 0, ?, '', 0, '', ?, ?)
+            """,
+            (
+                plan_id,
+                _identity_user_id(user),
+                persona_id,
+                str(payload.account_id),
+                platform,
+                mode,
+                json.dumps(items, ensure_ascii=False),
+                1 if _billing_admin_waived(user) else 0,
+                now,
+                now,
+            ),
+        )
+    return _materialize_automation_plan(plan_id)
+
+
+def cancel_social_automation_plan(plan_id: str, *, user_id: int) -> dict[str, Any]:
+    clean_plan_id = str(plan_id or "").strip()
+    with _AUTOMATION_PLAN_LOCK:
+        now = _now()
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM social_automation_plans WHERE id = ? AND user_id = ?",
+                (clean_plan_id, int(user_id)),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="自动化计划不存在")
+            conn.execute(
+                """
+                UPDATE social_automation_plans
+                SET status = 'cancelled', materialization_token = '',
+                    materializing_cycle = 0, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (now, clean_plan_id, int(user_id)),
+            )
+            task_rows = _automation_plan_task_rows(conn, clean_plan_id)
+            cancelled_ids = cancel_social_tasks_in_transaction(
+                conn,
+                task_rows,
+                reason="自动化计划已停止",
+                now=now,
+            )
+            updated = conn.execute(
+                "SELECT * FROM social_automation_plans WHERE id = ?",
+                (clean_plan_id,),
+            ).fetchone()
+            public = _automation_plan_public(updated, conn=conn)
+        if cancelled_ids:
+            cleanup_cancelled_social_tasks_runtime(cancelled_ids)
+            wake_social_automation_worker()
+        return public
+
+
+def _reconcile_social_automation_plans() -> None:
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM social_automation_plans
+            WHERE status IN ('active', 'materializing')
+            ORDER BY updated_at ASC
+            """
+        ).fetchall()
+    for row in rows:
+        plan_id = str(row["id"] or "")
+        status = str(row["status"] or "")
+        if status == "materializing" or int(row["cycle_index"] or 0) <= 0:
+            with contextlib.suppress(Exception):
+                _materialize_automation_plan(plan_id)
+            continue
+        cycle_index = int(row["cycle_index"] or 0)
+        with db() as conn:
+            cycle_tasks = _automation_plan_task_rows(conn, plan_id, cycle_index=cycle_index)
+        if not cycle_tasks:
+            with contextlib.suppress(Exception):
+                _materialize_automation_plan(plan_id)
+            continue
+        if any(str(task["status"] or "") not in {"success", "failed", "cancelled"} for task in cycle_tasks):
+            continue
+        failed_tasks = [
+            task
+            for task in cycle_tasks
+            if str(task["status"] or "") in {"failed", "cancelled"}
+        ]
+        if failed_tasks:
+            first_failure = failed_tasks[0]
+            failed_status = "paused" if str(row["mode"] or "list") == "loop" else "failed"
+            with db() as conn:
+                conn.execute(
+                    """
+                    UPDATE social_automation_plans
+                    SET status = ?, last_error = ?, updated_at = ?
+                    WHERE id = ? AND status = 'active' AND cycle_index = ?
+                    """,
+                    (
+                        failed_status,
+                        str(first_failure["error"] or "本轮存在失败或已取消任务"),
+                        _now(),
+                        plan_id,
+                        cycle_index,
+                    ),
+                )
+            continue
+        if str(row["mode"] or "list") == "loop":
+            with contextlib.suppress(Exception):
+                _materialize_automation_plan(plan_id)
+            continue
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE social_automation_plans
+                SET status = 'completed', updated_at = ?
+                WHERE id = ? AND status = 'active' AND cycle_index = ?
+                """,
+                (_now(), plan_id, cycle_index),
+            )
 
 
 def register_social_automation_routes(app: FastAPI) -> None:
@@ -1285,6 +1888,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
     @app.post("/api/persona_dashboard/automation/tasks")
     def api_social_task_create(payload: SocialTaskPayload, user: dict[str, Any] = Depends(get_current_user)):
         account = _require_account_access(payload.account_id, user)
+        _reject_external_automation_plan_metadata(payload.payload)
         _validate_user_task_media_paths(payload.payload, user)
         if str(payload.task_type or "").strip() == "open_login":
             if _open_login_auto_submit_mode(payload.payload) is not True:
@@ -1297,6 +1901,36 @@ def register_social_automation_routes(app: FastAPI) -> None:
         return {
             "ok": True,
             "task": _create_social_task_for_user(payload, user),
+        }
+
+    @app.get("/api/persona_dashboard/automation/plans")
+    def api_social_automation_plans(user: dict[str, Any] = Depends(get_current_user)):
+        return {
+            "ok": True,
+            "plans": list_social_automation_plans(user_id=_identity_user_id(user)),
+        }
+
+    @app.post("/api/persona_dashboard/automation/plans")
+    def api_social_automation_plan_create(
+        payload: SocialAutomationPlanPayload,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        return {
+            "ok": True,
+            "plan": create_social_automation_plan(payload, user=user),
+        }
+
+    @app.post("/api/persona_dashboard/automation/plans/{plan_id}/cancel")
+    def api_social_automation_plan_cancel(
+        plan_id: str,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        return {
+            "ok": True,
+            "plan": cancel_social_automation_plan(
+                plan_id,
+                user_id=_identity_user_id(user),
+            ),
         }
 
     @app.post("/api/persona_dashboard/automation/tasks/cancel_all")
@@ -3814,6 +4448,7 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
         if not existing:
             raise HTTPException(status_code=404, detail="账号不存在")
         target_persona_id = str(updates.get("persona_id", existing["persona_id"]) or "").strip()
+        current_persona_id = str(existing["persona_id"] or "").strip()
         target_platform = str(existing["platform"] or "").strip()
         target_username = str(updates.get("username", existing["username"]) or "").strip().lstrip("@")
         owner_user_id = int(existing["user_id"] or 0)
@@ -3843,6 +4478,8 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
             if active_proxy_task:
                 raise HTTPException(status_code=409, detail="账号有进行中的自动化任务，请停止任务后再切换代理 IP")
         if target_persona_id:
+            if payload.require_unbound and current_persona_id and current_persona_id != target_persona_id:
+                raise HTTPException(status_code=409, detail="账号已绑定到其他人设，请刷新后重新选择未绑定账号")
             if owner_user_id > 0:
                 persona_owner = conn.execute(
                     "SELECT 1 FROM persona_owners WHERE archive_id = ? AND user_id = ? LIMIT 1",
@@ -4355,9 +4992,11 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
             """
             INSERT INTO social_automation_tasks(
               id, user_id, persona_id, account_id, platform, task_type, priority, status, scheduled_at,
-              payload_json, result_json, max_retries, billing_reservation_id, daily_publish_waived, created_at, updated_at
+              payload_json, result_json, max_retries, billing_reservation_id, daily_publish_waived,
+              automation_plan_id, automation_plan_cycle, automation_plan_sequence,
+              created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -4373,6 +5012,9 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
                 0 if task_type == "open_login" else max(0, min(int(payload.max_retries or 0), 5)),
                 str((billing_reservation or {}).get("id") or ""),
                 1 if daily_publish_waived else 0,
+                str(batch_context.get("automation_plan_id") or ""),
+                max(0, int(batch_context.get("automation_plan_cycle") or 0)),
+                max(0, int(batch_context.get("automation_plan_sequence") or 0)),
                 now,
                 now,
             ),
@@ -4452,6 +5094,31 @@ def list_social_tasks(*, status: str = "", account_id: str = "", limit: int = 60
     ]
 
 
+def _reject_clearing_active_plan_tasks(conn: sqlite3.Connection, rows: list[Any]) -> None:
+    plan_ids = sorted(
+        {
+            str(row["automation_plan_id"] or "").strip()
+            for row in rows
+            if str(row["automation_plan_id"] or "").strip()
+        }
+    )
+    if not plan_ids:
+        return
+    placeholders = ",".join("?" for _ in plan_ids)
+    active = conn.execute(
+        f"""
+        SELECT id
+        FROM social_automation_plans
+        WHERE id IN ({placeholders})
+          AND status IN ('active', 'materializing')
+        LIMIT 1
+        """,
+        tuple(plan_ids),
+    ).fetchone()
+    if active:
+        raise HTTPException(status_code=409, detail="请先停止自动化计划，再清理计划任务记录")
+
+
 def clear_social_task(task_id: str) -> int:
     task_ids = [str(task_id or "").strip()]
     with db() as conn:
@@ -4466,6 +5133,7 @@ def clear_social_task(task_id: str) -> int:
             f"SELECT * FROM social_automation_tasks WHERE id IN ({placeholders})",
             tuple(task_ids),
         ).fetchall()
+        _reject_clearing_active_plan_tasks(conn, list(rows))
         now = _now()
         conn.execute(
             f"""
@@ -4520,6 +5188,7 @@ def clear_social_tasks(*, persona_id: str = "", account_id: str = "", user_id: i
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         rows = conn.execute(f"SELECT * FROM social_automation_tasks {where}", tuple(params)).fetchall()
+        _reject_clearing_active_plan_tasks(conn, list(rows))
         task_ids = [str(row["id"] or "") for row in rows if str(row["id"] or "")]
         if task_ids:
             placeholders = ",".join("?" for _ in task_ids)
@@ -4848,6 +5517,7 @@ def retry_social_task(task_id: str, *, billing_admin_waived: bool = False) -> di
 def run_social_automation_once() -> dict[str, Any] | None:
     if _WORKER_STOP.is_set():
         return None
+    _reconcile_social_automation_plans()
     with _WORKER_LOCK:
         _cleanup_worker_task_threads()
         if _active_worker_thread_count() >= _social_worker_max_concurrency():
@@ -4865,6 +5535,7 @@ def _worker_loop() -> None:
     _WORKER_STATE["last_started_at"] = _now()
     while not _WORKER_STOP.is_set():
         try:
+            _reconcile_social_automation_plans()
             _launch_available_social_tasks()
         except Exception as exc:
             _WORKER_STATE["last_error"] = str(exc)

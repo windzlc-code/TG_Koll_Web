@@ -331,6 +331,11 @@ export function createSentimentBackendApp({
   let scanChild = null;
   let continuousChild = null;
   let collectionJobChild = null;
+  const stopWorker = (child) => {
+    if (child && child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
+    }
+  };
   const startBackgroundScan = (job = {}) => {
     if (scanChild && scanChild.exitCode === null && scanChild.signalCode === null) return scanChild.pid;
     const child = spawn(process.execPath, [path.join(SRC_DIR, "scan-worker.js")], {
@@ -646,6 +651,12 @@ export function createSentimentBackendApp({
     log,
     close() {
       stopSentimentScheduler();
+      // The console launches this runtime from short-lived workflow CLIs. Stop
+      // worker children as well so a completed or timed-out workflow cannot
+      // leave a detached scan competing with the next user request.
+      stopWorker(scanChild);
+      stopWorker(continuousChild);
+      stopWorker(collectionJobChild);
       closeDb();
     },
   };

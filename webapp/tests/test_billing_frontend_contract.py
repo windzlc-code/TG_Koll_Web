@@ -69,10 +69,10 @@ class BillingFrontendContractTests(unittest.TestCase):
         for marker in ("effective_unlimited", "admin_waived", "unlimited_compute"):
             self.assertIn(marker, summary)
         self.assertIn('pointsNode.textContent = unlimited ? "不限"', personal)
-        self.assertIn('publishRemainingLabel.textContent = traditional ? "今日剩餘發布額度" : "今日剩余发布额度"', personal)
+        self.assertIn('publishRemainingLabel.textContent = traditional ? "今日剩餘任務額度" : "今日剩余任务额度"', personal)
         self.assertIn('loadBilling({ force: true }).catch(() => {})', events)
-        self.assertIn('publishRemaining: "今日剩余发布额度"', self.site_navigation_script)
-        self.assertIn('publishRemaining: "今日剩餘發布額度"', self.site_navigation_script)
+        self.assertIn('publishRemaining: "今日剩余任务额度"', self.site_navigation_script)
+        self.assertIn('publishRemaining: "今日剩餘任務額度"', self.site_navigation_script)
 
     def test_charge_buttons_do_not_render_catalog_prices(self):
         self.assertNotIn("renderBillingPricePill", self.console_script)
@@ -81,13 +81,13 @@ class BillingFrontendContractTests(unittest.TestCase):
 
     def test_charge_button_markup_has_no_price_text(self):
         for button_marker in (
-            "data-persona-regenerate-profile-content",
+            "data-persona-profile-editor-regenerate",
             "data-persona-generate-image",
             "data-persona-run-media-task",
             "data-persona-generate-posts",
             "data-persona-publish-submit",
             "data-persona-run-threads=",
-            "data-account-pool-run-threads=",
+            "data-automation-plan-submit",
             "data-persona-create-ai-keywords",
             "data-persona-create-ai-submit",
             'id="executeSimpleFlow"',

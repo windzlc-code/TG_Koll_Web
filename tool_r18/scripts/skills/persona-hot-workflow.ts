@@ -9,6 +9,7 @@ import {
   refreshSentimentSourceMetrics,
   warmSentimentHotSearchStrategy,
 } from "@/lib/sentiment-hot-importer";
+import { stopSentimentRuntime } from "@/lib/sentiment-runtime-manager";
 import {
   rememberSentimentHotImported,
   type SentimentHotCandidate,
@@ -67,6 +68,9 @@ async function printJsonAndExit(value: unknown, exitCode = 0): Promise<never> {
       else resolve();
     });
   });
+  // A workflow CLI is short lived. Close the runtime it started before force
+  // exiting so its background scanner cannot outlive this user request.
+  stopSentimentRuntime();
   process.exit(exitCode);
 }
 

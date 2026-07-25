@@ -213,9 +213,7 @@ function normalizePost(raw: any, fallbackIndex: number): PersonaArchivePost {
     ? buildArchiveMemoryOutline(rawPublishedMemory || legacyPublishedOriginal || rawContent)
     : undefined;
   const content = publishedAt ? (publishedMemory || "") : rawContent;
-  const title = typeof raw?.title === "string" && raw.title.trim()
-    ? raw.title
-    : `貼文 #${fallbackIndex + 1}`;
+  const title = typeof raw?.title === "string" ? raw.title.trim() : "";
   return {
     id: typeof raw?.id === "string" && raw.id ? raw.id : crypto.randomUUID(),
     title,
@@ -501,7 +499,7 @@ function migrateLegacyProjects(): PersonaArchive[] {
             const createdAt = ep.createdAt || new Date(new Date(baseCreatedAt).getTime() + index).toISOString();
             return {
               id: ep.archivePostId || `${project.id}-legacy-${index + 1}`,
-              title: ep.title || `貼文 #${index + 1}`,
+              title: String(ep.title || "").trim(),
               content: ep.content || "",
               wordCount: ep.wordCount || (ep.content || "").length,
               orderIndex: index,
@@ -821,7 +819,7 @@ function buildArchivePostFromEpisode(ep: EpisodeScript, index: number): PersonaA
   return normalizePost(
     {
       id: ep.archivePostId,
-      title: ep.title || `貼文 #${index + 1}`,
+      title: String(ep.title || "").trim(),
       content: ep.content,
       wordCount: ep.wordCount || ep.content.length,
       orderIndex: ep.orderIndex ?? index,
@@ -840,7 +838,7 @@ function buildArchivePostFromEpisode(ep: EpisodeScript, index: number): PersonaA
 export function archivePostsToEpisodes(posts: PersonaArchivePost[]): EpisodeScript[] {
   return sortArchivePosts(posts).map((post, index) => ({
     number: index + 1,
-    title: `貼文 #${index + 1}`,
+    title: String(post.title || "").trim(),
     content: post.content,
     wordCount: typeof post.wordCount === "number" ? post.wordCount : post.content.length,
     orderIndex: post.orderIndex,

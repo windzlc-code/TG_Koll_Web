@@ -40,7 +40,10 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("${renderUploadSelectionIcon(isSelected)}", self.script)
         self.assertIn("data-upload-select-all", self.script)
         self.assertIn("data-upload-delete-selected", self.script)
-        self.assertIn('<button type="button" class="upload-delete-selected"', self.script)
+        self.assertIn(
+            '<button type="button" class="upload-delete-selected unified-action-icon-button"',
+            self.script,
+        )
         self.assertIn('${selectedIndexes.size ? "" : "hidden"}', self.script)
         self.assertNotIn('data-upload-delete-selected="${esc(input.id)}" disabled', self.script)
         self.assertIn("removeUploadDropzoneFiles(input, indexes)", self.script)
@@ -114,20 +117,48 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('if (typeof DataTransfer === "function") {', self.script)
         self.assertIn("} catch (_error) {", self.script)
         self.assertIn("if (uploadSyntheticChangeInputs.has(input)) return;", self.script)
+        self.assertIn("function currentUploadDropzoneFiles(input)", self.script)
+
+    def test_hotspot_edit_opens_the_standard_draft_editor(self):
+        self.assertIn("async function openPersonaHotCandidateInDraftEditor", self.script)
         self.assertIn(
-            'if (event.target?.id === "personaHotReplacementFiles")',
+            'importPersonaHotDrafts([cleanCandidateId], { showCompletionModal: false, applyStoredEdits: true })',
             self.script,
         )
-        hot_replacement_handler = self.script.split(
-            'if (event.target?.id === "personaHotReplacementFiles")',
-            1,
-        )[1].split(
-            'if (event.target?.matches?.("[data-persona-upload-image-file]"))',
-            1,
-        )[0]
-        self.assertIn("const files = currentUploadDropzoneFiles(event.target);", hot_replacement_handler)
-        self.assertNotIn("event.target.files", hot_replacement_handler)
-        self.assertIn('clearUploadDropzoneState("personaHotReplacementFiles")', hot_replacement_handler)
+        self.assertIn('form.generate.composeMode = "tweet_media";', self.script)
+        self.assertIn('form.media.operationMode = "replace";', self.script)
+        self.assertIn('setPersonaPostSource("posts", persona);', self.script)
+        self.assertIn("openPersonaDraftEditor(postId);", self.script)
+        self.assertIn("已进入标准草稿编辑器，可直接编辑正文和媒体。", self.script)
+        self.assertIn('data-persona-start-hot-edit="${esc(candidateId)}">编辑后使用</button>', self.script)
+        self.assertNotIn("data-persona-import-hot-one", self.script)
+        self.assertNotIn("data-persona-confirm-hot-import", self.script)
+        self.assertNotIn(">直接导入</button>", self.script)
+        self.assertNotIn(">确认导入</button>", self.script)
+        self.assertNotIn('id="personaHotReplacementFiles"', self.script)
+
+    def test_hotspot_cards_open_one_editable_public_detail_window(self):
+        self.assertIn("async function openPersonaHotCandidateDetail", self.script)
+        self.assertIn('data-persona-view-hot-candidate="${esc(candidate.candidate_id)}"', self.script)
+        self.assertIn('class="persona-hot-card-actions"', self.script)
+        self.assertIn(">查看</button>", self.script)
+        self.assertIn('modalKey: "persona-hot-candidate-detail"', self.script)
+        self.assertIn('title: "热点推文详情"', self.script)
+        self.assertIn('name: "content"', self.script)
+        self.assertIn('label: "推文正文"', self.script)
+        self.assertIn('confirmText: "编辑后使用"', self.script)
+        self.assertIn("form.hotEditedContentByCandidate[cleanCandidateId] = editedContent;", self.script)
+        self.assertIn("await openPersonaHotCandidateInDraftEditor(persona, cleanCandidateId);", self.script)
+        self.assertIn('event.target.closest("[data-persona-view-hot-candidate]")', self.script)
+
+    def test_mobile_hotspot_cards_expand_without_inline_single_preview(self):
+        mobile_hotspot = self.styles.split("@media (max-width: 980px) {\n  .persona-hot-layout {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("grid-template-columns: 1fr;", mobile_hotspot)
+        self.assertIn(".persona-hot-grid {", mobile_hotspot)
+        self.assertIn("max-height: none;", mobile_hotspot)
+        self.assertIn("overflow: visible;", mobile_hotspot)
+        self.assertIn(".persona-hot-preview {", mobile_hotspot)
+        self.assertIn("display: none;", mobile_hotspot)
 
     def test_upload_files_survive_component_rerenders(self):
         self.assertIn("const uploadFilesById = new Map();", self.script)
@@ -168,23 +199,54 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('data-persona-edit-post-media="${esc(index)}"', self.script)
         self.assertIn('title="编辑媒体"', self.script)
         self.assertNotIn('data-persona-attach-task-media="replace"', self.script)
-        self.assertIn('["replace", "媒体编辑"]', self.script)
+        self.assertIn('["replace", "自定义上传"]', self.script)
+        self.assertIn('["generate", "AI 生成"]', self.script)
+        self.assertIn('aria-label="配图模式"', self.script)
         self.assertIn("function renderMediaCardViewIcon()", self.script)
         self.assertIn("function renderMediaCardEditIcon()", self.script)
-        self.assertIn("function renderMediaCardDeleteIcon()", self.script)
+        self.assertIn("function renderTrashIcon()", self.script)
         self.assertIn("${renderMediaCardViewIcon()}</button>", self.script)
         self.assertIn("${renderMediaCardEditIcon()}</button>", self.script)
-        self.assertIn("${renderMediaCardDeleteIcon()}</button>", self.script)
+        self.assertIn("${renderTrashIcon()}</button>", self.script)
         self.assertIn(".ui-media-card-view-icon", self.styles)
         self.assertIn(".ui-media-card-edit-icon", self.styles)
-        self.assertIn(".ui-media-card-delete-icon", self.styles)
+        self.assertIn(".ui-trash-icon", self.styles)
+
+    def test_compose_media_upload_mode_uses_one_compact_plus_picker(self):
+        renderer_start = self.script.index("function renderPersonaCompactMediaUpload(persona, post = null)")
+        renderer_end = self.script.index(
+            "\nfunction renderPersonaPendingMediaInput(persona)",
+            renderer_start,
+        )
+        renderer = self.script[renderer_start:renderer_end]
+        self.assertIn('accept="image/*,video/*"', renderer)
+        self.assertIn('class="account-pool-add-button persona-compose-media-upload-trigger"', renderer)
+        self.assertIn('<span aria-hidden="true"></span>', renderer)
+        self.assertIn("<strong>添加媒体</strong>", renderer)
+        self.assertIn('title="上传图片或视频"', renderer)
+        self.assertIn('directUpload ? "data-persona-direct-media-input"', renderer)
+        self.assertNotIn("选择媒体文件", renderer)
+        self.assertNotIn("拖动图片或视频", renderer)
+        self.assertIn(
+            ".persona-compose-media-upload .account-pool-add-button.persona-compose-media-upload-trigger {",
+            self.styles,
+        )
+        upload_trigger_styles = self.styles.split(
+            ".persona-compose-media-upload .account-pool-add-button.persona-compose-media-upload-trigger {",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("justify-content: center;", upload_trigger_styles)
+        self.assertIn("width: 100%;", upload_trigger_styles)
 
     def test_persona_media_bulk_selection_only_renders_delete_when_selected(self):
         self.assertIn("data-persona-media-select-index", self.script)
         self.assertIn("data-persona-media-select-all", self.script)
         self.assertIn("function togglePersonaMediaBulkSelection", self.script)
         self.assertIn("function deleteSelectedPersonaPostMedia", self.script)
-        self.assertIn('selectedIndexes.size ? `<button type="button" class="upload-delete-selected"', self.script)
+        self.assertIn(
+            'selectedIndexes.size ? `<button type="button" class="upload-delete-selected unified-action-icon-button"',
+            self.script,
+        )
         self.assertIn("if (!selected.size) {", self.script)
         self.assertIn("deleteSelected?.remove();", self.script)
         self.assertIn(".upload-selection-toolbar [hidden] {", self.styles)
@@ -227,7 +289,7 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('<circle cx="12" cy="12" r="2.5"></circle>', self.script)
         self.assertIn("function renderMediaCardEditIcon()", self.script)
         self.assertIn('class="ui-media-card-edit-icon"', self.script)
-        self.assertIn("function renderMediaCardDeleteIcon()", self.script)
+        self.assertIn("function renderTrashIcon()", self.script)
         self.assertIn("button.persona-media-card-select .persona-media-selection-icon", self.styles)
         self.assertIn("width: 17px;\n  height: 17px;", self.styles)
         self.assertIn("background: color-mix(in srgb, var(--panel-solid) 96%, transparent);", self.styles)

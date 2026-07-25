@@ -5010,7 +5010,18 @@ body.page-admin {
 
 .persona-post-delete {
   color: #b91c1c;
-  border-color: rgba(185, 28, 28, 0.22);
+  border: 0;
+  background: transparent;
+}
+
+.persona-post-delete .ui-trash-icon {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .persona-tab-pager {
@@ -9281,6 +9292,26 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   border-top: 3px solid #879896;
   border-radius: 7px;
   background: #fff;
+}
+
+.persona-auto-log-tools .persona-selection-icon-button {
+  display: inline-grid;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  place-items: center;
+}
+
+.persona-auto-log-tools :is(.ui-action-icon, .ui-trash-icon) {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.25;
 }
 
 .page-admin .admin-governance-kpi > span,

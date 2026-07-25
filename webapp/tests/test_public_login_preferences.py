@@ -399,6 +399,20 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn(':root[data-theme="dark"]', self.site_nav_styles)
         self.assertNotRegex(self.styles, r"(?m)^\.site-header\s*\{")
 
+    def test_mobile_site_navigation_is_modal_and_backdrop_closes_it(self):
+        self.assertIn("const mobileMenuIsolation = new WeakMap();", self.site_nav_script)
+        self.assertIn("function setMobileMenuBackgroundInert(menu, active)", self.site_nav_script)
+        self.assertIn("sibling.inert = true;", self.site_nav_script)
+        self.assertIn("setMobileMenuBackgroundInert(menu, true);", self.site_nav_script)
+        self.assertIn("setMobileMenuBackgroundInert(menu, false);", self.site_nav_script)
+        self.assertIn(
+            "if (event.target === backdrop) setMobileMenuOpen(menu, false",
+            self.site_nav_script,
+        )
+        self.assertIn("width: 100vw;", self.site_nav_styles)
+        self.assertIn("height: 100dvh;", self.site_nav_styles)
+        self.assertIn("body.site-mobile-menu-active", self.site_nav_styles)
+
     def test_fixed_light_palette_covers_each_public_page_without_recoloring_media(self):
         for selector in (
             ".home-canvas .home-flow-section",

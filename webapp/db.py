@@ -804,8 +804,34 @@ def init_db() -> None:
               daily_publish_waived INTEGER NOT NULL DEFAULT 0,
               daily_publish_committed INTEGER NOT NULL DEFAULT 0,
               daily_publish_committed_at INTEGER NOT NULL DEFAULT 0,
+              automation_plan_id TEXT NOT NULL DEFAULT '',
+              automation_plan_cycle INTEGER NOT NULL DEFAULT 0,
+              automation_plan_sequence INTEGER NOT NULL DEFAULT 0,
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS social_automation_plans (
+              id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL DEFAULT 0,
+              persona_id TEXT NOT NULL,
+              account_id TEXT NOT NULL,
+              platform TEXT NOT NULL,
+              mode TEXT NOT NULL DEFAULT 'list',
+              status TEXT NOT NULL DEFAULT 'active',
+              items_json TEXT NOT NULL DEFAULT '[]',
+              cycle_index INTEGER NOT NULL DEFAULT 0,
+              billing_admin_waived INTEGER NOT NULL DEFAULT 0,
+              materialization_token TEXT NOT NULL DEFAULT '',
+              materializing_cycle INTEGER NOT NULL DEFAULT 0,
+              last_error TEXT NOT NULL DEFAULT '',
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+              FOREIGN KEY(account_id) REFERENCES social_accounts(id) ON DELETE CASCADE
             )
             """
         )
@@ -870,6 +896,8 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_accounts_persona ON social_accounts(persona_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_queue ON social_automation_tasks(status, scheduled_at, priority, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_account ON social_automation_tasks(account_id, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_social_plans_user ON social_automation_plans(user_id, updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_social_plans_status ON social_automation_plans(status, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_logs_task ON social_automation_logs(task_id, created_at)")
         user_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(users)").fetchall()}
         user_column_migrations = {
@@ -984,6 +1012,68 @@ def init_db() -> None:
             conn.execute("ALTER TABLE social_automation_tasks ADD COLUMN daily_publish_committed INTEGER NOT NULL DEFAULT 0")
         if "daily_publish_committed_at" not in task_columns:
             conn.execute("ALTER TABLE social_automation_tasks ADD COLUMN daily_publish_committed_at INTEGER NOT NULL DEFAULT 0")
+        if "automation_plan_id" not in task_columns:
+            conn.execute("ALTER TABLE social_automation_tasks ADD COLUMN automation_plan_id TEXT NOT NULL DEFAULT ''")
+        if "automation_plan_cycle" not in task_columns:
+            conn.execute("ALTER TABLE social_automation_tasks ADD COLUMN automation_plan_cycle INTEGER NOT NULL DEFAULT 0")
+        if "automation_plan_sequence" not in task_columns:
+            conn.execute("ALTER TABLE social_automation_tasks ADD COLUMN automation_plan_sequence INTEGER NOT NULL DEFAULT 0")
+        plan_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_automation_plans)").fetchall()}
+        if "billing_admin_waived" not in plan_columns:
+            conn.execute("ALTER TABLE social_automation_plans ADD COLUMN billing_admin_waived INTEGER NOT NULL DEFAULT 0")
+        if "materialization_token" not in plan_columns:
+            conn.execute("ALTER TABLE social_automation_plans ADD COLUMN materialization_token TEXT NOT NULL DEFAULT ''")
+        if "materializing_cycle" not in plan_columns:
+            conn.execute("ALTER TABLE social_automation_plans ADD COLUMN materializing_cycle INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            """
+            UPDATE social_automation_tasks AS task
+            SET automation_plan_id = COALESCE(
+              (
+                SELECT plan.id
+                FROM social_automation_plans AS plan
+                WHERE plan.id = json_extract(
+                        CASE WHEN json_valid(task.payload_json) THEN task.payload_json ELSE '{}' END,
+                        '$._automation_plan_id'
+                      )
+                  AND plan.user_id = task.user_id
+                  AND plan.account_id = task.account_id
+                LIMIT 1
+              ),
+              ''
+            )
+            WHERE task.automation_plan_id = ''
+              AND json_valid(task.payload_json)
+              AND COALESCE(
+                    json_extract(
+                      CASE WHEN json_valid(task.payload_json) THEN task.payload_json ELSE '{}' END,
+                      '$._automation_plan_id'
+                    ),
+                    ''
+                  ) <> ''
+            """
+        )
+        conn.execute(
+            """
+            UPDATE social_automation_tasks
+            SET automation_plan_cycle = CASE
+                  WHEN json_valid(payload_json)
+                  THEN MAX(0, CAST(COALESCE(json_extract(payload_json, '$._automation_plan_cycle'), 0) AS INTEGER))
+                  ELSE 0
+                END,
+                automation_plan_sequence = CASE
+                  WHEN json_valid(payload_json)
+                  THEN MAX(0, CAST(COALESCE(json_extract(payload_json, '$._automation_plan_sequence'), 0) AS INTEGER))
+                  ELSE 0
+                END
+            WHERE automation_plan_id <> ''
+              AND (automation_plan_cycle = 0 OR automation_plan_sequence = 0)
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_social_tasks_plan_cycle "
+            "ON social_automation_tasks(automation_plan_id, automation_plan_cycle, automation_plan_sequence)"
+        )
         conn.execute(
             """
             UPDATE social_automation_tasks

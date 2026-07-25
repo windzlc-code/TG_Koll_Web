@@ -174,7 +174,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("function installUnifiedAccountMenu", self.site_nav_source)
         self.assertNotIn(".profile-page .site-account-popover", self.profile_styles)
         self.assertIn("background: #ffffff", self.site_nav_styles)
-        self.assertIn("border: 1px solid #d4dfdd", self.site_nav_styles)
+        self.assertIn(".site-account-popover > * {", self.site_nav_styles)
         self.assertIn("data-site-account-signature", self.site_nav_source)
         self.assertIn('data-site-copy="profileSignatureEmpty"', self.site_nav_source)
         self.assertIn('data-site-copy="profileTagsEmpty"', self.site_nav_source)
@@ -282,19 +282,35 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('pointerenter', self.site_nav_source)
         self.assertIn('if (event.target === trigger) return;', self.site_nav_source)
         self.assertIn('setAccountMenuOpen(menu, false, { restoreFocus: true });', self.site_nav_source)
-        self.assertIn('classList.toggle("site-account-menu-open", nextOpen)', self.site_nav_source)
+        self.assertIn('classList.toggle("site-account-menu-open", true)', self.site_nav_source)
+        self.assertIn("const accountPanelCloseTimers = new WeakMap();", self.site_nav_source)
+        self.assertIn("window.requestAnimationFrame", self.site_nav_source)
+        self.assertIn('event.propertyName !== "transform"', self.site_nav_source)
+        self.assertIn("popover.hidden = true", self.site_nav_source)
+        self.assertIn('document.body.classList.toggle("site-account-panel-active"', self.site_nav_source)
         self.assertIn('.site-header.site-account-menu-open {', self.site_nav_styles)
         self.assertIn('z-index: 5000;', self.site_nav_styles)
+        self.assertIn('inset: 0;', self.site_nav_styles)
+        self.assertIn('width: 100vw;', self.site_nav_styles)
+        self.assertIn('height: 100dvh;', self.site_nav_styles)
+        self.assertIn('transform: translate3d(100%, 0, 0);', self.site_nav_styles)
+        self.assertIn('.site-account-menu.is-open .site-account-popover {', self.site_nav_styles)
+        self.assertIn('body.site-account-panel-active {', self.site_nav_styles)
+        self.assertIn('class="site-account-id-line"', self.site_nav_source)
+        self.assertIn('class="site-account-footer"', self.site_nav_source)
+        self.assertIn('margin-top: auto;', self.site_nav_styles)
         self.assertIn('.site-account-close svg {', self.site_nav_styles)
         self.assertIn('border-radius: 50%', self.site_nav_styles)
-        self.assertIn('height: auto;', self.site_nav_styles)
-        self.assertIn('bottom: auto;', self.site_nav_styles)
+        self.assertIn('max-height: none;', self.site_nav_styles)
         self.assertIn('.site-header .site-mobile-menu,', self.site_nav_styles)
         self.assertIn('.site-header .site-account-menu {', self.site_nav_styles)
         self.assertIn('.site-header .site-menu-toggle span {', self.site_nav_styles)
         self.assertIn('grid-template-columns: 18px;', self.site_nav_styles)
         self.assertIn('width: fit-content;', self.site_nav_styles)
         self.assertIn('href="/" aria-label="Vecto 首页" data-site-home-label', self.markup)
+        self.assertIn('.site-header .site-header-branding {', self.site_nav_styles)
+        self.assertIn('min-width: max-content;', self.site_nav_styles)
+        self.assertIn('.site-header .brand-logo {\n    width: 30px;\n    height: 30px;', self.site_nav_styles)
 
     def test_console_actions_and_busy_button_borders_remain_static(self):
         self.assertIn("--vecto-action-static-gradient", self.styles)
@@ -320,7 +336,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('aria-busy="${busy ? "true" : "false"}"', self.source)
         for marker in (
             'id="executeSimpleFlow"',
-            "data-persona-regenerate-profile-content aria-busy=",
+            "data-automation-plan-submit aria-busy=",
             "data-browser-recommendation-refresh aria-busy=",
             "data-persona-create-ai-keywords aria-busy=",
             "data-persona-create-ai-submit aria-busy=",
@@ -351,7 +367,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self.assertNotIn(".console-modal-actions .danger {", self.styles)
 
-    def test_social_task_snapshots_files_and_schedule_before_busy_rerender(self):
+    def test_social_task_snapshots_files_before_busy_rerender(self):
         task_source = self.source.split("async function createSocialTask(", 1)[1].split("async function ", 1)[0]
         snapshot_index = task_source.index('const mediaFiles = [')
         rerender_index = task_source.index('renderSimpleFlowModule(state.activeModule)')
@@ -360,13 +376,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertLess(snapshot_index, rerender_index)
         self.assertLess(rerender_index, upload_index)
         self.assertIn('const targetUrls = $("simpleTargetUrls")?.value', task_source)
-        self.assertIn('const scheduledAt = normalizeScheduleValueForApi($("simpleScheduleAt")?.value);', task_source)
+        self.assertNotIn("simpleScheduleAt", task_source)
         self.assertIn('target_urls: splitLines(targetUrls)', task_source)
 
     def test_open_login_task_opens_the_live_browser_view_after_creation(self):
         task_source = self.source.split("async function createSocialTask(", 1)[1].split("async function ", 1)[0]
         self.assertIn(
-            'if (taskType === "open_login" && !waitingForSchedule) openLiveBrowserTaskView(String(result.task?.id || ""));',
+            'if (taskType === "open_login") openLiveBrowserTaskView(String(result.task?.id || ""));',
             task_source,
         )
 
@@ -832,6 +848,20 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn(".live-browser-card-actions", mobile_controls)
         self.assertIn("justify-content: flex-start;", mobile_controls)
 
+    def test_mobile_browser_monitor_hides_head_actions_without_sticky_stop_button(self):
+        render = self._function_source("renderLiveBrowserSessions")
+        mobile_overrides = self.styles[self.styles.index("/* Mobile browser monitor:"):]
+        head_actions = self._css_block(
+            '.console-page .account-browser-page[data-account-browser-page="browsers"] .live-browser-head-actions {',
+            self.styles.index("/* Mobile browser monitor:"),
+        )
+
+        self.assertIn('class="danger live-browser-stop-all--head" data-social-cancel-all disabled', render)
+        self.assertNotIn("live-browser-stop-all--bottom", render)
+        self.assertIn(".live-browser-head-actions", mobile_overrides)
+        self.assertIn("display: none;", head_actions)
+        self.assertNotIn("live-browser-stop-all--bottom", mobile_overrides)
+
     def test_mobile_live_browser_placeholders_and_expanded_window_prioritizes_media(self):
         mobile_density_start = self.styles.index(
             "@media (max-width: 760px)",
@@ -951,17 +981,24 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
 
         self.assertIn('class="row-actions persona-hot-fetch-toolbar"', self.source)
-        self.assertNotIn(".persona-hot-fetch-toolbar > button", self.styles)
+        self.assertIn('class="primary persona-hot-fetch-action"', self.source)
+        self.assertIn('class="persona-hot-fetch-action"', self.source)
+        self.assertIn('<select data-persona-hot-freshness-days', self.source)
+        self.assertNotIn('<input type="number" min="0" max="15"', self.source)
+        self.assertIn('class="persona-hot-freshness-default" aria-label="默认热点时限">默认</span>', self.source)
+        self.assertNotIn("is-reserved", self.source)
         self.assertIn(
-            "grid-template-columns: max-content max-content minmax(0, 1fr);",
+            "grid-template-columns: repeat(2, minmax(0, 1fr));",
             mobile_toolbar,
         )
         self.assertIn("grid-column: 1 / -1;", mobile_window)
-        self.assertIn("grid-template-columns: auto minmax(0, 1fr) auto;", mobile_window)
+        self.assertIn("grid-template-columns: auto minmax(0, 1fr) 92px;", mobile_window)
         self.assertIn(
             "grid-template-columns: repeat(2, minmax(0, 1fr));",
             mobile_freshness_tabs,
         )
+        self.assertIn("grid-column: 3;", self.styles)
+        self.assertIn("min-height: 42px;", self.styles)
 
     def test_expanded_mobile_browser_uses_one_compact_translucent_summary(self):
         portrait_start = self.styles.rfind("@media (max-width: 760px) and (orientation: portrait)")
@@ -1878,25 +1915,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("event.preventDefault()", account_events)
         self.assertIn(".account-pool-card-check", account_events)
 
-    def test_account_pool_reuses_the_mobile_persona_drawer(self):
-        sidebar = self._function_source("renderAccountPoolPersonaSidebar")
+    def test_account_pool_does_not_mount_the_removed_persona_picker(self):
         pool = self._function_source("renderAccountPool")
-        bind_events = self._function_source("bindEvents")
-        account_events = bind_events[
-            bind_events.index('if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click"'):
-            bind_events.index('if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("keydown"')
-        ]
-
-        self.assertIn('id="accountPoolPersonaSidebar"', sidebar)
-        self.assertIn("persona-mobile-drawer", sidebar)
-        self.assertIn("data-persona-mobile-sidebar", sidebar)
-        self.assertIn("data-persona-mobile-list-close", sidebar)
-        self.assertIn("data-persona-mobile-list-backdrop", sidebar)
-        self.assertIn('data-persona-mobile-list-toggle="accountPoolPersonaSidebar"', pool)
         self.assertIn("<strong>账号池</strong>", pool)
-        self.assertIn('[data-persona-mobile-list-toggle]', account_events)
-        self.assertIn('[data-persona-mobile-list-close], [data-persona-mobile-list-backdrop]', account_events)
-        self.assertIn("setPersonaMobileSidebarOpen", account_events)
+        self.assertNotIn("accountPoolPersonaSidebar", pool)
+        self.assertNotIn("选择人设", pool)
 
     def test_account_proxy_picker_replaces_legacy_edit_checkbox_and_keeps_single_binding(self):
         card = self._section("function renderAccountPoolCard", "function renderAccountPoolCards")

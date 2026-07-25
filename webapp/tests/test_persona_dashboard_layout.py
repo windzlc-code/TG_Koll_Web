@@ -117,7 +117,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("object-position: center;", self.dashboard_styles)
 
     def test_generation_and_media_result_actions_use_clear_compact_labels(self):
-        self.assertIn('(isRewriteMode ? "AI 重写推文" : "开始生成")', self.console_script)
+        self.assertIn('hasGenerateContent ? "AI 润色" : "AI 生成"', self.console_script)
+        self.assertNotIn(">开始生成</button>", self.console_script)
         self.assertNotIn('"自动生成草稿"', self.console_script)
         self.assertIn('taskState?.taskId ? "重新生成" : "生成预览"', self.console_script)
         self.assertIn(">添加至草稿</button>", self.console_script)
@@ -160,10 +161,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.styles,
         )
 
-    def test_mobile_task_dock_reuses_the_five_workspace_modules(self):
+    def test_mobile_task_dock_adds_home_and_omits_the_browser_shortcut(self):
         self.assertIn('id="mobileTaskDock"', self.markup)
         self.assertIn("function renderMobileTaskDock()", self.console_script)
-        self.assertIn("modules.map((item) =>", self.console_script)
+        self.assertIn('const mobileDockItems = [', self.console_script)
+        self.assertIn('{ id: "persona_dashboard", label: "首页", view: "persona_dashboard" }', self.console_script)
+        self.assertIn('...modules.filter((item) => item.id !== "browser_list")', self.console_script)
+        self.assertIn("mobileDockItems.map((item) =>", self.console_script)
         self.assertIn("renderMobileTaskIcon(item.id)", self.console_script)
         self.assertIn(
             '$("mobileTaskDock")?.addEventListener("click", handleWorkspaceModuleNavigation);',
@@ -174,7 +178,6 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             "tweet_generation",
             "publishing",
             "accounts",
-            "browser_list",
         ):
             with self.subTest(module_id=module_id):
                 self.assertIn(f'{module_id}:', self.console_script)
@@ -183,6 +186,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             'item.label === "账号管理" ? "账号池"',
             self.console_script,
         )
+        self.assertIn("tweet_generation: '<path d=\"M12 5v14M5 12h14\"></path>'", self.console_script)
 
     def test_mobile_task_queue_uses_compact_persona_and_task_rows(self):
         marker = "/* Mobile task queue density: align queue cards with the compact persona list. */"
@@ -240,8 +244,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("打开当前人设", self.console_script)
 
     def test_persona_generation_modes_use_short_labels_and_mobile_capsules(self):
-        self.assertIn('["tweet", "生成推文"]', self.console_script)
-        self.assertIn('["tweet_media", "推文加配图"]', self.console_script)
+        self.assertIn('["tweet", "普通推文"]', self.console_script)
+        self.assertIn('["tweet_media", "批量推文"]', self.console_script)
+        self.assertIn('["hot", "热点抓取"]', self.console_script)
         self.assertNotIn("只生成推文", self.console_script)
         self.assertNotIn("根据推文生成配图", self.console_script)
 
@@ -249,11 +254,87 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             ".console-page .persona-detail :is(\n"
             "    .persona-compose-toggle,\n"
             "    .persona-source-toggle,\n"
-            "    .persona-media-operation-toggle\n"
+            "    .persona-media-operation-toggle,\n"
+            "    .persona-content-tabs\n"
             '  ) button[type="button"] {\n'
             "    border-radius: 999px;"
         )
         self.assertIn(mobile_rule, self.styles)
+
+    def test_persona_generate_and_polish_share_one_compose_flow(self):
+        compose_tabs_start = self.console_script.index("function renderPersonaGenerateComposeTabs(mode)")
+        compose_tabs_end = self.console_script.index(
+            "\nfunction renderPersonaMediaOperationTabs(mode)",
+            compose_tabs_start,
+        )
+        compose_tabs = self.console_script[compose_tabs_start:compose_tabs_end]
+        self.assertIn('["tweet", "普通推文"]', compose_tabs)
+        self.assertIn('["tweet_media", "批量推文"]', compose_tabs)
+        self.assertIn('["hot", "热点抓取"]', compose_tabs)
+        self.assertNotIn('["custom", "自定义"]', compose_tabs)
+
+        content_panel_start = self.console_script.index("function renderPersonaContentPanel(persona, account, profile, step)")
+        content_panel_end = self.console_script.index(
+            "\nfunction refreshLiveBrowserSessionsSoon(",
+            content_panel_start,
+        )
+        content_panel = self.console_script[content_panel_start:content_panel_end]
+        self.assertNotIn("renderPersonaGenerateModeTabs", content_panel)
+        self.assertIn('const isBatchCompose = composeMode === "tweet_media";', content_panel)
+        self.assertIn('isBatchCompose && generateMode === "ai"', content_panel)
+        self.assertIn('id="personaDraftTitle"', content_panel)
+        self.assertIn('id="personaDraftContent"', content_panel)
+        self.assertIn('<select id="personaGenerateCount">', content_panel)
+        self.assertIn("PERSONA_GENERATE_MAX_COUNT", content_panel)
+        self.assertNotIn('id="personaGenerateCount" type="number"', content_panel)
+        self.assertNotIn('id="personaGeneratePrompt"', content_panel)
+        self.assertNotIn('id="personaMemorySearch"', content_panel)
+        self.assertNotIn("筛选记忆内容", content_panel)
+        self.assertLess(
+            content_panel.index("data-persona-create-post"),
+            content_panel.index("data-persona-route-step=\"content:posts\""),
+        )
+        self.assertLess(
+            content_panel.index("data-persona-route-step=\"content:posts\""),
+            content_panel.index("data-persona-generate-posts"),
+        )
+
+    def test_hotspot_top_capsule_switches_the_real_generation_mode(self):
+        handler_start = self.console_script.index(
+            'const composeModeButton = event.target.closest("[data-persona-compose-mode]")'
+        )
+        handler_end = self.console_script.index(
+            'const openImageSettingsButton = event.target.closest("[data-persona-open-image-settings]")',
+            handler_start,
+        )
+        handler = self.console_script[handler_start:handler_end]
+        self.assertIn('["tweet_media", "hot"].includes', handler)
+        self.assertIn('form.generate.mode = nextComposeMode === "hot" ? "hot" : "ai";', handler)
+        self.assertIn('editingPostId && nextComposeMode === "hot"', handler)
+        self.assertIn("请先保存或放弃修改", handler)
+
+        self.assertIn(
+            ".persona-generate-actions .persona-generate-ai-action {\n"
+            "  margin-left: auto;",
+            self.styles,
+        )
+        self.assertNotIn(".persona-memory-search", self.styles)
+        self.assertIn(": PERSONA_GENERATE_DEFAULT_COUNT;", self.console_script)
+        self.assertIn("PERSONA_GENERATE_MAX_COUNT = 5;", self.console_script)
+        self.assertNotIn("PERSONA_GENERATE_COUNT_KEY", self.console_script)
+        self.assertNotIn("PERSONA_GENERATE_TARGET_WORDS_KEY", self.console_script)
+        self.assertIn(
+            'payload.rewrite_source_content = rewriteSourceContent || String(draft.originalContent || "").trim();',
+            self.console_script,
+        )
+        self.assertIn("function openPersonaGeneratedSelectionModal(persona, rows = [])", self.console_script)
+        self.assertIn('modalKey: "persona-generated-selection"', self.console_script)
+        self.assertIn('name="personaGeneratedSelection"', self.console_script)
+        self.assertIn('{ value: "save", text: "保存草稿" }', self.console_script)
+        self.assertIn('{ value: "media", text: "生成配图", primary: true }', self.console_script)
+        self.assertIn("resolvePersonaOrdinaryGeneratedCandidates(persona, generatedPosts, requestedTitle)", self.console_script)
+        self.assertIn("discardPersonaGeneratedCandidatePosts(", self.console_script)
+        self.assertIn('.console-modal[data-modal-key="persona-generated-selection"]', self.styles)
 
     def test_mobile_task_queue_persona_list_reuses_shared_drawer(self):
         selector_start = self.console_script.index("function renderTaskQueuePersonaSelector()")
@@ -350,7 +431,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             module_branch,
         )
 
-    def test_mobile_profile_header_exposes_the_existing_persona_create_action(self):
+    def test_mobile_profile_header_hides_the_persona_create_copy_and_action(self):
         settings_start = self.console_script.index(
             "function renderPersonaSettingsPanelV2("
         )
@@ -360,25 +441,90 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         settings = self.console_script[settings_start:settings_end]
 
         self.assertIn("persona-profile-base-head", settings)
-        self.assertIn(
-            'class="account-pool-add-button persona-profile-new-button"',
-            settings,
-        )
+        self.assertIn("persona-profile-new-button", settings)
         self.assertIn("data-persona-open-create", settings)
-        self.assertIn('<span aria-hidden="true"></span>', settings)
-        self.assertIn("<strong>新建人设</strong>", settings)
-        self.assertNotIn("renderPlusIcon()", settings)
         self.assertIn("新建人设", settings)
-        self.assertIn(
-            "/* Mobile persona profile create shortcut. */",
-            self.styles,
-        )
+        self.assertIn("名称、简介、头像、链接和推文风格分别设置", settings)
+        self.assertIn("/* Keep the mobile persona editor focused on the selected profile. */", self.styles)
         mobile_styles = self.styles[
-            self.styles.index("/* Mobile persona profile create shortcut. */"):
+            self.styles.index("/* Keep the mobile persona editor focused on the selected profile. */"):
         ]
-        self.assertIn(".persona-profile-new-button", mobile_styles)
-        self.assertIn("display: inline-flex;", mobile_styles)
-        self.assertIn("width: 100%;", mobile_styles)
+        self.assertIn(".persona-profile-base-head", mobile_styles)
+        self.assertIn("display: none;", mobile_styles)
+
+    def test_persona_account_setting_keeps_status_beside_title_and_centers_add_action(self):
+        panel_start = self.console_script.index("function renderPersonaAccountPanelV2(")
+        panel_end = self.console_script.index("\nfunction personaUnboundAccountPoolCandidates", panel_start)
+        panel = self.console_script[panel_start:panel_end]
+
+        self.assertIn("persona-account-section-head", panel)
+        self.assertIn("persona-account-section-title", panel)
+        self.assertIn("account-pool-add-row persona-account-action-row", panel)
+        self.assertIn("persona-account-action-row", panel)
+        self.assertIn("data-persona-account-add", panel)
+        account_add_handler_start = self.console_script.index(
+            'const personaAccountAdd = event.target.closest("[data-persona-account-add]");'
+        )
+        account_add_handler_end = self.console_script.index(
+            "const personaAccountPlatform =", account_add_handler_start
+        )
+        account_add_handler = self.console_script[account_add_handler_start:account_add_handler_end]
+        self.assertIn("openPersonaAccountPoolPickerModal", account_add_handler)
+        self.assertNotIn("createPersonaAutomationAccount()", account_add_handler)
+        self.assertLess(
+            panel.index('class="persona-account-section-title"'),
+            panel.index("account-pool-selection-count"),
+        )
+        self.assertLess(
+            panel.index("persona-account-section-title"),
+            panel.index("persona-account-action-row"),
+        )
+        self.assertIn(".persona-account-pool-panel .persona-account-section-title", self.styles)
+        self.assertIn(".persona-account-pool-panel .persona-account-action-row", self.styles)
+        self.assertIn("justify-content: center;", self.styles)
+
+    def test_account_add_buttons_keep_the_shared_opening_motion_during_ui_open(self):
+        self.assertIn("function startAccountPoolAddButtonMotion(button)", self.console_script)
+        self.assertIn("function closeAccountPoolAddButtonMotion(button)", self.console_script)
+        self.assertIn('button.classList.add("is-opening");', self.console_script)
+        self.assertIn('button.classList.add("is-closing");', self.console_script)
+        self.assertIn("window.setTimeout(finish, 600);", self.console_script)
+        persona_handler_start = self.console_script.index(
+            'const personaAccountAdd = event.target.closest("[data-persona-account-add]");'
+        )
+        persona_handler_end = self.console_script.index(
+            "const personaAccountPlatform =", persona_handler_start
+        )
+        persona_handler = self.console_script[persona_handler_start:persona_handler_end]
+        self.assertIn("openPersonaAccountPoolPickerModal(persona, state.personaAutomationPlatform, personaAccountAdd)", persona_handler)
+        picker_start = self.console_script.index("async function openPersonaAccountPoolPickerModal(")
+        picker_end = self.console_script.index("\nfunction personaAutomationTasksFor", picker_start)
+        picker = self.console_script[picker_start:picker_end]
+        self.assertIn("motionTrigger = null", picker)
+        self.assertIn("startAccountPoolAddButtonMotion(motionTrigger);", picker)
+        self.assertIn("closeAccountPoolAddButtonMotion(motionTrigger)", picker)
+        self.assertLess(picker.index("openConsoleModal({"), picker.index("startAccountPoolAddButtonMotion(motionTrigger);"))
+        self.assertNotIn("account-pool-add-button-motion-proxy", self.console_script)
+        self.assertIn(".account-pool-add-button.is-opening {", self.styles)
+        self.assertIn(".account-pool-add-button.is-closing {", self.styles)
+        self.assertNotIn(".account-pool-add-button-motion-proxy", self.styles)
+        self.assertIn("animation: account-pool-add-button-open 420ms", self.styles)
+        self.assertIn(".account-pool-add-button.is-opening span {", self.styles)
+        self.assertIn("transform: rotate(180deg) scale(1.04);", self.styles)
+
+    def test_all_mobile_persistent_dock_pages_hide_the_left_toolbar_toggle(self):
+        helper_start = self.console_script.index("function isMobilePersistentDockPage()")
+        helper_end = self.console_script.index("\nfunction syncMobilePageToolbar()", helper_start)
+        helper = self.console_script[helper_start:helper_end]
+        toolbar = self.console_script[helper_end:self.console_script.index("\nfunction renderMobileTaskDock()", helper_end)]
+
+        self.assertIn('state.view === "persona_dashboard"', helper)
+        self.assertIn('state.view === "accounts"', helper)
+        self.assertIn('state.accountBrowserPanel !== "browsers"', helper)
+        self.assertIn('["personas", "tweet_generation", "publishing"].includes(state.activeModule)', helper)
+        self.assertIn('const navToggle = $("mobileNavToggle");', toolbar)
+        self.assertIn("navToggle.hidden = isMobilePersistentDockPage();", toolbar)
+        self.assertIn('.mobile-page-toolbar > .mobile-nav-toggle[hidden]', self.styles)
 
     def test_persona_create_mode_keeps_the_mobile_persona_list_button_source(self):
         create_start = self.console_script.index(
@@ -445,6 +591,28 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('if (!nextOpen && isMobileNavMode())', sidebar)
         self.assertIn('state.personaListEditorId = ""', sidebar)
         self.assertIn('removePersonaCardEditorPortal()', sidebar)
+
+    def test_mobile_persona_drawer_matches_the_shared_site_drawer_width(self):
+        self.assertIn(
+            "--site-mobile-drawer-width: min(320px, 100vw);",
+            self.navigation_styles,
+        )
+        self.assertIn(
+            "width: var(--site-mobile-drawer-width);",
+            self.styles,
+        )
+        backdrop_rule = self.styles.split(
+            "  .persona-mobile-drawer-backdrop {", 1
+        )[1].split("  }", 1)[0]
+        self.assertIn("width: 100vw;", backdrop_rule)
+        self.assertIn("height: 100dvh;", backdrop_rule)
+        for obsolete_width in (
+            "width: min(80vw, 280px);",
+            "width: min(82vw, 264px);",
+            "width: min(84vw, 304px);",
+            "width: min(88vw, 292px);",
+        ):
+            self.assertNotIn(obsolete_width, self.styles)
 
     def test_persona_bulk_management_unifies_personas_and_groups(self):
         module_start = self.console_script.index("function renderPersonaModule()")
@@ -520,7 +688,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         selection = self.console_script[selection_start:selection_end]
         binding_start = self.console_script.index("async function bindAccountPoolAccountToPersona")
-        binding_end = self.console_script.index("\nasync function runAccountPoolThreadsTask", binding_start)
+        binding_end = self.console_script.index("\nasync function unbindAccountPoolAccount", binding_start)
         binding = self.console_script[binding_start:binding_end]
 
         self.assertIn(
@@ -620,7 +788,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
     def test_mobile_page_toolbar_is_shared_and_keeps_publish_header_compact(self):
         header_start = self.console_script.index("function renderPublishHeaderRow(mode, account)")
-        header_end = self.console_script.index("\nfunction padSchedulePart", header_start)
+        header_end = self.console_script.index("\nconst SHANGHAI_TIME_ZONE", header_start)
         header = self.console_script[header_start:header_end]
         toolbar_start = self.markup.index('id="mobilePageToolbar"')
         toolbar_end = self.markup.index('<main id="main-content"', toolbar_start)
@@ -631,73 +799,159 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('id="mobileNavToggle"', site_header)
         self.assertIn('id="mobileNavToggle"', toolbar)
         self.assertIn('id="mobilePageToolbarTitle"', toolbar)
-        self.assertIn('id="mobilePageContextAction"', toolbar)
-        self.assertIn('id="mobilePageContextLabel"', toolbar)
+        self.assertNotIn('id="mobilePageContextAction"', toolbar)
+        self.assertNotIn('id="mobilePageContextLabel"', toolbar)
         self.assertIn("function mobilePageToolbarDescriptor()", self.console_script)
         self.assertIn("function syncMobilePageToolbar()", self.console_script)
         self.assertIn('grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);', self.styles)
         self.assertIn("height: 52px;", self.styles)
         self.assertIn("min-height: 52px;", self.styles)
+        self.assertIn("height: 40px;", self.styles)
+        self.assertIn("min-height: 40px;", self.styles)
+        self.assertIn("height: 44px;", self.styles)
+        self.assertIn("min-height: 44px;", self.styles)
         self.assertIn(".mobile-page-toolbar > .mobile-nav-toggle", self.styles)
-        self.assertIn(".mobile-page-context-action", self.styles)
-        self.assertIn("grid-column: 3;", self.styles)
-        self.assertIn("justify-self: end;", self.styles)
-        self.assertIn('class="publish-inline-title">发布</strong>', header)
+        self.assertNotIn(".mobile-page-context-action", self.styles)
+        self.assertIn('class="publish-inline-title">任务</strong>', header)
         self.assertNotIn('${renderMobileTaskIcon("publishing")}', header)
         self.assertNotIn('class="publish-header-end-slot"', header)
         self.assertIn('data-persona-mobile-list-toggle="publishPersonaSidebar"', header)
         self.assertNotIn("publish-account-badge", header)
         self.assertNotIn("到账号管理绑定", header)
 
-    def test_current_persona_summary_is_shared_only_across_mobile_console_views(self):
-        summary_start = self.markup.index('id="persistentPersonaSummary"')
-        workspace_start = self.markup.index('<section class="view is-active" data-panel="workspace">')
-        self.assertLess(summary_start, workspace_start)
-        self.assertIn("function renderPersistentPersonaSummary()", self.console_script)
+    def test_mobile_persona_profile_uses_the_existing_sidebar_with_inline_summary(self):
+        self.assertNotIn('id="persistentPersonaSummary"', self.markup)
+        self.assertNotIn("renderPersistentPersonaSummary", self.console_script)
+        self.assertNotIn("persistentPersona", self.console_script)
+        self.assertNotIn("persistent-persona", self.styles)
         self.assertIn("function personaSummaryCounts(persona)", self.console_script)
-        toolbar = self.console_script[
-            self.console_script.index("function syncMobilePageToolbar()"):
-            self.console_script.index("\nfunction renderMobileTaskDock()")
+        identity = self.console_script[
+            self.console_script.index("function renderPersonaProfileIdentity(persona, profile)"):
+            self.console_script.index("\nfunction renderPersonaContentOverview")
         ]
-        self.assertIn("renderPersistentPersonaSummary();", toolbar)
-        overview = self.console_script[
-            self.console_script.index("function applyPersonaOverviewData"):
-            self.console_script.index("\nfunction hydratePersonaOverviewFromCache")
-        ]
-        self.assertIn("renderPersistentPersonaSummary();", overview)
-        detail = self.console_script[
-            self.console_script.index("function renderPersonaDetail()"):
-            self.console_script.index("\nfunction renderPersonaContentPanel")
-        ]
-        self.assertIn("renderPersistentPersonaSummary();", detail)
-        self.assertIn('class="persona-workbench-head"', detail)
-        self.assertIn("persona-detail-summary-panel", detail)
-        self.assertIn(".persistent-persona-summary {", self.styles)
-        self.assertIn("display: none;", self.styles[self.styles.index(".persistent-persona-summary {"):])
-        mobile_summary = self.styles.index("  .persistent-persona-summary {")
-        self.assertIn("display: flex;", self.styles[mobile_summary:mobile_summary + 220])
+        self.assertNotIn("名称、简介、头像与生成设置", identity)
+        self.assertIn('class="persona-profile-summary-strip"', identity)
+        self.assertIn('class="persona-profile-summary-grid"', identity)
+        self.assertIn("personaGroupsForPersona(persona?.id)", identity)
+        self.assertIn("人设分组", identity)
+        self.assertIn("草稿", identity)
+        self.assertIn("收藏", identity)
+        self.assertNotIn("类型：", identity)
+        self.assertIn("renderPersonaExecutionAccountBadge(persona)", identity)
+        self.assertLess(
+            identity.index("persona-profile-identity-avatar-row"),
+            identity.index("persona-profile-account-status"),
+        )
+        self.assertLess(
+            identity.index("persona-profile-account-status"),
+            identity.index("persona-profile-summary-strip"),
+        )
+        self.assertIn("persona-profile-overview-shell", self.console_script)
+        self.assertIn('data-persona-mobile-list-toggle="personaWorkspaceSidebar"', identity)
+        self.assertIn('aria-label="打开人设列表"', identity)
+        self.assertIn('M4 5h16', identity)
+        self.assertIn("function setPersonaMobileSidebarOpen(open, sidebarId", self.console_script)
+        self.assertIn('data-persona-mobile-sidebar', self.console_script)
+        self.assertIn(".persona-profile-summary-strip {", self.styles)
+        self.assertIn(".persona-profile-list-toggle {", self.styles)
+        self.assertIn(".persona-profile-account-status {", self.styles)
+        self.assertIn(".persona-profile-identity-content {", self.styles)
+        self.assertIn(".persona-profile-name-row {", self.styles)
         self.assertIn(
-            ".persona-detail-summary-panel .persona-workbench-head",
+            ".console-page .persona-detail .persona-avatar {\n"
+            "    width: 88px;",
             self.styles,
         )
+        self.assertIn(".persona-profile-overview-shell", self.styles)
 
-    def test_mobile_persona_buttons_share_persistent_style(self):
-        self.assertGreaterEqual(self.console_script.count('class="persona-mobile-list-toggle"'), 4)
-        self.assertNotIn('<span>人设列表</span>', self.console_script)
-        self.assertGreaterEqual(self.console_script.count("<span>选择人设</span>"), 5)
+    def test_persona_profile_editor_emphasizes_name_and_opens_image_lightbox(self):
+        editor_start = self.console_script.index("async function openPersonaProfileEditorModal()")
+        editor_end = self.console_script.index("modal?.addEventListener(\"change\"", editor_start)
+        editor_handler = self.console_script[editor_start:editor_end]
+
+        self.assertIn('const previewButton = event.target.closest("[data-media-preview-group]");', editor_handler)
+        self.assertIn("openPersonaMediaLightbox(", editor_handler)
+        self.assertLess(
+            editor_handler.index('const previewButton = event.target.closest("[data-media-preview-group]");'),
+            editor_handler.index('const pageButton = event.target.closest("button[data-persona-profile-editor-page]");'),
+        )
+        self.assertIn("zoomHint: true,", self.console_script)
+        self.assertIn("function renderZoomInIcon()", self.console_script)
+        self.assertIn("${renderZoomInIcon()}", self.console_script)
+        self.assertIn(".persona-profile-editor-item--profile .persona-profile-editor-item-copy b {", self.styles)
+        self.assertIn(".persona-profile-editor-form #personaProfileEditorName {", self.styles)
+        self.assertIn(".persona-image-library-zoom-hint {", self.styles)
+        self.assertIn(".persona-image-library-zoom-hint .ui-zoom-in-icon {", self.styles)
+
+    def test_mobile_page_shells_do_not_create_nested_cards(self):
+        marker = "/* Mobile pages use a canvas plus functional cards, never page-card-in-page-card. */"
+        self.assertIn(marker, self.styles)
+        mobile_styles = self.styles[self.styles.index(marker):]
+
+        self.assertIn(".console-page .console-main,", mobile_styles)
+        self.assertIn(".console-page .view {", mobile_styles)
+        self.assertIn('.view[data-panel="workspace"]', mobile_styles)
+        self.assertIn('.view[data-panel="persona_dashboard"]', mobile_styles)
+        self.assertIn('background: var(--bg);', mobile_styles)
+        self.assertIn('.view[data-panel="workspace"] .module-panel', mobile_styles)
+        self.assertIn('.persona-step-shell > .persona-inline-panel', mobile_styles)
+        self.assertIn('.account-pool-main', mobile_styles)
+        self.assertIn('.automation-plan-row-main', mobile_styles)
+        self.assertIn('.automation-plan-submit-row', mobile_styles)
+        self.assertIn('.live-browser-panel', mobile_styles)
+        self.assertIn('.persona-mobile-drawer > .persona-list-toolbar.persona-inline-panel', mobile_styles)
+        functional_shell_start = mobile_styles.index(".console-page .persona-detail,")
+        functional_shell_end = mobile_styles.index("\n  }", functional_shell_start)
+        functional_shell = mobile_styles[functional_shell_start:functional_shell_end]
         self.assertIn(
+            ".console-page .persona-compose-media-side.persona-production-section,",
+            functional_shell,
+        )
+        for declaration in (
+            "padding: 0;",
+            "border: 0;",
+            "border-radius: 0;",
+            "background: transparent;",
+            "box-shadow: none;",
+        ):
+            self.assertIn(declaration, functional_shell)
+
+    def test_mobile_pages_share_the_persona_reference_content_gutter(self):
+        marker = "/* Shared mobile page spacing: one canvas gutter, then functional-card padding. */"
+        self.assertIn(marker, self.styles)
+        mobile_styles = self.styles[self.styles.index(marker):]
+
+        self.assertIn("--mobile-page-inner-gutter: 6px;", mobile_styles)
+        self.assertIn("--mobile-functional-card-padding: 8px;", mobile_styles)
+        shared_gutter_selector = (
+            ".console-page .persona-detail,\n"
+            "  .console-page .publish-config-panel,\n"
+            "  .console-page .persona-dashboard-page,\n"
+            '  .console-page .view[data-panel="tasks"],\n'
+            '  .console-page .view[data-panel="accounts"],\n'
+            '  .console-page .view[data-panel="console_settings"],\n'
+            "  .console-page .billing-view {"
+        )
+        self.assertIn(shared_gutter_selector, mobile_styles)
+        shared_gutter_start = mobile_styles.index(shared_gutter_selector)
+        shared_gutter_end = mobile_styles.index("\n  }", shared_gutter_start)
+        self.assertIn(
+            "padding: var(--mobile-page-inner-gutter);",
+            mobile_styles[shared_gutter_start:shared_gutter_end],
+        )
+
+    def test_mobile_persona_sidebar_triggers_remain_available(self):
+        self.assertNotIn(
             ".console-main .persona-mobile-list-toggle[data-persona-mobile-list-toggle]",
             self.styles,
         )
-        self.assertIn(
-            'Array.from(activePanel?.querySelectorAll("[data-persona-mobile-list-toggle]") || [])',
-            self.console_script,
+        self.assertNotIn(
+            ".persona-mobile-list-toggle[data-persona-mobile-list-toggle] {\n    display: none;",
+            self.styles,
         )
-        self.assertIn('.find((button) => !button.closest("[hidden]"));', self.console_script)
-        self.assertIn(
-            "setPersonaMobileSidebarOpen(!sidebar.classList.contains(\"is-mobile-open\"), sidebarId);",
-            self.console_script,
-        )
+        self.assertIn('data-persona-mobile-list-toggle="publishPersonaSidebar"', self.console_script)
+        self.assertIn('data-persona-mobile-list-toggle="automationPersonaSidebar"', self.console_script)
+        self.assertIn('data-persona-mobile-list-toggle="taskQueuePersonaSidebar"', self.console_script)
 
     def test_publish_preview_number_tabs_are_hidden_only_on_mobile(self):
         preview = self.console_script[
@@ -730,18 +984,41 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         mobile_rule = self.styles.index(".publish-post-card-media {\n    display: block;")
         self.assertLess(desktop_rule, mobile_rule)
 
-    def test_publish_reuses_shared_link_settings_and_refreshes_preview(self):
+    def test_generation_reuses_shared_link_settings_before_media_composer(self):
         self.assertIn("function applyPersonaLinkPresetToContent", self.console_script)
+        self.assertIn("function personaLinkEndingContent(preset)", self.console_script)
         self.assertIn("function renderPublishLinkSettings", self.console_script)
         self.assertIn('data-persona-open-links', self.console_script)
+        self.assertIn('data-persona-open-links title="链接设置" aria-label="链接设置"', self.console_script)
+        self.assertIn('<svg class="ui-link-icon" viewBox="0 0 24 24"', self.console_script)
+        self.assertNotIn('<span>链接设置</span>', self.console_script)
         self.assertIn('content_override: publishContentForPost(post, persona)', self.console_script)
-        self.assertIn('if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");', self.console_script)
+        generation_start = self.console_script.index("function renderPersonaContentPanel")
+        generation_end = self.console_script.index('\n  if (panel === "media")', generation_start)
+        generation_panel = self.console_script[generation_start:generation_end]
+        self.assertIn("${renderPublishLinkSettings(persona)}", generation_panel)
+        self.assertLess(
+            generation_panel.index("${renderPublishLinkSettings(persona)}"),
+            generation_panel.index("renderPersonaInlineMediaComposer"),
+        )
         self.assertIn(".publish-link-settings {", self.styles)
+        self.assertIn(".publish-link-settings button[data-persona-open-links] .ui-link-icon {", self.styles)
+        self.assertIn(".persona-compose-media-stack > .publish-link-settings", self.styles)
         self.assertNotIn('<span class="publish-link-settings-label">', self.console_script)
         self.assertNotIn("publish-link-settings-label", self.styles)
         self.assertNotIn('<span class="publish-link-settings-label">临时链接</span>', self.console_script)
 
-    def test_mobile_publish_source_stays_above_content_and_link_panel_is_stable(self):
+    def test_link_templates_use_one_unified_ending_content_field(self):
+        self.assertIn('label>结尾内容', self.console_script)
+        self.assertIn('id="personaLinkPresetEnding"', self.console_script)
+        self.assertNotIn('id="personaLinkPresetUrl"', self.console_script)
+        self.assertNotIn('label>链接地址', self.console_script)
+        self.assertNotIn('结尾文案', self.console_script)
+        self.assertIn('link_url: "",', self.console_script)
+        self.assertIn('personaLinkEndingContent(item)', self.console_script)
+        self.assertIn('.persona-link-content {', self.styles)
+
+    def test_mobile_publish_source_stays_above_content_without_a_link_panel(self):
         responsive_start = self.styles.index("@media (max-width: 1180px)")
         responsive_styles = self.styles[responsive_start:]
 
@@ -756,14 +1033,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             "    min-width: 0;",
             responsive_styles,
         )
-        self.assertIn(
-            ".publish-content-preview .publish-link-settings {\n"
-            "    padding: 9px 12px;\n"
-            "    border: 1px solid var(--line);\n"
-            "    border-radius: var(--radius);\n"
-            "    background: var(--panel-solid);",
-            responsive_styles,
-        )
+        self.assertNotIn(".publish-content-preview .publish-link-settings", responsive_styles)
+        self.assertNotIn("publish-mobile-custom-link-settings", responsive_styles)
         self.assertNotIn(
             ".module-panel.is-publishing-module:has(.publish-content-preview--selection)",
             responsive_styles,
@@ -793,7 +1064,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             ".console-modal-dialog.persona-link-settings-modal {\n  width: min(860px, calc(100vw - 32px));\n  grid-template-rows: auto auto minmax(0, 1fr);",
             self.styles,
         )
-        self.assertIn("grid-template-areas:\n      \"index name status actions\"\n      \"url url ending ending\";", self.styles)
+        self.assertIn("grid-template-areas:\n      \"index name status actions\"\n      \"content content content content\";", self.styles)
         self.assertIn(".persona-link-list-panel {\n    height: auto;\n    max-height: none;", self.styles)
 
     def test_mobile_task_dock_is_flush_with_the_viewport(self):
@@ -861,25 +1132,99 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("收藏快速选择", self.console_script)
         self.assertIn(".persona-source-toggle {\n  width: min(100%, 280px);", self.styles)
 
+    def test_content_tabs_keep_generate_drafts_and_favorites_in_one_pill_switcher(self):
+        tabs = self.console_script[
+            self.console_script.index("function renderPersonaStepTabs"):
+            self.console_script.index("function renderPersonaPostsViewTabs")
+        ]
+        posts_panel = self.console_script[
+            self.console_script.index('if (panel === "posts")'):
+            self.console_script.index('if (panel === "history")')
+        ]
+        self.assertIn('class="persona-content-tabs account-browser-tabs"', tabs)
+        self.assertIn('["generate", "新建推文"]', tabs)
+        self.assertIn('["posts", "草稿库"]', tabs)
+        self.assertIn('["favorites", "收藏"]', tabs)
+        self.assertIn('data-persona-content-tab=', tabs)
+        self.assertIn('classList.toggle("persona-detail--content", groupKey === "content")', self.console_script)
+        self.assertNotIn('persona-source-toggle', posts_panel)
+        self.assertNotIn('data-persona-open-new-draft', posts_panel)
+        self.assertNotIn('data-persona-edit-post=', posts_panel)
+        self.assertNotIn('data-persona-open-publishing', posts_panel)
+        self.assertIn('${renderPersonaPostBulkActions(persona, postSource, sourceRows)}', posts_panel)
+        self.assertNotIn('sourceRows.length ? renderPersonaPostBulkActions', posts_panel)
+        self.assertIn('const contentTabButton = event.target.closest("[data-persona-content-tab]");', self.console_script)
+        self.assertIn('.persona-content-tabs {\n  width: min(100%, 420px);', self.styles)
+        self.assertIn(".persona-content-tabs button {\n  min-height: 34px;\n  padding: 0 18px;", self.styles)
+        self.assertIn("position: sticky;", self.styles)
+        self.assertIn('.persona-content-tabs.account-browser-tabs button {\n  font-weight: inherit;', self.styles)
+        self.assertIn('.console-page .persona-content-tabs {\n    grid-template-columns: repeat(3, minmax(0, 1fr));', self.styles)
+        self.assertIn('.console-page .persona-detail.persona-detail--content {', self.styles)
+        self.assertIn('gap: var(--mobile-control-gap);', self.styles)
+        self.assertIn('min-height: var(--mobile-touch-target);', self.styles)
+
+    def test_generated_titles_are_only_written_from_manual_input_without_numbering(self):
+        generated_titles = self.console_script[
+            self.console_script.index("async function applyPersonaGeneratedBatchTitles"):
+            self.console_script.index("async function resolvePersonaOrdinaryGeneratedCandidates")
+        ]
+        self.assertIn("if (!rows.length || !title) return;", generated_titles)
+        self.assertIn("applyPersonaGeneratedCandidateTitle(personaId, post, title)", generated_titles)
+        self.assertNotIn("numberedTitle", generated_titles)
+
     def test_draft_toolbar_uses_icon_bulk_actions_and_aligned_controls(self):
         bulk_actions = self.console_script[
             self.console_script.index("function renderPersonaPostBulkActions"):
             self.console_script.index("async function viewPersonaDraftPost")
         ]
         self.assertIn('title="全选" aria-label="全选"', bulk_actions)
+        self.assertIn('data-persona-post-bulk="all"', bulk_actions)
+        self.assertIn('aria-label="全选" ${rows.length ? "" : "disabled"}', bulk_actions)
         self.assertIn("${renderSelectAllIcon()}", bulk_actions)
-        self.assertIn('title="清空选择" aria-label="清空选择"', bulk_actions)
         self.assertIn("${renderClearSelectionIcon()}", bulk_actions)
+        self.assertIn('title="清空选择" aria-label="清空选择"', bulk_actions)
+        self.assertIn('aria-label="清空选择" ${selectedCount ? "" : "disabled"}', bulk_actions)
         self.assertIn("${renderTrashIcon()}", bulk_actions)
         self.assertNotIn(">全选</button>", bulk_actions)
         self.assertNotIn(">清空</button>", bulk_actions)
-        self.assertIn(
-            ".console-page .persona-detail .persona-draft-toolbar > .row-actions > button {\n"
-            "  height: 40px;\n"
-            "  min-height: 40px;",
-            self.styles,
-        )
+        self.assertIn('data-persona-post-bulk="execute"', self.console_script)
+        self.assertIn('setPublishSelectedPostIds(persona, source, selectedIds);', self.console_script)
+        self.assertIn('setWorkspaceModule("publishing");', self.console_script)
+        self.assertIn('if (postBulkButton.disabled || postBulkButton.getAttribute("aria-disabled") === "true") return;', self.console_script)
+        self.assertIn(".persona-draft-toolbar--posts {", self.styles)
+        self.assertIn("position: sticky;", self.styles)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) auto;", self.styles)
         self.assertIn(".persona-post-bulk-actions .persona-post-bulk-icon-button {", self.styles)
+        self.assertIn('.persona-post-bulk-actions .persona-post-bulk-icon-button > :is(.ui-action-icon, .ui-trash-icon) {', self.styles)
+        self.assertIn("${renderSelectAllIcon()}", self.console_script)
+        self.assertIn("${renderClearSelectionIcon()}", self.console_script)
+        self.assertIn('.persona-post-bulk-actions [data-persona-post-bulk="delete"] {', self.styles)
+        self.assertIn(".persona-post-bulk-execute {", self.styles)
+
+    def test_publish_task_source_tabs_put_drafts_first_without_duplicate_source_label(self):
+        source_tabs = self.console_script[
+            self.console_script.index("function renderPublishContentSourceTabs"):
+            self.console_script.index("function renderPublishSourceActions")
+        ]
+        source_panel = self.console_script[
+            self.console_script.index("function renderPublishContentPanel"):
+            self.console_script.index("function renderPublishMobileSelectionStrip")
+        ]
+
+        self.assertLess(source_tabs.index('["posts", "草稿"]'), source_tabs.index('["favorites", "收藏"]'))
+        self.assertLess(source_tabs.index('["favorites", "收藏"]'), source_tabs.index('["custom", "自定义"]'))
+        self.assertNotIn('<span>${esc(publishContentSourceLabel(source))}</span>', source_panel)
+        self.assertIn("bulk-selection-icon-button", self.console_script)
+
+    def test_draft_detail_omits_content_type_but_keeps_detail_media(self):
+        detail = self.console_script[
+            self.console_script.index("async function viewPersonaDraftPost"):
+            self.console_script.index("\nasync function refreshPersonaHotPost")
+        ]
+        self.assertNotIn("<span>内容类型</span>", detail)
+        self.assertNotIn("renderMediaTypeBadge(mediaItems)", detail)
+        self.assertIn("const mediaItems = personaDraftMediaItems", detail)
+        self.assertIn("${renderPersonaDraftDetailMedia(mediaItems)}", detail)
 
     def test_hot_card_metrics_use_compact_thousands(self):
         self.assertIn("function hotMetricText(value)", self.console_script)

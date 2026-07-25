@@ -2625,9 +2625,22 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       )
     )
   )).length;
-  if (detailTargetCount > 0) {
+  // Post-detail reads enrich existing candidates with view counts. They must
+  // never extend the user-facing fetch beyond its total budget: each detail
+  // read can open additional browser and Reader requests, while candidates are
+  // already ready to return at this point.
+  const detailBudgetMs = remainingSentimentHotTotalBudgetMs(startedAt, 3_000);
+  if (detailTargetCount > 0 && detailBudgetMs >= 4_000) {
     const detailStartedAt = Date.now();
-    candidates = await enrichThreadsCandidateDetails(candidates, { force: forceDetailRefresh });
+    candidates = await measureSentimentStage(
+      warnings,
+      "post-detail-enrichment",
+      () => withSentimentTimeout(
+        enrichThreadsCandidateDetails(candidates, { force: forceDetailRefresh }),
+        detailBudgetMs,
+        candidates,
+      ),
+    );
     const resolvedViewCount = candidates.filter((candidate) => (
       typeof candidate.engagement?.viewCount === "number"
       || typeof (candidate.metrics as any)?.view_count === "number"
@@ -2641,6 +2654,8 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     if (resolvedViewCount < candidates.length) {
       warnings.push(`已从原帖详情获取 ${resolvedViewCount}/${candidates.length} 条真实浏览量；其余原帖暂未公开或详情读取失败。`);
     }
+  } else if (detailTargetCount > 0) {
+    channelStats.push("原帖详情指标跳过（已优先返回热点候选）");
   }
   const finalThreadsCount = candidates.filter((candidate) => candidate.platform === "threads").length;
   const finalInstagramCount = candidates.filter((candidate) => candidate.platform === "instagram").length;

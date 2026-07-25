@@ -15,6 +15,9 @@
   let logoutMessage = "";
   let proxyMarketBadgeRequest = 0;
   let accountBillingRequest = 0;
+  const accountPanelCloseTimers = new WeakMap();
+  const mobileMenuCloseTimers = new WeakMap();
+  const mobileMenuIsolation = new WeakMap();
   const accountBillingState = {
     identityKey: "",
     loading: false,
@@ -74,8 +77,8 @@
       billingSubscription: "当前订阅",
       billingImages: "图片额度",
       billingPending: "待审批",
-      publishToday: "今日发布",
-      publishRemaining: "今日剩余发布额度",
+      publishToday: "今日任务",
+      publishRemaining: "今日剩余任务额度",
       billingUnread: "尚未读取",
       billingLoading: "读取中…",
       billingReady: "已同步",
@@ -142,8 +145,8 @@
       billingSubscription: "目前訂閱",
       billingImages: "圖片額度",
       billingPending: "待審批",
-      publishToday: "今日發布",
-      publishRemaining: "今日剩餘發布額度",
+      publishToday: "今日任務",
+      publishRemaining: "今日剩餘任務額度",
       billingUnread: "尚未讀取",
       billingLoading: "讀取中…",
       billingReady: "已同步",
@@ -385,6 +388,21 @@
     return `<svg class="site-menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"></path></svg>`;
   }
 
+  function closeIcon() {
+    return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>`;
+  }
+
+  function mobileMenuItemIcon(key) {
+    const paths = {
+      solution: '<path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path d="m18.5 16 .7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"></path>',
+      proxyMarket: '<path d="M12 21s6-5.6 6-11a6 6 0 0 0-12 0c0 5.4 6 11 6 11Z"></path><circle cx="12" cy="10" r="2"></circle>',
+      pricing: '<rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M4 9h16M8 14h3"></path><path d="m16 12 .7 1.4 1.6.2-1.2 1.1.3 1.6-1.4-.8-1.4.8.3-1.6-1.2-1.1 1.6-.2z"></path>',
+      console: '<rect x="4" y="4" width="6" height="6" rx="1"></rect><rect x="14" y="4" width="6" height="6" rx="1"></rect><rect x="4" y="14" width="6" height="6" rx="1"></rect><path d="M15 17h5M17.5 14.5v5"></path>',
+      aboutVecto: '<circle cx="12" cy="12" r="8"></circle><path d="M12 10v5M12 7h.01"></path>',
+    };
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[key] || paths.solution}</svg>`;
+  }
+
   function accountIcon(className = "") {
     const classAttribute = className ? ` class="${className}"` : "";
     return `<svg${classAttribute} viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg>`;
@@ -436,13 +454,16 @@
       <div id="siteAccountPopover" class="site-account-popover" data-site-account-popover hidden role="dialog" aria-label="个人信息">
         <div class="site-account-summary">
           <span class="site-account-avatar" aria-hidden="true" data-site-account-avatar>${accountIcon()}</span>
-          <span class="site-account-identity"><strong data-site-account-name></strong><span data-site-account-role></span></span>
+          <span class="site-account-identity">
+            <strong data-site-account-name></strong>
+            <span data-site-account-role></span>
+            <span class="site-account-id-line"><span data-site-copy="accountId"></span><strong data-site-account-id>-</strong></span>
+          </span>
           <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus"></span></span>
           <button class="site-account-close" type="button" aria-label="" title="" data-site-account-close>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
           </button>
         </div>
-        <div class="site-account-detail"><span data-site-copy="accountId"></span><strong data-site-account-id>-</strong></div>
         <div class="site-account-profile-fields">
           <div class="site-account-profile-field">
             <span class="site-account-profile-label" data-site-copy="profileSignature"></span>
@@ -463,41 +484,87 @@
             <div class="site-account-billing-card"><span data-site-copy="billingSubscription">当前订阅</span><strong data-site-billing-subscription>—</strong></div>
             <div class="site-account-billing-card"><span data-site-copy="billingImages">图片额度</span><strong data-site-billing-images>—</strong></div>
             <div class="site-account-billing-card"><span data-site-copy="billingPending">待审批</span><strong data-site-billing-pending>—</strong></div>
-            <div class="site-account-billing-card"><span data-site-copy="publishToday">今日发布</span><strong data-site-publish-used>—</strong></div>
+            <div class="site-account-billing-card"><span data-site-copy="publishToday">今日任务</span><strong data-site-publish-used>—</strong></div>
             <div class="site-account-billing-card"><span data-site-copy="publishRemaining">剩余额度</span><strong data-site-publish-remaining>—</strong></div>
           </div>
           <div class="site-account-action-row">
             <button type="button" data-site-open-billing data-site-copy="billingView"></button>
             <button type="button" data-site-open-settings data-site-copy="personalProfile"></button>
+            <button type="button" data-site-open-subscription data-site-copy="pricing"></button>
           </div>
         </section>
         ${workspaceActions}
         ${accountPreferencesMarkup(page)}
-        <button class="site-account-logout" type="button" data-site-account-logout><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M18 12H9"></path></svg><span data-site-copy="logout"></span></button>
-        <span class="site-account-message" role="status" aria-live="polite" data-site-account-message></span>
+        <div class="site-account-footer">
+          <button class="site-account-logout" type="button" data-site-account-logout><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M18 12H9"></path></svg><span data-site-copy="logout"></span></button>
+          <span class="site-account-message" role="status" aria-live="polite" data-site-account-message></span>
+        </div>
       </div>
     </div>`;
   }
 
-  function renderMobileMenu(page, current, mode) {
-    return `<details class="site-mobile-menu" data-site-mobile-menu><summary class="site-menu-toggle" data-site-menu-toggle>${menuIcon()}<span data-site-copy="menu"></span></summary><nav class="site-mobile-menu-panel" data-site-navigation>${navigationLinks(page, current)}</nav></details>`;
+  function mobileNavigationLinks(page, current) {
+    return [
+      { key: "solution", href: navHref(page, "#solution") },
+      { key: "proxyMarket", href: "/proxy-market.html" },
+      { key: "pricing", href: "/subscription.html" },
+      { key: "console", href: "/console.html" },
+      { key: "aboutVecto", href: "/about-vecto.html" },
+    ].map(({ key, href }) => {
+      const active = current === key ? ' aria-current="page"' : "";
+      const consoleEntry = key === "console" ? " data-console-entry" : "";
+      return `<a class="site-mobile-menu-link" data-site-nav-key="${key}" href="${href}"${active}${consoleEntry}><span class="site-mobile-menu-link-icon">${mobileMenuItemIcon(key)}</span><span data-site-copy="${key}"></span><svg class="site-mobile-menu-link-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg></a>`;
+    }).join("");
+  }
+
+  function renderMobileMenu(page, current) {
+    return `<div class="site-mobile-menu" data-site-mobile-menu>
+      <button class="site-menu-toggle" type="button" aria-controls="siteMobileMenuDrawer" aria-expanded="false" data-site-menu-toggle>${menuIcon()}<span data-site-copy="menu"></span></button>
+      <div class="site-mobile-menu-backdrop" data-site-mobile-menu-backdrop hidden>
+        <aside id="siteMobileMenuDrawer" class="site-mobile-menu-panel" aria-label="站内导航" data-site-navigation>
+          <div class="site-mobile-menu-panel-head"><span data-site-copy="navigationLabel"></span><button class="site-mobile-menu-close" type="button" aria-label="关闭导航" data-site-mobile-menu-close>${closeIcon()}</button></div>
+          <nav class="site-mobile-menu-links">${mobileNavigationLinks(page, current)}</nav>
+        </aside>
+      </div>
+    </div>`;
+  }
+
+  function installMobileMenu(header, page, current) {
+    if (!header) return null;
+    const template = document.createElement("template");
+    template.innerHTML = renderMobileMenu(page, current).trim();
+    const nextMenu = template.content.firstElementChild;
+    if (!nextMenu) return null;
+    const existingMenu = header.querySelector("[data-site-mobile-menu]");
+    if (existingMenu) existingMenu.replaceWith(nextMenu);
+    const brand = header.querySelector(":scope > .brand");
+    const existingBranding = brand?.closest(".site-header-branding");
+    if (existingBranding) {
+      if (!existingBranding.contains(nextMenu)) existingBranding.prepend(nextMenu);
+      return nextMenu;
+    }
+    if (!brand) return nextMenu;
+    const branding = document.createElement("div");
+    branding.className = "site-header-branding";
+    brand.replaceWith(branding);
+    branding.append(nextMenu, brand);
+    return nextMenu;
   }
 
   function renderActions(mode, page, current) {
     const controls = `<div class="site-global-controls" data-site-global-controls><button id="languageToggle" class="site-icon-button site-language-button" type="button" data-site-language-toggle>${languageIcon()}</button></div>`;
-    const mobileMenu = renderMobileMenu(page, current, mode);
     if (mode === "authenticated") {
-      return `${mobileMenu}${subscriptionControl(page)}${accountMenuMarkup(page)}`;
+      return `${subscriptionControl(page)}${accountMenuMarkup(page)}`;
     }
-    return `${mobileMenu}${subscriptionControl(page)}${controls}<button class="header-login" type="button" data-open-login><span data-site-copy="login"></span></button>`;
+    return `${subscriptionControl(page)}${controls}<button class="header-login" type="button" data-open-login><span data-site-copy="login"></span></button>`;
   }
 
   function fallbackMarkup(page, mode, current) {
     return `
-      <a class="brand" href="/" data-site-home-label>
+      <div class="site-header-branding">${renderMobileMenu(page, current)}<a class="brand" href="/" data-site-home-label>
         <span class="brand-logo-frame" aria-hidden="true"><img class="brand-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" /></span>
         <span class="brand-text"><span class="brand-name">Vecto</span><span class="brand-local" data-site-copy="brandLocal"></span></span>
-      </a>
+      </a></div>
       <nav class="site-nav" data-site-navigation>${navigationLinks(page, current)}</nav>
       <div class="header-actions">${renderActions(mode, page, current)}</div>`;
   }
@@ -517,7 +584,131 @@
 
   function syncMenuState(menu) {
     const toggle = menu.querySelector("[data-site-menu-toggle]");
-    if (toggle) toggle.setAttribute("aria-expanded", menu.open ? "true" : "false");
+    if (toggle) toggle.setAttribute("aria-expanded", menu.classList.contains("is-open") ? "true" : "false");
+  }
+
+  function cancelMobileMenuClose(menu) {
+    const pending = mobileMenuCloseTimers.get(menu);
+    if (!pending) return;
+    window.clearTimeout(pending.timeoutId);
+    pending.backdrop.removeEventListener("transitionend", pending.onTransitionEnd);
+    mobileMenuCloseTimers.delete(menu);
+  }
+
+  function setMobileMenuBackgroundInert(menu, active) {
+    if (!menu) return;
+    if (active) {
+      if (mobileMenuIsolation.has(menu)) return;
+      const isolated = [];
+      let current = menu;
+      while (current?.parentElement) {
+        const parent = current.parentElement;
+        Array.from(parent.children).forEach((sibling) => {
+          if (sibling === current || sibling.inert) return;
+          sibling.inert = true;
+          isolated.push(sibling);
+        });
+        if (parent === document.body) break;
+        current = parent;
+      }
+      mobileMenuIsolation.set(menu, isolated);
+      document.body.classList.add("site-mobile-menu-active");
+      return;
+    }
+    const isolated = mobileMenuIsolation.get(menu) || [];
+    isolated.forEach((sibling) => {
+      sibling.inert = false;
+    });
+    mobileMenuIsolation.delete(menu);
+    if (!document.querySelector("[data-site-mobile-menu].is-open, [data-site-mobile-menu].is-closing")) {
+      document.body.classList.remove("site-mobile-menu-active");
+    }
+  }
+
+  function finishMobileMenuClose(menu, backdrop) {
+    cancelMobileMenuClose(menu);
+    if (!menu.classList.contains("is-closing")) return;
+    backdrop.hidden = true;
+    menu.classList.remove("is-closing");
+    menu.closest(".site-header")?.classList.remove("site-mobile-menu-open");
+    setMobileMenuBackgroundInert(menu, false);
+  }
+
+  function setMobileMenuOpen(menu, open, { restoreFocus = false } = {}) {
+    if (!menu) return;
+    const toggle = menu.querySelector("[data-site-menu-toggle]");
+    const backdrop = menu.querySelector("[data-site-mobile-menu-backdrop]");
+    if (!toggle || !backdrop) return;
+    const nextOpen = Boolean(open);
+    const shouldRestoreFocus = !nextOpen && restoreFocus && backdrop.contains(document.activeElement);
+    cancelMobileMenuClose(menu);
+    if (nextOpen) {
+      backdrop.hidden = false;
+      menu.classList.remove("is-closing");
+      menu.closest(".site-header")?.classList.add("site-mobile-menu-open");
+      window.requestAnimationFrame(() => menu.classList.add("is-open"));
+      toggle.setAttribute("aria-expanded", "true");
+      setMobileMenuBackgroundInert(menu, true);
+      document.querySelectorAll("[data-site-account-menu].is-open").forEach((accountMenu) => setAccountMenuOpen(accountMenu, false));
+      return;
+    }
+    menu.classList.remove("is-open");
+    syncMenuState(menu);
+    if (backdrop.hidden) {
+      menu.classList.remove("is-closing");
+      menu.closest(".site-header")?.classList.remove("site-mobile-menu-open");
+      setMobileMenuBackgroundInert(menu, false);
+    } else {
+      menu.classList.add("is-closing");
+      const completeClose = () => finishMobileMenuClose(menu, backdrop);
+      const onTransitionEnd = (event) => {
+        if (event.target !== backdrop || event.propertyName !== "opacity") return;
+        completeClose();
+      };
+      backdrop.addEventListener("transitionend", onTransitionEnd);
+      const timeoutId = window.setTimeout(completeClose, 340);
+      mobileMenuCloseTimers.set(menu, { timeoutId, backdrop, onTransitionEnd });
+    }
+    if (shouldRestoreFocus) toggle.focus({ preventScroll: true });
+  }
+
+  function bindMobileMenus(header) {
+    header.querySelectorAll("[data-site-mobile-menu]").forEach((menu) => {
+      if (menu.dataset.siteMobileMenuReady === "true") return;
+      menu.dataset.siteMobileMenuReady = "true";
+      const toggle = menu.querySelector("[data-site-menu-toggle]");
+      const backdrop = menu.querySelector("[data-site-mobile-menu-backdrop]");
+      toggle?.addEventListener("click", () => setMobileMenuOpen(menu, !menu.classList.contains("is-open"), { restoreFocus: true }));
+      menu.querySelector("[data-site-mobile-menu-close]")?.addEventListener("click", () => setMobileMenuOpen(menu, false, { restoreFocus: true }));
+      backdrop?.addEventListener("click", (event) => {
+        if (event.target === backdrop) setMobileMenuOpen(menu, false, { restoreFocus: true });
+      });
+      menu.querySelectorAll("a").forEach((link) => link.addEventListener("click", () => setMobileMenuOpen(menu, false)));
+    });
+  }
+
+  function syncAccountPanelScrollLock() {
+    const panelActive = Boolean(document.querySelector(
+      "[data-site-account-menu].is-open, [data-site-account-menu].is-closing",
+    ));
+    document.body.classList.toggle("site-account-panel-active", panelActive);
+  }
+
+  function cancelAccountPanelClose(menu) {
+    const pending = accountPanelCloseTimers.get(menu);
+    if (!pending) return;
+    window.clearTimeout(pending.timeoutId);
+    pending.popover.removeEventListener("transitionend", pending.onTransitionEnd);
+    accountPanelCloseTimers.delete(menu);
+  }
+
+  function finishAccountPanelClose(menu, popover) {
+    cancelAccountPanelClose(menu);
+    if (!menu.classList.contains("is-closing")) return;
+    popover.hidden = true;
+    menu.classList.remove("is-closing");
+    menu.closest(".site-header")?.classList.remove("site-account-menu-open");
+    syncAccountPanelScrollLock();
   }
 
   function setAccountMenuOpen(menu, open, { restoreFocus = false } = {}) {
@@ -527,16 +718,41 @@
     if (!trigger || !popover) return;
     const nextOpen = Boolean(open);
     const shouldRestoreFocus = !nextOpen && restoreFocus && popover.contains(document.activeElement);
-    menu.closest(".site-header")?.classList.toggle("site-account-menu-open", nextOpen);
+    cancelAccountPanelClose(menu);
     trigger.setAttribute("aria-expanded", nextOpen ? "true" : "false");
-    popover.hidden = !nextOpen;
-    menu.classList.toggle("is-open", nextOpen);
     if (nextOpen) {
-      document.querySelectorAll("[data-site-mobile-menu][open]").forEach((mobileMenu) => mobileMenu.removeAttribute("open"));
+      menu.closest(".site-header")?.classList.toggle("site-account-menu-open", true);
+      popover.hidden = false;
+      menu.classList.remove("is-closing");
+      window.requestAnimationFrame(() => {
+        if (trigger.getAttribute("aria-expanded") === "true") menu.classList.add("is-open");
+      });
+      syncAccountPanelScrollLock();
+      document.querySelectorAll("[data-site-mobile-menu].is-open").forEach((mobileMenu) => setMobileMenuOpen(mobileMenu, false));
       window.dispatchEvent(new CustomEvent(EVENT_ACCOUNT_MENU_OPEN, { detail: { account: currentAccount } }));
-    } else if (shouldRestoreFocus) {
-      trigger.focus({ preventScroll: true });
+      return;
     }
+    menu.classList.remove("is-open");
+    if (popover.hidden) {
+      menu.classList.remove("is-closing");
+      menu.closest(".site-header")?.classList.toggle("site-account-menu-open", false);
+      syncAccountPanelScrollLock();
+    } else {
+      menu.classList.add("is-closing");
+      // Keep the header stacking context above the workspace until the
+      // rightward exit transition has fully completed.
+      menu.closest(".site-header")?.classList.toggle("site-account-menu-open", true);
+      const completeClose = () => finishAccountPanelClose(menu, popover);
+      const onTransitionEnd = (event) => {
+        if (event.target !== popover || event.propertyName !== "transform") return;
+        completeClose();
+      };
+      popover.addEventListener("transitionend", onTransitionEnd);
+      const timeoutId = window.setTimeout(completeClose, 460);
+      accountPanelCloseTimers.set(menu, { timeoutId, popover, onTransitionEnd });
+      syncAccountPanelScrollLock();
+    }
+    if (shouldRestoreFocus) trigger.focus({ preventScroll: true });
   }
 
   function accountRoleLabel(account, labels) {
@@ -774,58 +990,25 @@
     header.querySelectorAll("[data-site-account-menu]").forEach((menu) => {
       if (menu.dataset.siteAccountReady === "true") return;
       menu.dataset.siteAccountReady = "true";
-      let hoverCloseTimer = 0;
-      let hoverOpened = false;
       const trigger = menu.querySelector("[data-site-account-trigger]");
-      const popover = menu.querySelector("[data-site-account-popover]");
-      const cancelHoverClose = () => {
-        if (hoverCloseTimer) window.clearTimeout(hoverCloseTimer);
-        hoverCloseTimer = 0;
-      };
-      const scheduleHoverClose = () => {
-        cancelHoverClose();
-        hoverCloseTimer = window.setTimeout(() => {
-          if (!menu.matches(":hover") && !popover?.contains(document.activeElement)) {
-            setAccountMenuOpen(menu, false);
-          }
-        }, 140);
-      };
       trigger?.addEventListener("click", () => {
-        cancelHoverClose();
-        if (hoverOpened) {
-          hoverOpened = false;
-          setAccountMenuOpen(menu, true);
-          return;
-        }
         setAccountMenuOpen(menu, trigger.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
       });
       menu.querySelector("[data-site-account-close]")?.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        cancelHoverClose();
-        hoverOpened = false;
         setAccountMenuOpen(menu, false, { restoreFocus: true });
       });
       menu.addEventListener("pointerenter", (event) => {
         if (event.pointerType && event.pointerType !== "mouse") return;
-        cancelHoverClose();
-        hoverOpened = trigger?.getAttribute("aria-expanded") !== "true";
-        setAccountMenuOpen(menu, true);
-      });
-      menu.addEventListener("pointerleave", (event) => {
-        if (event.pointerType && event.pointerType !== "mouse") return;
-        hoverOpened = false;
-        scheduleHoverClose();
+        // The profile is now a full-page drawer; do not open or dismiss it
+        // simply because the pointer crosses the compact header control.
       });
       menu.addEventListener("focusin", (event) => {
         // Focusing the trigger happens before a mouse click. Let the click
         // handler own the toggle so focusin cannot immediately close it.
         if (event.target === trigger) return;
-        cancelHoverClose();
         setAccountMenuOpen(menu, true);
-      });
-      menu.addEventListener("focusout", (event) => {
-        if (!menu.contains(event.relatedTarget)) scheduleHoverClose();
       });
       menu.querySelector("[data-site-open-billing]")?.addEventListener("click", () => {
         setAccountMenuOpen(menu, false);
@@ -834,6 +1017,10 @@
       menu.querySelector("[data-site-open-settings]")?.addEventListener("click", () => {
         setAccountMenuOpen(menu, false);
         openProfilePage();
+      });
+      menu.querySelector("[data-site-open-subscription]")?.addEventListener("click", () => {
+        setAccountMenuOpen(menu, false);
+        window.location.assign(adminOperationalPublicTarget("/subscription.html"));
       });
       menu.querySelectorAll("[data-site-open-console-view]").forEach((button) => {
         button.addEventListener("click", () => {
@@ -1036,19 +1223,13 @@
     if (!header.querySelector(".brand")) {
       header.innerHTML = fallbackMarkup(page, resolvedMode, current);
     }
+    installMobileMenu(header, page, current);
     if (mode === "authenticated") installUnifiedAccountMenu(header, page);
 
     header.dataset.siteReady = "true";
     header.dataset.i18nSkip = "true";
     bindPreferenceControls(header);
-    header.querySelectorAll("[data-site-mobile-menu]").forEach((menu) => {
-      syncMenuState(menu);
-      menu.addEventListener("toggle", () => {
-        syncMenuState(menu);
-        if (menu.open) header.querySelectorAll("[data-site-account-menu]").forEach((accountMenu) => setAccountMenuOpen(accountMenu, false));
-      });
-      menu.querySelectorAll("a").forEach((link) => link.addEventListener("click", () => menu.removeAttribute("open")));
-    });
+    bindMobileMenus(header);
     bindAccountMenus(header);
     sync();
     if (mode === "public") void hydratePublicSession(header);
@@ -1136,19 +1317,13 @@
   }
 
   document.addEventListener("click", (event) => {
-    document.querySelectorAll("[data-site-mobile-menu][open]").forEach((menu) => {
-      if (!menu.contains(event.target)) menu.removeAttribute("open");
-    });
     document.querySelectorAll("[data-site-account-menu].is-open").forEach((menu) => {
       if (!menu.contains(event.target)) setAccountMenuOpen(menu, false);
     });
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    document.querySelectorAll("[data-site-mobile-menu][open]").forEach((menu) => {
-      menu.removeAttribute("open");
-      menu.querySelector("[data-site-menu-toggle]")?.focus();
-    });
+    document.querySelectorAll("[data-site-mobile-menu].is-open").forEach((menu) => setMobileMenuOpen(menu, false, { restoreFocus: true }));
     document.querySelectorAll("[data-site-account-menu].is-open").forEach((menu) => setAccountMenuOpen(menu, false, { restoreFocus: true }));
   });
   window.addEventListener("storage", (event) => {

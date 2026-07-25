@@ -15,11 +15,20 @@ def function_source(name: str, next_name: str) -> str:
 
 
 class MatrixPublishFrontendContractTests(unittest.TestCase):
-    def test_matrix_reuses_the_standard_schedule_component(self):
+    def test_matrix_no_longer_exposes_the_removed_task_time_component(self):
         panel = function_source("renderMatrixPublishPanel", "submitMatrixPublishTask")
 
-        self.assertIn("renderPublishScheduleControls()", panel)
-        self.assertNotIn('placeholder="留空立即执行', panel)
+        self.assertNotIn("renderPublishScheduleControls", panel)
+        self.assertNotIn("simpleScheduleAt", panel)
+        self.assertNotIn("任务时间", panel)
+
+    def test_matrix_source_is_fixed_to_drafts_without_a_source_selector(self):
+        panel = function_source("renderMatrixPublishPanel", "submitMatrixPublishTask")
+        state_sync = function_source("updateMatrixPublishStateFromForm", "matrixPublishCandidatePosts")
+
+        self.assertNotIn("matrixPublishSource", panel)
+        self.assertNotIn("任务来源", panel)
+        self.assertIn('const source = "posts"', state_sync)
 
     def test_preview_keeps_requested_quantity_editable_and_marks_unavailable_personas(self):
         panel = function_source("renderMatrixPublishPanel", "submitMatrixPublishTask")
@@ -39,13 +48,13 @@ class MatrixPublishFrontendContractTests(unittest.TestCase):
         self.assertIn("data-matrix-remove-persona", panel)
         self.assertIn("data-matrix-remove-all", panel)
         self.assertIn("matrix-current-publish", panel)
-        self.assertIn("<th>当前发布</th>", panel)
+        self.assertIn("<th>本次执行</th>", panel)
         self.assertIn("Math.min(perCount, row.availableCount)", panel)
         self.assertNotIn("personaDraftDisplayTitleForPost(previewPosts", panel)
-        self.assertIn("M3 6h18", panel)
+        self.assertIn("renderTrashIcon()", panel)
         self.assertIn("button.matrix-persona-remove", CONSOLE_CSS)
         self.assertIn("var(--danger)", CONSOLE_CSS)
-        self.assertIn("border: 1px solid var(--danger) !important", CONSOLE_CSS)
+        self.assertIn("border: 0 !important", CONSOLE_CSS)
         self.assertIn("width: 29%", CONSOLE_CSS)
         self.assertNotIn("matrix-selection-head", panel)
         self.assertNotIn("matrix-persona-tabs", panel)
@@ -53,7 +62,7 @@ class MatrixPublishFrontendContractTests(unittest.TestCase):
     def test_submit_confirms_and_excludes_zero_capacity_personas(self):
         submit = function_source("submitMatrixPublishTask", "createSocialTask")
 
-        self.assertIn("部分人设不参与发布", submit)
+        self.assertIn("部分人设不参与任务", submit)
         self.assertIn("const eligible = availability.filter((row) => row.submitCount > 0)", submit)
         self.assertIn("const personaIds = eligible.map", submit)
 

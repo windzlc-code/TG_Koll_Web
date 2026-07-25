@@ -10471,7 +10471,7 @@ class PersonaDashboardDraftPostPayload(BaseModel):
 
 
 class PersonaDashboardGeneratePostsPayload(BaseModel):
-    count: int = 3
+    count: int = Field(default=3, ge=1, le=5)
     prompt: str = ""
     target_words: int = 120
     content_time_slot: str = ""
@@ -11056,6 +11056,9 @@ def _normalize_link_preset_id(value: Any) -> str:
     return re.sub(r"[^a-zA-Z0-9-]", "", str(value or ""))[:40]
 
 
+PERSONA_LINK_ENDING_CONTENT_MAX_LENGTH = 1200
+
+
 def _link_preset_fallback_name(ending_text: str, link_url: str) -> str:
     return re.sub(r"\s+", " ", ending_text or link_url).strip()[:24] or "未命名模板"
 
@@ -11069,7 +11072,7 @@ def _get_link_ending_presets(setup: Any) -> list[dict[str, Any]]:
             continue
         preset_id = _normalize_link_preset_id(preset.get("id"))
         link_url = _normalize_tweet_style_link_url(preset.get("linkUrl"))
-        ending_text = str(preset.get("endingText") or "").strip()[:240]
+        ending_text = str(preset.get("endingText") or "").strip()[:PERSONA_LINK_ENDING_CONTENT_MAX_LENGTH]
         if not preset_id or not (link_url or ending_text):
             continue
         presets.append({
@@ -11094,7 +11097,7 @@ def _sanitize_persona_dashboard_link_presets(raw_presets: Any, existing_setup: d
         while preset_id in seen_ids:
             preset_id = f"{preset_id[:28]}-{index}"
         link_url = _normalize_tweet_style_link_url(payload.get("link_url") or payload.get("linkUrl"))
-        ending_text = str(payload.get("ending_text") or payload.get("endingText") or "").strip()[:240]
+        ending_text = str(payload.get("ending_text") or payload.get("endingText") or "").strip()[:PERSONA_LINK_ENDING_CONTENT_MAX_LENGTH]
         if not (link_url or ending_text):
             continue
         previous = current.get(preset_id, {})
@@ -12832,7 +12835,7 @@ def _generate_persona_archive_posts(archive_id: str, payload: PersonaDashboardGe
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
-    count = max(1, min(int(payload.count or 3), 20))
+    count = max(1, min(int(payload.count or 3), 5))
     content_time_slot = str(payload.content_time_slot or "").strip().lower()
     if content_time_slot not in {"", "morning", "night"}:
         raise HTTPException(status_code=400, detail="不支持的文案时段。")
@@ -13299,7 +13302,7 @@ def _create_persona_archive_post(archive_id: str, payload: PersonaDashboardDraft
     now = _persona_dashboard_iso_now()
     record = {
         "id": _new_persona_post_id(),
-        "title": title or (_persona_post_title(content, len(posts)) if content else f"媒体草稿 #{len(posts) + 1}"),
+        "title": title,
         "content": content,
         "wordCount": len(content),
         "orderIndex": next_order,
@@ -13442,7 +13445,8 @@ def _update_persona_archive_post(archive_id: str, post_id: str, payload: Persona
     if not content and not next_media:
         raise HTTPException(status_code=400, detail="推文正文和媒体不能同时为空。")
     now = _persona_dashboard_iso_now()
-    target["title"] = title or (_persona_post_title(content, target_index) if content else str(target.get("title") or "").strip() or f"媒体草稿 #{target_index + 1}")
+    if "title" in payload.model_fields_set:
+        target["title"] = title
     target["content"] = content
     target["wordCount"] = len(content)
     if payload.media_ops:

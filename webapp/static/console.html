@@ -68,8 +68,8 @@
                 <div class="site-account-billing-card"><span data-site-copy="billingSubscription">当前订阅</span><strong data-site-billing-subscription>—</strong></div>
                 <div class="site-account-billing-card"><span data-site-copy="billingImages">图片额度</span><strong data-site-billing-images>—</strong></div>
                 <div class="site-account-billing-card"><span data-site-copy="billingPending">待审批</span><strong data-site-billing-pending>—</strong></div>
-                <div class="site-account-billing-card"><span data-site-copy="publishToday">今日发布</span><strong data-site-publish-used>—</strong></div>
-                <div class="site-account-billing-card"><span data-site-copy="publishRemaining">今日剩余发布额度</span><strong data-site-publish-remaining>—</strong></div>
+                <div class="site-account-billing-card"><span data-site-copy="publishToday">今日任务</span><strong data-site-publish-used>—</strong></div>
+                <div class="site-account-billing-card"><span data-site-copy="publishRemaining">今日剩余任务额度</span><strong data-site-publish-remaining>—</strong></div>
               </div>
               <div class="site-account-action-row">
                 <button type="button" data-site-open-billing data-site-copy="billingView">查看详情</button>
@@ -151,18 +151,6 @@
         <span id="mobilePageToolbarIcon" class="mobile-page-toolbar-icon" aria-hidden="true"></span>
         <strong id="mobilePageToolbarTitle">我的人设</strong>
       </div>
-      <button
-        id="mobilePageContextAction"
-        class="mobile-page-context-action"
-        type="button"
-        aria-expanded="false"
-        hidden
-      >
-        <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
-        </svg>
-        <span id="mobilePageContextLabel">选择人设</span>
-      </button>
     </div>
 
     <main id="main-content" class="console-main" tabindex="-1">
@@ -175,13 +163,6 @@
         </div>
         <a href="/admin.html#admin-users">返回账号管理</a>
       </div>
-
-      <section
-        id="persistentPersonaSummary"
-        class="persistent-persona-summary"
-        aria-label="当前人设"
-        aria-live="polite"
-      ></section>
 
       <section class="view is-active" data-panel="workspace">
         <div class="workbench-layout">

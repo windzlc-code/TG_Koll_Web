@@ -258,7 +258,7 @@ function parsePosts(text: string, count: number, startIndex = 0): EpisodeScript[
 
   return parts.map((content, index) => ({
     number: startIndex + index + 1,
-    title: `第${startIndex + index + 1}篇`,
+    title: "",
     content,
     wordCount: content.length,
     orderIndex: startIndex + index,
@@ -510,7 +510,7 @@ export async function runPersonaWorkflow(input: PersonaWorkflowInput) {
         const retryPosts = ensurePostsContainLinkEndingPreset(parsePosts(retryGenerated, missing, retryStartIndex), archive.setup).map((post, index) => ({
           ...post,
           number: retryStartIndex + index + 1,
-          title: `第${retryStartIndex + index + 1}篇`,
+          title: "",
           orderIndex: retryStartIndex + index,
         }));
         posts = [...posts, ...retryPosts].slice(0, targetCount);

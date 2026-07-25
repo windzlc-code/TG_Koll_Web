@@ -777,7 +777,7 @@ function pdRenderPersonaCard(persona) {
       <td class="persona-post-number">${pdEscape(pdNumber(row.view_count))}</td>
       <td class="persona-post-actions">
         <button class="ghost" type="button" data-post-view="${pdEscape(row.post_key || "")}">查看</button>
-        <button class="ghost persona-post-delete" type="button" data-post-delete="${pdEscape(row.post_key || "")}">删除</button>
+        <button class="ghost persona-post-delete persona-selection-icon-button" type="button" data-post-delete="${pdEscape(row.post_key || "")}" title="删除" aria-label="删除">${renderTrashIcon()}</button>
       </td>
     </tr>
   `).join("");
@@ -1082,7 +1082,7 @@ function pdRenderAutomationPanel(persona) {
       <td><div class="persona-auto-row-actions">
         <button class="ghost" type="button" data-auto-logs="${pdEscape(task.id)}">日志</button>
         ${pdRenderAutomationBrowserAction(task)}
-        <button class="ghost" type="button" data-auto-clear-log="${pdEscape(task.id)}">清除</button>
+        <button class="ghost persona-selection-icon-button" type="button" data-auto-clear-log="${pdEscape(task.id)}" title="清除" aria-label="清除">${renderTrashIcon()}</button>
         ${["queued", "running", "need_manual"].includes(String(task.status || "")) ? `<button class="ghost persona-auto-cancel" type="button" data-auto-cancel="${pdEscape(task.id)}">取消</button>` : ""}
       </div></td>
     </tr>
@@ -1129,14 +1129,14 @@ function pdRenderAutomationPanel(persona) {
               <div class="persona-strategy-section">
                 <div class="persona-strategy-head">
                   <div>
-                    <strong>发布推文</strong>
+                    <strong>创建推文任务</strong>
                     <small>支持正文直发，可选附图；不再强制要求媒体文件。</small>
                   </div>
-                  <button class="ghost persona-strategy-action" type="button" data-auto-task="publish_post" data-daily-publish-action="true" ${accounts.length ? "" : "disabled"}>执行发布</button>
+                  <button class="ghost persona-strategy-action" type="button" data-auto-task="publish_post" data-daily-publish-action="true" ${accounts.length ? "" : "disabled"}>执行任务</button>
                 </div>
                 <div class="persona-strategy-row persona-strategy-row-compact">
                   <div class="persona-strategy-fields">
-                    <label class="persona-strategy-field-wide">正文<textarea id="personaAutoText" rows="3" placeholder="填写 Threads 发布正文"></textarea></label>
+                    <label class="persona-strategy-field-wide">任务正文<textarea id="personaAutoText" rows="3" placeholder="填写 Threads 任务正文"></textarea></label>
                     <label class="persona-strategy-field-wide">媒体路径<textarea id="personaAutoMedia" rows="2" placeholder="可选，多个本地文件路径用英文逗号分隔"></textarea></label>
                   </div>
                 </div>
@@ -1239,9 +1239,9 @@ function pdRenderAutomationPanel(persona) {
           </table>
         ` : `
         <div class="persona-auto-log-tools">
-          <button class="ghost" type="button" id="personaAutoSelectAllLogs" ${tasks.length ? "" : "disabled"}>全选</button>
-          <button class="ghost" type="button" id="personaAutoClearSelectedLogs" ${tasks.length ? "" : "disabled"}>清除选中</button>
-          <button class="ghost" type="button" id="personaAutoClearAllLogs" ${tasks.length ? "" : "disabled"}>清除全部</button>
+          <button class="ghost persona-selection-icon-button" type="button" id="personaAutoSelectAllLogs" title="全选" aria-label="全选" ${tasks.length ? "" : "disabled"}>${renderSelectAllIcon()}</button>
+          <button class="ghost persona-selection-icon-button" type="button" id="personaAutoClearSelectedLogs" title="清除选中" aria-label="清除选中" ${tasks.length ? "" : "disabled"}>${renderClearSelectionIcon()}</button>
+          <button class="ghost persona-selection-icon-button" type="button" id="personaAutoClearAllLogs" title="清除全部" aria-label="清除全部" ${tasks.length ? "" : "disabled"}>${renderTrashIcon()}</button>
         </div>
         <table class="persona-auto-table">
           <thead><tr><th>选择</th><th>任务</th><th>状态</th><th>更新时间</th><th>结果 / 错误</th><th>操作</th></tr></thead>
