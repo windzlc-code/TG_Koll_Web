@@ -975,20 +975,26 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             ".console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-mobile-summary {",
             portrait_start,
         )
+        mobile_status = self._css_block(
+            ".console-page .live-browser-card-actions > .status {",
+            self.styles.find("@media (max-width: 760px)"),
+        )
 
         self.assertIn("padding: 3px 6px;", expanded_head)
         self.assertIn("background: rgb(5 12 13 / 37%);", expanded_head)
-        self.assertIn("top: -1px;", account_title)
+        self.assertIn("top: 2px;", account_title)
         self.assertIn("position: relative;", account_meta)
-        self.assertIn("top: -3px;", account_meta)
+        self.assertIn("top: 0;", account_meta)
         self.assertIn("display: none;", task_summary)
         self.assertIn("display: grid;", mobile_summary)
         self.assertIn("position: absolute;", mobile_summary)
         self.assertIn("top: 0;", mobile_summary)
         self.assertIn("left: 50%;", mobile_summary)
-        self.assertIn("transform: translate(-50%, -25px);", mobile_summary)
+        self.assertIn("transform: translate(-50%, -22px);", mobile_summary)
         self.assertIn("grid-template-columns: repeat(2, max-content);", mobile_summary)
         self.assertIn("justify-content: center;", mobile_summary)
+        self.assertIn("align-items: center;", mobile_status)
+        self.assertIn("justify-content: center;", mobile_status)
         self.assertIn("live-browser-mobile-summary > span:first-child", portrait_styles)
         self.assertIn("live-browser-mobile-summary > span:nth-child(2)", portrait_styles)
         self.assertIn("live-browser-mobile-summary > span:nth-child(3)", portrait_styles)
