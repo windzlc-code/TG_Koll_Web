@@ -4222,12 +4222,20 @@ def _html_response_with_versions(filename: str, replacements: dict[str, str] | N
     html = (STATIC_DIR / filename).read_text(encoding="utf-8")
     for key, value in (replacements or {}).items():
         html = html.replace(key, value)
+    fixed_theme_stylesheet = (
+        '<link rel="stylesheet" '
+        f'href="/assets/fixed-light.css?v={_asset_version("assets", "fixed-light.css")}" />'
+    )
     fixed_theme_bootstrap = (
         '<script>document.documentElement.dataset.theme="light";'
         'try{localStorage.setItem("wk-console-theme","light")}catch{}</script>'
     )
     if "</head>" in html:
-        html = html.replace("</head>", f"  {fixed_theme_bootstrap}\n</head>", 1)
+        html = html.replace(
+            "</head>",
+            f"  {fixed_theme_stylesheet}\n  {fixed_theme_bootstrap}\n</head>",
+            1,
+        )
     return HTMLResponse(
         content=html,
         headers={

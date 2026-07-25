@@ -189,6 +189,19 @@ class PublicLoginPreferenceTests(unittest.TestCase):
                     "/?login=1&return_url=%2Fadmin",
                 )
 
+    def test_public_pages_receive_the_shared_fixed_light_stylesheet_last(self):
+        client = TestClient(self.app)
+        for path in ("/", "/subscription.html", "/about-vecto.html", "/proxy-market.html"):
+            with self.subTest(path=path):
+                response = client.get(path)
+                self.assertEqual(response.status_code, 200, response.text)
+                markup = response.text
+                self.assertIn('/assets/fixed-light.css?v=', markup)
+                self.assertLess(
+                    markup.rindex('rel="stylesheet"'),
+                    markup.index('document.documentElement.dataset.theme="light"'),
+                )
+
 
 class PublicLoginUiSourceTests(unittest.TestCase):
     @classmethod
@@ -199,6 +212,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         cls.pricing_styles = (cls.static_dir / "assets" / "opc" / "pricing.css").read_text(encoding="utf-8")
         cls.site_nav_script = (cls.static_dir / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
         cls.site_nav_styles = (cls.static_dir / "assets" / "opc" / "site-navigation.css").read_text(encoding="utf-8")
+        cls.fixed_light_styles = (cls.static_dir / "assets" / "fixed-light.css").read_text(encoding="utf-8")
         cls.proxy_market_js = (cls.static_dir / "assets" / "opc" / "proxy-market.js").read_text(encoding="utf-8")
         cls.admin_js = (cls.static_dir / "assets" / "admin.js").read_text(encoding="utf-8")
         cls.console_js = (cls.static_dir / "assets" / "console.js").read_text(encoding="utf-8")
@@ -384,6 +398,32 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn("applyPublicLanguage", self.script)
         self.assertIn(':root[data-theme="dark"]', self.site_nav_styles)
         self.assertNotRegex(self.styles, r"(?m)^\.site-header\s*\{")
+
+    def test_fixed_light_palette_covers_each_public_page_without_recoloring_media(self):
+        for selector in (
+            ".home-canvas .home-flow-section",
+            ".about-canvas .about-capabilities",
+            'body[data-login-redirect="/subscription.html"] .pricing-comparison-band',
+            ".proxy-market-page .proxy-market-facts",
+        ):
+            self.assertIn(selector, self.fixed_light_styles)
+        self.assertIn("--public-cool: #356b91", self.fixed_light_styles)
+        self.assertIn("--public-warm: #fff3e8", self.fixed_light_styles)
+        self.assertNotIn(".home-canvas .home-media-card img {", self.fixed_light_styles)
+        self.assertNotIn(".about-canvas .about-hero-shade {", self.fixed_light_styles)
+
+    def test_fixed_light_palette_also_covers_authenticated_shells(self):
+        for selector in (
+            ".console-page",
+            ".page-admin .admin-page-title",
+            "body.profile-page",
+            ".auth-dialog",
+            '.site-nav a[aria-current="page"]::after',
+        ):
+            self.assertIn(selector, self.fixed_light_styles)
+        self.assertIn("--public-cool: #356b91", self.fixed_light_styles)
+        self.assertIn("--public-warm-accent: #c46b32", self.fixed_light_styles)
+        self.assertIn("background: var(--public-paper)", self.fixed_light_styles)
 
     def test_public_dark_theme_covers_forms_cards_and_dialogs(self):
         for selector in (
