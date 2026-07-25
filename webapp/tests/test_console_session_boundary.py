@@ -49,8 +49,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             self.assertIn(f'id="{required_id}"', self.markup)
         self.assertNotIn('id="refreshAll"', self.markup)
         self.assertNotIn('class="header-action" href="/"', self.markup)
-        for view in ("workspace", "tasks", "settings", "persona_dashboard", "console_settings"):
+        for view in ("workspace", "persona_dashboard"):
             self.assertIn(f'data-view="{view}"', self.markup)
+        for removed_view in ("tasks", "settings", "console_settings"):
+            self.assertNotIn(f'data-view="{removed_view}"', self.markup)
+        self.assertNotIn('data-panel="settings"', self.markup)
         self.assertIn('data-site-open-billing', self.markup)
         self.assertIn('data-panel="billing"', self.markup)
         self.assertNotIn(".console-page .site-header", self.styles)
@@ -67,8 +70,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('data-site-nav-key="${key}"', self.site_nav_source)
         self.assertIn('.site-nav > a[data-site-nav-key]', self.site_nav_styles)
 
-    def test_console_reuses_global_theme_and_language_controls(self):
-        self.assertIn('id="themeToggle"', self.site_nav_source)
+    def test_console_uses_fixed_dark_theme_and_global_language_control(self):
+        self.assertNotIn('id="themeToggle"', self.markup)
+        self.assertNotIn('data-site-theme-toggle', self.site_nav_source)
         self.assertIn('id="languageToggle"', self.site_nav_source)
         self.assertIn('window.addEventListener("vecto:theme-change"', self.source)
         self.assertIn('window.addEventListener("vecto:language-change"', self.source)
@@ -79,6 +83,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("setConsoleUiAttribute", self.source)
         self.assertIn('setConsoleUiAttribute(toggle, "aria-label"', self.source)
         self.assertIn('window.addEventListener("storage"', self.site_nav_source)
+        self.assertIn('const nextTheme = "dark"', self.site_nav_source)
+        self.assertIn('setTheme("dark", { persist: false })', self.site_nav_source)
         ensure_theme = self._function_source("ensureThemeToggle")
         ensure_language = self._function_source("ensureLanguageToggle")
         self.assertNotIn("document.createElement", ensure_theme)
@@ -244,12 +250,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             'data-site-account-trigger',
             'data-site-account-popover',
             'data-site-account-close',
-            'data-site-theme-toggle',
             'data-site-language-toggle',
             'data-site-account-logout',
         ):
             self.assertIn(marker, self.markup)
             self.assertIn(marker, self.site_nav_source)
+        self.assertNotIn('data-site-theme-toggle', self.markup)
+        self.assertNotIn('data-site-theme-toggle', self.site_nav_source)
         self.assertIn("function setAccount(account)", self.site_nav_source)
         self.assertIn('event.key !== "Escape"', self.site_nav_source)
         self.assertIn('const EVENT_LOGOUT = "vecto:logout-request"', self.site_nav_source)
@@ -267,6 +274,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('data-site-account-billing', self.markup)
         self.assertIn('data-site-open-billing', self.markup)
         self.assertIn('data-site-open-settings', self.markup)
+        self.assertIn('data-site-open-console-view="tasks"', self.site_nav_source)
+        self.assertIn('data-site-open-console-view="console_settings"', self.site_nav_source)
+        self.assertIn('const EVENT_CONSOLE_VIEW_REQUEST = "vecto:account-console-view-request"', self.site_nav_source)
+        self.assertIn('window.addEventListener("vecto:account-console-view-request"', self.source)
         self.assertIn('EVENT_ACCOUNT_MENU_OPEN', self.site_nav_source)
         self.assertIn('pointerenter', self.site_nav_source)
         self.assertIn('if (event.target === trigger) return;', self.site_nav_source)

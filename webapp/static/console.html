@@ -75,15 +75,13 @@
                 <button type="button" data-site-open-billing data-site-copy="billingView">查看详情</button>
                 <button type="button" data-site-open-settings data-site-copy="personalProfile">个人资料</button>
               </div>
+              <div class="site-account-action-row site-account-workspace-actions" aria-label="控制台快捷操作">
+                <button type="button" data-console-account-view="tasks">任务队列</button>
+                <button type="button" data-console-account-view="console_settings">设置</button>
+              </div>
             </section>
             <div class="site-account-preferences" aria-label="个人设置" data-site-personal-controls>
               <span class="site-account-section-label" data-site-copy="personalSettings">个人设置</span>
-              <button id="themeToggle" class="site-account-preference" type="button" aria-label="切换到暗色模式" aria-pressed="false" data-site-theme-toggle>
-                <span class="site-account-preference-icon" aria-hidden="true">
-                  <svg class="site-theme-icon site-theme-icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
-                  <svg class="site-theme-icon site-theme-icon-moon" viewBox="0 0 24 24"><path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.7 8.7 0 1 0 20.5 15.2Z"></path></svg>
-                </span>
-              </button>
               <button id="languageToggle" class="site-account-preference" type="button" aria-label="切换到繁体中文" aria-pressed="false" data-site-language-toggle>
                 <span class="site-account-preference-icon" aria-hidden="true"><svg class="site-language-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path></svg><span class="site-language-state" data-site-language-state>简</span></span>
               </button>
@@ -118,16 +116,10 @@
           <div class="sidebar-flow-divider" aria-hidden="true"></div>
           <div class="module-menu" id="moduleMenu"></div>
         </div>
-        <button type="button" data-view="tasks">任务队列</button>
-        <button type="button" data-view="settings">系统状态</button>
       </nav>
 
       <div class="sidebar-bottom-actions">
         <button type="button" data-view="persona_dashboard">人设看板</button>
-        <button id="consoleSettings" type="button" data-view="console_settings" class="settings-entry">
-          <span class="settings-entry-icon" aria-hidden="true">⚙</span>
-          <span>设置</span>
-        </button>
       </div>
     </aside>
 
@@ -233,26 +225,6 @@
           <section id="accountBrowserBrowsersPage" class="account-browser-page" data-account-browser-page="browsers" role="tabpanel" aria-label="浏览器列表" hidden>
             <div id="liveBrowserSessions"></div>
           </section>
-        </div>
-      </section>
-
-      <section class="view" data-panel="settings">
-        <div class="status-grid">
-          <div class="status-card">
-            <div class="eyebrow">任务执行器</div>
-            <strong id="workerState">-</strong>
-            <span id="workerDetail">等待读取</span>
-          </div>
-          <div class="status-card">
-            <div class="eyebrow">Web 控制台</div>
-            <strong>新面板</strong>
-            <span>入口统一到 Web 控制台。</span>
-          </div>
-          <div class="status-card">
-            <div class="eyebrow">浏览器环境</div>
-            <strong>浏览器环境</strong>
-            <span>持久化浏览器环境 + 代理 + 有头模式。</span>
-          </div>
         </div>
       </section>
 

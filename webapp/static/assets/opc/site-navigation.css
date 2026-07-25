@@ -799,6 +799,10 @@ html {
   gap: 6px;
 }
 
+.site-account-workspace-actions {
+  margin-top: 6px;
+}
+
 .site-account-action-row button {
   min-height: 34px;
   padding: 0 8px;

@@ -1,11 +1,11 @@
 (() => {
-  const THEME_STORAGE_KEY = "wk-console-theme";
   const LANGUAGE_STORAGE_KEY = "wk-console-language";
   const EVENT_THEME = "vecto:theme-change";
   const EVENT_LANGUAGE = "vecto:language-change";
   const EVENT_LOGOUT = "vecto:logout-request";
   const EVENT_ACCOUNT_MENU_OPEN = "vecto:account-menu-open";
   const EVENT_BILLING_REQUEST = "vecto:account-billing-request";
+  const EVENT_CONSOLE_VIEW_REQUEST = "vecto:account-console-view-request";
   const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
   const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
   const DEFAULT_LANGUAGE = document.documentElement.lang === "zh-Hant" ? "zh-Hant" : "zh-Hans";
@@ -40,8 +40,8 @@
       console: "控制台",
       adminConsole: "运营后台",
       aboutVecto: "了解 Vecto",
-      login: "账号登录",
-      guest: "游客申请",
+      login: "登录",
+      guest: "账号注册",
       home: "返回首页",
       currentAccount: "当前登录账号",
       accountFallback: "账户",
@@ -108,8 +108,8 @@
       console: "控制台",
       adminConsole: "營運後台",
       aboutVecto: "了解 Vecto",
-      login: "帳號登入",
-      guest: "遊客申請",
+      login: "登入",
+      guest: "帳號註冊",
       home: "返回首頁",
       currentAccount: "目前登入帳號",
       accountFallback: "帳戶",
@@ -314,12 +314,11 @@
   }
 
   function currentTheme() {
-    return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+    return "dark";
   }
 
   function themeEnabled() {
-    const page = document.querySelector("[data-site-header]")?.dataset.sitePage || "";
-    return page === "console" || document.body?.classList.contains("page-admin");
+    return true;
   }
 
   function currentLanguage() {
@@ -332,16 +331,9 @@
     } catch {}
   }
 
-  function setTheme(theme, { emit = true, persist = true } = {}) {
-    if (!themeEnabled()) {
-      delete document.documentElement.dataset.theme;
-      sync();
-      return;
-    }
-    const nextTheme = theme === "dark" ? "dark" : "light";
-    if (nextTheme === "dark") document.documentElement.dataset.theme = "dark";
-    else delete document.documentElement.dataset.theme;
-    if (persist) writePreference(THEME_STORAGE_KEY, nextTheme);
+  function setTheme(_theme, { emit = true } = {}) {
+    const nextTheme = "dark";
+    document.documentElement.dataset.theme = nextTheme;
     sync();
     if (emit) window.dispatchEvent(new CustomEvent(EVENT_THEME, { detail: { theme: nextTheme } }));
   }
@@ -361,9 +353,10 @@
 
   function navLink({ key, href, current, className = "" }) {
     const busy = key === "console" ? " data-console-entry" : "";
+    const register = key === "guest" ? " data-open-register" : "";
     const active = current === key ? ' aria-current="page"' : "";
     const classAttribute = className ? ` class="${className}"` : "";
-    return `<a${classAttribute} data-site-nav-key="${key}" href="${href}"${active}${busy}><span data-site-copy="${key}"></span></a>`;
+    return `<a${classAttribute} data-site-nav-key="${key}" href="${href}"${active}${busy}${register}><span data-site-copy="${key}"></span></a>`;
   }
 
   function navigationLinks(page, current) {
@@ -373,10 +366,6 @@
       navLink({ key: "console", href: "/console.html", current }),
       navLink({ key: "aboutVecto", href: "/about-vecto.html", current }),
     ].join("");
-  }
-
-  function themeIcon() {
-    return `<svg class="site-theme-icon site-theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg><svg class="site-theme-icon site-theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.7 8.7 0 1 0 20.5 15.2Z"></path></svg>`;
   }
 
   function languageIcon() {
@@ -425,12 +414,8 @@
   }
 
   function accountPreferencesMarkup(page = "console") {
-    const themePreference = page === "console" ? `<button id="themeToggle" class="site-account-preference" type="button" data-site-theme-toggle>
-        <span class="site-account-preference-icon" aria-hidden="true">${themeIcon()}</span>
-      </button>` : "";
     return `<div class="site-account-preferences" data-site-personal-controls>
       <span class="site-account-section-label" data-site-copy="personalSettings"></span>
-      ${themePreference}
       <button id="languageToggle" class="site-account-preference" type="button" data-site-language-toggle>
         <span class="site-account-preference-icon" aria-hidden="true">${languageIcon()}</span>
       </button>
@@ -438,6 +423,12 @@
   }
 
   function accountMenuMarkup(page = "console") {
+    const workspaceActions = page === "console"
+      ? `<div class="site-account-action-row site-account-workspace-actions" aria-label="控制台快捷操作">
+          <button type="button" data-site-open-console-view="tasks">任务队列</button>
+          <button type="button" data-site-open-console-view="console_settings">设置</button>
+        </div>`
+      : "";
     return `<div class="site-account-menu" data-site-account-menu>
       <button class="site-user" type="button" aria-controls="siteAccountPopover" aria-haspopup="dialog" aria-expanded="false" data-site-user-title data-site-account-trigger>
         <span class="site-user-avatar" data-site-account-avatar>${accountIcon()}</span><span id="consoleMeName" data-site-account-name></span><svg class="site-user-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"></path></svg>
@@ -480,6 +471,7 @@
             <button type="button" data-site-open-settings data-site-copy="personalProfile"></button>
           </div>
         </section>
+        ${workspaceActions}
         ${accountPreferencesMarkup(page)}
         <button class="site-account-logout" type="button" data-site-account-logout><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M18 12H9"></path></svg><span data-site-copy="logout"></span></button>
         <span class="site-account-message" role="status" aria-live="polite" data-site-account-message></span>
@@ -488,10 +480,7 @@
   }
 
   function renderMobileMenu(page, current, mode) {
-    const extraLink = mode === "authenticated"
-      ? ""
-      : navLink({ key: "guest", href: page === "home" ? "#contact" : "/#contact", current, className: "site-mobile-menu-extra" });
-    return `<details class="site-mobile-menu" data-site-mobile-menu><summary class="site-menu-toggle" data-site-menu-toggle>${menuIcon()}<span data-site-copy="menu"></span></summary><nav class="site-mobile-menu-panel" data-site-navigation>${navigationLinks(page, current)}${extraLink}</nav></details>`;
+    return `<details class="site-mobile-menu" data-site-mobile-menu><summary class="site-menu-toggle" data-site-menu-toggle>${menuIcon()}<span data-site-copy="menu"></span></summary><nav class="site-mobile-menu-panel" data-site-navigation>${navigationLinks(page, current)}</nav></details>`;
   }
 
   function renderActions(mode, page, current) {
@@ -500,7 +489,7 @@
     if (mode === "authenticated") {
       return `${mobileMenu}${subscriptionControl(page)}${accountMenuMarkup(page)}`;
     }
-    return `${mobileMenu}${subscriptionControl(page)}${controls}<button class="header-login" type="button" data-open-login><span data-site-copy="login"></span></button><a class="header-action site-guest-action" href="${page === "home" ? "#contact" : "/#contact"}"><span data-site-copy="guest"></span></a>`;
+    return `${mobileMenu}${subscriptionControl(page)}${controls}<button class="header-login" type="button" data-open-login><span data-site-copy="login"></span></button>`;
   }
 
   function fallbackMarkup(page, mode, current) {
@@ -774,11 +763,6 @@
   }
 
   function bindPreferenceControls(root) {
-    root.querySelectorAll("[data-site-theme-toggle]").forEach((button) => {
-      if (button.dataset.sitePreferenceReady === "true") return;
-      button.dataset.sitePreferenceReady = "true";
-      button.addEventListener("click", () => setTheme(currentTheme() === "dark" ? "light" : "dark"));
-    });
     root.querySelectorAll("[data-site-language-toggle]").forEach((button) => {
       if (button.dataset.sitePreferenceReady === "true") return;
       button.dataset.sitePreferenceReady = "true";
@@ -850,6 +834,14 @@
       menu.querySelector("[data-site-open-settings]")?.addEventListener("click", () => {
         setAccountMenuOpen(menu, false);
         openProfilePage();
+      });
+      menu.querySelectorAll("[data-site-open-console-view]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const view = String(button.dataset.siteOpenConsoleView || "");
+          if (!["tasks", "console_settings"].includes(view)) return;
+          setAccountMenuOpen(menu, false);
+          window.dispatchEvent(new CustomEvent(EVENT_CONSOLE_VIEW_REQUEST, { detail: { view } }));
+        });
       });
       menu.querySelector("[data-site-account-logout]")?.addEventListener("click", () => {
         setLogoutPending(true);
@@ -1095,12 +1087,6 @@
       }
     });
     syncOperationalPublicTargets();
-    document.querySelectorAll("[data-site-theme-toggle]").forEach((button) => {
-      const label = currentTheme() === "dark" ? labels.themeLight : labels.themeDark;
-      button.title = label;
-      button.setAttribute("aria-label", label);
-      button.setAttribute("aria-pressed", currentTheme() === "dark" ? "true" : "false");
-    });
     document.querySelectorAll("[data-site-language-toggle]").forEach((button) => {
       button.title = labels.language;
       button.setAttribute("aria-label", labels.language);
@@ -1167,16 +1153,11 @@
     document.querySelectorAll("[data-site-account-menu].is-open").forEach((menu) => setAccountMenuOpen(menu, false, { restoreFocus: true }));
   });
   window.addEventListener("storage", (event) => {
-    if (event.key === THEME_STORAGE_KEY) {
-      if (themeEnabled()) setTheme(event.newValue || "light", { persist: false });
-      else delete document.documentElement.dataset.theme;
-    }
     if (event.key === LANGUAGE_STORAGE_KEY) {
       setLanguage(event.newValue || DEFAULT_LANGUAGE, { persist: false });
     }
     if (event.key === null) {
-      if (themeEnabled()) setTheme("light", { persist: false });
-      else delete document.documentElement.dataset.theme;
+      setTheme("dark", { persist: false });
       setLanguage(DEFAULT_LANGUAGE, { persist: false });
     }
     if (event.key === "vecto-proxy-market-read") void syncProxyMarketBadge();
@@ -1186,8 +1167,7 @@
 
   syncAdminWorkspaceContext();
   document.querySelectorAll("[data-site-header]").forEach(mount);
-  if (themeEnabled()) setTheme(storedValue(THEME_STORAGE_KEY, "light"), { persist: false });
-  else delete document.documentElement.dataset.theme;
+  setTheme("dark", { persist: false });
   setLanguage(storedValue(LANGUAGE_STORAGE_KEY, DEFAULT_LANGUAGE), { persist: false });
 
   window.VectoSiteNavigation = {
