@@ -334,7 +334,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             handler.index('event.target.closest("[data-workspace-view]")'),
         )
 
-    def test_mobile_persona_repeat_click_reopens_the_existing_persona_drawer(self):
+    def test_mobile_persona_navigation_does_not_open_the_persona_drawer(self):
         handler_start = self.console_script.index(
             "const handleWorkspaceModuleNavigation = async (event) => {"
         )
@@ -343,21 +343,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         handler = self.console_script[handler_start:handler_end]
 
-        self.assertIn('dockButton?.dataset.module === "personas"', handler)
-        self.assertIn(
-            'setPersonaMobileSidebarOpen(true, "personaWorkspaceSidebar");',
-            handler,
-        )
+        self.assertNotIn('dockButton?.dataset.module === "personas"', handler)
         module_branch = handler[handler.index('const button = event.target.closest("[data-module]")'):]
-        self.assertIn(
-            'const reopenPersonaWorkspaceSidebar = isMobileNavMode() && button.dataset.module === "personas";',
+        self.assertNotIn(
+            'setPersonaMobileSidebarOpen(true, "personaWorkspaceSidebar");',
             module_branch,
-        )
-        self.assertLess(
-            module_branch.index("setModule(button.dataset.module);"),
-            module_branch.index(
-                'setPersonaMobileSidebarOpen(true, "personaWorkspaceSidebar");'
-            ),
         )
 
     def test_mobile_profile_header_exposes_the_existing_persona_create_action(self):
@@ -370,8 +360,14 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         settings = self.console_script[settings_start:settings_end]
 
         self.assertIn("persona-profile-base-head", settings)
-        self.assertIn("persona-profile-new-button", settings)
+        self.assertIn(
+            'class="account-pool-add-button persona-profile-new-button"',
+            settings,
+        )
         self.assertIn("data-persona-open-create", settings)
+        self.assertIn('<span aria-hidden="true"></span>', settings)
+        self.assertIn("<strong>新建人设</strong>", settings)
+        self.assertNotIn("renderPlusIcon()", settings)
         self.assertIn("新建人设", settings)
         self.assertIn(
             "/* Mobile persona profile create shortcut. */",
@@ -382,6 +378,23 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         ]
         self.assertIn(".persona-profile-new-button", mobile_styles)
         self.assertIn("display: inline-flex;", mobile_styles)
+        self.assertIn("width: 100%;", mobile_styles)
+
+    def test_persona_create_mode_keeps_the_mobile_persona_list_button_source(self):
+        create_start = self.console_script.index(
+            "function renderPersonaCreateWorkbench()"
+        )
+        create_end = self.console_script.index(
+            "\nfunction personaGroupStepOptions", create_start
+        )
+        create_workbench = self.console_script[create_start:create_end]
+
+        self.assertIn(
+            'data-persona-mobile-list-toggle="personaWorkspaceSidebar"',
+            create_workbench,
+        )
+        self.assertIn('aria-controls="personaWorkspaceSidebar"', create_workbench)
+        self.assertIn("<span>选择人设</span>", create_workbench)
 
     def test_selecting_the_current_persona_exits_persona_create_mode(self):
         selection_start = self.console_script.index(

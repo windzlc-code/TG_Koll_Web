@@ -8002,9 +8002,9 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
       <div class="persona-head-copy persona-profile-base-head">
         <strong>基础资料</strong>
         <span class="persona-panel-intro">名称、简介、头像、链接和推文风格分别设置，保存后会立即同步当前人设。</span>
-        <button type="button" class="primary persona-profile-new-button" data-persona-open-create>
-          ${renderPlusIcon()}
-          <span>新建人设</span>
+        <button type="button" class="account-pool-add-button persona-profile-new-button" data-persona-open-create>
+          <span aria-hidden="true"></span>
+          <strong>新建人设</strong>
         </button>
       </div>
       <div class="persona-profile-long-page">
@@ -17879,6 +17879,12 @@ function renderPersonaCreateWorkbench() {
           <span>先填名称和提示词，再确认关键词后创建。</span>
         </div>
         <div class="persona-quick-actions">
+          <button type="button" class="persona-mobile-list-toggle" data-persona-mobile-list-toggle="personaWorkspaceSidebar" aria-controls="personaWorkspaceSidebar" aria-expanded="false">
+            <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
+            </svg>
+            <span>选择人设</span>
+          </button>
           <button type="button" data-persona-cancel-create>返回人设详情</button>
         </div>
       </div>
@@ -23226,10 +23232,6 @@ function bindEvents() {
     const dockButton = event.target.closest(".mobile-task-dock-button");
     if (isCurrentMobileTaskDockTarget(dockButton)) {
       event.preventDefault();
-      if (dockButton?.dataset.module === "personas") {
-        setPersonaMobileSidebarOpen(true, "personaWorkspaceSidebar");
-        return;
-      }
       scrollConsolePageToTop();
       return;
     }
@@ -23248,7 +23250,6 @@ function bindEvents() {
     }
     const button = event.target.closest("[data-module]");
     if (button) {
-      const reopenPersonaWorkspaceSidebar = isMobileNavMode() && button.dataset.module === "personas";
       if (button.dataset.module !== state.activeModule && state.view === "workspace" && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
       if (button.dataset.module !== state.activeModule && state.view === "workspace" && !(await confirmLeaveTransientWorkspaceState())) return;
       setMenuClickHighlight(button, button.closest(".module-accordion-item") || button);
@@ -23257,9 +23258,6 @@ function bindEvents() {
         setView("workspace");
       }
       setModule(button.dataset.module);
-      if (reopenPersonaWorkspaceSidebar) {
-        setPersonaMobileSidebarOpen(true, "personaWorkspaceSidebar");
-      }
     }
   };
   $("moduleMenu").addEventListener("click", handleWorkspaceModuleNavigation);
