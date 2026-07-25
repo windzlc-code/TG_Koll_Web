@@ -314,11 +314,11 @@
   }
 
   function currentTheme() {
-    return "dark";
+    return "light";
   }
 
   function themeEnabled() {
-    return true;
+    return false;
   }
 
   function currentLanguage() {
@@ -332,7 +332,7 @@
   }
 
   function setTheme(_theme, { emit = true } = {}) {
-    const nextTheme = "dark";
+    const nextTheme = "light";
     document.documentElement.dataset.theme = nextTheme;
     sync();
     if (emit) window.dispatchEvent(new CustomEvent(EVENT_THEME, { detail: { theme: nextTheme } }));
@@ -1156,7 +1156,7 @@
       setLanguage(event.newValue || DEFAULT_LANGUAGE, { persist: false });
     }
     if (event.key === null) {
-      setTheme("dark", { persist: false });
+      setTheme("light", { persist: false });
       setLanguage(DEFAULT_LANGUAGE, { persist: false });
     }
     if (event.key === "vecto-proxy-market-read") void syncProxyMarketBadge();
@@ -1166,7 +1166,7 @@
 
   syncAdminWorkspaceContext();
   document.querySelectorAll("[data-site-header]").forEach(mount);
-  setTheme("dark", { persist: false });
+  setTheme("light", { persist: false });
   setLanguage(storedValue(LANGUAGE_STORAGE_KEY, DEFAULT_LANGUAGE), { persist: false });
 
   window.VectoSiteNavigation = {

@@ -70,7 +70,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('data-site-nav-key="${key}"', self.site_nav_source)
         self.assertIn('.site-nav > a[data-site-nav-key]', self.site_nav_styles)
 
-    def test_console_uses_fixed_dark_theme_and_global_language_control(self):
+    def test_console_uses_fixed_light_theme_and_global_language_control(self):
         self.assertNotIn('id="themeToggle"', self.markup)
         self.assertNotIn('data-site-theme-toggle', self.site_nav_source)
         self.assertIn('id="languageToggle"', self.site_nav_source)
@@ -83,8 +83,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("setConsoleUiAttribute", self.source)
         self.assertIn('setConsoleUiAttribute(toggle, "aria-label"', self.source)
         self.assertIn('window.addEventListener("storage"', self.site_nav_source)
-        self.assertIn('const nextTheme = "dark"', self.site_nav_source)
-        self.assertIn('setTheme("dark", { persist: false })', self.site_nav_source)
+        self.assertIn('const nextTheme = "light"', self.site_nav_source)
+        self.assertIn('setTheme("light", { persist: false })', self.site_nav_source)
         ensure_theme = self._function_source("ensureThemeToggle")
         ensure_language = self._function_source("ensureLanguageToggle")
         self.assertNotIn("document.createElement", ensure_theme)

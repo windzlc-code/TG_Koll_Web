@@ -115,12 +115,12 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('.admin-user-batch-bar', self.styles)
         self.assertIn('@media (max-width: 720px)', self.styles)
 
-    def test_admin_preferences_use_fixed_dark_theme_and_shared_language(self):
+    def test_admin_preferences_use_fixed_light_theme_and_shared_language(self):
         st_script = '/assets/vendor/opencc-js/st-characters.js?v=1.4.1'
         navigation_script = '/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__'
         admin_script = '/assets/admin.js?v=__ADMIN_JS_VERSION__'
         stylesheet = '/assets/style.css?v=__STYLE_VERSION__'
-        self.assertLess(self.html.index('document.documentElement.dataset.theme = "dark"'), self.html.index(stylesheet))
+        self.assertLess(self.html.index('document.documentElement.dataset.theme = "light"'), self.html.index(stylesheet))
         self.assertLess(self.html.index(st_script), self.html.index(admin_script))
         self.assertLess(self.html.index(navigation_script), self.html.index(admin_script))
         self.assertNotIn('id="adminThemeToggle"', self.html)

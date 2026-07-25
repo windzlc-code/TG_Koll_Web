@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>运营后台 - Web 素材生成平台</title>
   <script>
-    document.documentElement.dataset.theme = "dark";
+    document.documentElement.dataset.theme = "light";
+    try { localStorage.setItem("wk-console-theme", "light"); } catch {}
   </script>
   <link rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__">
   <style>

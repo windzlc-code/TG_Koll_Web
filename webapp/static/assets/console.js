@@ -151,9 +151,8 @@ function purgeLegacyTenantContentCaches() {
 purgeLegacyTenantContentCaches();
 
 try {
-  if (window.localStorage.getItem(THEME_STORAGE_KEY) === "dark") {
-    document.documentElement.dataset.theme = "dark";
-  }
+  window.localStorage.setItem(THEME_STORAGE_KEY, "light");
+  document.documentElement.dataset.theme = "light";
 } catch {}
 
 try {
@@ -894,7 +893,7 @@ function snapshotPersonaCreateInputs() {
 }
 
 function currentTheme() {
-  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+  return "light";
 }
 
 function syncThemeToggle() {
@@ -914,9 +913,8 @@ function syncThemeToggle() {
 }
 
 function applyTheme(theme) {
-  const nextTheme = theme === "dark" ? "dark" : "light";
-  if (nextTheme === "dark") document.documentElement.dataset.theme = "dark";
-  else delete document.documentElement.dataset.theme;
+  const nextTheme = "light";
+  document.documentElement.dataset.theme = nextTheme;
   try {
     window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
   } catch {}

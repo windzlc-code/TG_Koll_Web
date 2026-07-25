@@ -357,7 +357,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('fetch("/api/auth/logout"', self.site_nav_script)
         self.assertIn("window.location.reload()", self.site_nav_script)
 
-    def test_shared_navigation_keeps_language_and_uses_fixed_dark_theme(self):
+    def test_shared_navigation_keeps_language_and_uses_fixed_light_theme(self):
         for expected in ('id="languageToggle"', "site-language-icon"):
             self.assertIn(expected, self.site_nav_script)
         self.assertNotIn('id="themeToggle"', self.site_nav_script)
@@ -367,7 +367,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             self.assertNotIn("data-site-theme-toggle", markup)
             self.assertIn("data-site-language-toggle", markup)
         self.assertIn("function themeEnabled()", self.site_nav_script)
-        self.assertIn("return true", self.site_nav_script)
+        self.assertIn("function themeEnabled() {\n    return false;", self.site_nav_script)
         self.assertIn('installUnifiedAccountMenu(header, header.dataset.sitePage || "home")', self.site_nav_script)
         public_controls = self.site_nav_script.split("function renderActions", 1)[1].split("function fallbackMarkup", 1)[0]
         self.assertNotIn("data-site-theme-toggle", public_controls.split("const controls", 1)[1].split("const mobileMenu", 1)[0])
@@ -377,8 +377,8 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('actions.querySelectorAll(":scope > .site-global-controls")', self.site_nav_script)
         self.assertIn('const LANGUAGE_STORAGE_KEY = "wk-console-language"', self.site_nav_script)
         self.assertIn('window.addEventListener("storage"', self.site_nav_script)
-        self.assertIn('const nextTheme = "dark"', self.site_nav_script)
-        self.assertIn('setTheme("dark", { persist: false })', self.site_nav_script)
+        self.assertIn('const nextTheme = "light"', self.site_nav_script)
+        self.assertIn('setTheme("light", { persist: false })', self.site_nav_script)
         self.assertIn('data-site-mobile-menu', self.site_nav_script)
         self.assertIn('window.addEventListener("vecto:language-change"', self.script)
         self.assertIn("applyPublicLanguage", self.script)
