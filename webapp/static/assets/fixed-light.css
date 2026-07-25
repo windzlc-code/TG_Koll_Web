@@ -16,6 +16,8 @@
   --public-cool-dark: #253746;
   --public-on-dark-accent: #d7e0e7;
   --public-warm-accent: #8a674d;
+  --public-action-gradient: linear-gradient(112deg, #17212b 0%, #355c77 60%, #725c4b 100%);
+  --public-action-gradient-hover: linear-gradient(112deg, #22313f 0%, #466f8c 58%, #8a674d 100%);
   --public-success: #27845a;
   --paper: var(--public-paper);
   --surface: var(--public-page);
@@ -74,7 +76,8 @@
   body[data-login-redirect="/subscription.html"]
 ) :is(.button-primary, .home-button-primary, .proxy-filter-submit, .proxy-claim-button) {
   color: #fff;
-  background: var(--public-cool-dark);
+  background-color: var(--public-cool-dark);
+  background-image: var(--public-action-gradient);
   border-color: var(--public-cool-dark);
 }
 
@@ -85,8 +88,9 @@
   body[data-login-redirect="/subscription.html"]
 ) :is(.button-primary, .home-button-primary, .proxy-filter-submit, .proxy-claim-button):hover {
   color: #fff;
-  background: var(--public-cool);
-  border-color: var(--public-cool);
+  background-color: var(--public-cool);
+  background-image: var(--public-action-gradient-hover);
+  border-color: #536a7d;
 }
 
 /* Homepage */
@@ -831,7 +835,7 @@
   --soft: #f8fafc;
   --accent: var(--public-cool);
   --accent-dark: var(--public-cool-dark);
-  --accent-2: #68727d;
+  --accent-2: var(--public-warm-accent);
   --accent-ink: #fff;
   --chip-bg: #e8f0f7;
   --chip-ink: var(--public-cool-dark);
@@ -841,7 +845,18 @@
   --panel-shadow: 0 10px 30px rgb(49 65 85 / 6%);
   --vecto-action-border: #34495e;
   --vecto-action-static-gradient: linear-gradient(112deg, #17212b 0%, #23384a 52%, #355c77 100%);
-  --vecto-action-running-gradient: linear-gradient(112deg, #17212b 0%, #2a4960 46%, #647789 100%);
+  --vecto-action-running-gradient: linear-gradient(112deg, #17212b 0%, #3b607a 46%, #8a674d 100%);
+}
+
+:root[data-theme="light"] .console-page :is(.console-shell, .console-modal) :is(
+  button.primary:not(.danger),
+  .chip-button.primary:not(.danger),
+  button[data-persona-run-threads],
+  button[data-account-pool-run-threads],
+  button[data-persona-regenerate-profile-content],
+  button[data-browser-recommendation-refresh]
+) {
+  background-image: var(--public-action-gradient);
 }
 
 :root[data-theme="light"] .console-page :is(
@@ -1258,28 +1273,58 @@
   background: #30353a;
 }
 
-:root[data-theme="light"] .home-canvas .home-infra-section :is(h2, h3, strong) {
+:root[data-theme="light"] .home-canvas .home-infra-section > .home-section-head :is(h2, h3),
+:root[data-theme="light"] .home-canvas .home-infra-section .home-infra-visual strong {
   color: #f8fafc;
 }
 
-:root[data-theme="light"] .home-canvas .home-infra-section :is(p, span, small) {
+:root[data-theme="light"] .home-canvas .home-infra-section > .home-section-head :is(p, span, small),
+:root[data-theme="light"] .home-canvas .home-infra-section .home-infra-visual :is(p, span, small) {
   color: #c7d0d8;
 }
 
-:root[data-theme="light"] .about-canvas .about-architecture :is(
-  h2,
-  h3,
-  .about-section-head-light h2
+:root[data-theme="light"] .home-canvas .home-infra-section :is(
+  .home-infra-status,
+  .home-infra-control,
+  .home-infra-network
 ) {
+  color: var(--public-ink);
+}
+
+:root[data-theme="light"] .home-canvas .home-infra-section :is(
+  .home-infra-status,
+  .home-infra-control,
+  .home-infra-network
+) :is(h3, strong) {
+  color: var(--public-ink);
+}
+
+:root[data-theme="light"] .home-canvas .home-infra-section :is(
+  .home-infra-status,
+  .home-infra-control,
+  .home-infra-network
+) :is(p, span, small) {
+  color: var(--public-muted);
+}
+
+:root[data-theme="light"] .about-canvas .about-architecture .about-section-head-light h2 {
   color: #f8fafc;
 }
 
-:root[data-theme="light"] .about-canvas .about-architecture :is(
-  p,
-  li,
-  .about-section-head-light > p:last-child
-) {
+:root[data-theme="light"] .about-canvas .about-architecture .about-section-head-light > p:last-child {
   color: #c7d0d8;
+}
+
+:root[data-theme="light"] .about-canvas .about-architecture .about-engine-grid article {
+  color: var(--public-ink);
+}
+
+:root[data-theme="light"] .about-canvas .about-architecture .about-engine-grid article h3 {
+  color: var(--public-ink);
+}
+
+:root[data-theme="light"] .about-canvas .about-architecture .about-engine-grid article p {
+  color: var(--public-muted);
 }
 
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-comparison-band :is(
