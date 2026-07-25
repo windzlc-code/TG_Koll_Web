@@ -936,6 +936,12 @@ function initHomeExperience() {
       const firstClone = rail.querySelector("[data-home-rail-clone]");
       railCycleWidth = firstClone && railCards[0] ? firstClone.offsetLeft - railCards[0].offsetLeft : 0;
     };
+    const getNextRailOffset = () => {
+      const firstOffset = railCards[0]?.offsetLeft || 0;
+      return Array.from(rail.children)
+        .map((card) => card.offsetLeft - firstOffset)
+        .find((offset) => offset > rail.scrollLeft + 2);
+    };
     const normalizeRail = () => {
       if (!railCycleWidth || rail.scrollLeft < railCycleWidth) return;
       rail.scrollTo({ left: rail.scrollLeft - railCycleWidth, behavior: "auto" });
@@ -952,7 +958,7 @@ function initHomeExperience() {
     window.addEventListener("resize", updateRailCycle, { passive: true });
     window.setInterval(() => {
       if (railPaused || document.hidden || !railCycleWidth) return;
-      rail.scrollTo({ left: rail.scrollLeft + Math.min(430, rail.clientWidth * 0.72), behavior: "smooth" });
+      rail.scrollTo({ left: getNextRailOffset() ?? railCycleWidth, behavior: "smooth" });
       window.clearTimeout(railResetTimer);
       railResetTimer = window.setTimeout(normalizeRail, 900);
     }, 5200);

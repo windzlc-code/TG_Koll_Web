@@ -16,8 +16,8 @@
   --public-cool-dark: #253746;
   --public-on-dark-accent: #d7e0e7;
   --public-warm-accent: #8a674d;
-  --public-action-gradient: linear-gradient(112deg, #17212b 0%, #355c77 60%, #725c4b 100%);
-  --public-action-gradient-hover: linear-gradient(112deg, #22313f 0%, #466f8c 58%, #8a674d 100%);
+  --public-action-gradient: linear-gradient(112deg, #17212b 0%, #355c77 84%, #756d67 100%);
+  --public-action-gradient-hover: linear-gradient(112deg, #22313f 0%, #466f8c 82%, #7d736c 100%);
   --public-success: #27845a;
   --paper: var(--public-paper);
   --surface: var(--public-page);
@@ -200,8 +200,32 @@
 }
 
 :root[data-theme="light"] .home-canvas .home-flow-section {
+  grid-template-columns: minmax(0, 0.68fr) minmax(0, 1.32fr);
+  width: 100%;
+  min-width: 0;
   color: var(--public-ink);
   background: var(--public-surface);
+  overflow: hidden;
+}
+
+:root[data-theme="light"] .home-canvas :is(
+  .home-flow-copy,
+  .home-flow-board,
+  .home-flow-board ol,
+  .home-flow-board li,
+  .home-flow-board li div
+) {
+  min-width: 0;
+}
+
+:root[data-theme="light"] .home-canvas :is(
+  .home-flow-copy h2,
+  .home-flow-copy p,
+  .home-flow-board strong,
+  .home-flow-board small
+) {
+  max-width: 100%;
+  overflow-wrap: break-word;
 }
 
 :root[data-theme="light"] .home-canvas .home-flow-copy > p:last-child,
@@ -844,8 +868,8 @@
   --active-shadow: inset 0 0 0 2px rgb(53 107 145 / 18%);
   --panel-shadow: 0 10px 30px rgb(49 65 85 / 6%);
   --vecto-action-border: #34495e;
-  --vecto-action-static-gradient: linear-gradient(112deg, #17212b 0%, #23384a 52%, #355c77 100%);
-  --vecto-action-running-gradient: linear-gradient(112deg, #17212b 0%, #3b607a 46%, #8a674d 100%);
+  --vecto-action-static-gradient: var(--public-action-gradient);
+  --vecto-action-running-gradient: linear-gradient(112deg, #17212b 0%, #3b607a 80%, #756d67 100%);
 }
 
 :root[data-theme="light"] .console-page :is(.console-shell, .console-modal) :is(
@@ -856,7 +880,10 @@
   button[data-persona-regenerate-profile-content],
   button[data-browser-recommendation-refresh]
 ) {
+  color: #fff;
+  background-color: var(--public-cool-dark);
   background-image: var(--public-action-gradient);
+  border-color: var(--vecto-action-border);
 }
 
 :root[data-theme="light"] .console-page :is(
@@ -904,6 +931,32 @@
   border-color: var(--public-line);
 }
 
+:root[data-theme="light"] .console-page :is(
+  .publish-mode-tabs,
+  .persona-group-tabs,
+  .persona-subflow-tabs,
+  .persona-draft-view-toggle,
+  .persona-compose-toggle,
+  .persona-source-toggle,
+  .account-browser-tabs,
+  .account-pool-platforms,
+  .automation-capsule-tabs
+) button {
+  min-width: 0;
+  height: auto;
+  min-height: 34px;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+:root[data-theme="light"] .console-page .mobile-task-dock-button.is-active {
+  color: #fff;
+  background-color: var(--public-cool-dark);
+  background-image: var(--public-action-gradient);
+  border-color: var(--vecto-action-border);
+}
+
 :root[data-theme="light"] .page-admin {
   --admin-ink: var(--public-ink);
   --admin-ink-soft: var(--public-ink-soft);
@@ -915,6 +968,23 @@
   --admin-teal-dark: var(--public-cool-dark);
   --admin-green: var(--public-success);
   --admin-coral: #d94c45;
+}
+
+:root[data-theme="light"] .page-admin :is(button.primary, .btn.primary),
+:root[data-theme="light"] body.profile-page .profile-save,
+:root[data-theme="light"] body.page-auth-shell .auth-submit-row button[type="submit"] {
+  color: #fff;
+  background-color: var(--public-cool-dark);
+  background-image: var(--public-action-gradient);
+  border-color: var(--public-cool-dark);
+}
+
+:root[data-theme="light"] .page-admin :is(button.primary, .btn.primary):hover,
+:root[data-theme="light"] body.profile-page .profile-save:hover,
+:root[data-theme="light"] body.page-auth-shell .auth-submit-row button[type="submit"]:hover {
+  color: #fff;
+  background-image: var(--public-action-gradient-hover);
+  border-color: var(--public-cool-dark);
 }
 
 :root[data-theme="light"] .page-admin .admin-page-title {
@@ -1055,8 +1125,51 @@
   .auth-submit
 ) {
   color: #fff;
-  background: linear-gradient(110deg, var(--public-cool-dark), var(--public-cool) 68%, #78a7c7);
+  background-color: var(--public-cool-dark);
+  background-image: var(--public-action-gradient);
   border-color: var(--public-cool-dark);
+}
+
+:root[data-theme="light"] .auth-dialog :is(
+  button[type="submit"],
+  .auth-primary,
+  .auth-submit
+):hover {
+  background-image: var(--public-action-gradient-hover);
+}
+
+@media (max-width: 1080px) {
+  :root[data-theme="light"] .home-canvas .home-flow-section {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  :root[data-theme="light"] .console-page .mobile-task-dock-button > span {
+    display: -webkit-box;
+    overflow: hidden;
+    line-height: 1.15;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: break-word;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  :root[data-theme="light"] .console-page :is(
+    .publish-mode-tabs,
+    .persona-group-tabs,
+    .persona-subflow-tabs,
+    .persona-draft-view-toggle,
+    .persona-compose-toggle,
+    .persona-source-toggle,
+    .account-browser-tabs,
+    .account-pool-platforms,
+    .automation-capsule-tabs
+  ) button {
+    padding-inline: 8px;
+    font-size: 13px;
+  }
 }
 
 :root[data-theme="light"] .site-header a:focus-visible,
@@ -1575,5 +1688,42 @@
   :root[data-theme="light"] body.profile-page .profile-account-grid > div + div {
     border-top-color: var(--public-line);
     border-left-color: transparent;
+  }
+}
+
+/* Keep narrow utility pages and dense task rows inside the mobile viewport. */
+:root[data-theme="light"] .proxy-market-page {
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  :root[data-theme="light"] body.profile-page .profile-account-grid strong {
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 360px) {
+  :root[data-theme="light"] .console-page .task-table-inner--regular .task-row {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "check task status"
+      "empty time time"
+      "empty actions actions";
+  }
+
+  :root[data-theme="light"] .console-page .task-table-inner--regular .task-row .row-actions {
+    flex-wrap: wrap;
+  }
+
+  :root[data-theme="light"] .console-page .task-table-inner--regular .task-row > :nth-child(2) strong {
+    display: -webkit-box;
+    overflow: hidden;
+    white-space: normal;
+    text-overflow: clip;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
 }
