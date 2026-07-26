@@ -16,8 +16,13 @@
   --public-cool-dark: #253746;
   --public-on-dark-accent: #d7e0e7;
   --public-warm-accent: #8a674d;
-  --public-action-gradient: linear-gradient(108deg, #17212b 0 48%, #355c77 48% 88%, #625e5b 88% 100%);
-  --public-action-gradient-hover: linear-gradient(108deg, #22313f 0 42%, #466f8c 42% 88%, #6c6662 88% 100%);
+  --public-action-stains: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 100' preserveAspectRatio='none'%3E%3Cdefs%3E%3Cfilter id='n1'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.055 .17' numOctaves='3' seed='13' result='t'/%3E%3CfeColorMatrix in='t' values='0 0 0 0 1 0 0 0 0 .24 0 0 0 0 .02 6 0 0 0 -4.2'/%3E%3C/filter%3E%3Cfilter id='n2'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.11 .28' numOctaves='2' seed='29' result='t'/%3E%3CfeColorMatrix in='t' values='0 0 0 0 1 0 0 0 0 .62 0 0 0 0 .08 7 0 0 0 -5.1'/%3E%3C/filter%3E%3C/defs%3E%3Crect x='258' width='68' height='100' filter='url(%23n1)'/%3E%3Crect x='278' y='-8' width='52' height='116' filter='url(%23n2)' opacity='.92'/%3E%3C/svg%3E");
+  --public-action-gradient:
+    var(--public-action-stains),
+    linear-gradient(112deg, #17212b 0%, #29475d 54%, #3f6d8b 100%);
+  --public-action-gradient-hover:
+    var(--public-action-stains),
+    linear-gradient(112deg, #22313f 0%, #365d77 54%, #4d7b98 100%);
   --public-success: #27845a;
   --paper: var(--public-paper);
   --surface: var(--public-page);
@@ -869,7 +874,9 @@
   --panel-shadow: 0 10px 30px rgb(49 65 85 / 6%);
   --vecto-action-border: #34495e;
   --vecto-action-static-gradient: var(--public-action-gradient);
-  --vecto-action-running-gradient: linear-gradient(108deg, #17212b 0 44%, #3b607a 44% 88%, #625e5b 88% 100%);
+  --vecto-action-running-gradient:
+    var(--public-action-stains),
+    linear-gradient(112deg, #17212b 0%, #2d5068 54%, #426f8a 100%);
 }
 
 :root[data-theme="light"] .console-page :is(.console-shell, .console-modal) :is(
