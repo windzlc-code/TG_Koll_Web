@@ -56,7 +56,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn('data-panel="settings"', self.markup)
         self.assertIn('data-site-open-billing', self.markup)
         self.assertIn('data-panel="billing"', self.markup)
-        self.assertNotIn(".console-page .site-header", self.styles)
         self.assertIn(".site-header", self.site_nav_styles)
         self.assertIn(".console-page .console-shell", self.styles)
         self.assertIn("body.console-page", self.styles)
@@ -725,9 +724,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("openLiveBrowserTaskView(taskId)", self._function_source("submitPersonaPublishTask"))
         self.assertIn("openLiveBrowserTaskView(immediateTaskId)", self._function_source("executeSimpleFlow"))
         self.assertIn("openLiveBrowserTaskView(firstImmediateTaskId)", self._function_source("submitMatrixPublishTask"))
-        persona_events = self._persona_dashboard_function_source("pdBindAutomationEvents")
-        self.assertIn("const created = await pdApi", persona_events)
-        self.assertIn("window.VectoConsoleNavigation?.openLiveBrowserTaskView?.(createdTaskId)", persona_events)
 
     def test_live_browser_polling_preserves_unchanged_placeholder_nodes(self):
         browser_render = self._function_source("renderLiveBrowserSessions")
@@ -1917,10 +1913,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
     def test_account_pool_does_not_mount_the_removed_persona_picker(self):
         pool = self._function_source("renderAccountPool")
-        self.assertIn("<strong>账号池</strong>", pool)
+        self.assertIn("renderAccountPoolPlatformTabs()", pool)
+        self.assertIn("renderAccountPoolCards(accounts, selectedAccount)", pool)
         self.assertNotIn("accountPoolPersonaSidebar", pool)
-        self.assertNotIn("选择人设", pool)
-
+        self.assertNotIn("renderPersonaPicker", pool)
     def test_account_proxy_picker_replaces_legacy_edit_checkbox_and_keeps_single_binding(self):
         card = self._section("function renderAccountPoolCard", "function renderAccountPoolCards")
         picker = self._function_source("openAccountProxyPickerModal")
@@ -1992,7 +1988,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("data-persona-account-cancel-edit", self.source)
         self.assertNotIn("persona-account-pool-card--inline-edit", self.source)
         self.assertIn('"vecto:open-account-editor"', self.source)
-        self.assertIn('"vecto:open-account-editor"', self.persona_dashboard_source)
+        self.assertNotIn('"vecto:open-account-editor"', self.persona_dashboard_source)
         self.assertNotIn("personaAutoLoginUsername", self.persona_dashboard_source)
         self.assertNotIn("personaAutoLoginPassword", self.persona_dashboard_source)
         self.assertNotIn("personaAutoCreateAccount", self.persona_dashboard_source)
@@ -2523,10 +2519,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             """
         )
         self._run_node(harness)
-        self.assertIn(
-            "const task = logData.task || taskData.task || null;",
-            self.persona_dashboard_source,
-        )
 
     def test_publish_batch_child_notification_targets_aggregate_queue_row(self):
         helpers = "\n".join([
@@ -2568,208 +2560,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.strictEqual(taskQueuePageForTarget("persona", "publish-2"), 1);
             focusTaskQueueTarget("publish-2", "persona");
             assert.strictEqual(selectedSelector, '[data-task-queue-row-id="publish-1"]');
-            """
-        )
-        self._run_node(harness)
-
-    def test_persona_dashboard_publish_batch_is_one_log_row(self):
-        helpers = "\n".join([
-            self._persona_dashboard_function_source("pdAutomationAccountsForPersona"),
-            self._persona_dashboard_function_source("pdAutomationTaskPayload"),
-            self._persona_dashboard_function_source("pdAutomationTaskNeedsManualVerification"),
-            self._persona_dashboard_function_source("pdAggregateAutomationTaskBatch"),
-            self._persona_dashboard_function_source("pdAutomationTaskPresentationRows"),
-            self._persona_dashboard_function_source("pdAutomationTasksForPersona"),
-        ])
-        harness = textwrap.dedent(
-            f"""
-            const assert = require("assert");
-            const personaDashboardAutomation = {{
-              accounts: [
-                {{ id: "account-new", persona_id: "persona-1" }},
-              ],
-              tasks: [
-                {{
-                  id: "publish-2",
-                  persona_id: "persona-1",
-                  account_id: "account-1",
-                  task_type: "publish_post",
-                  status: "running",
-                  created_at: 20,
-                  payload: {{ publish_batch_id: "batch-1", publish_sequence_index: 2 }},
-                }},
-                {{
-                  id: "publish-1",
-                  persona_id: "persona-1",
-                  account_id: "account-1",
-                  task_type: "publish_post",
-                  status: "success",
-                  created_at: 10,
-                  payload: {{ publish_batch_id: "batch-1", publish_sequence_index: 1 }},
-                }},
-                {{
-                  id: "login-1",
-                  persona_id: "persona-1",
-                  account_id: "account-moved",
-                  task_type: "check_login",
-                  status: "success",
-                  created_at: 5,
-                  payload: {{}},
-                }},
-                {{
-                  id: "wrong-persona",
-                  persona_id: "persona-2",
-                  account_id: "account-new",
-                  task_type: "check_login",
-                  status: "success",
-                  created_at: 4,
-                  payload: {{}},
-                }},
-                {{
-                  id: "legacy-task",
-                  account_id: "account-new",
-                  task_type: "check_login",
-                  status: "success",
-                  created_at: 3,
-                  payload: {{}},
-                }},
-              ],
-            }};
-            {helpers}
-
-            const rows = pdAutomationTasksForPersona({{ id: "persona-1" }});
-            assert.strictEqual(rows.length, 3);
-            const batch = rows.find((item) => item.batch_task_count === 2);
-            assert.ok(batch);
-            assert.strictEqual(batch.id, "publish-1");
-            assert.strictEqual(batch.status, "running");
-            assert.deepStrictEqual(batch.batch_task_ids, ["publish-1", "publish-2"]);
-            assert.ok(rows.some((item) => item.id === "login-1"));
-            assert.ok(rows.some((item) => item.id === "legacy-task"));
-            assert.ok(!rows.some((item) => item.id === "wrong-persona"));
-            """
-        )
-        self._run_node(harness)
-
-    def test_persona_dashboard_keeps_all_login_tasks_and_uses_automatic_login_body(self):
-        helpers = "\n".join([
-            self._persona_dashboard_function_source("pdAutomationAccountsForPersona"),
-            self._persona_dashboard_function_source("pdAutomationTaskPayload"),
-            self._persona_dashboard_function_source("pdAutomationTaskNeedsManualVerification"),
-            self._persona_dashboard_function_source("pdAggregateAutomationTaskBatch"),
-            self._persona_dashboard_function_source("pdAutomationTaskPresentationRows"),
-            self._persona_dashboard_function_source("pdAutomationTasksForPersona"),
-            self._persona_dashboard_function_source("pdBuildAutomaticLoginTaskBody"),
-        ])
-        harness = textwrap.dedent(
-            f"""
-            const assert = require("assert");
-            const personaDashboardAutomation = {{
-              accounts: [{{ id: "account-1", persona_id: "persona-1" }}],
-              tasks: [
-                {{ id: "manual-login", account_id: "account-1", task_type: "open_login", status: "need_manual", payload: {{}} }},
-                {{ id: "auto-login", account_id: "account-1", task_type: "open_login", payload: {{ auto_submit: true }} }},
-                {{ id: "other-persona", account_id: "account-2", task_type: "open_login", payload: {{}} }},
-              ],
-            }};
-            {helpers}
-
-            assert.deepStrictEqual(
-              pdAutomationTasksForPersona({{ id: "persona-1" }}).map((task) => task.id),
-              ["manual-login", "auto-login"],
-            );
-            assert.deepStrictEqual(
-              pdBuildAutomaticLoginTaskBody({{ id: "persona-1" }}, "account-1", "threads", "saved-user", ""),
-              {{
-                persona_id: "persona-1",
-                account_id: "account-1",
-                platform: "threads",
-                task_type: "open_login",
-                priority: 20,
-                max_retries: 0,
-                payload: {{ auto_submit: true, login_username: "saved-user", login_wait_seconds: 600 }},
-              }},
-            );
-            """
-        )
-        self._run_node(harness)
-        self.assertNotIn('data-auto-account-action="open_login"', self.persona_dashboard_source)
-        self.assertEqual(self.persona_dashboard_source.count('data-auto-login="1"'), 1)
-        account_action_handler = self._persona_dashboard_function_source("pdBindAutomationEvents")
-        self.assertIn('if (action !== "check_login") return;', account_action_handler)
-        self.assertNotIn('action === "open_login"', account_action_handler)
-
-    def test_persona_dashboard_manual_task_opens_live_session_or_browser_monitor(self):
-        helpers = "\n".join([
-            self._persona_dashboard_function_source("pdAdminWorkspaceUrl"),
-            self._persona_dashboard_function_source("pdAutomationTaskPayload"),
-            self._persona_dashboard_function_source("pdAutomationTaskNeedsManualVerification"),
-            self._persona_dashboard_function_source("pdAutomationBrowserSessionForTask"),
-            self._persona_dashboard_function_source("pdAutomationBrowserMonitorUrl"),
-            self._persona_dashboard_function_source("pdRenderAutomationBrowserAction"),
-        ])
-        harness = textwrap.dedent(
-            f"""
-            const assert = require("assert");
-            const PD_ADMIN_WORKSPACE_USER_ID = "42";
-            const PD_ADMIN_CONSOLE_SESSION = true;
-            const window = {{ location: {{ href: "https://app.test/persona-dashboard.html", origin: "https://app.test" }} }};
-            function pdEscape(value) {{ return String(value || "").replaceAll("&", "&amp;"); }}
-            const personaDashboardAutomation = {{
-              browser_sessions: [{{ id: "live-1", task_id: "task-1", view_path: "/api/persona_dashboard/automation/browser_sessions/live-1/kasm/vnc.html?autoconnect=1&path=live-1" }}],
-            }};
-            {helpers}
-
-            const direct = pdRenderAutomationBrowserAction({{
-              id: "task-1",
-              status: "need_manual",
-              payload: {{ manual_takeover: true }},
-            }});
-            assert.ok(direct.includes("/browser_sessions/live-1/kasm"));
-            assert.ok(direct.includes("autoconnect=1"));
-            assert.ok(direct.includes("path=live-1"));
-            assert.ok(direct.includes("admin_workspace_user_id=42"));
-            assert.ok(direct.includes("admin_console=1"));
-            assert.ok(direct.includes("打开浏览器验证"));
-            assert.ok(direct.includes('target="_blank"'));
-
-            const fallback = pdRenderAutomationBrowserAction({{ id: "task-2", status: "need_manual" }});
-            assert.ok(fallback.includes("/console.html?view=accounts&amp;browser_panel=browsers"));
-            assert.ok(fallback.includes("admin_workspace_user_id=42"));
-            assert.ok(fallback.includes("前往浏览器监控"));
-            assert.strictEqual(pdRenderAutomationBrowserAction({{ id: "task-3", status: "running" }}), "");
-            assert.ok(pdRenderAutomationBrowserAction({{ id: "task-1", status: "running", payload: {{ manual_takeover: true }} }}));
-            assert.strictEqual(pdRenderAutomationBrowserAction({{ id: "task-1", status: "success", payload: {{ manual_takeover: true }} }}), "");
-            assert.strictEqual(pdRenderAutomationBrowserAction({{ id: "task-1", status: "failed", payload_json: '{{"manual_takeover":true}}' }}), "");
-            assert.strictEqual(pdRenderAutomationBrowserAction({{ id: "task-1", status: "need_manual", finished_at: 123 }}), "");
-            """
-        )
-        self._run_node(harness)
-
-    def test_persona_dashboard_manual_tasks_are_not_evicted_by_recent_history_limit(self):
-        helpers = "\n".join([
-            self._persona_dashboard_function_source("pdAutomationAccountsForPersona"),
-            self._persona_dashboard_function_source("pdAutomationTaskPayload"),
-            self._persona_dashboard_function_source("pdAutomationTaskNeedsManualVerification"),
-            self._persona_dashboard_function_source("pdAggregateAutomationTaskBatch"),
-            self._persona_dashboard_function_source("pdAutomationTaskPresentationRows"),
-            self._persona_dashboard_function_source("pdAutomationTasksForPersona"),
-        ])
-        harness = textwrap.dedent(
-            f"""
-            const assert = require("assert");
-            const personaDashboardAutomation = {{
-              accounts: [{{ id: "account-1", persona_id: "persona-1" }}],
-              tasks: [
-                ...Array.from({{ length: 9 }}, (_, index) => ({{ id: `recent-${{index}}`, account_id: "account-1", status: "success" }})),
-                {{ id: "manual-old", account_id: "account-1", status: "need_manual", finished_at: 0 }},
-              ],
-            }};
-            {helpers}
-            const rows = pdAutomationTasksForPersona({{ id: "persona-1" }});
-            assert.strictEqual(rows.length, 8);
-            assert.strictEqual(rows[0].id, "manual-old");
-            assert.ok(rows.some((task) => task.id === "manual-old"));
             """
         )
         self._run_node(harness)
@@ -2914,10 +2704,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         ):
             self.assertIn("ensureDailyPublishCapacity", self._function_source(function_name))
         self.assertGreaterEqual(self.source.count('data-daily-publish-action="true"'), 1)
-        self.assertIn("data-daily-publish-action", self.persona_dashboard_source)
-        persona_events = self._persona_dashboard_function_source("pdBindAutomationEvents")
-        self.assertIn("VectoPublishRiskGuard", persona_events)
-        self.assertIn("ensureCapacity", persona_events)
         bind_events = self._function_source("bindEvents")
         self.assertIn("handleDailyPublishActionGate", bind_events)
         action_gate = self._function_source("handleDailyPublishActionGate")

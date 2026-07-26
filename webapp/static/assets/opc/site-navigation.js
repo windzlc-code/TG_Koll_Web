@@ -956,6 +956,14 @@
     });
   }
 
+  function publicLogoutLocation() {
+    const url = new URL(window.location.href);
+    ["login", "return_url", "admin_console", "admin_workspace_user_id", "manage_user_id"].forEach((key) => {
+      url.searchParams.delete(key);
+    });
+    return `${url.pathname}${url.search}${url.hash}`;
+  }
+
   async function logoutPublicSession() {
     try {
       const headers = new Headers({ Accept: "application/json" });
@@ -972,7 +980,7 @@
       setAccount(null);
       if (currentSessionMode === "admin") clearAdminConsoleContext();
       currentSessionMode = "guest";
-      window.location.reload();
+      window.location.replace(publicLogoutLocation());
     } catch (error) {
       setLogoutPending(false, error?.message || copy[currentLanguage()].logoutFailed);
     }
@@ -1176,11 +1184,10 @@
       if (typeof onUnauthorized === "function") onUnauthorized();
       return session;
     } catch {
-      if (hasAdminConsoleContext()) {
-        const returnUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-        window.location.assign(`/admin?return_url=${encodeURIComponent(returnUrl)}`);
-        return null;
-      }
+      // A remembered admin workspace can outlive its admin cookie.  Do not
+      // bounce that stale context through /admin again: /admin redirects back
+      // to this public login view and creates a navigation loop.
+      if (hasAdminConsoleContext()) clearAdminConsoleContext();
       if (typeof onUnauthorized === "function") onUnauthorized();
       return null;
     } finally {
@@ -1201,14 +1208,20 @@
       void syncProxyMarketBadge();
       return session.account;
     } catch {
-      if (hasAdminConsoleContext()) {
-        const returnUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-        window.location.assign(`/admin?return_url=${encodeURIComponent(returnUrl)}`);
-        return null;
-      }
+      // The admin session may have expired while the public page was open.
+      // Clear only the stale client-side marker and stay on the login page.
+      // Redirecting to /admin here loops back to ?login=1 forever.
+      if (hasAdminConsoleContext()) clearAdminConsoleContext();
       showGuestAccount(header);
       return null;
     }
+  }
+
+  async function refreshPublicSession() {
+    const headers = [...document.querySelectorAll("[data-site-header]")]
+      .filter((entry) => entry.dataset.siteMode === "public");
+    const accounts = await Promise.all(headers.map((entry) => hydratePublicSession(entry)));
+    return accounts.find(Boolean) || null;
   }
 
   function mount(header) {
@@ -1357,6 +1370,7 @@
     openConsoleEntry,
     markAdminConsoleContext,
     clearAdminConsoleContext,
+    refreshPublicSession,
     syncProxyMarketBadge,
   };
   window.dispatchEvent(new CustomEvent("vecto:navigation-ready"));

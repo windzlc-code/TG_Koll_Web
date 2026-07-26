@@ -1135,17 +1135,21 @@ button.primary,
 }
 
 .persona-dashboard-view .persona-person-layout {
-  grid-template-columns: minmax(232px, 268px) minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: minmax(212px, 240px) minmax(0, 1fr);
+  gap: 8px;
 }
 
 .persona-dashboard-view .persona-tab-rail {
-  top: 12px;
-  padding: 12px;
+  top: 8px;
+  gap: 7px;
+  padding: 8px;
   max-height: calc(100vh - 136px);
 }
 
 .persona-dashboard-view .persona-tab {
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 7px;
+  padding: 8px;
   border-color: var(--line);
   border-radius: var(--radius);
   background: var(--soft);
@@ -1163,6 +1167,8 @@ button.primary,
 }
 
 .persona-dashboard-view .persona-tab-index {
+  width: 24px;
+  height: 24px;
   border-radius: 6px;
   background: var(--brand-bg);
   color: var(--accent-ink);
@@ -1203,18 +1209,27 @@ button.primary,
 }
 
 .persona-dashboard-view .persona-workbench-panel {
-  gap: 14px;
-  padding: 16px;
+  gap: 10px;
+  padding: 10px;
+}
+
+.persona-dashboard-view .persona-detail-card {
+  gap: 10px;
+  padding: 12px;
 }
 
 .persona-dashboard-view .persona-kpi-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .persona-dashboard-view .persona-kpi {
-  min-height: 94px;
-  padding: 13px;
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 11px;
   border-color: var(--line);
   border-radius: var(--radius);
   background: var(--soft);
@@ -1222,10 +1237,20 @@ button.primary,
 }
 
 .persona-dashboard-view .persona-kpi .num {
-  margin: 4px 0 2px;
+  margin: 0;
   color: var(--ink);
-  font-size: 27px;
+  font-size: 24px;
   line-height: 1;
+}
+
+.persona-dashboard-view .persona-kpi .label {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .persona-dashboard-view .persona-chart-grid {
@@ -1309,8 +1334,8 @@ button.primary,
   }
 
   .persona-dashboard-view .persona-tab {
-    width: 220px;
-    min-width: 220px;
+    width: 184px;
+    min-width: 184px;
   }
 
   .persona-dashboard-view .persona-tab-pager {
@@ -1381,11 +1406,79 @@ button.primary,
   }
 
   .persona-dashboard-view .persona-kpi-grid {
+    display: grid;
     grid-template-columns: 1fr;
+    gap: 6px;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .persona-dashboard-view .persona-kpi {
+    width: 100%;
+    min-width: 0;
+    min-height: 52px;
+    padding: 8px 9px;
+  }
+
+  .persona-dashboard-view .persona-kpi .num {
+    font-size: 22px;
+  }
+
+  .persona-dashboard-view .persona-tab-rail {
+    gap: 6px;
+    padding: 7px;
+  }
+
+  .persona-dashboard-view .persona-tab-list,
+  .persona-dashboard-view .persona-tab-section {
+    gap: 6px;
+  }
+
+  .persona-dashboard-view .persona-tab-section + .persona-tab-section {
+    padding-left: 6px;
+  }
+
+  .persona-dashboard-view .persona-tab {
+    width: 156px;
+    min-width: 156px;
+    min-height: 48px;
+    padding: 7px;
+  }
+
+  .persona-dashboard-view .persona-tab-main {
+    gap: 1px;
+  }
+
+  .persona-dashboard-view .persona-tab-main span {
+    font-size: 11px;
+  }
+
+  .persona-dashboard-view .persona-chart-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .persona-dashboard-view .persona-chart-panel {
+    gap: 7px;
+    padding: 9px;
+  }
+
+  .persona-dashboard-view .persona-chart-panel-wide {
+    grid-column: span 2;
   }
 
   .persona-dashboard-view .persona-chart-head {
     display: grid;
+    gap: 3px;
+  }
+
+  .persona-dashboard-view .persona-chart-head h3 {
+    font-size: 16px;
+  }
+
+  .persona-dashboard-view .persona-chart-head .small {
+    font-size: 11px;
+    line-height: 1.35;
   }
 
   .persona-dashboard-view .persona-chart-head .small {
@@ -1395,11 +1488,25 @@ button.primary,
 
   .persona-dashboard-view .persona-chart,
   .persona-dashboard-view .persona-chart-tall {
-    min-height: 140px;
+    min-height: 116px;
   }
 
   .persona-dashboard-view .persona-chart-empty {
-    min-height: 110px;
+    min-height: 94px;
+  }
+
+  .persona-dashboard-view .persona-donut-wrap {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    justify-items: center;
+  }
+
+  .persona-dashboard-view .persona-donut {
+    width: 108px;
+  }
+
+  .persona-dashboard-view .persona-donut > div {
+    width: 62px;
   }
 }
 
@@ -1715,15 +1822,15 @@ textarea:focus {
 
 .automation-plan-panel {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
 }
 
 .automation-plan-card {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
-  padding: 12px;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel-solid);
@@ -1759,16 +1866,11 @@ textarea:focus {
 .automation-plan-mode {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
-  min-width: 220px;
-  padding: 4px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--soft);
+  width: min(100%, 220px);
+  min-width: 0;
 }
 
 .automation-plan-mode button,
-.automation-plan-param-toggle,
 .automation-plan-add,
 .automation-plan-history-head button {
   display: inline-flex;
@@ -1777,23 +1879,7 @@ textarea:focus {
   gap: 6px;
 }
 
-.automation-plan-mode button {
-  min-height: 36px;
-  padding: 6px 10px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  box-shadow: none;
-}
-
-.automation-plan-mode button.is-active {
-  background: var(--ink);
-  color: var(--panel-solid);
-}
-
 .automation-plan-mode svg,
-.automation-plan-param-toggle svg,
 .automation-plan-add svg,
 .automation-plan-history-head svg {
   width: 17px;
@@ -1808,9 +1894,9 @@ textarea:focus {
 
 .automation-plan-table-head {
   display: grid;
-  grid-template-columns: minmax(160px, .9fr) minmax(180px, 1.1fr);
-  gap: 10px;
-  padding: 0 92px 0 42px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 0 8px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
@@ -1818,7 +1904,7 @@ textarea:focus {
 
 .automation-plan-list {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1826,67 +1912,245 @@ textarea:focus {
 
 .automation-plan-row {
   display: grid;
-  gap: 8px;
-  padding: 10px;
+  gap: 4px;
+  padding: 6px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--soft);
 }
 
+.automation-plan-row.is-time-menu-open {
+  position: relative;
+  z-index: 20;
+}
+
 .automation-plan-row-main {
   display: grid;
-  grid-template-columns: 28px minmax(160px, .9fr) minmax(180px, 1.1fr) auto 38px;
-  align-items: end;
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 4px;
   min-width: 0;
 }
 
-.automation-plan-sequence {
-  display: grid;
-  width: 28px;
-  height: 28px;
+.automation-plan-time-cell > span,
+.automation-plan-field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  line-height: 20px;
+}
+
+.automation-plan-time-cell b {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
   place-items: center;
-  align-self: center;
   border-radius: 999px;
   background: var(--ink);
   color: var(--panel-solid) !important;
+  font-size: 12px;
   font-weight: 900;
 }
 
-.automation-plan-row label,
-.automation-plan-card--builder > label,
-.automation-plan-params label {
+.automation-plan-time-cell,
+.automation-plan-card--builder > label {
   display: grid;
-  gap: 5px;
+  gap: 3px;
+  margin: 0;
   min-width: 0;
   color: var(--ink);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
 }
 
-.automation-plan-row select,
-.automation-plan-card--builder > label select,
-.automation-plan-params input,
-.automation-plan-params textarea {
-  width: 100%;
+.automation-plan-time-dropdown-shell {
+  position: relative;
   min-width: 0;
-  min-height: 42px;
 }
 
-.automation-plan-param-toggle {
-  min-height: 42px;
-  padding: 7px 10px;
+.automation-plan-task-cell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3px;
+  min-width: 0;
+}
+
+.automation-plan-field-label {
+  color: var(--ink) !important;
+  font-size: 12px !important;
+  font-weight: 800;
+}
+
+.automation-plan-time-picker,
+.automation-plan-task-value {
+  display: inline-flex;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  min-height: 32px;
+  box-sizing: border-box;
+  align-items: center;
+  overflow: hidden;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  color: var(--ink);
+  font-size: 12px;
+  text-align: left;
+}
+
+.automation-plan-time-picker strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.automation-plan-time-picker svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.automation-plan-task-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, 30px);
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.automation-plan-task-value {
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-plan-task-picker {
+  display: grid;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  place-items: center;
+  padding: 0;
+  color: var(--ink);
+}
+
+.automation-plan-task-picker svg,
+.automation-plan-task-option svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.automation-plan-task-detail .ui-eye-icon {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
 }
 
 .automation-plan-remove {
   display: grid;
-  width: 38px;
-  min-width: 38px;
-  height: 42px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
   place-items: center;
   padding: 0;
   color: var(--danger);
+}
+
+.automation-plan-task-detail,
+.automation-plan-task-picker,
+.automation-plan-remove {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.persona-dashboard-view .persona-dashboard-filters.persona-dashboard-platform-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 8px 10px;
+}
+
+.persona-dashboard-view .persona-dashboard-filter-label {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.persona-dashboard-view .persona-dashboard-filters > .persona-dashboard-platform-tabs {
+  position: static;
+  display: flex;
+  flex: 1 1 auto;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.persona-dashboard-view .persona-dashboard-platform-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.persona-dashboard-view .persona-dashboard-platform-tabs button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 11px;
+  border-radius: var(--radius);
+  white-space: nowrap;
+}
+
+.persona-dashboard-view .persona-dashboard-platform-tabs button > svg {
+  width: 17px;
+  height: 17px;
+}
+
+.persona-dashboard-view .persona-dashboard-platform-tabs button > span {
+  color: inherit;
+  opacity: 1;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.automation-plan-task-detail:hover,
+.automation-plan-task-detail:focus-visible,
+.automation-plan-task-picker:hover,
+.automation-plan-task-picker:focus-visible,
+.automation-plan-remove:hover,
+.automation-plan-remove:focus-visible {
+  border: 0;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  box-shadow: none;
+}
+
+.automation-plan-task-detail[disabled] {
+  visibility: hidden;
 }
 
 .automation-plan-remove .ui-trash-icon {
@@ -1894,27 +2158,188 @@ textarea:focus {
   height: 18px;
 }
 
-.automation-plan-params {
-  display: grid;
-  gap: 8px;
-  padding: 10px;
-  border-top: 1px solid var(--line);
-}
-
-.automation-plan-param-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
 .automation-plan-add {
-  justify-self: start;
-  min-height: 40px;
+  justify-self: center;
+  min-height: 32px;
+  padding: 3px 8px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.automation-plan-add:hover,
+.automation-plan-add:focus-visible {
+  border: 0;
+  background: var(--soft);
+  box-shadow: none;
 }
 
 .automation-plan-submit-row {
-  padding-top: 10px;
+  padding-top: 8px;
   border-top: 1px solid var(--line);
+}
+
+.automation-plan-task-config-modal {
+  width: min(720px, calc(100vw - 24px));
+  max-width: 720px;
+}
+
+.automation-plan-task-config-modal .automation-plan-shared-config {
+  display: grid;
+  gap: var(--content-gap);
+}
+
+.automation-plan-task-picker-modal {
+  width: min(560px, calc(100vw - 24px));
+  max-width: 560px;
+}
+
+.automation-plan-time-dropdown {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 4px);
+  left: 0;
+  display: grid;
+  width: max(100%, 156px);
+  max-width: min(240px, calc(100vw - 44px));
+  max-height: min(210px, calc(100dvh - 170px));
+  min-height: 0;
+  gap: 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  box-shadow: 0 14px 32px color-mix(in srgb, var(--ink) 18%, transparent);
+  scrollbar-width: thin;
+}
+
+.automation-plan-time-dropdown.opens-up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.automation-plan-time-option {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  text-align: left;
+}
+
+.automation-plan-time-option.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel-solid));
+  color: var(--accent-dark);
+}
+
+.automation-plan-time-option svg,
+.automation-plan-account-notice svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.automation-plan-detail-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.automation-plan-detail-list > div {
+  display: grid;
+  grid-template-columns: minmax(88px, .7fr) minmax(0, 1.3fr);
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.automation-plan-detail-list dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.automation-plan-detail-list dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.automation-plan-task-picker-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.automation-plan-task-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 52px;
+  padding: 8px 10px;
+  color: var(--ink);
+  text-align: left;
+}
+
+.automation-plan-task-option > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.automation-plan-task-option strong,
+.automation-plan-task-option small {
+  overflow-wrap: anywhere;
+}
+
+.automation-plan-task-option small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.automation-plan-task-option.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel-solid));
+}
+
+.automation-plan-account-notice {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.automation-plan-account-notice.is-ready {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel-solid));
+  color: var(--accent-dark);
 }
 
 .automation-plan-submit-row p {
@@ -1923,19 +2348,112 @@ textarea:focus {
 
 .automation-plan-history {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .automation-plan-history .automation-plan-card {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  padding: 10px;
+  padding: 8px;
   background: var(--soft);
 }
 
 .automation-plan-history .automation-plan-card > span {
   grid-column: 1 / -1;
   overflow-wrap: anywhere;
+}
+
+.automation-plan-run-list {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.automation-plan-run-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+}
+
+.automation-plan-run-row strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.automation-plan-run-row small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.automation-plan-run-index {
+  position: relative;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--panel-solid);
+  font-size: 11px;
+  font-weight: 900;
+  isolation: isolate;
+}
+
+.automation-plan-run-row.is-running .automation-plan-run-index::after {
+  position: absolute;
+  inset: -3px;
+  border: 2px solid color-mix(in srgb, var(--primary) 24%, transparent);
+  border-top-color: var(--primary);
+  border-radius: inherit;
+  content: "";
+  animation: automationPlanRunSpin .8s linear infinite;
+}
+
+.automation-plan-run-row.is-running small {
+  color: var(--primary);
+}
+
+.automation-plan-run-row.is-queued .automation-plan-run-index {
+  animation: automationPlanQueuePulse 1.25s ease-in-out infinite;
+}
+
+.automation-plan-run-row.is-queued small {
+  animation: automationPlanQueueFade 1.25s ease-in-out infinite;
+}
+
+@keyframes automationPlanRunSpin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes automationPlanQueuePulse {
+  0%, 100% { transform: translateX(0); opacity: .7; }
+  50% { transform: translateX(2px); opacity: 1; }
+}
+
+@keyframes automationPlanQueueFade {
+  0%, 100% { opacity: .52; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .automation-plan-run-row.is-running .automation-plan-run-index::after,
+  .automation-plan-run-row.is-queued .automation-plan-run-index,
+  .automation-plan-run-row.is-queued small {
+    animation: none;
+  }
 }
 
 .automation-plan-error {
@@ -3140,6 +3658,10 @@ textarea:focus {
   gap: 4px;
   min-width: 0;
   cursor: pointer;
+}
+
+.upload-zone-mobile-picker {
+  display: none;
 }
 
 .upload-zone p { margin: 4px 0 0; color: var(--muted); }
@@ -13308,6 +13830,11 @@ body.persona-media-sorting {
   text-decoration: none;
 }
 
+button.proxy-market-link {
+  cursor: pointer;
+  font: inherit;
+}
+
 .proxy-market-link:hover,
 .proxy-market-link:focus-visible {
   color: #083d34;
@@ -13502,6 +14029,145 @@ body.persona-media-sorting {
 
 .proxy-edit-modal {
   width: min(920px, calc(100vw - 32px));
+}
+
+.proxy-market-mini-modal {
+  width: min(840px, calc(100vw - 32px));
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.proxy-market-mini-content {
+  display: grid;
+  gap: 12px;
+  max-height: min(70vh, 720px);
+  overflow-y: auto;
+}
+
+.proxy-market-mini-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--soft);
+}
+
+.proxy-market-mini-filters label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.proxy-market-mini-filters select {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 5px 8px;
+  color: var(--ink);
+  background: var(--panel-solid);
+}
+
+.proxy-market-mini-status {
+  min-height: 18px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.proxy-market-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.proxy-market-mini-card,
+.proxy-market-mini-loading,
+.proxy-market-mini-empty {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+}
+
+.proxy-market-mini-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.proxy-market-mini-card-head,
+.proxy-market-mini-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.proxy-market-mini-country,
+.proxy-market-mini-stock {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.proxy-market-mini-country {
+  color: var(--ink);
+  background: var(--soft);
+}
+
+.proxy-market-mini-stock {
+  color: #0b6957;
+  background: #ddf7ef;
+}
+
+.proxy-market-mini-card > strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proxy-market-mini-location {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proxy-market-mini-meta {
+  align-items: flex-end;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.proxy-market-mini-meta strong {
+  margin-left: auto;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.proxy-market-mini-card > button {
+  width: 100%;
+  min-height: 34px;
+}
+
+.proxy-market-mini-loading,
+.proxy-market-mini-empty {
+  grid-column: 1 / -1;
+  padding: 20px 12px;
+  color: var(--muted);
+  text-align: center;
 }
 
 .proxy-edit-modal-content {
@@ -14994,6 +15660,18 @@ body.live-browser-modal-open {
   background: var(--accent);
   color: var(--accent-ink);
   box-shadow: var(--active-shadow);
+}
+
+.automation-capsule-tabs.automation-plan-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(100%, 220px);
+  min-width: 0;
+  overflow: visible;
+}
+
+.automation-capsule-tabs.automation-plan-mode button {
+  min-width: 0;
 }
 
 .automation-account-tabs {
@@ -16920,6 +17598,63 @@ body.console-page {
   }
 }
 
+@media (max-width: 980px) {
+  /* Mobile task forms use the same compact add-media trigger as tweet generation.
+     Desktop keeps the bordered dropzone above for drag-and-drop uploads. */
+  .upload-zone {
+    gap: 8px;
+    margin-top: 10px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .upload-zone:hover,
+  .upload-zone:focus-within,
+  .upload-zone.dragging {
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+    transform: none;
+  }
+
+  .upload-zone:not(.has-files) .upload-zone-picker,
+  .upload-zone.has-files .upload-zone-mobile-picker {
+    display: none;
+  }
+
+  .upload-zone:not(.has-files) .upload-zone-mobile-picker {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-width: 0;
+    height: 42px;
+    min-height: 42px;
+    gap: 7px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink);
+    cursor: pointer;
+  }
+
+  .upload-zone:not(.has-files) .upload-zone-mobile-picker:hover,
+  .upload-zone:not(.has-files) .upload-zone-mobile-picker:focus-visible {
+    background: var(--soft);
+    color: var(--ink);
+  }
+
+  .upload-zone.has-files {
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+}
+
 @media (max-width: 360px) {
   .persona-list-pager,
   .task-queue-pager {
@@ -17930,6 +18665,13 @@ body.console-page {
     min-height: 36px;
     place-items: center;
     padding: 0;
+  }
+
+  .persona-profile-list-toggle.is-labeled {
+    display: inline-flex;
+    width: auto;
+    min-width: 0;
+    padding: 0 9px;
   }
 
   .persona-profile-list-toggle .ui-action-icon {
@@ -19138,37 +19880,30 @@ body.console-page {
   }
 
   .automation-plan-table-head {
-    display: none;
+    display: grid;
   }
 
   .automation-plan-row-main {
-    grid-template-columns: 28px minmax(0, 1fr) 38px;
-    align-items: end;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
   }
 
-  .automation-plan-row-main > label {
-    grid-column: 2 / -1;
+  .console-page .module-panel.is-publishing-module :is(
+    .automation-plan-task-detail,
+    .automation-plan-task-picker,
+    .automation-plan-remove
+  ) {
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+    padding: 0;
   }
 
-  .automation-plan-row-main > label:first-of-type {
-    grid-column: 2 / 4;
-  }
-
-  .automation-plan-sequence {
-    grid-column: 1;
-    grid-row: 1;
-  }
-
-  .automation-plan-param-toggle {
-    grid-column: 2;
-  }
-
-  .automation-plan-remove {
-    grid-column: 3;
-  }
-
-  .automation-plan-param-grid {
-    grid-template-columns: minmax(0, 1fr);
+  .console-page .module-panel.is-publishing-module .automation-plan-time-picker {
+    box-sizing: border-box;
+    height: 32px;
+    min-height: 32px;
   }
 
   .automation-plan-submit-row .primary,
@@ -20531,5 +21266,285 @@ body.console-page {
   .console-page .live-browser-card.is-live-browser-modal .live-browser-action-menu-panel {
     background: rgb(13 18 19 / 42%);
     backdrop-filter: blur(8px);
+  }
+}
+
+/* Account pool: platforms and accounts are separate functional modules. */
+.account-pool-body > .account-pool-account-panel {
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+}
+
+.account-pool-platform-tabs button > svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.account-pool-platform-tabs button > svg.platform-brand-icon {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* The Instagram outline has wider inner whitespace than the filled Threads mark. */
+.account-pool-platform-tabs button > svg.platform-outline-icon--instagram {
+  transform: scale(1.16);
+  transform-origin: center;
+}
+
+.account-pool-platform-tabs button > small {
+  color: inherit;
+  opacity: .68;
+  font-size: 11px;
+  line-height: 1.15;
+}
+
+.account-pool-empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  min-height: 116px;
+  padding: 16px 10px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.account-pool-empty-state > svg {
+  width: 28px;
+  height: 28px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: .72;
+}
+
+.account-pool-empty-state > strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.account-pool-empty-state > span {
+  font-size: 12px;
+}
+
+@media (max-width: 760.98px) {
+  .console-page .account-pool-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .console-page .account-pool-platform-panel {
+    padding: 0 0 10px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .console-page .account-pool-body > .account-pool-account-panel {
+    padding: 10px 0 0;
+    border: 0;
+  }
+
+  .console-page .account-pool-section-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    min-height: 34px;
+  }
+
+  .console-page .account-pool-edit-toolbar {
+    display: flex;
+    grid-template-columns: none;
+    width: auto;
+    min-width: 0;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: flex-end;
+  }
+
+  .console-page .account-pool-edit-toolbar .account-pool-selection-count {
+    min-width: 0;
+    height: var(--mobile-touch-target);
+    padding-inline: 2px 4px;
+    justify-content: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .console-page .account-pool-platforms.account-pool-platform-tabs {
+    display: flex;
+    grid-template-columns: none;
+    gap: 6px;
+    width: calc(100% + 2px);
+    margin: 0 -1px;
+    padding: 0 1px 2px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .console-page .account-pool-platforms.account-pool-platform-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .console-page .account-pool-platform-tabs button {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "icon label"
+      "icon count";
+    column-gap: 6px;
+    row-gap: 1px;
+    flex: 0 0 108px;
+    min-width: 108px;
+    min-height: 42px;
+    padding: 6px 8px;
+    scroll-snap-align: start;
+    text-align: left;
+  }
+
+  .console-page .account-pool-platform-tabs button > svg {
+    grid-area: icon;
+    align-self: center;
+    width: 17px;
+    height: 17px;
+  }
+
+  .console-page .account-pool-platform-tabs button > strong {
+    grid-area: label;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 1.15;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .console-page .account-pool-platform-tabs button > small {
+    grid-area: count;
+    font-size: 10px;
+  }
+
+  .console-page .account-pool-account-panel {
+    touch-action: pan-y;
+  }
+
+  .console-page .account-pool-empty-state {
+    min-height: 108px;
+    padding: 14px 8px;
+  }
+
+  .console-page .persona-profile-account-panel .persona-account-pool-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .console-page .persona-profile-account-panel .persona-account-platform-panel {
+    padding: 0 0 10px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .console-page .persona-profile-account-panel .persona-account-pool-panel {
+    padding: 10px 0 0;
+    touch-action: pan-y;
+  }
+
+  .console-page .persona-profile-account-panel .account-pool-platforms.persona-account-platform-tabs {
+    display: flex;
+    grid-template-columns: none;
+    gap: 6px;
+    width: calc(100% + 2px);
+    margin: 0 -1px;
+    padding: 0 1px 2px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .console-page .persona-profile-account-panel .persona-account-platform-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .console-page .persona-profile-account-panel .persona-account-platform-tabs button {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "icon label"
+      "icon count";
+    column-gap: 6px;
+    row-gap: 1px;
+    flex: 0 0 108px;
+    min-width: 108px;
+    min-height: 42px;
+    padding: 6px 8px;
+    scroll-snap-align: start;
+    text-align: left;
+  }
+
+  .console-page .persona-profile-account-panel .persona-account-platform-tabs button > svg {
+    grid-area: icon;
+    align-self: center;
+    width: 17px;
+    height: 17px;
+  }
+
+  .console-page .persona-profile-account-panel .persona-account-platform-tabs button > strong {
+    grid-area: label;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 1.15;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .console-page .persona-profile-account-panel .persona-account-platform-tabs button > small {
+    grid-area: count;
+    color: inherit;
+    font-size: 10px;
+    line-height: 1.15;
+    opacity: .68;
+  }
+
+  .console-page .proxy-market-mini-modal {
+    width: 100%;
+  }
+
+  .console-page .proxy-market-mini-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+    padding: 8px;
+  }
+
+  .console-page .proxy-market-mini-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .console-page .proxy-market-mini-card {
+    gap: 7px;
+    padding: 10px;
+  }
+}
+
+@media (max-width: 360px) {
+  .console-page .account-pool-section-head {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+
+  .console-page .account-pool-edit-toolbar {
+    justify-content: flex-start;
   }
 }

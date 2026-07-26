@@ -327,12 +327,12 @@
         <button class="auth-close" type="button" data-close-login aria-label="關閉">×</button>
         <p class="form-kicker">Vecto OS</p>
         <h2 id="loginTitle">帳號登入</h2>
-        <p class="auth-copy">此處僅供已授權用戶登入，成功後直接進入 Web 任務控制台。</p>
+        <p class="auth-copy">管理員與已授權用戶均可登入；登入後保留在目前頁面，需要時再由頂部入口進入控制台。</p>
         <form id="homeLoginForm" novalidate>
           <label class="field" for="loginUsername"><span>帳號</span><input id="loginUsername" name="username" autocomplete="username" required /></label>
           <label class="field" for="loginPassword"><span>密碼</span><span class="auth-password-field"><input id="loginPassword" name="password" type="password" autocomplete="current-password" required /><button class="auth-password-toggle" type="button" data-login-password-toggle aria-label="顯示密碼" title="顯示密碼" aria-controls="loginPassword" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span></label>
           <label class="auth-remember" data-login-remember><input name="remember_me" type="checkbox" /> <span>記住帳號與登入狀態</span></label>
-          <button class="submit-button" type="submit"><span>進入 Web 任務控制台</span><span aria-hidden="true">→</span></button>
+          <button class="submit-button" type="submit"><span>登入並繼續</span><span aria-hidden="true">→</span></button>
           <p class="form-status" id="loginStatus" role="status" aria-live="polite"></p>
           <button class="auth-takeover-button" type="button" data-login-takeover hidden>強制登入此帳號</button>
         </form>

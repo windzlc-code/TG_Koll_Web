@@ -119,179 +119,18 @@ function pdConfirm(message, options = {}) {
   return pdPromptDialog({ ...options, message, showCancel: true });
 }
 
-const PD_THREADS_STRATEGIES = {
-  threads_warmup: [
-    {
-      id: "tg_default",
-      label: "默认养号：滑动 + 随机点赞",
-      desc: "适合日常维护账号状态：7-10 分钟，每 2-3 篇最多互动 1 次，少量点赞。",
-      payload: { strategy_id: "tg_default", strategy_label: "默认养号：滑动 + 随机点赞", browse_limit: 30, scroll_times: 30, like_limit: 16, comment_chance: 0, require_persona_relevance: false, session_minutes: "7-10", interaction_every: "2-3" },
-    },
-    {
-      id: "browse_only",
-      label: "保守养号：只浏览",
-      desc: "只滑动浏览不互动，适合新账号、异常后恢复或只需要保持登录活跃时。",
-      payload: { strategy_id: "browse_only", strategy_label: "保守养号：只浏览", browse_limit: 30, scroll_times: 30, like_limit: 0, comment_chance: 0, require_persona_relevance: false, session_minutes: "7-10", interaction_every: "无互动" },
-    },
-    {
-      id: "like_comment",
-      label: "互动养号：点赞/留言",
-      desc: "在浏览过程中加入点赞和人设留言，适合已稳定账号和回复素材较完整时。",
-      payload: { strategy_id: "like_comment", strategy_label: "互动养号：点赞/留言", browse_limit: 30, scroll_times: 30, like_limit: 16, comment_chance: 100, max_comments: 8, require_persona_relevance: true, session_minutes: "7-10", interaction_every: "2-3" },
-    },
-    {
-      id: "warmup_custom",
-      label: "自定义养号",
-      desc: "手动设置浏览篇数上限、点赞上限、留言上限和留言模板。",
-      payload: { strategy_id: "warmup_custom", strategy_label: "自定义养号", browse_limit: 30, scroll_times: 30, like_limit: 0, comment_chance: 0, max_comments: 0, require_persona_relevance: true, session_minutes: "自定义", interaction_every: "自定义" },
-    },
-  ],
-  threads_comment_reply: [
-    {
-      id: "comment_recent_2d",
-      label: "自动回复评论：最近 2 天",
-      desc: "扫描近期评论入口，按当前人设生成自然回复。适合日常处理新增评论。",
-      payload: { strategy_id: "comment_recent_2d", strategy_label: "自动回复评论：最近 2 天", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 2, require_persona_relevance: true },
-    },
-    {
-      id: "comment_recent_1d",
-      label: "自动回复评论：最近 1 天",
-      desc: "缩短查看范围，优先处理最新互动，适合账号状态不稳定或评论质量较杂时。",
-      payload: { strategy_id: "comment_recent_1d", strategy_label: "自动回复评论：最近 1 天", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 1, require_persona_relevance: true },
-    },
-    {
-      id: "comment_recent_7d",
-      label: "自动回复评论：最近 7 天",
-      desc: "扩大评论查找范围，适合需要补处理历史评论时使用。",
-      payload: { strategy_id: "comment_recent_7d", strategy_label: "自动回复评论：最近 7 天", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 7, require_persona_relevance: true },
-    },
-    {
-      id: "comment_custom",
-      label: "自定义评论回复",
-      desc: "手动设置查看天数、扫描篇数、回复上限，也可填写固定回复内容。",
-      payload: { strategy_id: "comment_custom", strategy_label: "自定义评论回复", reply_scope: "comments", max_posts: 5, max_replies: 3, max_age_days: 2, require_persona_relevance: true },
-    },
-  ],
-  threads_hot_reply: [
-    {
-      id: "hot_posts",
-      label: "自动回复热点推文",
-      desc: "从当前人设已发布和热点数据中提取高热度 Threads 推文，打开目标推文后按人设回复评论。",
-      payload: { strategy_id: "hot_posts", strategy_label: "自动回复热点推文", reply_scope: "hot_posts", max_posts: 5, max_replies: 3, max_age_days: 30, min_views: 0, require_persona_relevance: true },
-    },
-    {
-      id: "hot_recent_7d",
-      label: "热点推文：最近 7 天",
-      desc: "只处理最近 7 天内的人设热点推文，适合频繁运营的账号。",
-      payload: { strategy_id: "hot_recent_7d", strategy_label: "热点推文：最近 7 天", reply_scope: "hot_posts", max_posts: 5, max_replies: 3, max_age_days: 7, min_views: 0, require_persona_relevance: true },
-    },
-    {
-      id: "hot_views_1000",
-      label: "热点推文：千次浏览以上",
-      desc: "只处理达到浏览门槛的已发布 Threads 推文，避免低价值目标。",
-      payload: { strategy_id: "hot_views_1000", strategy_label: "热点推文：千次浏览以上", reply_scope: "hot_posts", max_posts: 5, max_replies: 3, max_age_days: 30, min_views: 1000, require_persona_relevance: true },
-    },
-    {
-      id: "hot_custom",
-      label: "自定义热点回复",
-      desc: "手动设置浏览门槛、目标 URL、查看范围和固定回复内容。",
-      payload: { strategy_id: "hot_custom", strategy_label: "自定义热点回复", reply_scope: "hot_posts", max_posts: 5, max_replies: 3, max_age_days: 30, min_views: 0, require_persona_relevance: true },
-    },
-  ],
-};
-
-function pdThreadsStrategyStorageKey(group) {
-  return ({
-    threads_comment_reply: "personaDashboardThreadsCommentReplyStrategy",
-    threads_hot_reply: "personaDashboardThreadsHotReplyStrategy",
-    threads_warmup: "personaDashboardThreadsWarmupStrategy",
-  }[group] || "personaDashboardThreadsWarmupStrategy");
-}
-
-function pdThreadsStrategyDefaultId(group) {
-  const options = PD_THREADS_STRATEGIES[group] || [];
-  return (options[0] && options[0].id) || "tg_default";
-}
-
-function pdThreadsStrategySelectedId(group) {
-  const key = pdThreadsStrategyStorageKey(group);
-  return localStorage.getItem(key) || pdThreadsStrategyDefaultId(group);
-}
-
-function pdThreadsStrategyById(group, id) {
-  const options = PD_THREADS_STRATEGIES[group] || [];
-  return options.find((item) => item.id === id) || options[0] || null;
-}
-
-function pdThreadsStrategyOptionsHtml(group) {
-  const selectedId = pdThreadsStrategySelectedId(group);
-  return (PD_THREADS_STRATEGIES[group] || []).map((item) => (
-    `<option value="${pdEscape(item.id)}" ${item.id === selectedId ? "selected" : ""}>${pdEscape(item.label)}</option>`
-  )).join("");
-}
-
-function pdThreadsStrategyParams(strategy) {
-  const payload = (strategy && strategy.payload) || {};
-  if (!strategy) return [];
-  if (Object.prototype.hasOwnProperty.call(payload, "max_age_days")) {
-    const scopeText = payload.reply_scope === "hot_posts" ? "热点推文" : "评论入口";
-    return [
-      `回复分支：${scopeText}`,
-      `查看范围：最近 ${payload.max_age_days} 天`,
-      `扫描上限：${payload.max_posts || 0} 篇`,
-      `回复上限：${payload.max_replies || 0} 条`,
-      `相关性：${payload.require_persona_relevance ? "只回复人设/内容相关留言" : "不限制"}`,
-    ];
-  }
-  return [
-    `时长：${payload.session_minutes || "按页面完成节点"}`,
-    `浏览篇数上限：${payload.browse_limit || payload.browse_count || payload.scroll_times || 30} 篇`,
-    `互动间隔：${payload.interaction_every || "自动判断"}`,
-    `点赞上限：${payload.like_limit || 0} 个`,
-    `留言上限：${payload.max_comments || 0} 条`,
-  ];
-}
-
-function pdThreadsStrategyDetailHtml(group) {
-  const strategy = pdThreadsStrategyById(group, pdThreadsStrategySelectedId(group));
-  if (!strategy) return "";
-  return `
-    <strong>${pdEscape(strategy.label)}</strong>
-    <small>${pdEscape(strategy.desc)}</small>
-    <div class="persona-strategy-params">
-      ${pdThreadsStrategyParams(strategy).map((item) => `<span>${pdEscape(item)}</span>`).join("")}
-    </div>
-  `;
-}
-
-function pdThreadsStrategyPayload(group) {
-  const strategy = pdThreadsStrategyById(group, pdThreadsStrategySelectedId(group));
-  return (strategy && strategy.payload) || {};
-}
-
-function pdThreadsStrategyIsCustom(group) {
-  return String(pdThreadsStrategySelectedId(group) || "").endsWith("_custom");
-}
-
 let personaDashboardData = null;
 let personaDashboardSelectedId = "__overview__";
 let personaDashboardPostPage = 1;
 let personaDashboardPageSize = Number(localStorage.getItem("personaDashboardPageSize") || 10) || 10;
 let personaDashboardRefreshTask = "";
-let personaDashboardAccountPlatform = localStorage.getItem("personaDashboardAccountPlatform") || "threads";
+let personaDashboardPlatform = "";
 let personaDashboardTabPage = 1;
 let personaDashboardPostModalKey = "";
 let personaDashboardGalleryIndex = -1;
 let personaDashboardAutoPollTimer = 0;
 let personaDashboardPostSort = localStorage.getItem("personaDashboardPostSort") || "hot_desc";
 let personaDashboardPostTypeFilter = localStorage.getItem("personaDashboardPostTypeFilter") || "all";
-let personaDashboardAutomation = { accounts: [], proxies: [], tasks: [], summary: {}, worker: {} };
-let personaDashboardAutomationPane = localStorage.getItem("personaDashboardAutomationPane") || "tasks";
-let personaDashboardAutomationLogTaskId = "";
-let personaDashboardAutomationLogData = null;
-let personaDashboardAutomationLogTimer = 0;
-let personaDashboardAutomationGalleryIndex = -1;
-let personaDashboardSelectedAutomationAccountId = "";
 const personaDashboardInitialParams = new URLSearchParams(window.location.search || "");
 const personaDashboardInitialPersonaId = String(personaDashboardInitialParams.get("persona_id") || personaDashboardInitialParams.get("persona") || "").trim();
 let personaDashboardInitialPersonaApplied = false;
@@ -354,27 +193,71 @@ function pdEntries(value) {
     .sort((a, b) => b.value - a.value);
 }
 
-function pdRangeDays() {
-  const range = String((pdEl("personaDashboardRange") && pdEl("personaDashboardRange").value) || "all").trim();
-  const days = Number(range || 0);
-  return Number.isFinite(days) && days > 0 ? days : 0;
-}
-
-function pdDateInRange(value) {
-  const days = pdRangeDays();
-  if (!days) return true;
-  const ts = new Date(value || 0).getTime();
-  if (!Number.isFinite(ts)) return false;
-  return ts >= Date.now() - days * 24 * 60 * 60 * 1000;
-}
-
 function pdPlatformFilter() {
-  return String((pdEl("personaDashboardPlatform") && pdEl("personaDashboardPlatform").value) || "").trim().toLowerCase();
+  return String(personaDashboardPlatform || "").trim().toLowerCase();
 }
 
 function pdIsWebVisiblePlatform(value) {
   const platform = String(value || "").trim().toLowerCase();
   return !!platform && platform !== "telegram";
+}
+
+function pdPlatformLabel(value) {
+  const platform = String(value || "").trim().toLowerCase();
+  if (!platform) return "全部平台";
+  if (platform === "threads") return "Threads";
+  if (platform === "instagram") return "Instagram";
+  return platform.charAt(0).toUpperCase() + platform.slice(1);
+}
+
+function pdPlatformIcon(value) {
+  if (typeof renderAccountPoolPlatformIcon === "function") {
+    return renderAccountPoolPlatformIcon(value);
+  }
+  if (!String(value || "").trim()) {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"></rect><rect x="14" y="4" width="6" height="6" rx="1"></rect><rect x="4" y="14" width="6" height="6" rx="1"></rect><rect x="14" y="14" width="6" height="6" rx="1"></rect></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"></circle></svg>';
+}
+
+function pdDashboardPlatforms(data) {
+  const platforms = new Set(["threads", "instagram"]);
+  (data && data.personas || []).forEach((persona) => {
+    (persona.hot_platforms || []).forEach((item) => {
+      if (pdIsWebVisiblePlatform(item && item.platform)) platforms.add(String(item.platform).trim().toLowerCase());
+    });
+    Object.keys((persona.counts && persona.counts.platform_posts) || {}).forEach((platform) => {
+      if (pdIsWebVisiblePlatform(platform)) platforms.add(String(platform).trim().toLowerCase());
+    });
+  });
+  return ["", ...Array.from(platforms).filter(pdIsWebVisiblePlatform).sort()];
+}
+
+function pdRenderDashboardPlatformTabs(data) {
+  const host = pdEl("personaDashboardPlatformTabs");
+  if (!host) return;
+  const platforms = pdDashboardPlatforms(data);
+  if (personaDashboardPlatform && !platforms.includes(personaDashboardPlatform)) personaDashboardPlatform = "";
+  host.innerHTML = platforms.map((platform) => `
+    <button
+      class="account-pool-platform-tab ${personaDashboardPlatform === platform ? "is-active" : ""}"
+      type="button"
+      role="tab"
+      aria-selected="${personaDashboardPlatform === platform ? "true" : "false"}"
+      data-persona-dashboard-platform="${pdEscape(platform)}"
+    >
+      ${pdPlatformIcon(platform)}
+      <span>${pdEscape(pdPlatformLabel(platform))}</span>
+    </button>
+  `).join("");
+  host.querySelectorAll("[data-persona-dashboard-platform]").forEach((node) => {
+    node.addEventListener("click", () => {
+      personaDashboardPlatform = String(node.getAttribute("data-persona-dashboard-platform") || "");
+      personaDashboardPostPage = 1;
+      personaDashboardTabPage = 1;
+      pdRenderDashboard();
+    });
+  });
 }
 
 function pdPostHeat(row) {
@@ -435,13 +318,11 @@ function pdPostTypeLabel(value) {
 
 function pdCurrentPostFilterText() {
   const platform = pdPlatformFilter();
-  const range = String((pdEl("personaDashboardRange") && pdEl("personaDashboardRange").value) || "all");
-  const rangeLabel = range === "all" || !range ? "全部时间" : `最近 ${range} 天`;
-  return `平台：${platform || "全部"} · 时间：${rangeLabel} · 内容：${pdPostTypeLabel(personaDashboardPostTypeFilter)} · 排序：${pdPostSortLabel(personaDashboardPostSort)}`;
+  return `平台：${pdPlatformLabel(platform)} · 内容：${pdPostTypeLabel(personaDashboardPostTypeFilter)} · 排序：${pdPostSortLabel(personaDashboardPostSort)}`;
 }
 
 function pdFilterTrend(rows) {
-  return (rows || []).filter((row) => pdDateInRange(row.date));
+  return rows || [];
 }
 
 function pdFilteredPostRows(persona) {
@@ -451,7 +332,6 @@ function pdFilteredPostRows(persona) {
   return (persona.post_metrics || []).filter((row) => {
     if (!pdIsWebVisiblePlatform(row.platform)) return false;
     if (platform && String(row.platform || "").toLowerCase() !== platform) return false;
-    if (!pdDateInRange(row.published_at || row.captured_at)) return false;
     return pdPostMatchesType(row);
   }).sort((a, b) => {
     const diff = pdPostSortNumber(a, sort) - pdPostSortNumber(b, sort);
@@ -487,13 +367,10 @@ function pdPersonaHot(persona) {
 }
 
 function pdVisibleSummary(visiblePersonas) {
-  const padSet = new Set();
   const summary = {
     persona_count: visiblePersonas.length,
     post_count: 0,
     published_count: 0,
-    image_count: 0,
-    bound_pad_count: 0,
     total_interactions: 0,
     recent_views: 0,
     post_views: 0,
@@ -508,9 +385,7 @@ function pdVisibleSummary(visiblePersonas) {
     summary.post_views += Number(hot.post_views || 0);
     summary.hot_score += Number(hot.hot_score || 0);
     summary.total_interactions += Number(hot.likes || 0) + Number(hot.comments || 0) + Number(hot.shares || 0) + Number(hot.reposts || 0);
-    if (persona.bound_pad_code) padSet.add(String(persona.bound_pad_code));
   });
-  summary.bound_pad_count = padSet.size;
   return summary;
 }
 
@@ -637,10 +512,7 @@ function pdRenderTrendChart(hostId, rows) {
 }
 
 function pdMatches(persona) {
-  const search = String((pdEl("personaDashboardSearch") && pdEl("personaDashboardSearch").value) || "").trim().toLowerCase();
   const platform = pdPlatformFilter();
-  const haystack = [persona.name, persona.content, persona.bound_pad_code, persona.bound_pad_name, persona.owner_bot_name, persona.threads_account && persona.threads_account.handle].join(" ").toLowerCase();
-  if (search && !haystack.includes(search)) return false;
   if (platform) {
     const platforms = (persona.hot_platforms || [])
       .map((item) => String(item.platform || "").toLowerCase())
@@ -650,7 +522,7 @@ function pdMatches(persona) {
       .filter((item) => pdIsWebVisiblePlatform(item));
     if (!platforms.includes(platform) && !platformPosts.includes(platform)) return false;
   }
-  return pdDateInRange(persona.updated_at || persona.created_at);
+  return true;
 }
 
 function pdRenderSummary(data, visiblePersonas) {
@@ -662,17 +534,15 @@ function pdRenderSummary(data, visiblePersonas) {
     { label: "人设总数", value: summary.persona_count, hint: `全部 ${globalSummary.persona_count || 0}` },
     { label: "已生成帖子", value: summary.post_count, hint: "当前筛选归档帖子" },
     { label: "已发布", value: summary.published_count, hint: "当前筛选发布记录" },
-    { label: "绑定设备", value: summary.bound_pad_count, hint: "当前筛选设备数" },
     { label: "总互动量", value: summary.total_interactions, hint: "点赞、评论、转发、分享" },
     { label: "账号主页浏览", value: summary.recent_views, hint: "账号主页级浏览" },
     { label: "逐帖浏览合计", value: summary.post_views, hint: "逐帖浏览，不与主页浏览合并" },
     { label: "筛选热度", value: summary.hot_score, hint: "逐帖浏览 + 点赞 + 评论 + 分享 + 转发" },
   ];
   host.innerHTML = cards.map((card) => `
-    <div class="kpi persona-kpi">
+    <div class="kpi persona-kpi" title="${pdEscape(card.hint)}">
       <div class="label">${pdEscape(card.label)}</div>
       <div class="num">${pdEscape(pdNumber(card.value))}</div>
-      <div class="small">${pdEscape(card.hint)}</div>
     </div>
   `).join("");
 }
@@ -719,31 +589,6 @@ function pdRenderPublishHistory(persona) {
   `;
 }
 
-function pdAutomationRecordsForPersona(persona) {
-  return (persona.publish_history || []).filter((row) => String(row.automation_task_type || row.task_type || "") !== "open_login");
-}
-
-function pdRenderAutomationRecordRows(persona) {
-  const rows = pdAutomationRecordsForPersona(persona);
-  return rows.slice(0, 40).map((row) => {
-    const taskId = String(row.automation_task_id || row.automationTaskId || row.id || "");
-    return `
-      <tr>
-        <td>${pdEscape(row.platform || "-")}</td>
-        <td class="persona-auto-record-content">
-          <div>${pdEscape(row.title || pdAutomationTaskLabel(row.automation_task_type || row.task_type) || "操作记录")}</div>
-          <small>${pdEscape(String(row.content || row.source_url || "").slice(0, 160))}</small>
-        </td>
-        <td>${pdEscape(pdDate(row.published_at || row.captured_at))}</td>
-        <td><span class="persona-auto-status persona-auto-status-${pdEscape(row.status || "success")}">${pdEscape(row.status || "success")}</span></td>
-        <td><div class="persona-auto-row-actions">
-          ${taskId.startsWith("social_task_") ? `<button class="ghost" type="button" data-auto-logs="${pdEscape(taskId)}">日志</button>` : (pdSafeLinkUrl(row.published_url) ? `<a class="ghost" href="${pdEscape(pdSafeLinkUrl(row.published_url))}" target="_blank" rel="noopener">打开</a>` : `<span class="small">-</span>`)}
-        </div></td>
-      </tr>
-    `;
-  }).join("");
-}
-
 function pdRenderPersonaCard(persona) {
   const hot = pdPersonaHot(persona);
   const counts = persona.counts || {};
@@ -752,7 +597,6 @@ function pdRenderPersonaCard(persona) {
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
   personaDashboardPostPage = Math.max(1, Math.min(pageCount, Number(personaDashboardPostPage || 1)));
   const start = (personaDashboardPostPage - 1) * pageSize;
-  const threads = persona.threads_account || {};
   const platforms = (persona.hot_platforms || []).filter((item) => pdIsWebVisiblePlatform(item.platform)).map((item) => `
     <div class="persona-platform-row">
       <strong>${pdEscape(item.platform || "-")}</strong>
@@ -786,23 +630,6 @@ function pdRenderPersonaCard(persona) {
       <div class="persona-detail-head">
         <div>
           <h3>${pdEscape(persona.name || "未命名人设")}</h3>
-          <div class="small">设备：${pdEscape(persona.bound_pad_name || persona.bound_pad_code || "未绑定")} · 机器人：${pdEscape(persona.owner_bot_name || "-")}</div>
-        </div>
-        <div class="persona-account-compact">
-          <div class="persona-account-title">
-            <label for="personaAccountPlatform">账号平台</label>
-            <span>绑定后可刷新该账号热点</span>
-          </div>
-          <div class="persona-account-grid">
-            <select id="personaAccountPlatform">
-              <option value="threads" selected>Threads</option>
-            </select>
-            <input id="personaThreadsInput" type="text" value="${pdEscape(threads.handle || "")}" placeholder="Threads 用户名 / handle" />
-          </div>
-          <div class="persona-account-actions">
-            <button class="ghost" type="button" id="personaBindThreadsBtn">保存</button>
-            <button class="ghost persona-unbind-btn" type="button" id="personaUnbindThreadsBtn" ${threads.handle ? "" : "disabled"}>解绑</button>
-          </div>
         </div>
         <div class="persona-score">
           <span>热度</span>
@@ -811,9 +638,6 @@ function pdRenderPersonaCard(persona) {
         </div>
       </div>
       ${pdPersonaWarnings(persona)}
-      <div class="persona-bind-hint">
-        <span>没有绑定时无法抓取该人设账号热点；刷新会使用服务器端已保存的浏览器授权。</span>
-      </div>
       <div class="persona-detail-grid">
         <div><span>帖子</span><strong>${pdEscape(pdNumber(counts.posts))}</strong></div>
         <div><span>发布</span><strong>${pdEscape(pdNumber(counts.published))}</strong></div>
@@ -823,7 +647,6 @@ function pdRenderPersonaCard(persona) {
       </div>
       <div class="persona-content-preview">${pdEscape(persona.content || "暂无人设描述")}</div>
       <div class="persona-platform-list">${platforms || `<div class="small">暂无平台热点指标</div>`}</div>
-      ${pdRenderAutomationPanel(persona)}
       <div class="persona-table-wrap">
         <div class="persona-table-toolbar">
           <div class="persona-table-title">
@@ -868,389 +691,12 @@ function pdRenderPersonaCard(persona) {
         <button class="ghost" type="button" id="personaPostNext" ${personaDashboardPostPage >= pageCount ? "disabled" : ""}>下一页</button>
       </div>
       ${pdRenderPostModal(persona)}
-      ${pdRenderAutomationLogModal()}
     </article>
   `;
 }
 
 function pdPersonaKey(persona, index = 0) {
-  return String((persona && (persona.id || persona.name || persona.bound_pad_code)) || `persona-${index}`);
-}
-
-function pdAutomationAccountsForPersona(persona) {
-  const key = String((persona && persona.id) || "").trim();
-  return (personaDashboardAutomation.accounts || []).filter((account) => String(account.persona_id || "") === key);
-}
-
-function pdSelectedAutomationPlatform() {
-  const select = pdEl("personaAutoPlatform");
-  const value = String((select && select.value) || personaDashboardAccountPlatform || "threads").trim().toLowerCase();
-  return value === "instagram" ? "instagram" : "threads";
-}
-
-function pdAutomationAccountsForPlatform(persona, platform) {
-  const current = String(platform || pdSelectedAutomationPlatform()).toLowerCase();
-  return pdAutomationAccountsForPersona(persona).filter((account) => String(account.platform || "").toLowerCase() === current);
-}
-
-function pdAggregateAutomationTaskBatch(tasks) {
-  const rows = (Array.isArray(tasks) ? tasks : []).slice().sort((left, right) => {
-    const leftPayload = pdAutomationTaskPayload(left);
-    const rightPayload = pdAutomationTaskPayload(right);
-    return Number(leftPayload.publish_sequence_index || 1) - Number(rightPayload.publish_sequence_index || 1)
-      || Number(left.created_at || 0) - Number(right.created_at || 0);
-  });
-  if (rows.length <= 1) return rows[0] || {};
-  const statuses = rows.map((task) => String(task.status || ""));
-  const activeStatus = ["need_manual", "running", "preparing", "queued"]
-    .find((status) => statuses.includes(status));
-  const source = rows[0];
-  return {
-    ...source,
-    status: activeStatus
-      || (statuses.includes("failed") ? "failed" : "")
-      || (statuses.every((status) => status === "success") ? "success" : "")
-      || (statuses.includes("cancelled") ? "cancelled" : statuses[statuses.length - 1]),
-    updated_at: Math.max(...rows.map((task) => Number(task.updated_at || task.created_at || 0))),
-    finished_at: activeStatus ? 0 : Math.max(...rows.map((task) => Number(task.finished_at || 0))),
-    error: rows.find((task) => task.error)?.error || "",
-    batch_task_count: rows.length,
-    batch_task_ids: rows.map((task) => String(task.id || "")),
-  };
-}
-
-function pdAutomationTaskPresentationRows(tasks) {
-  const slots = [];
-  const batches = new Map();
-  (Array.isArray(tasks) ? tasks : []).forEach((task) => {
-    const payload = pdAutomationTaskPayload(task);
-    const batchId = String(payload.publish_batch_id || "").trim();
-    if (String(task.task_type || "") !== "publish_post" || !batchId) {
-      slots.push(task);
-      return;
-    }
-    const key = `${String(task.persona_id || "")}:${String(task.account_id || "")}:${batchId}`;
-    if (!batches.has(key)) {
-      const batch = [];
-      batches.set(key, batch);
-      slots.push(batch);
-    }
-    batches.get(key).push(task);
-  });
-  return slots.map((item) => Array.isArray(item) ? pdAggregateAutomationTaskBatch(item) : item);
-}
-
-function pdAutomationTasksForPersona(persona) {
-  const personaId = String(persona?.id || "");
-  const accountIds = new Set(pdAutomationAccountsForPersona(persona).map((account) => String(account.id || "")));
-  const rows = pdAutomationTaskPresentationRows(
-    (personaDashboardAutomation.tasks || [])
-      .filter((task) => {
-        const taskPersonaId = String(task.persona_id || "");
-        return taskPersonaId ? taskPersonaId === personaId : accountIds.has(String(task.account_id || ""));
-      }),
-  );
-  const manualRows = rows.filter((task) => pdAutomationTaskNeedsManualVerification(task));
-  const manualIds = new Set(manualRows.map((task) => String(task.id || "")));
-  const historyRows = rows.filter((task) => !manualIds.has(String(task.id || "")));
-  return [...manualRows, ...historyRows.slice(0, Math.max(0, 8 - manualRows.length))];
-}
-
-function pdAutomationTaskPayload(task) {
-  let payload = task?.payload || task?.payload_json || {};
-  if (typeof payload === "string") {
-    try { payload = JSON.parse(payload || "{}"); } catch (_) { payload = {}; }
-  }
-  return payload && typeof payload === "object" ? payload : {};
-}
-
-function pdAutomationTaskNeedsManualVerification(task) {
-  const status = String(task?.status || "").trim();
-  if (Number(task?.finished_at || task?.finishedAt || 0) > 0) return false;
-  return ["running", "need_manual"].includes(status)
-    && (status === "need_manual" || pdAutomationTaskPayload(task).manual_takeover === true);
-}
-
-function pdAutomationBrowserSessionForTask(task) {
-  const taskId = String(task?.id || "").trim();
-  if (!taskId) return null;
-  const sessions = Array.isArray(personaDashboardAutomation.browser_sessions)
-    ? personaDashboardAutomation.browser_sessions
-    : [];
-  return sessions.find((session) => String(session?.task_id || "").trim() === taskId) || null;
-}
-
-function pdAutomationBrowserMonitorUrl(task) {
-  const session = pdAutomationBrowserSessionForTask(task);
-  const viewPath = String(session?.view_path || session?.novnc_path || "").trim();
-  if (viewPath) {
-    return pdAdminWorkspaceUrl(viewPath);
-  }
-  return pdAdminWorkspaceUrl("/console.html?view=accounts&browser_panel=browsers");
-}
-
-function pdRenderAutomationBrowserAction(task) {
-  if (!pdAutomationTaskNeedsManualVerification(task)) return "";
-  const session = pdAutomationBrowserSessionForTask(task);
-  const hasSession = Boolean(String(session?.view_path || session?.novnc_path || "").trim());
-  return `<a class="ghost" href="${pdEscape(pdAutomationBrowserMonitorUrl(task))}" target="_blank" rel="noopener">${hasSession ? "打开浏览器验证" : "前往浏览器监控"}</a>`;
-}
-
-function pdBuildAutomaticLoginTaskBody(persona, accountId, platform, loginUsername, loginPassword = "") {
-  return {
-    persona_id: String(persona?.id || ""),
-    account_id: String(accountId || ""),
-    platform: String(platform || "threads"),
-    task_type: "open_login",
-    priority: 20,
-    max_retries: 0,
-    payload: {
-      auto_submit: true,
-      login_username: String(loginUsername || "").trim(),
-      ...(loginPassword ? { login_password: loginPassword } : {}),
-      login_wait_seconds: 600,
-    },
-  };
-}
-
-function pdAutomationStatusLabel(value) {
-  return ({
-    pending_login: "待登录",
-    ready: "可执行",
-    need_verification: "需人工验证",
-    cookie_expired: "登录失效",
-    disabled: "已停用",
-    queued: "排队中",
-    running: "执行中",
-    success: "成功",
-    failed: "失败",
-    cancelled: "已取消",
-    need_manual: "需人工处理",
-    open_login: "打开登录",
-    check_login: "检查登录",
-    browse_feed: "浏览首页",
-    browse_profile: "浏览主页",
-    publish_post: "发帖",
-    comment_post: "评论",
-    reply_comment: "回复",
-    like_post: "点赞",
-    share_post: "分享",
-    repost_post: "转发",
-    threads_warmup: "Threads 养号",
-    threads_auto_reply: "Threads 自动回复",
-  }[String(value || "")] || String(value || "-"));
-}
-
-function pdRenderAutomationPanel(persona) {
-  const platform = personaDashboardAccountPlatform === "instagram" ? "instagram" : "threads";
-  const allAccounts = pdAutomationAccountsForPersona(persona);
-  const accounts = pdAutomationAccountsForPlatform(persona, platform);
-  const tasks = pdAutomationTasksForPersona(persona);
-  const preferredAccountId = accounts.some((account) => String(account.id || "") === personaDashboardSelectedAutomationAccountId)
-    ? personaDashboardSelectedAutomationAccountId
-    : String((accounts[0] && accounts[0].id) || "");
-  const selectedAccount = accounts.find((account) => String(account.id || "") === preferredAccountId) || accounts[0] || null;
-  const selectedAccountId = String((selectedAccount && selectedAccount.id) || "");
-  const hasSavedLoginPassword = !!(selectedAccount && selectedAccount.login_password_configured);
-  const readyCount = accounts.filter((account) => account.status === "ready").length;
-  const platformLabel = platform === "threads" ? "Threads" : "Instagram";
-  const activeReplyTab = localStorage.getItem("personaDashboardThreadsReplyTab") === "hot" ? "hot" : "comment";
-  const activeReplyGroup = activeReplyTab === "hot" ? "threads_hot_reply" : "threads_comment_reply";
-  const commentDefaults = pdThreadsStrategyPayload("threads_comment_reply");
-  const hotDefaults = pdThreadsStrategyPayload("threads_hot_reply");
-  const warmupDefaults = pdThreadsStrategyPayload("threads_warmup");
-  const commentCustom = pdThreadsStrategyIsCustom("threads_comment_reply");
-  const hotCustom = pdThreadsStrategyIsCustom("threads_hot_reply");
-  const warmupCustom = pdThreadsStrategyIsCustom("threads_warmup");
-  const accountOptions = accounts.map((account) => `
-    <option value="${pdEscape(account.id)}">${pdEscape(account.username || account.id)} · ${pdEscape(pdAutomationStatusLabel(account.status))}</option>
-  `).join("");
-  const accountOptionsFixed = accounts.map((account) => {
-    const accountId = String(account.id || "");
-    return `<option value="${pdEscape(accountId)}" ${accountId === preferredAccountId ? "selected" : ""}>${pdEscape(account.username || accountId)} - ${pdEscape(pdAutomationStatusLabel(account.status))}</option>`;
-  }).join("");
-  const activeAutomationPane = personaDashboardAutomationPane === "records" ? "records" : "tasks";
-  const recordRows = pdRenderAutomationRecordRows(persona);
-  const recordCount = pdAutomationRecordsForPersona(persona).length;
-  const taskRows = tasks.map((task) => `
-    <tr>
-      <td><input class="persona-auto-log-check" type="checkbox" value="${pdEscape(task.id)}" data-auto-select-log="${pdEscape(task.id)}" /></td>
-      <td>${pdEscape(`${pdAutomationStatusLabel(task.task_type)}${Number(task.batch_task_count || 0) > 1 ? ` · ${task.batch_task_count} 篇` : ""}`)}</td>
-      <td><span class="persona-auto-status persona-auto-status-${pdEscape(task.status)}">${pdEscape(pdAutomationStatusLabel(task.status))}</span></td>
-      <td>${pdEscape(pdDate((task.updated_at || task.created_at || 0) * 1000))}</td>
-      <td><div class="persona-auto-result" title="${pdEscape(task.error || (task.result && (task.result.url || task.result.screenshot_path)) || "-")}">${pdEscape(task.error || (task.result && (task.result.url || task.result.screenshot_path)) || "-")}</div></td>
-      <td><div class="persona-auto-row-actions">
-        <button class="ghost" type="button" data-auto-logs="${pdEscape(task.id)}">日志</button>
-        ${pdRenderAutomationBrowserAction(task)}
-        <button class="ghost persona-selection-icon-button" type="button" data-auto-clear-log="${pdEscape(task.id)}" title="清除" aria-label="清除">${renderTrashIcon()}</button>
-        ${["queued", "running", "need_manual"].includes(String(task.status || "")) ? `<button class="ghost persona-auto-cancel" type="button" data-auto-cancel="${pdEscape(task.id)}">取消</button>` : ""}
-      </div></td>
-    </tr>
-  `).join("");
-  return `
-    <section class="persona-auto-panel">
-      <div class="persona-auto-head">
-        <div>
-          <h4>社媒自动化执行</h4>
-          <div class="small">Instagram / Threads · 指纹浏览器执行环境 · 住宅代理 · 有头模式</div>
-        </div>
-        <div class="persona-auto-kpis">
-          <span>账号 ${pdEscape(String(allAccounts.length))}</span>
-          <span>可执行 ${pdEscape(String(readyCount))}</span>
-          <span>队列 ${pdEscape(String((personaDashboardAutomation.summary || {}).queued_count || 0))}</span>
-        </div>
-      </div>
-      <div class="persona-auto-grid">
-        <div class="persona-auto-box">
-          <label>执行平台</label>
-          <select id="personaAutoPlatform">
-            <option value="threads" ${platform === "threads" ? "selected" : ""}>Threads</option>
-            <option value="instagram" ${platform === "instagram" ? "selected" : ""}>Instagram</option>
-          </select>
-          <label>执行账号</label>
-          <div class="persona-auto-inline">
-            <select id="personaAutoAccount">${accountOptionsFixed || `<option value="">暂无账号，请先添加</option>`}</select>
-            <button class="ghost" type="button" id="personaAutoOpenAccountEditor">${selectedAccount ? "编辑账号" : "添加账号"}</button>
-          </div>
-          <div class="small">${selectedAccount
-            ? `登录资料：${hasSavedLoginPassword ? "已配置" : "未配置"} · 代理 IP：${selectedAccount.proxy_id ? "已绑定" : "未绑定"}`
-            : `使用统一账号编辑界面配置 ${pdEscape(platformLabel)} 登录资料、2FA 和代理 IP。`}</div>
-          <div class="persona-auto-actions">
-            <button class="ghost" type="button" data-auto-login="1" ${accounts.length ? "" : "disabled"}>打开登录窗口</button>
-            <button class="ghost" type="button" data-auto-account-action="check_login" ${accounts.length ? "" : "disabled"}>检查登录</button>
-            ${platform === "threads" ? "" : `<button class="ghost" type="button" data-auto-task="browse_feed" ${accounts.length ? "" : "disabled"}>浏览首页</button>`}
-          </div>
-        </div>
-        <div class="persona-auto-box persona-auto-box-wide">
-          ${platform === "threads" ? `
-            <label>Threads 自动化方式</label>
-            <div class="small">可直接使用预设策略；选择自定义后才会展开本次执行参数。</div>
-            <div class="persona-strategy-panel">
-              <div class="persona-strategy-section">
-                <div class="persona-strategy-head">
-                  <div>
-                    <strong>创建推文任务</strong>
-                    <small>支持正文直发，可选附图；不再强制要求媒体文件。</small>
-                  </div>
-                  <button class="ghost persona-strategy-action" type="button" data-auto-task="publish_post" data-daily-publish-action="true" ${accounts.length ? "" : "disabled"}>执行任务</button>
-                </div>
-                <div class="persona-strategy-row persona-strategy-row-compact">
-                  <div class="persona-strategy-fields">
-                    <label class="persona-strategy-field-wide">任务正文<textarea id="personaAutoText" rows="3" placeholder="填写 Threads 任务正文"></textarea></label>
-                    <label class="persona-strategy-field-wide">媒体路径<textarea id="personaAutoMedia" rows="2" placeholder="可选，多个本地文件路径用英文逗号分隔"></textarea></label>
-                  </div>
-                </div>
-              </div>
-              <div class="persona-strategy-section">
-                <div class="persona-strategy-head">
-                  <div>
-                    <strong>自动回复</strong>
-                    <small>评论回复和热点推文回复共用一个容器，通过左右页签切换。</small>
-                  </div>
-                  <button class="primary persona-strategy-action" type="button" data-auto-task="threads_auto_reply" data-threads-group="${pdEscape(activeReplyGroup)}" ${accounts.length ? "" : "disabled"}>${activeReplyTab === "hot" ? "执行热点回复" : "执行评论回复"}</button>
-                </div>
-                <div class="persona-reply-tabs" role="tablist" aria-label="自动回复分支">
-                  <button class="${activeReplyTab === "comment" ? "is-active" : ""}" type="button" role="tab" aria-selected="${activeReplyTab === "comment" ? "true" : "false"}" data-threads-reply-tab="comment">自动回复评论</button>
-                  <button class="${activeReplyTab === "hot" ? "is-active" : ""}" type="button" role="tab" aria-selected="${activeReplyTab === "hot" ? "true" : "false"}" data-threads-reply-tab="hot">自动回复热点推文</button>
-                </div>
-                ${activeReplyTab === "comment" ? `
-                <div class="persona-strategy-row persona-strategy-row-compact">
-                  <div class="persona-strategy-picker">
-                    <label for="personaAutoCommentStrategy">评论回复策略</label>
-                    <select id="personaAutoCommentStrategy" data-threads-strategy="threads_comment_reply">${pdThreadsStrategyOptionsHtml("threads_comment_reply")}</select>
-                  </div>
-                  ${commentCustom ? `<div class="persona-strategy-fields">
-                    <label>查看天数<input id="personaAutoCommentDays" type="number" min="1" max="30" value="${pdEscape(commentDefaults.max_age_days || 2)}" /></label>
-                    <label>扫描篇数<input id="personaAutoCommentPosts" type="number" min="1" max="20" value="${pdEscape(commentDefaults.max_posts || 5)}" /></label>
-                    <label>回复上限<input id="personaAutoCommentReplies" type="number" min="1" max="10" value="${pdEscape(commentDefaults.max_replies || 3)}" /></label>
-                    <label class="persona-strategy-field-wide">自定义回复内容<textarea id="personaAutoCommentReplyText" rows="2" placeholder="留空则按人设自动生成"></textarea></label>
-                  </div>` : ""}
-                  <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_comment_reply")}</div>
-                </div>
-                ` : `
-                <div class="persona-strategy-row persona-strategy-row-compact">
-                  <div class="persona-strategy-picker">
-                    <label for="personaAutoHotStrategy">热点回复策略</label>
-                    <select id="personaAutoHotStrategy" data-threads-strategy="threads_hot_reply">${pdThreadsStrategyOptionsHtml("threads_hot_reply")}</select>
-                  </div>
-                  ${hotCustom ? `<div class="persona-strategy-fields">
-                    <label>最低浏览<input id="personaAutoHotMinViews" type="number" min="0" max="999999999" value="${pdEscape(hotDefaults.min_views || 0)}" /></label>
-                    <label>查看天数<input id="personaAutoHotDays" type="number" min="1" max="365" value="${pdEscape(hotDefaults.max_age_days || 30)}" /></label>
-                    <label>目标篇数<input id="personaAutoHotPosts" type="number" min="1" max="20" value="${pdEscape(hotDefaults.max_posts || 5)}" /></label>
-                    <label>回复上限<input id="personaAutoHotReplies" type="number" min="1" max="10" value="${pdEscape(hotDefaults.max_replies || 3)}" /></label>
-                    <label class="persona-strategy-field-wide">指定热点推文 URL<textarea id="personaAutoHotTargetUrls" rows="2" placeholder="可选，多个链接用换行或英文逗号分隔"></textarea></label>
-                    <label class="persona-strategy-field-wide">自定义回复内容<textarea id="personaAutoHotReplyText" rows="2" placeholder="留空则按人设和推文自动生成"></textarea></label>
-                  </div>` : ""}
-                  <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_hot_reply")}</div>
-                </div>
-                `}
-              </div>
-              <div class="persona-strategy-section">
-                <div class="persona-strategy-head">
-                  <div>
-                    <strong>养号</strong>
-                    <small>独立设置浏览、点赞和留言强度，不与自动回复混用。</small>
-                  </div>
-                  <button class="ghost persona-strategy-action" type="button" data-auto-task="threads_warmup" data-threads-group="threads_warmup" ${accounts.length ? "" : "disabled"}>执行养号</button>
-                </div>
-                <div class="persona-strategy-row persona-strategy-row-compact">
-                  <div class="persona-strategy-picker">
-                    <label for="personaAutoWarmupStrategy">养号策略</label>
-                    <select id="personaAutoWarmupStrategy" data-threads-strategy="threads_warmup">${pdThreadsStrategyOptionsHtml("threads_warmup")}</select>
-                  </div>
-                  ${warmupCustom ? `<div class="persona-strategy-fields">
-                    <label>浏览篇数上限<input id="personaAutoWarmupBrowseLimit" type="number" min="1" max="300" value="${pdEscape(warmupDefaults.browse_limit || warmupDefaults.browse_count || warmupDefaults.scroll_times || 30)}" /></label>
-                    <label>点赞上限<input id="personaAutoWarmupLikes" type="number" min="0" max="100" value="${pdEscape(warmupDefaults.like_limit || 0)}" /></label>
-                    <label>留言上限<input id="personaAutoWarmupComments" type="number" min="0" max="50" value="${pdEscape(warmupDefaults.max_comments || 0)}" /></label>
-                    <label class="persona-strategy-field-wide">养号留言模板<textarea id="personaAutoWarmupTemplates" rows="2" placeholder="可选，多条用换行分隔；留空则按人设自动生成"></textarea></label>
-                  </div>` : ""}
-                  <div class="persona-strategy-detail">${pdThreadsStrategyDetailHtml("threads_warmup")}</div>
-                </div>
-              </div>
-            </div>
-          ` : `
-            <label>目标 URL / 主页用户名</label>
-            <input id="personaAutoTarget" type="text" placeholder="https://www.instagram.com/p/xxxx/ 或主页用户名" />
-            <label>正文 / 评论 / 回复</label>
-            <textarea id="personaAutoText" rows="3" placeholder="发帖 Caption、评论内容或回复内容"></textarea>
-            <label>媒体路径</label>
-            <input id="personaAutoMedia" type="text" placeholder="本地图片/视频路径，多个用英文逗号分隔" />
-            <div class="persona-auto-actions">
-              <button class="primary" type="button" data-auto-task="publish_post" data-daily-publish-action="true" ${accounts.length ? "" : "disabled"}>发帖</button>
-              <button class="ghost" type="button" data-auto-task="browse_profile" ${accounts.length ? "" : "disabled"}>浏览主页</button>
-              <button class="ghost" type="button" data-auto-task="like_post" ${accounts.length ? "" : "disabled"}>点赞</button>
-              <button class="ghost" type="button" data-auto-task="comment_post" ${accounts.length ? "" : "disabled"}>评论</button>
-              <button class="ghost" type="button" data-auto-task="reply_comment" ${accounts.length ? "" : "disabled"}>回复</button>
-              <button class="ghost" type="button" data-auto-task="share_post" ${accounts.length ? "" : "disabled"}>分享</button>
-              <button class="ghost" type="button" data-auto-task="repost_post" ${accounts.length ? "" : "disabled"} title="Instagram Web 不提供真实转发接口，任务会记录为不支持">转发</button>
-            </div>
-          `}
-        </div>
-      </div>
-      <div class="persona-auto-table-wrap persona-auto-log-shell">
-        <div class="persona-auto-log-switch" role="tablist" aria-label="自动化日志与操作记录">
-          <button class="${activeAutomationPane === "tasks" ? "is-active" : ""}" type="button" role="tab" aria-selected="${activeAutomationPane === "tasks" ? "true" : "false"}" data-auto-pane="tasks">任务日志 <span>${pdEscape(String(tasks.length))}</span></button>
-          <button class="${activeAutomationPane === "records" ? "is-active" : ""}" type="button" role="tab" aria-selected="${activeAutomationPane === "records" ? "true" : "false"}" data-auto-pane="records">操作记录 <span>${pdEscape(String(recordCount))}</span></button>
-        </div>
-        ${activeAutomationPane === "records" ? `
-          <table class="persona-auto-table persona-auto-record-table">
-            <thead><tr><th>平台</th><th>内容</th><th>时间</th><th>状态</th><th>操作</th></tr></thead>
-            <tbody>${recordRows || `<tr><td colspan="5">暂无网页发布或操作记录</td></tr>`}</tbody>
-          </table>
-        ` : `
-        <div class="persona-auto-log-tools">
-          <button class="ghost persona-selection-icon-button" type="button" id="personaAutoSelectAllLogs" title="全选" aria-label="全选" ${tasks.length ? "" : "disabled"}>${renderSelectAllIcon()}</button>
-          <button class="ghost persona-selection-icon-button" type="button" id="personaAutoClearSelectedLogs" title="清除选中" aria-label="清除选中" ${tasks.length ? "" : "disabled"}>${renderClearSelectionIcon()}</button>
-          <button class="ghost persona-selection-icon-button" type="button" id="personaAutoClearAllLogs" title="清除全部" aria-label="清除全部" ${tasks.length ? "" : "disabled"}>${renderTrashIcon()}</button>
-        </div>
-        <table class="persona-auto-table">
-          <thead><tr><th>选择</th><th>任务</th><th>状态</th><th>更新时间</th><th>结果 / 错误</th><th>操作</th></tr></thead>
-          <tbody>${taskRows || `<tr><td colspan="6">暂无自动化任务</td></tr>`}</tbody>
-        </table>
-        `}
-      </div>
-    </section>
-  `;
+  return String((persona && (persona.id || persona.name)) || `persona-${index}`);
 }
 
 function pdFindPostRow(persona, postKey) {
@@ -1352,313 +798,6 @@ function pdRenderPostGallery(row) {
   `;
 }
 
-function pdAutomationLogMediaUrl(taskId, index) {
-  return pdAdminWorkspaceUrl(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(taskId)}/media/${encodeURIComponent(index)}`);
-}
-
-function pdAutomationScreenshotUrl(path) {
-  const name = String(path || "").split(/[\\/]/).pop();
-  return name ? pdAdminWorkspaceUrl(`/api/persona_dashboard/automation/screenshots/${encodeURIComponent(name)}`) : "";
-}
-
-function pdAutomationScreenshotThumbnailUrl(url) {
-  const value = String(url || "");
-  if (!value.startsWith("/api/persona_dashboard/automation/screenshots/")) return pdAdminWorkspaceUrl(value);
-  const thumbnailUrl = new URL(value, window.location.href);
-  thumbnailUrl.searchParams.set("thumbnail", "1");
-  return pdAdminWorkspaceUrl(`${thumbnailUrl.pathname}${thumbnailUrl.search}${thumbnailUrl.hash}`);
-}
-
-function pdAutomationLogImages(task, logs) {
-  const result = (task && task.result) || {};
-  const items = [];
-  [result.screenshot_path, ...(result.replyScreenshots || [])].filter(Boolean).forEach((path, index) => {
-    items.push({ label: `结果截图 ${index + 1}`, url: pdAutomationScreenshotUrl(path), path });
-  });
-  (logs || []).forEach((row) => {
-    if (row.screenshot_url && pdAutomationLogIsCheckpointScreenshot(row)) items.push({ label: `${pdAutomationLogStepText(row)}截图`, url: pdAdminWorkspaceUrl(row.screenshot_url), path: row.screenshot_path });
-  });
-  const seen = new Set();
-  return items.filter((item) => {
-    const key = item.url || item.path;
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function pdAutomationLogIsCheckpointScreenshot(row) {
-  const stage = String((row && row.stage) || "");
-  return new Set([
-    "auto_login_start",
-    "auto_login_form_filled",
-    "login_verification_required",
-    "login_invalid_credentials",
-    "login_wait_timeout",
-    "login_complete",
-    "completion_node",
-    "check_login",
-    "browse_feed",
-    "threads_warmup",
-    "threads_auto_reply_done",
-    "publish_done",
-    "comment_done",
-    "reply_done",
-    "like_done",
-    "already_liked",
-    "share_done",
-    "failed",
-  ]).has(stage);
-}
-
-function pdAutomationLogStepText(row) {
-  const stage = String((row && row.stage) || "");
-  const task = row && row.data && row.data.task_type ? pdAutomationStatusLabel(row.data.task_type) : "";
-  const map = {
-    queued: "任务已加入队列，等待执行",
-    running: "Worker 已领取任务，准备开始",
-    prepare: "正在准备自动化任务",
-    browser_launch: "正在启动指纹浏览器",
-    open_login: "正在打开登录页面",
-    check_login: "正在检查登录状态",
-    auto_login_start: "开始自动登录",
-    auto_login_continue: "正在处理 Threads / Instagram 登录入口",
-    auto_login_find_inputs: "正在查找账号和密码输入框",
-    auto_login_type_username: "正在输入账号",
-    auto_login_type_password: "正在输入密码",
-    auto_login_form_filled: "账号密码已填写完成",
-    auto_login_submit: "已提交登录，等待平台返回结果",
-    login_ready_confirm: "正在确认登录状态是否稳定",
-    login_verification_required: "平台要求验证码或安全验证，需要人工处理",
-    login_complete: "登录完成，已截图",
-    completion_node: "任务完成节点已识别",
-    threads_warmup: "Threads 养号动作执行中",
-    threads_warmup_backfill: "正在补目标并继续换内容",
-    threads_auto_reply: "Threads 自动回复执行中",
-    threads_auto_reply_backfill: "正在补回复目标",
-    threads_reply_button: "正在打开回复输入框",
-    threads_reply_focus: "正在聚焦回复输入框",
-    threads_reply_submit: "正在提交回复",
-    success: "任务已完成",
-    failed: "任务失败",
-    need_manual: "需要人工介入",
-    cancel: "任务已取消",
-    force_stop: "已强制关闭浏览器",
-    publish_login_probe: "发布前登录检测",
-    publish_batch_item_started: "批次发布进度",
-    publish_done: "发布完成",
-    threads_publish_open: "打开发布页面",
-    threads_publish_focus: "聚焦发布输入框",
-    threads_publish_submit: "提交发布内容",
-    manual_login_recovery_expired: "人工登录恢复已过期",
-    manual_recovery_expired: "人工恢复已过期",
-  };
-  if (map[stage]) return map[stage];
-  if (task && stage === "queued") return `${task} 已加入队列`;
-  return pdAutomationPublicText((row && row.message) || "", "执行步骤");
-}
-
-function pdAutomationPublicText(value, fallback = "步骤已记录") {
-  const raw = String(value || "").trim();
-  if (!raw) return fallback;
-  const map = {
-    "Task cancelled: user_cancel.": "任务已取消：用户主动取消。",
-    "Task cancelled: user_cancel_all.": "任务已取消：用户停止全部任务。",
-    "Background browser page opened for a non-disruptive check.": "已打开后台浏览器页面进行无干扰检测。",
-    "Background page unavailable; using the primary page.": "后台检测页面不可用，已改用当前浏览器页面继续检测。",
-    "Publish batch task started.": "批次发布任务已开始。",
-  };
-  if (map[raw]) return map[raw];
-  return /[\u3400-\u9fff]/.test(raw) ? raw : fallback;
-}
-
-function pdAutomationLogDetailText(row) {
-  const data = (row && row.data) || {};
-  const stage = String((row && row.stage) || "");
-  const parts = [];
-  if (data.strategy_label) parts.push(`策略：${data.strategy_label}`);
-  if (data.username) parts.push(`账号：${data.username}`);
-  if (data.clicked !== undefined) parts.push(data.clicked ? "已点击入口按钮" : "未找到入口按钮");
-  if (data.clicked_submit_button !== undefined) parts.push(data.clicked_submit_button ? "已点击提交按钮" : "已使用回车提交");
-  if (data.hold_seconds) parts.push(`保留窗口：${data.hold_seconds} 秒`);
-  if (data.liked !== undefined) parts.push(`点赞：${data.liked}`);
-  if (data.scrolled !== undefined) parts.push(`滚动：${data.scrolled}`);
-  if (data.browse_limit !== undefined) parts.push(`浏览篇数上限：${data.browse_limit}`);
-  if (data.like_backfills !== undefined) parts.push(`补点赞：${data.like_backfills}`);
-  if (data.comment_backfills !== undefined) parts.push(`补留言：${data.comment_backfills}`);
-  if (data.reply_backfills !== undefined) parts.push(`补回复：${data.reply_backfills}`);
-  if (data.replied !== undefined) parts.push(`回复：${data.replied}`);
-  if (data.scannedPosts !== undefined) parts.push(`扫描帖子：${data.scannedPosts}`);
-  if (data.completionReason) parts.push(`完成原因：${data.completionReason}`);
-  if (!parts.length && stage === "queued") parts.push("等待后台 Worker 执行");
-  if (!parts.length && stage === "running") parts.push("任务已被后台 Worker 领取");
-  if (!parts.length && stage === "prepare") parts.push("正在初始化任务参数");
-  if (!parts.length && stage === "browser_launch") parts.push("正在启动并加载独立浏览器 Profile");
-  if (!parts.length && stage === "success") parts.push("任务已完成并保存结果");
-  if (!parts.length && stage === "failed") parts.push("任务失败，请查看当前步骤或截图");
-  if (!parts.length && stage === "need_manual") parts.push("自动脚本已停在人工接管节点，请在打开的浏览器里完成验证或确认");
-  if (!parts.length && stage === "cancel") parts.push("用户已取消任务");
-  if (!parts.length && row && row.message) parts.push(pdAutomationPublicText(row.message));
-  return parts.join(" · ");
-}
-
-function pdAutomationTaskSummary(task) {
-  const payload = (task && task.payload) || {};
-  const result = (task && task.result) || {};
-  const parts = [];
-  if (payload.strategy_label) parts.push(`策略：${payload.strategy_label}`);
-  if (payload.login_username) parts.push(`登录账号：${payload.login_username}`);
-  if (payload.auto_submit) parts.push("模式：自动输入账号密码");
-  if (payload.max_posts) parts.push(`最多扫描：${payload.max_posts} 条`);
-  if (payload.browse_limit) parts.push(`浏览篇数上限：${payload.browse_limit} 篇`);
-  if (payload.max_replies) parts.push(`目标回复：${payload.max_replies} 条`);
-  if (result.browse_limit) parts.push(`浏览上限：${result.browse_limit} 篇`);
-  if (result.likeBackfills) parts.push(`补点赞：${result.likeBackfills}`);
-  if (result.commentBackfills) parts.push(`补留言：${result.commentBackfills}`);
-  if (result.replyBackfills) parts.push(`补回复：${result.replyBackfills}`);
-  if (result.replied !== undefined) parts.push(`已回复：${result.replied}`);
-  if (result.scannedPosts !== undefined) parts.push(`已扫描：${result.scannedPosts}`);
-  if (result.completionReason) parts.push(`完成原因：${result.completionReason}`);
-  if (!parts.length) parts.push("暂无额外参数");
-  return parts;
-}
-
-function pdAutomationLogScreenshot(row) {
-  const url = pdAdminWorkspaceUrl(row && row.screenshot_url);
-  if (!url || !pdAutomationLogIsCheckpointScreenshot(row)) return "";
-  const images = pdAutomationLogImages((personaDashboardAutomationLogData || {}).task, (personaDashboardAutomationLogData || {}).logs || []);
-  const index = Math.max(0, images.findIndex((item) => item.url === url));
-  return `
-    <button class="persona-auto-log-shot" type="button" data-auto-gallery-index="${pdEscape(String(index))}">
-      <img src="${pdEscape(pdAutomationScreenshotThumbnailUrl(url))}" alt="步骤截图" loading="lazy" />
-      <span>点击放大截图</span>
-    </button>
-  `;
-}
-
-function pdRenderAutomationLogMedia(task, logs) {
-  const payload = (task && task.payload) || {};
-  const taskId = String((task && task.id) || personaDashboardAutomationLogTaskId || "");
-  const items = pdAutomationLogImages(task, logs);
-  (payload.media_paths || []).forEach((path, index) => {
-    items.push({ label: `任务媒体 ${index + 1}`, url: pdAutomationLogMediaUrl(taskId, index), path });
-  });
-  const seen = new Set();
-  const html = items.filter((item) => {
-    const key = item.url || item.path;
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).map((item) => {
-    const galleryIndex = pdAutomationLogImages(task, logs).findIndex((image) => image.url === item.url);
-    const imageButton = galleryIndex >= 0;
-    return `
-    <${imageButton ? "button" : "a"} class="persona-auto-log-media-item" ${imageButton ? `type="button" data-auto-gallery-index="${pdEscape(String(galleryIndex))}"` : `href="${pdEscape(pdSafeLinkUrl(item.url))}" target="_blank" rel="noopener"`}>
-      ${imageButton ? `<img src="${pdEscape(pdAutomationScreenshotThumbnailUrl(item.url))}" alt="${pdEscape(item.label)}" loading="lazy" />` : ""}
-      <strong>${pdEscape(item.label)}</strong>
-      <span>点击预览</span>
-    </${imageButton ? "button" : "a"}>`;
-  }).join("");
-  return html || `<div class="small">暂无媒体或截图</div>`;
-}
-
-function pdRenderAutomationLogGallery(task, logs) {
-  const images = pdAutomationLogImages(task, logs);
-  if (!images.length || personaDashboardAutomationGalleryIndex < 0) return "";
-  const index = Math.max(0, Math.min(images.length - 1, Number(personaDashboardAutomationGalleryIndex) || 0));
-  const item = images[index] || {};
-  return `
-    <div class="persona-post-gallery persona-auto-image-gallery" role="dialog" aria-modal="true" aria-label="自动化截图相册">
-      <div class="persona-post-gallery-card">
-        <div class="persona-post-gallery-head">
-          <div>
-            <strong>截图相册</strong>
-            <span>${pdEscape(item.label || "截图")} · 第 ${pdEscape(String(index + 1))} / ${pdEscape(String(images.length))} 张</span>
-          </div>
-          <button class="ghost" type="button" id="personaAutoGalleryClose">关闭相册</button>
-        </div>
-        <div class="persona-post-gallery-stage">
-          <img src="${pdEscape(pdAdminWorkspaceUrl(item.url || ""))}" alt="${pdEscape(item.label || "截图")}" />
-        </div>
-        <div class="persona-post-gallery-actions">
-          <button class="ghost" type="button" id="personaAutoGalleryPrev" ${index <= 0 ? "disabled" : ""}>上一张</button>
-          <div class="persona-post-gallery-dots">
-            ${images.map((image, dotIndex) => `<button type="button" class="${dotIndex === index ? "is-active" : ""}" data-auto-gallery-dot="${dotIndex}" aria-label="查看第 ${dotIndex + 1} 张截图">${dotIndex + 1}</button>`).join("")}
-          </div>
-          <button class="ghost" type="button" id="personaAutoGalleryNext" ${index >= images.length - 1 ? "disabled" : ""}>下一张</button>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function pdRenderAutomationLogModal() {
-  if (!personaDashboardAutomationLogTaskId) return "";
-  const data = personaDashboardAutomationLogData || {};
-  const task = data.task || (personaDashboardAutomation.tasks || []).find((item) => String(item.id || "") === personaDashboardAutomationLogTaskId) || { id: personaDashboardAutomationLogTaskId };
-  const logs = data.logs || [];
-  const current = logs.length ? logs[logs.length - 1] : null;
-  const taskSummary = pdAutomationTaskSummary(task);
-  return `
-    <div class="persona-auto-log-modal" role="dialog" aria-modal="true" aria-label="自动化任务日志">
-      <div class="persona-auto-log-card">
-        <div class="persona-auto-log-head">
-          <div>
-            <strong>自动化任务日志</strong>
-            <span>${pdEscape(task.platform || "-")} / ${pdEscape(task.task_type || "-")} / ${pdEscape(task.id || "")}</span>
-          </div>
-          <div class="persona-auto-row-actions">
-            <button class="ghost" type="button" id="personaAutoLogRefresh">刷新</button>
-            <button class="ghost" type="button" id="personaAutoLogClose">关闭</button>
-          </div>
-        </div>
-        <div class="persona-auto-log-layout">
-          <section class="persona-auto-log-panel">
-            <h4>当前步骤</h4>
-            <div class="persona-auto-current-step persona-auto-current-step-${pdEscape((current && current.level) || task.status || "")}">
-              <strong>${pdEscape(current ? pdAutomationLogStepText(current) : pdAutomationStatusLabel(task.status || "queued"))}</strong>
-              <span>${pdEscape(current ? pdAutomationLogDetailText(current) : "等待任务开始")}</span>
-              ${current ? pdAutomationLogScreenshot(current) : ""}
-            </div>
-            <h4>任务信息</h4>
-            <div class="persona-auto-log-meta">
-              ${[
-                ["平台", task.platform || "-"],
-                ["任务", pdAutomationStatusLabel(task.task_type)],
-                ["状态", pdAutomationStatusLabel(task.status)],
-                ["更新时间", pdDate((task.updated_at || task.created_at || 0) * 1000)],
-                ["错误", task.error || "-"],
-              ].map(([label, value]) => `<div><span>${pdEscape(label)}</span><strong>${pdEscape(value)}</strong></div>`).join("")}
-            </div>
-            <h4>任务摘要</h4>
-            <div class="persona-auto-log-summary">
-              ${taskSummary.map((item) => `<span>${pdEscape(item)}</span>`).join("")}
-            </div>
-            <h4>截图预览</h4>
-            <div class="persona-auto-log-media">${pdRenderAutomationLogMedia(task, logs)}</div>
-          </section>
-          <section class="persona-auto-log-panel">
-            <h4>完整过程</h4>
-            <div class="persona-auto-log-list">
-              ${logs.map((row) => `
-                <article class="persona-auto-log-item">
-                  <div class="persona-auto-log-item-head">
-                    <span>${pdEscape(pdDate((row.created_at || 0) * 1000))}</span>
-                    <strong>${pdEscape(pdAutomationLogStepText(row))}</strong>
-                  </div>
-                  ${pdAutomationLogDetailText(row) ? `<div class="persona-auto-log-message">${pdEscape(pdAutomationLogDetailText(row))}</div>` : ""}
-                  ${pdAutomationLogScreenshot(row)}
-                </article>
-              `).join("") || `<div class="small">暂无日志</div>`}
-            </div>
-          </section>
-        </div>
-      </div>
-      ${pdRenderAutomationLogGallery(task, logs)}
-    </div>
-  `;
-}
-
 function pdRenderPostInfo(row) {
   const items = [
     ["平台", row.platform || "-"],
@@ -1730,34 +869,28 @@ function pdRenderPersonaTabs(visiblePersonas, selectedPersona) {
   const tabPersonas = visiblePersonas.slice(tabStart, tabStart + tabPageSize);
   tabs.innerHTML = `
     <div class="persona-tab-rail-head">
-      <strong>分栏</strong>
+      <strong>人设</strong>
       <span>${pdEscape(String(visiblePersonas.length))} 人设</span>
     </div>
     <div class="persona-tab-list">
       <div class="persona-tab-section persona-tab-section-system">
       <button class="persona-tab ${personaDashboardSelectedId === "__overview__" ? "is-active" : ""}" type="button" data-persona-id="__overview__">
         <span class="persona-tab-index">总</span>
-        <span class="persona-tab-main"><strong>总览首页</strong><span>全部图表与指标</span></span>
-        <span class="persona-tab-metrics"><b>${pdEscape(pdNumber((personaDashboardData.summary || {}).persona_count))}</b><span>人设</span></span>
+        <span class="persona-tab-main"><strong>总览</strong><span>全部人设数据</span></span>
       </button>
       </div>
       <div class="persona-tab-section persona-tab-section-personas">
       ${tabPersonas.map((persona, pageIndex) => {
         const index = tabStart + pageIndex;
-        const hot = persona.hot || {};
-        const counts = persona.counts || {};
         const key = pdPersonaKey(persona, index);
         const active = selectedPersona && pdPersonaKey(selectedPersona, index) === key;
+        const handle = String(persona.threads_account && persona.threads_account.handle || "").trim();
         return `
           <button class="persona-tab ${active ? "is-active" : ""}" type="button" data-persona-id="${pdEscape(key)}">
             <span class="persona-tab-index">${index + 1}</span>
             <span class="persona-tab-main">
               <strong>${pdEscape(persona.name || "未命名人设")}</strong>
-              <span>${pdEscape(persona.bound_pad_name || persona.bound_pad_code || "未绑定设备")}</span>
-            </span>
-            <span class="persona-tab-metrics">
-              <b>${pdEscape(pdNumber(hot.hot_score))}</b>
-              <span>${pdEscape(pdNumber(counts.published))} 发布</span>
+              <span>${pdEscape(handle ? `Threads · ${handle}` : "未绑定账号")}</span>
             </span>
           </button>
         `;
@@ -1773,8 +906,7 @@ function pdRenderPersonaTabs(visiblePersonas, selectedPersona) {
       <div class="persona-tab-section persona-tab-section-system persona-tab-section-bottom">
       <button class="persona-tab persona-tab-settings ${personaDashboardSelectedId === "__settings__" ? "is-active" : ""}" type="button" data-persona-id="__settings__">
         <span class="persona-tab-index">设</span>
-        <span class="persona-tab-main"><strong>设置</strong><span>分页、刷新与显示数量</span></span>
-        <span class="persona-tab-metrics"><b>${pdEscape(String(personaDashboardPageSize))}</b><span>每页</span></span>
+        <span class="persona-tab-main"><strong>显示设置</strong><span>推文分页数量</span></span>
       </button>
       </div>
     </div>
@@ -1782,9 +914,6 @@ function pdRenderPersonaTabs(visiblePersonas, selectedPersona) {
   tabs.querySelectorAll("[data-persona-id]").forEach((node) => {
     node.addEventListener("click", () => {
       const nextPersonaId = String(node.getAttribute("data-persona-id") || "");
-      if (nextPersonaId !== personaDashboardSelectedId) {
-        personaDashboardSelectedAutomationAccountId = "";
-      }
       personaDashboardSelectedId = nextPersonaId;
       personaDashboardPostPage = 1;
       pdRenderDashboard();
@@ -1851,6 +980,7 @@ function pdRenderDashboard() {
   const overview = pdEl("personaOverviewPane");
   const settings = pdEl("personaDashboardSettings");
   if (!data || !list || !empty) return;
+  pdRenderDashboardPlatformTabs(data);
   const visible = (data.personas || []).filter(pdMatches);
   pdApplyInitialPersonaSelection(visible);
   let selected = visible.find((persona, index) => pdPersonaKey(persona, index) === String(personaDashboardSelectedId || ""));
@@ -1877,28 +1007,11 @@ function pdRenderDashboard() {
   list.innerHTML = selected ? pdRenderPersonaCard(selected) : "";
   const prev = pdEl("personaPostPrev");
   const next = pdEl("personaPostNext");
-  const bind = pdEl("personaBindThreadsBtn");
-  const unbind = pdEl("personaUnbindThreadsBtn");
-  const accountPlatform = pdEl("personaAccountPlatform");
   const modalClose = pdEl("personaPostModalClose");
-  const autoLogClose = pdEl("personaAutoLogClose");
-  const autoLogRefresh = pdEl("personaAutoLogRefresh");
-  const autoGalleryClose = pdEl("personaAutoGalleryClose");
-  const autoGalleryPrev = pdEl("personaAutoGalleryPrev");
-  const autoGalleryNext = pdEl("personaAutoGalleryNext");
   const postSort = pdEl("personaPostSort");
   const postTypeFilter = pdEl("personaPostTypeFilter");
   if (prev) prev.addEventListener("click", () => { personaDashboardPostPage -= 1; pdRenderDashboard(); });
   if (next) next.addEventListener("click", () => { personaDashboardPostPage += 1; pdRenderDashboard(); });
-  if (bind && selected) bind.addEventListener("click", () => pdBindThreads(selected));
-  if (unbind && selected) unbind.addEventListener("click", () => pdUnbindThreads(selected));
-  if (accountPlatform) {
-    accountPlatform.addEventListener("change", () => {
-      personaDashboardAccountPlatform = String(accountPlatform.value || "threads");
-      localStorage.setItem("personaDashboardAccountPlatform", personaDashboardAccountPlatform);
-      pdRenderDashboard();
-    });
-  }
   if (postSort) {
     postSort.addEventListener("change", () => {
       personaDashboardPostSort = String(postSort.value || "hot_desc");
@@ -1919,40 +1032,6 @@ function pdRenderDashboard() {
     personaDashboardPostModalKey = "";
     personaDashboardGalleryIndex = -1;
     pdRenderDashboard();
-  });
-  if (autoLogClose) autoLogClose.addEventListener("click", () => {
-    personaDashboardAutomationLogTaskId = "";
-    personaDashboardAutomationLogData = null;
-    personaDashboardAutomationGalleryIndex = -1;
-    pdStopAutomationLogPoll();
-    pdRenderDashboard();
-  });
-  if (autoLogRefresh) autoLogRefresh.addEventListener("click", () => {
-    pdRefreshAutomationLogModal(personaDashboardAutomationLogTaskId);
-  });
-  if (autoGalleryClose) autoGalleryClose.addEventListener("click", () => {
-    personaDashboardAutomationGalleryIndex = -1;
-    pdRenderDashboard();
-  });
-  if (autoGalleryPrev) autoGalleryPrev.addEventListener("click", () => {
-    personaDashboardAutomationGalleryIndex -= 1;
-    pdRenderDashboard();
-  });
-  if (autoGalleryNext) autoGalleryNext.addEventListener("click", () => {
-    personaDashboardAutomationGalleryIndex += 1;
-    pdRenderDashboard();
-  });
-  list.querySelectorAll("[data-auto-gallery-index]").forEach((node) => {
-    node.addEventListener("click", () => {
-      personaDashboardAutomationGalleryIndex = Number(node.getAttribute("data-auto-gallery-index") || 0);
-      pdRenderDashboard();
-    });
-  });
-  list.querySelectorAll("[data-auto-gallery-dot]").forEach((node) => {
-    node.addEventListener("click", () => {
-      personaDashboardAutomationGalleryIndex = Number(node.getAttribute("data-auto-gallery-dot") || 0);
-      pdRenderDashboard();
-    });
   });
   list.querySelectorAll("[data-post-view]").forEach((node) => {
     node.addEventListener("click", () => {
@@ -1985,9 +1064,6 @@ function pdRenderDashboard() {
       if (selected && postKey) pdDeletePost(selected, postKey);
     });
   });
-  if (selected) {
-    pdBindAutomationEvents(selected, list);
-  }
 }
 
 function pdSetMsg(text, type = "ok") {
@@ -2003,7 +1079,6 @@ async function pdLoadDashboard(options = {}) {
   try {
     const data = await pdApi("/api/persona_dashboard/overview");
     personaDashboardData = data;
-    await pdLoadAutomationOverview({ silent: true });
     const updated = pdEl("personaDashboardUpdated");
     if (updated) {
       const latest = data.summary && data.summary.latest_data_at;
@@ -2028,489 +1103,6 @@ function pdStopAutoPoll() {
   if (!personaDashboardAutoPollTimer) return;
   window.clearInterval(personaDashboardAutoPollTimer);
   personaDashboardAutoPollTimer = 0;
-}
-
-async function pdLoadAutomationOverview(options = {}) {
-  const publishPolicyRequestSeq = window.VectoPublishRiskGuard?.beginRequest?.() || 0;
-  try {
-    const data = await pdApi("/api/persona_dashboard/automation/overview");
-    personaDashboardAutomation = data || { accounts: [], proxies: [], tasks: [], summary: {}, worker: {} };
-    window.VectoPublishRiskGuard?.updatePolicy?.(data?.publish_policy, { requestSeq: publishPolicyRequestSeq });
-  } catch (err) {
-    if (!(options && options.silent)) {
-      pdSetMsg(String((err && (err.detail || err.message)) || err || "自动化模块加载失败"), "err");
-    }
-    personaDashboardAutomation = { accounts: [], proxies: [], tasks: [], summary: {}, worker: {} };
-  }
-}
-
-function pdMergeAutomationTask(task) {
-  if (!task || !task.id) return;
-  if (!personaDashboardAutomation || typeof personaDashboardAutomation !== "object") {
-    personaDashboardAutomation = { accounts: [], proxies: [], tasks: [], summary: {}, worker: {} };
-  }
-  const tasks = Array.isArray(personaDashboardAutomation.tasks) ? personaDashboardAutomation.tasks.slice() : [];
-  const taskId = String(task.id || "");
-  const index = tasks.findIndex((item) => String((item && item.id) || "") === taskId);
-  if (index >= 0) tasks[index] = { ...tasks[index], ...task };
-  else tasks.unshift(task);
-  personaDashboardAutomation.tasks = tasks;
-}
-
-async function pdOpenAutomationLogModal(taskId) {
-  const id = String(taskId || "").trim();
-  if (!id) return;
-  personaDashboardAutomationLogTaskId = id;
-  personaDashboardAutomationLogData = null;
-  pdRenderDashboard();
-  pdStartAutomationLogPoll();
-  await pdRefreshAutomationLogModal(id);
-}
-
-async function pdRefreshAutomationLogModal(taskId) {
-  const id = String(taskId || personaDashboardAutomationLogTaskId || "").trim();
-  if (!id) return;
-  const scrollPanel = document.querySelector(".persona-auto-log-layout .persona-auto-log-panel:nth-child(2)");
-  const scrollState = scrollPanel ? {
-    top: scrollPanel.scrollTop,
-    bottom: scrollPanel.scrollHeight - scrollPanel.scrollTop - scrollPanel.clientHeight < 48,
-  } : null;
-  try {
-    const [taskData, logData] = await Promise.all([
-      pdApi(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(id)}`),
-      pdApi(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(id)}/logs`),
-    ]);
-    const task = logData.task || taskData.task || null;
-    const status = String((task && task.status) || "");
-    pdMergeAutomationTask(task);
-    if (["success", "failed", "cancelled"].includes(status)) {
-      await pdLoadAutomationOverview({ silent: true });
-      pdStopAutomationLogPoll();
-    }
-    personaDashboardAutomationLogData = { task, logs: logData.logs || [] };
-    pdRenderDashboard();
-    if (scrollState) {
-      requestAnimationFrame(() => {
-        const nextPanel = document.querySelector(".persona-auto-log-layout .persona-auto-log-panel:nth-child(2)");
-        if (!nextPanel) return;
-        nextPanel.scrollTop = scrollState.bottom ? nextPanel.scrollHeight : scrollState.top;
-      });
-    }
-  } catch (err) {
-    pdSetMsg(String((err && (err.detail || err.message)) || err || "读取日志失败"), "err");
-  }
-}
-
-function pdStartAutomationLogPoll() {
-  if (personaDashboardAutomationLogTimer) window.clearInterval(personaDashboardAutomationLogTimer);
-  personaDashboardAutomationLogTimer = window.setInterval(() => {
-    if (!personaDashboardAutomationLogTaskId || document.hidden) return;
-    pdRefreshAutomationLogModal(personaDashboardAutomationLogTaskId);
-  }, 3000);
-}
-
-function pdStopAutomationLogPoll() {
-  if (personaDashboardAutomationLogTimer) window.clearInterval(personaDashboardAutomationLogTimer);
-  personaDashboardAutomationLogTimer = 0;
-}
-
-function pdSelectedAutomationAccountId() {
-  const select = pdEl("personaAutoAccount");
-  return String((select && select.value) || "").trim();
-}
-
-function pdSelectedAutomationAccount() {
-  const id = pdSelectedAutomationAccountId();
-  return (personaDashboardAutomation.accounts || []).find((account) => String(account.id || "") === id) || null;
-}
-
-function pdNumberInputValue(id, fallback, min, max) {
-  const node = pdEl(id);
-  const raw = Number((node && node.value) || fallback || 0);
-  let value = Number.isFinite(raw) ? Math.round(raw) : Number(fallback || 0);
-  if (Number.isFinite(min)) value = Math.max(min, value);
-  if (Number.isFinite(max)) value = Math.min(max, value);
-  return value;
-}
-
-function pdTextAreaListValue(id) {
-  const node = pdEl(id);
-  return String((node && node.value) || "")
-    .split(/[\n,]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function pdApplyThreadsCustomPayload(payload, group) {
-  if (group === "threads_comment_reply") {
-    payload.reply_scope = "comments";
-    payload.max_age_days = pdNumberInputValue("personaAutoCommentDays", payload.max_age_days || 2, 1, 30);
-    payload.max_posts = pdNumberInputValue("personaAutoCommentPosts", payload.max_posts || 5, 1, 20);
-    payload.max_replies = pdNumberInputValue("personaAutoCommentReplies", payload.max_replies || 3, 1, 10);
-    const replyText = String((pdEl("personaAutoCommentReplyText") && pdEl("personaAutoCommentReplyText").value) || "").trim();
-    if (replyText) {
-      payload.reply_mode = "manual";
-      payload.reply_text = replyText;
-      payload.reply_templates = [replyText];
-    }
-  } else if (group === "threads_hot_reply") {
-    payload.reply_scope = "hot_posts";
-    payload.min_views = pdNumberInputValue("personaAutoHotMinViews", payload.min_views || 0, 0, 999999999);
-    payload.max_age_days = pdNumberInputValue("personaAutoHotDays", payload.max_age_days || 30, 1, 365);
-    payload.max_posts = pdNumberInputValue("personaAutoHotPosts", payload.max_posts || 5, 1, 20);
-    payload.max_replies = pdNumberInputValue("personaAutoHotReplies", payload.max_replies || 3, 1, 10);
-    const targetUrls = pdTextAreaListValue("personaAutoHotTargetUrls");
-    if (targetUrls.length) payload.target_urls = targetUrls;
-    const replyText = String((pdEl("personaAutoHotReplyText") && pdEl("personaAutoHotReplyText").value) || "").trim();
-    if (replyText) {
-      payload.reply_mode = "manual";
-      payload.reply_text = replyText;
-      payload.reply_templates = [replyText];
-    }
-  } else if (group === "threads_warmup") {
-    payload.browse_limit = pdNumberInputValue("personaAutoWarmupBrowseLimit", payload.browse_limit || payload.browse_count || payload.scroll_times || 30, 1, 300);
-    payload.scroll_times = payload.browse_limit;
-    payload.like_limit = pdNumberInputValue("personaAutoWarmupLikes", payload.like_limit || 0, 0, 100);
-    payload.max_comments = pdNumberInputValue("personaAutoWarmupComments", payload.max_comments || 0, 0, 50);
-    payload.comment_chance = payload.max_comments > 0 ? Math.max(Number(payload.comment_chance || 100), 1) : 0;
-    const templates = pdTextAreaListValue("personaAutoWarmupTemplates");
-    if (templates.length) payload.reply_templates = templates;
-  }
-  return payload;
-}
-
-function pdAutomationPayload(taskType, persona = null, platform = "", strategy = null, group = "") {
-  const target = String((pdEl("personaAutoTarget") && pdEl("personaAutoTarget").value) || "").trim();
-  const text = String((pdEl("personaAutoText") && pdEl("personaAutoText").value) || "").trim();
-  const mediaText = String((pdEl("personaAutoMedia") && pdEl("personaAutoMedia").value) || "").trim();
-  const mediaPaths = mediaText.split(",").map((item) => item.trim()).filter(Boolean);
-  const payload = {};
-  if (taskType === "publish_post") {
-    payload.caption = text;
-    payload.media_paths = mediaPaths;
-    payload.warmup = true;
-  } else if (taskType === "browse_profile") {
-    if (/^https?:\/\//i.test(target)) payload.target_url = target;
-    else payload.username = target;
-  } else if (taskType === "comment_post") {
-    payload.target_url = target;
-    payload.comment = text;
-  } else if (taskType === "reply_comment") {
-    payload.target_url = target;
-    payload.reply = text;
-  } else if (["like_post", "share_post", "repost_post"].includes(taskType)) {
-    payload.target_url = target;
-  } else if (taskType === "browse_feed") {
-    payload.scroll_times = 2;
-  } else if (taskType === "threads_warmup") {
-    payload.browse_limit = 30;
-    payload.scroll_times = 30;
-    payload.like_limit = 2;
-    payload.persona_name = (persona && persona.name) || "";
-  } else if (taskType === "threads_auto_reply") {
-    payload.max_posts = 5;
-    payload.max_replies = 3;
-    payload.max_age_days = 2;
-    payload.persona_name = (persona && persona.name) || "";
-  }
-  if (strategy && strategy.payload) Object.assign(payload, strategy.payload);
-  if (platform === "threads" && group) pdApplyThreadsCustomPayload(payload, group);
-  if (platform) payload.platform = platform;
-  return payload;
-}
-
-function pdValidateAutomationPayload(taskType, payload) {
-  if (taskType === "publish_post") {
-    const platform = String(payload.platform || "").trim().toLowerCase();
-    if (platform === "threads") {
-      if (!(payload.media_paths || []).length && !String(payload.caption || payload.content || payload.text || "").trim()) return "Threads 发帖至少要填写正文或媒体路径。";
-    } else if (!(payload.media_paths || []).length) {
-      return "发帖需要填写至少一个媒体路径。";
-    }
-  }
-  if (["comment_post", "reply_comment"].includes(taskType) && !payload.target_url) return "评论/回复需要填写目标帖子 URL。";
-  if (["comment_post", "reply_comment"].includes(taskType) && !(payload.comment || payload.reply)) return "评论/回复需要填写正文。";
-  if (["like_post", "share_post", "repost_post"].includes(taskType) && !payload.target_url) return "点赞/分享/转发需要填写目标帖子 URL。";
-  if (taskType === "browse_profile" && !payload.target_url && !payload.username) return "浏览主页需要填写 URL 或主页用户名。";
-  return "";
-}
-
-function pdBindAutomationEvents(persona, root) {
-  window.VectoPublishRiskGuard?.apply?.(root);
-  root.querySelectorAll("[data-auto-pane]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const pane = String(node.getAttribute("data-auto-pane") || "tasks");
-      personaDashboardAutomationPane = pane === "records" ? "records" : "tasks";
-      localStorage.setItem("personaDashboardAutomationPane", personaDashboardAutomationPane);
-      pdRenderDashboard();
-    });
-  });
-  const platformSelect = pdEl("personaAutoPlatform");
-  if (platformSelect) {
-    platformSelect.addEventListener("change", () => {
-      personaDashboardAccountPlatform = pdSelectedAutomationPlatform();
-      personaDashboardSelectedAutomationAccountId = "";
-      localStorage.setItem("personaDashboardAccountPlatform", personaDashboardAccountPlatform);
-      pdRenderDashboard();
-    });
-  }
-  const accountSelect = pdEl("personaAutoAccount");
-  if (accountSelect) {
-    accountSelect.addEventListener("change", () => {
-      personaDashboardSelectedAutomationAccountId = String(accountSelect.value || "");
-      pdRenderDashboard();
-    });
-  }
-  const accountEditor = pdEl("personaAutoOpenAccountEditor");
-  if (accountEditor) {
-    accountEditor.addEventListener("click", () => {
-      const account = pdSelectedAutomationAccount();
-      window.dispatchEvent(new CustomEvent("vecto:open-account-editor", {
-        detail: account
-          ? { mode: "edit", account }
-          : { mode: "create", platform: pdSelectedAutomationPlatform(), personaId: persona.id },
-      }));
-    });
-  }
-  root.querySelectorAll("[data-auto-account-action]").forEach((node) => {
-    node.addEventListener("click", async () => {
-      const action = String(node.getAttribute("data-auto-account-action") || "");
-      if (action !== "check_login") return;
-      const accountId = pdSelectedAutomationAccountId();
-      if (!accountId) {
-        pdSetMsg("请先选择执行账号。", "err");
-        return;
-      }
-      try {
-        pdSetMsg("正在创建账号状态任务...", "ok");
-        const created = await pdApi(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(accountId)}/${encodeURIComponent(action)}`, {
-          method: "POST",
-        });
-        await pdLoadAutomationOverview();
-        pdSetMsg("已创建登录检查任务。", "ok");
-        pdRenderDashboard();
-      } catch (err) {
-        pdSetMsg(String((err && (err.detail || err.message)) || err || "创建任务失败"), "err");
-      }
-    });
-  });
-  root.querySelectorAll("[data-auto-login]").forEach((node) => {
-    node.addEventListener("click", async () => {
-      const accountId = pdSelectedAutomationAccountId();
-      const account = pdSelectedAutomationAccount();
-      const platform = pdSelectedAutomationPlatform();
-      const loginUsername = String((account && (account.login_username || account.username)) || "").trim();
-      const hasSavedLoginPassword = !!(account && account.login_password_configured);
-      if (!accountId) {
-        pdSetMsg("请先选择执行账号。", "err");
-        return;
-      }
-      if (!loginUsername || !hasSavedLoginPassword) {
-        pdSetMsg("请先点击“编辑账号”，在统一账号界面配置登录账号和密码。", "err");
-        return;
-      }
-      try {
-        pdSetMsg("正在创建自动登录任务...", "ok");
-        const created = await pdApi("/api/persona_dashboard/automation/tasks", {
-          method: "POST",
-          body: pdBuildAutomaticLoginTaskBody(persona, accountId, platform, loginUsername, ""),
-        });
-        await pdLoadAutomationOverview();
-        const createdTaskId = String(created?.task?.id || "").trim();
-        if (createdTaskId) window.VectoConsoleNavigation?.openLiveBrowserTaskView?.(createdTaskId);
-        pdSetMsg("自动登录任务已创建。普通账号密码会自动输入；验证码/安全验证时请在打开的窗口里人工处理。", "ok");
-        pdRenderDashboard();
-      } catch (err) {
-        pdSetMsg(String((err && (err.detail || err.message)) || err || "自动登录任务创建失败"), "err");
-      }
-    });
-  });
-  root.querySelectorAll("[data-threads-strategy]").forEach((node) => {
-    node.addEventListener("change", () => {
-      const taskType = String(node.getAttribute("data-threads-strategy") || "");
-      const selected = String(node.value || "tg_default");
-      localStorage.setItem(pdThreadsStrategyStorageKey(taskType), selected);
-      pdRenderDashboard();
-    });
-  });
-  root.querySelectorAll("[data-threads-reply-tab]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const tab = String(node.getAttribute("data-threads-reply-tab") || "comment") === "hot" ? "hot" : "comment";
-      localStorage.setItem("personaDashboardThreadsReplyTab", tab);
-      pdRenderDashboard();
-    });
-  });
-  root.querySelectorAll("[data-auto-task]").forEach((node) => {
-    node.addEventListener("click", async () => {
-      const taskType = String(node.getAttribute("data-auto-task") || "");
-      const threadsGroup = String(node.getAttribute("data-threads-group") || "");
-      const accountId = pdSelectedAutomationAccountId();
-      const platform = pdSelectedAutomationPlatform();
-      if (!accountId) {
-        pdSetMsg("请先选择执行账号。", "err");
-        return;
-      }
-      const strategy = platform === "threads" && threadsGroup
-        ? pdThreadsStrategyById(threadsGroup, pdThreadsStrategySelectedId(threadsGroup))
-        : null;
-      const payload = pdAutomationPayload(taskType, persona, platform, strategy, threadsGroup);
-      const validation = pdValidateAutomationPayload(taskType, payload);
-      if (validation) {
-        pdSetMsg(validation, "err");
-        return;
-      }
-      if (taskType === "publish_post") {
-        const publishAllowed = window.VectoPublishRiskGuard?.ensureCapacity
-          ? await window.VectoPublishRiskGuard.ensureCapacity(1)
-          : true;
-        if (!publishAllowed) return;
-      }
-      try {
-        pdSetMsg(payload.strategy_label ? `正在创建任务：${payload.strategy_label}...` : "正在创建社媒自动化任务...", "ok");
-        const created = await pdApi("/api/persona_dashboard/automation/tasks", {
-          method: "POST",
-          body: { persona_id: persona.id, account_id: accountId, platform, task_type: taskType, payload },
-        });
-        const createdTaskId = String((created && created.task && created.task.id) || (created && created.id) || "").trim();
-        await pdLoadAutomationOverview();
-        pdSetMsg("任务已进入自动化队列。", "ok");
-        pdRenderDashboard();
-        if (taskType === "publish_post" && createdTaskId) {
-          window.VectoConsoleNavigation?.openLiveBrowserTaskView?.(createdTaskId);
-        }
-      } catch (err) {
-        pdSetMsg(String((err && (err.detail || err.message)) || err || "创建任务失败"), "err");
-      }
-    });
-  });
-  root.querySelectorAll("[data-auto-logs]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const taskId = String(node.getAttribute("data-auto-logs") || "");
-      if (!taskId) return;
-      pdOpenAutomationLogModal(taskId);
-    });
-  });
-  const selectAllLogs = pdEl("personaAutoSelectAllLogs");
-  if (selectAllLogs) {
-    selectAllLogs.addEventListener("click", () => {
-      const checks = Array.from(root.querySelectorAll("[data-auto-select-log]"));
-      const allSelected = checks.length && checks.every((item) => item.checked);
-      checks.forEach((item) => { item.checked = !allSelected; });
-    });
-  }
-  const clearSelectedLogs = pdEl("personaAutoClearSelectedLogs");
-  if (clearSelectedLogs) {
-    clearSelectedLogs.addEventListener("click", async () => {
-      const ids = Array.from(root.querySelectorAll("[data-auto-select-log]:checked")).map((item) => String(item.value || "")).filter(Boolean);
-      if (!ids.length) {
-        pdSetMsg("请先勾选要清除的日志。", "err");
-        return;
-      }
-      if (!await pdConfirm(`确认清除选中的 ${ids.length} 条自动化日志吗？`, { title: "清除选中日志", confirmText: "清除", tone: "danger" })) return;
-      try {
-        pdSetMsg("正在清除选中日志...", "ok");
-        for (const taskId of ids) {
-          await pdApi(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
-        }
-        await pdLoadAutomationOverview();
-        if (ids.includes(personaDashboardAutomationLogTaskId)) {
-          personaDashboardAutomationLogTaskId = "";
-          personaDashboardAutomationLogData = null;
-          pdStopAutomationLogPoll();
-        }
-        pdSetMsg("选中日志已清除。", "ok");
-        pdRenderDashboard();
-      } catch (err) {
-        pdSetMsg(String((err && (err.detail || err.message)) || err || "清除日志失败"), "err");
-      }
-    });
-  }
-  const clearAllLogs = pdEl("personaAutoClearAllLogs");
-  if (clearAllLogs) {
-    clearAllLogs.addEventListener("click", async () => {
-      if (!await pdConfirm("确认清除当前人设的全部外部任务日志吗？", { title: "清除全部日志", confirmText: "清除全部", tone: "danger" })) return;
-      try {
-        pdSetMsg("正在清除全部日志...", "ok");
-        await pdApi(`/api/persona_dashboard/automation/tasks?persona_id=${encodeURIComponent(persona.id)}`, { method: "DELETE" });
-        await pdLoadAutomationOverview();
-        personaDashboardAutomationLogTaskId = "";
-        personaDashboardAutomationLogData = null;
-        pdStopAutomationLogPoll();
-        pdSetMsg("当前人设的外部任务日志已清除。", "ok");
-        pdRenderDashboard();
-      } catch (err) {
-        pdSetMsg(String((err && (err.detail || err.message)) || err || "清除全部日志失败"), "err");
-      }
-    });
-  }
-  root.querySelectorAll("[data-auto-clear-log]").forEach((node) => {
-    node.addEventListener("click", async () => {
-      const taskId = String(node.getAttribute("data-auto-clear-log") || "");
-      if (!taskId) return;
-      if (!await pdConfirm("确认清除这条自动化日志吗？", { title: "清除单条日志", confirmText: "清除", tone: "danger" })) return;
-      try {
-        pdSetMsg("正在清除日志...", "ok");
-        await pdApi(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
-        await pdLoadAutomationOverview();
-        if (taskId === personaDashboardAutomationLogTaskId) {
-          personaDashboardAutomationLogTaskId = "";
-          personaDashboardAutomationLogData = null;
-          pdStopAutomationLogPoll();
-        }
-        pdSetMsg("日志已清除。", "ok");
-        pdRenderDashboard();
-      } catch (err) {
-        pdSetMsg(String((err && (err.detail || err.message)) || err || "清除日志失败"), "err");
-      }
-    });
-  });
-  root.querySelectorAll("[data-auto-cancel]").forEach((node) => {
-    node.addEventListener("click", async () => {
-      const taskId = String(node.getAttribute("data-auto-cancel") || "");
-      if (!taskId) return;
-      try {
-        pdSetMsg("正在取消任务并关闭浏览器...", "ok");
-        await pdApi(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(taskId)}/cancel`, {
-          method: "POST",
-          body: { reason: "用户从网页强制取消" },
-        });
-        await pdLoadAutomationOverview();
-        pdSetMsg("任务已取消。执行中的浏览器上下文已发送关闭信号。", "ok");
-        pdRenderDashboard();
-      } catch (err) {
-        pdSetMsg(String((err && (err.detail || err.message)) || err || "取消任务失败"), "err");
-      }
-    });
-  });
-}
-
-async function pdBindThreads(persona) {
-  const input = pdEl("personaThreadsInput");
-  const username = input ? input.value : "";
-  try {
-    pdSetMsg("正在保存 Threads 绑定...", "ok");
-    await pdApi(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/threads_binding`, {
-      method: "POST",
-      body: { username },
-    });
-    pdSetMsg("绑定已保存。可以点击刷新当前人设抓取数据。", "ok");
-    await pdLoadDashboard();
-  } catch (err) {
-    pdSetMsg(String((err && (err.detail || err.message)) || err || "保存绑定失败"), "err");
-  }
-}
-
-async function pdUnbindThreads(persona) {
-  try {
-    pdSetMsg("正在解除 Threads 绑定...", "ok");
-    await pdApi(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/threads_binding`, {
-      method: "DELETE",
-    });
-    pdSetMsg("账号绑定已解除，旧账号热点缓存已清理。", "ok");
-    await pdLoadDashboard();
-  } catch (err) {
-    pdSetMsg(String((err && (err.detail || err.message)) || err || "解除绑定失败"), "err");
-  }
 }
 
 async function pdDeletePost(persona, postKey) {
@@ -2576,15 +1168,6 @@ function pdBindDashboard(root) {
   const refreshAll = pdEl("btnPersonaDashboardRefreshAll");
   if (refresh) refresh.addEventListener("click", () => pdLoadDashboard());
   if (refreshAll) refreshAll.addEventListener("click", () => pdStartRefresh(""));
-  ["personaDashboardSearch", "personaDashboardPlatform", "personaDashboardRange"].forEach((id) => {
-    const node = pdEl(id);
-    if (!node) return;
-    node.addEventListener(id === "personaDashboardSearch" ? "input" : "change", () => {
-      personaDashboardPostPage = 1;
-      personaDashboardTabPage = 1;
-      pdRenderDashboard();
-    });
-  });
 }
 
 function pdMountDashboard(root) {

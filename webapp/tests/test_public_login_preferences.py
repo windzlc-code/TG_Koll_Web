@@ -177,6 +177,9 @@ class PublicLoginPreferenceTests(unittest.TestCase):
         self.assertTrue(response.json()["is_admin"])
         self.assertIsNotNone(client.cookies.get("admin_session_token"))
         self.assertIsNone(client.cookies.get("session_token"))
+        session = client.get("/api/auth/me", headers={"X-Admin-Console": "1"})
+        self.assertEqual(session.status_code, 200, session.text)
+        self.assertTrue(session.json()["is_admin"])
 
     def test_admin_entry_redirects_anonymous_users_to_shared_home_login(self):
         client = TestClient(self.app)
@@ -232,6 +235,27 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn("result?.is_admin === true", self.script)
         self.assertNotIn("adminLoginForm", self.auth_js)
         self.assertNotIn("/api/auth/admin-login", self.auth_js)
+
+    def test_shared_login_keeps_the_current_public_page_after_success(self):
+        home = (self.static_dir / "index.html").read_text(encoding="utf-8")
+        self.assertIn("登入後保留在目前頁面", home)
+        self.assertIn("登入並繼續", home)
+        self.assertNotIn("成功後直接進入 Web 任務控制台", home)
+        self.assertIn("refreshPublicSession", self.site_nav_script)
+        self.assertIn("await window.VectoSiteNavigation?.refreshPublicSession?.()", self.script)
+        self.assertNotIn(
+            "window.location.assign(result?.must_change_password ? passwordTarget : safeRedirect);",
+            self.script,
+        )
+
+    def test_logout_returns_to_a_public_page_without_opening_login_automatically(self):
+        profile_script = (self.static_dir / "assets" / "profile.js").read_text(encoding="utf-8")
+        admin_logout = self.admin_js.split("async function logoutAdmin()", 1)[1].split("function runtimeFormToPayload", 1)[0]
+        self.assertIn("function publicLogoutLocation()", self.site_nav_script)
+        self.assertNotIn("window.location.reload()", self.site_nav_script)
+        self.assertNotIn('"/?login=1&return_url=%2Fprofile.html"', profile_script)
+        self.assertIn('window.location.replace("/")', admin_logout)
+        self.assertNotIn('ADMIN_CONSOLE_SESSION ? "/admin" : "/"', self.console_js)
 
     def test_home_navigation_opens_console_or_existing_login_dialog(self):
         page = (self.static_dir / "index.html").read_text(encoding="utf-8")
@@ -343,7 +367,8 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('["home", "aboutVecto", "proxyMarket", "pricing"].includes(page)', self.site_nav_script)
         self.assertIn('url.searchParams.delete("admin_workspace_user_id")', self.site_nav_script)
         self.assertIn("function adminWorkspacePageUrl(value)", self.console_js)
-        self.assertIn('adminWorkspacePageUrl("/proxy-market.html")', self.console_js)
+        self.assertIn('data-proxy-market-open', self.console_js)
+        self.assertIn("openProxyMarketModal();", self.console_js)
         self.assertIn('adminWorkspacePageUrl(publishedUrl)', self.console_js)
         self.assertIn('adminWorkspacePageUrl(resultUrl)', self.console_js)
         self.assertIn('sessionStorage.getItem("vecto-admin-console-context") === "1"', self.automation_log_html)
@@ -369,7 +394,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('installUnifiedAccountMenu(header, header.dataset.sitePage || "home")', self.site_nav_script)
         self.assertIn("async function logoutPublicSession()", self.site_nav_script)
         self.assertIn('fetch("/api/auth/logout"', self.site_nav_script)
-        self.assertIn("window.location.reload()", self.site_nav_script)
+        self.assertIn("window.location.replace(publicLogoutLocation())", self.site_nav_script)
 
     def test_shared_navigation_keeps_language_and_uses_fixed_light_theme(self):
         for expected in ('id="languageToggle"', "site-language-icon"):

@@ -4,10 +4,6 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 CONSOLE_JS = (ROOT / "webapp" / "static" / "assets" / "console.js").read_text(encoding="utf-8")
-PERSONA_DASHBOARD_JS = (
-    ROOT / "webapp" / "static" / "assets" / "persona-dashboard.js"
-).read_text(encoding="utf-8")
-
 
 class ConsoleLogLocalizationTests(unittest.TestCase):
     def test_recent_raw_log_codes_have_chinese_labels(self):
@@ -34,12 +30,3 @@ class ConsoleLogLocalizationTests(unittest.TestCase):
         self.assertNotIn('return map[key] || statusLabel(key) || "日志";', CONSOLE_JS)
         self.assertIn('return "执行步骤";', CONSOLE_JS)
         self.assertIn('"执行步骤未完成，系统将按当前策略继续处理或重试。"', CONSOLE_JS)
-
-    def test_persona_log_modal_uses_the_same_chinese_fallback(self):
-        self.assertIn('publish_login_probe: "发布前登录检测"', PERSONA_DASHBOARD_JS)
-        self.assertIn('threads_publish_submit: "提交发布内容"', PERSONA_DASHBOARD_JS)
-        self.assertIn('return pdAutomationPublicText(', PERSONA_DASHBOARD_JS)
-
-
-if __name__ == "__main__":
-    unittest.main()

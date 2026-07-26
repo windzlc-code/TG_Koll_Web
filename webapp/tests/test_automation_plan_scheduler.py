@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from webapp.db import db, init_db
 import webapp.social_automation_api as social_api
@@ -120,6 +121,106 @@ class AutomationPlanSchedulerTests(unittest.TestCase):
         payloads = [json.loads(row["payload_json"]) for row in rows]
         self.assertEqual([item["_automation_plan_sequence"] for item in payloads], [1, 2])
 
+    def test_normal_publish_expands_the_oldest_unpublished_drafts_first(self):
+        payload = social_api.SocialAutomationPlanPayload(
+            persona_id="persona-1",
+            account_id="account-1",
+            platform="threads",
+            mode="list",
+            items=[
+                social_api.SocialAutomationPlanItemPayload(
+                    reservation_minutes=0,
+                    task_type="normal_publish",
+                    payload={"publish_count": 2},
+                ),
+                social_api.SocialAutomationPlanItemPayload(
+                    reservation_minutes=30,
+                    task_type="threads_warmup",
+                    payload={},
+                ),
+            ],
+        )
+        archive = {
+            "id": "persona-1",
+            "posts": [
+                {"id": "draft-later", "title": "Later", "content": "later draft", "createdAt": "2026-07-03T00:00:00Z"},
+                {"id": "already-published", "content": "old draft", "publishedAt": "2026-07-01T00:00:00Z"},
+                {"id": "draft-earliest", "title": "Earliest", "content": "earliest draft", "createdAt": "2026-07-01T00:00:00Z"},
+                {"id": "draft-third", "content": "third draft", "createdAt": "2026-07-04T00:00:00Z"},
+            ],
+        }
+
+        with patch.object(social_api, "_load_persona_archive", return_value=archive):
+            plan = social_api.create_social_automation_plan(payload, user=self.user)
+
+        with db() as conn:
+            rows = social_api._automation_plan_task_rows(conn, plan["id"], cycle_index=1)
+        self.assertEqual([row["task_type"] for row in rows], ["publish_post", "publish_post", "threads_warmup"])
+        task_payloads = [json.loads(row["payload_json"]) for row in rows]
+        self.assertEqual([item["archive_post_id"] for item in task_payloads[:2]], ["draft-earliest", "draft-later"])
+        self.assertEqual([item["_automation_plan_sequence"] for item in task_payloads], [1, 2, 3])
+        self.assertEqual([item["publish_sequence_index"] for item in task_payloads[:2]], [1, 2])
+        self.assertEqual([item["publish_sequence_total"] for item in task_payloads[:2]], [2, 2])
+        self.assertEqual(task_payloads[0]["publish_batch_id"], task_payloads[1]["publish_batch_id"])
+        self.assertEqual(task_payloads[0]["_automation_plan_item_id"], "item_1")
+
+    def test_normal_publish_rejects_invalid_counts_and_keeps_virtual_type_out_of_task_api(self):
+        for publish_count in (0, 6, True, "2"):
+            payload = social_api.SocialAutomationPlanPayload(
+                persona_id="persona-1",
+                account_id="account-1",
+                platform="threads",
+                items=[
+                    social_api.SocialAutomationPlanItemPayload(
+                        reservation_minutes=0,
+                        task_type="normal_publish",
+                        payload={"publish_count": publish_count},
+                    )
+                ],
+            )
+            with self.assertRaises(HTTPException) as rejected:
+                social_api.create_social_automation_plan(payload, user=self.user)
+            self.assertEqual(rejected.exception.status_code, 400)
+
+        with self.assertRaises(HTTPException) as task_rejected:
+            social_api.create_social_task(
+                social_api.SocialTaskPayload(
+                    persona_id="persona-1",
+                    account_id="account-1",
+                    platform="threads",
+                    task_type="normal_publish",
+                    payload={"publish_count": 1},
+                )
+            )
+        self.assertEqual(task_rejected.exception.status_code, 400)
+
+    def test_normal_publish_pauses_when_unpublished_drafts_are_insufficient(self):
+        payload = social_api.SocialAutomationPlanPayload(
+            persona_id="persona-1",
+            account_id="account-1",
+            platform="threads",
+            items=[
+                social_api.SocialAutomationPlanItemPayload(
+                    reservation_minutes=0,
+                    task_type="normal_publish",
+                    payload={"publish_count": 2},
+                )
+            ],
+        )
+        with patch.object(social_api, "_load_persona_archive", return_value={
+            "id": "persona-1",
+            "posts": [{"id": "only-draft", "content": "only one"}],
+        }):
+            with self.assertRaises(HTTPException) as rejected:
+                social_api.create_social_automation_plan(payload, user=self.user)
+        self.assertEqual(rejected.exception.status_code, 409)
+        with db() as conn:
+            row = conn.execute(
+                "SELECT status, last_error FROM social_automation_plans ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        self.assertEqual(row["status"], "paused")
+        self.assertIn("草稿", row["last_error"])
+
     def test_loop_plan_creates_next_cycle_after_current_cycle_finishes(self):
         plan = social_api.create_social_automation_plan(
             self._payload(mode="loop", offsets=(0,)),
@@ -186,6 +287,39 @@ class AutomationPlanSchedulerTests(unittest.TestCase):
                 user=self.user,
             )
         self.assertEqual(duplicate_time.exception.status_code, 400)
+
+    def test_reservation_window_is_relative_to_confirmation_and_includes_24_hours(self):
+        confirmed_at = 2_000_000_000
+        with patch.object(social_api, "_now", return_value=confirmed_at):
+            plan = social_api.create_social_automation_plan(
+                self._payload(offsets=(0, 1440)),
+                user=self.user,
+            )
+
+        with db() as conn:
+            rows = social_api._automation_plan_task_rows(conn, plan["id"], cycle_index=1)
+        self.assertEqual(
+            [int(row["scheduled_at"]) for row in rows],
+            [confirmed_at, confirmed_at + 24 * 60 * 60],
+        )
+
+        with self.assertRaises(ValidationError):
+            self._payload(offsets=(1470,))
+
+    def test_all_49_half_hour_slots_are_accepted(self):
+        offsets = tuple(range(0, 1441, 30))
+        plan = social_api.create_social_automation_plan(
+            self._payload(offsets=offsets),
+            user=self.user,
+        )
+
+        with db() as conn:
+            rows = social_api._automation_plan_task_rows(conn, plan["id"], cycle_index=1)
+        self.assertEqual(len(rows), 49)
+        self.assertEqual(
+            int(rows[-1]["scheduled_at"]) - int(rows[0]["scheduled_at"]),
+            24 * 60 * 60,
+        )
 
     def test_cancel_stops_only_the_selected_plan(self):
         first = social_api.create_social_automation_plan(

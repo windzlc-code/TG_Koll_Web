@@ -654,12 +654,25 @@ async function submitUserLogin(forceTakeover = false) {
         sessionStorage.removeItem("vecto-admin-workspace-user-id");
       } catch {}
     }
-    const pageRedirect = String(document.body.dataset.loginRedirect || "/console.html");
-    const safeRedirect = isAdmin ? "/admin" : safeLoginReturnUrl(pageRedirect);
+    const currentUrl = new URL(window.location.href);
+    currentUrl.searchParams.delete("login");
+    currentUrl.searchParams.delete("return_url");
+    const safeRedirect = safeLoginReturnUrl(
+      `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
+      "/",
+    );
     const passwordTarget = isAdmin
       ? `/change-password.html?admin_console=1&return_url=${encodeURIComponent(safeRedirect)}`
       : `/change-password.html?return_url=${encodeURIComponent(safeRedirect)}`;
-    window.location.assign(result?.must_change_password ? passwordTarget : safeRedirect);
+    if (result?.must_change_password) {
+      window.location.assign(passwordTarget);
+      return;
+    }
+    if (isAdmin) window.VectoSiteNavigation?.markAdminConsoleContext?.();
+    else window.VectoSiteNavigation?.clearAdminConsoleContext?.();
+    await window.VectoSiteNavigation?.refreshPublicSession?.();
+    closeLogin();
+    window.history.replaceState({}, "", safeRedirect);
   } catch (error) {
     const detail = apiErrorDetail(error);
     loginStatus.textContent = detail.message || "登入失敗，請檢查帳號與密碼。";

@@ -486,7 +486,7 @@
     window.VectoSiteNavigation?.setLogoutPending(true);
     try {
       await api("/api/auth/logout", { method: "POST" });
-      window.location.replace(isAdminSession ? "/admin" : "/?login=1&return_url=%2Fprofile.html");
+      window.location.replace("/");
     } catch (error) {
       window.VectoSiteNavigation?.setLogoutPending(
         false,

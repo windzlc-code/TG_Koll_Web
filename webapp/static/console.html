@@ -274,27 +274,14 @@
                 </div>
               </div>
             </div>
-            <div class="persona-dashboard-filters">
-              <div>
-                <label for="personaDashboardSearch">搜索人设</label>
-                <input id="personaDashboardSearch" type="search" placeholder="输入人设名、内容关键词" />
-              </div>
-              <div>
-                <label for="personaDashboardPlatform">平台</label>
-                <select id="personaDashboardPlatform">
-                  <option value="">全部平台</option>
-                  <option value="threads">Threads</option>
-                </select>
-              </div>
-              <div>
-                <label for="personaDashboardRange">时间范围</label>
-                <select id="personaDashboardRange">
-                  <option value="all">全部</option>
-                  <option value="7">最近 7 天</option>
-                  <option value="30">最近 30 天</option>
-                  <option value="90">最近 90 天</option>
-                </select>
-              </div>
+            <div class="persona-dashboard-filters persona-dashboard-platform-filter">
+              <span class="persona-dashboard-filter-label">平台</span>
+              <div
+                id="personaDashboardPlatformTabs"
+                class="account-pool-platforms account-pool-platform-tabs persona-account-platform-tabs persona-dashboard-platform-tabs"
+                role="tablist"
+                aria-label="平台筛选"
+              ></div>
             </div>
 
             <div id="personaDashboardMsg" class="msg"></div>

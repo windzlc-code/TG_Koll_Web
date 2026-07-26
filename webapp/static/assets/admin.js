@@ -2428,7 +2428,7 @@ async function logoutAdmin() {
   try {
     await api("/api/auth/logout", { method: "POST" });
     clearStoredAdminWorkspaceContext();
-    window.location.replace("/admin");
+    window.location.replace("/");
   } catch (err) {
     if (message) message.textContent = getErrorMessage(err);
     button.disabled = false;

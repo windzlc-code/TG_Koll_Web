@@ -2260,6 +2260,22 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(posts_resp.status_code, 200)
         self.assertEqual([item["id"] for item in posts_resp.json()["posts"]], ["post-1"])
 
+    def test_favorite_copy_preserves_the_source_numeric_title(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        archives[0]["posts"][0]["title"] = "第5篇"
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        add_resp = self.client.post("/api/persona_dashboard/personas/persona-1/favorites/post-1")
+        self.assertEqual(add_resp.status_code, 200)
+        self.assertEqual(add_resp.json()["post"]["title"], "第5篇")
+        self.assertEqual(add_resp.json()["post"]["source_post_id"], "post-1")
+
+        favorites_resp = self.client.get("/api/persona_dashboard/personas/persona-1/favorites")
+        self.assertEqual(favorites_resp.status_code, 200)
+        self.assertEqual(favorites_resp.json()["favorites"][0]["title"], "第5篇")
+
     def test_run_persona_hot_workflow_cli_returns_success_result(self):
         process = mock.Mock()
         process.communicate.return_value = ('{"ok": true, "candidates": []}', "")

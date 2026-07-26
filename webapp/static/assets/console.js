@@ -478,7 +478,7 @@ const state = {
   automationPlansError: "",
   automationPlanPending: false,
   automationPlanDrafts: {},
-  automationPlanAccountIds: {},
+  automationPlanEditorPayload: {},
   renderedPersonaId: "",
   personaCreateMode: false,
   personaCreate: null,
@@ -706,7 +706,7 @@ function clearTenantInMemoryState() {
   state.automationPlansError = "";
   state.automationPlanPending = false;
   state.automationPlanDrafts = {};
-  state.automationPlanAccountIds = {};
+  state.automationPlanEditorPayload = {};
   state.socialRefreshFetch = null;
   state.liveBrowserSessionsFetch = null;
   state.socialCancelAllPending = false;
@@ -2224,7 +2224,11 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
       firstInput.focus();
       if (typeof firstInput.select === "function") firstInput.select();
     } else {
-      modal.querySelector("[data-console-modal-confirm]")?.focus();
+      (
+        modal.querySelector("[data-console-modal-confirm]")
+        || modal.querySelector(".console-modal-close")
+        || modal.querySelector("button[data-console-modal-cancel]")
+      )?.focus();
     }
     modal.addEventListener("click", (event) => {
       if (event.target.closest("[data-console-modal-cancel]")) {
@@ -3212,7 +3216,15 @@ function personaDraftOptionLabel(post, index = 0) {
 
 function personaDraftDisplayTitle(post, index = 0, rows = []) {
   const title = String(post?.title || "").trim();
-  if (/^第\d+篇$/.test(title)) {
+  const sourceMeta = post?.source_meta || post?.sourceMeta || {};
+  const isFavoriteCopy = Boolean(String(
+    post?.source_post_id
+    || post?.sourcePostId
+    || sourceMeta.favoriteSourcePostId
+    || sourceMeta.favorite_source_post_id
+    || "",
+  ).trim());
+  if (/^第\d+篇$/.test(title) && !isFavoriteCopy) {
     const total = Array.isArray(rows) && rows.length ? rows.length : Math.max(1, Number(index || 0) + 1);
     return `第${Math.max(1, total - Number(index || 0))}篇`;
   }
@@ -5710,6 +5722,13 @@ function shouldRefreshAccountStatus() {
 async function refreshAccountStatusOnce() {
   if (!shouldRefreshAccountStatus()) return;
   await refreshSocialAccountsOnly();
+  if (
+    state.activeModule === "publishing"
+    && normalizedPublishMode(state.simpleBranches.publishing) === "automation_tasks"
+    && state.automationPlans.some((plan) => ["active", "materializing"].includes(String(plan?.status || "")))
+  ) {
+    await Promise.all([loadAutomationTasksShared(), loadAutomationPlansShared()]);
+  }
 }
 
 function syncAccountStatusAutoRefresh() {
@@ -7146,7 +7165,7 @@ function renderPersonaMemoryOptions(persona, selectedIds = []) {
       <div class="persona-memory-toolbar">
         <strong>已选 <span id="personaMemorySelectedCount">${selected.size}</span> / ${safeRows.length}</strong>
         <div class="persona-memory-actions" aria-label="人设记忆操作">
-          <button type="button" data-persona-create-memory title="新建记忆" aria-label="新建记忆">${renderPlusIcon()}</button>
+          <button type="button" class="unified-action-icon-button" data-persona-create-memory title="新建记忆" aria-label="新建记忆">${renderPlusIcon()}</button>
           <button type="button" class="bulk-selection-icon-button" data-persona-memory-bulk="all" title="全选记忆" aria-label="全选记忆" ${safeRows.length ? "" : "disabled"}>${renderSelectAllIcon()}</button>
           <button type="button" class="bulk-selection-icon-button" data-persona-memory-bulk="clear" title="清空选择" aria-label="清空选择" ${selected.size ? "" : "disabled"}>${renderClearSelectionIcon()}</button>
         </div>
@@ -7290,7 +7309,7 @@ function renderPublishLinkSettings(persona = selectedPersona()) {
         <strong>${esc(preset?.name || "不添加链接")}</strong>
         <small title="${esc(summary)}">${esc(summary)}</small>
       </span>
-      <button type="button" data-persona-open-links title="链接设置" aria-label="链接设置" ${persona ? "" : "disabled"}>
+      <button type="button" class="unified-action-icon-button" data-persona-open-links title="链接设置" aria-label="链接设置" ${persona ? "" : "disabled"}>
         <svg class="ui-link-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
           <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
@@ -7945,7 +7964,6 @@ function renderPersonaContentOverview(persona, account, profile) {
         <section class="persona-profile-account-panel" aria-label="账号设置">
           <div class="persona-profile-data-panel-head">
             <strong>账号设置</strong>
-            <span>选择平台和执行账号</span>
           </div>
           ${renderPersonaAccountPanelV2(persona, account, profile, "binding")}
         </section>
@@ -8064,7 +8082,6 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
       <div class="persona-inline-panel">
         <div class="persona-head-copy">
           <strong>账号设置</strong>
-          <span class="persona-panel-intro">集中查看和编辑当前人设可用账号；账号绑定统一在账号管理中维护。</span>
         </div>
         ${renderPersonaAccountPanelV2(persona, account, profile, "binding")}
       </div>`;
@@ -8102,9 +8119,11 @@ function renderPersonaAccountPanelV2(persona, account, profile, step) {
   const platformOptions = personaAutomationPlatformOptions(persona);
   const renderPlatformTab = (value) => {
     const rows = personaAutomationAccounts(persona, value);
-    return `<button type="button" class="${platform === value ? "is-active" : ""}" data-persona-account-platform="${esc(value)}">
+    const isActive = platform === value;
+    return `<button type="button" class="${isActive ? "is-active" : ""}" data-persona-account-platform="${esc(value)}" role="tab" aria-selected="${isActive ? "true" : "false"}" aria-label="${esc(`${platformLabel(value)}，${rows.length} 个账号`)}">
+      ${renderAccountPoolPlatformIcon(value)}
       <strong>${esc(platformLabel(value))}</strong>
-      <span>${esc(`${rows.length} 个账号`)}</span>
+      <small>${esc(`${rows.length} 个账号`)}</small>
     </button>`;
   };
   const addAccountButton = `<button type="button" class="account-pool-add-button" data-persona-account-add data-persona-account-platform="${esc(platform)}">
@@ -8116,9 +8135,8 @@ function renderPersonaAccountPanelV2(persona, account, profile, step) {
       <section class="account-pool-platform-panel persona-account-platform-panel">
         <div class="account-pool-section-head">
           <strong>平台</strong>
-          <span>切换账号池</span>
         </div>
-        <div class="account-pool-platforms" aria-label="账号平台">
+        <div class="account-pool-platforms account-pool-platform-tabs persona-account-platform-tabs" data-persona-account-platform-tabs role="tablist" aria-label="账号平台">
           ${platformOptions.map(renderPlatformTab).join("")}
         </div>
       </section>
@@ -8134,7 +8152,11 @@ function renderPersonaAccountPanelV2(persona, account, profile, step) {
           ${accounts.length ? accounts.map((item) => renderAccountPoolCard(item, {
             variant: "persona-settings",
             active: String(item.id || "") === String(selectedAccount?.id || ""),
-          })).join("") : `<div class="empty-state">当前平台尚未绑定账号。可直接添加账号，保存后会自动绑定到当前人设。</div>`}
+          })).join("") : `<div class="account-pool-empty-state persona-account-empty-state" role="status">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="9" cy="8" r="3.25"></circle><path d="M3.75 19c.55-3.1 2.4-4.85 5.25-4.85s4.7 1.75 5.25 4.85M18.5 11.5v6M15.5 14.5h6"></path></svg>
+            <strong>暂无账号</strong>
+            <span>点击添加账号，开始配置当前平台</span>
+          </div>`}
         </div>
       </section>
     </div>
@@ -8439,6 +8461,22 @@ function renderNetworkIcon() {
     <path d="M3.6 15h16.8"></path>
     <path d="M12 3a14 14 0 0 1 0 18"></path>
     <path d="M12 3a14 14 0 0 0 0 18"></path>
+  </svg>`;
+}
+
+function renderProxyMarketIcon() {
+  return `<svg class="ui-action-icon ui-proxy-market-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 10.5h16v9H4z"></path>
+    <path d="M3 10.5 5 5h14l2 5.5"></path>
+    <path d="M4 10.5c0 1.55 1.12 2.5 2.5 2.5s2.5-.95 2.5-2.5c0 1.55 1.12 2.5 2.5 2.5s2.5-.95 2.5-2.5c0 1.55 1.12 2.5 2.5 2.5s2.5-.95 2.5-2.5"></path>
+    <path d="M8 19.5v-4h4v4"></path>
+  </svg>`;
+}
+
+function renderCustomProxyIcon() {
+  return `<svg class="ui-action-icon ui-custom-proxy-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 7h16M4 12h16M4 17h16"></path>
+    <circle cx="8" cy="7" r="1.5"></circle><circle cx="15" cy="12" r="1.5"></circle><circle cx="11" cy="17" r="1.5"></circle>
   </svg>`;
 }
 
@@ -8783,20 +8821,37 @@ function renderAutomationAccountTabs(persona, platform) {
     </div>`;
 }
 
-function renderAutomationStepTabs(activeStep) {
+function renderAutomationStepTabs(activeStep, { includeBinding = true } = {}) {
   const steps = [
     ["binding", "账号绑定"],
     ["reply_comment", "自动回复评论"],
     ["reply_hot", "自动回复热点"],
     ["warmup", "养号"],
-  ];
+  ].filter(([value]) => includeBinding || value !== "binding");
   return `
     <div class="automation-capsule-tabs automation-step-tabs" aria-label="切换自动化操作">
       ${steps.map(([value, label]) => `<button type="button" class="${activeStep === value ? "is-active" : ""}" data-automation-step="${esc(value)}">${esc(label)}</button>`).join("")}
     </div>`;
 }
 
-function renderUnifiedAutomationModule() {
+function renderPersonaAutomationAction({
+  kind,
+  actionMode = "execute",
+  busy = false,
+  busyStartedAt = 0,
+  selectedAccount = null,
+} = {}) {
+  if (actionMode === "plan") {
+    return `<button type="button" class="primary" data-automation-plan-add-configured="${esc(kind)}">添加该任务</button>`;
+  }
+  const isWarmup = kind === "warmup";
+  const busyLabel = isWarmup ? "养号执行中" : "自动回复执行中";
+  const idleLabel = isWarmup ? "提交养号任务" : "提交自动回复任务";
+  return `<button type="button" data-persona-run-threads="${esc(kind)}" aria-busy="${busy ? "true" : "false"}" ${selectedAccount && !busy ? "" : "disabled"}>${busy ? renderBusyButtonContent(busyLabel, true, busyStartedAt) : idleLabel}</button>`;
+}
+
+function renderUnifiedAutomationModule(options = null) {
+  const { embedded = false, actionMode = "execute" } = options || {};
   const persona = selectedPersona();
   const currentStep = ["binding", "reply_comment", "reply_hot", "warmup"].includes(currentBranch("automation"))
     ? currentBranch("automation")
@@ -8821,7 +8876,9 @@ function renderUnifiedAutomationModule() {
       : "threads_comment_reply";
   const strategy = personaThreadsStrategy(strategyGroup);
   const customStrategy = personaThreadsStrategyIsCustom(strategyGroup);
-  const payload = strategy?.payload || {};
+  const payload = actionMode === "plan"
+    ? { ...(strategy?.payload || {}), ...(state.automationPlanEditorPayload || {}) }
+    : (strategy?.payload || {});
   let operationPanel = "";
   if (!persona) {
     operationPanel = `<div class="empty-state">请先创建并选择人设。</div>`;
@@ -8859,15 +8916,21 @@ function renderUnifiedAutomationModule() {
             </label>` : ""}
           </div>
           ${currentStep === "reply_hot" ? `<label>指定目标 URL
-            <textarea id="personaAutoTargetUrls" rows="3" placeholder="可选，多个链接换行填写。"></textarea>
+            <textarea id="personaAutoTargetUrls" rows="3" placeholder="可选，多个链接换行填写。">${esc(Array.isArray(payload.target_urls) ? payload.target_urls.join("\n") : String(payload.target_urls || ""))}</textarea>
           </label>` : ""}
           <label>固定回复内容
-            <textarea id="personaAutoReplyText" rows="3" placeholder="留空则按当前人设自动生成。"></textarea>
+            <textarea id="personaAutoReplyText" rows="3" placeholder="留空则按当前人设自动生成。">${esc(Array.isArray(payload.reply_templates) ? payload.reply_templates.join("\n") : String(payload.reply_templates || ""))}</textarea>
           </label>
         ` : ""}
         ${personaThreadsStrategyDetail(strategyGroup)}
         <div class="row-actions">
-          <button type="button" data-persona-run-threads="${currentStep === "reply_hot" ? "reply_hot" : "reply_comment"}" aria-busy="${replyBusy ? "true" : "false"}" ${selectedAccount && !replyBusy ? "" : "disabled"}>${replyBusy ? renderBusyButtonContent("自动回复执行中", true, replyBusyStartedAt) : "提交自动回复任务"}</button>
+          ${renderPersonaAutomationAction({
+            kind: currentStep === "reply_hot" ? "reply_hot" : "reply_comment",
+            actionMode,
+            busy: replyBusy,
+            busyStartedAt: replyBusyStartedAt,
+            selectedAccount,
+          })}
         </div>
       </div>`;
   } else {
@@ -8892,13 +8955,26 @@ function renderUnifiedAutomationModule() {
             </label>
           </div>
           <label>养号留言模板
-            <textarea id="personaAutoReplyText" rows="3" placeholder="可选，多条换行。留空则按人设自动生成。"></textarea>
+            <textarea id="personaAutoReplyText" rows="3" placeholder="可选，多条换行。留空则按人设自动生成。">${esc(Array.isArray(payload.reply_templates) ? payload.reply_templates.join("\n") : String(payload.reply_templates || ""))}</textarea>
           </label>
         ` : ""}
         ${personaThreadsStrategyDetail("threads_warmup")}
         <div class="row-actions">
-          <button type="button" data-persona-run-threads="warmup" aria-busy="${warmupBusy ? "true" : "false"}" ${selectedAccount && !warmupBusy ? "" : "disabled"}>${warmupBusy ? renderBusyButtonContent("养号执行中", true, warmupBusyStartedAt) : "提交养号任务"}</button>
+          ${renderPersonaAutomationAction({
+            kind: "warmup",
+            actionMode,
+            busy: warmupBusy,
+            busyStartedAt: warmupBusyStartedAt,
+            selectedAccount,
+          })}
         </div>
+      </div>`;
+  }
+  if (embedded) {
+    return `
+      <div class="automation-work-panel automation-plan-shared-config">
+        ${renderAutomationStepTabs(currentStep, { includeBinding: actionMode !== "plan" })}
+        ${operationPanel}
       </div>`;
   }
   return `
@@ -8946,6 +9022,10 @@ function renderUploadDropzone(id, {
       <label class="upload-zone-picker" for="${esc(id)}">
         <strong>${esc(label)}</strong>
         <p>${esc(hint || "拖动文件到这里，或点击选择文件。")}</p>
+      </label>
+      <label class="account-pool-add-button upload-zone-mobile-picker" for="${esc(id)}" title="添加媒体" aria-label="添加媒体">
+        <span aria-hidden="true"></span>
+        <strong>添加媒体</strong>
       </label>
       <div class="file-strip" data-upload-file-list="${esc(id)}" hidden></div>
     </div>`;
@@ -9676,20 +9756,9 @@ function renderPublishHeaderRow(mode, account) {
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 
 function automationPlanTaskOptions(platform = "threads") {
-  if (String(platform || "").toLowerCase() === "instagram") {
-    return [
-      ["browse_feed", "浏览动态"],
-      ["browse_profile", "浏览主页"],
-      ["comment_post", "评论帖子"],
-      ["reply_comment", "回复评论"],
-      ["like_post", "点赞帖子"],
-      ["share_post", "分享帖子"],
-      ["repost_post", "转发帖子"],
-    ];
-  }
+  if (String(platform || "threads").trim().toLowerCase() !== "threads") return [];
   return [
-    ["publish_post", "发布内容"],
-    ["browse_feed", "浏览动态"],
+    ["normal_publish", "普通任务"],
     ["threads_reply_comment", "自动回复评论"],
     ["threads_reply_hot", "自动回复热点"],
     ["threads_warmup", "养号"],
@@ -9699,17 +9768,28 @@ function automationPlanTaskOptions(platform = "threads") {
 function automationPlanTaskLabel(taskType = "") {
   if (taskType === "publish_post") return "发布内容";
   if (taskType === "threads_auto_reply") return "自动回复";
+  if (taskType === "browse_feed") return "浏览动态";
   const options = [...automationPlanTaskOptions("threads"), ...automationPlanTaskOptions("instagram")];
   return options.find(([value]) => value === taskType)?.[1] || taskType || "未选择";
 }
 
+function automationPlanTaskDescription(taskType = "") {
+  return ({
+    browse_feed: "打开账号首页 Feed，仅滚动浏览，不执行回复或养号互动",
+    normal_publish: "按当前人设未发布草稿的列表顺序发布；仅设置发布数量",
+    threads_reply_comment: "复用自动回复评论配置",
+    threads_reply_hot: "复用自动回复热点配置",
+    threads_warmup: "复用账号养号配置",
+  })[taskType] || "打开现有任务配置";
+}
+
 function automationPlanDefaultItem(previousMinutes = -30, platform = "threads") {
-  const nextMinutes = Math.min(1410, Math.max(0, Number(previousMinutes || 0) + 30));
+  const nextMinutes = Math.min(1440, Math.max(0, Number(previousMinutes || 0) + 30));
   return {
     id: `item_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
     reservationMinutes: nextMinutes,
-    taskType: automationPlanTaskOptions(platform)[0][0],
-    expanded: true,
+    taskType: "",
+    configured: false,
     params: {},
   };
 }
@@ -9730,39 +9810,42 @@ function createAutomationPlanDraft(accountId = "", platform = "threads") {
 function currentAutomationPlanDraft(persona = selectedPersona()) {
   const accounts = persona ? personaAccounts(persona) : [];
   const personaId = String(persona?.id || "").trim();
-  const selectedAccountId = String(state.automationPlanAccountIds?.[personaId] || "");
-  const account = accounts.find((item) => String(item.id || "") === selectedAccountId)
-    || publishAccountForPersona(persona)
+  const account = publishAccountForPersona(persona)
     || accounts[0]
     || null;
   const accountId = String(account?.id || "");
-  if (personaId) state.automationPlanAccountIds[personaId] = accountId;
   const key = automationPlanDraftKey(personaId, accountId);
-  const draft = state.automationPlanDrafts[key] && typeof state.automationPlanDrafts[key] === "object"
+  const unboundKey = automationPlanDraftKey(personaId, "");
+  const unboundDraft = state.automationPlanDrafts[unboundKey];
+  let draft = state.automationPlanDrafts[key] && typeof state.automationPlanDrafts[key] === "object"
     ? state.automationPlanDrafts[key]
-    : createAutomationPlanDraft(accountId, account?.platform || "threads");
+    : null;
+  if (!draft && accountId && unboundDraft && typeof unboundDraft === "object") {
+    draft = unboundDraft;
+    state.automationPlanDrafts[key] = draft;
+    delete state.automationPlanDrafts[unboundKey];
+  }
+  if (!draft) draft = createAutomationPlanDraft(accountId, account?.platform || "threads");
   draft.accountId = String(account?.id || "");
   draft.mode = draft.mode === "loop" ? "loop" : "list";
   if (!Array.isArray(draft.items) || !draft.items.length) {
     draft.items = [automationPlanDefaultItem(-30, account?.platform || "threads")];
+  }
+  for (const item of draft.items) {
+    if (String(item?.taskType || "") !== "browse_feed") continue;
+    item.taskType = "";
+    item.configured = false;
+    item.params = {};
   }
   state.automationPlanDrafts[key] = draft;
   return { draft, account, accounts, key, personaId };
 }
 
 function automationReservationLabel(minutes = 0) {
-  const value = Math.max(0, Math.min(1410, Number(minutes || 0)));
-  if (!value) return "立即预约";
-  const target = new Date(Date.now() + value * 60 * 1000);
-  const clock = target.toLocaleString("zh-CN", {
-    timeZone: SHANGHAI_TIME_ZONE,
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-  return `${value < 60 ? `${value} 分钟后` : `${Math.floor(value / 60)} 小时${value % 60 ? " 30 分钟" : ""}后`} · ${clock}`;
+  const value = Math.max(0, Math.min(1440, Number(minutes || 0)));
+  if (!value) return "立即执行";
+  if (value < 60) return `${value} 分钟后`;
+  return `${Math.floor(value / 60)} 小时${value % 60 ? " 30 分钟" : ""}后`;
 }
 
 function normalizeAutomationPlanReservations(items = []) {
@@ -9770,22 +9853,59 @@ function normalizeAutomationPlanReservations(items = []) {
   rows.forEach((item, index) => {
     const remaining = rows.length - index - 1;
     const minimum = index ? Number(rows[index - 1]?.reservationMinutes || 0) + 30 : 0;
-    const maximum = 1410 - remaining * 30;
+    const maximum = 1440 - remaining * 30;
     const rounded = Math.round(Number(item?.reservationMinutes || 0) / 30) * 30;
     item.reservationMinutes = Math.max(minimum, Math.min(maximum, Number.isFinite(rounded) ? rounded : minimum));
   });
   return rows;
 }
 
-function automationReservationOptions(selected = 0, minimum = 0, maximum = 1410) {
-  const floor = Math.max(0, Math.min(1410, Number(minimum || 0)));
-  const ceiling = Math.max(floor, Math.min(1410, Number(maximum ?? 1410)));
-  const current = Math.max(floor, Math.min(ceiling, Number(selected || 0)));
-  const rows = [];
-  for (let minutes = floor; minutes <= ceiling; minutes += 30) {
-    rows.push(`<option value="${minutes}" ${minutes === current ? "selected" : ""}>${esc(automationReservationLabel(minutes))}</option>`);
+function automationPlanTimeChoices(draft, index) {
+  normalizeAutomationPlanReservations(draft.items);
+  const minimum = index ? Number(draft.items[index - 1]?.reservationMinutes || 0) + 30 : 0;
+  const maximum = 1440 - (draft.items.length - index - 1) * 30;
+  const choices = [];
+  for (let minutes = minimum; minutes <= maximum; minutes += 30) choices.push(minutes);
+  return choices;
+}
+
+function positionAutomationPlanTimeDropdown(index) {
+  window.requestAnimationFrame(() => {
+    const menu = document.querySelector(`[data-automation-plan-time-menu="${index}"]`);
+    const shell = menu?.closest(".automation-plan-time-dropdown-shell");
+    if (!menu || !shell) return;
+    const availableBelow = window.innerHeight - shell.getBoundingClientRect().bottom - 72;
+    menu.classList.toggle("opens-up", availableBelow < Math.min(menu.scrollHeight, 210));
+    const selected = menu.querySelector(".automation-plan-time-option.is-selected");
+    if (selected) {
+      menu.scrollTop = Math.max(0, selected.offsetTop - (menu.clientHeight - selected.offsetHeight) / 2);
+      selected.focus({ preventScroll: true });
+    }
+  });
+}
+
+function closeAutomationPlanTimePicker({ focusTrigger = false } = {}) {
+  const openMenu = document.querySelector("[data-automation-plan-time-menu]");
+  if (!openMenu) return false;
+  const index = Number(openMenu.dataset.automationPlanTimeMenu);
+  const { draft } = currentAutomationPlanDraft();
+  draft.openTimePickerIndex = -1;
+  renderSimpleFlowModule("publishing");
+  if (focusTrigger) {
+    window.requestAnimationFrame(() => {
+      document.querySelector(`[data-automation-plan-time="${index}"]`)?.focus({ preventScroll: true });
+    });
   }
-  return rows.join("");
+  return true;
+}
+
+function openAutomationPlanTimePicker(index) {
+  const { draft } = currentAutomationPlanDraft();
+  if (!draft.items[index]) return;
+  const nextOpen = Number(draft.openTimePickerIndex) === index ? -1 : index;
+  draft.openTimePickerIndex = nextOpen;
+  renderSimpleFlowModule("publishing");
+  if (nextOpen >= 0) positionAutomationPlanTimeDropdown(nextOpen);
 }
 
 function renderAutomationModeIcon(mode = "list") {
@@ -9794,76 +9914,315 @@ function renderAutomationModeIcon(mode = "list") {
     : `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 6h12"></path><path d="M8 12h12"></path><path d="M8 18h12"></path><path d="M3 6h.01"></path><path d="M3 12h.01"></path><path d="M3 18h.01"></path></svg>`;
 }
 
-function renderAutomationPlanItemParams(item, index) {
+function renderAutomationPlanCheckIcon() {
+  return `<svg class="automation-plan-check-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12 4 4L19 6"></path></svg>`;
+}
+
+function cloneAutomationPlanPayload(payload = {}) {
+  return JSON.parse(JSON.stringify(payload && typeof payload === "object" ? payload : {}));
+}
+
+function automationPlanStepForTask(taskType = "") {
+  if (taskType === "threads_reply_hot") return "reply_hot";
+  if (taskType === "threads_reply_comment" || taskType === "threads_auto_reply") return "reply_comment";
+  return "warmup";
+}
+
+function automationPlanTaskForStep(step = "") {
+  if (step === "reply_hot") return "threads_reply_hot";
+  if (step === "reply_comment") return "threads_reply_comment";
+  return "threads_warmup";
+}
+
+function automationPlanConfiguredSummary(item = {}) {
+  if (!item.taskType) return "选择后打开原任务配置";
+  if (!item.configured) return "尚未完成配置";
+  const strategyId = String(item.params?.strategy_id || "").trim();
+  if (!strategyId) return "已使用现有任务默认配置";
+  const strategy = Object.values(PERSONA_THREADS_STRATEGIES)
+    .flat()
+    .find((entry) => entry.id === strategyId);
+  return strategy?.label || "已保存原任务配置";
+}
+
+function syncAutomationPlanStrategyFromItem(item = {}) {
+  const step = automationPlanStepForTask(item.taskType);
+  const group = step === "reply_hot"
+    ? "threads_hot_reply"
+    : step === "warmup"
+      ? "threads_warmup"
+      : "threads_comment_reply";
+  const strategyId = String(item.params?.strategy_id || "");
+  if (strategyId) setPersonaStrategyId(group, strategyId);
+}
+
+function renderAutomationPlanSharedConfigurator() {
+  return renderUnifiedAutomationModule({ embedded: true, actionMode: "plan" });
+}
+
+function automationPlanNormalPublishCount(item = {}) {
+  const count = Number(item?.params?.publish_count);
+  return Number.isInteger(count) && count >= 1 && count <= 5 ? count : 1;
+}
+
+function openAutomationPlanNormalPublishConfigurator(index) {
+  const { draft } = currentAutomationPlanDraft();
+  const item = draft.items[index];
+  if (!item) return;
+  const currentCount = automationPlanNormalPublishCount(item);
+  const request = openConsoleModal({
+    title: "配置普通任务",
+    message: "系统会按当前人设未发布草稿的列表顺序，取前 N 篇加入原有发布队列。",
+    contentHtml: `
+      <div class="form-grid">
+        <label>发布数量
+          <select data-automation-plan-normal-publish-count>
+            ${[1, 2, 3, 4, 5].map((count) => `<option value="${count}" ${count === currentCount ? "selected" : ""}>${count} 篇</option>`).join("")}
+          </select>
+        </label>
+        <p class="field-note">仅发布草稿库中尚未发布的内容；草稿不足时不会创建不完整计划。</p>
+      </div>`,
+    confirmText: "添加该任务",
+    cancelText: "取消",
+    modalKey: "automation-plan-normal-publish-config",
+  });
+  const modal = $("consoleModal");
+  modal?.addEventListener("click", (event) => {
+    if (!event.target.closest("[data-console-modal-confirm]")) return;
+    const count = Number(modal.querySelector("[data-automation-plan-normal-publish-count]")?.value || currentCount);
+    item.taskType = "normal_publish";
+    item.params = { publish_count: Number.isInteger(count) && count >= 1 && count <= 5 ? count : 1 };
+    item.configured = true;
+  });
+  void request.then((confirmed) => {
+    if (!confirmed) return;
+    renderSimpleFlowModule("publishing");
+  }).catch(() => {});
+}
+
+function openAutomationPlanTaskConfigurator(index, options = null) {
+  const { draft, account } = currentAutomationPlanDraft();
+  const item = draft.items[index];
+  if (!item) return;
+  const requestedStep = String(options?.initialStep || "");
+  const step = ["reply_comment", "reply_hot", "warmup"].includes(requestedStep)
+    ? requestedStep
+    : automationPlanStepForTask(item.taskType);
+  state.personaAutomationPlatform = "threads";
+  state.preferredAccountId = String(account?.id || "");
+  state.simpleBranches.automation = step;
+  if (!requestedStep) syncAutomationPlanStrategyFromItem(item);
+  state.automationPlanEditorPayload = requestedStep ? {} : cloneAutomationPlanPayload(item.params || {});
+  const request = openConsoleModal({
+    title: "配置自动化任务",
+    message: account
+      ? "这里直接复用账号管理中的原任务配置，保存后加入无人值守列表。"
+      : "可以先配置并添加任务；绑定账号后再创建计划。",
+    contentHtml: renderAutomationPlanSharedConfigurator(),
+    showCancel: false,
+    showConfirm: false,
+    modalKey: "automation-plan-task-config",
+  });
+  void request.catch(() => {});
+  const modal = $("consoleModal");
+  const dialog = modal?.querySelector(".console-modal-dialog");
+  dialog?.classList.add("automation-plan-task-config-modal");
+  const rerender = () => {
+    const content = modal?.querySelector(".console-modal-content");
+    if (!content) return;
+    content.innerHTML = renderAutomationPlanSharedConfigurator();
+    content.querySelectorAll("strong, p, label, button, [title], [aria-label], [placeholder]").forEach(markConsoleUiElement);
+    translateConsoleLanguage(content, currentLanguage());
+  };
+  modal?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const stepButton = event.target.closest("[data-automation-step]");
+    if (stepButton) {
+      const nextStep = String(stepButton.dataset.automationStep || "warmup");
+      state.simpleBranches.automation = ["reply_comment", "reply_hot", "warmup"].includes(nextStep) ? nextStep : "warmup";
+      const nextGroup = nextStep === "reply_hot"
+        ? "threads_hot_reply"
+        : nextStep === "warmup"
+          ? "threads_warmup"
+          : "threads_comment_reply";
+      state.automationPlanEditorPayload = cloneAutomationPlanPayload(personaThreadsStrategy(nextGroup)?.payload || {});
+      rerender();
+      return;
+    }
+    const addButton = event.target.closest("[data-automation-plan-add-configured]");
+    if (!addButton) return;
+    const kind = String(addButton.dataset.automationPlanAddConfigured || "warmup");
+    item.taskType = automationPlanTaskForStep(kind);
+    item.params = cloneAutomationPlanPayload(buildPersonaThreadsTaskPayload(kind));
+    item.configured = true;
+    state.automationPlanEditorPayload = cloneAutomationPlanPayload(item.params);
+    closeConsoleModal(true);
+    renderSimpleFlowModule("publishing");
+    showMsg("commandMsg", `${automationPlanTaskLabel(item.taskType)}已加入自动化任务列表。`, true);
+  });
+  modal?.addEventListener("change", (event) => {
+    if (event.target?.id !== "personaStrategySelect") return;
+    const strategyGroup = String(event.target.dataset.strategyGroup || "");
+    if (strategyGroup) setPersonaStrategyId(strategyGroup, event.target.value || "");
+    state.automationPlanEditorPayload = cloneAutomationPlanPayload(personaThreadsStrategy(strategyGroup)?.payload || {});
+    rerender();
+  });
+}
+
+function openAutomationPlanTaskDetails(index) {
+  const { draft } = currentAutomationPlanDraft();
+  draft.openTimePickerIndex = -1;
+  const item = draft.items[index];
+  const taskType = String(item?.taskType || "");
+  if (!taskType) return;
   const params = item.params || {};
-  const field = (key, label, attrs = "") => `
-    <label>${esc(label)}
-      <input ${attrs} value="${esc(params[key] ?? "")}" data-automation-plan-param="${esc(key)}" data-automation-plan-index="${index}" />
-    </label>`;
-  if (item.taskType === "publish_post") {
-    return `<label>发布内容<textarea rows="4" data-automation-plan-param="content" data-automation-plan-index="${index}" placeholder="填写无人值守发布的正文">${esc(params.content || "")}</textarea></label>`;
-  }
-  if (item.taskType === "threads_reply_comment" || item.taskType === "threads_reply_hot") {
-    return `
-      <div class="automation-plan-param-grid">
-        ${field("max_age_days", "查看天数", 'type="number" min="1" max="365"')}
-        ${field("max_posts", "扫描篇数", 'type="number" min="1" max="20"')}
-        ${field("max_replies", "回复上限", 'type="number" min="1" max="10"')}
-        ${item.taskType === "threads_reply_hot" ? field("min_views", "最低浏览", 'type="number" min="0"') : ""}
-      </div>
-      ${item.taskType === "threads_reply_hot" ? `<label>指定目标 URL
-        <textarea rows="3" data-automation-plan-param="target_urls" data-automation-plan-index="${index}" placeholder="可选，多个链接换行填写">${esc(params.target_urls || "")}</textarea>
-      </label>` : ""}
-      <label>固定回复内容
-        <textarea rows="3" data-automation-plan-param="reply_templates" data-automation-plan-index="${index}" placeholder="可选，多条内容换行填写；留空按人设生成">${esc(params.reply_templates || "")}</textarea>
-      </label>`;
-  }
-  if (item.taskType === "threads_warmup") {
-    return `<div class="automation-plan-param-grid">
-      ${field("browse_limit", "浏览上限", 'type="number" min="1" max="300"')}
-      ${field("like_limit", "点赞上限", 'type="number" min="0" max="100"')}
-      ${field("max_comments", "留言上限", 'type="number" min="0" max="50"')}
-    </div>
-    <label>养号留言模板
-      <textarea rows="3" data-automation-plan-param="reply_templates" data-automation-plan-index="${index}" placeholder="可选，多条内容换行填写；留空按人设生成">${esc(params.reply_templates || "")}</textarea>
-    </label>`;
-  }
-  if (item.taskType === "browse_feed") {
-    return `<div class="automation-plan-param-grid">${field("browse_limit", "浏览次数", 'type="number" min="1" max="300"')}</div>`;
-  }
-  const needsContent = ["comment_post", "reply_comment"].includes(item.taskType);
-  return `
-    ${field("target_url", "目标 URL")}
-    ${needsContent ? `<label>执行内容<textarea rows="3" data-automation-plan-param="content" data-automation-plan-index="${index}">${esc(params.content || "")}</textarea></label>` : ""}`;
+  const request = openConsoleModal({
+    title: "查看任务明细",
+    message: automationPlanTaskDescription(taskType),
+    contentHtml: `
+      <dl class="automation-plan-detail-list">
+        <div><dt>任务类型</dt><dd>${esc(automationPlanTaskLabel(taskType))}</dd></div>
+        ${taskType === "normal_publish" ? `<div><dt>发布数量</dt><dd>${esc(automationPlanNormalPublishCount({ params }))} 篇</dd></div>` : ""}
+        ${["threads_reply_comment", "threads_reply_hot", "threads_warmup"].includes(taskType) ? `<div><dt>当前配置</dt><dd>${esc(automationPlanConfiguredSummary(item))}</dd></div>` : ""}
+      </dl>`,
+    confirmText: "关闭",
+    showCancel: false,
+    extraActions: [{ value: "edit", text: "编辑任务", primary: true }],
+    modalKey: "automation-plan-task-details",
+  });
+  void request.then((action) => {
+    if (action !== "edit") return;
+    if (taskType === "normal_publish") openAutomationPlanNormalPublishConfigurator(index);
+    else if (["threads_reply_comment", "threads_reply_hot", "threads_warmup"].includes(taskType)) openAutomationPlanTaskConfigurator(index);
+    else openAutomationPlanTaskPicker(index);
+  }).catch(() => {});
+}
+
+function automationPlanPickerTaskType(item = {}) {
+  return ["threads_reply_comment", "threads_reply_hot", "threads_warmup"].includes(String(item.taskType || ""))
+    ? "automation_mode"
+    : String(item.taskType || "");
+}
+
+function openAutomationPlanTaskPicker(index) {
+  const { draft } = currentAutomationPlanDraft();
+  draft.openTimePickerIndex = -1;
+  const item = draft.items[index];
+  if (!item) return;
+  const options = [["normal_publish", "普通任务"], ["automation_mode", "自动化模式"]];
+  const request = openConsoleModal({
+    title: "选择任务",
+    message: "选择任务后直接进入现有配置，不会创建另一套参数。",
+    contentHtml: `
+      <div class="automation-plan-task-picker-grid">
+        ${options.map(([taskType, label]) => `
+          <button type="button" class="automation-plan-task-option ${automationPlanPickerTaskType(item) === taskType ? "is-selected" : ""}" data-automation-plan-task-option="${esc(taskType)}">
+            <span>
+              <strong>${esc(label)}</strong>
+              <small>${esc(taskType === "automation_mode" ? "统一配置自动回复评论、自动回复热点或养号" : automationPlanTaskDescription(taskType))}</small>
+            </span>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m9 18 6-6-6-6"></path></svg>
+          </button>`).join("")}
+      </div>`,
+    showCancel: false,
+    showConfirm: false,
+    modalKey: "automation-plan-task-picker",
+  });
+  void request.catch(() => {});
+  const modal = $("consoleModal");
+  modal?.querySelector(".console-modal-dialog")?.classList.add("automation-plan-task-picker-modal");
+  modal?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const option = event.target.closest("[data-automation-plan-task-option]");
+    if (!option) return;
+    const taskType = String(option.dataset.automationPlanTaskOption || "");
+    if (taskType === "normal_publish") {
+      closeConsoleModal(taskType);
+      window.requestAnimationFrame(() => openAutomationPlanNormalPublishConfigurator(index));
+      return;
+    }
+    if (taskType === "automation_mode") {
+      const hasExistingAutomationTask = ["threads_reply_comment", "threads_reply_hot", "threads_warmup"].includes(item.taskType);
+      closeConsoleModal(taskType);
+      window.requestAnimationFrame(() => openAutomationPlanTaskConfigurator(
+        index,
+        hasExistingAutomationTask ? null : { initialStep: "warmup" },
+      ));
+      return;
+    }
+  });
 }
 
 function renderAutomationPlanRows(draft, platform) {
   normalizeAutomationPlanReservations(draft.items);
   return draft.items.map((item, index) => {
-    const minimum = index ? Number(draft.items[index - 1]?.reservationMinutes || 0) + 30 : 0;
-    const maximum = 1410 - (draft.items.length - index - 1) * 30;
     const options = automationPlanTaskOptions(platform);
-    if (!options.some(([value]) => value === item.taskType)) {
-      item.taskType = options[0][0];
-      item.params = {};
-    }
+    const selectedTask = options.some(([value]) => value === item.taskType) ? item.taskType : "";
+    const timeMenuOpen = Number(draft.openTimePickerIndex) === index;
+    const timeMenuId = `automationPlanTimeMenu${index}`;
+    const timeChoices = timeMenuOpen ? automationPlanTimeChoices(draft, index) : [];
+    const selectedMinutes = Number(item.reservationMinutes || 0);
     return `
-      <li class="automation-plan-row" data-automation-plan-row="${index}">
+      <li class="automation-plan-row ${timeMenuOpen ? "is-time-menu-open" : ""}" data-automation-plan-row="${index}">
         <div class="automation-plan-row-main">
-          <span class="automation-plan-sequence">${index + 1}</span>
-          <label>预约时间
-            <select data-automation-plan-time="${index}">${automationReservationOptions(item.reservationMinutes, minimum, maximum)}</select>
-          </label>
-          <label>任务
-            <select data-automation-plan-task="${index}">${optionTags(options, item.taskType)}</select>
-          </label>
-          <button type="button" class="automation-plan-param-toggle" data-automation-plan-expand="${index}" aria-expanded="${item.expanded ? "true" : "false"}">
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.07A1.7 1.7 0 0 0 9 19.37a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.07 14H3v-4h.07A1.7 1.7 0 0 0 4.63 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63 1.7 1.7 0 0 0 10 3.07V3h4v.07A1.7 1.7 0 0 0 15 4.63a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9 1.7 1.7 0 0 0 20.93 10H21v4h-.07A1.7 1.7 0 0 0 19.4 15Z"></path></svg>
-            <span>参数</span>
-          </button>
-          <button type="button" class="automation-plan-remove" data-automation-plan-remove="${index}" ${draft.items.length === 1 ? "disabled" : ""} aria-label="移除第 ${index + 1} 项">${renderTrashIcon()}</button>
+          <div class="automation-plan-time-cell"><span><b>${index + 1}</b> 时间</span>
+            <div class="automation-plan-time-dropdown-shell">
+              <button
+                type="button"
+                class="automation-plan-time-picker"
+                data-automation-plan-time="${index}"
+                aria-haspopup="listbox"
+                aria-expanded="${timeMenuOpen ? "true" : "false"}"
+                aria-controls="${timeMenuId}"
+              >
+                <strong>${esc(automationReservationLabel(item.reservationMinutes))}</strong>
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"></path></svg>
+              </button>
+              ${timeMenuOpen ? `
+                <div
+                  id="${timeMenuId}"
+                  class="automation-plan-time-dropdown"
+                  data-automation-plan-time-menu="${index}"
+                  role="listbox"
+                  aria-label="预约时间"
+                >
+                  ${timeChoices.map((minutes) => `
+                    <button
+                      type="button"
+                      class="automation-plan-time-option ${minutes === selectedMinutes ? "is-selected" : ""}"
+                      data-automation-plan-time-option="${minutes}"
+                      role="option"
+                      aria-selected="${minutes === selectedMinutes ? "true" : "false"}"
+                    >
+                      <span>${esc(automationReservationLabel(minutes))}</span>
+                      ${minutes === selectedMinutes ? renderAutomationPlanCheckIcon() : ""}
+                    </button>`).join("")}
+                </div>` : ""}
+            </div>
+          </div>
+          <div class="automation-plan-task-cell">
+            <span class="automation-plan-field-label">任务</span>
+            <div class="automation-plan-task-control">
+              <strong class="automation-plan-task-value">${esc(selectedTask ? automationPlanTaskLabel(selectedTask) : "未添加")}</strong>
+              <button
+                type="button"
+                class="automation-plan-task-detail unified-action-icon-button"
+                data-automation-plan-view-details="${index}"
+                title="查看任务明细"
+                aria-label="查看任务明细"
+                ${selectedTask ? "" : "disabled"}
+              >${renderEyeIcon()}</button>
+              <button
+                type="button"
+                class="automation-plan-task-picker unified-action-icon-button"
+                data-automation-plan-task-picker="${index}"
+                title="${selectedTask ? "更换任务" : "添加任务"}"
+                aria-label="${selectedTask ? "更换任务" : "添加任务"}"
+              >${selectedTask ? renderReplaceIcon() : renderPlusIcon()}</button>
+              <button type="button" class="automation-plan-remove unified-action-icon-button danger" data-automation-plan-remove="${index}" ${draft.items.length === 1 && !selectedTask ? "disabled" : ""} aria-label="移除第 ${index + 1} 项">${renderTrashIcon()}</button>
+            </div>
+          </div>
         </div>
-        ${item.expanded ? `<div class="automation-plan-params">${renderAutomationPlanItemParams(item, index)}</div>` : ""}
       </li>`;
   }).join("");
 }
@@ -9872,10 +10231,48 @@ function automationPlanStatusLabel(status = "") {
   return ({
     active: "执行中",
     materializing: "正在创建",
+    preparing: "准备中",
+    queued: "排队中",
+    running: "执行中",
+    need_manual: "等待处理",
+    success: "已完成",
+    failed: "执行失败",
     completed: "已完成",
     cancelled: "已停止",
     paused: "已暂停",
   })[status] || status || "未知";
+}
+
+function automationPlanRunTasks(plan = {}) {
+  const planId = String(plan?.id || "");
+  const cycleIndex = Number(plan?.cycle_index || 0);
+  return (state.socialTasks || [])
+    .filter((task) => (
+      String(task?.payload?._automation_plan_id || "") === planId
+      && Number(task?.payload?._automation_plan_cycle || 0) === cycleIndex
+    ))
+    .sort((left, right) => Number(left?.payload?._automation_plan_sequence || 0) - Number(right?.payload?._automation_plan_sequence || 0));
+}
+
+function automationPlanRunState(task = {}) {
+  const status = String(task?.status || "").toLowerCase();
+  if (["running", "need_manual"].includes(status)) return "running";
+  if (["preparing", "queued"].includes(status)) return "queued";
+  return status || "unknown";
+}
+
+function renderAutomationPlanRunRows(plan = {}) {
+  const tasks = automationPlanRunTasks(plan);
+  if (!tasks.length) return "";
+  return `<ol class="automation-plan-run-list" aria-label="计划执行队列">${tasks.map((task) => {
+    const stateKey = automationPlanRunState(task);
+    const sequence = Number(task?.payload?._automation_plan_sequence || 0);
+    return `<li class="automation-plan-run-row is-${esc(stateKey)}">
+      <span class="automation-plan-run-index" aria-label="第 ${sequence} 项：${esc(automationPlanStatusLabel(stateKey))}">${sequence}</span>
+      <strong>${esc(automationPlanTaskLabel(task?.task_type || ""))}</strong>
+      <small>${esc(automationPlanStatusLabel(stateKey))}</small>
+    </li>`;
+  }).join("")}</ol>`;
 }
 
 function renderAutomationPlanHistory(persona = selectedPersona()) {
@@ -9895,12 +10292,13 @@ function renderAutomationPlanHistory(persona = selectedPersona()) {
         <span>${esc(accountDisplayName(selectedSocialAccount(plan.account_id)))} · ${esc(automationPlanStatusLabel(plan.status))}${plan.next_run_at ? ` · 下次 ${esc(formatScheduledTime(plan.next_run_at))}` : ""}</span>
       </div>
       <span>${esc((plan.items || []).map((item) => automationPlanTaskLabel(item.task_type)).join(" → "))}</span>
+      ${renderAutomationPlanRunRows(plan)}
       ${["active", "materializing"].includes(plan.status) ? `<button type="button" class="danger" data-automation-plan-cancel="${esc(plan.id)}">停止计划</button>` : ""}
     </article>`).join("")}</div>`;
 }
 
 function renderAutomationTaskPlanPanel(persona = selectedPersona()) {
-  const { draft, account, accounts } = currentAutomationPlanDraft(persona);
+  const { draft, account } = currentAutomationPlanDraft(persona);
   const platform = String(account?.platform || "threads").toLowerCase();
   const busy = Boolean(state.automationPlanPending);
   return `
@@ -9909,9 +10307,9 @@ function renderAutomationTaskPlanPanel(persona = selectedPersona()) {
         <div class="automation-plan-head">
           <div>
             <strong>无人值守计划</strong>
-            <span>预约时间按 30 分钟递进，最远可安排到 24 小时内。</span>
+            <span>确认创建计划时开始计时，每项按 30 分钟递进，最远安排到 24 小时内。</span>
           </div>
-          <div class="automation-plan-mode" role="group" aria-label="自动化执行模式">
+          <div class="automation-capsule-tabs automation-plan-mode" role="group" aria-label="自动化执行模式">
             ${["list", "loop"].map((mode) => `
               <button type="button" class="${draft.mode === mode ? "is-active" : ""}" data-automation-plan-mode="${mode}" aria-pressed="${draft.mode === mode ? "true" : "false"}">
                 ${renderAutomationModeIcon(mode)}
@@ -9919,14 +10317,13 @@ function renderAutomationTaskPlanPanel(persona = selectedPersona()) {
               </button>`).join("")}
           </div>
         </div>
-        <label>执行账号
-          <select id="automationPlanAccount">
-            ${accounts.length ? accounts.map((item) => `<option value="${esc(item.id)}" ${String(item.id) === String(account?.id || "") ? "selected" : ""}>${esc(accountDisplayName(item))}</option>`).join("") : `<option value="">暂无已绑定账号</option>`}
-          </select>
-        </label>
-        <div class="automation-plan-table-head"><span>预约时间</span><span>任务</span></div>
+        <div class="automation-plan-account-notice ${account ? "is-ready" : "is-empty"}">
+          ${account ? renderAutomationPlanCheckIcon() : renderInfoIcon()}
+          <span>${account ? `当前人设将使用已绑定账号：${esc(accountDisplayName(account))}` : "当前人设未绑定执行账号，请先到账号池完成绑定。"}</span>
+        </div>
+        <div class="automation-plan-table-head"><span>时间</span><span>任务</span></div>
         <ol class="automation-plan-list">${renderAutomationPlanRows(draft, platform)}</ol>
-        <button type="button" class="automation-plan-add" data-automation-plan-add ${draft.items.length >= 48 || Number(draft.items.at(-1)?.reservationMinutes || 0) >= 1410 ? "disabled" : ""}>${renderPlusIcon()}<span>添加任务</span></button>
+        <button type="button" class="automation-plan-add" data-automation-plan-add ${draft.items.length >= 49 || Number(draft.items.at(-1)?.reservationMinutes || 0) >= 1440 ? "disabled" : ""}>${renderPlusIcon()}<span>添加任务</span></button>
         <div class="automation-plan-submit-row">
           <p>${draft.mode === "loop" ? "循环模式会在本轮全部结束后，从列表第一项继续下一轮；可随时手动停止。" : "列表模式会按顺序执行一次，全部结束后自动完成。"}</p>
           <button type="button" class="primary" data-automation-plan-submit aria-busy="${busy ? "true" : "false"}" ${!account || busy ? "disabled" : ""}>${busy ? "正在创建…" : "创建自动化计划"}</button>
@@ -10927,6 +11324,7 @@ function renderSimpleFlowModule(moduleId) {
         </div>`;
     } else if (publishMode === "automation_tasks") {
       if (!state.automationPlansLoaded && !state.automationPlansFetch) loadAutomationPlansShared().catch(() => {});
+      if (!state.socialTasksFetch) loadAutomationTasksShared().catch(() => {});
       body = `
         <div class="publish-workspace">
           <section class="publish-config-panel">
@@ -11165,63 +11563,73 @@ function bindSimpleFlowInputs(moduleId) {
         renderSimpleFlowModule("publishing");
       });
     });
-    $("automationPlanAccount")?.addEventListener("change", async (event) => {
-      const accountId = String(event.currentTarget.value || "");
-      const personaId = String(selectedPersona()?.id || "");
-      const previousAccountId = String(state.automationPlanAccountIds?.[personaId] || "");
-      if (accountId !== previousAccountId && !(await confirmLeaveTransientWorkspaceState())) {
-        event.currentTarget.value = previousAccountId;
-        return;
-      }
-      state.automationPlanAccountIds[personaId] = accountId;
-      state.transientWorkspaceLeaveAcknowledgement = "";
-      renderSimpleFlowModule("publishing");
-    });
     document.querySelectorAll("[data-automation-plan-time]").forEach((node) => {
-      node.addEventListener("change", () => {
-        const index = Number(node.dataset.automationPlanTime);
-        const { draft } = currentAutomationPlanDraft();
-        const items = draft.items;
-        if (!items[index]) return;
-        items[index].reservationMinutes = Number(node.value || 0);
-        normalizeAutomationPlanReservations(items);
-        renderSimpleFlowModule("publishing");
-      });
-    });
-    document.querySelectorAll("[data-automation-plan-task]").forEach((node) => {
-      node.addEventListener("change", () => {
-        const index = Number(node.dataset.automationPlanTask);
-        const item = currentAutomationPlanDraft().draft.items[index];
-        if (!item) return;
-        item.taskType = String(node.value || "");
-        item.params = {};
-        item.expanded = true;
-        renderSimpleFlowModule("publishing");
-      });
-    });
-    document.querySelectorAll("[data-automation-plan-param]").forEach((node) => {
-      node.addEventListener("input", () => {
-        const index = Number(node.dataset.automationPlanIndex);
-        const item = currentAutomationPlanDraft().draft.items[index];
-        if (!item) return;
-        item.params = item.params || {};
-        item.params[node.dataset.automationPlanParam] = node.value;
-      });
-    });
-    document.querySelectorAll("[data-automation-plan-expand]").forEach((node) => {
       node.addEventListener("click", () => {
-        const index = Number(node.dataset.automationPlanExpand);
-        const item = currentAutomationPlanDraft().draft.items[index];
+        openAutomationPlanTimePicker(Number(node.dataset.automationPlanTime));
+      });
+      node.addEventListener("keydown", (event) => {
+        if (!["ArrowDown", "ArrowUp"].includes(event.key)) return;
+        event.preventDefault();
+        openAutomationPlanTimePicker(Number(node.dataset.automationPlanTime));
+      });
+    });
+    document.querySelectorAll("[data-automation-plan-time-option]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const menu = node.closest("[data-automation-plan-time-menu]");
+        const { draft } = currentAutomationPlanDraft();
+        const index = Number(menu?.dataset.automationPlanTimeMenu);
+        const item = draft.items[index];
         if (!item) return;
-        item.expanded = !item.expanded;
+        item.reservationMinutes = Number(node.dataset.automationPlanTimeOption || 0);
+        draft.openTimePickerIndex = -1;
+        normalizeAutomationPlanReservations(draft.items);
         renderSimpleFlowModule("publishing");
+      });
+      node.addEventListener("keydown", (event) => {
+        const menu = node.closest("[data-automation-plan-time-menu]");
+        const options = Array.from(menu?.querySelectorAll("[data-automation-plan-time-option]") || []);
+        const current = options.indexOf(node);
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeAutomationPlanTimePicker({ focusTrigger: true });
+          return;
+        }
+        const targetIndex = event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? options.length - 1
+            : event.key === "ArrowDown"
+              ? Math.min(options.length - 1, current + 1)
+              : event.key === "ArrowUp"
+                ? Math.max(0, current - 1)
+                : -1;
+        if (targetIndex < 0 || targetIndex === current) return;
+        event.preventDefault();
+        options[targetIndex]?.focus({ preventScroll: true });
+        options[targetIndex]?.scrollIntoView({ block: "nearest" });
+      });
+    });
+    document.querySelectorAll("[data-automation-plan-task-picker]").forEach((node) => {
+      node.addEventListener("click", () => {
+        openAutomationPlanTaskPicker(Number(node.dataset.automationPlanTaskPicker));
+      });
+    });
+    document.querySelectorAll("[data-automation-plan-view-details]").forEach((node) => {
+      node.addEventListener("click", () => {
+        openAutomationPlanTaskDetails(Number(node.dataset.automationPlanViewDetails));
       });
     });
     document.querySelectorAll("[data-automation-plan-remove]").forEach((node) => {
       node.addEventListener("click", () => {
         const { draft } = currentAutomationPlanDraft();
-        if (draft.items.length <= 1) return;
-        draft.items.splice(Number(node.dataset.automationPlanRemove), 1);
+        const index = Number(node.dataset.automationPlanRemove);
+        if (draft.items.length <= 1) {
+          const account = selectedSocialAccount(draft.accountId);
+          draft.items = [automationPlanDefaultItem(-30, account?.platform || "threads")];
+        } else {
+          draft.items.splice(index, 1);
+        }
+        draft.openTimePickerIndex = -1;
         normalizeAutomationPlanReservations(draft.items);
         renderSimpleFlowModule("publishing");
       });
@@ -12897,7 +13305,7 @@ async function logoutConsoleSession() {
     purgeLegacyTenantContentCaches();
     if (ADMIN_CONSOLE_SESSION) clearStoredAdminWorkspaceContext();
     window.VectoSiteNavigation?.setAccount(null);
-    window.location.replace(ADMIN_CONSOLE_SESSION ? "/admin" : "/");
+    window.location.replace("/");
   } catch (error) {
     consoleLogoutPending = false;
     const message = error?.detail || error?.message || "退出失败，请重试。";
@@ -14974,15 +15382,21 @@ async function createPersonaMemoryEntry() {
     showMsg("commandMsg", "请先选择一个人设。", false);
     return;
   }
-  const summary = await openConsoleModal({
+  const values = await openConsoleModal({
     title: "新建人设记忆",
-    message: "填写一条可在生成推文时选用的人设记忆。",
-    inputLabel: "记忆内容",
+    message: "记忆只需要填写记忆内容，它会作为 AI 生成时可选的人设背景或写作约束。",
+    fields: [{
+      name: "summary",
+      label: "记忆内容（必填）",
+      multiline: true,
+      required: true,
+      placeholder: "例如：回答专业问题时先给结论，再给一个具体案例；语气克制、清晰。",
+    }],
     confirmText: "保存记忆",
     cancelText: "取消",
   });
-  if (summary === null) return;
-  const cleanSummary = String(summary || "").trim();
+  if (values === null) return;
+  const cleanSummary = String(values?.summary || "").trim();
   if (!cleanSummary) {
     showMsg("commandMsg", "人设记忆内容不能为空。", false);
     return;
@@ -14990,6 +15404,7 @@ async function createPersonaMemoryEntry() {
   showMsg("commandMsg", "正在保存人设记忆...", true);
   const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/memories`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ summary: cleanSummary }),
   });
   const memoryId = String(result.memory?.id || "").trim();
@@ -15146,47 +15561,16 @@ async function loadAutomationPlansShared({ force = false } = {}) {
   return request;
 }
 
-function boundedAutomationPlanNumber(value, fallback, minimum, maximum) {
-  const parsed = Number(value);
-  const safe = Number.isFinite(parsed) ? parsed : Number(fallback);
-  return Math.min(maximum, Math.max(minimum, safe));
-}
-
 function automationPlanSubmissionItem(item = {}) {
-  const params = { ...(item.params || {}) };
+  let params = cloneAutomationPlanPayload(item.params || {});
   const taskType = item.taskType === "threads_reply_comment" || item.taskType === "threads_reply_hot"
     ? "threads_auto_reply"
     : item.taskType;
   if (taskType === "threads_auto_reply") {
-    params.reply_scope = item.taskType === "threads_reply_hot" ? "hot_posts" : "comments";
-    params.max_age_days = boundedAutomationPlanNumber(params.max_age_days, params.reply_scope === "hot_posts" ? 30 : 2, 1, 365);
-    params.max_posts = boundedAutomationPlanNumber(params.max_posts, 5, 1, 20);
-    params.max_replies = boundedAutomationPlanNumber(params.max_replies, 3, 1, 10);
-    params.min_views = boundedAutomationPlanNumber(params.min_views, 0, 0, 999999999);
-    if (typeof params.target_urls === "string") params.target_urls = splitLines(params.target_urls);
-    if (typeof params.reply_templates === "string") params.reply_templates = splitLines(params.reply_templates);
+    params.reply_scope = String(params.reply_scope || (item.taskType === "threads_reply_hot" ? "hot_posts" : "comments"));
   }
-  if (taskType === "threads_warmup") {
-    params.browse_limit = boundedAutomationPlanNumber(params.browse_limit, 30, 1, 300);
-    params.scroll_times = params.browse_limit;
-    params.like_limit = boundedAutomationPlanNumber(params.like_limit, 0, 0, 100);
-    params.max_comments = boundedAutomationPlanNumber(params.max_comments, 0, 0, 50);
-    params.comment_chance = params.max_comments > 0 ? 100 : 0;
-    if (typeof params.reply_templates === "string") params.reply_templates = splitLines(params.reply_templates);
-  }
-  if (taskType === "browse_feed") {
-    params.browse_limit = boundedAutomationPlanNumber(params.browse_limit, 5, 1, 300);
-    params.scroll_times = params.browse_limit;
-  }
-  if (taskType === "publish_post") {
-    params.caption = String(params.content || "").trim();
-    params.text = params.caption;
-  }
-  if (taskType === "comment_post") params.comment = String(params.content || "").trim();
-  if (taskType === "reply_comment") params.reply = String(params.content || "").trim();
-  if (taskType === "browse_profile" && params.target_url && !/^https?:\/\//i.test(String(params.target_url))) {
-    params.username = String(params.target_url).trim();
-    delete params.target_url;
+  if (taskType === "normal_publish") {
+    params = { publish_count: automationPlanNormalPublishCount(item) };
   }
   return {
     reservation_minutes: Number(item.reservationMinutes || 0),
@@ -15200,19 +15584,26 @@ function automationPlanSubmissionItem(item = {}) {
 function validateAutomationPlanDraft(draft, account) {
   const items = normalizeAutomationPlanReservations(draft?.items || []);
   if (!items.length) return "请至少添加一项自动化任务。";
-  if (items.length > 48) return "单个自动化计划最多包含 48 项任务。";
+  if (items.length > 49) return "单个自动化计划最多包含 49 项任务。";
   const platform = String(account?.platform || "").trim().toLowerCase();
   const allowed = new Set(automationPlanTaskOptions(platform).map(([value]) => value));
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
     const taskType = String(item.taskType || "");
     const params = item.params || {};
+    if (!taskType) return `请选择第 ${index + 1} 项要执行的任务。`;
     if (!allowed.has(taskType)) return `第 ${index + 1} 项任务不适用于当前执行账号。`;
-    if (Number(item.reservationMinutes) < 0 || Number(item.reservationMinutes) > 1410 || Number(item.reservationMinutes) % 30 !== 0) {
+    if (Number(item.reservationMinutes) < 0 || Number(item.reservationMinutes) > 1440 || Number(item.reservationMinutes) % 30 !== 0) {
       return `第 ${index + 1} 项预约时间无效。`;
     }
     if (index > 0 && Number(item.reservationMinutes) <= Number(items[index - 1].reservationMinutes)) {
       return "预约时间必须按列表顺序每次至少向后 30 分钟。";
+    }
+    if (["threads_reply_comment", "threads_reply_hot", "threads_warmup"].includes(taskType) && !item.configured) {
+      return `请先打开第 ${index + 1} 项的原任务配置并点击“添加该任务”。`;
+    }
+    if (taskType === "normal_publish" && (!item.configured || !Number.isInteger(Number(params.publish_count)) || Number(params.publish_count) < 1 || Number(params.publish_count) > 5)) {
+      return `请设置第 ${index + 1} 项普通任务的发布数量。`;
     }
     if (taskType === "publish_post" && !String(params.content || "").trim()) {
       return `请填写第 ${index + 1} 项发布内容。`;
@@ -15239,7 +15630,8 @@ async function submitAutomationPlan() {
   const validationError = validateAutomationPlanDraft(draft, account);
   if (validationError) {
     const invalidIndex = draft.items.findIndex((item) => (
-      (item.taskType === "publish_post" && !String(item.params?.content || "").trim())
+      (item.taskType === "normal_publish" && (!item.configured || automationPlanNormalPublishCount(item) < 1))
+      || (item.taskType === "publish_post" && !String(item.params?.content || "").trim())
       || (["browse_profile", "comment_post", "reply_comment", "like_post", "share_post", "repost_post"].includes(item.taskType)
         && !String(item.params?.target_url || "").trim())
       || (["comment_post", "reply_comment"].includes(item.taskType) && !String(item.params?.content || "").trim())
@@ -17823,7 +18215,7 @@ function renderPersonaCard(persona, groupId = "", options = {}) {
         </span>`}
       </button>
       ${isMatrix ? `<input class="publish-persona-hidden-check" type="checkbox" data-matrix-persona value="${esc(persona.id)}" ${publishSelected ? "checked" : ""} aria-hidden="true" tabindex="-1" />` : ""}
-      ${isAccountPoolContext ? `<button type="button" class="account-pool-bind-persona" data-account-pool-bind-persona="${esc(persona.id)}" title="绑定所选账号" aria-label="绑定所选账号" ${accountPoolSelectedCount === 1 && !state.accountPoolBinding ? "" : "disabled"}>
+      ${isAccountPoolContext ? `<button type="button" class="account-pool-bind-persona unified-action-icon-button" data-account-pool-bind-persona="${esc(persona.id)}" title="绑定所选账号" aria-label="绑定所选账号" ${accountPoolSelectedCount === 1 && !state.accountPoolBinding ? "" : "disabled"}>
         <svg class="ui-link-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
           <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
@@ -19155,14 +19547,12 @@ function activeAutomationPlanTransientState() {
   if (mode !== "automation_tasks") return null;
   const persona = selectedPersona();
   const { draft, account, key } = currentAutomationPlanDraft(persona);
-  const platform = String(account?.platform || "threads");
-  const defaultTaskType = automationPlanTaskOptions(platform)[0]?.[0] || "";
   const rows = normalizeAutomationPlanReservations(draft.items);
   const changed = draft.mode === "loop"
     || rows.length !== 1
     || rows.some((item, index) => (
       Number(item.reservationMinutes || 0) !== index * 30
-      || String(item.taskType || "") !== defaultTaskType
+      || Boolean(String(item.taskType || ""))
       || Object.values(item.params || {}).some((value) => (
         Array.isArray(value) ? value.length > 0 : Boolean(String(value ?? "").trim())
       ))
@@ -19374,6 +19764,7 @@ function renderPersonaDetail() {
     </div>
   `;
   state.renderedPersonaId = String(persona.id || "");
+  bindPersonaAccountPlatformSwipe($("personaDetail"));
   } finally {
     restoreConsoleScrollState(scrollSnapshot);
     releaseConsoleLayoutLocks(layoutLocks);
@@ -19953,9 +20344,36 @@ const accountPoolPlatforms = [
   ["instagram", "Instagram"],
 ];
 
+function renderAccountPoolPlatformIcon(platform = "") {
+  const value = String(platform || "").trim().toLowerCase();
+  if (value === "instagram") {
+    return `<svg class="platform-outline-icon platform-outline-icon--instagram" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="3.5" y="3.5" width="17" height="17" rx="5"></rect>
+      <circle cx="12" cy="12" r="4"></circle>
+      <circle cx="17.35" cy="6.75" r=".8" fill="currentColor" stroke="none"></circle>
+    </svg>`;
+  }
+  if (value === "threads") {
+    return `<svg class="platform-brand-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M18.263 11.097c-.03-3.486-1.92-5.586-5.111-5.586-2.13 0-3.922.963-4.863 2.499l2.062 1.438c.535-.843 1.272-1.543 2.628-1.543 1.528 0 2.318.85 2.544 2.431a15 15 0 0 0-2.236-.173c-4.125 0-6.068 1.867-6.068 4.336s1.943 3.99 4.804 3.99c3.139 0 5.013-2.115 5.781-4.735.798.361 1.348 1.204 1.348 2.47 0 3.387-3.907 5.232-7.22 5.232-4.885 0-8.077-3.207-8.077-8.424 0-6.392 4.223-10.487 9.9-10.487 3.808 0 5.69 1.671 6.97 3.914l2.108-1.475C21.44 2.078 18.331 0 13.663 0 6.227 0 1.168 5.277 1.168 12.934c0 7 4.953 11.066 10.856 11.066 4.878 0 9.809-2.846 9.809-7.716 0-2.545-1.46-4.231-3.569-5.187m-6.33 4.855c-1.077 0-2.026-.512-2.026-1.453 0-1.483 1.822-1.934 3.606-1.934.678 0 1.34.045 1.927.173-.422 1.927-1.671 3.215-3.508 3.214Z"></path>
+    </svg>`;
+  }
+  return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"></circle><path d="M3.5 12h17M12 3.5c2.15 2.33 3.22 5.16 3.22 8.5S14.15 18.17 12 20.5C9.85 18.17 8.78 15.34 8.78 12S9.85 5.83 12 3.5Z"></path></svg>`;
+}
+
 function normalizeAccountPoolPlatform(platform = state.accountPoolPlatform) {
   const value = String(platform || "").trim().toLowerCase();
   return accountPoolPlatforms.some(([id]) => id === value) ? value : "threads";
+}
+
+function selectAccountPoolPlatform(platform = "") {
+  const next = normalizeAccountPoolPlatform(platform);
+  if (next === normalizeAccountPoolPlatform()) return;
+  state.accountPoolPlatform = next;
+  state.accountPoolAccountId = "";
+  state.accountPoolSelectedAccountIds = [];
+  resetAccountPoolCreateForm();
+  renderSocialAccounts();
 }
 
 function accountPoolAccounts(platform = state.accountPoolPlatform) {
@@ -20040,14 +20458,15 @@ function renderAccountPoolPlatformTabs() {
     <section class="account-pool-platform-panel">
       <div class="account-pool-section-head">
         <strong>平台</strong>
-        <span>先选平台</span>
       </div>
-      <div class="account-pool-platforms" aria-label="平台">
+      <div class="account-pool-platforms account-pool-platform-tabs" data-account-pool-platform-tabs role="tablist" aria-label="平台">
         ${accountPoolPlatforms.map(([value, label]) => {
           const count = accountPoolAccounts(value).length;
-          return `<button type="button" class="${active === value ? "is-active" : ""}" data-account-pool-platform="${esc(value)}">
+          const isActive = active === value;
+          return `<button type="button" class="${isActive ? "is-active" : ""}" data-account-pool-platform="${esc(value)}" role="tab" aria-selected="${isActive ? "true" : "false"}" aria-label="${esc(`${label}，${count} 个账号`)}">
+            ${renderAccountPoolPlatformIcon(value)}
             <strong>${esc(label)}</strong>
-            <span>${esc(`${count} 个账号`)}</span>
+            <small>${esc(`${count} 个账号`)}</small>
           </button>`;
         }).join("")}
       </div>
@@ -20238,7 +20657,11 @@ function renderAccountPoolCards(accounts, selectedAccount) {
         ${editToolbar}
       </div>
       <div class="account-pool-add-row">${addButton}</div>
-      <div class="empty-state">当前平台还没有账号。点击添加账号后填写账号信息。</div>
+      <div class="account-pool-empty-state" role="status">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="3.5"></circle><path d="M5.5 20c.65-3.28 2.72-5 6.5-5s5.85 1.72 6.5 5"></path><path d="M18.2 5.8v4.1M16.15 7.85h4.1"></path></svg>
+        <strong>暂无账号</strong>
+        <span>点击添加账号，开始配置当前平台</span>
+      </div>
     </section>`;
   return `
     <section class="account-pool-account-panel">
@@ -21681,18 +22104,65 @@ function renderAccountPool() {
   return `
     <div class="account-pool-layout account-pool-layout--standalone">
       <section class="account-pool-main">
-        <div class="account-pool-head">
-          <div>
-            <strong>账号池</strong>
-            <span>在此配置和维护账号、浏览器环境与代理 IP。</span>
-          </div>
-        </div>
         <div class="account-pool-body">
           ${renderAccountPoolPlatformTabs()}
           ${renderAccountPoolCards(accounts, selectedAccount)}
         </div>
       </section>
     </div>`;
+}
+
+function bindAccountPoolPlatformSwipe(host) {
+  const accountPanel = host?.querySelector(".account-pool-account-panel");
+  if (!accountPanel) return;
+  let gesture = null;
+  accountPanel.addEventListener("pointerdown", (event) => {
+    if (event.pointerType !== "touch" || event.isPrimary === false) return;
+    if (event.target.closest("button, input, select, textarea, a")) return;
+    gesture = { pointerId: event.pointerId, x: Number(event.clientX || 0), y: Number(event.clientY || 0) };
+  });
+  const finishGesture = (event) => {
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    const deltaX = Number(event.clientX || 0) - gesture.x;
+    const deltaY = Number(event.clientY || 0) - gesture.y;
+    gesture = null;
+    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY)) return;
+    const currentIndex = accountPoolPlatforms.findIndex(([value]) => value === normalizeAccountPoolPlatform());
+    const nextIndex = Math.max(0, Math.min(accountPoolPlatforms.length - 1, currentIndex + (deltaX < 0 ? 1 : -1)));
+    if (nextIndex !== currentIndex) selectAccountPoolPlatform(accountPoolPlatforms[nextIndex][0]);
+  };
+  accountPanel.addEventListener("pointerup", finishGesture);
+  accountPanel.addEventListener("pointercancel", () => { gesture = null; });
+}
+
+function bindPersonaAccountPlatformSwipe(host) {
+  const accountPanel = host?.querySelector(".persona-account-pool-panel");
+  const persona = selectedPersona();
+  const platforms = persona ? personaAutomationPlatformOptions(persona) : [];
+  if (!accountPanel || platforms.length < 2) return;
+  let gesture = null;
+  accountPanel.addEventListener("pointerdown", (event) => {
+    if (event.pointerType !== "touch" || event.isPrimary === false) return;
+    if (event.target.closest("button, input, select, textarea, a")) return;
+    gesture = { pointerId: event.pointerId, x: Number(event.clientX || 0), y: Number(event.clientY || 0) };
+  });
+  const finishGesture = (event) => {
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    const deltaX = Number(event.clientX || 0) - gesture.x;
+    const deltaY = Number(event.clientY || 0) - gesture.y;
+    gesture = null;
+    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY)) return;
+    const currentIndex = Math.max(0, platforms.indexOf(selectedPersonaAutomationPlatform()));
+    const nextIndex = Math.max(0, Math.min(platforms.length - 1, currentIndex + (deltaX < 0 ? 1 : -1)));
+    if (nextIndex === currentIndex) return;
+    clearAccountPasswordRevealState();
+    state.personaAutomationPlatform = platforms[nextIndex];
+    state.preferredAccountId = "";
+    renderPersonaDetail();
+    renderConfirmSummary();
+  };
+  accountPanel.addEventListener("pointerup", finishGesture);
+  accountPanel.addEventListener("pointercancel", () => { gesture = null; });
 }
 
 async function bindAccountPoolAccountToPersona(personaId = "") {
@@ -21810,8 +22280,8 @@ function renderProxyPool() {
       <div class="proxy-pool-head">
         <div><strong>代理 IP</strong><span>独立维护代理信息并查看账号绑定情况。</span></div>
         <div class="proxy-pool-head-actions">
-          <a class="proxy-market-link" href="${adminWorkspacePageUrl("/proxy-market.html")}">${renderNetworkIcon()}<span>代理商城</span></a>
-          <button type="button" class="primary proxy-pool-add" data-proxy-add>${renderPlusIcon()}<span>自定义代理</span></button>
+          <button type="button" class="proxy-market-link" data-proxy-market-open>${renderProxyMarketIcon()}<span>代理商城</span></button>
+          <button type="button" class="primary proxy-pool-add" data-proxy-add>${renderCustomProxyIcon()}<span>自定义代理</span></button>
         </div>
       </div>
       <div class="proxy-table-wrap">
@@ -21859,6 +22329,149 @@ function renderProxyPool() {
         </div>
       </div>
     </section>`;
+}
+
+function proxyMarketCatalogRoot(payload = {}) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  return source.data && typeof source.data === "object" && !Array.isArray(source.data) ? source.data : source;
+}
+
+function proxyMarketCatalogItems(payload = {}) {
+  const root = proxyMarketCatalogRoot(payload);
+  return Array.isArray(root.items) ? root.items : (Array.isArray(payload?.items) ? payload.items : []);
+}
+
+function proxyMarketItemId(item = {}) {
+  return String(item?.id || item?.item_id || "").trim();
+}
+
+function proxyMarketItemLocation(item = {}) {
+  return [item?.city_name || item?.city, item?.region_name || item?.region, item?.country_name || item?.country]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(" · ") || "全球节点";
+}
+
+function proxyMarketItemPrice(item = {}) {
+  const cents = Math.max(0, Number(item?.display_price_cents ?? item?.price_cents ?? 0) || 0);
+  const currency = String(item?.currency || "TWD").trim().toUpperCase() || "TWD";
+  return `${currency} ${(cents / 100).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`;
+}
+
+function proxyMarketItemValidity(item = {}) {
+  const expiresAt = Number(item?.expires_at || 0);
+  return expiresAt > 0 ? `有效至 ${formatTime(expiresAt)}` : "长期有效";
+}
+
+function renderProxyMarketMiniCard(item = {}) {
+  const id = proxyMarketItemId(item);
+  const country = String(item?.country_code || item?.country || "GL").trim().slice(0, 3).toUpperCase() || "GL";
+  const title = String(item?.display_name || item?.sku || "静态住宅 IP").trim() || "静态住宅 IP";
+  const protocol = String(item?.proxy_type || "SOCKS5").trim().toUpperCase();
+  return `<article class="proxy-market-mini-card" data-proxy-market-item="${esc(id)}">
+    <div class="proxy-market-mini-card-head"><span class="proxy-market-mini-country">${esc(country)}</span><span class="proxy-market-mini-stock">可领取</span></div>
+    <strong>${esc(title)}</strong>
+    <span class="proxy-market-mini-location">${esc(proxyMarketItemLocation(item))}</span>
+    <div class="proxy-market-mini-meta"><span>${esc(proxyMarketItemValidity(item))}</span><span>${esc(protocol)}</span><strong>${esc(proxyMarketItemPrice(item))}</strong></div>
+    <button type="button" class="primary" data-proxy-market-claim="${esc(id)}" ${id ? "" : "disabled"}>加入代理池</button>
+  </article>`;
+}
+
+function openProxyMarketModal() {
+  closeConsoleModal(null);
+  const modal = document.createElement("div");
+  modal.id = "consoleModal";
+  modal.className = "console-modal";
+  modal.dataset.modalKey = "proxy-market-mini";
+  modal.innerHTML = `
+    <div class="console-modal-backdrop" data-proxy-market-modal-cancel></div>
+    <section class="console-modal-dialog proxy-market-mini-modal" role="dialog" aria-modal="true" aria-labelledby="proxyMarketMiniTitle">
+      <div class="console-modal-head">
+        <div><strong id="proxyMarketMiniTitle">代理商城</strong><p>浏览可领取的静态住宅 IP，加入后会自动进入代理池。</p></div>
+        ${renderModalCloseButton("data-proxy-market-modal-cancel")}
+      </div>
+      <div class="console-modal-content proxy-market-mini-content">
+        <form class="proxy-market-mini-filters" data-proxy-market-filter-form>
+          <label>常用地区
+            <select name="country"><option value="">全部地区</option><option value="TW">台湾</option><option value="HK">香港</option><option value="JP">日本</option><option value="SG">新加坡</option><option value="US">美国</option></select>
+          </label>
+          <label>有效时间
+            <select name="valid_for_days"><option value="">不限</option><option value="7">至少 7 天</option><option value="30">至少 30 天</option><option value="90">至少 90 天</option></select>
+          </label>
+          <label>价格
+            <select name="price_range"><option value="">不限</option><option value="0-5000">TWD 50 以下</option><option value="5000-15000">TWD 50–150</option><option value="15000-">TWD 150 以上</option></select>
+          </label>
+          <label>排序
+            <select name="sort"><option value="">推荐排序</option><option value="newest">最新上架</option><option value="price_asc">价格从低到高</option><option value="price_desc">价格从高到低</option></select>
+          </label>
+        </form>
+        <p class="proxy-market-mini-status" data-proxy-market-mini-status role="status" aria-live="polite">正在读取可用 IP…</p>
+        <div class="proxy-market-mini-grid" data-proxy-market-mini-grid aria-busy="true"></div>
+      </div>
+    </section>`;
+  document.body.appendChild(modal);
+  const form = modal.querySelector("[data-proxy-market-filter-form]");
+  const grid = modal.querySelector("[data-proxy-market-mini-grid]");
+  const status = modal.querySelector("[data-proxy-market-mini-status]");
+  let catalogRequest = 0;
+  const loadCatalog = async () => {
+    const requestId = ++catalogRequest;
+    const fields = form?.elements;
+    const params = new URLSearchParams({ availability: "available", page: "1", page_size: "12" });
+    const country = String(fields?.country?.value || "").trim();
+    const validForDays = String(fields?.valid_for_days?.value || "").trim();
+    const priceRange = String(fields?.price_range?.value || "").trim();
+    const sort = String(fields?.sort?.value || "").trim();
+    if (country) params.set("country", country);
+    if (validForDays) params.set("valid_for_days", validForDays);
+    if (sort) params.set("sort", sort);
+    const [minPrice, maxPrice] = priceRange.split("-");
+    if (minPrice) params.set("min_price_cents", minPrice);
+    if (maxPrice) params.set("max_price_cents", maxPrice);
+    grid.setAttribute("aria-busy", "true");
+    grid.innerHTML = '<div class="proxy-market-mini-loading">正在加载 IP 选项…</div>';
+    status.textContent = "正在读取可用 IP…";
+    try {
+      const payload = await api(`/api/proxy-market/catalog?${params.toString()}`);
+      if (!modal.isConnected || requestId !== catalogRequest) return;
+      const items = proxyMarketCatalogItems(payload);
+      grid.innerHTML = items.length ? items.map((item) => renderProxyMarketMiniCard(item)).join("") : '<div class="proxy-market-mini-empty">当前筛选条件下暂无可领取 IP。</div>';
+      status.textContent = `已显示 ${items.length} 个可领取 IP`;
+    } catch (error) {
+      if (!modal.isConnected || requestId !== catalogRequest) return;
+      grid.innerHTML = '<div class="proxy-market-mini-empty">商城暂时无法读取，请稍后重试。</div>';
+      status.textContent = error?.detail || error?.message || "读取商城失败";
+    } finally {
+      if (modal.isConnected && requestId === catalogRequest) grid.setAttribute("aria-busy", "false");
+    }
+  };
+  const close = () => modal.remove();
+  modal.addEventListener("click", (event) => {
+    if (event.target.closest("[data-proxy-market-modal-cancel]")) { close(); return; }
+    const claim = event.target.closest("[data-proxy-market-claim]");
+    if (!claim || claim.disabled) return;
+    const itemId = String(claim.dataset.proxyMarketClaim || "").trim();
+    if (!itemId) return;
+    const key = `proxy-market:${itemId}:${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`.slice(0, 128);
+    claim.disabled = true;
+    claim.textContent = "正在加入";
+    api(`/api/proxy-market/items/${encodeURIComponent(itemId)}/claim`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+      body: JSON.stringify({ idempotency_key: key }),
+    }).then(async () => {
+      await refreshProxyPool();
+      status.textContent = "IP 已加入代理池。";
+      await loadCatalog();
+    }).catch((error) => {
+      claim.disabled = false;
+      claim.textContent = "加入代理池";
+      status.textContent = error?.detail || error?.message || "加入代理池失败";
+    });
+  });
+  form?.addEventListener("change", () => { void loadCatalog(); });
+  void loadCatalog();
 }
 
 function proxyFormPayload(proxy = null) {
@@ -22070,6 +22683,7 @@ function renderSocialAccounts() {
   if (state.accountBrowserPanel === "browsers") renderLiveBrowserSessions();
   if (!grid) return;
   grid.innerHTML = renderAccountPool();
+  bindAccountPoolPlatformSwipe(grid);
   syncMobilePageToolbar();
   });
 }
@@ -23652,6 +24266,12 @@ function bindEvents() {
   $("moduleMenu").addEventListener("click", handleWorkspaceModuleNavigation);
   $("mobileTaskDock")?.addEventListener("click", handleWorkspaceModuleNavigation);
   document.addEventListener("click", (event) => {
+    if (
+      document.querySelector("[data-automation-plan-time-menu]")
+      && !event.target.closest?.(".automation-plan-time-dropdown-shell")
+    ) {
+      closeAutomationPlanTimePicker();
+    }
     const modalPreviewButton = event.target.closest?.("[data-media-preview-group]");
     if (modalPreviewButton && !$("moduleBody")?.contains(modalPreviewButton)) {
       openPersonaMediaLightbox(
@@ -25394,6 +26014,10 @@ function bindEvents() {
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "读取登录密码失败", false));
       return;
     }
+    if (event.target.closest("[data-proxy-market-open]")) {
+      openProxyMarketModal();
+      return;
+    }
     if (event.target.closest("[data-proxy-add]")) {
       openProxyModal();
       return;
@@ -25502,11 +26126,7 @@ function bindEvents() {
     }
     const platform = event.target.closest("[data-account-pool-platform]");
     if (platform) {
-      state.accountPoolPlatform = normalizeAccountPoolPlatform(platform.dataset.accountPoolPlatform || "");
-      state.accountPoolAccountId = "";
-      state.accountPoolSelectedAccountIds = [];
-      resetAccountPoolCreateForm();
-      renderSocialAccounts();
+      selectAccountPoolPlatform(platform.dataset.accountPoolPlatform || "");
       return;
     }
     const accountAdd = event.target.closest("[data-account-pool-add]");
@@ -25653,6 +26273,11 @@ function bindEvents() {
   });
   document.addEventListener("keydown", (event) => {
     trapLiveBrowserModalFocus(event);
+    if (event.key === "Escape" && document.querySelector("[data-automation-plan-time-menu]")) {
+      event.preventDefault();
+      closeAutomationPlanTimePicker({ focusTrigger: true });
+      return;
+    }
     if (event.key === "Escape" && state.liveBrowserExpandedSessionId) {
       event.preventDefault();
       closeLiveBrowserLargeModal();

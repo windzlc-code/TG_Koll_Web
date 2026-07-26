@@ -69,6 +69,10 @@ SOCIAL_TASK_TYPES = {
     "share_post",
     "repost_post",
 }
+# Plan-only task type.  It is deliberately not a SOCIAL_TASK_TYPE: a normal
+# publish entry is expanded into real publish_post tasks before a worker sees it.
+AUTOMATION_PLAN_NORMAL_PUBLISH_TASK = "normal_publish"
+AUTOMATION_PLAN_NORMAL_PUBLISH_MAX_COUNT = 5
 _ADMIN_BILLING_WAIVED_PAYLOAD_IDS: set[int] = set()
 _ADMIN_BILLING_WAIVED_PAYLOAD_IDS_LOCK = threading.Lock()
 _TRUSTED_BATCH_TASK_CONTEXTS: dict[int, dict[str, Any]] = {}
@@ -334,7 +338,7 @@ class SocialTaskPayload(BaseModel):
 
 
 class SocialAutomationPlanItemPayload(BaseModel):
-    reservation_minutes: int = Field(default=0, ge=0, le=1410)
+    reservation_minutes: int = Field(default=0, ge=0, le=1440)
     task_type: str
     payload: dict[str, Any] = Field(default_factory=dict)
     priority: int = Field(default=50, ge=1, le=100)
@@ -346,7 +350,7 @@ class SocialAutomationPlanPayload(BaseModel):
     account_id: str
     platform: str = "threads"
     mode: str = "list"
-    items: list[SocialAutomationPlanItemPayload] = Field(min_length=1, max_length=48)
+    items: list[SocialAutomationPlanItemPayload] = Field(min_length=1, max_length=49)
 
 
 class SocialAccountPatchPayload(BaseModel):
@@ -926,6 +930,135 @@ def _automation_plan_task_id(plan_id: str, cycle_index: int, sequence: int) -> s
     return f"plan_task_{digest}"
 
 
+def _automation_plan_normal_publish_count(payload: dict[str, Any]) -> int:
+    raw_count = (payload or {}).get("publish_count")
+    if isinstance(raw_count, bool) or not isinstance(raw_count, int):
+        raise HTTPException(status_code=400, detail="普通任务的发布数量必须是整数")
+    if raw_count < 1 or raw_count > AUTOMATION_PLAN_NORMAL_PUBLISH_MAX_COUNT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"普通任务的发布数量必须在 1 到 {AUTOMATION_PLAN_NORMAL_PUBLISH_MAX_COUNT} 篇之间",
+        )
+    unexpected = sorted(str(key) for key in (payload or {}) if str(key) != "publish_count")
+    if unexpected:
+        raise HTTPException(status_code=400, detail="普通任务只支持设置发布数量")
+    return int(raw_count)
+
+
+def _automation_plan_archive_media_paths(post: dict[str, Any]) -> list[str]:
+    candidates: list[Any] = []
+    candidates.extend(post.get("media_paths") if isinstance(post.get("media_paths"), list) else [])
+    candidates.extend(post.get("mediaPaths") if isinstance(post.get("mediaPaths"), list) else [])
+    for key in ("imageUrl", "videoUrl", "mediaUrl"):
+        if post.get(key):
+            candidates.append(post[key])
+    for item in post.get("mediaItems") if isinstance(post.get("mediaItems"), list) else []:
+        if isinstance(item, dict):
+            candidates.append(item.get("url") or item.get("path"))
+        else:
+            candidates.append(item)
+    paths: list[str] = []
+    for raw_path in candidates:
+        try:
+            path = Path(str(raw_path or "")).expanduser().resolve()
+        except Exception:
+            continue
+        if not path.is_file() or path.suffix.lower() not in SOCIAL_MEDIA_EXTENSIONS:
+            continue
+        clean_path = str(path)
+        if clean_path not in paths:
+            paths.append(clean_path)
+    return paths[:SOCIAL_MEDIA_MAX_FILES]
+
+
+def _expand_automation_plan_normal_publish_item(
+    item: dict[str, Any],
+    *,
+    persona_id: str,
+    plan_id: str,
+    cycle_index: int,
+) -> list[dict[str, Any]]:
+    payload = dict(item.get("payload") or {})
+    publish_count = _automation_plan_normal_publish_count(payload)
+    item_id = str(item.get("id") or "").strip()
+    archive = _load_persona_archive(persona_id) or {}
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    drafts: list[dict[str, Any]] = []
+    ordered_posts = sorted(
+        enumerate(posts),
+        key=lambda row: (_parse_archive_time(row[1].get("createdAt") or row[1].get("created_at")) or 2**63, row[0])
+        if isinstance(row[1], dict) else (2**63, row[0]),
+    )
+    for _, post in ordered_posts:
+        if not isinstance(post, dict):
+            continue
+        post_id = str(post.get("id") or "").strip()
+        if not post_id:
+            continue
+        if str(post.get("publishedAt") or post.get("published_at") or "").strip():
+            continue
+        content = str(post.get("content") or post.get("full_content") or "").strip()
+        media_paths = _automation_plan_archive_media_paths(post)
+        if not content and not media_paths:
+            continue
+        drafts.append(
+            {
+                "archive_post_id": post_id,
+                "archive_post_title": str(post.get("title") or "").strip(),
+                "archive_post_source": "posts",
+                "caption": content,
+                "content": content,
+                "text": content,
+                "media_paths": media_paths,
+            }
+        )
+        if len(drafts) >= publish_count:
+            break
+    if len(drafts) < publish_count:
+        raise HTTPException(
+            status_code=409,
+            detail=f"当前人设可发布草稿不足：需要 {publish_count} 篇，当前仅有 {len(drafts)} 篇",
+        )
+    batch_id = f"automation-plan:{plan_id}:{int(cycle_index)}:{item_id or 'normal-publish'}"
+    targets = [str(draft["archive_post_id"]) for draft in drafts]
+    expanded: list[dict[str, Any]] = []
+    for index, draft_payload in enumerate(drafts, start=1):
+        expanded_item = dict(item)
+        expanded_item["task_type"] = "publish_post"
+        expanded_item["payload"] = {
+            **draft_payload,
+            "publish_batch_id": batch_id,
+            "publish_sequence_index": index,
+            "publish_sequence_total": len(drafts),
+            "publish_sequence_targets": targets,
+        }
+        expanded.append(expanded_item)
+    return expanded
+
+
+def _expand_automation_plan_items(
+    items: list[dict[str, Any]],
+    *,
+    persona_id: str,
+    plan_id: str,
+    cycle_index: int,
+) -> list[dict[str, Any]]:
+    expanded: list[dict[str, Any]] = []
+    for item in items:
+        if str(item.get("task_type") or "") == AUTOMATION_PLAN_NORMAL_PUBLISH_TASK:
+            expanded.extend(
+                _expand_automation_plan_normal_publish_item(
+                    item,
+                    persona_id=persona_id,
+                    plan_id=plan_id,
+                    cycle_index=cycle_index,
+                )
+            )
+        else:
+            expanded.append(dict(item))
+    return expanded
+
+
 def _automation_plan_items(row: Any) -> list[dict[str, Any]]:
     items = _loads(row["items_json"], [])
     return [dict(item) for item in items if isinstance(item, dict)] if isinstance(items, list) else []
@@ -1028,6 +1161,7 @@ def _validate_automation_plan_payload(
             "browse_feed",
             "threads_warmup",
             "threads_auto_reply",
+            AUTOMATION_PLAN_NORMAL_PUBLISH_TASK,
         },
         "instagram": {
             "publish_post",
@@ -1054,7 +1188,10 @@ def _validate_automation_plan_payload(
             raise HTTPException(status_code=400, detail=f"当前平台不支持第 {index + 1} 项任务：{task_type}")
         task_payload = dict(item.payload or {})
         _reject_external_automation_plan_metadata(task_payload)
-        _validate_user_task_media_paths(task_payload, user)
+        if task_type == AUTOMATION_PLAN_NORMAL_PUBLISH_TASK:
+            task_payload = {"publish_count": _automation_plan_normal_publish_count(task_payload)}
+        else:
+            _validate_user_task_media_paths(task_payload, user)
         if task_type == "publish_post" and not str(task_payload.get("content") or "").strip():
             raise HTTPException(status_code=400, detail=f"第 {index + 1} 项发布任务缺少发布内容")
         if task_type == "threads_auto_reply":
@@ -1185,7 +1322,13 @@ def _materialize_automation_plan(plan_id: str) -> dict[str, Any]:
         created_ids: list[str] = []
         cancelled_runtime_ids: list[str] = []
         try:
-            for sequence, item in enumerate(items, start=1):
+            materialized_items = _expand_automation_plan_items(
+                items,
+                persona_id=persona_id,
+                plan_id=clean_plan_id,
+                cycle_index=cycle_index,
+            )
+            for sequence, item in enumerate(materialized_items, start=1):
                 task_id = _automation_plan_task_id(clean_plan_id, cycle_index, sequence)
                 with db() as conn:
                     claim = conn.execute(
