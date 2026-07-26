@@ -1760,6 +1760,17 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("z-index: 5400;", workbench_layer)
         self.assertNotIn("z-index: 5400;", panel_layer)
 
+    def test_opening_draft_editor_clears_the_previous_menu_layer(self):
+        editor = self.console_script[
+            self.console_script.index("function openPersonaDraftEditor"):
+            self.console_script.index("async function deletePersonaDraftPost")
+        ]
+        self.assertIn("closePersonaDraftMenus();", editor)
+        self.assertLess(
+            editor.index("closePersonaDraftMenus();"),
+            editor.index("renderPersonaDetail();"),
+        )
+
     def test_draft_toolbar_uses_icon_bulk_actions_and_aligned_controls(self):
         bulk_actions = self.console_script[
             self.console_script.index("function renderPersonaPostBulkActions"):

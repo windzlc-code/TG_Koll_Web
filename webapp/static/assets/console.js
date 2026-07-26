@@ -16659,6 +16659,7 @@ function openPersonaDraftEditor(postId) {
     showMsg("commandMsg", source === "favorites" ? "当前收藏不存在或已移出。" : "当前草稿不存在或已被删除。", false);
     return;
   }
+  closePersonaDraftMenus();
   const form = personaFormState(persona.id);
   const originalMediaItems = personaEditablePostMediaItems(persona.id, post).map(clonePersonaDraftMediaItem);
   form.generate.mode = "custom";
