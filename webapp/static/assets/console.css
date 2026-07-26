@@ -1621,6 +1621,125 @@ textarea:focus {
   stroke-linejoin: round;
 }
 
+.module-persona-summary {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+}
+
+.module-persona-summary.is-empty {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.module-persona-summary-empty {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.module-persona-summary-empty span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.module-persona-summary-avatar,
+.module-persona-summary-avatar .persona-avatar {
+  width: 56px;
+  height: 56px;
+}
+
+.module-persona-summary-avatar {
+  overflow: hidden;
+  border-radius: 50%;
+}
+
+.module-persona-summary-content {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.module-persona-summary-head,
+.module-persona-summary-account {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.module-persona-summary-head {
+  justify-content: space-between;
+}
+
+.module-persona-summary-title {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.module-persona-summary-title small,
+.module-persona-summary-metrics small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.module-persona-summary-title strong {
+  overflow: hidden;
+  font-size: 16px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.module-persona-summary-account {
+  flex-wrap: wrap;
+}
+
+.module-persona-summary-account .persona-status-chip {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.module-persona-selection-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.module-persona-summary-metrics {
+  display: grid;
+  grid-template-columns: minmax(90px, 1.4fr) repeat(2, minmax(64px, .8fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.module-persona-summary-metrics > span {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.module-persona-summary-metrics strong {
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.persona-detail-summary-panel {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
 .persona-mobile-drawer-head-actions {
   display: inline-flex;
   align-items: center;
@@ -17942,10 +18061,6 @@ body.console-page {
     margin-top: 0;
   }
 
-  .console-page .persona-detail.persona-detail--content > .persona-detail-summary-panel {
-    display: none;
-  }
-
   .console-page .persona-detail :is(
     input:not([type="checkbox"]):not([type="radio"]),
     select,
@@ -19121,8 +19236,38 @@ body.console-page {
     display: none;
   }
 
-  .persona-detail-summary-panel .persona-workbench-head {
-    display: none;
+  .module-persona-summary {
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .module-persona-summary.is-empty {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .module-persona-summary-avatar,
+  .module-persona-summary-avatar .persona-avatar {
+    width: 44px;
+    height: 44px;
+  }
+
+  .module-persona-summary-title strong {
+    font-size: 14px;
+  }
+
+  .module-persona-summary-account {
+    gap: 5px;
+  }
+
+  .module-persona-summary-account .persona-status-chip {
+    max-width: 100%;
+    white-space: normal;
+  }
+
+  .module-persona-summary-metrics {
+    grid-template-columns: minmax(0, 1.3fr) repeat(2, minmax(52px, .7fr));
+    gap: 4px;
   }
 
   /* Keep the mobile persona editor focused on the selected profile. */

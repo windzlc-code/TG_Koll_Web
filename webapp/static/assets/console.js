@@ -7476,6 +7476,58 @@ function renderPersonaAvatar(persona, profile, avatar, { editor = false } = {}) 
     </div>`;
 }
 
+function renderPersonaModuleSummary(persona, {
+  sidebarId = "personaWorkspaceSidebar",
+  selectionLabel = "",
+} = {}) {
+  const listToggle = `
+    <button type="button" class="persona-mobile-list-toggle module-persona-list-toggle" data-persona-mobile-list-toggle="${esc(sidebarId)}" aria-controls="${esc(sidebarId)}" aria-expanded="false">
+      <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
+      </svg>
+      <span>人设列表</span>
+    </button>`;
+  if (!persona) {
+    return `
+      <section class="module-persona-summary is-empty" aria-label="当前人设预览">
+        <div class="module-persona-summary-empty">
+          <strong>尚未选择人设</strong>
+          <span>从人设列表选择后即可预览资料。</span>
+        </div>
+        ${listToggle}
+      </section>`;
+  }
+  const profile = state.personaProfiles[String(persona.id)] || fallbackPersonaProfile(persona);
+  const displayAvatar = normalizePersonaAvatar(profile?.avatar);
+  const { draftCount, favoriteCount } = personaSummaryCounts(persona);
+  const groupNames = personaGroupsForPersona(persona.id)
+    .map((group) => String(group?.name || "").trim())
+    .filter(Boolean);
+  const personaGroup = groupNames.join("、") || "未分组";
+  return `
+    <section class="module-persona-summary" aria-label="当前人设预览">
+      <div class="module-persona-summary-avatar">${renderPersonaAvatar(persona, profile, displayAvatar)}</div>
+      <div class="module-persona-summary-content">
+        <div class="module-persona-summary-head">
+          <div class="module-persona-summary-title">
+            <small>当前人设</small>
+            <strong>${esc(profile?.name || persona?.name || "未命名人设")}</strong>
+          </div>
+          ${listToggle}
+        </div>
+        <div class="module-persona-summary-account">
+          ${renderPersonaExecutionAccountBadge(persona)}
+          ${selectionLabel ? `<span class="module-persona-selection-label">${esc(selectionLabel)}</span>` : ""}
+        </div>
+        <div class="module-persona-summary-metrics" aria-label="当前人设统计">
+          <span><small>人设分组</small><strong>${esc(personaGroup)}</strong></span>
+          <span><small>草稿</small><strong>${esc(`${draftCount} 条`)}</strong></span>
+          <span><small>收藏</small><strong>${esc(`${favoriteCount} 条`)}</strong></span>
+        </div>
+      </div>
+    </section>`;
+}
+
 function personaAvatarCropModalHtml(images, avatar) {
   const selectedId = String(avatar?.imageId || images[0]?.id || "");
   return `
@@ -9611,19 +9663,12 @@ function renderPublishModeTabs(mode) {
 }
 
 function renderPublishHeaderRow(mode, account) {
+  void account;
   return `
     <div class="publish-header-row">
       <div class="publish-header-main">
         <strong class="publish-inline-title">任务</strong>
         ${renderPublishModeTabs(mode)}
-      </div>
-      <div class="publish-header-actions">
-        <button type="button" class="persona-mobile-list-toggle" data-persona-mobile-list-toggle="publishPersonaSidebar" aria-controls="publishPersonaSidebar" aria-expanded="false">
-          <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
-          </svg>
-          <span>选择人设</span>
-        </button>
       </div>
     </div>`;
 }
@@ -10857,6 +10902,11 @@ function renderSimpleFlowModule(moduleId) {
     const publishMode = normalizedPublishMode(branch);
     const publishAccount = publishAccountForPersona(selectedPersonaForPublish);
     const modeTabs = renderPublishHeaderRow(publishMode, publishAccount);
+    const selectedMatrixPersonaCount = publishMode === "matrix_start" ? matrixPublishSelectedIds().length : 0;
+    const personaSummary = renderPersonaModuleSummary(selectedPersonaForPublish, {
+      sidebarId: "publishPersonaSidebar",
+      selectionLabel: selectedMatrixPersonaCount ? `矩阵已选 ${selectedMatrixPersonaCount} 个人设` : "",
+    });
     if (publishMode === "publish_history" && selectedPersonaForPublish && !Array.isArray(state.personaPublishHistories[String(selectedPersonaForPublish.id)])) {
       loadPersonaPublishHistory(selectedPersonaForPublish.id).then(() => {
         if (state.activeModule === "publishing" && normalizedPublishMode(state.simpleBranches.publishing) === "publish_history") {
@@ -10868,6 +10918,7 @@ function renderSimpleFlowModule(moduleId) {
       body = `
         <div class="publish-workspace">
           <section class="publish-config-panel">
+            ${personaSummary}
             ${modeTabs}
             ${renderMatrixPublishPanel()}
           </section>
@@ -10878,6 +10929,7 @@ function renderSimpleFlowModule(moduleId) {
       body = `
         <div class="publish-workspace">
           <section class="publish-config-panel">
+            ${personaSummary}
             ${modeTabs}
             ${renderAutomationTaskPlanPanel(selectedPersonaForPublish)}
           </section>
@@ -10887,6 +10939,7 @@ function renderSimpleFlowModule(moduleId) {
       body = `
         <div class="publish-workspace">
           <section class="publish-config-panel">
+            ${personaSummary}
             ${modeTabs}
             ${renderPublishHistoryPanel(selectedPersonaForPublish)}
           </section>
@@ -10902,6 +10955,7 @@ function renderSimpleFlowModule(moduleId) {
       body = `
         <div class="publish-workspace">
           <section class="publish-config-panel">
+            ${personaSummary}
             ${modeTabs}
             ${renderPublishContentPanel(selectedPersonaForPublish)}
             <input id="simplePrimary" type="hidden" value="publish_post" />
@@ -19300,29 +19354,11 @@ function renderPersonaDetail() {
     loadPersonaPublishHistory(persona.id).catch(() => {});
   }
   const account = accountForPersona(persona);
-  const { draftCount, favoriteCount } = personaSummaryCounts(persona);
-  const personaType = String(personaKindLabel(persona, profile) || "").trim() || "-";
   const groupPanel = renderPersonaGroupPanel(groupKey, step, persona, account, profile);
   $("personaDetail").classList.toggle("persona-detail--content", groupKey === "content");
   $("personaDetail").innerHTML = `
-    <div class="persona-inline-panel is-flat persona-detail-summary-panel">
-      <div class="persona-workbench-head">
-        <div class="persona-summary-meta">
-          <strong>${esc(persona.name || "未命名人设")}</strong>
-          <span>${esc(`类型：${personaType}`)}</span>
-          ${renderPersonaExecutionAccountBadge(persona)}
-          <span>${esc(`草稿 ${draftCount} 条`)}</span>
-          <span>${esc(`收藏 ${favoriteCount} 条`)}</span>
-        </div>
-        <div class="persona-quick-actions">
-          <button type="button" class="persona-mobile-list-toggle" data-persona-mobile-list-toggle="personaWorkspaceSidebar" aria-controls="personaWorkspaceSidebar" aria-expanded="false">
-            <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
-            </svg>
-            <span>选择人设</span>
-          </button>
-        </div>
-      </div>
+    <div class="persona-detail-summary-panel">
+      ${renderPersonaModuleSummary(persona, { sidebarId: "personaWorkspaceSidebar" })}
       ${showPersonaGroupTabs() ? renderPersonaGroupTabs(profile) : ""}
     </div>
     <div class="persona-step-shell">

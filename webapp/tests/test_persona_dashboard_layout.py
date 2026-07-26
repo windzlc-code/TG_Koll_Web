@@ -815,7 +815,20 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('class="publish-inline-title">任务</strong>', header)
         self.assertNotIn('${renderMobileTaskIcon("publishing")}', header)
         self.assertNotIn('class="publish-header-end-slot"', header)
-        self.assertIn('data-persona-mobile-list-toggle="publishPersonaSidebar"', header)
+        self.assertNotIn('data-persona-mobile-list-toggle="publishPersonaSidebar"', header)
+        summary_start = self.console_script.index("function renderPersonaModuleSummary(")
+        summary_end = self.console_script.index("\nfunction personaAvatarCropModalHtml", summary_start)
+        summary = self.console_script[summary_start:summary_end]
+        self.assertIn('data-persona-mobile-list-toggle="${esc(sidebarId)}"', summary)
+        self.assertIn("<span>人设列表</span>", summary)
+        self.assertIn('sidebarId: "publishPersonaSidebar"', self.console_script)
+        self.assertIn("renderPersonaAvatar(persona, profile, displayAvatar)", summary)
+        self.assertIn("renderPersonaExecutionAccountBadge(persona)", summary)
+        self.assertIn("personaGroupsForPersona(persona.id)", summary)
+        self.assertIn("personaSummaryCounts(persona)", summary)
+        self.assertIn("draftCount", summary)
+        self.assertIn("favoriteCount", summary)
+        self.assertIn('renderPersonaModuleSummary(persona, { sidebarId: "personaWorkspaceSidebar" })', self.console_script)
         self.assertNotIn("publish-account-badge", header)
         self.assertNotIn("到账号管理绑定", header)
 
@@ -949,7 +962,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             ".persona-mobile-list-toggle[data-persona-mobile-list-toggle] {\n    display: none;",
             self.styles,
         )
-        self.assertIn('data-persona-mobile-list-toggle="publishPersonaSidebar"', self.console_script)
+        self.assertIn('sidebarId: "publishPersonaSidebar"', self.console_script)
         self.assertIn('data-persona-mobile-list-toggle="automationPersonaSidebar"', self.console_script)
         self.assertIn('data-persona-mobile-list-toggle="taskQueuePersonaSidebar"', self.console_script)
 
