@@ -603,6 +603,25 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(persona["post_metrics"][0]["media_items"][0]["url"], "data:image/png;base64,abc123")
         self.assertIn("浏览", persona["hot_score_formula"])
 
+    def test_overview_uses_owner_scoped_media_route_for_matched_archive_post(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        metric = archives[0]["setup"]["hotMetrics"]["threads"]["postMetrics"][0]
+        metric["content"] = "post"
+        metric["mediaItems"] = [{"url": "https://cdn.example.invalid/expired.jpg", "type": "image"}]
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        response = self.client.get("/api/persona_dashboard/overview")
+
+        self.assertEqual(response.status_code, 200)
+        item = response.json()["personas"][0]["post_metrics"][0]["media_items"][0]
+        self.assertIn("/api/persona_dashboard/personas/persona-1/posts/post-1/media/0", item["preview_url"])
+        self.assertNotIn("/api/persona_dashboard/media/", item["preview_url"])
+        media_response = self.client.get(item["preview_url"])
+        self.assertEqual(media_response.status_code, 200)
+        self.assertEqual(media_response.headers["content-type"], "image/png")
+
     def test_console_overview_aggregates_hot_metrics_without_heavy_rows(self):
         self._write_archives()
 

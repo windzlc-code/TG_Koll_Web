@@ -1883,7 +1883,9 @@ button.primary,
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) max-content max-content;
     grid-template-areas:
+      "meta-top meta-top meta-top meta-top"
       "platform platform time actions"
+      "meta-bottom meta-bottom meta-bottom meta-bottom"
       "source source source source"
       "likes comments shares views";
     gap: 4px;
@@ -1891,6 +1893,25 @@ button.primary,
     border: 1px solid var(--line);
     border-radius: 8px;
     background: var(--panel-solid);
+  }
+
+  .persona-dashboard-view .persona-post-table tr:not(.persona-post-empty)::before,
+  .persona-dashboard-view .persona-post-table tr:not(.persona-post-empty)::after {
+    content: "";
+    display: block;
+    height: 1px;
+    align-self: center;
+    background: var(--line);
+    opacity: 0.72;
+    pointer-events: none;
+  }
+
+  .persona-dashboard-view .persona-post-table tr:not(.persona-post-empty)::before {
+    grid-area: meta-top;
+  }
+
+  .persona-dashboard-view .persona-post-table tr:not(.persona-post-empty)::after {
+    grid-area: meta-bottom;
   }
 
   .persona-dashboard-view .persona-post-table td,
@@ -2030,8 +2051,9 @@ button.primary,
     min-height: 26px;
     padding: 0;
     color: #dc2626;
-    border: 1px solid #ef4444;
-    background: #fff;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
   }
 
   .persona-dashboard-view .persona-post-table td[data-label]::before {

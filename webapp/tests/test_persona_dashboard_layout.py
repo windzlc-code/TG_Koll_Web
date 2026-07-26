@@ -152,6 +152,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) max-content max-content;", mobile_styles)
         self.assertIn('"source source source source"', mobile_styles)
         self.assertIn('"likes comments shares views"', mobile_styles)
+        self.assertIn('"meta-top meta-top meta-top meta-top"', mobile_styles)
+        self.assertIn('"meta-bottom meta-bottom meta-bottom meta-bottom"', mobile_styles)
+        self.assertIn("grid-area: meta-top;", mobile_styles)
+        self.assertIn("grid-area: meta-bottom;", mobile_styles)
         self.assertIn(".persona-dashboard-view .persona-post-table td:nth-child(n + 4):nth-child(-n + 7) {", mobile_styles)
         self.assertIn(".persona-dashboard-view .persona-post-table td:nth-child(-n + 3)::before {", mobile_styles)
         self.assertIn("display: none;", mobile_styles)
@@ -185,8 +189,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('event.key === "Escape"', binder)
         self.assertIn("pdCloseDashboardPlatformPicker();", binder)
         self.assertNotIn("function pdCurrentPostFilterText()", self.dashboard_script)
-        self.assertIn(".persona-post-actions .persona-post-delete {", self.styles)
-        self.assertIn("border: 1px solid #ef4444;", self.styles)
+        self.assertIn(".persona-post-actions .persona-post-delete {", self.dashboard_styles)
+        delete_styles = self.dashboard_styles[self.dashboard_styles.index(".persona-post-delete {"):self.dashboard_styles.index(".persona-post-delete .ui-trash-icon {")]
+        self.assertIn("border: 0;", delete_styles)
+        self.assertNotIn("border: 1px solid #ef4444;", delete_styles)
 
     def test_post_detail_prefers_backend_preview_urls_and_does_not_render_schema_field_names(self):
         media_start = self.dashboard_script.index("function pdPostMediaItems(row)")
@@ -203,6 +209,27 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("item.unavailable || !url", renderer)
         self.assertIn("persona-post-media-unavailable", renderer)
         self.assertIn(".persona-post-modal {\n  position: fixed;\n  inset: 0;\n  z-index: 6000;", self.dashboard_styles)
+
+    def test_dashboard_media_uses_owner_scoped_route_and_hides_uncached_external_urls(self):
+        row = {"id": "metric-1", "content": "same post"}
+        post = {
+            "id": "post-1",
+            "content": "same post",
+            "mediaItems": [{"url": "/tmp/post-1.jpg", "type": "image"}],
+            "sourceMeta": {"originalMediaUrls": ["https://cdn.example.invalid/old.jpg"]},
+        }
+
+        items, context = server._related_dashboard_media_context(row, [post], [])
+
+        self.assertEqual(context, {"post_id": "post-1", "source": "posts"})
+        self.assertEqual([item["url"] for item in items], ["/tmp/post-1.jpg"])
+        external = server._previewable_persona_media_items(
+            [{"url": "https://cdn.example.invalid/old.jpg", "type": "image"}],
+            archive_id="persona-1",
+            allow_external=False,
+        )
+        self.assertTrue(external[0]["unavailable"])
+        self.assertEqual(external[0]["reason"], "媒体未缓存到本地")
 
     def test_mobile_metric_context_wraps_without_ellipsis(self):
         title_start = self.styles.index(".persona-dashboard-view .persona-table-title {")
