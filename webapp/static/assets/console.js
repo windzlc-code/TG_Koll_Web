@@ -11588,7 +11588,6 @@ function bindSimpleFlowInputs(moduleId) {
         const nextMode = normalizedPublishMode(node.dataset.simplePublishMode || "publish_now");
         const previousMode = normalizedPublishMode(state.simpleBranches.publishing);
         if (nextMode !== previousMode && !(await confirmLeaveTransientWorkspaceState())) return;
-        await slideSegmentedButtonBackground(node);
         state.simpleBranches.publishing = nextMode;
         state.publishHistoryPreviewId = "";
         renderSimpleFlowModule("publishing");
