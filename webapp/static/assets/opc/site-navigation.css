@@ -1,6 +1,8 @@
 :root {
   --site-header-height: 68px;
   --site-mobile-drawer-width: min(320px, 100vw);
+  --site-notification-unread: #2f80ed;
+  --site-notification-unread-ring: rgba(47, 128, 237, 0.24);
 }
 
 html {
@@ -731,10 +733,10 @@ body.site-mobile-menu-active {
   width: 9px;
   height: 9px;
   box-sizing: border-box;
-  background: #ef4444;
+  background: var(--site-notification-unread);
   border: 2px solid #131d1f;
   border-radius: 50%;
-  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18);
+  box-shadow: 0 0 0 2px var(--site-notification-unread-ring);
 }
 
 .site-notification-dot[hidden] {
@@ -868,7 +870,7 @@ body.site-mobile-menu-active {
   color: #ffffff;
   font-size: 10px;
   line-height: 1;
-  background: #ef4444;
+  background: var(--site-notification-unread);
   border-radius: 999px;
   transform: translateY(-50%);
 }
@@ -900,8 +902,8 @@ body.site-mobile-menu-active {
 
 .site-notification-item.is-unread {
   background: #edf5f7;
-  border-color: #7395ab;
-  box-shadow: inset 3px 0 0 #315d78;
+  border-color: var(--site-notification-unread);
+  box-shadow: inset 3px 0 0 var(--site-notification-unread);
 }
 
 .site-notification-item-meta {
