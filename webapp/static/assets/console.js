@@ -25722,7 +25722,18 @@ function bindEvents() {
         }
         state.personaGroup = "content";
         state.personaPanels.content = "generate";
-        renderPersonaDetail();
+        const composePanel = $("personaDetail")?.querySelector(".persona-generate-panel");
+        if (composePanel) {
+          composePanel.outerHTML = renderPersonaContentPanel(
+            persona,
+            accountForPersona(persona),
+            selectedPersonaProfile(),
+            "generate",
+          );
+          window.requestAnimationFrame(resizePersonaDraftEditContent);
+        } else {
+          renderPersonaDetail();
+        }
         renderConfirmSummary();
       }
       return;
