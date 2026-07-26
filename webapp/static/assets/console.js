@@ -18459,10 +18459,6 @@ function renderPersonaHotCandidatePicker(persona, form) {
   form.hotFreshnessMode = hotFreshnessMode;
   return `
     <div class="persona-hot-filters">
-      <div class="persona-head-copy">
-        <strong>热点抓取</strong>
-        <span>按当前人设和已有记忆自动抓取 Threads / Instagram 热点候选。</span>
-      </div>
       <div class="persona-hot-mode-row">
         <div class="automation-capsule-tabs persona-hot-mode-tabs" aria-label="热点抓取方式">
           ${[
@@ -19944,7 +19940,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   const selectedSourceLabel = (isEditingDraft ? editingSource : postSource) === "favorites" ? "收藏" : "草稿";
   const selectedPostMediaItems = selectedPost ? personaDraftMediaPreviewItems(persona, postSource, selectedPost) : [];
   const generateIntro = generateMode === "hot"
-    ? ""
+    ? "按当前人设与记忆抓取 Threads / Instagram 热点候选。"
     : (isEditingDraft
       ? `这里处理当前${editingSourceLabel}的正文修改。媒体、移出和 AI 重写都从这里进入，不再堆在列表里。`
       : `这里处理推文内容。已识别 ${memoryRows.length} 条可选记忆。`);
@@ -19965,7 +19961,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           <div class="persona-head-copy-main">
             <strong>${esc(generateTitle)}</strong>
             ${generateIntro
-              ? `<span class="persona-panel-intro">${esc(generateIntro)}</span>`
+              ? `<span class="persona-panel-intro" data-i18n-ui>${esc(generateIntro)}</span>`
               : `<span class="persona-panel-intro persona-panel-intro--reserved" aria-hidden="true">&nbsp;</span>`}
           </div>
         </div>

@@ -22225,8 +22225,8 @@ body.console-page {
     margin-bottom: 0;
   }
 
-  .console-page .persona-detail--content .persona-panel-intro--reserved {
-    display: none;
+  .console-page .persona-detail--content .persona-panel-intro {
+    min-height: 1.45em;
   }
 
   .console-page
