@@ -950,6 +950,28 @@
   overflow-wrap: break-word;
 }
 
+:root[data-theme="light"] .console-page .persona-content-tabs.persona-publish-content-tabs {
+  border: 1px solid var(--public-line);
+  border-radius: 8px;
+  background: var(--public-paper);
+}
+
+:root[data-theme="light"] .console-page .persona-content-tabs.persona-publish-content-tabs button {
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--public-ink);
+  box-shadow: none;
+}
+
+:root[data-theme="light"] .console-page .persona-content-tabs.persona-publish-content-tabs button.is-active {
+  border-color: var(--vecto-action-border);
+  background-color: #071112;
+  background-image: var(--vecto-action-static-gradient);
+  color: var(--vecto-action-ink);
+  box-shadow: none;
+}
+
 :root[data-theme="light"] .console-page .mobile-task-dock-button.is-active {
   color: #fff;
   background-color: var(--public-cool-dark);
@@ -1901,4 +1923,67 @@
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
   }
+}
+
+/* Keep one opaque admin theme last so the operations workspace has predictable
+   surfaces, table alignment, and a visible product image in the title band. */
+:root[data-theme="light"] .page-admin {
+  background: #ffffff;
+}
+
+:root[data-theme="light"] .page-admin .admin-page-title {
+  background-color: #ffffff;
+  background-image:
+    linear-gradient(90deg, #ffffff 0 38%, rgb(255 255 255 / 96%) 50%, rgb(255 255 255 / 18%) 72%, transparent 100%),
+    url("/assets/opc/vecto-ai-cockpit.png");
+  background-position: center right;
+  background-size: cover;
+  background-repeat: no-repeat;
+  border-color: #aeb8c1;
+  box-shadow: none;
+}
+
+:root[data-theme="light"] .page-admin .admin-page-title :is(.overview-pod, .admin-top-actions .ghost) {
+  background: #ffffff;
+  border-color: #bcc7cf;
+}
+
+:root[data-theme="light"] .page-admin :is(.card, .admin-page-view) {
+  background: #ffffff;
+  border-color: #b6c0c8;
+  box-shadow: none;
+}
+
+:root[data-theme="light"] .page-admin :is(
+  .admin-config-card,
+  .admin-runtime-block,
+  .task-summary-shell,
+  .admin-compose-shell,
+  .admin-table-shell,
+  .task-toolbar,
+  .account-grid > div
+) {
+  background: #ffffff;
+  border-color: #c4cdd4;
+  box-shadow: none;
+}
+
+:root[data-theme="light"] .page-admin .admin-governance-kpi {
+  background: #ffffff;
+  box-shadow: none;
+}
+
+:root[data-theme="light"] .page-admin .admin-governance-kpi.is-info,
+:root[data-theme="light"] .page-admin .admin-governance-kpi:is(.is-success, .is-health),
+:root[data-theme="light"] .page-admin .admin-governance-kpi.is-warning,
+:root[data-theme="light"] .page-admin .admin-governance-kpi.is-danger {
+  background: #ffffff;
+}
+
+:root[data-theme="light"] .page-admin :is(.table th, .table td) {
+  background-color: #ffffff;
+}
+
+:root[data-theme="light"] .page-admin .table th {
+  background-color: #f5f7f8;
 }

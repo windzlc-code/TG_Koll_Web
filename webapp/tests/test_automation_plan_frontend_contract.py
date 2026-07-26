@@ -133,6 +133,20 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         normal_config = function_source("openAutomationPlanNormalPublishConfigurator", "openAutomationPlanTaskConfigurator")
         self.assertIn('data-automation-plan-normal-publish-count', normal_config)
         self.assertIn('[1, 2, 3, 4, 5]', normal_config)
+
+    def test_plan_config_hides_persona_description_and_removes_the_outer_frame(self):
+        strategy_detail = function_source("personaThreadsStrategyDetail", "billingObject")
+        automation_module = function_source("renderUnifiedAutomationModule", "renderUploadDropzone")
+
+        self.assertIn("{ includePersonaContent = true } = {}", strategy_detail)
+        self.assertIn("if (!includePersonaContent) return summary;", strategy_detail)
+        self.assertIn('includePersonaContent: actionMode !== "plan"', automation_module)
+        config_style = CONSOLE_CSS.split(
+            ".automation-plan-task-config-modal .automation-plan-shared-config {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("border: 0;", config_style)
+        self.assertIn("background: transparent;", config_style)
+        normal_config = function_source("openAutomationPlanNormalPublishConfigurator", "openAutomationPlanTaskConfigurator")
         self.assertNotIn("链接", normal_config)
         self.assertNotIn("草稿内容", normal_config)
 
@@ -215,7 +229,7 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         current = function_source("currentAutomationPlanDraft", "automationReservationLabel")
         self.assertNotIn("hasAccount ? \"\" : \"disabled\"", rows)
         self.assertNotIn("!account || draft.items.length", panel)
-        self.assertIn("!account || busy ? \"disabled\"", panel)
+        self.assertIn("!account || !draft.items.length || busy ? \"disabled\"", panel)
         self.assertNotIn("selectedAccount ? \"\" : \"disabled\"", action)
         self.assertIn("绑定账号后再创建计划", configurator)
         self.assertIn('const unboundKey = automationPlanDraftKey(personaId, "")', current)
@@ -232,6 +246,47 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         guard = function_source("activeAutomationPlanTransientState", "activeTransientWorkspaceState")
         self.assertIn('Boolean(String(item.taskType || ""))', guard)
         self.assertNotIn("defaultTaskType", guard)
+
+    def test_plan_starts_empty_and_the_last_task_can_be_removed(self):
+        draft_factory = function_source("createAutomationPlanDraft", "currentAutomationPlanDraft")
+        current = function_source("currentAutomationPlanDraft", "automationReservationLabel")
+        rows = function_source("renderAutomationPlanRows", "automationPlanStatusLabel")
+        bindings = function_source("renderSimpleFlowModule", "fillSimpleAccounts")
+
+        self.assertIn("items: [],", draft_factory)
+        self.assertNotIn("draft.items = [automationPlanDefaultItem", current)
+        self.assertNotIn('draft.items.length === 1 && !selectedTask ? "disabled"', rows)
+        self.assertIn("draft.items.splice(index, 1);", bindings)
+        self.assertNotIn("draft.items = [automationPlanDefaultItem", bindings)
+        self.assertNotIn("const itemIndex = draft.items.length;", bindings)
+        self.assertNotIn("openAutomationPlanTaskPicker(itemIndex)", bindings)
+
+    def test_plan_mode_switch_updates_the_draft_without_waiting_for_button_animation(self):
+        bindings = function_source("renderSimpleFlowModule", "fillSimpleAccounts")
+        mode_bindings = bindings.split('document.querySelectorAll("[data-automation-plan-mode]")', 1)[1].split(
+            'document.querySelectorAll("[data-automation-plan-time]")', 1
+        )[0]
+
+        self.assertIn('node.addEventListener("click", (event) => {', mode_bindings)
+        self.assertIn("event.__vectoSegmentSlideHandled = true;", mode_bindings)
+        self.assertIn('draft.mode = node.dataset.automationPlanMode === "loop" ? "loop" : "list";', mode_bindings)
+        self.assertNotIn("await waitForSegmentedBackgroundSlide", mode_bindings)
+
+    def test_reopening_task_picker_or_configurator_cleans_up_previous_modal_handlers(self):
+        normal_config = function_source("openAutomationPlanNormalPublishConfigurator", "openAutomationPlanTaskConfigurator")
+        automation_config = function_source("openAutomationPlanTaskConfigurator", "openAutomationPlanTaskDetails")
+        picker = function_source("openAutomationPlanTaskPicker", "renderAutomationPlanRows")
+
+        self.assertNotIn('onNormalPublishConfigure', normal_config)
+        self.assertIn('void request.then((confirmed) => {', normal_config)
+        self.assertIn('if (!confirmed) return;', normal_config)
+        self.assertIn('item.taskType = "normal_publish";', normal_config)
+        self.assertIn('item.configured = true;', normal_config)
+        self.assertIn('const onAutomationTaskConfigure = (event) => {', automation_config)
+        self.assertIn('modal?.removeEventListener("click", onAutomationTaskConfigure);', automation_config)
+        self.assertIn('modal?.removeEventListener("change", onAutomationTaskConfigureChange);', automation_config)
+        self.assertIn('const onAutomationTaskPick = (event) => {', picker)
+        self.assertIn('modal?.removeEventListener("click", onAutomationTaskPick);', picker)
 
 
 if __name__ == "__main__":

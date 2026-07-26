@@ -92,6 +92,7 @@ from .social_automation_api import (
     wake_social_automation_worker,
 )
 from .proxy_market import register_proxy_market_routes
+from .notifications import register_notification_routes
 
 
 logger = logging.getLogger(__name__)
@@ -17266,6 +17267,7 @@ def create_app() -> FastAPI:
 
     register_social_automation_routes(app)
     register_proxy_market_routes(app)
+    register_notification_routes(app)
 
     @app.post("/api/auth/apply")
     @app.post("/api/auth/register")

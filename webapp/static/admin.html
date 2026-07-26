@@ -898,7 +898,24 @@
         <div id="taskMsg" class="msg"></div>
         <div class="small task-meta-line" id="taskMetaLine">正在加载生成记录...</div>
         <div id="taskEmpty" class="task-empty" style="display:none">当前筛选条件下没有生成记录</div>
-        <div id="taskList" class="task-list"></div>
+        <div id="taskTableShell" class="table-wrap admin-table-shell admin-task-table-shell">
+          <table class="table admin-task-table">
+            <caption class="sr-only">素材生成记录列表</caption>
+            <thead>
+              <tr>
+                <th scope="col">生成编号</th>
+                <th scope="col">生成类型</th>
+                <th scope="col">客户</th>
+                <th scope="col">状态</th>
+                <th scope="col">进度</th>
+                <th scope="col">消耗</th>
+                <th scope="col">创建时间</th>
+                <th scope="col">操作</th>
+              </tr>
+            </thead>
+            <tbody id="taskList"></tbody>
+          </table>
+        </div>
       </section>
 
       <section class="card section admin-page-view" id="secAudit" data-page-view="audit">

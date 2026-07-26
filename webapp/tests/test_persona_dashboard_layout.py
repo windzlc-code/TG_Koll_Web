@@ -48,26 +48,41 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("persona-auto-", self.dashboard_styles)
         self.assertNotIn("persona-strategy-", self.dashboard_styles)
 
-    def test_dashboard_uses_compact_platform_tabs_without_legacy_filters_or_binding_form(self):
+    def test_dashboard_uses_account_pool_platform_picker_aligned_with_persona_data_without_legacy_filters_or_binding_form(self):
         dashboard_start = self.markup.index(
             '<section class="view persona-dashboard-view" data-panel="persona_dashboard">'
         )
         dashboard = self.markup[dashboard_start:]
 
         self.assertIn('id="personaDashboardPlatformTabs"', dashboard)
-        self.assertIn("account-pool-platform-tabs", dashboard)
+        self.assertIn("persona-dashboard-top-controls", dashboard)
+        self.assertIn('id="personaDashboardTabs"', dashboard)
+        self.assertNotIn('>平台<', dashboard)
+        self.assertLess(
+            dashboard.index("persona-dashboard-top-controls"),
+            dashboard.index('id="personaDashboardMsg"'),
+        )
         self.assertNotIn("personaDashboardSearch", dashboard)
         self.assertNotIn("personaDashboardRange", dashboard)
         self.assertNotIn('id="personaDashboardPlatform"', dashboard)
 
         self.assertIn("function pdRenderDashboardPlatformTabs(data)", self.dashboard_script)
-        self.assertIn("renderAccountPoolPlatformIcon(value)", self.console_script)
+        self.assertIn('id="personaDashboardPlatformPickerTrigger"', self.dashboard_script)
+        self.assertIn("account-pool-platforms account-pool-platform-tabs persona-dashboard-platform-options", self.dashboard_script)
+        self.assertIn("data-persona-dashboard-platform-option", self.dashboard_script)
+        self.assertIn("pdPlatformIcon(platform)", self.dashboard_script)
+        self.assertIn("platforms.map(renderPlatformOption)", self.dashboard_script)
         self.assertNotIn("pdBindThreads", self.dashboard_script)
         self.assertNotIn("pdUnbindThreads", self.dashboard_script)
         self.assertNotIn("persona-account-compact", self.dashboard_script)
         self.assertNotIn("personaDashboardAccountPlatform", self.dashboard_script)
         self.assertIn("persona-dashboard-platform-filter", self.styles)
-        self.assertIn("persona-dashboard-platform-tabs", self.styles)
+        self.assertIn("persona-dashboard-top-controls", self.styles)
+        self.assertIn("persona-dashboard-platform-trigger", self.styles)
+        self.assertIn("persona-dashboard-platform-options", self.styles)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
+        self.assertIn(".persona-dashboard-view .persona-dashboard-platform-menu", self.styles)
+        self.assertIn("min-height: 50px;", self.styles)
 
     def test_platform_tabs_keep_the_full_persona_archive_visible(self):
         matcher_start = self.dashboard_script.index("function pdMatches()")
@@ -124,6 +139,21 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('class="persona-content-preview"', detail)
         self.assertIn(".persona-detail-grid--compact", self.styles)
 
+    def test_mobile_dashboard_keeps_five_hot_metrics_and_post_metrics_in_compact_rows(self):
+        mobile_start = self.styles.index("@media (max-width: 760px) {")
+        mobile_styles = self.styles[mobile_start:]
+
+        self.assertIn(
+            ".persona-dashboard-view .persona-detail-grid--compact {\n"
+            "    grid-template-columns: repeat(5, minmax(0, 1fr));",
+            mobile_styles,
+        )
+        self.assertIn('"platform source source source"', mobile_styles)
+        self.assertIn('"time time time actions"', mobile_styles)
+        self.assertIn('"likes comments shares views"', mobile_styles)
+        self.assertIn(".persona-dashboard-view .persona-post-table td:nth-child(n + 4):nth-child(-n + 7) {", mobile_styles)
+        self.assertIn(".persona-dashboard-view .persona-post-content-badges {", mobile_styles)
+
     def test_mobile_post_filters_stay_inline_and_post_rows_need_no_horizontal_scroll(self):
         card_start = self.dashboard_script.index("function pdRenderPersonaCard(persona)")
         card_end = self.dashboard_script.index("\nfunction pdPersonaKey", card_start)
@@ -159,6 +189,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('modalKey: "persona-dashboard-picker"', renderer)
         self.assertIn("data-dashboard-persona-picker", renderer)
         self.assertIn(".persona-dashboard-picker-trigger", self.styles)
+        self.assertIn(".persona-dashboard-persona-control .persona-dashboard-picker-trigger strong", self.styles)
+        self.assertIn("text-overflow: ellipsis;", self.styles)
+        self.assertIn("white-space: nowrap;", self.styles)
         self.assertIn('data-modal-key="persona-dashboard-picker"', self.styles)
 
     def test_persona_picker_uses_consistent_cards_with_grouped_sections(self):
@@ -419,10 +452,24 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         view_start = self.console_script.index("function renderTaskQueueView()")
         view_end = self.console_script.index("\nfunction currentBranch", view_start)
         queue_view = self.console_script[view_start:view_end]
+        tabs_start = self.console_script.index("function renderTaskQueuePanelTabs(")
+        tabs_end = self.console_script.index("\nfunction renderTaskQueueBulkControls", tabs_start)
+        tabs = self.console_script[tabs_start:tabs_end]
 
         self.assertIn('data-task-queue-delete-selected="${esc(kind)}"', self.console_script)
         self.assertIn('data-task-clear-persona-queue="${esc(persona.id)}"', queue_view)
-        self.assertIn('data-task-clear-persona-queue="${esc(persona.id)}" title="清空当前人设队列" aria-label="清空当前人设队列">${renderClearSelectionIcon()}</button>', queue_view)
+        self.assertIn('data-task-clear-persona-queue="${esc(persona.id)}" title="清空当前人设队列" aria-label="清空当前人设队列">${renderQueueClearIcon()}</button>', queue_view)
+        self.assertIn("function renderQueueClearIcon()", self.console_script)
+        self.assertIn('class="automation-capsule-tabs task-queue-panel-tabs"', tabs)
+        self.assertIn("task-queue-persona-select-button", queue_view)
+        self.assertIn('title="选择人设" aria-label="选择人设"', queue_view)
+        self.assertNotIn("<span>选择人设</span>", queue_view)
+        self.assertIn("task-panel-section-head--with-action", queue_view)
+        self.assertIn("task-panel-section-heading-actions", queue_view)
+        self.assertIn("task-panel-section-actions", queue_view)
+        self.assertIn(".console-page .automation-capsule-tabs.task-queue-panel-tabs {", self.styles)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
+        self.assertIn(".task-panel-section-head--with-action {", self.styles)
         self.assertIn(".console-page .task-table-inner {", self.styles)
         self.assertIn("max-height: none;", self.styles)
         self.assertIn("overflow-y: visible;", self.styles)
@@ -598,6 +645,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('event.target.closest(".mobile-task-dock-button")', handler)
         self.assertIn("isCurrentMobileTaskDockTarget(dockButton)", handler)
         self.assertIn("scrollConsolePageToTop();", handler)
+        self.assertEqual(
+            handler.count("if (dockButton) await waitForSegmentedBackgroundSlide(event, dockButton);"),
+            2,
+        )
         self.assertLess(
             handler.index("scrollConsolePageToTop();"),
             handler.index('event.target.closest("[data-workspace-view]")'),
@@ -753,6 +804,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
         self.assertIn('state.view === "persona_dashboard"', helper)
         self.assertIn('state.view === "accounts"', helper)
+        self.assertIn('state.view === "tasks"', helper)
         self.assertIn('state.accountBrowserPanel !== "browsers"', helper)
         self.assertIn('["personas", "tweet_generation", "publishing"].includes(state.activeModule)', helper)
         self.assertIn('const navToggle = $("mobileNavToggle");', toolbar)
@@ -1191,6 +1243,70 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             panel.index("data-matrix-remove-all"),
         )
 
+    def test_matrix_publish_panel_uses_the_shared_white_functional_card_surface(self):
+        self.assertIn(
+            ".matrix-publish-panel {\n"
+            "  display: grid;\n"
+            "  gap: 14px;\n"
+            "  padding: 14px;\n"
+            "  border: 1px solid var(--line);\n"
+            "  border-radius: var(--radius);\n"
+            "  background: var(--panel-solid);",
+            self.styles,
+        )
+
+    def test_matrix_publish_reuses_account_pool_platform_cards_in_a_vertical_dropdown(self):
+        panel_start = self.console_script.index("function renderMatrixPublishPanel(")
+        panel_end = self.console_script.index("\nasync function submitMatrixPublishTask", panel_start)
+        panel = self.console_script[panel_start:panel_end]
+
+        self.assertIn("const renderPlatformTab = (value) =>", panel)
+        self.assertIn("renderAccountPoolPlatformIcon(value)", panel)
+        self.assertIn('data-matrix-publish-platform-option="${esc(value)}"', panel)
+        self.assertIn('class="matrix-publish-platform-trigger" data-matrix-publish-platform-trigger', panel)
+        self.assertIn('class="matrix-publish-platform-menu" data-matrix-publish-platform-menu', panel)
+        self.assertIn('class="account-pool-platforms account-pool-platform-tabs matrix-publish-platform-options"', panel)
+        self.assertIn('id="matrixPublishPlatform" type="hidden"', panel)
+        self.assertNotIn('<select id="matrixPublishPlatform">', panel)
+        self.assertNotIn("matrix-publish-account-notice", panel)
+        self.assertIn('document.querySelectorAll("[data-matrix-publish-platform-option]")', self.console_script)
+        self.assertIn(".matrix-publish-settings {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
+        self.assertIn(".matrix-publish-platform-options {\n  position: static;\n  grid-template-columns: minmax(0, 1fr);", self.styles)
+        self.assertIn(".console-page .matrix-publish-platform-options.account-pool-platforms.account-pool-platform-tabs {\n    display: grid;\n    grid-template-columns: minmax(0, 1fr);", self.styles)
+        self.assertIn(
+            ".matrix-publish-platform-trigger,\n"
+            ".matrix-publish-count-field select {\n"
+            "  box-sizing: border-box;\n"
+            "  width: 100%;\n"
+            "  height: 50px;\n"
+            "  min-height: 50px;\n"
+            "  padding: 10px 11px;\n"
+            "  border: 1px solid var(--line);\n"
+            "  border-radius: var(--radius);",
+            self.styles,
+        )
+        self.assertIn(".matrix-toolbar {\n  display: flex;\n  align-items: center;", self.styles)
+        self.assertIn(
+            ".console-page .matrix-publish-panel {\n"
+            "    padding: var(--mobile-functional-card-padding);",
+            self.styles,
+        )
+
+    def test_matrix_publish_count_select_is_limited_to_current_common_capacity(self):
+        update_start = self.console_script.index("function updateMatrixPublishStateFromForm()")
+        update_end = self.console_script.index("\nfunction closeMatrixPublishPlatformPicker", update_start)
+        update = self.console_script[update_start:update_end]
+        panel_start = self.console_script.index("function renderMatrixPublishPanel(")
+        panel_end = self.console_script.index("\nasync function submitMatrixPublishTask", panel_start)
+        panel = self.console_script[panel_start:panel_end]
+
+        self.assertIn("matrixPublishCommonLimit(matrixPublishAvailabilityRows(selectedIds, source, platform))", update)
+        self.assertIn("const availableLimit = Math.min(matrixPublishCommonLimit(availability), 20);", panel)
+        self.assertIn("const countOptions = availableLimit", panel)
+        self.assertIn('<select id="matrixPublishCount" ${countOptions.length ? "" : "disabled"}>', panel)
+        self.assertIn("Array.from({ length: availableLimit }, (_, index) => index + 1)", panel)
+        self.assertIn('<option value="0">暂无可执行内容</option>', panel)
+
     def test_non_matrix_publish_modes_render_persona_summary_below_mode_tabs(self):
         publishing_start = self.console_script.index('if (moduleId === "publishing")')
         publishing_end = self.console_script.index('} else if (moduleId === "automation")', publishing_start)
@@ -1306,7 +1422,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script.index("\nfunction renderPublishContentPanel")
         ]
         self.assertIn(
-            'class="publish-content-preview publish-content-preview--selection"',
+            'class="publish-content-preview publish-content-preview--selection ${selectedPosts.length ? "" : "is-empty"}"',
             preview,
         )
         self.assertIn(
@@ -1480,8 +1596,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.styles.index("@media (max-width: 760px) {"):
             self.styles.index(".persona-dashboard-view .persona-tab-rail {", self.styles.index("@media (max-width: 760px) {"))
         ]
-        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", mobile_dashboard_styles)
-        self.assertIn("min-height: 44px;", mobile_dashboard_styles)
+        self.assertIn("grid-template-columns: repeat(7, minmax(0, 1fr));", mobile_dashboard_styles)
+        self.assertIn("min-height: 48px;", mobile_dashboard_styles)
+        self.assertNotIn(".persona-dashboard-view .persona-kpi:last-child", mobile_dashboard_styles)
         summary_start = self.dashboard_script.index("function pdRenderSummary(data, visiblePersonas)")
         summary_end = self.dashboard_script.index("\nfunction pdPersonaWarnings", summary_start)
         summary = self.dashboard_script[summary_start:summary_end]
@@ -1542,7 +1659,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script.index('if (panel === "posts")'):
             self.console_script.index('if (panel === "history")')
         ]
-        self.assertIn('class="persona-content-tabs account-browser-tabs"', tabs)
+        self.assertIn('class="persona-content-tabs persona-publish-content-tabs account-browser-tabs"', tabs)
         self.assertIn('["generate", "新建推文"]', tabs)
         self.assertIn('["posts", "草稿库"]', tabs)
         self.assertIn('["favorites", "收藏"]', tabs)
@@ -1616,6 +1733,102 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertLess(source_tabs.index('["favorites", "收藏"]'), source_tabs.index('["custom", "自定义"]'))
         self.assertNotIn('<span>${esc(publishContentSourceLabel(source))}</span>', source_panel)
         self.assertIn("bulk-selection-icon-button", self.console_script)
+        self.assertIn('class="publish-post-picker publish-post-picker--${esc(source)}"', source_panel)
+        self.assertIn(".publish-post-picker--custom {\n  grid-template-rows: auto auto;", self.styles)
+
+    def test_mobile_empty_publish_preview_does_not_leave_a_source_gap(self):
+        preview = self.console_script[
+            self.console_script.index("function renderPublishContentPreview"):
+            self.console_script.index("function renderPublishContentPanel")
+        ]
+
+        self.assertIn(
+            'class="publish-content-preview publish-content-preview--selection ${selectedPosts.length ? "" : "is-empty"}"',
+            preview,
+        )
+        self.assertIn(
+            ".publish-content-preview--selection.is-empty {\n    display: none;",
+            self.styles,
+        )
+
+    def test_persona_publish_entry_tabs_are_square_white_buttons(self):
+        render_start = self.console_script.index("function renderPersonaStepTabs(groupKey, profile)")
+        render_end = self.console_script.index("\nfunction renderPersonaPostsViewTabs", render_start)
+        renderer = self.console_script[render_start:render_end]
+
+        self.assertIn("persona-publish-content-tabs", renderer)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr));", self.styles)
+        self.assertIn(".persona-content-tabs.persona-publish-content-tabs button", self.styles)
+        self.assertIn("border-radius: 6px;", self.styles)
+        self.assertIn("border: 1px solid var(--line);", self.styles)
+        self.assertIn("background: var(--panel-solid);", self.styles)
+        self.assertIn("background: #071112;", self.styles)
+        self.assertIn(
+            ".persona-detail .persona-content-tabs.persona-publish-content-tabs button[type=\"button\"]",
+            self.styles,
+        )
+
+    def test_segmented_controls_use_a_simple_sliding_background_without_click_highlight(self):
+        interaction_start = self.styles.index("/* Segmented controls keep their existing state behavior")
+        interaction = self.styles[interaction_start:]
+        slider = self.console_script[
+            self.console_script.index("async function slideSegmentedButtonBackground"):
+            self.console_script.index("\nfunction bindEvents()")
+        ]
+
+        self.assertIn(".automation-capsule-tabs,", interaction)
+        self.assertIn(".persona-content-tabs,", interaction)
+        self.assertIn(".persona-media-operation-toggle,", interaction)
+        self.assertIn("-webkit-tap-highlight-color: transparent !important;", interaction)
+        self.assertIn("> button:focus:not(:focus-visible)", interaction)
+        self.assertIn(".is-segment-background-sliding::before", interaction)
+        self.assertIn(
+            "> button:is(.is-active, .is-segment-slide-to)",
+            interaction,
+        )
+        self.assertIn("left 180ms cubic-bezier(.2, .72, .2, 1)", interaction)
+        self.assertIn("async function slideSegmentedButtonBackground(button)", slider)
+        self.assertIn("itemRect.left - groupRect.left - group.clientLeft", slider)
+        self.assertIn("itemRect.top - groupRect.top - group.clientTop", slider)
+        self.assertIn("window.setTimeout(() => requestAnimationFrame(resolve), 180);", slider)
+        self.assertIn("requestAnimationFrame(() => {", slider)
+        self.assertIn("pointer-events: none;", interaction)
+        self.assertIn('const SEGMENTED_BACKGROUND_BUTTON_SELECTOR = [', self.console_script)
+        self.assertIn('".persona-content-tabs > button"', self.console_script)
+        self.assertIn('".persona-compose-toggle > button"', self.console_script)
+        self.assertIn('".persona-media-operation-toggle > button"', self.console_script)
+        self.assertIn('".automation-capsule-tabs > button"', self.console_script)
+        self.assertIn('".mobile-task-dock > button"', self.console_script)
+        self.assertNotIn('".publish-preview-tabs > button"', self.console_script)
+        self.assertNotIn('".persona-dashboard-picker-tabs > button"', self.console_script)
+        self.assertNotIn('".persona-dashboard-platform-tabs > button"', self.console_script)
+        self.assertNotIn('".persona-group-tabs > button"', self.console_script)
+        self.assertNotIn('".persona-step-tabs > button"', self.console_script)
+        self.assertNotIn('".persona-subflow-tabs > button"', self.console_script)
+        self.assertNotIn('".automation-tab-strip > button"', self.console_script)
+        self.assertNotIn('".automation-account-tabs > button"', self.console_script)
+        self.assertNotIn('".account-pool-platforms > button"', self.console_script)
+        self.assertNotIn('".persona-account-platform-tabs > button"', self.console_script)
+        self.assertIn("!button.matches?.(SEGMENTED_BACKGROUND_BUTTON_SELECTOR)", slider)
+        self.assertIn('const positionGroup = getComputedStyle(group).position === "static";', slider)
+        self.assertIn('group.classList.add("is-segment-slide-positioned")', slider)
+        self.assertIn(".is-segment-slide-positioned {", interaction)
+        self.assertNotIn(
+            ".is-segment-background-sliding {\n  position: relative;",
+            interaction,
+        )
+        self.assertIn('button.classList.contains("is-pending")', slider)
+        self.assertIn('group.style.setProperty("--segment-slide-background", activeStyle.background);', slider)
+        self.assertNotIn("activeStyle.backgroundColor", slider)
+        self.assertIn(
+            "if (segmentedButton) await waitForSegmentedBackgroundSlide(event, segmentedButton);",
+            self.console_script,
+        )
+        self.assertIn("await waitForSegmentedBackgroundSlide(event, node);", self.console_script)
+        self.assertIn("await waitForSegmentedBackgroundSlide(event, completionPolicy);", self.console_script)
+        self.assertNotIn("animation:", interaction)
+        self.assertNotIn("transform:", interaction)
+        self.assertNotIn("scale(", slider)
 
     def test_draft_detail_omits_content_type_but_keeps_detail_media(self):
         detail = self.console_script[

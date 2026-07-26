@@ -115,6 +115,24 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('.admin-user-batch-bar', self.styles)
         self.assertIn('@media (max-width: 720px)', self.styles)
 
+    def test_governance_workspace_keeps_structural_component_styles(self):
+        required_selectors = (
+            ".page-admin .admin-governance-panel {",
+            ".page-admin .admin-governance-chart {",
+            ".page-admin .admin-distribution-list,",
+            ".page-admin .admin-health-row,",
+            ".page-admin .admin-governance-filters",
+            ".page-admin .admin-security-alert {",
+            ".page-admin .admin-service-account-form",
+            ".page-admin .admin-user-governance-section {",
+            ".page-admin .admin-user-filter-bar,",
+            ".page-admin .admin-language-panel {",
+        )
+        for selector in required_selectors:
+            with self.subTest(selector=selector):
+                self.assertIn(selector, self.styles)
+        self.assertIn("border: 1px solid var(--admin-line);", self.styles)
+
     def test_admin_preferences_use_fixed_light_theme_and_shared_language(self):
         st_script = '/assets/vendor/opencc-js/st-characters.js?v=1.4.1'
         navigation_script = '/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__'
@@ -140,7 +158,7 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('markAdminStaticUi()', self.script)
         self.assertIn('markAdminStaticUi(node);', self.script)
         self.assertIn('data-admin-i18n-ui="true" data-act="detail"', self.script)
-        self.assertIn('<span data-admin-i18n-ui="true">生成类型：</span>', self.script)
+        self.assertIn('<span data-admin-i18n-ui="true">流程：</span>', self.script)
         for excluded_data_surface in (
             'tbody',
             '.task-list',

@@ -814,6 +814,23 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS user_notifications (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL,
+              category TEXT NOT NULL CHECK(category IN ('system', 'official', 'interaction')),
+              title TEXT NOT NULL,
+              body TEXT NOT NULL DEFAULT '',
+              action_json TEXT NOT NULL DEFAULT '{}',
+              source_key TEXT NOT NULL DEFAULT '',
+              read_at INTEGER,
+              created_at INTEGER NOT NULL,
+              expires_at INTEGER NOT NULL DEFAULT 0,
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS social_automation_plans (
               id TEXT PRIMARY KEY,
               user_id INTEGER NOT NULL DEFAULT 0,
@@ -929,6 +946,18 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_audit_target ON admin_audit_log(target_user_id, created_at DESC)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created "
+            "ON user_notifications(user_id, created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_notifications_unread "
+            "ON user_notifications(user_id, read_at, created_at DESC)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_notifications_source "
+            "ON user_notifications(user_id, source_key) WHERE source_key <> ''"
+        )
         proxy_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_proxies)").fetchall()}
         proxy_column_migrations = {
             "user_id": "INTEGER NOT NULL DEFAULT 0",

@@ -469,6 +469,7 @@ const state = {
     source: "posts",
     perPersonaCount: 1,
     platform: "threads",
+    platformPickerOpen: false,
     initialized: false,
   },
   automationPlans: [],
@@ -756,6 +757,7 @@ function clearTenantInMemoryState() {
     source: "posts",
     perPersonaCount: 1,
     platform: "threads",
+    platformPickerOpen: false,
     initialized: false,
   };
   discardConsoleBootstrap();
@@ -5328,19 +5330,22 @@ function personaThreadsStrategyIsCustom(group) {
   return String(selectedPersonaStrategyId(group)).endsWith("_custom");
 }
 
-function personaThreadsStrategyDetail(group) {
+function personaThreadsStrategyDetail(group, { includePersonaContent = true } = {}) {
   const persona = selectedPersona();
   const strategy = personaThreadsStrategy(group);
   if (!strategy || !persona) return "";
+  const summary = `
+    <div class="persona-inline-panel automation-strategy-summary">
+      <p>帖子 ${numberText(persona.counts?.posts)} · 已发布 ${numberText(persona.counts?.published)} · 素材图 ${numberText(persona.counts?.images)}</p>
+      <p>这里会按当前人设、账号和策略生成执行任务。</p>
+    </div>`;
+  if (!includePersonaContent) return summary;
   return `
     <div class="form-grid">
       <div class="persona-inline-panel">
         <p>${esc(persona.content || "暂无人设描述。")}</p>
       </div>
-      <div class="persona-inline-panel">
-        <p>帖子 ${numberText(persona.counts?.posts)} · 已发布 ${numberText(persona.counts?.published)} · 素材图 ${numberText(persona.counts?.images)}</p>
-        <p>这里会按当前人设、账号和策略生成执行任务。</p>
-      </div>
+      ${summary}
     </div>`;
 }
 
@@ -5975,6 +5980,7 @@ function mobilePageToolbarDescriptor() {
 
 function isMobilePersistentDockPage() {
   if (state.view === "persona_dashboard") return true;
+  if (state.view === "tasks") return true;
   if (state.view === "accounts") return state.accountBrowserPanel !== "browsers";
   return state.view === "workspace" && ["personas", "tweet_generation", "publishing"].includes(state.activeModule);
 }
@@ -8354,7 +8360,7 @@ function renderTaskQueuePanelTabs(active = "persona") {
     ["persona", "人设队列"],
     ["regular", "通用队列"],
   ];
-  return `<div class="persona-step-tabs task-queue-panel-tabs" aria-label="任务队列切换">${tabs.map(([value, label]) => `
+  return `<div class="automation-capsule-tabs task-queue-panel-tabs" aria-label="任务队列切换">${tabs.map(([value, label]) => `
     <button
       type="button"
       class="${active === value ? "is-active" : ""}"
@@ -8401,6 +8407,13 @@ function renderClearSelectionIcon() {
   return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <rect x="4" y="4" width="16" height="16" rx="4"></rect>
     <path d="m8 16 8-8"></path>
+  </svg>`;
+}
+
+function renderQueueClearIcon() {
+  return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="m7.5 15.5 7-8 4.5 4.5-7 8H7l-2-2 2.5-2.5Z"></path>
+    <path d="m14.5 7.5 2-2 4 4-1.5 2.5"></path>
   </svg>`;
 }
 
@@ -8697,16 +8710,15 @@ function renderTaskQueueView() {
       title: "当前人设自动化队列",
       description: persona ? `这里统一查看「${persona.name || persona.id}」的浏览器自动化任务，不再单独放在人设页签里。` : "先在右侧点选一个人设，这里会同步显示对应自动化队列。",
       extraActions: `
-        <button type="button" class="persona-mobile-list-toggle" data-persona-mobile-list-toggle="taskQueuePersonaSidebar" aria-controls="taskQueuePersonaSidebar" aria-expanded="false">
+        <button type="button" class="persona-mobile-list-toggle task-queue-persona-select-button" data-persona-mobile-list-toggle="taskQueuePersonaSidebar" aria-controls="taskQueuePersonaSidebar" aria-expanded="false" title="选择人设" aria-label="选择人设">
           <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
           </svg>
-          <span>选择人设</span>
         </button>`,
       actions: `
         <div class="task-queue-actionbar">
           ${renderTaskQueueBulkControls("persona")}
-          ${persona ? `<button type="button" class="danger unified-action-icon-button" data-task-clear-persona-queue="${esc(persona.id)}" title="清空当前人设队列" aria-label="清空当前人设队列">${renderClearSelectionIcon()}</button>` : ""}
+          ${persona ? `<button type="button" class="danger unified-action-icon-button" data-task-clear-persona-queue="${esc(persona.id)}" title="清空当前人设队列" aria-label="清空当前人设队列">${renderQueueClearIcon()}</button>` : ""}
         </div>`,
       body: persona
         ? (
@@ -8725,13 +8737,14 @@ function renderTaskQueueView() {
       <div class="persona-step-shell task-queue-shell">
         ${renderTaskQueuePanelTabs(currentPanel)}
         <section class="task-panel-section task-panel-section--shared">
-          <div class="task-panel-section-head">
+          <div class="task-panel-section-head ${panel.extraActions ? "task-panel-section-head--with-action" : ""}">
             <div>
               <strong>${panel.title}</strong>
               <p>${esc(panel.description)}</p>
             </div>
-            ${panel.actions || panel.extraActions ? `<div class="task-panel-section-controls">${panel.extraActions || ""}${panel.actions || ""}</div>` : ""}
+            ${panel.extraActions ? `<div class="task-panel-section-heading-actions">${panel.extraActions}</div>` : (panel.actions ? `<div class="task-panel-section-controls">${panel.actions}</div>` : "")}
           </div>
+          ${panel.extraActions && panel.actions ? `<div class="task-panel-section-actions">${panel.actions}</div>` : ""}
           ${panel.body}
           <div class="task-panel-section-foot">${panel.pager}</div>
         </section>
@@ -8928,7 +8941,7 @@ function renderUnifiedAutomationModule(options = null) {
             <textarea id="personaAutoReplyText" rows="3" placeholder="留空则按当前人设自动生成。">${esc(Array.isArray(payload.reply_templates) ? payload.reply_templates.join("\n") : String(payload.reply_templates || ""))}</textarea>
           </label>
         ` : ""}
-        ${personaThreadsStrategyDetail(strategyGroup)}
+        ${personaThreadsStrategyDetail(strategyGroup, { includePersonaContent: actionMode !== "plan" })}
         <div class="row-actions">
           ${renderPersonaAutomationAction({
             kind: currentStep === "reply_hot" ? "reply_hot" : "reply_comment",
@@ -8964,7 +8977,7 @@ function renderUnifiedAutomationModule(options = null) {
             <textarea id="personaAutoReplyText" rows="3" placeholder="可选，多条换行。留空则按人设自动生成。">${esc(Array.isArray(payload.reply_templates) ? payload.reply_templates.join("\n") : String(payload.reply_templates || ""))}</textarea>
           </label>
         ` : ""}
-        ${personaThreadsStrategyDetail("threads_warmup")}
+        ${personaThreadsStrategyDetail("threads_warmup", { includePersonaContent: actionMode !== "plan" })}
         <div class="row-actions">
           ${renderPersonaAutomationAction({
             kind: "warmup",
@@ -9804,12 +9817,12 @@ function automationPlanDraftKey(personaId = "", accountId = "") {
   return `${String(personaId || "").trim()}:${String(accountId || "").trim()}`;
 }
 
-function createAutomationPlanDraft(accountId = "", platform = "threads") {
+function createAutomationPlanDraft(accountId = "") {
   return {
     mode: "list",
     accountId: String(accountId || ""),
     expandedIndex: 0,
-    items: [automationPlanDefaultItem(-30, platform)],
+    items: [],
   };
 }
 
@@ -9831,12 +9844,10 @@ function currentAutomationPlanDraft(persona = selectedPersona()) {
     state.automationPlanDrafts[key] = draft;
     delete state.automationPlanDrafts[unboundKey];
   }
-  if (!draft) draft = createAutomationPlanDraft(accountId, account?.platform || "threads");
+  if (!draft) draft = createAutomationPlanDraft(accountId);
   draft.accountId = String(account?.id || "");
   draft.mode = draft.mode === "loop" ? "loop" : "list";
-  if (!Array.isArray(draft.items) || !draft.items.length) {
-    draft.items = [automationPlanDefaultItem(-30, account?.platform || "threads")];
-  }
+  if (!Array.isArray(draft.items)) draft.items = [];
   for (const item of draft.items) {
     if (String(item?.taskType || "") !== "browse_feed") continue;
     item.taskType = "";
@@ -9993,15 +10004,12 @@ function openAutomationPlanNormalPublishConfigurator(index) {
     modalKey: "automation-plan-normal-publish-config",
   });
   const modal = $("consoleModal");
-  modal?.addEventListener("click", (event) => {
-    if (!event.target.closest("[data-console-modal-confirm]")) return;
-    const count = Number(modal.querySelector("[data-automation-plan-normal-publish-count]")?.value || currentCount);
+  void request.then((confirmed) => {
+    if (!confirmed) return;
+    const count = Number(modal?.querySelector("[data-automation-plan-normal-publish-count]")?.value || currentCount);
     item.taskType = "normal_publish";
     item.params = { publish_count: Number.isInteger(count) && count >= 1 && count <= 5 ? count : 1 };
     item.configured = true;
-  });
-  void request.then((confirmed) => {
-    if (!confirmed) return;
     renderSimpleFlowModule("publishing");
   }).catch(() => {});
 }
@@ -10029,7 +10037,6 @@ function openAutomationPlanTaskConfigurator(index, options = null) {
     showConfirm: false,
     modalKey: "automation-plan-task-config",
   });
-  void request.catch(() => {});
   const modal = $("consoleModal");
   const dialog = modal?.querySelector(".console-modal-dialog");
   dialog?.classList.add("automation-plan-task-config-modal");
@@ -10040,7 +10047,7 @@ function openAutomationPlanTaskConfigurator(index, options = null) {
     content.querySelectorAll("strong, p, label, button, [title], [aria-label], [placeholder]").forEach(markConsoleUiElement);
     translateConsoleLanguage(content, currentLanguage());
   };
-  modal?.addEventListener("click", (event) => {
+  const onAutomationTaskConfigure = (event) => {
     event.stopPropagation();
     const stepButton = event.target.closest("[data-automation-step]");
     if (stepButton) {
@@ -10065,13 +10072,19 @@ function openAutomationPlanTaskConfigurator(index, options = null) {
     closeConsoleModal(true);
     renderSimpleFlowModule("publishing");
     showMsg("commandMsg", `${automationPlanTaskLabel(item.taskType)}已加入自动化任务列表。`, true);
-  });
-  modal?.addEventListener("change", (event) => {
+  };
+  const onAutomationTaskConfigureChange = (event) => {
     if (event.target?.id !== "personaStrategySelect") return;
     const strategyGroup = String(event.target.dataset.strategyGroup || "");
     if (strategyGroup) setPersonaStrategyId(strategyGroup, event.target.value || "");
     state.automationPlanEditorPayload = cloneAutomationPlanPayload(personaThreadsStrategy(strategyGroup)?.payload || {});
     rerender();
+  };
+  modal?.addEventListener("click", onAutomationTaskConfigure);
+  modal?.addEventListener("change", onAutomationTaskConfigureChange);
+  void request.catch(() => {}).finally(() => {
+    modal?.removeEventListener("click", onAutomationTaskConfigure);
+    modal?.removeEventListener("change", onAutomationTaskConfigureChange);
   });
 }
 
@@ -10134,10 +10147,9 @@ function openAutomationPlanTaskPicker(index) {
     showConfirm: false,
     modalKey: "automation-plan-task-picker",
   });
-  void request.catch(() => {});
   const modal = $("consoleModal");
   modal?.querySelector(".console-modal-dialog")?.classList.add("automation-plan-task-picker-modal");
-  modal?.addEventListener("click", (event) => {
+  const onAutomationTaskPick = (event) => {
     event.stopPropagation();
     const option = event.target.closest("[data-automation-plan-task-option]");
     if (!option) return;
@@ -10156,6 +10168,10 @@ function openAutomationPlanTaskPicker(index) {
       ));
       return;
     }
+  };
+  modal?.addEventListener("click", onAutomationTaskPick);
+  void request.catch(() => {}).finally(() => {
+    modal?.removeEventListener("click", onAutomationTaskPick);
   });
 }
 
@@ -10225,7 +10241,7 @@ function renderAutomationPlanRows(draft, platform) {
                 title="${selectedTask ? "更换任务" : "添加任务"}"
                 aria-label="${selectedTask ? "更换任务" : "添加任务"}"
               >${selectedTask ? renderReplaceIcon() : renderPlusIcon()}</button>
-              <button type="button" class="automation-plan-remove unified-action-icon-button danger" data-automation-plan-remove="${index}" ${draft.items.length === 1 && !selectedTask ? "disabled" : ""} aria-label="移除第 ${index + 1} 项">${renderTrashIcon()}</button>
+              <button type="button" class="automation-plan-remove unified-action-icon-button danger" data-automation-plan-remove="${index}" aria-label="移除第 ${index + 1} 项">${renderTrashIcon()}</button>
             </div>
           </div>
         </div>
@@ -10332,7 +10348,7 @@ function renderAutomationTaskPlanPanel(persona = selectedPersona()) {
         <button type="button" class="automation-plan-add" data-automation-plan-add ${draft.items.length >= 49 || Number(draft.items.at(-1)?.reservationMinutes || 0) >= 1440 ? "disabled" : ""}>${renderPlusIcon()}<span>添加任务</span></button>
         <div class="automation-plan-submit-row">
           <p>${draft.mode === "loop" ? "循环模式会在本轮全部结束后，从列表第一项继续下一轮；可随时手动停止。" : "列表模式会按顺序执行一次，全部结束后自动完成。"}</p>
-          <button type="button" class="primary" data-automation-plan-submit aria-busy="${busy ? "true" : "false"}" ${!account || busy ? "disabled" : ""}>${busy ? "正在创建…" : "创建自动化计划"}</button>
+          <button type="button" class="primary" data-automation-plan-submit aria-busy="${busy ? "true" : "false"}" ${!account || !draft.items.length || busy ? "disabled" : ""}>${busy ? "正在创建…" : "创建自动化计划"}</button>
         </div>
       </section>
       <section class="automation-plan-card">
@@ -10525,7 +10541,7 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
   const selectedPosts = selectedPublishPosts(persona, cleanSource);
   const activePost = activePublishPreviewPost(selectedPosts);
   return `
-    <section class="publish-content-preview publish-content-preview--selection">
+    <section class="publish-content-preview publish-content-preview--selection ${selectedPosts.length ? "" : "is-empty"}">
       <div class="publish-panel-head">
         <strong>任务内容展示</strong>
         <span>${esc(publishContentSourceLabel(cleanSource))} · 已选 ${selectedPosts.length} 条</span>
@@ -10565,7 +10581,7 @@ function renderPublishContentPanel(persona = selectedPersona()) {
   return `
     <div class="publish-content-layout">
       ${renderPublishContentPreview(persona, source)}
-      <section class="publish-post-picker">
+      <section class="publish-post-picker publish-post-picker--${esc(source)}">
         <div class="publish-panel-head">
           <strong>任务来源</strong>
         </div>
@@ -11550,17 +11566,20 @@ function bindSimpleFlowInputs(moduleId) {
   });
   if (moduleId === "publishing") {
     document.querySelectorAll("[data-simple-publish-mode]").forEach((node) => {
-      node.addEventListener("click", async () => {
+      node.addEventListener("click", async (event) => {
+        event.__vectoSegmentSlideHandled = true;
         const nextMode = normalizedPublishMode(node.dataset.simplePublishMode || "publish_now");
         const previousMode = normalizedPublishMode(state.simpleBranches.publishing);
         if (nextMode !== previousMode && !(await confirmLeaveTransientWorkspaceState())) return;
+        await slideSegmentedButtonBackground(node);
         state.simpleBranches.publishing = nextMode;
         state.publishHistoryPreviewId = "";
         renderSimpleFlowModule("publishing");
       });
     });
     document.querySelectorAll("[data-automation-plan-mode]").forEach((node) => {
-      node.addEventListener("click", () => {
+      node.addEventListener("click", (event) => {
+        event.__vectoSegmentSlideHandled = true;
         const { draft } = currentAutomationPlanDraft();
         draft.mode = node.dataset.automationPlanMode === "loop" ? "loop" : "list";
         renderSimpleFlowModule("publishing");
@@ -11626,12 +11645,7 @@ function bindSimpleFlowInputs(moduleId) {
       node.addEventListener("click", () => {
         const { draft } = currentAutomationPlanDraft();
         const index = Number(node.dataset.automationPlanRemove);
-        if (draft.items.length <= 1) {
-          const account = selectedSocialAccount(draft.accountId);
-          draft.items = [automationPlanDefaultItem(-30, account?.platform || "threads")];
-        } else {
-          draft.items.splice(index, 1);
-        }
+        draft.items.splice(index, 1);
         draft.openTimePickerIndex = -1;
         normalizeAutomationPlanReservations(draft.items);
         renderSimpleFlowModule("publishing");
@@ -11660,10 +11674,12 @@ function bindSimpleFlowInputs(moduleId) {
       });
     });
     document.querySelectorAll("[data-publish-content-source]").forEach((node) => {
-      node.addEventListener("click", async () => {
+      node.addEventListener("click", async (event) => {
+        event.__vectoSegmentSlideHandled = true;
         const previousSource = normalizePublishContentSource();
         const nextSource = normalizePublishContentSource(node.dataset.publishContentSource || "posts");
         if (nextSource !== previousSource && !(await confirmLeaveTransientWorkspaceState())) return;
+        await slideSegmentedButtonBackground(node);
         state.publishContentSource = nextSource;
         renderSimpleFlowModule("publishing");
       });
@@ -11729,7 +11745,8 @@ function bindSimpleFlowInputs(moduleId) {
       });
     });
     document.querySelectorAll("[data-publish-preview-post]").forEach((node) => {
-      node.addEventListener("click", () => {
+      node.addEventListener("click", async (event) => {
+        await waitForSegmentedBackgroundSlide(event, node);
         state.publishPreviewPostId = String(node.dataset.publishPreviewPost || "").trim();
         // Preview tabs only change the active post. Keep the surrounding
         // publish workspace and its scroll containers mounted to avoid a
@@ -11824,6 +11841,19 @@ function bindSimpleFlowInputs(moduleId) {
       state.matrixPublish.initialized = true;
       renderSimpleFlowModule("publishing");
     });
+    document.querySelector("[data-matrix-publish-platform-trigger]")?.addEventListener("click", () => {
+      state.matrixPublish.platformPickerOpen = !state.matrixPublish.platformPickerOpen;
+      renderSimpleFlowModule("publishing");
+    });
+    document.querySelectorAll("[data-matrix-publish-platform-option]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const platform = String(node.dataset.matrixPublishPlatformOption || "").trim().toLowerCase();
+        if (!["threads", "instagram"].includes(platform)) return;
+        state.matrixPublish.platform = platform;
+        state.matrixPublish.platformPickerOpen = false;
+        renderSimpleFlowModule("publishing");
+      });
+    });
   }
   ["matrixPublishPlatform", "matrixPublishCount"].forEach((id) => {
     const node = $(id);
@@ -11835,9 +11865,10 @@ function bindSimpleFlowInputs(moduleId) {
   });
   if (moduleId === "automation") {
     document.querySelectorAll("[data-automation-persona]").forEach((node) => {
-      node.addEventListener("click", () => {
+      node.addEventListener("click", async (event) => {
         const personaId = String(node.dataset.automationPersona || "").trim();
         if (!personaId) return;
+        await waitForSegmentedBackgroundSlide(event, node);
         state.selectedPersonaId = personaId;
         state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
         setSelectedPersonaPostId("");
@@ -11845,20 +11876,23 @@ function bindSimpleFlowInputs(moduleId) {
       });
     });
     document.querySelectorAll("[data-automation-platform]").forEach((node) => {
-      node.addEventListener("click", () => {
+      node.addEventListener("click", async (event) => {
+        await waitForSegmentedBackgroundSlide(event, node);
         state.personaAutomationPlatform = node.dataset.automationPlatform === "instagram" ? "instagram" : "threads";
         state.preferredAccountId = "";
         renderSimpleFlowModule("automation");
       });
     });
     document.querySelectorAll("[data-automation-account]").forEach((node) => {
-      node.addEventListener("click", () => {
+      node.addEventListener("click", async (event) => {
+        await waitForSegmentedBackgroundSlide(event, node);
         state.preferredAccountId = node.dataset.automationAccount || "";
         renderSimpleFlowModule("automation");
       });
     });
     document.querySelectorAll("[data-automation-step]").forEach((node) => {
-      node.addEventListener("click", () => {
+      node.addEventListener("click", async (event) => {
+        await waitForSegmentedBackgroundSlide(event, node);
         const step = String(node.dataset.automationStep || "binding");
         state.simpleBranches.automation = ["binding", "reply_comment", "reply_hot", "warmup"].includes(step) ? step : "binding";
         renderSimpleFlowModule("automation");
@@ -18360,7 +18394,7 @@ function renderPersonaStepTabs(groupKey, profile) {
       ["posts", "草稿库"],
       ["favorites", "收藏"],
     ];
-    return `<div class="persona-content-tabs account-browser-tabs" id="personaStepTabs" aria-label="内容切换">${tabs.map(([value, label]) => `
+    return `<div class="persona-content-tabs persona-publish-content-tabs account-browser-tabs" id="personaStepTabs" aria-label="内容切换">${tabs.map(([value, label]) => `
       <button
         type="button"
         class="${(value === "generate" ? step === "generate" : step === "posts" && postSource === value) ? "is-active" : ""}"
@@ -23850,7 +23884,10 @@ function updateMatrixPublishStateFromForm() {
   const selectedIds = Array.from(document.querySelectorAll("[data-matrix-persona]:checked")).map((node) => String(node.value || "").trim()).filter(Boolean);
   const source = "posts";
   const platform = $("matrixPublishPlatform")?.value || state.matrixPublish.platform || "threads";
-  const requestedCount = Math.min(Math.max(Number($("matrixPublishCount")?.value || state.matrixPublish.perPersonaCount || 1), 1), 20);
+  const availableLimit = Math.min(matrixPublishCommonLimit(matrixPublishAvailabilityRows(selectedIds, source, platform)), 20);
+  const requestedCount = availableLimit
+    ? Math.min(Math.max(Number($("matrixPublishCount")?.value || state.matrixPublish.perPersonaCount || 1), 1), availableLimit)
+    : 1;
   state.matrixPublish = {
     ...state.matrixPublish,
     personaIds: sortPersonaIdsByPublishOrder(selectedIds),
@@ -23859,6 +23896,18 @@ function updateMatrixPublishStateFromForm() {
     platform,
     initialized: true,
   };
+}
+
+function closeMatrixPublishPlatformPicker({ focusTrigger = false } = {}) {
+  if (!state.matrixPublish.platformPickerOpen) return false;
+  state.matrixPublish.platformPickerOpen = false;
+  renderSimpleFlowModule("publishing");
+  if (focusTrigger) {
+    window.requestAnimationFrame(() => {
+      document.querySelector("[data-matrix-publish-platform-trigger]")?.focus({ preventScroll: true });
+    });
+  }
+  return true;
 }
 
 function ensureMatrixDraftLoads(personaIds) {
@@ -23951,8 +24000,22 @@ function renderMatrixPublishPanel() {
   ensureMatrixDraftLoads(selectedIds);
   const platform = state.matrixPublish.platform || "threads";
   const availability = matrixPublishAvailabilityRows(selectedIds, source, platform);
-  const perCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), 20);
-  if (state.matrixPublish.perPersonaCount !== perCount) state.matrixPublish.perPersonaCount = perCount;
+  const availableLimit = Math.min(matrixPublishCommonLimit(availability), 20);
+  const perCount = availableLimit
+    ? Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), availableLimit)
+    : 0;
+  if (availableLimit && state.matrixPublish.perPersonaCount !== perCount) state.matrixPublish.perPersonaCount = perCount;
+  const countOptions = availableLimit
+    ? Array.from({ length: availableLimit }, (_, index) => index + 1)
+    : [];
+  const platformPickerOpen = Boolean(state.matrixPublish.platformPickerOpen);
+  const renderPlatformTab = (value) => {
+    const isActive = platform === value;
+    return `<button type="button" class="${isActive ? "is-active" : ""}" data-matrix-publish-platform-option="${esc(value)}" role="option" aria-selected="${isActive ? "true" : "false"}">
+      ${renderAccountPoolPlatformIcon(value)}
+      <strong>${esc(platformLabel(value))}</strong>
+    </button>`;
+  };
   const participatingRows = availability.filter((row) => row.submitCount > 0);
   const rows = availability.map((row) => {
     const unavailable = !row.availableCount;
@@ -23974,16 +24037,30 @@ function renderMatrixPublishPanel() {
   }).join("");
   return `
     <div class="matrix-publish-panel">
-      <div class="form-grid">
-        <label>执行平台
-          <select id="matrixPublishPlatform">
-            <option value="threads" ${platform === "threads" ? "selected" : ""}>Threads</option>
-            <option value="instagram" ${platform === "instagram" ? "selected" : ""}>Instagram</option>
+      <div class="matrix-publish-settings">
+        <section class="matrix-publish-setting">
+          <strong class="matrix-publish-setting-label">执行平台</strong>
+          <div class="matrix-publish-platform-picker">
+            <button type="button" class="matrix-publish-platform-trigger" data-matrix-publish-platform-trigger aria-haspopup="listbox" aria-expanded="${platformPickerOpen ? "true" : "false"}">
+              ${renderAccountPoolPlatformIcon(platform)}
+              <strong>${esc(platformLabel(platform))}</strong>
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"></path></svg>
+            </button>
+            ${platformPickerOpen ? `
+              <div class="matrix-publish-platform-menu" data-matrix-publish-platform-menu role="listbox" aria-label="执行平台">
+                <div class="account-pool-platforms account-pool-platform-tabs matrix-publish-platform-options">
+                  ${["threads", "instagram"].map(renderPlatformTab).join("")}
+                </div>
+              </div>` : ""}
+          </div>
+          <input id="matrixPublishPlatform" type="hidden" value="${esc(platform)}" />
+        </section>
+        <label class="matrix-publish-setting matrix-publish-count-field">每个人设任务数量
+          <select id="matrixPublishCount" ${countOptions.length ? "" : "disabled"}>
+            ${countOptions.length
+              ? countOptions.map((count) => `<option value="${count}" ${count === perCount ? "selected" : ""}>${count} 篇</option>`).join("")
+              : '<option value="0">暂无可执行内容</option>'}
           </select>
-        </label>
-        <label>每个人设任务数量
-          <input id="matrixPublishCount" type="number" min="1" max="20" value="${esc(perCount)}" />
-          <small>每人本次数量，最多 20 篇</small>
         </label>
       </div>
       <div class="matrix-preview">
@@ -24283,6 +24360,101 @@ async function openPersonalConsoleView(view) {
   setView(view);
 }
 
+const SEGMENTED_BACKGROUND_BUTTON_SELECTOR = [
+  ".automation-capsule-tabs > button",
+  ".publish-mode-tabs > button",
+  ".publish-time-tabs > button",
+  ".publish-source-tabs > button",
+  ".persona-content-tabs > button",
+  ".persona-source-toggle > button",
+  ".persona-media-operation-toggle > button",
+  ".persona-draft-view-toggle > button",
+  ".persona-compose-toggle > button",
+  ".account-browser-tabs > button",
+  ".mobile-task-dock > button",
+].join(",");
+
+async function slideSegmentedButtonBackground(button) {
+  if (
+    !button
+    || !button.matches?.(SEGMENTED_BACKGROUND_BUTTON_SELECTOR)
+    || button.disabled
+    || button.classList.contains("is-pending")
+    || button.classList.contains("is-active")
+    || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
+  ) return;
+  const group = button.parentElement;
+  const current = Array.from(group?.children || [])
+    .find((item) => item.matches?.("button.is-active"));
+  if (!group || !current) return;
+  const positionGroup = getComputedStyle(group).position === "static";
+
+  const relativeBox = (item) => {
+    const groupRect = group.getBoundingClientRect();
+    const itemRect = item.getBoundingClientRect();
+    return {
+      left: itemRect.left - groupRect.left - group.clientLeft + group.scrollLeft,
+      top: itemRect.top - groupRect.top - group.clientTop + group.scrollTop,
+      width: itemRect.width,
+      height: itemRect.height,
+    };
+  };
+  const from = relativeBox(current);
+  const to = relativeBox(button);
+  const activeStyle = getComputedStyle(current);
+  const inactiveStyle = getComputedStyle(button);
+  group.style.setProperty("--segment-slide-left", `${from.left}px`);
+  group.style.setProperty("--segment-slide-top", `${from.top}px`);
+  group.style.setProperty("--segment-slide-width", `${from.width}px`);
+  group.style.setProperty("--segment-slide-height", `${from.height}px`);
+  group.style.setProperty("--segment-slide-background", activeStyle.background);
+  group.style.setProperty("--segment-slide-border", activeStyle.borderColor);
+  group.style.setProperty("--segment-slide-radius", activeStyle.borderRadius);
+  group.style.setProperty("--segment-slide-shadow", activeStyle.boxShadow);
+  group.style.setProperty("--segment-slide-active-color", activeStyle.color);
+  group.style.setProperty("--segment-slide-inactive-color", inactiveStyle.color);
+  if (positionGroup) group.classList.add("is-segment-slide-positioned");
+  group.classList.add("is-segment-background-sliding");
+  current.classList.add("is-segment-slide-from");
+  button.classList.add("is-segment-slide-to");
+  void group.offsetWidth;
+
+  await new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      group.style.setProperty("--segment-slide-left", `${to.left}px`);
+      group.style.setProperty("--segment-slide-top", `${to.top}px`);
+      group.style.setProperty("--segment-slide-width", `${to.width}px`);
+      group.style.setProperty("--segment-slide-height", `${to.height}px`);
+      window.setTimeout(() => requestAnimationFrame(resolve), 180);
+    });
+  });
+
+  requestAnimationFrame(() => {
+    current.classList.remove("is-segment-slide-from");
+    button.classList.remove("is-segment-slide-to");
+    group.classList.remove("is-segment-background-sliding");
+    group.classList.remove("is-segment-slide-positioned");
+    [
+      "--segment-slide-left",
+      "--segment-slide-top",
+      "--segment-slide-width",
+      "--segment-slide-height",
+      "--segment-slide-background",
+      "--segment-slide-border",
+      "--segment-slide-radius",
+      "--segment-slide-shadow",
+      "--segment-slide-active-color",
+      "--segment-slide-inactive-color",
+    ].forEach((name) => group.style.removeProperty(name));
+  });
+}
+
+async function waitForSegmentedBackgroundSlide(event, button) {
+  if (event?.__vectoSegmentSlideHandled) return;
+  if (event) event.__vectoSegmentSlideHandled = true;
+  await slideSegmentedButtonBackground(button);
+}
+
 function bindEvents() {
   document.addEventListener("click", handleDailyPublishActionGate, true);
   ensureThemeToggle();
@@ -24372,7 +24544,8 @@ function bindEvents() {
       const nextView = viewButton.dataset.workspaceView || "workspace";
       if (nextView !== state.view && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
       if (nextView !== state.view && !(await confirmLeaveTransientWorkspaceState())) return;
-      setMenuClickHighlight(viewButton, viewButton.closest(".module-accordion-item") || viewButton);
+      if (dockButton) await waitForSegmentedBackgroundSlide(event, dockButton);
+      else setMenuClickHighlight(viewButton, viewButton.closest(".module-accordion-item") || viewButton);
       state.workspaceMenuOpen = true;
       if (nextView === "accounts") {
         setAccountBrowserPanel(viewButton.dataset.workspacePanel || "accounts");
@@ -24384,7 +24557,8 @@ function bindEvents() {
     if (button) {
       if (button.dataset.module !== state.activeModule && state.view === "workspace" && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
       if (button.dataset.module !== state.activeModule && state.view === "workspace" && !(await confirmLeaveTransientWorkspaceState())) return;
-      setMenuClickHighlight(button, button.closest(".module-accordion-item") || button);
+      if (dockButton) await waitForSegmentedBackgroundSlide(event, dockButton);
+      else setMenuClickHighlight(button, button.closest(".module-accordion-item") || button);
       if (state.view !== "workspace") {
         state.workspaceMenuOpen = true;
         setView("workspace");
@@ -24400,6 +24574,12 @@ function bindEvents() {
       && !event.target.closest?.(".automation-plan-time-dropdown-shell")
     ) {
       closeAutomationPlanTimePicker();
+    }
+    if (
+      document.querySelector("[data-matrix-publish-platform-menu]")
+      && !event.target.closest?.(".matrix-publish-platform-picker")
+    ) {
+      closeMatrixPublishPlatformPicker();
     }
     const modalPreviewButton = event.target.closest?.("[data-media-preview-group]");
     if (modalPreviewButton && !$("moduleBody")?.contains(modalPreviewButton)) {
@@ -24523,6 +24703,8 @@ function bindEvents() {
       event.stopPropagation();
       return;
     }
+    const segmentedButton = event.target.closest(SEGMENTED_BACKGROUND_BUTTON_SELECTOR);
+    if (segmentedButton) await waitForSegmentedBackgroundSlide(event, segmentedButton);
     const personaMobileToggle = event.target.closest("[data-persona-mobile-list-toggle]");
     if (personaMobileToggle) {
       const sidebarId = personaMobileToggle.dataset.personaMobileListToggle || "";
@@ -26101,7 +26283,9 @@ function bindEvents() {
   if ($("socialAccount")) $("socialAccount").addEventListener("change", syncStandaloneSocialForm);
   if ($("socialPlatform")) $("socialPlatform").addEventListener("change", syncStandaloneSocialForm);
   if ($("runSocialOnce")) $("runSocialOnce").addEventListener("click", () => api("/api/persona_dashboard/automation/worker/run_once", { method: "POST" }).then(loadSocial).catch((error) => showMsg("socialMsg", error.detail || error.message || "执行失败", false)));
-  if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click", (event) => {
+  if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click", async (event) => {
+    const segmentedButton = event.target.closest(SEGMENTED_BACKGROUND_BUTTON_SELECTOR);
+    if (segmentedButton) await waitForSegmentedBackgroundSlide(event, segmentedButton);
     const personaMobileToggle = event.target.closest("[data-persona-mobile-list-toggle]");
     if (personaMobileToggle) {
       const sidebarId = personaMobileToggle.dataset.personaMobileListToggle || "";
@@ -26396,6 +26580,11 @@ function bindEvents() {
       closeAutomationPlanTimePicker({ focusTrigger: true });
       return;
     }
+    if (event.key === "Escape" && document.querySelector("[data-matrix-publish-platform-menu]")) {
+      event.preventDefault();
+      closeMatrixPublishPlatformPicker({ focusTrigger: true });
+      return;
+    }
     if (event.key === "Escape" && state.liveBrowserExpandedSessionId) {
       event.preventDefault();
       closeLiveBrowserLargeModal();
@@ -26430,14 +26619,16 @@ function bindEvents() {
     clearTenantInMemoryState();
     location.href = "/admin.html";
   });
-  $("consoleSettingsBody").addEventListener("click", (event) => {
+  $("consoleSettingsBody").addEventListener("click", async (event) => {
     const completionPolicy = event.target.closest("[data-browser-completion-policy]");
     if (completionPolicy) {
+      await waitForSegmentedBackgroundSlide(event, completionPolicy);
       setBrowserPreferenceChoice("completion_policy", completionPolicy.dataset.browserCompletionPolicy || "immediate_close");
       return;
     }
     const inputMode = event.target.closest("[data-browser-text-input-mode]");
     if (inputMode) {
+      await waitForSegmentedBackgroundSlide(event, inputMode);
       setBrowserPreferenceChoice("text_input_mode", inputMode.dataset.browserTextInputMode || "paste");
       return;
     }

@@ -2229,59 +2229,37 @@ function taskActionButtons(task) {
   return buttons.join("");
 }
 
-function renderTaskCard(task) {
+function renderTaskRow(task) {
   const status = String(task.status || "").trim() || "unknown";
   const workflowName = oneLine(task.workflow_name || task.type || "-");
   const taskType = taskTypeLabel(task.type);
   const workflowId = oneLine(task.workflow_id || "-");
-  const workflowChainSummary = oneLine(task.workflow_chain_summary || "");
   const userName = oneLine(task.username || task.user_id || "-");
   const batchText = Number(task.total_count) > 0
     ? `成功 ${task.success_count || 0}/${task.total_count || 0}，失败 ${task.failed_count || 0}`
     : "单任务";
-  const runninghubIds = runninghubList(task);
   const errorText = oneLine(task.first_error || task.error || "");
   return `
-    <article class="task-card task-card-status-${escapeHtml(status)}">
-      <div class="task-card-head">
-        <div class="task-card-main">
-          <div class="task-card-title-row">
-            <div class="task-card-title">${escapeHtml(workflowName)}</div>
-            ${statusPill(task.status)}
-          </div>
-          <div class="task-card-subtitle"><span data-admin-i18n-ui="true">生成类型：</span>${escapeHtml(taskType)} · <span data-admin-i18n-ui="true">客户：</span>${escapeHtml(userName)}</div>
-          ${workflowChainSummary ? `<div class="small" style="margin-top:4px"><span data-admin-i18n-ui="true">链路摘要：</span>${escapeHtml(workflowChainSummary)}</div>` : ""}
-        </div>
-        <div class="task-card-actions">
-          ${taskActionButtons(task)}
-        </div>
-      </div>
-      <div class="task-chip-row">
-        <span class="meta-chip"><span data-admin-i18n-ui="true">生成编号：</span>${escapeHtml(task.id)}</span>
-        <span class="meta-chip"><span data-admin-i18n-ui="true">内部流程编号：</span>${escapeHtml(workflowId)}</span>
-        <span class="meta-chip"><span data-admin-i18n-ui="true">创建时间：</span>${escapeHtml(formatTime(task.created_at))}</span>
-        <span class="meta-chip"><span data-admin-i18n-ui="true">额度消耗：</span>${escapeHtml(String(task.cost_cents || 0))} <span data-admin-i18n-ui="true">分</span></span>
-      </div>
-      <div class="task-card-grid">
-        <div class="task-card-item">
-          <div class="task-card-label" data-admin-i18n-ui="true">批量进度</div>
-          <div class="task-card-value" data-admin-i18n-ui="true">${escapeHtml(batchText)}</div>
-        </div>
-        <div class="task-card-item">
-          <div class="task-card-label" data-admin-i18n-ui="true">更新时间</div>
-          <div class="task-card-value">${escapeHtml(formatTime(task.updated_at || task.created_at))}</div>
-        </div>
-        <div class="task-card-item task-card-item-wide">
-          <div class="task-card-label" data-admin-i18n-ui="true">供应商记录</div>
-          <div class="task-card-value task-card-rh">
-            ${runninghubIds.length
-              ? runninghubIds.map((id) => `<span class="meta-chip meta-chip-code">${escapeHtml(id)}</span>`).join("")
-              : `<span class="small" data-admin-i18n-ui="true">暂无供应商记录编号</span>`}
-          </div>
-        </div>
-      </div>
-      ${errorText ? `<div class="task-card-alert"><span data-admin-i18n-ui="true">错误：</span>${escapeHtml(errorText)}</div>` : ""}
-    </article>
+    <tr class="admin-task-row task-card-status-${escapeHtml(status)}">
+      <td class="admin-task-id-cell">
+        <strong>${escapeHtml(task.id)}</strong>
+        <span><span data-admin-i18n-ui="true">流程：</span>${escapeHtml(workflowId)}</span>
+      </td>
+      <td class="admin-task-type-cell">
+        <strong>${escapeHtml(workflowName)}</strong>
+        <span>${escapeHtml(taskType)}</span>
+        ${errorText ? `<span class="admin-task-error" title="${escapeHtml(errorText)}"><span data-admin-i18n-ui="true">错误：</span>${escapeHtml(errorText)}</span>` : ""}
+      </td>
+      <td>${escapeHtml(userName)}</td>
+      <td>${statusPill(task.status)}</td>
+      <td>${escapeHtml(batchText)}</td>
+      <td>${escapeHtml(String(task.cost_cents || 0))} <span data-admin-i18n-ui="true">分</span></td>
+      <td>
+        <time>${escapeHtml(formatTime(task.created_at))}</time>
+        <span><span data-admin-i18n-ui="true">更新：</span>${escapeHtml(formatTime(task.updated_at || task.created_at))}</span>
+      </td>
+      <td><div class="admin-task-table-actions">${taskActionButtons(task)}</div></td>
+    </tr>
   `;
 }
 
@@ -2289,6 +2267,7 @@ function renderTasks() {
   const allRows = Array.isArray(taskState.rows) ? taskState.rows : [];
   const visibleRows = filterTasks(allRows);
   const list = el("taskList");
+  const tableShell = el("taskTableShell");
   const empty = el("taskEmpty");
   const meta = el("taskMetaLine");
   if (!list || !empty || !meta) return;
@@ -2297,7 +2276,8 @@ function renderTasks() {
     ? `共 ${allRows.length} 条生成记录，按创建时间倒序展示`
     : `显示 ${visibleRows.length} / ${allRows.length} 条生成记录`;
   empty.style.display = visibleRows.length ? "none" : "block";
-  list.innerHTML = visibleRows.map((task) => renderTaskCard(task)).join("");
+  if (tableShell) tableShell.style.display = visibleRows.length ? "block" : "none";
+  list.innerHTML = visibleRows.map((task) => renderTaskRow(task)).join("");
 }
 
 function setButtonLoading(buttonId, loading, loadingText) {

@@ -379,7 +379,8 @@ select:focus {
   visibility: hidden;
   opacity: 0;
   background: rgba(3, 12, 13, 0.78);
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   transition: opacity 160ms ease, visibility 160ms ease;
 }
 

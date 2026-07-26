@@ -125,6 +125,7 @@ let personaDashboardPostPage = 1;
 let personaDashboardPageSize = Number(localStorage.getItem("personaDashboardPageSize") || 10) || 10;
 let personaDashboardRefreshTask = "";
 let personaDashboardPlatform = "";
+let personaDashboardPlatformPickerOpen = false;
 let personaDashboardTabPage = 1;
 let personaDashboardPostModalKey = "";
 let personaDashboardGalleryIndex = -1;
@@ -238,21 +239,52 @@ function pdRenderDashboardPlatformTabs(data) {
   if (!host) return;
   const platforms = pdDashboardPlatforms(data);
   if (personaDashboardPlatform && !platforms.includes(personaDashboardPlatform)) personaDashboardPlatform = "";
-  host.innerHTML = platforms.map((platform) => `
-    <button
-      class="account-pool-platform-tab ${personaDashboardPlatform === platform ? "is-active" : ""}"
-      type="button"
-      role="tab"
-      aria-selected="${personaDashboardPlatform === platform ? "true" : "false"}"
-      data-persona-dashboard-platform="${pdEscape(platform)}"
-    >
-      ${pdPlatformIcon(platform)}
-      <span>${pdEscape(pdPlatformLabel(platform))}</span>
-    </button>
-  `).join("");
-  host.querySelectorAll("[data-persona-dashboard-platform]").forEach((node) => {
+  const selectedPlatform = personaDashboardPlatform;
+  const renderPlatformOption = (platform) => {
+    const isActive = selectedPlatform === platform;
+    return `
+      <button
+        class="${isActive ? "is-active" : ""}"
+        type="button"
+        role="option"
+        aria-selected="${isActive ? "true" : "false"}"
+        data-persona-dashboard-platform-option="${pdEscape(platform)}"
+      >
+        ${pdPlatformIcon(platform)}
+        <strong>${pdEscape(pdPlatformLabel(platform))}</strong>
+      </button>
+    `;
+  };
+  host.innerHTML = `
+    <div class="persona-dashboard-platform-picker">
+      <button
+        id="personaDashboardPlatformPickerTrigger"
+        class="persona-dashboard-platform-trigger"
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded="${personaDashboardPlatformPickerOpen ? "true" : "false"}"
+      >
+        ${pdPlatformIcon(selectedPlatform)}
+        <strong>${pdEscape(pdPlatformLabel(selectedPlatform))}</strong>
+        <svg class="persona-dashboard-platform-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"></path></svg>
+      </button>
+      ${personaDashboardPlatformPickerOpen ? `
+        <div class="persona-dashboard-platform-menu" role="listbox" aria-label="选择平台">
+          <div class="account-pool-platforms account-pool-platform-tabs persona-dashboard-platform-options">
+            ${platforms.map(renderPlatformOption).join("")}
+          </div>
+        </div>
+      ` : ""}
+    </div>
+  `;
+  pdEl("personaDashboardPlatformPickerTrigger")?.addEventListener("click", () => {
+    personaDashboardPlatformPickerOpen = !personaDashboardPlatformPickerOpen;
+    pdRenderDashboard();
+  });
+  host.querySelectorAll("[data-persona-dashboard-platform-option]").forEach((node) => {
     node.addEventListener("click", () => {
-      personaDashboardPlatform = String(node.getAttribute("data-persona-dashboard-platform") || "");
+      personaDashboardPlatform = String(node.getAttribute("data-persona-dashboard-platform-option") || "");
+      personaDashboardPlatformPickerOpen = false;
       personaDashboardPostPage = 1;
       personaDashboardTabPage = 1;
       pdRenderDashboard();
@@ -549,13 +581,13 @@ function pdRenderSummary(data, visiblePersonas) {
   if (!host) return;
   const summary = pdVisibleSummary(visiblePersonas);
   const cards = [
-    { label: "人设总数", value: summary.persona_count, hint: "全局人设归档，不受平台切换影响" },
-    { label: "已生成帖子", value: summary.post_count, hint: "全局归档帖子，不受平台切换影响" },
-    { label: "已发布", value: summary.published_count, hint: "全局发布归档，不受平台切换影响" },
-    { label: "总互动量", value: summary.total_interactions, hint: "点赞、评论、转发、分享" },
-    { label: "账号主页浏览", value: summary.recent_views, hint: "账号主页级浏览" },
-    { label: "逐帖浏览合计", value: summary.post_views, hint: "逐帖浏览，不与主页浏览合并" },
-    { label: "筛选热度", value: summary.hot_score, hint: "逐帖浏览 + 点赞 + 评论 + 分享 + 转发" },
+    { label: "人设", value: summary.persona_count, hint: "全局人设归档，不受平台切换影响" },
+    { label: "帖子", value: summary.post_count, hint: "全局归档帖子，不受平台切换影响" },
+    { label: "发布", value: summary.published_count, hint: "全局发布归档，不受平台切换影响" },
+    { label: "互动", value: summary.total_interactions, hint: "点赞、评论、转发、分享" },
+    { label: "主页浏览", value: summary.recent_views, hint: "账号主页级浏览" },
+    { label: "逐帖浏览", value: summary.post_views, hint: "逐帖浏览，不与主页浏览合并" },
+    { label: "热度", value: summary.hot_score, hint: "逐帖浏览 + 点赞 + 评论 + 分享 + 转发" },
   ];
   host.innerHTML = cards.map((card) => `
     <div class="kpi persona-kpi" title="${pdEscape(card.hint)}">
@@ -884,13 +916,9 @@ function pdRenderPersonaTabs(visiblePersonas, selectedPersona) {
   const selectedLabel = selectedPersona?.name
     || (personaDashboardSelectedId === "__settings__" ? "显示设置" : "总览首页");
   tabs.innerHTML = `
-    <div class="persona-dashboard-picker-head">
-      <strong>人设数据</strong>
-      <span>${pdEscape(String(visiblePersonas.length))} 人设</span>
-    </div>
     <button id="personaDashboardPickerTrigger" class="persona-dashboard-picker-trigger" type="button" aria-haspopup="dialog">
-      <span><small>当前查看</small><strong>${pdEscape(selectedLabel)}</strong></span>
-      <span class="persona-dashboard-picker-action">查看人设数据
+      <span><small>人设数据 · ${pdEscape(String(visiblePersonas.length))} 人设</small><strong>${pdEscape(selectedLabel)}</strong></span>
+      <span class="persona-dashboard-picker-action">查看
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
       </span>
     </button>

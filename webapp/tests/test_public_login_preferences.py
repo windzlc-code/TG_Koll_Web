@@ -228,6 +228,14 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertNotIn("if (event.target === loginModal) closeLogin()", self.script)
         self.assertIn('[data-close-login]', self.script)
 
+    def test_login_overlay_uses_a_light_background_blur(self):
+        overlay_start = self.styles.index(".auth-overlay {")
+        overlay_end = self.styles.index("\n}\n\n.auth-overlay.is-open", overlay_start)
+        overlay = self.styles[overlay_start:overlay_end]
+        self.assertIn("backdrop-filter: blur(4px);", overlay)
+        self.assertIn("-webkit-backdrop-filter: blur(4px);", overlay)
+        self.assertNotIn("blur(12px)", overlay)
+
     def test_admin_login_page_is_removed_and_shared_login_handles_admins(self):
         self.assertFalse((self.static_dir / "admin-login.html").exists())
         self.assertNotIn("_admin_login_page", self.server_source)
@@ -463,6 +471,17 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn("--public-cool: #4b6478", self.fixed_light_styles)
         self.assertIn("--public-warm-accent: #8a674d", self.fixed_light_styles)
         self.assertIn("background: var(--public-paper)", self.fixed_light_styles)
+
+    def test_admin_uses_opaque_operational_surfaces_with_a_filled_title_image(self):
+        admin_title = self.fixed_light_styles.rsplit(
+            ':root[data-theme="light"] .page-admin .admin-page-title {', 1
+        )[1].split("}", 1)[0]
+        self.assertIn("background-color: #ffffff;", admin_title)
+        self.assertIn("background-image:", admin_title)
+        self.assertIn("vecto-ai-cockpit.png", admin_title)
+        self.assertIn("background-size: cover;", admin_title)
+        self.assertIn(".page-admin :is(.card, .admin-page-view)", self.fixed_light_styles)
+        self.assertIn("background: #ffffff;", self.fixed_light_styles)
 
     def test_console_has_no_photographic_backdrop_and_home_uses_a_separate_image(self):
         console_rule = self.fixed_light_styles.split(
