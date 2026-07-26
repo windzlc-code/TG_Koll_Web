@@ -752,9 +752,19 @@ async function checkRunningHubKey() {
 }
 
 const MODEL_PROVIDER_KEY_CHECKS = {
-  text: { buttonId: "btnCheckLlmKey", inputId: "rtLlmApiKeyGpt", baseUrlId: "rtLlmBaseUrl", statusId: "rtLlmKeyStatus", label: "文字模型" },
-  image: { buttonId: "btnCheckImageKey", inputId: "rtImageGeminiApiKey", baseUrlId: "rtImageBaseUrl", statusId: "rtImageKeyStatus", label: "图片模型" },
+  text: { buttonId: "btnCheckLlmKey", inputId: "rtLlmApiKeyGpt", baseUrlId: "rtLlmBaseUrl", statusId: "rtLlmKeyStatus", modelStatusId: "rtLlmModelStatus", label: "文字模型" },
+  image: { buttonId: "btnCheckImageKey", inputId: "rtImageGeminiApiKey", baseUrlId: "rtImageBaseUrl", statusId: "rtImageKeyStatus", modelStatusId: "rtImageModelStatus", label: "图片模型" },
 };
+
+function setProviderKeyStatus(id, status) {
+  const node = el(id);
+  if (!node) return;
+  const current = status || {};
+  const checked = current.checked === true;
+  const ok = checked && current.valid === true && current.usable !== false;
+  node.textContent = current.message || "未返回独立的凭据状态。";
+  node.className = `msg ${checked ? (ok ? "ok" : "err") : (current.error ? "err" : "")}`.trim();
+}
 
 async function checkModelProviderKey(type) {
   const config = MODEL_PROVIDER_KEY_CHECKS[type];
@@ -767,17 +777,21 @@ async function checkModelProviderKey(type) {
     return;
   }
   setButtonLoading(config.buttonId, true, "检测中...");
-  setMsg(config.statusId, `正在检测${config.label} Key...`, true);
+  setMsg(config.statusId, "正在检测凭据与账户状态...", true);
+  setMsg(config.modelStatusId, "正在读取模型目录...", true);
   try {
-    const result = await api("/api/admin/models", {
+    const result = await api("/api/admin/provider_key_status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type, provider: "openai-compatible", base_url: baseUrl, api_key: apiKey }),
     });
-    const count = Array.isArray(result.models) ? result.models.length : 0;
-    setMsg(config.statusId, count ? `Key 有效，已识别 ${count} 个可用模型。` : "Key 有效，接口连接成功。", true);
+    const keyStatus = result.key_status || {};
+    const modelStatus = result.model_status || {};
+    setProviderKeyStatus(config.statusId, keyStatus);
+    setMsg(config.modelStatusId, modelStatus.message || "未返回模型目录检测结果。", modelStatus.ok === true);
   } catch (error) {
     setMsg(config.statusId, error.detail || error.message || `${config.label} Key 检测失败。`, false);
+    setMsg(config.modelStatusId, "模型目录未完成检测。", false);
   } finally {
     setButtonLoading(config.buttonId, false);
   }

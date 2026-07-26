@@ -852,6 +852,41 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertIn("企业余额不足", payload["message"])
         self.assertNotIn("saved-runninghub-key", response.text)
         self.assertEqual(request_post.call_args.kwargs["json"], {"apikey": "saved-runninghub-key"})
+        self.assertEqual(request_post.call_args.kwargs["headers"]["Authorization"], "Bearer saved-runninghub-key")
+
+    def test_admin_provider_key_status_separates_runninghub_balance_from_model_directory(self):
+        model_response = Mock()
+        model_response.status_code = 200
+        model_response.json.return_value = {"data": [{"id": "gemini-2.5-pro"}, {"id": "gemini-2.5-flash"}]}
+        account_response = Mock()
+        account_response.raise_for_status.return_value = None
+        account_response.json.return_value = {
+            "code": 0,
+            "msg": "success",
+            "data": {"apiType": "SHARED", "remainMoney": "0", "remainCoins": "9999"},
+        }
+        admin, _identity = self._admin_client()
+        with patch.object(server.requests, "get", return_value=model_response) as request_get, patch.object(server.requests, "post", return_value=account_response) as request_post:
+            response = admin.post(
+                "/api/admin/provider_key_status",
+                json={
+                    "type": "text",
+                    "provider": "openai-compatible",
+                    "base_url": "https://llm.runninghub.ai/v1",
+                    "api_key": "same-runninghub-key",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload["model_status"]["ok"])
+        self.assertEqual(payload["model_status"]["count"], 2)
+        self.assertTrue(payload["key_status"]["valid"])
+        self.assertFalse(payload["key_status"]["usable"])
+        self.assertIn("企业余额不足", payload["key_status"]["message"])
+        self.assertNotIn("same-runninghub-key", response.text)
+        self.assertEqual(request_get.call_args.args[0], "https://llm.runninghub.ai/v1/models")
+        self.assertEqual(request_post.call_args.kwargs["headers"]["Authorization"], "Bearer same-runninghub-key")
 
     def test_admin_runninghub_key_status_reports_invalid_key(self):
         provider_response = Mock()

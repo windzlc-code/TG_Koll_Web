@@ -2766,6 +2766,71 @@ def _fetch_provider_model_ids(*, model_type: str, base_url: str, api_key: str, p
     return _filter_models_for_type(models, typ)
 
 
+def _is_runninghub_api_base_url(base_url: str) -> bool:
+    """Return whether a provider URL belongs to a RunningHub API surface."""
+    text = str(base_url or "").strip()
+    if not text:
+        return False
+    if "://" not in text:
+        text = f"https://{text.lstrip('/')}"
+    try:
+        host = str(urlsplit(text).hostname or "").lower()
+    except ValueError:
+        return False
+    return host == "runninghub.ai" or host == "runninghub.cn" or host.endswith(".runninghub.ai") or host.endswith(".runninghub.cn")
+
+
+def _check_runninghub_account_key(api_key: str) -> dict[str, Any]:
+    """Read RunningHub account status without making a billable generation request."""
+    key = str(api_key or "").strip()
+    if not key:
+        raise ValueError("请先配置 RunningHub API Key。")
+    try:
+        response = requests.post(
+            "https://www.runninghub.cn/uc/openapi/accountStatus",
+            headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+            json={"apikey": key},
+            timeout=20,
+        )
+        response.raise_for_status()
+        body = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise RuntimeError(f"RunningHub 账户状态请求失败：{type(exc).__name__}") from exc
+
+    code = str(body.get("code") if isinstance(body, dict) else "")
+    if code not in {"0", "0.0"}:
+        message = str(body.get("msg") or "API Key 无效") if isinstance(body, dict) else "API Key 无效"
+        return {
+            "checked": True,
+            "valid": False,
+            "usable": False,
+            "message": f"Key 无效：{message}（代码 {code}）。",
+        }
+
+    data = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else {}
+    api_type = str(data.get("apiType") or "").upper()
+    money_raw = data.get("remainMoney")
+    coins_raw = data.get("remainCoins")
+    money = _to_float(money_raw, 0.0) if money_raw not in {None, ""} else None
+    coins = _to_float(coins_raw, 0.0) if coins_raw not in {None, ""} else None
+    usable = money > 0 if api_type == "SHARED" and money is not None else (coins > 0 if coins is not None else None)
+    if api_type == "SHARED" and money is not None:
+        message = "Key 有效，企业余额可用。" if usable else "Key 有效，但企业余额不足。"
+    elif coins is not None:
+        message = "Key 有效，RH 币余额可用。" if usable else "Key 有效，但 RH 币余额不足。"
+    else:
+        message = "Key 有效；账户余额接口未返回可判断余额。"
+    return {
+        "checked": True,
+        "valid": True,
+        "usable": usable,
+        "api_type": api_type,
+        "remain_money": money,
+        "remain_coins": coins,
+        "message": message,
+    }
+
+
 def _ordered_model_list(*groups: Any, fallback: list[str] | None = None) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -15551,7 +15616,15 @@ def _is_direct_preview_media_url(value: Any) -> bool:
     return bool(re.match(r"^(?:https?:)?//", text, re.I) or re.match(r"^(?:data:|blob:|/api/)", text, re.I))
 
 
-def _previewable_persona_media_items(items: list[dict[str, str]], *, archive_id: str = "", post_id: str = "", history_id: str = "", source: str = "posts") -> list[dict[str, str]]:
+def _previewable_persona_media_items(
+    items: list[dict[str, str]],
+    *,
+    archive_id: str = "",
+    post_id: str = "",
+    history_id: str = "",
+    source: str = "posts",
+    allow_external: bool = True,
+) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for index, item in enumerate(items or []):
         url = str((item or {}).get("url") or "").strip()
@@ -15559,8 +15632,12 @@ def _previewable_persona_media_items(items: list[dict[str, str]], *, archive_id:
             continue
         preview_url = ""
         reason = ""
-        if _is_direct_preview_media_url(url):
+        if _is_direct_preview_media_url(url) and (
+            allow_external or not re.match(r"^(?:https?:)?//", url, re.I)
+        ):
             preview_url = url
+        elif _is_direct_preview_media_url(url):
+            reason = "媒体未缓存到本地"
         elif archive_id and post_id:
             path = Path(url).expanduser().resolve()
             if path.is_file():
@@ -15779,8 +15856,11 @@ def _publish_history_hot_metrics(record: dict[str, Any], archive: dict[str, Any]
     }
 
 
-def _related_dashboard_media_items(row: dict[str, Any], posts: list[Any], publish_history: list[Any]) -> list[dict[str, str]]:
-    sources: list[Any] = [row]
+def _related_dashboard_media_context(
+    row: dict[str, Any],
+    posts: list[Any],
+    publish_history: list[Any],
+) -> tuple[list[dict[str, str]], dict[str, str]]:
     for post in posts:
         if not isinstance(post, dict):
             continue
@@ -15790,11 +15870,13 @@ def _related_dashboard_media_items(row: dict[str, Any], posts: list[Any], publis
             if meta and _dashboard_rows_match(row, {**meta, "id": post.get("id"), "content": post.get("content")}):
                 related = True
         if related:
-            sources.append(post)
-            for meta_key in ("sourceMeta", "publishedMeta"):
-                meta = post.get(meta_key) if isinstance(post.get(meta_key), dict) else {}
-                if meta:
-                    sources.append(meta)
+            post_id = str(post.get("id") or "").strip()
+            if post_id:
+                published_meta = post.get("publishedMeta") if isinstance(post.get("publishedMeta"), dict) else {}
+                items = _compact_dashboard_media_items(post, published_meta)
+                if not items:
+                    items = _compact_dashboard_media_items(post.get("sourceMeta"))
+                return items, {"post_id": post_id, "source": "posts"}
     for record in publish_history:
         if not isinstance(record, dict):
             continue
@@ -15803,16 +15885,14 @@ def _related_dashboard_media_items(row: dict[str, Any], posts: list[Any], publis
         if published_meta and _dashboard_rows_match(row, {**published_meta, "id": record.get("archivePostId") or record.get("id"), "content": record.get("content")}):
             related = True
         if related:
-            sources.append(record)
-            if published_meta:
-                sources.append(published_meta)
-            targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
-            for target in targets:
-                if isinstance(target, dict):
-                    sources.append(target)
-                    if isinstance(target.get("publishedMeta"), dict):
-                        sources.append(target.get("publishedMeta"))
-    return _compact_dashboard_media_items(*sources)
+            history_id = str(record.get("id") or "").strip()
+            if history_id:
+                items = _compact_dashboard_media_items(record, published_meta)
+                if not items:
+                    targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
+                    items = _compact_dashboard_media_items(*targets)
+                return items, {"history_id": history_id}
+    return _compact_dashboard_media_items(row), {}
 
 
 def _persona_dashboard_post_key(archive_id: str, row: Any) -> str:
@@ -16420,9 +16500,16 @@ def _build_persona_dashboard_overview(
                 compact = _compact_hot_post(row, archive_id)
                 if compact:
                     compact["platform"] = platform_name
+                    related_media, media_context = _related_dashboard_media_context(
+                        row,
+                        posts,
+                        visible_publish_history,
+                    )
                     compact["media_items"] = _previewable_persona_media_items(
-                        _related_dashboard_media_items(row, posts, visible_publish_history),
+                        related_media,
                         archive_id=archive_id,
+                        allow_external=False,
+                        **media_context,
                     )
                     post_metric_rows.append(compact)
             hot_platforms.append({
@@ -19919,6 +20006,58 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=502, detail=f"識別模型失敗：{type(exc).__name__}: {str(exc)[:300]}") from exc
         return {"ok": True, "type": typ, "count": len(models), "models": models}
 
+    @app.post("/api/admin/provider_key_status")
+    def api_admin_provider_key_status(payload: ModelLookupPayload, user: dict[str, Any] = Depends(require_admin)):
+        """Check account status and model-directory access as separate, non-billable results."""
+        typ = str(payload.type or "text").strip().lower()
+        base_url = str(payload.base_url or "").strip()
+        api_key = str(payload.api_key or "").strip()
+        if "***" in api_key or "•" in api_key:
+            api_key = ""
+        if not base_url or not api_key:
+            with db() as conn:
+                runtime = _get_runtime_config(conn)
+            if typ == "image":
+                base_url = base_url or str(runtime.get("image_model_provider_base_url") or "").strip()
+                api_key = api_key or str(runtime.get("image_model_provider_api_key_gemini") or "").strip()
+            else:
+                base_url = base_url or str(runtime.get("llm_base_url") or "").strip()
+                api_key = api_key or str(runtime.get("llm_api_key_gpt") or runtime.get("llm_api_key") or "").strip()
+        if not base_url or not api_key:
+            raise HTTPException(status_code=400, detail="请先配置 API Base URL 和 API Key")
+
+        key_status: dict[str, Any] = {
+            "checked": False,
+            "unsupported": True,
+            "message": "当前供应商未提供统一余额接口；不会把模型目录结果当作余额状态。",
+        }
+        if _is_runninghub_api_base_url(base_url):
+            try:
+                key_status = _check_runninghub_account_key(api_key)
+            except (ValueError, RuntimeError) as exc:
+                key_status = {"checked": False, "error": True, "message": str(exc)}
+
+        try:
+            models = _fetch_provider_model_ids(
+                model_type=typ,
+                base_url=base_url,
+                api_key=api_key,
+                provider=str(payload.provider or "").strip(),
+            )
+            model_status = {
+                "checked": True,
+                "ok": True,
+                "count": len(models),
+                "message": f"模型目录读取成功：识别 {len(models)} 个候选模型。",
+            }
+        except (ValueError, RuntimeError) as exc:
+            model_status = {"checked": True, "ok": False, "count": 0, "message": f"模型目录读取失败：{str(exc)[:300]}"}
+            models = []
+        except Exception as exc:
+            model_status = {"checked": True, "ok": False, "count": 0, "message": f"模型目录读取失败：{type(exc).__name__}"}
+            models = []
+        return {"ok": True, "type": typ, "models": models, "model_status": model_status, "key_status": key_status}
+
     @app.post("/api/admin/runninghub/key_status")
     def api_admin_runninghub_key_status(payload: ModelLookupPayload, user: dict[str, Any] = Depends(require_admin)):
         api_key = str(payload.api_key or "").strip()
@@ -19932,39 +20071,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="请先配置 RunningHub API Key。")
 
         try:
-            response = requests.post(
-                "https://www.runninghub.cn/uc/openapi/accountStatus",
-                json={"apikey": api_key},
-                timeout=20,
-            )
-            response.raise_for_status()
-            body = response.json()
-        except (requests.RequestException, ValueError) as exc:
-            raise HTTPException(status_code=502, detail=f"RunningHub 检测请求失败：{type(exc).__name__}") from exc
-        code = str(body.get("code") if isinstance(body, dict) else "")
-        if code not in {"0", "0.0"}:
-            message = str(body.get("msg") or "API Key 无效") if isinstance(body, dict) else "API Key 无效"
-            return {"ok": True, "valid": False, "usable": False, "message": f"Key 无效：{message}（代码 {code}）。"}
-
-        data = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else {}
-        api_type = str(data.get("apiType") or "").upper()
-        money_raw = data.get("remainMoney")
-        coins_raw = data.get("remainCoins")
-        money = _to_float(money_raw, 0.0) if money_raw not in {None, ""} else None
-        coins = _to_float(coins_raw, 0.0) if coins_raw not in {None, ""} else None
-        usable = money > 0 if api_type == "SHARED" and money is not None else (coins > 0 if coins is not None else None)
-        if api_type == "SHARED" and money is not None:
-            message = "Key 有效，当前可正常使用。" if usable else "Key 有效，但当前不可用：企业余额不足。"
-        elif coins is not None:
-            message = "Key 有效，当前可正常使用。" if usable else "Key 有效，但当前不可用：RH 币余额不足。"
-        else:
-            message = "Key 有效。"
-        return {
-            "ok": True,
-            "valid": True,
-            "usable": usable,
-            "message": message,
-        }
+            return {"ok": True, **_check_runninghub_account_key(api_key)}
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/api/admin/pricing")
     def api_admin_get_pricing(user: dict[str, Any] = Depends(require_admin)):
