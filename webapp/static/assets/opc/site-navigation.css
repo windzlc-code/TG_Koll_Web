@@ -714,8 +714,14 @@ body.site-mobile-menu-active {
 }
 
 .site-notification-icon {
+  display: block;
   width: 19px;
   height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .site-notification-dot {
@@ -792,15 +798,30 @@ body.site-mobile-menu-active {
   height: 40px;
   padding: 0;
   color: #314152;
-  background: #f3f6f7;
-  border: 1px solid #d7e0e3;
+  background: transparent;
+  border: 0;
   border-radius: 8px;
   cursor: pointer;
 }
 
-.site-notification-close svg {
+.site-notification-close:hover,
+.site-notification-close:focus-visible,
+.site-notification-broadcast-head button:hover,
+.site-notification-broadcast-head button:focus-visible {
+  color: #172033;
+  background: #eef2f4;
+}
+
+.site-notification-close svg,
+.site-notification-broadcast-head button svg {
+  display: block;
   width: 18px;
   height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .site-notification-tabs {
@@ -986,15 +1007,14 @@ body.site-mobile-menu-active {
   height: 38px;
   padding: 0;
   color: #314152;
-  background: #f3f6f7;
-  border: 1px solid #d7e0e3;
+  background: transparent;
+  border: 0;
   border-radius: 8px;
   cursor: pointer;
 }
 
 .site-notification-broadcast-head button svg {
-  width: 18px;
-  height: 18px;
+  pointer-events: none;
 }
 
 .site-notification-broadcast-dialog h2 {
