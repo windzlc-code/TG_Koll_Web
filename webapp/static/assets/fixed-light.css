@@ -16,8 +16,8 @@
   --public-cool-dark: #253746;
   --public-on-dark-accent: #d7e0e7;
   --public-warm-accent: #8a674d;
-  --public-action-gradient: linear-gradient(112deg, #17212b 0%, #355c77 84%, #756d67 100%);
-  --public-action-gradient-hover: linear-gradient(112deg, #22313f 0%, #466f8c 82%, #7d736c 100%);
+  --public-action-gradient: linear-gradient(108deg, #17212b 0 48%, #355c77 48% 88%, #625e5b 88% 100%);
+  --public-action-gradient-hover: linear-gradient(108deg, #22313f 0 42%, #466f8c 42% 88%, #6c6662 88% 100%);
   --public-success: #27845a;
   --paper: var(--public-paper);
   --surface: var(--public-page);
@@ -869,7 +869,7 @@
   --panel-shadow: 0 10px 30px rgb(49 65 85 / 6%);
   --vecto-action-border: #34495e;
   --vecto-action-static-gradient: var(--public-action-gradient);
-  --vecto-action-running-gradient: linear-gradient(112deg, #17212b 0%, #3b607a 80%, #756d67 100%);
+  --vecto-action-running-gradient: linear-gradient(108deg, #17212b 0 44%, #3b607a 44% 88%, #625e5b 88% 100%);
 }
 
 :root[data-theme="light"] .console-page :is(.console-shell, .console-modal) :is(
@@ -961,13 +961,56 @@
   --admin-ink: var(--public-ink);
   --admin-ink-soft: var(--public-ink-soft);
   --admin-muted: var(--public-muted);
-  --admin-paper: var(--public-paper);
-  --admin-surface: var(--public-page);
-  --admin-line: var(--public-line);
+  --admin-paper: #f8fafb;
+  --admin-surface: #e3e8ec;
+  --admin-line: #aeb8c1;
   --admin-teal: var(--public-cool);
   --admin-teal-dark: var(--public-cool-dark);
   --admin-green: var(--public-success);
   --admin-coral: #d94c45;
+  background: #dfe4e8;
+}
+
+:root[data-theme="light"] .page-admin .sidebar {
+  color: #dbe3e9;
+  background: #121a21;
+  border-color: #2b3741;
+  scrollbar-color: #667786 transparent;
+}
+
+:root[data-theme="light"] .page-admin :is(.brand, .admin-rail-note) {
+  color: #eef3f6;
+  background: #1a242d;
+  border-color: #35424d;
+}
+
+:root[data-theme="light"] .page-admin :is(.brand p, .sidebar .small) {
+  color: #aebbc5;
+}
+
+:root[data-theme="light"] .page-admin :is(.admin-brand-eyebrow, .section-kicker) {
+  color: #b9cad7;
+}
+
+:root[data-theme="light"] .page-admin .admin-nav button {
+  color: #b9c4cc;
+}
+
+:root[data-theme="light"] .page-admin .admin-nav button:hover {
+  color: #fff;
+  background: #25313b;
+  border-color: #3a4854;
+}
+
+:root[data-theme="light"] .page-admin .admin-nav button.is-active {
+  color: #fff;
+  background-color: var(--public-cool-dark);
+  background-image: var(--public-action-gradient);
+  border-color: #587084;
+}
+
+:root[data-theme="light"] .page-admin .admin-nav button.is-active::before {
+  display: none;
 }
 
 :root[data-theme="light"] .page-admin :is(button.primary, .btn.primary),
@@ -989,7 +1032,7 @@
 
 :root[data-theme="light"] .page-admin .admin-page-title {
   color: var(--public-ink);
-  background: linear-gradient(120deg, #fff 0%, var(--public-cool-soft) 60%, #f7f9fb 100%);
+  background: linear-gradient(90deg, #f8fafb 0 58%, #dce3e8 58% 84%, #c6cdd2 84% 100%);
   border-color: var(--public-line);
 }
 
@@ -1553,18 +1596,22 @@
   border-left-color: var(--public-line);
 }
 
-/* Admin: preserve white panels while restoring visual ownership and sections. */
+/* Admin: neutral operational canvas with large, readable color blocks. */
 :root[data-theme="light"] .page-admin .admin-page-title {
   background-image:
-    linear-gradient(105deg, rgb(255 255 255 / 91%), rgb(237 244 250 / 91%)),
+    linear-gradient(90deg, rgb(248 250 251 / 96%) 0 58%, rgb(220 227 232 / 94%) 58% 84%, rgb(198 205 210 / 92%) 84% 100%),
     url("/assets/opc/vecto-ai-cockpit.png");
   background-position: center;
   background-size: cover;
-  border-color: var(--public-line);
+  border-color: #aeb8c1;
 }
 
 :root[data-theme="light"] .page-admin .admin-page-title::before {
   background: transparent;
+}
+
+:root[data-theme="light"] .page-admin .admin-page-title .section-kicker {
+  color: #34495e;
 }
 
 :root[data-theme="light"] .page-admin .admin-page-view > .section-head {
@@ -1584,8 +1631,122 @@
 }
 
 :root[data-theme="light"] .page-admin :is(.admin-config-card, .admin-runtime-block) {
-  background: var(--public-cool-muted);
-  border-color: var(--public-line);
+  background: #edf1f4;
+  border-color: #b6c0c8;
+}
+
+:root[data-theme="light"] .page-admin :is(.card, .admin-page-view) {
+  background: #f8fafb;
+  border-color: #b6c0c8;
+}
+
+:root[data-theme="light"] .page-admin :is(
+  .task-summary-shell,
+  .admin-compose-shell,
+  .admin-table-shell,
+  .task-toolbar,
+  .account-grid > div
+) {
+  background: #edf1f4;
+  border-color: #b6c0c8;
+}
+
+:root[data-theme="light"] .page-admin .admin-governance-kpi {
+  border-color: #aeb8c1;
+  border-top-width: 4px;
+  background: #f7f9fa;
+  box-shadow: inset 0 -1px 0 rgb(64 78 91 / 8%);
+}
+
+:root[data-theme="light"] .page-admin .admin-governance-kpi.is-info {
+  border-top-color: #4d718b;
+  background: linear-gradient(90deg, #dce6ed 0 30%, #f8fafb 30% 100%);
+}
+
+:root[data-theme="light"] .page-admin :is(
+  .admin-governance-kpi.is-success,
+  .admin-governance-kpi.is-health
+) {
+  border-top-color: #527361;
+  background: linear-gradient(90deg, #e0e8e3 0 30%, #f8fafb 30% 100%);
+}
+
+:root[data-theme="light"] .page-admin .admin-governance-kpi.is-warning {
+  border-top-color: #8a7665;
+  background: linear-gradient(90deg, #e9e4de 0 26%, #f8fafb 26% 100%);
+}
+
+:root[data-theme="light"] .page-admin .admin-governance-kpi.is-danger {
+  border-top-color: #9c5960;
+  background: linear-gradient(90deg, #ece2e3 0 26%, #f8fafb 26% 100%);
+}
+
+:root[data-theme="light"] .page-admin .admin-governance-panel {
+  background: #f8fafb;
+  border-color: #aeb8c1;
+  box-shadow: inset 0 4px 0 #d5dde3;
+}
+
+:root[data-theme="light"] .page-admin .admin-chart-panel:nth-child(2n) {
+  box-shadow: inset 0 4px 0 #c8d6e0;
+}
+
+:root[data-theme="light"] .page-admin .admin-chart-panel:nth-child(3n) {
+  box-shadow: inset 0 4px 0 #d8d2cc;
+}
+
+:root[data-theme="light"] .page-admin :is(.admin-governance-chart, .admin-distribution-list, .admin-health-list, .admin-queue-list) {
+  background: #eef2f5;
+  border-color: #c0c8cf;
+}
+
+:root[data-theme="light"] .page-admin :is(
+  .admin-governance-kpi > span,
+  .admin-governance-kpi > small,
+  .admin-governance-panel header span
+) {
+  color: #4b5965;
+}
+
+:root[data-theme="light"] .page-admin .admin-governance-kpi > strong {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+:root[data-theme="light"] .page-admin .admin-governance-panel > header {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+:root[data-theme="light"] .page-admin .admin-chart-legend {
+  max-width: 100%;
+  white-space: normal;
+}
+
+@media (max-width: 760px) {
+  :root[data-theme="light"] .page-admin .admin-page-title {
+    background-image:
+      linear-gradient(180deg, rgb(248 250 251 / 97%) 0 64%, rgb(220 227 232 / 95%) 64% 88%, rgb(198 205 210 / 93%) 88% 100%),
+      url("/assets/opc/vecto-ai-cockpit.png");
+  }
+
+  :root[data-theme="light"] .page-admin .admin-governance-kpi {
+    min-width: 0;
+    padding: 12px;
+  }
+
+  :root[data-theme="light"] .page-admin .admin-governance-kpi.is-info {
+    background: linear-gradient(90deg, #dce6ed 0 22%, #f8fafb 22% 100%);
+  }
+
+  :root[data-theme="light"] .page-admin .admin-governance-kpi:is(.is-success, .is-health) {
+    background: linear-gradient(90deg, #e0e8e3 0 22%, #f8fafb 22% 100%);
+  }
+
+  :root[data-theme="light"] .page-admin .admin-governance-kpi:is(.is-warning, .is-danger) {
+    background: linear-gradient(90deg, #e8e2dc 0 22%, #f8fafb 22% 100%);
+  }
 }
 
 :root[data-theme="light"] .page-admin :is(
