@@ -1881,7 +1881,7 @@ button.primary,
 
   .persona-dashboard-view .persona-post-table tr {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) max-content max-content;
     grid-template-areas:
       "platform platform time actions"
       "source source source source"
@@ -1920,13 +1920,17 @@ button.primary,
 
   .persona-dashboard-view .persona-post-platform-name {
     flex: 0 0 auto;
+    font-size: 11px;
+    white-space: nowrap;
   }
 
   .persona-dashboard-view .persona-post-platform .persona-post-content-badges {
     flex: 1 1 auto;
+    gap: 2px;
     flex-wrap: nowrap;
     min-width: 0;
     margin: 0;
+    overflow: hidden;
   }
 
   .persona-dashboard-view .persona-post-table td:nth-child(2) {
@@ -1946,6 +1950,7 @@ button.primary,
     font-size: 10px;
     line-height: 1.2;
     text-align: right;
+    white-space: nowrap;
   }
 
   .persona-dashboard-view .persona-post-table td:nth-child(4) { grid-area: likes; }
@@ -1996,19 +2001,37 @@ button.primary,
   }
 
   .persona-dashboard-view .persona-post-content-badges span {
-    min-height: 18px;
-    padding: 2px 5px;
-    font-size: 10px;
+    min-width: 0;
+    min-height: 17px;
+    padding: 1px 4px;
+    overflow: hidden;
+    font-size: 9px;
+    line-height: 1.15;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .persona-dashboard-view .persona-post-actions {
     gap: 4px;
+    flex-wrap: nowrap;
+    white-space: nowrap;
   }
 
   .persona-dashboard-view .persona-post-actions .ghost {
-    min-height: 28px;
-    padding: 3px 7px;
-    font-size: 11px;
+    min-height: 26px;
+    padding: 2px 5px;
+    font-size: 10px;
+  }
+
+  .persona-dashboard-view .persona-post-actions .persona-post-delete {
+    width: 26px;
+    min-width: 26px;
+    height: 26px;
+    min-height: 26px;
+    padding: 0;
+    color: #dc2626;
+    border: 1px solid #ef4444;
+    background: #fff;
   }
 
   .persona-dashboard-view .persona-post-table td[data-label]::before {
@@ -3228,26 +3251,6 @@ textarea:focus {
   .automation-plan-run-row.is-queued .automation-plan-run-index,
   .automation-plan-run-row.is-queued small {
     animation: none;
-  }
-}
-
-/* Touch layouts use an instant highlighted pill while an account picker is open. */
-@media (max-width: 760px) {
-  .account-pool-add-button.is-opening,
-  .account-pool-add-button.is-opening span,
-  .account-pool-add-button.is-closing,
-  .account-pool-add-button.is-closing span {
-    animation: none;
-  }
-
-  .account-pool-add-button.is-modal-open {
-    box-shadow: inset 0 0 0 1px var(--accent);
-    transition: none;
-  }
-
-  .account-pool-add-button.is-modal-open span {
-    transform: none;
-    transition: none;
   }
 }
 
@@ -14167,6 +14170,38 @@ body.persona-media-sorting {
   line-height: 1;
 }
 
+/* Mobile add-account triggers use a border-only open state; desktop motion stays unchanged. */
+@media (max-width: 760px) {
+  .account-pool-add-button,
+  .account-pool-add-button:hover,
+  .account-pool-add-button:focus,
+  .account-pool-add-button:focus-visible,
+  .account-pool-add-button.is-opening,
+  .account-pool-add-button.is-modal-open,
+  .account-pool-add-button.is-closing {
+    background: transparent;
+    transform: none;
+    animation: none;
+    transition: none;
+  }
+
+  .account-pool-add-button.is-modal-open {
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+
+  .account-pool-add-button span,
+  .account-pool-add-button:hover span,
+  .account-pool-add-button:focus span,
+  .account-pool-add-button:focus-visible span,
+  .account-pool-add-button.is-opening span,
+  .account-pool-add-button.is-modal-open span,
+  .account-pool-add-button.is-closing span {
+    transform: none;
+    animation: none;
+    transition: none;
+  }
+}
+
 @container account-pool-card (max-width: 360px) {
   .account-pool-section-head {
     display: grid;
@@ -15962,34 +15997,32 @@ button.proxy-market-link {
 }
 
 .account-password-display--input {
+  position: relative;
+  display: block;
   width: 100%;
-  min-height: 34px;
-  padding: 0 6px 0 10px;
-  gap: 4px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-solid);
-}
-
-.account-password-display--input:focus-within {
-  border-color: var(--ink);
-  background: var(--panel-solid);
+  min-width: 0;
 }
 
 .account-password-display--input input {
-  flex: 1 1 auto;
+  display: block;
   width: 100%;
   min-width: 0;
   min-height: 34px;
-  padding: 0 4px;
-  border: 0;
+  padding: 0 42px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
   outline: 0;
-  background: transparent;
+  background: var(--panel-solid);
   box-shadow: none;
   color: var(--ink);
   font: inherit;
   appearance: none;
   -webkit-appearance: none;
+}
+
+.account-password-display--input input:focus {
+  border-color: var(--ink);
+  box-shadow: none;
 }
 
 .account-password-display--input input::placeholder {
@@ -15999,17 +16032,20 @@ button.proxy-market-link {
 }
 
 .account-password-toggle {
-  display: inline-grid;
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: grid;
   place-items: center;
   width: 30px;
   height: 30px;
-  flex: 0 0 30px;
   padding: 0;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  transform: translateY(-50%);
 }
 
 .account-password-toggle:hover,
@@ -16045,13 +16081,12 @@ button.proxy-market-link {
 }
 
 .account-password-field--modal .account-password-display--input {
-  min-height: 42px;
-  padding: 0 6px 0 10px;
+  min-height: 0;
 }
 
 .account-password-field--modal .account-password-display--input input {
   min-height: 40px;
-  padding: 0 4px;
+  padding-right: 42px;
   font-size: inherit;
   font-weight: 500;
 }
@@ -17705,10 +17740,10 @@ body.live-browser-modal-open {
     gap: 7px;
   }
 
-  input:not([type="checkbox"]):not([type="radio"]),
+  input:not([type="checkbox"]):not([type="radio"]):not(.account-inline-password-input),
   select,
   textarea,
-  .console-modal-dialog input {
+  .console-modal-dialog input:not(.account-inline-password-input) {
     min-height: 38px;
     padding: 7px 9px;
     font-size: 16px;

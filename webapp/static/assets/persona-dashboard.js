@@ -292,6 +292,12 @@ function pdRenderDashboardPlatformTabs(data) {
   });
 }
 
+function pdCloseDashboardPlatformPicker() {
+  if (!personaDashboardPlatformPickerOpen) return;
+  personaDashboardPlatformPickerOpen = false;
+  pdRenderDashboard();
+}
+
 function pdPostHeat(row) {
   return Number(row.view_count || 0)
     + Number(row.like_count || 0)
@@ -346,11 +352,6 @@ function pdPostTypeLabel(value) {
     video: "有视频",
     media: "有媒体",
   }[String(value || "")] || "全部内容");
-}
-
-function pdCurrentPostFilterText() {
-  const platform = pdPlatformFilter();
-  return `平台：${pdPlatformLabel(platform)} · 内容：${pdPostTypeLabel(personaDashboardPostTypeFilter)} · 排序：${pdPostSortLabel(personaDashboardPostSort)}`;
 }
 
 function pdFilterTrend(rows) {
@@ -693,7 +694,6 @@ function pdRenderPersonaCard(persona) {
         <div class="persona-table-toolbar">
           <div class="persona-table-title">
             <strong>发送推文指标</strong>
-            <span>${pdEscape(pdCurrentPostFilterText())}</span>
           </div>
           <div class="persona-post-controls">
             <label>
@@ -1250,6 +1250,15 @@ async function pdPollRefresh(taskId) {
 function pdBindDashboard(root) {
   if (!root || personaDashboardBoundRoot === root) return;
   personaDashboardBoundRoot = root;
+  document.addEventListener("click", (event) => {
+    if (!personaDashboardPlatformPickerOpen) return;
+    const picker = pdEl("personaDashboardPlatformTabs")?.querySelector(".persona-dashboard-platform-picker");
+    if (picker?.contains(event.target)) return;
+    pdCloseDashboardPlatformPicker();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") pdCloseDashboardPlatformPicker();
+  });
   const refresh = pdEl("btnPersonaDashboardRefresh");
   const refreshAll = pdEl("btnPersonaDashboardRefreshAll");
   if (refresh) refresh.addEventListener("click", () => pdLoadDashboard());
@@ -1265,6 +1274,7 @@ function pdMountDashboard(root) {
 }
 
 function pdUnmountDashboard() {
+  personaDashboardPlatformPickerOpen = false;
   pdStopAutoPoll();
 }
 

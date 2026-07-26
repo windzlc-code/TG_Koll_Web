@@ -21989,6 +21989,7 @@ function openAccountPoolEditorModal(options) {
     account = null,
     platform = "",
     personaId = "",
+    motionTrigger = null,
   } = options;
   const editing = Boolean(account?.id);
   if (!editing) {
@@ -22022,10 +22023,15 @@ function openAccountPoolEditorModal(options) {
       </div>
     </section>`;
   document.body.appendChild(modal);
+  const mobileAddTrigger = !editing && isMobileNavMode() && motionTrigger instanceof HTMLElement
+    ? motionTrigger
+    : null;
+  if (mobileAddTrigger) startAccountPoolAddButtonMotion(mobileAddTrigger);
   const totpController = editing ? createAccountTotpController(modal, account) : null;
   $(`${editing ? "accountPoolEdit" : "accountPool"}Username`)?.focus();
   modal.__cleanup = () => {
     totpController?.close();
+    closeAccountPoolAddButtonMotion(mobileAddTrigger);
     if (editing) clearAccountPasswordReveal(accountId, "pool-edit");
     else resetAccountPoolCreateForm();
   };
@@ -26478,7 +26484,7 @@ function bindEvents() {
     }
     const accountAdd = event.target.closest("[data-account-pool-add]");
     if (accountAdd) {
-      openAccountPoolCreateModal();
+      openAccountPoolCreateModal({ motionTrigger: accountAdd });
       return;
     }
     const accountCheckTarget = event.target.closest(".account-pool-card-check");

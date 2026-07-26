@@ -149,6 +149,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             mobile_styles,
         )
         self.assertIn('"platform platform time actions"', mobile_styles)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) max-content max-content;", mobile_styles)
         self.assertIn('"source source source source"', mobile_styles)
         self.assertIn('"likes comments shares views"', mobile_styles)
         self.assertIn(".persona-dashboard-view .persona-post-table td:nth-child(n + 4):nth-child(-n + 7) {", mobile_styles)
@@ -173,6 +174,19 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-dashboard-view .persona-post-table thead {", self.styles)
         self.assertIn(".persona-dashboard-view .persona-post-platform .persona-post-content-badges {", self.styles)
         self.assertIn("overflow: visible;", self.styles)
+
+    def test_platform_picker_closes_on_outside_click_and_filter_summary_is_not_rendered(self):
+        binder_start = self.dashboard_script.index("function pdBindDashboard(root)")
+        binder_end = self.dashboard_script.index("\nfunction pdMountDashboard", binder_start)
+        binder = self.dashboard_script[binder_start:binder_end]
+
+        self.assertIn('document.addEventListener("click"', binder)
+        self.assertIn('".persona-dashboard-platform-picker"', binder)
+        self.assertIn('event.key === "Escape"', binder)
+        self.assertIn("pdCloseDashboardPlatformPicker();", binder)
+        self.assertNotIn("function pdCurrentPostFilterText()", self.dashboard_script)
+        self.assertIn(".persona-post-actions .persona-post-delete {", self.styles)
+        self.assertIn("border: 1px solid #ef4444;", self.styles)
 
     def test_post_detail_prefers_backend_preview_urls_and_does_not_render_schema_field_names(self):
         media_start = self.dashboard_script.index("function pdPostMediaItems(row)")
@@ -772,7 +786,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("overflow-x: auto;", mobile_account_pool_styles)
         self.assertIn("scroll-snap-type: x proximity;", mobile_account_pool_styles)
 
-    def test_mobile_account_add_uses_an_instant_highlight_while_desktop_keeps_shared_motion(self):
+    def test_mobile_account_add_uses_a_border_only_state_while_desktop_keeps_shared_motion(self):
         self.assertIn("function startAccountPoolAddButtonMotion(button)", self.console_script)
         self.assertIn("function closeAccountPoolAddButtonMotion(button)", self.console_script)
         self.assertIn("if (isMobileNavMode())", self.console_script)
@@ -796,10 +810,28 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("closeAccountPoolAddButtonMotion(motionTrigger)", picker)
         self.assertLess(picker.index("openConsoleModal({"), picker.index("startAccountPoolAddButtonMotion(motionTrigger);"))
         self.assertNotIn("account-pool-add-button-motion-proxy", self.console_script)
+        editor_start = self.console_script.index("function openAccountPoolEditorModal(options)")
+        editor_end = self.console_script.index("\nfunction openAccountPoolCreateModal(", editor_start)
+        editor = self.console_script[editor_start:editor_end]
+        self.assertIn("motionTrigger = null", editor)
+        self.assertIn("!editing && isMobileNavMode()", editor)
+        self.assertIn("startAccountPoolAddButtonMotion(mobileAddTrigger);", editor)
+        self.assertIn("closeAccountPoolAddButtonMotion(mobileAddTrigger);", editor)
+        self.assertIn("openAccountPoolCreateModal({ motionTrigger: accountAdd });", self.console_script)
         self.assertIn(".account-pool-add-button.is-opening {", self.styles)
         self.assertIn(".account-pool-add-button.is-closing {", self.styles)
-        self.assertIn("Touch layouts use an instant highlighted pill", self.styles)
-        self.assertIn("box-shadow: inset 0 0 0 1px var(--accent);", self.styles)
+        mobile_marker = "/* Mobile add-account triggers use a border-only open state; desktop motion stays unchanged. */"
+        self.assertIn(mobile_marker, self.styles)
+        mobile_styles = self.styles[self.styles.index(mobile_marker):]
+        self.assertIn("box-shadow: inset 0 0 0 1px var(--accent);", mobile_styles)
+        self.assertIn("background: transparent;", mobile_styles)
+        self.assertIn("transform: none;", mobile_styles)
+        self.assertIn("animation: none;", mobile_styles)
+        self.assertIn("transition: none;", mobile_styles)
+        self.assertGreater(
+            self.styles.index(mobile_marker),
+            self.styles.index("@keyframes account-pool-add-icon-close"),
+        )
         self.assertNotIn(".account-pool-add-button-motion-proxy", self.styles)
         self.assertIn("animation: account-pool-add-button-open 420ms", self.styles)
         self.assertIn(".account-pool-add-button.is-opening span {", self.styles)
@@ -813,7 +845,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         platform_tabs_end = self.console_script.index("\nfunction accountById", platform_tabs_start)
         platform_tabs = self.console_script[platform_tabs_start:platform_tabs_end]
         cards_start = self.console_script.index("function renderAccountPoolCards(")
-        cards_end = self.console_script.index("\nfunction accountPoolFieldValue", cards_start)
+        cards_end = self.console_script.index("\nfunction accountPoolDraftValue", cards_start)
         cards = self.console_script[cards_start:cards_end]
 
         self.assertNotIn('class="account-pool-head"', account_pool)
