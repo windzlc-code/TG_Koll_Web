@@ -21663,3 +21663,31 @@ body.console-page {
     justify-content: flex-start;
   }
 }
+
+/* Keep every mobile page aligned to the persona-dashboard top rhythm. */
+@media (max-width: 760.98px) {
+  .console-page {
+    --mobile-page-top-gap: 8px;
+    --mobile-page-section-gap: 8px;
+  }
+
+  .console-page .mobile-page-toolbar {
+    margin-bottom: 0;
+  }
+
+  .console-page .console-main > .view.is-active {
+    padding-top: var(--mobile-page-top-gap);
+  }
+
+  .console-page .console-main > .view.is-active > :first-child {
+    margin-top: 0;
+  }
+
+  .console-page .view[data-panel="persona_dashboard"] .persona-dashboard-page {
+    padding-top: 0;
+  }
+
+  .console-page .persona-dashboard-local-actions {
+    margin-bottom: var(--mobile-page-section-gap);
+  }
+}
