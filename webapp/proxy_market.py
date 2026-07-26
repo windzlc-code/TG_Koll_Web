@@ -1084,10 +1084,10 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             if row is None:
                 raise HTTPException(status_code=404, detail="商城代理不存在")
             current = dict(row)
-            if str(current.get("status") or "") in {"disabled", "archived"}:
+            if str(current.get("status") or "") == "archived":
                 raise HTTPException(
                     status_code=409,
-                    detail="已停用或归档的商城代理不能直接检测发布",
+                    detail="已归档的商城代理不能重新检测发布",
                 )
             expected_version = int(current.get("version") or 1)
             active_task = conn.execute(

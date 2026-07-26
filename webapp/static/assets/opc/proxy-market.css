@@ -780,7 +780,7 @@
 
 @media (max-width: 680px) {
   .proxy-market-hero {
-    min-height: 410px;
+    min-height: 320px;
   }
 
   .proxy-market-hero-media {
@@ -796,43 +796,107 @@
   .proxy-market-account,
   .proxy-market-filters,
   .proxy-market-catalog {
-    width: min(100% - 28px, 1180px);
+    width: min(100% - 24px, 1180px);
   }
 
   .proxy-market-hero-copy {
-    padding: 104px 0 38px;
+    padding: 78px 0 24px;
   }
 
   .proxy-market-hero-copy h1 {
-    font-size: 48px;
+    font-size: 34px;
+    line-height: 1.05;
   }
 
   .proxy-market-hero-copy > p:not(.eyebrow) {
-    font-size: 15px;
+    margin: 10px 0 14px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .proxy-market-hero-copy .eyebrow {
+    margin-bottom: 6px;
+    font-size: 10px;
+  }
+
+  .proxy-market-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .proxy-market-facts > div {
+    padding: 9px 11px;
+  }
+
+  .proxy-market-facts > div:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .proxy-market-facts > div:nth-child(-n + 2) {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .proxy-market-facts span {
+    font-size: 10px;
+  }
+
+  .proxy-market-facts strong {
+    font-size: 14px;
   }
 
   .proxy-market-account {
     align-items: stretch;
     flex-direction: column;
-    gap: 12px;
+    gap: 8px;
+    margin-top: 14px;
+    padding: 11px 13px;
   }
 
   .proxy-market-account .button {
     width: 100%;
+    min-height: 38px;
+    font-size: 11px;
+  }
+
+  .proxy-market-account-copy span {
+    font-size: 10px;
+  }
+
+  .proxy-market-account-copy strong {
+    font-size: 12px;
   }
 
   .proxy-market-section-heading {
     align-items: start;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .proxy-market-section-heading h2 {
+    font-size: 22px;
+  }
+
+  .proxy-market-filters {
+    padding: 20px 0 16px;
   }
 
   .proxy-filter-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 7px;
   }
 
   .proxy-filter-reset,
   .proxy-filter-submit,
   .proxy-filter-form :is(input, select) {
-    min-height: 44px;
+    min-height: 40px;
+    font-size: 12px;
+  }
+
+  .proxy-filter-form label {
+    gap: 2px;
+  }
+
+  .proxy-filter-form label > span {
+    font-size: 10px;
   }
 
   .proxy-filter-submit {
@@ -840,7 +904,8 @@
   }
 
   .proxy-market-catalog {
-    padding-bottom: 54px;
+    min-height: 280px;
+    padding: 28px 0 42px;
   }
 
   .proxy-catalog-grid {
@@ -848,7 +913,42 @@
   }
 
   .proxy-card {
-    min-height: 268px;
+    min-height: 220px;
+    padding: 14px;
+  }
+
+  .proxy-card-top {
+    margin-bottom: 10px;
+  }
+
+  .proxy-country-code {
+    width: 34px;
+    height: 27px;
+    font-size: 10px;
+  }
+
+  .proxy-card h3 {
+    font-size: 17px;
+  }
+
+  .proxy-card-meta {
+    gap: 7px;
+    margin: 11px 0;
+  }
+
+  .proxy-card-meta div {
+    padding-top: 6px;
+  }
+
+  .proxy-card-meta :is(dt, dd),
+  .proxy-card-note {
+    font-size: 10px;
+  }
+
+  .proxy-claim-button {
+    min-height: 38px;
+    padding-inline: 11px;
+    font-size: 11px;
   }
 
   .proxy-claim-success {
@@ -859,40 +959,39 @@
 
 @media (max-width: 440px) {
   .proxy-market-facts {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .proxy-market-facts > div {
-    padding: 13px 16px;
-    border-right: 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    border-right: 1px solid rgba(255, 255, 255, 0.12);
   }
 
-  .proxy-market-facts > div:last-child {
-    border-bottom: 0;
+  .proxy-market-facts > div:nth-child(2n) {
+    border-right: 0;
   }
 
   .proxy-filter-form {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .proxy-filter-submit {
-    grid-column: auto;
+    grid-column: span 2;
   }
 
   .catalog-heading {
-    align-items: start;
-    flex-direction: column;
-    gap: 8px;
+    align-items: center;
+    flex-direction: row;
+    gap: 6px;
   }
 
   .proxy-result-summary {
-    text-align: left;
+    font-size: 11px;
+    text-align: right;
   }
 
   .proxy-card-footer {
-    align-items: stretch;
-    flex-direction: column;
+    align-items: end;
+    flex-direction: row;
   }
 
   .proxy-card-note {

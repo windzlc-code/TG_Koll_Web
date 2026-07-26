@@ -3,14 +3,9 @@
 
   const FILTER_KEYS = [
     "country",
-    "region",
-    "city",
     "isp",
     "proxy_type",
     "ip_type",
-    "health_status",
-    "use_case",
-    "tag",
     "availability",
     "min_price_cents",
     "max_price_cents",
@@ -256,10 +251,8 @@
       const field = elements.form?.elements?.[key];
       if (field) field.value = query.has(key) ? (query.get(key) || "") : (key === "availability" ? "available" : "");
     });
-    const pageSize = [12, 24, 48].includes(Number(query.get("page_size"))) ? Number(query.get("page_size")) : 12;
-    if (elements.form?.elements?.page_size) elements.form.elements.page_size.value = String(pageSize);
     state.page = Math.max(1, Math.floor(finiteNumber(query.get("page"), 1)));
-    state.pageSize = pageSize;
+    state.pageSize = 12;
   }
 
   function catalogParams() {
@@ -268,9 +261,7 @@
       const value = String(elements.form?.elements?.[key]?.value || "").trim();
       if (value || key === "availability") params.set(key, value);
     });
-    state.pageSize = [12, 24, 48].includes(Number(elements.form?.elements?.page_size?.value))
-      ? Number(elements.form.elements.page_size.value)
-      : 12;
+    state.pageSize = 12;
     params.set("page", String(state.page));
     params.set("page_size", String(state.pageSize));
     return params;
@@ -498,7 +489,6 @@
       marketCityOptions: ["city", ["city_name", "city"], "全部城市"],
       marketIspOptions: ["isp", ["isp_name", "isp", "carrier"], "全部 ISP"],
       marketUseCaseOptions: ["use_cases", ["use_case", "recommended_use_case", "purpose"], "全部情境"],
-      marketTagOptions: ["tags", ["tag"], "全部標籤"],
     };
     Object.entries(sources).forEach(([id, [facetKey, itemKeys, emptyLabel]]) => {
       const values = facetValues(root, facetKey);

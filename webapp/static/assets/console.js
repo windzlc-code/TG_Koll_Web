@@ -3308,7 +3308,7 @@ function personaFormState(personaId) {
     return {
       generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", prompt: "", selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotSearchMode: "strict", hotFreshnessMode: "default", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {} },
       draft: defaultPersonaDraftForm(),
-      media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "1:1", resolution: "720p", duration: 2, replaceExisting: false },
+      media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1" },
     };
   }
@@ -3344,7 +3344,7 @@ function personaFormState(personaId) {
         manualContent: "",
         prompt: "",
         imageCount: storedPersonaMediaImageCount(),
-        aspectRatio: "1:1",
+        aspectRatio: "auto",
         resolution: "720p",
         duration: 2,
         replaceExisting: false,
@@ -4342,7 +4342,7 @@ function snapshotPersonaCurrentForm() {
   if ($("personaDraftContent")) form.draft.content = String($("personaDraftContent")?.value || "");
   syncPersonaDraftDirty(form.draft);
   if ($("personaMediaTaskPrompt")) form.media.prompt = String($("personaMediaTaskPrompt")?.value || "");
-  if ($("personaMediaAspectRatio")) form.media.aspectRatio = String($("personaMediaAspectRatio")?.value || "1:1");
+  if ($("personaMediaAspectRatio")) form.media.aspectRatio = String($("personaMediaAspectRatio")?.value || "auto");
   if ($("personaMediaImageCount")) form.media.imageCount = Math.min(Math.max(Number.parseInt(String($("personaMediaImageCount")?.value || ""), 10) || storedPersonaMediaImageCount(), 1), 4);
   if ($("personaMediaResolution")) form.media.resolution = String($("personaMediaResolution")?.value || "720p");
   if ($("personaMediaDuration")) form.media.duration = Number($("personaMediaDuration")?.value || form.media.duration || 2);
@@ -17264,7 +17264,7 @@ async function submitPersonaMediaTask() {
     related_persona_id: String(persona.id || "").trim(),
     related_post_id: String(post.id || "").trim(),
     draft_source_text: draftSourceText,
-    aspect_ratio: taskType === "persona_post_image" ? String(form.aspectRatio || "1:1") : undefined,
+    aspect_ratio: taskType === "persona_post_image" ? String(form.aspectRatio || "auto") : undefined,
   });
   const body = new FormData();
   body.append("task_type", taskType);
@@ -18789,7 +18789,8 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
               </label>
               ${showAspectRatio ? `<label>图像比例
                 <select id="personaMediaAspectRatio">
-                  <option value="1:1" ${String(mediaForm.aspectRatio || "1:1") === "1:1" ? "selected" : ""}>1:1</option>
+                  <option value="auto" ${String(mediaForm.aspectRatio || "auto") === "auto" ? "selected" : ""}>自动（AI 匹配）</option>
+                  <option value="1:1" ${String(mediaForm.aspectRatio || "") === "1:1" ? "selected" : ""}>1:1</option>
                   <option value="3:4" ${String(mediaForm.aspectRatio || "") === "3:4" ? "selected" : ""}>3:4</option>
                   <option value="4:3" ${String(mediaForm.aspectRatio || "") === "4:3" ? "selected" : ""}>4:3</option>
                   <option value="9:16" ${String(mediaForm.aspectRatio || "") === "9:16" ? "selected" : ""}>9:16</option>
@@ -20180,7 +20181,8 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                   </label>
                   ${showAspectRatio ? `<label>图像比例
                     <select id="personaMediaAspectRatio">
-                      <option value="1:1" ${String(mediaForm.aspectRatio || "1:1") === "1:1" ? "selected" : ""}>1:1</option>
+                      <option value="auto" ${String(mediaForm.aspectRatio || "auto") === "auto" ? "selected" : ""}>自动（AI 匹配）</option>
+                      <option value="1:1" ${String(mediaForm.aspectRatio || "") === "1:1" ? "selected" : ""}>1:1</option>
                       <option value="3:4" ${String(mediaForm.aspectRatio || "") === "3:4" ? "selected" : ""}>3:4</option>
                       <option value="4:3" ${String(mediaForm.aspectRatio || "") === "4:3" ? "selected" : ""}>4:3</option>
                       <option value="9:16" ${String(mediaForm.aspectRatio || "") === "9:16" ? "selected" : ""}>9:16</option>
@@ -21989,7 +21991,6 @@ function openAccountPoolEditorModal(options) {
     account = null,
     platform = "",
     personaId = "",
-    motionTrigger = null,
   } = options;
   const editing = Boolean(account?.id);
   if (!editing) {
@@ -22023,15 +22024,10 @@ function openAccountPoolEditorModal(options) {
       </div>
     </section>`;
   document.body.appendChild(modal);
-  const mobileAddTrigger = !editing && isMobileNavMode() && motionTrigger instanceof HTMLElement
-    ? motionTrigger
-    : null;
-  if (mobileAddTrigger) startAccountPoolAddButtonMotion(mobileAddTrigger);
   const totpController = editing ? createAccountTotpController(modal, account) : null;
   $(`${editing ? "accountPoolEdit" : "accountPool"}Username`)?.focus();
   modal.__cleanup = () => {
     totpController?.close();
-    closeAccountPoolAddButtonMotion(mobileAddTrigger);
     if (editing) clearAccountPasswordReveal(accountId, "pool-edit");
     else resetAccountPoolCreateForm();
   };
@@ -24389,7 +24385,6 @@ const SEGMENTED_BACKGROUND_BUTTON_SELECTOR = [
   ".persona-media-operation-toggle > button",
   ".persona-draft-view-toggle > button",
   ".persona-compose-toggle > button",
-  ".account-browser-tabs > button",
   ".mobile-task-dock > button",
 ].join(",");
 const segmentedBackgroundSlides = new WeakMap();
@@ -26484,7 +26479,7 @@ function bindEvents() {
     }
     const accountAdd = event.target.closest("[data-account-pool-add]");
     if (accountAdd) {
-      openAccountPoolCreateModal({ motionTrigger: accountAdd });
+      openAccountPoolCreateModal();
       return;
     }
     const accountCheckTarget = event.target.closest(".account-pool-card-check");

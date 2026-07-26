@@ -9061,6 +9061,136 @@ def _persist_generated_image_for_task(task_id: str, image_url: str, index: int =
     raise RuntimeError("未识别的图片结果地址。")
 
 
+_PERSONA_POST_IMAGE_ASPECT_RATIOS = ("1:1", "3:4", "4:3", "9:16", "16:9")
+_PERSONA_POST_IMAGE_ASPECT_RATIO_VALUES = {"auto", *_PERSONA_POST_IMAGE_ASPECT_RATIOS}
+_PERSONA_POST_IMAGE_RATIO_TWEET_MAX_CHARS = 4000
+_PERSONA_POST_IMAGE_RATIO_PROMPT_MAX_CHARS = 2000
+
+
+def _normalize_persona_post_image_aspect_ratio(value: Any, *, default: str = "1:1") -> str:
+    ratio = str(value or default).strip().lower() or default
+    if ratio not in _PERSONA_POST_IMAGE_ASPECT_RATIO_VALUES:
+        raise ValueError(f"不支持的图像比例：{ratio}")
+    return ratio
+
+
+def _resolve_persona_post_image_aspect_ratio(
+    payload: dict[str, Any],
+    *,
+    tweet_content: str,
+    custom_prompt: str,
+) -> tuple[str, dict[str, Any]]:
+    requested = _normalize_persona_post_image_aspect_ratio(
+        payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1"
+    )
+    if requested != "auto":
+        return requested, {"mode": "manual", "requested": requested, "resolved": requested}
+
+    cached_ratio = str(payload.get("aspect_ratio_resolved") or "").strip()
+    if cached_ratio in _PERSONA_POST_IMAGE_ASPECT_RATIOS:
+        return cached_ratio, {
+            "mode": "auto_cached",
+            "requested": "auto",
+            "resolved": cached_ratio,
+            "reason": "沿用本任务首次自动选择的比例",
+        }
+
+    llm_source: dict[str, Any] = {}
+    try:
+        with db() as conn:
+            runtime = _get_runtime_config(conn)
+        for key in (
+            "llm_base_url",
+            "llm_api_key",
+            "llm_api_key_gemini",
+            "llm_api_key_gpt",
+            "llm_default_model",
+            "llm_default_model_gemini",
+            "llm_default_model_gpt",
+            "llm_model_priority_order",
+        ):
+            llm_source[key] = runtime.get(key)
+    except Exception:
+        pass
+
+    system_prompt = "\n".join(
+        [
+            "你是社交媒体配图的画面比例决策器，只返回 JSON，不要输出 Markdown 或解释文字。",
+            "综合推文正文、用户补充提示词、主体数量、构图方向、场景空间、阅读设备和内容用途，选择最契合画面表达的比例。",
+            "只能选择 1:1、3:4、4:3、9:16、16:9。",
+            "1:1 适合均衡居中、单一主体或信息密度接近方形的画面；3:4 适合人物、生活方式、穿搭和纵向叙事；4:3 适合自然场景、室内环境、纪实和横向信息；9:16 适合明显的竖屏、全身、纵深或高耸主体；16:9 适合宽阔场景、多人关系、横向动作或电影感构图。",
+            "不要固定偏好某个比例，必须以当前内容的构图和场景适配为准。",
+            '返回格式：{"aspect_ratio":"1:1|3:4|4:3|9:16|16:9","reason":"不超过40个中文字符"}',
+        ]
+    )
+    user_input = "\n".join(
+        [
+            f"推文正文：{str(tweet_content or '').strip()[:_PERSONA_POST_IMAGE_RATIO_TWEET_MAX_CHARS] or '未提供'}",
+            f"补充提示词：{str(custom_prompt or '').strip()[:_PERSONA_POST_IMAGE_RATIO_PROMPT_MAX_CHARS] or '未提供'}",
+            "请选择最合适的画面比例。",
+        ]
+    )
+    try:
+        result, selected, attempts = _request_llm_json_with_fallback(
+            source=llm_source,
+            user_input=user_input,
+            system_prompt=system_prompt,
+            parameters="",
+            allow_builtin=True,
+            retry_count=1,
+            request_label="推文配图自动比例选择",
+        )
+        parsed = result.get("parsed") if isinstance(result, dict) else None
+        selected_ratio = str(
+            parsed.get("aspect_ratio") if isinstance(parsed, dict) else ""
+        ).strip()
+        if selected_ratio not in _PERSONA_POST_IMAGE_ASPECT_RATIOS:
+            raise RuntimeError("文字模型返回了不支持的图像比例")
+        return selected_ratio, {
+            "mode": "auto",
+            "requested": "auto",
+            "resolved": selected_ratio,
+            "reason": str(parsed.get("reason") or "").strip()[:80] if isinstance(parsed, dict) else "",
+            "model": str(selected.get("model") or "").strip() if isinstance(selected, dict) else "",
+            "attempt_count": len(attempts),
+        }
+    except Exception as exc:
+        logger.warning("推文配图自动比例选择失败，回退为 1:1：%s", exc)
+        return "1:1", {
+            "mode": "auto_fallback",
+            "requested": "auto",
+            "resolved": "1:1",
+            "reason": "自动比例选择不可用，使用兼容比例",
+        }
+
+
+def _persist_persona_post_image_aspect_ratio(task_id: str, aspect_ratio: str) -> None:
+    clean_task_id = str(task_id or "").strip()
+    resolved = str(aspect_ratio or "").strip()
+    if not clean_task_id or resolved not in _PERSONA_POST_IMAGE_ASPECT_RATIOS:
+        return
+    with db() as conn:
+        row = conn.execute(
+            "SELECT input_json FROM tasks WHERE id = ? AND status = 'running'",
+            (clean_task_id,),
+        ).fetchone()
+        if row is None:
+            return
+        stored_payload = _json_loads(row["input_json"], {})
+        if not isinstance(stored_payload, dict):
+            return
+        requested = str(
+            stored_payload.get("aspect_ratio") or stored_payload.get("aspectRatio") or ""
+        ).strip().lower()
+        if requested != "auto" or stored_payload.get("aspect_ratio_resolved") == resolved:
+            return
+        stored_payload["aspect_ratio_resolved"] = resolved
+        conn.execute(
+            "UPDATE tasks SET input_json = ? WHERE id = ? AND status = 'running'",
+            (_json_dumps(stored_payload), clean_task_id),
+        )
+
+
 def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     archive_id = str(payload.get("related_persona_id") or "").strip()
     post_id = str(payload.get("related_post_id") or "").strip()
@@ -9071,7 +9201,6 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         image_count = min(max(int(float(image_count_raw)), 1), 4)
     except (TypeError, ValueError):
         image_count = 1
-    aspect_ratio = str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1"
     if not archive_id or not post_id:
         raise RuntimeError("推文配图缺少人设 ID 或草稿 ID。")
     _, _, archives = _persona_archive_source_for_write(archive_id)
@@ -9085,6 +9214,15 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     source_content = generation_content or str(post.get("content") or "").strip()
     if not source_content and not prompt:
         raise RuntimeError("推文配图缺少用于生成的正文或提示词。")
+    try:
+        aspect_ratio, aspect_ratio_selection = _resolve_persona_post_image_aspect_ratio(
+            payload,
+            tweet_content=source_content,
+            custom_prompt=prompt,
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    _persist_persona_post_image_aspect_ratio(task_id, aspect_ratio)
     cli_payload = {
         "setup": archive.get("setup") if isinstance(archive.get("setup"), dict) else {},
         "content": source_content or prompt,
@@ -9165,6 +9303,8 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         "image_url": image_urls[0],
         "image_urls": image_urls,
         "image_count": len(image_paths),
+        "aspect_ratio": aspect_ratio,
+        "aspect_ratio_selection": aspect_ratio_selection,
         "timings": timings[0] if len(timings) == 1 else {"items": timings},
     }
 
@@ -19635,7 +19775,17 @@ def create_app() -> FastAPI:
                 payload["image_count"] = min(max(int(float(image_count_raw)), 1), 4)
             except (TypeError, ValueError):
                 payload["image_count"] = 1
-            payload["aspect_ratio"] = str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1"
+            try:
+                for key in list(payload):
+                    if str(key or "").strip().lower().startswith("llm_"):
+                        payload.pop(key, None)
+                payload.pop("aspect_ratio_resolved", None)
+                payload["aspect_ratio"] = _normalize_persona_post_image_aspect_ratio(
+                    payload.get("aspect_ratio") or payload.get("aspectRatio") or "auto",
+                    default="auto",
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not payload["related_persona_id"] or not payload["related_post_id"]:
                 raise HTTPException(status_code=400, detail="推文配图需要关联人设 ID 和草稿 ID")
         except HTTPException:

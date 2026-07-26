@@ -663,26 +663,47 @@ class ProxyMarketTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(expired_proxy["status"], "maintenance")
 
-    def test_disabled_and_archived_items_cannot_be_republished(self):
-        for status in ("disabled", "archived"):
-            item = self._market_item(f"TW-TPE-{status.upper()}")
-            changed = self.admin.patch(
-                f"/api/admin/proxy-market/items/{item['id']}",
+    def test_disabled_item_can_be_rechecked_and_republished(self):
+        item = self._market_item("TW-TPE-DISABLED")
+        changed = self.admin.patch(
+            f"/api/admin/proxy-market/items/{item['id']}",
+            headers=self.origin,
+            json={"status": "disabled"},
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value={"ok": True, "latency_ms": 20, "response": {}},
+        ) as connection_check:
+            published = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test-and-publish",
                 headers=self.origin,
-                json={"status": status},
+                json={},
             )
-            self.assertEqual(changed.status_code, 200, changed.text)
-            with patch(
-                "webapp.proxy_market._run_proxy_connection_check",
-                return_value={"ok": True, "latency_ms": 20, "response": {}},
-            ) as connection_check:
-                published = self.admin.post(
-                    f"/api/admin/proxy-market/items/{item['id']}/test-and-publish",
-                    headers=self.origin,
-                    json={"host": "198.51.100.44", "port": 1081},
-                )
-            self.assertEqual(published.status_code, 409, published.text)
-            connection_check.assert_not_called()
+        self.assertEqual(published.status_code, 200, published.text)
+        self.assertEqual(published.json()["item"]["status"], "active")
+        self.assertEqual(published.json()["item"]["health_status"], "healthy")
+        connection_check.assert_called_once()
+
+    def test_archived_item_cannot_be_republished(self):
+        item = self._market_item("TW-TPE-ARCHIVED")
+        changed = self.admin.patch(
+            f"/api/admin/proxy-market/items/{item['id']}",
+            headers=self.origin,
+            json={"status": "archived"},
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value={"ok": True, "latency_ms": 20, "response": {}},
+        ) as connection_check:
+            published = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test-and-publish",
+                headers=self.origin,
+                json={},
+            )
+        self.assertEqual(published.status_code, 409, published.text)
+        connection_check.assert_not_called()
 
     def test_publish_omitted_protocol_preserves_existing_protocol(self):
         item = self._market_item("TW-TPE-PROTOCOL")

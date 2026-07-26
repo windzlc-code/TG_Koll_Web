@@ -59,7 +59,7 @@ html {
   font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
   font-size: 16px;
   line-height: normal;
-  background: rgba(7, 17, 18, 0.58);
+  background: rgba(5, 11, 12, 0.84);
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
   backdrop-filter: blur(16px);
   transition: background 180ms ease;
@@ -67,7 +67,7 @@ html {
 
 .site-header.is-scrolled,
 .site-header[data-site-variant="solid"] {
-  background: rgba(7, 17, 18, 0.94);
+  background: rgba(5, 11, 12, 0.84);
   box-shadow: none;
 }
 

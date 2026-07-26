@@ -1898,6 +1898,180 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["generation_content"], "手动输入的通勤配图正文")
         self.assertEqual(captured["payload"]["content_source_mode"], "manual")
         self.assertEqual(captured["payload"]["image_count"], 3)
+        self.assertEqual(captured["payload"]["aspect_ratio"], "1:1")
+
+    def test_task_submit_accepts_auto_persona_post_image_ratio(self):
+        self._write_archives()
+        captured = {}
+
+        def fake_enqueue(task_id, user_id, task_type, payload):
+            captured["payload"] = payload
+
+        with mock.patch.object(server, "_enqueue_task", side_effect=fake_enqueue):
+            resp = self.client.post(
+                "/api/tasks/submit",
+                data={
+                    "task_type": "persona_post_image",
+                    "params_json": json.dumps(
+                        {
+                            "related_persona_id": "persona-1",
+                            "related_post_id": "post-1",
+                            "generation_content": "一群人在宽阔海岸线上奔跑",
+                            "aspect_ratio": "auto",
+                            "aspect_ratio_resolved": "16:9",
+                            "llm_base_url": "https://attacker.example",
+                            "llm_api_key": "client-supplied-key",
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(captured["payload"]["aspect_ratio"], "auto")
+        self.assertNotIn("aspect_ratio_resolved", captured["payload"])
+        self.assertNotIn("llm_base_url", captured["payload"])
+        self.assertNotIn("llm_api_key", captured["payload"])
+
+    def test_auto_persona_post_image_ratio_uses_tweet_and_prompt(self):
+        captured = {}
+
+        def fake_request(**kwargs):
+            captured.update(kwargs)
+            return (
+                {"ok": True, "parsed": {"aspect_ratio": "16:9", "reason": "宽阔海岸与多人横向运动"}},
+                {"model": "test-text-model"},
+                [{"ok": True, "model": "test-text-model"}],
+            )
+
+        with mock.patch.object(server, "_request_llm_json_with_fallback", side_effect=fake_request):
+            ratio, detail = server._resolve_persona_post_image_aspect_ratio(
+                {"aspect_ratio": "auto"},
+                tweet_content="一群人在宽阔海岸线上奔跑",
+                custom_prompt="电影感远景构图",
+            )
+
+        self.assertEqual(ratio, "16:9")
+        self.assertEqual(detail["mode"], "auto")
+        self.assertEqual(detail["resolved"], "16:9")
+        self.assertIn("一群人在宽阔海岸线上奔跑", captured["user_input"])
+        self.assertIn("电影感远景构图", captured["user_input"])
+
+    def test_auto_persona_post_image_ratio_ignores_client_llm_settings(self):
+        captured = {}
+        trusted_runtime = {
+            "llm_base_url": "https://trusted.example",
+            "llm_api_key_gpt": "server-key",
+            "llm_default_model_gpt": "trusted-model",
+        }
+
+        def fake_request(**kwargs):
+            captured.update(kwargs)
+            return (
+                {"ok": True, "parsed": {"aspect_ratio": "4:3", "reason": "横向环境构图"}},
+                {"model": "trusted-model"},
+                [{"ok": True, "model": "trusted-model"}],
+            )
+
+        with (
+            mock.patch.object(server, "_get_runtime_config", return_value=trusted_runtime),
+            mock.patch.object(server, "_request_llm_json_with_fallback", side_effect=fake_request),
+        ):
+            ratio, _ = server._resolve_persona_post_image_aspect_ratio(
+                {
+                    "aspect_ratio": "auto",
+                    "llm_base_url": "https://attacker.example",
+                    "llm_api_key": "client-supplied-key",
+                    "llm_default_model": "attacker-model",
+                },
+                tweet_content="横向城市街景",
+                custom_prompt="",
+            )
+
+        self.assertEqual(ratio, "4:3")
+        self.assertEqual(captured["source"]["llm_base_url"], "https://trusted.example")
+        self.assertEqual(captured["source"]["llm_api_key_gpt"], "server-key")
+        self.assertNotEqual(captured["source"].get("llm_default_model"), "attacker-model")
+
+    def test_auto_persona_post_image_ratio_reuses_cached_selection(self):
+        with mock.patch.object(server, "_request_llm_json_with_fallback") as request_mock:
+            ratio, detail = server._resolve_persona_post_image_aspect_ratio(
+                {"aspect_ratio": "auto", "aspect_ratio_resolved": "3:4"},
+                tweet_content="人物全身照",
+                custom_prompt="生活方式场景",
+            )
+
+        self.assertEqual(ratio, "3:4")
+        self.assertEqual(detail["mode"], "auto_cached")
+        request_mock.assert_not_called()
+
+    def test_auto_persona_post_image_ratio_fallback_hides_provider_error(self):
+        with mock.patch.object(
+            server,
+            "_request_llm_json_with_fallback",
+            side_effect=RuntimeError("internal-provider.example: secret upstream error"),
+        ):
+            ratio, detail = server._resolve_persona_post_image_aspect_ratio(
+                {"aspect_ratio": "auto"},
+                tweet_content="正文",
+                custom_prompt="",
+            )
+
+        self.assertEqual(ratio, "1:1")
+        self.assertEqual(detail["mode"], "auto_fallback")
+        self.assertNotIn("error", detail)
+        self.assertNotIn("attempts", detail)
+
+    def test_task_submit_rejects_unknown_persona_post_image_ratio(self):
+        self._write_archives()
+        resp = self.client.post(
+            "/api/tasks/submit",
+            data={
+                "task_type": "persona_post_image",
+                "params_json": json.dumps(
+                    {
+                        "related_persona_id": "persona-1",
+                        "related_post_id": "post-1",
+                        "generation_content": "正文",
+                        "aspect_ratio": "2:1",
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("不支持的图像比例", resp.text)
+
+    def test_retry_persona_post_image_reuses_resolved_auto_ratio(self):
+        self._write_archives()
+        task_id = "task-persona-post-image-retry"
+        payload = {
+            "related_persona_id": "persona-1",
+            "related_post_id": "post-1",
+            "generation_content": "正文",
+            "aspect_ratio": "auto",
+            "aspect_ratio_resolved": "16:9",
+        }
+        server._create_task_record(
+            task_id,
+            self._admin_user_id(),
+            "persona_post_image",
+            payload,
+        )
+        with server.db() as conn:
+            conn.execute("UPDATE tasks SET status = 'failed' WHERE id = ?", (task_id,))
+        captured = {}
+
+        def fake_enqueue(new_task_id, user_id, task_type, retry_payload):
+            captured["payload"] = retry_payload
+
+        with mock.patch.object(server, "_enqueue_task", side_effect=fake_enqueue):
+            resp = self.client.post(f"/api/tasks/{task_id}/retry")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(captured["payload"]["aspect_ratio"], "auto")
+        self.assertEqual(captured["payload"]["aspect_ratio_resolved"], "16:9")
 
     def test_task_submit_limits_persona_post_image_to_four_outputs(self):
         self._write_archives()
@@ -1985,11 +2159,13 @@ class PersonaDashboardApiTests(unittest.TestCase):
             "related_persona_id": "persona-1",
             "related_post_id": "post-1",
             "prompt": "请生成一张适合当前推文的通勤配图",
-            "aspect_ratio": "1:1",
+            "aspect_ratio": "auto",
             "generation_content": "手动输入正文",
             "image_count": 2,
         }
         server._create_task_record(task_id, self._admin_user_id(), "persona_post_image", payload)
+        with server.db() as conn:
+            conn.execute("UPDATE tasks SET status = 'running' WHERE id = ?", (task_id,))
         data_url = "data:image/png;base64," + base64.b64encode(self.draft_media_path.read_bytes()).decode("ascii")
         completed = mock.Mock(
             returncode=0,
@@ -2003,12 +2179,30 @@ class PersonaDashboardApiTests(unittest.TestCase):
             ),
             stderr="",
         )
-        with mock.patch.object(server.subprocess, "run", return_value=completed) as run_mock:
+        ratio_detail = {
+            "mode": "auto",
+            "requested": "auto",
+            "resolved": "4:3",
+            "reason": "环境叙事需要横向空间",
+        }
+        with (
+            mock.patch.object(server, "_resolve_persona_post_image_aspect_ratio", return_value=("4:3", ratio_detail)),
+            mock.patch.object(server.subprocess, "run", return_value=completed) as run_mock,
+        ):
             result = server._run_persona_post_image_task(task_id, payload)
         self.assertTrue(result["ok"])
         self.assertEqual(result["image_count"], 2)
         self.assertEqual(len(result["image_paths"]), 2)
         self.assertEqual(run_mock.call_count, 2)
+        cli_payload = json.loads(run_mock.call_args_list[0].args[0][-1])
+        self.assertEqual(cli_payload["aspectRatio"], "4:3")
+        self.assertEqual(result["aspect_ratio"], "4:3")
+        self.assertEqual(result["aspect_ratio_selection"], ratio_detail)
+        with server.db() as conn:
+            stored_task = conn.execute("SELECT input_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        stored_payload = json.loads(stored_task["input_json"])
+        self.assertEqual(stored_payload["aspect_ratio"], "auto")
+        self.assertEqual(stored_payload["aspect_ratio_resolved"], "4:3")
         saved_path = Path(result["image_paths"][0])
         self.assertTrue(saved_path.is_file())
         self.assertEqual(saved_path.read_bytes(), self.draft_media_path.read_bytes())

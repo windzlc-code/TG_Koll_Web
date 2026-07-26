@@ -500,7 +500,7 @@
           <button type="button" data-page="security">安全告警 <span class="small" id="adminAlertCount">0</span></button>
           <button type="button" data-page="serviceAccounts">服务账号</button>
           <button type="button" data-page="proxyMarket">代理商城</button>
-          <button type="button" data-page="pricing">额度与计费</button>
+          <button type="button" data-page="pricing">套餐与客户额度</button>
           <button type="button" data-page="runtime">系统配置</button>
           <button type="button" data-page="sentimentCookies">舆情 Cookie</button>
         </nav>
@@ -1281,12 +1281,12 @@
       <section class="card section admin-page-view" id="secPricing" data-page-view="pricing">
         <div class="section-head">
           <div>
-            <h2>额度与计费</h2>
-            <div class="meta">管理商业目录版本、审核线上方案申请，并查看或人工调整客户计费权益。</div>
+            <h2>套餐与客户额度</h2>
+            <div class="meta">设置客户可购买的月度套餐和储值包，审批购买申请，并管理客户现有额度。</div>
           </div>
           <div class="section-head-side">
             <span class="admin-billing-pending" id="billingPendingSummary">待审批 0</span>
-            <button id="btnRefreshBilling" class="ghost admin-compact-button" type="button">刷新计费</button>
+            <button id="btnRefreshBilling" class="ghost admin-compact-button" type="button">刷新数据</button>
           </div>
         </div>
 
@@ -1294,36 +1294,97 @@
           <section class="admin-config-card admin-billing-panel" aria-labelledby="billingCatalogTitle">
             <div class="admin-billing-panel-head">
               <div>
-                <div class="admin-config-card-title" id="billingCatalogTitle">商业目录版本</div>
-                <div class="small">新目录先保存为草稿，确认后再发布为客户当前可见版本。</div>
+                <div class="admin-config-card-title" id="billingCatalogTitle">客户套餐设置</div>
+                <div class="small">设置客户购买页显示的套餐价格、账号数量、赠送图片和算力点。修改后先保存，确认无误再发布。</div>
               </div>
-              <button id="btnReloadBillingCatalog" class="ghost admin-compact-button" type="button">刷新版本</button>
+              <button id="btnReloadBillingCatalog" class="ghost admin-compact-button" type="button">刷新方案</button>
             </div>
-            <div id="billingCatalogActive" class="admin-billing-active-summary" aria-live="polite">当前没有已发布目录</div>
+            <div id="billingCatalogActive" class="admin-billing-active-summary" aria-live="polite">当前没有已发布方案</div>
             <div class="admin-billing-catalog-layout">
               <div class="table-wrap admin-billing-table-wrap">
                 <table class="table admin-billing-table">
-                  <caption class="sr-only">商业计费目录版本列表</caption>
+                  <caption class="sr-only">客户套餐历史记录</caption>
                   <thead>
                     <tr>
-                      <th scope="col">版本</th>
-                      <th scope="col">状态</th>
+                      <th scope="col">方案记录</th>
+                      <th scope="col">是否生效</th>
                       <th scope="col">生效时间</th>
-                      <th scope="col">创建时间</th>
+                      <th scope="col">保存时间</th>
                       <th scope="col">操作</th>
                     </tr>
                   </thead>
                   <tbody id="billingCatalogBody">
-                    <tr><td colspan="5" class="admin-billing-empty">正在读取目录版本...</td></tr>
+                    <tr><td colspan="5" class="admin-billing-empty">正在读取套餐记录...</td></tr>
                   </tbody>
                 </table>
               </div>
               <form id="billingCatalogDraftForm" class="admin-billing-editor" novalidate>
-                <label for="billingCatalogJson">目录 JSON</label>
-                <textarea id="billingCatalogJson" rows="10" spellcheck="false" placeholder='{"currency":"TWD","subscription_plans":[],"credit_packages":[]}'></textarea>
+                <div class="admin-billing-editor-head">
+                  <div>
+                    <strong>套餐设置</strong>
+                    <span id="billingCatalogEditorStatus">正在载入套餐设置...</span>
+                  </div>
+                  <span class="admin-billing-editor-step">修改后先保存，再发布</span>
+                </div>
+
+                <section class="admin-billing-editor-section" aria-labelledby="billingSubscriptionTitle">
+                  <div class="admin-billing-editor-section-head">
+                    <div>
+                      <strong id="billingSubscriptionTitle">月度套餐</strong>
+                      <span>客户每月支付的固定费用和包含额度</span>
+                    </div>
+                  </div>
+                  <div class="admin-billing-field-grid">
+                    <label class="admin-billing-field admin-billing-field-wide">
+                      <span>套餐名称</span>
+                      <input id="billingSubscriptionName" type="text" maxlength="120" placeholder="例如：Vecto Vanguard OPC">
+                    </label>
+                    <label class="admin-billing-field">
+                      <span>每月价格（NT$）</span>
+                      <input id="billingSubscriptionPrice" type="number" min="0" step="1" inputmode="decimal">
+                    </label>
+                    <label class="admin-billing-field">
+                      <span>可绑定 Threads 账号</span>
+                      <input id="billingSubscriptionAccounts" type="number" min="0" step="1" inputmode="numeric">
+                    </label>
+                    <label class="admin-billing-field">
+                      <span>每月免费图片</span>
+                      <input id="billingSubscriptionImages" type="number" min="0" step="1" inputmode="numeric">
+                    </label>
+                    <label class="admin-billing-field">
+                      <span>每 1 点算力折合金额（NT$）</span>
+                      <input id="billingPointUnit" type="number" min="0" step="0.01" inputmode="decimal">
+                    </label>
+                    <label class="admin-billing-field admin-billing-field-wide">
+                      <span>套餐包含内容</span>
+                      <textarea id="billingSubscriptionFeatures" rows="4" placeholder="每行填写一项客户权益"></textarea>
+                    </label>
+                  </div>
+                </section>
+
+                <section class="admin-billing-editor-section" aria-labelledby="billingPackagesTitle">
+                  <div class="admin-billing-editor-section-head">
+                    <div>
+                      <strong id="billingPackagesTitle">储值包</strong>
+                      <span>客户额外购买的算力点数</span>
+                    </div>
+                  </div>
+                  <div id="billingPackageEditorList" class="admin-billing-dynamic-list"></div>
+                </section>
+
+                <section class="admin-billing-editor-section" aria-labelledby="billingActionsTitle">
+                  <div class="admin-billing-editor-section-head">
+                    <div>
+                      <strong id="billingActionsTitle">功能使用费用</strong>
+                      <span>客户每使用一次功能，系统自动扣除的算力点</span>
+                    </div>
+                  </div>
+                  <div id="billingActionEditorList" class="admin-billing-dynamic-list"></div>
+                </section>
+
                 <div class="admin-billing-form-actions">
-                  <button id="btnUseActiveCatalog" class="ghost admin-compact-button" type="button">载入当前版本</button>
-                  <button id="btnCreateCatalogDraft" class="primary admin-compact-button" type="submit">保存新草稿</button>
+                  <button id="btnUseActiveCatalog" class="ghost admin-compact-button" type="button">恢复已发布设置</button>
+                  <button id="btnCreateCatalogDraft" class="primary admin-compact-button" type="submit">保存修改</button>
                 </div>
                 <div id="billingCatalogMsg" class="msg" role="status" aria-live="polite"></div>
               </form>
@@ -1333,8 +1394,8 @@
           <section class="admin-config-card admin-billing-panel" aria-labelledby="billingOrdersTitle">
             <div class="admin-billing-panel-head">
               <div>
-                <div class="admin-config-card-title" id="billingOrdersTitle">方案申请审批</div>
-                <div class="small">核对客户、申请方案、数量与金额后执行批准或拒绝；批准后权益才会生效。</div>
+                <div class="admin-config-card-title" id="billingOrdersTitle">客户购买申请</div>
+                <div class="small">核对客户、购买内容与金额。批准后套餐或点数才会发放到客户账号。</div>
               </div>
               <div class="admin-billing-toolbar">
                 <label for="billingOrderStatus" class="sr-only">申请状态</label>
@@ -1350,7 +1411,7 @@
             </div>
             <div class="table-wrap admin-billing-table-wrap">
               <table class="table admin-billing-table admin-billing-order-table">
-                <caption class="sr-only">线上方案申请审批列表</caption>
+                <caption class="sr-only">客户购买申请列表</caption>
                 <thead>
                   <tr>
                     <th scope="col">申请 / 客户</th>
@@ -1667,6 +1728,21 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <div id="adminPublicPromptModal" class="modal-overlay" style="display:none" aria-hidden="true">
+    <div id="adminPublicPromptDialog" class="modal-card modal-card-narrow" role="dialog" aria-modal="true" aria-labelledby="adminPublicPromptTitle" tabindex="-1">
+      <div class="modal-header">
+        <div class="modal-title" id="adminPublicPromptTitle">操作提示</div>
+        <button id="btnAdminPublicPromptClose" type="button" class="ghost" aria-label="关闭提示">关闭</button>
+      </div>
+      <div class="modal-body">
+        <div id="adminPublicPromptMessage" class="msg" role="status" aria-live="polite" aria-atomic="true"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="btnAdminPublicPromptDone" type="button" class="primary">知道了</button>
+      </div>
+    </div>
   </div>
 
   <div id="taskInspectModal" class="modal-overlay" style="display:none" aria-hidden="true">

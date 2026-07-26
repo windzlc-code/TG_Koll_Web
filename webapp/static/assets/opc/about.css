@@ -153,39 +153,78 @@
 }
 
 @media (max-width: 680px) {
-  .about-shell { width: calc(100% - 28px); }
-  .about-band { padding: 54px 0; }
-  .about-band h2, .about-cta h2 { font-size: 32px; }
-  .about-hero { min-height: 620px; }
-  .about-hero-copy { padding-bottom: 44px; }
-  .about-hero h1 { font-size: 43px; }
-  .about-hero-copy > p:not(.about-kicker) { font-size: 15px; }
+  .about-shell { width: calc(100% - 24px); }
+  .about-band { padding: 36px 0; }
+  .about-band h2, .about-cta h2 { font-size: 26px; line-height: 1.14; }
+  .about-kicker { margin-bottom: 10px; font-size: 10px; }
+  .about-section-head { gap: 12px; margin-bottom: 22px; }
+  .about-section-head > p:last-child { font-size: 12px; line-height: 1.55; }
+  .about-hero { min-height: 430px; }
+  .about-hero-copy { padding-bottom: 28px; }
+  .about-hero h1 { font-size: 34px; line-height: 1.08; }
+  .about-hero-copy > p:not(.about-kicker) { margin-top: 16px; font-size: 13px; line-height: 1.55; }
+  .about-hero-actions { gap: 8px; margin-top: 20px; }
+  .about-hero-actions .button { min-height: 40px; padding-inline: 14px; font-size: 12px; }
   .about-hero-actions, .about-cta .about-shell > div { flex-wrap: wrap; }
-  .about-index { grid-template-columns: repeat(3,minmax(0,1fr)); width: calc(100% - 28px); }
-  .about-index a { min-height: 54px; border-bottom: 1px solid var(--about-line); font-size: 11px; }
+  .about-index { grid-template-columns: repeat(3,minmax(0,1fr)); width: calc(100% - 24px); }
+  .about-index a { min-height: 44px; gap: 6px; border-bottom: 1px solid var(--about-line); font-size: 10px; }
   .about-index a:nth-child(3) { border-right: 0; }
   .about-index a:nth-child(n+4) { border-bottom: 0; }
-  .about-facts div { grid-template-columns: 86px 1fr; }
+  .about-lead > p { font-size: 14px; line-height: 1.55; }
+  .about-facts { margin-top: 20px; }
+  .about-facts div { grid-template-columns: 72px 1fr; gap: 12px; padding: 11px 0; }
+  .about-facts dd { font-size: 12px; line-height: 1.45; }
   .about-loop-track { grid-template-columns: repeat(2,minmax(0,1fr)); }
-  .about-loop-track li { min-height: 150px; padding: 20px 16px; }
+  .about-loop-track li { min-height: 108px; padding: 13px 12px; }
   .about-loop-track li:nth-child(3) { border-right: 1px solid var(--about-line); }
   .about-loop-track li:nth-child(2n) { border-right: 0; }
   .about-loop-track li:nth-child(-n+4) { border-bottom: 1px solid var(--about-line); }
-  .about-loop-track strong { margin-top: 24px; font-size: 16px; }
-  .about-module-grid, .about-scene-grid, .about-engine-grid, .about-roadmap-groups, .about-case-grid { grid-template-columns: 1fr; }
+  .about-loop-track strong { margin-top: 14px; font-size: 14px; }
+  .about-loop-track small { margin-top: 5px; font-size: 11px; line-height: 1.4; }
+  .about-module-grid, .about-scene-grid, .about-engine-grid, .about-roadmap-groups, .about-case-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .about-module-grid article, .about-roadmap-groups article { min-height: 0; }
+  .about-module-grid article { padding: 13px; }
+  .about-module-grid h3 { margin: 18px 0 7px; font-size: 16px; }
   .about-module-grid p { min-height: 0; }
-  .about-agents-media { min-height: 330px; }
-  .about-scene-grid article { min-height: 310px; }
-  .about-engine-grid article { grid-template-rows: 220px auto; min-height: 0; }
-  .about-architecture-flow { grid-template-columns: 1fr; }
+  .about-module-grid p { font-size: 11px; line-height: 1.45; }
+  .about-module-grid ul { gap: 4px; margin-top: 10px; }
+  .about-module-grid li { padding: 4px 5px; font-size: 9px; }
+  .about-agents-layout { gap: 18px; }
+  .about-agents-media { min-height: 210px; }
+  .about-agents h2 { margin-bottom: 18px; }
+  .about-agent-list article { grid-template-columns: 30px 1fr; gap: 8px; padding: 11px 0; }
+  .about-agent-list h3 { font-size: 15px; }
+  .about-agent-list p { margin-top: 3px; font-size: 11px; line-height: 1.4; }
+  .about-scene-grid article { min-height: 190px; }
+  .about-scene-grid article > div { right: 12px; bottom: 12px; left: 12px; }
+  .about-scene-grid h3 { margin: 6px 0 4px; font-size: 16px; }
+  .about-scene-grid p { font-size: 11px; line-height: 1.35; }
+  .about-engine-grid article { grid-template-rows: 116px auto; min-height: 0; }
+  .about-engine-grid article > div { padding: 13px; }
+  .about-engine-grid h3 { margin: 6px 0; font-size: 16px; }
+  .about-engine-grid p { font-size: 11px; line-height: 1.4; }
+  .about-architecture-flow { grid-template-columns: 1fr; gap: 5px; margin-top: 14px; padding: 12px; }
+  .about-architecture-flow span { font-size: 11px; }
   .about-architecture-flow i { transform: rotate(90deg); text-align: center; }
+  .about-roadmap-layout { gap: 18px; }
+  .about-roadmap-groups article { min-height: 116px; padding: 13px; }
+  .about-roadmap-groups h3 { margin: 16px 0 5px; font-size: 15px; }
+  .about-roadmap-groups p { font-size: 11px; line-height: 1.4; }
   .about-service-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
-  .about-service-grid article { min-height: 190px; padding: 19px; }
-  .about-value-strip { grid-template-columns: 1fr; }
-  .about-value-strip div { border-right: 0; border-bottom: 1px solid rgba(255,255,255,.14); }
+  .about-service-grid article { min-height: 136px; padding: 13px; }
+  .about-service-grid h3 { margin: 18px 0 6px; font-size: 16px; }
+  .about-service-grid p { font-size: 11px; line-height: 1.4; }
+  .about-value-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 14px; }
+  .about-value-strip div { padding: 12px; border-right: 1px solid rgba(255,255,255,.14); border-bottom: 0; }
+  .about-value-strip span { font-size: 10px; line-height: 1.35; }
+  .about-case-grid img { aspect-ratio: 1.5 / 1; }
+  .about-case-grid figcaption { gap: 4px; padding: 11px; }
+  .about-case-grid figcaption span { font-size: 10px; line-height: 1.4; }
   .about-advantage-list li { grid-template-columns: 42px 1fr; gap: 10px; padding: 18px 0; }
   .about-advantage-list li > div { display: block; }
-  .about-advantage-list p { margin-top: 6px; font-size: 13px; }
-  .about-cta { min-height: 440px; }
+  .about-advantage-list strong { font-size: 16px; }
+  .about-advantage-list p { margin-top: 4px; font-size: 11px; line-height: 1.4; }
+  .about-cta { min-height: 300px; }
+  .about-cta .about-shell > div { gap: 8px; margin-top: 18px; }
+  .about-cta .button { min-height: 40px; padding-inline: 14px; font-size: 12px; }
 }

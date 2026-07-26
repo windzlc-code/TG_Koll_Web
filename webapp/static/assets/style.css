@@ -7210,9 +7210,16 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 .page-admin #secPricing .admin-billing-catalog-layout,
 .page-admin #secPricing .admin-billing-user-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(260px, .7fr);
   gap: 12px;
   align-items: start;
+}
+
+.page-admin #secPricing .admin-billing-catalog-layout {
+  grid-template-columns: minmax(420px, .78fr) minmax(600px, 1.22fr);
+}
+
+.page-admin #secPricing .admin-billing-user-layout {
+  grid-template-columns: minmax(0, 1.55fr) minmax(260px, .7fr);
 }
 
 .page-admin #secPricing .admin-billing-table-wrap {
@@ -7306,23 +7313,204 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   background: #f8fbfa;
 }
 
+.page-admin #secPricing .admin-billing-editor {
+  gap: 12px;
+  padding: 14px;
+  background: #f7f9fa;
+}
+
 .page-admin #secPricing .admin-billing-editor label,
 .page-admin #secPricing .admin-billing-adjustment label {
   margin: 0;
   font-size: 12px;
 }
 
-.page-admin #secPricing .admin-billing-editor textarea {
-  min-height: 220px;
-  font-family: Consolas, "Courier New", monospace;
+.page-admin #secPricing .admin-billing-editor-head,
+.page-admin #secPricing .admin-billing-editor-section-head,
+.page-admin #secPricing .admin-billing-item-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.page-admin #secPricing .admin-billing-editor-head > div,
+.page-admin #secPricing .admin-billing-editor-section-head > div {
+  min-width: 0;
+}
+
+.page-admin #secPricing .admin-billing-editor-head strong,
+.page-admin #secPricing .admin-billing-editor-head span,
+.page-admin #secPricing .admin-billing-editor-section-head strong,
+.page-admin #secPricing .admin-billing-editor-section-head span {
+  display: block;
+}
+
+.page-admin #secPricing .admin-billing-editor-head strong {
+  color: var(--admin-ink);
+  font-size: 14px;
+}
+
+.page-admin #secPricing .admin-billing-editor-head > div > span,
+.page-admin #secPricing .admin-billing-editor-section-head span,
+.page-admin #secPricing .admin-billing-item-title span {
+  margin-top: 2px;
+  color: var(--admin-muted);
+  font-size: 11px;
+}
+
+.page-admin #secPricing .admin-billing-editor-step {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid #cbd5dc;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--admin-ink-soft);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.page-admin #secPricing .admin-billing-editor-section {
+  display: grid;
+  gap: 9px;
+  padding-top: 12px;
+  border-top: 1px solid var(--admin-line);
+}
+
+.page-admin #secPricing .admin-billing-editor-section-head strong {
+  color: var(--admin-ink);
+  font-size: 13px;
+}
+
+.page-admin #secPricing .admin-billing-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.page-admin #secPricing .admin-billing-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--admin-ink-soft);
+  font-weight: 700;
+}
+
+.page-admin #secPricing .admin-billing-field-wide {
+  grid-column: 1 / -1;
+}
+
+.page-admin #secPricing .admin-billing-field input,
+.page-admin #secPricing .admin-billing-field textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  margin: 0;
+  padding: 6px 8px;
+  border-color: var(--admin-line);
+  background: #ffffff;
+  color: var(--admin-ink);
+  font: inherit;
+  font-weight: 500;
+}
+
+.page-admin #secPricing .admin-billing-field textarea,
+.page-admin #secPricing #billingSubscriptionFeatures {
+  min-height: 74px;
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.45;
   resize: vertical;
+}
+
+.page-admin #secPricing .admin-billing-dynamic-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.page-admin #secPricing #billingPackageEditorList {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.page-admin #secPricing .admin-billing-package-card,
+.page-admin #secPricing .admin-billing-action-card {
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--admin-line);
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.page-admin #secPricing .admin-billing-package-card {
+  display: grid;
+  gap: 8px;
+}
+
+.page-admin #secPricing .admin-billing-item-title strong {
+  color: var(--admin-ink);
+  font-size: 12px;
+}
+
+.page-admin #secPricing .admin-billing-item-title span {
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-admin #secPricing .admin-billing-item-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.page-admin #secPricing .admin-billing-action-card {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.25fr) minmax(90px, .5fr) minmax(110px, .65fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.page-admin #secPricing .admin-billing-action-card .admin-billing-field-wide {
+  grid-column: auto;
+}
+
+.page-admin #secPricing .admin-billing-action-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--admin-line);
+  border-radius: 6px;
+  background: #f5f7f8;
+  color: var(--admin-ink-soft);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.page-admin #secPricing .admin-billing-action-toggle input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+
+.page-admin #secPricing .admin-billing-dynamic-list.is-empty {
+  display: block;
+  padding: 12px;
+  border: 1px dashed var(--admin-line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--admin-muted);
+  font-size: 12px;
+  text-align: center;
 }
 
 .page-admin #secPricing .admin-billing-form-actions {
   justify-content: flex-end;
   flex-wrap: wrap;
+  padding-top: 4px;
 }
 
 .page-admin #secPricing .admin-billing-empty,
@@ -7469,6 +7657,14 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   .page-admin #secPricing .admin-billing-summary-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .page-admin #secPricing .admin-billing-action-card {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-admin #secPricing .admin-billing-action-card .admin-billing-field-wide {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 720px) {
@@ -7495,6 +7691,16 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   .page-admin #secPricing .admin-billing-summary-grid,
   .page-admin #secPricing .admin-billing-pricing-grid {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .page-admin #secPricing #billingPackageEditorList,
+  .page-admin #secPricing .admin-billing-field-grid,
+  .page-admin #secPricing .admin-billing-action-card {
+    grid-template-columns: 1fr;
+  }
+
+  .page-admin #secPricing .admin-billing-action-card .admin-billing-field-wide {
+    grid-column: auto;
   }
 
   .page-admin #secPricing .admin-billing-summary-item strong {

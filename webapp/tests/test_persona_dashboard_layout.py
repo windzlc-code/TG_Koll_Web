@@ -813,7 +813,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("overflow-x: auto;", mobile_account_pool_styles)
         self.assertIn("scroll-snap-type: x proximity;", mobile_account_pool_styles)
 
-    def test_mobile_account_add_uses_a_border_only_state_while_desktop_keeps_shared_motion(self):
+    def test_mobile_account_add_uses_a_border_transition_without_icon_motion(self):
         self.assertIn("function startAccountPoolAddButtonMotion(button)", self.console_script)
         self.assertIn("function closeAccountPoolAddButtonMotion(button)", self.console_script)
         self.assertIn("if (isMobileNavMode())", self.console_script)
@@ -840,17 +840,17 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         editor_start = self.console_script.index("function openAccountPoolEditorModal(options)")
         editor_end = self.console_script.index("\nfunction openAccountPoolCreateModal(", editor_start)
         editor = self.console_script[editor_start:editor_end]
-        self.assertIn("motionTrigger = null", editor)
-        self.assertIn("!editing && isMobileNavMode()", editor)
-        self.assertIn("startAccountPoolAddButtonMotion(mobileAddTrigger);", editor)
-        self.assertIn("closeAccountPoolAddButtonMotion(mobileAddTrigger);", editor)
-        self.assertIn("openAccountPoolCreateModal({ motionTrigger: accountAdd });", self.console_script)
+        self.assertNotIn("motionTrigger", editor)
+        self.assertNotIn("mobileAddTrigger", editor)
+        self.assertIn("openAccountPoolCreateModal();", self.console_script)
         self.assertIn(".account-pool-add-button.is-opening {", self.styles)
         self.assertIn(".account-pool-add-button.is-closing {", self.styles)
-        mobile_marker = "/* Mobile add-account triggers use a border-only open state; desktop motion stays unchanged. */"
+        mobile_marker = "/* Mobile add-account triggers keep only a lightweight border transition. */"
         self.assertIn(mobile_marker, self.styles)
         mobile_styles = self.styles[self.styles.index(mobile_marker):]
-        self.assertIn("box-shadow: inset 0 0 0 1px var(--accent);", mobile_styles)
+        self.assertIn("border: 1px solid transparent;", mobile_styles)
+        self.assertIn("transition: border-color 180ms ease;", mobile_styles)
+        self.assertIn("border-color: var(--accent);", mobile_styles)
         self.assertIn("background: transparent;", mobile_styles)
         self.assertIn("transform: none;", mobile_styles)
         self.assertIn("animation: none;", mobile_styles)
@@ -2124,6 +2124,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("content_source_mode: \"draft\"", self.console_script)
         self.assertNotIn("contentMode === \"manual\"", self.console_script)
         self.assertNotIn("manual_content:", self.console_script)
+        self.assertGreaterEqual(self.console_script.count('value="auto"'), 2)
+        self.assertGreaterEqual(self.console_script.count("自动（AI 匹配）"), 2)
+        self.assertIn('aspectRatio: "auto"', self.console_script)
+        self.assertIn('String(form.aspectRatio || "auto")', self.console_script)
         self.assertNotIn(
             "Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : 1, 1), 8)",
             self.console_script,

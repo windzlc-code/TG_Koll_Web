@@ -59,18 +59,16 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertFalse((ROOT / "static" / "admin-login.html").exists())
         self.assertNotIn("page-admin-auth", self.styles)
 
-    def test_admin_profile_control_uses_the_admin_modal_not_the_shared_profile_editor(self):
-        trigger_start = self.html.index('id="adminProfileToggle"')
-        trigger = self.html[trigger_start - 160 : trigger_start + 360]
-        self.assertIn("<button", trigger)
-        self.assertNotIn("href=", trigger)
-        self.assertIn('aria-controls="adminProfileModal"', trigger)
-        self.assertIn('id="adminProfileModal"', self.html)
-        self.assertIn('id="btnAdminProfileAccount"', self.html)
+    def test_admin_profile_control_reuses_the_shared_account_drawer(self):
+        host_start = self.html.index('id="adminSharedAccountHost"')
+        host = self.html[host_start - 160 : host_start + 260]
+        self.assertIn('class="admin-shared-account-host"', host)
+        self.assertIn('data-site-mode="public"', host)
+        self.assertIn('aria-label="管理员个人信息"', host)
+        self.assertNotIn('id="adminProfileModal"', self.html)
+        self.assertNotIn('id="adminProfileToggle"', self.html)
         self.assertNotIn('class="admin-rail-note"', self.html)
-        self.assertIn('el("adminProfileToggle")?.addEventListener("click", openAdminProfileModal);', self.script)
-        self.assertIn('if (setActiveAdminPage("account"))', self.script)
-        self.assertIn('closeAdminProfileModal();', self.script)
+        self.assertNotIn("openAdminProfileModal", self.script)
 
     def test_admin_creation_requires_and_submits_step_up_only_for_admins(self):
         for field_id in (
@@ -281,9 +279,11 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('createAdminDynamicUiText("位客户")', taxonomy)
         self.assertNotIn("markAdminDynamicUiElement(name)", taxonomy)
 
-    def test_admin_language_icon_is_centered_in_fixed_light_theme(self):
-        self.assertIn('.admin-preference-button,', self.styles)
-        self.assertIn('.admin-language-toggle,', self.styles)
+    def test_admin_language_and_account_icons_are_centered_in_fixed_light_theme(self):
+        self.assertIn(
+            ':root .page-admin .admin-profile-menu :is(.admin-language-toggle, .site-user)',
+            self.styles,
+        )
         for declaration in ('display: grid;', 'place-items: center;', 'padding: 0;', 'line-height: 0;'):
             self.assertIn(declaration, self.styles)
         self.assertIn('document.documentElement.dataset.theme = "light"', self.html)
@@ -299,6 +299,12 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertNotIn('/publish`', proxy_market)
         self.assertNotIn("pending_check_id", proxy_market)
         self.assertNotIn("pending_check_status", proxy_market)
+        self.assertNotIn("confirm(`将重新检测并发布", proxy_market)
+        self.assertIn('publish.disabled = String(item.status || "") === "archived"', proxy_market)
+        self.assertIn('["draft", "active", "disabled"]', proxy_market)
+        self.assertIn('if (status === "active") return publishProxyMarketRow(itemId, control);', self.script)
+        self.assertIn("showAdminPublicPrompt", proxy_market)
+        self.assertIn('id="adminPublicPromptModal"', self.html)
         self.assertIn("检测并发布", self.html)
 
 

@@ -13827,16 +13827,15 @@ body.persona-media-sorting {
   min-height: 34px;
   padding: 0 18px;
   border-radius: 999px;
-  border-color: transparent;
+  border: 0;
   background: transparent;
   color: var(--muted);
   box-shadow: none;
 }
 
 .account-browser-tabs button.is-active {
-  background: var(--ink);
-  border-color: var(--ink);
-  color: var(--panel-solid);
+  background: var(--vecto-action-static-gradient);
+  color: var(--vecto-action-ink);
 }
 
 .account-browser-tab-badge {
@@ -14192,32 +14191,22 @@ body.persona-media-sorting {
   line-height: 1;
 }
 
-/* Mobile add-account triggers use a border-only open state; desktop motion stays unchanged. */
+/* Mobile add-account triggers keep only a lightweight border transition. */
 @media (max-width: 760px) {
-  .account-pool-add-button,
-  .account-pool-add-button:hover,
-  .account-pool-add-button:focus,
-  .account-pool-add-button:focus-visible,
-  .account-pool-add-button.is-opening,
-  .account-pool-add-button.is-modal-open,
-  .account-pool-add-button.is-closing {
-    background: transparent;
-    transform: none;
-    animation: none;
-    transition: none;
+  .account-pool-add-button {
+    border: 1px solid transparent;
+    transition: border-color 180ms ease;
   }
 
-  .account-pool-add-button.is-modal-open {
-    box-shadow: inset 0 0 0 1px var(--accent);
+  .account-pool-add-button:is(:hover, :focus, :active, .is-modal-open) {
+    background: transparent;
+    border-color: var(--accent);
+    transform: none;
+    animation: none;
   }
 
   .account-pool-add-button span,
-  .account-pool-add-button:hover span,
-  .account-pool-add-button:focus span,
-  .account-pool-add-button:focus-visible span,
-  .account-pool-add-button.is-opening span,
-  .account-pool-add-button.is-modal-open span,
-  .account-pool-add-button.is-closing span {
+  .account-pool-add-button:is(:hover, :focus, :active, .is-modal-open) span {
     transform: none;
     animation: none;
     transition: none;
@@ -22700,6 +22689,17 @@ body.console-page {
     width: 100%;
     min-width: 0;
     flex: initial;
+    grid-template-columns: 17px minmax(0, 1fr);
+    grid-template-areas: "icon label";
+    grid-template-rows: minmax(0, 1fr);
+    column-gap: 8px;
+    row-gap: 0;
+  }
+
+  .console-page .matrix-publish-platform-options.account-pool-platform-tabs button > strong {
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.2;
   }
 
   .console-page .account-pool-account-panel {

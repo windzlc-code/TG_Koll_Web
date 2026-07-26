@@ -770,12 +770,12 @@
 
 :root[data-theme="light"] .proxy-market-page .proxy-market-facts {
   color: #f8fafc;
-  background: #30353a;
-  border-color: #59616a;
+  background: #123033;
+  border-color: #2d5558;
 }
 
 :root[data-theme="light"] .proxy-market-page .proxy-market-facts > div {
-  border-color: #59616a;
+  border-color: #2d5558;
 }
 
 :root[data-theme="light"] .proxy-market-page .proxy-market-facts strong {
@@ -783,7 +783,7 @@
 }
 
 :root[data-theme="light"] .proxy-market-page .proxy-market-facts span {
-  color: #c7d0d8;
+  color: #b9cecf;
 }
 
 :root[data-theme="light"] .proxy-market-page .proxy-market-account {

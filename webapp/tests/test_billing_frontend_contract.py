@@ -79,6 +79,24 @@ class BillingFrontendContractTests(unittest.TestCase):
         self.assertNotIn("billing-price-pill", self.console_script)
         self.assertNotIn(".billing-price-pill", self.console_styles)
 
+    def test_admin_catalog_editor_uses_business_fields_instead_of_raw_json(self):
+        for control_id in (
+            "billingSubscriptionName",
+            "billingSubscriptionPrice",
+            "billingSubscriptionAccounts",
+            "billingSubscriptionImages",
+            "billingPointUnit",
+            "billingPackageEditorList",
+            "billingActionEditorList",
+        ):
+            self.assertIn(f'id="{control_id}"', self.admin_markup)
+        self.assertIn("客户套餐设置", self.admin_markup)
+        self.assertIn("功能使用费用", self.admin_markup)
+        self.assertIn("客户购买申请", self.admin_markup)
+        self.assertNotIn('id="billingCatalogJson"', self.admin_markup)
+        self.assertNotIn("目录 JSON", self.admin_markup)
+        self.assertIn("billingCatalogProductName", self.admin_script)
+
     def test_charge_button_markup_has_no_price_text(self):
         for button_marker in (
             "data-persona-profile-editor-regenerate",

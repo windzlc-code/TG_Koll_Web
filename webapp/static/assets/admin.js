@@ -316,7 +316,7 @@ const ADMIN_PAGE_LABELS = {
   security: "安全告警",
   serviceAccounts: "服务账号",
   proxyMarket: "代理商城",
-  pricing: "额度与计费",
+  pricing: "套餐与客户额度",
   runtime: "系统配置",
   sentimentCookies: "舆情 Cookie",
   account: "账号设置",
@@ -539,6 +539,29 @@ function setMsg(id, message, ok = true) {
   if (!node) return;
   node.textContent = message || "";
   node.className = `msg ${ok ? "ok" : "err"}`;
+}
+
+function showAdminPublicPrompt({ title = "操作提示", message = "", ok = true, busy = false } = {}) {
+  const modal = el("adminPublicPromptModal");
+  if (!modal) return;
+  setText("adminPublicPromptTitle", title);
+  setMsg("adminPublicPromptMessage", message, ok);
+  modal.dataset.busy = busy ? "true" : "false";
+  modal.style.display = "grid";
+  modal.setAttribute("aria-hidden", "false");
+  [el("btnAdminPublicPromptClose"), el("btnAdminPublicPromptDone")].forEach((button) => {
+    if (button) button.disabled = busy;
+  });
+  window.setTimeout(() => {
+    (busy ? el("adminPublicPromptDialog") : el("btnAdminPublicPromptDone"))?.focus();
+  }, 0);
+}
+
+function closeAdminPublicPrompt() {
+  const modal = el("adminPublicPromptModal");
+  if (!modal || modal.getAttribute("aria-hidden") === "true" || modal.dataset.busy === "true") return;
+  modal.style.display = "none";
+  modal.setAttribute("aria-hidden", "true");
 }
 
 function clearAccountMsgs() {
@@ -1513,6 +1536,10 @@ const adminState = {
   billingCatalogVersions: [],
   billingActiveCatalog: null,
   billingCatalogDraftId: null,
+  billingCatalogWorking: null,
+  billingCatalogWorkingVersion: null,
+  billingCatalogSaving: false,
+  billingCatalogPublishing: false,
   billingOrderRows: [],
   billingPendingCount: 0,
   billingOrderOffset: 0,
@@ -2927,6 +2954,222 @@ function formatBillingNtd(cents) {
   return `NT$ ${value.toLocaleString("zh-TW", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function formatBillingCatalogNtd(value) {
+  const amount = Number(value || 0);
+  return `NT$ ${Number.isFinite(amount) ? amount.toLocaleString("zh-TW", { maximumFractionDigits: 2 }) : "0"}`;
+}
+
+function cloneBillingCatalog(catalog) {
+  if (!catalog || typeof catalog !== "object" || Array.isArray(catalog)) return {};
+  if (typeof structuredClone === "function") return structuredClone(catalog);
+  return JSON.parse(JSON.stringify(catalog));
+}
+
+function billingCatalogVersionLabel(version) {
+  return `v${version?.version_number ?? version?.version ?? version?.id ?? "-"}`;
+}
+
+function billingCatalogRecordLabel(version) {
+  const number = version?.version_number ?? version?.version;
+  return Number.isFinite(Number(number)) ? `第 ${Number(number)} 次保存` : "已保存方案";
+}
+
+function billingCatalogPlanSummary(catalog) {
+  const subscription = catalog?.subscription && typeof catalog.subscription === "object"
+    ? catalog.subscription
+    : {};
+  return {
+    name: String(subscription.name || "未命名套餐"),
+    price: Number(subscription.price_ntd || 0),
+    accounts: Number(subscription.threads_accounts || 0),
+    images: Number(subscription.monthly_free_images || 0),
+  };
+}
+
+function setBillingCatalogInput(id, value) {
+  const input = el(id);
+  if (input) input.value = value === null || value === undefined ? "" : String(value);
+}
+
+function createBillingCatalogField(labelText, value, {
+  type = "number",
+  step = "1",
+  field,
+  itemType,
+  itemIndex,
+  className = "",
+} = {}) {
+  const label = document.createElement("label");
+  label.className = `admin-billing-field${className ? ` ${className}` : ""}`;
+  const caption = document.createElement("span");
+  caption.textContent = labelText;
+  const input = document.createElement("input");
+  input.type = type;
+  input.value = value === null || value === undefined ? "" : String(value);
+  if (type === "number") {
+    input.min = "0";
+    input.step = step;
+    input.inputMode = step === "1" ? "numeric" : "decimal";
+  }
+  input.dataset.billingField = field;
+  input.dataset.billingItemType = itemType;
+  input.dataset.billingItemIndex = String(itemIndex);
+  label.append(caption, input);
+  return label;
+}
+
+function renderBillingCatalogForm(catalog, version) {
+  const working = cloneBillingCatalog(catalog);
+  const subscription = working.subscription && typeof working.subscription === "object"
+    ? working.subscription
+    : {};
+  working.subscription = subscription;
+  working.packages = Array.isArray(working.packages) ? working.packages : [];
+  working.actions = Array.isArray(working.actions) ? working.actions : [];
+  adminState.billingCatalogWorking = working;
+  adminState.billingCatalogWorkingVersion = version || null;
+
+  setBillingCatalogInput("billingSubscriptionName", subscription.name || "");
+  setBillingCatalogInput("billingSubscriptionPrice", subscription.price_ntd ?? 0);
+  setBillingCatalogInput("billingSubscriptionAccounts", subscription.threads_accounts ?? 0);
+  setBillingCatalogInput("billingSubscriptionImages", subscription.monthly_free_images ?? 0);
+  setBillingCatalogInput("billingPointUnit", working.point_unit_ntd ?? 0);
+  setBillingCatalogInput(
+    "billingSubscriptionFeatures",
+    Array.isArray(subscription.features) ? subscription.features.join("\n") : "",
+  );
+
+  const status = el("billingCatalogEditorStatus");
+  if (status) {
+    status.textContent = version
+      ? "正在修改已保存的套餐"
+      : "正在设置新套餐";
+  }
+
+  const packageList = el("billingPackageEditorList");
+  packageList?.replaceChildren();
+  working.packages.forEach((item, index) => {
+    const card = document.createElement("article");
+    card.className = "admin-billing-package-card";
+    card.dataset.billingPackageIndex = String(index);
+    const title = document.createElement("div");
+    title.className = "admin-billing-item-title";
+    const titleStrong = document.createElement("strong");
+    titleStrong.textContent = `储值包 ${index + 1}`;
+    const total = document.createElement("span");
+    total.dataset.billingPackageTotal = String(index);
+    total.textContent = `客户获得 ${formatBillingPoints(item.total_points ?? (Number(item.paid_points || 0) + Number(item.bonus_points || 0)))} 点`;
+    title.append(titleStrong, total);
+    const fields = document.createElement("div");
+    fields.className = "admin-billing-field-grid admin-billing-item-fields";
+    fields.append(
+      createBillingCatalogField("名称", item.name || "", { type: "text", field: "name", itemType: "package", itemIndex: index, className: "admin-billing-field-wide" }),
+      createBillingCatalogField("售价（NT$）", item.price_ntd ?? 0, { field: "price_ntd", itemType: "package", itemIndex: index }),
+      createBillingCatalogField("基础点数", item.paid_points ?? 0, { field: "paid_points", itemType: "package", itemIndex: index }),
+      createBillingCatalogField("赠送点数", item.bonus_points ?? 0, { field: "bonus_points", itemType: "package", itemIndex: index }),
+      createBillingCatalogField("赠送图片", item.bonus_images ?? 0, { field: "bonus_images", itemType: "package", itemIndex: index }),
+    );
+    card.append(title, fields);
+    packageList?.appendChild(card);
+  });
+  if (packageList && !working.packages.length) {
+    packageList.textContent = "当前方案没有储值包。";
+    packageList.classList.add("is-empty");
+  } else {
+    packageList?.classList.remove("is-empty");
+  }
+
+  const actionList = el("billingActionEditorList");
+  actionList?.replaceChildren();
+  working.actions.forEach((item, index) => {
+    const row = document.createElement("article");
+    row.className = "admin-billing-action-card";
+    row.dataset.billingActionIndex = String(index);
+    row.append(
+      createBillingCatalogField("功能名称", item.name || "", { type: "text", field: "name", itemType: "action", itemIndex: index, className: "admin-billing-field-wide" }),
+      createBillingCatalogField("每次使用所需点数", item.points ?? 0, { step: "0.01", field: "points", itemType: "action", itemIndex: index }),
+      createBillingCatalogField("使用次数说明", item.unit || "", { type: "text", field: "unit", itemType: "action", itemIndex: index }),
+    );
+    const toggle = document.createElement("label");
+    toggle.className = "admin-billing-action-toggle";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = item.implemented !== false;
+    checkbox.dataset.billingField = "implemented";
+    checkbox.dataset.billingItemType = "action";
+    checkbox.dataset.billingItemIndex = String(index);
+    const toggleText = document.createElement("span");
+    toggleText.textContent = "允许客户使用";
+    toggle.append(checkbox, toggleText);
+    row.appendChild(toggle);
+    actionList?.appendChild(row);
+  });
+  if (actionList && !working.actions.length) {
+    actionList.textContent = "当前套餐没有单独收费的功能。";
+    actionList.classList.add("is-empty");
+  } else {
+    actionList?.classList.remove("is-empty");
+  }
+}
+
+function billingCatalogNumber(id, label, { integer = false } = {}) {
+  const input = el(id);
+  const raw = String(input?.value || "").trim();
+  const value = Number(raw);
+  if (!raw || !Number.isFinite(value) || value < 0 || (integer && !Number.isInteger(value))) {
+    throw new Error(`请正确填写“${label}”`);
+  }
+  return value;
+}
+
+function readBillingCatalogForm() {
+  const catalog = cloneBillingCatalog(adminState.billingCatalogWorking);
+  const name = String(el("billingSubscriptionName")?.value || "").trim();
+  if (!name) throw new Error("请填写“套餐名称”");
+  catalog.point_unit_ntd = billingCatalogNumber("billingPointUnit", "1 点算力参考价");
+  catalog.subscription = {
+    ...(catalog.subscription || {}),
+    name,
+    price_ntd: billingCatalogNumber("billingSubscriptionPrice", "每月价格"),
+    threads_accounts: billingCatalogNumber("billingSubscriptionAccounts", "可绑定 Threads 账号", { integer: true }),
+    monthly_free_images: billingCatalogNumber("billingSubscriptionImages", "每月免费图片", { integer: true }),
+    features: String(el("billingSubscriptionFeatures")?.value || "")
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  };
+
+  const readDynamicNumber = (input, label) => {
+    const value = Number(String(input.value || "").trim());
+    if (!Number.isFinite(value) || value < 0) throw new Error(`请正确填写“${label}”`);
+    return value;
+  };
+  document.querySelectorAll("#billingPackageEditorList [data-billing-package-index]").forEach((card) => {
+    const index = Number(card.dataset.billingPackageIndex);
+    const item = { ...(catalog.packages?.[index] || {}) };
+    card.querySelectorAll("[data-billing-field]").forEach((input) => {
+      const field = input.dataset.billingField;
+      item[field] = input.type === "number"
+        ? readDynamicNumber(input, `储值包 ${index + 1}`)
+        : String(input.value || "").trim();
+    });
+    item.total_points = Number(item.paid_points || 0) + Number(item.bonus_points || 0);
+    catalog.packages[index] = item;
+  });
+  document.querySelectorAll("#billingActionEditorList [data-billing-action-index]").forEach((card) => {
+    const index = Number(card.dataset.billingActionIndex);
+    const item = { ...(catalog.actions?.[index] || {}) };
+    card.querySelectorAll("[data-billing-field]").forEach((input) => {
+      const field = input.dataset.billingField;
+      if (input.type === "checkbox") item[field] = input.checked;
+      else if (input.type === "number") item[field] = readDynamicNumber(input, `功能使用费用 ${index + 1}`);
+      else item[field] = String(input.value || "").trim();
+    });
+    catalog.actions[index] = item;
+  });
+  return catalog;
+}
+
 const BILLING_STATUS_LABELS = {
   draft: "草稿",
   active: "使用中",
@@ -2979,12 +3222,14 @@ function renderBillingCatalog(payload) {
     activeSummary.replaceChildren();
     if (active) {
       const title = document.createElement("strong");
-      title.textContent = `当前版本 v${active.version_number ?? active.version ?? active.id ?? "-"}`;
+      const catalog = billingCatalogOf(active);
+      const summary = billingCatalogPlanSummary(catalog);
+      title.textContent = `当前客户套餐 · ${summary.name}`;
       const meta = document.createElement("span");
-      meta.textContent = `生效于 ${formatBillingTime(active.effective_at || active.published_at)}`;
+      meta.textContent = `${formatBillingCatalogNtd(summary.price)} / 月 · ${summary.accounts} 个 Threads 账号 · ${summary.images} 张免费图片`;
       activeSummary.append(title, createBillingStatus("active"), meta);
     } else {
-      activeSummary.textContent = "当前没有已发布目录";
+      activeSummary.textContent = "当前没有已发布方案";
     }
   }
 
@@ -2993,7 +3238,7 @@ function renderBillingCatalog(payload) {
   body.replaceChildren();
   if (!versions.length) {
     const row = document.createElement("tr");
-    const cell = createBillingCell("暂无目录版本", "admin-billing-empty");
+    const cell = createBillingCell("还没有保存过套餐", "admin-billing-empty");
     cell.colSpan = 5;
     row.appendChild(cell);
     body.appendChild(row);
@@ -3001,7 +3246,7 @@ function renderBillingCatalog(payload) {
   }
   versions.forEach((version) => {
     const row = document.createElement("tr");
-    const versionLabel = `v${version.version_number ?? version.version ?? version.id ?? "-"}`;
+    const versionLabel = billingCatalogRecordLabel(version);
     row.appendChild(createBillingCell(versionLabel, "admin-billing-strong"));
     const statusCell = document.createElement("td");
     statusCell.appendChild(createBillingStatus(version.status));
@@ -3010,15 +3255,18 @@ function renderBillingCatalog(payload) {
     row.appendChild(createBillingCell(formatBillingTime(version.created_at)));
     const actionCell = document.createElement("td");
     actionCell.className = "admin-billing-actions";
-    const inspectButton = createBillingAction("查看", "catalog-inspect", version.id);
+    const inspectButton = createBillingAction("编辑设置", "catalog-inspect", version.id);
     inspectButton.dataset.versionIndex = String(adminState.billingCatalogVersions.indexOf(version));
     actionCell.appendChild(inspectButton);
     if (String(version.status || "").toLowerCase() === "draft") {
-      actionCell.appendChild(createBillingAction("发布", "catalog-publish", version.id, "primary"));
+      actionCell.appendChild(createBillingAction("发布给客户", "catalog-publish", version.id, "primary"));
     }
     row.appendChild(actionCell);
     body.appendChild(row);
   });
+  if (!adminState.billingCatalogWorking) {
+    useBillingCatalog(active || versions[0], { silent: true });
+  }
 }
 
 async function loadBillingCatalog() {
@@ -3034,64 +3282,102 @@ async function loadBillingCatalog() {
   }
 }
 
-function useBillingCatalog(version) {
+function useBillingCatalog(version, { silent = false } = {}) {
   const catalog = billingCatalogOf(version);
   if (!catalog) {
-    setMsg("billingCatalogMsg", "该版本没有可读取的目录 JSON", false);
+    setMsg("billingCatalogMsg", "该记录没有可读取的套餐设置", false);
     return;
   }
   adminState.billingCatalogDraftId = String(version.status || "").toLowerCase() === "draft"
     ? String(version.id || "")
     : null;
-  el("billingCatalogJson").value = JSON.stringify(catalog, null, 2);
+  renderBillingCatalogForm(catalog, version);
   if (el("btnCreateCatalogDraft")) {
-    el("btnCreateCatalogDraft").textContent = adminState.billingCatalogDraftId ? "保存草稿" : "保存新草稿";
+    el("btnCreateCatalogDraft").textContent = "保存修改";
   }
-  setMsg("billingCatalogMsg", `已载入版本 v${version.version_number ?? version.version ?? version.id ?? "-"}`, true);
+  if (!silent) setMsg("billingCatalogMsg", "套餐设置已载入，可以修改后保存", true);
 }
 
 async function createBillingCatalogDraft() {
-  const raw = String(el("billingCatalogJson")?.value || "").trim();
-  if (!raw) throw new Error("请填写目录 JSON");
-  let catalog;
+  if (adminState.billingCatalogSaving) return;
+  const saveButton = el("btnCreateCatalogDraft");
+  adminState.billingCatalogSaving = true;
+  if (saveButton) {
+    saveButton.disabled = true;
+    saveButton.textContent = "正在保存...";
+  }
   try {
-    catalog = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`目录 JSON 格式错误：${err.message}`);
-  }
-  if (!catalog || Array.isArray(catalog) || typeof catalog !== "object") {
-    throw new Error("目录 JSON 顶层必须是对象");
-  }
-  let draftId = String(adminState.billingCatalogDraftId || "");
-  if (!draftId) {
-    const draft = await api("/api/admin/billing/catalog/versions", {
-      method: "POST",
+    const catalog = readBillingCatalogForm();
+    let draftId = String(adminState.billingCatalogDraftId || "");
+    if (!draftId) {
+      const draft = await api("/api/admin/billing/catalog/versions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source_id: String(adminState.billingActiveCatalog?.id || "") }),
+      });
+      draftId = String(draft?.id || draft?.item?.id || draft?.data?.id || "");
+      if (!draftId) throw new Error("套餐记录已创建，但系统没有返回记录编号");
+    }
+    await api(`/api/admin/billing/catalog/versions/${encodeURIComponent(draftId)}`, {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source_id: String(adminState.billingActiveCatalog?.id || "") }),
+      body: JSON.stringify({ catalog }),
     });
-    draftId = String(draft?.id || draft?.item?.id || draft?.data?.id || "");
-    if (!draftId) throw new Error("新草稿已创建，但接口未返回草稿 ID");
+    adminState.billingCatalogDraftId = draftId;
+    await loadBillingCatalog();
+    const savedVersion = adminState.billingCatalogVersions.find((item) => String(item.id || "") === draftId);
+    if (savedVersion) useBillingCatalog(savedVersion, { silent: true });
+    setMsg("billingCatalogMsg", "套餐设置已保存，确认无误后可在左侧发布给客户", true);
+  } finally {
+    adminState.billingCatalogSaving = false;
+    if (saveButton) {
+      saveButton.disabled = false;
+      saveButton.textContent = "保存修改";
+    }
   }
-  await api(`/api/admin/billing/catalog/versions/${encodeURIComponent(draftId)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ catalog }),
-  });
-  adminState.billingCatalogDraftId = draftId;
-  await loadBillingCatalog();
-  if (el("btnCreateCatalogDraft")) el("btnCreateCatalogDraft").textContent = "保存草稿";
-  setMsg("billingCatalogMsg", "目录草稿已保存", true);
 }
 
 async function publishBillingCatalog(versionId) {
-  if (!versionId || !confirm("确认发布该商业目录版本吗？发布后客户购买页将使用此版本。")) return;
-  await api(`/api/admin/billing/catalog/versions/${encodeURIComponent(versionId)}/publish`, {
-    method: "POST",
-  });
-  adminState.billingCatalogDraftId = null;
-  if (el("btnCreateCatalogDraft")) el("btnCreateCatalogDraft").textContent = "保存新草稿";
-  await loadBillingCatalog();
-  setMsg("billingCatalogMsg", "目录版本已发布", true);
+  if (adminState.billingCatalogPublishing) return;
+  const version = adminState.billingCatalogVersions.find((item) => String(item.id || "") === String(versionId || ""));
+  const summary = billingCatalogPlanSummary(billingCatalogOf(version));
+  const prompt = `确认将“${summary.name}”发布给客户吗？\n\n月费：${formatBillingCatalogNtd(summary.price)}\nThreads 账号：${summary.accounts} 个\n免费图片：${summary.images} 张`;
+  if (!versionId || !confirm(prompt)) return;
+  const publishButtons = [...document.querySelectorAll('[data-billing-action="catalog-publish"]')];
+  adminState.billingCatalogPublishing = true;
+  publishButtons.forEach((button) => { button.disabled = true; });
+  try {
+    await api(`/api/admin/billing/catalog/versions/${encodeURIComponent(versionId)}/publish`, {
+      method: "POST",
+    });
+    adminState.billingCatalogDraftId = null;
+    adminState.billingCatalogWorking = null;
+    adminState.billingCatalogWorkingVersion = null;
+    if (el("btnCreateCatalogDraft")) el("btnCreateCatalogDraft").textContent = "保存修改";
+    await loadBillingCatalog();
+    setMsg("billingCatalogMsg", "套餐已发布，客户购买页已更新", true);
+  } finally {
+    adminState.billingCatalogPublishing = false;
+    publishButtons.forEach((button) => { button.disabled = false; });
+  }
+}
+
+function billingCatalogProductName(sku, order = {}) {
+  const explicit = order.product_name || order.plan_name || order.item_name || order.package_name || order.sku_name;
+  if (explicit) return String(explicit);
+  const catalogs = [
+    billingCatalogOf(adminState.billingActiveCatalog),
+    ...adminState.billingCatalogVersions.map((item) => billingCatalogOf(item)),
+  ].filter(Boolean);
+  for (const catalog of catalogs) {
+    if (String(catalog.subscription?.sku || "") === String(sku || "")) {
+      return String(catalog.subscription?.name || "月度套餐");
+    }
+    const packageItem = (Array.isArray(catalog.packages) ? catalog.packages : [])
+      .find((item) => String(item?.sku || "") === String(sku || ""));
+    if (packageItem) return String(packageItem.name || "算力储值包");
+  }
+  return "客户购买方案";
 }
 
 function renderBillingOrders(payload, { append = false, requestOffset = 0 } = {}) {
@@ -3169,7 +3455,7 @@ function renderBillingOrders(payload, { append = false, requestOffset = 0 } = {}
     user.textContent = `${order.username || order.user_name || "客户"} · ID ${order.user_id ?? "-"}`;
     identity.append(orderId, user);
     row.appendChild(identity);
-    row.appendChild(createBillingCell(`${order.sku || "-"} × ${order.quantity || 1}`));
+    row.appendChild(createBillingCell(`${billingCatalogProductName(order.sku, order)} × ${order.quantity || 1}`));
     row.appendChild(createBillingCell(formatBillingNtd(order.amount_ntd_cents), "admin-billing-money"));
     const application = document.createElement("td");
     const summary = document.createElement("strong");
@@ -6249,14 +6535,14 @@ function renderProxyMarketItems(payload = {}) {
       '<circle cx="12" cy="12" r="9"></circle><path d="m8 12 2.5 2.5L16 9"></path>',
       "primary",
     );
-    publish.disabled = ["disabled", "archived"].includes(String(item.status || ""));
+    publish.disabled = String(item.status || "") === "archived";
     const status = document.createElement("select");
     status.dataset.proxyMarketStatus = String(item.id || "");
     status.setAttribute("aria-label", `库存状态 ${item.id}`);
     markAdminDynamicUiElement(status);
     const currentStatus = String(item.status || "draft");
     const statusOptions = currentStatus === "draft" || !Number(item.published_at || 0)
-      ? ["draft", "disabled"]
+      ? ["draft", "active", "disabled"]
       : currentStatus === "allocated"
         ? ["allocated", "maintenance", "disabled"]
         : ["active", "maintenance", "disabled"];
@@ -6613,6 +6899,13 @@ async function saveProxyMarketItem({ publish = false } = {}) {
   const existingItem = selectedId ? proxyMarketItemById(selectedId) : null;
   setProxyMarketEditorBusy(true);
   setMsg("proxyMarketItemMsg", publish ? "正在保存、检测并发布代理..." : "正在保存代理库存...");
+  if (publish) {
+    showAdminPublicPrompt({
+      title: "代理检测与发布",
+      message: "正在保存当前配置并执行真实连接检测，检测通过后会自动发布。",
+      busy: true,
+    });
+  }
   try {
     let result;
     if (selectedId) {
@@ -6668,7 +6961,29 @@ async function saveProxyMarketItem({ publish = false } = {}) {
       ? `真实检测通过，代理已发布${Number(result?.check?.latency_ms || 0) ? `，延迟 ${Number(result.check.latency_ms)} ms` : ""}`
       : "代理库存已保存";
     await refreshProxyMarketItemsAfterWrite("proxyMarketItemMsg", successMessage);
+    if (publish) {
+      showAdminPublicPrompt({
+        title: "检测发布完成",
+        message: successMessage,
+        ok: true,
+      });
+    }
     return result;
+  } catch (error) {
+    if (publish) {
+      const prefix = error?.proxyMarketDraftSaved
+        ? "草稿已保存并保留在编辑器中；检测发布失败"
+        : error?.proxyMarketChangesSaved
+          ? "库存修改已保存；检测发布失败"
+          : "检测发布失败";
+      showAdminPublicPrompt({
+        title: "检测发布失败",
+        message: `${prefix}：${getErrorMessage(error)}`,
+        ok: false,
+      });
+      try { error.adminPublicPromptShown = true; } catch (_) {}
+    }
+    throw error;
   } finally {
     setProxyMarketEditorBusy(false);
   }
@@ -6677,12 +6992,17 @@ async function saveProxyMarketItem({ publish = false } = {}) {
 async function publishProxyMarketRow(itemId, button) {
   const item = proxyMarketItemById(itemId);
   if (!item) return;
-  if (["disabled", "archived"].includes(String(item.status || ""))) {
-    throw new Error("已停用或归档的代理不能直接检测发布");
+  if (String(item.status || "") === "archived") {
+    throw new Error("已归档的代理不能重新检测发布");
   }
-  if (!confirm(`将重新检测并发布 ${item.sku || item.id}，检测失败时保留现有配置，确认继续吗？`)) return;
   button.disabled = true;
+  button.setAttribute("aria-busy", "true");
   setMsg("proxyMarketMsg", `正在重新检测并发布 ${item.sku || item.id}...`);
+  showAdminPublicPrompt({
+    title: "代理检测与发布",
+    message: `正在使用已保存配置检测 ${item.sku || item.id}，检测通过后会自动发布。`,
+    busy: true,
+  });
   try {
     const result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(item.id)}/test-and-publish`, {
       method: "POST",
@@ -6698,14 +7018,31 @@ async function publishProxyMarketRow(itemId, button) {
       "proxyMarketMsg",
       `${item.sku || item.id} 已通过检测并重新发布`,
     );
+    showAdminPublicPrompt({
+      title: "检测发布完成",
+      message: `${item.sku || item.id} 已通过检测并自动发布${Number(result?.check?.latency_ms || 0) ? `，延迟 ${Number(result.check.latency_ms)} ms` : ""}。`,
+      ok: true,
+    });
+    return result;
+  } catch (error) {
+    if (button instanceof HTMLSelectElement) button.value = String(item.status || "");
+    showAdminPublicPrompt({
+      title: "检测发布失败",
+      message: getErrorMessage(error),
+      ok: false,
+    });
+    try { error.adminPublicPromptShown = true; } catch (_) {}
+    throw error;
   } finally {
     button.disabled = false;
+    button.removeAttribute("aria-busy");
   }
 }
 
 async function updateProxyMarketStatus(itemId, status, control) {
   const item = proxyMarketItemById(itemId);
   if (!item || status === String(item.status || "")) return;
+  if (status === "active") return publishProxyMarketRow(itemId, control);
   control.disabled = true;
   try {
     let result;
@@ -6725,6 +7062,11 @@ async function updateProxyMarketStatus(itemId, status, control) {
       "proxyMarketMsg",
       `${item.sku || item.id} 已切换为${PROXY_MARKET_STATUS_LABELS[updated?.status || status] || updated?.status || status}`,
     );
+    showAdminPublicPrompt({
+      title: "库存状态已更新",
+      message: `${item.sku || item.id} 已切换为${PROXY_MARKET_STATUS_LABELS[updated?.status || status] || updated?.status || status}。`,
+      ok: true,
+    });
   } finally {
     control.disabled = false;
   }
@@ -7282,7 +7624,7 @@ function bindBillingActions() {
   });
   el("btnUseActiveCatalog")?.addEventListener("click", () => {
     if (!adminState.billingActiveCatalog) {
-      setMsg("billingCatalogMsg", "当前没有可载入的已发布目录", false);
+      setMsg("billingCatalogMsg", "当前还没有已发布的套餐设置", false);
       return;
     }
     useBillingCatalog(adminState.billingActiveCatalog);
@@ -7471,6 +7813,13 @@ function bindActions() {
           ? "库存修改已保存；检测发布失败"
           : "检测发布失败";
       setMsg("proxyMarketItemMsg", `${prefix}：${getErrorMessage(error)}`, false);
+      if (!error?.adminPublicPromptShown) {
+        showAdminPublicPrompt({
+          title: "检测发布失败",
+          message: `${prefix}：${getErrorMessage(error)}`,
+          ok: false,
+        });
+      }
     }
   });
   el("proxyMarketItemBody")?.addEventListener("click", async (event) => {
@@ -7483,6 +7832,9 @@ function bindActions() {
       if (button.dataset.proxyMarketAction === "archive") await archiveProxyMarketItem(itemId, button);
     } catch (error) {
       setMsg("proxyMarketMsg", getErrorMessage(error), false);
+      if (!error?.adminPublicPromptShown) {
+        showAdminPublicPrompt({ title: "代理操作失败", message: getErrorMessage(error), ok: false });
+      }
     }
   });
   el("proxyMarketItemBody")?.addEventListener("change", async (event) => {
@@ -7492,6 +7844,9 @@ function bindActions() {
       await updateProxyMarketStatus(control.dataset.proxyMarketStatus, control.value, control);
     } catch (error) {
       setMsg("proxyMarketMsg", getErrorMessage(error), false);
+      if (!error?.adminPublicPromptShown) {
+        showAdminPublicPrompt({ title: "状态切换失败", message: getErrorMessage(error), ok: false });
+      }
     }
   });
   el("proxyMarketRecordsTabs")?.addEventListener("click", (event) => {
@@ -7940,6 +8295,11 @@ function bindActions() {
   if (el("btnTaskInspectClose")) {
     el("btnTaskInspectClose").addEventListener("click", () => closeTaskInspectModal());
   }
+  el("btnAdminPublicPromptClose")?.addEventListener("click", closeAdminPublicPrompt);
+  el("btnAdminPublicPromptDone")?.addEventListener("click", closeAdminPublicPrompt);
+  el("adminPublicPromptModal")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) closeAdminPublicPrompt();
+  });
   if (el("btnTaskInspectDone")) {
     el("btnTaskInspectDone").addEventListener("click", () => closeTaskInspectModal());
   }
@@ -8107,6 +8467,7 @@ function bindActions() {
   document.addEventListener("keydown", (e) => {
     if (trapUserDetailFocus(e)) return;
     if (e.key === "Escape") {
+      closeAdminPublicPrompt();
       closeTaskInspectModal();
       closeRechargeModal();
       closeUserDetailModal();
