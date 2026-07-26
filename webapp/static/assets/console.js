@@ -11,6 +11,7 @@ const PERSONA_POSTS_CACHE_PREFIX = "wk-persona-posts-cache";
 const TASK_QUEUE_PERSONA_PAGE_SIZE_KEY = "wk-task-queue-persona-page-size";
 const TASK_QUEUE_REGULAR_PAGE_SIZE_KEY = "wk-task-queue-regular-page-size";
 const LIVE_BROWSER_LAYOUT_KEY = "wk-live-browser-layout";
+const SELECTED_PERSONA_STORAGE_KEY = "wk-selected-persona";
 const MOBILE_NAV_QUERY = "(max-width: 980px)";
 const REORDER_LONG_PRESS_MS = 420;
 const REORDER_LONG_PRESS_MOVE_TOLERANCE = 10;
@@ -587,6 +588,34 @@ let identityRevalidationPromise = null;
 
 function consoleUserId(value) {
   return String(value == null ? "" : value).trim();
+}
+
+function selectedPersonaStorageKey(user = state.currentUser) {
+  const workspaceUserId = consoleUserId(ADMIN_WORKSPACE_USER_ID || user?.id);
+  return workspaceUserId ? `${SELECTED_PERSONA_STORAGE_KEY}:${workspaceUserId}` : "";
+}
+
+function storedSelectedPersonaId(user = state.currentUser) {
+  const key = selectedPersonaStorageKey(user);
+  if (!key) return "";
+  try {
+    return String(window.localStorage.getItem(key) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function setSelectedPersonaId(personaId, { persist = true } = {}) {
+  const cleanId = String(personaId || "").trim();
+  state.selectedPersonaId = cleanId;
+  if (!persist) return cleanId;
+  const key = selectedPersonaStorageKey();
+  if (!key) return cleanId;
+  try {
+    if (cleanId) window.localStorage.setItem(key, cleanId);
+    else window.localStorage.removeItem(key);
+  } catch {}
+  return cleanId;
 }
 
 function maskConsoleForIdentityRevalidation() {
@@ -1954,7 +1983,7 @@ async function openToastTarget(rawTarget) {
   }
   if (targetPersonaId) {
     if (state.personas.some((persona) => String(persona.id || "") === targetPersonaId)) {
-      state.selectedPersonaId = targetPersonaId;
+      setSelectedPersonaId(targetPersonaId);
     }
     state.taskQueuePersonaPage = 1;
   }
@@ -11239,7 +11268,7 @@ function selectPublishingPersona(personaId) {
   const cleanId = String(personaId || "").trim();
   if (!cleanId || !state.personas.some((persona) => String(persona.id) === cleanId)) return;
   const previousId = String(state.selectedPersonaId || "");
-  state.selectedPersonaId = cleanId;
+  setSelectedPersonaId(cleanId);
   if (cleanId !== previousId) clearPublishSelectionForPersona(selectedPersona());
   else setSelectedPersonaPostId("");
   state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
@@ -11579,7 +11608,7 @@ function bindSimpleFlowInputs(moduleId) {
           node.value = previousPersonaId;
           return;
         }
-        state.selectedPersonaId = node.value || state.selectedPersonaId;
+        setSelectedPersonaId(node.value || state.selectedPersonaId);
         setSelectedPersonaPostId("");
         renderSimpleFlowModule(moduleId);
         return;
@@ -11899,7 +11928,7 @@ function bindSimpleFlowInputs(moduleId) {
         const personaId = String(node.dataset.automationPersona || "").trim();
         if (!personaId) return;
         await waitForSegmentedBackgroundSlide(event, node);
-        state.selectedPersonaId = personaId;
+        setSelectedPersonaId(personaId);
         state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
         setSelectedPersonaPostId("");
         renderSimpleFlowModule("automation");
@@ -12973,7 +13002,7 @@ async function deleteSelectedPersona(personaId = "") {
   await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}`, { method: "DELETE" });
   showMsg("commandMsg", "人设已删除。", true);
   if (String(state.selectedPersonaId || "") === String(persona.id || "")) {
-    state.selectedPersonaId = "";
+    setSelectedPersonaId("");
     setSelectedPersonaPostId("");
     state.personaCreateMode = false;
   }
@@ -13033,7 +13062,7 @@ async function deleteBulkSelectedPersonaEntries() {
         deletedIds.forEach((id) => delete cache?.[id]);
       });
       if (deletedIds.has(String(state.selectedPersonaId || ""))) {
-        state.selectedPersonaId = "";
+        setSelectedPersonaId("");
         setSelectedPersonaPostId("");
         state.personaCreateMode = false;
       }
@@ -13067,7 +13096,7 @@ async function duplicatePersonaArchive(personaId = "") {
   const profile = result?.profile && typeof result.profile === "object" ? result.profile : null;
   if (profile?.id) {
     const newId = String(profile.id);
-    state.selectedPersonaId = newId;
+    setSelectedPersonaId(newId);
     setSelectedPersonaPostId("");
     delete state.personaDraftPosts[newId];
     delete state.personaFavoritePosts[newId];
@@ -13076,7 +13105,7 @@ async function duplicatePersonaArchive(personaId = "") {
     delete state.personaImageLibraries[newId];
   }
   await loadPersonas();
-  if (profile?.id) state.selectedPersonaId = String(profile.id);
+  if (profile?.id) setSelectedPersonaId(profile.id);
   renderActivePersonaListSurface();
   renderConfirmSummary();
   showMsg("commandMsg", `已复制人设：${profile?.name || `${persona.name || persona.id} 副本`}`, true);
@@ -13193,7 +13222,7 @@ async function openPersonaAccountBindingPage(persona = selectedPersona(), accoun
   const personaId = String(persona?.id || state.selectedPersonaId || "").trim();
   const targetAccount = account || publishAccountForPersona(persona) || accountForPersona(persona);
   if (personaId) {
-    state.selectedPersonaId = personaId;
+    setSelectedPersonaId(personaId);
     state.accountPoolPersonaId = personaId;
   }
   if (targetAccount?.platform) state.accountPoolPlatform = normalizeAccountPoolPlatform(targetAccount.platform);
@@ -13422,10 +13451,9 @@ function applyPersonaOverviewData(data, { fromCache = false } = {}) {
   state.personaCollections = data.persona_groups && Array.isArray(data.persona_groups.groups)
     ? data.persona_groups
     : { groups: [], assigned_persona_ids: [] };
-  if (!state.selectedPersonaId && state.personas[0]) state.selectedPersonaId = state.personas[0].id;
-  if (!state.personas.some((item) => String(item.id) === String(state.selectedPersonaId)) && state.personas[0]) {
-    state.selectedPersonaId = state.personas[0].id;
-  }
+  const requestedPersonaId = String(state.selectedPersonaId || storedSelectedPersonaId() || "").trim();
+  const requestedPersonaExists = state.personas.some((item) => String(item.id) === requestedPersonaId);
+  setSelectedPersonaId(requestedPersonaExists ? requestedPersonaId : state.personas[0]?.id || "");
   const validIds = new Set(state.personas.map((item) => String(item.id)));
   Object.keys(state.personaProfiles).forEach((id) => {
     if (!validIds.has(id)) delete state.personaProfiles[id];
@@ -15750,7 +15778,7 @@ async function cancelAutomationPlan(planId = "") {
 }
 
 async function activateCreatedPersona(personaId, { group = "settings", step = "profile" } = {}) {
-  state.selectedPersonaId = personaId || state.selectedPersonaId;
+  setSelectedPersonaId(personaId || state.selectedPersonaId);
   setSelectedPersonaPostId("");
   state.personaGroup = group;
   if (group === "settings") state.personaPanels.settings = step;
@@ -15928,7 +15956,7 @@ async function createPersonaArchiveWithAi() {
     };
     await loadPersonas();
     if (createState.aiResult.id) {
-      state.selectedPersonaId = createState.aiResult.id;
+      setSelectedPersonaId(createState.aiResult.id);
       await loadPersonaProfile(createState.aiResult.id, { force: true }).catch(() => {});
     }
     renderPersonaCreateSurface();
@@ -24833,7 +24861,7 @@ function bindEvents() {
         setSelectedPersonaPostId(selectedIds[0]);
         state.publishContentSource = source;
         setPublishSelectedPostIds(persona, source, selectedIds);
-        state.selectedPersonaId = persona.id;
+        setSelectedPersonaId(persona.id);
         state.simpleBranches.publishing = "publish_now";
         setWorkspaceModule("publishing");
         return;
@@ -25391,7 +25419,7 @@ function bindEvents() {
           setPublishSelectedPostIds(persona, state.publishContentSource, [postId]);
           ensurePersonaPostPageForPost(persona, source, postId);
         }
-        state.selectedPersonaId = persona.id;
+        setSelectedPersonaId(persona.id);
         state.simpleBranches.publishing = "publish_now";
       }
       setWorkspaceModule("publishing");
@@ -25579,7 +25607,7 @@ function bindEvents() {
       if (state.activeModule === "automation") {
         clearMsg("commandMsg");
         const previousPersonaId = String(state.selectedPersonaId || "");
-        state.selectedPersonaId = nextPersonaId;
+        setSelectedPersonaId(nextPersonaId);
         if (nextPersonaId !== previousPersonaId) {
           state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
           state.personaListEditorId = "";
@@ -25594,7 +25622,7 @@ function bindEvents() {
       clearMsg("commandMsg");
       const previousPersonaId = String(state.selectedPersonaId || "");
       const wasCreatingPersona = state.personaCreateMode;
-      state.selectedPersonaId = nextPersonaId;
+      setSelectedPersonaId(nextPersonaId);
       if (nextPersonaId !== previousPersonaId || wasCreatingPersona) resetPersonaWorkspaceStateOnSwitch(nextPersonaId);
       else setSelectedPersonaPostId("");
       state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
@@ -26212,7 +26240,7 @@ function bindEvents() {
       const reopenTaskQueuePersonaSidebar = Boolean(
         document.getElementById("taskQueuePersonaSidebar")?.classList.contains("is-mobile-open")
       );
-      state.selectedPersonaId = taskPersonaSelect.dataset.taskPersonaSelect || "";
+      setSelectedPersonaId(taskPersonaSelect.dataset.taskPersonaSelect || "");
       setSelectedPersonaPostId("");
       state.taskQueuePersonaPage = 1;
       $("taskTable").innerHTML = renderTaskQueueView();

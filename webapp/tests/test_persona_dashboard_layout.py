@@ -2097,6 +2097,36 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
                 server._persona_dashboard_refresh_archive_ids("", {"id": 7})
         self.assertEqual(raised.exception.status_code, 400)
 
+    def test_selected_persona_survives_refresh_with_workspace_scoped_storage(self):
+        self.assertIn(
+            'const SELECTED_PERSONA_STORAGE_KEY = "wk-selected-persona";',
+            self.console_script,
+        )
+        self.assertIn(
+            "consoleUserId(ADMIN_WORKSPACE_USER_ID || user?.id)",
+            self.console_script,
+        )
+        self.assertIn(
+            "state.selectedPersonaId || storedSelectedPersonaId() || \"\"",
+            self.console_script,
+        )
+        self.assertIn(
+            "setSelectedPersonaId(requestedPersonaExists ? requestedPersonaId : state.personas[0]?.id || \"\");",
+            self.console_script,
+        )
+        self.assertIn(
+            "setSelectedPersonaId(nextPersonaId);",
+            self.console_script,
+        )
+        self.assertIn(
+            'if (cleanId) window.localStorage.setItem(key, cleanId);',
+            self.console_script,
+        )
+        self.assertIn(
+            "else window.localStorage.removeItem(key);",
+            self.console_script,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
