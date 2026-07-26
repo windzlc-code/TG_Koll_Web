@@ -30,6 +30,15 @@ class PublicAccountDrawerTests(unittest.TestCase):
         self.assertIn("max-height: none;", desktop_block)
         self.assertNotIn("calc(var(--site-header-height, 68px) + 12px)", desktop_block)
 
+    def test_desktop_notification_panel_matches_the_account_side_drawer(self):
+        desktop_block = self.navigation_css[self.navigation_css.rindex("@media (min-width: 821px)"):]
+        self.assertIn(".site-notification-popover {", desktop_block)
+        self.assertIn("inset: 0 0 0 auto;", desktop_block)
+        self.assertIn("width: min(520px, 42vw);", desktop_block)
+        self.assertIn("height: 100dvh;", desktop_block)
+        self.assertIn("max-height: none;", desktop_block)
+        self.assertNotIn("calc(var(--site-header-height, 68px) + 12px)", desktop_block)
+
 
 if __name__ == "__main__":
     unittest.main()
