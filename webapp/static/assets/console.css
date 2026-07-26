@@ -22920,8 +22920,8 @@ body.console-page {
   content: "";
   position: absolute;
   z-index: 0;
-  left: var(--segment-slide-left);
-  top: var(--segment-slide-top);
+  left: 0;
+  top: 0;
   width: var(--segment-slide-width);
   height: var(--segment-slide-height);
   box-sizing: border-box;
@@ -22930,9 +22930,10 @@ body.console-page {
   border-radius: var(--segment-slide-radius);
   background: var(--segment-slide-background);
   box-shadow: var(--segment-slide-shadow);
+  transform: translate3d(var(--segment-slide-x), var(--segment-slide-y), 0);
+  will-change: transform, width, height;
   transition:
-    left 180ms cubic-bezier(.2, .72, .2, 1),
-    top 180ms cubic-bezier(.2, .72, .2, 1),
+    transform 180ms cubic-bezier(.2, .72, .2, 1),
     width 180ms cubic-bezier(.2, .72, .2, 1),
     height 180ms cubic-bezier(.2, .72, .2, 1);
 }

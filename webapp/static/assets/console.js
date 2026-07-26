@@ -11585,9 +11585,11 @@ function bindSimpleFlowInputs(moduleId) {
     document.querySelectorAll("[data-simple-publish-mode]").forEach((node) => {
       node.addEventListener("click", async (event) => {
         event.__vectoSegmentSlideHandled = true;
+        if (node.closest(".publish-mode-tabs")?.classList.contains("is-segment-background-sliding")) return;
         const nextMode = normalizedPublishMode(node.dataset.simplePublishMode || "publish_now");
         const previousMode = normalizedPublishMode(state.simpleBranches.publishing);
         if (nextMode !== previousMode && !(await confirmLeaveTransientWorkspaceState())) return;
+        await slideSegmentedButtonBackground(node);
         state.simpleBranches.publishing = nextMode;
         state.publishHistoryPreviewId = "";
         renderSimpleFlowModule("publishing");
@@ -24382,6 +24384,7 @@ const SEGMENTED_BACKGROUND_BUTTON_SELECTOR = [
   ".account-browser-tabs > button",
   ".mobile-task-dock > button",
 ].join(",");
+const segmentedBackgroundSlides = new WeakMap();
 
 async function slideSegmentedButtonBackground(button) {
   if (
@@ -24396,6 +24399,8 @@ async function slideSegmentedButtonBackground(button) {
   const current = Array.from(group?.children || [])
     .find((item) => item.matches?.("button.is-active"));
   if (!group || !current) return;
+  const pendingSlide = segmentedBackgroundSlides.get(group);
+  if (pendingSlide) return pendingSlide;
   const positionGroup = getComputedStyle(group).position === "static";
 
   const relativeBox = (item) => {
@@ -24412,8 +24417,8 @@ async function slideSegmentedButtonBackground(button) {
   const to = relativeBox(button);
   const activeStyle = getComputedStyle(current);
   const inactiveStyle = getComputedStyle(button);
-  group.style.setProperty("--segment-slide-left", `${from.left}px`);
-  group.style.setProperty("--segment-slide-top", `${from.top}px`);
+  group.style.setProperty("--segment-slide-x", `${from.left}px`);
+  group.style.setProperty("--segment-slide-y", `${from.top}px`);
   group.style.setProperty("--segment-slide-width", `${from.width}px`);
   group.style.setProperty("--segment-slide-height", `${from.height}px`);
   group.style.setProperty("--segment-slide-background", activeStyle.background);
@@ -24428,24 +24433,23 @@ async function slideSegmentedButtonBackground(button) {
   button.classList.add("is-segment-slide-to");
   void group.offsetWidth;
 
-  await new Promise((resolve) => {
+  const slide = new Promise((resolve) => {
     requestAnimationFrame(() => {
-      group.style.setProperty("--segment-slide-left", `${to.left}px`);
-      group.style.setProperty("--segment-slide-top", `${to.top}px`);
+      group.style.setProperty("--segment-slide-x", `${to.left}px`);
+      group.style.setProperty("--segment-slide-y", `${to.top}px`);
       group.style.setProperty("--segment-slide-width", `${to.width}px`);
       group.style.setProperty("--segment-slide-height", `${to.height}px`);
       window.setTimeout(() => requestAnimationFrame(resolve), 180);
     });
   });
-
-  requestAnimationFrame(() => {
+  const completion = slide.then(() => new Promise((resolve) => requestAnimationFrame(() => {
     current.classList.remove("is-segment-slide-from");
     button.classList.remove("is-segment-slide-to");
     group.classList.remove("is-segment-background-sliding");
     group.classList.remove("is-segment-slide-positioned");
     [
-      "--segment-slide-left",
-      "--segment-slide-top",
+      "--segment-slide-x",
+      "--segment-slide-y",
       "--segment-slide-width",
       "--segment-slide-height",
       "--segment-slide-background",
@@ -24455,7 +24459,14 @@ async function slideSegmentedButtonBackground(button) {
       "--segment-slide-active-color",
       "--segment-slide-inactive-color",
     ].forEach((name) => group.style.removeProperty(name));
-  });
+    resolve();
+  })));
+  segmentedBackgroundSlides.set(group, completion);
+  try {
+    await completion;
+  } finally {
+    if (segmentedBackgroundSlides.get(group) === completion) segmentedBackgroundSlides.delete(group);
+  }
 }
 
 async function waitForSegmentedBackgroundSlide(event, button) {
