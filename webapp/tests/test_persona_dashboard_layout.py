@@ -816,19 +816,19 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('${renderMobileTaskIcon("publishing")}', header)
         self.assertNotIn('class="publish-header-end-slot"', header)
         self.assertNotIn('data-persona-mobile-list-toggle="publishPersonaSidebar"', header)
-        summary_start = self.console_script.index("function renderPersonaModuleSummary(")
-        summary_end = self.console_script.index("\nfunction personaAvatarCropModalHtml", summary_start)
-        summary = self.console_script[summary_start:summary_end]
-        self.assertIn('data-persona-mobile-list-toggle="${esc(sidebarId)}"', summary)
-        self.assertIn("<span>人设列表</span>", summary)
+        toggle_start = self.console_script.index("function renderPersonaProfileListToggle(")
+        toggle_end = self.console_script.index("\nfunction personaAvatarCropModalHtml", toggle_start)
+        toggle = self.console_script[toggle_start:toggle_end]
+        self.assertNotIn("function renderPersonaModuleSummary(", self.console_script)
+        self.assertNotIn(".module-persona-summary", self.styles)
+        self.assertIn('data-persona-mobile-list-toggle="${esc(sidebarId)}"', toggle)
+        self.assertNotIn("<span>人设列表</span>", toggle)
         self.assertIn('sidebarId: "publishPersonaSidebar"', self.console_script)
-        self.assertIn("renderPersonaAvatar(persona, profile, displayAvatar)", summary)
-        self.assertIn("renderPersonaExecutionAccountBadge(persona)", summary)
-        self.assertIn("personaGroupsForPersona(persona.id)", summary)
-        self.assertIn("personaSummaryCounts(persona)", summary)
-        self.assertIn("draftCount", summary)
-        self.assertIn("favoriteCount", summary)
-        self.assertIn('renderPersonaModuleSummary(persona, { sidebarId: "personaWorkspaceSidebar" })', self.console_script)
+        self.assertIn("renderPersonaProfileIdentity(selectedPersonaForPublish, null, {", self.console_script)
+        self.assertIn('state.activeModule === "tweet_generation"', self.console_script)
+        self.assertIn("renderPersonaProfileIdentity(persona, profile, {", self.console_script)
+        self.assertIn("persona-profile-compact-meta", self.styles)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
         self.assertNotIn("publish-account-badge", header)
         self.assertNotIn("到账号管理绑定", header)
 
@@ -839,7 +839,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("persistent-persona", self.styles)
         self.assertIn("function personaSummaryCounts(persona)", self.console_script)
         identity = self.console_script[
-            self.console_script.index("function renderPersonaProfileIdentity(persona, profile)"):
+            self.console_script.index("function renderPersonaProfileIdentity("):
             self.console_script.index("\nfunction renderPersonaContentOverview")
         ]
         self.assertNotIn("名称、简介、头像与生成设置", identity)
@@ -851,18 +851,21 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("收藏", identity)
         self.assertNotIn("类型：", identity)
         self.assertIn("renderPersonaExecutionAccountBadge(persona)", identity)
+        self.assertIn("renderPersonaProfileListToggle(sidebarId)", identity)
+        self.assertIn("renderPersonaAvatar(persona, resolvedProfile, displayAvatar)", identity)
+        self.assertIn('class="persona-profile-compact-layout"', identity)
+        self.assertIn('class="persona-profile-compact-meta"', identity)
+        self.assertNotIn("人设简介</strong>\n          ${listToggle}\n        </div>\n        <div class=\"persona-profile-compact-layout\"", identity)
         self.assertLess(
-            identity.index("persona-profile-identity-avatar-row"),
+            identity.index("persona-profile-compact-layout"),
             identity.index("persona-profile-account-status"),
         )
         self.assertLess(
             identity.index("persona-profile-account-status"),
-            identity.index("persona-profile-summary-strip"),
+            identity.index("persona-profile-compact-meta"),
         )
         self.assertIn("persona-profile-overview-shell", self.console_script)
-        self.assertIn('data-persona-mobile-list-toggle="personaWorkspaceSidebar"', identity)
-        self.assertIn('aria-label="打开人设列表"', identity)
-        self.assertIn('M4 5h16', identity)
+        self.assertIn('sidebarId = "personaWorkspaceSidebar"', identity)
         self.assertIn("function setPersonaMobileSidebarOpen(open, sidebarId", self.console_script)
         self.assertIn('data-persona-mobile-sidebar', self.console_script)
         self.assertIn(".persona-profile-summary-strip {", self.styles)

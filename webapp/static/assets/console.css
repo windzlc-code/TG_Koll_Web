@@ -1621,119 +1621,6 @@ textarea:focus {
   stroke-linejoin: round;
 }
 
-.module-persona-summary {
-  display: grid;
-  grid-template-columns: 56px minmax(0, 1fr);
-  gap: 12px;
-  align-items: center;
-  min-width: 0;
-  padding: 11px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-solid);
-}
-
-.module-persona-summary.is-empty {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
-.module-persona-summary-empty {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.module-persona-summary-empty span {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.module-persona-summary-avatar,
-.module-persona-summary-avatar .persona-avatar {
-  width: 56px;
-  height: 56px;
-}
-
-.module-persona-summary-avatar {
-  overflow: hidden;
-  border-radius: 50%;
-}
-
-.module-persona-summary-content {
-  display: grid;
-  min-width: 0;
-  gap: 7px;
-}
-
-.module-persona-summary-head,
-.module-persona-summary-account {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 8px;
-}
-
-.module-persona-summary-head {
-  justify-content: space-between;
-}
-
-.module-persona-summary-title {
-  display: grid;
-  min-width: 0;
-  gap: 1px;
-}
-
-.module-persona-summary-title small,
-.module-persona-summary-metrics small {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.2;
-}
-
-.module-persona-summary-title strong {
-  overflow: hidden;
-  font-size: 16px;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.module-persona-summary-account {
-  flex-wrap: wrap;
-}
-
-.module-persona-summary-account .persona-status-chip {
-  padding: 3px 8px;
-  font-size: 12px;
-}
-
-.module-persona-selection-label {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.module-persona-summary-metrics {
-  display: grid;
-  grid-template-columns: minmax(90px, 1.4fr) repeat(2, minmax(64px, .8fr));
-  gap: 6px;
-  min-width: 0;
-}
-
-.module-persona-summary-metrics > span {
-  display: grid;
-  min-width: 0;
-  gap: 1px;
-}
-
-.module-persona-summary-metrics strong {
-  overflow: hidden;
-  font-size: 12px;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .persona-detail-summary-panel {
   display: grid;
   gap: 8px;
@@ -6698,6 +6585,81 @@ body.persona-touch-dragging .persona-list-card:active {
   background: var(--panel-solid);
 }
 
+.persona-profile-identity--compact {
+  gap: 0;
+  padding: 8px 9px;
+}
+
+.persona-profile-identity--compact.is-empty {
+  display: block;
+}
+
+.persona-profile-compact-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 38px;
+  gap: 8px;
+}
+
+.persona-profile-compact-layout {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 36px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.persona-profile-compact-content {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.persona-profile-compact-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 10px;
+  min-width: 0;
+}
+
+.persona-profile-compact-meta > span {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.persona-profile-compact-meta small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.persona-profile-compact-meta strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.persona-profile-identity--compact .persona-profile-list-toggle {
+  align-self: start;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+}
+
+.persona-profile-identity-empty,
+.persona-profile-selection-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .persona-profile-identity-avatar-row {
   display: flex;
   align-items: flex-start;
@@ -6732,6 +6694,28 @@ body.persona-touch-dragging .persona-list-card:active {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 5px 8px;
+}
+
+.persona-profile-identity--compact .persona-avatar {
+  width: 46px;
+  height: 46px;
+  aspect-ratio: 1;
+}
+
+.persona-profile-identity--compact .persona-profile-name-row > strong {
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.persona-profile-identity--compact .persona-profile-name-row {
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+
+.persona-profile-identity--compact .persona-status-chip {
+  max-width: 100%;
+  padding: 2px 6px;
+  font-size: 11px;
 }
 
 .persona-profile-summary-item {
@@ -18368,6 +18352,37 @@ body.console-page {
     font-size: 18px;
   }
 
+  .console-page .persona-detail .persona-profile-identity--compact .persona-avatar,
+  .persona-profile-identity--compact .persona-avatar {
+    width: 44px;
+    height: 44px;
+    aspect-ratio: 1;
+  }
+
+  .console-page .persona-detail .persona-profile-identity--compact,
+  .persona-profile-identity--compact {
+    padding: 6px 7px;
+  }
+
+  .console-page .persona-detail .persona-profile-compact-layout,
+  .persona-profile-compact-layout {
+    grid-template-columns: 44px minmax(0, 1fr) 32px;
+    gap: 6px;
+  }
+
+  .console-page .persona-detail .persona-profile-compact-meta,
+  .persona-profile-compact-meta {
+    gap: 3px 7px;
+  }
+
+  .console-page .persona-detail .persona-profile-identity--compact .persona-profile-list-toggle,
+  .persona-profile-identity--compact .persona-profile-list-toggle {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+  }
+
   .console-page .persona-detail .persona-avatar--editor {
     width: 86px;
   }
@@ -19234,40 +19249,6 @@ body.console-page {
 
   .publish-content-preview--selection .publish-preview-tabs-layout {
     display: none;
-  }
-
-  .module-persona-summary {
-    grid-template-columns: 44px minmax(0, 1fr);
-    gap: 8px;
-    padding: 8px;
-  }
-
-  .module-persona-summary.is-empty {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .module-persona-summary-avatar,
-  .module-persona-summary-avatar .persona-avatar {
-    width: 44px;
-    height: 44px;
-  }
-
-  .module-persona-summary-title strong {
-    font-size: 14px;
-  }
-
-  .module-persona-summary-account {
-    gap: 5px;
-  }
-
-  .module-persona-summary-account .persona-status-chip {
-    max-width: 100%;
-    white-space: normal;
-  }
-
-  .module-persona-summary-metrics {
-    grid-template-columns: minmax(0, 1.3fr) repeat(2, minmax(52px, .7fr));
-    gap: 4px;
   }
 
   /* Keep the mobile persona editor focused on the selected profile. */
