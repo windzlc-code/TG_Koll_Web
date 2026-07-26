@@ -559,6 +559,7 @@ body.site-mobile-menu-active {
 
 .site-header .header-login,
 .site-header .header-action,
+.site-header .site-admin-entry,
 .site-user {
   display: inline-flex;
   align-items: center;
@@ -593,6 +594,19 @@ body.site-mobile-menu-active {
 
 .site-header .header-action:hover {
   background: #ffffff;
+}
+
+.site-header .site-admin-entry {
+  padding: 0 13px;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  cursor: pointer;
+}
+
+.site-header .site-admin-entry:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.14);
 }
 
 .site-user {

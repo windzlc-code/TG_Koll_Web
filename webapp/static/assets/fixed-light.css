@@ -1815,19 +1815,19 @@
   border-color: var(--public-line);
 }
 
-/* Desktop account information is a partial right drawer. Mobile remains full screen. */
+/* Keep desktop account information in the same edge-to-edge side drawer as mobile. */
 @media (min-width: 821px) {
   :root[data-theme="light"] .site-account-popover {
-    inset: calc(var(--site-header-height, 68px) + 12px) 16px auto auto;
-    align-items: stretch;
-    width: min(440px, calc(100vw - 32px));
-    height: auto;
-    max-height: calc(100dvh - var(--site-header-height, 68px) - 28px);
-    padding: 16px;
-    border: 1px solid var(--public-line);
-    border-radius: 8px;
+    inset: 0 0 0 auto;
+    align-items: center;
+    width: min(520px, 42vw);
+    height: 100dvh;
+    max-height: none;
+    padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+    border: 0;
+    border-radius: 0;
     box-shadow: 0 22px 56px rgb(17 24 39 / 22%);
-    transform: translate3d(calc(100% + 24px), 0, 0);
+    transform: translate3d(100%, 0, 0);
   }
 
   :root[data-theme="light"] .site-account-menu.is-open .site-account-popover {
@@ -1836,11 +1836,6 @@
 
   :root[data-theme="light"] .site-account-popover > * {
     width: 100%;
-  }
-
-  :root[data-theme="light"] body.site-account-panel-active {
-    overflow: auto;
-    overscroll-behavior: auto;
   }
 }
 

@@ -352,6 +352,41 @@
     });
   }
 
+  function syncPublicAdminEntry() {
+    const labels = copy[currentLanguage()];
+    const isAdmin = currentSessionMode === "admin"
+      && (currentAccount?.is_admin === true || Number(currentAccount?.is_admin) === 1);
+    document.querySelectorAll('[data-site-header][data-site-mode="public"]').forEach((header) => {
+      const actions = header.querySelector(".header-actions");
+      if (!actions) return;
+      let entry = actions.querySelector(":scope > [data-site-admin-entry]");
+      if (!isAdmin) {
+        entry?.remove();
+        return;
+      }
+      if (!entry) {
+        entry = document.createElement("button");
+        entry.type = "button";
+        entry.className = "site-admin-entry";
+        entry.dataset.siteAdminEntry = "true";
+        entry.addEventListener("click", () => {
+          const workspaceUserId = publicPagePreservesAdminWorkspace() ? storedAdminWorkspaceUserId() : "";
+          if (!workspaceUserId) removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+          markAdminConsoleContext();
+          window.location.assign(adminConsoleTarget("", workspaceUserId));
+        });
+        const notificationMenu = actions.querySelector(":scope > [data-site-notification-menu]");
+        const accountMenu = actions.querySelector(":scope > [data-site-account-menu]");
+        if (notificationMenu) notificationMenu.before(entry);
+        else if (accountMenu) accountMenu.before(entry);
+        else actions.appendChild(entry);
+      }
+      entry.hidden = false;
+      entry.textContent = labels.adminConsole;
+      entry.setAttribute("aria-label", labels.adminConsole);
+    });
+  }
+
   function currentTheme() {
     return "light";
   }
@@ -939,6 +974,7 @@
     });
     renderAccountBilling();
     syncConsoleEntryTargets();
+    syncPublicAdminEntry();
   }
 
   function setAccount(account) {
