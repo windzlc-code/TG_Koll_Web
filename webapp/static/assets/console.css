@@ -1908,11 +1908,25 @@ button.primary,
     grid-area: platform;
     display: flex;
     align-items: center;
+    flex-wrap: nowrap;
+    gap: 5px;
     min-height: 22px;
     padding: 0;
     color: var(--ink);
     font-size: 12px;
     font-weight: 850;
+    min-width: 0;
+  }
+
+  .persona-dashboard-view .persona-post-platform-name {
+    flex: 0 0 auto;
+  }
+
+  .persona-dashboard-view .persona-post-platform .persona-post-content-badges {
+    flex: 1 1 auto;
+    flex-wrap: nowrap;
+    min-width: 0;
+    margin: 0;
   }
 
   .persona-dashboard-view .persona-post-table td:nth-child(2) {
@@ -10609,6 +10623,22 @@ body.persona-touch-dragging .persona-list-card:active {
   border-color: var(--ink);
   background: var(--ink);
   color: var(--panel-solid);
+}
+
+.persona-compose-toggle button:disabled,
+.persona-compose-toggle button:disabled:hover {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.persona-compose-lock-hint {
+  margin: -4px 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .persona-source-toggle,

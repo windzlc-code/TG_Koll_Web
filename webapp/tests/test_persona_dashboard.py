@@ -1580,6 +1580,65 @@ class PersonaDashboardApiTests(unittest.TestCase):
         archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
         self.assertTrue(any(item["id"] == post["id"] for item in archives[0]["posts"]))
 
+    def test_user_post_retention_prunes_oldest_history_across_owned_personas(self):
+        self._write_archives()
+        archive_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archive_path.read_text(encoding="utf-8"))
+        archives.append({
+            "id": "persona-2",
+            "name": "Second persona",
+            "content": "Second persona",
+            "createdAt": "2026-06-25T00:00:00Z",
+            "updatedAt": "2026-07-01T00:00:00Z",
+            "posts": [],
+            "publishHistory": [{
+                "id": "pub-2",
+                "archivePostId": "post-published-2",
+                "title": "Newer history",
+                "content": "Newer history",
+                "publishedAt": "2026-07-01T00:00:00Z",
+                "sourceMeta": {"archivePostSource": "posts"},
+            }],
+        })
+        archives.append({
+            "id": "persona-other-user",
+            "name": "Other user",
+            "content": "Other user",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "posts": [{
+                "id": "other-old-post",
+                "title": "Other",
+                "content": "Must not be pruned",
+                "createdAt": "2026-01-01T00:00:00Z",
+            }],
+            "publishHistory": [],
+        })
+        archive_path.write_text(json.dumps(archives), encoding="utf-8")
+        self._assign_personas_to_admin(["persona-2"])
+
+        with mock.patch.object(server, "PERSONA_USER_POST_LIMIT", 3):
+            response = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/posts",
+                json={"title": "Newest draft", "content": "Newest draft content"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        persisted = {
+            archive["id"]: archive
+            for archive in json.loads(archive_path.read_text(encoding="utf-8"))
+        }
+        self.assertEqual(persisted["persona-1"]["publishHistory"], [])
+        self.assertEqual([item["id"] for item in persisted["persona-2"]["publishHistory"]], ["pub-2"])
+        self.assertEqual(
+            {item["id"] for item in persisted["persona-1"]["posts"]},
+            {"post-1", response.json()["id"]},
+        )
+        self.assertEqual(
+            [item["id"] for item in persisted["persona-other-user"]["posts"]],
+            ["other-old-post"],
+        )
+
     def test_create_persona_media_only_post_requires_explicit_media_intent(self):
         self._write_archives()
         allowed_media_path = self.draft_media_path.parent / "media-only.png"
@@ -1820,6 +1879,32 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["generation_content"], "手动输入的通勤配图正文")
         self.assertEqual(captured["payload"]["content_source_mode"], "manual")
         self.assertEqual(captured["payload"]["image_count"], 3)
+
+    def test_task_submit_limits_persona_post_image_to_four_outputs(self):
+        self._write_archives()
+        captured = {}
+
+        def fake_enqueue(task_id, user_id, task_type, payload):
+            captured["payload"] = payload
+
+        with mock.patch.object(server, "_enqueue_task", side_effect=fake_enqueue):
+            resp = self.client.post(
+                "/api/tasks/submit",
+                data={
+                    "task_type": "persona_post_image",
+                    "params_json": json.dumps(
+                        {
+                            "related_persona_id": "persona-1",
+                            "related_post_id": "post-1",
+                            "generation_content": "draft content",
+                            "image_count": 8,
+                        },
+                    ),
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(captured["payload"]["image_count"], 4)
 
     def test_persona_image_tasks_require_ownership_before_enqueue(self):
         self._write_archives()

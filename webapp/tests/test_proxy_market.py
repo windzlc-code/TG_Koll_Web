@@ -199,6 +199,7 @@ class ProxyMarketTests(unittest.TestCase):
         )
         stale_result = next(item for item in all_catalog.json()["items"] if item["id"] == stale["id"])
         self.assertFalse(stale_result["available"])
+        self.assertEqual(stale_result["availability_reason"], "health_stale")
 
     def test_claim_is_exclusive_idempotent_and_release_returns_inventory(self):
         item = self._market_item()

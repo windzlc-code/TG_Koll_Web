@@ -520,57 +520,19 @@
         </div>
       </div>
 
-      <button
+      <a
         class="admin-profile-toggle"
         id="adminProfileToggle"
-        type="button"
-        aria-label="打开管理员中心"
-        aria-controls="adminProfilePanel"
-        aria-expanded="false"
-        aria-haspopup="dialog"
+        href="/admin-profile.html"
+        aria-label="打开个人页面"
+        title="个人页面"
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <circle cx="12" cy="8" r="3.5"></circle>
           <path d="M5.5 19c.7-4 3-6 6.5-6s5.8 2 6.5 6"></path>
         </svg>
         <span class="admin-profile-online" aria-hidden="true"></span>
-      </button>
-
-      <div
-        class="admin-profile-panel"
-        id="adminProfilePanel"
-        role="dialog"
-        aria-labelledby="adminProfilePanelTitle"
-        aria-hidden="true"
-        hidden
-      >
-        <div class="admin-profile-panel-head">
-          <div>
-            <span>管理员账户</span>
-            <strong id="adminProfilePanelTitle">管理员中心</strong>
-          </div>
-          <button id="adminProfileClose" type="button" aria-label="关闭管理员中心">×</button>
-        </div>
-
-        <section class="admin-session-card" aria-labelledby="adminSessionTitle">
-          <div class="admin-session-card-head">
-            <span class="admin-session-state"><i aria-hidden="true"></i>已登录</span>
-            <span class="admin-session-role">管理员</span>
-          </div>
-          <div class="admin-session-title" id="adminSessionTitle">当前管理员</div>
-          <strong class="admin-session-name" id="adminSessionName">...</strong>
-          <div class="admin-session-meta">
-            <span>账号 ID <b id="adminSessionId">-</b></span>
-            <span>创建时间 <b id="adminSessionCreatedAt">-</b></span>
-          </div>
-        </section>
-
-        <div class="admin-profile-actions">
-          <button id="btnAdminAccountSettings" class="btn ghost" type="button">账号设置</button>
-          <button id="btnAdminLogout" class="btn ghost admin-logout-btn" type="button">退出账号</button>
-        </div>
-        <div id="adminLogoutMsg" class="admin-logout-msg" role="status" aria-live="polite"></div>
-      </div>
+      </a>
     </div>
 
     <main class="main">
@@ -743,14 +705,20 @@
           <button id="btnResetUserFilters" type="button" class="ghost">重置</button>
         </form>
         <div id="adminUserBatchBar" class="admin-user-batch-bar">
-          <div class="admin-user-batch-selection"><strong id="adminSelectedUserCount">0</strong><span>个客户已选择</span></div>
-          <label><span class="sr-only">批量操作</span><select id="adminUserBatchAction"><option value="">选择批量操作</option><option value="approve">审核通过</option><option value="reject">拒绝申请</option><option value="enable">启用账号</option><option value="suspend">临时停用</option><option value="lock">安全锁定</option><option value="archive">只读归档</option><option value="revoke_sessions">强制全部下线</option><option value="assign_group">调整分组</option><option value="add_tags">添加标签</option></select></label>
-          <label><span class="sr-only">批量操作原因</span><input id="adminUserBatchReason" maxlength="500" placeholder="填写操作原因"></label>
-          <label id="adminBatchGroupField" hidden><span class="sr-only">客户分组</span><select id="adminUserBatchGroup"><option value="">选择客户分组</option></select></label>
-          <label id="adminBatchTagsField" hidden><span class="sr-only">客户标签</span><select id="adminUserBatchTags" multiple aria-label="客户标签"></select></label>
-          <button id="btnPreviewUserBatch" type="button" class="ghost">预览影响</button>
-          <button id="btnRunUserBatch" type="button" class="primary" disabled>确认执行</button>
-          <button id="btnClearUserSelection" type="button" class="ghost">清除选择</button>
+          <div class="admin-user-batch-summary">
+            <div class="admin-user-batch-selection"><strong id="adminSelectedUserCount">0</strong><span>个客户已选择</span></div>
+            <button id="btnClearUserSelection" type="button" class="ghost">清除选择</button>
+          </div>
+          <div class="admin-user-batch-fields">
+            <label><span class="sr-only">批量操作</span><select id="adminUserBatchAction"><option value="">选择批量操作</option><option value="approve">审核通过</option><option value="reject">拒绝申请</option><option value="enable">启用账号</option><option value="suspend">临时停用</option><option value="lock">安全锁定</option><option value="archive">只读归档</option><option value="revoke_sessions">强制全部下线</option><option value="assign_group">调整分组</option><option value="add_tags">添加标签</option></select></label>
+            <label class="admin-user-batch-reason"><span class="sr-only">批量操作原因</span><input id="adminUserBatchReason" maxlength="500" placeholder="填写操作原因"></label>
+            <label id="adminBatchGroupField" hidden><span class="sr-only">客户分组</span><select id="adminUserBatchGroup"><option value="">选择客户分组</option></select></label>
+            <label id="adminBatchTagsField" hidden><span class="sr-only">客户标签</span><select id="adminUserBatchTags" multiple aria-label="客户标签"></select></label>
+          </div>
+          <div class="admin-user-batch-actions">
+            <button id="btnPreviewUserBatch" type="button" class="ghost">预览影响</button>
+            <button id="btnRunUserBatch" type="button" class="primary" disabled>确认执行</button>
+          </div>
           <div id="adminUserBatchMsg" class="msg" role="status" aria-live="polite"></div>
         </div>
         <div class="admin-compose-shell">
@@ -1220,13 +1188,9 @@
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5Z"></path><path d="M8 4v6h8V4M8 20v-6h8v6"></path></svg>
                   保存草稿
                 </button>
-                <button id="btnTestProxyMarketItem" type="button" class="ghost">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h4l2-5 4 10 2-5h4"></path><circle cx="12" cy="12" r="9"></circle></svg>
-                  真实检测
-                </button>
-                <button id="btnPublishProxyMarketItem" type="button" class="primary" disabled>
+                <button id="btnPublishProxyMarketItem" type="button" class="primary">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 12 2.5 2.5L16 9"></path><circle cx="12" cy="12" r="9"></circle></svg>
-                  发布
+                  检测并发布
                 </button>
               </div>
             </div>

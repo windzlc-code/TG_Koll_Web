@@ -184,10 +184,22 @@ function storedPersonaPostPageSize() {
 function storedPersonaMediaImageCount() {
   try {
     const value = Number(window.localStorage.getItem(PERSONA_MEDIA_IMAGE_COUNT_KEY) || 1);
-    return Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : 1, 1), 8);
+    return Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : 1, 1), 4);
   } catch {
     return 1;
   }
+}
+
+function normalizePersonaMediaGenerationForm(mediaForm) {
+  if (!mediaForm || typeof mediaForm !== "object") return mediaForm;
+  const legacyManualContent = String(mediaForm.manualContent || "").trim();
+  if (!String(mediaForm.prompt || "").trim() && legacyManualContent) {
+    mediaForm.prompt = legacyManualContent;
+  }
+  mediaForm.contentMode = "draft";
+  mediaForm.manualContent = "";
+  mediaForm.imageCount = Math.min(Math.max(Number(mediaForm.imageCount || 1), 1), 4);
+  return mediaForm;
 }
 
 function storedTaskQueuePersonaPageSize() {
@@ -4300,13 +4312,13 @@ function snapshotPersonaCurrentForm() {
   if ($("personaDraftTitle")) form.draft.title = String($("personaDraftTitle")?.value || "");
   if ($("personaDraftContent")) form.draft.content = String($("personaDraftContent")?.value || "");
   syncPersonaDraftDirty(form.draft);
-  if ($("personaMediaManualContent")) form.media.manualContent = String($("personaMediaManualContent")?.value || "");
   if ($("personaMediaTaskPrompt")) form.media.prompt = String($("personaMediaTaskPrompt")?.value || "");
   if ($("personaMediaAspectRatio")) form.media.aspectRatio = String($("personaMediaAspectRatio")?.value || "1:1");
-  if ($("personaMediaImageCount")) form.media.imageCount = Math.min(Math.max(Number.parseInt(String($("personaMediaImageCount")?.value || ""), 10) || storedPersonaMediaImageCount(), 1), 8);
+  if ($("personaMediaImageCount")) form.media.imageCount = Math.min(Math.max(Number.parseInt(String($("personaMediaImageCount")?.value || ""), 10) || storedPersonaMediaImageCount(), 1), 4);
   if ($("personaMediaResolution")) form.media.resolution = String($("personaMediaResolution")?.value || "720p");
   if ($("personaMediaDuration")) form.media.duration = Number($("personaMediaDuration")?.value || form.media.duration || 2);
   if ($("personaMediaReplaceExisting")) form.media.replaceExisting = Boolean($("personaMediaReplaceExisting")?.checked);
+  normalizePersonaMediaGenerationForm(form.media);
 }
 
 function personaImageLibraryState(personaId) {
@@ -17200,17 +17212,12 @@ async function submitPersonaMediaTask() {
     return;
   }
   const draftSourceText = String(post.content || "").trim();
-  const contentMode = String(form.contentMode || "draft") === "manual" ? "manual" : "draft";
-  const manualContent = String(form.manualContent || "").trim();
-  const generationContent = contentMode === "manual" ? manualContent : draftSourceText;
-  const prompt = contentMode === "manual" ? "" : String(form.prompt || "").trim();
-  const desiredImageCount = Math.min(Math.max(Number(form.imageCount || state.personaMediaImageCountDefault || storedPersonaMediaImageCount() || 1), 1), 8);
+  normalizePersonaMediaGenerationForm(form);
+  const generationContent = draftSourceText;
+  const prompt = String(form.prompt || "").trim();
+  const desiredImageCount = Math.min(Math.max(Number(form.imageCount || state.personaMediaImageCountDefault || storedPersonaMediaImageCount() || 1), 1), 4);
   form.imageCount = desiredImageCount;
-  if (taskType === "persona_post_image" && contentMode === "manual" && !generationContent) {
-    showMsg("commandMsg", "请先输入自定义生成内容。", false);
-    return;
-  }
-  if (taskType === "persona_post_image" && contentMode !== "manual" && !generationContent && !prompt) {
+  if (taskType === "persona_post_image" && !generationContent && !prompt) {
     showMsg("commandMsg", "当前草稿没有正文，请补充提示词后再生成。", false);
     return;
   }
@@ -17220,8 +17227,7 @@ async function submitPersonaMediaTask() {
     message: prompt,
     custom_prompt: prompt,
     generation_content: generationContent,
-    content_source_mode: contentMode,
-    manual_content: contentMode === "manual" ? manualContent : "",
+    content_source_mode: "draft",
     image_count: desiredImageCount,
     persona_enabled: true,
     persona_label: String(persona.name || profile.name || "").trim(),
@@ -18447,21 +18453,6 @@ function renderPersonaPostsViewTabs(drafts, historyRows, activeStep) {
   `).join("")}</div>`;
 }
 
-function renderPersonaMediaContentModeTabs(mode) {
-  const activeMode = mode === "manual" ? "manual" : "draft";
-  const tabs = [
-    ["draft", "根据图文生成"],
-    ["manual", "自定义"],
-  ];
-  return `<div class="persona-step-tabs persona-subflow-tabs">${tabs.map(([value, label]) => `
-      <button
-        type="button"
-        class="${activeMode === value ? "is-active" : ""}"
-        data-persona-media-content-mode="${esc(value)}"
-      >${esc(label)}</button>
-  `).join("")}</div>`;
-}
-
 function renderPersonaHotCandidatePreview(candidate) {
   if (!candidate) return `<div class="empty-state">从左侧热点候选里选一条，这里会显示正文预览和来源。</div>`;
   const persona = selectedPersona();
@@ -18624,20 +18615,24 @@ function renderPersonaMediaTaskTabs(profile, generateForm, taskType) {
   `).join("")}</div>`;
 }
 
-function renderPersonaGenerateComposeTabs(mode) {
+function renderPersonaGenerateComposeTabs(mode, { editingDraft = false } = {}) {
   const activeMode = ["tweet_media", "hot"].includes(mode) ? mode : "tweet";
+  const lockReason = "正在编辑单条草稿，请先保存或退出编辑后切换。";
   const tabs = [
     ["tweet", "普通推文"],
     ["tweet_media", "批量推文"],
     ["hot", "热点抓取"],
   ];
-  return `<div class="persona-compose-toggle" aria-label="新建推文档位">${tabs.map(([value, label]) => `
+  return `<div class="persona-compose-toggle" aria-label="新建推文档位">${tabs.map(([value, label]) => {
+    const locked = editingDraft && value !== "tweet";
+    return `
     <button
       type="button"
       class="${activeMode === value ? "is-active" : ""}"
       data-persona-compose-mode="${esc(value)}"
-    >${esc(label)}</button>
-  `).join("")}</div>`;
+      ${locked ? `disabled title="${esc(lockReason)}" aria-label="${esc(`${label}，${lockReason}`)}"` : ""}
+    >${esc(label)}</button>`;
+  }).join("")}</div>`;
 }
 
 function renderPersonaMediaOperationTabs(mode) {
@@ -18735,8 +18730,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
     ? String(mediaForm.taskType || "")
     : String(mediaTaskOptions[0]?.[0] || "persona_post_image");
   mediaForm.taskType = currentTaskType;
-  mediaForm.contentMode = String(mediaForm.contentMode || "draft") === "manual" ? "manual" : "draft";
-  mediaForm.imageCount = Math.min(Math.max(Number(mediaForm.imageCount || state.personaMediaImageCountDefault || 1), 1), 8);
+  normalizePersonaMediaGenerationForm(mediaForm);
   const mediaMeta = taskMeta[currentTaskType] || taskMeta.persona_post_image;
   const showAspectRatio = currentTaskType === "persona_post_image";
   const showVideoOptions = false;
@@ -18759,10 +18753,11 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
           </div>
         ` : `
           <div class="persona-media-operation-pane">
-            ${renderPersonaMediaContentModeTabs(mediaForm.contentMode)}
             <div class="form-grid persona-detail-controls persona-media-generation-controls">
               <label>生成张数
-                <input id="personaMediaImageCount" type="number" min="1" max="8" step="1" value="${esc(mediaForm.imageCount)}" />
+                <select id="personaMediaImageCount">
+                  ${[1, 2, 3, 4].map((count) => `<option value="${count}" ${count === Number(mediaForm.imageCount) ? "selected" : ""}>${count} 张</option>`).join("")}
+                </select>
               </label>
               ${showAspectRatio ? `<label>图像比例
                 <select id="personaMediaAspectRatio">
@@ -18783,12 +18778,9 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
                 <input id="personaMediaDuration" type="number" min="2" max="15" value="${esc(mediaForm.duration || 2)}" />
               </label>` : ""}
             </div>
-            ${mediaForm.contentMode === "manual" ? `<label>手动生成内容
-              <textarea id="personaMediaManualContent" rows="5" placeholder="输入要用于生成配图的内容。">${esc(mediaForm.manualContent || "")}</textarea>
-            </label>` : ""}
-            ${mediaForm.contentMode === "manual" ? "" : `<label>补充提示词
-              <textarea id="personaMediaTaskPrompt" rows="5" placeholder="可留空；补充图文生成要求。">${esc(mediaForm.prompt || "")}</textarea>
-            </label>`}
+            <label>补充提示词（可选）
+              <textarea id="personaMediaTaskPrompt" rows="5" placeholder="留空按当前推文生成；填写后按提示词润色生成。">${esc(mediaForm.prompt || "")}</textarea>
+            </label>
             ${showSourceUpload ? renderUploadDropzone("personaMediaTaskFiles", {
               label: "上传素材",
               accept: uploadAccept,
@@ -19023,7 +19015,10 @@ function renderPersonaImageLibraryGrid(library) {
 
 function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, mediaBusyStartedAt = 0 } = {}) {
   const taskState = personaMediaTaskState(personaId, postId);
-  const runButton = `<button type="button" class="primary" data-persona-run-media-task aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (taskState?.taskId ? "重新生成" : "生成预览")}</button>`;
+  const prompt = String(personaFormState(personaId).media?.prompt || "").trim();
+  const generateLabel = prompt ? "AI 润色预览" : "生成预览";
+  const actionKind = taskState?.taskId ? "regenerate" : "generate";
+  const runButton = `<button type="button" class="primary" data-persona-run-media-task data-persona-media-action="${actionKind}" aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (taskState?.taskId ? "重新生成" : generateLabel)}</button>`;
   if (!taskState?.taskId) return `
     <div class="empty-state">提交生成任务后，这里会显示结果预览，并可直接添加至草稿。</div>
     <div class="row-actions persona-media-task-actions">
@@ -19987,7 +19982,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   const generateIntro = generateMode === "hot"
     ? "按当前人设与记忆抓取 Threads / Instagram 热点候选。"
     : (isEditingDraft
-      ? `这里处理当前${editingSourceLabel}的正文修改。媒体、移出和 AI 重写都从这里进入，不再堆在列表里。`
+      ? "可修改正文、媒体或 AI 重写。"
       : `这里处理推文内容。已识别 ${memoryRows.length} 条可选记忆。`);
   const generateBusy = isActionLocked("persona", persona.id, "generate_posts");
   const hotImportBusy = isActionLocked("persona", persona.id, "hot_import");
@@ -19999,7 +19994,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
       <div class="persona-inline-panel persona-generate-panel ${isEditingDraft ? "is-editing-draft" : ""} ${editingDirty ? "is-dirty" : ""}">
         ${isEditingDraft ? `
           <div class="persona-temp-edit-toolbar persona-temp-edit-toolbar--hint">
-            <span>临时编辑中：修改草稿内容后保存，或清空、退出当前编辑。</span>
+            <span>编辑中：保存、清空或退出。</span>
           </div>
         ` : ""}
         <div class="persona-head-copy persona-head-copy--split">
@@ -20019,8 +20014,9 @@ function renderPersonaContentPanel(persona, account, profile, step) {
               </div>
             ` : ""}
             <div class="persona-compose-mode-slot">
-              ${renderPersonaGenerateComposeTabs(composeMode)}
+              ${renderPersonaGenerateComposeTabs(composeMode, { editingDraft: isEditingDraft })}
             </div>
+            ${isEditingDraft ? `<p class="persona-compose-lock-hint" role="status">正在编辑单条草稿，批量推文和热点抓取不可用；请先保存或退出编辑后切换。</p>` : ""}
             ${isBatchCompose && generateMode === "ai" ? `
               <div class="persona-generate-current-settings">
                 <label>本次生成数量
@@ -20045,9 +20041,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           </label>
           <div class="row-actions">
             <button type="button" class="primary" data-persona-create-post>${isEditingDraft ? "保存修改" : "保存草稿"}</button>
-            ${isEditingDraft ? `
-              <button type="button" class="danger unified-action-icon-button" data-persona-delete-post="${esc(draftForm.editingPostId)}" title="${editingSource === "favorites" ? "移出收藏" : "删除草稿"}" aria-label="${editingSource === "favorites" ? "移出收藏" : "删除草稿"}">${renderTrashIcon()}</button>
-            ` : `
+            ${isEditingDraft ? "" : `
               <button type="button" data-persona-route-step="content:posts">查看草稿</button>
             `}
           </div>
@@ -20099,8 +20093,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
       ? String(mediaForm.taskType || "")
       : String(mediaTaskOptions[0]?.[0] || "persona_post_image");
     mediaForm.taskType = currentTaskType;
-    mediaForm.contentMode = String(mediaForm.contentMode || "draft") === "manual" ? "manual" : "draft";
-    mediaForm.imageCount = Math.min(Math.max(Number(mediaForm.imageCount || state.personaMediaImageCountDefault || 1), 1), 8);
+    normalizePersonaMediaGenerationForm(mediaForm);
     const mediaMeta = taskMeta[currentTaskType] || taskMeta.persona_post_image;
     const showAspectRatio = currentTaskType === "persona_post_image";
     const showVideoOptions = false;
@@ -20151,8 +20144,12 @@ function renderPersonaContentPanel(persona, account, profile, step) {
               ` : `
               <div class="persona-inline-panel persona-inline-panel--nested">
                 <strong>生成媒体</strong>
-                ${renderPersonaMediaContentModeTabs(mediaForm.contentMode)}
                 <div class="form-grid persona-detail-controls">
+                  <label>生成张数
+                    <select id="personaMediaImageCount">
+                      ${[1, 2, 3, 4].map((count) => `<option value="${count}" ${count === Number(mediaForm.imageCount) ? "selected" : ""}>${count} 张</option>`).join("")}
+                    </select>
+                  </label>
                   ${showAspectRatio ? `<label>图像比例
                     <select id="personaMediaAspectRatio">
                       <option value="1:1" ${String(mediaForm.aspectRatio || "1:1") === "1:1" ? "selected" : ""}>1:1</option>
@@ -20172,12 +20169,9 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                     <input id="personaMediaDuration" type="number" min="2" max="15" value="${esc(mediaForm.duration || 2)}" />
                   </label>` : ""}
                 </div>
-                ${mediaForm.contentMode === "manual" ? `<label>手动生成内容
-                  <textarea id="personaMediaManualContent" rows="5" placeholder="输入要用于生成配图的内容。">${esc(mediaForm.manualContent || "")}</textarea>
-                </label>` : ""}
-                ${mediaForm.contentMode === "manual" ? "" : `<label>补充提示词
-                  <textarea id="personaMediaTaskPrompt" rows="5" placeholder="可留空；补充图文生成要求。">${esc(mediaForm.prompt || "")}</textarea>
-                </label>`}
+                <label>补充提示词（可选）
+                  <textarea id="personaMediaTaskPrompt" rows="5" placeholder="留空按当前推文生成；填写后按提示词润色生成。">${esc(mediaForm.prompt || "")}</textarea>
+                </label>
                 ${showSourceUpload ? renderUploadDropzone("personaMediaTaskFiles", {
                   label: "上传素材",
                   accept: uploadAccept,
@@ -25240,19 +25234,6 @@ function bindEvents() {
       }
       return;
     }
-    const mediaContentModeButton = event.target.closest("[data-persona-media-content-mode]");
-    if (mediaContentModeButton) {
-      const persona = selectedPersona();
-      const personaId = String(persona?.id || state.renderedPersonaId || state.selectedPersonaId || "").trim();
-      if (personaId) {
-        snapshotPersonaCurrentForm();
-        const mode = String(mediaContentModeButton.dataset.personaMediaContentMode || "draft");
-        personaFormState(personaId).media.contentMode = mode === "manual" ? "manual" : "draft";
-        renderPersonaDetail();
-        renderConfirmSummary();
-      }
-      return;
-    }
     if (event.target.closest("[data-persona-run-media-task]")) {
       submitPersonaMediaTask().catch(() => {});
       return;
@@ -25727,8 +25708,8 @@ function bindEvents() {
         const form = personaFormState(persona.id);
         form.draft = normalizePersonaDraftForm(form.draft);
         const editingPostId = String(form.draft.editingPostId || "").trim();
-        if (editingPostId && nextComposeMode === "hot") {
-          showMsg("commandMsg", "当前正在编辑草稿，热点抓取已锁定。请先保存或放弃修改。", false);
+        if (editingPostId && nextComposeMode !== "tweet") {
+          showMsg("commandMsg", "当前正在编辑单条草稿，批量推文和热点抓取已锁定。请先保存或退出编辑后切换。", false);
           return;
         }
         form.generate.composeMode = nextComposeMode;
@@ -26135,6 +26116,15 @@ function bindEvents() {
   $("moduleBody").addEventListener("input", (event) => {
     if (["personaGenerateCount", "personaMediaImageCount"].includes(event.target?.id || "")) {
       snapshotPersonaCurrentForm();
+      renderConfirmSummary();
+      return;
+    }
+    if (event.target?.id === "personaMediaTaskPrompt") {
+      snapshotPersonaCurrentForm();
+      const button = document.querySelector('[data-persona-run-media-task][data-persona-media-action="generate"]');
+      if (button && !button.disabled) {
+        button.textContent = String(event.target.value || "").trim() ? "AI 润色预览" : "生成预览";
+      }
       renderConfirmSummary();
       return;
     }

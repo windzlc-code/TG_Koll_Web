@@ -135,7 +135,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("metrics.map((metric)", detail)
         self.assertIn("hot.recent_views", detail)
         self.assertIn("hot.post_views", detail)
-        self.assertIn('class="persona-platform-list"', detail)
+        self.assertNotIn('class="persona-platform-list"', detail)
         self.assertNotIn('class="persona-content-preview"', detail)
         self.assertIn(".persona-detail-grid--compact", self.styles)
 
@@ -164,11 +164,14 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('data-label="平台"', card)
         self.assertIn('data-label="推文内容"', card)
         self.assertIn('data-label="发布时间"', card)
+        self.assertIn('class="persona-post-platform-name"', card)
+        self.assertIn('class="persona-post-platform" data-label="平台"', card)
         self.assertIn('class="persona-post-empty"', card)
         self.assertIn(".persona-dashboard-view .persona-post-controls {", self.styles)
         self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
         self.assertIn(".persona-dashboard-view .persona-table-wrap {", self.styles)
         self.assertIn(".persona-dashboard-view .persona-post-table thead {", self.styles)
+        self.assertIn(".persona-dashboard-view .persona-post-platform .persona-post-content-badges {", self.styles)
         self.assertIn("overflow: visible;", self.styles)
 
     def test_post_detail_prefers_backend_preview_urls_and_does_not_render_schema_field_names(self):
@@ -347,7 +350,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('hasGenerateContent ? "AI 润色" : "AI 生成"', self.console_script)
         self.assertNotIn(">开始生成</button>", self.console_script)
         self.assertNotIn('"自动生成草稿"', self.console_script)
-        self.assertIn('taskState?.taskId ? "重新生成" : "生成预览"', self.console_script)
+        self.assertIn('const generateLabel = prompt ? "AI 润色预览" : "生成预览"', self.console_script)
+        self.assertIn('taskState?.taskId ? "重新生成" : generateLabel', self.console_script)
         self.assertIn(">添加至草稿</button>", self.console_script)
         self.assertIn(">替换</button>", self.console_script)
         self.assertNotIn(">覆盖全部媒体</button>", self.console_script)
@@ -515,7 +519,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(mobile_rule, self.styles)
 
     def test_persona_generate_and_polish_share_one_compose_flow(self):
-        compose_tabs_start = self.console_script.index("function renderPersonaGenerateComposeTabs(mode)")
+        compose_tabs_start = self.console_script.index("function renderPersonaGenerateComposeTabs(mode,")
         compose_tabs_end = self.console_script.index(
             "\nfunction renderPersonaMediaOperationTabs(mode)",
             compose_tabs_start,
@@ -563,8 +567,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         handler = self.console_script[handler_start:handler_end]
         self.assertIn('["tweet_media", "hot"].includes', handler)
         self.assertIn('form.generate.mode = nextComposeMode === "hot" ? "hot" : "ai";', handler)
-        self.assertIn('editingPostId && nextComposeMode === "hot"', handler)
-        self.assertIn("请先保存或放弃修改", handler)
+        self.assertIn('editingPostId && nextComposeMode !== "tweet"', handler)
+        self.assertIn("批量推文和热点抓取已锁定", handler)
 
         self.assertIn(
             ".persona-generate-actions .persona-generate-ai-action {\n"
@@ -1800,6 +1804,29 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-draft-content--full {", self.styles)
         self.assertIn("overflow-y: hidden;", self.styles)
 
+    def test_editing_draft_locks_incompatible_compose_modes_without_delete_action(self):
+        compose_tabs = self.console_script[
+            self.console_script.index("function renderPersonaGenerateComposeTabs"):
+            self.console_script.index("function renderPersonaMediaOperationTabs")
+        ]
+        content_panel = self.console_script[
+            self.console_script.index("function renderPersonaContentPanel"):
+            self.console_script.index("function refreshLiveBrowserSessionsSoon")
+        ]
+        compose_handler = self.console_script[
+            self.console_script.index('const composeModeButton = event.target.closest("[data-persona-compose-mode]");'):
+            self.console_script.index("const openImageSettingsButton", self.console_script.index('const composeModeButton = event.target.closest("[data-persona-compose-mode]");'))
+        ]
+        self.assertIn("function renderPersonaGenerateComposeTabs(mode, { editingDraft = false } = {})", compose_tabs)
+        self.assertIn("const locked = editingDraft && value !== \"tweet\";", compose_tabs)
+        self.assertIn('disabled title="${esc(lockReason)}"', compose_tabs)
+        self.assertIn("renderPersonaGenerateComposeTabs(composeMode, { editingDraft: isEditingDraft })", content_panel)
+        self.assertIn("persona-compose-lock-hint", content_panel)
+        self.assertNotIn('data-persona-delete-post="${esc(draftForm.editingPostId)}"', content_panel)
+        self.assertIn('if (editingPostId && nextComposeMode !== "tweet")', compose_handler)
+        self.assertIn(".persona-compose-toggle button:disabled", self.styles)
+        self.assertIn(".persona-compose-lock-hint {", self.styles)
+
     def test_draft_toolbar_uses_icon_bulk_actions_and_aligned_controls(self):
         bulk_actions = self.console_script[
             self.console_script.index("function renderPersonaPostBulkActions"):
@@ -1896,7 +1923,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             "> button:is(.is-active, .is-segment-slide-to)",
             interaction,
         )
-        self.assertIn("left 180ms cubic-bezier(.2, .72, .2, 1)", interaction)
+        self.assertIn("transform: translate3d(var(--segment-slide-x), var(--segment-slide-y), 0);", interaction)
+        self.assertIn("transform 180ms cubic-bezier(.2, .72, .2, 1)", interaction)
         self.assertIn("async function slideSegmentedButtonBackground(button)", slider)
         self.assertIn("itemRect.left - groupRect.left - group.clientLeft", slider)
         self.assertIn("itemRect.top - groupRect.top - group.clientTop", slider)
@@ -1937,7 +1965,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("await waitForSegmentedBackgroundSlide(event, node);", self.console_script)
         self.assertIn("await waitForSegmentedBackgroundSlide(event, completionPolicy);", self.console_script)
         self.assertNotIn("animation:", interaction)
-        self.assertNotIn("transform:", interaction)
+        self.assertNotIn("left 180ms cubic-bezier(.2, .72, .2, 1)", interaction)
         self.assertNotIn("scale(", slider)
 
     def test_draft_detail_omits_content_type_but_keeps_detail_media(self):
@@ -2026,6 +2054,21 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(guard, body)
         self.assertLess(body.index(guard), body.index("snapshotPersonaCurrentForm();"))
         self.assertLess(body.index(guard), body.index('api("/api/tasks/submit"'))
+
+    def test_media_generation_uses_a_single_optional_prompt_and_four_image_limit(self):
+        self.assertNotIn("function renderPersonaMediaContentModeTabs", self.console_script)
+        self.assertNotIn("personaMediaManualContent", self.console_script)
+        self.assertIn("function normalizePersonaMediaGenerationForm", self.console_script)
+        self.assertIn("<select id=\"personaMediaImageCount\">", self.console_script)
+        self.assertIn("[1, 2, 3, 4]", self.console_script)
+        self.assertIn("prompt ? \"AI ", self.console_script)
+        self.assertIn("content_source_mode: \"draft\"", self.console_script)
+        self.assertNotIn("contentMode === \"manual\"", self.console_script)
+        self.assertNotIn("manual_content:", self.console_script)
+        self.assertNotIn(
+            "Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : 1, 1), 8)",
+            self.console_script,
+        )
 
     def test_full_refresh_scope_is_limited_to_visible_personas(self):
         user = {"id": 7}

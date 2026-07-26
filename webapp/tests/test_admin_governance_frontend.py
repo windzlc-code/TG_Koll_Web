@@ -91,6 +91,19 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('/purge-preview', self.script)
         self.assertIn('method: "DELETE"', self.script)
 
+    def test_account_batch_controls_use_stable_grouped_layout(self):
+        for class_name in (
+            "admin-user-batch-summary",
+            "admin-user-batch-fields",
+            "admin-user-batch-actions",
+        ):
+            self.assertIn(f'class="{class_name}', self.html)
+            self.assertIn(f".page-admin .{class_name}", self.styles)
+        self.assertIn("grid-template-columns: minmax(190px, 0.7fr) minmax(520px, 2.8fr) auto;", self.styles)
+        self.assertIn("height: 38px;", self.styles)
+        self.assertIn(".page-admin [hidden]", self.styles)
+        self.assertIn("display: none !important;", self.styles)
+
     def test_governance_pages_and_step_up_fields_are_present(self):
         for page in ("overview", "users", "taxonomy", "audit", "security", "serviceAccounts"):
             self.assertIn(f'data-page="{page}"', self.html)
@@ -151,7 +164,7 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
 
     def test_admin_language_menu_accessibility_and_ui_only_translation(self):
         self.assertIn('function setAdminLanguageMenuOpen', self.script)
-        self.assertIn('setAdminProfileMenuOpen(false)', self.script)
+        self.assertNotIn('setAdminProfileMenuOpen', self.script)
         self.assertIn('setAdminLanguageMenuOpen(false)', self.script)
         self.assertIn('event.key === "Escape"', self.script)
         self.assertIn('toggle.focus({ preventScroll: true })', self.script)
@@ -164,7 +177,6 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             '.task-list',
             '.admin-security-list',
             '#adminName',
-            '#adminSessionName',
             '#taskInspectBody',
             '#userDetailBody',
         ):
@@ -233,7 +245,7 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             self.script.index("function renderProxyMarketItems")
             : self.script.index("function proxyMarketItemQuery")
         ]
-        self.assertIn('createAdminDynamicUiText(item.available ? "公共商城可领取" : "当前不可领取")', proxy_market)
+        self.assertIn("proxyMarketAvailabilityText(item)", proxy_market)
         self.assertIn('createAdminDynamicUiText("尚未检测")', proxy_market)
         self.assertNotIn("markAdminDynamicUiElement(endpoint)", proxy_market)
 
@@ -263,6 +275,18 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             self.assertIn(declaration, self.styles)
         self.assertIn('document.documentElement.dataset.theme = "light"', self.html)
         self.assertNotIn('html[data-theme="dark"] body.page-admin', self.styles)
+
+    def test_proxy_market_reuses_atomic_test_and_publish_api(self):
+        proxy_market = self.script[
+            self.script.index("function renderProxyMarketItems")
+            : self.script.index("async function updateProxyMarketStatus")
+        ]
+        self.assertIn('/test-and-publish`', proxy_market)
+        self.assertNotIn('/test`', proxy_market)
+        self.assertNotIn('/publish`', proxy_market)
+        self.assertNotIn("pending_check_id", proxy_market)
+        self.assertNotIn("pending_check_status", proxy_market)
+        self.assertIn("检测并发布", self.html)
 
 
 if __name__ == "__main__":

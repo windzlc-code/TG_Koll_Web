@@ -258,11 +258,10 @@ class PublicLoginUiSourceTests(unittest.TestCase):
 
     def test_logout_returns_to_a_public_page_without_opening_login_automatically(self):
         profile_script = (self.static_dir / "assets" / "profile.js").read_text(encoding="utf-8")
-        admin_logout = self.admin_js.split("async function logoutAdmin()", 1)[1].split("function runtimeFormToPayload", 1)[0]
         self.assertIn("function publicLogoutLocation()", self.site_nav_script)
         self.assertNotIn("window.location.reload()", self.site_nav_script)
         self.assertNotIn('"/?login=1&return_url=%2Fprofile.html"', profile_script)
-        self.assertIn('window.location.replace("/")', admin_logout)
+        self.assertNotIn("async function logoutAdmin()", self.admin_js)
         self.assertNotIn('ADMIN_CONSOLE_SESSION ? "/admin" : "/"', self.console_js)
 
     def test_home_navigation_opens_console_or_existing_login_dialog(self):
@@ -651,9 +650,10 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             self.assertIn(f'id="{field_id}"', self.admin_html)
             self.assertIn(field_id, self.admin_js)
 
-    def test_admin_profile_menu_exposes_session_details_and_actions(self):
-        for field_id in (
-            "adminProfileToggle",
+    def test_admin_profile_entry_reuses_the_shared_profile_page(self):
+        self.assertIn('id="adminProfileToggle"', self.admin_html)
+        self.assertIn('href="/admin-profile.html"', self.admin_html)
+        for obsolete_id in (
             "adminProfilePanel",
             "adminProfileClose",
             "adminSessionName",
@@ -663,22 +663,9 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             "btnAdminLogout",
             "adminLogoutMsg",
         ):
-            self.assertIn(f'id="{field_id}"', self.admin_html)
-            self.assertIn(field_id, self.admin_js)
-        self.assertIn('aria-controls="adminProfilePanel"', self.admin_html)
-        self.assertIn('aria-expanded="false"', self.admin_html)
-        self.assertIn('setActiveAdminPage("account")', self.admin_js)
-        self.assertIn('event.key === "Escape"', self.admin_js)
-        self.assertIn('api("/api/auth/logout", { method: "POST" })', self.admin_js)
-        self.assertIn('window.location.replace("/admin")', self.admin_js)
-
-        public_links = self.admin_html.index('id="adminPublicLinks"')
-        profile_panel = self.admin_html.index('id="adminProfilePanel"')
-        main_content = self.admin_html.index('<main class="main">')
-        self.assertLess(public_links, profile_panel)
-        profile_markup = self.admin_html[profile_panel:main_content]
-        self.assertNotIn('href="/"', profile_markup)
-        self.assertNotIn('href="/admin-console.html"', profile_markup)
+            self.assertNotIn(f'id="{obsolete_id}"', self.admin_html)
+            self.assertNotIn(obsolete_id, self.admin_js)
+        self.assertNotIn("setAdminProfileMenuOpen", self.admin_js)
 
 
 if __name__ == "__main__":

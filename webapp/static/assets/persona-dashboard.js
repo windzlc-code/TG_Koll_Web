@@ -647,16 +647,6 @@ function pdRenderPersonaCard(persona) {
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
   personaDashboardPostPage = Math.max(1, Math.min(pageCount, Number(personaDashboardPostPage || 1)));
   const start = (personaDashboardPostPage - 1) * pageSize;
-  const platforms = (persona.hot_platforms || []).filter((item) => pdIsWebVisiblePlatform(item.platform)).map((item) => `
-    <div class="persona-platform-row">
-      <strong>${pdEscape(item.platform || "-")}</strong>
-      <span>主页浏览 ${pdEscape(pdNumber(item.recent_views))}</span>
-      <span>逐帖浏览 ${pdEscape(pdNumber(item.post_views))}</span>
-      <span>赞 ${pdEscape(pdNumber(item.likes))}</span>
-      <span>评 ${pdEscape(pdNumber(item.comments))}</span>
-      <span>${item.complete ? "完整" : "部分/未知"}</span>
-    </div>
-  `).join("");
   const metrics = [
     ["帖子", counts.posts],
     ["发布", counts.published],
@@ -666,10 +656,12 @@ function pdRenderPersonaCard(persona) {
   ];
   const postRows = rows.slice(start, start + pageSize).map((row) => `
     <tr>
-      <td class="persona-post-platform" data-label="平台">${pdEscape(row.platform || "-")}</td>
+      <td class="persona-post-platform" data-label="平台">
+        <span class="persona-post-platform-name">${pdEscape(row.platform || "-")}</span>
+        ${pdRenderPostContentBadges(row)}
+      </td>
       <td class="persona-post-source" data-label="推文内容">
         <div>${pdEscape(String(row.content || row.source_url || "-"))}</div>
-        ${pdRenderPostContentBadges(row)}
       </td>
       <td class="persona-post-time" data-label="发布时间">${pdEscape(pdDate(row.published_at || row.captured_at))}</td>
       <td class="persona-post-number" data-label="点赞">${pdEscape(pdNumber(row.like_count))}</td>
@@ -697,7 +689,6 @@ function pdRenderPersonaCard(persona) {
       <div class="persona-detail-grid persona-detail-grid--compact">
         ${metrics.map((metric) => `<div><span>${pdEscape(metric[0])}</span><strong>${pdEscape(pdNumber(metric[1]))}</strong></div>`).join("")}
       </div>
-      <div class="persona-platform-list">${platforms || `<div class="small">暂无平台热点指标</div>`}</div>
       <div class="persona-table-wrap">
         <div class="persona-table-toolbar">
           <div class="persona-table-title">

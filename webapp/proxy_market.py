@@ -254,10 +254,27 @@ def _market_public(
     health_max_age_seconds: int,
     last_seen_at: int = 0,
 ) -> dict[str, Any]:
-    available = (
-        str(item.get("status") or "") == "active"
-        and _fresh_and_healthy(item, now=now, max_age_seconds=health_max_age_seconds)
+    status = str(item.get("status") or "")
+    health_status = str(item.get("health_status") or "")
+    last_check_at = int(item.get("last_check_at") or 0)
+    expires_at = int(item.get("expires_at") or 0)
+    available = status == "active" and _fresh_and_healthy(
+        item,
+        now=now,
+        max_age_seconds=health_max_age_seconds,
     )
+    availability_reason = ""
+    if not available:
+        if status != "active":
+            availability_reason = f"status_{status or 'draft'}"
+        elif health_status != "healthy":
+            availability_reason = "health_failed" if health_status == "failed" else "health_pending"
+        elif last_check_at < now - health_max_age_seconds:
+            availability_reason = "health_stale"
+        elif expires_at > 0 and expires_at <= now:
+            availability_reason = "expired"
+        else:
+            availability_reason = "unavailable"
     return {
         "id": str(item.get("id") or ""),
         "sku": str(item.get("sku") or ""),
@@ -276,12 +293,14 @@ def _market_public(
         "display_price_cents": int(item.get("display_price_cents") or 0),
         "currency": str(item.get("currency") or "TWD"),
         "billing_cycle": str(item.get("billing_cycle") or "month"),
-        "health_status": str(item.get("health_status") or "pending"),
+        "health_status": health_status or "pending",
         "latency_ms": int(item.get("latency_ms") or 0),
-        "last_check_at": int(item.get("last_check_at") or 0),
-        "expires_at": int(item.get("expires_at") or 0),
+        "last_check_at": last_check_at,
+        "health_valid_until": last_check_at + health_max_age_seconds if last_check_at > 0 else 0,
+        "expires_at": expires_at,
         "published_at": int(item.get("published_at") or 0),
         "available": available,
+        "availability_reason": availability_reason,
         "is_new": int(item.get("published_at") or 0) > int(last_seen_at or 0),
     }
 

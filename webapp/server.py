@@ -9003,7 +9003,7 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     generation_content = str(payload.get("generation_content") or "").strip()
     image_count_raw = payload.get("image_count") or payload.get("imageCount") or payload.get("count") or 1
     try:
-        image_count = min(max(int(float(image_count_raw)), 1), 8)
+        image_count = min(max(int(float(image_count_raw)), 1), 4)
     except (TypeError, ValueError):
         image_count = 1
     aspect_ratio = str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1"
@@ -10356,6 +10356,7 @@ PERSONA_DASHBOARD_REFRESH_LOCK = threading.Lock()
 PERSONA_DASHBOARD_ARCHIVE_LOCK_TIMEOUT_SECONDS = 30
 PERSONA_DASHBOARD_ARCHIVE_THREAD_LOCK = threading.RLock()
 PERSONA_DASHBOARD_ARCHIVE_LOCK_STATE = threading.local()
+PERSONA_USER_POST_LIMIT = 10_000
 PERSONA_DASHBOARD_MONITOR_LOCK = threading.Lock()
 PERSONA_DASHBOARD_MONITOR_STARTED = False
 PERSONA_DASHBOARD_MONITOR_STATE: dict[str, Any] = {
@@ -12574,6 +12575,200 @@ def _persona_post_source_key(source: str = "posts") -> str:
 
 def _persona_post_source_name(source: str = "posts") -> str:
     return "favorites" if _persona_post_source_key(source) == "favoritePosts" else "posts"
+
+
+def _persona_post_retention_timestamp(record: dict[str, Any], *, history: bool) -> float:
+    keys = (
+        ("publishedAt", "published_at", "createdAt", "created_at", "updatedAt", "updated_at")
+        if history
+        else ("createdAt", "created_at", "updatedAt", "updated_at", "publishedAt", "published_at")
+    )
+    for key in keys:
+        value = record.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+        text = str(value or "").strip()
+        if not text:
+            continue
+        if text.replace(".", "", 1).isdigit():
+            return float(text)
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except (ValueError, OverflowError):
+            continue
+    return 0.0
+
+
+def _persona_publish_history_source(record: dict[str, Any]) -> str:
+    source_meta = record.get("sourceMeta") if isinstance(record.get("sourceMeta"), dict) else {}
+    return str(
+        source_meta.get("archivePostSource")
+        or source_meta.get("archive_post_source")
+        or record.get("archivePostSource")
+        or record.get("archive_post_source")
+        or "posts"
+    ).strip().lower()
+
+
+def _persona_retention_record_id(record: dict[str, Any], *, history: bool) -> str:
+    if history:
+        return str(
+            record.get("id")
+            or record.get("archivePostId")
+            or record.get("archive_post_id")
+            or record.get("automationTaskId")
+            or record.get("automation_task_id")
+            or ""
+        ).strip()
+    return str(record.get("id") or "").strip()
+
+
+def _enforce_persona_post_retention_for_user(
+    user_id: int,
+    *,
+    limit: int | None = None,
+) -> dict[str, int]:
+    owner_user_id = int(user_id or 0)
+    retention_limit = max(1, int(limit if limit is not None else PERSONA_USER_POST_LIMIT))
+    result = {
+        "limit": retention_limit,
+        "removed_history_count": 0,
+        "removed_draft_count": 0,
+        "remaining_count": 0,
+    }
+    if owner_user_id <= 0:
+        return result
+
+    with _persona_archive_file_lock():
+        with db() as conn:
+            owner_rows = conn.execute(
+                "SELECT archive_id FROM persona_owners WHERE user_id = ?",
+                (owner_user_id,),
+            ).fetchall()
+        owner_archive_ids = {
+            str(row["archive_id"] or "").strip()
+            for row in owner_rows
+            if str(row["archive_id"] or "").strip()
+        }
+        if not owner_archive_ids:
+            return result
+
+        path, raw, archives = _persona_archive_source_for_write()
+        candidates: list[dict[str, Any]] = []
+        for archive in archives:
+            if not isinstance(archive, dict):
+                continue
+            archive_id = str(archive.get("id") or "").strip()
+            if archive_id not in owner_archive_ids:
+                continue
+            publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
+            for index, record in enumerate(publish_history):
+                if (
+                    not isinstance(record, dict)
+                    or not _is_persona_publish_history_record(record)
+                    or _persona_publish_history_source(record) == "favorites"
+                ):
+                    continue
+                candidates.append({
+                    "archive_id": archive_id,
+                    "source": "publishHistory",
+                    "index": index,
+                    "record_id": _persona_retention_record_id(record, history=True),
+                    "timestamp": _persona_post_retention_timestamp(record, history=True),
+                })
+            posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+            for index, record in enumerate(posts):
+                if not isinstance(record, dict) or _is_published_persona_draft(record):
+                    continue
+                candidates.append({
+                    "archive_id": archive_id,
+                    "source": "posts",
+                    "index": index,
+                    "record_id": _persona_retention_record_id(record, history=False),
+                    "timestamp": _persona_post_retention_timestamp(record, history=False),
+                })
+
+        result["remaining_count"] = len(candidates)
+        excess = len(candidates) - retention_limit
+        if excess <= 0:
+            return result
+
+        candidates.sort(key=lambda item: (
+            0 if item["source"] == "publishHistory" else 1,
+            float(item["timestamp"]),
+            str(item["archive_id"]),
+            int(item["index"]),
+        ))
+        removed = candidates[:excess]
+        removals_by_archive: dict[str, dict[str, set[int]]] = {}
+        removal_ids: dict[tuple[str, str], set[str]] = {}
+        for item in removed:
+            archive_id = str(item["archive_id"])
+            source = str(item["source"])
+            removals_by_archive.setdefault(archive_id, {}).setdefault(source, set()).add(int(item["index"]))
+            record_id = str(item["record_id"] or "")
+            if record_id:
+                removal_ids.setdefault((archive_id, source), set()).add(record_id)
+            if source == "publishHistory":
+                result["removed_history_count"] += 1
+            else:
+                result["removed_draft_count"] += 1
+
+        for archive in archives:
+            if not isinstance(archive, dict):
+                continue
+            archive_id = str(archive.get("id") or "").strip()
+            source_removals = removals_by_archive.get(archive_id)
+            if not source_removals:
+                continue
+            for source, indexes in source_removals.items():
+                rows = archive.get(source) if isinstance(archive.get(source), list) else []
+                archive[source] = [record for index, record in enumerate(rows) if index not in indexes]
+            archive["updatedAt"] = _persona_dashboard_iso_now()
+        _write_persona_archives_preserving_shape_unlocked(path, raw, archives)
+
+        for storage_path in (
+            TOOL_R18_RUNTIME_DIR / "persona_archives.json",
+            TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json",
+        ):
+            if storage_path.resolve() == path.resolve() or not storage_path.is_file():
+                continue
+            storage_raw = _read_json_file(storage_path)
+            storage_archives = _extract_persona_archive_list(storage_raw)
+            storage_changed = False
+            for archive in storage_archives:
+                if not isinstance(archive, dict):
+                    continue
+                archive_id = str(archive.get("id") or "").strip()
+                for source in ("publishHistory", "posts"):
+                    ids = removal_ids.get((archive_id, source), set())
+                    if not ids:
+                        continue
+                    rows = archive.get(source) if isinstance(archive.get(source), list) else []
+                    filtered = [
+                        record
+                        for record in rows
+                        if not (
+                            isinstance(record, dict)
+                            and _persona_retention_record_id(record, history=source == "publishHistory") in ids
+                        )
+                    ]
+                    if len(filtered) != len(rows):
+                        archive[source] = filtered
+                        archive["updatedAt"] = _persona_dashboard_iso_now()
+                        storage_changed = True
+            if storage_changed:
+                _write_persona_archives_preserving_shape_unlocked(storage_path, storage_raw, storage_archives)
+
+        result["remaining_count"] = max(0, len(candidates) - len(removed))
+        return result
+
+
+def _apply_persona_post_retention(result: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    retention = _enforce_persona_post_retention_for_user(_workspace_user_id(user))
+    if retention["removed_history_count"] or retention["removed_draft_count"]:
+        result["retention"] = retention
+    return result
 
 
 def _is_published_persona_draft(post: dict[str, Any] | None) -> bool:
@@ -18145,8 +18340,9 @@ def create_app() -> FastAPI:
         return _serve_persona_archive_publish_history_media(archive_id, history_id, index)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/requeue")
-    def api_persona_dashboard_persona_publish_history_requeue(archive_id: str, history_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
-        return _requeue_persona_publish_record(archive_id, history_id)
+    def api_persona_dashboard_persona_publish_history_requeue(archive_id: str, history_id: str, user: dict[str, Any] = Depends(require_persona_owner)):
+        result = _requeue_persona_publish_record(archive_id, history_id)
+        return _apply_persona_post_retention(result, user)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/memories")
     def api_persona_dashboard_persona_memories(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
@@ -18347,8 +18543,9 @@ def create_app() -> FastAPI:
         return {"ok": True, "cancelled": task_cancelled or process_cancelled}
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/import")
-    def api_persona_dashboard_import_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesImportPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
-        return _import_persona_hot_candidates(archive_id, payload)
+    def api_persona_dashboard_import_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesImportPayload, user: dict[str, Any] = Depends(require_persona_owner)):
+        result = _import_persona_hot_candidates(archive_id, payload)
+        return _apply_persona_post_retention(result, user)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/hot_metrics/refresh")
     def api_persona_dashboard_refresh_hot_post(archive_id: str, post_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
@@ -18357,7 +18554,9 @@ def create_app() -> FastAPI:
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts")
     def api_persona_dashboard_create_post(archive_id: str, payload: PersonaDashboardDraftPostPayload, user: dict[str, Any] = Depends(require_persona_owner)):
         _require_user_draft_media_paths(payload, user)
-        return _create_persona_archive_post(archive_id, payload)
+        result = _create_persona_archive_post(archive_id, payload)
+        _apply_persona_post_retention({}, user)
+        return result
 
     @app.patch("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}")
     def api_persona_dashboard_update_post(archive_id: str, post_id: str, payload: PersonaDashboardDraftPostPayload, user: dict[str, Any] = Depends(require_persona_owner)):
@@ -18450,6 +18649,7 @@ def create_app() -> FastAPI:
             )
         try:
             result = _generate_persona_archive_posts(archive_id, payload)
+            _apply_persona_post_retention(result, user)
         except Exception:
             with db() as conn:
                 conn.execute("BEGIN IMMEDIATE")
@@ -19344,7 +19544,7 @@ def create_app() -> FastAPI:
             payload["content_source_mode"] = "manual" if str(payload.get("content_source_mode") or "").strip() == "manual" else "draft"
             image_count_raw = payload.get("image_count") or payload.get("imageCount") or payload.get("count") or 1
             try:
-                payload["image_count"] = min(max(int(float(image_count_raw)), 1), 8)
+                payload["image_count"] = min(max(int(float(image_count_raw)), 1), 4)
             except (TypeError, ValueError):
                 payload["image_count"] = 1
             payload["aspect_ratio"] = str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1"
