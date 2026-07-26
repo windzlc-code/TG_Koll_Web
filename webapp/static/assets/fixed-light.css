@@ -16,8 +16,8 @@
   --public-cool-dark: #253746;
   --public-on-dark-accent: #d7e0e7;
   --public-warm-accent: #8a674d;
-  --public-action-gradient: linear-gradient(108deg, #17212b 0 48%, #355c77 48% 88%, #625e5b 88% 100%);
-  --public-action-gradient-hover: linear-gradient(108deg, #22313f 0 42%, #466f8c 42% 88%, #6c6662 88% 100%);
+  --public-action-gradient: linear-gradient(112deg, #17212b 0%, #29475d 46%, #3f6f8e 76%, #c58f71 100%);
+  --public-action-gradient-hover: linear-gradient(112deg, #22313f 0%, #365d77 44%, #4f7f9d 74%, #d09b7c 100%);
   --public-success: #27845a;
   --paper: var(--public-paper);
   --surface: var(--public-page);
@@ -869,7 +869,7 @@
   --panel-shadow: 0 10px 30px rgb(49 65 85 / 6%);
   --vecto-action-border: #34495e;
   --vecto-action-static-gradient: var(--public-action-gradient);
-  --vecto-action-running-gradient: linear-gradient(108deg, #17212b 0 44%, #3b607a 44% 88%, #625e5b 88% 100%);
+  --vecto-action-running-gradient: linear-gradient(112deg, #17212b 0%, #2d5068 46%, #426f8a 76%, #c98f70 100%);
 }
 
 :root[data-theme="light"] .console-page :is(.console-shell, .console-modal) :is(
