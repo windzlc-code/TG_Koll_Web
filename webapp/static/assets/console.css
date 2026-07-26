@@ -1288,6 +1288,74 @@ button.primary,
   background: var(--panel-solid);
 }
 
+.persona-dashboard-view .persona-chart-placeholder {
+  display: grid;
+  min-height: 150px;
+  place-items: center;
+  align-content: center;
+  gap: 9px;
+  padding: 12px;
+  box-sizing: border-box;
+  border: 1px dashed var(--line);
+  border-radius: calc(var(--radius) - 2px);
+  background: color-mix(in srgb, var(--panel-solid) 82%, var(--soft));
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.persona-dashboard-view .persona-chart-placeholder--bars .persona-chart-placeholder-bars {
+  display: flex;
+  align-items: end;
+  gap: 7px;
+  width: min(100%, 180px);
+  height: 58px;
+  padding: 0 9px;
+  border-bottom: 1px solid var(--line);
+}
+
+.persona-dashboard-view .persona-chart-placeholder--bars .persona-chart-placeholder-bars i {
+  flex: 1 1 0;
+  min-width: 8px;
+  border-radius: 5px 5px 2px 2px;
+  background: color-mix(in srgb, var(--accent) 26%, var(--panel-solid));
+}
+
+.persona-dashboard-view .persona-chart-placeholder--bars .persona-chart-placeholder-bars i:nth-child(1) { height: 32%; }
+.persona-dashboard-view .persona-chart-placeholder--bars .persona-chart-placeholder-bars i:nth-child(2) { height: 58%; }
+.persona-dashboard-view .persona-chart-placeholder--bars .persona-chart-placeholder-bars i:nth-child(3) { height: 42%; }
+.persona-dashboard-view .persona-chart-placeholder--bars .persona-chart-placeholder-bars i:nth-child(4) { height: 74%; }
+.persona-dashboard-view .persona-chart-placeholder--bars .persona-chart-placeholder-bars i:nth-child(5) { height: 50%; }
+
+.persona-dashboard-view .persona-chart-placeholder--donut .persona-chart-placeholder-donut {
+  display: grid;
+  width: 76px;
+  aspect-ratio: 1;
+  place-items: center;
+  border: 10px solid color-mix(in srgb, var(--accent) 18%, var(--panel-solid));
+  border-top-color: color-mix(in srgb, var(--accent) 48%, var(--panel-solid));
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.persona-dashboard-view .persona-chart-placeholder--donut .persona-chart-placeholder-donut i { display: none; }
+
+.persona-dashboard-view .persona-chart-placeholder--line .persona-chart-placeholder-line {
+  width: min(100%, 240px);
+  height: 58px;
+  overflow: visible;
+}
+
+.persona-dashboard-view .persona-chart-placeholder--line .persona-chart-placeholder-line path {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent) 44%, var(--panel-solid));
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 2 9;
+}
+
 .persona-dashboard-view .persona-dashboard-note {
   padding: 10px 12px;
   border-color: var(--line);
@@ -1407,8 +1475,8 @@ button.primary,
 
   .persona-dashboard-view .persona-kpi-grid {
     display: grid;
-    grid-template-columns: 1fr;
-    gap: 6px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
     overflow: visible;
     padding: 0;
   }
@@ -1416,12 +1484,16 @@ button.primary,
   .persona-dashboard-view .persona-kpi {
     width: 100%;
     min-width: 0;
-    min-height: 52px;
-    padding: 8px 9px;
+    min-height: 44px;
+    padding: 7px 8px;
   }
 
   .persona-dashboard-view .persona-kpi .num {
-    font-size: 22px;
+    font-size: 20px;
+  }
+
+  .persona-dashboard-view .persona-kpi .label {
+    font-size: 11px;
   }
 
   .persona-dashboard-view .persona-tab-rail {
@@ -1439,10 +1511,22 @@ button.primary,
   }
 
   .persona-dashboard-view .persona-tab {
-    width: 156px;
-    min-width: 156px;
-    min-height: 48px;
-    padding: 7px;
+    width: 132px;
+    min-width: 132px;
+    min-height: 42px;
+    padding: 6px;
+    gap: 5px;
+    grid-template-columns: 22px minmax(0, 1fr);
+  }
+
+  .persona-dashboard-view .persona-tab-index {
+    width: 22px;
+    height: 22px;
+    font-size: 12px;
+  }
+
+  .persona-dashboard-view .persona-tab-main strong {
+    font-size: 13px;
   }
 
   .persona-dashboard-view .persona-tab-main {
@@ -1450,7 +1534,7 @@ button.primary,
   }
 
   .persona-dashboard-view .persona-tab-main span {
-    font-size: 11px;
+    font-size: 10px;
   }
 
   .persona-dashboard-view .persona-chart-grid {
@@ -1493,6 +1577,29 @@ button.primary,
 
   .persona-dashboard-view .persona-chart-empty {
     min-height: 94px;
+  }
+
+  .persona-dashboard-view .persona-chart-placeholder {
+    min-height: 94px;
+    gap: 6px;
+    padding: 8px;
+    font-size: 11px;
+  }
+
+  .persona-dashboard-view .persona-chart-placeholder--bars .persona-chart-placeholder-bars {
+    width: min(100%, 136px);
+    height: 40px;
+    gap: 5px;
+  }
+
+  .persona-dashboard-view .persona-chart-placeholder--donut .persona-chart-placeholder-donut {
+    width: 58px;
+    border-width: 8px;
+    font-size: 13px;
+  }
+
+  .persona-dashboard-view .persona-chart-placeholder--line .persona-chart-placeholder-line {
+    height: 42px;
   }
 
   .persona-dashboard-view .persona-donut-wrap {
@@ -10207,7 +10314,15 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-memory-actions {
   display: inline-flex;
+  align-items: center;
   gap: 6px;
+  white-space: nowrap;
+}
+
+.persona-memory-empty-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 30px;
   white-space: nowrap;
 }
 

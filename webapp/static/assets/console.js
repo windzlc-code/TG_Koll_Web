@@ -301,7 +301,7 @@ const initialConsoleParams = new URLSearchParams(window.location.search);
 const initialConsoleView = initialConsoleParams.get("view");
 const initialAccountBrowserPanel = initialConsoleParams.get("browser_panel");
 const state = {
-  view: ["workspace", "tasks", "accounts", "billing", "console_settings", "persona_dashboard"].includes(initialConsoleView) ? initialConsoleView : "workspace",
+  view: ["workspace", "tasks", "accounts", "billing", "console_settings", "persona_dashboard"].includes(initialConsoleView) ? initialConsoleView : "persona_dashboard",
   activeModule: "personas",
   transientWorkspaceLeaveAcknowledgement: "",
   transientWorkspaceAllowNextUnload: false,
@@ -5196,9 +5196,9 @@ function renderPersonaExecutionAccountBadge(persona) {
   const account = accountForPersona(persona);
   const profileName = String(account?.username || account?.account_username || "").trim();
   const handle = String(persona?.threads_account?.handle || "").trim();
-  const accountLabel = profileName || handle || "未绑定执行账号";
+  const accountLabel = profileName || handle || "未绑定";
   const hasExecutionAccount = Boolean(account?.id || profileName || handle);
-  const label = `执行账号：${accountLabel}`;
+  const label = `账号：${accountLabel}`;
   return `<span class="persona-status-chip ${hasExecutionAccount ? "is-ready" : "is-warning"}">${esc(label)}</span>`;
 }
 
@@ -7159,12 +7159,16 @@ async function refreshPersonaHotPost(postId = "", trigger = null) {
 function renderPersonaMemoryOptions(persona, selectedIds = []) {
   const rows = state.personaMemories[String(persona.id)] || [];
   const safeRows = Array.isArray(rows) ? rows : [];
-  const selected = new Set((selectedIds || []).map((item) => String(item || "")));
+  const rowIds = new Set(safeRows.map((row) => String(row?.id || "")));
+  const selected = new Set((selectedIds || [])
+    .map((item) => String(item || ""))
+    .filter((id) => rowIds.has(id)));
   return `
     <div class="persona-memory-panel">
       <div class="persona-memory-toolbar">
         <strong>已选 <span id="personaMemorySelectedCount">${selected.size}</span> / ${safeRows.length}</strong>
         <div class="persona-memory-actions" aria-label="人设记忆操作">
+          ${safeRows.length ? "" : '<span class="persona-memory-empty-hint">暂无可选记忆</span>'}
           <button type="button" class="unified-action-icon-button" data-persona-create-memory title="新建记忆" aria-label="新建记忆">${renderPlusIcon()}</button>
           <button type="button" class="bulk-selection-icon-button" data-persona-memory-bulk="all" title="全选记忆" aria-label="全选记忆" ${safeRows.length ? "" : "disabled"}>${renderSelectAllIcon()}</button>
           <button type="button" class="bulk-selection-icon-button" data-persona-memory-bulk="clear" title="清空选择" aria-label="清空选择" ${selected.size ? "" : "disabled"}>${renderClearSelectionIcon()}</button>
@@ -7196,7 +7200,7 @@ function renderPersonaMemoryOptions(persona, selectedIds = []) {
               </div>
             </article>`;
         }).join("")}
-      </div>` : `<div class="empty-state">当前还没有可选人设记忆，点击“新建记忆”图标即可添加。</div>`}
+      </div>` : ""}
     </div>`;
 }
 
@@ -7872,7 +7876,6 @@ function renderPersonaDataPanel(persona) {
 function renderPersonaProfileIdentity(persona, profile, {
   compact = false,
   sidebarId = "personaWorkspaceSidebar",
-  selectionLabel = "",
 } = {}) {
   const identityClass = `persona-profile-identity ${compact ? "persona-profile-identity--compact" : ""}`;
   const listToggle = renderPersonaProfileListToggle(sidebarId);
@@ -7912,7 +7915,6 @@ function renderPersonaProfileIdentity(persona, profile, {
               <strong>${esc(resolvedProfile?.name || persona?.name || "未命名人设")}</strong>
               <span class="persona-profile-account-status" aria-label="执行账号">${renderPersonaExecutionAccountBadge(persona)}</span>
             </div>
-            ${selectionLabel ? `<span class="persona-profile-selection-label">${esc(selectionLabel)}</span>` : ""}
             <div class="persona-profile-compact-meta" aria-label="当前人设信息">
               <span><small>分组</small><strong>${esc(personaGroup)}</strong></span>
               <span><small>内容</small><strong>草稿 ${esc(numberText(draftCount))} · 收藏 ${esc(numberText(favoriteCount))}</strong></span>
@@ -7940,7 +7942,6 @@ function renderPersonaProfileIdentity(persona, profile, {
               <strong>${esc(resolvedProfile?.name || persona?.name || "未命名人设")}</strong>
               <span class="persona-profile-account-status" aria-label="执行账号">${renderPersonaExecutionAccountBadge(persona)}</span>
             </div>
-            ${selectionLabel ? `<span class="persona-profile-selection-label">${esc(selectionLabel)}</span>` : ""}
             <button type="button" class="persona-profile-editor-launch" data-persona-open-profile-editor>编辑人设档案</button>
           </div>
           <div class="persona-profile-summary-strip" aria-label="当前人设信息">
@@ -11299,11 +11300,9 @@ function renderSimpleFlowModule(moduleId) {
     const publishMode = normalizedPublishMode(branch);
     const publishAccount = publishAccountForPersona(selectedPersonaForPublish);
     const modeTabs = renderPublishHeaderRow(publishMode, publishAccount);
-    const selectedMatrixPersonaCount = publishMode === "matrix_start" ? matrixPublishSelectedIds().length : 0;
     const personaSummary = renderPersonaProfileIdentity(selectedPersonaForPublish, null, {
       compact: true,
       sidebarId: "publishPersonaSidebar",
-      selectionLabel: selectedMatrixPersonaCount ? `矩阵已选 ${selectedMatrixPersonaCount} 个人设` : "",
     });
     if (publishMode === "publish_history" && selectedPersonaForPublish && !Array.isArray(state.personaPublishHistories[String(selectedPersonaForPublish.id)])) {
       loadPersonaPublishHistory(selectedPersonaForPublish.id).then(() => {
@@ -11316,7 +11315,6 @@ function renderSimpleFlowModule(moduleId) {
       body = `
         <div class="publish-workspace">
           <section class="publish-config-panel">
-            ${personaSummary}
             ${modeTabs}
             ${renderMatrixPublishPanel()}
           </section>
@@ -11328,8 +11326,8 @@ function renderSimpleFlowModule(moduleId) {
       body = `
         <div class="publish-workspace">
           <section class="publish-config-panel">
-            ${personaSummary}
             ${modeTabs}
+            ${personaSummary}
             ${renderAutomationTaskPlanPanel(selectedPersonaForPublish)}
           </section>
           ${renderPublishPersonaSidebar(publishMode)}
@@ -11338,8 +11336,8 @@ function renderSimpleFlowModule(moduleId) {
       body = `
         <div class="publish-workspace">
           <section class="publish-config-panel">
-            ${personaSummary}
             ${modeTabs}
+            ${personaSummary}
             ${renderPublishHistoryPanel(selectedPersonaForPublish)}
           </section>
           ${renderPublishPersonaSidebar(publishMode)}
@@ -11354,8 +11352,8 @@ function renderSimpleFlowModule(moduleId) {
       body = `
         <div class="publish-workspace">
           <section class="publish-config-panel">
-            ${personaSummary}
             ${modeTabs}
+            ${personaSummary}
             ${renderPublishContentPanel(selectedPersonaForPublish)}
             <input id="simplePrimary" type="hidden" value="publish_post" />
           </section>
@@ -23863,6 +23861,7 @@ function renderMatrixPublishPanel() {
           <strong>提交预览</strong>
           <div class="matrix-toolbar-meta">
             <span class="muted">${esc(selectedIds.length)} 人设 · ${esc(participatingRows.length)} 可参与 · ${matrixPublishRequestedCount(availability)} 任务</span>
+            ${renderPersonaProfileListToggle("publishPersonaSidebar")}
             <button type="button" class="danger matrix-remove-all unified-action-icon-button" data-matrix-remove-all ${selectedIds.length ? "" : "disabled"} title="移除全部已选人设" aria-label="移除全部已选人设">${renderTrashIcon()}</button>
           </div>
         </div>
@@ -24496,6 +24495,7 @@ function bindEvents() {
     }
     const memoryBulkButton = event.target.closest("[data-persona-memory-bulk]");
     if (memoryBulkButton) {
+      if (memoryBulkButton.disabled || memoryBulkButton.getAttribute("aria-disabled") === "true") return;
       const nextChecked = memoryBulkButton.dataset.personaMemoryBulk === "all";
       document.querySelectorAll("[data-persona-memory-id]").forEach((node) => {
         node.checked = nextChecked;

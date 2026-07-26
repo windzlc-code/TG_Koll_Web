@@ -133,6 +133,21 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('multiline: true', memory_creator)
         self.assertIn('headers: { "Content-Type": "application/json" }', memory_creator)
 
+    def test_memory_toolbar_discards_deleted_selections_and_ignores_disabled_bulk_controls(self):
+        renderer_start = self.console_script.index("function renderPersonaMemoryOptions")
+        renderer_end = self.console_script.index("\nfunction syncPersonaMemorySelectionState", renderer_start)
+        renderer = self.console_script[renderer_start:renderer_end]
+        bulk_start = self.console_script.index('const memoryBulkButton = event.target.closest("[data-persona-memory-bulk]");')
+        bulk_end = self.console_script.index("\n    if (event.target.closest(\"[data-persona-create-memory]\"))", bulk_start)
+        bulk_handler = self.console_script[bulk_start:bulk_end]
+
+        self.assertIn("const rowIds = new Set(safeRows.map((row) => String(row?.id || \"\")));", renderer)
+        self.assertIn(".filter((id) => rowIds.has(id))", renderer)
+        self.assertIn('class="persona-memory-empty-hint">暂无可选记忆</span>', renderer)
+        self.assertNotIn('<div class="empty-state">暂无可选记忆', renderer)
+        self.assertIn("if (memoryBulkButton.disabled || memoryBulkButton.getAttribute(\"aria-disabled\") === \"true\") return;", bulk_handler)
+        self.assertIn("align-items: center;", self.styles[self.styles.index(".persona-memory-actions {"):self.styles.index(".persona-memory-actions button {")])
+
     def test_mobile_draft_list_is_compact_and_grid_refresh_moves_beside_view(self):
         marker = "/* Responsive draft list density: keep rows as compact records instead of labeled field stacks. */"
         self.assertIn(marker, self.styles)
@@ -960,6 +975,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("renderPersonaAvatar(persona, resolvedProfile, displayAvatar)", identity)
         self.assertIn('class="persona-profile-compact-layout"', identity)
         self.assertIn('class="persona-profile-compact-meta"', identity)
+        self.assertNotIn('class="persona-profile-compact-actions"', identity)
+        self.assertNotIn("selectionLabel", identity)
+        self.assertIn("${listToggle}", identity)
         self.assertNotIn("人设简介</strong>\n          ${listToggle}\n        </div>\n        <div class=\"persona-profile-compact-layout\"", identity)
         self.assertLess(
             identity.index("persona-profile-compact-layout"),
@@ -984,6 +1002,46 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.styles,
         )
         self.assertIn(".persona-profile-overview-shell", self.styles)
+
+    def test_matrix_publish_moves_persona_list_control_into_submit_preview(self):
+        publishing_start = self.console_script.index('if (moduleId === "publishing")')
+        publishing_end = self.console_script.index('} else if (moduleId === "automation")', publishing_start)
+        publishing = self.console_script[publishing_start:publishing_end]
+        matrix_start = publishing.index('if (publishMode === "matrix_start")')
+        matrix_end = publishing.index('} else if (publishMode === "automation_tasks")', matrix_start)
+        matrix_branch = publishing[matrix_start:matrix_end]
+
+        self.assertNotIn("${personaSummary}", matrix_branch)
+        self.assertLess(matrix_branch.index("${modeTabs}"), matrix_branch.index("${renderMatrixPublishPanel()}"))
+
+        panel_start = self.console_script.index("function renderMatrixPublishPanel(")
+        panel_end = self.console_script.index("\nasync function submitMatrixPublishTask", panel_start)
+        panel = self.console_script[panel_start:panel_end]
+        self.assertIn('renderPersonaProfileListToggle("publishPersonaSidebar")', panel)
+        self.assertLess(
+            panel.index('renderPersonaProfileListToggle("publishPersonaSidebar")'),
+            panel.index("data-matrix-remove-all"),
+        )
+
+    def test_non_matrix_publish_modes_render_persona_summary_below_mode_tabs(self):
+        publishing_start = self.console_script.index('if (moduleId === "publishing")')
+        publishing_end = self.console_script.index('} else if (moduleId === "automation")', publishing_start)
+        publishing = self.console_script[publishing_start:publishing_end]
+
+        automation_start = publishing.index('} else if (publishMode === "automation_tasks")')
+        history_start = publishing.index('} else if (publishMode === "publish_history")', automation_start)
+        automation_branch = publishing[automation_start:history_start]
+        self.assertLess(automation_branch.index("${modeTabs}"), automation_branch.index("${personaSummary}"))
+        self.assertLess(automation_branch.index("${personaSummary}"), automation_branch.index("${renderAutomationTaskPlanPanel"))
+
+        normal_start = publishing.index("} else {", history_start)
+        history_branch = publishing[history_start:normal_start]
+        self.assertLess(history_branch.index("${modeTabs}"), history_branch.index("${personaSummary}"))
+        self.assertLess(history_branch.index("${personaSummary}"), history_branch.index("${renderPublishHistoryPanel"))
+
+        normal_branch = publishing[normal_start:]
+        self.assertLess(normal_branch.index("${modeTabs}"), normal_branch.index("${personaSummary}"))
+        self.assertLess(normal_branch.index("${personaSummary}"), normal_branch.index("${renderPublishContentPanel"))
 
     def test_persona_profile_editor_emphasizes_name_and_opens_image_lightbox(self):
         editor_start = self.console_script.index("async function openPersonaProfileEditorModal()")
@@ -1245,6 +1303,22 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             with self.subTest(rule=rule):
                 self.assertIn(rule, self.styles)
 
+    def test_console_opens_the_dashboard_by_default_and_keeps_mobile_summary_compact(self):
+        self.assertIn(
+            '"persona_dashboard"].includes(initialConsoleView) ? initialConsoleView : "persona_dashboard"',
+            self.console_script,
+        )
+        mobile_dashboard_styles = self.styles[
+            self.styles.index("@media (max-width: 760px) {"):
+            self.styles.index(".persona-dashboard-view .persona-tab-rail {", self.styles.index("@media (max-width: 760px) {"))
+        ]
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", mobile_dashboard_styles)
+        self.assertIn("min-height: 44px;", mobile_dashboard_styles)
+        summary_start = self.dashboard_script.index("function pdRenderSummary(data, visiblePersonas)")
+        summary_end = self.dashboard_script.index("\nfunction pdPersonaWarnings", summary_start)
+        summary = self.dashboard_script[summary_start:summary_end]
+        self.assertNotIn(".filter((card) => Number(card.value || 0) > 0)", summary)
+
     def test_dashboard_charts_reuse_the_console_accent(self):
         self.assertIn('const colors = ["var(--accent)"', self.dashboard_script)
         self.assertIn('color: "var(--accent)"', self.dashboard_script)
@@ -1252,6 +1326,30 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             ".persona-dashboard-view .persona-bar-fill",
             self.styles,
         )
+
+    def test_dashboard_uses_compact_persona_tabs_and_chart_placeholders_for_empty_data(self):
+        mobile_dashboard_styles = self.styles[
+            self.styles.index("@media (max-width: 760px) {"):
+            self.styles.index(".persona-dashboard-view .persona-chart-grid {", self.styles.index("@media (max-width: 760px) {"))
+        ]
+        self.assertIn("width: 132px;", mobile_dashboard_styles)
+        self.assertIn("min-width: 132px;", mobile_dashboard_styles)
+        self.assertIn("min-height: 42px;", mobile_dashboard_styles)
+        self.assertIn("function pdRenderChartPlaceholder(kind", self.dashboard_script)
+        self.assertIn('pdRenderChartPlaceholder("bars", "暂无热度数据")', self.dashboard_script)
+        self.assertIn('pdRenderChartPlaceholder("donut", "暂无分布数据")', self.dashboard_script)
+        self.assertIn('pdRenderChartPlaceholder("line", "暂无走势数据")', self.dashboard_script)
+        self.assertIn(".persona-dashboard-view .persona-chart-placeholder", self.styles)
+        self.assertIn(".persona-chart-placeholder--donut", self.styles)
+        self.assertIn(".persona-chart-placeholder--line", self.styles)
+
+    def test_unbound_persona_account_badge_uses_the_compact_account_label(self):
+        start = self.console_script.index("function renderPersonaExecutionAccountBadge(persona)")
+        end = self.console_script.index("\nfunction personaSummaryCounts", start)
+        badge = self.console_script[start:end]
+
+        self.assertIn('const accountLabel = profileName || handle || "未绑定";', badge)
+        self.assertIn('const label = `账号：${accountLabel}`;', badge)
 
     def test_draft_source_controls_are_wide_without_quick_select(self):
         self.assertNotIn("草稿快速选择", self.console_script)

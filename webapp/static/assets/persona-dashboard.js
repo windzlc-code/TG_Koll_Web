@@ -424,12 +424,24 @@ function pdBuildFilteredCharts(visiblePersonas, data) {
   };
 }
 
+function pdRenderChartPlaceholder(kind = "bars", message = "暂无可展示数据") {
+  const shape = kind === "donut"
+    ? `<div class="persona-chart-placeholder-donut" aria-hidden="true"><i></i><span>0</span></div>`
+    : kind === "line"
+      ? `<svg class="persona-chart-placeholder-line" viewBox="0 0 240 76" aria-hidden="true" focusable="false"><path d="M8 60 L54 44 L96 50 L142 24 L188 38 L232 12" /></svg>`
+      : `<div class="persona-chart-placeholder-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>`;
+  return `<div class="persona-chart-placeholder persona-chart-placeholder--${pdEscape(kind)}" role="img" aria-label="${pdEscape(message)}">
+    ${shape}
+    <span>${pdEscape(message)}</span>
+  </div>`;
+}
+
 function pdRenderBarChart(hostId, rows) {
   const host = pdEl(hostId);
   if (!host) return;
   const items = (rows || []).filter((row) => Number(row.value || 0) > 0).slice(0, 12);
   if (!items.length) {
-    host.innerHTML = `<div class="persona-chart-empty">暂无可展示数据</div>`;
+    host.innerHTML = pdRenderChartPlaceholder("bars", "暂无热度数据");
     return;
   }
   const max = Math.max(...items.map((row) => Number(row.value || 0)), 1);
@@ -455,7 +467,7 @@ function pdRenderDonutChart(hostId, entries) {
   const rows = pdEntries(entries);
   const total = rows.reduce((sum, row) => sum + row.value, 0);
   if (!total) {
-    host.innerHTML = `<div class="persona-chart-empty">暂无可展示数据</div>`;
+    host.innerHTML = pdRenderChartPlaceholder("donut", "暂无分布数据");
     return;
   }
   const colors = ["var(--accent)", "#d8992b", "#3f8d67", "#ba554f", "#7b6a9b", "#4f7775"];
@@ -485,7 +497,7 @@ function pdRenderTrendChart(hostId, rows) {
   if (!host) return;
   const items = (rows || []).slice(-30);
   if (!items.length) {
-    host.innerHTML = `<div class="persona-chart-empty">暂无走势数据</div>`;
+    host.innerHTML = pdRenderChartPlaceholder("line", "暂无走势数据");
     return;
   }
   const width = 720;
