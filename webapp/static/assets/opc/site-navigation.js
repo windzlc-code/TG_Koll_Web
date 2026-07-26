@@ -370,10 +370,9 @@
         entry.className = "site-admin-entry";
         entry.dataset.siteAdminEntry = "true";
         entry.addEventListener("click", () => {
-          const workspaceUserId = publicPagePreservesAdminWorkspace() ? storedAdminWorkspaceUserId() : "";
-          if (!workspaceUserId) removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+          removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
           markAdminConsoleContext();
-          window.location.assign(adminConsoleTarget("", workspaceUserId));
+          window.location.assign("/admin.html");
         });
         const notificationMenu = actions.querySelector(":scope > [data-site-notification-menu]");
         const accountMenu = actions.querySelector(":scope > [data-site-account-menu]");

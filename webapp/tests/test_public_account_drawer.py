@@ -15,7 +15,12 @@ class PublicAccountDrawerTests(unittest.TestCase):
     def test_public_admin_session_exposes_shared_console_entry(self):
         self.assertIn("function syncPublicAdminEntry()", self.navigation)
         self.assertIn("data-site-admin-entry", self.navigation)
-        self.assertIn("adminConsoleTarget(\"\", workspaceUserId)", self.navigation)
+        self.assertIn('window.location.assign("/admin.html")', self.navigation)
+        admin_entry = self.navigation[
+            self.navigation.index("function syncPublicAdminEntry()"):
+            self.navigation.index("function currentTheme()")
+        ]
+        self.assertNotIn("adminConsoleTarget(", admin_entry)
         self.assertIn("syncPublicAdminEntry();", self.navigation)
         self.assertIn(".site-header .site-admin-entry", self.navigation_css)
 
