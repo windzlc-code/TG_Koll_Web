@@ -7939,6 +7939,7 @@ function renderPersonaProfileIdentity(persona, profile, {
     <section class="${identityClass}">
       <div class="persona-profile-data-panel-head persona-profile-data-panel-head--identity">
         <strong>人设简介</strong>
+        <span class="persona-profile-account-status persona-profile-header-account" aria-label="执行账号">${renderPersonaExecutionAccountBadge(persona)}</span>
         ${listToggle}
       </div>
       <div class="persona-profile-identity-avatar-row">
@@ -7951,7 +7952,6 @@ function renderPersonaProfileIdentity(persona, profile, {
             <span>人设名称</span>
             <div class="persona-profile-name-row">
               <strong>${esc(resolvedProfile?.name || persona?.name || "未命名人设")}</strong>
-              <span class="persona-profile-account-status" aria-label="执行账号">${renderPersonaExecutionAccountBadge(persona)}</span>
             </div>
             <button type="button" class="primary persona-profile-editor-launch" data-persona-open-profile-editor>编辑人设档案</button>
           </div>
@@ -19711,16 +19711,7 @@ function activeAutomationPlanTransientState() {
   const persona = selectedPersona();
   const { draft, account, key } = currentAutomationPlanDraft(persona);
   const rows = normalizeAutomationPlanReservations(draft.items);
-  const changed = draft.mode === "loop"
-    || rows.length !== 1
-    || rows.some((item, index) => (
-      Number(item.reservationMinutes || 0) !== index * 30
-      || Boolean(String(item.taskType || ""))
-      || Object.values(item.params || {}).some((value) => (
-        Array.isArray(value) ? value.length > 0 : Boolean(String(value ?? "").trim())
-      ))
-    ));
-  if (!changed) return null;
+  if (!rows.some((item) => Boolean(item.configured))) return null;
   return {
     persona,
     account,

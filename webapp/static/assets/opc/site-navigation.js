@@ -4,8 +4,11 @@
   const EVENT_LANGUAGE = "vecto:language-change";
   const EVENT_LOGOUT = "vecto:logout-request";
   const EVENT_ACCOUNT_MENU_OPEN = "vecto:account-menu-open";
+  const EVENT_NOTIFICATION_MENU_OPEN = "vecto:notification-menu-open";
   const EVENT_BILLING_REQUEST = "vecto:account-billing-request";
   const EVENT_CONSOLE_VIEW_REQUEST = "vecto:account-console-view-request";
+  const NOTIFICATION_STORAGE_KEY = "vecto-notifications-updated";
+  const NOTIFICATION_POLL_MS = 15000;
   const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
   const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
   const DEFAULT_LANGUAGE = document.documentElement.lang === "zh-Hant" ? "zh-Hant" : "zh-Hans";
@@ -15,7 +18,10 @@
   let logoutMessage = "";
   let proxyMarketBadgeRequest = 0;
   let accountBillingRequest = 0;
+  let notificationRequest = 0;
+  let notificationPollTimer = 0;
   const accountPanelCloseTimers = new WeakMap();
+  const notificationPanelCloseTimers = new WeakMap();
   const mobileMenuCloseTimers = new WeakMap();
   const mobileMenuIsolation = new WeakMap();
   const accountBillingState = {
@@ -25,6 +31,14 @@
     partial: false,
     summary: {},
     orders: {},
+  };
+  const notificationState = {
+    identityKey: "",
+    items: [],
+    unread: { system: 0, official: 0, interaction: 0, total: 0 },
+    activeCategory: "system",
+    loading: false,
+    loaded: false,
   };
 
   const copy = {
@@ -95,6 +109,17 @@
       profileSignatureEmpty: "暂未填写个人简介",
       profileTags: "个人标签",
       profileTagsEmpty: "暂未添加个人标签",
+      notificationCenter: "通知中心",
+      notificationSystem: "系统消息",
+      notificationOfficial: "官方消息",
+      notificationInteraction: "互动消息",
+      notificationClose: "关闭通知中心",
+      notificationEmpty: "暂无消息",
+      notificationLoading: "正在读取消息…",
+      notificationUnread: "新消息",
+      notificationMarkAllRead: "全部已读",
+      notificationBroadcast: "重要通知",
+      notificationAction: "查看详情",
     },
     "zh-Hant": {
       brandLocal: "維拓 / 維圖",
@@ -163,6 +188,17 @@
       profileSignatureEmpty: "暫未填寫個人簡介",
       profileTags: "個人標籤",
       profileTagsEmpty: "暫未添加個人標籤",
+      notificationCenter: "通知中心",
+      notificationSystem: "系統消息",
+      notificationOfficial: "官方消息",
+      notificationInteraction: "互動消息",
+      notificationClose: "關閉通知中心",
+      notificationEmpty: "暫無消息",
+      notificationLoading: "正在讀取消息…",
+      notificationUnread: "新消息",
+      notificationMarkAllRead: "全部已讀",
+      notificationBroadcast: "重要通知",
+      notificationAction: "查看詳情",
     },
   };
 
@@ -384,6 +420,31 @@
     return `<a class="site-icon-button site-subscription-link" href="/subscription.html"${active} data-site-subscription-entry aria-label="" title="">${subscriptionIcon()}</a>`;
   }
 
+  function notificationIcon() {
+    return `<svg class="site-notification-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg>`;
+  }
+
+  function notificationMenuMarkup() {
+    return `<div class="site-notification-menu" data-site-notification-menu>
+      <button class="site-icon-button site-notification-trigger" type="button" aria-controls="siteNotificationPopover" aria-haspopup="dialog" aria-expanded="false" data-site-notification-trigger>
+        ${notificationIcon()}<span class="site-notification-dot" data-site-notification-dot hidden></span>
+      </button>
+      <aside id="siteNotificationPopover" class="site-notification-popover" data-site-notification-popover hidden role="dialog">
+        <div class="site-notification-head">
+          <strong data-site-copy="notificationCenter"></strong>
+          <button class="site-notification-close" type="button" data-site-notification-close>${closeIcon()}</button>
+        </div>
+        <div class="site-notification-tabs" role="tablist">
+          <button type="button" role="tab" data-site-notification-category="system" data-site-copy="notificationSystem"></button>
+          <button type="button" role="tab" data-site-notification-category="official" data-site-copy="notificationOfficial"></button>
+          <button type="button" role="tab" data-site-notification-category="interaction" data-site-copy="notificationInteraction"></button>
+        </div>
+        <div class="site-notification-list" data-site-notification-list aria-live="polite"></div>
+        <button class="site-notification-read-all" type="button" data-site-notification-read-all data-site-copy="notificationMarkAllRead"></button>
+      </aside>
+    </div>`;
+  }
+
   function menuIcon() {
     return `<svg class="site-menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"></path></svg>`;
   }
@@ -554,7 +615,7 @@
   function renderActions(mode, page, current) {
     const controls = `<div class="site-global-controls" data-site-global-controls><button id="languageToggle" class="site-icon-button site-language-button" type="button" data-site-language-toggle>${languageIcon()}</button></div>`;
     if (mode === "authenticated") {
-      return `${subscriptionControl(page)}${accountMenuMarkup(page)}`;
+      return `${subscriptionControl(page)}${notificationMenuMarkup()}${accountMenuMarkup(page)}`;
     }
     return `${subscriptionControl(page)}${controls}<button class="header-login" type="button" data-open-login><span data-site-copy="login"></span></button>`;
   }
@@ -579,6 +640,23 @@
     const existingMenu = actions.querySelector("[data-site-account-menu]");
     if (existingMenu) existingMenu.replaceWith(nextMenu);
     else actions.appendChild(nextMenu);
+    return nextMenu;
+  }
+
+  function installUnifiedNotificationMenu(header) {
+    const actions = header?.querySelector(".header-actions");
+    if (!actions) return null;
+    const template = document.createElement("template");
+    template.innerHTML = notificationMenuMarkup().trim();
+    const nextMenu = template.content.firstElementChild;
+    if (!nextMenu) return null;
+    const existingMenu = actions.querySelector("[data-site-notification-menu]");
+    if (existingMenu) existingMenu.replaceWith(nextMenu);
+    else {
+      const accountMenu = actions.querySelector("[data-site-account-menu]");
+      if (accountMenu) accountMenu.before(nextMenu);
+      else actions.appendChild(nextMenu);
+    }
     return nextMenu;
   }
 
@@ -650,6 +728,7 @@
       toggle.setAttribute("aria-expanded", "true");
       setMobileMenuBackgroundInert(menu, true);
       document.querySelectorAll("[data-site-account-menu].is-open").forEach((accountMenu) => setAccountMenuOpen(accountMenu, false));
+      document.querySelectorAll("[data-site-notification-menu].is-open").forEach((notificationMenu) => setNotificationMenuOpen(notificationMenu, false));
       return;
     }
     menu.classList.remove("is-open");
@@ -689,7 +768,7 @@
 
   function syncAccountPanelScrollLock() {
     const panelActive = Boolean(document.querySelector(
-      "[data-site-account-menu].is-open, [data-site-account-menu].is-closing",
+      "[data-site-account-menu].is-open, [data-site-account-menu].is-closing, [data-site-notification-menu].is-open, [data-site-notification-menu].is-closing",
     ));
     document.body.classList.toggle("site-account-panel-active", panelActive);
   }
@@ -729,6 +808,7 @@
       });
       syncAccountPanelScrollLock();
       document.querySelectorAll("[data-site-mobile-menu].is-open").forEach((mobileMenu) => setMobileMenuOpen(mobileMenu, false));
+      document.querySelectorAll("[data-site-notification-menu].is-open").forEach((notificationMenu) => setNotificationMenuOpen(notificationMenu, false));
       window.dispatchEvent(new CustomEvent(EVENT_ACCOUNT_MENU_OPEN, { detail: { account: currentAccount } }));
       return;
     }
@@ -750,6 +830,67 @@
       popover.addEventListener("transitionend", onTransitionEnd);
       const timeoutId = window.setTimeout(completeClose, 460);
       accountPanelCloseTimers.set(menu, { timeoutId, popover, onTransitionEnd });
+      syncAccountPanelScrollLock();
+    }
+    if (shouldRestoreFocus) trigger.focus({ preventScroll: true });
+  }
+
+  function cancelNotificationPanelClose(menu) {
+    const pending = notificationPanelCloseTimers.get(menu);
+    if (!pending) return;
+    window.clearTimeout(pending.timeoutId);
+    pending.popover.removeEventListener("transitionend", pending.onTransitionEnd);
+    notificationPanelCloseTimers.delete(menu);
+  }
+
+  function finishNotificationPanelClose(menu, popover) {
+    cancelNotificationPanelClose(menu);
+    if (!menu.classList.contains("is-closing")) return;
+    popover.hidden = true;
+    menu.classList.remove("is-closing");
+    menu.closest(".site-header")?.classList.remove("site-notification-menu-open");
+    syncAccountPanelScrollLock();
+  }
+
+  function setNotificationMenuOpen(menu, open, { restoreFocus = false } = {}) {
+    if (!menu) return;
+    const trigger = menu.querySelector("[data-site-notification-trigger]");
+    const popover = menu.querySelector("[data-site-notification-popover]");
+    if (!trigger || !popover) return;
+    const nextOpen = Boolean(open);
+    const shouldRestoreFocus = !nextOpen && restoreFocus && popover.contains(document.activeElement);
+    cancelNotificationPanelClose(menu);
+    trigger.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+    if (nextOpen) {
+      menu.closest(".site-header")?.classList.add("site-notification-menu-open");
+      popover.hidden = false;
+      menu.classList.remove("is-closing");
+      window.requestAnimationFrame(() => {
+        if (trigger.getAttribute("aria-expanded") === "true") menu.classList.add("is-open");
+      });
+      syncAccountPanelScrollLock();
+      document.querySelectorAll("[data-site-mobile-menu].is-open").forEach((mobileMenu) => setMobileMenuOpen(mobileMenu, false));
+      document.querySelectorAll("[data-site-account-menu].is-open").forEach((accountMenu) => setAccountMenuOpen(accountMenu, false));
+      void markNotificationsRead({ all: true });
+      window.dispatchEvent(new CustomEvent(EVENT_NOTIFICATION_MENU_OPEN));
+      return;
+    }
+    menu.classList.remove("is-open");
+    if (popover.hidden) {
+      menu.classList.remove("is-closing");
+      menu.closest(".site-header")?.classList.remove("site-notification-menu-open");
+      syncAccountPanelScrollLock();
+    } else {
+      menu.classList.add("is-closing");
+      menu.closest(".site-header")?.classList.add("site-notification-menu-open");
+      const completeClose = () => finishNotificationPanelClose(menu, popover);
+      const onTransitionEnd = (event) => {
+        if (event.target !== popover || event.propertyName !== "transform") return;
+        completeClose();
+      };
+      popover.addEventListener("transitionend", onTransitionEnd);
+      const timeoutId = window.setTimeout(completeClose, 460);
+      notificationPanelCloseTimers.set(menu, { timeoutId, popover, onTransitionEnd });
       syncAccountPanelScrollLock();
     }
     if (shouldRestoreFocus) trigger.focus({ preventScroll: true });
@@ -802,6 +943,7 @@
 
   function setAccount(account) {
     const previousIdentity = accountBillingState.identityKey;
+    const previousNotificationIdentity = notificationState.identityKey;
     currentAccount = account && typeof account === "object" ? { ...account } : null;
     const nextIdentity = accountBillingIdentityKey();
     if (previousIdentity !== nextIdentity) {
@@ -813,8 +955,24 @@
       accountBillingState.summary = {};
       accountBillingState.orders = {};
     }
+    if (previousNotificationIdentity !== nextIdentity) {
+      notificationRequest += 1;
+      notificationState.identityKey = nextIdentity;
+      notificationState.items = [];
+      notificationState.unread = { system: 0, official: 0, interaction: 0, total: 0 };
+      notificationState.activeCategory = "system";
+      notificationState.loading = false;
+      notificationState.loaded = false;
+    }
     syncAccount();
-    if (currentAccount && currentSessionMode !== "guest") void loadAccountBilling();
+    if (currentAccount && currentSessionMode !== "guest") {
+      void loadAccountBilling();
+      startNotificationPolling();
+      void loadNotifications();
+    } else {
+      stopNotificationPolling();
+      renderNotifications();
+    }
   }
 
   function accountBillingIdentityKey() {
@@ -846,6 +1004,274 @@
       throw error;
     }
     return payload;
+  }
+
+  function notificationNumber(value) {
+    const number = Number(value || 0);
+    return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+  }
+
+  function normalizeNotificationUnread(value) {
+    const unread = value && typeof value === "object" ? value : {};
+    return {
+      system: notificationNumber(unread.system),
+      official: notificationNumber(unread.official),
+      interaction: notificationNumber(unread.interaction),
+      total: notificationNumber(unread.total),
+    };
+  }
+
+  function safeNotificationActionUrl(value) {
+    const clean = String(value || "").trim();
+    if (!clean) return "";
+    try {
+      const parsed = new URL(clean, window.location.origin);
+      if (!["http:", "https:"].includes(parsed.protocol)) return "";
+      if (parsed.origin !== window.location.origin && !/^https?:\/\//i.test(clean)) return "";
+      return parsed.href;
+    } catch {
+      return "";
+    }
+  }
+
+  function notificationDateLabel(value) {
+    const seconds = notificationNumber(value);
+    if (!seconds) return "";
+    try {
+      return new Intl.DateTimeFormat(currentLanguage() === "zh-Hant" ? "zh-Hant" : "zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(new Date(seconds * 1000));
+    } catch {
+      return "";
+    }
+  }
+
+  function notificationCategoryLabel(category, labels) {
+    return {
+      system: labels.notificationSystem,
+      official: labels.notificationOfficial,
+      interaction: labels.notificationInteraction,
+    }[category] || labels.notificationSystem;
+  }
+
+  function notificationAnnounceKey(item) {
+    return `vecto-notification-announced:${notificationState.identityKey || "user"}:${notificationNumber(item?.id)}`;
+  }
+
+  function createNotificationItem(item) {
+    const labels = copy[currentLanguage()];
+    const card = document.createElement("article");
+    card.className = "site-notification-item";
+    card.classList.toggle("is-unread", !item.read);
+    card.dataset.siteNotificationId = String(notificationNumber(item.id));
+
+    const meta = document.createElement("div");
+    meta.className = "site-notification-item-meta";
+    const category = document.createElement("span");
+    category.textContent = notificationCategoryLabel(item.category, labels);
+    const time = document.createElement("time");
+    time.textContent = notificationDateLabel(item.created_at);
+    meta.append(category, time);
+
+    const title = document.createElement("strong");
+    title.className = "site-notification-item-title";
+    title.textContent = String(item.title || labels.notificationCenter);
+    const body = document.createElement("p");
+    body.className = "site-notification-item-body";
+    body.textContent = String(item.body || "");
+    card.append(meta, title);
+    if (body.textContent) card.append(body);
+
+    const actionUrl = safeNotificationActionUrl(item.action?.url);
+    if (actionUrl) {
+      const action = document.createElement("a");
+      action.className = "site-notification-item-action";
+      action.href = actionUrl;
+      action.textContent = String(item.action?.label || labels.notificationAction);
+      action.addEventListener("click", () => void markNotificationsRead({ ids: [item.id] }));
+      card.append(action);
+    }
+    card.addEventListener("click", () => {
+      if (!item.read) void markNotificationsRead({ ids: [item.id] });
+    });
+    return card;
+  }
+
+  function renderNotifications() {
+    const labels = copy[currentLanguage()];
+    const totalUnread = notificationNumber(notificationState.unread.total);
+    document.querySelectorAll("[data-site-notification-trigger]").forEach((button) => {
+      button.title = labels.notificationCenter;
+      button.setAttribute("aria-label", totalUnread
+        ? `${labels.notificationCenter}，${totalUnread} 条${labels.notificationUnread}`
+        : labels.notificationCenter);
+    });
+    document.querySelectorAll("[data-site-notification-dot]").forEach((dot) => {
+      dot.hidden = totalUnread <= 0;
+      dot.setAttribute("aria-label", totalUnread ? `${totalUnread} ${labels.notificationUnread}` : "");
+    });
+    document.querySelectorAll("[data-site-notification-close]").forEach((button) => {
+      button.title = labels.notificationClose;
+      button.setAttribute("aria-label", labels.notificationClose);
+    });
+    document.querySelectorAll("[data-site-notification-category]").forEach((button) => {
+      const category = button.dataset.siteNotificationCategory || "system";
+      const active = category === notificationState.activeCategory;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-selected", active ? "true" : "false");
+      const count = notificationNumber(notificationState.unread[category]);
+      let badge = button.querySelector(".site-notification-tab-count");
+      if (!badge) {
+        badge = document.createElement("span");
+        badge.className = "site-notification-tab-count";
+        button.append(badge);
+      }
+      badge.textContent = count > 99 ? "99+" : String(count);
+      badge.hidden = count <= 0;
+    });
+    document.querySelectorAll("[data-site-notification-list]").forEach((list) => {
+      if (notificationState.loading && !notificationState.loaded) {
+        const status = document.createElement("p");
+        status.className = "site-notification-empty";
+        status.textContent = labels.notificationLoading;
+        list.replaceChildren(status);
+        return;
+      }
+      const items = notificationState.items.filter((item) => item.category === notificationState.activeCategory);
+      if (!items.length) {
+        const status = document.createElement("p");
+        status.className = "site-notification-empty";
+        status.textContent = labels.notificationEmpty;
+        list.replaceChildren(status);
+        return;
+      }
+      list.replaceChildren(...items.map(createNotificationItem));
+    });
+    document.querySelectorAll("[data-site-notification-read-all]").forEach((button) => {
+      button.disabled = totalUnread <= 0;
+    });
+  }
+
+  function closeNotificationBroadcast() {
+    document.querySelectorAll("[data-site-notification-broadcast]").forEach((node) => node.remove());
+  }
+
+  function showNotificationBroadcast(item) {
+    if (!item || item.read || !notificationNumber(item.id)) return;
+    const announceKey = notificationAnnounceKey(item);
+    if (window.sessionStorage.getItem(announceKey) === "1") return;
+    window.sessionStorage.setItem(announceKey, "1");
+    closeNotificationBroadcast();
+    const labels = copy[currentLanguage()];
+    const overlay = document.createElement("div");
+    overlay.className = "site-notification-broadcast";
+    overlay.dataset.siteNotificationBroadcast = "true";
+    overlay.innerHTML = `<section class="site-notification-broadcast-dialog" role="alertdialog" aria-modal="true">
+      <div class="site-notification-broadcast-head">
+        <span>${notificationIcon()}</span>
+        <strong></strong>
+        <button type="button">${closeIcon()}</button>
+      </div>
+      <h2></h2>
+      <p></p>
+      <div class="site-notification-broadcast-actions"></div>
+    </section>`;
+    overlay.querySelector(".site-notification-broadcast-head strong").textContent = labels.notificationBroadcast;
+    overlay.querySelector("h2").textContent = String(item.title || labels.notificationCenter);
+    overlay.querySelector("p").textContent = String(item.body || "");
+    const actions = overlay.querySelector(".site-notification-broadcast-actions");
+    const actionUrl = safeNotificationActionUrl(item.action?.url);
+    if (actionUrl) {
+      const action = document.createElement("a");
+      action.href = actionUrl;
+      action.textContent = String(item.action?.label || labels.notificationAction);
+      actions.append(action);
+    }
+    const close = () => {
+      void markNotificationsRead({ ids: [item.id] });
+      overlay.remove();
+    };
+    overlay.querySelector("button").setAttribute("aria-label", labels.notificationClose);
+    overlay.querySelector("button").addEventListener("click", close);
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) close();
+    });
+    document.body.append(overlay);
+    overlay.querySelector("button").focus({ preventScroll: true });
+  }
+
+  async function loadNotifications({ announce = true, force = false } = {}) {
+    if (!currentAccount || currentSessionMode === "guest") return null;
+    if (notificationState.loading && !force) return null;
+    const requestId = ++notificationRequest;
+    notificationState.loading = true;
+    renderNotifications();
+    try {
+      const payload = await fetchAccountJson("/api/notifications?limit=100");
+      if (requestId !== notificationRequest) return null;
+      notificationState.items = Array.isArray(payload?.items) ? payload.items : [];
+      notificationState.unread = normalizeNotificationUnread(payload?.unread);
+      notificationState.loaded = true;
+      notificationState.loading = false;
+      renderNotifications();
+      if (announce && !document.hidden) {
+        const latestUnread = notificationState.items.find((item) => !item.read);
+        if (latestUnread) showNotificationBroadcast(latestUnread);
+      }
+      return payload;
+    } catch {
+      if (requestId !== notificationRequest) return null;
+      notificationState.loading = false;
+      renderNotifications();
+      return null;
+    }
+  }
+
+  async function markNotificationsRead({ ids = [], category = "", all = false } = {}) {
+    if (!currentAccount || currentSessionMode === "guest") return null;
+    const cleanIds = [...new Set(ids.map(notificationNumber).filter(Boolean))];
+    const headers = accountRequestHeaders();
+    headers.set("Content-Type", "application/json");
+    try {
+      const response = await fetch("/api/notifications/read", {
+        method: "POST",
+        credentials: "include",
+        headers,
+        body: JSON.stringify({ ids: cleanIds, category, all }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) return null;
+      const matches = (item) => all
+        || (category && item.category === category)
+        || cleanIds.includes(notificationNumber(item.id));
+      notificationState.items = notificationState.items.map((item) => matches(item) ? { ...item, read: true } : item);
+      notificationState.unread = normalizeNotificationUnread(payload?.unread);
+      renderNotifications();
+      try {
+        window.localStorage.setItem(NOTIFICATION_STORAGE_KEY, `${Date.now()}`);
+      } catch {}
+      window.dispatchEvent(new CustomEvent("vecto:notifications-updated"));
+      return payload;
+    } catch {
+      return null;
+    }
+  }
+
+  function startNotificationPolling() {
+    if (notificationPollTimer) return;
+    notificationPollTimer = window.setInterval(() => {
+      if (!document.hidden) void loadNotifications();
+    }, NOTIFICATION_POLL_MS);
+  }
+
+  function stopNotificationPolling() {
+    if (!notificationPollTimer) return;
+    window.clearInterval(notificationPollTimer);
+    notificationPollTimer = 0;
   }
 
   function accountNumber(value) {
@@ -1049,6 +1475,33 @@
     });
   }
 
+  function bindNotificationMenus(header) {
+    header.querySelectorAll("[data-site-notification-menu]").forEach((menu) => {
+      if (menu.dataset.siteNotificationReady === "true") return;
+      menu.dataset.siteNotificationReady = "true";
+      const trigger = menu.querySelector("[data-site-notification-trigger]");
+      trigger?.addEventListener("click", () => {
+        setNotificationMenuOpen(menu, trigger.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
+      });
+      menu.querySelector("[data-site-notification-close]")?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setNotificationMenuOpen(menu, false, { restoreFocus: true });
+      });
+      menu.querySelectorAll("[data-site-notification-category]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const category = String(button.dataset.siteNotificationCategory || "");
+          if (!["system", "official", "interaction"].includes(category)) return;
+          notificationState.activeCategory = category;
+          renderNotifications();
+        });
+      });
+      menu.querySelector("[data-site-notification-read-all]")?.addEventListener("click", () => {
+        void markNotificationsRead({ all: true });
+      });
+    });
+  }
+
   function openAccountConsoleView(view) {
     const targetView = "billing";
     const isAdminConsole = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
@@ -1107,17 +1560,21 @@
     actions.querySelectorAll("[data-open-login]").forEach((node) => node.remove());
     actions.querySelectorAll(":scope > .site-global-controls").forEach((node) => node.remove());
     installUnifiedAccountMenu(header, header.dataset.sitePage || "home");
+    installUnifiedNotificationMenu(header);
     header.dataset.siteAuthState = "authenticated";
     bindPreferenceControls(header);
     bindAccountMenus(header);
+    bindNotificationMenus(header);
     setAccount(account);
     sync();
   }
 
   function showGuestAccount(header) {
     if (!header || header.dataset.siteMode !== "public") return;
+    header.querySelectorAll("[data-site-notification-menu]").forEach((node) => node.remove());
     header.dataset.siteAuthState = "guest";
     currentSessionMode = "guest";
+    setAccount(null);
     proxyMarketBadgeRequest += 1;
     sync();
   }
@@ -1237,13 +1694,17 @@
       header.innerHTML = fallbackMarkup(page, resolvedMode, current);
     }
     installMobileMenu(header, page, current);
-    if (mode === "authenticated") installUnifiedAccountMenu(header, page);
+    if (mode === "authenticated") {
+      installUnifiedAccountMenu(header, page);
+      installUnifiedNotificationMenu(header);
+    }
 
     header.dataset.siteReady = "true";
     header.dataset.i18nSkip = "true";
     bindPreferenceControls(header);
     bindMobileMenus(header);
     bindAccountMenus(header);
+    bindNotificationMenus(header);
     sync();
     if (mode === "public") void hydratePublicSession(header);
     return header;
@@ -1293,6 +1754,7 @@
       node.textContent = language === "zh-Hant" ? labels.languageTraditionalState : labels.languageSimplifiedState;
     });
     syncAccount();
+    renderNotifications();
     setLogoutPending(logoutPending, logoutMessage);
   }
 
@@ -1333,11 +1795,15 @@
     document.querySelectorAll("[data-site-account-menu].is-open").forEach((menu) => {
       if (!menu.contains(event.target)) setAccountMenuOpen(menu, false);
     });
+    document.querySelectorAll("[data-site-notification-menu].is-open").forEach((menu) => {
+      if (!menu.contains(event.target)) setNotificationMenuOpen(menu, false);
+    });
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     document.querySelectorAll("[data-site-mobile-menu].is-open").forEach((menu) => setMobileMenuOpen(menu, false, { restoreFocus: true }));
     document.querySelectorAll("[data-site-account-menu].is-open").forEach((menu) => setAccountMenuOpen(menu, false, { restoreFocus: true }));
+    document.querySelectorAll("[data-site-notification-menu].is-open").forEach((menu) => setNotificationMenuOpen(menu, false, { restoreFocus: true }));
   });
   window.addEventListener("storage", (event) => {
     if (event.key === LANGUAGE_STORAGE_KEY) {
@@ -1348,9 +1814,15 @@
       setLanguage(DEFAULT_LANGUAGE, { persist: false });
     }
     if (event.key === "vecto-proxy-market-read") void syncProxyMarketBadge();
+    if (event.key === NOTIFICATION_STORAGE_KEY) void loadNotifications({ force: true, announce: false });
   });
   window.addEventListener("vecto:proxy-market-read", () => void syncProxyMarketBadge());
   window.addEventListener(EVENT_ACCOUNT_MENU_OPEN, () => void loadAccountBilling({ force: true }));
+  window.addEventListener(EVENT_NOTIFICATION_MENU_OPEN, () => void loadNotifications({ force: true, announce: false }));
+  window.addEventListener("vecto:notifications-updated", () => void loadNotifications({ force: true, announce: false }));
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void loadNotifications({ force: true });
+  });
 
   syncAdminWorkspaceContext();
   document.querySelectorAll("[data-site-header]").forEach(mount);
@@ -1372,6 +1844,7 @@
     clearAdminConsoleContext,
     refreshPublicSession,
     syncProxyMarketBadge,
+    refreshNotifications: () => loadNotifications({ force: true }),
   };
   window.dispatchEvent(new CustomEvent("vecto:navigation-ready"));
 })();

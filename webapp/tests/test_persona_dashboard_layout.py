@@ -148,10 +148,12 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             "    grid-template-columns: repeat(5, minmax(0, 1fr));",
             mobile_styles,
         )
-        self.assertIn('"platform source source source"', mobile_styles)
-        self.assertIn('"time time time actions"', mobile_styles)
+        self.assertIn('"platform platform time actions"', mobile_styles)
+        self.assertIn('"source source source source"', mobile_styles)
         self.assertIn('"likes comments shares views"', mobile_styles)
         self.assertIn(".persona-dashboard-view .persona-post-table td:nth-child(n + 4):nth-child(-n + 7) {", mobile_styles)
+        self.assertIn(".persona-dashboard-view .persona-post-table td:nth-child(-n + 3)::before {", mobile_styles)
+        self.assertIn("display: none;", mobile_styles)
         self.assertIn(".persona-dashboard-view .persona-post-content-badges {", mobile_styles)
 
     def test_mobile_post_filters_stay_inline_and_post_rows_need_no_horizontal_scroll(self):
@@ -1207,6 +1209,20 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             identity.index("persona-profile-account-status"),
             identity.index("persona-profile-compact-meta"),
         )
+        full_title_index = identity.index("<strong>人设简介</strong>")
+        full_identity_start = identity.rfind(
+            '<div class="persona-profile-data-panel-head persona-profile-data-panel-head--identity">',
+            0,
+            full_title_index,
+        )
+        full_identity = identity[full_identity_start:]
+        full_header = full_identity[:full_identity.index("</div>")]
+        full_name_start = full_identity.index('<div class="persona-profile-name-row">')
+        full_name_row = full_identity[full_name_start:full_identity.index("</div>", full_name_start)]
+        self.assertIn("persona-profile-header-account", full_header)
+        self.assertLess(full_header.index("人设简介"), full_header.index("persona-profile-header-account"))
+        self.assertLess(full_header.index("persona-profile-header-account"), full_header.index("${listToggle}"))
+        self.assertNotIn("persona-profile-account-status", full_name_row)
         self.assertIn("persona-profile-overview-shell", self.console_script)
         self.assertIn('sidebarId = "personaWorkspaceSidebar"', identity)
         self.assertIn("function setPersonaMobileSidebarOpen(open, sidebarId", self.console_script)
@@ -1214,6 +1230,15 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-profile-summary-strip {", self.styles)
         self.assertIn(".persona-profile-list-toggle {", self.styles)
         self.assertIn(".persona-profile-account-status {", self.styles)
+        self.assertIn(".persona-profile-data-panel-head--identity {", self.styles)
+        self.assertIn("grid-template-columns: max-content minmax(0, 1fr) max-content;", self.styles)
+        self.assertIn(".persona-profile-header-account {", self.styles)
+        self.assertIn("grid-template-columns: 88px minmax(0, 1fr) 36px;", self.styles)
+        self.assertIn(
+            ".persona-profile-data-panel-head--identity .persona-profile-header-account {\n"
+            "    justify-self: start;",
+            self.styles,
+        )
         self.assertIn(".persona-profile-identity-content {", self.styles)
         self.assertIn(".persona-profile-name-row {", self.styles)
         self.assertIn(
@@ -1596,9 +1621,14 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.styles.index("@media (max-width: 760px) {"):
             self.styles.index(".persona-dashboard-view .persona-tab-rail {", self.styles.index("@media (max-width: 760px) {"))
         ]
-        self.assertIn("grid-template-columns: repeat(7, minmax(0, 1fr));", mobile_dashboard_styles)
-        self.assertIn("min-height: 48px;", mobile_dashboard_styles)
-        self.assertNotIn(".persona-dashboard-view .persona-kpi:last-child", mobile_dashboard_styles)
+        self.assertIn("grid-template-columns: repeat(12, minmax(0, 1fr));", mobile_dashboard_styles)
+        self.assertIn("min-height: 64px;", mobile_dashboard_styles)
+        self.assertIn(".persona-dashboard-view .persona-kpi:nth-child(n + 5)", mobile_dashboard_styles)
+        self.assertIn("grid-column: span 4;", mobile_dashboard_styles)
+        self.assertIn(".persona-dashboard-view .persona-kpi:nth-child(-n + 4)", mobile_dashboard_styles)
+        self.assertIn("grid-column: span 3;", mobile_dashboard_styles)
+        self.assertIn("font-size: 18px;", mobile_dashboard_styles)
+        self.assertIn("font-size: 11px;", mobile_dashboard_styles)
         summary_start = self.dashboard_script.index("function pdRenderSummary(data, visiblePersonas)")
         summary_end = self.dashboard_script.index("\nfunction pdPersonaWarnings", summary_start)
         summary = self.dashboard_script[summary_start:summary_end]

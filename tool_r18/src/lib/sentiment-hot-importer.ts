@@ -3045,11 +3045,9 @@ function hasMinimumSentimentHotContentLength(candidate: SentimentHotCandidate): 
   return sentimentHotHanCount(candidate.content) >= MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT;
 }
 
-function minimumSentimentHotHanCountForCandidate(candidate: SentimentHotCandidate): number {
-  const tier = sentimentCandidateSourceTier(candidate);
-  if (tier === "primary_threads_search") return 12;
-  if (tier === "supplement_instagram_search") return 30;
-  if (tier === "fallback_history") return 18;
+function minimumSentimentHotHanCountForCandidate(): number {
+  // Every displayed candidate follows the same content-quality floor,
+  // regardless of whether it came from search, a supplement, or history.
   return MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT;
 }
 
@@ -3129,12 +3127,11 @@ function candidateMeetsDisplayQuality(
   };
   if ((normalized.metrics as any)?.semanticRelevant === false) return reject("semantic");
   if (!candidateMatchesOperationalFreshness(normalized, freshnessDays)) return reject("freshness");
-  const isFreshRelevantFallback = (normalized.metrics as any)?.freshRelevantFallback === true;
-  if (!skipHeatGate && !isFreshRelevantFallback && !isUsefulHotCandidate(normalized)) {
+  if (!skipHeatGate && !isUsefulHotCandidate(normalized)) {
     const viewCount = Number(normalized.engagement?.viewCount ?? (normalized.metrics as any)?.view_count ?? 0);
     return reject(viewCount >= MIN_SENTIMENT_HOT_SCORE ? "heat_interactions_only" : "heat");
   }
-  if (sentimentHotHanCount(content) < minimumSentimentHotHanCountForCandidate(normalized)) return reject("content_length");
+  if (sentimentHotHanCount(content) < minimumSentimentHotHanCountForCandidate()) return reject("content_length");
   if (isNoisyReaderCandidateContent(normalized, content)) return reject("reader_noise");
   const relevanceKeywords = keywords;
   if (relevanceKeywords.length > 0 && !candidateMatchesCurrentKeywords(normalized, relevanceKeywords, searchMode)) return reject("keyword_mismatch");
@@ -3245,8 +3242,9 @@ export function ensureSentimentHotPlatformContributions(
   limit: number,
   options?: { archiveId?: string; keywords?: string[]; excludeShown?: boolean; searchMode?: SentimentHotSearchMode; freshnessDays?: number },
 ): SentimentHotCandidate[] {
-  if (limit < 2 || selected.length === 0) return selected.slice(0, limit);
-  const out = selected.slice(0, limit);
+  const qualifiedSelected = finalizeSentimentHotCandidatesForDisplay(selected, limit, options);
+  if (limit < 2 || qualifiedSelected.length === 0) return qualifiedSelected;
+  const out = qualifiedSelected.slice(0, limit);
   for (const platform of ["threads", "instagram"] as SentimentHotPlatform[]) {
     if (out.some((candidate) => candidate.platform === platform)) continue;
     const platformCandidates = finalizeSentimentHotCandidatesForDisplay(

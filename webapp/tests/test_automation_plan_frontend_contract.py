@@ -245,9 +245,14 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         self.assertIn("automationPlansError", history)
         self.assertIn("automationPlansLoading", CONSOLE_JS)
 
-    def test_untouched_empty_plan_does_not_trigger_leave_guard(self):
+    def test_plan_without_detailed_configuration_does_not_trigger_leave_guard(self):
         guard = function_source("activeAutomationPlanTransientState", "activeTransientWorkspaceState")
-        self.assertIn('Boolean(String(item.taskType || ""))', guard)
+        self.assertIn("rows.some((item) => Boolean(item.configured))", guard)
+        self.assertNotIn('draft.mode === "loop"', guard)
+        self.assertNotIn("rows.length !== 1", guard)
+        self.assertNotIn("reservationMinutes", guard)
+        self.assertNotIn("item.taskType", guard)
+        self.assertNotIn("item.params", guard)
         self.assertNotIn("defaultTaskType", guard)
 
     def test_plan_starts_empty_and_the_last_task_can_be_removed(self):
