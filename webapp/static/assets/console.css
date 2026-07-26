@@ -3217,6 +3217,26 @@ textarea:focus {
   }
 }
 
+/* Touch layouts use an instant highlighted pill while an account picker is open. */
+@media (max-width: 760px) {
+  .account-pool-add-button.is-opening,
+  .account-pool-add-button.is-opening span,
+  .account-pool-add-button.is-closing,
+  .account-pool-add-button.is-closing span {
+    animation: none;
+  }
+
+  .account-pool-add-button.is-modal-open {
+    box-shadow: inset 0 0 0 1px var(--accent);
+    transition: none;
+  }
+
+  .account-pool-add-button.is-modal-open span {
+    transform: none;
+    transition: none;
+  }
+}
+
 .automation-plan-error {
   border-color: color-mix(in srgb, var(--danger) 34%, var(--line));
   color: var(--danger);
@@ -3482,7 +3502,8 @@ textarea:focus {
 }
 
 .unified-action-icon-button > .ui-action-icon,
-.unified-action-icon-button > .ui-trash-icon {
+.unified-action-icon-button > .ui-trash-icon,
+.unified-action-icon-button > .ui-lightbox-icon {
   width: 20px;
   height: 20px;
   fill: none;
@@ -9282,6 +9303,12 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-temp-edit-actions--inline {
   margin-left: auto;
+}
+
+.persona-draft-content--full {
+  min-height: 280px;
+  overflow-y: hidden;
+  resize: none;
 }
 
 .persona-profile-regen-input {

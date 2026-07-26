@@ -2411,6 +2411,13 @@ function sleep(ms) {
 
 function startAccountPoolAddButtonMotion(button) {
   if (!(button instanceof HTMLElement) || button.dataset.accountPoolAddOpening) return false;
+  // Mobile uses an immediate highlighted pill instead of the desktop motion.
+  if (isMobileNavMode()) {
+    button.classList.remove("is-opening", "is-closing");
+    button.classList.add("is-modal-open");
+    button.dataset.accountPoolAddOpening = "open";
+    return true;
+  }
   const reduceMotion = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
   if (reduceMotion) return true;
   button.dataset.accountPoolAddOpening = "true";
@@ -2440,6 +2447,10 @@ function closeAccountPoolAddButtonMotion(button) {
     button.classList.remove("is-opening", "is-modal-open", "is-closing");
     delete button.dataset.accountPoolAddOpening;
   };
+  if (isMobileNavMode()) {
+    reset();
+    return;
+  }
   if (reduceMotion) {
     reset();
     return;
@@ -3437,11 +3448,19 @@ function updatePersonaDraftEditVisualState() {
   const chip = document.querySelector(".persona-edit-state-chip");
   if (panel) panel.classList.toggle("is-dirty", dirty);
   if (section) section.classList.toggle("is-dirty", dirty);
+  resizePersonaDraftEditContent();
   if (chip) {
     chip.classList.toggle("is-warning", dirty);
     chip.classList.toggle("is-ready", !dirty);
     chip.textContent = dirty ? "未保存修改" : "编辑中";
   }
+}
+
+function resizePersonaDraftEditContent() {
+  const textarea = $("personaDraftContent");
+  if (!textarea?.classList.contains("persona-draft-content--full")) return;
+  textarea.style.height = "auto";
+  textarea.style.height = `${textarea.scrollHeight}px`;
 }
 
 function syncPersonaGenerateActionState() {
@@ -8175,11 +8194,10 @@ function renderPersonaAccountPanelV2(persona, account, profile, step) {
   `;
 }
 
-function personaUnboundAccountPoolCandidates(platform = "") {
+function personaAccountPoolCandidates(platform = "") {
   const normalizedPlatform = String(platform || "").trim().toLowerCase();
   return (state.socialAccounts || []).filter((account) => (
-    !String(account?.persona_id || "").trim()
-    && (!normalizedPlatform || String(account?.platform || "").trim().toLowerCase() === normalizedPlatform)
+    !normalizedPlatform || String(account?.platform || "").trim().toLowerCase() === normalizedPlatform
   ));
 }
 
@@ -8198,21 +8216,21 @@ function renderPersonaAccountPoolPickerCard(account) {
   </button>`;
 }
 
-async function bindUnboundPoolAccountToPersona(accountId = "", persona = selectedPersona(), platform = "") {
+async function bindPoolAccountToPersona(accountId = "", persona = selectedPersona(), platform = "") {
   if (state.accountPoolBinding) return false;
   const cleanAccountId = String(accountId || "").trim();
   const personaId = String(persona?.id || "").trim();
   const normalizedPlatform = String(platform || "").trim().toLowerCase();
-  const account = personaUnboundAccountPoolCandidates(normalizedPlatform)
+  const account = personaAccountPoolCandidates(normalizedPlatform)
     .find((item) => String(item?.id || "") === cleanAccountId);
-  if (!personaId || !account) throw new Error("该账号已被绑定或不存在，请刷新后重新选择。");
+  if (!personaId || !account) throw new Error("该账号不存在或平台不匹配，请刷新后重新选择。");
   state.accountPoolBinding = true;
   renderPersonaDetail();
   try {
     await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanAccountId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ persona_id: personaId, require_unbound: true }),
+      body: JSON.stringify({ persona_id: personaId, replace_existing_binding: true }),
     });
     state.preferredAccountId = cleanAccountId;
     await loadSocial({ force: true });
@@ -8234,15 +8252,12 @@ async function openPersonaAccountPoolPickerModal(persona = selectedPersona(), pl
     return false;
   }
   await loadSocial({ force: true });
-  const platformAlreadyBound = personaAutomationAccounts(persona, normalizedPlatform).length > 0;
-  const candidates = platformAlreadyBound ? [] : personaUnboundAccountPoolCandidates(normalizedPlatform);
-  const emptyMessage = platformAlreadyBound
-    ? "当前平台已经绑定账号，请先移除当前账号后再从账号池添加。"
-    : "暂无可添加账号。请先在账号池完成配置，或移除其他人设已绑定的账号。";
+  const candidates = personaAccountPoolCandidates(normalizedPlatform);
+  const emptyMessage = "暂无可添加账号。请先在账号池完成当前平台配置。";
   const request = openConsoleModal({
     title: "从账号池添加账号",
     contentHtml: `<div class="persona-account-picker">
-      <p>仅显示账号池中已配置且尚未绑定人设的 ${esc(platformLabel(normalizedPlatform))} 账号。</p>
+      <p>显示账号池中已配置的 ${esc(platformLabel(normalizedPlatform))} 账号。选择后绑定到当前人设，必要时替换该平台当前绑定。</p>
       <div class="persona-account-picker-list">${candidates.length ? candidates.map(renderPersonaAccountPoolPickerCard).join("") : `<div class="empty-state">${esc(emptyMessage)}</div>`}</div>
     </div>`,
     showCancel: false,
@@ -8259,7 +8274,7 @@ async function openPersonaAccountPoolPickerModal(persona = selectedPersona(), pl
     const button = event.target.closest("[data-persona-account-pool-select]");
     if (!button) return;
     button.disabled = true;
-    bindUnboundPoolAccountToPersona(button.dataset.personaAccountPoolSelect || "", persona, normalizedPlatform)
+    bindPoolAccountToPersona(button.dataset.personaAccountPoolSelect || "", persona, normalizedPlatform)
       .then((bound) => {
         if (bound) closeConsoleModal(true);
         else button.disabled = false;
@@ -19915,6 +19930,7 @@ function renderPersonaDetail() {
   `;
   state.renderedPersonaId = String(persona.id || "");
   bindPersonaAccountPlatformSwipe($("personaDetail"));
+  window.requestAnimationFrame(resizePersonaDraftEditContent);
   } finally {
     restoreConsoleScrollState(scrollSnapshot);
     releaseConsoleLayoutLocks(layoutLocks);
@@ -19998,7 +20014,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             ${isEditingDraft ? `
               <div class="persona-temp-edit-actions persona-temp-edit-actions--inline">
                 <button type="button" class="unified-action-icon-button" data-persona-clear-draft-edit title="清空" aria-label="清空">${renderClearSelectionIcon()}</button>
-                <button type="button" data-persona-exit-draft-edit>退出编辑</button>
+                <button type="button" class="unified-action-icon-button" data-persona-exit-draft-edit title="退出编辑" aria-label="退出编辑">${renderCloseIcon()}</button>
               </div>
             ` : ""}
             <div class="persona-compose-mode-slot">
@@ -20024,7 +20040,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             <input id="personaDraftTitle" value="${esc(draftForm.title || "")}" placeholder="例如：今日主题帖" />
           </label>
           <label>自定义正文
-            <textarea id="personaDraftContent" rows="6" placeholder="直接输入本次要保存的推文正文。">${esc(draftForm.content || "")}</textarea>
+            <textarea id="personaDraftContent" class="persona-draft-content--full" rows="6" placeholder="直接输入本次要保存的推文正文。">${esc(draftForm.content || "")}</textarea>
           </label>
           <div class="row-actions">
             <button type="button" class="primary" data-persona-create-post>${isEditingDraft ? "保存修改" : "保存草稿"}</button>

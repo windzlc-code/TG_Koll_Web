@@ -711,7 +711,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
     def test_persona_account_setting_keeps_status_beside_title_and_centers_add_action(self):
         panel_start = self.console_script.index("function renderPersonaAccountPanelV2(")
-        panel_end = self.console_script.index("\nfunction personaUnboundAccountPoolCandidates", panel_start)
+        panel_end = self.console_script.index("\nfunction personaAccountPoolCandidates", panel_start)
         panel = self.console_script[panel_start:panel_end]
 
         self.assertIn("persona-account-section-head", panel)
@@ -745,6 +745,17 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-account-pool-panel .persona-account-action-row", self.styles)
         self.assertIn("justify-content: center;", self.styles)
 
+    def test_persona_account_picker_allows_existing_platform_accounts_and_replaces_current_binding(self):
+        picker_start = self.console_script.index("function personaAccountPoolCandidates(")
+        picker_end = self.console_script.index("\nfunction personaAutomationTasksFor", picker_start)
+        picker = self.console_script[picker_start:picker_end]
+
+        self.assertNotIn("!String(account?.persona_id", picker)
+        self.assertIn("personaAccountPoolCandidates(normalizedPlatform)", picker)
+        self.assertIn("replace_existing_binding: true", picker)
+        self.assertNotIn("require_unbound: true", picker)
+        self.assertIn("必要时替换该平台当前绑定", picker)
+
     def test_persona_account_settings_reuses_the_mobile_platform_rail_and_swipe(self):
         self.assertIn("function bindPersonaAccountPlatformSwipe(host)", self.console_script)
         self.assertIn("personaAutomationPlatformOptions(persona)", self.console_script)
@@ -757,9 +768,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("overflow-x: auto;", mobile_account_pool_styles)
         self.assertIn("scroll-snap-type: x proximity;", mobile_account_pool_styles)
 
-    def test_account_add_buttons_keep_the_shared_opening_motion_during_ui_open(self):
+    def test_mobile_account_add_uses_an_instant_highlight_while_desktop_keeps_shared_motion(self):
         self.assertIn("function startAccountPoolAddButtonMotion(button)", self.console_script)
         self.assertIn("function closeAccountPoolAddButtonMotion(button)", self.console_script)
+        self.assertIn("if (isMobileNavMode())", self.console_script)
+        self.assertIn('button.classList.add("is-modal-open");', self.console_script)
         self.assertIn('button.classList.add("is-opening");', self.console_script)
         self.assertIn('button.classList.add("is-closing");', self.console_script)
         self.assertIn("window.setTimeout(finish, 600);", self.console_script)
@@ -781,6 +794,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("account-pool-add-button-motion-proxy", self.console_script)
         self.assertIn(".account-pool-add-button.is-opening {", self.styles)
         self.assertIn(".account-pool-add-button.is-closing {", self.styles)
+        self.assertIn("Touch layouts use an instant highlighted pill", self.styles)
+        self.assertIn("box-shadow: inset 0 0 0 1px var(--accent);", self.styles)
         self.assertNotIn(".account-pool-add-button-motion-proxy", self.styles)
         self.assertIn("animation: account-pool-add-button-open 420ms", self.styles)
         self.assertIn(".account-pool-add-button.is-opening span {", self.styles)
@@ -1770,6 +1785,20 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             editor.index("closePersonaDraftMenus();"),
             editor.index("renderPersonaDetail();"),
         )
+
+    def test_draft_editor_uses_icon_exit_and_expands_its_content(self):
+        content_panel = self.console_script[
+            self.console_script.index("function renderPersonaContentPanel"):
+            self.console_script.index("function refreshLiveBrowserSessionsSoon")
+        ]
+        self.assertIn('class="unified-action-icon-button" data-persona-exit-draft-edit', content_panel)
+        self.assertIn('${renderCloseIcon()}', content_panel)
+        self.assertIn('class="persona-draft-content--full"', content_panel)
+        self.assertIn("function resizePersonaDraftEditContent()", self.console_script)
+        self.assertIn("window.requestAnimationFrame(resizePersonaDraftEditContent);", self.console_script)
+        self.assertIn("resizePersonaDraftEditContent();", self.console_script)
+        self.assertIn(".persona-draft-content--full {", self.styles)
+        self.assertIn("overflow-y: hidden;", self.styles)
 
     def test_draft_toolbar_uses_icon_bulk_actions_and_aligned_controls(self):
         bulk_actions = self.console_script[
