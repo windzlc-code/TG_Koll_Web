@@ -833,7 +833,7 @@ class AccountGovernanceTests(unittest.TestCase):
             json={
                 "name": "reporting-worker",
                 "purpose": "Read governance reports",
-                "allowed_scopes": ["audit:read", "audit:read", "internal:tg", "users:read"],
+                "allowed_scopes": ["audit:read", "audit:read", "users:read"],
                 "expires_at": governance.now_ts() + 86400,
                 "admin_password": self.ADMIN_PASSWORD,
                 "totp_code": governance.totp_code(secret),
@@ -851,13 +851,7 @@ class AccountGovernanceTests(unittest.TestCase):
         item = next(row for row in listed.json()["items"] if row["id"] == service_id)
         self.assertNotIn("credential", item)
         self.assertNotIn("credential_hash", item)
-        self.assertEqual(item["allowed_scopes"], ["audit:read", "internal:tg", "users:read"])
-
-        internal_status = TestClient(self.app).get(
-            "/api/internal/tg/status?chat_id=1",
-            headers={"x-tg-internal-token": credential},
-        )
-        self.assertEqual(internal_status.status_code, 200, internal_status.text)
+        self.assertEqual(item["allowed_scopes"], ["audit:read", "users:read"])
 
         with db_module.db() as conn:
             stored = conn.execute(

@@ -167,7 +167,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         for task_type in sorted(removed_types):
             with self.subTest(task_type=task_type):
                 with self.assertRaises(HTTPException) as raised:
-                    server._build_internal_tg_task_payload("removed-preview", task_type, {})
+                    server._require_supported_task_type(task_type)
                 self.assertEqual(raised.exception.status_code, 400)
                 self.assertIn(task_type, str(raised.exception.detail))
 
@@ -209,7 +209,6 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         production_files = (
             root / "webapp" / "server.py",
             root / "webapp" / "static" / "assets" / "admin.js",
-            root / "tool_r18" / "src" / "telegram-bot.ts",
             root / "webapp" / "WEB_CORE_FUNCTIONS_AND_FLOW_REFERENCE.md",
         )
         removed_markers = (

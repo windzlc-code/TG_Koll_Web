@@ -560,24 +560,22 @@ Web 重构时必须统一回真实后端动作:
 - `threads_warmup`
 - `threads_auto_reply`
 
-### 8.3 Telegram 历史命名残留
+### 8.3 历史命名残留
 
 例如:
 
 - `tg_prompt_mode`
 - `tg_web_branch`
-- `/api/internal/tg/*`
 
 要分开看:
 
 - `tg_prompt_mode` 这类字段虽然名字旧, 但生成链里仍在实际使用
-- `/api/internal/tg/*` 是旧客户端调用 Web 的入站兼容层，本身不访问 Telegram；daemon、Bot API 出站通知和自动启动入口已移除
+- 已移除旧 Telegram 客户端的入站兼容 API、Bot 轮询、Webhook 和依赖；Web 控制台直接调用 FastAPI。
 
 ## 9. 哪些内容不应该再作为 Web 端参考
 
 后续整理 Web 结构时, 以下内容只能视为历史兼容层, 不能再反推设计:
 
-- `/api/internal/tg/*`
 - Persona archive 中的 `pad` / `boundPadCode` / `ownerBotName` 一类历史运营字段
 - 控制台中为了兼容旧流程而保留的动作别名
 - `admin.html`
