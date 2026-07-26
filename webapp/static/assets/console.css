@@ -15974,10 +15974,10 @@ button.proxy-market-link {
 .account-password-display--input:focus-within {
   border-color: var(--ink);
   background: var(--panel-solid);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ink) 12%, transparent);
 }
 
 .account-password-display--input input {
+  flex: 1 1 auto;
   width: 100%;
   min-width: 0;
   min-height: 34px;
@@ -15988,6 +15988,8 @@ button.proxy-market-link {
   box-shadow: none;
   color: var(--ink);
   font: inherit;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .account-password-display--input input::placeholder {

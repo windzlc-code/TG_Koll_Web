@@ -20844,10 +20844,6 @@ function renderAccountPoolCards(accounts, selectedAccount) {
     </section>`;
 }
 
-function accountPoolFieldValue(id = "") {
-  return String($(`accountPool${id}`)?.value || "").trim();
-}
-
 function accountPoolDraftValue(key = "") {
   return String(state.accountPoolCreateDraft?.[key] || "");
 }
@@ -21040,10 +21036,8 @@ async function testProxyForm(prefix = "", proxy = null) {
 
 function syncAccountPoolCreateDraftFromForm() {
   state.accountPoolCreateDraft = {
-    username: accountPoolFieldValue("Username"),
-    login_username: accountPoolFieldValue("LoginUsername"),
+    username: String($("accountPoolUsername")?.value || "").trim(),
     login_password: String($("accountPoolLoginPassword")?.value || ""),
-    display_name: accountPoolFieldValue("DisplayName"),
     totp_secret_or_uri: String($("accountPoolTotpSecret")?.value || "").trim(),
   };
 }
@@ -21057,25 +21051,15 @@ function renderAccountIdentityFields(account = null, mode = "create") {
   const editing = mode === "edit";
   const prefix = editing ? "accountPoolEdit" : "accountPool";
   const username = editing ? String(account?.username || "") : accountPoolDraftValue("username");
-  const loginUsername = String(account?.login_username || account?.username || "");
-  const displayName = String(account?.display_name || "");
   return `<div class="account-create-form account-create-form--modal">
     <label>
       <span>账号用户名</span>
       <input id="${prefix}Username" value="${esc(username)}" placeholder="例如：liliacvuiy575" autocomplete="off" />
     </label>
-    ${editing ? `<label>
-      <span>登录账号（可选）</span>
-      <input id="${prefix}LoginUsername" value="${esc(loginUsername)}" placeholder="默认同账号用户名" autocomplete="off" />
-    </label>` : ""}
     ${renderAccountPasswordField(account, {
       scope: editing ? "pool-edit" : "pool-create",
       inputId: editing ? "accountPoolEditLoginPassword" : "accountPoolLoginPassword",
     })}
-    ${editing ? `<label>
-      <span>显示名称（可选）</span>
-      <input id="${prefix}DisplayName" value="${esc(displayName)}" placeholder="用于区分账号，可留空" autocomplete="off" />
-    </label>` : ""}
   </div>`;
 }
 
@@ -21100,8 +21084,6 @@ async function saveAccountPoolCreateForm(options) {
     platform,
     persona_id: String(personaId || "").trim(),
     username: accountPoolDraftValue("username").trim().replace(/^@+/, ""),
-    display_name: accountPoolDraftValue("display_name").trim(),
-    login_username: accountPoolDraftValue("login_username").trim(),
     login_password: accountPoolDraftValue("login_password"),
   };
   const selectedProxyId = String(proxyId || "").trim();
@@ -22200,8 +22182,6 @@ async function saveAccountPoolEditForm(accountId = "") {
   }
   const payload = {
     username,
-    display_name: String($("accountPoolEditDisplayName")?.value || "").trim(),
-    login_username: String($("accountPoolEditLoginUsername")?.value || "").trim() || username,
   };
   const loginPasswordInput = $("accountPoolEditLoginPassword");
   const loginPassword = loginPasswordInput?.dataset.passwordDirty === "true" ? String(loginPasswordInput.value || "") : "";
