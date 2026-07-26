@@ -18356,7 +18356,6 @@ body.console-page {
   .persona-compose-toggle button.is-active,
   .persona-source-toggle button.is-active,
   .persona-media-operation-toggle button.is-active,
-  .account-browser-tabs button.is-active,
   .account-pool-platforms button.is-active,
   .automation-capsule-tabs button.is-active,
   .live-browser-mode-toggle button.is-active:not(.is-pending),
@@ -18401,7 +18400,6 @@ body.console-page {
   .persona-compose-toggle button.is-active,
   .persona-source-toggle button.is-active,
   .persona-media-operation-toggle button.is-active,
-  .account-browser-tabs button.is-active,
   .account-pool-platforms button.is-active,
   .automation-capsule-tabs button.is-active,
   .live-browser-mode-toggle button.is-active:not(.is-pending),
@@ -18433,7 +18431,6 @@ body.console-page {
   .persona-compose-toggle button.is-active,
   .persona-source-toggle button.is-active,
   .persona-media-operation-toggle button.is-active,
-  .account-browser-tabs button.is-active,
   .account-pool-platforms button.is-active,
   .automation-capsule-tabs button.is-active,
   .account-pool-create-actions button,
@@ -22909,37 +22906,6 @@ body.console-page {
   .mobile-task-dock
 ) > button:focus:not(:focus-visible) {
   outline: none !important;
-}
-
-/* Selected segmented tabs are identified by their fill only.  Do not let the
-   shared action hover treatment add a teal outline or glow during a switch. */
-.console-page :where(
-  .automation-capsule-tabs,
-  .publish-mode-tabs,
-  .publish-time-tabs,
-  .publish-source-tabs,
-  .publish-preview-tabs,
-  .persona-dashboard-picker-tabs,
-  .persona-dashboard-platform-tabs,
-  .persona-group-tabs,
-  .persona-step-tabs,
-  .persona-subflow-tabs,
-  .persona-content-tabs,
-  .persona-source-toggle,
-  .persona-media-operation-toggle,
-  .persona-draft-view-toggle,
-  .persona-compose-toggle,
-  .automation-tab-strip,
-  .account-browser-tabs,
-  .account-pool-platform-tabs,
-  .automation-account-tabs,
-  .live-browser-mode-toggle,
-  .persona-account-platform-tabs,
-  .persona-keyword-grid,
-  .mobile-task-dock
-) > button:is(.is-active, .is-segment-slide-to) {
-  border-color: transparent !important;
-  box-shadow: none !important;
 }
 
 .console-page .is-segment-background-sliding {
