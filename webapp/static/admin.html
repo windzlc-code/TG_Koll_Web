@@ -445,6 +445,41 @@
           <span class="admin-mobile-nav-icon" aria-hidden="true"><i></i><i></i><i></i></span>
           <span id="adminMobileCurrentLabel">运营概览</span>
         </button>
+        <div class="admin-profile-menu" id="adminProfileMenu">
+          <div class="admin-language-menu" id="adminLanguageMenu">
+            <button
+              class="admin-preference-button admin-language-toggle"
+              id="adminLanguageToggle"
+              type="button"
+              aria-label="选择界面语言"
+              aria-controls="adminLanguagePanel"
+              aria-expanded="false"
+              aria-haspopup="menu"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9"></circle>
+                <path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path>
+              </svg>
+            </button>
+            <div
+              class="admin-language-panel"
+              id="adminLanguagePanel"
+              role="menu"
+              aria-label="界面语言"
+              aria-hidden="true"
+              hidden
+            >
+              <button type="button" role="menuitemradio" aria-checked="true" data-admin-language="zh-Hans">
+                <span>简体中文</span><small>zh-Hans</small>
+              </button>
+              <button type="button" role="menuitemradio" aria-checked="false" data-admin-language="zh-Hant">
+                <span>繁體中文</span><small>zh-Hant</small>
+              </button>
+            </div>
+          </div>
+
+          <div id="adminSharedAccountHost" class="admin-shared-account-host" data-site-mode="public" aria-label="管理员个人信息"></div>
+        </div>
       </div>
 
       <div id="adminMobileDrawer" class="admin-mobile-drawer" aria-hidden="true" inert>
@@ -478,42 +513,6 @@
     </aside>
 
     <div id="adminMobileNavBackdrop" class="admin-mobile-nav-backdrop" aria-hidden="true" hidden></div>
-
-    <div class="admin-profile-menu" id="adminProfileMenu">
-      <div class="admin-language-menu" id="adminLanguageMenu">
-        <button
-          class="admin-preference-button admin-language-toggle"
-          id="adminLanguageToggle"
-          type="button"
-          aria-label="选择界面语言"
-          aria-controls="adminLanguagePanel"
-          aria-expanded="false"
-          aria-haspopup="menu"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="12" cy="12" r="9"></circle>
-            <path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path>
-          </svg>
-        </button>
-        <div
-          class="admin-language-panel"
-          id="adminLanguagePanel"
-          role="menu"
-          aria-label="界面语言"
-          aria-hidden="true"
-          hidden
-        >
-          <button type="button" role="menuitemradio" aria-checked="true" data-admin-language="zh-Hans">
-            <span>简体中文</span><small>zh-Hans</small>
-          </button>
-          <button type="button" role="menuitemradio" aria-checked="false" data-admin-language="zh-Hant">
-            <span>繁體中文</span><small>zh-Hant</small>
-          </button>
-        </div>
-      </div>
-
-      <div id="adminSharedAccountHost" class="admin-shared-account-host" data-site-mode="public" aria-label="管理员个人信息"></div>
-    </div>
 
     <main class="main">
       <section class="section page-title admin-page-title">

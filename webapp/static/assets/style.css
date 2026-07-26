@@ -8035,9 +8035,17 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 
 @media (max-width: 760px) {
   .page-admin .admin-profile-menu {
-    top: max(9px, env(safe-area-inset-top));
-    right: max(126px, calc(env(safe-area-inset-right) + 126px));
-    z-index: 95;
+    position: static;
+    top: auto;
+    right: auto;
+    z-index: auto;
+    order: 2;
+    margin-left: auto;
+  }
+
+  .page-admin .admin-mobile-nav-toggle {
+    order: 3;
+    flex: 0 0 auto;
   }
 
   .page-admin .admin-public-links {
@@ -9275,8 +9283,6 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 @media (max-width: 760px) {
   .page-admin :is(
     #adminMobileNavClose,
-    .admin-preference-button,
-    .admin-language-toggle,
     .secret-toggle,
     .admin-model-chip-remove,
     .admin-model-chip-order
@@ -9476,32 +9482,60 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   align-items: center;
 }
 
-.page-admin .admin-preference-button.admin-language-toggle {
+:root .page-admin .admin-profile-menu :is(.admin-language-toggle, .site-user) {
   display: grid;
-  inline-size: 42px;
-  block-size: 42px;
-  width: 42px;
-  height: 42px;
-  min-width: 42px;
-  min-height: 42px;
+  inline-size: 38px;
+  block-size: 38px;
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  min-height: 38px;
   place-items: center;
   padding: 0;
-  color: #173c38;
-  border: 1px solid #c8d8d4;
-  border-radius: 10px;
-  background: #ffffff;
-  box-shadow: 0 8px 24px rgba(10, 35, 32, 0.1);
+  color: #effff9;
+  border: 1px solid rgba(218, 255, 243, 0.18);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: none;
   line-height: 0;
 }
 
-.page-admin .admin-preference-button.admin-language-toggle:hover,
-.page-admin .admin-preference-button.admin-language-toggle[aria-expanded="true"] {
-  color: #087b68;
-  border-color: #5de29b;
-  background: #f5fffb;
+@media (min-width: 761px) {
+  .page-admin .sidebar {
+    z-index: 90;
+  }
+
+  .page-admin .admin-profile-menu {
+    z-index: 100;
+  }
+
+  :root .page-admin .admin-profile-menu :is(.admin-language-toggle, .site-user) {
+    color: #19394a;
+    border-color: #b8cbd7;
+    background: #ffffff;
+    box-shadow: 0 6px 18px rgba(20, 45, 60, 0.1);
+  }
 }
 
-.page-admin .admin-preference-button.admin-language-toggle svg {
+:root .page-admin .admin-profile-menu :is(.admin-language-toggle, .site-user):hover,
+:root .page-admin .admin-profile-menu .admin-language-toggle[aria-expanded="true"],
+:root .page-admin .admin-profile-menu .site-account-menu.is-open .site-user {
+  color: #ffffff;
+  border-color: rgba(117, 241, 211, 0.34);
+  background: rgba(12, 154, 154, 0.16);
+}
+
+@media (min-width: 761px) {
+  :root .page-admin .admin-profile-menu :is(.admin-language-toggle, .site-user):hover,
+  :root .page-admin .admin-profile-menu .admin-language-toggle[aria-expanded="true"],
+  :root .page-admin .admin-profile-menu .site-account-menu.is-open .site-user {
+    color: #0f4554;
+    border-color: #5f92a3;
+    background: #eef7f7;
+  }
+}
+
+:root .page-admin .admin-profile-menu :is(.admin-language-toggle, .site-user) svg {
   inline-size: 21px;
   block-size: 21px;
   width: 21px;

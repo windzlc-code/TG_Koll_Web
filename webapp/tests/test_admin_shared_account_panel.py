@@ -17,6 +17,7 @@ class AdminSharedAccountPanelTests(unittest.TestCase):
         self.assertIn('id="adminSharedAccountHost"', self.html)
         self.assertIn('meta name="admin-console-session" content="1"', self.html)
         self.assertIn('/assets/opc/site-navigation.css?v=__SITE_NAVIGATION_CSS_VERSION__', self.html)
+        self.assertLess(self.html.index('id="adminProfileMenu"'), self.html.index('id="adminMobileDrawer"'))
         self.assertNotIn('id="adminProfileModal"', self.html)
         self.assertNotIn("openAdminProfileModal", self.admin_script)
         self.assertIn("navigation.mountAccountMenu?.(accountHost, { page: \"home\" })", self.admin_script)
@@ -26,6 +27,14 @@ class AdminSharedAccountPanelTests(unittest.TestCase):
         self.assertIn('function mountAccountMenu(host, { page = "home" } = {})', self.navigation_script)
         self.assertIn("mountAccountMenu,", self.navigation_script)
         self.assertIn('"__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css")', self.server)
+
+    def test_mobile_admin_header_keeps_shared_utilities_in_the_header_row(self):
+        style = (ROOT / "static" / "assets" / "style.css").read_text(encoding="utf-8")
+        self.assertIn(".page-admin .admin-profile-menu {\n    position: static;", style)
+        self.assertIn(":root .page-admin .admin-profile-menu :is(.admin-language-toggle, .site-user)", style)
+        self.assertIn("color: #effff9;", style)
+        self.assertIn("@media (min-width: 761px)", style)
+        self.assertIn("color: #19394a;", style)
 
 
 if __name__ == "__main__":
