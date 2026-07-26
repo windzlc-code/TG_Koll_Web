@@ -17497,6 +17497,7 @@ def create_app() -> FastAPI:
             replacements={
                 "__STYLE_VERSION__": _asset_version("assets", "style.css"),
                 "__ADMIN_JS_VERSION__": _asset_version("assets", "admin.js"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
                 "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
             },
         )

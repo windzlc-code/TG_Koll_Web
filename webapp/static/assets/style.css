@@ -7997,48 +7997,9 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   z-index: 80;
 }
 
-.page-admin .admin-profile-toggle {
-  position: relative;
+.page-admin .admin-shared-account-host {
   display: grid;
-  width: 46px;
-  min-width: 46px;
-  height: 46px;
-  min-height: 46px;
   place-items: center;
-  padding: 0;
-  color: #173c38;
-  border: 1px solid #c8d8d4;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 8px 24px rgba(10, 35, 32, 0.12);
-}
-
-.page-admin .admin-profile-toggle:hover,
-.page-admin .admin-profile-toggle:focus-visible {
-  color: #087b68;
-  border-color: #5de29b;
-  background: #f5fffb;
-}
-
-.page-admin .admin-profile-toggle svg {
-  width: 23px;
-  height: 23px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.page-admin .admin-profile-online {
-  position: absolute;
-  right: 1px;
-  bottom: 2px;
-  width: 10px;
-  height: 10px;
-  border: 2px solid #ffffff;
-  border-radius: 50%;
-  background: #31c985;
 }
 
 .page-admin .admin-public-links {
@@ -8077,23 +8038,6 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
     top: max(9px, env(safe-area-inset-top));
     right: max(126px, calc(env(safe-area-inset-right) + 126px));
     z-index: 95;
-  }
-
-  .page-admin .admin-profile-toggle {
-    width: 36px;
-    min-width: 36px;
-    height: 36px;
-    min-height: 36px;
-  }
-
-  .page-admin .admin-profile-toggle svg {
-    width: 19px;
-    height: 19px;
-  }
-
-  .page-admin .admin-profile-online {
-    width: 9px;
-    height: 9px;
   }
 
   .page-admin .admin-public-links {
@@ -9331,7 +9275,6 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 @media (max-width: 760px) {
   .page-admin :is(
     #adminMobileNavClose,
-    .admin-profile-toggle,
     .admin-preference-button,
     .admin-language-toggle,
     .secret-toggle,

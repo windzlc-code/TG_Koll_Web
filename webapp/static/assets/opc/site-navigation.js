@@ -677,6 +677,20 @@
     return nextMenu;
   }
 
+  function mountAccountMenu(host, { page = "home" } = {}) {
+    if (!host) return null;
+    const template = document.createElement("template");
+    template.innerHTML = accountMenuMarkup(page).trim();
+    const nextMenu = template.content.firstElementChild;
+    if (!nextMenu) return null;
+    host.replaceChildren(nextMenu);
+    host.dataset.siteAccountHost = "true";
+    bindPreferenceControls(host);
+    bindAccountMenus(host);
+    sync();
+    return nextMenu;
+  }
+
   function installUnifiedNotificationMenu(header) {
     const actions = header?.querySelector(".header-actions");
     if (!actions) return null;
@@ -1882,6 +1896,7 @@
 
   window.VectoSiteNavigation = {
     mount,
+    mountAccountMenu,
     sync,
     setTheme,
     setLanguage,

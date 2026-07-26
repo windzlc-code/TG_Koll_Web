@@ -3,12 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="admin-console-session" content="1">
   <title>运营后台 - Web 素材生成平台</title>
   <script>
     document.documentElement.dataset.theme = "light";
     try { localStorage.setItem("wk-console-theme", "light"); } catch {}
   </script>
   <link rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__">
+  <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=__SITE_NAVIGATION_CSS_VERSION__">
   <style>
     .proxy-market-admin-head-actions,
     .proxy-market-admin-actions,
@@ -510,21 +512,7 @@
         </div>
       </div>
 
-      <button
-        class="admin-profile-toggle"
-        id="adminProfileToggle"
-        type="button"
-        aria-label="打开管理员个人信息"
-        aria-controls="adminProfileModal"
-        aria-haspopup="dialog"
-        title="管理员个人信息"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="12" cy="8" r="3.5"></circle>
-          <path d="M5.5 19c.7-4 3-6 6.5-6s5.8 2 6.5 6"></path>
-        </svg>
-        <span class="admin-profile-online" aria-hidden="true"></span>
-      </button>
+      <div id="adminSharedAccountHost" class="admin-shared-account-host" data-site-mode="public" aria-label="管理员个人信息"></div>
     </div>
 
     <main class="main">
@@ -1699,42 +1687,6 @@
         <div class="task-inline-actions">
           <button id="btnTaskInspectCopy" type="button" class="ghost">复制内容</button>
           <button id="btnTaskInspectDone" type="button" class="primary">完成</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div id="adminProfileModal" class="modal-overlay" style="display:none" aria-hidden="true">
-    <div id="adminProfileDialog" class="modal-card admin-user-detail-modal" role="dialog" aria-modal="true" aria-labelledby="adminProfileTitle" tabindex="-1">
-      <div class="modal-header">
-        <div>
-          <div class="modal-title" id="adminProfileTitle">管理员个人信息</div>
-          <div class="small">仅管理当前登录的管理员账号</div>
-        </div>
-        <button id="btnAdminProfileClose" type="button" class="ghost">关闭</button>
-      </div>
-      <div class="modal-body">
-        <div class="admin-user-detail-grid">
-          <div class="admin-user-detail-item">
-            <span>登录账号</span>
-            <strong id="adminProfileUsername">-</strong>
-          </div>
-          <div class="admin-user-detail-item">
-            <span>账号类型</span>
-            <strong>管理员</strong>
-          </div>
-          <div class="admin-user-detail-item admin-user-detail-item-wide">
-            <span>当前页面</span>
-            <strong id="adminProfileCurrentPage">运营概览</strong>
-          </div>
-        </div>
-        <p class="small">账号设置将在当前后台中打开，不会跳转到客户个人资料编辑页。</p>
-      </div>
-      <div class="modal-footer">
-        <span class="small">管理员账号与客户资料分别管理。</span>
-        <div class="row">
-          <button id="btnAdminProfileAccount" type="button" class="primary">账号设置</button>
-          <button id="btnAdminProfileDone" type="button" class="ghost">完成</button>
         </div>
       </div>
     </div>
