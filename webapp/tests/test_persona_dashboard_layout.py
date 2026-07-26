@@ -69,6 +69,32 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("persona-dashboard-platform-filter", self.styles)
         self.assertIn("persona-dashboard-platform-tabs", self.styles)
 
+    def test_platform_tabs_keep_the_full_persona_archive_visible(self):
+        matcher_start = self.dashboard_script.index("function pdMatches()")
+        matcher_end = self.dashboard_script.index("\nfunction pdRenderSummary", matcher_start)
+        matcher = self.dashboard_script[matcher_start:matcher_end]
+
+        self.assertIn("Platform tabs refine platform-specific posts and engagement only.", matcher)
+        self.assertIn("return true;", matcher)
+        self.assertNotIn("pdPlatformFilter()", matcher)
+        self.assertIn("const visible = (data.personas || []).filter(pdMatches);", self.dashboard_script)
+
+    def test_platform_tabs_filter_only_platform_metrics_not_global_archive_counts(self):
+        summary_start = self.dashboard_script.index("function pdRenderSummary(data, visiblePersonas)")
+        summary_end = self.dashboard_script.index("\nfunction pdPersonaWarnings", summary_start)
+        summary = self.dashboard_script[summary_start:summary_end]
+        charts_start = self.dashboard_script.index("function pdBuildFilteredCharts(visiblePersonas, data)")
+        charts_end = self.dashboard_script.index("\nfunction pdMatches", charts_start)
+        charts = self.dashboard_script[charts_start:charts_end]
+
+        self.assertIn("全局人设归档，不受平台切换影响", summary)
+        self.assertIn("全局归档帖子，不受平台切换影响", summary)
+        self.assertIn("全局发布归档，不受平台切换影响", summary)
+        self.assertIn("const selectedPlatform = pdPlatformFilter();", charts)
+        self.assertIn("data.charts.platform_trend[selectedPlatform]", charts)
+        self.assertIn("const platforms = (persona.hot_platforms || []).filter", charts)
+        self.assertIn("value: pdPersonaHot(item).hot_score", self.dashboard_script)
+
     def test_dashboard_summary_and_persona_tabs_stay_compact_on_mobile(self):
         summary_start = self.dashboard_script.index("function pdRenderSummary(data, visiblePersonas)")
         summary_end = self.dashboard_script.index("\nfunction pdPersonaWarnings", summary_start)
@@ -79,9 +105,84 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("display: flex;", self.styles)
         self.assertIn("grid-template-columns: 1fr;", self.styles)
         self.assertIn("overflow: visible;", self.styles)
-        self.assertIn("width: 156px;", self.styles)
+        self.assertIn("width: 116px;", self.styles)
         self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
         self.assertIn(".persona-dashboard-view .persona-chart-panel-wide {", self.styles)
+
+    def test_persona_hot_detail_keeps_all_metrics_in_a_compact_grid(self):
+        detail_start = self.dashboard_script.index("function pdPersonaWarnings(persona)")
+        detail_end = self.dashboard_script.index("\nfunction pdPersonaKey", detail_start)
+        detail = self.dashboard_script[detail_start:detail_end]
+
+        self.assertIn('class="persona-warning-summary"', detail)
+        self.assertIn('class="persona-detail-grid persona-detail-grid--compact"', detail)
+        self.assertIn("const metrics = [", detail)
+        self.assertIn("metrics.map((metric)", detail)
+        self.assertIn("hot.recent_views", detail)
+        self.assertIn("hot.post_views", detail)
+        self.assertIn('class="persona-platform-list"', detail)
+        self.assertNotIn('class="persona-content-preview"', detail)
+        self.assertIn(".persona-detail-grid--compact", self.styles)
+
+    def test_mobile_post_filters_stay_inline_and_post_rows_need_no_horizontal_scroll(self):
+        card_start = self.dashboard_script.index("function pdRenderPersonaCard(persona)")
+        card_end = self.dashboard_script.index("\nfunction pdPersonaKey", card_start)
+        card = self.dashboard_script[card_start:card_end]
+
+        self.assertIn('data-label="平台"', card)
+        self.assertIn('data-label="推文内容"', card)
+        self.assertIn('data-label="发布时间"', card)
+        self.assertIn('class="persona-post-empty"', card)
+        self.assertIn(".persona-dashboard-view .persona-post-controls {", self.styles)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
+        self.assertIn(".persona-dashboard-view .persona-table-wrap {", self.styles)
+        self.assertIn(".persona-dashboard-view .persona-post-table thead {", self.styles)
+        self.assertIn("overflow: visible;", self.styles)
+
+    def test_mobile_metric_context_wraps_without_ellipsis(self):
+        title_start = self.styles.index(".persona-dashboard-view .persona-table-title {")
+        title_end = self.styles.index(".persona-dashboard-view .persona-post-controls {", title_start)
+        title_styles = self.styles[title_start:title_end]
+
+        self.assertIn("white-space: normal;", title_styles)
+        self.assertIn("overflow-wrap: anywhere;", title_styles)
+        self.assertNotIn("text-overflow: ellipsis;", title_styles)
+
+    def test_persona_data_selection_uses_a_common_modal_instead_of_a_horizontal_rail(self):
+        renderer_start = self.dashboard_script.index("function pdRenderPersonaTabs(visiblePersonas, selectedPersona)")
+        renderer_end = self.dashboard_script.index("\nfunction pdRenderSettings", renderer_start)
+        renderer = self.dashboard_script[renderer_start:renderer_end]
+
+        self.assertIn('id="personaDashboardPickerTrigger"', renderer)
+        self.assertNotIn('class="persona-tab-list"', renderer)
+        self.assertIn("function pdOpenPersonaDashboardPicker", renderer)
+        self.assertIn('modalKey: "persona-dashboard-picker"', renderer)
+        self.assertIn("data-dashboard-persona-picker", renderer)
+        self.assertIn(".persona-dashboard-picker-trigger", self.styles)
+        self.assertIn('data-modal-key="persona-dashboard-picker"', self.styles)
+
+    def test_persona_picker_uses_consistent_cards_with_grouped_sections(self):
+        picker_start = self.dashboard_script.index("function pdOpenPersonaDashboardPicker")
+        picker_end = self.dashboard_script.index("\nfunction pdRenderSettings", picker_start)
+        picker = self.dashboard_script[picker_start:picker_end]
+
+        self.assertIn("persona-dashboard-picker-section--overview", picker)
+        self.assertIn("persona-dashboard-picker-section--personas", picker)
+        self.assertIn("persona-dashboard-picker-section--settings", picker)
+        self.assertIn("persona-dashboard-picker-option--${type}", picker)
+        self.assertIn('renderOption(overview, "overview")', picker)
+        self.assertIn('renderOption(settings, "settings")', picker)
+        self.assertIn("总览数据", picker)
+        self.assertIn("普通人设", picker)
+        self.assertIn("显示设置", picker)
+
+        picker_start = self.styles.index(".persona-dashboard-picker-tabs {")
+        picker_end = self.styles.index(".persona-dashboard-view .persona-tab {", picker_start)
+        picker_styles = self.styles[picker_start:picker_end]
+        self.assertIn(".persona-dashboard-picker-section:not(.persona-dashboard-picker-section--overview)", picker_styles)
+        self.assertNotIn("border-style: dashed;", picker_styles)
+        self.assertNotIn(".persona-dashboard-picker-option--overview {", picker_styles)
+        self.assertNotIn(".persona-dashboard-picker-option--settings {", picker_styles)
 
     def test_dashboard_does_not_render_device_or_bot_fields(self):
         self.assertNotIn("绑定设备", self.dashboard_script)
@@ -646,7 +747,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("navToggle.hidden = isMobilePersistentDockPage();", toolbar)
         self.assertIn('.mobile-page-toolbar > .mobile-nav-toggle[hidden]', self.styles)
 
-    def test_persona_create_mode_keeps_the_mobile_persona_list_button_source(self):
+    def test_persona_create_uses_the_shared_modal_and_merges_create_paths(self):
         create_start = self.console_script.index(
             "function renderPersonaCreateWorkbench()"
         )
@@ -655,12 +756,44 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         create_workbench = self.console_script[create_start:create_end]
 
+        self.assertIn('data-persona-create-ai-keywords', create_workbench)
+        self.assertIn('"提炼关键词")}</button>', create_workbench)
+        self.assertIn('data-persona-create aria-busy=', create_workbench)
+        self.assertIn('renderBusyButtonContent("正在提炼关键词", true, createBusy.keywordsStartedAt)', create_workbench)
+        self.assertIn('renderBusyButtonContent("正在生成人设", true, createBusy.aiCreateStartedAt)', create_workbench)
+        self.assertNotIn("renderPersonaProfileListToggle", create_workbench)
+        self.assertNotIn('data-persona-mobile-list-toggle', create_workbench)
+        self.assertNotIn("data-persona-create-mode", create_workbench)
+        self.assertNotIn(">AI 生成</button>", create_workbench)
+        self.assertNotIn(">手动输入</button>", create_workbench)
+
+        self.assertIn('modalKey: "persona-create"', create_workbench)
+        self.assertIn('dialog.classList.add("persona-create-modal")', create_workbench)
+        self.assertIn("function openPersonaCreateModal()", create_workbench)
+
+    def test_persona_profile_editor_uses_the_shared_primary_button_style(self):
         self.assertIn(
-            'data-persona-mobile-list-toggle="personaWorkspaceSidebar"',
-            create_workbench,
+            'class="primary persona-profile-editor-launch" data-persona-open-profile-editor',
+            self.console_script,
         )
-        self.assertIn('aria-controls="personaWorkspaceSidebar"', create_workbench)
-        self.assertIn("<span>选择人设</span>", create_workbench)
+
+    def test_persona_create_keyword_limit_and_running_exit_confirmation_are_explicit(self):
+        create_start = self.console_script.index("function renderPersonaCreateWorkbench()")
+        create_end = self.console_script.index("\nfunction isPersonaCreateModalOpen()", create_start)
+        create_workbench = self.console_script[create_start:create_end]
+        modal_start = self.console_script.index("function openPersonaCreateModal()")
+        modal_end = self.console_script.index("\nfunction personaGroupStepOptions", modal_start)
+        create_modal = self.console_script[modal_start:modal_end]
+
+        self.assertIn("最多选择 2 个，用于确定人设生成的重点方向", create_workbench)
+        self.assertIn("const keywordLimitReached = aiSelectedKeywords.length >= 2;", create_workbench)
+        self.assertIn("const disabled = aiCreateBusy || (!active && keywordLimitReached);", create_workbench)
+        self.assertIn('modal.__requestClose = () => {', create_modal)
+        self.assertIn('modalKey: "persona-create-exit-confirm",', create_modal)
+        self.assertIn("stack: true,", create_modal)
+        self.assertIn('cancelText: "继续运行",', create_modal)
+        self.assertIn('confirmText: "确认退出",', create_modal)
+        self.assertNotIn("window.confirm", create_modal)
 
     def test_selecting_the_current_persona_exits_persona_create_mode(self):
         selection_start = self.console_script.index(
@@ -677,6 +810,22 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             "if (nextPersonaId !== previousPersonaId || wasCreatingPersona)",
             selection,
         )
+        self.assertIn(
+            'if (wasCreatingPersona) setPersonaMobileSidebarOpen(false, "personaWorkspaceSidebar");',
+            selection,
+        )
+
+    def test_persona_create_closes_the_drawer_and_opens_the_shared_modal(self):
+        module_handler_start = self.console_script.index('$("moduleBody").addEventListener("click", async (event) => {')
+        module_handler_end = self.console_script.index('\n  $("moduleBody").addEventListener("change"', module_handler_start)
+        module_handler = self.console_script[module_handler_start:module_handler_end]
+        create_handler_start = module_handler.index('if (event.target.closest("[data-persona-open-create]"))')
+        create_handler_end = module_handler.index('const personaGroupButton = event.target.closest("[data-persona-group]")', create_handler_start)
+        create_handler = module_handler[create_handler_start:create_handler_end]
+
+        self.assertIn('setPersonaMobileSidebarOpen(false, "personaWorkspaceSidebar");', create_handler)
+        self.assertIn('void openPersonaCreateModal();', create_handler)
+        self.assertNotIn('renderPersonaDetail();', create_handler)
 
     def test_mobile_dock_repeat_click_checks_exact_account_panel(self):
         helper_start = self.console_script.index(
@@ -905,6 +1054,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("white-space: pre-wrap;", self.styles)
         self.assertNotIn('.slice(0, 86) || "当前内容为空。"', self.console_script)
         self.assertNotIn('.slice(0, 170))}</p>', self.console_script)
+
+    def test_draft_bulk_toolbar_does_not_restore_a_white_fill(self):
+        toolbar = self.styles[
+            self.styles.index(".persona-draft-toolbar--posts {"):
+            self.styles.index("}\n", self.styles.index(".persona-draft-toolbar--posts {"))
+        ]
+        self.assertIn("background: transparent;", toolbar)
 
     def test_mobile_page_toolbar_is_shared_and_keeps_publish_header_compact(self):
         header_start = self.console_script.index("function renderPublishHeaderRow(mode, account)")
@@ -1332,9 +1488,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.styles.index("@media (max-width: 760px) {"):
             self.styles.index(".persona-dashboard-view .persona-chart-grid {", self.styles.index("@media (max-width: 760px) {"))
         ]
-        self.assertIn("width: 132px;", mobile_dashboard_styles)
-        self.assertIn("min-width: 132px;", mobile_dashboard_styles)
-        self.assertIn("min-height: 42px;", mobile_dashboard_styles)
+        self.assertIn("width: 116px;", mobile_dashboard_styles)
+        self.assertIn("min-width: 116px;", mobile_dashboard_styles)
+        self.assertIn("min-height: 38px;", mobile_dashboard_styles)
         self.assertIn("function pdRenderChartPlaceholder(kind", self.dashboard_script)
         self.assertIn('pdRenderChartPlaceholder("bars", "暂无热度数据")', self.dashboard_script)
         self.assertIn('pdRenderChartPlaceholder("donut", "暂无分布数据")', self.dashboard_script)

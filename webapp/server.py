@@ -16119,6 +16119,7 @@ def _build_persona_dashboard_overview(
     pad_counts: dict[str, int] = {}
     task_status_counts = dict(queue_stats.get("by_status") or {})
     daily: dict[str, dict[str, int]] = {}
+    platform_daily: dict[str, dict[str, dict[str, int]]] = {}
     personas: list[dict[str, Any]] = []
     totals = {
         "posts": 0,
@@ -16250,11 +16251,17 @@ def _build_persona_dashboard_overview(
             if not isinstance(record, dict):
                 continue
             platform = str(record.get("platform") or "unknown").strip() or "unknown"
+            platform_key = platform.lower()
             platform_counts[platform] = platform_counts.get(platform, 0) + 1
             day = _date_key(record.get("publishedAt"))
             if day:
                 bucket = daily.setdefault(day, {"published": 0, "likes": 0, "comments": 0, "shares": 0, "post_views": 0})
                 bucket["published"] += 1
+                platform_bucket = platform_daily.setdefault(platform_key, {}).setdefault(
+                    day,
+                    {"published": 0, "likes": 0, "comments": 0, "shares": 0, "post_views": 0},
+                )
+                platform_bucket["published"] += 1
             published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
             targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
             sources = [published_meta] + [target.get("publishedMeta") for target in targets if isinstance(target, dict)]
@@ -16268,6 +16275,14 @@ def _build_persona_dashboard_overview(
                     bucket["comments"] += _source_metric(source, "commentCount", "comment_count")
                     bucket["shares"] += _source_metric(source, "shareCount", "share_count", "send_count")
                     bucket["post_views"] += _source_metric(source, "viewCount", "view_count")
+                    platform_bucket = platform_daily.setdefault(platform_key, {}).setdefault(
+                        day,
+                        {"published": 0, "likes": 0, "comments": 0, "shares": 0, "post_views": 0},
+                    )
+                    platform_bucket["likes"] += _source_metric(source, "likeCount", "like_count")
+                    platform_bucket["comments"] += _source_metric(source, "commentCount", "comment_count")
+                    platform_bucket["shares"] += _source_metric(source, "shareCount", "share_count", "send_count")
+                    platform_bucket["post_views"] += _source_metric(source, "viewCount", "view_count")
             latest_update = max(latest_update, str(record.get("publishedAt") or ""))
 
         for post in posts:
@@ -16407,6 +16422,10 @@ def _build_persona_dashboard_overview(
                 "none": max(0, len(personas) - totals["complete_hot_metrics"] - totals["partial_hot_metrics"]),
             },
             "trend": trend[-90:],
+            "platform_trend": {
+                platform: [{"date": day, **values} for day, values in sorted(days.items())][-90:]
+                for platform, days in platform_daily.items()
+            },
             "pad_distribution": pad_counts,
         },
         "personas": personas,

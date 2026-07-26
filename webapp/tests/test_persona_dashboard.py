@@ -555,6 +555,22 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertFalse(persona["threads_account"]["bound"])
         self.assertTrue(any("Threads" in item for item in persona["warnings"]))
 
+    def test_overview_exposes_platform_scoped_trends_without_changing_global_totals(self):
+        self._write_archives()
+
+        resp = self.client.get("/api/persona_dashboard/overview")
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["summary"]["persona_count"], 1)
+        self.assertEqual(data["summary"]["post_count"], 1)
+        self.assertEqual(data["summary"]["published_count"], 1)
+        threads_trend = data["charts"]["platform_trend"]["threads"]
+        self.assertEqual(threads_trend[0]["date"], "2026-06-30")
+        self.assertEqual(threads_trend[0]["published"], 1)
+        self.assertEqual(threads_trend[0]["likes"], 3)
+        self.assertNotIn("instagram", data["charts"]["platform_trend"])
+
     def test_overview_post_count_ignores_legacy_published_drafts(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"

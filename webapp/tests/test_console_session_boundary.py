@@ -979,7 +979,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('class="row-actions persona-hot-fetch-toolbar"', self.source)
         self.assertIn('class="primary persona-hot-fetch-action"', self.source)
         self.assertIn('class="persona-hot-fetch-action"', self.source)
-        self.assertIn('<select data-persona-hot-freshness-days', self.source)
+        self.assertIn('data-persona-hot-freshness-picker', self.source)
+        self.assertIn('data-persona-hot-freshness-option', self.source)
+        self.assertIn('const hotFreshnessOption = event.target.closest("[data-persona-hot-freshness-option]");', self.source)
+        self.assertIn('form.hotFreshnessDays = normalizePersonaHotFreshnessDays(hotFreshnessOption.dataset.personaHotFreshnessOption);', self.source)
         self.assertNotIn('<input type="number" min="0" max="15"', self.source)
         self.assertIn('class="persona-hot-freshness-default" aria-label="默认热点时限">默认</span>', self.source)
         self.assertNotIn("is-reserved", self.source)
@@ -995,6 +998,17 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self.assertIn("grid-column: 3;", self.styles)
         self.assertIn("min-height: 42px;", self.styles)
+        self.assertIn(".persona-hot-freshness-menu {", self.styles)
+        self.assertIn("max-height: 208px;", self.styles)
+        self.assertIn("overflow-y: auto;", self.styles)
+
+    def test_custom_dropdowns_close_when_clicking_outside(self):
+        bind_events = self._function_source("bindEvents")
+
+        self.assertIn('data-console-dropdown', self.source)
+        self.assertIn('function closeConsoleDropdowns(exceptMenu = null)', self.source)
+        self.assertIn('document.querySelectorAll("details[open][data-console-dropdown]")', self.source)
+        self.assertIn('closeConsoleDropdowns(event.target.closest("[data-console-dropdown]"));', bind_events)
 
     def test_expanded_mobile_browser_uses_one_compact_translucent_summary(self):
         portrait_start = self.styles.rfind("@media (max-width: 760px) and (orientation: portrait)")

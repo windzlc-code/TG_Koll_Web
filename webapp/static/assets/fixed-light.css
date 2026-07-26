@@ -869,7 +869,7 @@
   --panel-shadow: 0 10px 30px rgb(49 65 85 / 6%);
   --vecto-action-border: #34495e;
   --vecto-action-static-gradient: var(--public-action-gradient);
-  --vecto-action-running-gradient: linear-gradient(#355c77, #355c77);
+  --vecto-action-running-gradient: var(--public-action-gradient);
 }
 
 :root[data-theme="light"] .console-page :is(.console-shell, .console-modal) :is(
@@ -1415,7 +1415,14 @@
   color: var(--public-ink-soft);
 }
 
-:root[data-theme="light"] .home-canvas :is(.home-flow-section, .home-difference-section),
+:root[data-theme="light"] .home-canvas :is(.home-flow-section, .home-difference-section) {
+  background-image:
+    linear-gradient(rgb(226 231 236 / 88%), rgb(237 240 243 / 94%)),
+    url("/assets/opc/home/analytics-screen.jpg");
+  background-position: center;
+  background-size: cover;
+}
+
 :root[data-theme="light"] .about-canvas .about-proof {
   background-image:
     linear-gradient(rgb(226 231 236 / 88%), rgb(237 240 243 / 94%)),
@@ -1516,14 +1523,9 @@
   color: var(--public-ink-soft);
 }
 
-/* Console: make work areas readable without returning to a blank white slab. */
+/* Console work areas use the shared neutral canvas without a photographic backdrop. */
 :root[data-theme="light"] .console-page .console-main {
-  background-image:
-    linear-gradient(rgb(245 247 250 / 95%), rgb(238 243 248 / 97%)),
-    url("/assets/opc/vecto-ai-cockpit.png");
-  background-position: center top;
-  background-size: cover;
-  background-attachment: fixed;
+  background-image: none;
 }
 
 :root[data-theme="light"] .console-page :is(
@@ -1840,6 +1842,18 @@
   :root[data-theme="light"] .home-canvas .home-hero-slide {
     height: 375px;
     grid-template-rows: minmax(0, 1fr) 156px;
+  }
+
+  /* The workspace is a canvas on mobile: only functional cards get a white fill. */
+  :root[data-theme="light"] .console-page .view[data-panel="workspace"] .module-panel {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+
+  /* Keep the always-visible task mode switch visually anchored above that canvas. */
+  :root[data-theme="light"] .console-page .module-panel.is-publishing-module .publish-mode-tabs {
+    background: var(--public-paper);
   }
 
   :root[data-theme="light"] .console-page .console-main {

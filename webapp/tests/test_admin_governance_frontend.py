@@ -238,16 +238,13 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('createAdminDynamicUiText("位客户")', taxonomy)
         self.assertNotIn("markAdminDynamicUiElement(name)", taxonomy)
 
-    def test_admin_language_icon_is_centered_and_dark_theme_is_readable(self):
-        self.assertIn('.page-admin .admin-preference-button', self.styles)
+    def test_admin_language_icon_is_centered_in_fixed_light_theme(self):
+        self.assertIn('.admin-preference-button,', self.styles)
+        self.assertIn('.admin-language-toggle,', self.styles)
         for declaration in ('display: grid;', 'place-items: center;', 'padding: 0;', 'line-height: 0;'):
             self.assertIn(declaration, self.styles)
-        self.assertIn('.page-admin .admin-language-toggle svg', self.styles)
-        self.assertIn('display: block;', self.styles)
-        self.assertIn('html[data-theme="dark"] body.page-admin', self.styles)
-        self.assertIn('#secOverview > .admin-governance-head', self.styles)
-        for surface in ('modal-card', 'admin-profile-panel', 'table th', 'input'):
-            self.assertIn(surface, self.styles)
+        self.assertIn('document.documentElement.dataset.theme = "light"', self.html)
+        self.assertNotIn('html[data-theme="dark"] body.page-admin', self.styles)
 
 
 if __name__ == "__main__":

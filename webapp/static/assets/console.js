@@ -485,8 +485,11 @@ const state = {
   actionLocks: {},
   personaCreateBusy: {
     manual: false,
+    manualStartedAt: 0,
     keywords: false,
+    keywordsStartedAt: 0,
     aiCreate: false,
+    aiCreateStartedAt: 0,
     profileContent: false,
   },
   personaCreateKeywordController: null,
@@ -838,15 +841,12 @@ function resolvedPersonaGenerateBranch(profile, generateForm = {}) {
 
 function defaultPersonaCreateState() {
   return {
-    mode: "ai",
     aiStep: "input",
     aiName: "",
     aiPrompt: "",
     aiKeywords: [],
     aiSelectedKeywords: [],
     aiResult: null,
-    manualName: "",
-    manualContent: "",
   };
 }
 
@@ -874,12 +874,8 @@ function snapshotPersonaCreateInputs() {
   const createState = ensurePersonaCreateState();
   const aiName = $("personaCreateAiName");
   const aiPrompt = $("personaCreateAiPrompt");
-  const manualName = $("personaCreateName");
-  const manualContent = $("personaCreateContent");
   if (aiName) createState.aiName = aiName.value || "";
   if (aiPrompt) createState.aiPrompt = aiPrompt.value || "";
-  if (manualName) createState.manualName = manualName.value || "";
-  if (manualContent) createState.manualContent = manualContent.value || "";
   return createState;
 }
 
@@ -2153,14 +2149,14 @@ function clearConsoleNotices() {
   clearMsg("consoleSettingsMsg");
 }
 
-function closeConsoleModal(result) {
-  const modal = $("consoleModal");
+function closeConsoleModal(result, targetModal = $("consoleModal")) {
+  const modal = targetModal;
   if (!modal) return;
   const resolver = modal.__resolve;
   if (typeof modal.__cleanup === "function") modal.__cleanup();
   modal.remove();
   if (typeof resolver === "function") resolver(result);
-  if (state.dailyPublishPendingWarning && !state.dailyPublishWarningPromise) {
+  if (modal.id === "consoleModal" && state.dailyPublishPendingWarning && !state.dailyPublishWarningPromise) {
     const pending = state.dailyPublishPendingWarning;
     state.dailyPublishPendingWarning = null;
     window.setTimeout(() => void showDailyPublishLimitWarning(pending), 0);
@@ -2173,19 +2169,21 @@ function renderModalCloseButton(cancelAttribute = "data-console-modal-cancel") {
   </button>`;
 }
 
-function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", fields = [], confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, showConfirm = true, extraActions = [], modalKey = "" } = {}) {
-  closeConsoleModal(null);
+function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", fields = [], confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, showConfirm = true, extraActions = [], modalKey = "", stack = false } = {}) {
+  if (!stack) closeConsoleModal(null);
   return new Promise((resolve) => {
     const modal = document.createElement("div");
-    modal.id = "consoleModal";
-    modal.className = "console-modal";
+    const modalId = stack ? `consoleModalLayer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` : "consoleModal";
+    const titleId = `${modalId}-title`;
+    modal.id = modalId;
+    modal.className = `console-modal${stack ? " console-modal-layer" : ""}`;
     modal.dataset.modalKey = String(modalKey || "");
     modal.__resolve = resolve;
     modal.innerHTML = `
       <div class="console-modal-backdrop" data-console-modal-cancel></div>
-      <section class="console-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="consoleModalTitle">
+      <section class="console-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="${esc(titleId)}">
         <div class="console-modal-head">
-          <strong id="consoleModalTitle">${esc(title)}</strong>
+          <strong id="${esc(titleId)}">${esc(title)}</strong>
           ${renderModalCloseButton()}
         </div>
         ${message ? `<p>${esc(message)}</p>` : ""}
@@ -2217,7 +2215,7 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
     document.body.appendChild(modal);
     modal.querySelectorAll("strong, p, label, button, [title], [aria-label], [placeholder]").forEach(markConsoleUiElement);
     translateConsoleLanguage(modal, currentLanguage());
-    const input = $("consoleModalInput");
+    const input = modal.querySelector("#consoleModalInput");
     const fieldInputs = [...modal.querySelectorAll("[data-console-modal-field]")];
     const firstInput = input || fieldInputs[0];
     if (firstInput) {
@@ -2230,13 +2228,20 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
         || modal.querySelector("button[data-console-modal-cancel]")
       )?.focus();
     }
+    const requestClose = (result) => {
+      if (typeof modal.__requestClose === "function") {
+        modal.__requestClose(result);
+        return;
+      }
+      closeConsoleModal(result, modal);
+    };
     modal.addEventListener("click", (event) => {
       if (event.target.closest("[data-console-modal-cancel]")) {
-        closeConsoleModal(null);
+        requestClose(null);
       }
       const valueButton = event.target.closest("[data-console-modal-value]");
       if (valueButton) {
-        closeConsoleModal(valueButton.dataset.consoleModalValue || "");
+        requestClose(valueButton.dataset.consoleModalValue || "");
       }
       if (event.target.closest("[data-console-modal-confirm]")) {
         const missing = fieldInputs.find((field) => field.required && !String(field.value || "").trim());
@@ -2247,12 +2252,12 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
         const result = fieldInputs.length
           ? Object.fromEntries(fieldInputs.map((field) => [field.dataset.consoleModalField || "", field.value]))
           : (input ? input.value : true);
-        closeConsoleModal(result);
+        requestClose(result);
       }
     });
     modal.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") closeConsoleModal(null);
-      if (event.key === "Enter" && input) closeConsoleModal(input.value);
+      if (event.key === "Escape") requestClose(null);
+      if (event.key === "Enter" && input) requestClose(input.value);
     });
   });
 }
@@ -7942,7 +7947,7 @@ function renderPersonaProfileIdentity(persona, profile, {
               <strong>${esc(resolvedProfile?.name || persona?.name || "未命名人设")}</strong>
               <span class="persona-profile-account-status" aria-label="执行账号">${renderPersonaExecutionAccountBadge(persona)}</span>
             </div>
-            <button type="button" class="persona-profile-editor-launch" data-persona-open-profile-editor>编辑人设档案</button>
+            <button type="button" class="primary persona-profile-editor-launch" data-persona-open-profile-editor>编辑人设档案</button>
           </div>
           <div class="persona-profile-summary-strip" aria-label="当前人设信息">
             <div class="persona-profile-summary-grid">
@@ -15724,8 +15729,8 @@ async function createPersonaArchive() {
     return;
   }
   const createState = snapshotPersonaCreateInputs();
-  const name = String(createState.manualName || "").trim();
-  const content = String(createState.manualContent || "").trim();
+  const name = String(createState.aiName || "").trim();
+  const content = String(createState.aiPrompt || "").trim();
   if (!name) {
     showMsg("commandMsg", "请先填写人设名称。", false);
     return;
@@ -15735,7 +15740,8 @@ async function createPersonaArchive() {
     return;
   }
   state.personaCreateBusy.manual = true;
-  renderPersonaDetail();
+  state.personaCreateBusy.manualStartedAt = Date.now();
+  renderPersonaCreateSurface();
   try {
     showMsg("commandMsg", "正在新建人设...", true);
     const result = await api("/api/persona_dashboard/personas", {
@@ -15745,10 +15751,14 @@ async function createPersonaArchive() {
     });
     state.personaCreate = defaultPersonaCreateState();
     showMsg("commandMsg", `人设已创建：${result.name || result.id || "-"}`, true);
+    state.personaCreateMode = false;
+    if (isPersonaCreateModalOpen()) closeConsoleModal(true);
     await activateCreatedPersona(result.id || state.selectedPersonaId, { group: "settings", step: "profile" });
+    renderWorkspace();
   } finally {
     state.personaCreateBusy.manual = false;
-    if (state.personaCreateMode) renderPersonaDetail();
+    state.personaCreateBusy.manualStartedAt = 0;
+    if (state.personaCreateMode) renderPersonaCreateSurface();
   }
 }
 
@@ -15770,8 +15780,9 @@ async function suggestPersonaCreateKeywords() {
     return;
   }
   state.personaCreateBusy.keywords = true;
+  state.personaCreateBusy.keywordsStartedAt = Date.now();
   state.personaCreateKeywordController = new AbortController();
-  renderPersonaDetail();
+  renderPersonaCreateSurface();
   try {
     showMsg("commandMsg", "正在提炼人设方向关键词...", true);
     const result = await apiWithTimeout("/api/persona_dashboard/personas/ai_keywords", {
@@ -15784,7 +15795,7 @@ async function suggestPersonaCreateKeywords() {
     createState.aiKeywords = Array.isArray(result.keywords) ? result.keywords : [];
     createState.aiSelectedKeywords = [];
     createState.aiResult = null;
-    renderPersonaDetail();
+    renderPersonaCreateSurface();
     showMsg("commandMsg", withBillingChargeMessage("已提炼出人设方向关键词。", result), true);
   } catch (error) {
     if (error?.name === "AbortError" || error?.status === 499) {
@@ -15794,8 +15805,9 @@ async function suggestPersonaCreateKeywords() {
     }
   } finally {
     state.personaCreateBusy.keywords = false;
+    state.personaCreateBusy.keywordsStartedAt = 0;
     state.personaCreateKeywordController = null;
-    if (state.personaCreateMode) renderPersonaDetail();
+    if (state.personaCreateMode) renderPersonaCreateSurface();
   }
 }
 
@@ -15805,9 +15817,10 @@ function cancelPersonaCreateKeywords() {
     controller.abort(new DOMException("Request cancelled", "AbortError"));
   }
   state.personaCreateBusy.keywords = false;
+  state.personaCreateBusy.keywordsStartedAt = 0;
   state.personaCreateKeywordController = null;
   showMsg("commandMsg", "已取消关键词提炼。", true);
-  if (state.personaCreateMode) renderPersonaDetail();
+  if (state.personaCreateMode) renderPersonaCreateSurface();
 }
 
 async function createPersonaArchiveWithAi() {
@@ -15828,7 +15841,8 @@ async function createPersonaArchiveWithAi() {
     return;
   }
   state.personaCreateBusy.aiCreate = true;
-  renderPersonaDetail();
+  state.personaCreateBusy.aiCreateStartedAt = Date.now();
+  renderPersonaCreateSurface();
   try {
     showMsg("commandMsg", "正在根据提示词生成人设...", true);
     const result = await api("/api/persona_dashboard/personas/ai_create", {
@@ -15853,11 +15867,12 @@ async function createPersonaArchiveWithAi() {
       state.selectedPersonaId = createState.aiResult.id;
       await loadPersonaProfile(createState.aiResult.id, { force: true }).catch(() => {});
     }
-    renderPersonaDetail();
+    renderPersonaCreateSurface();
     showMsg("commandMsg", withBillingChargeMessage(`AI 人设已创建：${createState.aiResult.name || "-"}`, result), true);
   } finally {
     state.personaCreateBusy.aiCreate = false;
-    if (state.personaCreateMode) renderPersonaDetail();
+    state.personaCreateBusy.aiCreateStartedAt = 0;
+    if (state.personaCreateMode) renderPersonaCreateSurface();
   }
 }
 
@@ -18468,9 +18483,14 @@ function renderPersonaHotCandidatePicker(persona, form) {
           </div>
           <label class="persona-hot-freshness-control" title="${hotFreshnessMode === "custom" ? "选择热点时限" : "默认热点时限"}">
             ${hotFreshnessMode === "custom"
-              ? `<select data-persona-hot-freshness-days ${hotBusy ? "disabled" : ""} aria-label="热点时限天数">
-                  ${hotFreshnessOptions.map(({ days, label }) => `<option value="${days}" ${days === hotFreshnessDays ? "selected" : ""}>${label}</option>`).join("")}
-                </select>`
+              ? (hotBusy
+                ? `<span class="persona-hot-freshness-default" aria-label="热点时限天数">${esc(personaHotFreshnessLabel(hotFreshnessDays))}</span>`
+                : `<details class="persona-hot-freshness-picker" data-console-dropdown data-persona-hot-freshness-picker>
+                    <summary aria-label="选择热点时限天数"><span>${esc(personaHotFreshnessLabel(hotFreshnessDays))}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></summary>
+                    <div class="persona-hot-freshness-menu" role="listbox" aria-label="热点时限天数">
+                      ${hotFreshnessOptions.map(({ days, label }) => `<button type="button" role="option" aria-selected="${days === hotFreshnessDays ? "true" : "false"}" data-persona-hot-freshness-option="${days}" class="${days === hotFreshnessDays ? "is-active" : ""}">${label}</button>`).join("")}
+                    </div>
+                  </details>`)
               : `<span class="persona-hot-freshness-default" aria-label="默认热点时限">默认</span>`}
           </label>
         </div>
@@ -18999,18 +19019,19 @@ function renderPersonaCreateWorkbench() {
   const aiInputsLocked = createState.aiStep !== "input" && aiKeywords.length > 0;
   const aiKeywordsBusy = Boolean(createBusy.keywords);
   const aiCreateBusy = Boolean(createBusy.aiCreate);
-  const manualBusy = Boolean(createBusy.manual);
   const anyCreateBusy = personaCreateIsBusy();
   const busyLabel = personaCreateBusyKind();
+  const keywordLimitReached = aiSelectedKeywords.length >= 2;
   const selectedKeywordHint = aiSelectedKeywords.length
-    ? `已选 ${aiSelectedKeywords.length} / 2`
-    : "可选 0 到 2 个关键词";
+    ? `已选 ${aiSelectedKeywords.length} / 2 个，可取消后重新选择`
+    : "最多选择 2 个，用于确定人设生成的重点方向";
   const keywordsMarkup = aiKeywords.length
     ? `
       <div class="persona-keyword-grid">
         ${aiKeywords.map((keyword) => {
           const active = aiSelectedKeywords.includes(keyword);
-          return `<button type="button" class="${active ? "is-active" : ""}" data-persona-create-ai-keyword="${esc(keyword)}" ${aiCreateBusy ? "disabled" : ""}>${esc(keyword)}</button>`;
+          const disabled = aiCreateBusy || (!active && keywordLimitReached);
+          return `<button type="button" class="${active ? "is-active" : ""}" data-persona-create-ai-keyword="${esc(keyword)}" ${disabled ? "disabled" : ""}>${esc(keyword)}</button>`;
         }).join("")}
       </div>
     `
@@ -19044,70 +19065,182 @@ function renderPersonaCreateWorkbench() {
     : "";
   return `
     <div class="persona-inline-panel persona-create-workbench is-flat">
-      <div class="persona-workbench-head">
-        <div class="persona-head-copy">
-          <strong>新建人设</strong>
-          <span>先填名称和提示词，再确认关键词后创建。</span>
-        </div>
-        <div class="persona-quick-actions">
-          <button type="button" class="persona-mobile-list-toggle" data-persona-mobile-list-toggle="personaWorkspaceSidebar" aria-controls="personaWorkspaceSidebar" aria-expanded="false">
-            <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
-            </svg>
-            <span>选择人设</span>
-          </button>
-          <button type="button" data-persona-cancel-create>返回人设详情</button>
-        </div>
-      </div>
-      <div class="persona-step-tabs">
-        <button type="button" class="${createState.mode === "ai" ? "is-active" : ""}" data-persona-create-mode="ai" ${anyCreateBusy ? "disabled" : ""}>AI 生成</button>
-        <button type="button" class="${createState.mode === "manual" ? "is-active" : ""}" data-persona-create-mode="manual" ${anyCreateBusy ? "disabled" : ""}>手动输入</button>
-      </div>
-      ${createState.mode === "ai" ? `
-        <label>人设名称
-          <input id="personaCreateAiName" value="${esc(createState.aiName || "")}" placeholder="例如：咖啡馆主理人" ${aiInputsLocked ? "readonly aria-readonly=\"true\"" : ""} />
-        </label>
-        <label>人设提示词
-          <textarea id="personaCreateAiPrompt" rows="7" placeholder="描述身份、性格、内容方向、语气、受众和图片风格。" ${aiInputsLocked ? "readonly aria-readonly=\"true\"" : ""}>${esc(createState.aiPrompt || "")}</textarea>
-        </label>
-        ${createState.aiStep === "input" ? `
-          <div class="row-actions">
-            <button type="button" class="primary" data-persona-create-ai-keywords aria-busy="${aiKeywordsBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiKeywordsBusy ? "正在提炼关键词..." : (anyCreateBusy ? `${busyLabel}中` : "下一步：提炼关键词")}</button>
-            ${aiKeywordsBusy ? `<button type="button" data-persona-create-ai-cancel-keywords>取消</button>` : ""}
-          </div>
-        ` : `
-          <div class="persona-inline-panel is-flat">
-            <div class="persona-create-keyword-section">
-              <div class="persona-workbench-head">
-                <div class="persona-head-copy">
-                  <strong>方向关键词</strong>
-                  <span>${selectedKeywordHint}</span>
-                </div>
-                <span class="module-chip">${esc(createState.aiStep === "created" ? "已完成" : "步骤 3/3")}</span>
-              </div>
-              ${keywordsMarkup}
-            </div>
-            <div class="persona-create-actions">
-              <button type="button" data-persona-create-ai-back ${aiCreateBusy ? "disabled" : ""}>返回修改提示词</button>
-              <button type="button" class="unified-action-icon-button" data-persona-create-ai-clear title="清空选择" aria-label="清空选择" ${aiSelectedKeywords.length && !aiCreateBusy ? "" : "disabled"}>${renderClearSelectionIcon()}</button>
-              <button type="button" class="primary" data-persona-create-ai-submit aria-busy="${aiCreateBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiCreateBusy ? "正在生成人设..." : (anyCreateBusy ? `${busyLabel}中` : "确认并生成人设")}</button>
-            </div>
-          </div>
-          ${resultMarkup}
-        `}
-      ` : `
-        <label>人设名称
-          <input id="personaCreateName" value="${esc(createState.manualName || "")}" placeholder="例如：咖啡馆主理人" />
-        </label>
-        <label>人设简介
-          <textarea id="personaCreateContent" rows="8" placeholder="填写人设的背景、内容方向和说话方式。">${esc(createState.manualContent || "")}</textarea>
-        </label>
+      <label>人设名称
+        <input id="personaCreateAiName" value="${esc(createState.aiName || "")}" placeholder="例如：咖啡馆主理人" ${aiInputsLocked ? "readonly aria-readonly=\"true\"" : ""} />
+      </label>
+      <label>人设提示词
+        <textarea id="personaCreateAiPrompt" rows="7" placeholder="描述身份、性格、内容方向、语气、受众和图片风格。" ${aiInputsLocked ? "readonly aria-readonly=\"true\"" : ""}>${esc(createState.aiPrompt || "")}</textarea>
+      </label>
+      ${createState.aiStep === "input" ? `
         <div class="row-actions">
-          <button type="button" class="primary" data-persona-create aria-busy="${manualBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${manualBusy ? "正在创建人设..." : (anyCreateBusy ? `${busyLabel}中` : "直接创建人设")}</button>
+          <button type="button" class="primary" data-persona-create-ai-keywords aria-busy="${aiKeywordsBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiKeywordsBusy ? renderBusyButtonContent("正在提炼关键词", true, createBusy.keywordsStartedAt) : (anyCreateBusy ? `${busyLabel}中` : "提炼关键词")}</button>
+          <button type="button" data-persona-create aria-busy="${Boolean(createBusy.manual) ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${createBusy.manual ? renderBusyButtonContent("正在创建人设", true, createBusy.manualStartedAt) : (anyCreateBusy ? `${busyLabel}中` : "直接创建人设")}</button>
+          ${aiKeywordsBusy ? `<button type="button" data-persona-create-ai-cancel-keywords>取消</button>` : ""}
         </div>
+      ` : `
+        <div class="persona-inline-panel is-flat">
+          <div class="persona-create-keyword-section">
+            <div class="persona-workbench-head">
+              <div class="persona-head-copy">
+                <strong>方向关键词</strong>
+                <span>${selectedKeywordHint}</span>
+              </div>
+              <span class="module-chip">${esc(createState.aiStep === "created" ? "已完成" : "步骤 3/3")}</span>
+            </div>
+            ${keywordsMarkup}
+          </div>
+          <div class="persona-create-actions">
+            <button type="button" data-persona-create-ai-back ${aiCreateBusy ? "disabled" : ""}>返回修改提示词</button>
+            <button type="button" class="unified-action-icon-button" data-persona-create-ai-clear title="清空选择" aria-label="清空选择" ${aiSelectedKeywords.length && !aiCreateBusy ? "" : "disabled"}>${renderClearSelectionIcon()}</button>
+            <button type="button" class="primary" data-persona-create-ai-submit aria-busy="${aiCreateBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiCreateBusy ? renderBusyButtonContent("正在生成人设", true, createBusy.aiCreateStartedAt) : (anyCreateBusy ? `${busyLabel}中` : "确认并生成人设")}</button>
+          </div>
+        </div>
+        ${resultMarkup}
       `}
     </div>
   `;
+}
+
+function isPersonaCreateModalOpen() {
+  return Boolean($("consoleModal")?.dataset.modalKey === "persona-create");
+}
+
+function renderPersonaCreateModal() {
+  const modal = $("consoleModal");
+  const content = modal?.querySelector(".console-modal-content");
+  if (!modal || modal.dataset.modalKey !== "persona-create" || !content) return false;
+  content.innerHTML = renderPersonaCreateWorkbench();
+  content.querySelectorAll("strong, p, label, button, [title], [aria-label], [placeholder]").forEach(markConsoleUiElement);
+  translateConsoleLanguage(content, currentLanguage());
+  content.querySelector("#personaCreateAiName, [data-persona-create-ai-keyword], [data-persona-create-ai-open-profile]")?.focus();
+  return true;
+}
+
+function renderPersonaCreateSurface() {
+  if (!renderPersonaCreateModal()) renderPersonaDetail();
+}
+
+function closePersonaCreateModal(result = null) {
+  if (isPersonaCreateModalOpen()) {
+    closeConsoleModal(result);
+    return;
+  }
+  state.personaCreate = defaultPersonaCreateState();
+  state.personaCreateMode = false;
+  renderPersonaDetail();
+}
+
+function openPersonaCreateModal() {
+  const request = openConsoleModal({
+    title: "新建人设",
+    contentHtml: " ",
+    showCancel: false,
+    showConfirm: false,
+    modalKey: "persona-create",
+  });
+  const modal = $("consoleModal");
+  const dialog = modal?.querySelector(".console-modal-dialog");
+  if (!modal || !dialog) return request;
+  dialog.classList.add("persona-create-modal");
+  modal.__requestClose = () => {
+    const busyKind = personaCreateBusyKind();
+    if (!busyKind) {
+      closeConsoleModal(null);
+      return;
+    }
+    void openConsoleModal({
+      title: "确认退出",
+      message: `${busyKind}正在执行。现在退出可能导致当前流程未完成。`,
+      cancelText: "继续运行",
+      confirmText: "确认退出",
+      danger: true,
+      modalKey: "persona-create-exit-confirm",
+      stack: true,
+    }).then((confirmed) => {
+      if (confirmed && modal.isConnected) closeConsoleModal(null, modal);
+    });
+  };
+  modal.__cleanup = () => {
+    if (state.personaCreateKeywordController && !state.personaCreateKeywordController.signal.aborted) {
+      state.personaCreateKeywordController.abort(new DOMException("Create dialog closed", "AbortError"));
+    }
+    state.personaCreateKeywordController = null;
+    state.personaCreateBusy.keywords = false;
+    state.personaCreateBusy.keywordsStartedAt = 0;
+    state.personaCreate = defaultPersonaCreateState();
+    state.personaCreateMode = false;
+    if (state.activeModule === "personas") renderPersonaDetail();
+  };
+  renderPersonaCreateModal();
+  modal.addEventListener("click", (event) => {
+    if (!modal.isConnected) return;
+    const run = (action, failureText) => {
+      action().catch((error) => showMsg("commandMsg", error?.detail || error?.message || failureText, false));
+    };
+    if (event.target.closest("[data-persona-create]")) {
+      run(createPersonaArchive, "创建人设失败");
+      return;
+    }
+    if (event.target.closest("[data-persona-create-ai-keywords]")) {
+      run(suggestPersonaCreateKeywords, "提炼关键词失败");
+      return;
+    }
+    if (event.target.closest("[data-persona-create-ai-cancel-keywords]")) {
+      cancelPersonaCreateKeywords();
+      return;
+    }
+    const keywordButton = event.target.closest("[data-persona-create-ai-keyword]");
+    if (keywordButton) {
+      const createState = snapshotPersonaCreateInputs();
+      const keyword = String(keywordButton.dataset.personaCreateAiKeyword || "").trim();
+      if (!keyword) return;
+      const selected = new Set(Array.isArray(createState.aiSelectedKeywords) ? createState.aiSelectedKeywords : []);
+      if (selected.has(keyword)) selected.delete(keyword);
+      else if (selected.size < 2) selected.add(keyword);
+      createState.aiSelectedKeywords = Array.from(selected);
+      renderPersonaCreateSurface();
+      return;
+    }
+    if (event.target.closest("[data-persona-create-ai-clear]")) {
+      ensurePersonaCreateState().aiSelectedKeywords = [];
+      renderPersonaCreateSurface();
+      return;
+    }
+    if (event.target.closest("[data-persona-create-ai-back]")) {
+      const createState = snapshotPersonaCreateInputs();
+      createState.aiStep = "input";
+      createState.aiKeywords = [];
+      createState.aiSelectedKeywords = [];
+      createState.aiResult = null;
+      renderPersonaCreateSurface();
+      return;
+    }
+    if (event.target.closest("[data-persona-create-ai-submit]")) {
+      run(createPersonaArchiveWithAi, "AI 新建人设失败");
+      return;
+    }
+    const openProfile = event.target.closest("[data-persona-create-ai-open-profile]");
+    if (openProfile) {
+      const personaId = String(ensurePersonaCreateState().aiResult?.id || state.selectedPersonaId || "");
+      closePersonaCreateModal(true);
+      run(async () => {
+        await activateCreatedPersona(personaId, { group: "settings", step: "profile" });
+        renderWorkspace();
+      }, "打开人设详情失败");
+      return;
+    }
+    if (event.target.closest("[data-persona-create-ai-open-images]")) {
+      const personaId = String(ensurePersonaCreateState().aiResult?.id || state.selectedPersonaId || "");
+      closePersonaCreateModal(true);
+      run(() => openPersonaImageGeneration(personaId), "打开编辑资料失败");
+      return;
+    }
+    if (event.target.closest("[data-persona-create-ai-reset]")) {
+      state.personaCreate = defaultPersonaCreateState();
+      renderPersonaCreateSurface();
+    }
+  });
+  return request;
 }
 
 function personaGroupStepOptions(groupKey, profile) {
@@ -19704,12 +19837,7 @@ function renderPersonaDetail() {
   snapshotPersonaProfileEditDraft();
   snapshotPersonaCurrentForm();
   const persona = selectedPersona();
-  if (state.personaCreateMode) {
-    state.renderedPersonaId = "";
-    $("personaDetail").classList.remove("persona-detail--content");
-    $("personaDetail").innerHTML = renderPersonaCreateWorkbench();
-    return;
-  }
+  if (state.personaCreateMode && !isPersonaCreateModalOpen()) state.personaCreateMode = false;
   if (!persona) {
     state.renderedPersonaId = "";
     $("personaDetail").innerHTML = `
@@ -23122,7 +23250,7 @@ function liveBrowserTaskSummary(session) {
 function renderLiveBrowserActionMenu(session, { canStopTask = false, canCloseWindow = false } = {}) {
   const sessionId = liveBrowserSessionId(session);
   return `
-    <details class="live-browser-action-menu">
+    <details class="live-browser-action-menu" data-console-dropdown>
       <summary title="任务操作" aria-label="任务操作">${renderEditIcon()}</summary>
       <div class="live-browser-action-menu-panel">
         ${renderLiveBrowserModeToggle(session)}
@@ -23134,6 +23262,12 @@ function renderLiveBrowserActionMenu(session, { canStopTask = false, canCloseWin
 
 function closeLiveBrowserActionMenus(exceptMenu = null) {
   document.querySelectorAll(".live-browser-action-menu[open]").forEach((menu) => {
+    if (menu !== exceptMenu) menu.removeAttribute("open");
+  });
+}
+
+function closeConsoleDropdowns(exceptMenu = null) {
+  document.querySelectorAll("details[open][data-console-dropdown]").forEach((menu) => {
     if (menu !== exceptMenu) menu.removeAttribute("open");
   });
 }
@@ -24565,18 +24699,6 @@ function bindEvents() {
       createPersonaArchive().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
       return;
     }
-    const createModeButton = event.target.closest("[data-persona-create-mode]");
-    if (createModeButton) {
-      const busyKind = personaCreateBusyKind();
-      if (busyKind) {
-        showMsg("commandMsg", `${busyKind}正在执行，请等待当前任务完成。`, false);
-        return;
-      }
-      const createState = snapshotPersonaCreateInputs();
-      createState.mode = createModeButton.dataset.personaCreateMode === "manual" ? "manual" : "ai";
-      renderPersonaDetail();
-      return;
-    }
     if (event.target.closest("[data-persona-create-ai-keywords]")) {
       suggestPersonaCreateKeywords().catch((error) => {
         if (Number(error?.status || 0) === 499) return;
@@ -24701,6 +24823,19 @@ function bindEvents() {
         form.hotFreshnessMode = hotFreshnessModeButton.dataset.personaHotFreshnessMode === "custom" ? "custom" : "default";
         if (form.hotFreshnessMode === "default") form.hotFreshnessDays = 7;
         else form.hotFreshnessDays = normalizePersonaHotFreshnessDays(form.hotFreshnessDays || 7);
+        renderPersonaDetail();
+        renderConfirmSummary();
+      }
+      return;
+    }
+    const hotFreshnessOption = event.target.closest("[data-persona-hot-freshness-option]");
+    if (hotFreshnessOption) {
+      const persona = selectedPersona();
+      if (persona) {
+        snapshotPersonaCurrentForm();
+        const form = personaFormState(persona.id).generate;
+        form.hotFreshnessMode = "custom";
+        form.hotFreshnessDays = normalizePersonaHotFreshnessDays(hotFreshnessOption.dataset.personaHotFreshnessOption);
         renderPersonaDetail();
         renderConfirmSummary();
       }
@@ -25289,6 +25424,7 @@ function bindEvents() {
       else setSelectedPersonaPostId("");
       state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
       renderPersonaModule();
+      if (wasCreatingPersona) setPersonaMobileSidebarOpen(false, "personaWorkspaceSidebar");
       renderConfirmSummary();
       Promise.all([
         loadPersonaProfile(state.selectedPersonaId, { force: true }).catch(() => {}),
@@ -25305,13 +25441,12 @@ function bindEvents() {
       clearMsg("commandMsg");
       state.personaCreate = defaultPersonaCreateState();
       state.personaCreateMode = true;
-      renderPersonaDetail();
+      setPersonaMobileSidebarOpen(false, "personaWorkspaceSidebar");
+      void openPersonaCreateModal();
     }
     if (event.target.closest("[data-persona-cancel-create]")) {
       clearMsg("commandMsg");
-      state.personaCreate = defaultPersonaCreateState();
-      state.personaCreateMode = false;
-      renderPersonaDetail();
+      closePersonaCreateModal();
     }
     const personaGroupButton = event.target.closest("[data-persona-group]");
     if (personaGroupButton) {
@@ -25680,19 +25815,6 @@ function bindEvents() {
   $("moduleBody").addEventListener("change", async (event) => {
     if (event.target?.id === "personaGenerateCount") {
       snapshotPersonaCurrentForm();
-      renderConfirmSummary();
-      return;
-    }
-    if (event.target?.matches?.("[data-persona-hot-freshness-days]")) {
-      const persona = selectedPersona();
-      if (!persona) return;
-      const days = normalizePersonaHotFreshnessDays(event.target.value);
-      const form = personaFormState(persona.id).generate;
-      form.hotFreshnessMode = "custom";
-      form.hotFreshnessDays = days;
-      event.target.value = String(days);
-      const unit = event.target.parentElement?.querySelector?.("[data-persona-hot-freshness-unit]");
-      if (unit) unit.textContent = days > 0 ? "天内" : "不限";
       renderConfirmSummary();
       return;
     }
@@ -26285,6 +26407,7 @@ function bindEvents() {
   });
   document.addEventListener("click", (event) => {
     closeLiveBrowserActionMenus(event.target.closest(".live-browser-action-menu"));
+    closeConsoleDropdowns(event.target.closest("[data-console-dropdown]"));
   });
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("change", (event) => {
     const proxyPageSize = event.target.closest("[data-proxy-page-size]");

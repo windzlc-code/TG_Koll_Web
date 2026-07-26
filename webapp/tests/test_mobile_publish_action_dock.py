@@ -60,6 +60,7 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn("z-index: 1400", rule)
         self.assertIn("justify-content: stretch", rule)
         self.assertIn("justify-items: stretch", rule)
+        self.assertNotIn("border-top:", rule)
         self.assertIn("grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr)", rule)
         self.assertIn("right: 0", rule)
         self.assertIn("left: 0", rule)
@@ -69,6 +70,8 @@ class MobilePublishActionDockTests(unittest.TestCase):
         media = STYLES.split("@media (max-width: 760px)", 1)[1]
         self.assertIn("--mobile-task-dock-height:", media)
         self.assertIn("padding-bottom: var(--mobile-task-dock-height)", media)
+        self.assertIn("padding-bottom: 48px", media)
+        self.assertNotIn("padding-bottom: 126px", media)
         self.assertIn("bottom: var(--mobile-task-dock-height)", media)
         self.assertIn("height: var(--mobile-task-dock-height)", media)
         self.assertIn("min-height: var(--mobile-task-dock-height)", media)

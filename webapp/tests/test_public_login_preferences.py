@@ -464,6 +464,33 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn("--public-warm-accent: #8a674d", self.fixed_light_styles)
         self.assertIn("background: var(--public-paper)", self.fixed_light_styles)
 
+    def test_console_has_no_photographic_backdrop_and_home_uses_a_separate_image(self):
+        console_rule = self.fixed_light_styles.split(
+            ':root[data-theme="light"] .console-page .console-main {', 1
+        )[1].split("}", 1)[0]
+        home_rule = self.fixed_light_styles.split(
+            ':root[data-theme="light"] .home-canvas :is(.home-flow-section, .home-difference-section) {', 1
+        )[1].split("}", 1)[0]
+        home_markup = (self.static_dir / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("background-image: none;", console_rule)
+        self.assertNotIn("vecto-ai-cockpit.png", console_rule)
+        self.assertIn('url("/assets/opc/home/analytics-screen.jpg")', home_rule)
+        self.assertNotIn("vecto-ai-cockpit.png", home_rule)
+        self.assertNotIn('rel="preload" href="/assets/opc/vecto-ai-cockpit.png"', home_markup)
+
+    def test_mobile_workspace_canvas_is_transparent_while_top_publish_tabs_stay_white(self):
+        self.assertIn(
+            ':root[data-theme="light"] .console-page .view[data-panel="workspace"] .module-panel',
+            self.fixed_light_styles,
+        )
+        self.assertIn("background: transparent;", self.fixed_light_styles)
+        self.assertIn(
+            ':root[data-theme="light"] .console-page .module-panel.is-publishing-module .publish-mode-tabs',
+            self.fixed_light_styles,
+        )
+        self.assertIn("background: var(--public-paper);", self.fixed_light_styles)
+
     def test_public_dark_theme_covers_forms_cards_and_dialogs(self):
         for selector in (
             ':root[data-theme="dark"] .lead-form',

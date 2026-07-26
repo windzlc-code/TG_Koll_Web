@@ -390,6 +390,7 @@ function pdVisibleSummary(visiblePersonas) {
 }
 
 function pdBuildFilteredCharts(visiblePersonas, data) {
+  const selectedPlatform = pdPlatformFilter();
   const platformDistribution = {};
   const engagement = { likes: 0, comments: 0, shares: 0, reposts: 0 };
   const taskStatus = {};
@@ -398,15 +399,24 @@ function pdBuildFilteredCharts(visiblePersonas, data) {
   visiblePersonas.forEach((persona) => {
     const hot = pdPersonaHot(persona);
     Object.keys(engagement).forEach((key) => { engagement[key] += Number(hot[key] || 0); });
-    (persona.hot_platforms || []).forEach((item) => {
+    (persona.hot_platforms || []).filter((item) => {
+      return !selectedPlatform || String(item.platform || "").trim().toLowerCase() === selectedPlatform;
+    }).forEach((item) => {
       const platform = String(item.platform || "").trim();
       if (pdIsWebVisiblePlatform(platform)) platformDistribution[platform] = (platformDistribution[platform] || 0) + 1;
     });
     Object.keys((persona.counts && persona.counts.platform_posts) || {}).forEach((platform) => {
       const count = Number(persona.counts.platform_posts[platform] || 0);
-      if (count > 0 && pdIsWebVisiblePlatform(platform)) platformDistribution[platform] = (platformDistribution[platform] || 0) + count;
+      if (
+        count > 0
+        && pdIsWebVisiblePlatform(platform)
+        && (!selectedPlatform || String(platform || "").trim().toLowerCase() === selectedPlatform)
+      ) platformDistribution[platform] = (platformDistribution[platform] || 0) + count;
     });
-    const platforms = (persona.hot_platforms || []).filter((item) => pdIsWebVisiblePlatform(item.platform));
+    const platforms = (persona.hot_platforms || []).filter((item) => (
+      pdIsWebVisiblePlatform(item.platform)
+      && (!selectedPlatform || String(item.platform || "").trim().toLowerCase() === selectedPlatform)
+    ));
     if (!platforms.length) coverage.none += 1;
     else if (platforms.some((item) => item.complete)) coverage.complete += 1;
     else coverage.partial_or_unknown += 1;
@@ -420,7 +430,11 @@ function pdBuildFilteredCharts(visiblePersonas, data) {
     engagement_mix: engagement,
     task_status_distribution: taskStatus,
     hot_coverage: coverage,
-    trend: pdFilterTrend(data.charts && data.charts.trend),
+    trend: pdFilterTrend(
+      selectedPlatform
+        ? ((data.charts && data.charts.platform_trend && data.charts.platform_trend[selectedPlatform]) || [])
+        : (data.charts && data.charts.trend),
+    ),
   };
 }
 
@@ -523,29 +537,21 @@ function pdRenderTrendChart(hostId, rows) {
   `;
 }
 
-function pdMatches(persona) {
-  const platform = pdPlatformFilter();
-  if (platform) {
-    const platforms = (persona.hot_platforms || [])
-      .map((item) => String(item.platform || "").toLowerCase())
-      .filter((item) => pdIsWebVisiblePlatform(item));
-    const platformPosts = Object.keys((persona.counts && persona.counts.platform_posts) || {})
-      .map((item) => item.toLowerCase())
-      .filter((item) => pdIsWebVisiblePlatform(item));
-    if (!platforms.includes(platform) && !platformPosts.includes(platform)) return false;
-  }
+function pdMatches() {
+  // Platform tabs refine platform-specific posts and engagement only.  The
+  // persona archive is a shared source of truth, so changing platforms must
+  // never make its total or its selectable personas disappear.
   return true;
 }
 
 function pdRenderSummary(data, visiblePersonas) {
   const host = pdEl("personaDashboardSummary");
   if (!host) return;
-  const globalSummary = data.summary || {};
   const summary = pdVisibleSummary(visiblePersonas);
   const cards = [
-    { label: "人设总数", value: summary.persona_count, hint: `全部 ${globalSummary.persona_count || 0}` },
-    { label: "已生成帖子", value: summary.post_count, hint: "当前筛选归档帖子" },
-    { label: "已发布", value: summary.published_count, hint: "当前筛选发布记录" },
+    { label: "人设总数", value: summary.persona_count, hint: "全局人设归档，不受平台切换影响" },
+    { label: "已生成帖子", value: summary.post_count, hint: "全局归档帖子，不受平台切换影响" },
+    { label: "已发布", value: summary.published_count, hint: "全局发布归档，不受平台切换影响" },
     { label: "总互动量", value: summary.total_interactions, hint: "点赞、评论、转发、分享" },
     { label: "账号主页浏览", value: summary.recent_views, hint: "账号主页级浏览" },
     { label: "逐帖浏览合计", value: summary.post_views, hint: "逐帖浏览，不与主页浏览合并" },
@@ -560,12 +566,12 @@ function pdRenderSummary(data, visiblePersonas) {
 }
 
 function pdPersonaWarnings(persona) {
-  const warnings = persona.warnings || [];
+  const warnings = (persona.warnings || []).filter(Boolean);
   if (!warnings.length) return "";
+  const accountUnbound = warnings.some((item) => /未绑定|绑定账号|用户名/.test(String(item || "")));
+  const summary = accountUnbound ? "账号未绑定 · 热点待同步" : "热点数据待刷新";
   return `
-    <div class="persona-warning-list">
-      ${warnings.map((item) => `<div class="persona-warning-item">${pdEscape(item)}</div>`).join("")}
-    </div>
+    <div class="persona-warning-summary" title="${pdEscape(warnings.join("；"))}">${pdEscape(summary)}</div>
   `;
 }
 
@@ -612,26 +618,33 @@ function pdRenderPersonaCard(persona) {
   const platforms = (persona.hot_platforms || []).filter((item) => pdIsWebVisiblePlatform(item.platform)).map((item) => `
     <div class="persona-platform-row">
       <strong>${pdEscape(item.platform || "-")}</strong>
-      <span>账号主页浏览 ${pdEscape(pdNumber(item.recent_views))}</span>
+      <span>主页浏览 ${pdEscape(pdNumber(item.recent_views))}</span>
       <span>逐帖浏览 ${pdEscape(pdNumber(item.post_views))}</span>
       <span>赞 ${pdEscape(pdNumber(item.likes))}</span>
       <span>评 ${pdEscape(pdNumber(item.comments))}</span>
       <span>${item.complete ? "完整" : "部分/未知"}</span>
     </div>
   `).join("");
+  const metrics = [
+    ["帖子", counts.posts],
+    ["发布", counts.published],
+    ["互动", Number(hot.likes || 0) + Number(hot.comments || 0) + Number(hot.shares || 0) + Number(hot.reposts || 0)],
+    ["主页浏览", hot.recent_views],
+    ["逐帖浏览", hot.post_views],
+  ];
   const postRows = rows.slice(start, start + pageSize).map((row) => `
     <tr>
-      <td class="persona-post-platform">${pdEscape(row.platform || "-")}</td>
-      <td class="persona-post-source">
-        <div>${pdEscape(String(row.content || row.source_url || "-").slice(0, 120))}</div>
+      <td class="persona-post-platform" data-label="平台">${pdEscape(row.platform || "-")}</td>
+      <td class="persona-post-source" data-label="推文内容">
+        <div>${pdEscape(String(row.content || row.source_url || "-"))}</div>
         ${pdRenderPostContentBadges(row)}
       </td>
-      <td class="persona-post-time">${pdEscape(pdDate(row.published_at || row.captured_at))}</td>
-      <td class="persona-post-number">${pdEscape(pdNumber(row.like_count))}</td>
-      <td class="persona-post-number">${pdEscape(pdNumber(row.comment_count))}</td>
-      <td class="persona-post-number">${pdEscape(pdNumber(row.share_count || row.repost_count))}</td>
-      <td class="persona-post-number">${pdEscape(pdNumber(row.view_count))}</td>
-      <td class="persona-post-actions">
+      <td class="persona-post-time" data-label="发布时间">${pdEscape(pdDate(row.published_at || row.captured_at))}</td>
+      <td class="persona-post-number" data-label="点赞">${pdEscape(pdNumber(row.like_count))}</td>
+      <td class="persona-post-number" data-label="评论">${pdEscape(pdNumber(row.comment_count))}</td>
+      <td class="persona-post-number" data-label="转发/分享">${pdEscape(pdNumber(row.share_count || row.repost_count))}</td>
+      <td class="persona-post-number" data-label="逐帖浏览">${pdEscape(pdNumber(row.view_count))}</td>
+      <td class="persona-post-actions" data-label="操作">
         <button class="ghost" type="button" data-post-view="${pdEscape(row.post_key || "")}">查看</button>
         <button class="ghost persona-post-delete persona-selection-icon-button" type="button" data-post-delete="${pdEscape(row.post_key || "")}" title="删除" aria-label="删除">${renderTrashIcon()}</button>
       </td>
@@ -646,18 +659,12 @@ function pdRenderPersonaCard(persona) {
         <div class="persona-score">
           <span>热度</span>
           <strong>${pdEscape(pdNumber(hot.hot_score))}</strong>
-          <small>${pdEscape(persona.hot_score_formula || "热度 = 逐帖浏览 + 点赞 + 评论 + 分享 + 转发")}</small>
         </div>
       </div>
       ${pdPersonaWarnings(persona)}
-      <div class="persona-detail-grid">
-        <div><span>帖子</span><strong>${pdEscape(pdNumber(counts.posts))}</strong></div>
-        <div><span>发布</span><strong>${pdEscape(pdNumber(counts.published))}</strong></div>
-        <div><span>互动</span><strong>${pdEscape(pdNumber(Number(hot.likes || 0) + Number(hot.comments || 0) + Number(hot.shares || 0) + Number(hot.reposts || 0)))}</strong></div>
-        <div><span>账号主页浏览</span><strong>${pdEscape(pdNumber(hot.recent_views))}</strong></div>
-        <div><span>逐帖浏览</span><strong>${pdEscape(pdNumber(hot.post_views))}</strong></div>
+      <div class="persona-detail-grid persona-detail-grid--compact">
+        ${metrics.map((metric) => `<div><span>${pdEscape(metric[0])}</span><strong>${pdEscape(pdNumber(metric[1]))}</strong></div>`).join("")}
       </div>
-      <div class="persona-content-preview">${pdEscape(persona.content || "暂无人设描述")}</div>
       <div class="persona-platform-list">${platforms || `<div class="small">暂无平台热点指标</div>`}</div>
       <div class="persona-table-wrap">
         <div class="persona-table-toolbar">
@@ -694,7 +701,7 @@ function pdRenderPersonaCard(persona) {
         </div>
         <table class="persona-post-table">
           <thead><tr><th>平台</th><th>推文内容 / 来源</th><th>发布时间</th><th>点赞</th><th>评论</th><th>转发/分享</th><th>逐帖浏览</th><th>操作</th></tr></thead>
-          <tbody>${postRows || `<tr><td colspan="8">暂无发送推文指标</td></tr>`}</tbody>
+          <tbody>${postRows || `<tr class="persona-post-empty"><td colspan="8">暂无发送推文指标</td></tr>`}</tbody>
         </table>
       </div>
       <div class="persona-pager">
@@ -874,67 +881,101 @@ function pdRenderPostModal(persona) {
 function pdRenderPersonaTabs(visiblePersonas, selectedPersona) {
   const tabs = pdEl("personaDashboardTabs");
   if (!tabs) return;
-  const tabPageSize = 10;
-  const tabPageCount = Math.max(1, Math.ceil(visiblePersonas.length / tabPageSize));
-  personaDashboardTabPage = Math.max(1, Math.min(tabPageCount, Number(personaDashboardTabPage || 1)));
-  const tabStart = (personaDashboardTabPage - 1) * tabPageSize;
-  const tabPersonas = visiblePersonas.slice(tabStart, tabStart + tabPageSize);
+  const selectedLabel = selectedPersona?.name
+    || (personaDashboardSelectedId === "__settings__" ? "显示设置" : "总览首页");
   tabs.innerHTML = `
-    <div class="persona-tab-rail-head">
-      <strong>人设</strong>
+    <div class="persona-dashboard-picker-head">
+      <strong>人设数据</strong>
       <span>${pdEscape(String(visiblePersonas.length))} 人设</span>
     </div>
-    <div class="persona-tab-list">
-      <div class="persona-tab-section persona-tab-section-system">
-      <button class="persona-tab ${personaDashboardSelectedId === "__overview__" ? "is-active" : ""}" type="button" data-persona-id="__overview__">
-        <span class="persona-tab-index">总</span>
-        <span class="persona-tab-main"><strong>总览</strong><span>全部人设数据</span></span>
-      </button>
-      </div>
-      <div class="persona-tab-section persona-tab-section-personas">
-      ${tabPersonas.map((persona, pageIndex) => {
-        const index = tabStart + pageIndex;
-        const key = pdPersonaKey(persona, index);
-        const active = selectedPersona && pdPersonaKey(selectedPersona, index) === key;
-        const handle = String(persona.threads_account && persona.threads_account.handle || "").trim();
-        return `
-          <button class="persona-tab ${active ? "is-active" : ""}" type="button" data-persona-id="${pdEscape(key)}">
-            <span class="persona-tab-index">${index + 1}</span>
-            <span class="persona-tab-main">
-              <strong>${pdEscape(persona.name || "未命名人设")}</strong>
-              <span>${pdEscape(handle ? `Threads · ${handle}` : "未绑定账号")}</span>
-            </span>
-          </button>
-        `;
-      }).join("")}
-      ${visiblePersonas.length > tabPageSize ? `
-        <div class="persona-tab-pager">
-          <button class="ghost" type="button" id="personaTabPrev" ${personaDashboardTabPage <= 1 ? "disabled" : ""}>上一页</button>
-          <span>第 ${pdEscape(String(personaDashboardTabPage))} / ${pdEscape(String(tabPageCount))} 页</span>
-          <button class="ghost" type="button" id="personaTabNext" ${personaDashboardTabPage >= tabPageCount ? "disabled" : ""}>下一页</button>
-        </div>
-      ` : ""}
-      </div>
-      <div class="persona-tab-section persona-tab-section-system persona-tab-section-bottom">
-      <button class="persona-tab persona-tab-settings ${personaDashboardSelectedId === "__settings__" ? "is-active" : ""}" type="button" data-persona-id="__settings__">
-        <span class="persona-tab-index">设</span>
-        <span class="persona-tab-main"><strong>显示设置</strong><span>推文分页数量</span></span>
-      </button>
-      </div>
-    </div>
+    <button id="personaDashboardPickerTrigger" class="persona-dashboard-picker-trigger" type="button" aria-haspopup="dialog">
+      <span><small>当前查看</small><strong>${pdEscape(selectedLabel)}</strong></span>
+      <span class="persona-dashboard-picker-action">查看人设数据
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
+      </span>
+    </button>
   `;
-  tabs.querySelectorAll("[data-persona-id]").forEach((node) => {
+  pdEl("personaDashboardPickerTrigger")?.addEventListener("click", () => {
+    pdOpenPersonaDashboardPicker(visiblePersonas, selectedPersona);
+  });
+}
+
+function pdOpenPersonaDashboardPicker(visiblePersonas, selectedPersona) {
+  if (typeof openConsoleModal !== "function") return;
+  const overview = {
+    id: "__overview__",
+    index: "总",
+    title: "总览首页",
+    meta: "全部人设数据",
+  };
+  const personas = visiblePersonas.map((persona, index) => {
+    const handle = String(persona.threads_account?.handle || "").trim();
+    return {
+      id: pdPersonaKey(persona, index),
+      index: String(index + 1),
+      title: persona.name || "未命名人设",
+      meta: handle ? `Threads · ${handle}` : "账号未绑定",
+    };
+  });
+  const settings = {
+    id: "__settings__",
+    index: "设",
+    title: "显示设置",
+    meta: "推文分页数量",
+  };
+  const renderOption = (option, type) => {
+    const active = String(option.id) === String(personaDashboardSelectedId);
+    return `
+      <button
+        class="persona-dashboard-picker-option persona-dashboard-picker-option--${type} ${active ? "is-active" : ""}"
+        type="button"
+        data-dashboard-persona-picker="${pdEscape(option.id)}"
+        aria-pressed="${active ? "true" : "false"}"
+      >
+        <span class="persona-dashboard-picker-index">${pdEscape(option.index)}</span>
+        <span class="persona-dashboard-picker-copy"><strong>${pdEscape(option.title)}</strong><span>${pdEscape(option.meta)}</span></span>
+      </button>
+    `;
+  };
+  void openConsoleModal({
+    title: "查看人设数据",
+    message: "选择需要查看的人设或总览数据。",
+    contentHtml: `
+      <div class="persona-dashboard-picker-modal">
+        <div class="persona-dashboard-picker-tabs" role="list">
+          <section class="persona-dashboard-picker-section persona-dashboard-picker-section--overview" aria-label="总览">
+            <div class="persona-dashboard-picker-section-label"><span>总览数据</span></div>
+            ${renderOption(overview, "overview")}
+          </section>
+          <section class="persona-dashboard-picker-section persona-dashboard-picker-section--personas" aria-label="人设列表">
+            <div class="persona-dashboard-picker-section-label"><span>普通人设</span><small>${pdEscape(String(personas.length))} 个</small></div>
+            <div class="persona-dashboard-picker-personas">
+              ${personas.map((persona) => renderOption(persona, "persona")).join("")}
+            </div>
+          </section>
+          <section class="persona-dashboard-picker-section persona-dashboard-picker-section--settings" aria-label="设置">
+            <div class="persona-dashboard-picker-section-label"><span>显示设置</span></div>
+            ${renderOption(settings, "settings")}
+          </section>
+        </div>
+      </div>
+    `,
+    showCancel: false,
+    showConfirm: false,
+    modalKey: "persona-dashboard-picker",
+  });
+  const modal = document.querySelector('.console-modal[data-modal-key="persona-dashboard-picker"]');
+  if (!modal) return;
+  modal.querySelectorAll("[data-dashboard-persona-picker]").forEach((node) => {
     node.addEventListener("click", () => {
-      const nextPersonaId = String(node.getAttribute("data-persona-id") || "");
+      const nextPersonaId = String(node.getAttribute("data-dashboard-persona-picker") || "");
       personaDashboardSelectedId = nextPersonaId;
       personaDashboardPostPage = 1;
+      if (typeof closeConsoleModal === "function") closeConsoleModal(null, modal);
+      else modal.remove();
       pdRenderDashboard();
     });
   });
-  const tabPrev = pdEl("personaTabPrev");
-  const tabNext = pdEl("personaTabNext");
-  if (tabPrev) tabPrev.addEventListener("click", () => { personaDashboardTabPage -= 1; pdRenderDashboard(); });
-  if (tabNext) tabNext.addEventListener("click", () => { personaDashboardTabPage += 1; pdRenderDashboard(); });
 }
 
 function pdRenderSettings() {
@@ -1002,7 +1043,7 @@ function pdRenderDashboard() {
   }
   const charts = pdBuildFilteredCharts(visible, data);
   pdRenderSummary(data, visible);
-  pdRenderBarChart("personaHotRankChart", visible.map((item) => ({ label: item.name, value: item.hot && item.hot.hot_score })));
+  pdRenderBarChart("personaHotRankChart", visible.map((item) => ({ label: item.name, value: pdPersonaHot(item).hot_score })));
   pdRenderDonutChart("personaPlatformChart", charts.platform_distribution);
   pdRenderDonutChart("personaCoverageChart", charts.hot_coverage);
   pdRenderTrendChart("personaTrendChart", charts.trend);
