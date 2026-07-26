@@ -25490,7 +25490,23 @@ function bindEvents() {
           resetPersonaDraftEditor(persona.id);
         }
         setPersonaGroupStep("content", nextStep, selectedPersonaProfile());
-        renderPersonaDetail();
+        const contentShell = $("personaDetail")?.querySelector(".persona-step-shell");
+        const contentPanel = contentShell?.querySelector(":scope > .persona-inline-panel");
+        if (contentShell && contentPanel) {
+          contentShell.querySelectorAll("[data-persona-content-tab]").forEach((button) => {
+            const tab = String(button.dataset.personaContentTab || "");
+            button.classList.toggle("is-active", target === "generate" ? tab === "generate" : tab === target);
+          });
+          contentPanel.outerHTML = renderPersonaContentPanel(
+            persona,
+            accountForPersona(persona),
+            selectedPersonaProfile(),
+            nextStep,
+          );
+          window.requestAnimationFrame(resizePersonaDraftEditContent);
+        } else {
+          renderPersonaDetail();
+        }
         renderConfirmSummary();
       }
       return;
