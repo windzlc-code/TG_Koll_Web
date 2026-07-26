@@ -171,6 +171,22 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-dashboard-view .persona-post-table thead {", self.styles)
         self.assertIn("overflow: visible;", self.styles)
 
+    def test_post_detail_prefers_backend_preview_urls_and_does_not_render_schema_field_names(self):
+        media_start = self.dashboard_script.index("function pdPostMediaItems(row)")
+        media_end = self.dashboard_script.index("\nfunction pdPostComposition", media_start)
+        media = self.dashboard_script[media_start:media_end]
+        render_start = self.dashboard_script.index("function pdRenderPostMedia(row)")
+        render_end = self.dashboard_script.index("\nfunction pdRenderPostGallery", render_start)
+        renderer = self.dashboard_script[render_start:render_end]
+
+        self.assertIn("item.preview_url || item.previewUrl", media)
+        self.assertIn("original_url: rawUrl", media)
+        self.assertIn("url: pdAdminWorkspaceUrl(previewUrl || (item.unavailable ? \"\" : rawUrl))", media)
+        self.assertIn("genericLabel", media)
+        self.assertIn("item.unavailable || !url", renderer)
+        self.assertIn("persona-post-media-unavailable", renderer)
+        self.assertIn(".persona-post-modal {\n  position: fixed;\n  inset: 0;\n  z-index: 6000;", self.dashboard_styles)
+
     def test_mobile_metric_context_wraps_without_ellipsis(self):
         title_start = self.styles.index(".persona-dashboard-view .persona-table-title {")
         title_end = self.styles.index(".persona-dashboard-view .persona-post-controls {", title_start)
@@ -1719,6 +1735,16 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("if (!rows.length || !title) return;", generated_titles)
         self.assertIn("applyPersonaGeneratedCandidateTitle(personaId, post, title)", generated_titles)
         self.assertNotIn("numberedTitle", generated_titles)
+
+    def test_hidden_draft_menu_keeps_delete_actions_as_text(self):
+        actions = self.console_script[
+            self.console_script.index("function renderPersonaDraftPostActions"):
+            self.console_script.index("function renderPersonaDraftTableRows")
+        ]
+        self.assertIn('data-persona-delete-favorite="${esc(post.id)}">移出收藏</button>', actions)
+        self.assertIn('data-persona-delete-post="${esc(post.id)}">删除草稿</button>', actions)
+        self.assertNotIn("unified-action-icon-button", actions)
+        self.assertNotIn("renderTrashIcon()", actions)
 
     def test_draft_toolbar_uses_icon_bulk_actions_and_aligned_controls(self):
         bulk_actions = self.console_script[

@@ -19,12 +19,26 @@ class AdminTaskTableFrontendTests(unittest.TestCase):
         self.assertIn('<tbody id="taskList"></tbody>', self.html)
         self.assertIn("function renderTaskRow(task)", self.script)
         self.assertNotIn("function renderTaskCard(task)", self.script)
-        self.assertIn("visibleRows.map((task) => renderTaskRow(task))", self.script)
+        self.assertIn("pageRows.map((task) => renderTaskRow(task))", self.script)
 
     def test_generation_table_has_scoped_column_layout(self):
         self.assertIn(".page-admin .admin-task-table {", self.styles)
         self.assertIn(".page-admin .admin-task-table-actions {", self.styles)
         self.assertIn(".page-admin .admin-task-table th:nth-child(8)", self.styles)
+
+    def test_long_admin_lists_share_the_same_pagination_pattern(self):
+        for prefix in ("task", "audit", "security"):
+            self.assertIn(f'id="{prefix}Pagination"', self.html)
+            self.assertIn(f'id="{prefix}PageIndicator"', self.html)
+        self.assertIn("pageSize: 20", self.script)
+        self.assertIn("auditListPageSize: 20", self.script)
+        self.assertIn("securityListPageSize: 20", self.script)
+        self.assertIn(".page-admin .admin-list-pagination[hidden]", self.styles)
+
+    def test_desktop_workspace_is_capped_and_admin_utilities_are_aligned(self):
+        self.assertIn("width: min(1480px, calc(100% - 48px));", self.styles)
+        self.assertIn(".page-admin .admin-profile-menu {\n  display: flex;", self.styles)
+        self.assertIn(".page-admin .admin-preference-button.admin-language-toggle {", self.styles)
 
     def test_final_admin_theme_is_opaque_and_keeps_the_title_image(self):
         marker = "/* Keep one opaque admin theme last"

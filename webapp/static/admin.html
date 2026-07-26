@@ -916,6 +916,14 @@
             <tbody id="taskList"></tbody>
           </table>
         </div>
+        <nav id="taskPagination" class="admin-user-pagination admin-list-pagination" aria-label="生成记录分页" hidden>
+          <div class="admin-user-pagination-summary" id="taskPaginationSummary" aria-live="polite">共 0 条生成记录</div>
+          <div class="admin-user-pagination-actions">
+            <button id="btnTaskPagePrev" type="button" class="ghost" aria-label="上一页生成记录">上一页</button>
+            <span id="taskPageIndicator" aria-live="polite">第 1 / 1 页</span>
+            <button id="btnTaskPageNext" type="button" class="ghost" aria-label="下一页生成记录">下一页</button>
+          </div>
+        </nav>
       </section>
 
       <section class="card section admin-page-view" id="secAudit" data-page-view="audit">
@@ -943,6 +951,14 @@
             <tbody id="auditBody"></tbody>
           </table>
         </div>
+        <nav id="auditPagination" class="admin-user-pagination admin-list-pagination" aria-label="审计日志分页" hidden>
+          <div class="admin-user-pagination-summary" id="auditPaginationSummary" aria-live="polite">共 0 条审计日志</div>
+          <div class="admin-user-pagination-actions">
+            <button id="btnAuditPagePrev" type="button" class="ghost" aria-label="上一页审计日志">上一页</button>
+            <span id="auditPageIndicator" aria-live="polite">第 1 / 1 页</span>
+            <button id="btnAuditPageNext" type="button" class="ghost" aria-label="下一页审计日志">下一页</button>
+          </div>
+        </nav>
         <div id="auditMsg" class="msg" role="status" aria-live="polite"></div>
       </section>
 
@@ -959,6 +975,14 @@
           <label><span>严重度</span><select id="securitySeverity"><option value="">全部</option><option value="critical">严重</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label>
         </form>
         <div id="securityAlertList" class="admin-security-list"></div>
+        <nav id="securityPagination" class="admin-user-pagination admin-list-pagination" aria-label="安全告警分页" hidden>
+          <div class="admin-user-pagination-summary" id="securityPaginationSummary" aria-live="polite">共 0 条安全告警</div>
+          <div class="admin-user-pagination-actions">
+            <button id="btnSecurityPagePrev" type="button" class="ghost" aria-label="上一页安全告警">上一页</button>
+            <span id="securityPageIndicator" aria-live="polite">第 1 / 1 页</span>
+            <button id="btnSecurityPageNext" type="button" class="ghost" aria-label="下一页安全告警">下一页</button>
+          </div>
+        </nav>
         <div id="securityMsg" class="msg" role="status" aria-live="polite"></div>
       </section>
 

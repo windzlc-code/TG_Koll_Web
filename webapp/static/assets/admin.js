@@ -1508,6 +1508,8 @@ const GOVERNANCE_POLL_INTERVAL_MS = 30000;
 const taskState = {
   rows: [],
   inspectText: "",
+  page: 1,
+  pageSize: 20,
 };
 const adminState = {
   rechargeTarget: null,
@@ -1567,7 +1569,12 @@ const adminState = {
   governanceLastPayload: null,
   governanceCharts: new Map(),
   auditRows: [],
+  auditListPage: 1,
+  auditListPageSize: 20,
+  auditListTotal: 0,
   securityRows: [],
+  securityListPage: 1,
+  securityListPageSize: 20,
   serviceAccountRows: [],
   proxyMarketItemRows: [],
   proxyMarketAllocationRows: [],
@@ -2266,18 +2273,29 @@ function renderTaskRow(task) {
 function renderTasks() {
   const allRows = Array.isArray(taskState.rows) ? taskState.rows : [];
   const visibleRows = filterTasks(allRows);
+  const pageSize = Math.max(1, Number(taskState.pageSize || 20));
+  const totalPages = Math.max(1, Math.ceil(visibleRows.length / pageSize));
+  taskState.page = Math.min(Math.max(1, Number(taskState.page || 1)), totalPages);
+  const pageStart = (taskState.page - 1) * pageSize;
+  const pageRows = visibleRows.slice(pageStart, pageStart + pageSize);
   const list = el("taskList");
   const tableShell = el("taskTableShell");
   const empty = el("taskEmpty");
   const meta = el("taskMetaLine");
+  const pagination = el("taskPagination");
   if (!list || !empty || !meta) return;
   renderTaskSummary(allRows, visibleRows);
   meta.textContent = visibleRows.length === allRows.length
-    ? `共 ${allRows.length} 条生成记录，按创建时间倒序展示`
-    : `显示 ${visibleRows.length} / ${allRows.length} 条生成记录`;
+    ? `共 ${allRows.length} 条生成记录，按创建时间倒序展示 · 第 ${taskState.page} / ${totalPages} 页`
+    : `筛选到 ${visibleRows.length} / ${allRows.length} 条生成记录 · 第 ${taskState.page} / ${totalPages} 页`;
   empty.style.display = visibleRows.length ? "none" : "block";
   if (tableShell) tableShell.style.display = visibleRows.length ? "block" : "none";
-  list.innerHTML = visibleRows.map((task) => renderTaskRow(task)).join("");
+  list.innerHTML = pageRows.map((task) => renderTaskRow(task)).join("");
+  if (pagination) pagination.hidden = !visibleRows.length;
+  setText("taskPaginationSummary", `共 ${visibleRows.length} 条生成记录 · 每页 ${pageSize} 条`);
+  setText("taskPageIndicator", `第 ${taskState.page} / ${totalPages} 页`);
+  if (el("btnTaskPagePrev")) el("btnTaskPagePrev").disabled = taskState.page <= 1;
+  if (el("btnTaskPageNext")) el("btnTaskPageNext").disabled = taskState.page >= totalPages;
 }
 
 function setButtonLoading(buttonId, loading, loadingText) {
@@ -4928,7 +4946,12 @@ function appendCell(row, primary, secondary = "") {
 }
 
 function auditQuery() {
-  const query = new URLSearchParams({ limit: "200", offset: "0" });
+  const pageSize = Math.max(1, Number(adminState.auditListPageSize || 20));
+  const page = Math.max(1, Number(adminState.auditListPage || 1));
+  const query = new URLSearchParams({
+    limit: String(pageSize),
+    offset: String((page - 1) * pageSize),
+  });
   const values = {
     actor_user_id: el("auditActorId")?.value,
     target_user_id: el("auditTargetId")?.value,
@@ -4946,6 +4969,11 @@ function renderAuditEvents(payload = {}) {
   const body = el("auditBody");
   if (!body) return;
   const rows = Array.isArray(payload.items) ? payload.items : [];
+  const total = Math.max(0, Number(payload.total || rows.length));
+  const pageSize = Math.max(1, Number(adminState.auditListPageSize || 20));
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  adminState.auditListTotal = total;
+  adminState.auditListPage = Math.min(Math.max(1, Number(adminState.auditListPage || 1)), totalPages);
   adminState.auditRows = rows;
   body.replaceChildren();
   if (!rows.length) {
@@ -4972,7 +5000,12 @@ function renderAuditEvents(payload = {}) {
       body.appendChild(row);
     });
   }
-  setText("auditResultSummary", `显示 ${rows.length} / ${Number(payload.total || rows.length)} 条`);
+  setText("auditResultSummary", `第 ${adminState.auditListPage} / ${totalPages} 页 · 共 ${total} 条`);
+  if (el("auditPagination")) el("auditPagination").hidden = !total;
+  setText("auditPaginationSummary", `共 ${total} 条审计日志 · 每页 ${pageSize} 条`);
+  setText("auditPageIndicator", `第 ${adminState.auditListPage} / ${totalPages} 页`);
+  if (el("btnAuditPagePrev")) el("btnAuditPagePrev").disabled = adminState.auditListPage <= 1;
+  if (el("btnAuditPageNext")) el("btnAuditPageNext").disabled = adminState.auditListPage >= totalPages;
 }
 
 async function loadAuditEvents() {
@@ -5024,13 +5057,22 @@ function renderSecurityAlerts(payload = {}) {
   const container = el("securityAlertList");
   if (!container) return;
   const rows = Array.isArray(payload.items) ? payload.items : [];
+  const pageSize = Math.max(1, Number(adminState.securityListPageSize || 20));
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  adminState.securityListPage = Math.min(
+    Math.max(1, Number(adminState.securityListPage || 1)),
+    totalPages,
+  );
+  const pageStart = (adminState.securityListPage - 1) * pageSize;
+  const pageRows = rows.slice(pageStart, pageStart + pageSize);
   adminState.securityRows = rows;
   container.replaceChildren();
   if (!rows.length) {
     container.appendChild(markAdminDynamicUiElement(createEmptyState("当前筛选条件下没有安全告警")));
+    if (el("securityPagination")) el("securityPagination").hidden = true;
     return;
   }
-  rows.forEach((item) => {
+  pageRows.forEach((item) => {
     const article = document.createElement("article");
     article.className = `admin-security-alert is-${String(item.severity || "low").toLowerCase()}`;
     const copy = document.createElement("div");
@@ -5082,6 +5124,11 @@ function renderSecurityAlerts(payload = {}) {
     article.append(copy, meta, actions);
     container.appendChild(article);
   });
+  if (el("securityPagination")) el("securityPagination").hidden = false;
+  setText("securityPaginationSummary", `共 ${rows.length} 条安全告警 · 每页 ${pageSize} 条`);
+  setText("securityPageIndicator", `第 ${adminState.securityListPage} / ${totalPages} 页`);
+  if (el("btnSecurityPagePrev")) el("btnSecurityPagePrev").disabled = adminState.securityListPage <= 1;
+  if (el("btnSecurityPageNext")) el("btnSecurityPageNext").disabled = adminState.securityListPage >= totalPages;
 }
 
 async function loadSecurityAlerts() {
@@ -7423,11 +7470,24 @@ function bindActions() {
   el("governanceStartDate")?.addEventListener("change", () => void loadGovernanceDashboard({ force: true }));
   el("governanceEndDate")?.addEventListener("change", () => void loadGovernanceDashboard({ force: true }));
   syncGovernanceRangeControls();
-  el("btnRefreshAudit")?.addEventListener("click", () => void loadAuditEvents());
+  el("btnRefreshAudit")?.addEventListener("click", () => {
+    adminState.auditListPage = 1;
+    void loadAuditEvents();
+  });
   el("btnExportAudit")?.addEventListener("click", () => void exportAuditEvents());
-  el("auditFilterForm")?.addEventListener("submit", (event) => { event.preventDefault(); void loadAuditEvents(); });
-  el("btnRefreshSecurity")?.addEventListener("click", () => void loadSecurityAlerts());
-  el("securityFilterForm")?.addEventListener("change", () => void loadSecurityAlerts());
+  el("auditFilterForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    adminState.auditListPage = 1;
+    void loadAuditEvents();
+  });
+  el("btnRefreshSecurity")?.addEventListener("click", () => {
+    adminState.securityListPage = 1;
+    void loadSecurityAlerts();
+  });
+  el("securityFilterForm")?.addEventListener("change", () => {
+    adminState.securityListPage = 1;
+    void loadSecurityAlerts();
+  });
   el("btnRefreshServiceAccounts")?.addEventListener("click", () => void loadServiceAccounts());
   setDefaultServiceAccountExpiry();
   el("serviceAccountForm")?.addEventListener("submit", async (event) => {
@@ -7863,6 +7923,7 @@ function bindActions() {
     const node = el(id);
     if (!node) return;
     node.addEventListener(id === "taskSearch" ? "input" : "change", () => {
+      taskState.page = 1;
       renderTasks();
     });
   });
@@ -7873,9 +7934,41 @@ function bindActions() {
       if (el("taskStatusFilter")) el("taskStatusFilter").value = "";
       if (el("taskWorkflowFilter")) el("taskWorkflowFilter").value = "";
       if (el("taskUserFilter")) el("taskUserFilter").value = "";
+      taskState.page = 1;
       renderTasks();
     });
   }
+
+  el("btnTaskPagePrev")?.addEventListener("click", () => {
+    taskState.page = Math.max(1, Number(taskState.page || 1) - 1);
+    renderTasks();
+  });
+  el("btnTaskPageNext")?.addEventListener("click", () => {
+    taskState.page = Number(taskState.page || 1) + 1;
+    renderTasks();
+  });
+  el("btnAuditPagePrev")?.addEventListener("click", () => {
+    if (adminState.auditListPage <= 1) return;
+    adminState.auditListPage -= 1;
+    void loadAuditEvents();
+  });
+  el("btnAuditPageNext")?.addEventListener("click", () => {
+    const totalPages = Math.max(
+      1,
+      Math.ceil(Number(adminState.auditListTotal || 0) / Number(adminState.auditListPageSize || 20)),
+    );
+    if (adminState.auditListPage >= totalPages) return;
+    adminState.auditListPage += 1;
+    void loadAuditEvents();
+  });
+  el("btnSecurityPagePrev")?.addEventListener("click", () => {
+    adminState.securityListPage = Math.max(1, Number(adminState.securityListPage || 1) - 1);
+    renderSecurityAlerts({ items: adminState.securityRows });
+  });
+  el("btnSecurityPageNext")?.addEventListener("click", () => {
+    adminState.securityListPage = Number(adminState.securityListPage || 1) + 1;
+    renderSecurityAlerts({ items: adminState.securityRows });
+  });
 
   if (el("btnSentimentCookieRefresh")) {
     el("btnSentimentCookieRefresh").addEventListener("click", async () => {

@@ -1268,7 +1268,6 @@
       try {
         window.localStorage.setItem(NOTIFICATION_STORAGE_KEY, `${Date.now()}`);
       } catch {}
-      window.dispatchEvent(new CustomEvent("vecto:notifications-updated"));
       return payload;
     } catch {
       notificationState.items = previousItems;

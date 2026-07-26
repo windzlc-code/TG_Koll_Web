@@ -7021,8 +7021,8 @@ function renderPersonaDraftPostActions(post, {
         <div class="persona-draft-more-menu">
           <button type="button" data-persona-edit-post="${esc(post.id)}">${isFavoriteSource ? "编辑收藏" : "编辑草稿"}</button>
           ${isFavoriteSource
-            ? `<button type="button" class="danger unified-action-icon-button" data-persona-delete-favorite="${esc(post.id)}" title="移出收藏" aria-label="移出收藏">${renderTrashIcon()}</button>`
-            : `<button type="button" class="danger unified-action-icon-button" data-persona-delete-post="${esc(post.id)}" title="删除草稿" aria-label="删除草稿">${renderTrashIcon()}</button>`}
+            ? `<button type="button" class="danger" data-persona-delete-favorite="${esc(post.id)}">移出收藏</button>`
+            : `<button type="button" class="danger" data-persona-delete-post="${esc(post.id)}">删除草稿</button>`}
         </div>
       </div>
       <button type="button" class="primary" data-persona-open-publishing="${esc(post.id)}" ${dailyPublishActionAttrs()}>${source === "favorites" ? "执行收藏任务" : "执行任务"}</button>

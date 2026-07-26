@@ -4957,7 +4957,7 @@ body.page-admin {
 .persona-post-modal {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: 6000;
   display: grid;
   place-items: center;
   padding: 24px;
@@ -5101,6 +5101,22 @@ body.page-admin {
 .persona-post-media-empty {
   min-height: 72px;
   color: #64748b;
+}
+
+.persona-post-media-unavailable {
+  gap: 4px;
+  padding: 10px;
+  text-align: center;
+}
+
+.persona-post-media-unavailable strong {
+  color: #475569;
+}
+
+.persona-post-media-unavailable span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .persona-post-gallery {
@@ -9557,4 +9573,77 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
     max-height: 100%;
   }
 
+}
+
+/* Desktop operations workspace: cap the reading width and keep the utility
+   controls as one coherent icon group. */
+@media (min-width: 1181px) {
+  .page-admin .main {
+    width: min(1480px, calc(100% - 48px));
+    max-width: 1480px;
+    margin-inline: auto;
+    padding-block: 24px 36px;
+  }
+}
+
+.page-admin .admin-profile-menu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-admin .admin-language-menu {
+  display: flex;
+  align-items: center;
+}
+
+.page-admin .admin-preference-button.admin-language-toggle {
+  display: grid;
+  inline-size: 42px;
+  block-size: 42px;
+  width: 42px;
+  height: 42px;
+  min-width: 42px;
+  min-height: 42px;
+  place-items: center;
+  padding: 0;
+  color: #173c38;
+  border: 1px solid #c8d8d4;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(10, 35, 32, 0.1);
+  line-height: 0;
+}
+
+.page-admin .admin-preference-button.admin-language-toggle:hover,
+.page-admin .admin-preference-button.admin-language-toggle[aria-expanded="true"] {
+  color: #087b68;
+  border-color: #5de29b;
+  background: #f5fffb;
+}
+
+.page-admin .admin-preference-button.admin-language-toggle svg {
+  inline-size: 21px;
+  block-size: 21px;
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.page-admin .admin-list-pagination[hidden] {
+  display: none;
+}
+
+.page-admin .admin-list-pagination {
+  border-top: 1px solid var(--admin-line);
+}
+
+@media (max-width: 760px) {
+  .page-admin .admin-profile-menu {
+    gap: 6px;
+  }
 }

@@ -756,7 +756,7 @@ function pdFindPostRow(persona, postKey) {
 }
 
 function pdMediaType(item) {
-  const text = `${(item && item.type) || ""} ${(item && item.url) || ""}`.toLowerCase();
+  const text = `${(item && item.type) || ""} ${(item && item.url) || ""} ${(item && item.original_url) || ""}`.toLowerCase();
   if (/(video|mp4|mov|m4v|webm)/.test(text)) return "video";
   if (/(image|photo|png|jpe?g|webp|gif)/.test(text)) return "image";
   return "link";
@@ -764,7 +764,18 @@ function pdMediaType(item) {
 
 function pdPostMediaItems(row) {
   return Array.isArray(row.media_items)
-    ? row.media_items.filter((item) => item && item.url).map((item) => ({ ...item, url: pdAdminWorkspaceUrl(item.url) }))
+    ? row.media_items.filter((item) => item && (item.url || item.mediaUrl || item.media_url)).map((item) => {
+      const rawUrl = String(item.url || item.mediaUrl || item.media_url || "").trim();
+      const previewUrl = String(item.preview_url || item.previewUrl || "").trim();
+      const rawLabel = String(item.label || "").trim();
+      const genericLabel = /^(?:media|mediaurl|mediaitem|mediaitems|attachment|attachments)$/i.test(rawLabel);
+      return {
+        ...item,
+        original_url: rawUrl,
+        url: pdAdminWorkspaceUrl(previewUrl || (item.unavailable ? "" : rawUrl)),
+        label: genericLabel ? "" : rawLabel,
+      };
+    })
     : [];
 }
 
@@ -798,6 +809,9 @@ function pdRenderPostMedia(row) {
         const url = String(item.url || "");
         const type = pdMediaType(item);
         const label = item.label || `媒体 ${index + 1}`;
+        if (item.unavailable || !url) {
+          return `<div class="persona-post-media-empty persona-post-media-unavailable"><strong>${pdEscape(label)}</strong><span>${pdEscape(item.reason || "媒体预览暂不可用")}</span></div>`;
+        }
         if (type === "image") {
           return `<button class="persona-post-media-item" type="button" data-post-media-index="${index}" aria-label="站内查看${pdEscape(label)}"><img src="${pdEscape(url)}" alt="${pdEscape(label)}" loading="lazy" /></button>`;
         }
