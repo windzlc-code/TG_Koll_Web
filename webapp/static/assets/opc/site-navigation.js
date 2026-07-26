@@ -1234,6 +1234,22 @@
   async function markNotificationsRead({ ids = [], category = "", all = false } = {}) {
     if (!currentAccount || currentSessionMode === "guest") return null;
     const cleanIds = [...new Set(ids.map(notificationNumber).filter(Boolean))];
+    const previousItems = notificationState.items;
+    const previousUnread = notificationState.unread;
+    const matches = (item) => all
+      || (category && item.category === category)
+      || cleanIds.includes(notificationNumber(item.id));
+    const markedItems = previousItems.map((item) => matches(item) ? { ...item, read: true } : item);
+    notificationRequest += 1;
+    notificationState.loading = false;
+    notificationState.items = markedItems;
+    notificationState.unread = {
+      system: markedItems.filter((item) => item.category === "system" && !item.read).length,
+      official: markedItems.filter((item) => item.category === "official" && !item.read).length,
+      interaction: markedItems.filter((item) => item.category === "interaction" && !item.read).length,
+      total: markedItems.filter((item) => !item.read).length,
+    };
+    renderNotifications();
     const headers = accountRequestHeaders();
     headers.set("Content-Type", "application/json");
     try {
@@ -1244,12 +1260,10 @@
         body: JSON.stringify({ ids: cleanIds, category, all }),
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) return null;
-      const matches = (item) => all
-        || (category && item.category === category)
-        || cleanIds.includes(notificationNumber(item.id));
-      notificationState.items = notificationState.items.map((item) => matches(item) ? { ...item, read: true } : item);
-      notificationState.unread = normalizeNotificationUnread(payload?.unread);
+      if (!response.ok) throw new Error("notification read failed");
+      if (payload?.unread && typeof payload.unread === "object") {
+        notificationState.unread = normalizeNotificationUnread(payload.unread);
+      }
       renderNotifications();
       try {
         window.localStorage.setItem(NOTIFICATION_STORAGE_KEY, `${Date.now()}`);
@@ -1257,6 +1271,9 @@
       window.dispatchEvent(new CustomEvent("vecto:notifications-updated"));
       return payload;
     } catch {
+      notificationState.items = previousItems;
+      notificationState.unread = previousUnread;
+      renderNotifications();
       return null;
     }
   }

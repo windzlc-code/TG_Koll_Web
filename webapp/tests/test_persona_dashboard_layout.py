@@ -1766,7 +1766,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('class="publish-post-picker publish-post-picker--${esc(source)}"', source_panel)
         self.assertIn(".publish-post-picker--custom {\n  grid-template-rows: auto auto;", self.styles)
 
-    def test_mobile_empty_publish_preview_does_not_leave_a_source_gap(self):
+    def test_mobile_hidden_publish_preview_does_not_leave_a_source_gap(self):
         preview = self.console_script[
             self.console_script.index("function renderPublishContentPreview"):
             self.console_script.index("function renderPublishContentPanel")
@@ -1777,7 +1777,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             preview,
         )
         self.assertIn(
-            ".publish-content-preview--selection.is-empty {\n    display: none;",
+            ".publish-content-preview--selection {\n    display: none;",
             self.styles,
         )
 

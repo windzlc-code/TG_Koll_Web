@@ -852,6 +852,10 @@ body.site-mobile-menu-active {
   transform: translateY(-50%);
 }
 
+.site-notification-tab-count[hidden] {
+  display: none;
+}
+
 .site-notification-list {
   display: grid;
   align-content: start;

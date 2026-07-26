@@ -21093,7 +21093,7 @@ body.console-page {
   }
 
   .publish-content-preview--selection {
-    display: block;
+    display: none;
     order: -2;
     padding: 0;
     border: 0;
@@ -21102,10 +21102,6 @@ body.console-page {
   }
 
   .publish-content-preview--selection .publish-preview-tabs-layout {
-    display: none;
-  }
-
-  .publish-content-preview--selection.is-empty {
     display: none;
   }
 
