@@ -8706,7 +8706,7 @@ function renderTaskQueueView() {
       actions: `
         <div class="task-queue-actionbar">
           ${renderTaskQueueBulkControls("persona")}
-          ${persona ? `<button type="button" class="danger unified-action-icon-button" data-task-clear-persona-queue="${esc(persona.id)}" title="删除全部记录" aria-label="删除全部记录">${renderTrashIcon()}</button>` : ""}
+          ${persona ? `<button type="button" class="danger unified-action-icon-button" data-task-clear-persona-queue="${esc(persona.id)}" title="清空当前人设队列" aria-label="清空当前人设队列">${renderClearSelectionIcon()}</button>` : ""}
         </div>`,
       body: persona
         ? (
@@ -26026,9 +26026,9 @@ function bindEvents() {
     }
     const clearPersonaQueue = event.target.closest("[data-task-clear-persona-queue]");
     if (clearPersonaQueue) {
-      confirmDangerAction("确定删除该人设的全部自动化队列记录吗？删除后不可恢复。", {
-        title: "删除全部记录",
-        confirmText: "删除全部",
+      confirmDangerAction("确定清空该人设的全部自动化队列记录吗？清空后不可恢复。", {
+        title: "清空当前人设队列",
+        confirmText: "确认清空",
       }).then((ok) => {
         if (!ok) return;
         clearPersonaAutomationTasksFor(clearPersonaQueue.dataset.taskClearPersonaQueue || "", "taskQueueMsg")

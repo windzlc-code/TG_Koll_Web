@@ -415,6 +415,18 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("align-items: center;", self.styles)
         self.assertIn("justify-content: center;", self.styles)
 
+    def test_task_queue_uses_trash_only_for_direct_delete_actions_and_does_not_nest_scroll(self):
+        view_start = self.console_script.index("function renderTaskQueueView()")
+        view_end = self.console_script.index("\nfunction currentBranch", view_start)
+        queue_view = self.console_script[view_start:view_end]
+
+        self.assertIn('data-task-queue-delete-selected="${esc(kind)}"', self.console_script)
+        self.assertIn('data-task-clear-persona-queue="${esc(persona.id)}"', queue_view)
+        self.assertIn('data-task-clear-persona-queue="${esc(persona.id)}" title="清空当前人设队列" aria-label="清空当前人设队列">${renderClearSelectionIcon()}</button>', queue_view)
+        self.assertIn(".console-page .task-table-inner {", self.styles)
+        self.assertIn("max-height: none;", self.styles)
+        self.assertIn("overflow-y: visible;", self.styles)
+
     def test_task_queue_removes_open_current_persona_action(self):
         self.assertNotIn("data-task-open-persona", self.console_script)
         self.assertNotIn("打开当前人设", self.console_script)

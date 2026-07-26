@@ -21052,6 +21052,13 @@ body.console-page {
     grid-auto-rows: max-content;
   }
 
+  /* Let regular queue rows use the page scroll on mobile instead of a nested list scroll. */
+  .console-page .task-table-inner {
+    max-height: none;
+    overflow-y: visible;
+    scrollbar-gutter: auto;
+  }
+
   .task-persona-queue-row {
     display: grid;
     grid-template-columns: 22px minmax(0, 1fr) minmax(88px, 42%);
