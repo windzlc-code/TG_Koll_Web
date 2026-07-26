@@ -1746,6 +1746,20 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("unified-action-icon-button", actions)
         self.assertNotIn("renderTrashIcon()", actions)
 
+    def test_open_draft_menu_stays_below_fixed_navigation(self):
+        workbench_layer = self.styles[
+            self.styles.index(".persona-workbench-shell.is-menu-open {"):
+            self.styles.index("}", self.styles.index(".persona-workbench-shell.is-menu-open {")) + 1
+        ]
+        panel_layer = self.styles[
+            self.styles.index(".persona-inline-panel.is-menu-open {"):
+            self.styles.index("}", self.styles.index(".persona-inline-panel.is-menu-open {")) + 1
+        ]
+        self.assertIn("z-index: 40;", workbench_layer)
+        self.assertIn("z-index: 40;", panel_layer)
+        self.assertNotIn("z-index: 5400;", workbench_layer)
+        self.assertNotIn("z-index: 5400;", panel_layer)
+
     def test_draft_toolbar_uses_icon_bulk_actions_and_aligned_controls(self):
         bulk_actions = self.console_script[
             self.console_script.index("function renderPersonaPostBulkActions"):

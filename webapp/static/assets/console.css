@@ -5033,7 +5033,7 @@ body.upload-media-sorting {
 
 .persona-workbench-shell.is-menu-open {
   position: relative;
-  z-index: 5400;
+  z-index: 40;
 }
 
 .persona-list-shell {
@@ -9214,7 +9214,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-inline-panel.is-menu-open {
   position: relative;
-  z-index: 5400;
+  z-index: 40;
 }
 
 .persona-generate-panel.is-editing-draft,
