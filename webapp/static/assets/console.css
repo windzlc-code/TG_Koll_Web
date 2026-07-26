@@ -2547,8 +2547,9 @@ textarea:focus {
 
 .automation-plan-row-main {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
+  /* The task cell also reserves space for detail, replace and remove actions. */
+  grid-template-columns: minmax(0, 0.84fr) minmax(0, 1.16fr);
+  align-items: center;
   gap: 4px;
   min-width: 0;
 }
@@ -2583,6 +2584,20 @@ textarea:focus {
   color: var(--ink);
   font-size: 12px;
   font-weight: 800;
+}
+
+.automation-plan-row-main .automation-plan-time-cell,
+.automation-plan-row-main .automation-plan-task-cell {
+  display: block;
+  min-width: 0;
+}
+
+.automation-plan-time-control {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
 }
 
 .automation-plan-time-dropdown-shell {
@@ -20927,8 +20942,8 @@ body.console-page {
   }
 
   .automation-plan-row-main {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: start;
+    grid-template-columns: minmax(0, 0.84fr) minmax(0, 1.16fr);
+    align-items: center;
   }
 
   .console-page .module-panel.is-publishing-module :is(

@@ -10187,8 +10187,10 @@ function renderAutomationPlanRows(draft, platform) {
     return `
       <li class="automation-plan-row ${timeMenuOpen ? "is-time-menu-open" : ""}" data-automation-plan-row="${index}">
         <div class="automation-plan-row-main">
-          <div class="automation-plan-time-cell"><span><b>${index + 1}</b> 时间</span>
-            <div class="automation-plan-time-dropdown-shell">
+          <div class="automation-plan-time-cell">
+            <div class="automation-plan-time-control">
+              <b>${index + 1}</b>
+              <div class="automation-plan-time-dropdown-shell">
               <button
                 type="button"
                 class="automation-plan-time-picker"
@@ -10220,10 +10222,10 @@ function renderAutomationPlanRows(draft, platform) {
                       ${minutes === selectedMinutes ? renderAutomationPlanCheckIcon() : ""}
                     </button>`).join("")}
                 </div>` : ""}
+              </div>
             </div>
           </div>
           <div class="automation-plan-task-cell">
-            <span class="automation-plan-field-label">任务</span>
             <div class="automation-plan-task-control">
               <strong class="automation-plan-task-value">${esc(selectedTask ? automationPlanTaskLabel(selectedTask) : "未添加")}</strong>
               <button

@@ -153,7 +153,10 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
     def test_plan_rows_remain_two_columns_on_mobile(self):
         rows = function_source("renderAutomationPlanRows", "automationPlanStatusLabel")
         self.assertIn("automation-plan-time-cell", rows)
+        self.assertIn("automation-plan-time-control", rows)
         self.assertIn("automation-plan-task-cell", rows)
+        self.assertNotIn('<span class="automation-plan-field-label">任务</span>', rows)
+        self.assertNotIn('</b> 时间</span>', rows)
         self.assertIn('data-automation-plan-view-details="${index}"', rows)
         self.assertIn("renderEyeIcon()", rows)
         self.assertIn("renderPlusIcon()", rows)
