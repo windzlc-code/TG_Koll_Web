@@ -59,6 +59,19 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertFalse((ROOT / "static" / "admin-login.html").exists())
         self.assertNotIn("page-admin-auth", self.styles)
 
+    def test_admin_profile_control_uses_the_admin_modal_not_the_shared_profile_editor(self):
+        trigger_start = self.html.index('id="adminProfileToggle"')
+        trigger = self.html[trigger_start - 160 : trigger_start + 360]
+        self.assertIn("<button", trigger)
+        self.assertNotIn("href=", trigger)
+        self.assertIn('aria-controls="adminProfileModal"', trigger)
+        self.assertIn('id="adminProfileModal"', self.html)
+        self.assertIn('id="btnAdminProfileAccount"', self.html)
+        self.assertNotIn('class="admin-rail-note"', self.html)
+        self.assertIn('el("adminProfileToggle")?.addEventListener("click", openAdminProfileModal);', self.script)
+        self.assertIn('if (setActiveAdminPage("account"))', self.script)
+        self.assertIn('closeAdminProfileModal();', self.script)
+
     def test_admin_creation_requires_and_submits_step_up_only_for_admins(self):
         for field_id in (
             "adminCreateStepUpPanel",

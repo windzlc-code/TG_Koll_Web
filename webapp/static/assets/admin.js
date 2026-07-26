@@ -505,6 +505,24 @@ function setActiveAdminPage(page, updateHash = true) {
   return true;
 }
 
+function openAdminProfileModal() {
+  const modal = el("adminProfileModal");
+  if (!modal) return;
+  setText("adminProfileUsername", el("adminName")?.textContent || "-");
+  setText("adminProfileCurrentPage", el("adminCurrentPageLabel")?.textContent || "运营概览");
+  modal.style.display = "grid";
+  modal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => el("btnAdminProfileClose")?.focus(), 0);
+}
+
+function closeAdminProfileModal() {
+  const modal = el("adminProfileModal");
+  if (!modal || modal.getAttribute("aria-hidden") === "true") return;
+  modal.style.display = "none";
+  modal.setAttribute("aria-hidden", "true");
+  el("adminProfileToggle")?.focus({ preventScroll: true });
+}
+
 function clearStoredAdminWorkspaceContext() {
   try { window.sessionStorage.removeItem("vecto-admin-workspace-user-id"); } catch (_) {}
   try { window.sessionStorage.removeItem("vecto-admin-console-context"); } catch (_) {}
@@ -2366,6 +2384,7 @@ async function ensureAdmin() {
     return null;
   }
   el("adminName").textContent = me.username;
+  setText("adminProfileUsername", me.username || "-");
   if (el("accCurrentUsername")) el("accCurrentUsername").value = me.username || "";
   return me;
 }
@@ -8097,12 +8116,25 @@ function bindActions() {
       if (e.target === e.currentTarget) closeUserDetailModal();
     });
   }
+  el("adminProfileToggle")?.addEventListener("click", openAdminProfileModal);
+  el("btnAdminProfileClose")?.addEventListener("click", closeAdminProfileModal);
+  el("btnAdminProfileDone")?.addEventListener("click", closeAdminProfileModal);
+  el("btnAdminProfileAccount")?.addEventListener("click", () => {
+    closeAdminProfileModal();
+    if (setActiveAdminPage("account")) {
+      el("secAccount")?.scrollIntoView({ block: "start" });
+    }
+  });
+  el("adminProfileModal")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) closeAdminProfileModal();
+  });
   document.addEventListener("keydown", (e) => {
     if (trapUserDetailFocus(e)) return;
     if (e.key === "Escape") {
       closeTaskInspectModal();
       closeRechargeModal();
       closeUserDetailModal();
+      closeAdminProfileModal();
       setMfaModalOpen(false);
     }
   });
