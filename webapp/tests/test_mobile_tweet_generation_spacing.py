@@ -87,6 +87,8 @@ def test_draft_edit_save_uses_a_global_button_with_long_press_actions():
     assert '.persona-draft-global-save-dock.is-actions-expanded .persona-draft-save-floating-actions {' in css
     assert 'grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);' in css
     assert '.console-page #personaDetail:has(.persona-draft-global-save-dock)' in css
-    assert 'left: calc(25% + 5px);' in css
+    assert 'right: calc(25% + 5px);' in css
     assert '.console-page .persona-draft-save-cancel {' in css
+    assert 'grid-row: 1;' in css
+    assert 'font-size: 16px !important;' in css
     assert 'height: 50px !important;' in css
