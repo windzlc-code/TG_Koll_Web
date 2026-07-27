@@ -8860,20 +8860,24 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-account-picker,
 .persona-account-picker-list {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .persona-account-picker > p {
   margin: 0;
   color: var(--muted);
-  line-height: 1.55;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .persona-account-picker-card {
   display: grid;
   width: 100%;
-  gap: 10px;
-  padding: 13px 14px;
+  min-height: 0;
+  max-width: none;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--soft);
@@ -8903,13 +8907,19 @@ body.persona-touch-dragging .persona-list-card:active {
   min-width: 0;
 }
 
+.persona-account-picker-card-main {
+  grid-column: 1 / -1;
+}
+
 .persona-account-picker-card-copy {
   display: grid;
   min-width: 0;
-  gap: 3px;
+  gap: 1px;
 }
 
 .persona-account-picker-card-copy strong {
+  font-size: 15px;
+  line-height: 1.2;
   overflow-wrap: anywhere;
 }
 
@@ -8924,18 +8934,46 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-account-picker-card-meta {
-  justify-content: flex-start;
-  flex-wrap: wrap;
+  display: grid;
+  grid-column: 1;
+  grid-row: 2;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+  gap: 4px;
 }
 
 .persona-account-picker-card-meta span {
-  padding: 3px 7px;
+  max-width: 100%;
+  padding: 2px 6px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel-solid);
+  overflow-wrap: anywhere;
+}
+
+.persona-account-picker-card-meta .persona-account-picker-binding {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+  font-weight: 800;
+}
+
+.persona-account-picker-card-meta .persona-account-picker-binding.is-bound {
+  border-color: #d6a957;
+  background: #fff8e8;
+  color: #9a5a00;
+}
+
+.persona-account-picker-card-meta .persona-account-picker-binding.is-current {
+  border-color: #6f9f8b;
+  background: #eef8f2;
+  color: #18734d;
 }
 
 .persona-account-picker-card-action {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: center;
+  padding: 2px 0;
   justify-self: end;
   color: var(--accent-dark);
   font-size: 13px;
@@ -9371,6 +9409,56 @@ body.persona-touch-dragging .persona-list-card:active {
   width: 100%;
   margin-left: 0;
   justify-content: space-between;
+}
+
+.persona-draft-global-save-dock {
+  position: relative;
+  display: grid;
+  width: min(100%, 420px);
+  margin: 16px auto 4px;
+}
+
+.persona-draft-global-save-button {
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 22px;
+  border-radius: 12px;
+  font-size: 17px;
+  font-weight: 900;
+  letter-spacing: .04em;
+}
+
+.persona-draft-save-floating-actions {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity .16s ease, transform .16s ease, visibility .16s ease;
+}
+
+.persona-draft-save-floating-actions .unified-action-icon-button {
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
+  border-radius: 999px;
+  box-shadow: 0 7px 18px rgba(20, 27, 36, .16);
+}
+
+.persona-draft-global-save-dock.is-actions-expanded .persona-draft-save-floating-actions {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .persona-draft-content--full {
@@ -10468,6 +10556,19 @@ body.persona-touch-dragging .persona-list-card:active {
   transform: rotate(45deg);
 }
 
+.persona-draft-more.opens-upward .persona-draft-more-menu {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+.persona-draft-more.opens-upward .persona-draft-more-menu::before {
+  top: auto;
+  bottom: -6px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
 .persona-draft-more.is-open .persona-draft-more-menu {
   display: grid;
   gap: 5px;
@@ -11279,6 +11380,11 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-draft-detail-hot {
   display: grid;
   gap: 8px;
+}
+
+.persona-draft-detail-hot .persona-hot-metric-strip {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
 }
 
 .persona-hot-detail,
@@ -12679,6 +12785,14 @@ body.persona-media-sorting {
   justify-content: flex-end;
   gap: 10px;
   padding-top: 2px;
+}
+
+.console-modal[data-modal-key="persona-draft-detail"] .console-modal-actions {
+  justify-content: space-between;
+}
+
+.console-modal[data-modal-key="persona-draft-detail"] .console-modal-actions > [data-console-modal-confirm] {
+  order: -1;
 }
 
 .console-modal-actions button {
@@ -14220,10 +14334,10 @@ body.persona-media-sorting {
   line-height: 1;
 }
 
-/* Draft-exit confirmation keeps the return path on the left and destructive/save actions together on the right. */
+/* Draft-exit confirmation offers only discard-and-exit or save. */
 .console-modal[data-modal-key="persona-draft-edit-exit"] .console-modal-actions {
   display: grid;
-  grid-template-columns: minmax(76px, 1fr) minmax(96px, 1.2fr) minmax(76px, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
   justify-content: initial;
   gap: 8px;
@@ -14237,17 +14351,31 @@ body.persona-media-sorting {
   white-space: nowrap;
 }
 
-.console-modal[data-modal-key="persona-draft-edit-exit"] .console-modal-actions > [data-console-modal-cancel] {
-  grid-column: 1;
-  justify-self: start;
-}
-
 .console-modal[data-modal-key="persona-draft-edit-exit"] .console-modal-actions > [data-console-modal-value] {
-  grid-column: 2;
+  grid-column: 1;
 }
 
 .console-modal[data-modal-key="persona-draft-edit-exit"] .console-modal-actions > [data-console-modal-confirm] {
-  grid-column: 3;
+  grid-column: 2;
+}
+
+@media (max-width: 760px) {
+  .console-page .persona-draft-global-save-dock {
+    position: sticky;
+    bottom: calc(var(--mobile-task-dock-height, 64px) + 8px);
+    z-index: 12;
+    width: 100%;
+    margin: 12px 0 4px;
+  }
+
+  .console-page .persona-draft-global-save-button {
+    min-height: 52px;
+    font-size: 16px;
+  }
+
+  .console-page .persona-draft-save-floating-actions {
+    bottom: calc(100% + 8px);
+  }
 }
 
 /* Mobile add-account triggers keep only a lightweight border transition. */

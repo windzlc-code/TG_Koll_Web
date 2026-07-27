@@ -45,9 +45,13 @@ def test_editing_draft_copy_and_controls_share_the_compose_card_header():
 
     assert 'persona-temp-edit-toolbar--hint' not in panel
     assert 'class="persona-temp-edit-copy"' in panel
-    assert 'class="persona-temp-edit-icon-actions"' in panel
     assert panel.index('persona-temp-edit-copy') < panel.index('persona-compose-mode-slot')
-    assert panel.index('persona-temp-edit-icon-actions') < panel.index('persona-compose-mode-slot')
+    assert 'data-persona-draft-save-dock' in panel
+    assert 'data-persona-cancel-draft-edit' in panel
+    assert 'data-persona-exit-draft-edit' in panel
+    assert 'data-persona-clear-draft-edit' in panel
+    assert 'data-persona-generate-posts' in panel
+    assert 'AI 重新生成' in panel
 
 
 def test_draft_exit_confirmation_uses_a_compact_left_right_action_layout():
@@ -55,8 +59,25 @@ def test_draft_exit_confirmation_uses_a_compact_left_right_action_layout():
     css = CONSOLE_CSS.read_text(encoding="utf-8")
 
     assert 'modalKey: "persona-draft-edit-exit"' in script
+    assert 'showCancel: false' in script
     assert '.console-modal[data-modal-key="persona-draft-edit-exit"] .console-modal-actions {' in css
-    assert 'grid-template-columns: minmax(76px, 1fr) minmax(96px, 1.2fr) minmax(76px, 1fr);' in css
-    assert 'console-modal-actions > [data-console-modal-cancel]' in css
+    assert 'grid-template-columns: repeat(2, minmax(0, 1fr));' in css
+    exit_modal_css = css[css.index('.console-modal[data-modal-key="persona-draft-edit-exit"]'):]
+    assert 'console-modal-actions > [data-console-modal-cancel]' not in exit_modal_css[:exit_modal_css.index('@media (max-width: 760px)')]
     assert 'console-modal-actions > [data-console-modal-value]' in css
     assert 'console-modal-actions > [data-console-modal-confirm]' in css
+
+
+def test_draft_edit_save_uses_a_global_button_with_long_press_actions():
+    script = CONSOLE_JS.read_text(encoding="utf-8")
+    css = CONSOLE_CSS.read_text(encoding="utf-8")
+
+    assert 'const PERSONA_DRAFT_SAVE_LONG_PRESS_MS = 520;' in script
+    assert 'function bindPersonaDraftSaveLongPress(host)' in script
+    assert 'bindPersonaDraftSaveLongPress($("personaDetail"));' in script
+    assert 'data-persona-create-post aria-expanded="false">保存修改</button>' in script
+    assert 'data-persona-generate-posts aria-label="使用 AI 重新生成当前推文"' in script
+    assert 'createPostButton.dataset.personaDraftSaveLongPress === "true"' in script
+    assert '.persona-draft-global-save-dock {' in css
+    assert '.persona-draft-save-floating-actions {' in css
+    assert '.persona-draft-global-save-dock.is-actions-expanded .persona-draft-save-floating-actions {' in css

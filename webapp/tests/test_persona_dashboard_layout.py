@@ -592,10 +592,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             content_panel.index("data-persona-create-post"),
             content_panel.index("data-persona-route-step=\"content:posts\""),
         )
-        self.assertLess(
-            content_panel.index("data-persona-route-step=\"content:posts\""),
-            content_panel.index("data-persona-generate-posts"),
-        )
+        self.assertIn('aria-label="使用 AI 重新生成当前推文"', content_panel)
+        self.assertIn('data-persona-draft-save-dock', content_panel)
 
     def test_hotspot_top_capsule_switches_the_real_generation_mode(self):
         handler_start = self.console_script.index(
@@ -2037,6 +2035,31 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("const mediaItems = personaDraftMediaItems", detail)
         self.assertIn("${renderPersonaDraftDetailMedia(mediaItems)}", detail)
 
+    def test_draft_detail_reuses_hot_metrics_and_has_edit_close_actions(self):
+        detail = self.console_script[
+            self.console_script.index("async function viewPersonaDraftPost"):
+            self.console_script.index("\nasync function refreshPersonaHotPost")
+        ]
+        self.assertIn("${renderPersonaHotMetricStrip(hotMeta)}", detail)
+        self.assertIn('modalKey: "persona-draft-detail"', detail)
+        self.assertIn('cancelText: "关闭"', detail)
+        self.assertIn("if (shouldEdit) openPersonaDraftEditor(post.id);", detail)
+        self.assertIn(
+            '.console-modal[data-modal-key="persona-draft-detail"] .console-modal-actions {',
+            self.styles,
+        )
+        self.assertIn(
+            '.console-modal[data-modal-key="persona-draft-detail"] .console-modal-actions > [data-console-modal-confirm] {',
+            self.styles,
+        )
+
+    def test_draft_more_menu_flips_above_the_mobile_dock(self):
+        self.assertIn("function positionPersonaDraftMenu(menu)", self.console_script)
+        self.assertIn('document.querySelector(".mobile-task-dock")', self.console_script)
+        self.assertIn('menu.classList.toggle("opens-upward"', self.console_script)
+        self.assertIn(".persona-draft-more.opens-upward .persona-draft-more-menu {", self.styles)
+        self.assertIn("bottom: calc(100% + 6px);", self.styles)
+
     def test_hot_card_metrics_use_compact_thousands(self):
         self.assertIn("function hotMetricText(value)", self.console_script)
         self.assertIn("${esc(hotMetricText(value))}", self.console_script)
@@ -2223,6 +2246,22 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             "else window.localStorage.removeItem(key);",
             self.console_script,
         )
+
+    def test_persona_account_picker_shows_binding_status_without_browser_environment_copy(self):
+        self.assertIn("function personaAccountBindingDisplay(", self.console_script)
+        self.assertIn('label: "可选 · 未绑定人设"', self.console_script)
+        self.assertIn("已绑定人设：${currentPersona?.name || currentPersonaId}", self.console_script)
+        self.assertIn("添加后替换", self.console_script)
+        self.assertIn("persona-account-picker-binding", self.console_script)
+        self.assertIn("persona-account-picker-proxy", self.console_script)
+        self.assertNotIn("浏览器环境已配置", self.console_script)
+        self.assertNotIn("浏览器环境未配置", self.console_script)
+        self.assertNotIn("已配置浏览器环境", self.console_script)
+        self.assertNotIn("未配置浏览器环境", self.console_script)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) auto;", self.styles)
+        self.assertIn(".persona-account-picker-card-meta {\n  display: grid;", self.styles)
+        self.assertIn("grid-template-columns: minmax(0, 1fr);", self.styles)
+        self.assertIn(".persona-account-picker-card-meta .persona-account-picker-binding.is-bound", self.styles)
 
 
 if __name__ == "__main__":
