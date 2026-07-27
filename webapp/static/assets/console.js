@@ -20967,26 +20967,19 @@ function renderAccountPoolCardActions(account, { context = "pool" } = {}) {
 
 function renderAccountPoolCard(account, { variant = "pool", active = false, checked = false, persona = null } = {}) {
   const accountId = String(account?.id || "");
-  if (variant === "persona-settings") {
-    return `<article class="account-card account-pool-card persona-account-pool-card persona-account-pool-card--summary ${active ? "is-active" : ""}" data-persona-account-card="${esc(accountId)}" role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
-      <div class="account-pool-card-main">
-        <span class="account-pool-card-copy">
-          <strong>${esc(accountDisplayName(account))}</strong>
-          <span class="account-pool-card-subline"><small>${esc(platformLabel(account.platform || "threads"))}</small><span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${esc(accountLastLoginCheckLabel(account))}</span>${renderAccountTotpBadge(account)}</span>
-        </span>
-      </div>
-      <div class="persona-account-summary-meta" aria-label="账号重要信息">
-        ${String(account.login_username || "").trim() && String(account.login_username || "").trim() !== String(account.username || "").trim() ? `<span><small>登录账号</small><strong>${esc(account.login_username)}</strong></span>` : ""}
-        <span><small>代理 IP</small><strong data-account-proxy-for="${esc(accountId)}">${esc(accountResidentialProxyLabel(account))}</strong></span>
-      </div>
-      ${renderAccountPoolCardActions(account, { context: "persona-settings" })}
-    </article>`;
-  }
-  return `<article class="account-card account-pool-card ${active ? "is-active" : ""} ${checked ? "is-checked" : ""}" data-account-pool-account="${esc(accountId)}" role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
-    <label class="account-pool-card-check" aria-label="多选账号">
+  const isPersonaSettings = variant === "persona-settings";
+  const boundPersona = persona || (account?.persona_id
+    ? state.personas.find((item) => String(item?.id || "") === String(account.persona_id || ""))
+    : null);
+  const accountCardTarget = isPersonaSettings
+    ? `data-persona-account-card="${esc(accountId)}"`
+    : `data-account-pool-account="${esc(accountId)}"`;
+  const selectionControl = isPersonaSettings ? "" : `<label class="account-pool-card-check" aria-label="多选账号">
       <input type="checkbox" data-account-pool-check="${esc(accountId)}" ${checked ? "checked" : ""} />
       <span aria-hidden="true"></span>
-    </label>
+    </label>`;
+  return `<article class="account-card account-pool-card ${isPersonaSettings ? "account-pool-card--persona" : ""} ${active ? "is-active" : ""} ${checked ? "is-checked" : ""}" ${accountCardTarget} role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
+    ${selectionControl}
     <div class="account-pool-card-main">
       <span class="account-pool-card-copy">
         <strong title="${esc(account.username || accountId)}">${esc(account.username || accountId)}</strong>

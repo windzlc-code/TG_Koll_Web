@@ -788,6 +788,20 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-account-pool-panel .persona-account-action-row", self.styles)
         self.assertIn("justify-content: center;", self.styles)
 
+    def test_persona_account_card_reuses_the_account_pool_card_layout(self):
+        renderer_start = self.console_script.index("function renderAccountPoolCard(")
+        renderer_end = self.console_script.index("\nfunction renderAccountPoolCards", renderer_start)
+        renderer = self.console_script[renderer_start:renderer_end]
+
+        self.assertIn('const isPersonaSettings = variant === "persona-settings";', renderer)
+        self.assertIn('data-persona-account-card="${esc(accountId)}"', renderer)
+        self.assertIn('account-pool-card--persona', renderer)
+        self.assertIn('account-pool-bound-persona', renderer)
+        self.assertIn('account-card-meta', renderer)
+        self.assertNotIn('persona-account-pool-card--summary', renderer)
+        self.assertIn('.account-pool-card--persona {', self.styles)
+        self.assertIn('padding-left: 12px;', self.styles)
+
     def test_persona_account_picker_allows_existing_platform_accounts_and_replaces_current_binding(self):
         picker_start = self.console_script.index("function personaAccountPoolCandidates(")
         picker_end = self.console_script.index("\nfunction personaAutomationTasksFor", picker_start)

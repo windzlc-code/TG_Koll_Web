@@ -15839,6 +15839,10 @@ button.proxy-market-link {
   cursor: pointer;
 }
 
+.account-pool-card--persona {
+  padding-left: 12px;
+}
+
 .account-card.account-pool-card {
   gap: 5px;
 }
