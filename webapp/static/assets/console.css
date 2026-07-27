@@ -9456,7 +9456,7 @@ body.persona-touch-dragging .persona-list-card:active {
   box-shadow: 0 7px 18px rgba(20, 27, 36, .16);
 }
 
-.persona-draft-global-save-dock.is-actions-expanded .persona-draft-save-floating-actions {
+.persona-draft-global-save-dock.is-selection-expanded .persona-draft-save-floating-actions {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
@@ -9475,13 +9475,6 @@ body.persona-touch-dragging .persona-list-card:active {
   pointer-events: none;
   transform: translateX(-8px);
   transition: opacity .16s ease, transform .16s ease, visibility .16s ease;
-}
-
-.persona-draft-global-save-dock.is-actions-expanded .persona-draft-save-cancel {
-  opacity: 1;
-  visibility: visible;
-  pointer-events: auto;
-  transform: translateX(0);
 }
 
 .persona-draft-content--full {
@@ -14425,19 +14418,9 @@ body.persona-media-sorting {
     position: static;
     grid-column: 3;
     grid-row: 1;
-    display: grid;
-    width: 100%;
-    height: 50px !important;
-    min-height: 50px !important;
-    padding: 9px 12px;
-    place-items: center;
-    border-radius: 9px;
-    background: var(--panel-solid);
-    box-shadow: 0 8px 22px rgba(7, 17, 18, 0.12);
-    transform: translateX(-8px);
   }
 
-  .console-page .persona-draft-global-save-dock.is-actions-expanded .persona-draft-save-floating-actions {
+  .console-page .persona-draft-global-save-dock.is-selection-expanded .persona-draft-save-floating-actions {
     pointer-events: auto;
   }
 }
@@ -21021,7 +21004,8 @@ body.console-page {
   .module-panel.is-publishing-module :is(
     .publish-mobile-selection-clear,
     .publish-mobile-selection-cancel
-  ) {
+  ),
+  .console-page .persona-draft-save-cancel {
     display: grid;
     width: 100%;
     min-height: 50px;
@@ -21062,8 +21046,10 @@ body.console-page {
   stroke-width: 2.25;
 }
 
-  .module-panel.is-publishing-module .publish-mobile-selection-cancel {
+  .module-panel.is-publishing-module .publish-mobile-selection-cancel,
+  .console-page .persona-draft-save-cancel {
     grid-column: 3;
+    grid-row: 1;
     transform: translateX(-8px);
   }
 
@@ -21081,7 +21067,8 @@ body.console-page {
   .module-panel.is-publishing-module .publish-command-actions.is-selection-expanded :is(
     .publish-mobile-selection-clear,
     .publish-mobile-selection-cancel
-  ) {
+  ),
+  .console-page .persona-draft-global-save-dock.is-selection-expanded .persona-draft-save-cancel {
     opacity: 1;
     transform: translateX(0);
     visibility: visible;

@@ -3513,7 +3513,7 @@ function setPersonaDraftSaveActionsExpanded(dock, expanded) {
   const trigger = dock.querySelector("[data-persona-create-post]");
   const actions = dock.querySelector(".persona-draft-save-floating-actions");
   const cancel = dock.querySelector("[data-persona-cancel-draft-edit]");
-  dock.classList.toggle("is-actions-expanded", nextExpanded);
+  dock.classList.toggle("is-selection-expanded", nextExpanded);
   trigger?.setAttribute("aria-expanded", nextExpanded ? "true" : "false");
   actions?.setAttribute("aria-hidden", nextExpanded ? "false" : "true");
   cancel?.setAttribute("aria-hidden", nextExpanded ? "false" : "true");
@@ -20283,7 +20283,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
               <button type="button" class="danger unified-action-icon-button" data-persona-clear-draft-edit title="清空" aria-label="清空">${renderClearSelectionIcon()}</button>
               <button type="button" class="unified-action-icon-button" data-persona-exit-draft-edit title="退出编辑" aria-label="退出编辑">${renderCloseIcon()}</button>
             </div>
-            <button type="button" class="persona-draft-save-cancel" data-persona-cancel-draft-edit aria-hidden="true">取消</button>
+            <button type="button" class="publish-mobile-selection-cancel persona-draft-save-cancel" data-persona-cancel-draft-edit aria-hidden="true">取消</button>
             <button type="button" class="primary persona-draft-global-save-button" data-persona-create-post aria-expanded="false">保存修改</button>
           </div>
         ` : ""}
@@ -25396,11 +25396,15 @@ function bindEvents() {
     }
     if (event.target.closest("[data-persona-cancel-draft-edit]")) {
       const persona = selectedPersona();
-      if (persona && cancelPersonaDraftEditChanges(persona.id)) {
-        renderPersonaDetail();
-        renderConfirmSummary();
-        showMsg("commandMsg", "已取消未保存修改。", true);
-      }
+      const dock = event.target.closest("[data-persona-draft-save-dock]");
+      setPersonaDraftSaveActionsExpanded(dock, false);
+      window.setTimeout(() => {
+        if (persona && cancelPersonaDraftEditChanges(persona.id)) {
+          renderPersonaDetail();
+          renderConfirmSummary();
+          showMsg("commandMsg", "已取消未保存修改。", true);
+        }
+      }, 260);
       return;
     }
     if (event.target.closest("[data-persona-clear-draft-edit]")) {
