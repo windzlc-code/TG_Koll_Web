@@ -14360,21 +14360,38 @@ body.persona-media-sorting {
 }
 
 @media (max-width: 760px) {
+  .console-page #personaDetail:has(.persona-draft-global-save-dock) {
+    padding-bottom: 64px;
+  }
+
   .console-page .persona-draft-global-save-dock {
-    position: sticky;
-    bottom: calc(var(--mobile-task-dock-height, 64px) + 8px);
-    z-index: 12;
-    width: 100%;
-    margin: 12px 0 4px;
+    position: fixed;
+    z-index: 1400;
+    right: 0;
+    bottom: var(--mobile-task-dock-height, 64px);
+    left: 0;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+    width: auto;
+    margin: 0;
+    pointer-events: none;
   }
 
   .console-page .persona-draft-global-save-button {
+    grid-column: 2;
     min-height: 52px;
     font-size: 16px;
+    pointer-events: auto;
+    box-shadow: 0 8px 22px rgba(7, 17, 18, 0.22);
   }
 
   .console-page .persona-draft-save-floating-actions {
+    right: max(18px, env(safe-area-inset-right, 0px));
     bottom: calc(100% + 8px);
+    pointer-events: none;
+  }
+
+  .console-page .persona-draft-global-save-dock.is-actions-expanded .persona-draft-save-floating-actions {
+    pointer-events: auto;
   }
 }
 

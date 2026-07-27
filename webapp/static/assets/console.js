@@ -20202,6 +20202,10 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                   <strong>${esc(generateTitle)}</strong>
                   <span>编辑中 · 可修改正文、媒体或 AI 重写。</span>
                 </div>
+                <div class="persona-temp-edit-icon-actions" aria-label="草稿编辑操作">
+                  <button type="button" class="unified-action-icon-button" data-persona-clear-draft-edit title="清空" aria-label="清空">${renderClearSelectionIcon()}</button>
+                  <button type="button" class="unified-action-icon-button" data-persona-exit-draft-edit title="退出编辑" aria-label="退出编辑">${renderCloseIcon()}</button>
+                </div>
               </div>
             ` : ""}
             <div class="persona-compose-mode-slot">
