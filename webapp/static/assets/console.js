@@ -3512,9 +3512,11 @@ function setPersonaDraftSaveActionsExpanded(dock, expanded) {
   const nextExpanded = Boolean(expanded);
   const trigger = dock.querySelector("[data-persona-create-post]");
   const actions = dock.querySelector(".persona-draft-save-floating-actions");
+  const cancel = dock.querySelector("[data-persona-cancel-draft-edit]");
   dock.classList.toggle("is-actions-expanded", nextExpanded);
   trigger?.setAttribute("aria-expanded", nextExpanded ? "true" : "false");
   actions?.setAttribute("aria-hidden", nextExpanded ? "false" : "true");
+  cancel?.setAttribute("aria-hidden", nextExpanded ? "false" : "true");
 }
 
 function bindPersonaDraftSaveLongPress(host) {
@@ -20278,10 +20280,10 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         ${isEditingDraft ? `
           <div class="persona-draft-global-save-dock" data-persona-draft-save-dock>
             <div class="persona-draft-save-floating-actions" aria-hidden="true" aria-label="编辑操作">
-              <button type="button" class="unified-action-icon-button" data-persona-cancel-draft-edit title="取消未保存修改" aria-label="取消未保存修改">${renderUndoIcon()}</button>
-              <button type="button" class="unified-action-icon-button" data-persona-exit-draft-edit title="退出编辑" aria-label="退出编辑">${renderCloseIcon()}</button>
               <button type="button" class="danger unified-action-icon-button" data-persona-clear-draft-edit title="清空" aria-label="清空">${renderClearSelectionIcon()}</button>
+              <button type="button" class="unified-action-icon-button" data-persona-exit-draft-edit title="退出编辑" aria-label="退出编辑">${renderCloseIcon()}</button>
             </div>
+            <button type="button" class="persona-draft-save-cancel" data-persona-cancel-draft-edit aria-hidden="true">取消</button>
             <button type="button" class="primary persona-draft-global-save-button" data-persona-create-post aria-expanded="false">保存修改</button>
           </div>
         ` : ""}

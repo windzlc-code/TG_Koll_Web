@@ -78,9 +78,15 @@ def test_draft_edit_save_uses_a_global_button_with_long_press_actions():
     assert 'data-persona-create-post aria-expanded="false">保存修改</button>' in script
     assert 'data-persona-generate-posts aria-label="使用 AI 重新生成当前推文"' in script
     assert 'persona-temp-edit-icon-actions" aria-label="草稿编辑操作"' in script
+    assert 'data-persona-clear-draft-edit' in script
+    assert script.index('data-persona-clear-draft-edit', script.index('persona-draft-save-floating-actions')) < script.index('data-persona-exit-draft-edit', script.index('persona-draft-save-floating-actions'))
+    assert 'class="persona-draft-save-cancel" data-persona-cancel-draft-edit aria-hidden="true">取消</button>' in script
     assert 'createPostButton.dataset.personaDraftSaveLongPress === "true"' in script
     assert '.persona-draft-global-save-dock {' in css
     assert '.persona-draft-save-floating-actions {' in css
     assert '.persona-draft-global-save-dock.is-actions-expanded .persona-draft-save-floating-actions {' in css
     assert 'grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);' in css
     assert '.console-page #personaDetail:has(.persona-draft-global-save-dock)' in css
+    assert 'left: calc(25% + 5px);' in css
+    assert '.console-page .persona-draft-save-cancel {' in css
+    assert 'height: 50px !important;' in css

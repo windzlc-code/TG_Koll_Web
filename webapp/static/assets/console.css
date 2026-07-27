@@ -9430,7 +9430,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-draft-save-floating-actions {
   position: absolute;
-  right: 0;
+  left: 0;
   bottom: calc(100% + 10px);
   z-index: 6;
   display: inline-flex;
@@ -9451,6 +9451,8 @@ body.persona-touch-dragging .persona-list-card:active {
   min-height: 38px;
   padding: 0;
   border-radius: 999px;
+  background: var(--panel-solid);
+  opacity: 1;
   box-shadow: 0 7px 18px rgba(20, 27, 36, .16);
 }
 
@@ -9459,6 +9461,27 @@ body.persona-touch-dragging .persona-list-card:active {
   visibility: visible;
   pointer-events: auto;
   transform: translateY(0);
+}
+
+.persona-draft-save-cancel {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 12px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-8px);
+  transition: opacity .16s ease, transform .16s ease, visibility .16s ease;
+}
+
+.persona-draft-global-save-dock.is-actions-expanded .persona-draft-save-cancel {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateX(0);
 }
 
 .persona-draft-content--full {
@@ -14371,6 +14394,7 @@ body.persona-media-sorting {
     bottom: var(--mobile-task-dock-height, 64px);
     left: 0;
     grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+    column-gap: 10px;
     width: auto;
     margin: 0;
     pointer-events: none;
@@ -14378,16 +14402,34 @@ body.persona-media-sorting {
 
   .console-page .persona-draft-global-save-button {
     grid-column: 2;
-    min-height: 52px;
+    height: 50px !important;
+    min-height: 50px !important;
+    padding: 9px 42px;
+    border-radius: 9px;
     font-size: 16px;
     pointer-events: auto;
     box-shadow: 0 8px 22px rgba(7, 17, 18, 0.22);
   }
 
   .console-page .persona-draft-save-floating-actions {
-    right: max(18px, env(safe-area-inset-right, 0px));
+    left: calc(25% + 5px);
     bottom: calc(100% + 8px);
     pointer-events: none;
+  }
+
+  .console-page .persona-draft-save-cancel {
+    position: static;
+    grid-column: 3;
+    display: grid;
+    width: 100%;
+    height: 50px !important;
+    min-height: 50px !important;
+    padding: 9px 12px;
+    place-items: center;
+    border-radius: 9px;
+    background: var(--panel-solid);
+    box-shadow: 0 8px 22px rgba(7, 17, 18, 0.12);
+    transform: translateX(-8px);
   }
 
   .console-page .persona-draft-global-save-dock.is-actions-expanded .persona-draft-save-floating-actions {
