@@ -353,7 +353,10 @@ button.primary,
 }
 
 .row-actions button.danger,
-.console-modal-actions button.danger {
+.console-modal-actions button.danger,
+.persona-memory-card-actions button.danger,
+.persona-link-actions button.danger,
+.proxy-table-actions button.danger {
   border-color: var(--danger);
   color: var(--danger);
 }
@@ -364,7 +367,10 @@ button.primary,
 }
 
 .row-actions button.danger:active,
-.console-modal-actions button.danger:active {
+.console-modal-actions button.danger:active,
+.persona-memory-card-actions button.danger:active,
+.persona-link-actions button.danger:active,
+.proxy-table-actions button.danger:active {
   background: var(--danger);
   border-color: var(--danger);
   color: var(--danger-ink);
@@ -11517,8 +11523,7 @@ body.persona-touch-dragging .persona-list-card:active {
   line-height: 0;
 }
 
-.persona-memory-actions .ui-action-icon,
-.persona-memory-delete .ui-trash-icon {
+.persona-memory-actions .ui-action-icon {
   width: 20px;
   height: 20px;
   fill: none;
@@ -11682,14 +11687,6 @@ body.persona-touch-dragging .persona-list-card:active {
   align-self: center;
   justify-self: end;
   line-height: 1;
-}
-
-.persona-memory-card-actions .persona-memory-delete {
-  width: 30px;
-  min-width: 30px;
-  max-width: 30px;
-  padding: 0;
-  line-height: 0;
 }
 
 .persona-media-workspace {
@@ -14541,22 +14538,6 @@ body.persona-media-sorting {
   display: none;
 }
 
-.account-pool-card .row-actions .account-pool-delete-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
-  min-height: 30px;
-  padding: 0;
-}
-
-.account-pool-card .row-actions .account-pool-delete-icon .ui-trash-icon {
-  width: 20px;
-  height: 20px;
-}
-
 .account-totp-section {
   display: grid;
   gap: 8px;
@@ -15421,6 +15402,12 @@ button.proxy-market-link {
   min-width: 28px;
   min-height: 28px;
   padding: 0;
+}
+
+.proxy-table-actions button.danger {
+  width: auto;
+  min-width: 40px;
+  padding: 0 6px;
 }
 
 .proxy-table-actions svg {
@@ -22069,7 +22056,6 @@ body.console-page {
    centered at every breakpoint. */
 .console-page .console-shell :is(
   .persona-memory-actions > button,
-  .persona-memory-delete,
   .persona-hot-media-action
 ) {
   display: inline-grid;
@@ -22080,7 +22066,6 @@ body.console-page {
 
 .console-page .console-shell :is(
   .persona-memory-actions > button,
-  .persona-memory-delete,
   .persona-hot-media-action
 ) svg {
   display: block;

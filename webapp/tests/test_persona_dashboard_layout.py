@@ -2125,11 +2125,31 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('<path d="M6 6l1 15h10l1-15"></path>', self.console_script)
         self.assertIn(
             ".persona-memory-actions > button,\n"
-            "  .persona-memory-delete,\n"
             "  .persona-hot-media-action",
             self.styles,
         )
         self.assertIn("place-items: center;\n  padding: 0;\n  line-height: 0;", self.styles)
+
+    def test_editor_and_persona_menu_deletes_use_red_text_actions(self):
+        self.assertIn(
+            'class="persona-menu-tab persona-menu-tab--action persona-menu-tab--danger" data-persona-delete',
+            self.console_script,
+        )
+        self.assertIn('data-persona-delete-group="${esc(group.id)}"><span>删除</span></button>', self.console_script)
+        for action in (
+            'data-persona-delete-memory="${esc(row.id)}">删除</button>',
+            'data-persona-delete-preset-id="${esc(presetId)}">删除</button>',
+            'data-persona-delete-image="${esc(item.id)}" ${!item.id ? "disabled" : ""}>删除</button>',
+            'data-persona-account-delete="${esc(accountId)}">删除</button>',
+            'data-social-delete-account="${esc(accountId)}">删除</button>',
+            'data-proxy-delete="${esc(proxy.id)}"',
+        ):
+            with self.subTest(action=action):
+                self.assertIn(action, self.console_script)
+        self.assertIn('${isMarketplace ? "释放" : "删除"}</button>', self.console_script)
+        self.assertNotIn("account-pool-delete-icon", self.console_script)
+        self.assertIn(".persona-link-actions button.danger,", self.styles)
+        self.assertIn(".proxy-table-actions button.danger {", self.styles)
 
     def test_media_generation_requires_a_loadable_persona_reference_image(self):
         self.assertIn(

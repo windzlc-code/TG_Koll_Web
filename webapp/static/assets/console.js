@@ -7343,7 +7343,7 @@ function renderPersonaMemoryOptions(persona, selectedIds = []) {
               </label>
               <div class="persona-memory-card-actions">
                 <button type="button" data-persona-view-memory="${esc(row.id)}">查看</button>
-                <button type="button" class="danger persona-memory-delete unified-action-icon-button" data-persona-delete-memory="${esc(row.id)}" title="删除记忆" aria-label="删除记忆">${renderTrashIcon()}</button>
+                <button type="button" class="danger persona-memory-delete" data-persona-delete-memory="${esc(row.id)}">删除</button>
               </div>
             </article>`;
         }).join("")}
@@ -7542,7 +7542,7 @@ function renderPersonaLinkPresetTable(profile, presets, selectedPresetId) {
               </div>
               <div class="persona-link-actions" role="cell">
                 <button type="button" data-persona-activate-preset-id="${esc(presetId)}">${isActive ? "关闭启用" : "启用"}</button>
-                <button type="button" class="danger unified-action-icon-button" data-persona-delete-preset-id="${esc(presetId)}" title="删除" aria-label="删除">${renderTrashIcon()}</button>
+                <button type="button" class="danger" data-persona-delete-preset-id="${esc(presetId)}">删除</button>
               </div>
             </article>`;
         }).join("")}
@@ -18214,7 +18214,7 @@ function renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) {
           <span>复制人设</span>
         </button>`,
     `
-        <button type="button" class="persona-menu-tab persona-menu-tab--action persona-menu-tab--danger unified-action-icon-button" data-persona-delete data-persona-delete-id="${esc(personaId)}" title="删除人设" aria-label="删除人设">${renderTrashIcon()}</button>`,
+        <button type="button" class="persona-menu-tab persona-menu-tab--action persona-menu-tab--danger" data-persona-delete data-persona-delete-id="${esc(personaId)}"><span>删除</span></button>`,
   ].join("");
   return `
     <div class="persona-card-menu" data-persona-editor-menu="${esc(personaId)}">
@@ -18517,7 +18517,7 @@ function renderPersonaFolder(group, map, options = {}) {
               <button type="button" class="persona-menu-tab persona-menu-tab--action" data-persona-rename-group="${esc(group.id)}">
                 <span>重命名</span>
               </button>
-              <button type="button" class="persona-menu-tab persona-menu-tab--action unified-action-icon-button" data-persona-delete-group="${esc(group.id)}" title="删除分组" aria-label="删除分组">${renderTrashIcon()}</button>
+              <button type="button" class="persona-menu-tab persona-menu-tab--action persona-menu-tab--danger" data-persona-delete-group="${esc(group.id)}"><span>删除</span></button>
             </div>
           </div>
         ` : ""}
@@ -19199,7 +19199,7 @@ function renderPersonaImageLibraryGrid(library) {
       <div class="row-actions persona-image-library-actions">
         <button type="button" class="primary persona-image-library-apply" data-persona-apply-image="${esc(item.id)}" ${item.isReference || !item.id ? "disabled" : ""}>${item.isReference ? "当前使用" : "设为当前"}</button>
         <button type="button" data-persona-replace-image="${esc(item.id)}" ${!item.id ? "disabled" : ""}>替换</button>
-        <button type="button" class="danger unified-action-icon-button" data-persona-delete-image="${esc(item.id)}" title="删除" aria-label="删除" ${!item.id ? "disabled" : ""}>${renderTrashIcon()}</button>
+        <button type="button" class="danger" data-persona-delete-image="${esc(item.id)}" ${!item.id ? "disabled" : ""}>删除</button>
       </div>
     </div>
   `).join("")}${renderPersonaImageUploadPlaceholderCard()}</div>`;
@@ -20953,7 +20953,7 @@ function renderAccountPoolCardActions(account, { context = "pool" } = {}) {
       <button type="button" data-persona-account-proxy="${esc(accountId)}">${proxyLabel}</button>
       <button type="button" data-persona-account-edit="${esc(accountId)}">编辑</button>
       <button type="button" data-persona-account-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>移除</button>
-      <button type="button" class="danger account-pool-delete-icon unified-action-icon-button" data-persona-account-delete="${esc(accountId)}" title="删除账号" aria-label="删除账号">${renderTrashIcon()}</button>
+      <button type="button" class="danger" data-persona-account-delete="${esc(accountId)}">删除</button>
     </div>`;
   }
   return `<div class="row-actions">
@@ -20961,7 +20961,7 @@ function renderAccountPoolCardActions(account, { context = "pool" } = {}) {
     <button type="button" data-account-proxy-picker="${esc(accountId)}">${proxyLabel}</button>
     <button type="button" data-account-pool-edit="${esc(accountId)}">编辑</button>
     <button type="button" data-account-pool-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>解绑</button>
-    <button type="button" class="danger account-pool-delete-icon unified-action-icon-button" data-social-delete-account="${esc(accountId)}" title="删除账号" aria-label="删除账号">${renderTrashIcon()}</button>
+    <button type="button" class="danger" data-social-delete-account="${esc(accountId)}">删除</button>
   </div>`;
 }
 
@@ -22654,7 +22654,7 @@ function renderProxyPool() {
               <span role="cell" class="proxy-table-actions" data-mobile-label="操作">
                 <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderRefreshIcon()}</button>
                 <button type="button" data-proxy-edit="${esc(proxy.id)}" title="${isMarketplace ? "商城代理由管理员统一维护" : "编辑代理"}" aria-label="${isMarketplace ? "商城代理不可编辑" : "编辑代理"}" ${isMarketplace ? "disabled" : ""}>${renderEditIcon()}</button>
-                <button type="button" class="danger unified-action-icon-button" data-proxy-delete="${esc(proxy.id)}" title="${proxyBoundAccountCount(proxy) ? "代理已绑定账号，不能释放" : (isMarketplace ? "释放并退回商城" : "删除代理")}" aria-label="${isMarketplace ? "释放商城代理" : "删除代理"}" ${proxyBoundAccountCount(proxy) ? "disabled" : ""}>${renderTrashIcon()}</button>
+                <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${proxyBoundAccountCount(proxy) ? "代理已绑定账号，不能释放" : (isMarketplace ? "释放并退回商城" : "删除代理")}" ${proxyBoundAccountCount(proxy) ? "disabled" : ""}>${isMarketplace ? "释放" : "删除"}</button>
               </span>
             </div>`;
           }).join("") : `<div class="empty-state proxy-pool-empty">暂无代理 IP，点击新增代理开始配置。</div>`}
