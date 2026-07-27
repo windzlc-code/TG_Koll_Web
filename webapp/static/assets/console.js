@@ -367,6 +367,7 @@ const state = {
   workspaceBootstrapPending: false,
   workspaceBootstrapNoticeVisible: false,
   workspaceBootstrapTimer: 0,
+  personaDashboardLoading: false,
   personaProfiles: {},
   personaProfileEditDrafts: {},
   personaCollections: { groups: [], assigned_persona_ids: [] },
@@ -6255,8 +6256,8 @@ function renderWorkspace(renderMenu = true) {
 }
 
 function beginWorkspaceBootstrapLoading() {
-  setConsolePageLoading(true);
   state.workspaceBootstrapPending = true;
+  syncConsolePageLoading();
   state.workspaceBootstrapNoticeVisible = false;
   if (state.workspaceBootstrapTimer) clearTimeout(state.workspaceBootstrapTimer);
   state.workspaceBootstrapTimer = window.setTimeout(() => {
@@ -6272,7 +6273,16 @@ function finishWorkspaceBootstrapLoading() {
   state.workspaceBootstrapTimer = 0;
   state.workspaceBootstrapPending = false;
   state.workspaceBootstrapNoticeVisible = false;
-  setConsolePageLoading(false);
+  syncConsolePageLoading();
+}
+
+function syncConsolePageLoading() {
+  setConsolePageLoading(Boolean(state.workspaceBootstrapPending || state.personaDashboardLoading));
+}
+
+function setPersonaDashboardLoading(loading) {
+  state.personaDashboardLoading = Boolean(loading);
+  syncConsolePageLoading();
 }
 
 function setConsolePageLoading(loading) {
@@ -6281,6 +6291,10 @@ function setConsolePageLoading(loading) {
   const overlay = $("consolePageLoading");
   if (overlay) overlay.setAttribute("aria-busy", active ? "true" : "false");
 }
+
+document.addEventListener("vecto:persona-dashboard-loading", (event) => {
+  setPersonaDashboardLoading(event.detail?.loading === true);
+});
 
 function renderWorkspaceBootstrapLoading() {
   const noticeClass = state.workspaceBootstrapNoticeVisible ? " is-notice-visible" : "";
@@ -25079,6 +25093,7 @@ const SEGMENTED_BACKGROUND_BUTTON_SELECTOR = [
   ".mobile-task-dock > button",
 ].join(",");
 const segmentedBackgroundSlides = new WeakMap();
+const segmentedBackgroundCommits = new WeakMap();
 
 async function slideSegmentedButtonBackground(button) {
   if (
@@ -25137,6 +25152,9 @@ async function slideSegmentedButtonBackground(button) {
     });
   });
   const completion = slide.then(() => new Promise((resolve) => requestAnimationFrame(() => {
+    const onBeforeCleanup = segmentedBackgroundCommits.get(group);
+    segmentedBackgroundCommits.delete(group);
+    onBeforeCleanup?.();
     current.classList.remove("is-segment-slide-from");
     button.classList.remove("is-segment-slide-to");
     group.classList.remove("is-segment-background-sliding");
@@ -25163,10 +25181,21 @@ async function slideSegmentedButtonBackground(button) {
   }
 }
 
-async function waitForSegmentedBackgroundSlide(event, button) {
+async function waitForSegmentedBackgroundSlide(event, button, options = {}) {
   if (event?.__vectoSegmentSlideHandled) return;
   if (event) event.__vectoSegmentSlideHandled = true;
-  await slideSegmentedButtonBackground(button);
+  const group = button?.parentElement;
+  const onBeforeCleanup = options.onBeforeCleanup;
+  if (group && typeof onBeforeCleanup === "function") {
+    segmentedBackgroundCommits.set(group, onBeforeCleanup);
+  }
+  try {
+    await slideSegmentedButtonBackground(button);
+  } finally {
+    if (group && segmentedBackgroundCommits.get(group) === onBeforeCleanup) {
+      segmentedBackgroundCommits.delete(group);
+    }
+  }
 }
 
 function bindEvents() {
@@ -25258,26 +25287,52 @@ function bindEvents() {
       const nextView = viewButton.dataset.workspaceView || "workspace";
       if (nextView !== state.view && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
       if (nextView !== state.view && !(await confirmLeaveTransientWorkspaceState())) return;
-      if (dockButton) await waitForSegmentedBackgroundSlide(event, dockButton);
-      else setMenuClickHighlight(viewButton, viewButton.closest(".module-accordion-item") || viewButton);
-      state.workspaceMenuOpen = true;
-      if (nextView === "accounts") {
-        setAccountBrowserPanel(viewButton.dataset.workspacePanel || "accounts");
+      const commitView = () => {
+        state.workspaceMenuOpen = true;
+        if (nextView === "accounts") {
+          setAccountBrowserPanel(viewButton.dataset.workspacePanel || "accounts");
+        }
+        setView(nextView);
+      };
+      let committed = false;
+      if (dockButton) {
+        await waitForSegmentedBackgroundSlide(event, dockButton, {
+          onBeforeCleanup: () => {
+            committed = true;
+            commitView();
+          },
+        });
       }
-      setView(nextView);
+      if (!committed) {
+        setMenuClickHighlight(viewButton, viewButton.closest(".module-accordion-item") || viewButton);
+        commitView();
+      }
       return;
     }
     const button = event.target.closest("[data-module]");
     if (button) {
       if (button.dataset.module !== state.activeModule && state.view === "workspace" && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
       if (button.dataset.module !== state.activeModule && state.view === "workspace" && !(await confirmLeaveTransientWorkspaceState())) return;
-      if (dockButton) await waitForSegmentedBackgroundSlide(event, dockButton);
-      else setMenuClickHighlight(button, button.closest(".module-accordion-item") || button);
-      if (state.view !== "workspace") {
-        state.workspaceMenuOpen = true;
-        setView("workspace");
+      const commitModule = () => {
+        if (state.view !== "workspace") {
+          state.workspaceMenuOpen = true;
+          setView("workspace");
+        }
+        setModule(button.dataset.module);
+      };
+      let committed = false;
+      if (dockButton) {
+        await waitForSegmentedBackgroundSlide(event, dockButton, {
+          onBeforeCleanup: () => {
+            committed = true;
+            commitModule();
+          },
+        });
       }
-      setModule(button.dataset.module);
+      if (!committed) {
+        setMenuClickHighlight(button, button.closest(".module-accordion-item") || button);
+        commitModule();
+      }
     }
   };
   $("moduleMenu").addEventListener("click", handleWorkspaceModuleNavigation);

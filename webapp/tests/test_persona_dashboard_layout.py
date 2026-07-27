@@ -707,9 +707,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("isCurrentMobileTaskDockTarget(dockButton)", handler)
         self.assertIn("scrollConsolePageToTop();", handler)
         self.assertEqual(
-            handler.count("if (dockButton) await waitForSegmentedBackgroundSlide(event, dockButton);"),
+            handler.count("await waitForSegmentedBackgroundSlide(event, dockButton, {"),
             2,
         )
+        self.assertIn("onBeforeCleanup:", handler)
         self.assertLess(
             handler.index("scrollConsolePageToTop();"),
             handler.index('event.target.closest("[data-workspace-view]")'),

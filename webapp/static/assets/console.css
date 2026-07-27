@@ -13685,11 +13685,12 @@ body.persona-media-sorting {
 
 .console-page-loading {
   position: fixed;
-  z-index: 2000;
-  inset: 0;
+  z-index: 7000;
+  /* Keep the shared site header available while the workspace is loading. */
+  inset: var(--site-header-height) 0 0;
   display: grid;
   place-items: center;
-  background: color-mix(in srgb, var(--page) 96%, var(--panel-solid));
+  background: var(--bg);
   opacity: 1;
   visibility: visible;
   transition: opacity 260ms ease, visibility 0s linear 260ms;
@@ -13720,7 +13721,7 @@ body.persona-media-sorting {
   width: 9px;
   height: 9px;
   border-radius: 999px;
-  background: var(--primary);
+  background: var(--accent);
   content: "";
   opacity: .18;
   transform: translateX(-50%) scale(.72);

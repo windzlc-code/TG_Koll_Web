@@ -1159,8 +1159,16 @@ function pdSetMsg(text, type = "ok") {
   msg.className = text ? `msg ${type}` : "msg";
 }
 
+function pdSetConsoleLoading(loading) {
+  document.dispatchEvent(new CustomEvent("vecto:persona-dashboard-loading", {
+    detail: { loading: Boolean(loading) },
+  }));
+}
+
 async function pdLoadDashboard(options = {}) {
   const silent = Boolean(options && options.silent);
+  const shouldShowPageLoader = !silent;
+  if (shouldShowPageLoader) pdSetConsoleLoading(true);
   if (!silent) pdSetMsg("正在加载人设数据...", "ok");
   try {
     const data = await pdApi("/api/persona_dashboard/overview");
@@ -1174,6 +1182,8 @@ async function pdLoadDashboard(options = {}) {
     pdRenderDashboard();
   } catch (err) {
     if (!silent) pdSetMsg(String((err && (err.detail || err.message)) || err || "加载失败"), "err");
+  } finally {
+    if (shouldShowPageLoader) pdSetConsoleLoading(false);
   }
 }
 
