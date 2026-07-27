@@ -3184,9 +3184,88 @@ textarea:focus {
   background: var(--soft);
 }
 
-.automation-plan-history .automation-plan-card > span {
-  grid-column: 1 / -1;
-  overflow-wrap: anywhere;
+.automation-plan-bulk-controls {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.automation-plan-card > .automation-plan-history-head {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.automation-plan-bulk-controls > span {
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.automation-plan-card-summary {
+  display: block !important;
+}
+
+.automation-plan-card-summary.is-selectable {
+  display: grid !important;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start !important;
+  justify-content: initial !important;
+  gap: 7px !important;
+}
+
+.automation-plan-card-summary > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.automation-plan-record-select {
+  display: grid;
+  width: 18px;
+  height: 24px;
+  place-items: center;
+  cursor: pointer;
+}
+
+.automation-plan-record-select input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+.automation-plan-browser-link.unified-action-icon-button {
+  align-self: start;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  box-shadow: none;
+}
+
+.automation-plan-browser-link.unified-action-icon-button:hover,
+.automation-plan-browser-link.unified-action-icon-button:focus-visible {
+  border: 0;
+  color: var(--ink);
+  background: var(--panel-2);
+  box-shadow: none;
+}
+
+.automation-plan-delete-link {
+  align-self: start;
+}
+
+.automation-plan-status {
+  color: inherit;
+  font-size: inherit;
+}
+
+.automation-plan-status.is-completed,
+.automation-plan-status.is-success {
+  color: var(--status-success-ink);
 }
 
 .automation-plan-run-list {
@@ -3230,34 +3309,76 @@ textarea:focus {
   width: 20px;
   height: 20px;
   place-items: center;
+  border: 2px solid var(--line);
   border-radius: 999px;
-  background: var(--ink);
-  color: var(--panel-solid);
+  background: transparent;
+  color: var(--muted);
   font-size: 11px;
   font-weight: 900;
   isolation: isolate;
 }
 
+.automation-plan-run-row.is-success .automation-plan-run-index,
+.automation-plan-run-row.is-completed .automation-plan-run-index {
+  border-color: var(--status-success-ink);
+  background: var(--status-success-ink);
+  color: var(--panel-solid);
+}
+
+.automation-plan-run-row.is-success small,
+.automation-plan-run-row.is-completed small {
+  color: var(--status-success-ink);
+}
+
+.automation-plan-run-row.is-running .automation-plan-run-index {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--ink) 8%, var(--panel-solid));
+  color: var(--ink);
+}
+
 .automation-plan-run-row.is-running .automation-plan-run-index::after {
   position: absolute;
-  inset: -3px;
-  border: 2px solid color-mix(in srgb, var(--primary) 24%, transparent);
-  border-top-color: var(--primary);
+  inset: -2px;
+  border: 2px solid color-mix(in srgb, var(--ink) 24%, transparent);
+  border-top-color: var(--ink);
   border-radius: inherit;
   content: "";
   animation: automationPlanRunSpin .8s linear infinite;
+  animation-delay: var(--automation-plan-animation-delay, 0ms);
 }
 
 .automation-plan-run-row.is-running small {
-  color: var(--primary);
+  color: var(--ink);
 }
 
 .automation-plan-run-row.is-queued .automation-plan-run-index {
-  animation: automationPlanQueuePulse 1.25s ease-in-out infinite;
+  border-color: color-mix(in srgb, var(--muted) 70%, var(--line));
+  background: transparent;
+  color: var(--ink);
 }
 
-.automation-plan-run-row.is-queued small {
-  animation: automationPlanQueueFade 1.25s ease-in-out infinite;
+.automation-plan-run-row.is-queued .automation-plan-run-index::after {
+  position: absolute;
+  inset: -2px;
+  border: 2px solid color-mix(in srgb, var(--status-queued-ink) 52%, transparent);
+  border-radius: inherit;
+  content: "";
+  animation: automationPlanQueuePulse 1.4s ease-out infinite;
+  animation-delay: var(--automation-plan-animation-delay, 0ms);
+}
+
+.automation-plan-run-row.is-failed .automation-plan-run-index,
+.automation-plan-run-row.is-cancelled .automation-plan-run-index,
+.automation-plan-run-row.is-canceled .automation-plan-run-index {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, var(--panel-solid));
+  color: var(--danger);
+}
+
+.automation-plan-run-row.is-failed small,
+.automation-plan-run-row.is-cancelled small,
+.automation-plan-run-row.is-canceled small {
+  color: var(--danger);
 }
 
 @keyframes automationPlanRunSpin {
@@ -3265,19 +3386,14 @@ textarea:focus {
 }
 
 @keyframes automationPlanQueuePulse {
-  0%, 100% { transform: translateX(0); opacity: .7; }
-  50% { transform: translateX(2px); opacity: 1; }
-}
-
-@keyframes automationPlanQueueFade {
-  0%, 100% { opacity: .52; }
-  50% { opacity: 1; }
+  0% { transform: scale(.86); opacity: 0; }
+  28% { opacity: .58; }
+  100% { transform: scale(1.55); opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .automation-plan-run-row.is-running .automation-plan-run-index::after,
-  .automation-plan-run-row.is-queued .automation-plan-run-index,
-  .automation-plan-run-row.is-queued small {
+  .automation-plan-run-row.is-queued .automation-plan-run-index::after {
     animation: none;
   }
 }
@@ -13567,6 +13683,66 @@ body.persona-media-sorting {
   border: 0;
 }
 
+.console-page-loading {
+  position: fixed;
+  z-index: 2000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--page) 96%, var(--panel-solid));
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 260ms ease, visibility 0s linear 260ms;
+}
+
+.console-page.is-console-ready .console-page-loading {
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.console-page-loading-orbit {
+  position: relative;
+  width: 58px;
+  height: 58px;
+}
+
+.console-page-loading-orbit > span {
+  position: absolute;
+  inset: 0;
+  transform: rotate(calc(var(--loader-dot) * 36deg));
+}
+
+.console-page-loading-orbit > span::after {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--primary);
+  content: "";
+  opacity: .18;
+  transform: translateX(-50%) scale(.72);
+  animation: console-page-loading-dot 1.05s ease-in-out infinite;
+  animation-delay: calc(var(--loader-dot) * -105ms);
+}
+
+@keyframes console-page-loading-dot {
+  0%, 100% { opacity: .18; transform: translateX(-50%) scale(.72); }
+  42% { opacity: 1; transform: translateX(-50%) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console-page-loading,
+  .console-page-loading-orbit > span::after {
+    transition: none;
+    animation: none;
+  }
+
+  .console-page-loading-orbit > span::after { opacity: .7; }
+}
+
 .task-persona-card .persona-list-item {
   gap: 4px;
 }
@@ -14384,7 +14560,6 @@ body.persona-media-sorting {
     bottom: var(--mobile-task-dock-height, 64px);
     left: 0;
     grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
-    grid-template-areas: "save-spacer save-action save-cancel";
     column-gap: 10px;
     width: auto;
     margin: 0;
@@ -14392,7 +14567,8 @@ body.persona-media-sorting {
   }
 
   .console-page .persona-draft-global-save-button {
-    grid-area: save-action;
+    grid-column: 2;
+    grid-row: 1;
     height: 50px !important;
     min-height: 50px !important;
     padding: 9px 42px;
@@ -14413,11 +14589,8 @@ body.persona-media-sorting {
 
   .console-page .persona-draft-save-cancel {
     position: static;
-    inset: auto;
-    grid-area: save-cancel;
-    align-self: stretch;
-    justify-self: stretch;
-    margin: 0;
+    grid-column: 3;
+    grid-row: 1;
   }
 
   .console-page .persona-draft-global-save-dock.is-selection-expanded .persona-draft-save-floating-actions {
@@ -21019,7 +21192,8 @@ body.console-page {
 
 .module-panel.is-publishing-module .publish-mobile-selection-clear {
   grid-column: 1;
-  justify-self: start;
+  grid-row: 2;
+  justify-self: end;
   align-self: center;
   width: 44px;
   min-width: 44px;
@@ -21040,7 +21214,12 @@ body.console-page {
   stroke-width: 2.25;
 }
 
-  .module-panel.is-publishing-module .publish-mobile-selection-cancel,
+  .module-panel.is-publishing-module .publish-mobile-selection-cancel {
+    grid-column: 3;
+    grid-row: 2;
+    transform: translateX(-8px);
+  }
+
   .console-page .persona-draft-save-cancel {
     grid-column: 3;
     grid-row: 1;
@@ -21116,8 +21295,8 @@ body.console-page {
     font-weight: 900;
   }
 
-  .publish-mobile-selection-chip.is-active .publish-mobile-selection-jump {
-    color: inherit;
+  .console-page .module-panel.is-publishing-module .publish-mobile-selection-chip.is-active .publish-mobile-selection-jump {
+    color: var(--accent-ink);
   }
 
   .publish-mobile-selection-number {
@@ -22814,11 +22993,111 @@ body.console-page {
   font-size: 12px;
 }
 
+.account-pool-content-window,
+.account-pool-content {
+  min-width: 0;
+}
+
+.account-pool-content-window {
+  position: relative;
+}
+
+@keyframes accountPoolCardRefreshPulse {
+  0% {
+    border-color: var(--line);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+  38% {
+    border-color: color-mix(in srgb, var(--accent) 72%, var(--line));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+  100% {
+    border-color: var(--line);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+}
+
+@keyframes accountPoolCardRefreshSweep {
+  from {
+    transform: translate3d(-115%, 0, 0);
+  }
+  to {
+    transform: translate3d(115%, 0, 0);
+  }
+}
+
+.account-pool-card.is-platform-refresh-pulse {
+  overflow: hidden;
+  isolation: isolate;
+  animation: accountPoolCardRefreshPulse 720ms ease-out both;
+}
+
+.account-pool-card.is-platform-refresh-pulse::after {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(
+    100deg,
+    transparent 24%,
+    color-mix(in srgb, var(--accent) 16%, transparent) 42%,
+    color-mix(in srgb, var(--accent) 78%, white) 50%,
+    color-mix(in srgb, var(--accent) 16%, transparent) 58%,
+    transparent 76%
+  );
+  content: "";
+  pointer-events: none;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: accountPoolCardRefreshSweep 720ms ease-out both;
+}
+
 @media (max-width: 760.98px) {
   .console-page .account-pool-body {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
+    touch-action: pan-y;
+  }
+
+  .console-page .account-pool-body :is(button, input, select, textarea, a) {
+    touch-action: pan-y;
+  }
+
+  .console-page .account-pool-content-window.is-account-platform-dragging {
+    overflow: hidden;
+    user-select: none;
+  }
+
+  .console-page .account-pool-content.is-account-platform-drag-current {
+    position: relative;
+    z-index: 1;
+    will-change: transform;
+  }
+
+  .console-page .account-pool-content-drag-peer {
+    position: absolute;
+    z-index: 2;
+    margin: 0;
+    pointer-events: none;
+    will-change: transform;
+  }
+
+  .console-page .account-pool-content-window.is-account-platform-settling .account-pool-content {
+    transition: transform 220ms cubic-bezier(.2, .72, .2, 1);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .console-page .account-pool-content-window.is-account-platform-settling .account-pool-content {
+      transition: none;
+    }
+
+    .console-page .account-pool-card.is-platform-refresh-pulse,
+    .console-page .account-pool-card.is-platform-refresh-pulse::after {
+      animation: none;
+    }
   }
 
   .console-page .account-pool-platform-panel {

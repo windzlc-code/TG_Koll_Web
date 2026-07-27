@@ -340,7 +340,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             "data-persona-create-ai-keywords aria-busy=",
             "data-persona-create-ai-submit aria-busy=",
             "data-persona-create aria-busy=",
-            "data-persona-run-media-task aria-busy=",
+            "data-persona-run-media-task data-persona-media-action=",
         ):
             self.assertIn(marker, self.source)
         self.assertIn('trigger.setAttribute("aria-busy", "true")', self.source)
@@ -952,7 +952,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn(".live-browser-interaction-note", self.styles)
 
     def test_mobile_live_browser_header_keeps_status_and_compact_two_line_summary(self):
-        mobile_start = self.styles.rfind("@media (max-width: 760px) {")
+        mobile_header_start = self.styles.rfind(".console-page .live-browser-card-head {")
+        mobile_start = self.styles.rfind("@media (max-width: 760px) {", 0, mobile_header_start)
         mobile_styles = self.styles[mobile_start:]
         mobile_header = self._css_block(".console-page .live-browser-card-head {", mobile_start)
         mobile_summary = self._css_block(".console-page .live-browser-mobile-summary {", mobile_start)
@@ -1570,11 +1571,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         status_hint = self._css_block(
             ".console-page .live-browser-interaction-note [data-live-browser-hint] {"
         )
-        mobile_density_start = self.styles.rindex("@media (max-width: 760px) {")
+        mobile_header_start = self.styles.rfind(".console-page .live-browser-card-head {")
+        mobile_density_start = self.styles.rfind("@media (max-width: 760px) {", 0, mobile_header_start)
         mobile_density = self._css_block("@media (max-width: 760px)", mobile_density_start)
 
         self.assertIn("任务数：<b data-live-browser-task-count>", render_session)
         self.assertIn("任务目标：<b data-live-browser-task-target>", render_session)
+        update_card = self._function_source("updateLiveBrowserSessionCard")
+        self.assertIn('targetContainer.setAttribute("title", taskSummary.detail)', update_card)
+        self.assertIn('targetContainer.setAttribute("aria-label", `任务目标：${taskSummary.detail}`)', update_card)
         self.assertIn('class="live-browser-interaction-context"', render_session)
         self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", mode_toggle)
         self.assertIn("width: 100%;", mode_toggle)
@@ -1675,6 +1680,111 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.equal(legacyBatch.count, 2);
             assert.equal(legacyBatch.target, "发布第1/2篇");
 
+            """
+        )
+        self._run_node(harness)
+
+    def test_live_browser_task_summary_prefers_realtime_server_strategy(self):
+        task_summary = self._function_source("liveBrowserTaskSummary")
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const state = {{
+              socialTasks: [{{
+                id: "warmup-task",
+                task_type: "threads_warmup",
+                account_id: "account-1",
+                account_username: "Peacock83628",
+                payload: {{}},
+              }}],
+              socialTaskToastKeys: {{}},
+              socialTaskToastBatches: {{}},
+            }};
+            function socialTaskPayload(task) {{ return task?.payload || {{}}; }}
+            function accountById() {{ return {{ username: "Peacock83628" }}; }}
+            function statusLabel(value) {{ return value; }}
+            {task_summary}
+
+            const first = liveBrowserTaskSummary({{
+              task_id: "warmup-task",
+              task_type: "threads_warmup",
+              task_summary: {{
+                count: 3,
+                target: "养号｜随机点赞｜浏览30·赞16·评0",
+                detail: "养号 · 默认养号：滑动 + 随机点赞 · 浏览 30 次 · 点赞最多 16 次 · 评论最多 0 次",
+              }},
+            }});
+            assert.equal(first.count, 3);
+            assert.equal(first.target, "养号｜随机点赞｜浏览30·赞16·评0");
+            assert.equal(first.detail, "养号 · 默认养号：滑动 + 随机点赞 · 浏览 30 次 · 点赞最多 16 次 · 评论最多 0 次");
+            assert.ok(!first.target.includes("Peacock83628"));
+
+            const next = liveBrowserTaskSummary({{
+              task_id: "publish-task",
+              task_type: "publish_post",
+              task_summary: {{
+                count: 3,
+                target: "发布2/3｜春日穿搭",
+                detail: "发布内容 · 第 2/3 篇 · 春日穿搭",
+              }},
+            }});
+            assert.equal(next.count, 3);
+            assert.equal(next.target, "发布2/3｜春日穿搭");
+            assert.equal(next.detail, "发布内容 · 第 2/3 篇 · 春日穿搭");
+            """
+        )
+        self._run_node(harness)
+
+    def test_queued_automation_plan_browser_button_opens_the_real_queued_task(self):
+        browser_link = self._section(
+            "function renderAutomationPlanBrowserLink",
+            "\nfunction automationPlanCanDelete",
+        )
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            function automationPlanRunTasks(plan) {{ return plan.tasks || []; }}
+            function esc(value) {{ return String(value); }}
+            function renderBrowserLaunchIcon() {{ return "<svg></svg>"; }}
+            {browser_link}
+
+            const queuedOnly = renderAutomationPlanBrowserLink({{
+              tasks: [
+                {{ id: "queued-task", status: "queued" }},
+                {{ id: "later-task", status: "preparing" }},
+              ],
+            }});
+            assert.ok(queuedOnly.includes('data-automation-plan-browser-task="queued-task"'));
+
+            const runningWins = renderAutomationPlanBrowserLink({{
+              tasks: [
+                {{ id: "queued-task", status: "queued" }},
+                {{ id: "running-task", status: "running" }},
+              ],
+            }});
+            assert.ok(runningWins.includes('data-automation-plan-browser-task="running-task"'));
+            """
+        )
+        self._run_node(harness)
+
+    def test_browser_list_hides_only_the_redundant_mobile_navigation_toggle(self):
+        persistent_page = self._section(
+            "function isMobilePersistentDockPage",
+            "\nfunction syncMobilePageToolbar",
+        )
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const state = {{
+              view: "accounts",
+              accountBrowserPanel: "browsers",
+              activeModule: "",
+            }};
+            {persistent_page}
+            assert.equal(isMobilePersistentDockPage(), true);
+
+            state.view = "social";
+            assert.equal(isMobilePersistentDockPage(), false);
             """
         )
         self._run_node(harness)
@@ -1907,7 +2017,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
         for event_name in ("click", "keydown", "change"):
             self.assertIn(
-                f'if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("{event_name}", (event) => {{',
+                f'if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("{event_name}", {"async " if event_name == "click" else ""}(event) => {{',
                 bind_events,
             )
         self.assertNotIn('event.target.closest(".account-pool-create-panel")', bind_events)

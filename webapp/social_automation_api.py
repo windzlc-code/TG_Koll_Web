@@ -353,6 +353,10 @@ class SocialAutomationPlanPayload(BaseModel):
     items: list[SocialAutomationPlanItemPayload] = Field(min_length=1, max_length=49)
 
 
+class SocialAutomationPlanDeletePayload(StrictProxyModel):
+    plan_ids: list[str] = Field(min_length=1, max_length=80)
+
+
 class SocialAccountPatchPayload(BaseModel):
     persona_id: str | None = None
     replace_existing_binding: bool = False
@@ -1087,11 +1091,39 @@ def _automation_plan_task_rows(
     ).fetchall()
 
 
+def _automation_plan_task_public(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    return {
+        "id": str(item.get("id") or ""),
+        "task_type": str(item.get("task_type") or ""),
+        "status": str(item.get("status") or ""),
+        "scheduled_at": int(item.get("scheduled_at") or 0),
+        "started_at": int(item.get("started_at") or 0),
+        "finished_at": int(item.get("finished_at") or 0),
+        "error": str(item.get("error") or ""),
+        "cycle_index": int(item.get("automation_plan_cycle") or 0),
+        "sequence": int(item.get("automation_plan_sequence") or 0),
+    }
+
+
 def _automation_plan_public(row: Any, *, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
     if conn is None:
         with db() as active_conn:
             return _automation_plan_public(row, conn=active_conn)
     task_rows = _automation_plan_task_rows(conn, str(row["id"]))
+    cycle_index = int(row["cycle_index"] or 0)
+    current_task_rows = [
+        task
+        for task in task_rows
+        if int(task["automation_plan_cycle"] or 0) == cycle_index
+    ]
+    if not current_task_rows and task_rows:
+        latest_task_cycle = max(int(task["automation_plan_cycle"] or 0) for task in task_rows)
+        current_task_rows = [
+            task
+            for task in task_rows
+            if int(task["automation_plan_cycle"] or 0) == latest_task_cycle
+        ]
     terminal = {"success", "failed", "cancelled"}
     next_run_at = min(
         (
@@ -1109,7 +1141,8 @@ def _automation_plan_public(row: Any, *, conn: sqlite3.Connection | None = None)
         "mode": str(row["mode"] or "list"),
         "status": str(row["status"] or "active"),
         "items": _automation_plan_items(row),
-        "cycle_index": int(row["cycle_index"] or 0),
+        "cycle_index": cycle_index,
+        "tasks": [_automation_plan_task_public(task) for task in current_task_rows],
         "last_error": str(row["last_error"] or ""),
         "next_run_at": next_run_at,
         "task_count": len(task_rows),
@@ -1562,6 +1595,104 @@ def cancel_social_automation_plan(plan_id: str, *, user_id: int) -> dict[str, An
             cleanup_cancelled_social_tasks_runtime(cancelled_ids)
             wake_social_automation_worker()
         return public
+
+
+def delete_social_automation_plans(plan_ids: list[str], *, user_id: int) -> dict[str, Any]:
+    clean_plan_ids = list(
+        dict.fromkeys(
+            str(plan_id or "").strip()
+            for plan_id in (plan_ids or [])
+            if str(plan_id or "").strip()
+        )
+    )
+    if not clean_plan_ids:
+        raise HTTPException(status_code=400, detail="请选择要删除的自动化计划")
+    if len(clean_plan_ids) > 80:
+        raise HTTPException(status_code=400, detail="单次最多删除 80 条自动化计划")
+    placeholders = ",".join("?" for _ in clean_plan_ids)
+    task_ids: list[str] = []
+    deleted_task_count = 0
+    with _AUTOMATION_PLAN_LOCK:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM social_automation_plans
+                WHERE user_id = ? AND id IN ({placeholders})
+                """,
+                (int(user_id), *clean_plan_ids),
+            ).fetchall()
+            if len(rows) != len(clean_plan_ids):
+                raise HTTPException(status_code=404, detail="自动化计划不存在")
+            active_plan = conn.execute(
+                f"""
+                SELECT id
+                FROM social_automation_plans
+                WHERE user_id = ? AND id IN ({placeholders})
+                  AND status IN ('active', 'materializing')
+                LIMIT 1
+                """,
+                (int(user_id), *clean_plan_ids),
+            ).fetchone()
+            if active_plan:
+                raise HTTPException(status_code=409, detail="请先停止自动化计划，再删除记录")
+            task_rows = conn.execute(
+                f"""
+                SELECT *
+                FROM social_automation_tasks
+                WHERE automation_plan_id IN ({placeholders})
+                """,
+                tuple(clean_plan_ids),
+            ).fetchall()
+            active_task = conn.execute(
+                f"""
+                SELECT id
+                FROM social_automation_tasks
+                WHERE automation_plan_id IN ({placeholders})
+                  AND status IN ('preparing', 'queued', 'running', 'need_manual')
+                LIMIT 1
+                """,
+                tuple(clean_plan_ids),
+            ).fetchone()
+            if active_task:
+                raise HTTPException(status_code=409, detail="计划仍有执行中或排队中的任务，暂时不能删除")
+            task_ids = [str(task["id"] or "") for task in task_rows if str(task["id"] or "")]
+            for task in task_rows:
+                _release_task_billing_reservation(conn, task)
+            if task_ids:
+                task_placeholders = ",".join("?" for _ in task_ids)
+                conn.execute(
+                    f"DELETE FROM social_automation_logs WHERE task_id IN ({task_placeholders})",
+                    tuple(task_ids),
+                )
+                deleted_task_count = int(
+                    conn.execute(
+                        f"DELETE FROM social_automation_tasks WHERE id IN ({task_placeholders})",
+                        tuple(task_ids),
+                    ).rowcount
+                    or 0
+                )
+            deleted_plan_count = int(
+                conn.execute(
+                    f"""
+                    DELETE FROM social_automation_plans
+                    WHERE user_id = ? AND id IN ({placeholders})
+                    """,
+                    (int(user_id), *clean_plan_ids),
+                ).rowcount
+                or 0
+            )
+            if deleted_plan_count != len(clean_plan_ids):
+                raise RuntimeError("自动化计划删除数量不一致")
+    if task_ids:
+        _discard_ephemeral_task_secrets(*task_ids)
+    wake_social_automation_worker()
+    return {
+        "deleted_plan_count": deleted_plan_count,
+        "deleted_task_count": deleted_task_count,
+        "deleted_plan_ids": clean_plan_ids,
+    }
 
 
 def _reconcile_social_automation_plans() -> None:
@@ -2072,6 +2203,32 @@ def register_social_automation_routes(app: FastAPI) -> None:
             "ok": True,
             "plan": cancel_social_automation_plan(
                 plan_id,
+                user_id=_identity_user_id(user),
+            ),
+        }
+
+    @app.post("/api/persona_dashboard/automation/plans/batch-delete")
+    def api_social_automation_plans_delete(
+        payload: SocialAutomationPlanDeletePayload,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        return {
+            "ok": True,
+            **delete_social_automation_plans(
+                payload.plan_ids,
+                user_id=_identity_user_id(user),
+            ),
+        }
+
+    @app.delete("/api/persona_dashboard/automation/plans/{plan_id}")
+    def api_social_automation_plan_delete(
+        plan_id: str,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        return {
+            "ok": True,
+            **delete_social_automation_plans(
+                [plan_id],
                 user_id=_identity_user_id(user),
             ),
         }
@@ -3094,6 +3251,178 @@ def build_social_automation_overview(*, user_id: int | None = None, admin_waived
     }
 
 
+def _live_browser_summary_int(payload: dict[str, Any], *keys: str, fallback: int = 0) -> int:
+    for key in keys:
+        if key not in payload:
+            continue
+        try:
+            return max(0, int(payload.get(key) or 0))
+        except (TypeError, ValueError):
+            continue
+    return max(0, int(fallback or 0))
+
+
+def _live_browser_summary_text(value: Any, *, limit: int = 96) -> str:
+    text = re.sub(r"\s+", " ", _redact_sensitive_text(str(value or ""))).strip()
+    return text if len(text) <= limit else f"{text[: max(1, limit - 1)].rstrip()}…"
+
+
+def _live_browser_summary_target(payload: dict[str, Any]) -> str:
+    plain_target = payload.get("username") or payload.get("target_title")
+    if plain_target:
+        return _live_browser_summary_text(plain_target)
+    raw_url = str(payload.get("target_url") or payload.get("post_url") or "").strip()
+    if not raw_url:
+        return ""
+    parsed = urlparse(raw_url)
+    if parsed.scheme and parsed.netloc:
+        raw_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    return _live_browser_summary_text(raw_url)
+
+
+def _live_browser_task_summary(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    payload = _loads(item.get("payload_json"), {})
+    if not isinstance(payload, dict):
+        payload = {}
+    task_type = str(item.get("task_type") or "").strip().lower()
+    count = max(
+        1,
+        _live_browser_summary_int(item, "task_group_count"),
+        _live_browser_summary_int(payload, "publish_sequence_total"),
+    )
+    strategy_id = _live_browser_summary_text(payload.get("strategy_id"), limit=64)
+    strategy_label = _live_browser_summary_text(payload.get("strategy_label"))
+    fields: list[dict[str, str]] = []
+    task_label = {
+        "threads_warmup": "养号",
+        "threads_auto_reply": "自动回复",
+        "publish_post": "发布内容",
+        "browse_feed": "浏览首页",
+        "browse_profile": "浏览主页",
+        "comment_post": "评论",
+        "reply_comment": "回复评论",
+        "like_post": "点赞",
+        "share_post": "分享",
+        "repost_post": "转发",
+        "open_login": "账号登录",
+        "check_login": "登录检测",
+    }.get(task_type, "自动化任务")
+
+    if task_type == "threads_warmup":
+        browse_limit = _live_browser_summary_int(payload, "browse_limit", "scroll_times")
+        like_limit = _live_browser_summary_int(payload, "like_limit")
+        max_comments = _live_browser_summary_int(payload, "max_comments")
+        fields = [
+            {"label": "浏览", "value": f"{browse_limit} 次"},
+            {"label": "点赞最多", "value": f"{like_limit} 次"},
+            {"label": "评论最多", "value": f"{max_comments} 次"},
+        ]
+        comment_chance = _live_browser_summary_int(payload, "comment_chance")
+        if max_comments > 0 and comment_chance > 0:
+            fields.append({"label": "评论概率", "value": f"{comment_chance}%"})
+    elif task_type == "threads_auto_reply":
+        reply_scope = str(payload.get("reply_scope") or "comments").strip().lower()
+        max_posts = _live_browser_summary_int(payload, "max_posts")
+        max_replies = _live_browser_summary_int(payload, "max_replies")
+        max_age_days = _live_browser_summary_int(payload, "max_age_days")
+        fields = [
+            {"label": "范围", "value": "热点推文" if reply_scope == "hot_posts" else "账号评论"},
+            {"label": "扫描推文", "value": f"{max_posts} 篇"},
+            {"label": "回复最多", "value": f"{max_replies} 条"},
+            {"label": "时间范围", "value": f"{max_age_days} 天"},
+        ]
+        min_views = _live_browser_summary_int(payload, "min_views")
+        if min_views > 0:
+            fields.append({"label": "最低浏览", "value": f"{min_views} 次"})
+    elif task_type == "publish_post":
+        sequence_total = max(1, _live_browser_summary_int(payload, "publish_sequence_total", fallback=count))
+        sequence_index = min(
+            sequence_total,
+            max(1, _live_browser_summary_int(payload, "publish_sequence_index", fallback=1)),
+        )
+        fields.append({"label": "进度", "value": f"第 {sequence_index}/{sequence_total} 篇"})
+        title = _live_browser_summary_text(payload.get("archive_post_title") or payload.get("target_title"))
+        if title:
+            fields.append({"label": "内容", "value": title})
+    elif task_type in {"browse_feed", "browse_profile"}:
+        browse_limit = _live_browser_summary_int(payload, "browse_limit", "scroll_times")
+        fields.append(
+            {
+                "label": "浏览",
+                "value": f"{browse_limit} 次",
+            }
+        )
+        target = _live_browser_summary_target(payload)
+        if target:
+            fields.append({"label": "对象", "value": target})
+    elif task_type in {"comment_post", "reply_comment", "like_post", "share_post", "repost_post"}:
+        target = _live_browser_summary_target(payload)
+        if target:
+            fields.append({"label": "对象", "value": target})
+    elif task_type == "open_login":
+        fields.append({"label": "方式", "value": "自动登录" if payload.get("auto_submit", True) else "人工登录"})
+
+    detail_parts = [task_label]
+    if strategy_label:
+        detail_parts.append(strategy_label)
+    if task_type == "publish_post":
+        detail_parts.extend(field["value"] for field in fields)
+    else:
+        detail_parts.extend(f"{field['label']} {field['value']}" for field in fields)
+    detail = " · ".join(part for part in detail_parts if part)
+
+    if task_type == "threads_warmup":
+        short_strategy = {
+            "browse_only": "只浏览",
+            "like_comment": "点赞留言",
+            "warmup_custom": "自定义",
+            "tg_default": "随机点赞",
+        }.get(strategy_id)
+        if not short_strategy:
+            if "只浏览" in strategy_label:
+                short_strategy = "只浏览"
+            elif "留言" in strategy_label or "评论" in strategy_label:
+                short_strategy = "点赞留言"
+            elif "随机点赞" in strategy_label:
+                short_strategy = "随机点赞"
+            else:
+                short_strategy = _live_browser_summary_text(strategy_label or "养号", limit=8)
+        target = f"养号｜{short_strategy}｜浏览{browse_limit}·赞{like_limit}·评{max_comments}"
+    elif task_type == "threads_auto_reply":
+        short_strategy = "热点回复" if reply_scope == "hot_posts" else "评论回复"
+        target = f"{short_strategy}｜扫{max_posts}·回{max_replies}·{max_age_days}天"
+        if min_views > 0:
+            target += f"·≥{min_views}浏览"
+    elif task_type == "publish_post":
+        short_title = _live_browser_summary_text(payload.get("archive_post_title") or payload.get("target_title"), limit=14)
+        target = f"发布{sequence_index}/{sequence_total}"
+        if short_title:
+            target += f"｜{short_title}"
+    elif task_type in {"browse_feed", "browse_profile"}:
+        short_target = _live_browser_summary_text(target, limit=12) if target else ""
+        target = f"浏览{browse_limit}" + (f"｜{short_target}" if short_target else "")
+    elif task_type in {"comment_post", "reply_comment", "like_post", "share_post", "repost_post"}:
+        short_target = _live_browser_summary_text(target, limit=12) if target else ""
+        target = task_label + (f"｜{short_target}" if short_target else "")
+    elif task_type == "open_login":
+        target = "自动登录" if payload.get("auto_submit", True) else "人工登录"
+    else:
+        target = task_label
+    target = _live_browser_summary_text(target, limit=36)
+    return {
+        "count": count,
+        "current_task_id": str(item.get("id") or ""),
+        "task_type": task_type,
+        "task_label": task_label,
+        "strategy_id": strategy_id,
+        "strategy_label": strategy_label,
+        "fields": fields,
+        "target": target,
+        "detail": detail,
+    }
+
+
 def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool = False) -> list[dict[str, Any]]:
     try:
         from social_automation.live_browser import list_live_browser_sessions
@@ -3119,10 +3448,36 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
     placeholders = ",".join("?" for _ in task_ids)
     try:
         with db() as conn:
-            owner_clause = "" if user_id is None else " AND user_id = ?"
+            owner_clause = "" if user_id is None else " AND task.user_id = ?"
             owner_params: list[Any] = [] if user_id is None else [int(user_id)]
             rows = conn.execute(
-                f"SELECT id, status, task_type, payload_json, error, finished_at FROM social_automation_tasks WHERE id IN ({placeholders}){owner_clause}",
+                f"""
+                SELECT
+                  task.id,
+                  task.user_id,
+                  task.persona_id,
+                  task.account_id,
+                  task.platform,
+                  task.status,
+                  task.task_type,
+                  task.payload_json,
+                  task.error,
+                  task.finished_at,
+                  task.automation_plan_id,
+                  task.automation_plan_cycle,
+                  CASE
+                    WHEN task.automation_plan_id != '' THEN (
+                      SELECT COUNT(*)
+                      FROM social_automation_tasks AS grouped_task
+                      WHERE grouped_task.user_id = task.user_id
+                        AND grouped_task.automation_plan_id = task.automation_plan_id
+                        AND grouped_task.automation_plan_cycle = task.automation_plan_cycle
+                    )
+                    ELSE 1
+                  END AS task_group_count
+                FROM social_automation_tasks AS task
+                WHERE task.id IN ({placeholders}){owner_clause}
+                """,
                 [*task_ids, *owner_params],
             ).fetchall()
         task_status = {str(row["id"]): row for row in rows}
@@ -3139,8 +3494,14 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
         status = str(row["status"] or "").strip().lower()
         if status:
             session["task_status"] = status
+        current_task_type = str(row["task_type"] or "").strip()
+        session["task_type"] = current_task_type
+        session["persona_id"] = str(dict(row).get("persona_id") or "")
+        session["account_id"] = str(dict(row).get("account_id") or session.get("account_id") or "")
+        session["platform"] = str(dict(row).get("platform") or session.get("platform") or "")
+        session["task_summary"] = _live_browser_task_summary(row)
         session["input_allowed"] = bool(session.get("browser_ready")) and _live_browser_task_input_allowed(row)
-        if str(row["task_type"] or "").strip() in {"open_login", "publish_post"}:
+        if current_task_type in {"open_login", "publish_post"}:
             session["login_mode"] = _live_browser_open_login_mode(row)
             session["takeover_waiting_for"] = _running_task_takeover_waiting_for(str(row["id"] or ""))
         if str(row["error"] or "").strip():

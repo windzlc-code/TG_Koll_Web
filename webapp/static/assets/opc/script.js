@@ -665,6 +665,13 @@ async function submitUserLogin(forceTakeover = false) {
       ? `/change-password.html?admin_console=1&return_url=${encodeURIComponent(safeRedirect)}`
       : `/change-password.html?return_url=${encodeURIComponent(safeRedirect)}`;
     if (result?.must_change_password) {
+      closeLogin();
+      await window.VectoSiteNavigation?.showAuthFeedback?.({
+        kind: "success",
+        title: "登录验证成功",
+        message: "为保护账号安全，请先设置新的登录密码。",
+        actionText: "前往设置",
+      });
       window.location.assign(passwordTarget);
       return;
     }
@@ -672,6 +679,12 @@ async function submitUserLogin(forceTakeover = false) {
     else window.VectoSiteNavigation?.clearAdminConsoleContext?.();
     await window.VectoSiteNavigation?.refreshPublicSession?.();
     closeLogin();
+    await window.VectoSiteNavigation?.showAuthFeedback?.({
+      kind: "success",
+      title: "登录成功",
+      message: isAdmin ? "管理员账号已登录，当前页面将保留不跳转。" : "账号已登录，当前页面将保留不跳转。",
+      actionText: "继续",
+    });
     window.history.replaceState({}, "", safeRedirect);
   } catch (error) {
     const detail = apiErrorDetail(error);
@@ -683,6 +696,12 @@ async function submitUserLogin(forceTakeover = false) {
     if (loginTakeover) loginTakeover.hidden = detail.code !== "SESSION_CONFLICT";
     submit.disabled = false;
     if (loginTakeover) loginTakeover.disabled = false;
+    await window.VectoSiteNavigation?.showAuthFeedback?.({
+      kind: "error",
+      title: "登录失败",
+      message: detail.message || "请检查账号和密码后重试。",
+      actionText: "返回继续填写",
+    });
   }
 }
 

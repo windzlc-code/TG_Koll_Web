@@ -1,5 +1,7 @@
 import asyncio
+import contextlib
 import json
+import sqlite3
 from http.cookies import SimpleCookie
 from types import SimpleNamespace
 from unittest import mock
@@ -369,6 +371,131 @@ def test_live_browser_sessions_follow_current_publish_batch_task():
 
     assert result[0]["task_id"] == "publish-task-2"
     assert result[0]["task_status"] == "running"
+
+
+def test_live_browser_task_summary_exposes_only_concrete_strategy_fields():
+    warmup = social_automation_api._live_browser_task_summary(
+        {
+            "id": "warmup-task",
+            "task_type": "threads_warmup",
+            "task_group_count": 3,
+            "payload_json": json.dumps(
+                {
+                    "strategy_label": "默认养号：滑动 + 随机点赞",
+                    "browse_limit": 30,
+                    "like_limit": 16,
+                    "max_comments": 0,
+                    "comment_chance": 0,
+                    "login_password": "must-not-leak",
+                    "initial_cookies": [{"value": "must-not-leak"}],
+                },
+                ensure_ascii=False,
+            ),
+        }
+    )
+
+    assert warmup["count"] == 3
+    assert warmup["task_type"] == "threads_warmup"
+    assert warmup["strategy_label"] == "默认养号：滑动 + 随机点赞"
+    assert warmup["fields"] == [
+        {"label": "浏览", "value": "30 次"},
+        {"label": "点赞最多", "value": "16 次"},
+        {"label": "评论最多", "value": "0 次"},
+    ]
+    assert warmup["target"] == "养号｜随机点赞｜浏览30·赞16·评0"
+    assert warmup["detail"] == "养号 · 默认养号：滑动 + 随机点赞 · 浏览 30 次 · 点赞最多 16 次 · 评论最多 0 次"
+    assert len(warmup["target"]) < len(warmup["detail"])
+    assert "must-not-leak" not in json.dumps(warmup, ensure_ascii=False)
+
+    publish = social_automation_api._live_browser_task_summary(
+        {
+            "id": "publish-task",
+            "task_type": "publish_post",
+            "task_group_count": 3,
+            "payload_json": json.dumps(
+                {
+                    "publish_sequence_index": 2,
+                    "publish_sequence_total": 3,
+                    "archive_post_title": "春日穿搭",
+                },
+                ensure_ascii=False,
+            ),
+        }
+    )
+    assert publish["count"] == 3
+    assert publish["target"] == "发布2/3｜春日穿搭"
+    assert publish["detail"] == "发布内容 · 第 2/3 篇 · 春日穿搭"
+
+
+def test_live_browser_sessions_count_only_the_current_plan_cycle_and_refresh_current_strategy():
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE social_automation_tasks (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          persona_id TEXT NOT NULL,
+          account_id TEXT NOT NULL,
+          platform TEXT NOT NULL,
+          status TEXT NOT NULL,
+          task_type TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          error TEXT NOT NULL DEFAULT '',
+          finished_at INTEGER NOT NULL DEFAULT 0,
+          automation_plan_id TEXT NOT NULL DEFAULT '',
+          automation_plan_cycle INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    rows = [
+        ("done", 7, "persona-1", "account-1", "threads", "success", "publish_post", '{"publish_sequence_index":1,"publish_sequence_total":1}', "", 1, "plan-1", 2),
+        ("current", 7, "persona-1", "account-1", "threads", "running", "threads_warmup", '{"strategy_id":"browse_only","strategy_label":"保守养号：只浏览","browse_limit":30,"like_limit":0,"max_comments":0}', "", 0, "plan-1", 2),
+        ("next", 7, "persona-1", "account-1", "threads", "queued", "threads_auto_reply", '{"strategy_id":"hot_posts","strategy_label":"自动回复热点推文","reply_scope":"hot_posts","max_posts":5,"max_replies":3,"max_age_days":30}', "", 0, "plan-1", 2),
+        ("other-cycle", 7, "persona-1", "account-1", "threads", "queued", "threads_warmup", "{}", "", 0, "plan-1", 1),
+        ("other-plan", 7, "persona-1", "account-1", "threads", "queued", "threads_warmup", "{}", "", 0, "plan-2", 2),
+        ("other-user", 8, "persona-1", "account-1", "threads", "queued", "threads_warmup", "{}", "", 0, "plan-1", 2),
+    ]
+    connection.executemany(
+        "INSERT INTO social_automation_tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    connection.commit()
+
+    @contextlib.contextmanager
+    def database():
+        yield connection
+
+    sessions = [
+        {
+            "id": "live-current",
+            "task_id": "current",
+            "account_id": "account-1",
+            "platform": "threads",
+            "browser_ready": True,
+        }
+    ]
+    with (
+        mock.patch.object(live_browser, "list_live_browser_sessions", return_value=sessions),
+        mock.patch.object(social_automation_api, "db", database),
+    ):
+        current = social_automation_api._live_browser_sessions(user_id=7)
+
+    assert current[0]["task_summary"]["count"] == 3
+    assert current[0]["task_summary"]["strategy_id"] == "browse_only"
+    assert current[0]["task_summary"]["target"] == "养号｜只浏览｜浏览30·赞0·评0"
+
+    sessions[0]["task_id"] = "next"
+    with (
+        mock.patch.object(live_browser, "list_live_browser_sessions", return_value=sessions),
+        mock.patch.object(social_automation_api, "db", database),
+    ):
+        next_task = social_automation_api._live_browser_sessions(user_id=7)
+
+    assert next_task[0]["task_summary"]["count"] == 3
+    assert next_task[0]["task_summary"]["strategy_id"] == "hot_posts"
+    assert next_task[0]["task_summary"]["target"] == "热点回复｜扫5·回3·30天"
+    connection.close()
 
 
 @pytest.mark.parametrize("auto_submit", [1, "true", "false", None])

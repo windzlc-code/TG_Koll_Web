@@ -102,7 +102,7 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn('publish-command-actions${publishSelectionExpanded ? " is-selection-expanded" : ""}', SCRIPT)
         media = STYLES.split("@media (max-width: 760px)", 1)[1]
         shared_action = re.search(
-            r"\.module-panel\.is-publishing-module :is\(\s*\.publish-mobile-selection-clear,\s*\.publish-mobile-selection-cancel\s*\)\s*\{([^}]+)\}",
+            r"\.module-panel\.is-publishing-module :is\(\s*\.publish-mobile-selection-clear,\s*\.publish-mobile-selection-cancel\s*\)\s*,\s*\.console-page \.persona-draft-save-cancel\s*\{([^}]+)\}",
             media,
         )
         self.assertIsNotNone(shared_action)
@@ -114,17 +114,19 @@ class MobilePublishActionDockTests(unittest.TestCase):
         )
         self.assertIsNotNone(clear)
         self.assertIn("grid-column: 1", clear.group(1))
+        self.assertIn("grid-row: 2", clear.group(1))
         self.assertIn("width: 44px", clear.group(1))
         self.assertIn("height: 44px", clear.group(1))
-        self.assertIn("justify-self: start", clear.group(1))
+        self.assertIn("justify-self: end", clear.group(1))
         cancel = re.search(
             r"\.module-panel\.is-publishing-module \.publish-mobile-selection-cancel\s*\{([^}]+)\}",
             media,
         )
         self.assertIsNotNone(cancel)
         self.assertIn("grid-column: 3", cancel.group(1))
+        self.assertIn("grid-row: 2", cancel.group(1))
         expanded_actions = re.search(
-            r"\.publish-command-actions\.is-selection-expanded :is\(\s*\.publish-mobile-selection-clear,\s*\.publish-mobile-selection-cancel\s*\)\s*\{([^}]+)\}",
+            r"\.publish-command-actions\.is-selection-expanded :is\(\s*\.publish-mobile-selection-clear,\s*\.publish-mobile-selection-cancel\s*\)\s*,\s*\.console-page \.persona-draft-global-save-dock\.is-selection-expanded \.persona-draft-save-cancel\s*\{([^}]+)\}",
             media,
         )
         self.assertIsNotNone(expanded_actions)
@@ -156,14 +158,14 @@ class MobilePublishActionDockTests(unittest.TestCase):
             r"\.publish-mobile-selection-cancel\s*\{[^}]*display:\s*none",
         )
 
-    def test_mobile_link_and_sequence_tools_render_before_the_publish_source(self):
+    def test_mobile_selection_preview_stays_hidden_until_it_has_content(self):
         media = STYLES.split("@media (max-width: 760px)", 1)[1]
         preview = re.search(
             r"\.publish-content-preview--selection\s*\{([^}]+)\}",
             media,
         )
         self.assertIsNotNone(preview)
-        self.assertIn("display: block", preview.group(1))
+        self.assertIn("display: none", preview.group(1))
         self.assertIn("order: -2", preview.group(1))
 
     def test_link_settings_move_from_tasks_to_the_generation_media_stack(self):

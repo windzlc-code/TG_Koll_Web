@@ -1209,6 +1209,51 @@
     document.querySelectorAll("[data-site-notification-broadcast]").forEach((node) => node.remove());
   }
 
+  function authFeedbackIcon(kind = "success") {
+    const paths = kind === "logout"
+      ? '<path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M18 12H9"></path>'
+      : kind === "error"
+        ? '<circle cx="12" cy="12" r="9"></circle><path d="m9 9 6 6m0-6-6 6"></path>'
+        : '<circle cx="12" cy="12" r="9"></circle><path d="m8 12 2.5 2.5L16 9"></path>';
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
+  }
+
+  function showAuthFeedback({ kind = "success", title = "操作完成", message = "", actionText = "知道了" } = {}) {
+    document.querySelectorAll("[data-site-auth-feedback]").forEach((node) => node.remove());
+    return new Promise((resolve) => {
+      const modal = document.createElement("div");
+      modal.className = `site-auth-feedback is-${kind}`;
+      modal.dataset.siteAuthFeedback = "true";
+      modal.innerHTML = `<section class="site-auth-feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="siteAuthFeedbackTitle">
+        <div class="site-auth-feedback-icon">${authFeedbackIcon(kind)}</div>
+        <div class="site-auth-feedback-copy"><strong id="siteAuthFeedbackTitle"></strong><p></p></div>
+        <button type="button" class="site-auth-feedback-close" aria-label="关闭">${closeIcon()}</button>
+        <button type="button" class="site-auth-feedback-confirm"></button>
+      </section>`;
+      modal.querySelector("strong").textContent = String(title || "操作完成");
+      modal.querySelector("p").textContent = String(message || "");
+      modal.querySelector(".site-auth-feedback-confirm").textContent = String(actionText || "知道了");
+      const close = () => {
+        if (!modal.isConnected) return;
+        modal.classList.add("is-leaving");
+        window.setTimeout(() => {
+          modal.remove();
+          resolve(true);
+        }, 180);
+      };
+      modal.querySelector(".site-auth-feedback-close").addEventListener("click", close);
+      modal.querySelector(".site-auth-feedback-confirm").addEventListener("click", close);
+      modal.addEventListener("click", (event) => {
+        if (event.target === modal) close();
+      });
+      modal.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") close();
+      });
+      document.body.append(modal);
+      modal.querySelector(".site-auth-feedback-confirm")?.focus({ preventScroll: true });
+    });
+  }
+
   function showNotificationBroadcast(item) {
     if (!item || item.read || !notificationNumber(item.id)) return;
     const announceKey = notificationAnnounceKey(item);
@@ -1468,12 +1513,20 @@
         const data = await response.json().catch(() => ({}));
         throw new Error(data?.detail || copy[currentLanguage()].logoutFailed);
       }
+      await showAuthFeedback({
+        kind: "logout",
+        title: "已退出登录",
+        message: "当前账号已安全退出，返回后可随时再次登录。",
+        actionText: "继续",
+      });
       setAccount(null);
       if (currentSessionMode === "admin") clearAdminConsoleContext();
       currentSessionMode = "guest";
       window.location.replace(publicLogoutLocation());
     } catch (error) {
-      setLogoutPending(false, error?.message || copy[currentLanguage()].logoutFailed);
+      const message = error?.message || copy[currentLanguage()].logoutFailed;
+      setLogoutPending(false, message);
+      await showAuthFeedback({ kind: "error", title: "退出未完成", message });
     }
   }
 
@@ -1908,6 +1961,7 @@
     openConsoleEntry,
     markAdminConsoleContext,
     clearAdminConsoleContext,
+    showAuthFeedback,
     refreshPublicSession,
     syncProxyMarketBadge,
     refreshNotifications: () => loadNotifications({ force: true }),

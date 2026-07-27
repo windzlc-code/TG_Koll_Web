@@ -247,10 +247,26 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         )
         self.assertEqual(task_response.status_code, 200, task_response.text)
         task_id = task_response.json()["task"]["id"]
+        plan_response = owner.post(
+            "/api/persona_dashboard/automation/plans",
+            json={
+                "persona_id": owner_persona_id,
+                "account_id": account_id,
+                "platform": "threads",
+                "mode": "list",
+                "items": [{"reservation_minutes": 0, "task_type": "browse_feed", "payload": {}}],
+            },
+        )
+        self.assertEqual(plan_response.status_code, 200, plan_response.text)
+        plan_id = plan_response.json()["plan"]["id"]
+        self.assertEqual(
+            owner.post(f"/api/persona_dashboard/automation/plans/{plan_id}/cancel").status_code,
+            200,
+        )
 
         self.assertEqual(len(owner.get("/api/persona_dashboard/automation/accounts").json()["accounts"]), 1)
         self.assertEqual(len(owner.get("/api/persona_dashboard/automation/proxies").json()["proxies"]), 1)
-        self.assertEqual(len(owner.get("/api/persona_dashboard/automation/tasks").json()["tasks"]), 1)
+        self.assertEqual(len(owner.get("/api/persona_dashboard/automation/tasks").json()["tasks"]), 2)
         self.assertEqual(stranger.get("/api/persona_dashboard/automation/accounts").json()["accounts"], [])
         self.assertEqual(stranger.get("/api/persona_dashboard/automation/proxies").json()["proxies"], [])
         self.assertEqual(stranger.get("/api/persona_dashboard/automation/tasks").json()["tasks"], [])
@@ -277,6 +293,11 @@ class AuthSecurityHardeningTests(unittest.TestCase):
             stranger.post(f"/api/persona_dashboard/automation/tasks/{task_id}/cancel", json={}),
             stranger.post(f"/api/persona_dashboard/automation/tasks/{task_id}/retry"),
             stranger.delete(f"/api/persona_dashboard/automation/tasks/{task_id}"),
+            stranger.delete(f"/api/persona_dashboard/automation/plans/{plan_id}"),
+            stranger.post(
+                "/api/persona_dashboard/automation/plans/batch-delete",
+                json={"plan_ids": [plan_id]},
+            ),
         ]
         self.assertTrue(all(response.status_code == 404 for response in denied), [(response.status_code, response.text) for response in denied])
 
@@ -312,7 +333,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(owner_detail.json()["resource_counts"]["personas"], 1)
         self.assertEqual(owner_detail.json()["resource_counts"]["social_accounts"], 1)
         self.assertEqual(owner_detail.json()["resource_counts"]["social_proxies"], 1)
-        self.assertEqual(owner_detail.json()["resource_counts"]["social_tasks"], 1)
+        self.assertEqual(owner_detail.json()["resource_counts"]["social_tasks"], 2)
 
     def test_archiving_customer_preserves_tenant_resources_without_user_zero_orphans(self):
         customer, customer_id = self._approved_client("delete_tenant")

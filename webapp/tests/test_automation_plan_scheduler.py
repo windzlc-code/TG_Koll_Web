@@ -109,6 +109,8 @@ class AutomationPlanSchedulerTests(unittest.TestCase):
         self.assertEqual(plan["mode"], "list")
         self.assertEqual(plan["status"], "active")
         self.assertEqual(plan["cycle_index"], 1)
+        self.assertEqual([task["status"] for task in plan["tasks"]], ["queued", "queued"])
+        self.assertEqual([task["sequence"] for task in plan["tasks"]], [1, 2])
         with db() as conn:
             rows = social_api._automation_plan_task_rows(
                 conn,
@@ -337,6 +339,10 @@ class AutomationPlanSchedulerTests(unittest.TestCase):
         )
 
         self.assertEqual(cancelled["status"], "cancelled")
+        self.assertEqual(
+            [task["status"] for task in cancelled["tasks"]],
+            ["cancelled"],
+        )
         with db() as conn:
             first_tasks = social_api._automation_plan_task_rows(conn, first["id"])
             second_tasks = social_api._automation_plan_task_rows(conn, second["id"])
@@ -649,6 +655,110 @@ class AutomationPlanSchedulerTests(unittest.TestCase):
         self.assertEqual(migrated["automation_plan_id"], plan["id"])
         self.assertEqual(int(migrated["automation_plan_cycle"]), 1)
         self.assertEqual(int(migrated["automation_plan_sequence"]), 1)
+
+    def test_terminal_plan_delete_removes_plan_tasks_and_logs(self):
+        plan = social_api.create_social_automation_plan(
+            self._payload(offsets=(0,)),
+            user=self.user,
+        )
+        task_id = plan["tasks"][0]["id"]
+        with db() as conn:
+            conn.execute(
+                "UPDATE social_automation_plans SET status = 'cancelled' WHERE id = ?",
+                (plan["id"],),
+            )
+            conn.execute(
+                "UPDATE social_automation_tasks SET status = 'cancelled' WHERE id = ?",
+                (task_id,),
+            )
+            conn.execute(
+                """
+                INSERT INTO social_automation_logs(task_id, level, stage, message, created_at)
+                VALUES (?, 'info', 'test', 'delete me', 1)
+                """,
+                (task_id,),
+            )
+
+        result = social_api.delete_social_automation_plans(
+            [plan["id"], plan["id"]],
+            user_id=self.user_id,
+        )
+
+        self.assertEqual(result["deleted_plan_count"], 1)
+        self.assertEqual(result["deleted_task_count"], 1)
+        with db() as conn:
+            self.assertIsNone(conn.execute("SELECT 1 FROM social_automation_plans WHERE id = ?", (plan["id"],)).fetchone())
+            self.assertIsNone(conn.execute("SELECT 1 FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone())
+            self.assertIsNone(conn.execute("SELECT 1 FROM social_automation_logs WHERE task_id = ?", (task_id,)).fetchone())
+
+    def test_active_plan_delete_is_rejected_without_partial_deletion(self):
+        plan = social_api.create_social_automation_plan(
+            self._payload(offsets=(0,)),
+            user=self.user,
+        )
+
+        with self.assertRaises(HTTPException) as raised:
+            social_api.delete_social_automation_plans([plan["id"]], user_id=self.user_id)
+
+        self.assertEqual(raised.exception.status_code, 409)
+        with db() as conn:
+            self.assertIsNotNone(conn.execute("SELECT 1 FROM social_automation_plans WHERE id = ?", (plan["id"],)).fetchone())
+            self.assertIsNotNone(conn.execute("SELECT 1 FROM social_automation_tasks WHERE automation_plan_id = ?", (plan["id"],)).fetchone())
+
+    def test_terminal_plan_with_active_task_and_foreign_plan_are_rejected(self):
+        plan = social_api.create_social_automation_plan(
+            self._payload(offsets=(0,)),
+            user=self.user,
+        )
+        with db() as conn:
+            conn.execute(
+                "UPDATE social_automation_plans SET status = 'cancelled' WHERE id = ?",
+                (plan["id"],),
+            )
+
+        with self.assertRaises(HTTPException) as active_task:
+            social_api.delete_social_automation_plans([plan["id"]], user_id=self.user_id)
+        self.assertEqual(active_task.exception.status_code, 409)
+
+        with self.assertRaises(HTTPException) as foreign:
+            social_api.delete_social_automation_plans([plan["id"]], user_id=self.user_id + 1)
+        self.assertEqual(foreign.exception.status_code, 404)
+
+    def test_batch_plan_delete_is_all_or_nothing_when_one_plan_is_active(self):
+        terminal = social_api.create_social_automation_plan(
+            self._payload(offsets=(0,)),
+            user=self.user,
+        )
+        active = social_api.create_social_automation_plan(
+            self._payload(offsets=(30,)),
+            user=self.user,
+        )
+        with db() as conn:
+            conn.execute(
+                "UPDATE social_automation_plans SET status = 'cancelled' WHERE id = ?",
+                (terminal["id"],),
+            )
+            conn.execute(
+                "UPDATE social_automation_tasks SET status = 'cancelled' WHERE automation_plan_id = ?",
+                (terminal["id"],),
+            )
+
+        with self.assertRaises(HTTPException) as raised:
+            social_api.delete_social_automation_plans(
+                [terminal["id"], active["id"]],
+                user_id=self.user_id,
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        with db() as conn:
+            remaining = {
+                str(row["id"])
+                for row in conn.execute(
+                    "SELECT id FROM social_automation_plans WHERE id IN (?, ?)",
+                    (terminal["id"], active["id"]),
+                ).fetchall()
+            }
+        self.assertEqual(remaining, {terminal["id"], active["id"]})
 
 
 if __name__ == "__main__":

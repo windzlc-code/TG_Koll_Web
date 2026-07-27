@@ -264,6 +264,17 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertNotIn("async function logoutAdmin()", self.admin_js)
         self.assertNotIn('ADMIN_CONSOLE_SESSION ? "/admin" : "/"', self.console_js)
 
+    def test_login_and_logout_reuse_the_shared_account_feedback_modal(self):
+        self.assertIn("function showAuthFeedback", self.site_nav_script)
+        self.assertIn('class="site-auth-feedback', self.site_nav_script)
+        self.assertIn("showAuthFeedback,", self.site_nav_script)
+        self.assertIn("await window.VectoSiteNavigation?.showAuthFeedback?.({", self.script)
+        self.assertIn('title: "登录成功"', self.script)
+        self.assertIn('title: "登录失败"', self.script)
+        self.assertIn('title: "已退出登录"', self.site_nav_script)
+        self.assertIn('title: "退出未完成"', self.site_nav_script)
+        self.assertIn('title: "已退出登录"', self.console_js)
+
     def test_home_navigation_opens_console_or_existing_login_dialog(self):
         page = (self.static_dir / "index.html").read_text(encoding="utf-8")
         pricing = (self.static_dir / "pricing.html").read_text(encoding="utf-8")
@@ -651,8 +662,12 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             self.assertIn(field_id, self.admin_js)
 
     def test_admin_profile_entry_reuses_the_shared_profile_page(self):
-        self.assertIn('id="adminProfileToggle"', self.admin_html)
-        self.assertIn('href="/admin-profile.html"', self.admin_html)
+        self.assertIn('id="adminSharedAccountHost"', self.admin_html)
+        self.assertIn('class="admin-shared-account-host"', self.admin_html)
+        self.assertIn('data-site-mode="public"', self.admin_html)
+        self.assertIn('/assets/opc/site-navigation.css', self.admin_html)
+        self.assertIn('/assets/opc/site-navigation.js', self.admin_html)
+        self.assertNotIn('href="/admin-profile.html"', self.admin_html)
         for obsolete_id in (
             "adminProfilePanel",
             "adminProfileClose",

@@ -491,6 +491,8 @@ const state = {
   automationPlansLoading: false,
   automationPlansError: "",
   automationPlanPending: false,
+  automationPlanDeleting: false,
+  automationPlanSelectedIds: new Set(),
   automationPlanDrafts: {},
   automationPlanEditorPayload: {},
   renderedPersonaId: "",
@@ -750,6 +752,8 @@ function clearTenantInMemoryState() {
   state.automationPlansLoading = false;
   state.automationPlansError = "";
   state.automationPlanPending = false;
+  state.automationPlanDeleting = false;
+  state.automationPlanSelectedIds = new Set();
   state.automationPlanDrafts = {};
   state.automationPlanEditorPayload = {};
   state.socialRefreshFetch = null;
@@ -6097,7 +6101,7 @@ function mobilePageToolbarDescriptor() {
 function isMobilePersistentDockPage() {
   if (state.view === "persona_dashboard") return true;
   if (state.view === "tasks") return true;
-  if (state.view === "accounts") return state.accountBrowserPanel !== "browsers";
+  if (state.view === "accounts") return true;
   return state.view === "workspace" && ["personas", "tweet_generation", "publishing"].includes(state.activeModule);
 }
 
@@ -6251,6 +6255,7 @@ function renderWorkspace(renderMenu = true) {
 }
 
 function beginWorkspaceBootstrapLoading() {
+  setConsolePageLoading(true);
   state.workspaceBootstrapPending = true;
   state.workspaceBootstrapNoticeVisible = false;
   if (state.workspaceBootstrapTimer) clearTimeout(state.workspaceBootstrapTimer);
@@ -6267,6 +6272,14 @@ function finishWorkspaceBootstrapLoading() {
   state.workspaceBootstrapTimer = 0;
   state.workspaceBootstrapPending = false;
   state.workspaceBootstrapNoticeVisible = false;
+  setConsolePageLoading(false);
+}
+
+function setConsolePageLoading(loading) {
+  const active = Boolean(loading);
+  document.body.classList.toggle("is-console-ready", !active);
+  const overlay = $("consolePageLoading");
+  if (overlay) overlay.setAttribute("aria-busy", active ? "true" : "false");
 }
 
 function renderWorkspaceBootstrapLoading() {
@@ -8622,6 +8635,15 @@ function renderRefreshIcon() {
   </svg>`;
 }
 
+function renderBrowserLaunchIcon() {
+  return `<svg class="ui-action-icon ui-browser-launch-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <rect x="3" y="4" width="18" height="16" rx="2.5"></rect>
+    <path d="M3 9h18"></path>
+    <path d="M14 12h5v5"></path>
+    <path d="m19 12-7 7"></path>
+  </svg>`;
+}
+
 function renderRequeueIcon() {
   return `<svg class="ui-action-icon ui-requeue-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <path d="M20 7v5h-5"></path>
@@ -10419,11 +10441,25 @@ function automationPlanStatusLabel(status = "") {
     failed: "执行失败",
     completed: "已完成",
     cancelled: "已停止",
+    canceled: "已停止",
     paused: "已暂停",
   })[status] || status || "未知";
 }
 
+function automationPlanRunSequence(task = {}) {
+  return Number(
+    task?.sequence
+    ?? task?.automation_plan_sequence
+    ?? task?.payload?._automation_plan_sequence
+    ?? 0
+  );
+}
+
 function automationPlanRunTasks(plan = {}) {
+  const embeddedTasks = Array.isArray(plan?.tasks) ? [...plan.tasks] : null;
+  if (embeddedTasks) {
+    return embeddedTasks.sort((left, right) => automationPlanRunSequence(left) - automationPlanRunSequence(right));
+  }
   const planId = String(plan?.id || "");
   const cycleIndex = Number(plan?.cycle_index || 0);
   return (state.socialTasks || [])
@@ -10431,14 +10467,102 @@ function automationPlanRunTasks(plan = {}) {
       String(task?.payload?._automation_plan_id || "") === planId
       && Number(task?.payload?._automation_plan_cycle || 0) === cycleIndex
     ))
-    .sort((left, right) => Number(left?.payload?._automation_plan_sequence || 0) - Number(right?.payload?._automation_plan_sequence || 0));
+    .sort((left, right) => automationPlanRunSequence(left) - automationPlanRunSequence(right));
 }
 
 function automationPlanRunState(task = {}) {
   const status = String(task?.status || "").toLowerCase();
   if (["running", "need_manual"].includes(status)) return "running";
   if (["preparing", "queued"].includes(status)) return "queued";
+  if (status === "canceled") return "cancelled";
   return status || "unknown";
+}
+
+function automationPlanAnimationStyle(stateKey = "") {
+  const durationMs = stateKey === "running" ? 800 : (stateKey === "queued" ? 1400 : 0);
+  if (!durationMs) return "";
+  return ` style="--automation-plan-animation-delay: -${Date.now() % durationMs}ms"`;
+}
+
+function renderAutomationPlanBrowserLink(plan = {}) {
+  const tasks = automationPlanRunTasks(plan);
+  const taskForStatuses = (statuses) => tasks.find((task) => (
+    statuses.includes(String(task?.status || "").toLowerCase())
+    && String(task?.id || "").trim()
+  ));
+  const browserTask = taskForStatuses(["running", "need_manual"])
+    || taskForStatuses(["preparing", "queued"]);
+  if (!browserTask) return "";
+  return `<button
+    type="button"
+    class="automation-plan-browser-link unified-action-icon-button"
+    data-automation-plan-browser-task="${esc(browserTask.id)}"
+    title="打开任务浏览器页面"
+    aria-label="打开任务浏览器页面"
+  >${renderBrowserLaunchIcon()}</button>`;
+}
+
+function automationPlanCanDelete(plan = {}) {
+  const status = String(plan?.status || "").toLowerCase();
+  if (!["completed", "failed", "cancelled", "canceled", "paused"].includes(status)) return false;
+  return !automationPlanRunTasks(plan).some((task) => (
+    ["preparing", "queued", "running", "need_manual"].includes(String(task?.status || "").toLowerCase())
+  ));
+}
+
+function automationPlansForPersona(persona = selectedPersona()) {
+  const personaId = String(persona?.id || "").trim();
+  return (Array.isArray(state.automationPlans) ? state.automationPlans : [])
+    .filter((plan) => String(plan?.persona_id || "").trim() === personaId);
+}
+
+function syncAutomationPlanSelection(persona = selectedPersona()) {
+  const validIds = new Set(
+    automationPlansForPersona(persona)
+      .filter(automationPlanCanDelete)
+      .map((plan) => String(plan?.id || ""))
+      .filter(Boolean)
+  );
+  Array.from(state.automationPlanSelectedIds).forEach((id) => {
+    if (!validIds.has(String(id))) state.automationPlanSelectedIds.delete(id);
+  });
+  return validIds;
+}
+
+function automationPlanSelectionSummary(persona = selectedPersona()) {
+  const validIds = syncAutomationPlanSelection(persona);
+  const selectedIds = Array.from(state.automationPlanSelectedIds).filter((id) => validIds.has(String(id)));
+  return {
+    validIds,
+    selectedIds,
+    total: validIds.size,
+    selected: selectedIds.length,
+    allSelected: validIds.size > 0 && selectedIds.length === validIds.size,
+  };
+}
+
+function renderAutomationPlanBulkControls(persona = selectedPersona()) {
+  const summary = automationPlanSelectionSummary(persona);
+  const busy = Boolean(state.automationPlanDeleting);
+  return `<div class="automation-plan-bulk-controls" aria-label="计划记录批量操作">
+    <button type="button" class="bulk-selection-icon-button" data-automation-plan-select-all title="${summary.allSelected ? "取消全选" : "全选可删除记录"}" aria-label="${summary.allSelected ? "取消全选" : "全选可删除记录"}" ${summary.total && !busy ? "" : "disabled"}>${summary.allSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}</button>
+    <span>${esc(`已选 ${summary.selected} / ${summary.total}`)}</span>
+    <button type="button" class="danger unified-action-icon-button" data-automation-plan-delete-selected title="删除选中记录" aria-label="删除选中记录" ${summary.selected && !busy ? "" : "disabled"}>${renderTrashIcon()}</button>
+  </div>`;
+}
+
+function renderAutomationPlanCardAction(plan = {}) {
+  const browserLink = renderAutomationPlanBrowserLink(plan);
+  if (browserLink) return browserLink;
+  if (!automationPlanCanDelete(plan)) return "";
+  return `<button
+    type="button"
+    class="automation-plan-delete-link danger unified-action-icon-button"
+    data-automation-plan-delete="${esc(plan?.id || "")}"
+    title="删除计划记录"
+    aria-label="删除计划记录"
+    ${state.automationPlanDeleting ? "disabled" : ""}
+  >${renderTrashIcon()}</button>`;
 }
 
 function renderAutomationPlanRunRows(plan = {}) {
@@ -10446,19 +10570,18 @@ function renderAutomationPlanRunRows(plan = {}) {
   if (!tasks.length) return "";
   return `<ol class="automation-plan-run-list" aria-label="计划执行队列">${tasks.map((task) => {
     const stateKey = automationPlanRunState(task);
-    const sequence = Number(task?.payload?._automation_plan_sequence || 0);
+    const sequence = automationPlanRunSequence(task);
     return `<li class="automation-plan-run-row is-${esc(stateKey)}">
-      <span class="automation-plan-run-index" aria-label="第 ${sequence} 项：${esc(automationPlanStatusLabel(stateKey))}">${sequence}</span>
+      <span class="automation-plan-run-index"${automationPlanAnimationStyle(stateKey)} aria-label="第 ${sequence} 项：${esc(automationPlanStatusLabel(task?.status))}">${sequence}</span>
       <strong>${esc(automationPlanTaskLabel(task?.task_type || ""))}</strong>
-      <small>${esc(automationPlanStatusLabel(stateKey))}</small>
+      <small>${esc(automationPlanStatusLabel(task?.status))}</small>
     </li>`;
   }).join("")}</ol>`;
 }
 
 function renderAutomationPlanHistory(persona = selectedPersona()) {
-  const personaId = String(persona?.id || "").trim();
-  const plans = (Array.isArray(state.automationPlans) ? state.automationPlans : [])
-    .filter((plan) => String(plan?.persona_id || "").trim() === personaId);
+  const plans = automationPlansForPersona(persona);
+  syncAutomationPlanSelection(persona);
   if (state.automationPlansLoading && !plans.length) return `<div class="empty-state">正在读取自动化计划…</div>`;
   const errorHtml = state.automationPlansError
     ? `<div class="empty-state automation-plan-error">自动化计划读取失败：${esc(state.automationPlansError)}</div>`
@@ -10467,11 +10590,17 @@ function renderAutomationPlanHistory(persona = selectedPersona()) {
   if (!plans.length) return `<div class="empty-state">当前人设还没有自动化计划。</div>`;
   return `${errorHtml}<div class="automation-plan-history">${plans.map((plan) => `
     <article class="automation-plan-card">
-      <div>
-        <strong>${plan.mode === "loop" ? "循环模式" : "列表模式"} · 第 ${esc(plan.cycle_index || 0)} 轮</strong>
-        <span>${esc(accountDisplayName(selectedSocialAccount(plan.account_id)))} · ${esc(automationPlanStatusLabel(plan.status))}${plan.next_run_at ? ` · 下次 ${esc(formatScheduledTime(plan.next_run_at))}` : ""}</span>
+      <div class="automation-plan-card-summary ${automationPlanCanDelete(plan) ? "is-selectable" : ""}">
+        ${automationPlanCanDelete(plan) ? `<label class="automation-plan-record-select" title="选择计划记录">
+          <input type="checkbox" data-automation-plan-select="${esc(plan.id)}" ${state.automationPlanSelectedIds.has(String(plan.id || "")) ? "checked" : ""} ${state.automationPlanDeleting ? "disabled" : ""} />
+          <span class="sr-only">选择计划记录</span>
+        </label>` : ""}
+        <div>
+          <strong>${plan.mode === "loop" ? "循环模式" : "列表模式"} · 第 ${esc(plan.cycle_index || 0)} 轮</strong>
+          <span>${esc(accountDisplayName(selectedSocialAccount(plan.account_id)))} · <b class="automation-plan-status is-${esc(String(plan.status || "").toLowerCase())}">${esc(automationPlanStatusLabel(plan.status))}</b>${plan.next_run_at ? ` · 下次 ${esc(formatScheduledTime(plan.next_run_at))}` : ""}</span>
+        </div>
       </div>
-      <span>${esc((plan.items || []).map((item) => automationPlanTaskLabel(item.task_type)).join(" → "))}</span>
+      ${renderAutomationPlanCardAction(plan)}
       ${renderAutomationPlanRunRows(plan)}
       ${["active", "materializing"].includes(plan.status) ? `<button type="button" class="danger" data-automation-plan-cancel="${esc(plan.id)}">停止计划</button>` : ""}
     </article>`).join("")}</div>`;
@@ -10512,7 +10641,7 @@ function renderAutomationTaskPlanPanel(persona = selectedPersona()) {
       <section class="automation-plan-card">
         <div class="automation-plan-history-head">
           <strong>自动化计划</strong>
-          <button type="button" data-automation-plans-refresh ${state.automationPlansLoading ? "disabled" : ""}>${renderRefreshIcon()}<span>${state.automationPlansLoading ? "读取中" : "刷新"}</span></button>
+          ${renderAutomationPlanBulkControls(persona)}
         </div>
         ${renderAutomationPlanHistory(persona)}
       </section>
@@ -11823,8 +11952,34 @@ function bindSimpleFlowInputs(moduleId) {
         renderSimpleFlowModule("publishing");
       });
     });
-    document.querySelector("[data-automation-plans-refresh]")?.addEventListener("click", () => {
-      loadAutomationPlansShared({ force: true }).catch((error) => showMsg("commandMsg", error.detail || error.message || "计划刷新失败", false));
+    document.querySelectorAll("[data-automation-plan-select]").forEach((node) => {
+      node.addEventListener("change", () => {
+        const planId = String(node.dataset.automationPlanSelect || "").trim();
+        if (!planId) return;
+        if (node.checked) state.automationPlanSelectedIds.add(planId);
+        else state.automationPlanSelectedIds.delete(planId);
+        renderSimpleFlowModule("publishing");
+      });
+    });
+    document.querySelector("[data-automation-plan-select-all]")?.addEventListener("click", () => {
+      const summary = automationPlanSelectionSummary(selectedPersona());
+      if (summary.allSelected) summary.validIds.forEach((id) => state.automationPlanSelectedIds.delete(id));
+      else summary.validIds.forEach((id) => state.automationPlanSelectedIds.add(id));
+      renderSimpleFlowModule("publishing");
+    });
+    document.querySelector("[data-automation-plan-delete-selected]")?.addEventListener("click", () => {
+      deleteSelectedAutomationPlanRecords().catch((error) => showMsg("commandMsg", error.detail || error.message || "批量删除计划记录失败", false));
+    });
+    document.querySelectorAll("[data-automation-plan-delete]").forEach((node) => {
+      node.addEventListener("click", () => {
+        deleteAutomationPlanRecord(node.dataset.automationPlanDelete || "")
+          .catch((error) => showMsg("commandMsg", error.detail || error.message || "删除计划记录失败", false));
+      });
+    });
+    document.querySelectorAll("[data-automation-plan-browser-task]").forEach((node) => {
+      node.addEventListener("click", () => {
+        openLiveBrowserTaskView(node.dataset.automationPlanBrowserTask || "");
+      });
     });
     document.querySelectorAll("[data-automation-plan-cancel]").forEach((node) => {
       node.addEventListener("click", () => {
@@ -13496,6 +13651,12 @@ async function logoutConsoleSession() {
   window.VectoSiteNavigation?.setLogoutPending(true);
   try {
     await api("/api/auth/logout", { method: "POST" });
+    await window.VectoSiteNavigation?.showAuthFeedback?.({
+      kind: "logout",
+      title: "已退出登录",
+      message: "当前账号已安全退出，返回后可随时再次登录。",
+      actionText: "继续",
+    });
     consoleBoundaryNavigationActive = true;
     clearTenantInMemoryState();
     purgeLegacyTenantContentCaches();
@@ -13506,7 +13667,11 @@ async function logoutConsoleSession() {
     consoleLogoutPending = false;
     const message = error?.detail || error?.message || "退出失败，请重试。";
     window.VectoSiteNavigation?.setLogoutPending(false, message);
-    showToast(message, false);
+    await window.VectoSiteNavigation?.showAuthFeedback?.({
+      kind: "error",
+      title: "退出未完成",
+      message,
+    });
   }
 }
 
@@ -15708,7 +15873,10 @@ async function loadPersonaPublishHistory(personaId, { force = false } = {}) {
 }
 
 async function loadAutomationTasksShared({ force = false } = {}) {
-  if (!force && state.socialTasksFetch) return state.socialTasksFetch;
+  if (state.socialTasksFetch) {
+    if (!force) return state.socialTasksFetch;
+    await state.socialTasksFetch.catch(() => {});
+  }
   const previousById = new Map((state.socialTasks || []).map((task) => [String(task?.id || ""), task]));
   const publishPolicyRequestSeq = beginDailyPublishPolicyRequest();
   const request = api("/api/persona_dashboard/automation/tasks?limit=80")
@@ -15730,7 +15898,10 @@ async function loadAutomationTasksShared({ force = false } = {}) {
 }
 
 async function loadAutomationPlansShared({ force = false } = {}) {
-  if (state.automationPlansFetch) return state.automationPlansFetch;
+  if (state.automationPlansFetch) {
+    if (!force) return state.automationPlansFetch;
+    await state.automationPlansFetch.catch(() => {});
+  }
   state.automationPlansLoading = true;
   state.automationPlansError = "";
   const request = api("/api/persona_dashboard/automation/plans")
@@ -15872,9 +16043,90 @@ async function cancelAutomationPlan(planId = "") {
     modalKey: `cancel-automation-plan-${cleanPlanId}`,
   });
   if (!confirmed) return;
-  await api(`/api/persona_dashboard/automation/plans/${encodeURIComponent(cleanPlanId)}/cancel`, { method: "POST" });
-  await loadAutomationPlansShared({ force: true });
+  const result = await api(`/api/persona_dashboard/automation/plans/${encodeURIComponent(cleanPlanId)}/cancel`, { method: "POST" });
+  await Promise.all([
+    loadAutomationTasksShared({ force: true }),
+    loadAutomationPlansShared({ force: true }),
+  ]);
+  if (result?.plan) {
+    state.automationPlans = [
+      result.plan,
+      ...state.automationPlans.filter((plan) => String(plan?.id || "") !== cleanPlanId),
+    ];
+    if (state.activeModule === "publishing" && normalizedPublishMode(state.simpleBranches.publishing) === "automation_tasks") {
+      renderSimpleFlowModule("publishing");
+    }
+  }
   showMsg("commandMsg", "自动化计划已停止。", true);
+}
+
+async function deleteAutomationPlanRecord(planId = "") {
+  const cleanPlanId = String(planId || "").trim();
+  const plan = state.automationPlans.find((item) => String(item?.id || "") === cleanPlanId);
+  if (!cleanPlanId || !plan || !automationPlanCanDelete(plan) || state.automationPlanDeleting) return;
+  const confirmed = await openConsoleModal({
+    title: "删除计划记录？",
+    message: "该计划及关联的任务、执行日志会一并删除，此操作不可恢复。",
+    confirmText: "删除记录",
+    cancelText: "取消",
+    danger: true,
+    modalKey: `delete-automation-plan-${cleanPlanId}`,
+  });
+  if (!confirmed) return;
+  state.automationPlanDeleting = true;
+  renderSimpleFlowModule("publishing");
+  try {
+    await api(`/api/persona_dashboard/automation/plans/${encodeURIComponent(cleanPlanId)}`, { method: "DELETE" });
+    state.automationPlanSelectedIds.delete(cleanPlanId);
+    state.automationPlans = state.automationPlans.filter((item) => String(item?.id || "") !== cleanPlanId);
+    await Promise.all([
+      loadAutomationTasksShared({ force: true }).catch(() => {}),
+      loadAutomationPlansShared({ force: true }).catch(() => {}),
+    ]);
+    showMsg("commandMsg", "计划记录已删除。", true);
+  } finally {
+    state.automationPlanDeleting = false;
+    renderSimpleFlowModule("publishing");
+  }
+}
+
+async function deleteSelectedAutomationPlanRecords() {
+  if (state.automationPlanDeleting) return;
+  const summary = automationPlanSelectionSummary(selectedPersona());
+  const planIds = summary.selectedIds;
+  if (!planIds.length) {
+    showMsg("commandMsg", "请先选择要删除的计划记录。", false);
+    return;
+  }
+  const confirmed = await openConsoleModal({
+    title: "批量删除计划记录？",
+    message: `确认删除已选的 ${planIds.length} 条计划记录？关联任务和执行日志会一并删除，此操作不可恢复。`,
+    confirmText: `删除 ${planIds.length} 条`,
+    cancelText: "取消",
+    danger: true,
+    modalKey: "delete-selected-automation-plans",
+  });
+  if (!confirmed) return;
+  state.automationPlanDeleting = true;
+  renderSimpleFlowModule("publishing");
+  try {
+    await api("/api/persona_dashboard/automation/plans/batch-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan_ids: planIds }),
+    });
+    const deletedIds = new Set(planIds);
+    state.automationPlans = state.automationPlans.filter((plan) => !deletedIds.has(String(plan?.id || "")));
+    planIds.forEach((id) => state.automationPlanSelectedIds.delete(id));
+    await Promise.all([
+      loadAutomationTasksShared({ force: true }).catch(() => {}),
+      loadAutomationPlansShared({ force: true }).catch(() => {}),
+    ]);
+    showMsg("commandMsg", `已删除 ${planIds.length} 条计划记录。`, true);
+  } finally {
+    state.automationPlanDeleting = false;
+    renderSimpleFlowModule("publishing");
+  }
 }
 
 async function activateCreatedPersona(personaId, { group = "settings", step = "profile" } = {}) {
@@ -20745,6 +20997,170 @@ function selectAccountPoolPlatform(platform = "") {
   state.accountPoolSelectedAccountIds = [];
   resetAccountPoolCreateForm();
   renderSocialAccounts();
+  pulseAccountPoolPlatformCards();
+}
+
+let accountPoolPlatformTransitionPromise = null;
+let accountPoolActivePlatformMotion = null;
+let accountPoolPlatformSwipeSuppressClickUntil = 0;
+let accountPoolPlatformPulseTimer = 0;
+
+function pulseAccountPoolPlatformCards() {
+  if (!window.matchMedia?.("(max-width: 760.98px)")?.matches) return;
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return;
+  window.clearTimeout(accountPoolPlatformPulseTimer);
+  window.requestAnimationFrame(() => {
+    const cards = Array.from($("accountGrid")?.querySelectorAll(".account-pool-content .account-pool-card") || []);
+    if (!cards.length) return;
+    cards.forEach((card) => card.classList.add("is-platform-refresh-pulse"));
+    accountPoolPlatformPulseTimer = window.setTimeout(() => {
+      cards.forEach((card) => card.classList.remove("is-platform-refresh-pulse"));
+      accountPoolPlatformPulseTimer = 0;
+    }, 760);
+  });
+}
+
+function waitForAccountPoolPlatformMotion(node, timeoutMs = 240) {
+  if (!node) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = 0;
+    const finish = (event = null) => {
+      if (event && (event.target !== node || event.propertyName !== "transform")) return;
+      if (settled) return;
+      settled = true;
+      node.removeEventListener("transitionend", finish);
+      window.clearTimeout(timer);
+      resolve();
+    };
+    node.addEventListener("transitionend", finish);
+    timer = window.setTimeout(finish, timeoutMs);
+  });
+}
+
+function createAccountPoolPlatformMotion(platform = "", direction = 0) {
+  if (accountPoolActivePlatformMotion) return null;
+  const current = normalizeAccountPoolPlatform();
+  const next = normalizeAccountPoolPlatform(platform);
+  if (next === current) return null;
+
+  const currentIndex = accountPoolPlatforms.findIndex(([value]) => value === current);
+  const nextIndex = accountPoolPlatforms.findIndex(([value]) => value === next);
+  const travelDirection = direction || (nextIndex >= currentIndex ? 1 : -1);
+  const currentPanel = $("accountGrid")?.querySelector(".account-pool-account-panel");
+  const contentWindow = currentPanel?.querySelector(".account-pool-content-window");
+  const currentContent = contentWindow?.querySelector(".account-pool-content");
+  if (!currentPanel || !contentWindow || !currentContent) return null;
+
+  const preview = document.createElement("div");
+  preview.innerHTML = renderAccountPoolCards(accountPoolAccounts(next), null, []);
+  const incomingPanel = preview.firstElementChild;
+  const incomingContent = incomingPanel?.querySelector(".account-pool-content");
+  if (!incomingContent) return null;
+  incomingContent.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
+  incomingContent.classList.add("account-pool-content-drag-peer");
+  incomingContent.setAttribute("aria-hidden", "true");
+  incomingContent.inert = true;
+
+  const windowRect = contentWindow.getBoundingClientRect();
+  const contentRect = currentContent.getBoundingClientRect();
+  const contentTop = Math.max(0, contentRect.top - windowRect.top);
+  const contentLeft = Math.max(0, contentRect.left - windowRect.left);
+  const contentWidth = Math.max(1, contentRect.width);
+  contentWindow.classList.add("is-account-platform-dragging");
+  currentContent.classList.add("is-account-platform-drag-current");
+  incomingContent.style.top = `${contentTop}px`;
+  incomingContent.style.left = `${contentLeft}px`;
+  incomingContent.style.width = `${contentWidth}px`;
+  contentWindow.appendChild(incomingContent);
+  contentWindow.style.height = `${Math.max(currentContent.offsetHeight, incomingContent.scrollHeight)}px`;
+
+  const apply = (deltaX = 0) => {
+    const offset = travelDirection > 0 ? Math.min(0, Number(deltaX || 0)) : Math.max(0, Number(deltaX || 0));
+    currentContent.style.transform = `translate3d(${offset}px, 0, 0)`;
+    incomingContent.style.transform = `translate3d(${offset + (travelDirection * contentWidth)}px, 0, 0)`;
+    return offset;
+  };
+  apply(0);
+  const motion = {
+    contentWindow,
+    currentContent,
+    incomingContent,
+    current,
+    next,
+    direction: travelDirection,
+    width: contentWidth,
+    apply,
+    discarded: false,
+  };
+  accountPoolActivePlatformMotion = motion;
+  return motion;
+}
+
+function clearAccountPoolPlatformMotion(motion) {
+  if (!motion) return;
+  const { contentWindow, currentContent, incomingContent } = motion;
+  incomingContent.remove();
+  currentContent.classList.remove("is-account-platform-drag-current");
+  currentContent.style.removeProperty("transform");
+  contentWindow.style.removeProperty("height");
+  contentWindow.classList.remove("is-account-platform-dragging", "is-account-platform-settling");
+  if (accountPoolActivePlatformMotion === motion) {
+    accountPoolActivePlatformMotion = null;
+  }
+}
+
+function discardAccountPoolPlatformMotion() {
+  if (!accountPoolActivePlatformMotion) return;
+  accountPoolActivePlatformMotion.discarded = true;
+  clearAccountPoolPlatformMotion(accountPoolActivePlatformMotion);
+}
+
+async function settleAccountPoolPlatformMotion(motion, commit = false) {
+  if (!motion || motion.discarded) return;
+  const { contentWindow, currentContent, incomingContent, direction, width, next } = motion;
+  const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  contentWindow.classList.add("is-account-platform-settling");
+  const destination = commit ? -direction * width : 0;
+  if (!reduceMotion) {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    currentContent.style.transform = `translate3d(${destination}px, 0, 0)`;
+    incomingContent.style.transform = `translate3d(${commit ? 0 : direction * width}px, 0, 0)`;
+    await waitForAccountPoolPlatformMotion(currentContent);
+  }
+  if (motion.discarded) return;
+  clearAccountPoolPlatformMotion(motion);
+  if (commit) selectAccountPoolPlatform(next);
+}
+
+async function transitionAccountPoolPlatform(platform = "", direction = 0) {
+  const current = normalizeAccountPoolPlatform();
+  const next = normalizeAccountPoolPlatform(platform);
+  if (next === current) return;
+  if (accountPoolPlatformTransitionPromise || accountPoolActivePlatformMotion) {
+    return accountPoolPlatformTransitionPromise;
+  }
+
+  const shouldAnimate = window.matchMedia?.("(max-width: 760.98px)")?.matches
+    && !window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  if (!shouldAnimate) {
+    selectAccountPoolPlatform(next);
+    return;
+  }
+  const motion = createAccountPoolPlatformMotion(next, direction);
+  if (!motion) {
+    selectAccountPoolPlatform(next);
+    return;
+  }
+  const transition = settleAccountPoolPlatformMotion(motion, true);
+  accountPoolPlatformTransitionPromise = transition;
+  try {
+    await transition;
+  } finally {
+    if (accountPoolPlatformTransitionPromise === transition) {
+      accountPoolPlatformTransitionPromise = null;
+    }
+  }
 }
 
 function accountPoolAccounts(platform = state.accountPoolPlatform) {
@@ -20990,16 +21406,18 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
         ${renderAccountTotpBadge(account)}
       </span>
     </div>
-    <strong class="account-pool-bound-persona ${persona ? "is-bound" : "is-unbound"}" title="${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}">${esc(persona ? `已绑定：${persona.name || persona.id}` : "未绑定人设")}</strong>
+    <strong class="account-pool-bound-persona ${boundPersona ? "is-bound" : "is-unbound"}" title="${esc(boundPersona ? `已绑定：${boundPersona.name || boundPersona.id}` : "未绑定人设")}">${esc(boundPersona ? `已绑定：${boundPersona.name || boundPersona.id}` : "未绑定人设")}</strong>
     <div class="account-card-meta">
       <span data-account-proxy-for="${esc(accountId)}">${esc(accountResidentialProxyLabel(account))}</span>
     </div>
-    ${renderAccountPoolCardActions(account)}
+    ${renderAccountPoolCardActions(account, { context: isPersonaSettings ? "persona-settings" : "pool" })}
   </article>`;
 }
 
-function renderAccountPoolCards(accounts, selectedAccount) {
-  const selectedIds = new Set(accountPoolSelectedIds());
+function renderAccountPoolCards(accounts, selectedAccount, selectedAccountIds = null) {
+  const selectedIds = selectedAccountIds === null
+    ? new Set(accountPoolSelectedIds())
+    : new Set(Array.from(selectedAccountIds || []).map((id) => String(id || "")));
   const selectedCount = selectedIds.size;
   const addButton = `<button type="button" class="account-pool-add-button" data-account-pool-add>
     <span aria-hidden="true"></span>
@@ -21019,10 +21437,14 @@ function renderAccountPoolCards(accounts, selectedAccount) {
         ${editToolbar}
       </div>
       <div class="account-pool-add-row">${addButton}</div>
-      <div class="account-pool-empty-state" role="status">
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="3.5"></circle><path d="M5.5 20c.65-3.28 2.72-5 6.5-5s5.85 1.72 6.5 5"></path><path d="M18.2 5.8v4.1M16.15 7.85h4.1"></path></svg>
-        <strong>暂无账号</strong>
-        <span>点击添加账号，开始配置当前平台</span>
+      <div class="account-pool-content-window">
+        <div class="account-pool-content">
+          <div class="account-pool-empty-state" role="status">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="3.5"></circle><path d="M5.5 20c.65-3.28 2.72-5 6.5-5s5.85 1.72 6.5 5"></path><path d="M18.2 5.8v4.1M16.15 7.85h4.1"></path></svg>
+            <strong>暂无账号</strong>
+            <span>点击添加账号，开始配置当前平台</span>
+          </div>
+        </div>
       </div>
     </section>`;
   return `
@@ -21032,15 +21454,19 @@ function renderAccountPoolCards(accounts, selectedAccount) {
         ${editToolbar}
       </div>
       <div class="account-pool-add-row">${addButton}</div>
-      <div class="account-pool-list">
-      ${accounts.map((account) => {
-        const accountId = String(account.id || "");
-        return renderAccountPoolCard(account, {
-          active: String(selectedAccount?.id || state.accountPoolAccountId || "") === accountId,
-          checked: selectedIds.has(accountId),
-          persona: state.personas.find((item) => String(item.id || "") === String(account.persona_id || "")),
-        });
-      }).join("")}
+      <div class="account-pool-content-window">
+        <div class="account-pool-content">
+          <div class="account-pool-list">
+          ${accounts.map((account) => {
+            const accountId = String(account.id || "");
+            return renderAccountPoolCard(account, {
+              active: String(selectedAccount?.id || state.accountPoolAccountId || "") === accountId,
+              checked: selectedIds.has(accountId),
+              persona: state.personas.find((item) => String(item.id || "") === String(account.persona_id || "")),
+            });
+          }).join("")}
+          </div>
+        </div>
       </div>
     </section>`;
 }
@@ -22455,26 +22881,105 @@ function renderAccountPool() {
 }
 
 function bindAccountPoolPlatformSwipe(host) {
+  const swipeSurface = host?.querySelector(".account-pool-body");
   const accountPanel = host?.querySelector(".account-pool-account-panel");
-  if (!accountPanel) return;
+  if (!swipeSurface || !accountPanel) return;
   let gesture = null;
-  accountPanel.addEventListener("pointerdown", (event) => {
+  const moveWindowGesture = (event) => moveGesture(event);
+  const finishWindowGesture = (event) => finishGesture(event, false);
+  const cancelWindowGesture = (event) => finishGesture(event, true);
+  const removeWindowGestureListeners = () => {
+    window.removeEventListener("pointermove", moveWindowGesture, true);
+    window.removeEventListener("pointerup", finishWindowGesture, true);
+    window.removeEventListener("pointercancel", cancelWindowGesture, true);
+  };
+  const abandonGesture = () => {
+    removeWindowGestureListeners();
+    gesture = null;
+  };
+  swipeSurface.addEventListener("click", (event) => {
+    if (Date.now() >= accountPoolPlatformSwipeSuppressClickUntil) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+  swipeSurface.addEventListener("pointerdown", (event) => {
     if (event.pointerType !== "touch" || event.isPrimary === false) return;
-    if (event.target.closest("button, input, select, textarea, a")) return;
-    gesture = { pointerId: event.pointerId, x: Number(event.clientX || 0), y: Number(event.clientY || 0) };
+    if (accountPoolPlatformTransitionPromise) return;
+    gesture = {
+      pointerId: event.pointerId,
+      x: Number(event.clientX || 0),
+      y: Number(event.clientY || 0),
+      lastAt: Number(event.timeStamp || performance.now()),
+      lastX: Number(event.clientX || 0),
+      velocityX: 0,
+      motion: null,
+      locked: false,
+      deltaX: 0,
+    };
+    window.addEventListener("pointermove", moveWindowGesture, { capture: true, passive: false });
+    window.addEventListener("pointerup", finishWindowGesture, true);
+    window.addEventListener("pointercancel", cancelWindowGesture, true);
   });
-  const finishGesture = (event) => {
+
+  function moveGesture(event) {
     if (!gesture || event.pointerId !== gesture.pointerId) return;
     const deltaX = Number(event.clientX || 0) - gesture.x;
     const deltaY = Number(event.clientY || 0) - gesture.y;
+    if (!gesture.locked) {
+      if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < 7) return;
+      if (Math.abs(deltaY) >= Math.abs(deltaX)) {
+        abandonGesture();
+        return;
+      }
+      const currentIndex = accountPoolPlatforms.findIndex(([value]) => value === normalizeAccountPoolPlatform());
+      const direction = deltaX < 0 ? 1 : -1;
+      const nextIndex = currentIndex + direction;
+      if (nextIndex < 0 || nextIndex >= accountPoolPlatforms.length) {
+        abandonGesture();
+        return;
+      }
+      gesture.motion = createAccountPoolPlatformMotion(accountPoolPlatforms[nextIndex][0], direction);
+      if (!gesture.motion) {
+        abandonGesture();
+        return;
+      }
+      gesture.locked = true;
+    }
+    if (gesture.motion.discarded) {
+      abandonGesture();
+      return;
+    }
+    event.preventDefault();
+    gesture.deltaX = gesture.motion.apply(deltaX);
+    const now = Number(event.timeStamp || performance.now());
+    const elapsed = Math.max(1, now - gesture.lastAt);
+    gesture.velocityX = (Number(event.clientX || 0) - gesture.lastX) / elapsed;
+    gesture.lastAt = now;
+    gesture.lastX = Number(event.clientX || 0);
+  }
+
+  const finishGesture = (event, cancelled = false) => {
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    const currentGesture = gesture;
     gesture = null;
-    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY)) return;
-    const currentIndex = accountPoolPlatforms.findIndex(([value]) => value === normalizeAccountPoolPlatform());
-    const nextIndex = Math.max(0, Math.min(accountPoolPlatforms.length - 1, currentIndex + (deltaX < 0 ? 1 : -1)));
-    if (nextIndex !== currentIndex) selectAccountPoolPlatform(accountPoolPlatforms[nextIndex][0]);
+    removeWindowGestureListeners();
+    if (!currentGesture.motion) return;
+    const distanceThreshold = Math.min(72, currentGesture.motion.width * 0.18);
+    const commit = !cancelled && (
+      Math.abs(currentGesture.deltaX) >= distanceThreshold
+      || (Math.abs(currentGesture.deltaX) >= 24 && Math.abs(currentGesture.velocityX) >= 0.45)
+    );
+    if (Math.abs(currentGesture.deltaX) >= 7) {
+      accountPoolPlatformSwipeSuppressClickUntil = Date.now() + 350;
+    }
+    const transition = settleAccountPoolPlatformMotion(currentGesture.motion, commit);
+    accountPoolPlatformTransitionPromise = transition;
+    void transition.finally(() => {
+      if (accountPoolPlatformTransitionPromise === transition) {
+        accountPoolPlatformTransitionPromise = null;
+      }
+    });
   };
-  accountPanel.addEventListener("pointerup", finishGesture);
-  accountPanel.addEventListener("pointercancel", () => { gesture = null; });
 }
 
 function bindPersonaAccountPlatformSwipe(host) {
@@ -23024,6 +23529,7 @@ function renderSocialAccounts() {
   }
   if (state.accountBrowserPanel === "browsers") renderLiveBrowserSessions();
   if (!grid) return;
+  discardAccountPoolPlatformMotion();
   grid.innerHTML = renderAccountPool();
   bindAccountPoolPlatformSwipe(grid);
   syncMobilePageToolbar();
@@ -23213,6 +23719,11 @@ function updateLiveBrowserSessionCard(card, session) {
   });
   card.querySelectorAll("[data-live-browser-task-target], [data-live-browser-mobile-task-target]").forEach((node) => {
     node.textContent = taskSummary.target;
+    const targetContainer = node.closest("span");
+    if (targetContainer) {
+      targetContainer.setAttribute("title", taskSummary.detail);
+      targetContainer.setAttribute("aria-label", `任务目标：${taskSummary.detail}`);
+    }
   });
   const iframe = card.querySelector("iframe");
   if (iframe) iframe.title = title;
@@ -23362,7 +23873,7 @@ function liveBrowserIdentity(session) {
   const taskId = String(session?.task_id || "").trim();
   const task = (state.socialTasks || []).find((item) => String(item?.id || "").trim() === taskId) || null;
   const payload = socialTaskPayload(task);
-  const personaId = String(task?.persona_id || payload.persona_id || payload.archive_id || "").trim();
+  const personaId = String(session?.persona_id || task?.persona_id || payload.persona_id || payload.archive_id || "").trim();
   const persona = state.personas.find((item) => String(item?.id || "") === personaId) || null;
   return {
     account: String(session?.account_username || account?.username || account?.account_username || session?.account_id || "未获取").trim(),
@@ -23411,6 +23922,15 @@ function renderLiveBrowserModeToggle(session) {
 }
 
 function liveBrowserTaskSummary(session) {
+  const serverSummary = session?.task_summary && typeof session.task_summary === "object"
+    ? session.task_summary
+    : null;
+  if (serverSummary) {
+    const serverCount = Math.max(1, Math.floor(Number(serverSummary.count) || 1));
+    const serverTarget = String(serverSummary.target || "").trim();
+    const serverDetail = String(serverSummary.detail || serverTarget).trim();
+    if (serverTarget) return { count: serverCount, target: serverTarget, detail: serverDetail };
+  }
   const taskId = String(session?.task_id || "").trim();
   const task = (state.socialTasks || []).find((item) => String(item?.id || "").trim() === taskId) || {};
   const payload = socialTaskPayload(task);
@@ -23460,7 +23980,7 @@ function liveBrowserTaskSummary(session) {
         || (taskType === "open_login" ? "账号登录" : statusLabel(taskType || "浏览器任务"))
       ),
   ).trim();
-  return { count, target };
+  return { count, target, detail: target };
 }
 
 function renderLiveBrowserActionMenu(session, { canStopTask = false, canCloseWindow = false } = {}) {
@@ -23602,12 +24122,12 @@ function renderLiveBrowserSession(session) {
         </div>
         <div class="live-browser-task-summary" aria-label="任务信息">
           <span>任务数：<b data-live-browser-task-count>${esc(taskSummary.count)}</b></span>
-          <span title="${esc(taskSummary.target)}">任务目标：<b data-live-browser-task-target>${esc(taskSummary.target)}</b></span>
+          <span title="${esc(taskSummary.detail)}" aria-label="${esc(`任务目标：${taskSummary.detail}`)}">任务目标：<b data-live-browser-task-target>${esc(taskSummary.target)}</b></span>
         </div>
         <div class="live-browser-mobile-summary" aria-label="任务信息">
           <span data-live-browser-mobile-meta>${esc(`平台：${identity.platform} · 人设：${identity.persona}`)}</span>
           <span>任务数：<b data-live-browser-mobile-task-count>${esc(taskSummary.count)}</b></span>
-          <span title="${esc(taskSummary.target)}">目标：<b data-live-browser-mobile-task-target>${esc(taskSummary.target)}</b></span>
+          <span title="${esc(taskSummary.detail)}" aria-label="${esc(`任务目标：${taskSummary.detail}`)}">目标：<b data-live-browser-mobile-task-target>${esc(taskSummary.target)}</b></span>
         </div>
         <div class="live-browser-card-actions">
           <button type="button" class="live-browser-expand-button" data-live-browser-fullscreen="${esc(sessionId)}" title="放大窗口" aria-label="放大窗口" aria-pressed="false">${renderExpandIcon()}</button>
@@ -25383,7 +25903,6 @@ function bindEvents() {
         state.personaPanels.content = "posts";
         renderPersonaDetail();
         renderConfirmSummary();
-        showMsg("commandMsg", "已放弃本次修改。", true);
       }
       return;
     }
@@ -25395,7 +25914,6 @@ function bindEvents() {
         if (persona && cancelPersonaDraftEditChanges(persona.id)) {
           renderPersonaDetail();
           renderConfirmSummary();
-          showMsg("commandMsg", "已取消未保存修改。", true);
         }
       }, 260);
       return;
@@ -25406,17 +25924,15 @@ function bindEvents() {
         clearPersonaDraftEdit(persona.id);
         renderPersonaDetail();
         renderConfirmSummary();
-        showMsg("commandMsg", "已清空当前草稿编辑内容。", true);
       }
       return;
     }
     if (event.target.closest("[data-persona-exit-draft-edit]")) {
       const persona = selectedPersona();
       if (persona) {
-        const exited = await exitPersonaDraftEdit(persona.id);
+        await exitPersonaDraftEdit(persona.id);
         renderPersonaDetail();
         renderConfirmSummary();
-        if (exited) showMsg("commandMsg", "已退出当前草稿编辑。", true);
       }
       return;
     }
@@ -26670,7 +27186,12 @@ function bindEvents() {
     }
     const platform = event.target.closest("[data-account-pool-platform]");
     if (platform) {
-      selectAccountPoolPlatform(platform.dataset.accountPoolPlatform || "");
+      const currentIndex = accountPoolPlatforms.findIndex(([value]) => value === normalizeAccountPoolPlatform());
+      const nextIndex = accountPoolPlatforms.findIndex(([value]) => value === normalizeAccountPoolPlatform(platform.dataset.accountPoolPlatform || ""));
+      void transitionAccountPoolPlatform(
+        platform.dataset.accountPoolPlatform || "",
+        nextIndex >= currentIndex ? 1 : -1,
+      );
       return;
     }
     const accountAdd = event.target.closest("[data-account-pool-add]");
@@ -26929,9 +27450,13 @@ async function init() {
   ensurePersonaMediaLightbox();
   beginWorkspaceBootstrapLoading();
   const me = await loadMe();
-  if (!me || consoleBoundaryNavigationActive) return;
+  if (!me || consoleBoundaryNavigationActive) {
+    finishWorkspaceBootstrapLoading();
+    return;
+  }
   const expectedBootstrapUserId = consoleBootstrapUserId();
   if (expectedBootstrapUserId && expectedBootstrapUserId !== consoleUserId(me.id)) {
+    finishWorkspaceBootstrapLoading();
     reloadForIdentityChange();
     return;
   }
@@ -26949,17 +27474,17 @@ async function init() {
   } else {
     state.setupStatus = null;
   }
-  loadTasks().catch(() => {});
-  loadSocial({ render: false }).then(() => {
+  const tasksReady = loadTasks().catch(() => {});
+  const socialReady = loadSocial({ render: false }).then(() => {
     updateAccountStatusViews();
     if (!hasPersonaBootstrap || isPersonaWorkspaceModule() || state.activeModule === "publishing" || state.activeModule === "automation") scheduleWorkspaceRender(false);
   }).catch(() => {});
-  loadPersonas().then(() => {
+  const personasReady = loadPersonas().then(() => {
     if (state.activeModule === "publishing") refreshCurrentPublishingPersonaContent({ force: false }).catch(() => []);
-  }).catch(() => {}).finally(() => {
-    finishWorkspaceBootstrapLoading();
-    scheduleWorkspaceRender(false);
-  });
+  }).catch(() => {});
+  await Promise.all([tasksReady, socialReady, personasReady]);
+  finishWorkspaceBootstrapLoading();
+  scheduleWorkspaceRender(false);
 }
 
 window.addEventListener("vecto:logout-request", () => {
@@ -26977,5 +27502,6 @@ if ("BroadcastChannel" in window) {
 }
 
 init().catch((error) => {
+  finishWorkspaceBootstrapLoading();
   appendEvent("error", error.detail || error.message || "控制台初始化失败");
 });
