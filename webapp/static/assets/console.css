@@ -13696,6 +13696,13 @@ body.persona-media-sorting {
   transition: opacity 260ms ease, visibility 0s linear 260ms;
 }
 
+@media (max-width: 760px) {
+  /* Keep the five persistent mobile navigation buttons usable and visible. */
+  .console-page-loading {
+    bottom: var(--mobile-task-dock-height);
+  }
+}
+
 .console-page.is-console-ready .console-page-loading {
   pointer-events: none;
   opacity: 0;

@@ -16,6 +16,7 @@ class ConsoleLoadingOverlayTests(unittest.TestCase):
         self.assertIn('.console-page-loading {', CONSOLE_CSS)
         self.assertIn('z-index: 7000;', CONSOLE_CSS)
         self.assertIn('inset: var(--site-header-height) 0 0;', CONSOLE_CSS)
+        self.assertIn('bottom: var(--mobile-task-dock-height);', CONSOLE_CSS)
         self.assertIn('background: var(--bg);', CONSOLE_CSS)
         self.assertIn('.console-page.is-console-ready .console-page-loading {', CONSOLE_CSS)
         self.assertIn('transition: opacity 260ms ease, visibility 0s linear 260ms;', CONSOLE_CSS)
