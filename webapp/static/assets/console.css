@@ -14384,6 +14384,7 @@ body.persona-media-sorting {
     bottom: var(--mobile-task-dock-height, 64px);
     left: 0;
     grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+    grid-template-areas: "save-spacer save-action save-cancel";
     column-gap: 10px;
     width: auto;
     margin: 0;
@@ -14391,8 +14392,7 @@ body.persona-media-sorting {
   }
 
   .console-page .persona-draft-global-save-button {
-    grid-column: 2;
-    grid-row: 1;
+    grid-area: save-action;
     height: 50px !important;
     min-height: 50px !important;
     padding: 9px 42px;
@@ -14413,8 +14413,11 @@ body.persona-media-sorting {
 
   .console-page .persona-draft-save-cancel {
     position: static;
-    grid-column: 3;
-    grid-row: 1;
+    inset: auto;
+    grid-area: save-cancel;
+    align-self: stretch;
+    justify-self: stretch;
+    margin: 0;
   }
 
   .console-page .persona-draft-global-save-dock.is-selection-expanded .persona-draft-save-floating-actions {
