@@ -374,66 +374,6 @@
   color: #fff;
 }
 
-:root[data-theme="light"] .home-canvas .home-pricing-band {
-  color: var(--public-ink);
-  background: var(--public-surface);
-}
-
-:root[data-theme="light"] .home-canvas .home-pricing-band .home-kicker {
-  color: var(--public-cool);
-}
-
-:root[data-theme="light"] .home-canvas .home-pricing-band .section-heading p {
-  color: var(--public-muted);
-}
-
-:root[data-theme="light"] .home-canvas .home-pricing-band :is(
-  .subscription-card,
-  .credit-panel,
-  .package-grid article
-) {
-  color: var(--public-ink);
-  background: var(--public-paper);
-  border-color: var(--public-line);
-}
-
-:root[data-theme="light"] .home-canvas .home-pricing-band .subscription-card {
-  background: var(--public-cool-soft);
-}
-
-:root[data-theme="light"] .home-canvas .home-pricing-band :is(
-  .price span,
-  .price small,
-  .subscription-card li,
-  .unit-price span,
-  .usage-grid,
-  .package-grid small
-) {
-  color: var(--public-muted);
-}
-
-:root[data-theme="light"] .home-canvas .home-pricing-band :is(
-  .price,
-  .unit-price strong,
-  .usage-grid strong,
-  .package-grid h3,
-  .package-grid p
-) {
-  color: var(--public-ink);
-}
-
-:root[data-theme="light"] .home-canvas .home-pricing-band .pricing-label {
-  color: var(--public-cool);
-}
-
-:root[data-theme="light"] .home-canvas .home-pricing-band .unit-price {
-  border-color: var(--public-line);
-}
-
-:root[data-theme="light"] .home-canvas .home-pricing-band .home-button-primary {
-  color: #fff;
-}
-
 :root[data-theme="light"] .home-canvas .home-contact-section {
   color: var(--public-ink);
   background: var(--public-page);

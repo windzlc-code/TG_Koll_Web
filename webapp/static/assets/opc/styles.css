@@ -1710,9 +1710,6 @@ body.modal-open {
 .home-canvas .home-scenario-feature div { position: absolute; z-index: 1; right: 32px; bottom: 32px; left: 32px; }
 .home-canvas .home-scenario-feature h3 { margin: 12px 0; font-size: 34px; }
 
-.home-canvas .home-pricing-band { padding: 104px 0; background: #071112; }
-.home-canvas .home-pricing-band .home-kicker { color: var(--home-lime); }
-
 .home-canvas .home-compare {
   width: min(1100px, calc(100% - 64px));
   margin: 0 auto;
@@ -1804,68 +1801,67 @@ body.modal-open {
 }
 
 @media (max-width: 560px) {
-  .home-canvas .home-proof > div { min-height: 74px; padding: 11px 14px; }
-  .home-canvas .home-proof strong { font-size: 19px; }
-  .home-canvas .home-proof span { font-size: 11px; line-height: 1.35; }
+  .home-canvas .home-proof > div { min-height: 62px; padding: 8px 11px; }
+  .home-canvas .home-proof strong { font-size: 17px; }
+  .home-canvas .home-proof span { font-size: 10px; line-height: 1.3; }
   .home-canvas .home-capability-section,
   .home-canvas .home-infra-section,
   .home-canvas .home-difference-section,
   .home-canvas .home-agents-section,
-  .home-canvas .home-scenarios-section,
-  .home-canvas .home-pricing-band { padding: 44px 0; }
-  .home-canvas .home-section-head { gap: 12px; width: calc(100% - 24px); margin-bottom: 20px; }
+  .home-canvas .home-scenarios-section { padding: 34px 0; }
+  .home-canvas .home-section-head { gap: 9px; width: calc(100% - 24px); margin-bottom: 15px; }
   .home-canvas .home-section-head h2,
   .home-canvas .home-flow-copy h2,
-  .home-canvas .home-contact-copy h2 { max-width: 100%; font-size: 28px; line-height: 1.12; }
+  .home-canvas .home-contact-copy h2 { max-width: 100%; font-size: 24px; line-height: 1.12; }
   .home-canvas .home-section-head > p:last-child,
   .home-canvas .home-flow-copy > p:last-child,
-  .home-canvas .home-contact-copy > p:last-child { font-size: 13px; line-height: 1.55; }
+  .home-canvas .home-contact-copy > p:last-child { font-size: 12px; line-height: 1.45; }
   .home-canvas .home-media-card,
-  .home-canvas .home-media-card-wide { flex-basis: calc(100vw - 38px); height: 310px; }
-  .home-canvas .home-media-card > div { padding: 15px; }
-  .home-canvas .home-media-card h3 { font-size: 18px; }
-  .home-canvas .home-media-card p { font-size: 12px; line-height: 1.45; }
-  .home-canvas .home-roadmap { gap: 16px; width: calc(100% - 24px); margin-top: 18px; padding-top: 18px; }
-  .home-canvas .home-roadmap-intro h3 { font-size: 22px; line-height: 1.18; }
-  .home-canvas .home-roadmap-intro > p:last-child { font-size: 12px; line-height: 1.5; }
-  .home-canvas .home-roadmap-journey { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; }
-  .home-canvas .home-roadmap-journey li { min-height: 62px; padding: 9px; }
-  .home-canvas .home-roadmap-journey strong { font-size: 13px; }
-  .home-canvas .home-roadmap-journey small { font-size: 10px; }
+  .home-canvas .home-media-card-wide { flex-basis: calc(100vw - 38px); height: 270px; }
+  .home-canvas .home-media-card > div { padding: 12px; }
+  .home-canvas .home-media-card h3 { font-size: 16px; }
+  .home-canvas .home-media-card p { font-size: 11px; line-height: 1.4; }
+  .home-canvas .home-roadmap { gap: 12px; width: calc(100% - 24px); margin-top: 14px; padding-top: 14px; }
+  .home-canvas .home-roadmap-intro h3 { font-size: 19px; line-height: 1.16; }
+  .home-canvas .home-roadmap-intro > p:last-child { font-size: 11px; line-height: 1.4; }
+  .home-canvas .home-roadmap-journey { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 10px; }
+  .home-canvas .home-roadmap-journey li { min-height: 54px; padding: 7px; }
+  .home-canvas .home-roadmap-journey strong { font-size: 12px; }
+  .home-canvas .home-roadmap-journey small { font-size: 9px; }
   .home-canvas .home-roadmap-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .home-canvas .home-roadmap-grid article { min-height: 0; padding: 0; }
-  .home-canvas .home-roadmap-grid article > img { height: 88px; }
-  .home-canvas .home-roadmap-grid article > div { padding: 11px; }
-  .home-canvas .home-roadmap-grid h4 { margin: 7px 0 5px; font-size: 15px; line-height: 1.25; }
-  .home-canvas .home-roadmap-grid p { font-size: 11px; line-height: 1.4; }
-  .home-canvas .home-flow-section { gap: 24px; padding: 48px 14px; }
-  .home-canvas .home-flow-board li { grid-template-columns: 30px minmax(0, 1fr); gap: 8px; min-height: 58px; padding: 8px 12px; }
+  .home-canvas .home-roadmap-grid article > img { height: 72px; }
+  .home-canvas .home-roadmap-grid article > div { padding: 9px; }
+  .home-canvas .home-roadmap-grid h4 { margin: 5px 0 4px; font-size: 14px; line-height: 1.2; }
+  .home-canvas .home-roadmap-grid p { font-size: 10px; line-height: 1.35; }
+  .home-canvas .home-flow-section { gap: 18px; padding: 38px 12px; }
+  .home-canvas .home-flow-board li { grid-template-columns: 27px minmax(0, 1fr); gap: 7px; min-height: 50px; padding: 7px 10px; }
   .home-canvas .home-flow-board li div { display: grid; gap: 2px; }
-  .home-canvas .home-flow-board strong { font-size: 16px; }
-  .home-canvas .home-flow-board small { font-size: 11px; }
+  .home-canvas .home-flow-board strong { font-size: 14px; }
+  .home-canvas .home-flow-board small { font-size: 10px; }
   .home-canvas .home-agent-stage { width: calc(100% - 24px); }
   .home-canvas .home-agent-stage article { min-height: 0; padding: 0; }
-  .home-canvas .home-infra-grid { grid-template-rows: 250px auto auto auto; width: calc(100% - 24px); }
-  .home-canvas .home-infra-visual div { right: 16px; bottom: 16px; left: 16px; }
-  .home-canvas .home-infra-visual strong { font-size: 23px; }
+  .home-canvas .home-infra-grid { grid-template-rows: 210px auto auto auto; width: calc(100% - 24px); }
+  .home-canvas .home-infra-visual div { right: 13px; bottom: 13px; left: 13px; }
+  .home-canvas .home-infra-visual strong { font-size: 20px; }
   .home-canvas .home-infra-status,
   .home-canvas .home-infra-control,
-  .home-canvas .home-infra-network { padding: 16px; }
-  .home-canvas .home-infra-status dl div { padding: 7px; }
-  .home-canvas .home-infra-status dd { font-size: 18px; }
-  .home-canvas .home-scenario-mosaic { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: none; grid-auto-rows: 220px; width: calc(100% - 24px); }
+  .home-canvas .home-infra-network { padding: 13px; }
+  .home-canvas .home-infra-status dl div { padding: 6px; }
+  .home-canvas .home-infra-status dd { font-size: 16px; }
+  .home-canvas .home-scenario-mosaic { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: none; grid-auto-rows: 180px; width: calc(100% - 24px); }
   .home-canvas .home-scenario-feature { grid-column: auto; }
-  .home-canvas .home-scenario-mosaic article { min-height: 220px; padding: 14px; }
-  .home-canvas .home-scenario-feature { min-height: 220px !important; }
+  .home-canvas .home-scenario-mosaic article { min-height: 180px; padding: 12px; }
+  .home-canvas .home-scenario-feature { min-height: 180px !important; }
   .home-canvas .home-compare { width: calc(100% - 24px); }
   .home-canvas .home-compare span,
   .home-canvas .home-compare strong { padding: 10px 8px; font-size: 11px; }
   .home-canvas .home-compare-head span,
   .home-canvas .home-compare-head strong { font-size: 13px; }
-  .home-canvas .home-contact-section { gap: 22px; padding: 48px 12px; }
-  .home-canvas .home-lead-form { padding: 16px; }
+  .home-canvas .home-contact-section { gap: 16px; padding: 38px 12px; }
+  .home-canvas .home-lead-form { padding: 13px; }
   .home-canvas .home-trust-strip { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .home-canvas .home-trust-strip span { padding: 10px; text-align: center; border-bottom: 1px solid rgba(10, 20, 16, 0.2); font-size: 11px; }
+  .home-canvas .home-trust-strip span { padding: 8px; text-align: center; border-bottom: 1px solid rgba(10, 20, 16, 0.2); font-size: 10px; }
   .home-canvas .home-trust-strip span + span { border-left: 0; }
   .home-canvas .home-trust-strip span:nth-child(even) { border-left: 1px solid rgba(10, 20, 16, 0.2); }
   .home-canvas .home-footer-links { gap: 14px; }
@@ -2309,7 +2305,7 @@ body.modal-open {
     padding: var(--site-header-height, 68px) 12px 4px;
   }
   .home-canvas .home-hero-track { gap: 8px; }
-  .home-canvas .home-hero-slide { height: 300px; grid-template-rows: minmax(0, 1fr) 106px; }
+  .home-canvas .home-hero-slide { height: 270px; grid-template-rows: minmax(0, 1fr) 96px; }
   .home-canvas .home-hero-slide[data-home-hero-index="0"] .home-hero-media { object-position: 62% center; }
   .home-canvas .home-hero-copy { display: block; padding: 8px 12px 9px; }
   .home-canvas .home-hero-copy .home-kicker { margin-bottom: 3px; font-size: 9px; }
@@ -2335,20 +2331,20 @@ body.modal-open {
   .home-canvas .home-hero-switcher button,
   .home-canvas .home-hero-switcher button.is-active { width: 30px; min-width: 30px; height: 28px; min-height: 28px; }
   .home-canvas .home-hero-switcher button.is-active i { width: 20px; }
-  .home-canvas .home-agent-stage article > img { height: 150px; }
-  .home-canvas .home-agent-body { padding: 16px; }
-  .home-canvas .home-agent-body h3 { font-size: 18px; }
+  .home-canvas .home-agent-stage article > img { height: 128px; }
+  .home-canvas .home-agent-body { padding: 13px; }
+  .home-canvas .home-agent-body h3 { font-size: 16px; }
   .home-canvas .home-agent-body p,
   .home-canvas .home-agent-body li { font-size: 11px; line-height: 1.4; }
-  .home-canvas .home-scenario-mosaic { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: none; grid-auto-rows: 220px; }
+  .home-canvas .home-scenario-mosaic { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: none; grid-auto-rows: 180px; }
   .home-canvas .home-scenario-feature,
   .home-canvas .home-scenario-mosaic > article:nth-child(4) { grid-column: auto; }
   .home-canvas .home-scenario-mosaic article,
-  .home-canvas .home-scenario-feature { min-height: 220px !important; }
+  .home-canvas .home-scenario-feature { min-height: 180px !important; }
   .home-canvas .home-scenario-mosaic article > div,
-  .home-canvas .home-scenario-feature div { right: 13px; bottom: 13px; left: 13px; }
-  .home-canvas .home-scenario-mosaic h3 { margin: 8px 0 5px; font-size: 17px; }
-  .home-canvas .home-scenario-mosaic p { font-size: 11px; line-height: 1.35; }
+  .home-canvas .home-scenario-feature div { right: 10px; bottom: 10px; left: 10px; }
+  .home-canvas .home-scenario-mosaic h3 { margin: 6px 0 4px; font-size: 15px; }
+  .home-canvas .home-scenario-mosaic p { font-size: 10px; line-height: 1.3; }
   .home-canvas .home-scenario-note { width: calc(100% - 24px); font-size: 10px; }
 }
 

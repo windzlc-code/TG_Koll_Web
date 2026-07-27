@@ -2125,13 +2125,47 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("contentMode === \"manual\"", self.console_script)
         self.assertNotIn("manual_content:", self.console_script)
         self.assertGreaterEqual(self.console_script.count('value="auto"'), 2)
-        self.assertGreaterEqual(self.console_script.count("自动（AI 匹配）"), 2)
+        self.assertNotIn("自动（AI 匹配）", self.console_script)
+        self.assertGreaterEqual(
+            self.console_script.count(
+                '${String(mediaForm.aspectRatio || "auto") === "auto" ? "selected" : ""}>自动</option>'
+            ),
+            2,
+        )
         self.assertIn('aspectRatio: "auto"', self.console_script)
         self.assertIn('String(form.aspectRatio || "auto")', self.console_script)
         self.assertNotIn(
             "Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : 1, 1), 8)",
             self.console_script,
         )
+
+    def test_media_task_selection_keeps_image_nodes_and_draft_edit_reuses_media_editor(self):
+        task_handler_start = self.console_script.index(
+            'const taskMediaSelect = event.target.closest("[data-persona-task-media-select]")'
+        )
+        task_handler_end = self.console_script.index(
+            'if (event.target.closest("[data-persona-attach-task-media]"))',
+            task_handler_start,
+        )
+        task_handler = self.console_script[task_handler_start:task_handler_end]
+        self.assertIn("syncPersonaTaskMediaSelectionState(", task_handler)
+        self.assertIn('taskMediaSelect.closest(".persona-media-operation-pane")', task_handler)
+        self.assertNotIn("renderPersonaDetail()", task_handler)
+        self.assertIn("thumbnailUrl: thumbnailUrl || previewUrl", self.console_script)
+
+        composer_start = self.console_script.index(
+            "function renderPersonaInlineMediaComposer("
+        )
+        composer_end = self.console_script.index(
+            "\nfunction taskOutputMediaItems",
+            composer_start,
+        )
+        composer = self.console_script[composer_start:composer_end]
+        self.assertIn("renderPersonaEditableMediaGrid(postMediaItems", composer)
+        self.assertIn("postMediaItems.length", composer)
+        self.assertIn("renderPersonaCompactMediaUpload(persona, post)", composer)
+        self.assertIn("data-persona-edit-post-media", self.console_script)
+        self.assertIn("data-persona-delete-post-media", self.console_script)
 
     def test_full_refresh_scope_is_limited_to_visible_personas(self):
         user = {"id": 7}

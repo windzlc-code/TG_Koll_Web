@@ -1,7 +1,6 @@
 (() => {
   const page = document.querySelector("#pricingSubscription");
-  const preview = document.querySelector("#homePricingLayout");
-  if (!page && !preview) return;
+  if (!page) return;
   const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
   const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
   const pricingParams = new URLSearchParams(window.location.search || "");
@@ -137,31 +136,6 @@
     try { payload = text ? JSON.parse(text) : {}; } catch { payload = { detail: text || `HTTP ${response.status}` }; }
     if (!response.ok) throw { ...payload, status: response.status };
     return payload;
-  }
-
-  function renderPreview(catalog) {
-    const layout = document.querySelector("#homePricingLayout");
-    const packages = document.querySelector("#homePackageGrid");
-    if (!layout || !packages) return;
-    const subscription = object(catalog.subscription);
-    const actions = list(catalog.actions).filter((item) => item.implemented !== false).slice(0, 5);
-    layout.innerHTML = `<article class="subscription-card">
-      <span class="pricing-label">Vecto Vanguard OPC</span>
-      <h3>${escapeHtml(subscription.name || "月度訂閱方案")}</h3>
-      <p class="price"><span>NT$</span>${Number(subscription.price_ntd || 0).toLocaleString("zh-TW")}<small>/ 月</small></p>
-      <ul>${list(subscription.features).map((feature) => `<li>${escapeHtml(feature)}</li>`).join("")}</ul>
-      <div class="catalog-purchase"><a class="button button-primary" href="${publicPricingUrl()}">查看完整方案</a></div>
-    </article>
-    <div class="credit-panel" aria-label="算力計價標準">
-      <h3>算力點官方計價</h3>
-      <div class="unit-price"><span>1 點</span><strong>${money(catalog.point_unit_ntd || 10)}</strong></div>
-      <div class="usage-grid">${actions.map((item) => `<span>${escapeHtml(item.name)}</span><strong>${escapeHtml(item.points)} 點 / ${escapeHtml(item.unit)}</strong>`).join("")}</div>
-    </div>`;
-    packages.innerHTML = list(catalog.packages).map((item) => `<article>
-      <span>${escapeHtml(item.name)}</span><h3>${Number(item.total_points || 0).toLocaleString("zh-TW")} 點</h3>
-      <p>${money(item.price_ntd)}</p><small>${item.bonus_points ? `含 ${Number(item.bonus_points).toLocaleString("zh-TW")} 點加贈` : "算力點永久有效"}</small>
-      <div class="catalog-purchase"><a class="button button-primary" href="${publicPricingUrl(skuOf(item))}">查看方案</a></div>
-    </article>`).join("");
   }
 
   function renderPage(catalog) {
@@ -377,17 +351,11 @@
   Promise.all([request("/api/billing/catalog"), loadAccount()])
     .then(([catalog]) => {
       state.catalog = object(catalog.catalog || catalog.data || catalog);
-      renderPreview(state.catalog);
-      if (page) renderPage(state.catalog);
+      renderPage(state.catalog);
       const product = new URLSearchParams(window.location.search).get("product");
-      if (product && page) window.setTimeout(() => openOrder(product), 80);
+      if (product) window.setTimeout(() => openOrder(product), 80);
     })
     .catch((error) => {
       document.querySelectorAll(".pricing-public-loading").forEach((node) => { node.textContent = error.detail || "目前無法讀取方案，請稍後重試。"; });
-      if (preview) {
-        preview.innerHTML = '<div class="catalog-loading">目前無法讀取方案，請稍後重試。</div>';
-        const packageGrid = document.querySelector("#homePackageGrid");
-        if (packageGrid) packageGrid.innerHTML = '<div class="catalog-loading">目前無法讀取算力方案。</div>';
-      }
     });
 })();

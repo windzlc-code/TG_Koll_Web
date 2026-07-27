@@ -3440,6 +3440,7 @@ async function confirmSaveDraftEditBeforeLeave() {
     message: "当前草稿有未保存修改。可以保存修改、放弃本次修改并退出，或返回继续编辑。",
     confirmText: "保存修改",
     cancelText: "返回编辑",
+    modalKey: "persona-draft-edit-exit",
     extraActions: [
       { text: "放弃修改并退出", value: "discard", danger: true },
     ],
@@ -17145,6 +17146,16 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
   const status = String(detail.status || "").trim();
   const errorText = String(detail.error || "").trim();
   const previousStatus = String(previousTaskState.status || "").trim();
+  const renderKey = JSON.stringify([
+    status,
+    String(detail.updated_at || detail.finished_at || ""),
+    errorText,
+    (Array.isArray(detail.media_items) ? detail.media_items : []).map((item) => [
+      String(item?.url || ""),
+      String(item?.thumbnail_url || ""),
+    ]),
+  ]);
+  const shouldRender = renderKey !== String(previousTaskState.renderKey || "");
   const terminalStatuses = ["success", "failed", "cancelled"];
   const becameTerminal = terminalStatuses.includes(status) && !terminalStatuses.includes(previousStatus);
   const taskTitle = taskMeta[String(detail.type || state.personaMediaTasks[key]?.taskType || "persona_post_image")]?.title || statusLabel(detail.type || "") || "生成任务";
@@ -17153,6 +17164,7 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
     taskType: String(detail.type || "").trim(),
     status,
     detail,
+    renderKey,
     selectedMediaIndexes: Array.isArray(previousTaskState.selectedMediaIndexes)
       ? previousTaskState.selectedMediaIndexes
       : null,
@@ -17184,6 +17196,7 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
     String(selectedPersona()?.id || "") === String(personaId || "")
     && String(selectedPersonaPost()?.id || "") === String(postId || "")
     && isPersonaWorkspaceModule()
+    && shouldRender
   ) {
     renderPersonaDetail();
     renderConfirmSummary();
@@ -17200,10 +17213,6 @@ async function watchPersonaMediaTask(personaId, postId, taskId) {
     const status = String(detail?.status || "").trim();
     if (["success", "failed", "cancelled"].includes(status)) {
       await loadTasks().catch(() => {});
-      if (String(selectedPersona()?.id || "") === String(personaId || "") && isPersonaWorkspaceModule()) {
-        renderPersonaDetail();
-        renderConfirmSummary();
-      }
       return;
     }
     await sleep(2000);
@@ -18777,7 +18786,14 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
         ${isFavoriteMedia ? `<strong>收藏媒体</strong>` : renderPersonaMediaOperationTabs(operationMode)}
         ${operationMode === "replace" ? `
           <div class="persona-media-operation-pane">
-            ${renderPersonaCompactMediaUpload(persona, post)}
+            ${postMediaItems.length
+              ? renderPersonaEditableMediaGrid(postMediaItems, {
+                personaId: persona.id,
+                source: isFavoriteMedia ? "favorites" : "posts",
+                postId: post.id,
+                sourceLabel,
+              })
+              : renderPersonaCompactMediaUpload(persona, post)}
           </div>
         ` : `
           <div class="persona-media-operation-pane">
@@ -18789,7 +18805,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
               </label>
               ${showAspectRatio ? `<label>图像比例
                 <select id="personaMediaAspectRatio">
-                  <option value="auto" ${String(mediaForm.aspectRatio || "auto") === "auto" ? "selected" : ""}>自动（AI 匹配）</option>
+                  <option value="auto" ${String(mediaForm.aspectRatio || "auto") === "auto" ? "selected" : ""}>自动</option>
                   <option value="1:1" ${String(mediaForm.aspectRatio || "") === "1:1" ? "selected" : ""}>1:1</option>
                   <option value="3:4" ${String(mediaForm.aspectRatio || "") === "3:4" ? "selected" : ""}>3:4</option>
                   <option value="4:3" ${String(mediaForm.aspectRatio || "") === "4:3" ? "selected" : ""}>4:3</option>
@@ -18830,9 +18846,12 @@ function taskOutputMediaItems(detail = {}) {
   return rows.map((item, sourceIndex) => {
     const previewUrl = String(item?.preview_url || item?.url || "").trim();
     if (!previewUrl) return null;
+    const thumbnailUrl = String(item?.thumbnail_url || item?.thumbnailUrl || "").trim();
     return {
       url: previewUrl,
       previewUrl,
+      originalUrl: previewUrl,
+      thumbnailUrl: thumbnailUrl || previewUrl,
       type: guessMediaType(previewUrl, item?.type || ""),
       label: String(item?.label || item?.type || "").trim() || mediaKindLabel(guessMediaType(previewUrl, item?.type || "")),
       sourceIndex,
@@ -18861,7 +18880,7 @@ function renderPersonaTaskMediaPreview(taskState, items = []) {
       const sourceIndex = Number(item.sourceIndex);
       const isSelected = selected.has(sourceIndex);
       return `
-        <div class="persona-task-media-card ${isSelected ? "is-selected" : ""}" role="option" aria-selected="${isSelected ? "true" : "false"}">
+        <div class="persona-task-media-card ${isSelected ? "is-selected" : ""}" data-persona-task-media-display-index="${esc(index)}" role="option" aria-selected="${isSelected ? "true" : "false"}">
           ${renderMediaPreviewButton(item, groupId, index, {
             className: "persona-media-card",
             frameClass: "persona-media-frame",
@@ -18879,6 +18898,24 @@ function renderPersonaTaskMediaPreview(taskState, items = []) {
       `;
     }).join("")}
   </div>`;
+}
+
+function syncPersonaTaskMediaSelectionState(taskState, items = [], root = document) {
+  const selected = new Set(selectedPersonaTaskMediaIndexes(taskState, items));
+  root.querySelectorAll("[data-persona-task-media-select]").forEach((button) => {
+    const sourceIndex = Number(button.dataset.personaTaskMediaSelect);
+    const isSelected = selected.has(sourceIndex);
+    const card = button.closest(".persona-task-media-card");
+    const displayIndex = Number(card?.dataset.personaTaskMediaDisplayIndex || 0);
+    button.setAttribute("aria-pressed", isSelected ? "true" : "false");
+    button.innerHTML = `${renderSelectAllIcon()}<span>第 ${displayIndex + 1} 张</span>`;
+    if (card) {
+      card.classList.toggle("is-selected", isSelected);
+      card.setAttribute("aria-selected", isSelected ? "true" : "false");
+    }
+  });
+  const attachButton = root.querySelector("[data-persona-attach-task-media]");
+  if (attachButton) attachButton.disabled = selected.size === 0;
 }
 
 function renderPersonaEditableMediaGrid(items, options = {}) {
@@ -20006,8 +20043,9 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   generateForm.targetWords = Math.min(Math.max(Number(generateForm.targetWords || generateDefaults.targetWords), 10), 2000);
   const selectedPostBase = selectedPersonaPost(persona, { requireExplicit: panel === "generate" && composeMode === "tweet_media" });
   const selectedPost = isEditingDraft ? editingDraft : selectedPostBase;
-  const selectedSourceLabel = (isEditingDraft ? editingSource : postSource) === "favorites" ? "收藏" : "草稿";
-  const selectedPostMediaItems = selectedPost ? personaDraftMediaPreviewItems(persona, postSource, selectedPost) : [];
+  const selectedMediaSource = isEditingDraft ? editingSource : postSource;
+  const selectedSourceLabel = selectedMediaSource === "favorites" ? "收藏" : "草稿";
+  const selectedPostMediaItems = selectedPost ? personaDraftMediaPreviewItems(persona, selectedMediaSource, selectedPost) : [];
   const generateIntro = generateMode === "hot"
     ? "按当前人设与记忆抓取 Threads / Instagram 热点候选。"
     : (isEditingDraft
@@ -20021,25 +20059,28 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   if (panel === "generate") {
     return `
       <div class="persona-inline-panel persona-generate-panel ${isEditingDraft ? "is-editing-draft" : ""} ${editingDirty ? "is-dirty" : ""}">
-        ${isEditingDraft ? `
-          <div class="persona-temp-edit-toolbar persona-temp-edit-toolbar--hint">
-            <span>编辑中：保存、清空或退出。</span>
+        ${!isEditingDraft ? `
+          <div class="persona-head-copy persona-head-copy--split">
+            <div class="persona-head-copy-main">
+              <strong>${esc(generateTitle)}</strong>
+              ${generateIntro
+                ? `<span class="persona-panel-intro" data-i18n-ui>${esc(generateIntro)}</span>`
+                : `<span class="persona-panel-intro persona-panel-intro--reserved" aria-hidden="true">&nbsp;</span>`}
+            </div>
           </div>
         ` : ""}
-        <div class="persona-head-copy persona-head-copy--split">
-          <div class="persona-head-copy-main">
-            <strong>${esc(generateTitle)}</strong>
-            ${generateIntro
-              ? `<span class="persona-panel-intro" data-i18n-ui>${esc(generateIntro)}</span>`
-              : `<span class="persona-panel-intro persona-panel-intro--reserved" aria-hidden="true">&nbsp;</span>`}
-          </div>
-        </div>
         <div class="persona-compose-workspace ${hasComposeAside ? "has-media" : ""}">
           <section class="persona-compose-post-side persona-production-section ${isEditingDraft ? "is-editing-draft" : ""} ${editingDirty ? "is-dirty" : ""}">
             ${isEditingDraft ? `
               <div class="persona-temp-edit-actions persona-temp-edit-actions--inline">
-                <button type="button" class="unified-action-icon-button" data-persona-clear-draft-edit title="清空" aria-label="清空">${renderClearSelectionIcon()}</button>
-                <button type="button" class="unified-action-icon-button" data-persona-exit-draft-edit title="退出编辑" aria-label="退出编辑">${renderCloseIcon()}</button>
+                <div class="persona-temp-edit-copy">
+                  <strong>${esc(generateTitle)}</strong>
+                  <span>编辑中 · 可修改正文、媒体或 AI 重写。</span>
+                </div>
+                <div class="persona-temp-edit-icon-actions">
+                  <button type="button" class="unified-action-icon-button" data-persona-clear-draft-edit title="清空" aria-label="清空">${renderClearSelectionIcon()}</button>
+                  <button type="button" class="unified-action-icon-button" data-persona-exit-draft-edit title="退出编辑" aria-label="退出编辑">${renderCloseIcon()}</button>
+                </div>
               </div>
             ` : ""}
             <div class="persona-compose-mode-slot">
@@ -20102,7 +20143,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
               ${generatePreviewDock}
               ${renderPublishLinkSettings(persona)}
               ${canComposeMedia ? ((isEditingDraft || composeMode === "tweet_media")
-                ? renderPersonaInlineMediaComposer(persona, profile, generateForm, form.media, selectedPost, selectedPostMediaItems, selectedSourceLabel, postSource === "favorites")
+                ? renderPersonaInlineMediaComposer(persona, profile, generateForm, form.media, selectedPost, selectedPostMediaItems, selectedSourceLabel, selectedMediaSource === "favorites")
                 : renderPersonaMediaComposerPlaceholder(persona, form.media)) : ""}
             </div>
           ` : ""}
@@ -20181,7 +20222,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                   </label>
                   ${showAspectRatio ? `<label>图像比例
                     <select id="personaMediaAspectRatio">
-                      <option value="auto" ${String(mediaForm.aspectRatio || "auto") === "auto" ? "selected" : ""}>自动（AI 匹配）</option>
+                      <option value="auto" ${String(mediaForm.aspectRatio || "auto") === "auto" ? "selected" : ""}>自动</option>
                       <option value="1:1" ${String(mediaForm.aspectRatio || "") === "1:1" ? "selected" : ""}>1:1</option>
                       <option value="3:4" ${String(mediaForm.aspectRatio || "") === "3:4" ? "selected" : ""}>3:4</option>
                       <option value="4:3" ${String(mediaForm.aspectRatio || "") === "4:3" ? "selected" : ""}>4:3</option>
@@ -25260,8 +25301,13 @@ function bindEvents() {
       if (selected.has(sourceIndex)) selected.delete(sourceIndex);
       else selected.add(sourceIndex);
       taskState.selectedMediaIndexes = Array.from(selected).sort((a, b) => a - b);
-      renderPersonaDetail();
-      renderConfirmSummary();
+      syncPersonaTaskMediaSelectionState(
+        taskState,
+        items,
+        taskMediaSelect.closest(".persona-media-operation-pane")
+          || taskMediaSelect.closest(".persona-compose-media-side")
+          || document,
+      );
       return;
     }
     if (event.target.closest("[data-persona-attach-task-media]")) {

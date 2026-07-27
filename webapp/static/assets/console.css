@@ -9335,13 +9335,42 @@ body.persona-touch-dragging .persona-list-card:active {
   flex-shrink: 0;
 }
 
+.persona-temp-edit-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.persona-temp-edit-copy strong {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.persona-temp-edit-copy span {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.persona-temp-edit-icon-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .persona-temp-edit-actions button {
   min-height: 34px;
   padding: 6px 12px;
 }
 
 .persona-temp-edit-actions--inline {
-  margin-left: auto;
+  display: flex;
+  width: 100%;
+  margin-left: 0;
+  justify-content: space-between;
 }
 
 .persona-draft-content--full {
@@ -14189,6 +14218,36 @@ body.persona-media-sorting {
 .account-pool-add-button strong {
   font-size: 15px;
   line-height: 1;
+}
+
+/* Draft-exit confirmation keeps the return path on the left and destructive/save actions together on the right. */
+.console-modal[data-modal-key="persona-draft-edit-exit"] .console-modal-actions {
+  display: grid;
+  grid-template-columns: minmax(76px, 1fr) minmax(96px, 1.2fr) minmax(76px, 1fr);
+  align-items: center;
+  justify-content: initial;
+  gap: 8px;
+}
+
+.console-modal[data-modal-key="persona-draft-edit-exit"] .console-modal-actions button {
+  min-width: 0;
+  min-height: 36px;
+  padding-inline: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.console-modal[data-modal-key="persona-draft-edit-exit"] .console-modal-actions > [data-console-modal-cancel] {
+  grid-column: 1;
+  justify-self: start;
+}
+
+.console-modal[data-modal-key="persona-draft-edit-exit"] .console-modal-actions > [data-console-modal-value] {
+  grid-column: 2;
+}
+
+.console-modal[data-modal-key="persona-draft-edit-exit"] .console-modal-actions > [data-console-modal-confirm] {
+  grid-column: 3;
 }
 
 /* Mobile add-account triggers keep only a lightweight border transition. */

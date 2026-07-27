@@ -780,7 +780,7 @@
 
 @media (max-width: 680px) {
   .proxy-market-hero {
-    min-height: 320px;
+    min-height: 280px;
   }
 
   .proxy-market-hero-media {
@@ -800,18 +800,18 @@
   }
 
   .proxy-market-hero-copy {
-    padding: 78px 0 24px;
+    padding: 68px 0 18px;
   }
 
   .proxy-market-hero-copy h1 {
-    font-size: 34px;
+    font-size: 30px;
     line-height: 1.05;
   }
 
   .proxy-market-hero-copy > p:not(.eyebrow) {
-    margin: 10px 0 14px;
-    font-size: 12px;
-    line-height: 1.5;
+    margin: 8px 0 10px;
+    font-size: 11px;
+    line-height: 1.4;
   }
 
   .proxy-market-hero-copy .eyebrow {
@@ -824,7 +824,7 @@
   }
 
   .proxy-market-facts > div {
-    padding: 9px 11px;
+    padding: 7px 9px;
   }
 
   .proxy-market-facts > div:nth-child(2n) {
@@ -840,21 +840,21 @@
   }
 
   .proxy-market-facts strong {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .proxy-market-account {
     align-items: stretch;
     flex-direction: column;
-    gap: 8px;
-    margin-top: 14px;
-    padding: 11px 13px;
+    gap: 6px;
+    margin-top: 10px;
+    padding: 9px 11px;
   }
 
   .proxy-market-account .button {
     width: 100%;
-    min-height: 38px;
-    font-size: 11px;
+    min-height: 34px;
+    font-size: 10px;
   }
 
   .proxy-market-account-copy span {
@@ -872,11 +872,11 @@
   }
 
   .proxy-market-section-heading h2 {
-    font-size: 22px;
+    font-size: 19px;
   }
 
   .proxy-market-filters {
-    padding: 20px 0 16px;
+    padding: 15px 0 12px;
   }
 
   .proxy-filter-form {
@@ -887,8 +887,8 @@
   .proxy-filter-reset,
   .proxy-filter-submit,
   .proxy-filter-form :is(input, select) {
-    min-height: 40px;
-    font-size: 12px;
+    min-height: 36px;
+    font-size: 11px;
   }
 
   .proxy-filter-form label {
@@ -904,8 +904,8 @@
   }
 
   .proxy-market-catalog {
-    min-height: 280px;
-    padding: 28px 0 42px;
+    min-height: 230px;
+    padding: 22px 0 32px;
   }
 
   .proxy-catalog-grid {
@@ -913,12 +913,12 @@
   }
 
   .proxy-card {
-    min-height: 220px;
-    padding: 14px;
+    min-height: 196px;
+    padding: 12px;
   }
 
   .proxy-card-top {
-    margin-bottom: 10px;
+    margin-bottom: 8px;
   }
 
   .proxy-country-code {
@@ -928,12 +928,12 @@
   }
 
   .proxy-card h3 {
-    font-size: 17px;
+    font-size: 15px;
   }
 
   .proxy-card-meta {
     gap: 7px;
-    margin: 11px 0;
+    margin: 8px 0;
   }
 
   .proxy-card-meta div {
@@ -946,7 +946,7 @@
   }
 
   .proxy-claim-button {
-    min-height: 38px;
+    min-height: 34px;
     padding-inline: 11px;
     font-size: 11px;
   }

@@ -7,11 +7,13 @@ import threading
 import time
 import unittest
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from unittest import mock
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import webapp.server as server
 import webapp.social_automation_api as social_automation_api
@@ -3651,6 +3653,60 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(aggregate["status"], "failed")
         self.assertEqual(aggregate["result"], {})
         self.assertEqual(aggregate["error"], "second failed")
+
+    def test_task_image_media_uses_cached_thumbnail_and_keeps_original_preview(self):
+        task_id = "task-thumbnail-preview"
+        source_path = self.root / "generated-result.png"
+        Image.effect_noise((1600, 1200), 100).convert("RGB").save(source_path, format="PNG")
+        with server.db() as conn:
+            admin_id = int(conn.execute("SELECT id FROM users WHERE username = 'admin'").fetchone()["id"])
+            server._insert_task_record_in_transaction(
+                conn,
+                task_id,
+                admin_id,
+                "persona_post_image",
+                {},
+            )
+            conn.execute(
+                "UPDATE tasks SET status = 'success', output_json = ?, updated_at = ? WHERE id = ?",
+                (
+                    server._json_dumps({"image_paths": [str(source_path)]}),
+                    server._now_ts(),
+                    task_id,
+                ),
+            )
+
+        thumbnail_root = self.data_dir / "outputs"
+        with mock.patch.object(server, "OUTPUT_ROOT", thumbnail_root):
+            detail_response = self.client.get(f"/api/tasks/{task_id}")
+            self.assertEqual(detail_response.status_code, 200)
+            media_item = detail_response.json()["media_items"][0]
+            self.assertEqual(media_item["url"], f"/api/tasks/{task_id}/media/0")
+            self.assertEqual(
+                media_item["thumbnail_url"],
+                f"/api/tasks/{task_id}/media/0/thumbnail",
+            )
+
+            thumbnail_response = self.client.get(media_item["thumbnail_url"])
+            self.assertEqual(thumbnail_response.status_code, 200)
+            self.assertEqual(thumbnail_response.headers["content-type"], "image/jpeg")
+            self.assertIn("immutable", thumbnail_response.headers["cache-control"])
+            with Image.open(BytesIO(thumbnail_response.content)) as thumbnail:
+                self.assertLessEqual(thumbnail.width, 480)
+                self.assertLessEqual(thumbnail.height, 480)
+            self.assertLess(len(thumbnail_response.content), source_path.stat().st_size)
+
+            cached_response = self.client.get(media_item["thumbnail_url"])
+            self.assertEqual(cached_response.content, thumbnail_response.content)
+            self.assertEqual(
+                len(list((thumbnail_root / ".thumbnails" / task_id).glob("0-*.jpg"))),
+                1,
+            )
+
+            original_response = self.client.get(media_item["url"])
+            self.assertEqual(original_response.status_code, 200)
+            self.assertIn("max-age=86400", original_response.headers["cache-control"])
+            self.assertEqual(original_response.content, source_path.read_bytes())
 
 if __name__ == "__main__":
     unittest.main()

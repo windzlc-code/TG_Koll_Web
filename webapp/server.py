@@ -36,7 +36,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
-from PIL import Image
+from PIL import Image, ImageOps
 
 import get_gemini
 import asset_uploader
@@ -3331,15 +3331,17 @@ def _task_output_media_items(task_id: str, output_data: dict[str, Any]) -> list[
             continue
         suffix = path.suffix.lower()
         media_type = "video" if suffix in VIDEO_EXTS else "audio" if suffix in AUDIO_EXTS else "image" if suffix in IMAGE_EXTS else "file"
+        media_url = f"/api/tasks/{quote(str(task_id).strip(), safe='')}/media/{index}"
         items.append({
-            "url": f"/api/tasks/{quote(str(task_id).strip(), safe='')}/media/{index}",
+            "url": media_url,
+            "thumbnail_url": f"{media_url}/thumbnail" if media_type == "image" else media_url,
             "type": media_type,
             "label": path.name or f"{media_type}-{index + 1}",
         })
     return items
 
 
-def _serve_task_output_media(task_id: str, index: int, user: dict[str, Any]) -> FileResponse:
+def _task_output_media_path(task_id: str, index: int, user: dict[str, Any]) -> Path:
     with db() as conn:
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (str(task_id or "").strip(),)).fetchone()
     if row is None:
@@ -3357,7 +3359,53 @@ def _serve_task_output_media(task_id: str, index: int, user: dict[str, Any]) -> 
         path = Path(str(paths[index])).expanduser()
     if not path.is_file():
         raise HTTPException(status_code=404, detail="任务媒体文件不存在。")
-    return FileResponse(str(path), filename=path.name)
+    return path
+
+
+def _serve_task_output_media(task_id: str, index: int, user: dict[str, Any]) -> FileResponse:
+    path = _task_output_media_path(task_id, index, user)
+    return FileResponse(
+        str(path),
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
+def _serve_task_output_media_thumbnail(task_id: str, index: int, user: dict[str, Any]) -> FileResponse:
+    path = _task_output_media_path(task_id, index, user)
+    if path.suffix.lower() not in IMAGE_EXTS:
+        return _serve_task_output_media(task_id, index, user)
+
+    stat = path.stat()
+    source_key = hashlib.sha256(
+        f"{path}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")
+    ).hexdigest()[:16]
+    safe_task_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(task_id or "").strip()) or "task"
+    cache_dir = OUTPUT_ROOT / ".thumbnails" / safe_task_id
+    cache_path = cache_dir / f"{int(index)}-{source_key}.jpg"
+    if not cache_path.is_file():
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        temp_path = cache_dir / f".{cache_path.name}.{uuid.uuid4().hex}.tmp"
+        try:
+            with Image.open(path) as source:
+                image = ImageOps.exif_transpose(source)
+                image.thumbnail((480, 480), Image.Resampling.LANCZOS)
+                if "A" in image.getbands():
+                    rgb = Image.new("RGB", image.size, "white")
+                    rgb.paste(image, mask=image.getchannel("A"))
+                else:
+                    rgb = image.convert("RGB")
+                rgb.save(temp_path, format="JPEG", quality=78, optimize=True)
+            temp_path.replace(cache_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
+        for stale in cache_dir.glob(f"{int(index)}-*.jpg"):
+            if stale != cache_path:
+                stale.unlink(missing_ok=True)
+    return FileResponse(
+        str(cache_path),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
 
 
 def _tool_r18_runtime_dir() -> Path:
@@ -19083,6 +19131,10 @@ def create_app() -> FastAPI:
     @app.get("/api/tasks/{task_id}/media/{index}")
     def api_task_media(task_id: str, index: int, user: dict[str, Any] = Depends(get_current_user)):
         return _serve_task_output_media(task_id, index, user)
+
+    @app.get("/api/tasks/{task_id}/media/{index}/thumbnail")
+    def api_task_media_thumbnail(task_id: str, index: int, user: dict[str, Any] = Depends(get_current_user)):
+        return _serve_task_output_media_thumbnail(task_id, index, user)
 
     def _run_task_error_analysis_impl(task_id: str, user: dict[str, Any]) -> dict[str, Any]:
         tid = str(task_id or "").strip()
