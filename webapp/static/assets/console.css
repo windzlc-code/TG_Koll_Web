@@ -21041,6 +21041,14 @@ body.console-page {
 
 .module-panel.is-publishing-module .publish-mobile-selection-clear {
   grid-column: 1;
+  justify-self: start;
+  align-self: center;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 8px;
   transform: translateX(8px);
 }
 

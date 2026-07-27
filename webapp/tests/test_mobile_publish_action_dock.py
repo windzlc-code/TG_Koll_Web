@@ -114,6 +114,9 @@ class MobilePublishActionDockTests(unittest.TestCase):
         )
         self.assertIsNotNone(clear)
         self.assertIn("grid-column: 1", clear.group(1))
+        self.assertIn("width: 44px", clear.group(1))
+        self.assertIn("height: 44px", clear.group(1))
+        self.assertIn("justify-self: start", clear.group(1))
         cancel = re.search(
             r"\.module-panel\.is-publishing-module \.publish-mobile-selection-cancel\s*\{([^}]+)\}",
             media,
