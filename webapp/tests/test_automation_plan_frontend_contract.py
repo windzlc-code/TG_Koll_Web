@@ -254,6 +254,13 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         self.assertIn("data-automation-plan-delete", card_action)
         self.assertIn("renderTrashIcon()", card_action)
 
+    def test_active_plan_stop_control_spans_the_history_card_grid(self):
+        start = CONSOLE_CSS.index(".automation-plan-card > [data-automation-plan-cancel]")
+        end = CONSOLE_CSS.index("}", start) + 1
+        stop_control = CONSOLE_CSS[start:end]
+        self.assertIn("grid-column: 1 / -1;", stop_control)
+        self.assertIn("width: 100%;", stop_control)
+
     def test_plan_refresh_button_is_removed_and_bulk_delete_is_bound(self):
         panel = function_source("renderAutomationTaskPlanPanel", "normalizePublishContentSource")
         bindings = function_source("renderSimpleFlowModule", "fillSimpleAccounts")

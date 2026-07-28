@@ -2558,6 +2558,7 @@ textarea:focus {
 
 /* The active-plan stop control is the card's single primary action. */
 .automation-plan-card > [data-automation-plan-cancel] {
+  grid-column: 1 / -1;
   box-sizing: border-box;
   width: 100%;
 }
