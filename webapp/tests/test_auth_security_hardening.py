@@ -196,7 +196,11 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         admin, _identity = self._admin_client()
         created = admin.post(
             "/api/persona_dashboard/automation/accounts",
-            json={"platform": "threads", "username": "security-account"},
+            json={
+                "platform": "threads",
+                "username": "security-account",
+                "totp_secret_or_uri": "JBSWY3DPEHPK3PXP",
+            },
         )
         self.assertEqual(created.status_code, 200, created.text)
         account_id = created.json()["account"]["id"]
@@ -208,10 +212,44 @@ class AuthSecurityHardeningTests(unittest.TestCase):
 
         response = admin.get(f"/api/persona_dashboard/automation/accounts/{account_id}/credentials")
         self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["username"], "security-account")
         self.assertEqual(response.json()["login_username"], "security-login")
         self.assertEqual(response.json()["login_password"], "top-secret")
+        self.assertEqual(response.json()["totp_secret_or_uri"], "JBSWY3DPEHPK3PXP")
         self.assertIn("no-store", response.headers["cache-control"])
 
+    def test_account_card_transfer_token_routes_are_removed(self):
+        admin, _identity = self._admin_client()
+        created = admin.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={"platform": "threads", "username": "plain-text-copy-only"},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        account_id = created.json()["account"]["id"]
+
+        removed_requests = (
+            admin.post(
+                f"/api/persona_dashboard/automation/accounts/{account_id}/card-transfer"
+            ),
+            admin.post(
+                "/api/persona_dashboard/automation/accounts/card-transfer/preview",
+                json={"token": "unused"},
+            ),
+            admin.post(
+                "/api/persona_dashboard/automation/accounts/card-transfer/import",
+                json={"token": "unused", "target_platform": "instagram"},
+            ),
+            admin.post(
+                f"/api/persona_dashboard/automation/accounts/{account_id}/card-transfer/apply",
+                json={"token": "unused"},
+            ),
+        )
+        self.assertTrue(
+            all(response.status_code == 404 for response in removed_requests),
+            [response.status_code for response in removed_requests],
+        )
+
+    @unittest.skip("encrypted account-card transfer workflow was removed")
     def test_account_card_transfer_only_copies_username_password_and_totp(self):
         admin, _identity = self._admin_client()
         persona = admin.post(
@@ -430,6 +468,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(duplicated_without_totp.status_code, 200, duplicated_without_totp.text)
         self.assertFalse(duplicated_without_totp.json()["account"]["totp_configured"])
 
+    @unittest.skip("encrypted account-card transfer workflow was removed")
     def test_account_card_transfer_apply_only_overwrites_username_password_and_totp(self):
         owner, _owner_id = self._approved_client("card-apply-owner")
         persona = owner.post(
@@ -583,6 +622,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         )
         self.assertEqual(denied_foreign_account.status_code, 404, denied_foreign_account.text)
 
+    @unittest.skip("encrypted account-card transfer workflow was removed")
     def test_account_card_transfer_lengths_are_consistent_between_generation_and_import(self):
         admin, _identity = self._admin_client()
         max_password = "P9!" * 1365 + "P"

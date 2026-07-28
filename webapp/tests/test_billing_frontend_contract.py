@@ -167,9 +167,10 @@ class BillingFrontendContractTests(unittest.TestCase):
         )
         mobile_end = self.console_styles.index("@media (max-width: 360px)", mobile_start)
         mobile_styles = self.console_styles[mobile_start:mobile_end]
-        self.assertIn("top: calc(var(--site-header-height) + 12px);", mobile_styles)
+        self.assertIn("top: max(12px, env(safe-area-inset-top));", mobile_styles)
         self.assertIn("bottom: auto;", mobile_styles)
-        self.assertIn("animation: toastSlideDown 180ms ease-out;", mobile_styles)
+        self.assertIn("width: auto;", mobile_styles)
+        self.assertIn("animation: toastSlideDown 180ms ease-out;", self.console_styles)
         self.assertIn("@keyframes toastSlideDown", self.console_styles)
         self.assertIn("width: 16px;", self.console_styles)
         self.assertIn("flex: 0 0 16px;", self.console_styles)

@@ -448,7 +448,7 @@ const state = {
   accountPasswordValues: {},
   accountPasswordVisible: {},
   accountPoolCreateDraft: {},
-  accountCardTransferToken: "",
+  accountClipboardText: "",
   proxyPoolPage: 1,
   proxyPoolPageSize: 10,
   personaMediaTasks: {},
@@ -726,7 +726,7 @@ function clearTenantInMemoryState() {
   state.accountPasswordValues = {};
   state.accountPasswordVisible = {};
   state.accountPoolCreateDraft = {};
-  state.accountCardTransferToken = "";
+  state.accountClipboardText = "";
   state.personaMediaTasks = {};
   state.personaGenerateRuns = {};
   state.personaGeneratedPreviews = {};
@@ -1883,6 +1883,41 @@ function formatElapsed(milliseconds) {
     : [minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
 }
 
+function toastStatusIconMarkup(status = "") {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (["running", "progress"].includes(normalized)) {
+    return `<svg class="toast-status-spinner" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.5"></circle>
+      <path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5"></path>
+    </svg>`;
+  }
+  if (normalized === "queued") {
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="7.5"></circle>
+      <path d="M12 7.5V12l3 2"></path>
+    </svg>`;
+  }
+  if (["failed", "error"].includes(normalized)) {
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m8.5 8.5 7 7m0-7-7 7"></path>
+    </svg>`;
+  }
+  if (["warning", "warn", "need_manual"].includes(normalized)) {
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 7.5v5.25"></path>
+      <path d="M12 16.5h.01"></path>
+    </svg>`;
+  }
+  if (normalized === "cancelled") {
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M8 12h8"></path>
+    </svg>`;
+  }
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="m7.5 12.25 3 3 6-6.5"></path>
+  </svg>`;
+}
+
 function applyToastMeta(toast, { key, ok, message, target, status, scheduled }) {
   if (!toast) return;
   const normalizedStatus = normalizeToastStatus(status, ok);
@@ -1904,6 +1939,8 @@ function applyToastMeta(toast, { key, ok, message, target, status, scheduled }) 
     delete toast.dataset.toastScheduled;
   }
   applyToastTargetMeta(toast, target, ok);
+  const iconNode = toast.querySelector(".toast-message-status-icon");
+  if (iconNode) iconNode.innerHTML = toastStatusIconMarkup(normalizedStatus);
   const messageNode = toast.querySelector(".toast-message-text");
   if (messageNode) messageNode.textContent = message;
 }
@@ -2047,10 +2084,13 @@ function createToast(request) {
   const { host, toastKey, ok, message, target, status, scheduled } = request;
   const toast = document.createElement("div");
   toast.innerHTML = `
+    <span class="toast-message-status-icon" aria-hidden="true"></span>
     <span class="toast-message-body">
       <span class="toast-message-text">${esc(message)}</span>
     </span>
-    <button type="button" class="toast-message-close" aria-label="关闭提示">×</button>
+    <button type="button" class="toast-message-close" aria-label="关闭提示">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"></path></svg>
+    </button>
   `;
   applyToastMeta(toast, { key: toastKey, ok, message, target, status, scheduled });
   host.appendChild(toast);
@@ -5026,6 +5066,15 @@ function activeSocialTaskFor({ accountId = "", personaId = "", taskType = "", po
     }
     return true;
   }) || null;
+}
+
+function activeOpenLoginTaskForAccount(accountId = "") {
+  const cleanAccountId = String(accountId || "").trim();
+  return (state.socialTasks || []).find((task) => (
+    String(task?.account_id || "").trim() === cleanAccountId
+    && String(task?.task_type || "").trim() === "open_login"
+    && ["preparing", "queued", "running", "need_manual"].includes(String(task?.status || "").trim())
+  )) || null;
 }
 
 function socialTaskLoginDependency(task) {
@@ -21615,7 +21664,7 @@ function pulseAccountPoolPlatformCards() {
   });
 }
 
-function waitForAccountPoolPlatformMotion(node, timeoutMs = 240) {
+function waitForAccountPoolPlatformMotion(node, timeoutMs = 320) {
   if (!node) return Promise.resolve();
   return new Promise((resolve) => {
     let settled = false;
@@ -21716,6 +21765,8 @@ async function settleAccountPoolPlatformMotion(motion, commit = false) {
   const { contentWindow, currentContent, incomingContent, direction, width, next } = motion;
   const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
   if (commit) stageAccountPoolPlatformSelection(next);
+  void currentContent.offsetWidth;
+  void incomingContent.offsetWidth;
   contentWindow.classList.add("is-account-platform-settling");
   const destination = commit ? -direction * width : 0;
   if (!reduceMotion) {
@@ -21972,9 +22023,17 @@ async function toggleAccountPasswordVisibility(button) {
 function renderAccountPoolCardActions(account, { context = "pool" } = {}) {
   const accountId = String(account?.id || "");
   const proxyLabel = account?.proxy_id ? "切换代理" : "选择代理";
+  const activeLoginTask = activeOpenLoginTaskForAccount(accountId);
+  const loginAction = (attribute) => {
+    if (activeLoginTask?.id) {
+      return `<button type="button" class="primary" ${attribute}="${esc(accountId)}" data-open-login-task-id="${esc(activeLoginTask.id)}">${renderBusyButtonContent("执行中", true, activeLoginTask.created_at || activeLoginTask.updated_at)}</button>`;
+    }
+    const boundPersonaId = String(account?.persona_id || "").trim();
+    return `<button type="button" class="primary" ${attribute}="${esc(accountId)}" ${boundPersonaId ? "" : 'disabled title="请先绑定人设后再打开登录"'}>打开登录</button>`;
+  };
   if (context === "persona-settings") {
     return `<div class="row-actions persona-account-summary-actions">
-      <button type="button" class="primary" data-persona-account-open-login="${esc(accountId)}">打开登录</button>
+      ${loginAction("data-persona-account-open-login")}
       <button type="button" data-persona-account-proxy="${esc(accountId)}">${proxyLabel}</button>
       <button type="button" data-persona-account-edit="${esc(accountId)}">编辑</button>
       <button type="button" data-persona-account-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>移除</button>
@@ -21982,7 +22041,7 @@ function renderAccountPoolCardActions(account, { context = "pool" } = {}) {
     </div>`;
   }
   return `<div class="row-actions">
-    <button type="button" class="primary" data-social-open-login="${esc(accountId)}">打开登录</button>
+    ${loginAction("data-social-open-login")}
     <button type="button" data-account-proxy-picker="${esc(accountId)}">${proxyLabel}</button>
     <button type="button" data-account-pool-edit="${esc(accountId)}">编辑</button>
     <button type="button" class="danger" data-social-delete-account="${esc(accountId)}">删除</button>
@@ -22298,7 +22357,6 @@ function renderAccountIdentityFields(account = null, mode = "create") {
   const editing = mode === "edit";
   const prefix = editing ? "accountPoolEdit" : "accountPool";
   const username = editing ? String(account?.username || "") : accountPoolDraftValue("username");
-  const transferredPassword = !editing && Boolean(state.accountPoolCreateDraft?.transfer_login_password_configured);
   return `<div class="account-create-form account-create-form--modal">
     <label>
       <span>账号用户名</span>
@@ -22308,20 +22366,17 @@ function renderAccountIdentityFields(account = null, mode = "create") {
       scope: editing ? "pool-edit" : "pool-create",
       inputId: editing ? "accountPoolEditLoginPassword" : "accountPoolLoginPassword",
     })}
-    ${transferredPassword ? `<p class="account-card-transfer-field-note">登录密码已从账号卡安全识别，留空即可沿用。</p>` : ""}
   </div>`;
 }
 
 function renderAccountEditorForm(account = null, mode = "create") {
   const editing = mode === "edit";
   const platform = account?.platform || normalizeAccountPoolPlatform();
-  const transferSource = String(state.accountPoolCreateDraft?.transfer_source_platform || "");
   return `<div class="account-pool-create-modal-body">
     <div class="account-pool-editor-platform">
       <span>平台：</span>
       ${renderAccountPoolPlatformIcon(platform)}
       <strong>${esc(platformLabel(platform))}</strong>
-      <small data-account-card-paste-summary ${transferSource ? "" : "hidden"}>${transferSource ? esc(`已识别 ${platformLabel(transferSource)} 账号卡，将创建为 ${platformLabel(platform)}`) : ""}</small>
     </div>
     ${renderAccountIdentityFields(account, mode)}
     ${renderAccountTotpSection(account, mode)}
@@ -22349,23 +22404,10 @@ async function saveAccountPoolCreateForm(options) {
     showMsg("socialMsg", "请填写账号用户名。", false);
     return false;
   }
-  const transferToken = String(state.accountPoolCreateDraft?.transfer_token || "").trim();
-  const endpoint = transferToken
-    ? "/api/persona_dashboard/automation/accounts/card-transfer/import"
-    : "/api/persona_dashboard/automation/accounts";
-  const requestPayload = transferToken
-    ? {
-      token: transferToken,
-      target_platform: platform,
-      username: payload.username,
-      login_password: payload.login_password || null,
-      totp_secret_or_uri: payload.totp_secret_or_uri || null,
-    }
-    : payload;
-  const result = await api(endpoint, {
+  const result = await api("/api/persona_dashboard/automation/accounts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(requestPayload),
+    body: JSON.stringify(payload),
   });
   const account = result?.account || {};
   state.accountPoolPlatform = normalizeAccountPoolPlatform(account.platform || payload.platform);
@@ -22374,9 +22416,7 @@ async function saveAccountPoolCreateForm(options) {
   state.preferredAccountId = String(account.id || "");
   resetAccountPoolCreateForm();
   await loadSocial();
-  showMsg("socialMsg", transferToken
-    ? "账号、密码和 2FA 已复制；人设、代理和登录状态未复制。"
-    : (payload.persona_id ? "账号已保存，并已绑定当前人设。" : "账号已保存。"), true);
+  showMsg("socialMsg", payload.persona_id ? "账号已保存，并已绑定当前人设。" : "账号已保存。", true);
   return true;
 }
 
@@ -22385,94 +22425,93 @@ function accountPoolSelectedAccountsForAction() {
   return accountPoolAccounts().filter((account) => selectedIds.has(String(account.id || "")));
 }
 
-function applyAccountCardClipboardToCreateForm(modal, card) {
+function serializeAccountClipboardText(fields) {
+  fields = fields || {};
+  return [
+    "账号: " + String(fields.username || ""),
+    "密码: " + String(fields.login_password || ""),
+    "2FA: " + String(fields.totp_secret_or_uri || ""),
+  ].join("\n");
+}
+
+function parseAccountClipboardText(value = "") {
+  const fields = {
+    username: "",
+    login_password: "",
+    totp_secret_or_uri: "",
+  };
+  const aliases = {
+    "账号": "username",
+    "密码": "login_password",
+    "2fa": "totp_secret_or_uri",
+  };
+  String(value || "").split(/\r?\n/).forEach((line) => {
+    const match = line.match(/^\s*(账号|密码|2fa)\s*[:：=]\s*(.*?)\s*$/i);
+    if (!match) return;
+    fields[aliases[match[1].toLowerCase()]] = match[2];
+  });
+  fields.username = fields.username.trim().replace(/^@+/, "");
+  if (!fields.username) throw new Error("剪贴板中没有账号字段");
+  return fields;
+}
+
+function applyAccountClipboardFields(modal, fields, totpController = null) {
   if (!modal) return false;
-  card = card || {};
+  fields = fields || {};
   const editing = modal.dataset.accountEditorMode === "edit";
   const prefix = editing ? "accountPoolEdit" : "accountPool";
-  const targetPlatform = normalizeAccountPoolPlatform();
-  const sourcePlatform = String(card.source_platform || card.platform || "").trim().toLowerCase();
-  const fields = {
-    username: String(card.username || "").trim().replace(/^@+/, ""),
-    login_password: String(card.login_password || ""),
+  const values = {
+    username: String(fields.username || "").trim().replace(/^@+/, ""),
+    login_password: String(fields.login_password || ""),
+    totp_secret_or_uri: String(fields.totp_secret_or_uri || "").trim(),
   };
-  modal.dataset.accountTransferToken = String(card.transfer_token || "").trim();
   if (!editing) {
     state.accountPoolCreateDraft = {
       ...(state.accountPoolCreateDraft || {}),
-      ...fields,
-      transfer_token: String(card.transfer_token || "").trim(),
-      transfer_source_platform: sourcePlatform,
-      transfer_login_password_configured: Boolean(card.login_password_configured || card.login_password),
-      transfer_totp_configured: Boolean(card.totp_configured),
+      ...values,
     };
   }
   const username = $(`${prefix}Username`);
   const password = $(`${prefix}LoginPassword`);
-  if (username) username.value = fields.username;
+  if (username) username.value = values.username;
   if (password) {
-    password.value = fields.login_password;
-    if (editing) password.dataset.passwordDirty = card.transfer_token ? "false" : "true";
-    if (Boolean(card.login_password_configured) && !password.value) {
-      password.placeholder = "已安全识别，留空即可沿用";
-    }
+    password.value = values.login_password;
+    if (editing) password.dataset.passwordDirty = "true";
   }
-  const totpState = modal.querySelector("[data-account-totp-state]");
-  if (totpState) {
-    totpState.textContent = card.totp_configured
-      ? "2FA 已识别，保存时覆盖"
-      : "2FA 未配置，保存时移除";
-    totpState.dataset.totpStatus = card.totp_configured ? "pending" : "not_configured";
+  if (editing && values.totp_secret_or_uri) {
+    totpController?.showUpdate();
   }
-  const totpInput = $("accountPoolTotpSecret");
-  if (totpInput && card.totp_configured && !totpInput.value) {
-    totpInput.placeholder = "已安全识别，保存时自动复制";
-  }
-  const summary = modal.querySelector("[data-account-card-paste-summary]");
-  if (summary) {
-    summary.hidden = false;
-    summary.textContent = sourcePlatform
-      ? `已识别 ${platformLabel(sourcePlatform)} 的账号、密码和 2FA，${editing ? "保存时覆盖" : `将创建为 ${platformLabel(targetPlatform)}`}`
-      : `已识别账号、密码和 2FA，${editing ? "保存时覆盖" : `将创建为 ${platformLabel(targetPlatform)}`}`;
-  }
+  const totpInput = editing
+    ? modal.querySelector("[data-account-totp-secret]")
+    : $("accountPoolTotpSecret");
+  if (totpInput) totpInput.value = values.totp_secret_or_uri;
   return true;
 }
 
 async function copyAccountPoolCardToClipboard(accountId = "") {
   const cleanId = String(accountId || "").trim();
   if (!cleanId) throw new Error("账号不存在");
-  const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}/card-transfer`, {
-    method: "POST",
+  const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}/credentials`, {
+    cache: "no-store",
   });
-  state.accountCardTransferToken = String(result?.token || "").trim();
-  await copyTextToClipboard(state.accountCardTransferToken);
-  showMsg("socialMsg", "账号、密码和 2FA 已复制。", true);
+  state.accountClipboardText = serializeAccountClipboardText({
+    username: result?.username || result?.login_username,
+    login_password: result?.login_password,
+    totp_secret_or_uri: result?.totp_secret_or_uri,
+  });
+  await copyTextToClipboard(state.accountClipboardText);
+  showMsg("socialMsg", "账号、密码和 2FA 已复制到剪贴板", true);
 }
 
-async function pasteAccountPoolCardFromClipboard(modal) {
-  let text = String(state.accountCardTransferToken || "").trim();
+async function pasteAccountPoolCardFromClipboard(modal, totpController = null) {
+  let text = String(state.accountClipboardText || "").trim();
   if (!text && navigator.clipboard?.readText) {
     try {
       text = await navigator.clipboard.readText();
-    } catch (_) {
-      text = window.prompt("浏览器未允许直接读取剪贴板，请在这里粘贴账号卡内容") || "";
-    }
-  } else if (!text) {
-    text = window.prompt("请粘贴账号卡内容") || "";
+    } catch (_) {}
   }
-  if (!text.startsWith("VECTO_ACCOUNT_CARD_V1.")) {
-    throw new Error("剪贴板中没有可识别的账号复制内容");
-  }
-  const result = await api("/api/persona_dashboard/automation/accounts/card-transfer/preview", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: text }),
-  });
-  applyAccountCardClipboardToCreateForm(modal, {
-    ...(result?.card || {}),
-    transfer_token: text,
-  });
-  showMsg("socialMsg", "账号、密码和 2FA 已识别，请确认后保存。", true);
+  if (!text) throw new Error("剪贴板中没有账号文本");
+  applyAccountClipboardFields(modal, parseAccountClipboardText(text), totpController);
 }
 
 async function duplicateAccountPoolSelectedAccounts(targetPlatform = "") {
@@ -22953,20 +22992,19 @@ function renderAccountProxyPickerPanel(account = null) {
 
 function renderAccountTotpSection(account = null, mode = "edit") {
   const creating = mode === "create";
-  const transferredTotp = creating && Boolean(state.accountPoolCreateDraft?.transfer_totp_configured);
   return `<section class="account-totp-section" data-account-totp-section>
     <div class="account-totp-head">
       <div>
         <strong>两步验证 (2FA)</strong>
         <span>支持 Base32 密钥或 otpauth URI</span>
       </div>
-      <span class="account-totp-state" data-account-totp-state ${transferredTotp ? 'data-totp-status="pending"' : ""}>${creating ? (transferredTotp ? "2FA 已识别" : "2FA 未配置") : ""}</span>
+      <span class="account-totp-state" data-account-totp-state>${creating ? "2FA 未配置" : ""}</span>
     </div>
     <div class="account-totp-body" data-account-totp-body>
       ${creating ? `<div class="account-totp-entry">
         <label for="accountPoolTotpSecret">
           <span>2FA 密钥</span>
-          <input id="accountPoolTotpSecret" value="${esc(accountPoolDraftValue("totp_secret_or_uri"))}" placeholder="${transferredTotp ? "已安全识别，保存时自动复制" : "输入 Base32 或 otpauth://..."}" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          <input id="accountPoolTotpSecret" value="${esc(accountPoolDraftValue("totp_secret_or_uri"))}" placeholder="输入 Base32 或 otpauth://..." autocomplete="off" autocapitalize="off" spellcheck="false" />
         </label>
         <div class="account-totp-entry-actions">
           <button type="button" class="primary account-inline-action" data-account-totp-create-stage>${renderPlusIcon()}<span>添加 2FA</span></button>
@@ -23405,7 +23443,7 @@ function openAccountPoolEditorModal(options) {
     const pasteCard = event.target.closest("[data-account-pool-paste-card]");
     if (pasteCard) {
       pasteCard.disabled = true;
-      pasteAccountPoolCardFromClipboard(modal)
+      pasteAccountPoolCardFromClipboard(modal, totpController)
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "粘贴账号字段失败", false))
         .finally(() => {
           if (pasteCard.isConnected) pasteCard.disabled = false;
@@ -23590,42 +23628,25 @@ async function saveAccountPoolEditForm(accountId = "") {
     payload.login_password = String(loginPasswordInput.value || "");
   }
   const editModal = $("consoleModal");
-  const transferToken = String(editModal?.dataset.accountTransferToken || "").trim();
+  const totpSecret = String(editModal?.querySelector("[data-account-totp-secret]")?.value || "").trim();
   const selectedProxyId = String(editModal?.dataset.selectedProxyId || "").trim();
   const originalProxyId = String(editModal?.dataset.originalProxyId || account?.proxy_id || "").trim();
   const proxyChanged = accountProxyBindingChanged(originalProxyId, selectedProxyId);
-  if (!transferToken && proxyChanged) {
+  if (proxyChanged) {
     payload.expected_proxy_id = originalProxyId;
     if (selectedProxyId) payload.proxy_id = selectedProxyId;
     else payload.clear_residential_proxy = true;
   }
-  let result = transferToken
-    ? await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}/card-transfer/apply`, {
-      method: "POST",
+  const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (totpSecret) {
+    await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}/totp`, {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        token: transferToken,
-        username: payload.username,
-        login_password: Object.prototype.hasOwnProperty.call(payload, "login_password")
-          ? payload.login_password
-          : null,
-      }),
-    })
-    : await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  if (transferToken && proxyChanged) {
-    const proxyPayload = {
-      expected_proxy_id: originalProxyId,
-    };
-    if (selectedProxyId) proxyPayload.proxy_id = selectedProxyId;
-    else proxyPayload.clear_residential_proxy = true;
-    result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(proxyPayload),
+      body: JSON.stringify({ secret_or_uri: totpSecret }),
     });
   }
   state.accountPoolAccountId = String(result.account?.id || cleanId);
@@ -25700,6 +25721,10 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
   }
   const selected = selectedSocialAccount(accountId);
   const platform = selected?.platform || $("socialPlatform")?.value || "threads";
+  if (taskType === "open_login" && !String(selected?.persona_id || personaId || "").trim()) {
+    showMsg(messageId, "请先绑定人设后再打开登录。", false);
+    return;
+  }
   const allowPublishTask = taskType === "publish_post" && state.activeModule === "publishing";
   if (!validateTaskForPlatform(taskType, platform, { includePublish: allowPublishTask })) {
     showMsg(messageId, `${platformLabel(platform)} 当前不支持「${statusLabel(taskType)}」，请切换到可执行任务类型。`, false);
@@ -25707,7 +25732,10 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
   }
   const cleanPersonaId = String(personaId || selected?.persona_id || "").trim();
   const lockParts = ["social", accountId, taskType, cleanPersonaId || "standalone"];
-  if (isActionLocked(...lockParts) || activeSocialTaskFor({ accountId, taskType })) {
+  const existingTask = taskType === "open_login"
+    ? activeOpenLoginTaskForAccount(accountId)
+    : activeSocialTaskFor({ accountId, taskType });
+  if (isActionLocked(...lockParts) || existingTask) {
     showMsg(messageId, `该账号已有「${statusLabel(taskType)}」任务在队列或执行中，请等待完成。`, false);
     return;
   }
@@ -27523,6 +27551,11 @@ function bindEvents() {
     if (personaOpenLogin) {
       const persona = selectedPersona();
       const accountId = String(personaOpenLogin.dataset.personaOpenLogin || selectedPersonaAutomationAccount(persona)?.id || "").trim();
+      const activeTask = activeOpenLoginTaskForAccount(accountId);
+      if (activeTask?.id) {
+        openLiveBrowserTaskView(activeTask.id);
+        return;
+      }
       createSocialTask("open_login", accountId, persona?.id || "", "commandMsg")
         .catch((error) => showMsg("commandMsg", error.detail || error.message || "打开登录失败", false));
     }
@@ -27599,6 +27632,11 @@ function bindEvents() {
     if (personaAccountOpenLogin) {
       const persona = selectedPersona();
       const accountId = String(personaAccountOpenLogin.dataset.personaAccountOpenLogin || "").trim();
+      const activeTask = activeOpenLoginTaskForAccount(accountId);
+      if (activeTask?.id) {
+        openLiveBrowserTaskView(activeTask.id);
+        return;
+      }
       createSocialTask("open_login", accountId, persona?.id || "", "commandMsg")
         .catch((error) => showMsg("commandMsg", error.detail || error.message || "打开登录失败", false));
       return;
@@ -28117,6 +28155,11 @@ function bindEvents() {
     if (openLogin) {
       const accountId = String(openLogin.dataset.socialOpenLogin || "").trim();
       const account = selectedSocialAccount(accountId);
+      const activeTask = activeOpenLoginTaskForAccount(accountId);
+      if (activeTask?.id) {
+        openLiveBrowserTaskView(activeTask.id);
+        return;
+      }
       createSocialTask("open_login", accountId, account?.persona_id || "", "socialMsg")
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "打开登录失败", false));
       return;

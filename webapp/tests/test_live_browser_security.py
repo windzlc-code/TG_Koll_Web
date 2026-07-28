@@ -521,7 +521,7 @@ def test_open_login_http_always_starts_in_automatic_mode(payload):
         mock.patch.object(
             social_automation_api,
             "_require_account_access",
-            return_value={"login_username": "saved-user", "username": "saved-user", "login_password": "saved-password"},
+            return_value={"persona_id": "persona-1", "login_username": "saved-user", "username": "saved-user", "login_password": "saved-password"},
         ),
         mock.patch.object(
             social_automation_api,
@@ -545,7 +545,7 @@ def test_open_login_http_rejects_manual_start_mode():
         mock.patch.object(
             social_automation_api,
             "_require_account_access",
-            return_value={"login_username": "saved-user", "username": "saved-user", "login_password": "saved-password"},
+            return_value={"persona_id": "persona-1", "login_username": "saved-user", "username": "saved-user", "login_password": "saved-password"},
         ),
         mock.patch.object(social_automation_api, "create_account_task") as create_task,
     ):
@@ -580,13 +580,33 @@ def test_generic_task_http_rejects_manual_login_start_mode():
     create_task.assert_not_called()
 
 
+def test_open_login_http_requires_bound_persona():
+    client = _security_test_client()
+    with (
+        mock.patch.object(
+            social_automation_api,
+            "_require_account_access",
+            return_value={"persona_id": "", "login_username": "saved-user", "username": "saved-user", "login_password": "saved-password"},
+        ),
+        mock.patch.object(social_automation_api, "create_account_task") as create_task,
+    ):
+        response = client.post(
+            "/api/persona_dashboard/automation/accounts/account-1/open_login",
+            json={},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "请先绑定人设后再打开登录"
+    create_task.assert_not_called()
+
+
 def test_generic_task_http_rejects_automatic_login_without_effective_credentials():
     client = _security_test_client()
     with (
         mock.patch.object(
             social_automation_api,
             "_require_account_access",
-            return_value={"login_username": "", "username": "", "login_password": ""},
+            return_value={"persona_id": "persona-1", "login_username": "", "username": "", "login_password": ""},
         ),
         mock.patch.object(social_automation_api, "_validate_user_task_media_paths"),
         mock.patch.object(social_automation_api, "_create_social_task_for_user") as create_task,

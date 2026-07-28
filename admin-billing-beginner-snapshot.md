@@ -1,0 +1,39 @@
+- generic [ref=e864] [box=256,147,1133,2462]:
+  - generic [ref=e865] [box=273,164,1099,75]:
+    - generic [ref=e866] [box=273,164,408,49]:
+      - heading "套餐与客户额度" [level=2] [ref=e867] [box=273,164,408,25]
+      - generic [ref=e868] [box=273,193,408,20]: 设置客户可购买的月度套餐和储值包，审批购买申请，并管理客户现有额度。
+    - generic [ref=e869] [box=1304,164,68,60]:
+      - generic [ref=e870] [box=1308,164,60,24]: 待审批 0
+      - button "刷新数据" [ref=e871] [cursor=pointer] [box=1304,194,68,30]
+  - generic [ref=e872] [box=273,249,1099,2344]:
+    - region "客户套餐设置" [ref=e873] [box=273,249,1099,1794]:
+      - generic [ref=e874] [box=286,261,1074,43]:
+        - generic [ref=e875] [box=286,261,528,43]
+        - button "刷新方案" [ref=e878] [cursor=pointer] [box=1292,268,68,30]
+      - generic [ref=e879] [box=286,317,1074,42]:
+        - strong [ref=e880] [box=298,327,218,21]: 当前客户套餐 · Vecto Vanguard OPC
+        - generic [ref=e881] [box=524,326,51,24]: 使用中
+        - generic [ref=e882] [box=582,328,271,19]: NT$ 6,000 / 月 · 3 个 Threads 账号 · 10 张免费图片
+      - generic [ref=e883] [box=286,371,1074,1659]:
+        - table "客户套餐历史记录" [ref=e885] [box=286,372,800,177]
+        - generic [ref=e919] [box=718,371,642,1659]
+    - region "客户购买申请" [ref=e1103] [box=273,2054,1099,236]:
+      - generic [ref=e1104] [box=286,2067,1074,43]:
+        - generic [ref=e1105] [box=286,2067,372,43]
+        - generic [ref=e1108] [box=1156,2073,204,32]
+      - table "客户购买申请列表" [ref=e1113] [box=286,2123,1072,108]:
+        - caption [ref=e1114] [box=285,2158,1,1]: 客户购买申请列表
+        - rowgroup [ref=e1115] [box=286,2123,1072,36]
+        - rowgroup [ref=e1124] [box=286,2159,1072,72]
+      - generic [ref=e1128] [box=1280,2232,79,19]: 已加载 0 / 0 条
+      - status [ref=e1129] [box=286,2260,1074,18]
+    - region "用户计费详情与人工调整" [ref=e1130] [box=273,2302,1099,173]:
+      - generic [ref=e1131] [box=286,2315,1074,43]:
+        - generic [ref=e1132] [box=286,2315,414,43]
+        - generic [ref=e1135] [box=1110,2321,249,32]
+      - generic [ref=e1139] [box=286,2371,1074,92]: 从客户账号列表点击计费按钮，或输入客户 ID 查询。
+    - group [ref=e1140] [box=273,2487,1099,67]:
+      - generic "基础换算参数 原有服务点、汇率与识别成本配置" [ref=e1141] [cursor=pointer] [box=286,2500,1074,41]:
+        - generic [ref=e1142] [box=286,2500,162,41]
+    - status [ref=e1145] [box=273,2574,1099,18]

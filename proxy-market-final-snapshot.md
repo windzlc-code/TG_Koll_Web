@@ -1,0 +1,81 @@
+- generic [active] [ref=e1] [box=0,0,981,1727]:
+  - link "跳至主要內容" [ref=e2] [cursor=pointer] [box=8,-48,111,40]:
+    - /url: "#main-content"
+  - banner [ref=e3] [box=0,0,981,68]:
+    - link "Vecto 首頁" [ref=e4] [cursor=pointer] [box=39,14,592,40]:
+      - /url: /
+      - generic [ref=e6] [box=89,16,66,36]:
+        - generic [ref=e7] [box=89,16,66,18]: Vecto
+        - generic [ref=e8] [box=89,35,66,17]: 維拓 / 維圖
+    - generic [ref=e9] [box=641,14,301,40]:
+      - group [ref=e10] [box=641,14,67,40]:
+        - generic "導覽" [ref=e11] [cursor=pointer] [box=641,14,67,40]
+      - generic "全域顯示設定" [ref=e15] [box=714,14,48,40]:
+        - button "切換到簡體中文" [pressed] [ref=e16] [cursor=pointer] [box=714,14,46,40]
+      - button "帳號登入" [ref=e21] [cursor=pointer] [box=769,14,82,40]:
+        - generic [ref=e22] [box=784,25,52,17]: 帳號登入
+      - link "遊客申請" [ref=e23] [cursor=pointer] [box=858,14,84,40]:
+        - /url: /#contact
+        - generic [ref=e24] [box=874,25,52,17]: 遊客申請
+  - main [ref=e25] [box=0,0,981,1626]:
+    - region "靜態住宅代理 IP 商城" [ref=e26] [box=0,0,981,430]:
+      - generic [ref=e28] [box=24,26,933,404]:
+        - paragraph [ref=e29] [box=24,142,933,16]: Vecto Network Supply
+        - heading "靜態住宅代理 IP 商城" [level=1] [ref=e30] [box=24,168,760,60]
+        - paragraph [ref=e31] [box=24,246,670,58]: 從可用地區與線路規格中快速選擇節點。目錄對游客開放，登入後即可將合適的代理加入個人代理池。
+        - link "瀏覽可用節點" [ref=e32] [cursor=pointer] [box=24,328,142,48]:
+          - /url: "#catalog"
+    - region "商城摘要" [ref=e33] [box=24,429,933,79]:
+      - generic [ref=e34] [box=24,430,233,78]:
+        - generic [ref=e35] [box=46,448,188,16]: 可瀏覽節點
+        - strong [ref=e36] [box=46,467,188,23]: 0 個
+      - generic [ref=e37] [box=257,430,233,78]:
+        - generic [ref=e38] [box=279,448,188,16]: 覆蓋地區
+        - strong [ref=e39] [box=279,467,188,23]: 0 個
+      - generic [ref=e40] [box=490,430,233,78]:
+        - generic [ref=e41] [box=512,448,188,16]: 我的領取額度
+        - strong [ref=e42] [box=512,467,188,23]: 登入後查看
+      - generic [ref=e43] [box=724,430,233,78]:
+        - generic [ref=e44] [box=746,448,189,16]: 交付方式
+        - strong [ref=e45] [box=746,467,189,23]: 加入個人代理池
+    - generic [ref=e46] [box=24,532,933,82]:
+      - generic [ref=e47] [box=45,554,285,38]:
+        - generic [ref=e48] [box=45,554,285,16]: 游客瀏覽
+        - strong [ref=e49] [box=45,572,285,20]: 目錄可直接查看；登入後可領取可用節點。
+      - button "登入後領取" [ref=e50] [box=810,549,126,48]
+    - region "節點篩選" [ref=e51] [box=24,613,933,488]:
+      - generic [ref=e52] [box=24,655,933,53]:
+        - generic [ref=e53] [box=24,655,112,53]
+        - button "重設" [ref=e56] [cursor=pointer] [box=874,670,83,38]
+      - generic [ref=e61] [box=24,726,933,342]:
+        - generic [ref=e62] [box=24,726,224,63]
+        - generic [ref=e65] [box=260,726,224,63]
+        - generic [ref=e68] [box=496,726,224,63]
+        - generic [ref=e71] [box=733,726,224,63]
+        - generic [ref=e74] [box=24,801,224,63]
+        - generic [ref=e77] [box=260,801,224,63]
+        - generic [ref=e80] [box=496,801,224,63]
+        - generic [ref=e83] [box=733,801,224,63]
+        - generic [ref=e86] [box=24,876,224,63]
+        - generic [ref=e89] [box=260,876,224,63]
+        - generic [ref=e92] [box=496,876,224,63]
+        - generic [ref=e95] [box=733,876,224,63]
+        - generic [ref=e98] [box=24,951,224,63]
+        - generic [ref=e101] [box=260,951,224,63]
+        - generic [ref=e104] [box=496,951,224,63]
+        - button "套用篩選" [ref=e107] [cursor=pointer] [box=24,1026,460,42]
+    - region "可用代理節點" [ref=e112] [box=24,1101,933,525]:
+      - generic [ref=e113] [box=24,1143,933,53]:
+        - generic [ref=e114] [box=24,1143,168,53]
+        - status [ref=e117] [box=803,1160,154,18]: 目前沒有符合條件的節點
+      - generic [ref=e118] [box=24,1214,933,340]:
+        - img [ref=e119] [box=469,1260,42,42]
+        - heading "目前沒有符合條件的節點" [level=3] [ref=e121] [box=369,1340,242,27]
+        - paragraph [ref=e122] [box=362,1394,256,22]: 調整地區或線路條件後再查看目錄。
+        - button "清除篩選" [ref=e123] [box=436,1460,110,48]
+  - contentinfo [ref=e124] [box=0,1626,981,101]:
+    - generic [ref=e127] [box=95,1656,151,42]:
+      - strong [ref=e128] [box=95,1656,151,22]: Vecto 維拓
+      - generic [ref=e129] [box=95,1679,151,18]: OPC 超級個體 AI 駕駛艙
+    - link "開啟 Web 控制台" [ref=e130] [cursor=pointer] [box=772,1653,169,48]:
+      - /url: /console.html

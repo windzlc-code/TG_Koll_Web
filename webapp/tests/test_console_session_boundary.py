@@ -385,6 +385,17 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             task_source,
         )
 
+    def test_open_login_account_actions_preserve_running_task_navigation(self):
+        actions = self._section("function renderAccountPoolCardActions", "function renderAccountPoolCard(")
+        create_task = self._javascript_function_source(self.source, "createSocialTask")
+
+        self.assertIn("activeOpenLoginTaskForAccount(accountId)", actions)
+        self.assertIn('data-open-login-task-id="${esc(activeLoginTask.id)}"', actions)
+        self.assertIn('renderBusyButtonContent("执行中"', actions)
+        self.assertIn('title="请先绑定人设后再打开登录"', actions)
+        self.assertIn("请先绑定人设后再打开登录。", create_task)
+        self.assertGreaterEqual(self.source.count("openLiveBrowserTaskView(activeTask.id)"), 3)
+
     def test_console_header_boundary_has_no_drop_shadow(self):
         start = self.site_nav_styles.index('.site-header.is-scrolled,')
         end = self.site_nav_styles.index('}', start)
@@ -1161,25 +1172,35 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("grid-template", exit_head)
         self.assertIn("opacity: 0;", exit_note)
 
-    def test_public_toast_uses_compact_bottom_layout(self):
+    def test_public_toast_uses_unified_top_status_card(self):
         host = self._css_block(".toast-host {")
         message = self._css_block(".toast-message {")
         message_text = self._css_block(".toast-message-text {")
-        slide = self._css_block("@keyframes toastSlideIn")
+        status_icon = self._css_block(".toast-message-status-icon {")
+        slide = self._css_block("@keyframes toastSlideDown")
+        metadata = self._section("function applyToastMeta", "function applyToastTargetMeta")
+        creation = self._function_source("createToast")
 
         self.assertIn("left: auto;", host)
         self.assertIn("right: 16px;", host)
-        self.assertIn("bottom: 22px;", host)
-        self.assertIn("width: min(440px, calc(100vw - 24px));", host)
+        self.assertIn("top: max(16px, env(safe-area-inset-top));", host)
+        self.assertIn("bottom: auto;", host)
+        self.assertIn("width: min(420px, calc(100vw - 24px));", host)
         self.assertNotIn("transform: translateX(-50%);", host)
-        self.assertNotIn("top: 16px;", host)
-        self.assertIn("min-height: 52px;", message)
-        self.assertIn("padding: 12px 8px 12px 14px;", message)
-        self.assertIn("border: 2px solid var(--line);", message)
+        self.assertIn("grid-template-columns: 24px minmax(0, 1fr) 28px;", message)
+        self.assertIn("min-height: 56px;", message)
+        self.assertIn("padding: 12px 8px 12px 12px;", message)
+        self.assertIn("background: var(--panel-solid);", message)
+        self.assertIn("animation: toastSlideDown 180ms ease-out;", message)
+        self.assertIn("background: var(--toast-state-color);", status_icon)
+        self.assertIn("border-radius: 999px;", status_icon)
+        self.assertIn("toast-message-status-icon", creation)
+        self.assertIn("toastStatusIconMarkup(normalizedStatus)", metadata)
         self.assertIn("-webkit-line-clamp: 2;", message_text)
         self.assertIn("max-height: 2.8em;", message_text)
         self.assertIn("overflow: hidden;", message_text)
-        self.assertIn("transform: translateY(18px);", slide)
+        self.assertIn("font-weight: 700;", message_text)
+        self.assertIn("transform: translateY(-18px);", slide)
 
     def test_all_toasts_capture_a_clickable_destination_and_open_the_exact_surface(self):
         target = self._section("function currentToastTarget", "function toastTargetForKind")
@@ -2059,7 +2080,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         identity = self._function_source("renderAccountIdentityFields")
         copy_one = self._function_source("copyAccountPoolCardToClipboard")
         paste = self._function_source("pasteAccountPoolCardFromClipboard")
-        apply = self._function_source("applyAccountCardClipboardToCreateForm")
+        apply = self._function_source("applyAccountClipboardFields")
         duplicate = self._function_source("duplicateAccountPoolSelectedAccounts")
         create_save = self._function_source("saveAccountPoolCreateForm")
         edit_save = self._function_source("saveAccountPoolEditForm")
@@ -2070,16 +2091,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("account-pool-card-platform", card)
         self.assertIn('title="复制账号卡"', cards)
         self.assertIn("openAccountPoolDuplicateModal", bind_events)
-        self.assertIn("/card-transfer", copy_one)
-        self.assertNotIn("/credentials", copy_one)
-        self.assertIn("result?.token", copy_one)
-        self.assertNotIn("serializeAccountCardClipboard", self.source)
-        self.assertNotIn("parseAccountCardClipboard", self.source)
+        self.assertIn("/credentials", copy_one)
+        self.assertNotIn("/card-transfer", copy_one)
+        self.assertIn("serializeAccountClipboardText", copy_one)
+        self.assertIn("parseAccountClipboardText", paste)
         self.assertIn("data-account-pool-paste-card", editor)
         self.assertNotIn('editing ? "" : `<button type="button" class="account-pool-paste-card-button"', editor)
         self.assertIn("navigator.clipboard.readText", paste)
-        self.assertIn("VECTO_ACCOUNT_CARD_V1.", paste)
-        self.assertIn("applyAccountCardClipboardToCreateForm", paste)
+        self.assertNotIn("VECTO_ACCOUNT_CARD_V1.", paste)
+        self.assertIn("applyAccountClipboardFields", paste)
         self.assertIn("/duplicate", duplicate)
         self.assertIn("target_platform", duplicate)
         self.assertNotIn("display_name", create_save)
@@ -2088,51 +2108,57 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("LoginUsername", identity)
         self.assertNotIn("显示名称", identity)
         self.assertNotIn("登录账号", identity)
-        self.assertIn("transfer_totp_configured", apply)
+        self.assertIn("fields.login_password", apply)
+        self.assertIn("fields.totp_secret_or_uri", apply)
+        self.assertIn('password.dataset.passwordDirty = "true"', apply)
         self.assertIn("totp_secret_or_uri", create_save)
-        self.assertIn("/card-transfer/apply", edit_save)
-        self.assertIn("accountTransferToken", edit_save)
+        self.assertNotIn("/card-transfer", create_save)
+        self.assertNotIn("/card-transfer", edit_save)
+        self.assertIn("/totp", edit_save)
+        self.assertNotIn("data-account-card-paste-summary", self.source)
 
-    def test_account_pool_clipboard_keeps_secrets_inside_the_encrypted_token(self):
+    def test_account_pool_clipboard_is_only_three_plain_text_fields(self):
+        serialize = self._function_source("serializeAccountClipboardText")
+        parse = self._function_source("parseAccountClipboardText")
         copy_one = self._function_source("copyAccountPoolCardToClipboard")
-        paste = self._function_source("pasteAccountPoolCardFromClipboard")
-        apply = self._function_source("applyAccountCardClipboardToCreateForm")
 
-        self.assertIn("copyTextToClipboard(state.accountCardTransferToken)", copy_one)
-        self.assertIn("VECTO_ACCOUNT_CARD_V1.", paste)
-        self.assertNotIn("JSON.parse", paste)
-        self.assertNotIn("login_password", copy_one)
-        self.assertNotIn("totp_secret_or_uri", copy_one)
-        self.assertNotIn("proxy_id", copy_one)
-        self.assertNotIn("persona_id", copy_one)
-        self.assertIn("normalizeAccountPoolPlatform()", apply)
-        self.assertIn('const prefix = editing ? "accountPoolEdit" : "accountPool"', apply)
-        self.assertIn("`${prefix}Username`", apply)
-        self.assertIn("`${prefix}LoginPassword`", apply)
-        self.assertNotIn("`${prefix}DisplayName`", apply)
-        self.assertNotIn("`${prefix}LoginUsername`", apply)
-        self.assertIn("transfer_totp_configured", apply)
-        self.assertNotIn("state.accountPoolPlatform =", apply)
+        self.assertIn('"账号: "', serialize)
+        self.assertIn('"密码: "', serialize)
+        self.assertIn('"2FA: "', serialize)
+        self.assertNotIn("JSON.stringify", serialize)
+        self.assertNotIn("platform", serialize)
+        self.assertNotIn("proxy", serialize)
+        self.assertNotIn("persona", serialize)
+        self.assertIn("username", parse)
+        self.assertIn("login_password", parse)
+        self.assertIn("totp_secret_or_uri", parse)
+        self.assertIn("copyTextToClipboard(state.accountClipboardText)", copy_one)
+        self.assertIn(
+            'showMsg("socialMsg", "账号、密码和 2FA 已复制到剪贴板", true)',
+            copy_one,
+        )
 
-    def test_account_pool_clipboard_reuses_current_page_token_before_browser_read(self):
+    def test_account_pool_clipboard_reuses_current_page_text_before_browser_read(self):
         copy_one = self._function_source("copyAccountPoolCardToClipboard")
         paste = self._function_source("pasteAccountPoolCardFromClipboard")
         clear_tenant = self._function_source("clearTenantInMemoryState")
 
         self.assertIn(
-            'state.accountCardTransferToken = String(result?.token || "").trim()',
+            "state.accountClipboardText = serializeAccountClipboardText",
             copy_one,
         )
         self.assertIn(
-            'let text = String(state.accountCardTransferToken || "").trim()',
+            'let text = String(state.accountClipboardText || "").trim()',
             paste,
         )
         self.assertIn("if (!text && navigator.clipboard?.readText)", paste)
+        self.assertNotIn("window.prompt", paste)
         self.assertLess(
-            paste.index("state.accountCardTransferToken"),
+            paste.index("state.accountClipboardText"),
             paste.index("navigator.clipboard?.readText"),
         )
-        self.assertIn('state.accountCardTransferToken = "";', clear_tenant)
+        self.assertIn('state.accountClipboardText = "";', clear_tenant)
+        self.assertNotIn("showMsg", paste)
 
     def test_account_card_platform_logo_and_compact_status_copy_have_styles(self):
         self.assertIn(".account-pool-card-platform", self.styles)
