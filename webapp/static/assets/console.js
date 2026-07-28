@@ -24007,6 +24007,20 @@ function renderEditIcon() {
   </svg>`;
 }
 
+function renderLiveBrowserSendIcon() {
+  return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="m4 11.7 15.2-6.1-5.9 13-2.3-5.1L4 11.7Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" />
+    <path d="m11 13.5 3.8-3.8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+  </svg>`;
+}
+
+function renderLiveBrowserEnterIcon() {
+  return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M5 6v7a3 3 0 0 0 3 3h11" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="m15 12 4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>`;
+}
+
 function renderProxyPool() {
   const root = $("proxyPool");
   if (!root) return;
@@ -25056,8 +25070,8 @@ function renderLiveBrowserSession(session) {
               autocomplete="off"
               ${interactionAllowed ? "" : "disabled"}
             />
-            <button type="button" data-live-browser-type="${esc(sessionId)}" title="发送文本" aria-label="发送文本" ${interactionAllowed ? "" : "disabled"}>发送</button>
-            <button type="button" data-live-browser-key="${esc(sessionId)}" data-live-browser-key-value="Enter" title="发送回车" aria-label="发送回车" ${interactionAllowed ? "" : "disabled"}>回车</button>
+            <button type="button" class="live-browser-tool-button" data-live-browser-type="${esc(sessionId)}" title="发送文本" aria-label="发送文本" ${interactionAllowed ? "" : "disabled"}>${renderLiveBrowserSendIcon()}</button>
+            <button type="button" class="live-browser-tool-button" data-live-browser-key="${esc(sessionId)}" data-live-browser-key-value="Enter" title="发送回车" aria-label="发送回车" ${interactionAllowed ? "" : "disabled"}>${renderLiveBrowserEnterIcon()}</button>
           </div>
         </div>
       </div>

@@ -23140,9 +23140,9 @@ body.console-page {
 .console-page .live-browser-manual-input {
   position: absolute;
   z-index: 12;
-  left: 10px;
-  right: 10px;
-  bottom: 10px;
+  left: 16px;
+  right: 16px;
+  bottom: max(20px, env(safe-area-inset-bottom));
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -23217,14 +23217,14 @@ body.console-page {
 }
 
 .console-page .live-browser-manual-input[data-expanded="true"] .live-browser-tools {
-  width: min(520px, calc(100% - 130px));
-  padding: 4px;
+  width: min(390px, calc(100% - 74px));
+  padding: 5px;
   gap: 6px;
   opacity: 1;
   visibility: visible;
-  background: rgb(6 17 18 / 74%);
-  border-color: rgb(120 204 191 / 52%);
-  box-shadow: 0 6px 18px rgb(0 0 0 / 44%);
+  background: rgb(7 25 25 / 94%);
+  border-color: rgb(102 206 191 / 62%);
+  box-shadow: 0 9px 24px rgb(0 0 0 / 48%);
   pointer-events: auto;
   transform: translateX(0);
   transition-delay: 0s;
@@ -23234,13 +23234,13 @@ body.console-page {
   display: block;
   flex: 1 1 0;
   min-width: 0;
-  height: 48px;
-  min-height: 48px;
-  padding: 8px 10px;
-  color: #effcf9;
-  background: rgb(16 31 31 / 88%);
-  border: 1px solid rgb(131 211 198 / 60%);
-  border-radius: 5px;
+  height: 38px;
+  min-height: 38px;
+  padding: 7px 10px;
+  color: #eafff9;
+  background: #102523;
+  border: 1px solid rgb(118 197 185 / 68%);
+  border-radius: 6px;
   font: inherit;
   line-height: 1.35;
   outline: none;
@@ -23249,6 +23249,10 @@ body.console-page {
 .console-page .live-browser-tools input:focus {
   border-color: rgb(172 244 232 / 88%);
   box-shadow: 0 0 0 2px rgb(91 202 185 / 24%);
+}
+
+.console-page .live-browser-tools input::placeholder {
+  color: #86aaa3;
 }
 
 .console-page .live-browser-tools button {
@@ -23267,6 +23271,34 @@ body.console-page {
   font-weight: 700;
 }
 
+.console-page .live-browser-tools .live-browser-tool-button {
+  display: inline-grid;
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
+  place-items: center;
+  border-radius: 6px;
+  line-height: 0;
+  transition: transform 160ms ease, background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.console-page .live-browser-tools .live-browser-tool-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.console-page .live-browser-tools .live-browser-tool-button:hover:not(:disabled),
+.console-page .live-browser-tools .live-browser-tool-button:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgb(0 0 0 / 28%);
+}
+
 .console-page .live-browser-tools [data-live-browser-type] {
   color: #fff;
   background: rgb(20 117 105 / 88%);
@@ -23281,9 +23313,9 @@ body.console-page {
 
 @media (max-width: 760px) {
   .console-page .live-browser-manual-input {
-    left: 7px;
-    right: 7px;
-    bottom: 7px;
+    left: 12px;
+    right: 12px;
+    bottom: max(14px, env(safe-area-inset-bottom));
     gap: 6px;
   }
 
@@ -23303,23 +23335,23 @@ body.console-page {
   }
 
   .console-page .live-browser-manual-input[data-expanded="true"] .live-browser-tools {
-    width: calc(100% - 82px);
+    width: min(300px, calc(100% - 62px));
   }
 
-  .console-page .live-browser-tools input,
-  .console-page .live-browser-tools button {
-    height: 40px;
-    min-height: 40px;
+  .console-page .live-browser-tools input {
+    height: 38px;
+    min-height: 38px;
   }
 
   .console-page .live-browser-tools input {
     font-size: 12px;
   }
 
-  .console-page .live-browser-tools button {
-    width: 54px;
-    min-width: 54px;
-    padding: 0 7px;
+  .console-page .live-browser-tools .live-browser-tool-button {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
   }
 }
 
