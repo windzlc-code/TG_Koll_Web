@@ -2113,7 +2113,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('".persona-compose-toggle > button"', self.console_script)
         self.assertIn('".persona-media-operation-toggle > button"', self.console_script)
         self.assertIn('".automation-capsule-tabs > button"', self.console_script)
-        self.assertIn('".mobile-task-dock > button"', self.console_script)
+        self.assertNotIn('".mobile-task-dock > button"', self.console_script)
         self.assertNotIn('".publish-preview-tabs > button"', self.console_script)
         self.assertNotIn('".persona-dashboard-picker-tabs > button"', self.console_script)
         self.assertNotIn('".persona-dashboard-platform-tabs > button"', self.console_script)
@@ -2144,6 +2144,46 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("animation:", interaction)
         self.assertNotIn("left 180ms cubic-bezier(.2, .72, .2, 1)", interaction)
         self.assertNotIn("scale(", slider)
+
+    def test_mobile_task_dock_keeps_a_persistent_transform_only_indicator(self):
+        renderer = self.console_script[
+            self.console_script.index("function renderMobileTaskDock()"):
+            self.console_script.index("\nfunction isCurrentMobileTaskDockTarget")
+        ]
+        navigation = self.console_script[
+            self.console_script.index("const handleWorkspaceModuleNavigation"):
+            self.console_script.index('\n  $("moduleMenu").addEventListener', self.console_script.index("const handleWorkspaceModuleNavigation"))
+        ]
+        dock_styles = self.styles[
+            self.styles.index("  .mobile-task-dock {\n    position: fixed;"):
+            self.styles.index("\n  .publish-header-row", self.styles.index("  .mobile-task-dock {\n    position: fixed;"))
+        ]
+        self.assertIn('if (!dock.querySelector(".mobile-task-dock-button"))', renderer)
+        self.assertIn("syncMobileTaskDockState(dock);", renderer)
+        self.assertIn("--mobile-task-dock-offset", renderer)
+        self.assertIn(".mobile-task-dock::before", dock_styles)
+        self.assertIn(
+            "transform: translate3d(var(--mobile-task-dock-offset, 0), 0, 0);",
+            dock_styles,
+        )
+        self.assertIn(
+            "transition: transform 180ms cubic-bezier(.2, .72, .2, 1);",
+            dock_styles,
+        )
+        self.assertNotIn("transition: width", dock_styles)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", dock_styles)
+        self.assertIn("if (moduleChanged) setModule(nextModule);", navigation)
+        self.assertIn("state.socialViewRefreshTarget === targetView", self.console_script)
+        self.assertIn("cancelScheduledSocialViewRefresh();", self.console_script)
+        account_refresh = self.console_script[
+            self.console_script.index("async function refreshSocialAccountsOnly"):
+            self.console_script.index("\nfunction updateAccountStatusViews")
+        ]
+        self.assertNotIn("state.socialDataLoadedAt = Date.now();", account_refresh)
+        self.assertIn(
+            'if (window.matchMedia("(max-width: 820px)").matches) renderSocialAccounts();',
+            self.console_script,
+        )
 
     def test_draft_detail_omits_content_type_but_keeps_detail_media(self):
         detail = self.console_script[

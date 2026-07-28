@@ -542,6 +542,9 @@ const state = {
   publishCustomContent: "",
   socialTasksFetch: null,
   socialRefreshFetch: null,
+  socialDataLoadedAt: 0,
+  socialViewRefreshHandle: 0,
+  socialViewRefreshTarget: "",
   liveBrowserSessionsFetch: null,
   socialCancelAllPending: false,
   socialAccounts: [],
@@ -761,6 +764,8 @@ function clearTenantInMemoryState() {
   state.automationPlanDrafts = {};
   state.automationPlanEditorPayload = {};
   state.socialRefreshFetch = null;
+  state.socialDataLoadedAt = 0;
+  cancelScheduledSocialViewRefresh();
   state.liveBrowserSessionsFetch = null;
   state.socialCancelAllPending = false;
   state.socialAccounts = [];
@@ -5899,7 +5904,8 @@ function setView(view) {
   else window.PersonaDashboard?.unmount?.();
   if (view === "tasks") loadTasks();
   if (view === "billing") loadBilling().catch(() => {});
-  if (view === "social" || view === "accounts") loadSocial();
+  if (view === "social" || view === "accounts") scheduleSocialViewRefresh(view);
+  else cancelScheduledSocialViewRefresh();
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
   setMobileNavOpen(false);
@@ -6221,18 +6227,49 @@ function renderMobileTaskDock() {
     { id: "persona_dashboard", label: "首页", view: "persona_dashboard" },
     ...modules.filter((item) => item.id !== "browser_list"),
   ];
-  dock.innerHTML = mobileDockItems.map((item) => {
-    const itemPanel = String(item.panel || "");
-    const itemPanels = Array.isArray(item.panels) ? item.panels.map((panel) => String(panel || "")) : [];
-    const isActive = item.view
-      ? (item.view === state.view && (itemPanel ? itemPanel === state.accountBrowserPanel : (!itemPanels.length || itemPanels.includes(state.accountBrowserPanel))))
-      : (state.view === "workspace" && item.id === state.activeModule);
-    return `
-      <button type="button" class="mobile-task-dock-button ${isActive ? "is-active" : ""}" ${moduleNavigationAttributes(item)} aria-label="${esc(item.label)}" ${isActive ? 'aria-current="page"' : ""}>
-        ${renderMobileTaskIcon(item.id)}
-        <span>${esc(item.label === "账号管理" ? "账号池" : item.label.replace("列表", ""))}</span>
-      </button>`;
-  }).join("");
+  if (!dock.querySelector(".mobile-task-dock-button")) {
+    dock.innerHTML = mobileDockItems.map((item) => `
+        <button type="button" class="mobile-task-dock-button" ${moduleNavigationAttributes(item)} aria-label="${esc(item.label)}">
+          ${renderMobileTaskIcon(item.id)}
+          <span>${esc(item.label === "账号管理" ? "账号池" : item.label.replace("列表", ""))}</span>
+        </button>`).join("");
+  }
+  syncMobileTaskDockState(dock);
+}
+
+function syncMobileTaskDockState(dock = $("mobileTaskDock")) {
+  if (!dock) return;
+  let activeIndex = -1;
+  const buttons = Array.from(dock.querySelectorAll(".mobile-task-dock-button"));
+  buttons.forEach((button, index) => {
+    const moduleId = String(button.dataset.module || "");
+    const nextView = String(button.dataset.workspaceView || "");
+    const itemPanel = String(button.dataset.workspacePanel || "");
+    const itemId = String(button.dataset.workspaceModule || "");
+    const item = modules.find((entry) => String(entry.id || "") === itemId);
+    const itemPanels = Array.isArray(item?.panels) ? item.panels.map((panel) => String(panel || "")) : [];
+    const isActive = moduleId
+      ? state.view === "workspace" && moduleId === state.activeModule
+      : nextView === state.view && (
+        itemPanel
+          ? itemPanel === state.accountBrowserPanel
+          : (!itemPanels.length || itemPanels.includes(state.accountBrowserPanel))
+      );
+    button.classList.toggle("is-active", isActive);
+    if (isActive) {
+      activeIndex = index;
+      button.setAttribute("aria-current", "page");
+    } else {
+      button.removeAttribute("aria-current");
+    }
+  });
+  dock.classList.toggle("has-active-item", activeIndex >= 0);
+  if (activeIndex >= 0) {
+    dock.style.setProperty("--mobile-task-dock-offset", `calc(${activeIndex * 100}% + ${activeIndex * 3}px)`);
+  }
+  if (!dock.classList.contains("is-motion-ready")) {
+    window.requestAnimationFrame(() => dock.classList.add("is-motion-ready"));
+  }
 }
 
 function isCurrentMobileTaskDockTarget(button) {
@@ -6296,6 +6333,7 @@ function syncModuleMenuState() {
       else button.removeAttribute("aria-current");
     }
   });
+  syncMobileTaskDockState();
 }
 
 function setMenuClickHighlight(button, leaveScope = button) {
@@ -21436,6 +21474,7 @@ async function fetchSocialDataShared({ force = false } = {}) {
       ? proxiesData.proxies
       : (Array.isArray(overview.proxies) ? overview.proxies : tenantArrayFallback(null, state.socialProxies));
     state.socialTasks = Array.isArray(tasksData.tasks) ? tasksData.tasks : [];
+    state.socialDataLoadedAt = Date.now();
     saveSocialAccountsSnapshot();
     return overview;
   }).finally(() => {
@@ -21459,6 +21498,40 @@ async function loadSocial({ render = true, force = false } = {}) {
   }
   syncAccountStatusAutoRefresh();
   return overview;
+}
+
+function cancelScheduledSocialViewRefresh() {
+  const handle = state.socialViewRefreshHandle;
+  if (handle) {
+    if (typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(handle);
+    else window.clearTimeout(handle);
+  }
+  state.socialViewRefreshHandle = 0;
+  state.socialViewRefreshTarget = "";
+}
+
+function scheduleSocialViewRefresh(view = state.view) {
+  const targetView = ["social", "accounts"].includes(view) ? view : "";
+  if (!targetView) return;
+  if (state.socialViewRefreshHandle) {
+    if (state.socialViewRefreshTarget === targetView) return;
+    cancelScheduledSocialViewRefresh();
+  }
+  if (state.socialDataLoadedAt && Date.now() - state.socialDataLoadedAt < 15000) return;
+  const refresh = () => {
+    state.socialViewRefreshHandle = 0;
+    state.socialViewRefreshTarget = "";
+    if (state.view !== targetView) return;
+    loadSocial({ render: false }).then(() => {
+      if (state.view !== targetView) return;
+      renderSocialAccounts();
+      if (targetView === "social") renderSocialTasks();
+    }).catch(() => {});
+  };
+  state.socialViewRefreshTarget = targetView;
+  state.socialViewRefreshHandle = typeof window.requestIdleCallback === "function"
+    ? window.requestIdleCallback(refresh, { timeout: 1200 })
+    : window.setTimeout(refresh, 240);
 }
 
 async function refreshSocialAccountsOnly({ force = false, includeOverview = false } = {}) {
@@ -25952,7 +26025,6 @@ const SEGMENTED_BACKGROUND_BUTTON_SELECTOR = [
   ".persona-media-operation-toggle > button",
   ".persona-draft-view-toggle > button",
   ".persona-compose-toggle > button",
-  ".mobile-task-dock > button",
 ].join(",");
 const segmentedBackgroundSlides = new WeakMap();
 const segmentedBackgroundCommits = new WeakMap();
@@ -26176,11 +26248,14 @@ function bindEvents() {
       if (button.dataset.module !== state.activeModule && state.view === "workspace" && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
       if (button.dataset.module !== state.activeModule && state.view === "workspace" && !(await confirmLeaveTransientWorkspaceState())) return;
       const commitModule = () => {
+        const nextModule = button.dataset.module;
+        const moduleChanged = nextModule !== state.activeModule;
         if (state.view !== "workspace") {
           state.workspaceMenuOpen = true;
           setView("workspace");
         }
-        setModule(button.dataset.module);
+        if (moduleChanged) setModule(nextModule);
+        else syncModuleMenuState();
       };
       let committed = false;
       if (dockButton) {
@@ -28408,6 +28483,7 @@ async function init() {
   }
   const tasksReady = loadTasks().catch(() => {});
   const socialReady = loadSocial({ render: false }).then(() => {
+    if (window.matchMedia("(max-width: 820px)").matches) renderSocialAccounts();
     updateAccountStatusViews();
     if (!hasPersonaBootstrap || isPersonaWorkspaceModule() || state.activeModule === "publishing" || state.activeModule === "automation") scheduleWorkspaceRender(false);
   }).catch(() => {});

@@ -21983,6 +21983,38 @@ body.console-page {
     background: color-mix(in srgb, var(--panel-solid) 94%, transparent);
     box-shadow: 0 8px 22px rgba(7, 17, 18, 0.16);
     backdrop-filter: blur(14px);
+    isolation: isolate;
+  }
+
+  .mobile-task-dock::before {
+    content: "";
+    position: relative;
+    z-index: 0;
+    grid-row: 1;
+    grid-column: 1;
+    width: 100%;
+    height: 46px;
+    pointer-events: none;
+    border: 1px solid #174f49;
+    border-radius: 7px;
+    background: #0b3532;
+    opacity: 0;
+    transform: translate3d(var(--mobile-task-dock-offset, 0), 0, 0);
+    will-change: transform;
+  }
+
+  .mobile-task-dock.has-active-item::before {
+    opacity: 1;
+  }
+
+  .mobile-task-dock.is-motion-ready::before {
+    transition: transform 180ms cubic-bezier(.2, .72, .2, 1);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mobile-task-dock.is-motion-ready::before {
+      transition: none;
+    }
   }
 
   /* Compact the shared mobile page bar so the workspace content starts sooner. */
@@ -22013,6 +22045,9 @@ body.console-page {
   }
 
   .mobile-task-dock-button {
+    position: relative;
+    z-index: 1;
+    grid-row: 1;
     display: grid;
     grid-template-rows: 22px auto;
     place-items: center;
@@ -22026,6 +22061,12 @@ body.console-page {
     background: transparent;
     box-shadow: none;
   }
+
+  .mobile-task-dock-button:nth-of-type(1) { grid-column: 1; }
+  .mobile-task-dock-button:nth-of-type(2) { grid-column: 2; }
+  .mobile-task-dock-button:nth-of-type(3) { grid-column: 3; }
+  .mobile-task-dock-button:nth-of-type(4) { grid-column: 4; }
+  .mobile-task-dock-button:nth-of-type(5) { grid-column: 5; }
 
   .console-page .mobile-page-toolbar > .mobile-nav-toggle[hidden] {
     display: none;
@@ -22054,8 +22095,8 @@ body.console-page {
 
   .mobile-task-dock-button.is-active {
     color: #ffffff;
-    border-color: #174f49;
-    background: #0b3532;
+    border-color: transparent;
+    background: transparent;
   }
 
   .publish-header-row {
