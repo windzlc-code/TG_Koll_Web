@@ -6123,14 +6123,19 @@ async function confirmDangerAction(message, { title = "确认删除", confirmTex
   }));
 }
 
+let consoleScrollPreserveDepth = 0;
+
 function withConsoleScrollPreserved(callback) {
+  if (consoleScrollPreserveDepth > 0) return callback();
   const snapshot = snapshotConsoleScrollState();
   const layoutLocks = captureConsoleLayoutLocks();
+  consoleScrollPreserveDepth += 1;
   try {
     return callback();
   } finally {
     restoreConsoleScrollState(snapshot);
     releaseConsoleLayoutLocks(layoutLocks);
+    consoleScrollPreserveDepth = Math.max(0, consoleScrollPreserveDepth - 1);
   }
 }
 
@@ -6281,6 +6286,7 @@ function scrollConsolePageToTop() {
 }
 
 let mobileTaskDockPageAnimation = null;
+let mobileTaskDockToolbarAnimation = null;
 
 function mobileTaskDockNavigationDirection(button) {
   const dock = button?.closest?.(".mobile-task-dock");
@@ -6299,25 +6305,35 @@ function animateMobileTaskDockPage(direction) {
     || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
   ) return;
   const page = document.querySelector(".console-main > .view.is-active");
+  const toolbar = $("mobilePageToolbar");
   if (!page?.animate) return;
   mobileTaskDockPageAnimation?.cancel();
+  mobileTaskDockToolbarAnimation?.cancel();
   const distance = Math.min(56, Math.max(32, Math.round(window.innerWidth * 0.12)));
-  const animation = page.animate(
-    [
-      { left: `${direction * distance}px` },
-      { left: "0px" },
-    ],
-    {
-      duration: 180,
-      easing: "cubic-bezier(.2, .72, .2, 1)",
-    },
-  );
+  const keyframes = [
+    { left: `${direction * distance}px` },
+    { left: "0px" },
+  ];
+  const timing = {
+    duration: 180,
+    easing: "cubic-bezier(.2, .72, .2, 1)",
+  };
+  const animation = page.animate(keyframes, timing);
+  const toolbarAnimation = toolbar?.animate ? toolbar.animate(keyframes, timing) : null;
   mobileTaskDockPageAnimation = animation;
+  mobileTaskDockToolbarAnimation = toolbarAnimation;
   animation.finished
     .catch(() => {})
     .finally(() => {
       if (mobileTaskDockPageAnimation === animation) {
         mobileTaskDockPageAnimation = null;
+      }
+    });
+  toolbarAnimation?.finished
+    .catch(() => {})
+    .finally(() => {
+      if (mobileTaskDockToolbarAnimation === toolbarAnimation) {
+        mobileTaskDockToolbarAnimation = null;
       }
     });
 }
@@ -6398,7 +6414,7 @@ function setModule(moduleId) {
     state.personaGroup = personaModuleDefaultGroup(moduleId);
     setPersonaGroupStep(state.personaGroup, state.personaPanels[state.personaGroup] || personaGroups[state.personaGroup]?.defaultStep || "", selectedPersonaProfile());
   }
-  renderWorkspace();
+  renderWorkspace(false);
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
   syncLiveBrowserAutoRefresh();

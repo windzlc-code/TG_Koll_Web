@@ -7549,7 +7549,7 @@ body.persona-touch-dragging .persona-list-card:active {
     padding: 6px 4px;
     box-sizing: border-box;
     border-bottom: 1px solid var(--line);
-    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    background: color-mix(in srgb, var(--bg) 94%, transparent);
     backdrop-filter: blur(12px);
   }
 
