@@ -16580,7 +16580,7 @@ button.proxy-market-link {
   grid-template-columns: 22px auto auto minmax(0, 1fr) auto;
   grid-template-areas:
     "check platform copy status status"
-    ". username username username totp";
+    "username username username username totp";
   align-items: center;
   gap: 4px 7px;
   grid-column: 1;
@@ -16599,7 +16599,7 @@ button.proxy-market-link {
 
 .account-pool-card:not(.persona-account-pool-card) .account-pool-card-copy strong {
   grid-area: username;
-  margin-left: 16px;
+  margin-left: 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
