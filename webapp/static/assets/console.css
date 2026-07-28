@@ -2330,6 +2330,35 @@ textarea { resize: vertical; }
   white-space: nowrap;
 }
 
+.account-status-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  line-height: 0;
+}
+
+.account-status-icon.is-healthy { color: var(--persona-status-success-ink); }
+.account-status-icon.is-warning { color: var(--persona-status-running-ink); }
+.account-status-icon.is-danger { color: var(--persona-status-error-ink); }
+
+.account-status-icon svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.account-status-label {
+  min-width: 0;
+  white-space: nowrap;
+}
+
 input:focus,
 select:focus,
 textarea:focus {
@@ -16618,6 +16647,11 @@ button.proxy-market-link {
   padding: 2px 6px;
   font-size: 10px;
   line-height: 1.15;
+}
+
+.account-pool-card .account-pool-card-flags .status {
+  align-items: center;
+  gap: 3px;
 }
 
 .account-pool-card .row-actions button {

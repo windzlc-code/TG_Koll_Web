@@ -2667,13 +2667,25 @@ function accountStatusTitle(account = null) {
   return [label, detail].filter(Boolean).join(" · ");
 }
 
+function accountStatusIconTone(status = "") {
+  const tone = statusTone(status);
+  if (tone === "success") return "healthy";
+  if (tone === "error") return "danger";
+  return "warning";
+}
+
+function renderAccountStatusContent(account) {
+  const status = accountDisplayedStatus(account);
+  const iconTone = accountStatusIconTone(status);
+  return `<span class="account-status-icon is-${esc(iconTone)}" aria-hidden="true">${renderPersonaAccountHealthIcon({ tone: iconTone })}</span><span class="account-status-label">${esc(accountLastLoginCheckLabel(account))}</span>`;
+}
+
 function renderAccountStatusChip(account, { emptyLabel = "未选择" } = {}) {
   if (!account) return `<span class="task-status-text is-muted account-status-chip">${esc(emptyLabel)}</span>`;
   const accountId = String(account.id || "");
   const key = accountDisplayedStatus(account);
   const classes = ["task-status-text", `is-${statusTone(key)}`, "account-status-chip"].join(" ");
-  const label = accountLastLoginCheckLabel(account);
-  return `<span class="${esc(classes)}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${esc(label)}</span>`;
+  return `<span class="${esc(classes)}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${renderAccountStatusContent(account)}</span>`;
 }
 
 function renderAccountFieldHead(label, account, options = {}) {
@@ -21504,8 +21516,7 @@ function updateAccountStatusViews() {
     node.className = node.classList.contains("status")
       ? `status ${accountStatusClassNames(status)}`
       : `task-status-text is-${statusTone(status)} account-status-chip`;
-    const label = accountLastLoginCheckLabel(account);
-    node.textContent = label;
+    node.innerHTML = renderAccountStatusContent(account);
     node.title = accountStatusTitle(account);
   });
   ["simpleAccount", "socialAccount", "personaAutoAccount", "personaPublishAccountSelect"].forEach((id) => {
@@ -22011,7 +22022,7 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
         </span>
       </span>
       <span class="account-pool-card-flags">
-        <span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${esc(accountLastLoginCheckLabel(account))}</span>
+        <span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${renderAccountStatusContent(account)}</span>
         ${renderAccountTotpBadge(account)}
       </span>
     </div>
