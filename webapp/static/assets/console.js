@@ -9025,8 +9025,8 @@ function renderBrowserLaunchIcon() {
 
 function renderRequeueIcon() {
   return `<svg class="ui-action-icon ui-requeue-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <path d="M20 7v5h-5"></path>
-    <path d="M19.2 12a7.5 7.5 0 1 1-2.3-5.3L20 9"></path>
+    <path d="M6 21V4"></path>
+    <path d="M6 5c3.1-2 6.2 2 10 0v9c-3.8 2-6.9-2-10 0"></path>
   </svg>`;
 }
 
@@ -11676,7 +11676,14 @@ function renderPublishHistorySelectionList(persona = selectedPersona()) {
   if (!rows.length) return `<div class="empty-state">当前人设还没有任务历史。</div>`;
   const activeId = String(state.publishHistoryPreviewId || rows[0]?.id || "");
   const personaId = String(persona?.id || "");
-  const stream = mobileTweetStreamInfo(rows, `publish-history:${personaId}`, 10);
+  const stream = {
+    key: `publish-history:${personaId}`,
+    items: rows,
+    loaded: rows.length,
+    totalItems: rows.length,
+    hasMore: false,
+    mobile: false,
+  };
   return `
     <div class="publish-post-list">
       ${stream.items.map((record, index) => {
@@ -11706,6 +11713,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona()) {
               </span>
               ${renderPublishHistoryMetrics(record, "publish-history-card-metrics")}
             </div>
+            ${mediaItems.length ? `<div class="publish-post-card-media publish-history-card-media">${renderPublishPreviewMedia(mediaItems)}</div>` : ""}
           </article>`;
       }).join("")}
     </div>

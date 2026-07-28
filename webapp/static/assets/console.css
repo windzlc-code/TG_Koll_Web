@@ -22335,20 +22335,23 @@ body.console-page {
     padding: 5px 7px;
   }
 
-  .publish-history-card .publish-post-card-meta {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .publish-history-card .publish-post-card-head {
+    align-items: flex-start;
+    flex-wrap: wrap;
   }
 
-  .publish-history-card .publish-post-card-snippet {
-    display: -webkit-box;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: normal;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
+  .publish-history-card :is(
+    .publish-post-card-head strong,
+    .publish-post-card-meta,
+    .publish-post-card-snippet
+  ) {
+    display: block;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
   }
 
   .persona-draft-card p {
