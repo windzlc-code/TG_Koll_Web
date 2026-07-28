@@ -60,6 +60,7 @@ SOCIAL_TASK_TYPES = {
     "open_login",
     "browse_feed",
     "browse_profile",
+    "instagram_warmup",
     "threads_warmup",
     "threads_auto_reply",
     "publish_post",
@@ -68,6 +69,11 @@ SOCIAL_TASK_TYPES = {
     "like_post",
     "share_post",
     "repost_post",
+}
+SOCIAL_TASK_REQUIRED_PLATFORM = {
+    "instagram_warmup": "instagram",
+    "threads_warmup": "threads",
+    "threads_auto_reply": "threads",
 }
 # Plan-only task type.  It is deliberately not a SOCIAL_TASK_TYPE: a normal
 # publish entry is expanded into real publish_post tasks before a worker sees it.
@@ -1296,6 +1302,7 @@ def _automation_plan_conflict_key(task_type: str) -> str:
         return "threads_reply_comment"
     if normalized in {
         AUTOMATION_PLAN_NORMAL_PUBLISH_TASK,
+        "instagram_warmup",
         "threads_reply_comment",
         "threads_reply_hot",
         "threads_warmup",
@@ -1335,6 +1342,7 @@ def _validate_automation_plan_payload(
             "publish_post",
             "browse_feed",
             "browse_profile",
+            "instagram_warmup",
             "comment_post",
             "reply_comment",
             "like_post",
@@ -3493,6 +3501,7 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
     fields: list[dict[str, str]] = []
     task_label = {
         "threads_warmup": "养号",
+        "instagram_warmup": "养号",
         "threads_auto_reply": "自动回复",
         "publish_post": "发布内容",
         "browse_feed": "浏览首页",
@@ -3506,7 +3515,7 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
         "check_login": "登录检测",
     }.get(task_type, "自动化任务")
 
-    if task_type == "threads_warmup":
+    if task_type in {"threads_warmup", "instagram_warmup"}:
         browse_limit = _live_browser_summary_int(payload, "browse_limit", "scroll_times")
         like_limit = _live_browser_summary_int(payload, "like_limit")
         max_comments = _live_browser_summary_int(payload, "max_comments")
@@ -3569,7 +3578,7 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
         detail_parts.extend(f"{field['label']} {field['value']}" for field in fields)
     detail = " · ".join(part for part in detail_parts if part)
 
-    if task_type == "threads_warmup":
+    if task_type in {"threads_warmup", "instagram_warmup"}:
         short_strategy = {
             "browse_only": "只浏览",
             "like_comment": "点赞留言",
@@ -5541,8 +5550,15 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
             and task_type not in {"check_login", "open_login"}
         ):
             raise HTTPException(status_code=409, detail="平台账号已被封禁，只能重新检测或打开登录处理。")
-        if str(account["platform"] or "").strip().lower() != platform:
+        account_platform = str(account["platform"] or "").strip().lower()
+        if account_platform != platform:
             raise HTTPException(status_code=400, detail="任务平台与执行账号平台不一致")
+        required_platform = SOCIAL_TASK_REQUIRED_PLATFORM.get(task_type)
+        if required_platform and account_platform != required_platform:
+            raise HTTPException(
+                status_code=400,
+                detail=f"任务类型 {task_type} 仅支持 {required_platform} 账号",
+            )
         proxy_id = str(account["proxy_id"] or "").strip()
         if proxy_id:
             proxy = conn.execute(
@@ -5652,7 +5668,13 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
             saved_username = str(account["login_username"] or "").strip() if "login_username" in account.keys() else ""
             task_payload["login_username"] = str(task_payload.get("login_username") or saved_username or account["username"] or "").strip()
         task_payload, runtime_secrets = _extract_runtime_secrets(task_payload)
-        if platform == "threads" and task_type in {"threads_warmup", "threads_auto_reply"}:
+        if (
+            platform == "threads"
+            and task_type in {"threads_warmup", "threads_auto_reply"}
+        ) or (
+            platform == "instagram"
+            and task_type == "instagram_warmup"
+        ):
             task_payload = _enrich_threads_task_payload(persona_id, task_type, task_payload)
         if task_type == "open_login":
             active_login_rows = conn.execute(
@@ -8610,6 +8632,7 @@ def _automation_action_label(task_type: str) -> str:
         "repost_post": "网页自动化转发",
         "browse_feed": "网页自动化浏览首页",
         "browse_profile": "网页自动化浏览主页",
+        "instagram_warmup": "Instagram 网页自动化养号",
         "threads_warmup": "Threads 网页自动化养号",
         "threads_auto_reply": "Threads 网页自动化按人设自动回复",
         "check_login": "网页自动化登录检查",
@@ -8830,7 +8853,7 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
         if handle:
             next_payload.setdefault("threads_handle", handle)
         next_payload.setdefault("reply_templates", _collect_persona_reply_templates(archive))
-    if task_type == "threads_warmup":
+    if task_type in {"threads_warmup", "instagram_warmup"}:
         strategy_id = str(next_payload.get("strategy_id") or "tg_default")
         next_payload.setdefault("strategy_id", strategy_id)
         if strategy_id == "browse_only":

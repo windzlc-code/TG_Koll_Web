@@ -46,16 +46,23 @@ class SocialTaskLifecycleIsolationTests(unittest.TestCase):
             )
             return int(cursor.lastrowid)
 
-    def _insert_account(self, account_id: str, user_id: int, *, platform: str = "threads") -> None:
+    def _insert_account(
+        self,
+        account_id: str,
+        user_id: int,
+        *,
+        platform: str = "threads",
+        persona_id: str = "",
+    ) -> None:
         with db() as conn:
             conn.execute(
                 """
                 INSERT INTO social_accounts(
                   id, user_id, persona_id, platform, username, display_name,
                   profile_dir, status, created_at, updated_at
-                ) VALUES (?, ?, '', ?, ?, '', ?, 'ready', 1, 1)
+                ) VALUES (?, ?, ?, ?, ?, '', ?, 'ready', 1, 1)
                 """,
-                (account_id, user_id, platform, account_id, f"profiles/{account_id}"),
+                (account_id, user_id, persona_id, platform, account_id, f"profiles/{account_id}"),
             )
 
     def _insert_task(
@@ -80,7 +87,16 @@ class SocialTaskLifecycleIsolationTests(unittest.TestCase):
 
     def test_new_open_login_replaces_old_manual_session(self):
         owner_id = self._insert_user("login-replacement")
-        self._insert_account("login-account", owner_id)
+        persona_id = "login-replacement-persona"
+        with db() as conn:
+            conn.execute(
+                """
+                INSERT INTO persona_owners(archive_id, user_id, created_at, updated_at)
+                VALUES (?, ?, 1, 1)
+                """,
+                (persona_id, owner_id),
+            )
+        self._insert_account("login-account", owner_id, persona_id=persona_id)
         self._insert_task(
             "old-login",
             "login-account",

@@ -1255,11 +1255,6 @@
   border-color: #c4d6e4;
 }
 
-:root[data-theme="light"] .site-account-billing-card {
-  background: var(--public-cool-muted);
-  border-color: var(--public-line);
-}
-
 :root[data-theme="light"] .site-account-action-row button {
   color: var(--public-cool-dark);
   background: var(--public-cool-soft);
@@ -1550,10 +1545,6 @@
 :root[data-theme="light"] .site-account-popover {
   border-color: var(--public-cool-line);
   box-shadow: 0 18px 46px rgb(41 55 75 / 16%);
-}
-
-:root[data-theme="light"] .site-account-billing-card {
-  box-shadow: inset 3px 0 0 var(--public-cool-line);
 }
 
 :root[data-theme="light"] .site-account-profile-field + .site-account-profile-field {

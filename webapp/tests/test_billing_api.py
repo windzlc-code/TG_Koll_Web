@@ -574,7 +574,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         self.assertIn('id="pricingSubscription"', pricing.text)
         self.assertIn('/assets/opc/pricing.js', pricing.text)
         self.assertEqual(console.status_code, 200, console.text)
-        self.assertIn('href="/pricing.html"', console.text)
+        self.assertIn('id="openBillingPlans"', console.text)
         self.assertNotIn('id="billingCatalog"', console.text)
 
     def test_pricing_uses_online_application_copy_without_offline_payment_form(self):

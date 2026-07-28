@@ -30,12 +30,13 @@ class MatrixPublishFrontendContractTests(unittest.TestCase):
         self.assertNotIn("任务来源", panel)
         self.assertIn('const source = "posts"', state_sync)
 
-    def test_preview_keeps_requested_quantity_editable_and_marks_unavailable_personas(self):
+    def test_preview_keeps_requested_quantity_selectable_and_marks_unavailable_personas(self):
         panel = function_source("renderMatrixPublishPanel", "submitMatrixPublishTask")
         candidates = function_source("matrixPublishCandidatePosts", "matrixPublishAvailabilityRows")
 
-        self.assertIn('id="matrixPublishCount" type="number" min="1" max="20"', panel)
-        self.assertIn("每人本次数量，最多 20 篇", panel)
+        self.assertIn('<select id="matrixPublishCount"', panel)
+        self.assertIn("countOptions.map", panel)
+        self.assertIn("Math.min(matrixPublishCommonLimit(availability), 20)", panel)
         self.assertIn("submitPosts", candidates)
         self.assertIn("availableCount: detail.availablePosts.length", CONSOLE_JS)
         self.assertIn("submitCount: detail.submitPosts.length", CONSOLE_JS)

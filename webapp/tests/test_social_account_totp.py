@@ -140,8 +140,18 @@ class SocialAccountTotpApiTests(unittest.TestCase):
         return customer, user_id
 
     def _create_account(self, owner_user_id: int, username: str) -> dict:
+        persona_id = f"{username}-persona"
+        with sqlite3.connect(os.environ["APP_DB_PATH"]) as conn:
+            conn.execute(
+                """
+                INSERT INTO persona_owners(archive_id, user_id, created_at, updated_at)
+                VALUES (?, ?, 1, 1)
+                """,
+                (persona_id, owner_user_id),
+            )
         return social_automation_api.create_social_account(
             social_automation_api.SocialAccountPayload(
+                persona_id=persona_id,
                 platform="threads",
                 username=username,
                 login_username=f"{username}@example.com",

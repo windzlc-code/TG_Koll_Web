@@ -1061,9 +1061,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("display: none;", task_summary)
         self.assertIn("display: grid;", mobile_summary)
         self.assertIn("position: absolute;", mobile_summary)
-        self.assertIn("top: 0;", mobile_summary)
+        self.assertIn("top: calc(50% - 20px);", mobile_summary)
         self.assertIn("left: 50%;", mobile_summary)
-        self.assertIn("transform: translate(-50%, -22px);", mobile_summary)
+        self.assertIn("transform: translate(-50%, -50%);", mobile_summary)
         self.assertIn("grid-template-columns: repeat(2, max-content);", mobile_summary)
         self.assertIn("justify-content: center;", mobile_summary)
         self.assertIn("align-items: center;", mobile_status)
@@ -1177,7 +1177,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         message = self._css_block(".toast-message {")
         message_text = self._css_block(".toast-message-text {")
         status_icon = self._css_block(".toast-message-status-icon {")
-        slide = self._css_block("@keyframes toastSlideDown")
+        slide = self._css_block("@keyframes toastSlideDownIn")
+        exit_slide = self._css_block("@keyframes toastSlideUpOut")
         metadata = self._section("function applyToastMeta", "function applyToastTargetMeta")
         creation = self._function_source("createToast")
 
@@ -1191,7 +1192,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("min-height: 56px;", message)
         self.assertIn("padding: 12px 8px 12px 12px;", message)
         self.assertIn("background: var(--panel-solid);", message)
-        self.assertIn("animation: toastSlideDown 180ms ease-out;", message)
+        self.assertIn("animation: toastSlideDownIn 220ms", message)
         self.assertIn("background: var(--toast-state-color);", status_icon)
         self.assertIn("border-radius: 999px;", status_icon)
         self.assertIn("toast-message-status-icon", creation)
@@ -1200,7 +1201,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("max-height: 2.8em;", message_text)
         self.assertIn("overflow: hidden;", message_text)
         self.assertIn("font-weight: 700;", message_text)
-        self.assertIn("transform: translateY(-18px);", slide)
+        self.assertIn("transform: translateY(-24px);", slide)
+        self.assertIn("transform: translateY(-24px);", exit_slide)
 
     def test_all_toasts_capture_a_clickable_destination_and_open_the_exact_surface(self):
         target = self._section("function currentToastTarget", "function toastTargetForKind")
@@ -1826,9 +1828,16 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         navigation = self._section("function bindMobileNavigation", "\nfunction setPersonaMobileSidebarOpen")
         self.assertIn("const showBrowserBack", toolbar)
         self.assertIn("renderMobileNavToggleIcon(showBrowserBack)", toolbar)
-        self.assertIn('showBrowserBack ? "\\u8fd4\\u56de\\u8d26\\u53f7\\u7ba1\\u7406"', toolbar)
+        self.assertIn("const browserBackLabel = liveBrowserReturnLabel();", toolbar)
+        self.assertIn("showBrowserBack ? browserBackLabel", toolbar)
         self.assertIn('state.accountBrowserPanel === "browsers"', navigation)
-        self.assertIn('setAccountBrowserPanel("accounts")', navigation)
+        self.assertIn("returnFromLiveBrowserTaskView();", navigation)
+        live_browser_navigation = self._section("function captureLiveBrowserReturnTarget", "window.VectoConsoleNavigation")
+        self.assertIn('view: "tasks"', live_browser_navigation)
+        self.assertIn("taskQueueRegularPage", live_browser_navigation)
+        self.assertIn("taskQueuePersonaPage", live_browser_navigation)
+        self.assertIn("function returnFromLiveBrowserTaskView()", live_browser_navigation)
+        self.assertIn("state.liveBrowserReturnTarget = captureLiveBrowserReturnTarget();", live_browser_navigation)
 
     def test_publish_toast_lane_rollover_does_not_merge_cancelled_batch(self):
         lane_key = self._function_source("socialTaskToastLaneKey")
@@ -1910,14 +1919,14 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             frame_markup.index('data-live-browser-manual-input'),
         )
         self.assertIn("position: absolute;", overlay)
-        self.assertIn("left: 10px;", overlay)
-        self.assertIn("right: 10px;", overlay)
+        self.assertIn("left: 16px;", overlay)
+        self.assertIn("right: 16px;", overlay)
         self.assertIn("pointer-events: none;", overlay)
         self.assertIn("width: 0;", tools)
         self.assertIn("visibility: hidden;", tools)
         self.assertIn("transition: width 240ms ease", tools)
         self.assertIn('data-expanded="true"', self.styles)
-        self.assertIn("width: min(520px, calc(100% - 130px));", self.styles)
+        self.assertIn("width: min(390px, calc(100% - 74px));", self.styles)
         self.assertIn("display: inline-flex;", toggle)
         self.assertIn("min-height: 44px;", toggle)
         self.assertIn(".console-page .live-browser-tools input {", self.styles)
@@ -2022,6 +2031,107 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
+    def test_instagram_publish_without_media_opens_resolution_modal_before_submit(self):
+        submit_publish = f"async {self._function_source('submitPublishContentTasks')}"
+        modal_source = self._function_source("requestInstagramPublishMediaResolution")
+        self.assertIn('modalKey: "instagram-media-required"', modal_source)
+        self.assertIn('cancelText: "暂不处理"', modal_source)
+        self.assertIn('confirmText: "跳转生成页面"', modal_source)
+        self.assertNotIn("contentHtml", modal_source)
+        self.assertIn("openInstagramMediaGenerationPage", modal_source)
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const requests = [];
+            const resolutions = [];
+            let capacityChecks = 0;
+            let actionLocks = 0;
+            const state = {{ activeModule: "publishing" }};
+            function selectedPersona() {{ return {{ id: "persona-1" }}; }}
+            function normalizePublishContentSource() {{ return "posts"; }}
+            function publishAccountForPersona() {{
+              return {{ id: "account-instagram", platform: "instagram", username: "publisher" }};
+            }}
+            async function promptPersonaAccountBinding() {{}}
+            function canSubmitPublishWithAccount() {{ return true; }}
+            function publishAccountBlockMessage() {{ return ""; }}
+            function publishSourceRows() {{ return [{{ id: "post-no-media", content: "pure text", media_items: [] }}]; }}
+            function syncPublishSelectedPostIds() {{ return ["post-no-media"]; }}
+            function publishContentSourceLabel() {{ return "草稿"; }}
+            async function ensureDailyPublishCapacity() {{ capacityChecks += 1; return true; }}
+            function socialTaskToastLaneKey() {{ return "batch-toast"; }}
+            function isActionLocked() {{ return false; }}
+            function activeSocialTaskFor() {{ return null; }}
+            function setActionLocked() {{ actionLocks += 1; }}
+            async function uploadAutomationMedia() {{ return []; }}
+            function filesFromInput() {{ return []; }}
+            function personaPublishPostMediaItems() {{ return []; }}
+            async function requestInstagramPublishMediaResolution(options) {{
+              resolutions.push(options);
+              return true;
+            }}
+            function showMsg() {{}}
+            function renderSimpleFlowModule() {{}}
+            async function api(url, options) {{
+              requests.push({{ url, options }});
+              return {{}};
+            }}
+            {submit_publish}
+
+            (async () => {{
+              const persona = {{ id: "persona-1" }};
+              const result = await submitPublishContentTasks("account-instagram", persona);
+              assert.equal(result, null);
+              assert.equal(requests.length, 0);
+              assert.equal(resolutions.length, 1);
+              assert.equal(capacityChecks, 0);
+              assert.equal(actionLocks, 0);
+              assert.equal(resolutions[0].persona, persona);
+              assert.equal(resolutions[0].source, "posts");
+              assert.equal(resolutions[0].post.id, "post-no-media");
+            }})().catch((error) => {{
+              console.error(error);
+              process.exitCode = 1;
+            }});
+            """
+        )
+        self._run_node(harness)
+
+    def test_instagram_media_resolution_reuses_existing_generation_page(self):
+        open_editor = f"async {self._function_source('openInstagramMediaGenerationPage')}"
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const calls = [];
+            const form = {{
+              generate: {{ composeMode: "tweet" }},
+              media: {{ contentMode: "", operationMode: "" }},
+            }};
+            function selectedPersona() {{ return null; }}
+            function setSelectedPersonaId(value) {{ calls.push(["persona", value]); }}
+            function setPersonaPostSource(value) {{ calls.push(["source", value]); }}
+            function setSelectedPersonaPostId(value) {{ calls.push(["post", value]); }}
+            function personaFormState() {{ return form; }}
+            function setWorkspaceModule(value) {{ calls.push(["module", value]); }}
+            function openPersonaDraftEditor(value) {{ calls.push(["editor", value]); }}
+            {open_editor}
+
+            (async () => {{
+              const persona = {{ id: "persona-1" }};
+              const post = {{ id: "post-1" }};
+              assert.equal(await openInstagramMediaGenerationPage({{ persona, source: "posts", post }}), true);
+              assert.equal(form.generate.composeMode, "tweet_media");
+              assert.equal(form.media.contentMode, "draft");
+              assert.equal(form.media.operationMode, "generate");
+              assert.deepEqual(calls.slice(-2), [["module", "tweet_generation"], ["editor", "post-1"]]);
+            }})().catch((error) => {{
+              console.error(error);
+              process.exitCode = 1;
+            }});
+            """
+        )
+        self._run_node(harness)
+
     def test_live_browser_action_menu_closes_on_outside_and_guards_iframe(self):
         close_menus = self._function_source("closeLiveBrowserActionMenus")
         bind_events = self._function_source("bindEvents")
@@ -2066,14 +2176,17 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
     def test_account_pool_visible_checkbox_uses_the_multi_select_path(self):
         bind_events = self._function_source("bindEvents")
+        change_events = bind_events[
+            bind_events.index('$("moduleBody").addEventListener("change"'):
+            bind_events.index('$("moduleBody").addEventListener("input"')
+        ]
         account_events = bind_events[
             bind_events.index('if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click"'):
             bind_events.index('if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("keydown"')
         ]
 
-        self.assertIn('const accountCheckTarget = event.target.closest(".account-pool-card-check")', account_events)
-        self.assertIn('accountCheckTarget.querySelector("[data-account-pool-check]")', account_events)
-        self.assertIn("event.preventDefault()", account_events)
+        self.assertIn('event.target?.matches?.("[data-account-pool-check]")', change_events)
+        self.assertIn("toggleAccountPoolAccount(event.target.dataset.accountPoolCheck", change_events)
         self.assertIn(".account-pool-card-check", account_events)
 
     def test_account_pool_does_not_mount_the_removed_persona_picker(self):
@@ -2196,8 +2309,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
         self.assertIn("min-width: 44px", paste_rule)
         self.assertIn("min-height: 44px", paste_rule)
-        self.assertIn("min-width: 44px", copy_rule)
-        self.assertIn("min-height: 44px", copy_rule)
+        self.assertIn("min-width: 28px", copy_rule)
+        self.assertIn("min-height: 28px", copy_rule)
 
     def test_account_proxy_picker_replaces_legacy_edit_checkbox_and_keeps_single_binding(self):
         card = self._section("function renderAccountPoolCard", "function renderAccountPoolCards")

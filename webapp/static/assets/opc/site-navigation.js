@@ -14,6 +14,8 @@
   const DEFAULT_LANGUAGE = document.documentElement.lang === "zh-Hant" ? "zh-Hant" : "zh-Hans";
   let currentAccount = null;
   let currentSessionMode = "guest";
+  let accountProfileLoading = false;
+  let accountProfileLoadPromise = null;
   let logoutPending = false;
   let logoutMessage = "";
   let proxyMarketBadgeRequest = 0;
@@ -62,7 +64,6 @@
       home: "返回首页",
       currentAccount: "当前登录账号",
       accountFallback: "账户",
-      accountStatus: "已登录",
       accountRole: "普通账号",
       accountAdminRole: "管理员",
       accountManagedRole: "管理员代管",
@@ -141,7 +142,6 @@
       home: "返回首頁",
       currentAccount: "目前登入帳號",
       accountFallback: "帳戶",
-      accountStatus: "已登入",
       accountRole: "一般帳號",
       accountAdminRole: "管理員",
       accountManagedRole: "管理員代管",
@@ -554,7 +554,6 @@
             <span data-site-account-role></span>
             <span class="site-account-id-line"><span data-site-copy="accountId"></span><strong data-site-account-id>-</strong></span>
           </span>
-          <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus"></span></span>
           <button class="site-account-close" type="button" aria-label="" title="" data-site-account-close>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
           </button>
@@ -575,12 +574,12 @@
             <span class="site-account-billing-state" data-site-billing-status data-site-copy="billingUnread">尚未读取</span>
           </div>
           <div class="site-account-billing-grid" aria-live="polite">
-            <div class="site-account-billing-card"><span data-site-copy="billingPoints">算力余额</span><strong data-site-billing-points>—</strong></div>
-            <div class="site-account-billing-card"><span data-site-copy="billingSubscription">当前订阅</span><strong data-site-billing-subscription>—</strong></div>
-            <div class="site-account-billing-card"><span data-site-copy="billingImages">图片额度</span><strong data-site-billing-images>—</strong></div>
-            <div class="site-account-billing-card"><span data-site-copy="billingPending">待审批</span><strong data-site-billing-pending>—</strong></div>
-            <div class="site-account-billing-card"><span data-site-copy="publishToday">今日任务</span><strong data-site-publish-used>—</strong></div>
-            <div class="site-account-billing-card"><span data-site-copy="publishRemaining">剩余额度</span><strong data-site-publish-remaining>—</strong></div>
+            <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 2 3 14h7l-1 8 10-12h-7z"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="billingPoints">算力余额</span><strong data-site-billing-points>—</strong></span></div>
+            <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M7 14h4"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="billingSubscription">当前订阅</span><strong data-site-billing-subscription>—</strong></span></div>
+            <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.2"/><path d="m5.5 17 4-4 3 3 2-2 4 3"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="billingImages">图片额度</span><strong data-site-billing-images>—</strong></span></div>
+            <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="billingPending">待审批</span><strong data-site-billing-pending>—</strong></span></div>
+            <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="publishToday">今日任务</span><strong data-site-publish-used>—</strong></span></div>
+            <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 2v4M16 2v4M4 9h16M12 13v3l2 1"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="publishRemaining">剩余额度</span><strong data-site-publish-remaining>—</strong></span></div>
           </div>
           <div class="site-account-action-row">
             <button type="button" data-site-open-billing data-site-copy="billingView"></button>
@@ -951,6 +950,7 @@
 
   function syncAccount() {
     const labels = copy[currentLanguage()];
+    const identityLoading = accountProfileLoading && !currentAccount;
     const username = String(currentAccount?.full_name || currentAccount?.display_name || currentAccount?.username || "").trim() || labels.accountFallback;
     const signature = String(currentAccount?.profile_signature || currentAccount?.profileSignature || "").trim();
     const tagText = String(currentAccount?.profile_tags || currentAccount?.profileTags || "").trim();
@@ -960,22 +960,25 @@
     document.querySelectorAll("[data-site-account-name]").forEach((node) => node.textContent = username);
     document.querySelectorAll("[data-site-account-role]").forEach((node) => node.textContent = accountRoleLabel(currentAccount, labels));
     document.querySelectorAll("[data-site-account-id]").forEach((node) => {
-      node.textContent = currentAccount?.id ? `#${currentAccount.id}` : "-";
+      node.textContent = currentAccount?.id ? `#${currentAccount.id}` : (identityLoading ? "…" : "-");
+    });
+    document.querySelectorAll("[data-site-account-menu]").forEach((node) => {
+      node.setAttribute("aria-busy", identityLoading ? "true" : "false");
     });
     document.querySelectorAll("[data-site-account-avatar]").forEach((node) => {
       renderAccountAvatar(node, node.classList.contains("site-user-avatar") ? "" : "");
     });
     document.querySelectorAll("[data-site-account-signature]").forEach((node) => {
-      node.dataset.siteCopy = signature ? "" : "profileSignatureEmpty";
-      node.textContent = signature || labels.profileSignatureEmpty;
+      node.dataset.siteCopy = signature || identityLoading ? "" : "profileSignatureEmpty";
+      node.textContent = signature || (identityLoading ? labels.billingLoading : labels.profileSignatureEmpty);
       node.classList.toggle("is-placeholder", !signature);
     });
     document.querySelectorAll("[data-site-account-tags]").forEach((node) => {
       if (!tags.length) {
         const placeholder = document.createElement("span");
         placeholder.className = "site-account-placeholder";
-        placeholder.dataset.siteCopy = "profileTagsEmpty";
-        placeholder.textContent = labels.profileTagsEmpty;
+        placeholder.dataset.siteCopy = identityLoading ? "" : "profileTagsEmpty";
+        placeholder.textContent = identityLoading ? labels.billingLoading : labels.profileTagsEmpty;
         node.replaceChildren(placeholder);
         return;
       }
@@ -1053,6 +1056,26 @@
       throw error;
     }
     return payload;
+  }
+
+  async function loadAccountProfile() {
+    if (currentAccount || currentSessionMode === "guest") return currentAccount;
+    if (accountProfileLoadPromise) return accountProfileLoadPromise;
+    accountProfileLoading = true;
+    syncAccount();
+    const request = fetchAccountJson("/api/auth/me")
+      .then((account) => {
+        if (account && typeof account === "object") setAccount(account);
+        return currentAccount;
+      })
+      .catch(() => null)
+      .finally(() => {
+        if (accountProfileLoadPromise === request) accountProfileLoadPromise = null;
+        accountProfileLoading = false;
+        syncAccount();
+      });
+    accountProfileLoadPromise = request;
+    return request;
   }
 
   function notificationNumber(value) {
@@ -1935,7 +1958,9 @@
     if (event.key === NOTIFICATION_STORAGE_KEY) void loadNotifications({ force: true, announce: false });
   });
   window.addEventListener("vecto:proxy-market-read", () => void syncProxyMarketBadge());
-  window.addEventListener(EVENT_ACCOUNT_MENU_OPEN, () => void loadAccountBilling({ force: true }));
+  window.addEventListener(EVENT_ACCOUNT_MENU_OPEN, () => {
+    void loadAccountProfile().then(() => loadAccountBilling({ force: true }));
+  });
   window.addEventListener(EVENT_NOTIFICATION_MENU_OPEN, () => void loadNotifications({ force: true, announce: false }));
   window.addEventListener("vecto:notifications-updated", () => void loadNotifications({ force: true, announce: false }));
   document.addEventListener("visibilitychange", () => {

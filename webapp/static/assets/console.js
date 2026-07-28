@@ -324,6 +324,7 @@ const state = {
   proxyMarketReadRevision: 0,
   proxyMarketMarkReadPromise: null,
   liveBrowserExpandedSessionId: "",
+  liveBrowserReturnTarget: null,
   workspaceMenuOpen: true,
   currentUser: null,
   socialPublishPolicy: { limit: 15 },
@@ -340,6 +341,8 @@ const state = {
     loaded: false,
     loading: false,
     cancellingOrderId: "",
+    trendRangeDays: 30,
+    ledgerFilter: "all",
     errors: {},
   },
   personaGroup: "settings",
@@ -352,6 +355,7 @@ const state = {
     threads_comment_reply: "comment_recent_2d",
     threads_hot_reply: "hot_posts",
     threads_warmup: "tg_default",
+    instagram_warmup: "tg_default",
   },
   preferredAccountId: "",
   simpleBranches: {},
@@ -368,7 +372,6 @@ const state = {
   workspaceBootstrapPending: false,
   workspaceBootstrapNoticeVisible: false,
   workspaceBootstrapTimer: 0,
-  personaDashboardLoading: false,
   personaProfiles: {},
   personaProfileEditDrafts: {},
   personaCollections: { groups: [], assigned_persona_ids: [] },
@@ -1003,7 +1006,7 @@ function bindMobileNavigation() {
   if (!toggle || !closeButton || !sidebar || !backdrop) return;
   toggle.addEventListener("click", () => {
     if (state.view === "accounts" && state.accountBrowserPanel === "browsers") {
-      setAccountBrowserPanel("accounts");
+      returnFromLiveBrowserTaskView();
       return;
     }
     setMobileNavOpen(toggle.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
@@ -2639,6 +2642,7 @@ function statusLabel(status) {
     publish_post: "发布内容",
     persona_post_image: "推文配图",
     threads_warmup: "Threads 养号",
+    instagram_warmup: "Instagram 养号",
     threads_auto_reply: "Threads 自动回复",
     browse_feed: "浏览动态",
     login_wait_timeout: "登录等待超时",
@@ -3076,6 +3080,7 @@ function logStageLabel(stage, level) {
     resume_manual_login: "恢复登录检测",
     prepare: "准备执行",
     threads_warmup: "Threads 养号",
+    instagram_warmup: "Instagram 养号",
     threads_warmup_comment: "养号评论",
     threads_warmup_backfill: "补养号目标",
     threads_like_candidate: "选择点赞目标",
@@ -4608,7 +4613,13 @@ function selectedPublishAccountForPersona(persona) {
   return fallback;
 }
 
-async function choosePublishPlatformAccount(persona) {
+async function choosePublishPlatformAccount(persona, {
+  title = "选择发布平台",
+  message = "先选择发布平台，确认后才会创建任务。",
+  confirmText = "执行任务",
+  modalKey = "publish-platform-picker",
+  persistSelection = true,
+} = {}) {
   const accounts = publishPlatformAccountsForPersona(persona).filter(canSubmitPublishWithAccount);
   if (!accounts.length) {
     await promptPersonaAccountBinding(persona);
@@ -4627,8 +4638,8 @@ async function choosePublishPlatformAccount(persona) {
   }).filter(Boolean);
   const selectedOption = options.find((option) => String(option.account?.id || "") === currentAccountId) || options[0];
   const request = openConsoleModal({
-    title: "选择发布平台",
-    message: "先选择发布平台，确认后才会创建任务。",
+    title,
+    message,
     contentHtml: `<div class="publish-platform-picker">
       <div class="automation-capsule-tabs publish-platform-picker-tabs" style="display:grid;grid-template-columns:minmax(0,1fr)" role="tablist" aria-label="发布平台">
         ${options.map((option) => `<button type="button" class="${option === selectedOption ? "is-active" : ""}" data-publish-platform-tab="${esc(option.platform)}" data-publish-platform-account="${esc(option.account?.id || "")}" role="tab" aria-selected="${option === selectedOption ? "true" : "false"}">
@@ -4640,9 +4651,9 @@ async function choosePublishPlatformAccount(persona) {
       <div class="publish-platform-picker-account" data-publish-platform-account-label>本次使用：${esc(accountDisplayName(selectedOption.account))}</div>
     </div>`,
     fields: [{ name: "accountId", type: "hidden", value: String(selectedOption.account?.id || "") }],
-    confirmText: "执行任务",
+    confirmText,
     cancelText: "取消",
-    modalKey: "publish-platform-picker",
+    modalKey,
   });
   const modal = document.getElementById("consoleModal");
   const accountInput = modal?.querySelector('[data-console-modal-field="accountId"]');
@@ -4662,7 +4673,7 @@ async function choosePublishPlatformAccount(persona) {
   });
   const result = await request;
   const account = accounts.find((item) => String(item.id || "") === String(result?.accountId || "")) || null;
-  if (account) state.personaPublishAccountIds[String(persona.id || "")] = String(account.id || "");
+  if (account && persistSelection) state.personaPublishAccountIds[String(persona.id || "")] = String(account.id || "");
   return account;
 }
 
@@ -5363,7 +5374,7 @@ function personaPublishPreflight(account) {
   const accountId = String(account?.id || "").trim();
   return {
     login: latestSuccessfulSocialTask(accountId, ["check_login", "open_login"]),
-    warmup: latestSuccessfulSocialTask(accountId, ["threads_warmup"]),
+    warmup: latestSuccessfulSocialTask(accountId, ["threads_warmup", "instagram_warmup"]),
     reply: latestSuccessfulSocialTask(accountId, ["threads_auto_reply"]),
   };
 }
@@ -5589,6 +5600,12 @@ var PERSONA_THREADS_STRATEGIES = {
     { id: "like_comment", label: "互动养号：点赞 + 留言", payload: { strategy_id: "like_comment", browse_limit: 30, scroll_times: 30, like_limit: 16, max_comments: 8, comment_chance: 100 } },
     { id: "warmup_custom", label: "自定义养号", payload: { strategy_id: "warmup_custom", browse_limit: 30, scroll_times: 30, like_limit: 0, max_comments: 0, comment_chance: 0 } },
   ],
+  instagram_warmup: [
+    { id: "tg_default", label: "默认养号", payload: { strategy_id: "tg_default", browse_limit: 30, scroll_times: 30, like_limit: 16, max_comments: 0, comment_chance: 0 } },
+    { id: "browse_only", label: "保守养号：只浏览", payload: { strategy_id: "browse_only", browse_limit: 30, scroll_times: 30, like_limit: 0, max_comments: 0, comment_chance: 0 } },
+    { id: "like_comment", label: "互动养号：点赞 + 留言", payload: { strategy_id: "like_comment", browse_limit: 30, scroll_times: 30, like_limit: 16, max_comments: 8, comment_chance: 100 } },
+    { id: "warmup_custom", label: "自定义养号", payload: { strategy_id: "warmup_custom", browse_limit: 30, scroll_times: 30, like_limit: 0, max_comments: 0, comment_chance: 0 } },
+  ],
 };
 globalThis.PERSONA_THREADS_STRATEGIES = PERSONA_THREADS_STRATEGIES;
 
@@ -5744,6 +5761,160 @@ function billingSummaryData() {
   return { summary, wallet, subscription, imageQuota, imageRemaining, creditPoints, unlimited, pendingOrders };
 }
 
+function billingDashboardIcon(kind = "balance") {
+  const icons = {
+    balance: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h16v11H4z"></path><path d="M4 10.5h16M15.5 14.5h2"></path><path d="M7 7.5V5.7A1.7 1.7 0 0 1 8.7 4h8.8"></path></svg>',
+    subscription: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6.5h14v12H5z"></path><path d="M8 4v5M16 4v5M5 10h14"></path><path d="m9 14 2 2 4-4"></path></svg>',
+    images: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"></rect><circle cx="9" cy="10" r="1.5"></circle><path d="m6.5 17 4-4 2.8 2.6 2.2-2.1 2 2"></path></svg>',
+    pending: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><path d="M12 7.5V12l3 2"></path></svg>',
+    flow: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18.5V10m5 8.5V5.5m5 13V8m5 10.5V3.5"></path><path d="m4 8 5-4 5 2.5L20 2"></path></svg>',
+  };
+  return icons[kind] || icons.balance;
+}
+
+function billingLedgerEntries() {
+  return billingRows(state.billing.ledger, ["ledger", "entries", "items", "results"]);
+}
+
+function billingCreditAmount(entry = {}) {
+  return Number(entry.asset_type === "credit" && entry.amount_points != null
+    ? entry.amount_points
+    : (entry.amount_units ?? entry.amount ?? 0));
+}
+
+function billingTimestampMs(value) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric < 1000000000000 ? numeric * 1000 : numeric;
+  }
+  return new Date(value || 0).getTime();
+}
+
+function billingTrendData(rangeDays = state.billing.trendRangeDays) {
+  const { creditPoints } = billingSummaryData();
+  const rows = billingLedgerEntries()
+    .filter((entry) => String(entry?.asset_type || "credit") === "credit")
+    .map((entry) => ({
+      time: billingTimestampMs(entry.created_at),
+      amount: billingCreditAmount(entry),
+      balance: Number(entry.balance_after_points ?? entry.balance_after_units),
+      eventType: String(entry.event_type || ""),
+    }))
+    .filter((entry) => Number.isFinite(entry.time) && entry.time > 0 && Number.isFinite(entry.balance))
+    .sort((left, right) => left.time - right.time);
+  const now = Date.now();
+  const days = Math.max(0, Number(rangeDays || 0));
+  const cutoff = days ? now - days * 86400000 : 0;
+  const visibleRows = rows.filter((entry) => !cutoff || entry.time >= cutoff);
+  const periodRows = rows.filter((entry) => !cutoff || entry.time >= cutoff);
+  const points = visibleRows.map((entry) => ({ time: entry.time, value: entry.balance }));
+  const currentBalance = Number.isFinite(Number(creditPoints)) ? Number(creditPoints) : (points.at(-1)?.value || 0);
+
+  if (!points.length) {
+    const start = cutoff || now - 86400000;
+    points.push({ time: start, value: currentBalance }, { time: now, value: currentBalance });
+  } else {
+    const firstEntry = visibleRows[0];
+    points.unshift({
+      time: Math.max(cutoff || 0, firstEntry.time - 1),
+      value: firstEntry.balance - firstEntry.amount,
+    });
+    const lastPoint = points[points.length - 1];
+    if (now > lastPoint.time) points.push({ time: now, value: currentBalance });
+  }
+
+  const activityRows = periodRows.filter((entry) => entry.eventType !== "opening_balance");
+  const income = activityRows.reduce((total, entry) => total + Math.max(0, entry.amount), 0);
+  const expense = activityRows.reduce((total, entry) => total + Math.abs(Math.min(0, entry.amount)), 0);
+  return {
+    points,
+    currentBalance,
+    income,
+    expense,
+    change: points[points.length - 1].value - points[0].value,
+  };
+}
+
+function billingTrendChart(points = []) {
+  const width = 760;
+  const height = 260;
+  const padding = { top: 22, right: 24, bottom: 38, left: 62 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const values = points.map((point) => Number(point.value || 0));
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  const rawSpan = rawMax - rawMin;
+  const margin = rawSpan > 0 ? rawSpan * 0.12 : Math.max(1, Math.abs(rawMax) * 0.02);
+  const minValue = Math.max(0, rawMin - margin);
+  const maxValue = rawMax + margin;
+  const timeMin = Math.min(...points.map((point) => point.time));
+  const timeMax = Math.max(...points.map((point) => point.time));
+  const timeSpan = Math.max(1, timeMax - timeMin);
+  const xFor = (time) => padding.left + ((time - timeMin) / timeSpan) * plotWidth;
+  const yFor = (value) => padding.top + (1 - ((value - minValue) / Math.max(1, maxValue - minValue))) * plotHeight;
+  const coordinates = points.map((point) => ({ x: xFor(point.time), y: yFor(point.value) }));
+  const linePath = coordinates.reduce((path, point, index) => {
+    if (!index) return `M ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+    const previous = coordinates[index - 1];
+    const midpoint = (previous.x + point.x) / 2;
+    return `${path} C ${midpoint.toFixed(2)} ${previous.y.toFixed(2)}, ${midpoint.toFixed(2)} ${point.y.toFixed(2)}, ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+  }, "");
+  const last = coordinates[coordinates.length - 1];
+  const grid = Array.from({ length: 4 }, (_, index) => {
+    const ratio = index / 3;
+    const y = padding.top + plotHeight * ratio;
+    const value = maxValue - (maxValue - minValue) * ratio;
+    return `<g><line x1="${padding.left}" y1="${y.toFixed(2)}" x2="${width - padding.right}" y2="${y.toFixed(2)}"></line><text x="${padding.left - 12}" y="${(y + 4).toFixed(2)}">${esc(numberText(Math.round(value)))}</text></g>`;
+  }).join("");
+  const timeLabels = [timeMin, timeMin + timeSpan / 2, timeMax].map((time, index) => {
+    const anchor = index === 0 ? "start" : index === 2 ? "end" : "middle";
+    return `<text x="${xFor(time).toFixed(2)}" y="${height - 10}" text-anchor="${anchor}">${esc(new Date(time).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }))}</text>`;
+  }).join("");
+  return `<svg class="billing-trend-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="账户算力余额变化折线图" preserveAspectRatio="xMidYMid meet">
+    <g class="billing-trend-grid">${grid}</g>
+    <g class="billing-trend-axis">${timeLabels}</g>
+    <path class="billing-trend-line" d="${linePath}"></path>
+    <circle class="billing-trend-point" cx="${last.x.toFixed(2)}" cy="${last.y.toFixed(2)}" r="4"></circle>
+  </svg>`;
+}
+
+function renderBillingTrend() {
+  const host = $("billingTrend");
+  if (!host) return;
+  if (state.billing.loading && !state.billing.loaded) {
+    host.innerHTML = '<div class="billing-loading">正在生成账户趋势...</div>';
+    return;
+  }
+  const range = Math.max(0, Number(state.billing.trendRangeDays || 0));
+  const trend = billingTrendData(range);
+  const changeTone = trend.change > 0 ? "is-positive" : trend.change < 0 ? "is-negative" : "";
+  host.innerHTML = `
+    <div class="billing-trend-head">
+      <div class="billing-section-title">
+        <span class="billing-section-icon" aria-hidden="true">${billingDashboardIcon("flow")}</span>
+        <div><div class="eyebrow">算力分析</div><h3>余额变化趋势</h3></div>
+      </div>
+      <div class="billing-trend-ranges" role="group" aria-label="选择趋势时间范围">
+        ${[[7, "7 天"], [30, "30 天"], [0, "全部"]].map(([value, label]) => `<button type="button" data-billing-trend-range="${value}" aria-pressed="${range === value ? "true" : "false"}">${label}</button>`).join("")}
+      </div>
+    </div>
+    <div class="billing-trend-layout">
+      <div class="billing-chart-panel">
+        <div class="billing-chart-caption">
+          <div><span>当前可用算力</span><strong>${esc(numberText(trend.currentBalance))}<small> 点</small></strong></div>
+          <span class="billing-chart-change ${changeTone}">${trend.change > 0 ? "+" : ""}${esc(numberText(trend.change))} 点</span>
+        </div>
+        ${billingTrendChart(trend.points)}
+      </div>
+      <aside class="billing-trend-insights" aria-label="周期收支概览">
+        <article><span>期间入账</span><strong class="is-positive">+${esc(numberText(trend.income))}</strong><small>算力点</small></article>
+        <article><span>期间支出</span><strong class="is-negative">${trend.expense > 0 ? "-" : ""}${esc(numberText(trend.expense))}</strong><small>算力点</small></article>
+        <article><span>净变化</span><strong class="${changeTone}">${trend.change > 0 ? "+" : ""}${esc(numberText(trend.change))}</strong><small>算力点</small></article>
+      </aside>
+    </div>`;
+}
+
 function renderBillingSummary() {
   const host = $("billingSummary");
   if (!host) return;
@@ -5761,12 +5932,15 @@ function renderBillingSummary() {
     || subscription.plan_sku
     || (legacyMode ? "存量账号" : (summary.subscription_active ? "已启用" : "暂无订阅"));
   const cards = [
-    { label: "算力余额", value: `${numberText(creditPoints)} 点`, note: billingMode === "legacy" ? "旧版计费模式" : "可用算力" },
-    { label: "当前订阅", value: planName, note: legacyMode ? "免订阅过渡模式" : (periodEnd ? `有效至 ${formatTime(periodEnd)}` : (subscriptionStatus?.label || (summary.subscription_active ? "生效中" : "尚未生效"))) },
-    { label: "图片额度", value: `${numberText(imageRemaining)} 张`, note: imageQuota.monthly_remaining != null ? `月度 ${numberText(imageQuota.monthly_remaining)} · 长期 ${numberText(imageQuota.permanent_remaining)}` : "优先抵扣免费额度" },
-    { label: "待审批申请", value: numberText(pendingOrders), note: "等待管理员审批" },
+    { icon: "balance", tone: "is-balance", label: "算力余额", value: `${numberText(creditPoints)} 点`, note: billingMode === "legacy" ? "旧版计费模式" : "当前可用算力" },
+    { icon: "subscription", tone: "is-subscription", label: "当前订阅", value: planName, note: legacyMode ? "免订阅过渡模式" : (periodEnd ? `有效至 ${formatTime(periodEnd)}` : (subscriptionStatus?.label || (summary.subscription_active ? "生效中" : "尚未生效"))) },
+    { icon: "images", tone: "is-images", label: "图片额度", value: `${numberText(imageRemaining)} 张`, note: imageQuota.monthly_remaining != null ? `月度 ${numberText(imageQuota.monthly_remaining)} · 长期 ${numberText(imageQuota.permanent_remaining)}` : "优先抵扣免费额度" },
+    { icon: "pending", tone: "is-pending", label: "待审批申请", value: numberText(pendingOrders), note: "等待管理员审批" },
   ];
-  host.innerHTML = cards.map((card) => `<article class="billing-summary-card"><span>${esc(card.label)}</span><strong>${esc(card.value)}</strong><small>${esc(card.note)}</small></article>`).join("");
+  host.innerHTML = cards.map((card) => `<article class="billing-summary-card ${card.tone}">
+    <div class="billing-summary-card-head"><span class="billing-summary-icon" aria-hidden="true">${billingDashboardIcon(card.icon)}</span><span>${esc(card.label)}</span></div>
+    <strong>${esc(card.value)}</strong><small>${esc(card.note)}</small>
+  </article>`).join("");
 }
 
 function renderPersonalBillingSummary() {
@@ -5849,29 +6023,87 @@ function renderBillingLedger() {
     host.innerHTML = '<div class="billing-loading">正在加载流水...</div>';
     return;
   }
-  const rows = billingRows(state.billing.ledger, ["ledger", "entries", "items", "results"]);
+  const rows = billingLedgerEntries();
+  const filter = ["all", "expense", "income"].includes(state.billing.ledgerFilter) ? state.billing.ledgerFilter : "all";
+  document.querySelectorAll("[data-billing-ledger-filter]").forEach((button) => {
+    const active = button.dataset.billingLedgerFilter === filter;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
   if (!rows.length) {
     const detail = state.billing.errors.ledger?.detail || "暂无余额变动记录。";
     host.innerHTML = `<div class="billing-empty">${esc(detail)}</div>`;
     return;
   }
-  host.innerHTML = rows.slice(0, 16).map((entry) => {
-    const amount = Number(entry.asset_type === "credit" && entry.amount_points != null ? entry.amount_points : (entry.amount_units ?? entry.amount ?? 0));
+  const visibleRows = rows.filter((entry) => {
+    const amount = billingCreditAmount(entry);
+    if (filter === "expense") return amount < 0;
+    if (filter === "income") return amount > 0;
+    return true;
+  });
+  if (!visibleRows.length) {
+    host.innerHTML = '<div class="billing-empty">当前筛选条件下暂无余额变动。</div>';
+    return;
+  }
+  const tableRows = visibleRows.slice(0, 24).map((entry) => {
+    const amount = billingCreditAmount(entry);
     const asset = String(entry.asset_type || entry.asset || "credit");
     const unit = asset === "image" ? "张" : asset === "subscription" ? "期" : "点";
     const eventLabels = { opening_balance: "期初余额", reserve: "任务预扣", release: "预扣返还", reservation_refund: "任务退款", order_credit: "申请批准入账", credit_pack_approved: "储值申请批准入账", credit_pack_bonus: "储值赠送图片", subscription_period_approved: "订阅申请批准生效", admin_adjustment: "人工调整", image_grant: "图片额度入账", settled: "任务结算" };
     const label = entry.label || entry.description || entry.event_name || eventLabels[entry.event_type] || entry.event_type || "余额调整";
     const sign = amount > 0 ? "+" : "";
     const balanceAfter = entry.asset_type === "credit" && entry.balance_after_points != null ? entry.balance_after_points : entry.balance_after_units;
-    return `<div class="billing-ledger-row"><div class="billing-ledger-copy"><strong>${esc(label)}</strong><time>${esc(formatTime(entry.created_at))}${balanceAfter != null ? ` · 余额 ${esc(numberText(balanceAfter))}` : ""}</time></div><span class="billing-ledger-amount ${amount > 0 ? "is-positive" : amount < 0 ? "is-negative" : ""}">${esc(`${sign}${numberText(amount)} ${unit}`)}</span></div>`;
+    const tone = amount > 0 ? "is-positive" : amount < 0 ? "is-negative" : "is-neutral";
+    return `<div class="billing-ledger-row" role="row">
+      <time class="billing-ledger-time" role="cell" data-label="时间">${esc(formatTime(entry.created_at))}</time>
+      <div class="billing-ledger-event" role="cell" data-label="变动说明">
+        <span class="billing-ledger-direction ${tone}" aria-hidden="true">${amount > 0 ? "↗" : amount < 0 ? "↘" : "•"}</span>
+        <strong>${esc(label)}</strong>
+      </div>
+      <span class="billing-ledger-amount ${tone}" role="cell" data-label="变动">${esc(`${sign}${numberText(amount)} ${unit}`)}</span>
+      <strong class="billing-ledger-balance" role="cell" data-label="变动后余额">${balanceAfter != null ? esc(`${numberText(balanceAfter)} ${unit}`) : "—"}</strong>
+    </div>`;
   }).join("");
+  host.innerHTML = `<div class="billing-ledger-table" role="table" aria-label="账户余额变动明细">
+    <div class="billing-ledger-table-head" role="row">
+      <span role="columnheader">时间</span>
+      <span role="columnheader">变动说明</span>
+      <span role="columnheader">变动</span>
+      <span role="columnheader">变动后余额</span>
+    </div>
+    <div class="billing-ledger-table-body" role="rowgroup">${tableRows}</div>
+  </div>`;
 }
 
 function renderBilling() {
   renderPersonalBillingSummary();
   renderBillingSummary();
+  renderBillingTrend();
   renderBillingOrders();
   renderBillingLedger();
+}
+
+async function loadBillingLedger() {
+  const pageSize = 200;
+  const items = [];
+  let before = 0;
+  let page = {};
+  while (true) {
+    const params = new URLSearchParams({ limit: String(pageSize) });
+    if (before > 0) params.set("before", String(before));
+    page = await api(`/api/billing/ledger?${params.toString()}`);
+    const pageItems = Array.isArray(page?.items) ? page.items : [];
+    items.push(...pageItems);
+    const nextBefore = Number(page?.next_before || 0);
+    if (
+      pageItems.length < pageSize
+      || !Number.isFinite(nextBefore)
+      || nextBefore <= 0
+      || (before > 0 && nextBefore >= before)
+    ) break;
+    before = nextBefore;
+  }
+  return { ...page, items };
 }
 
 async function loadBilling({ force = false } = {}) {
@@ -5883,7 +6115,7 @@ async function loadBilling({ force = false } = {}) {
     catalog: loadBillingCatalog({ force }),
     summary: api("/api/billing/summary"),
     orders: api("/api/billing/orders"),
-    ledger: api("/api/billing/ledger"),
+    ledger: loadBillingLedger(),
   };
   const keys = Object.keys(requests);
   const results = await Promise.allSettled(Object.values(requests));
@@ -6295,11 +6527,12 @@ function syncMobilePageToolbar() {
   const title = $("mobilePageToolbarTitle");
   const icon = $("mobilePageToolbarIcon");
   const showBrowserBack = state.view === "accounts" && state.accountBrowserPanel === "browsers";
+  const browserBackLabel = liveBrowserReturnLabel();
   if (navToggle) {
     navToggle.hidden = !showBrowserBack && isMobilePersistentDockPage();
     navToggle.classList.toggle("is-page-back", showBrowserBack);
     navToggle.innerHTML = renderMobileNavToggleIcon(showBrowserBack);
-    setConsoleUiAttribute(navToggle, "aria-label", showBrowserBack ? "\u8fd4\u56de\u8d26\u53f7\u7ba1\u7406" : "\u6253\u5f00\u63a7\u5236\u53f0\u5bfc\u822a");
+    setConsoleUiAttribute(navToggle, "aria-label", showBrowserBack ? browserBackLabel : "\u6253\u5f00\u63a7\u5236\u53f0\u5bfc\u822a");
   }
   if (!title || !icon) return;
 
@@ -6598,12 +6831,7 @@ function finishWorkspaceBootstrapLoading() {
 }
 
 function syncConsolePageLoading() {
-  setConsolePageLoading(Boolean(state.workspaceBootstrapPending || state.personaDashboardLoading));
-}
-
-function setPersonaDashboardLoading(loading) {
-  state.personaDashboardLoading = Boolean(loading);
-  syncConsolePageLoading();
+  setConsolePageLoading(Boolean(state.workspaceBootstrapPending));
 }
 
 function setConsolePageLoading(loading) {
@@ -6612,10 +6840,6 @@ function setConsolePageLoading(loading) {
   const overlay = $("consolePageLoading");
   if (overlay) overlay.setAttribute("aria-busy", active ? "true" : "false");
 }
-
-document.addEventListener("vecto:persona-dashboard-loading", (event) => {
-  setPersonaDashboardLoading(event.detail?.loading === true);
-});
 
 function renderWorkspaceBootstrapLoading() {
   const noticeClass = state.workspaceBootstrapNoticeVisible ? " is-notice-visible" : "";
@@ -8181,8 +8405,8 @@ function renderPersonaLinkPresetTable(profile, presets, selectedPresetId) {
 function personaAutomationTaskTypesForStep(step) {
   if (step === "login") return ["open_login"];
   if (step === "reply_comment" || step === "reply_hot") return ["threads_auto_reply"];
-  if (step === "warmup") return ["threads_warmup"];
-  if (["open_login", "browse_feed", "browse_profile", "comment_post", "reply_comment", "like_post", "share_post", "threads_auto_reply"].includes(String(step || ""))) return [String(step)];
+  if (step === "warmup") return ["threads_warmup", "instagram_warmup"];
+  if (["open_login", "browse_feed", "browse_profile", "comment_post", "reply_comment", "like_post", "share_post", "threads_auto_reply", "instagram_warmup"].includes(String(step || ""))) return [String(step)];
   return [];
 }
 
@@ -9612,6 +9836,7 @@ function taskOptionsForPlatform(platform, { includePublish = false } = {}) {
   if (platform === "instagram") {
     const options = [
       ["browse_feed", "浏览 Feed"],
+      ["instagram_warmup", "Instagram 养号"],
       ["browse_profile", "浏览主页"],
       ["comment_post", "评论帖子"],
       ["reply_comment", "回复评论"],
@@ -9708,7 +9933,7 @@ function renderPersonaAutomationAction({
   const isWarmup = kind === "warmup";
   const busyLabel = isWarmup ? "养号执行中" : "自动回复执行中";
   const idleLabel = isWarmup ? "提交养号任务" : "提交自动回复任务";
-  return `<button type="button" data-persona-run-threads="${esc(kind)}" aria-busy="${busy ? "true" : "false"}" ${selectedAccount && !busy ? "" : "disabled"}>${busy ? renderBusyButtonContent(busyLabel, true, busyStartedAt) : idleLabel}</button>`;
+  return `<button type="button" data-persona-run-automation="${esc(kind)}" aria-busy="${busy ? "true" : "false"}" ${selectedAccount && !busy ? "" : "disabled"}>${busy ? renderBusyButtonContent(busyLabel, true, busyStartedAt) : idleLabel}</button>`;
 }
 
 function renderUnifiedAutomationModule(options = null) {
@@ -9721,19 +9946,20 @@ function renderUnifiedAutomationModule(options = null) {
   const accounts = persona ? personaAutomationAccounts(persona, platform) : [];
   const selectedAccount = persona ? selectedPersonaAutomationAccount(persona, platform) : null;
   const selectedAccountId = String(selectedAccount?.id || "");
+  const warmupTaskType = platform === "instagram" ? "instagram_warmup" : "threads_warmup";
   const replyTask = selectedAccountId ? activeSocialTaskFor({ accountId: selectedAccountId, taskType: "threads_auto_reply" }) : null;
-  const warmupTask = selectedAccountId ? activeSocialTaskFor({ accountId: selectedAccountId, taskType: "threads_warmup" }) : null;
+  const warmupTask = selectedAccountId ? activeSocialTaskFor({ accountId: selectedAccountId, taskType: warmupTaskType }) : null;
   const replyBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, "threads_auto_reply") || replyTask);
-  const warmupBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, "threads_warmup") || warmupTask);
+  const warmupBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, warmupTaskType) || warmupTask);
   const replyBusyStartedAt = actionTaskStartedAt(replyTask, "social", selectedAccountId, "threads_auto_reply");
-  const warmupBusyStartedAt = actionTaskStartedAt(warmupTask, "social", selectedAccountId, "threads_warmup");
-  const threadsOnlyNotice = platform !== "threads" && ["reply_comment", "reply_hot", "warmup"].includes(currentStep)
+  const warmupBusyStartedAt = actionTaskStartedAt(warmupTask, "social", selectedAccountId, warmupTaskType);
+  const threadsOnlyNotice = platform !== "threads" && ["reply_comment", "reply_hot"].includes(currentStep)
     ? `<div class="empty-state">当前操作只支持 Threads。请先切换到 Threads 平台。</div>`
     : "";
   const strategyGroup = currentStep === "reply_hot"
     ? "threads_hot_reply"
     : currentStep === "warmup"
-      ? "threads_warmup"
+      ? `${platform}_warmup`
       : "threads_comment_reply";
   const strategy = personaThreadsStrategy(strategyGroup);
   const customStrategy = personaThreadsStrategyIsCustom(strategyGroup);
@@ -9799,8 +10025,8 @@ function renderUnifiedAutomationModule(options = null) {
       <div class="automation-operation-card">
         <strong>养号</strong>
         <label>策略
-          <select id="personaStrategySelect" data-strategy-group="threads_warmup">
-            ${personaThreadsStrategyOptionsHtml("threads_warmup")}
+          <select id="personaStrategySelect" data-strategy-group="${esc(strategyGroup)}">
+            ${personaThreadsStrategyOptionsHtml(strategyGroup)}
           </select>
         </label>
         ${customStrategy ? `
@@ -9819,7 +10045,7 @@ function renderUnifiedAutomationModule(options = null) {
             <textarea id="personaAutoReplyText" rows="3" placeholder="可选，多条换行。留空则按人设自动生成。">${esc(Array.isArray(payload.reply_templates) ? payload.reply_templates.join("\n") : String(payload.reply_templates || ""))}</textarea>
           </label>
         ` : ""}
-        ${personaThreadsStrategyDetail("threads_warmup", { includePersonaContent: actionMode !== "plan" })}
+        ${personaThreadsStrategyDetail(strategyGroup, { includePersonaContent: actionMode !== "plan" })}
         <div class="row-actions">
           ${renderPersonaAutomationAction({
             kind: "warmup",
@@ -10617,7 +10843,9 @@ function renderPublishHeaderRow(mode, account) {
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 
 function automationPlanTaskOptions(platform = "threads") {
-  if (String(platform || "threads").trim().toLowerCase() !== "threads") return [];
+  if (String(platform || "threads").trim().toLowerCase() === "instagram") {
+    return [["instagram_warmup", "养号"]];
+  }
   return [
     ["normal_publish", "普通任务"],
     ["threads_reply_comment", "自动回复评论"],
@@ -10627,6 +10855,7 @@ function automationPlanTaskOptions(platform = "threads") {
 }
 
 function automationPlanTaskLabel(taskType = "") {
+  if (taskType === "instagram_warmup") return "养号";
   if (taskType === "publish_post") return "发布内容";
   if (taskType === "threads_auto_reply") return "自动回复";
   if (taskType === "browse_feed") return "浏览动态";
@@ -10787,16 +11016,25 @@ function automationPlanStepForTask(taskType = "") {
   return "warmup";
 }
 
-function automationPlanTaskForStep(step = "") {
+function automationPlanTaskForStep(step = "", platform = "threads") {
+  const normalizedPlatform = String(platform || "").trim().toLowerCase();
   if (step === "reply_hot") return "threads_reply_hot";
   if (step === "reply_comment") return "threads_reply_comment";
-  return "threads_warmup";
+  return normalizedPlatform === "instagram" ? "instagram_warmup" : "threads_warmup";
+}
+
+function automationPlanTaskTypeForPlatform(taskType = "", platform = "threads") {
+  const normalized = String(taskType || "").trim();
+  if (["threads_warmup", "instagram_warmup"].includes(normalized)) {
+    return String(platform || "").trim().toLowerCase() === "instagram" ? "instagram_warmup" : "threads_warmup";
+  }
+  return normalized;
 }
 
 function automationPlanConflictKey(taskType = "") {
   const normalized = String(taskType || "").trim();
   if (normalized === "threads_auto_reply") return "threads_reply_comment";
-  return ["normal_publish", "threads_reply_comment", "threads_reply_hot", "threads_warmup"].includes(normalized)
+  return ["normal_publish", "threads_reply_comment", "threads_reply_hot", "threads_warmup", "instagram_warmup"].includes(normalized)
     ? normalized
     : "";
 }
@@ -10822,10 +11060,11 @@ function automationPlanConfiguredSummary(item = {}) {
 
 function syncAutomationPlanStrategyFromItem(item = {}) {
   const step = automationPlanStepForTask(item.taskType);
+  const platform = item.taskType === "instagram_warmup" ? "instagram" : "threads";
   const group = step === "reply_hot"
     ? "threads_hot_reply"
     : step === "warmup"
-      ? "threads_warmup"
+      ? `${platform}_warmup`
       : "threads_comment_reply";
   const strategyId = String(item.params?.strategy_id || "");
   if (strategyId) setPersonaStrategyId(group, strategyId);
@@ -10884,7 +11123,8 @@ function openAutomationPlanTaskConfigurator(index, options = null) {
   const step = ["reply_comment", "reply_hot", "warmup"].includes(requestedStep)
     ? requestedStep
     : automationPlanStepForTask(item.taskType);
-  state.personaAutomationPlatform = "threads";
+  const platform = String(account?.platform || "threads").trim().toLowerCase() === "instagram" ? "instagram" : "threads";
+  state.personaAutomationPlatform = platform;
   state.preferredAccountId = String(account?.id || "");
   state.simpleBranches.automation = step;
   if (!requestedStep) syncAutomationPlanStrategyFromItem(item);
@@ -10918,7 +11158,7 @@ function openAutomationPlanTaskConfigurator(index, options = null) {
       const nextGroup = nextStep === "reply_hot"
         ? "threads_hot_reply"
         : nextStep === "warmup"
-          ? "threads_warmup"
+          ? `${platform}_warmup`
           : "threads_comment_reply";
       state.automationPlanEditorPayload = cloneAutomationPlanPayload(personaThreadsStrategy(nextGroup)?.payload || {});
       rerender();
@@ -10927,14 +11167,14 @@ function openAutomationPlanTaskConfigurator(index, options = null) {
     const addButton = event.target.closest("[data-automation-plan-add-configured]");
     if (!addButton) return;
     const kind = String(addButton.dataset.automationPlanAddConfigured || "warmup");
-    const taskType = automationPlanTaskForStep(kind);
+    const taskType = automationPlanTaskForStep(kind, platform);
     const itemIndex = draft.items.indexOf(item);
     if (automationPlanHasTaskConflict(draft, taskType, itemIndex)) {
       showMsg("commandMsg", "同一账号不能重复添加同类型自动化任务。", false);
       return;
     }
     item.taskType = taskType;
-    item.params = cloneAutomationPlanPayload(buildPersonaThreadsTaskPayload(kind));
+    item.params = cloneAutomationPlanPayload(buildPersonaThreadsTaskPayload(kind, platform));
     item.configured = true;
     state.automationPlanEditorPayload = cloneAutomationPlanPayload(item.params);
     closeConsoleModal(true);
@@ -10970,7 +11210,7 @@ function openAutomationPlanTaskDetails(index) {
       <dl class="automation-plan-detail-list">
         <div><dt>任务类型</dt><dd>${esc(automationPlanTaskLabel(taskType))}</dd></div>
         ${taskType === "normal_publish" ? `<div><dt>发布数量</dt><dd>${esc(automationPlanNormalPublishCount({ params }))} 篇</dd></div>` : ""}
-        ${["threads_reply_comment", "threads_reply_hot", "threads_warmup"].includes(taskType) ? `<div><dt>当前配置</dt><dd>${esc(automationPlanConfiguredSummary(item))}</dd></div>` : ""}
+        ${["threads_reply_comment", "threads_reply_hot", "threads_warmup", "instagram_warmup"].includes(taskType) ? `<div><dt>当前配置</dt><dd>${esc(automationPlanConfiguredSummary(item))}</dd></div>` : ""}
       </dl>`,
     confirmText: "关闭",
     showCancel: false,
@@ -10980,7 +11220,7 @@ function openAutomationPlanTaskDetails(index) {
   void request.then((action) => {
     if (action !== "edit") return;
     if (taskType === "normal_publish") openAutomationPlanNormalPublishConfigurator(index);
-    else if (["threads_reply_comment", "threads_reply_hot", "threads_warmup"].includes(taskType)) openAutomationPlanTaskConfigurator(index);
+    else if (["threads_reply_comment", "threads_reply_hot", "threads_warmup", "instagram_warmup"].includes(taskType)) openAutomationPlanTaskConfigurator(index);
     else openAutomationPlanTaskPicker(index);
   }).catch(() => {});
 }
@@ -11125,7 +11365,7 @@ function clearAutomationPlanDraft() {
 }
 
 function automationPlanPickerTaskType(item = {}) {
-  return ["threads_reply_comment", "threads_reply_hot", "threads_warmup"].includes(String(item.taskType || ""))
+  return ["threads_reply_comment", "threads_reply_hot", "threads_warmup", "instagram_warmup"].includes(String(item.taskType || ""))
     ? "automation_mode"
     : String(item.taskType || "");
 }
@@ -11167,7 +11407,7 @@ function openAutomationPlanTaskPicker(index) {
       return;
     }
     if (taskType === "automation_mode") {
-      const hasExistingAutomationTask = ["threads_reply_comment", "threads_reply_hot", "threads_warmup"].includes(item.taskType);
+      const hasExistingAutomationTask = ["threads_reply_comment", "threads_reply_hot", "threads_warmup", "instagram_warmup"].includes(item.taskType);
       closeConsoleModal(taskType);
       window.requestAnimationFrame(() => openAutomationPlanTaskConfigurator(
         index,
@@ -13339,6 +13579,60 @@ function watchTask(taskId, options = {}) {
   };
 }
 
+async function openInstagramMediaGenerationPage(options = null) {
+  const { persona = selectedPersona(), source = "posts", post = {} } = options || {};
+  if (!persona || !post) return false;
+  let targetSource = source === "favorites" ? "favorites" : "posts";
+  let targetPost = post;
+  if (targetSource === "favorites") {
+    const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/posts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: String(post.title || "").trim(),
+        content: publishContentForPost(post, persona),
+        media_paths: [],
+      }),
+    });
+    await loadPersonaDraftPosts(persona.id, { force: true });
+    targetSource = "posts";
+    targetPost = personaDraftPosts(persona).find((item) => String(item.id) === String(result?.id || "")) || personaDraftPosts(persona)[0] || null;
+    if (!targetPost) {
+      showMsg("commandMsg", "未能创建用于 AI 配图的草稿，请稍后重试。", false);
+      return false;
+    }
+  }
+  setSelectedPersonaId(persona.id);
+  setPersonaPostSource(targetSource, persona);
+  setSelectedPersonaPostId(targetPost.id || "");
+  const form = personaFormState(persona.id);
+  form.generate.composeMode = "tweet_media";
+  form.media.contentMode = "draft";
+  form.media.operationMode = "generate";
+  setWorkspaceModule("tweet_generation");
+  openPersonaDraftEditor(targetPost.id);
+  return true;
+}
+
+async function requestInstagramPublishMediaResolution(options = null) {
+  const { persona = selectedPersona(), source = "posts", post = {} } = options || {};
+  if (state.simpleFlowPendingModule === "publishing") {
+    state.simpleFlowPending = false;
+    state.simpleFlowPendingModule = "";
+    state.simpleFlowPendingStartedAt = 0;
+    if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
+  }
+  const shouldNavigate = await openConsoleModal({
+    title: "Instagram 发布需要媒体",
+    message: "当前内容缺少图片或视频，是否前往生成页面补充媒体？",
+    cancelText: "暂不处理",
+    confirmText: "跳转生成页面",
+    modalKey: "instagram-media-required",
+  });
+  if (!shouldNavigate) return false;
+  return openInstagramMediaGenerationPage({ persona, source, post });
+}
+
 async function submitPersonaPublishTask() {
   const persona = selectedPersona();
   if (!persona) {
@@ -13367,16 +13661,20 @@ async function submitPersonaPublishTask() {
     return;
   }
   const platform = String(account.platform || "instagram").trim().toLowerCase() || "instagram";
-  if (!(await ensureDailyPublishCapacity(1))) return;
   const publishUploadState = captureUploadDropzoneState("personaPublishFiles");
   const publishFiles = publishUploadState.files;
+  const postMediaItems = personaPublishPostMediaItems(String(persona.id || ""), post);
+  if (platform === "instagram" && !publishFiles.length && !postMediaItems.length) {
+    await requestInstagramPublishMediaResolution({ persona, source, post });
+    return;
+  }
+  if (!(await ensureDailyPublishCapacity(1))) return;
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
     const mediaPaths = await uploadAutomationMedia(publishFiles, "commandMsg");
-    const postMediaItems = Array.isArray(post.media_items) ? post.media_items : [];
     if (platform === "instagram" && !mediaPaths.length && !postMediaItems.length) {
-    showMsg("commandMsg", `Instagram 任务至少需要上传一份媒体，或先给当前${sourceLabel}添加媒体。`, false);
+      showMsg("commandMsg", "媒体上传失败，请重新选择文件。", false);
       return;
     }
     showMsg("commandMsg", `正在提交 ${publishPlatformLabel(account)} 任务到浏览器执行队列...`, true);
@@ -13444,6 +13742,14 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
     return null;
   }
   const platform = String(account.platform || "threads").trim().toLowerCase() || "threads";
+  const publishFiles = filesFromInput("simpleMediaFiles");
+  if (platform === "instagram" && !publishFiles.length) {
+    const missingMedia = posts.find((post) => !personaPublishPostMediaItems(String(persona.id || ""), post).length);
+    if (missingMedia) {
+      await requestInstagramPublishMediaResolution({ persona, source, post: missingMedia });
+      return null;
+    }
+  }
   if (!(await ensureDailyPublishCapacity(posts.length))) return null;
   const lockParts = ["publish_content", source, persona.id, cleanAccountId, selectedInSourceOrder.join("_"), "now"];
   const batchToastKey = socialTaskToastLaneKey({
@@ -13463,11 +13769,11 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
   }
   setActionLocked(lockParts, true);
   try {
-    const mediaPaths = await uploadAutomationMedia(filesFromInput("simpleMediaFiles"), messageId);
+    const mediaPaths = await uploadAutomationMedia(publishFiles, messageId);
     if (platform === "instagram") {
-      const missingMedia = posts.find((post) => !mediaPaths.length && !(Array.isArray(post.media_items) && post.media_items.length));
+      const missingMedia = posts.find((post) => !mediaPaths.length && !personaPublishPostMediaItems(String(persona.id || ""), post).length);
       if (missingMedia) {
-        showMsg(messageId, "Instagram 任务至少需要上传素材，或选择已有媒体的草稿/收藏。", false);
+        showMsg(messageId, "媒体上传失败，请重新选择文件。", false);
         return null;
       }
     }
@@ -14310,11 +14616,11 @@ async function createPersonaAutomationAccount() {
   openAccountPoolCreateModal({ platform, personaId: persona.id });
 }
 
-function buildPersonaThreadsTaskPayload(kind) {
+function buildPersonaThreadsTaskPayload(kind, platform = selectedPersonaAutomationPlatform()) {
   const strategyGroup = kind === "reply_hot"
     ? "threads_hot_reply"
     : kind === "warmup"
-      ? "threads_warmup"
+      ? `${String(platform || "").trim().toLowerCase() === "instagram" ? "instagram" : "threads"}_warmup`
       : "threads_comment_reply";
   const strategy = personaThreadsStrategy(strategyGroup);
   const payload = { ...(strategy?.payload || {}) };
@@ -14346,12 +14652,19 @@ function buildPersonaThreadsTaskPayload(kind) {
 
 async function runPersonaThreadsTask(kind) {
   const persona = selectedPersona();
-  const account = selectedPersonaAutomationAccount(persona, "threads");
+  const platform = selectedPersonaAutomationPlatform();
+  const account = selectedPersonaAutomationAccount(persona, platform);
   if (!persona || !account) {
-    showMsg("commandMsg", "请先绑定并选择 Threads 执行账号。", false);
+    showMsg("commandMsg", `请先绑定并选择 ${platformLabel(platform)} 执行账号。`, false);
     return;
   }
-  const taskType = kind === "warmup" ? "threads_warmup" : "threads_auto_reply";
+  if (platform === "instagram" && kind !== "warmup") {
+    showMsg("commandMsg", "Instagram 当前只开放养号任务。", false);
+    return;
+  }
+  const taskType = kind === "warmup"
+    ? (platform === "instagram" ? "instagram_warmup" : "threads_warmup")
+    : "threads_auto_reply";
   const lockParts = ["social", account.id, taskType];
   if (isActionLocked(...lockParts) || activeSocialTaskFor({ accountId: account.id, taskType })) {
     showMsg("commandMsg", `该账号已有${kind === "warmup" ? "养号" : "自动回复"}任务在队列或执行中，请等待完成。`, false);
@@ -14366,11 +14679,11 @@ async function runPersonaThreadsTask(kind) {
       body: JSON.stringify({
         persona_id: persona.id,
         account_id: account.id,
-        platform: "threads",
+        platform,
         task_type: taskType,
         priority: 50,
         max_retries: 2,
-        payload: buildPersonaThreadsTaskPayload(kind),
+        payload: buildPersonaThreadsTaskPayload(kind, platform),
       }),
     });
     showMsg("commandMsg", `${kind === "warmup" ? "养号" : "自动回复"}任务已提交：${result.task?.id || ""}`, true, {
@@ -15984,7 +16297,7 @@ function automationScreenshotThumbnailUrl(urlValue) {
 function isAutomationResultScreenshotStage(stageValue) {
   return new Set([
     "publish_done", "comment_done", "reply_done", "like_done", "already_liked",
-    "share_done", "threads_auto_reply_done", "threads_warmup", "browse_feed", "check_login", "login_complete",
+    "share_done", "threads_auto_reply_done", "threads_warmup", "instagram_warmup", "browse_feed", "check_login", "login_complete",
   ]).has(String(stageValue || "").trim());
 }
 
@@ -16867,11 +17180,12 @@ async function loadAutomationPlansShared({ force = false } = {}) {
   return request;
 }
 
-function automationPlanSubmissionItem(item = {}) {
+function automationPlanSubmissionItem(item = {}, platform = "threads") {
   let params = cloneAutomationPlanPayload(item.params || {});
-  const taskType = item.taskType === "threads_reply_comment" || item.taskType === "threads_reply_hot"
+  let taskType = item.taskType === "threads_reply_comment" || item.taskType === "threads_reply_hot"
     ? "threads_auto_reply"
     : item.taskType;
+  taskType = automationPlanTaskTypeForPlatform(taskType, platform);
   if (taskType === "threads_auto_reply") {
     params.reply_scope = String(params.reply_scope || (item.taskType === "threads_reply_hot" ? "hot_posts" : "comments"));
   }
@@ -16897,10 +17211,11 @@ function validateAutomationPlanDraft(draft, account) {
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
     const taskType = String(item.taskType || "");
+    const effectiveTaskType = automationPlanTaskTypeForPlatform(taskType, platform);
     const params = item.params || {};
     if (!taskType) return `请选择第 ${index + 1} 项要执行的任务。`;
-    if (!allowed.has(taskType)) return `第 ${index + 1} 项任务不适用于当前执行账号。`;
-    const conflictKey = automationPlanConflictKey(taskType);
+    if (!allowed.has(effectiveTaskType)) return `第 ${index + 1} 项任务不适用于当前执行账号。`;
+    const conflictKey = automationPlanConflictKey(effectiveTaskType);
     if (conflictKey && taskTypes.has(conflictKey)) return `同一账号不能重复添加${automationPlanTaskLabel(taskType)}。`;
     if (conflictKey) taskTypes.add(conflictKey);
     if (Number(item.reservationMinutes) < 0 || Number(item.reservationMinutes) > 1440 || Number(item.reservationMinutes) % 30 !== 0) {
@@ -16909,7 +17224,7 @@ function validateAutomationPlanDraft(draft, account) {
     if (index > 0 && Number(item.reservationMinutes) <= Number(items[index - 1].reservationMinutes)) {
       return "预约时间必须按列表顺序每次至少向后 30 分钟。";
     }
-    if (["threads_reply_comment", "threads_reply_hot", "threads_warmup"].includes(taskType) && !item.configured) {
+    if (["threads_reply_comment", "threads_reply_hot", "threads_warmup", "instagram_warmup"].includes(taskType) && !item.configured) {
       return `请先打开第 ${index + 1} 项的原任务配置并点击“添加该任务”。`;
     }
     if (taskType === "normal_publish" && (!item.configured || !Number.isInteger(Number(params.publish_count)) || Number(params.publish_count) < 1 || Number(params.publish_count) > 5)) {
@@ -16932,11 +17247,19 @@ function validateAutomationPlanDraft(draft, account) {
 async function submitAutomationPlan() {
   if (state.automationPlanPending) return;
   const persona = selectedPersona();
-  const { draft, account, key } = currentAutomationPlanDraft(persona);
-  if (!persona || !account) {
-    showMsg("commandMsg", "请先选择已绑定执行账号的人设。", false);
+  if (!persona) {
+    showMsg("commandMsg", "请先选择人设。", false);
     return;
   }
+  const { draft, key } = currentAutomationPlanDraft(persona);
+  const account = await choosePublishPlatformAccount(persona, {
+    title: "选择执行平台",
+    message: "选择本次自动化计划的执行平台，确认后才会创建并开始执行。",
+    confirmText: "创建并执行",
+    modalKey: "automation-plan-platform-picker",
+    persistSelection: false,
+  });
+  if (!account) return;
   const validationError = validateAutomationPlanDraft(draft, account);
   if (validationError) {
     const invalidIndex = draft.items.findIndex((item) => (
@@ -16962,12 +17285,15 @@ async function submitAutomationPlan() {
         account_id: account.id,
         platform: account.platform || "threads",
         mode: draft.mode,
-        items: draft.items.map(automationPlanSubmissionItem),
+        items: draft.items.map((item) => automationPlanSubmissionItem(item, account.platform || "threads")),
       }),
     });
     state.automationPlans = [result.plan, ...state.automationPlans.filter((plan) => String(plan.id) !== String(result.plan?.id))].filter(Boolean);
-    state.automationPlanDrafts[key] = createAutomationPlanDraft(account.id, account.platform || "threads");
-    state.automationPlanDrafts[key].mode = draft.mode;
+    state.personaPublishAccountIds[String(persona.id || "")] = String(account.id || "");
+    delete state.automationPlanDrafts[key];
+    const selectedKey = automationPlanDraftKey(persona.id, account.id);
+    state.automationPlanDrafts[selectedKey] = createAutomationPlanDraft(account.id);
+    state.automationPlanDrafts[selectedKey].mode = draft.mode;
     showMsg("commandMsg", `${draft.mode === "loop" ? "循环" : "列表"}自动化计划已创建。`, true);
     await loadAutomationPlansShared({ force: true });
   } finally {
@@ -21909,8 +22235,82 @@ function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 50
   window.setTimeout(() => run(1), 250);
 }
 
+function captureLiveBrowserReturnTarget() {
+  const view = String(state.view || "").trim();
+  if (view === "tasks") {
+    return {
+      view: "tasks",
+      taskPanel: state.taskQueuePanel === "regular" ? "regular" : "persona",
+      taskQueueRegularPage: Math.max(1, Number(state.taskQueueRegularPage || 1)),
+      taskQueuePersonaPage: Math.max(1, Number(state.taskQueuePersonaPage || 1)),
+      personaId: String(state.selectedPersonaId || "").trim(),
+    };
+  }
+  if (view === "workspace") {
+    return {
+      view: "workspace",
+      module: String(state.activeModule || "personas").trim() || "personas",
+      personaId: String(state.selectedPersonaId || "").trim(),
+      personaGroup: String(state.personaGroup || "").trim(),
+      personaStep: String(state.personaPanels?.[state.personaGroup] || "").trim(),
+    };
+  }
+  if (view === "accounts") {
+    return {
+      view: "accounts",
+      accountPanel: state.accountBrowserPanel === "proxies" ? "proxies" : "accounts",
+    };
+  }
+  return { view: ["persona_dashboard", "billing", "console_settings"].includes(view) ? view : "accounts" };
+}
+
+function liveBrowserReturnLabel(target = state.liveBrowserReturnTarget) {
+  if (target?.view === "tasks") return "返回任务";
+  if (target?.view === "workspace") return "返回工作台";
+  if (target?.view === "persona_dashboard") return "返回人设看板";
+  return "返回账号管理";
+}
+
+function returnFromLiveBrowserTaskView() {
+  const target = state.liveBrowserReturnTarget;
+  state.liveBrowserReturnTarget = null;
+  if (!target || typeof target !== "object") {
+    setAccountBrowserPanel("accounts");
+    return;
+  }
+  const targetView = String(target.view || "accounts").trim();
+  const targetPersonaId = String(target.personaId || "").trim();
+  if (targetPersonaId && state.personas.some((persona) => String(persona?.id || "") === targetPersonaId)) {
+    setSelectedPersonaId(targetPersonaId);
+  }
+  if (targetView === "tasks") {
+    state.taskQueuePanel = target.taskPanel === "regular" ? "regular" : "persona";
+    state.taskQueueRegularPage = Math.max(1, Number(target.taskQueueRegularPage || 1));
+    state.taskQueuePersonaPage = Math.max(1, Number(target.taskQueuePersonaPage || 1));
+    setView("tasks");
+    return;
+  }
+  if (targetView === "workspace") {
+    state.activeModule = String(target.module || "personas").trim() || "personas";
+    if (target.personaGroup) {
+      state.personaGroup = normalizedPersonaGroupKey(target.personaGroup);
+      setPersonaGroupStep(state.personaGroup, target.personaStep, selectedPersonaProfile());
+    }
+    setView("workspace");
+    return;
+  }
+  if (targetView === "accounts") {
+    setAccountBrowserPanel(target.accountPanel === "proxies" ? "proxies" : "accounts");
+    return;
+  }
+  setView(["persona_dashboard", "billing", "console_settings"].includes(targetView) ? targetView : "accounts");
+}
+
 function openLiveBrowserTaskView(taskId = "") {
   const cleanTaskId = String(taskId || "").trim();
+  if (!(state.view === "accounts" && state.accountBrowserPanel === "browsers")) {
+    state.liveBrowserReturnTarget = captureLiveBrowserReturnTarget();
+  }
   state.accountBrowserPanel = "browsers";
   setView("accounts");
   setAccountBrowserPanel("browsers");
@@ -25742,7 +26142,7 @@ function compactPayload(payload) {
 }
 
 function defaultPayloadForTask(taskType) {
-  if (taskType === "threads_warmup") {
+  if (["threads_warmup", "instagram_warmup"].includes(taskType)) {
     return {
       strategy_id: "tg_default",
       browse_limit: 30,
@@ -26562,6 +26962,23 @@ function bindEvents() {
   $("refreshBilling")?.addEventListener("click", () => loadBilling({ force: true }).catch((error) => {
     showMsg("billingMsg", error.detail || error.message || "刷新计费信息失败", false, { target: { view: "billing" } });
   }));
+  $("openBillingPlans")?.addEventListener("click", () => {
+    window.location.assign("/pricing.html");
+  });
+  $("billingTrend")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-billing-trend-range]");
+    if (!button) return;
+    const range = Number(button.dataset.billingTrendRange);
+    state.billing.trendRangeDays = [0, 7, 30].includes(range) ? range : 30;
+    renderBillingTrend();
+  });
+  $("billingLedgerSection")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-billing-ledger-filter]");
+    if (!button) return;
+    const filter = String(button.dataset.billingLedgerFilter || "all");
+    state.billing.ledgerFilter = ["all", "expense", "income"].includes(filter) ? filter : "all";
+    renderBillingLedger();
+  });
   $("billingOrders")?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-billing-cancel-order]");
     if (button) cancelBillingOrder(button.dataset.billingCancelOrder || "");
@@ -28094,8 +28511,8 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-clear-tasks]")) clearPersonaAutomationTasks().catch((error) => showMsg("commandMsg", error.detail || error.message || "清理队列失败", false));
-    const runThreads = event.target.closest("[data-persona-run-threads]");
-    if (runThreads) runPersonaThreadsTask(runThreads.dataset.personaRunThreads).catch((error) => showMsg("commandMsg", error.detail || error.message || "提交任务失败", false));
+    const runAutomation = event.target.closest("[data-persona-run-automation]");
+    if (runAutomation) runPersonaThreadsTask(runAutomation.dataset.personaRunAutomation).catch((error) => showMsg("commandMsg", error.detail || error.message || "提交任务失败", false));
     if (
       state.personaListEditorId
       && !event.target.closest(".persona-card-menu")
@@ -28850,13 +29267,16 @@ async function init() {
   }
   consoleIdentityReady = true;
   bindIdentityRevalidationEvents();
-  await loadBillingCatalog().catch((error) => {
+  const billingCatalogReady = loadBillingCatalog().catch((error) => {
     state.billing.errors.catalog = error || { detail: "计费目录加载失败" };
   });
   const hasPersonaBootstrap = hydratePersonaOverviewFromBootstrap(me);
   bindEvents();
   setView(state.view);
   renderWorkspace();
+  // The shell and any server-rendered persona bootstrap are ready now. Keep
+  // slower data refreshes in the background instead of holding the page mask.
+  finishWorkspaceBootstrapLoading();
   if (me.is_admin) {
     loadSetupStatus().catch(() => {});
   } else {
@@ -28871,9 +29291,8 @@ async function init() {
   const personasReady = loadPersonas().then(() => {
     if (state.activeModule === "publishing") refreshCurrentPublishingPersonaContent({ force: false }).catch(() => []);
   }).catch(() => {});
-  await Promise.all([tasksReady, socialReady, personasReady]);
-  finishWorkspaceBootstrapLoading();
-  scheduleWorkspaceRender(false);
+  void Promise.all([billingCatalogReady, tasksReady, socialReady, personasReady])
+    .finally(() => scheduleWorkspaceRender(false));
 }
 
 window.addEventListener("vecto:logout-request", () => {

@@ -27,6 +27,7 @@ SUPPORTED_TASK_TYPES = {
     "open_login",
     "browse_feed",
     "browse_profile",
+    "instagram_warmup",
     "threads_warmup",
     "threads_auto_reply",
     "publish_post",
@@ -283,6 +284,8 @@ def run_social_task(
         raise UnsupportedActionError(f"不支持的平台：{platform}")
     if platform == "instagram" and task_type in {"threads_warmup", "threads_auto_reply"}:
         raise UnsupportedActionError(f"{task_type} 需要使用 Threads 账号。")
+    if platform == "threads" and task_type == "instagram_warmup":
+        raise UnsupportedActionError("instagram_warmup 需要使用 Instagram 账号。")
     if platform == "threads" and task_type not in {"open_login", "check_login", "browse_feed", "threads_warmup", "threads_auto_reply", "publish_post"}:
         raise UnsupportedActionError(f"{task_type} 尚未支持 Threads Web 自动化。")
     if platform == "instagram" and task_type == "repost_post":
@@ -398,6 +401,9 @@ def run_social_task(
             if platform == "threads":
                 return _run_threads_warmup(page, task, payload, screenshot_dir, logger)
             return _run_browse_feed(page, task, payload, screenshot_dir, logger)
+        if task_type == "instagram_warmup":
+            _raise_if_cancelled(cancel_event)
+            return _run_instagram_warmup(page, task, payload, screenshot_dir, logger, cancel_event=cancel_event)
         if task_type == "threads_warmup":
             _raise_if_cancelled(cancel_event)
             return _run_threads_warmup(page, task, payload, screenshot_dir, logger)
@@ -1375,7 +1381,10 @@ def _should_capture_screenshot(stage: str) -> bool:
     mode = str(os.getenv("SOCIAL_AUTOMATION_SCREENSHOT_MODE") or "checkpoint").strip().lower()
     if mode in {"debug", "all", "full"}:
         return True
-    return str(stage or "") in {
+    normalized_stage = str(stage or "").strip().lower()
+    if normalized_stage.startswith("instagram_warmup"):
+        return True
+    return normalized_stage in {
         "login_verification_required",
         "login_invalid_credentials",
         "login_wait_timeout",
@@ -2494,6 +2503,273 @@ def _run_browse_feed(page, task, payload, screenshot_dir, logger) -> dict[str, A
     _warmup_scroll(page, logger, int(payload.get("scroll_times") or 2))
     shot = _screenshot(page, screenshot_dir, task, "browse_feed", logger)
     return {"ok": True, "url": page.url, "screenshot_path": shot}
+
+
+def _instagram_action_locators(page, label: str):
+    localized_labels = {
+        "Like": ("Like", "赞", "讚"),
+        "Comment": ("Comment", "评论", "留言"),
+    }.get(str(label or "").strip(), (str(label or "").strip(),))
+    result = []
+    for action_label in localized_labels:
+        if not action_label:
+            continue
+        selectors = [
+            f'xpath=//*[@aria-label="{action_label}" and (self::button or @role="button")]',
+            f'xpath=//*[@aria-label="{action_label}"]/ancestor::*[self::button or @role="button"][1]',
+        ]
+        for selector in selectors:
+            with contextlib.suppress(Exception):
+                result.append(page.locator(selector))
+    return result
+
+
+def _instagram_unlike_count(page) -> int:
+    total = 0
+    for label in ("Unlike", "取消赞", "取消讚"):
+        with contextlib.suppress(Exception):
+            total += int(page.locator(f'[aria-label="{label}"]').count())
+    return total
+
+
+def _dismiss_instagram_interstitials(page, logger: AutomationLogger) -> bool:
+    dismissed = False
+    for _ in range(2):
+        if not _click_text_button(
+            page,
+            logger,
+            ["Not Now", "稍后", "以后再说", "暂不", "現在不要"],
+            "instagram_warmup_dismiss",
+        ):
+            break
+        dismissed = True
+        logger.log("info", "instagram_warmup_dismiss", "已关闭 Instagram 平台提示弹窗。")
+        _sleep_between(0.5, 1.0)
+    return dismissed
+
+
+def _click_some_instagram_likes(page, logger: AutomationLogger, limit: int) -> int:
+    clicked = 0
+    if limit <= 0:
+        return clicked
+    for group in _instagram_action_locators(page, "Like"):
+        with contextlib.suppress(Exception):
+            indices = list(range(min(group.count(), 32)))
+            random.shuffle(indices)
+            for index in indices:
+                locator = group.nth(index)
+                if not locator.is_visible(timeout=1000):
+                    continue
+                unlike_before = _instagram_unlike_count(page)
+                _human_click(page, locator, logger, "instagram_warmup_like")
+                _sleep_between(0.8, 1.4)
+                unlike_after = _instagram_unlike_count(page)
+                if unlike_after <= unlike_before:
+                    logger.log(
+                        "warn",
+                        "instagram_warmup_like_unconfirmed",
+                        "Instagram 点赞状态未变更，本次不计入成功数。",
+                        {"unlike_before": unlike_before, "unlike_after": unlike_after},
+                    )
+                    continue
+                clicked += 1
+                logger.log("info", "instagram_warmup_like", "Instagram 养号过程中已点赞。", {"liked": clicked})
+                _sleep_between(0.4, 1.4)
+                if clicked >= limit:
+                    return clicked
+    return clicked
+
+
+def _instagram_warmup_comment_box(page):
+    selectors = [
+        'textarea[aria-label*="comment" i]',
+        'textarea[placeholder*="comment" i]',
+        'textarea',
+    ]
+    for selector in selectors:
+        with contextlib.suppress(Exception):
+            group = page.locator(selector)
+            for index in reversed(range(min(group.count(), 12))):
+                locator = group.nth(index)
+                if locator.is_visible(timeout=1000):
+                    return locator
+    return None
+
+
+def _instagram_exact_text_count(page, text: str) -> int:
+    with contextlib.suppress(Exception):
+        return int(page.get_by_text(str(text or ""), exact=True).count())
+    return 0
+
+
+def _wait_for_instagram_comment_echo(page, text: str, previous_count: int, timeout_seconds: float = 10.0) -> bool:
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    while time.monotonic() < deadline:
+        with contextlib.suppress(Exception):
+            group = page.get_by_text(str(text or ""), exact=True)
+            if int(group.count()) > int(previous_count):
+                target = group.last
+                if target.is_visible(timeout=1000):
+                    target.scroll_into_view_if_needed(timeout=5000)
+                    return True
+        time.sleep(0.5)
+    return False
+
+
+def _post_instagram_warmup_comment(page, logger: AutomationLogger, text: str) -> bool:
+    clean_text = str(text or "").strip()
+    if not clean_text:
+        return False
+    for group in _instagram_action_locators(page, "Comment"):
+        with contextlib.suppress(Exception):
+            for index in range(min(group.count(), 20)):
+                button = group.nth(index)
+                if not button.is_visible(timeout=1000):
+                    continue
+                _human_click(page, button, logger, "instagram_warmup_comment_button")
+                _sleep_between(1.0, 2.0)
+                box = _instagram_warmup_comment_box(page)
+                if box is None:
+                    continue
+                previous_count = _instagram_exact_text_count(page, clean_text)
+                _human_click(page, box, logger, "instagram_warmup_comment_focus")
+                _human_type(page, clean_text, min_delay=0.10, max_delay=0.22)
+                if not _click_text_button(page, logger, ["Post", "发布"], "instagram_warmup_comment_submit"):
+                    continue
+                if _wait_for_instagram_comment_echo(page, clean_text, previous_count):
+                    logger.log(
+                        "info",
+                        "instagram_warmup_comment_confirmed",
+                        "Instagram 评论内容已在页面回显。",
+                        {"text": clean_text[:80]},
+                    )
+                    return True
+                logger.log(
+                    "warn",
+                    "instagram_warmup_comment_unconfirmed",
+                    "Instagram 评论提交后未检测到内容回显，本次不计入成功数。",
+                    {"text": clean_text[:80]},
+                )
+                return False
+    return False
+
+
+def _run_instagram_warmup(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    cancel_event: Any | None = None,
+) -> dict[str, Any]:
+    _goto(page, INSTAGRAM_HOME, logger, "instagram_warmup")
+    _dismiss_instagram_interstitials(page, logger)
+    browse_limit = _payload_int(payload, ("browse_limit", "browse_count", "scroll_times"), 30, 1, 300)
+    like_limit = _payload_int(payload, ("like_limit",), 0, 0, 100)
+    max_comments = _payload_int(payload, ("max_comments",), 0, 0, 50)
+    comment_chance = _payload_int(payload, ("comment_chance",), 0, 0, 100)
+    session_seconds = _warmup_session_seconds(payload)
+    strategy_id = str(payload.get("strategy_id") or "tg_default")
+    strategy_label = str(payload.get("strategy_label") or "默认养号：滑动 + 随机点赞")
+    min_required_likes = _payload_int(
+        payload,
+        ("min_required_likes",),
+        1 if like_limit > 0 else 0,
+        0,
+        like_limit or 0,
+    )
+    min_required_comments = _payload_int(
+        payload,
+        ("min_required_comments",),
+        1 if max_comments > 0 and comment_chance > 0 else 0,
+        0,
+        max_comments or 0,
+    )
+    logger.log("info", "instagram_warmup", "开始执行 Instagram 养号。", {
+        "strategy_id": strategy_id,
+        "strategy_label": strategy_label,
+        "browse_limit": browse_limit,
+        "session_seconds": session_seconds,
+        "like_limit": like_limit,
+        "max_comments": max_comments,
+        "comment_chance": comment_chance,
+    })
+    liked = 0
+    commented = 0
+    browsed = 0
+    comment_screenshots: list[str] = []
+    deadline = time.monotonic() + session_seconds
+    while time.monotonic() < deadline and browsed < browse_limit:
+        _raise_if_cancelled(cancel_event)
+        _dismiss_instagram_interstitials(page, logger)
+        elapsed_ratio = 1 - max(0, deadline - time.monotonic()) / max(1, session_seconds)
+        should_backfill_like = liked < min_required_likes and elapsed_ratio >= 0.25
+        if like_limit > liked and (should_backfill_like or random.random() < 0.34):
+            liked += _click_some_instagram_likes(page, logger, like_limit - liked)
+            _dismiss_instagram_interstitials(page, logger)
+        should_backfill_comment = commented < min_required_comments and elapsed_ratio >= 0.35
+        if (
+            max_comments > commented
+            and comment_chance > 0
+            and browsed > 0
+            and (should_backfill_comment or random.randint(1, 100) <= comment_chance)
+        ):
+            reply_text = _pick_persona_reply(payload)
+            if _post_instagram_warmup_comment(page, logger, reply_text):
+                commented += 1
+                shot_comment = _screenshot(
+                    page,
+                    screenshot_dir,
+                    task,
+                    f"instagram_warmup_comment_{commented}",
+                    logger,
+                )
+                if shot_comment:
+                    comment_screenshots.append(shot_comment)
+                logger.log("info", "instagram_warmup_comment", "Instagram 养号过程中已评论。", {
+                    "commented": commented,
+                    "text": str(reply_text or "")[:80],
+                })
+        scroll = _slow_human_scroll(page)
+        browsed += 1
+        logger.log("debug", "instagram_warmup", "已平滑浏览 Instagram 信息流。", {
+            "index": browsed,
+            "browse_limit": browse_limit,
+            "liked": liked,
+            "commented": commented,
+            **scroll,
+        })
+        if time.monotonic() >= deadline:
+            break
+        _sleep_between(5.0, 10.0)
+    _dismiss_instagram_interstitials(page, logger)
+    shot = _screenshot(page, screenshot_dir, task, "instagram_warmup", logger)
+    if liked < min_required_likes:
+        raise RuntimeError(f"Instagram 养号未达到最低点赞目标：{liked}/{min_required_likes}")
+    if commented < min_required_comments:
+        raise RuntimeError(f"Instagram 养号未达到最低评论目标：{commented}/{min_required_comments}")
+    logger.log("info", "completion_node", "Instagram 养号完成节点已确认。", {
+        "url": str(page.url or ""),
+        "liked": liked,
+        "commented": commented,
+        "scrolled": browsed,
+        "strategy_id": strategy_id,
+        "strategy_label": strategy_label,
+    }, shot)
+    return {
+        "ok": True,
+        "url": page.url,
+        "liked": liked,
+        "commented": commented,
+        "scrolled": browsed,
+        "browse_limit": browse_limit,
+        "target_seconds": session_seconds,
+        "strategy_id": strategy_id,
+        "strategy_label": strategy_label,
+        "commentScreenshots": comment_screenshots,
+        "screenshot_path": shot,
+    }
 
 
 def _threads_like_buttons(page):

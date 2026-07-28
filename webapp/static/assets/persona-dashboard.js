@@ -119,7 +119,10 @@ function pdConfirm(message, options = {}) {
   return pdPromptDialog({ ...options, message, showCancel: true });
 }
 
-let personaDashboardData = null;
+const pdInitialDashboardData = window.__PERSONA_DASHBOARD_BOOTSTRAP__ || window.__CONSOLE_BOOTSTRAP__;
+let personaDashboardData = pdInitialDashboardData && Array.isArray(pdInitialDashboardData.personas)
+  ? pdInitialDashboardData
+  : null;
 let personaDashboardSelectedId = "__overview__";
 let personaDashboardPostPage = 1;
 let personaDashboardPageSize = Number(localStorage.getItem("personaDashboardPageSize") || 10) || 10;
@@ -130,7 +133,7 @@ let personaDashboardTabPage = 1;
 let personaDashboardPostModalKey = "";
 let personaDashboardGalleryIndex = -1;
 let personaDashboardAutoPollTimer = 0;
-let personaDashboardLastLoadedAt = 0;
+let personaDashboardLastLoadedAt = personaDashboardData ? Date.now() : 0;
 let personaDashboardLoadPromise = null;
 let personaDashboardPostSort = localStorage.getItem("personaDashboardPostSort") || "hot_desc";
 let personaDashboardPostTypeFilter = localStorage.getItem("personaDashboardPostTypeFilter") || "all";
@@ -1103,6 +1106,7 @@ function pdOpenPersonaDashboardPicker(visiblePersonas, selectedPersona) {
       index: String(index + 1),
       title: persona.name || "未命名人设",
       meta: handle ? `Threads · ${handle}` : "账号未绑定",
+      accountBound: Boolean(handle),
     };
   });
   const settings = {
@@ -1115,7 +1119,7 @@ function pdOpenPersonaDashboardPicker(visiblePersonas, selectedPersona) {
     const active = String(option.id) === String(personaDashboardSelectedId);
     return `
       <button
-        class="persona-dashboard-picker-option persona-dashboard-picker-option--${type} ${active ? "is-active" : ""}"
+        class="persona-dashboard-picker-option persona-dashboard-picker-option--${type} ${active ? "is-active" : ""} ${option.accountBound === false ? "is-account-unbound" : option.accountBound === true ? "is-account-bound" : ""}"
         type="button"
         data-dashboard-persona-picker="${pdEscape(option.id)}"
         aria-pressed="${active ? "true" : "false"}"
@@ -1303,12 +1307,6 @@ function pdSetMsg(text, type = "ok") {
   msg.className = text ? `msg ${type}` : "msg";
 }
 
-function pdSetConsoleLoading(loading) {
-  document.dispatchEvent(new CustomEvent("vecto:persona-dashboard-loading", {
-    detail: { loading: Boolean(loading) },
-  }));
-}
-
 function pdDashboardViewCacheIsFresh() {
   return Boolean(
     personaDashboardData
@@ -1319,14 +1317,10 @@ function pdDashboardViewCacheIsFresh() {
 
 async function pdLoadDashboard(options = {}) {
   const silent = Boolean(options && options.silent);
-  const shouldShowPageLoader = !silent;
   if (personaDashboardLoadPromise) {
-    if (!shouldShowPageLoader) return personaDashboardLoadPromise;
-    pdSetConsoleLoading(true);
-    return personaDashboardLoadPromise.finally(() => pdSetConsoleLoading(false));
+    return personaDashboardLoadPromise;
   }
   const request = (async () => {
-    if (shouldShowPageLoader) pdSetConsoleLoading(true);
     if (!silent) pdSetMsg("正在加载人设数据...", "ok");
     try {
       const data = await pdApi("/api/persona_dashboard/overview");
@@ -1343,8 +1337,6 @@ async function pdLoadDashboard(options = {}) {
     } catch (err) {
       if (!silent) pdSetMsg(String((err && (err.detail || err.message)) || err || "加载失败"), "err");
       return null;
-    } finally {
-      if (shouldShowPageLoader) pdSetConsoleLoading(false);
     }
   })();
   personaDashboardLoadPromise = request;

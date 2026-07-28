@@ -1,5 +1,7 @@
 import unittest
 from pathlib import Path
+import shutil
+import subprocess
 
 
 STATIC_ROOT = Path(__file__).resolve().parents[1] / "static"
@@ -11,9 +13,24 @@ class BillingFrontendContractTests(unittest.TestCase):
         cls.admin_markup = (STATIC_ROOT / "admin.html").read_text(encoding="utf-8")
         cls.admin_script = (STATIC_ROOT / "assets" / "admin.js").read_text(encoding="utf-8")
         cls.admin_styles = (STATIC_ROOT / "assets" / "style.css").read_text(encoding="utf-8")
+        cls.console_markup = (STATIC_ROOT / "console.html").read_text(encoding="utf-8")
         cls.console_script = (STATIC_ROOT / "assets" / "console.js").read_text(encoding="utf-8")
         cls.console_styles = (STATIC_ROOT / "assets" / "console.css").read_text(encoding="utf-8")
         cls.site_navigation_script = (STATIC_ROOT / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
+
+    def _run_node(self, script):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        result = subprocess.run(
+            [node, "-e", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=20,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_both_admin_adjustment_entries_submit_the_unlimited_contract(self):
         for control_id in ("billingAdjustmentUnlimited", "rechargeUnlimited"):
@@ -79,6 +96,138 @@ class BillingFrontendContractTests(unittest.TestCase):
         self.assertNotIn("billing-price-pill", self.console_script)
         self.assertNotIn(".billing-price-pill", self.console_styles)
 
+    def test_billing_dashboard_uses_real_ledger_for_the_balance_chart(self):
+        trend = self.console_script[
+            self.console_script.index("function billingTrendData")
+            : self.console_script.index("function renderBillingSummary")
+        ]
+        self.assertIn("billingLedgerEntries()", trend)
+        self.assertIn("entry.balance_after_points", trend)
+        self.assertIn("entry.created_at", trend)
+        self.assertIn("billingTimestampMs(entry.created_at)", trend)
+        self.assertIn("billingCreditAmount(entry)", trend)
+        self.assertIn('entry.eventType !== "opening_balance"', trend)
+        self.assertIn('role="img" aria-label="账户算力余额变化折线图"', trend)
+        self.assertNotIn("Math.random", trend)
+        self.assertNotIn("billingTrendArea", trend)
+        self.assertNotIn("billingTrendGlow", trend)
+
+    def test_billing_loader_pages_through_the_complete_ledger(self):
+        loader = self.console_script[
+            self.console_script.index("async function loadBillingLedger")
+            : self.console_script.index(
+                "async function loadBilling(",
+                self.console_script.index("async function loadBillingLedger"),
+            )
+        ]
+        load_billing = self.console_script[
+            self.console_script.index("async function loadBilling(")
+            : self.console_script.index("async function loadBillingCatalog")
+        ]
+        self.assertIn("const pageSize = 200", loader)
+        self.assertIn('params.set("before", String(before))', loader)
+        self.assertIn("page?.next_before", loader)
+        self.assertIn("ledger: loadBillingLedger()", load_billing)
+        self.assertNotIn('ledger: api("/api/billing/ledger")', load_billing)
+
+    def test_billing_ledger_pagination_and_trend_baseline_behave_in_node(self):
+        loader_start = self.console_script.index("async function loadBillingLedger")
+        loader = self.console_script[
+            loader_start:self.console_script.index("\nasync function loadBilling(", loader_start)
+        ]
+        credit_start = self.console_script.index("function billingCreditAmount")
+        credit = self.console_script[
+            credit_start:self.console_script.index("\nfunction billingTrendData", credit_start)
+        ]
+        trend_start = self.console_script.index("function billingTrendData")
+        trend = self.console_script[
+            trend_start:self.console_script.index("\nfunction billingTrendChart", trend_start)
+        ]
+        harness = f"""
+const assert = require("node:assert/strict");
+const requestedPaths = [];
+async function api(path) {{
+  requestedPaths.push(path);
+  if (requestedPaths.length === 1) {{
+    return {{
+      items: Array.from({{ length: 200 }}, (_, index) => ({{ id: `row-${{index}}` }})),
+      next_before: 800,
+    }};
+  }}
+  return {{ items: [{{ id: "row-200" }}, {{ id: "row-201" }}], next_before: 700 }};
+}}
+{loader}
+
+const state = {{ billing: {{ trendRangeDays: 30 }} }};
+let ledgerRows = [];
+function billingSummaryData() {{ return {{ creditPoints: 100 }}; }}
+function billingLedgerEntries() {{ return ledgerRows; }}
+{credit}
+{trend}
+
+(async () => {{
+  const ledger = await loadBillingLedger();
+  assert.equal(ledger.items.length, 202);
+  assert.deepEqual(requestedPaths, [
+    "/api/billing/ledger?limit=200",
+    "/api/billing/ledger?limit=200&before=800",
+  ]);
+
+  const now = Date.now();
+  ledgerRows = [{{
+    asset_type: "credit",
+    amount_points: 100,
+    balance_after_points: 100,
+    created_at: Math.floor((now - 3600000) / 1000),
+    event_type: "admin_adjustment",
+  }}];
+  const result = billingTrendData(30);
+  assert.equal(result.points[0].value, 0);
+  assert.equal(result.change, 100);
+}})().catch((error) => {{
+  console.error(error);
+  process.exitCode = 1;
+}});
+"""
+        self._run_node(harness)
+
+    def test_billing_dashboard_has_range_and_ledger_controls(self):
+        self.assertIn('id="billingTrend"', self.console_markup)
+        for marker in (
+            'data-billing-ledger-filter="all"',
+            'data-billing-ledger-filter="expense"',
+            'data-billing-ledger-filter="income"',
+        ):
+            self.assertIn(marker, self.console_markup)
+        events = self.console_script[
+            self.console_script.index("function bindEvents")
+            : self.console_script.index('window.addEventListener("beforeunload"')
+        ]
+        self.assertIn('data-billing-trend-range', self.console_script)
+        self.assertIn('state.billing.trendRangeDays', events)
+        self.assertIn('state.billing.ledgerFilter', events)
+        self.assertIn('id="openBillingPlans"', self.console_markup)
+        self.assertNotIn('<a class="button" href="/pricing.html">查看订阅中心</a>', self.console_markup)
+        self.assertIn('window.location.assign("/pricing.html")', events)
+
+    def test_billing_dashboard_has_console_and_mobile_layouts(self):
+        dashboard_styles = self.console_styles[
+            self.console_styles.index("/* Billing command center */"):
+        ]
+        self.assertIn(".billing-chart-panel", dashboard_styles)
+        self.assertIn(".billing-trend-line", dashboard_styles)
+        self.assertIn("stroke: var(--billing-accent);", dashboard_styles)
+        self.assertIn("background: var(--panel-solid);", dashboard_styles)
+        self.assertNotIn("radial-gradient(circle at 86% 8%", dashboard_styles)
+        for status_color in ("#1db9a5", "#3778b9", "#8a65c7", "#d29035"):
+            self.assertIn(status_color, dashboard_styles)
+        self.assertIn(".billing-ledger-table-head", dashboard_styles)
+        self.assertIn("grid-template-columns: 170px minmax(220px, 1fr) 120px 140px;", dashboard_styles)
+        self.assertIn('role="table" aria-label="账户余额变动明细"', self.console_script)
+        self.assertIn('role="columnheader">变动后余额', self.console_script)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", dashboard_styles)
+        self.assertIn("@media (max-width: 760px)", dashboard_styles)
+
     def test_admin_catalog_editor_uses_business_fields_instead_of_raw_json(self):
         for control_id in (
             "billingSubscriptionName",
@@ -104,7 +253,7 @@ class BillingFrontendContractTests(unittest.TestCase):
             "data-persona-run-media-task",
             "data-persona-generate-posts",
             "data-persona-publish-submit",
-            "data-persona-run-threads=",
+            "data-persona-run-automation=",
             "data-automation-plan-submit",
             "data-persona-create-ai-keywords",
             "data-persona-create-ai-submit",
@@ -170,8 +319,8 @@ class BillingFrontendContractTests(unittest.TestCase):
         self.assertIn("top: max(12px, env(safe-area-inset-top));", mobile_styles)
         self.assertIn("bottom: auto;", mobile_styles)
         self.assertIn("width: auto;", mobile_styles)
-        self.assertIn("animation: toastSlideDown 180ms ease-out;", self.console_styles)
-        self.assertIn("@keyframes toastSlideDown", self.console_styles)
+        self.assertIn("animation: toastSlideDownIn 220ms", self.console_styles)
+        self.assertIn("@keyframes toastSlideDownIn", self.console_styles)
         self.assertIn("width: 16px;", self.console_styles)
         self.assertIn("flex: 0 0 16px;", self.console_styles)
         self.assertIn(".task-button-spinner circle", self.console_styles)

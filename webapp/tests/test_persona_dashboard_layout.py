@@ -303,14 +303,29 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("总览数据", picker)
         self.assertIn("普通人设", picker)
         self.assertIn("显示设置", picker)
+        self.assertIn("accountBound: Boolean(handle)", picker)
+        self.assertIn('"is-account-unbound"', picker)
 
         picker_start = self.styles.index(".persona-dashboard-picker-tabs {")
         picker_end = self.styles.index(".persona-dashboard-view .persona-tab {", picker_start)
         picker_styles = self.styles[picker_start:picker_end]
         self.assertIn(".persona-dashboard-picker-section:not(.persona-dashboard-picker-section--overview)", picker_styles)
         self.assertNotIn("border-style: dashed;", picker_styles)
-        self.assertNotIn(".persona-dashboard-picker-option--overview {", picker_styles)
-        self.assertNotIn(".persona-dashboard-picker-option--settings {", picker_styles)
+        self.assertIn(".persona-dashboard-picker-option--overview {", picker_styles)
+        self.assertIn(".persona-dashboard-picker-option--settings {", picker_styles)
+        self.assertIn(".persona-dashboard-picker-option::after {", picker_styles)
+        self.assertIn(".persona-dashboard-picker-copy span::before {", picker_styles)
+        self.assertIn("linear-gradient(110deg", picker_styles)
+        self.assertIn("text-overflow: ellipsis;", picker_styles)
+        self.assertIn("#e3efed", picker_styles)
+        self.assertIn("#1d3446", picker_styles)
+        self.assertIn("#71979a", picker_styles)
+        self.assertIn("background: #ffffff;", picker_styles)
+        self.assertIn(".persona-dashboard-picker-option.is-account-unbound .persona-dashboard-picker-copy span::before", picker_styles)
+        self.assertIn("background: #28465a;", picker_styles)
+        self.assertIn("linear-gradient(110deg, #f5fbfa 0%, #eaf4f2 58%, #e3efed 100%)", picker_styles)
+        self.assertNotIn("var(--brand-bg)", picker_styles)
+        self.assertNotIn("#071112", picker_styles)
 
     def test_dashboard_does_not_render_device_or_bot_fields(self):
         self.assertNotIn("绑定设备", self.dashboard_script)
@@ -2198,19 +2213,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('".persona-dashboard-platform-tabs > button"', self.console_script)
         self.assertNotIn('".persona-group-tabs > button"', self.console_script)
         self.assertNotIn('".persona-step-tabs > button"', self.console_script)
-        self.assertNotIn('".persona-subflow-tabs > button"', self.console_script)
-        self.assertNotIn('".automation-tab-strip > button"', self.console_script)
-        self.assertNotIn('".automation-account-tabs > button"', self.console_script)
-        self.assertNotIn('".account-pool-platforms > button"', self.console_script)
-        self.assertNotIn('".persona-account-platform-tabs > button"', self.console_script)
-        self.assertIn("!button.matches?.(SEGMENTED_BACKGROUND_BUTTON_SELECTOR)", slider)
-        self.assertIn('const positionGroup = getComputedStyle(group).position === "static";', slider)
-        self.assertIn('group.classList.add("is-segment-slide-positioned")', slider)
-        self.assertIn(".is-segment-slide-positioned {", interaction)
-        self.assertNotIn(
-            ".is-segment-background-sliding {\n  position: relative;",
-            interaction,
-        )
+
         self.assertIn(
             "button:focus-visible {\n  outline: 2px solid var(--ink);",
             self.styles,
@@ -2229,6 +2232,19 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(
             ".account-pool-add-button:is(:hover, :focus-visible, :active, .is-modal-open)",
             self.styles,
+        )
+        self.assertNotIn('".persona-subflow-tabs > button"', self.console_script)
+        self.assertNotIn('".automation-tab-strip > button"', self.console_script)
+        self.assertNotIn('".automation-account-tabs > button"', self.console_script)
+        self.assertNotIn('".account-pool-platforms > button"', self.console_script)
+        self.assertNotIn('".persona-account-platform-tabs > button"', self.console_script)
+        self.assertIn("!button.matches?.(SEGMENTED_BACKGROUND_BUTTON_SELECTOR)", slider)
+        self.assertIn('const positionGroup = getComputedStyle(group).position === "static";', slider)
+        self.assertIn('group.classList.add("is-segment-slide-positioned")', slider)
+        self.assertIn(".is-segment-slide-positioned {", interaction)
+        self.assertNotIn(
+            ".is-segment-background-sliding {\n  position: relative;",
+            interaction,
         )
         self.assertIn('button.classList.contains("is-pending")', slider)
         self.assertIn('group.style.setProperty("--segment-slide-background", slideStyle.background);', slider)

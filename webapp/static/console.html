@@ -52,7 +52,6 @@
             <div class="site-account-summary">
               <span class="site-account-avatar" aria-hidden="true" data-site-account-avatar><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"></path></svg></span>
               <span class="site-account-identity"><strong data-site-account-name>账户</strong><span data-site-account-role>普通账号</span></span>
-              <span class="site-account-status"><i aria-hidden="true"></i><span data-site-copy="accountStatus">已登录</span></span>
               <button class="site-account-close" type="button" aria-label="关闭个人信息" title="关闭个人信息" data-site-account-close>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
               </button>
@@ -64,12 +63,12 @@
                 <span class="site-account-billing-state" data-site-billing-status data-site-copy="billingUnread">尚未读取</span>
               </div>
               <div class="site-account-billing-grid" aria-live="polite">
-                <div class="site-account-billing-card"><span data-site-copy="billingPoints">算力余额</span><strong data-site-billing-points>—</strong></div>
-                <div class="site-account-billing-card"><span data-site-copy="billingSubscription">当前订阅</span><strong data-site-billing-subscription>—</strong></div>
-                <div class="site-account-billing-card"><span data-site-copy="billingImages">图片额度</span><strong data-site-billing-images>—</strong></div>
-                <div class="site-account-billing-card"><span data-site-copy="billingPending">待审批</span><strong data-site-billing-pending>—</strong></div>
-                <div class="site-account-billing-card"><span data-site-copy="publishToday">今日任务</span><strong data-site-publish-used>—</strong></div>
-                <div class="site-account-billing-card"><span data-site-copy="publishRemaining">今日剩余任务额度</span><strong data-site-publish-remaining>—</strong></div>
+                <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 2 3 14h7l-1 8 10-12h-7z"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="billingPoints">算力余额</span><strong data-site-billing-points>—</strong></span></div>
+                <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M7 14h4"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="billingSubscription">当前订阅</span><strong data-site-billing-subscription>—</strong></span></div>
+                <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.2"/><path d="m5.5 17 4-4 3 3 2-2 4 3"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="billingImages">图片额度</span><strong data-site-billing-images>—</strong></span></div>
+                <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="billingPending">待审批</span><strong data-site-billing-pending>—</strong></span></div>
+                <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="publishToday">今日任务</span><strong data-site-publish-used>—</strong></span></div>
+                <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 2v4M16 2v4M4 9h16M12 13v3l2 1"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="publishRemaining">今日剩余任务额度</span><strong data-site-publish-remaining>—</strong></span></div>
               </div>
               <div class="site-account-action-row">
                 <button type="button" data-site-open-billing data-site-copy="billingView">查看详情</button>
@@ -86,11 +85,13 @@
                 <span class="site-account-preference-icon" aria-hidden="true"><svg class="site-language-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path></svg><span class="site-language-state" data-site-language-state>简</span></span>
               </button>
             </div>
-            <button class="site-account-logout" type="button" data-site-account-logout>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M18 12H9"></path></svg>
-              <span data-site-copy="logout">退出登录</span>
-            </button>
-            <span class="site-account-message" role="status" aria-live="polite" data-site-account-message></span>
+            <div class="site-account-footer">
+              <button class="site-account-logout" type="button" data-site-account-logout>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M18 12H9"></path></svg>
+                <span data-site-copy="logout">退出登录</span>
+              </button>
+              <span class="site-account-message" role="status" aria-live="polite" data-site-account-message></span>
+            </div>
           </div>
         </div>
       </div>
@@ -143,6 +144,7 @@
         id="mobileNavToggle"
         class="mobile-nav-toggle"
         type="button"
+        hidden
         aria-label="打开控制台导航"
         title="打开控制台导航"
         aria-controls="consoleSidebar"
@@ -217,19 +219,25 @@
 
       <section class="view billing-view" data-panel="billing" aria-labelledby="viewTitle">
         <div class="billing-view-head">
-          <div>
-            <div class="eyebrow">账户计费</div>
-            <h3>订阅、算力与申请</h3>
-            <p>查看当前权益、方案申请与消费明细；申请只有在管理员批准后才会生效。</p>
+          <div class="billing-view-heading">
+            <span class="billing-view-heading-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 18.5V10m5 8.5V5.5m5 13V8m5 10.5V3.5"></path><path d="m4 8 5-4 5 2.5L20 2"></path></svg>
+            </span>
+            <div>
+              <div class="eyebrow">账户计费</div>
+              <h3>账户算力仪表盘</h3>
+              <p>集中查看账户权益、余额趋势、消费入账和方案申请。</p>
+            </div>
           </div>
           <div class="billing-view-actions">
-            <a class="button" href="/pricing.html">查看订阅中心</a>
+            <button id="openBillingPlans" class="billing-subscription-button" type="button">查看订阅中心</button>
             <button id="refreshBilling" type="button">刷新计费</button>
           </div>
         </div>
         <div id="billingSummary" class="billing-summary-grid" aria-live="polite"></div>
+        <section id="billingTrend" class="billing-trend-section" aria-label="算力余额趋势"></section>
         <div class="billing-layout">
-          <section class="billing-section">
+          <section class="billing-section billing-orders-section">
             <div class="billing-section-head">
               <div>
                 <div class="eyebrow">最近申请</div>
@@ -238,11 +246,16 @@
             </div>
             <div id="billingOrders" class="billing-list"></div>
           </section>
-          <section class="billing-section billing-ledger-section">
+          <section id="billingLedgerSection" class="billing-section billing-ledger-section">
             <div class="billing-section-head">
               <div>
                 <div class="eyebrow">算力流水</div>
                 <h3>余额变动</h3>
+              </div>
+              <div class="billing-ledger-filters" role="group" aria-label="筛选余额变动">
+                <button type="button" data-billing-ledger-filter="all" aria-pressed="true">全部</button>
+                <button type="button" data-billing-ledger-filter="expense" aria-pressed="false">支出</button>
+                <button type="button" data-billing-ledger-filter="income" aria-pressed="false">入账</button>
               </div>
             </div>
             <div id="billingLedger" class="billing-list"></div>
@@ -348,6 +361,7 @@
 
   <script>
     window.__CONSOLE_BOOTSTRAP__ = __CONSOLE_BOOTSTRAP_JSON__;
+    window.__PERSONA_DASHBOARD_BOOTSTRAP__ = window.__CONSOLE_BOOTSTRAP__;
   </script>
   <script src="/assets/vendor/opencc-js/st-characters.js?v=1.4.1"></script>
   <script src="/assets/console.js?v=__CONSOLE_JS_VERSION__"></script>
