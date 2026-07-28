@@ -26233,8 +26233,18 @@ function bindEvents() {
     const viewButton = event.target.closest("[data-workspace-view]");
     if (viewButton) {
       const nextView = viewButton.dataset.workspaceView || "workspace";
-      if (nextView !== state.view && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
-      if (nextView !== state.view && !(await confirmLeaveTransientWorkspaceState())) return;
+      const viewChanged = nextView !== state.view;
+      if (
+        viewChanged
+        && isPersonaWorkspaceModule()
+        && currentPersonaDraftEditPersonaId()
+        && !(await canLeaveCurrentPersonaDraftEdit("leave"))
+      ) return;
+      if (
+        viewChanged
+        && activeTransientWorkspaceState()
+        && !(await confirmLeaveTransientWorkspaceState())
+      ) return;
       const commitView = () => {
         state.workspaceMenuOpen = true;
         if (nextView === "accounts") {
@@ -26242,28 +26252,32 @@ function bindEvents() {
         }
         setView(nextView);
       };
-      let committed = false;
       if (dockButton) {
-        await waitForSegmentedBackgroundSlide(event, dockButton, {
-          onBeforeCleanup: () => {
-            committed = true;
-            commitView();
-          },
-        });
-      }
-      if (!committed) {
-        setMenuClickHighlight(viewButton, viewButton.closest(".module-accordion-item") || viewButton);
         commitView();
+        return;
       }
+      setMenuClickHighlight(viewButton, viewButton.closest(".module-accordion-item") || viewButton);
+      commitView();
       return;
     }
     const button = event.target.closest("[data-module]");
     if (button) {
-      if (button.dataset.module !== state.activeModule && state.view === "workspace" && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
-      if (button.dataset.module !== state.activeModule && state.view === "workspace" && !(await confirmLeaveTransientWorkspaceState())) return;
+      const moduleChanged = button.dataset.module !== state.activeModule;
+      if (
+        moduleChanged
+        && state.view === "workspace"
+        && isPersonaWorkspaceModule()
+        && currentPersonaDraftEditPersonaId()
+        && !(await canLeaveCurrentPersonaDraftEdit("leave"))
+      ) return;
+      if (
+        moduleChanged
+        && state.view === "workspace"
+        && activeTransientWorkspaceState()
+        && !(await confirmLeaveTransientWorkspaceState())
+      ) return;
       const commitModule = () => {
         const nextModule = button.dataset.module;
-        const moduleChanged = nextModule !== state.activeModule;
         if (state.view !== "workspace") {
           state.workspaceMenuOpen = true;
           setView("workspace");
@@ -26271,19 +26285,12 @@ function bindEvents() {
         if (moduleChanged) setModule(nextModule);
         else syncModuleMenuState();
       };
-      let committed = false;
       if (dockButton) {
-        await waitForSegmentedBackgroundSlide(event, dockButton, {
-          onBeforeCleanup: () => {
-            committed = true;
-            commitModule();
-          },
-        });
-      }
-      if (!committed) {
-        setMenuClickHighlight(button, button.closest(".module-accordion-item") || button);
         commitModule();
+        return;
       }
+      setMenuClickHighlight(button, button.closest(".module-accordion-item") || button);
+      commitModule();
     }
   };
   $("moduleMenu").addEventListener("click", handleWorkspaceModuleNavigation);
