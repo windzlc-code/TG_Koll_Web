@@ -21985,7 +21985,6 @@ function renderAccountPoolCardActions(account, { context = "pool" } = {}) {
     <button type="button" class="primary" data-social-open-login="${esc(accountId)}">打开登录</button>
     <button type="button" data-account-proxy-picker="${esc(accountId)}">${proxyLabel}</button>
     <button type="button" data-account-pool-edit="${esc(accountId)}">编辑</button>
-    <button type="button" data-account-pool-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>解绑</button>
     <button type="button" class="danger" data-social-delete-account="${esc(accountId)}">删除</button>
   </div>`;
 }
@@ -28127,7 +28126,7 @@ function bindEvents() {
       return;
     }
     const accountCard = event.target.closest("[data-account-pool-account]");
-    const accountAction = event.target.closest("[data-social-open-login], [data-account-pool-copy-card], [data-account-proxy-picker], [data-account-pool-edit], [data-account-pool-unbind], [data-social-delete-account], .account-pool-card-check");
+    const accountAction = event.target.closest("[data-social-open-login], [data-account-pool-copy-card], [data-account-proxy-picker], [data-account-pool-edit], [data-social-delete-account], .account-pool-card-check");
     if (accountCard && !accountAction) {
       selectAccountPoolAccount(accountCard.dataset.accountPoolAccount || "");
       renderSocialAccounts();
@@ -28143,12 +28142,6 @@ function bindEvents() {
     if (personaPanelBlank && !event.target.closest("[data-persona-card], [data-persona-folder-card], button, a, input, select, textarea, label")) {
       clearAccountPoolPersonaSelection();
       renderSocialAccounts();
-      return;
-    }
-    const accountUnbind = event.target.closest("[data-account-pool-unbind]");
-    if (accountUnbind) {
-      unbindAccountPoolAccount(accountUnbind.dataset.accountPoolUnbind || "")
-        .catch((error) => showMsg("socialMsg", error.detail || error.message || "解绑账号失败", false));
       return;
     }
     const dedupe = event.target.closest("[data-social-dedupe-accounts]");

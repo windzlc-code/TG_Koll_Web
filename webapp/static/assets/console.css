@@ -16350,7 +16350,7 @@ button.proxy-market-link {
   width: 100%;
   max-width: 420px;
   min-height: 96px;
-  padding: 12px 12px 12px 42px;
+  padding: 12px;
   border-color: var(--line);
   cursor: pointer;
 }
@@ -16392,11 +16392,10 @@ button.proxy-market-link {
 }
 
 .account-pool-card-check {
-  position: absolute;
-  top: 13px;
-  left: 12px;
-  z-index: 4;
+  position: relative;
   display: inline-flex;
+  grid-area: check;
+  align-self: start;
   width: 22px;
   height: 22px;
   cursor: pointer;
@@ -16418,8 +16417,8 @@ button.proxy-market-link {
   height: 22px;
   border: 2px solid var(--ink);
   border-radius: 5px;
-  background: var(--surface);
-  box-shadow: 0 0 0 2px var(--surface), 0 2px 8px rgba(15, 23, 42, 0.16);
+  background: var(--panel-solid);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.16);
   transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
 }
 
@@ -16569,7 +16568,12 @@ button.proxy-market-link {
 }
 
 .account-pool-card:not(.persona-account-pool-card) {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 22px minmax(0, 1fr);
+  grid-template-areas:
+    "check main"
+    ". bound"
+    ". meta"
+    ". actions";
   grid-template-rows: auto;
   align-items: stretch;
 }
@@ -16582,8 +16586,7 @@ button.proxy-market-link {
     "username username username totp";
   align-items: center;
   gap: 4px 7px;
-  grid-column: 1;
-  grid-row: auto;
+  grid-area: main;
 }
 
 .account-pool-card:not(.persona-account-pool-card) .account-pool-card-platform {
@@ -16608,6 +16611,10 @@ button.proxy-market-link {
   grid-area: copy;
 }
 
+.account-pool-card:not(.persona-account-pool-card) .account-pool-bound-persona {
+  grid-area: bound;
+}
+
 .account-pool-card:not(.persona-account-pool-card) .account-pool-card-flags .status {
   grid-area: status;
   justify-self: end;
@@ -16619,13 +16626,11 @@ button.proxy-market-link {
 }
 
 .account-pool-card:not(.persona-account-pool-card) .account-card-meta {
-  grid-column: 1;
-  grid-row: auto;
+  grid-area: meta;
 }
 
 .account-pool-card:not(.persona-account-pool-card) .row-actions {
-  grid-column: 1 / -1;
-  grid-row: auto;
+  grid-area: actions;
 }
 
 .account-pool-card .row-actions {
