@@ -16394,36 +16394,6 @@ button.proxy-market-link {
 .account-pool-card.is-active:hover,
 .account-pool-card.is-checked:hover {
   border-color: var(--ink);
-.account-pool-card--persona .account-pool-card-main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "platform flags"
-    "username flags";
-  align-items: center;
-  gap: 4px 7px;
-}
-
-.account-pool-card--persona .account-pool-card-platform {
-  grid-area: platform;
-  justify-self: start;
-}
-
-.account-pool-card--persona .account-pool-card-copy,
-.account-pool-card--persona .account-pool-card-title-line {
-  display: contents;
-}
-
-.account-pool-card--persona .account-pool-card-copy strong {
-  grid-area: username;
-}
-
-.account-pool-card--persona .account-pool-card-flags {
-  grid-area: flags;
-  align-self: start;
-  justify-self: end;
-}
-
 }
 
 .account-pool-card-check {
@@ -16663,6 +16633,37 @@ button.proxy-market-link {
 .account-pool-card:not(.persona-account-pool-card) .row-actions {
   grid-column: 1 / -1;
   grid-row: auto;
+}
+
+.account-pool-card.account-pool-card--persona .account-pool-card-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "platform flags"
+    "username flags";
+  align-items: center;
+  gap: 4px 7px;
+}
+
+.account-pool-card.account-pool-card--persona .account-pool-card-platform {
+  grid-area: platform;
+  justify-self: start;
+}
+
+.account-pool-card.account-pool-card--persona .account-pool-card-copy,
+.account-pool-card.account-pool-card--persona .account-pool-card-title-line {
+  display: contents;
+}
+
+.account-pool-card.account-pool-card--persona .account-pool-card-copy strong {
+  grid-area: username;
+}
+
+.account-pool-card.account-pool-card--persona .account-pool-card-flags {
+  display: flex;
+  grid-area: flags;
+  align-self: start;
+  justify-self: end;
 }
 
 .account-pool-card .row-actions {
