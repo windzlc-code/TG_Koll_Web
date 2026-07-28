@@ -2645,15 +2645,15 @@ function accountDisplayedStatus(account = null) {
 }
 
 function accountLastLoginCheckLabel(account) {
-  if (!account) return "登录状态：未知 · 尚未检测";
+  if (!account) return "未知 · 未检测";
   const status = accountDisplayedStatus(account);
   const checkedAt = Number(account.status_checked_at || 0)
     || Math.max(Number(account.last_login_check_at || 0), Number(account.health_checked_at || 0));
   const checkedDate = checkedAt > 0 ? new Date(checkedAt * 1000) : null;
   const checkedTime = checkedDate && !Number.isNaN(checkedDate.getTime())
     ? checkedDate.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
-    : "尚未检测";
-  return `登录状态：${statusLabel(status)} · ${checkedTime}`;
+    : "未检测";
+  return `${statusLabel(status)} · ${checkedTime}`;
 }
 
 function accountStatusClassNames(status) {
@@ -22000,15 +22000,15 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
   return `<article class="account-card account-pool-card ${isPersonaSettings ? "account-pool-card--persona" : ""} ${active ? "is-active" : ""} ${checked ? "is-checked" : ""}" ${accountCardTarget} role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
     ${selectionControl}
     <div class="account-pool-card-main">
+      <small class="account-pool-card-platform">
+        ${renderAccountPoolPlatformIcon(platform)}
+        <span>${esc(platformCopy)}</span>
+      </small>
       <span class="account-pool-card-copy">
         <span class="account-pool-card-title-line">
           <strong title="${esc(account.username || accountId)}">${esc(account.username || accountId)}</strong>
           ${isPersonaSettings ? "" : `<button type="button" class="account-pool-card-copy-button" data-account-pool-copy-card="${esc(accountId)}" title="复制账号字段" aria-label="复制账号字段">${renderClipboardIcon()}</button>`}
         </span>
-        <small class="account-pool-card-platform">
-          ${renderAccountPoolPlatformIcon(platform)}
-          <span>${esc(platformCopy)}</span>
-        </small>
       </span>
       <span class="account-pool-card-flags">
         <span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${esc(accountLastLoginCheckLabel(account))}</span>

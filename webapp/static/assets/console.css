@@ -16456,10 +16456,10 @@ button.proxy-market-link {
 .account-pool-card-copy-button {
   display: inline-grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
   padding: 0;
   border: 0;
   border-radius: 6px;
@@ -16478,8 +16478,8 @@ button.proxy-market-link {
 }
 
 .account-pool-card-copy-button .ui-clipboard-icon {
-  width: 17px;
-  height: 17px;
+  width: 16px;
+  height: 16px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.9;
@@ -16508,12 +16508,12 @@ button.proxy-market-link {
 }
 
 .account-pool-card-flags {
-  display: grid;
-  justify-items: end;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 4px;
   min-width: 0;
-  max-width: 52%;
-  text-align: right;
+  white-space: nowrap;
 }
 
 .account-pool-bound-persona {
@@ -16547,25 +16547,16 @@ button.proxy-market-link {
 
 .account-pool-card:not(.persona-account-pool-card) .account-pool-card-main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
   grid-column: 1;
   grid-row: auto;
 }
 
-.account-pool-card:not(.persona-account-pool-card) .account-pool-card-copy strong,
-.account-pool-card:not(.persona-account-pool-card) .account-pool-bound-persona {
-  overflow: visible;
-  overflow-wrap: anywhere;
-  text-overflow: clip;
-  white-space: normal;
-}
-
-.account-pool-card:not(.persona-account-pool-card) .account-pool-bound-persona {
-  width: auto;
-  max-width: none;
-  grid-column: 1;
-  grid-row: auto;
+.account-pool-card:not(.persona-account-pool-card) .account-pool-card-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .account-pool-card:not(.persona-account-pool-card) .account-card-meta {
@@ -19459,7 +19450,7 @@ body.console-page {
   }
 
   .console-page :is(
-    button:not(.account-password-toggle),
+    button:not(.account-password-toggle):not(.account-pool-card-copy-button),
     .button,
     .chip-button,
     a[role="button"],
@@ -20105,6 +20096,8 @@ body.console-page {
   gap: 4px;
   width: fit-content;
   max-width: 100%;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .account-pool-card-platform > svg {
