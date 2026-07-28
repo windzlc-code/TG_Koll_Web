@@ -12707,10 +12707,17 @@ function bindSimpleFlowInputs(moduleId) {
         const nextMode = normalizedPublishMode(node.dataset.simplePublishMode || "publish_now");
         const previousMode = normalizedPublishMode(state.simpleBranches.publishing);
         if (nextMode !== previousMode && !(await confirmLeaveTransientWorkspaceState())) return;
-        await slideSegmentedButtonBackground(node);
-        state.simpleBranches.publishing = nextMode;
-        state.publishHistoryPreviewId = "";
-        renderSimpleFlowModule("publishing");
+        if (nextMode === previousMode) return;
+        await slideSegmentedButtonBackground(node, {
+          commit: () => {
+            state.simpleBranches.publishing = nextMode;
+            state.publishHistoryPreviewId = "";
+            renderSimpleFlowModule("publishing");
+          },
+          resolveButton: () => document.querySelector(
+            `[data-simple-publish-mode="${CSS.escape(nextMode)}"]`
+          ),
+        });
       });
     });
     document.querySelectorAll("[data-automation-plan-mode]").forEach((node) => {
@@ -12852,9 +12859,16 @@ function bindSimpleFlowInputs(moduleId) {
         const previousSource = normalizePublishContentSource();
         const nextSource = normalizePublishContentSource(node.dataset.publishContentSource || "posts");
         if (nextSource !== previousSource && !(await confirmLeaveTransientWorkspaceState())) return;
-        await slideSegmentedButtonBackground(node);
-        state.publishContentSource = nextSource;
-        renderSimpleFlowModule("publishing");
+        if (nextSource === previousSource) return;
+        await slideSegmentedButtonBackground(node, {
+          commit: () => {
+            state.publishContentSource = nextSource;
+            renderSimpleFlowModule("publishing");
+          },
+          resolveButton: () => document.querySelector(
+            `[data-publish-content-source="${CSS.escape(nextSource)}"]`
+          ),
+        });
       });
     });
     document.querySelectorAll("[data-publish-source-select]").forEach((node) => {
@@ -26277,7 +26291,8 @@ const SEGMENTED_BACKGROUND_BUTTON_SELECTOR = [
 const segmentedBackgroundSlides = new WeakMap();
 const segmentedBackgroundCommits = new WeakMap();
 
-async function slideSegmentedButtonBackground(button) {
+async function slideSegmentedButtonBackground(button, options = {}) {
+  const commit = typeof options.commit === "function" ? options.commit : null;
   if (
     !button
     || !button.matches?.(SEGMENTED_BACKGROUND_BUTTON_SELECTOR)
@@ -26285,13 +26300,49 @@ async function slideSegmentedButtonBackground(button) {
     || button.classList.contains("is-pending")
     || button.classList.contains("is-active")
     || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
-  ) return;
-  const group = button.parentElement;
-  const current = Array.from(group?.children || [])
+  ) {
+    commit?.();
+    return;
+  }
+  let group = button.parentElement;
+  let current = Array.from(group?.children || [])
     .find((item) => item.matches?.("button.is-active"));
-  if (!group || !current) return;
+  if (!group || !current) {
+    commit?.();
+    return;
+  }
   const pendingSlide = segmentedBackgroundSlides.get(group);
-  if (pendingSlide) return pendingSlide;
+  if (pendingSlide) {
+    if (commit) return;
+    return pendingSlide;
+  }
+  const currentIndex = Array.from(group.children).indexOf(current);
+  const targetIndex = Array.from(group.children).indexOf(button);
+  const activeStyle = getComputedStyle(current);
+  const inactiveColor = getComputedStyle(button).color;
+  const slideStyle = {
+    background: activeStyle.background,
+    border: activeStyle.borderColor,
+    radius: activeStyle.borderRadius,
+    shadow: activeStyle.boxShadow,
+    activeColor: activeStyle.color,
+    inactiveColor,
+  };
+  if (commit) {
+    commit();
+    const replacementButton = options.resolveButton?.();
+    const replacementGroup = replacementButton?.parentElement;
+    const replacementCurrent = Array.from(replacementGroup?.children || [])[currentIndex];
+    if (
+      !replacementButton
+      || !replacementGroup
+      || !replacementCurrent?.matches?.("button")
+      || Array.from(replacementGroup.children).indexOf(replacementButton) !== targetIndex
+    ) return;
+    button = replacementButton;
+    group = replacementGroup;
+    current = replacementCurrent;
+  }
   const positionGroup = getComputedStyle(group).position === "static";
   const groupRect = group.getBoundingClientRect();
 
@@ -26306,18 +26357,16 @@ async function slideSegmentedButtonBackground(button) {
   };
   const from = relativeBox(current);
   const to = relativeBox(button);
-  const activeStyle = getComputedStyle(current);
-  const inactiveColor = getComputedStyle(button).color;
   group.style.setProperty("--segment-slide-x", `${from.left}px`);
   group.style.setProperty("--segment-slide-y", `${from.top}px`);
   group.style.setProperty("--segment-slide-width", `${from.width}px`);
   group.style.setProperty("--segment-slide-height", `${from.height}px`);
-  group.style.setProperty("--segment-slide-background", activeStyle.background);
-  group.style.setProperty("--segment-slide-border", activeStyle.borderColor);
-  group.style.setProperty("--segment-slide-radius", activeStyle.borderRadius);
-  group.style.setProperty("--segment-slide-shadow", activeStyle.boxShadow);
-  group.style.setProperty("--segment-slide-active-color", activeStyle.color);
-  group.style.setProperty("--segment-slide-inactive-color", inactiveColor);
+  group.style.setProperty("--segment-slide-background", slideStyle.background);
+  group.style.setProperty("--segment-slide-border", slideStyle.border);
+  group.style.setProperty("--segment-slide-radius", slideStyle.radius);
+  group.style.setProperty("--segment-slide-shadow", slideStyle.shadow);
+  group.style.setProperty("--segment-slide-active-color", slideStyle.activeColor);
+  group.style.setProperty("--segment-slide-inactive-color", slideStyle.inactiveColor);
   if (positionGroup) group.classList.add("is-segment-slide-positioned");
   group.classList.add("is-segment-background-sliding");
   current.classList.add("is-segment-slide-from");

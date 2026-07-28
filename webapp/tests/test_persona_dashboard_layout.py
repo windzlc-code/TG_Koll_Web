@@ -2181,7 +2181,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         self.assertIn("transform: translate3d(var(--segment-slide-x), var(--segment-slide-y), 0);", interaction)
         self.assertIn("transform 180ms cubic-bezier(.2, .72, .2, 1)", interaction)
-        self.assertIn("async function slideSegmentedButtonBackground(button)", slider)
+        self.assertIn("async function slideSegmentedButtonBackground(button, options = {})", slider)
         self.assertIn("itemRect.left - groupRect.left - group.clientLeft", slider)
         self.assertIn("itemRect.top - groupRect.top - group.clientTop", slider)
         self.assertIn("window.setTimeout(() => requestAnimationFrame(resolve), 180);", slider)
@@ -2212,7 +2212,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             interaction,
         )
         self.assertIn('button.classList.contains("is-pending")', slider)
-        self.assertIn('group.style.setProperty("--segment-slide-background", activeStyle.background);', slider)
+        self.assertIn('group.style.setProperty("--segment-slide-background", slideStyle.background);', slider)
         self.assertNotIn("activeStyle.backgroundColor", slider)
         self.assertIn(
             "if (segmentedButton) await waitForSegmentedBackgroundSlide(event, segmentedButton);",
@@ -2223,6 +2223,28 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("animation:", interaction)
         self.assertNotIn("left 180ms cubic-bezier(.2, .72, .2, 1)", interaction)
         self.assertNotIn("scale(", slider)
+
+    def test_publish_segmented_tabs_commit_content_when_the_slide_starts(self):
+        mode_handler = self.console_script[
+            self.console_script.index('document.querySelectorAll("[data-simple-publish-mode]")'):
+            self.console_script.index('document.querySelectorAll("[data-automation-plan-mode]")')
+        ]
+        source_handler = self.console_script[
+            self.console_script.index('document.querySelectorAll("[data-publish-content-source]")'):
+            self.console_script.index('document.querySelectorAll("[data-publish-source-select]")')
+        ]
+        handlers = mode_handler + source_handler
+
+        self.assertEqual(handlers.count("await slideSegmentedButtonBackground(node, {"), 2)
+        self.assertIn("state.simpleBranches.publishing = nextMode;", handlers)
+        self.assertIn("state.publishContentSource = nextSource;", handlers)
+        self.assertEqual(handlers.count('renderSimpleFlowModule("publishing");'), 2)
+        self.assertIn("resolveButton: () => document.querySelector(", handlers)
+        self.assertNotIn("await slideSegmentedButtonBackground(node);\n", handlers)
+        self.assertLess(
+            self.console_script.index("commit();", self.console_script.index("async function slideSegmentedButtonBackground")),
+            self.console_script.index('group.classList.add("is-segment-background-sliding")', self.console_script.index("async function slideSegmentedButtonBackground")),
+        )
 
     def test_mobile_task_dock_reuses_fixed_size_segment_slide_without_delaying_navigation(self):
         renderer = self.console_script[
