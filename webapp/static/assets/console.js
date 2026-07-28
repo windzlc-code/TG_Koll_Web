@@ -6266,6 +6266,7 @@ function syncMobileTaskDockState(dock = $("mobileTaskDock")) {
       button.removeAttribute("aria-current");
     }
   });
+  scheduleMobileTaskDockSlideMetrics(dock);
 }
 
 function isCurrentMobileTaskDockTarget(button) {
@@ -6287,6 +6288,47 @@ function scrollConsolePageToTop() {
 
 let mobileTaskDockPageAnimation = null;
 let mobileTaskDockToolbarAnimation = null;
+const mobileTaskDockSlideMetrics = new WeakMap();
+let mobileTaskDockSlideMetricsFrame = 0;
+
+function captureMobileTaskDockSlideMetrics(dock = $("mobileTaskDock")) {
+  if (!dock) return;
+  const buttons = Array.from(dock.querySelectorAll(".mobile-task-dock-button"));
+  if (!buttons.length) return;
+  const groupRect = dock.getBoundingClientRect();
+  const activeButton = buttons.find((button) => button.classList.contains("is-active")) || buttons[0];
+  const inactiveButton = buttons.find((button) => button !== activeButton) || activeButton;
+  const activeStyle = getComputedStyle(activeButton);
+  const inactiveStyle = getComputedStyle(inactiveButton);
+  mobileTaskDockSlideMetrics.set(dock, {
+    viewportWidth: window.innerWidth,
+    boxes: new Map(buttons.map((button) => {
+      const rect = button.getBoundingClientRect();
+      return [button, {
+        left: rect.left - groupRect.left - dock.clientLeft + dock.scrollLeft,
+        top: rect.top - groupRect.top - dock.clientTop + dock.scrollTop,
+        width: rect.width,
+        height: rect.height,
+      }];
+    })),
+    activeStyle: {
+      background: activeStyle.background,
+      borderColor: activeStyle.borderColor,
+      borderRadius: activeStyle.borderRadius,
+      boxShadow: activeStyle.boxShadow,
+      color: activeStyle.color,
+    },
+    inactiveColor: inactiveStyle.color,
+  });
+}
+
+function scheduleMobileTaskDockSlideMetrics(dock = $("mobileTaskDock")) {
+  if (!dock || mobileTaskDockSlideMetricsFrame) return;
+  mobileTaskDockSlideMetricsFrame = window.requestAnimationFrame(() => {
+    mobileTaskDockSlideMetricsFrame = 0;
+    captureMobileTaskDockSlideMetrics(dock);
+  });
+}
 
 function mobileTaskDockNavigationDirection(button) {
   const dock = button?.closest?.(".mobile-task-dock");
@@ -6414,7 +6456,7 @@ function setModule(moduleId) {
     state.personaGroup = personaModuleDefaultGroup(moduleId);
     setPersonaGroupStep(state.personaGroup, state.personaPanels[state.personaGroup] || personaGroups[state.personaGroup]?.defaultStep || "", selectedPersonaProfile());
   }
-  renderWorkspace(false);
+  renderWorkspace(false, false);
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
   syncLiveBrowserAutoRefresh();
@@ -6425,8 +6467,8 @@ function selectedBranch(moduleId) {
   return state.simpleBranches[moduleId] || moduleDefaultBranch[moduleId] || "";
 }
 
-function renderWorkspace(renderMenu = true) {
-  return withConsoleScrollPreserved(() => {
+function renderWorkspace(renderMenu = true, preserveScroll = true) {
+  const render = () => {
   const module = currentModule();
   closePersonaMediaLightbox();
   resetMediaPreviewGroups();
@@ -6443,7 +6485,14 @@ function renderWorkspace(renderMenu = true) {
   else renderSimpleFlowModule(module.id);
   renderConfirmSummary();
   syncMobilePageToolbar();
-  });
+  };
+  if (preserveScroll) return withConsoleScrollPreserved(render);
+  consoleScrollPreserveDepth += 1;
+  try {
+    return render();
+  } finally {
+    consoleScrollPreserveDepth = Math.max(0, consoleScrollPreserveDepth - 1);
+  }
 }
 
 function beginWorkspaceBootstrapLoading() {
@@ -26124,10 +26173,16 @@ async function slideSegmentedButtonBackground(button) {
   if (!group || !current) return;
   const pendingSlide = segmentedBackgroundSlides.get(group);
   if (pendingSlide) return pendingSlide;
+  const cachedDockMetrics = group.classList.contains("mobile-task-dock")
+    && mobileTaskDockSlideMetrics.get(group)?.viewportWidth === window.innerWidth
+    ? mobileTaskDockSlideMetrics.get(group)
+    : null;
   const positionGroup = getComputedStyle(group).position === "static";
+  const groupRect = cachedDockMetrics ? null : group.getBoundingClientRect();
 
   const relativeBox = (item) => {
-    const groupRect = group.getBoundingClientRect();
+    const cachedBox = cachedDockMetrics?.boxes.get(item);
+    if (cachedBox) return cachedBox;
     const itemRect = item.getBoundingClientRect();
     return {
       left: itemRect.left - groupRect.left - group.clientLeft + group.scrollLeft,
@@ -26138,8 +26193,8 @@ async function slideSegmentedButtonBackground(button) {
   };
   const from = relativeBox(current);
   const to = relativeBox(button);
-  const activeStyle = getComputedStyle(current);
-  const inactiveStyle = getComputedStyle(button);
+  const activeStyle = cachedDockMetrics?.activeStyle || getComputedStyle(current);
+  const inactiveColor = cachedDockMetrics?.inactiveColor || getComputedStyle(button).color;
   group.style.setProperty("--segment-slide-x", `${from.left}px`);
   group.style.setProperty("--segment-slide-y", `${from.top}px`);
   group.style.setProperty("--segment-slide-width", `${from.width}px`);
@@ -26149,7 +26204,7 @@ async function slideSegmentedButtonBackground(button) {
   group.style.setProperty("--segment-slide-radius", activeStyle.borderRadius);
   group.style.setProperty("--segment-slide-shadow", activeStyle.boxShadow);
   group.style.setProperty("--segment-slide-active-color", activeStyle.color);
-  group.style.setProperty("--segment-slide-inactive-color", inactiveStyle.color);
+  group.style.setProperty("--segment-slide-inactive-color", inactiveColor);
   if (positionGroup) group.classList.add("is-segment-slide-positioned");
   group.classList.add("is-segment-background-sliding");
   current.classList.add("is-segment-slide-from");
@@ -26216,7 +26271,10 @@ function bindEvents() {
   document.addEventListener("click", handleDailyPublishActionGate, true);
   ensureThemeToggle();
   ensureLanguageToggle();
-  window.addEventListener("vecto:theme-change", (event) => applyTheme(event.detail?.theme));
+  window.addEventListener("vecto:theme-change", (event) => {
+    applyTheme(event.detail?.theme);
+    scheduleMobileTaskDockSlideMetrics();
+  });
   window.addEventListener("vecto:language-change", (event) => applyLanguage(event.detail?.language));
   window.addEventListener("vecto:open-account-editor", (event) => {
     const detail = event.detail || {};
@@ -26479,6 +26537,7 @@ function bindEvents() {
   document.addEventListener("wheel", handlePersonaImageLibraryWheel, { passive: false });
   $("moduleBody").addEventListener("scroll", schedulePersonaCardEditorMenuPosition, true);
   window.addEventListener("resize", schedulePersonaCardEditorMenuPosition);
+  window.addEventListener("resize", () => scheduleMobileTaskDockSlideMetrics());
   window.addEventListener("beforeunload", (event) => {
     const activeState = activeTransientWorkspaceState();
     if (!activeState) return;
