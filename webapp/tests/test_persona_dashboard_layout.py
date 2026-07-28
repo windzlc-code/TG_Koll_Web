@@ -2202,10 +2202,21 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         self.assertNotIn('document.querySelector(".console-main")', helper)
         self.assertIn("mobileTaskDockPageAnimation?.cancel();", helper)
-        self.assertIn("transform: `translate3d(${direction * distance}px, 0, 0)`", helper)
-        self.assertIn('transform: "translate3d(0, 0, 0)"', helper)
+        self.assertIn("left: `${direction * distance}px`", helper)
+        self.assertIn('left: "0px"', helper)
+        self.assertNotIn("translate3d(", helper)
         self.assertIn("duration: 180", helper)
         self.assertIn('easing: "cubic-bezier(.2, .72, .2, 1)"', helper)
+        self.assertIn(
+            ".console-page .console-main {\n"
+            "    overflow-x: clip;",
+            self.styles,
+        )
+        self.assertIn(
+            ".console-page .console-main > .view.is-active {\n"
+            "    position: relative;",
+            self.styles,
+        )
         self.assertIn("function commitMobileTaskDockNavigation(button, commit)", helper)
         self.assertLess(
             helper.index("slideSegmentedButtonBackground(button).catch(() => {});"),

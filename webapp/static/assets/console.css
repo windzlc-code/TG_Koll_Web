@@ -23984,6 +23984,17 @@ body.console-page {
   }
 }
 
+/* Slide only the active page flow; fixed controls stay anchored to the viewport. */
+@media (max-width: 820px) {
+  .console-page .console-main {
+    overflow-x: clip;
+  }
+
+  .console-page .console-main > .view.is-active {
+    position: relative;
+  }
+}
+
 /* Keep every mobile page on one compact 8px rhythm. */
 @media (max-width: 760.98px) {
   .console-page {

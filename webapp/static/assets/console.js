@@ -6304,8 +6304,8 @@ function animateMobileTaskDockPage(direction) {
   const distance = Math.min(56, Math.max(32, Math.round(window.innerWidth * 0.12)));
   const animation = page.animate(
     [
-      { transform: `translate3d(${direction * distance}px, 0, 0)` },
-      { transform: "translate3d(0, 0, 0)" },
+      { left: `${direction * distance}px` },
+      { left: "0px" },
     ],
     {
       duration: 180,
