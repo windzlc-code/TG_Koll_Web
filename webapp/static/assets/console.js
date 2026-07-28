@@ -6298,11 +6298,11 @@ function animateMobileTaskDockPage(direction) {
     || !window.matchMedia?.("(max-width: 820px)")?.matches
     || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
   ) return;
-  const main = document.querySelector(".console-main");
-  if (!main?.animate) return;
+  const page = document.querySelector(".console-main > .view.is-active");
+  if (!page?.animate) return;
   mobileTaskDockPageAnimation?.cancel();
   const distance = Math.min(56, Math.max(32, Math.round(window.innerWidth * 0.12)));
-  const animation = main.animate(
+  const animation = page.animate(
     [
       { transform: `translate3d(${direction * distance}px, 0, 0)` },
       { transform: "translate3d(0, 0, 0)" },

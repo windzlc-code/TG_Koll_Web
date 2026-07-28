@@ -2196,6 +2196,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("function animateMobileTaskDockPage(direction)", helper)
         self.assertIn('window.matchMedia?.("(max-width: 820px)")?.matches', helper)
         self.assertIn('window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches', helper)
+        self.assertIn(
+            'document.querySelector(".console-main > .view.is-active")',
+            helper,
+        )
+        self.assertNotIn('document.querySelector(".console-main")', helper)
         self.assertIn("mobileTaskDockPageAnimation?.cancel();", helper)
         self.assertIn("transform: `translate3d(${direction * distance}px, 0, 0)`", helper)
         self.assertIn('transform: "translate3d(0, 0, 0)"', helper)
