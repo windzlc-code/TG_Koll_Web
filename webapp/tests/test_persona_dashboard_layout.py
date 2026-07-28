@@ -2249,7 +2249,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             "  transition: transform 180ms cubic-bezier(.2, .72, .2, 1);",
             self.styles,
         )
-        self.assertIn("if (moduleChanged) setModule(nextModule);", navigation)
+        self.assertIn("return setModule(nextModule, {", navigation)
+        self.assertIn(
+            "deferMobileRender: Boolean(dockButton && state.view === \"workspace\")",
+            navigation,
+        )
         self.assertIn("state.socialViewRefreshTarget === targetView", self.console_script)
         self.assertIn("cancelScheduledSocialViewRefresh();", self.console_script)
         account_refresh = self.console_script[
@@ -2262,12 +2266,50 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script,
         )
 
+    def test_mobile_task_dock_reads_stable_live_geometry_instead_of_animation_cache(self):
+        slider = self.console_script[
+            self.console_script.index("async function slideSegmentedButtonBackground"):
+            self.console_script.index("\nasync function waitForSegmentedBackgroundSlide")
+        ]
+        dock_state = self.console_script[
+            self.console_script.index("function syncMobileTaskDockState"):
+            self.console_script.index("\nfunction isCurrentMobileTaskDockTarget")
+        ]
+
+        self.assertNotIn("mobileTaskDockSlideMetrics", slider)
+        self.assertNotIn("scheduleMobileTaskDockSlideMetrics", dock_state)
+        self.assertIn("const groupRect = group.getBoundingClientRect();", slider)
+        self.assertIn("const activeStyle = getComputedStyle(current);", slider)
+        self.assertIn("const inactiveColor = getComputedStyle(button).color;", slider)
+
+    def test_mobile_heavy_module_switch_freezes_render_until_navigation_has_painted(self):
+        helper = self.console_script[
+            self.console_script.index("function mobileTaskDockNavigationDirection(button)"):
+            self.console_script.index("\nfunction renderModuleMenu()", self.console_script.index("function mobileTaskDockNavigationDirection(button)"))
+        ]
+        setter = self.console_script[
+            self.console_script.index("function setModule(moduleId"):
+            self.console_script.index("\nfunction selectedBranch", self.console_script.index("function setModule(moduleId"))
+        ]
+
+        self.assertIn("function scheduleMobileDeferredModuleRender(moduleId)", helper)
+        self.assertIn("moduleBody.inert = true;", helper)
+        self.assertIn('moduleBody.setAttribute("aria-busy", "true");', helper)
+        self.assertGreaterEqual(helper.count("window.requestAnimationFrame"), 2)
+        self.assertIn("renderWorkspace(false, false);", helper)
+        self.assertIn("deferredMobileRender: true", setter)
+        self.assertIn('["tweet_generation", "publishing"]', setter)
+        self.assertIn("syncMobilePageToolbar();", setter)
+
     def test_mobile_task_dock_page_and_indicator_slide_start_in_the_same_commit(self):
         start = self.console_script.index("function mobileTaskDockNavigationDirection(button)")
         end = self.console_script.index("\nfunction renderModuleMenu()", start)
         helper = self.console_script[start:end]
 
-        self.assertIn("function animateMobileTaskDockPage(direction)", helper)
+        self.assertIn(
+            "function animateMobileTaskDockPage(direction, { freezePage = false } = {})",
+            helper,
+        )
         self.assertIn('window.matchMedia?.("(max-width: 820px)")?.matches', helper)
         self.assertIn('window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches', helper)
         self.assertIn(
@@ -2294,9 +2336,16 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("function commitMobileTaskDockNavigation(button, commit)", helper)
         self.assertLess(
             helper.index("slideSegmentedButtonBackground(button).catch(() => {});"),
-            helper.index("commit();"),
+            helper.index("const result = commit();"),
         )
-        self.assertLess(helper.index("commit();"), helper.index("animateMobileTaskDockPage(direction);"))
+        self.assertLess(
+            helper.index("const result = commit();"),
+            helper.index(
+                "animateMobileTaskDockPage(direction,",
+                helper.index("const result = commit();"),
+            ),
+        )
+        self.assertIn("freezePage: Boolean(result?.deferredMobileRender)", helper)
         self.assertNotIn("await ", helper)
 
     def test_draft_detail_omits_content_type_but_keeps_detail_media(self):

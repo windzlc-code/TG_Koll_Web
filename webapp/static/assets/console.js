@@ -5945,6 +5945,7 @@ function syncPersonaDashboardStyles(view) {
 
 function setView(view) {
   if (view === "settings") view = "workspace";
+  cancelMobileDeferredModuleRender();
   cancelMobileTweetStreamLoading();
   const scrollSnapshot = snapshotConsoleScrollState();
   const layoutLocks = captureConsoleLayoutLocks();
@@ -6348,7 +6349,6 @@ function syncMobileTaskDockState(dock = $("mobileTaskDock")) {
       button.removeAttribute("aria-current");
     }
   });
-  scheduleMobileTaskDockSlideMetrics(dock);
 }
 
 function isCurrentMobileTaskDockTarget(button) {
@@ -6370,47 +6370,8 @@ function scrollConsolePageToTop() {
 
 let mobileTaskDockPageAnimation = null;
 let mobileTaskDockToolbarAnimation = null;
-const mobileTaskDockSlideMetrics = new WeakMap();
-let mobileTaskDockSlideMetricsFrame = 0;
-
-function captureMobileTaskDockSlideMetrics(dock = $("mobileTaskDock")) {
-  if (!dock) return;
-  const buttons = Array.from(dock.querySelectorAll(".mobile-task-dock-button"));
-  if (!buttons.length) return;
-  const groupRect = dock.getBoundingClientRect();
-  const activeButton = buttons.find((button) => button.classList.contains("is-active")) || buttons[0];
-  const inactiveButton = buttons.find((button) => button !== activeButton) || activeButton;
-  const activeStyle = getComputedStyle(activeButton);
-  const inactiveStyle = getComputedStyle(inactiveButton);
-  mobileTaskDockSlideMetrics.set(dock, {
-    viewportWidth: window.innerWidth,
-    boxes: new Map(buttons.map((button) => {
-      const rect = button.getBoundingClientRect();
-      return [button, {
-        left: rect.left - groupRect.left - dock.clientLeft + dock.scrollLeft,
-        top: rect.top - groupRect.top - dock.clientTop + dock.scrollTop,
-        width: rect.width,
-        height: rect.height,
-      }];
-    })),
-    activeStyle: {
-      background: activeStyle.background,
-      borderColor: activeStyle.borderColor,
-      borderRadius: activeStyle.borderRadius,
-      boxShadow: activeStyle.boxShadow,
-      color: activeStyle.color,
-    },
-    inactiveColor: inactiveStyle.color,
-  });
-}
-
-function scheduleMobileTaskDockSlideMetrics(dock = $("mobileTaskDock")) {
-  if (!dock || mobileTaskDockSlideMetricsFrame) return;
-  mobileTaskDockSlideMetricsFrame = window.requestAnimationFrame(() => {
-    mobileTaskDockSlideMetricsFrame = 0;
-    captureMobileTaskDockSlideMetrics(dock);
-  });
-}
+let mobileDeferredModuleRenderToken = 0;
+let mobileDeferredModuleRenderFrame = 0;
 
 function mobileTaskDockNavigationDirection(button) {
   const dock = button?.closest?.(".mobile-task-dock");
@@ -6422,15 +6383,59 @@ function mobileTaskDockNavigationDirection(button) {
   return targetIndex > currentIndex ? 1 : -1;
 }
 
-function animateMobileTaskDockPage(direction) {
+function cancelMobileDeferredModuleRender() {
+  mobileDeferredModuleRenderToken += 1;
+  if (mobileDeferredModuleRenderFrame) {
+    window.cancelAnimationFrame(mobileDeferredModuleRenderFrame);
+    mobileDeferredModuleRenderFrame = 0;
+  }
+  const moduleBody = $("moduleBody");
+  if (!moduleBody) return;
+  moduleBody.inert = false;
+  moduleBody.removeAttribute("aria-busy");
+  delete moduleBody.dataset.pendingModule;
+}
+
+function scheduleMobileDeferredModuleRender(moduleId) {
+  const moduleBody = $("moduleBody");
+  if (!moduleBody) {
+    renderWorkspace(false, false);
+    return { deferredMobileRender: false };
+  }
+  const token = ++mobileDeferredModuleRenderToken;
+  moduleBody.inert = true;
+  moduleBody.setAttribute("aria-busy", "true");
+  moduleBody.dataset.pendingModule = moduleId;
+  mobileDeferredModuleRenderFrame = window.requestAnimationFrame(() => {
+    mobileDeferredModuleRenderFrame = window.requestAnimationFrame(() => {
+      mobileDeferredModuleRenderFrame = 0;
+      if (token !== mobileDeferredModuleRenderToken || state.activeModule !== moduleId) return;
+      try {
+        renderWorkspace(false, false);
+      } finally {
+        if (token === mobileDeferredModuleRenderToken) {
+          moduleBody.inert = false;
+          moduleBody.removeAttribute("aria-busy");
+          delete moduleBody.dataset.pendingModule;
+        }
+      }
+      syncTaskQueueAutoRefresh();
+      syncAccountStatusAutoRefresh();
+      syncLiveBrowserAutoRefresh();
+    });
+  });
+  return { deferredMobileRender: true };
+}
+
+function animateMobileTaskDockPage(direction, { freezePage = false } = {}) {
   if (
     !direction
     || !window.matchMedia?.("(max-width: 820px)")?.matches
     || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
   ) return;
-  const page = document.querySelector(".console-main > .view.is-active");
+  const page = freezePage ? null : document.querySelector(".console-main > .view.is-active");
   const toolbar = $("mobilePageToolbar");
-  if (!page?.animate) return;
+  if (!page?.animate && !toolbar?.animate) return;
   mobileTaskDockPageAnimation?.cancel();
   mobileTaskDockToolbarAnimation?.cancel();
   const distance = Math.min(56, Math.max(32, Math.round(window.innerWidth * 0.12)));
@@ -6442,11 +6447,11 @@ function animateMobileTaskDockPage(direction) {
     duration: 180,
     easing: "cubic-bezier(.2, .72, .2, 1)",
   };
-  const animation = page.animate(keyframes, timing);
+  const animation = page?.animate ? page.animate(keyframes, timing) : null;
   const toolbarAnimation = toolbar?.animate ? toolbar.animate(keyframes, timing) : null;
   mobileTaskDockPageAnimation = animation;
   mobileTaskDockToolbarAnimation = toolbarAnimation;
-  animation.finished
+  animation?.finished
     .catch(() => {})
     .finally(() => {
       if (mobileTaskDockPageAnimation === animation) {
@@ -6465,8 +6470,10 @@ function animateMobileTaskDockPage(direction) {
 function commitMobileTaskDockNavigation(button, commit) {
   const direction = mobileTaskDockNavigationDirection(button);
   slideSegmentedButtonBackground(button).catch(() => {});
-  commit();
-  animateMobileTaskDockPage(direction);
+  const result = commit();
+  animateMobileTaskDockPage(direction, {
+    freezePage: Boolean(result?.deferredMobileRender),
+  });
 }
 
 function renderModuleMenu() {
@@ -6529,19 +6536,38 @@ function setMenuClickHighlight(button, leaveScope = button) {
   leaveScope.addEventListener("mouseleave", clear, { once: true });
 }
 
-function setModule(moduleId) {
+function setModule(moduleId, { deferMobileRender = false } = {}) {
   cancelMobileTweetStreamLoading();
   clearMsg("commandMsg");
   const previousModule = state.activeModule;
+  const moduleBody = $("moduleBody");
+  const renderedModule = String(moduleBody?.dataset.renderedModule || previousModule || "");
   state.activeModule = moduleId;
   if (isPersonaWorkspaceModule(moduleId) && moduleId !== previousModule) {
     state.personaGroup = personaModuleDefaultGroup(moduleId);
     setPersonaGroupStep(state.personaGroup, state.personaPanels[state.personaGroup] || personaGroups[state.personaGroup]?.defaultStep || "", selectedPersonaProfile());
   }
+  const shouldDeferRender = deferMobileRender
+    && window.matchMedia?.("(max-width: 820px)")?.matches
+    && previousModule !== moduleId
+    && ["tweet_generation", "publishing"].includes(previousModule)
+    && ["tweet_generation", "publishing"].includes(moduleId);
+  if (shouldDeferRender) {
+    syncModuleMenuState();
+    $("moduleTitle").textContent = currentModule().label;
+    syncMobilePageToolbar();
+    if (renderedModule === moduleId) {
+      cancelMobileDeferredModuleRender();
+      return { deferredMobileRender: true };
+    }
+    return scheduleMobileDeferredModuleRender(moduleId);
+  }
+  cancelMobileDeferredModuleRender();
   renderWorkspace(false, false);
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
   syncLiveBrowserAutoRefresh();
+  return { deferredMobileRender: false };
 }
 
 function selectedBranch(moduleId) {
@@ -6567,6 +6593,7 @@ function renderWorkspace(renderMenu = true, preserveScroll = true) {
   else renderSimpleFlowModule(module.id);
   renderConfirmSummary();
   syncMobilePageToolbar();
+  $("moduleBody").dataset.renderedModule = module.id;
   };
   if (preserveScroll) return withConsoleScrollPreserved(render);
   consoleScrollPreserveDepth += 1;
@@ -26293,16 +26320,10 @@ async function slideSegmentedButtonBackground(button) {
   if (!group || !current) return;
   const pendingSlide = segmentedBackgroundSlides.get(group);
   if (pendingSlide) return pendingSlide;
-  const cachedDockMetrics = group.classList.contains("mobile-task-dock")
-    && mobileTaskDockSlideMetrics.get(group)?.viewportWidth === window.innerWidth
-    ? mobileTaskDockSlideMetrics.get(group)
-    : null;
   const positionGroup = getComputedStyle(group).position === "static";
-  const groupRect = cachedDockMetrics ? null : group.getBoundingClientRect();
+  const groupRect = group.getBoundingClientRect();
 
   const relativeBox = (item) => {
-    const cachedBox = cachedDockMetrics?.boxes.get(item);
-    if (cachedBox) return cachedBox;
     const itemRect = item.getBoundingClientRect();
     return {
       left: itemRect.left - groupRect.left - group.clientLeft + group.scrollLeft,
@@ -26313,8 +26334,8 @@ async function slideSegmentedButtonBackground(button) {
   };
   const from = relativeBox(current);
   const to = relativeBox(button);
-  const activeStyle = cachedDockMetrics?.activeStyle || getComputedStyle(current);
-  const inactiveColor = cachedDockMetrics?.inactiveColor || getComputedStyle(button).color;
+  const activeStyle = getComputedStyle(current);
+  const inactiveColor = getComputedStyle(button).color;
   group.style.setProperty("--segment-slide-x", `${from.left}px`);
   group.style.setProperty("--segment-slide-y", `${from.top}px`);
   group.style.setProperty("--segment-slide-width", `${from.width}px`);
@@ -26391,10 +26412,7 @@ function bindEvents() {
   document.addEventListener("click", handleDailyPublishActionGate, true);
   ensureThemeToggle();
   ensureLanguageToggle();
-  window.addEventListener("vecto:theme-change", (event) => {
-    applyTheme(event.detail?.theme);
-    scheduleMobileTaskDockSlideMetrics();
-  });
+  window.addEventListener("vecto:theme-change", (event) => applyTheme(event.detail?.theme));
   window.addEventListener("vecto:language-change", (event) => applyLanguage(event.detail?.language));
   window.addEventListener("vecto:open-account-editor", (event) => {
     const detail = event.detail || {};
@@ -26526,8 +26544,13 @@ function bindEvents() {
           state.workspaceMenuOpen = true;
           setView("workspace");
         }
-        if (moduleChanged) setModule(nextModule);
+        if (moduleChanged) {
+          return setModule(nextModule, {
+            deferMobileRender: Boolean(dockButton && state.view === "workspace"),
+          });
+        }
         else syncModuleMenuState();
+        return { deferredMobileRender: false };
       };
       if (dockButton) {
         commitMobileTaskDockNavigation(dockButton, commitModule);
@@ -26657,7 +26680,6 @@ function bindEvents() {
   document.addEventListener("wheel", handlePersonaImageLibraryWheel, { passive: false });
   $("moduleBody").addEventListener("scroll", schedulePersonaCardEditorMenuPosition, true);
   window.addEventListener("resize", schedulePersonaCardEditorMenuPosition);
-  window.addEventListener("resize", () => scheduleMobileTaskDockSlideMetrics());
   window.addEventListener("beforeunload", (event) => {
     const activeState = activeTransientWorkspaceState();
     if (!activeState) return;
