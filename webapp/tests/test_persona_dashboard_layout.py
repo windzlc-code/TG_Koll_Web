@@ -739,13 +739,14 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('event.target.closest(".mobile-task-dock-button")', handler)
         self.assertIn("isCurrentMobileTaskDockTarget(dockButton)", handler)
         self.assertIn("scrollConsolePageToTop();", handler)
-        self.assertNotIn(
-            "await waitForSegmentedBackgroundSlide(event, dockButton",
-            handler,
-        )
+        self.assertNotIn("await waitForSegmentedBackgroundSlide(event, dockButton", handler)
         self.assertIn("currentPersonaDraftEditPersonaId()", handler)
         self.assertIn("activeTransientWorkspaceState()", handler)
         self.assertEqual(handler.count("if (dockButton) {"), 2)
+        self.assertEqual(
+            handler.count("slideSegmentedButtonBackground(dockButton).catch(() => {});"),
+            2,
+        )
         self.assertIn("commitView();\n        return;", handler)
         self.assertIn("commitModule();\n        return;", handler)
         self.assertLess(
@@ -2117,7 +2118,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('".persona-compose-toggle > button"', self.console_script)
         self.assertIn('".persona-media-operation-toggle > button"', self.console_script)
         self.assertIn('".automation-capsule-tabs > button"', self.console_script)
-        self.assertNotIn('".mobile-task-dock > button"', self.console_script)
+        self.assertIn('".mobile-task-dock > button"', self.console_script)
         self.assertNotIn('".publish-preview-tabs > button"', self.console_script)
         self.assertNotIn('".persona-dashboard-picker-tabs > button"', self.console_script)
         self.assertNotIn('".persona-dashboard-platform-tabs > button"', self.console_script)
@@ -2149,7 +2150,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("left 180ms cubic-bezier(.2, .72, .2, 1)", interaction)
         self.assertNotIn("scale(", slider)
 
-    def test_mobile_task_dock_keeps_a_persistent_transform_only_indicator(self):
+    def test_mobile_task_dock_reuses_fixed_size_segment_slide_without_delaying_navigation(self):
         renderer = self.console_script[
             self.console_script.index("function renderMobileTaskDock()"):
             self.console_script.index("\nfunction isCurrentMobileTaskDockTarget")
@@ -2164,18 +2165,19 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         ]
         self.assertIn('if (!dock.querySelector(".mobile-task-dock-button"))', renderer)
         self.assertIn("syncMobileTaskDockState(dock);", renderer)
-        self.assertIn("--mobile-task-dock-offset", renderer)
-        self.assertIn(".mobile-task-dock::before", dock_styles)
-        self.assertIn(
-            "transform: translate3d(var(--mobile-task-dock-offset, 0), 0, 0);",
-            dock_styles,
+        self.assertNotIn("--mobile-task-dock-offset", renderer)
+        self.assertNotIn(".mobile-task-dock::before", dock_styles)
+        self.assertEqual(
+            navigation.count("slideSegmentedButtonBackground(dockButton).catch(() => {});"),
+            2,
         )
+        self.assertNotIn("await slideSegmentedButtonBackground(dockButton)", navigation)
         self.assertIn(
-            "transition: transform 180ms cubic-bezier(.2, .72, .2, 1);",
-            dock_styles,
+            ".mobile-task-dock.is-segment-background-sliding::before {\n"
+            "  will-change: transform;\n"
+            "  transition: transform 180ms cubic-bezier(.2, .72, .2, 1);",
+            self.styles,
         )
-        self.assertNotIn("transition: width", dock_styles)
-        self.assertIn("@media (prefers-reduced-motion: reduce)", dock_styles)
         self.assertIn("if (moduleChanged) setModule(nextModule);", navigation)
         self.assertIn("state.socialViewRefreshTarget === targetView", self.console_script)
         self.assertIn("cancelScheduledSocialViewRefresh();", self.console_script)

@@ -6239,9 +6239,8 @@ function renderMobileTaskDock() {
 
 function syncMobileTaskDockState(dock = $("mobileTaskDock")) {
   if (!dock) return;
-  let activeIndex = -1;
   const buttons = Array.from(dock.querySelectorAll(".mobile-task-dock-button"));
-  buttons.forEach((button, index) => {
+  buttons.forEach((button) => {
     const moduleId = String(button.dataset.module || "");
     const nextView = String(button.dataset.workspaceView || "");
     const itemPanel = String(button.dataset.workspacePanel || "");
@@ -6257,19 +6256,11 @@ function syncMobileTaskDockState(dock = $("mobileTaskDock")) {
       );
     button.classList.toggle("is-active", isActive);
     if (isActive) {
-      activeIndex = index;
       button.setAttribute("aria-current", "page");
     } else {
       button.removeAttribute("aria-current");
     }
   });
-  dock.classList.toggle("has-active-item", activeIndex >= 0);
-  if (activeIndex >= 0) {
-    dock.style.setProperty("--mobile-task-dock-offset", `calc(${activeIndex * 100}% + ${activeIndex * 3}px)`);
-  }
-  if (!dock.classList.contains("is-motion-ready")) {
-    window.requestAnimationFrame(() => dock.classList.add("is-motion-ready"));
-  }
 }
 
 function isCurrentMobileTaskDockTarget(button) {
@@ -26039,6 +26030,7 @@ const SEGMENTED_BACKGROUND_BUTTON_SELECTOR = [
   ".persona-media-operation-toggle > button",
   ".persona-draft-view-toggle > button",
   ".persona-compose-toggle > button",
+  ".mobile-task-dock > button",
 ].join(",");
 const segmentedBackgroundSlides = new WeakMap();
 const segmentedBackgroundCommits = new WeakMap();
@@ -26253,6 +26245,7 @@ function bindEvents() {
         setView(nextView);
       };
       if (dockButton) {
+        slideSegmentedButtonBackground(dockButton).catch(() => {});
         commitView();
         return;
       }
@@ -26286,6 +26279,7 @@ function bindEvents() {
         else syncModuleMenuState();
       };
       if (dockButton) {
+        slideSegmentedButtonBackground(dockButton).catch(() => {});
         commitModule();
         return;
       }
