@@ -6374,7 +6374,6 @@ let mobileTaskDockToolbarAnimation = null;
 let mobileTaskDockCommitToken = 0;
 let mobileTaskDockCommitFrame = 0;
 let mobileTaskDockPendingButton = null;
-let mobileTaskDockFrozenPage = null;
 
 function mobileTaskDockNavigationDirection(button) {
   const dock = button?.closest?.(".mobile-task-dock");
@@ -6393,30 +6392,15 @@ function cancelMobileTaskDockCommit() {
     mobileTaskDockCommitFrame = 0;
   }
   mobileTaskDockPendingButton = null;
-  mobileTaskDockFrozenPage?.removeAttribute("aria-busy");
-  mobileTaskDockFrozenPage = null;
 }
 
-function previewMobileTaskDockToolbar(button) {
-  const title = $("mobilePageToolbarTitle");
-  const icon = $("mobilePageToolbarIcon");
-  const sourceIcon = button?.querySelector(".mobile-task-dock-icon");
-  const nextView = String(button?.dataset.workspaceView || "");
-  const previewTitle = {
-    persona_dashboard: "\u4eba\u8bbe\u770b\u677f",
-    accounts: "\u8d26\u53f7\u7ba1\u7406",
-  }[nextView] || button?.querySelector("span")?.textContent?.trim() || "";
-  if (title) title.textContent = previewTitle;
-  if (icon && sourceIcon) icon.innerHTML = sourceIcon.innerHTML;
-}
-
-function animateMobileTaskDockPage(direction, { freezePage = false } = {}) {
+function animateMobileTaskDockPage(direction) {
   if (
     !direction
     || !window.matchMedia?.("(max-width: 820px)")?.matches
     || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
   ) return;
-  const page = freezePage ? null : document.querySelector(".console-main > .view.is-active");
+  const page = document.querySelector(".console-main > .view.is-active");
   const toolbar = $("mobilePageToolbar");
   if (!page?.animate && !toolbar?.animate) return;
   mobileTaskDockPageAnimation?.cancel();
@@ -6453,26 +6437,15 @@ function animateMobileTaskDockPage(direction, { freezePage = false } = {}) {
 function commitMobileTaskDockNavigation(button, commit) {
   const direction = mobileTaskDockNavigationDirection(button);
   slideSegmentedButtonBackground(button).catch(() => {});
-  previewMobileTaskDockToolbar(button);
-  animateMobileTaskDockPage(direction, { freezePage: true });
   cancelMobileTaskDockCommit();
   const token = ++mobileTaskDockCommitToken;
   mobileTaskDockPendingButton = button;
-  mobileTaskDockFrozenPage = document.querySelector(".console-main > .view.is-active");
-  mobileTaskDockFrozenPage?.setAttribute("aria-busy", "true");
   mobileTaskDockCommitFrame = window.requestAnimationFrame(() => {
-    mobileTaskDockCommitFrame = window.requestAnimationFrame(() => {
-      mobileTaskDockCommitFrame = 0;
-      if (token !== mobileTaskDockCommitToken) return;
-      mobileTaskDockPendingButton = null;
-      const frozenPage = mobileTaskDockFrozenPage;
-      mobileTaskDockFrozenPage = null;
-      try {
-        commit();
-      } finally {
-        frozenPage?.removeAttribute("aria-busy");
-      }
-    });
+    mobileTaskDockCommitFrame = 0;
+    if (token !== mobileTaskDockCommitToken) return;
+    mobileTaskDockPendingButton = null;
+    commit();
+    animateMobileTaskDockPage(direction);
   });
 }
 

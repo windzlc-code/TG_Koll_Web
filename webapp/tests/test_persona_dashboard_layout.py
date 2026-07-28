@@ -2278,39 +2278,34 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("const activeStyle = getComputedStyle(current);", slider)
         self.assertIn("const inactiveColor = getComputedStyle(button).color;", slider)
 
-    def test_mobile_task_dock_freezes_the_previous_frame_before_every_real_navigation(self):
+    def test_mobile_task_dock_defers_real_navigation_one_frame_without_removing_page_slide(self):
         helper = self.console_script[
             self.console_script.index("function mobileTaskDockNavigationDirection(button)"):
             self.console_script.index("\nfunction renderModuleMenu()", self.console_script.index("function mobileTaskDockNavigationDirection(button)"))
         ]
 
-        self.assertIn("function previewMobileTaskDockToolbar(button)", helper)
-        self.assertIn('persona_dashboard: "\\u4eba\\u8bbe\\u770b\\u677f"', helper)
-        self.assertIn('accounts: "\\u8d26\\u53f7\\u7ba1\\u7406"', helper)
-        self.assertIn("previewMobileTaskDockToolbar(button);", helper)
-        self.assertIn("animateMobileTaskDockPage(direction, { freezePage: true });", helper)
+        self.assertIn("function animateMobileTaskDockPage(direction)", helper)
         self.assertIn('document.querySelector(".console-main > .view.is-active")', helper)
-        self.assertIn('mobileTaskDockFrozenPage?.setAttribute("aria-busy", "true");', helper)
-        self.assertGreaterEqual(helper.count("window.requestAnimationFrame"), 2)
+        self.assertIn("const animation = page?.animate ? page.animate(keyframes, timing) : null;", helper)
+        self.assertEqual(helper.count("mobileTaskDockCommitFrame = window.requestAnimationFrame"), 1)
         self.assertIn("commit();", helper)
         self.assertLess(
-            helper.index("previewMobileTaskDockToolbar(button);"),
-            helper.index("window.requestAnimationFrame"),
+            helper.index("slideSegmentedButtonBackground(button).catch(() => {});"),
+            helper.index("mobileTaskDockCommitFrame = window.requestAnimationFrame"),
         )
         self.assertLess(
-            helper.index("window.requestAnimationFrame"),
+            helper.index("mobileTaskDockCommitFrame = window.requestAnimationFrame"),
             helper.index("commit();"),
         )
+        self.assertLess(helper.index("commit();"), helper.index("animateMobileTaskDockPage(direction);"))
+        self.assertNotIn("freezePage", helper)
 
     def test_mobile_task_dock_page_and_indicator_slide_start_in_the_same_commit(self):
         start = self.console_script.index("function mobileTaskDockNavigationDirection(button)")
         end = self.console_script.index("\nfunction renderModuleMenu()", start)
         helper = self.console_script[start:end]
 
-        self.assertIn(
-            "function animateMobileTaskDockPage(direction, { freezePage = false } = {})",
-            helper,
-        )
+        self.assertIn("function animateMobileTaskDockPage(direction)", helper)
         self.assertIn('window.matchMedia?.("(max-width: 820px)")?.matches', helper)
         self.assertIn('window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches', helper)
         self.assertIn(
@@ -2337,17 +2332,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("function commitMobileTaskDockNavigation(button, commit)", helper)
         self.assertLess(
             helper.index("slideSegmentedButtonBackground(button).catch(() => {});"),
-            helper.index("previewMobileTaskDockToolbar(button);"),
+            helper.index("mobileTaskDockCommitFrame = window.requestAnimationFrame"),
         )
         self.assertLess(
-            helper.index("previewMobileTaskDockToolbar(button);"),
-            helper.index("animateMobileTaskDockPage(direction, { freezePage: true });"),
+            helper.index("mobileTaskDockCommitFrame = window.requestAnimationFrame"),
+            helper.index("commit();"),
         )
-        self.assertLess(
-            helper.index("animateMobileTaskDockPage(direction, { freezePage: true });"),
-            helper.index("window.requestAnimationFrame"),
-        )
-        self.assertLess(helper.index("window.requestAnimationFrame"), helper.index("commit();"))
+        self.assertLess(helper.index("commit();"), helper.index("animateMobileTaskDockPage(direction);"))
         self.assertNotIn("await ", helper)
 
     def test_draft_detail_omits_content_type_but_keeps_detail_media(self):
