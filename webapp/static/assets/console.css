@@ -15001,7 +15001,7 @@ body.persona-media-sorting {
     transition: border-color 180ms ease;
   }
 
-  .account-pool-add-button:is(:hover, :focus, :active, .is-modal-open) {
+  .account-pool-add-button:is(:hover, :focus-visible, :active, .is-modal-open) {
     background: transparent;
     border-color: var(--accent);
     transform: none;
@@ -15009,7 +15009,7 @@ body.persona-media-sorting {
   }
 
   .account-pool-add-button span,
-  .account-pool-add-button:is(:hover, :focus, :active, .is-modal-open) span {
+  .account-pool-add-button:is(:hover, :focus-visible, :active, .is-modal-open) span {
     transform: none;
     animation: none;
     transition: none;
@@ -19531,7 +19531,7 @@ body.console-page {
 }
 
 .console-page :is(.console-shell, .console-modal) button:focus-visible {
-  outline: 2px solid var(--hover-border);
+  outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
 
@@ -19591,8 +19591,8 @@ body.console-page {
   button[data-browser-recommendation-refresh]
 ):hover:not(:disabled) {
   color: var(--vecto-action-ink);
-  border-color: #2a9184;
-  box-shadow: 0 0 0 3px rgba(35, 124, 114, 0.16);
+  border-color: var(--vecto-action-border);
+  box-shadow: none;
 }
 
 .console-page :is(.console-shell, .console-modal) :is(

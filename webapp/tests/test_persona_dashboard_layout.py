@@ -2211,6 +2211,25 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             ".is-segment-background-sliding {\n  position: relative;",
             interaction,
         )
+        self.assertIn(
+            "button:focus-visible {\n  outline: 2px solid var(--ink);",
+            self.styles,
+        )
+        self.assertIn(
+            "):hover:not(:disabled) {\n"
+            "  color: var(--vecto-action-ink);\n"
+            "  border-color: var(--vecto-action-border);\n"
+            "  box-shadow: none;",
+            self.styles,
+        )
+        self.assertNotIn(
+            ".account-pool-add-button:is(:hover, :focus, :active, .is-modal-open)",
+            self.styles,
+        )
+        self.assertIn(
+            ".account-pool-add-button:is(:hover, :focus-visible, :active, .is-modal-open)",
+            self.styles,
+        )
         self.assertIn('button.classList.contains("is-pending")', slider)
         self.assertIn('group.style.setProperty("--segment-slide-background", slideStyle.background);', slider)
         self.assertNotIn("activeStyle.backgroundColor", slider)
