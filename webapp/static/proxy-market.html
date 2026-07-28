@@ -90,18 +90,8 @@
         </div>
         <form id="marketFilterForm" class="proxy-filter-form">
           <label><span>國家 / 地區</span><select id="marketCountryOptions" name="country"><option value="">全部國家</option></select></label>
-          <label><span>網路供應商</span><select id="marketIspOptions" name="isp"><option value="">全部 ISP</option></select></label>
-          <label><span>代理協定</span><select name="proxy_type"><option value="">全部協定</option><option value="http">HTTP</option><option value="https">HTTPS</option><option value="socks5">SOCKS5</option></select></label>
           <label><span>IP 類型</span><select name="ip_type"><option value="">全部類型</option><option value="static_residential">靜態住宅</option></select></label>
-          <label><span>庫存狀態</span><select name="availability"><option value="available">可領取</option><option value="">全部狀態</option><option value="unavailable">暫不可用</option></select></label>
-          <label><span>最低參考價（分）</span><input name="min_price_cents" type="number" min="0" step="1" placeholder="不限" /></label>
-          <label><span>最高參考價（分）</span><input name="max_price_cents" type="number" min="0" step="1" placeholder="不限" /></label>
-          <label><span>至少有效</span><select name="valid_for_days"><option value="">不限</option><option value="7">7 天</option><option value="30">30 天</option><option value="90">90 天</option></select></label>
-          <label><span>排序</span><select name="sort"><option value="">推薦排序</option><option value="newest">最新上架</option><option value="latency">延遲較低</option><option value="price_asc">價格由低至高</option><option value="price_desc">價格由高至低</option></select></label>
-          <button class="proxy-filter-submit" type="submit">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
-            <span>套用篩選</span>
-          </button>
+          <label><span>排序</span><select name="sort"><option value="recommended">推薦排序</option><option value="newest">最新上架</option><option value="updated">最近更新</option><option value="checked_recently">最近檢測</option><option value="latency">延遲較低</option><option value="price_asc">價格由低至高</option><option value="price_desc">價格由高至低</option><option value="expires_soon">即將到期</option><option value="expires_later">有效期最長</option></select></label>
         </form>
       </section>
 

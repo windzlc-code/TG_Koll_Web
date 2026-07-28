@@ -3,15 +3,10 @@
 
   const FILTER_KEYS = [
     "country",
-    "isp",
-    "proxy_type",
     "ip_type",
-    "availability",
-    "min_price_cents",
-    "max_price_cents",
-    "valid_for_days",
     "sort",
   ];
+  const FILTER_DEFAULTS = { sort: "recommended" };
   const UNAVAILABLE_VALUES = new Set(["unavailable", "sold_out", "out_of_stock", "exhausted", "disabled", "inactive"]);
   const LIMITED_VALUES = new Set(["limited", "low", "low_stock"]);
   const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
@@ -249,7 +244,7 @@
     const query = new URLSearchParams(window.location.search);
     FILTER_KEYS.forEach((key) => {
       const field = elements.form?.elements?.[key];
-      if (field) field.value = query.has(key) ? (query.get(key) || "") : (key === "availability" ? "available" : "");
+      if (field) field.value = query.has(key) ? (query.get(key) || "") : (FILTER_DEFAULTS[key] || "");
     });
     state.page = Math.max(1, Math.floor(finiteNumber(query.get("page"), 1)));
     state.pageSize = 12;
@@ -259,7 +254,7 @@
     const params = new URLSearchParams();
     FILTER_KEYS.forEach((key) => {
       const value = String(elements.form?.elements?.[key]?.value || "").trim();
-      if (value || key === "availability") params.set(key, value);
+      if (value) params.set(key, value);
     });
     state.pageSize = 12;
     params.set("page", String(state.page));
@@ -487,7 +482,6 @@
       marketCountryOptions: ["country", ["country_name", "country"], "全部國家"],
       marketRegionOptions: ["region", ["region_name", "region", "state"], "全部區域"],
       marketCityOptions: ["city", ["city_name", "city"], "全部城市"],
-      marketIspOptions: ["isp", ["isp_name", "isp", "carrier"], "全部 ISP"],
       marketUseCaseOptions: ["use_cases", ["use_case", "recommended_use_case", "purpose"], "全部情境"],
     };
     Object.entries(sources).forEach(([id, [facetKey, itemKeys, emptyLabel]]) => {
@@ -729,15 +723,14 @@
 
   function clearFilters() {
     elements.form.reset();
-    if (elements.form.elements.page_size) elements.form.elements.page_size.value = "12";
     state.page = 1;
     void loadCatalog({ scroll: true });
   }
 
-  elements.form?.addEventListener("submit", (event) => {
-    event.preventDefault();
+  elements.form?.addEventListener("change", (event) => {
+    if (!(event.target instanceof HTMLSelectElement)) return;
     state.page = 1;
-    void loadCatalog({ scroll: true });
+    void loadCatalog();
   });
 
   elements.reset?.addEventListener("click", clearFilters);

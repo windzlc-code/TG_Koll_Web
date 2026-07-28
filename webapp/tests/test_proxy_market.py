@@ -175,6 +175,34 @@ class ProxyMarketTests(unittest.TestCase):
         self.assertNotIn("username", item)
         self.assertNotIn("password", item)
 
+    def test_public_catalog_supports_extended_sorting(self):
+        earlier = self._market_item("TW-TPE-EARLIER")
+        later = self._market_item("TW-TPE-LATER")
+        now = int(time.time())
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE proxy_market_items
+                SET updated_at = ?, last_check_at = ?, expires_at = ?
+                WHERE id = ?
+                """,
+                (now - 300, now - 120, now + 7 * 24 * 60 * 60, earlier["id"]),
+            )
+            conn.execute(
+                """
+                UPDATE proxy_market_items
+                SET updated_at = ?, last_check_at = ?, expires_at = ?
+                WHERE id = ?
+                """,
+                (now, now, now + 30 * 24 * 60 * 60, later["id"]),
+            )
+
+        client = TestClient(self.app)
+        self.assertEqual(client.get("/api/proxy-market/catalog?sort=updated").json()["items"][0]["id"], later["id"])
+        self.assertEqual(client.get("/api/proxy-market/catalog?sort=checked_recently").json()["items"][0]["id"], later["id"])
+        self.assertEqual(client.get("/api/proxy-market/catalog?sort=expires_soon").json()["items"][0]["id"], earlier["id"])
+        self.assertEqual(client.get("/api/proxy-market/catalog?sort=expires_later").json()["items"][0]["id"], later["id"])
+
     def test_public_catalog_all_status_filter_includes_stale_active_items(self):
         available = self._market_item("TW-TPE-AVAILABLE")
         stale = self._market_item("TW-TPE-STALE")

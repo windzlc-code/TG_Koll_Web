@@ -541,10 +541,14 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             )
             params.extend([now - settings["health_max_age_seconds"], now])
         order_by = {
-            "latency": "latency_ms ASC, published_at DESC",
+            "latency": "CASE WHEN latency_ms > 0 THEN 0 ELSE 1 END ASC, latency_ms ASC, published_at DESC",
             "newest": "published_at DESC, updated_at DESC",
+            "updated": "updated_at DESC, published_at DESC",
+            "checked_recently": "last_check_at DESC, published_at DESC",
             "price_asc": "display_price_cents ASC, published_at DESC",
             "price_desc": "display_price_cents DESC, published_at DESC",
+            "expires_soon": "CASE WHEN expires_at > 0 THEN 0 ELSE 1 END ASC, expires_at ASC, published_at DESC",
+            "expires_later": "CASE WHEN expires_at = 0 THEN 0 ELSE 1 END ASC, expires_at DESC, published_at DESC",
         }.get(str(sort or "").strip().lower(), "health_status DESC, published_at DESC, latency_ms ASC")
         where = " AND ".join(filters)
         offset = (page - 1) * page_size

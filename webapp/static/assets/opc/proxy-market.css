@@ -210,7 +210,6 @@
 }
 
 .proxy-filter-reset svg,
-.proxy-filter-submit svg,
 .proxy-pagination svg,
 .proxy-empty-state svg,
 .proxy-success-close svg,
@@ -226,7 +225,7 @@
 
 .proxy-filter-form {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px 10px;
 }
 
@@ -264,26 +263,6 @@
   border-color: #0c9a9a;
   box-shadow: 0 0 0 3px rgba(12, 154, 154, 0.11);
   outline: 0;
-}
-
-.proxy-filter-submit {
-  display: inline-flex;
-  align-items: center;
-  align-self: end;
-  justify-content: center;
-  gap: 8px;
-  min-height: 38px;
-  padding: 0 16px;
-  color: #ffffff;
-  background: #087071;
-  border: 1px solid #087071;
-  border-radius: 6px;
-  cursor: pointer;
-  font-weight: 900;
-}
-
-.proxy-filter-submit:hover {
-  background: #065c5d;
 }
 
 .proxy-market-catalog {
@@ -738,19 +717,10 @@
   .proxy-market-nav-link {
     display: none;
   }
-
-  .proxy-filter-form {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .proxy-filter-submit {
-    grid-column: auto;
-  }
 }
 
 @media (hover: none) and (pointer: coarse) {
   .proxy-filter-reset,
-  .proxy-filter-submit,
   .proxy-filter-form :is(input, select) {
     min-height: 44px;
   }
@@ -767,10 +737,6 @@
 
   .proxy-market-facts > div:nth-child(-n + 2) {
     border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-  }
-
-  .proxy-filter-form {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .proxy-catalog-grid {
@@ -899,10 +865,6 @@
     font-size: 10px;
   }
 
-  .proxy-filter-submit {
-    grid-column: span 2;
-  }
-
   .proxy-market-catalog {
     min-height: 230px;
     padding: 22px 0 32px;
@@ -968,14 +930,6 @@
 
   .proxy-market-facts > div:nth-child(2n) {
     border-right: 0;
-  }
-
-  .proxy-filter-form {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .proxy-filter-submit {
-    grid-column: span 2;
   }
 
   .catalog-heading {

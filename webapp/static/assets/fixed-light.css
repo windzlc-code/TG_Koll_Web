@@ -742,7 +742,7 @@
   color: var(--public-cool);
 }
 
-:root[data-theme="light"] .proxy-market-page :is(.proxy-filter-form, .proxy-card, .proxy-empty-state) {
+:root[data-theme="light"] .proxy-market-page :is(.proxy-card, .proxy-empty-state) {
   background: var(--public-paper);
   border-color: var(--public-line);
 }
