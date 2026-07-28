@@ -8653,7 +8653,7 @@ function renderPersonaAccountPoolPickerCard(account, currentPersona = selectedPe
   return `<button type="button" class="persona-account-picker-card" data-persona-account-pool-select="${esc(accountId)}">
     <span class="persona-account-picker-card-main">
       <span class="persona-account-picker-card-copy"><strong>${esc(displayName)}</strong><small>${esc(supplementaryName)}</small></span>
-      <span class="persona-account-picker-card-status"><span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}">${esc(accountLastLoginCheckLabel(account))}</span>${renderAccountTotpBadge(account)}</span>
+      <span class="persona-account-picker-card-status"><span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}">${renderAccountStatusContent(account)}</span>${renderAccountTotpBadge(account)}</span>
     </span>
     <span class="persona-account-picker-card-meta"><span class="persona-account-picker-binding ${esc(binding.className)}">${esc(binding.label)}</span><span class="persona-account-picker-proxy">${esc(accountResidentialProxyLabel(account))}</span></span>
     <span class="persona-account-picker-card-action">${esc(binding.action)}</span>
