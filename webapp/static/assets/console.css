@@ -16395,7 +16395,9 @@ button.proxy-market-link {
   position: relative;
   display: inline-flex;
   grid-area: check;
-  align-self: start;
+  align-self: center;
+  margin: 0;
+  gap: 0;
   width: 22px;
   height: 22px;
   cursor: pointer;
@@ -16568,25 +16570,21 @@ button.proxy-market-link {
 }
 
 .account-pool-card:not(.persona-account-pool-card) {
-  grid-template-columns: 22px minmax(0, 1fr);
-  grid-template-areas:
-    "check main"
-    ". bound"
-    ". meta"
-    ". actions";
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto;
   align-items: stretch;
 }
 
 .account-pool-card:not(.persona-account-pool-card) .account-pool-card-main {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-columns: 22px auto auto minmax(0, 1fr) auto;
   grid-template-areas:
-    "platform copy status status"
-    "username username username totp";
+    "check platform copy status status"
+    ". username username username totp";
   align-items: center;
   gap: 4px 7px;
-  grid-area: main;
+  grid-column: 1;
+  grid-row: auto;
 }
 
 .account-pool-card:not(.persona-account-pool-card) .account-pool-card-platform {
@@ -16611,10 +16609,6 @@ button.proxy-market-link {
   grid-area: copy;
 }
 
-.account-pool-card:not(.persona-account-pool-card) .account-pool-bound-persona {
-  grid-area: bound;
-}
-
 .account-pool-card:not(.persona-account-pool-card) .account-pool-card-flags .status {
   grid-area: status;
   justify-self: end;
@@ -16626,11 +16620,13 @@ button.proxy-market-link {
 }
 
 .account-pool-card:not(.persona-account-pool-card) .account-card-meta {
-  grid-area: meta;
+  grid-column: 1;
+  grid-row: auto;
 }
 
 .account-pool-card:not(.persona-account-pool-card) .row-actions {
-  grid-area: actions;
+  grid-column: 1 / -1;
+  grid-row: auto;
 }
 
 .account-pool-card .row-actions {

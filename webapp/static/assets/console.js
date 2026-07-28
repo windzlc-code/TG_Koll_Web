@@ -22008,8 +22008,8 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
       <span aria-hidden="true"></span>
     </label>`;
   return `<article class="account-card account-pool-card ${isPersonaSettings ? "account-pool-card--persona" : ""} ${active ? "is-active" : ""} ${checked ? "is-checked" : ""}" ${accountCardTarget} role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
-    ${selectionControl}
     <div class="account-pool-card-main">
+      ${selectionControl}
       <small class="account-pool-card-platform">
         ${renderAccountPoolPlatformIcon(platform)}
         <span>${esc(platformCopy)}</span>
