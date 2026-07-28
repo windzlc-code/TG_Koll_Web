@@ -6401,7 +6401,12 @@ function previewMobileTaskDockToolbar(button) {
   const title = $("mobilePageToolbarTitle");
   const icon = $("mobilePageToolbarIcon");
   const sourceIcon = button?.querySelector(".mobile-task-dock-icon");
-  if (title) title.textContent = button?.querySelector("span")?.textContent?.trim() || "";
+  const nextView = String(button?.dataset.workspaceView || "");
+  const previewTitle = {
+    persona_dashboard: "\u4eba\u8bbe\u770b\u677f",
+    accounts: "\u8d26\u53f7\u7ba1\u7406",
+  }[nextView] || button?.querySelector("span")?.textContent?.trim() || "";
+  if (title) title.textContent = previewTitle;
   if (icon && sourceIcon) icon.innerHTML = sourceIcon.innerHTML;
 }
 

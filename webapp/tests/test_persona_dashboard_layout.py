@@ -2285,6 +2285,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         ]
 
         self.assertIn("function previewMobileTaskDockToolbar(button)", helper)
+        self.assertIn('persona_dashboard: "\\u4eba\\u8bbe\\u770b\\u677f"', helper)
+        self.assertIn('accounts: "\\u8d26\\u53f7\\u7ba1\\u7406"', helper)
         self.assertIn("previewMobileTaskDockToolbar(button);", helper)
         self.assertIn("animateMobileTaskDockPage(direction, { freezePage: true });", helper)
         self.assertIn('document.querySelector(".console-main > .view.is-active")', helper)
