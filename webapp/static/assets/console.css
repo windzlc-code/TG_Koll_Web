@@ -23531,7 +23531,7 @@ body.console-page {
 
   .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-mobile-summary {
     position: absolute;
-    top: 50%;
+    top: calc(50% - 20px);
     left: 50%;
     display: grid;
     grid-template-columns: repeat(2, max-content);
