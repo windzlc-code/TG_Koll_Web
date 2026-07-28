@@ -12706,7 +12706,11 @@ function bindSimpleFlowInputs(moduleId) {
         if (node.closest(".publish-mode-tabs")?.classList.contains("is-segment-background-sliding")) return;
         const nextMode = normalizedPublishMode(node.dataset.simplePublishMode || "publish_now");
         const previousMode = normalizedPublishMode(state.simpleBranches.publishing);
-        if (nextMode !== previousMode && !(await confirmLeaveTransientWorkspaceState())) return;
+        if (
+          nextMode !== previousMode
+          && activeTransientWorkspaceState()
+          && !(await confirmLeaveTransientWorkspaceState())
+        ) return;
         if (nextMode === previousMode) return;
         await slideSegmentedButtonBackground(node, {
           commit: () => {
@@ -12858,7 +12862,11 @@ function bindSimpleFlowInputs(moduleId) {
         event.__vectoSegmentSlideHandled = true;
         const previousSource = normalizePublishContentSource();
         const nextSource = normalizePublishContentSource(node.dataset.publishContentSource || "posts");
-        if (nextSource !== previousSource && !(await confirmLeaveTransientWorkspaceState())) return;
+        if (
+          nextSource !== previousSource
+          && activeTransientWorkspaceState()
+          && !(await confirmLeaveTransientWorkspaceState())
+        ) return;
         if (nextSource === previousSource) return;
         await slideSegmentedButtonBackground(node, {
           commit: () => {

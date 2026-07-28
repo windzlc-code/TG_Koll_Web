@@ -2240,6 +2240,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("state.publishContentSource = nextSource;", handlers)
         self.assertEqual(handlers.count('renderSimpleFlowModule("publishing");'), 2)
         self.assertIn("resolveButton: () => document.querySelector(", handlers)
+        self.assertEqual(handlers.count("&& activeTransientWorkspaceState()"), 2)
         self.assertNotIn("await slideSegmentedButtonBackground(node);\n", handlers)
         self.assertLess(
             self.console_script.index("commit();", self.console_script.index("async function slideSegmentedButtonBackground")),
