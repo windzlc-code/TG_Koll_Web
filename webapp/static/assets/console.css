@@ -16599,6 +16599,7 @@ button.proxy-market-link {
 
 .account-pool-card:not(.persona-account-pool-card) .account-pool-card-copy strong {
   grid-area: username;
+  margin-left: 16px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

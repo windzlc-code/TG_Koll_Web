@@ -27633,6 +27633,11 @@ function bindEvents() {
     }
   });
   $("moduleBody").addEventListener("change", async (event) => {
+    if (event.target?.matches?.("[data-account-pool-check]")) {
+      toggleAccountPoolAccount(event.target.dataset.accountPoolCheck || "");
+      renderSocialAccounts();
+      return;
+    }
     if (event.target?.id === "personaGenerateCount") {
       snapshotPersonaCurrentForm();
       renderConfirmSummary();
@@ -28096,15 +28101,6 @@ function bindEvents() {
     const accountAdd = event.target.closest("[data-account-pool-add]");
     if (accountAdd) {
       openAccountPoolCreateModal();
-      return;
-    }
-    const accountCheckTarget = event.target.closest(".account-pool-card-check");
-    if (accountCheckTarget) {
-      event.preventDefault();
-      const accountCheck = accountCheckTarget.querySelector("[data-account-pool-check]");
-      if (!accountCheck) return;
-      toggleAccountPoolAccount(accountCheck.dataset.accountPoolCheck || "");
-      renderSocialAccounts();
       return;
     }
     const accountEdit = event.target.closest("[data-account-pool-edit]");
