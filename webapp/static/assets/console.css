@@ -15347,12 +15347,16 @@ body.persona-media-sorting {
 
 @media (max-width: 760px) {
   .account-totp-code-card {
-    grid-template-columns: minmax(0, 1fr) 48px;
+    grid-template-columns: minmax(0, 1fr) 48px auto;
   }
 
-  .account-totp-meta,
+  .account-totp-meta {
+    grid-column: 1;
+  }
+
   .account-totp-code-actions {
-    grid-column: 1 / -1;
+    grid-column: 2 / -1;
+    align-self: end;
   }
 }
 
@@ -15366,7 +15370,7 @@ body.persona-media-sorting {
   }
 
   .account-totp-code-card {
-    grid-template-columns: minmax(0, 1fr) 48px;
+    grid-template-columns: minmax(0, 1fr) 48px auto;
   }
 
   .account-totp-entry-actions {
@@ -15374,14 +15378,12 @@ body.persona-media-sorting {
     justify-content: stretch;
   }
 
-  .account-totp-entry-actions button,
-  .account-totp-code-actions button {
+  .account-totp-entry-actions button {
     flex: 1 1 0;
   }
 
-  .account-totp-meta,
   .account-totp-code-actions {
-    grid-column: 1 / -1;
+    flex: 0 0 auto;
   }
 
   .account-residential-proxy-head {
@@ -15462,6 +15464,11 @@ body.persona-media-sorting {
 .account-proxy-custom-add .ui-action-icon {
   width: 16px;
   height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .account-proxy-picker-panel .account-residential-proxy-head button {
@@ -19452,7 +19459,7 @@ body.console-page {
   }
 
   .console-page :is(
-    button,
+    button:not(.account-password-toggle),
     .button,
     .chip-button,
     a[role="button"],
@@ -19481,7 +19488,6 @@ body.console-page {
   .persona-draft-more-trigger,
   .persona-draft-view-toggle button,
   .account-pool-edit-toolbar > button:not(.account-pool-add-button),
-  .account-password-toggle,
   .account-pool-bind-persona,
   .toast-message-close,
   .proxy-table-actions button,
