@@ -9219,6 +9219,7 @@ function renderPersonaQueueRows(rows) {
       <div class="task-persona-queue-time" data-mobile-label="时间">${esc(socialQueueTaskTime(task))}</div>
       <div data-mobile-label="状态">${renderSocialQueueTaskStatus(task)}</div>
       <div class="row-actions" data-mobile-label="操作">
+        ${activeSocialAutomationTask(task) ? `<button type="button" class="task-queue-browser-button unified-action-icon-button" data-social-browser="${esc(task.id)}" title="打开任务浏览器页面" aria-label="打开任务浏览器页面">${renderBrowserLaunchIcon()}</button>` : ""}
         <button type="button" data-social-log="${esc(task.id)}">日志</button>
         ${task.status === "failed" && !task.batch_task_count && task?.result?.retryable !== false ? `<button type="button" data-social-retry="${esc(task.id)}">重试</button>` : ""}
         ${activeSocialAutomationTask(task) ? `<button type="button" class="muted" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
@@ -28078,6 +28079,11 @@ function bindEvents() {
     const socialPreview = event.target.closest("[data-social-preview]");
     if (socialPreview) {
       openLiveBrowserTaskView(socialPreview.dataset.socialPreview || "");
+      return;
+    }
+    const socialBrowser = event.target.closest("[data-social-browser]");
+    if (socialBrowser) {
+      openLiveBrowserTaskView(socialBrowser.dataset.socialBrowser || "");
       return;
     }
     const socialLog = event.target.closest("[data-social-log]");

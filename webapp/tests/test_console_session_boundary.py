@@ -1791,6 +1791,16 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
+    def test_task_queue_browser_button_reuses_the_live_browser_navigation(self):
+        queue_rows = self._section(
+            "function renderPersonaQueueRows",
+            "\nfunction renderTaskQueuePersonaSelectorCard",
+        )
+        self.assertIn('data-social-browser="${esc(task.id)}"', queue_rows)
+        self.assertIn("renderBrowserLaunchIcon()", queue_rows)
+        self.assertIn("const socialBrowser = event.target.closest(\"[data-social-browser]\")", self.source)
+        self.assertIn("openLiveBrowserTaskView(socialBrowser.dataset.socialBrowser || \"\")", self.source)
+
     def test_browser_list_replaces_the_redundant_mobile_navigation_toggle_with_back_navigation(self):
         persistent_page = self._section(
             "function isMobilePersistentDockPage",

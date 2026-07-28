@@ -7465,6 +7465,11 @@ body.persona-touch-dragging .persona-list-card:active {
   transition: transform var(--motion-fast);
 }
 
+.mobile-page-toolbar > .mobile-nav-toggle.is-page-back {
+  border-color: transparent;
+  background: transparent;
+}
+
 @media (max-width: 980px) {
   html {
     scrollbar-gutter: auto;
@@ -14092,6 +14097,26 @@ body.persona-media-sorting {
   border-color: transparent;
   background: #fef2f2;
   color: #b91c1c;
+}
+
+.task-row .row-actions .task-queue-browser-button,
+.task-persona-queue-row .row-actions .task-queue-browser-button {
+  display: inline-grid;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  line-height: 0;
+}
+
+.task-row .row-actions .task-queue-browser-button:hover,
+.task-persona-queue-row .row-actions .task-queue-browser-button:hover {
+  border-color: transparent;
+  background: var(--soft);
 }
 
 .ui-trash-icon {
@@ -23506,13 +23531,13 @@ body.console-page {
 
   .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-mobile-summary {
     position: absolute;
-    top: 0;
+    top: 50%;
     left: 50%;
     display: grid;
     grid-template-columns: repeat(2, max-content);
     gap: 1px 5px;
     justify-content: center;
-    transform: translate(-50%, -22px);
+    transform: translate(-50%, -50%);
     font-size: 7px;
     line-height: 1.05;
   }
