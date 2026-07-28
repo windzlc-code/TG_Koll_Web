@@ -16,13 +16,56 @@ def function_source(name: str, next_name: str) -> str:
 
 
 class ConsolePublishHistoryHotDataTests(unittest.TestCase):
+    def test_history_list_preview_renders_all_six_hot_metrics_before_opening_detail(self):
+        selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")
+
+        self.assertIn(
+            'renderPublishHistoryMetrics(record, "publish-history-card-metrics")',
+            selection,
+        )
+        self.assertIn(".publish-history-card-metrics", CONSOLE_CSS)
+        self.assertIn(
+            "grid-template-columns: repeat(6, minmax(0, 1fr));",
+            CONSOLE_CSS,
+        )
+
+    def test_history_detail_places_one_row_of_hot_metrics_before_the_post_content(self):
+        detail = function_source("openPublishHistoryRecordModal", "requeuePublishHistoryRecord")
+
+        self.assertIn(
+            'renderPublishHistoryMetrics(record, "publish-history-modal-metrics")',
+            detail,
+        )
+        self.assertLess(
+            detail.index('renderPublishHistoryMetrics(record, "publish-history-modal-metrics")'),
+            detail.index("<p>"),
+        )
+        self.assertIn(
+            ".publish-history-modal-card .publish-history-metrics",
+            CONSOLE_CSS,
+        )
+
+    def test_history_metric_units_cover_thousands_ten_thousands_millions_and_hundred_millions(self):
+        formatter = function_source("publishHistoryMetricText", "renderPublishHistoryMetrics")
+
+        self.assertIn("absolute >= 100000000", formatter)
+        self.assertIn('formatPublishHistoryMetricUnit(number, 100000000, "亿")', formatter)
+        self.assertIn("absolute >= 1000000", formatter)
+        self.assertIn('formatPublishHistoryMetricUnit(number, 1000000, "m")', formatter)
+        self.assertIn("absolute >= 10000", formatter)
+        self.assertIn('formatPublishHistoryMetricUnit(number, 10000, "w")', formatter)
+        self.assertIn("absolute >= 1000", formatter)
+        self.assertIn('formatPublishHistoryMetricUnit(number, 1000, "k")', formatter)
+        self.assertNotIn('notation: "compact"', formatter)
+
     def test_publish_history_renders_full_hot_metrics_and_manual_refresh(self):
         preview = function_source("renderPublishHistoryPreview", "renderPublishHistoryPanel")
+        metrics = function_source("publishHistoryMetricEntries", "renderPublishHistoryMetrics")
         panel = function_source("renderPublishHistoryPanel", "requeuePublishHistoryRecord")
 
         self.assertIn("hot_metrics", preview)
         for label in ("热度", "浏览", "点赞", "评论", "分享", "转发"):
-            self.assertIn(label, preview)
+            self.assertIn(label, metrics)
         self.assertIn("data-publish-history-refresh", panel)
         self.assertIn("刷新热点数据", panel)
 

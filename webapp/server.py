@@ -15712,6 +15712,22 @@ def _source_metric(source: Any, *keys: str) -> int:
     return _number(source.get(keys[0]), 0) if keys else 0
 
 
+def _source_share_metric(source: Any) -> int:
+    if not isinstance(source, dict):
+        return 0
+    engagement = source.get("engagement") if isinstance(source.get("engagement"), dict) else {}
+    metrics = source.get("metrics") if isinstance(source.get("metrics"), dict) else {}
+    for key in ("sendCount", "send_count", "reshare_count"):
+        for container in (engagement, metrics, source):
+            if key in container:
+                return _number(container.get(key), 0)
+    for key in ("shareCount", "share_count"):
+        for container in (metrics, source, engagement):
+            if key in container:
+                return _number(container.get(key), 0)
+    return 0
+
+
 def _looks_like_media_url(value: Any) -> bool:
     text = str(value or "").strip()
     if not text:
@@ -16782,7 +16798,8 @@ def _build_persona_dashboard_overview(
                     "captured_at": source.get("capturedAt"),
                     "like_count": _source_metric(source, "likeCount", "like_count"),
                     "comment_count": _source_metric(source, "commentCount", "comment_count"),
-                    "share_count": _source_metric(source, "shareCount", "share_count", "send_count"),
+                    "repost_count": _source_metric(source, "repostCount", "repost_count"),
+                    "share_count": _source_share_metric(source),
                     "view_count": _source_metric(source, "viewCount", "view_count"),
                     "media_items": _compact_dashboard_media_items(post, source),
                     "details": _sanitize_dashboard_value({"post": post, meta_key: source}, "post"),

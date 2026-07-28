@@ -30,7 +30,10 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
 
     def test_automation_plan_uses_inline_scrollable_half_hour_dropdown_and_server_api(self):
         panel = function_source("renderAutomationTaskPlanPanel", "normalizePublishContentSource")
-        self.assertIn("<span>时间</span><span>任务</span>", panel)
+        self.assertIn('<span>时间</span>', panel)
+        self.assertIn('<span>任务</span><div class="automation-plan-draft-actions">', panel)
+        self.assertIn("data-automation-plan-draft-preview", panel)
+        self.assertIn("data-automation-plan-draft-clear", panel)
         self.assertIn("data-automation-plan-time", CONSOLE_JS)
         self.assertIn("function openAutomationPlanTimePicker", CONSOLE_JS)
         self.assertIn('data-automation-plan-time-option="${minutes}"', CONSOLE_JS)
@@ -168,7 +171,7 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         self.assertNotIn("grid-template-columns: 28px minmax(0, 1fr) 38px", CONSOLE_CSS)
 
     def test_every_selected_plan_task_has_a_working_details_route(self):
-        details = function_source("openAutomationPlanTaskDetails", "automationPlanPickerTaskType")
+        details = function_source("openAutomationPlanTaskDetails", "automationPlanTaskContent")
         self.assertIn("openAutomationPlanTaskConfigurator(index)", details)
         self.assertIn("automationPlanTaskDescription", details)
         self.assertIn('taskType === "normal_publish"', details)
@@ -239,7 +242,7 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         browser_link = function_source("renderAutomationPlanBrowserLink", "renderAutomationPlanRunRows")
         card_action = function_source("renderAutomationPlanCardAction", "renderAutomationPlanRunRows")
         self.assertNotIn('.join(" → ")', history)
-        self.assertIn("renderAutomationPlanCardAction(plan)", history)
+        self.assertIn("renderAutomationPlanCardActions(plan)", history)
         self.assertIn("automation-plan-status is-${", history)
         self.assertIn('completed: "已完成"', CONSOLE_JS)
         self.assertIn('taskForStatuses(["running", "need_manual"])', browser_link)
@@ -253,6 +256,33 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         self.assertIn("data-automation-plan-select", history)
         self.assertIn("data-automation-plan-delete", card_action)
         self.assertIn("renderTrashIcon()", card_action)
+        card_actions = function_source("renderAutomationPlanCardActions", "renderAutomationPlanRunRows")
+        self.assertIn("data-automation-plan-view-run-details", card_actions)
+        self.assertIn("renderFormListIcon()", card_actions)
+
+    def test_plan_detail_overviews_show_configuration_and_runtime_fields(self):
+        draft_preview = function_source("openAutomationPlanDraftPreview", "clearAutomationPlanDraft")
+        run_details = function_source("openAutomationPlanRunDetails", "renderAutomationPlanCardActions")
+        form_rows = function_source("renderAutomationPlanDetailFormRows", "automationPlanPlanItemForTask")
+        strategy_labels = function_source("automationPlanStrategyFieldLabel", "automationPlanStrategyFieldValue")
+        strategy_fields = function_source("renderAutomationPlanStrategyFields", "renderAutomationPlanDetailFormRows")
+        panel = function_source("renderAutomationTaskPlanPanel", "normalizePublishContentSource")
+        self.assertIn("renderAutomationPlanDetailFormRows(items)", draft_preview)
+        self.assertIn("automationPlanPlanItemForTask(plan, task)", run_details)
+        self.assertIn("renderAutomationPlanStrategyFields(detailItem)", form_rows)
+        self.assertIn("strategy_id", strategy_labels)
+        self.assertIn("reply_templates", strategy_labels)
+        self.assertIn("Object.entries(params)", strategy_fields)
+        self.assertIn('"strategy_label"', strategy_fields)
+        self.assertIn('"comment_chance"', strategy_fields)
+        self.assertIn('strategy?.label || "已配置策略"', CONSOLE_JS)
+        self.assertNotIn('strategy.label}（${String(value)}）', CONSOLE_JS)
+        self.assertNotIn("当前状态", form_rows)
+        self.assertNotIn("任务状态", form_rows)
+        self.assertIn("任务内容", form_rows)
+        self.assertIn("automationPlanTaskContent(task)", form_rows)
+        self.assertNotIn("<strong>无人值守计划</strong>", panel)
+        self.assertIn("renderFormListIcon()", panel)
 
     def test_active_plan_stop_control_spans_the_history_card_grid(self):
         start = CONSOLE_CSS.index(".automation-plan-card > [data-automation-plan-cancel]")

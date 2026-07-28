@@ -111,6 +111,7 @@ class AutomationPlanSchedulerTests(unittest.TestCase):
         self.assertEqual(plan["cycle_index"], 1)
         self.assertEqual([task["status"] for task in plan["tasks"]], ["queued", "queued"])
         self.assertEqual([task["sequence"] for task in plan["tasks"]], [1, 2])
+        self.assertEqual(plan["tasks"][0]["payload"]["browse_limit"], 1)
         with db() as conn:
             rows = social_api._automation_plan_task_rows(
                 conn,
@@ -195,6 +196,45 @@ class AutomationPlanSchedulerTests(unittest.TestCase):
                 )
             )
         self.assertEqual(task_rejected.exception.status_code, 400)
+
+    def test_rejects_duplicate_automation_task_types_for_the_same_account(self):
+        duplicate_payload = social_api.SocialAutomationPlanPayload(
+            persona_id="persona-1",
+            account_id="account-1",
+            platform="threads",
+            items=[
+                social_api.SocialAutomationPlanItemPayload(
+                    reservation_minutes=0,
+                    task_type="threads_warmup",
+                    payload={},
+                ),
+                social_api.SocialAutomationPlanItemPayload(
+                    reservation_minutes=30,
+                    task_type="threads_warmup",
+                    payload={},
+                ),
+            ],
+        )
+        with self.assertRaises(HTTPException) as rejected:
+            social_api.create_social_automation_plan(duplicate_payload, user=self.user)
+        self.assertEqual(rejected.exception.status_code, 409)
+
+        active_plan = social_api.SocialAutomationPlanPayload(
+            persona_id="persona-1",
+            account_id="account-1",
+            platform="threads",
+            items=[
+                social_api.SocialAutomationPlanItemPayload(
+                    reservation_minutes=0,
+                    task_type="threads_warmup",
+                    payload={},
+                ),
+            ],
+        )
+        social_api.create_social_automation_plan(active_plan, user=self.user)
+        with self.assertRaises(HTTPException) as active_rejected:
+            social_api.create_social_automation_plan(active_plan, user=self.user)
+        self.assertEqual(active_rejected.exception.status_code, 409)
 
     def test_normal_publish_pauses_when_unpublished_drafts_are_insufficient(self):
         payload = social_api.SocialAutomationPlanPayload(

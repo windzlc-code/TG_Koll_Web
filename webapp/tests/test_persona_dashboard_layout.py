@@ -139,6 +139,37 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('class="persona-content-preview"', detail)
         self.assertIn(".persona-detail-grid--compact", self.styles)
 
+    def test_dashboard_metric_units_match_publish_history_units(self):
+        number_start = self.dashboard_script.index("function pdNumber(value)")
+        number_end = self.dashboard_script.index("\nfunction pdDate", number_start)
+        formatter = self.dashboard_script[number_start:number_end]
+
+        self.assertIn('pdFormatMetricUnit(n, 100000000, "亿")', formatter)
+        self.assertIn('pdFormatMetricUnit(n, 1000000, "m")', formatter)
+        self.assertIn('pdFormatMetricUnit(n, 10000, "w")', formatter)
+        self.assertIn('pdFormatMetricUnit(n, 1000, "k")', formatter)
+        self.assertNotIn('"万"', formatter)
+
+    def test_post_cards_and_detail_split_reposts_from_shares_without_extra_heading(self):
+        card_start = self.dashboard_script.index("function pdRenderPersonaCard(persona)")
+        card_end = self.dashboard_script.index("\nfunction pdPersonaKey", card_start)
+        row_start = self.dashboard_script.index("function pdRenderPostTableRow(row)")
+        row_end = self.dashboard_script.index("\nfunction pdRenderMobilePostStreamStatus", row_start)
+        card = self.dashboard_script[row_start:row_end] + self.dashboard_script[card_start:card_end]
+        modal_start = self.dashboard_script.index("function pdRenderPostModal(persona)")
+        modal_end = self.dashboard_script.index("\nfunction pdRenderPersonaTabs", modal_start)
+        modal = self.dashboard_script[modal_start:modal_end]
+
+        self.assertNotIn("<strong>发送推文指标</strong>", card)
+        self.assertIn('data-label="转发">${pdEscape(pdNumber(row.repost_count))}', card)
+        self.assertIn('data-label="分享">${pdEscape(pdNumber(row.share_count))}', card)
+        self.assertNotIn('data-label="转发/分享"', card)
+        self.assertIn('value="reposts_desc"', card)
+        self.assertIn('value="shares_desc"', card)
+        self.assertIn("<span>转发</span>", modal)
+        self.assertIn("<span>分享</span>", modal)
+        self.assertNotIn("<span>转发/分享</span>", modal)
+
     def test_mobile_dashboard_keeps_five_hot_metrics_and_post_metrics_in_compact_rows(self):
         mobile_start = self.styles.index("@media (max-width: 760px) {")
         mobile_styles = self.styles[mobile_start:]
@@ -148,15 +179,15 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             "    grid-template-columns: repeat(5, minmax(0, 1fr));",
             mobile_styles,
         )
-        self.assertIn('"platform platform time actions"', mobile_styles)
-        self.assertIn("grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) max-content max-content;", mobile_styles)
-        self.assertIn('"source source source source"', mobile_styles)
-        self.assertIn('"likes comments shares views"', mobile_styles)
-        self.assertIn('"meta-top meta-top meta-top meta-top"', mobile_styles)
-        self.assertIn('"meta-bottom meta-bottom meta-bottom meta-bottom"', mobile_styles)
+        self.assertIn('"platform platform platform time actions"', mobile_styles)
+        self.assertIn("grid-template-columns: repeat(5, minmax(0, 1fr));", mobile_styles)
+        self.assertIn('"source source source source source"', mobile_styles)
+        self.assertIn('"likes comments reposts shares views"', mobile_styles)
+        self.assertIn('"meta-top meta-top meta-top meta-top meta-top"', mobile_styles)
+        self.assertIn('"meta-bottom meta-bottom meta-bottom meta-bottom meta-bottom"', mobile_styles)
         self.assertIn("grid-area: meta-top;", mobile_styles)
         self.assertIn("grid-area: meta-bottom;", mobile_styles)
-        self.assertIn(".persona-dashboard-view .persona-post-table td:nth-child(n + 4):nth-child(-n + 7) {", mobile_styles)
+        self.assertIn(".persona-dashboard-view .persona-post-table td:nth-child(n + 4):nth-child(-n + 8) {", mobile_styles)
         self.assertIn(".persona-dashboard-view .persona-post-table td:nth-child(-n + 3)::before {", mobile_styles)
         self.assertIn("display: none;", mobile_styles)
         self.assertIn(".persona-dashboard-view .persona-post-content-badges {", mobile_styles)
@@ -164,7 +195,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
     def test_mobile_post_filters_stay_inline_and_post_rows_need_no_horizontal_scroll(self):
         card_start = self.dashboard_script.index("function pdRenderPersonaCard(persona)")
         card_end = self.dashboard_script.index("\nfunction pdPersonaKey", card_start)
-        card = self.dashboard_script[card_start:card_end]
+        row_start = self.dashboard_script.index("function pdRenderPostTableRow(row)")
+        row_end = self.dashboard_script.index("\nfunction pdRenderMobilePostStreamStatus", row_start)
+        card = self.dashboard_script[row_start:row_end] + self.dashboard_script[card_start:card_end]
 
         self.assertIn('data-label="平台"', card)
         self.assertIn('data-label="推文内容"', card)
@@ -936,6 +969,22 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("function pulseAccountPoolPlatformCards()", self.console_script)
         self.assertIn('card.classList.add("is-platform-refresh-pulse")', self.console_script)
         self.assertIn('card.classList.remove("is-platform-refresh-pulse")', self.console_script)
+        settle_start = self.console_script.index("async function settleAccountPoolPlatformMotion(")
+        settle_end = self.console_script.index("\nasync function transitionAccountPoolPlatform", settle_start)
+        settle = self.console_script[settle_start:settle_end]
+        self.assertIn("stageAccountPoolPlatformSelection(next);", settle)
+        self.assertLess(
+            settle.index("stageAccountPoolPlatformSelection(next);"),
+            settle.index("contentWindow.classList.add(\"is-account-platform-settling\")"),
+        )
+        self.assertNotIn("if (commit) selectAccountPoolPlatform(next);", settle)
+        self.assertIn("renderSocialAccounts();", settle)
+        self.assertIn("function syncAccountPoolPlatformTabs(", self.console_script)
+        transition_start = self.console_script.index("async function transitionAccountPoolPlatform(")
+        transition_end = self.console_script.index("\nfunction accountPoolAccounts", transition_start)
+        transition = self.console_script[transition_start:transition_end]
+        self.assertIn("accountPoolPlatformQueuedTarget = next;", transition)
+        self.assertIn("await transitionAccountPoolPlatform(queuedTarget", transition)
 
         mobile_account_pool_styles = self.styles[self.styles.rindex("/* Account pool: platforms and accounts are separate functional modules. */"):]
         self.assertIn("border-bottom: 1px solid var(--line);", mobile_account_pool_styles)
@@ -946,6 +995,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".account-pool-content-drag-peer", mobile_account_pool_styles)
         self.assertIn(".account-pool-content-window.is-account-platform-settling", mobile_account_pool_styles)
         self.assertIn("transition: transform 220ms", mobile_account_pool_styles)
+        self.assertIn(".account-pool-content-window.is-account-platform-settling .account-pool-content-drag-current", mobile_account_pool_styles)
         self.assertIn(".account-pool-body :is(button, input, select, textarea, a)", mobile_account_pool_styles)
         self.assertIn("touch-action: pan-y;", mobile_account_pool_styles)
         self.assertIn("@media (prefers-reduced-motion: reduce)", mobile_account_pool_styles)
@@ -956,7 +1006,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("@keyframes account-pool-platform", mobile_account_pool_styles)
         self.assertNotIn("will-change: transform, opacity;", mobile_account_pool_styles)
 
-    def test_all_mobile_persistent_dock_pages_hide_the_left_toolbar_toggle(self):
+    def test_mobile_persistent_dock_pages_hide_the_left_toolbar_toggle_except_browser_back_navigation(self):
         helper_start = self.console_script.index("function isMobilePersistentDockPage()")
         helper_end = self.console_script.index("\nfunction syncMobilePageToolbar()", helper_start)
         helper = self.console_script[helper_start:helper_end]
@@ -968,7 +1018,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('if (state.view === "accounts") return true;', helper)
         self.assertIn('["personas", "tweet_generation", "publishing"].includes(state.activeModule)', helper)
         self.assertIn('const navToggle = $("mobileNavToggle");', toolbar)
-        self.assertIn("navToggle.hidden = isMobilePersistentDockPage();", toolbar)
+        self.assertIn("const showBrowserBack", toolbar)
+        self.assertIn("navToggle.hidden = !showBrowserBack && isMobilePersistentDockPage();", toolbar)
+        self.assertIn("renderMobileNavToggleIcon(showBrowserBack)", toolbar)
         self.assertIn('.mobile-page-toolbar > .mobile-nav-toggle[hidden]', self.styles)
 
     def test_persona_create_uses_the_shared_modal_and_merges_create_paths(self):
@@ -1609,7 +1661,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             preview,
         )
         self.assertIn(
-            'aria-label="${esc(`第${index + 1}篇：${previewTitle}`)}"',
+            'aria-label="${esc(`第${previewIndex + 1}篇：${previewTitle}`)}"',
             preview,
         )
         self.assertIn("publish-preview-tabs-layout", preview)
@@ -2166,7 +2218,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
     def test_shared_svg_icons_keep_their_visual_center(self):
         self.assertIn(
-            ".ui-action-icon,\n.ui-trash-icon,\n.ui-eye-icon,\n.ui-expand-icon,",
+            ".ui-action-icon,\n.ui-trash-icon,\n.ui-eye-icon,\n.ui-form-list-icon,\n.ui-expand-icon,",
             self.styles,
         )
         for declaration in ("display: block;", "flex: 0 0 auto;", "margin: 0;"):
@@ -2348,6 +2400,85 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-account-picker-card-meta {\n  display: grid;", self.styles)
         self.assertIn("grid-template-columns: minmax(0, 1fr);", self.styles)
         self.assertIn(".persona-account-picker-card-meta .persona-account-picker-binding.is-bound", self.styles)
+
+    def test_mobile_persona_dashboard_posts_load_at_the_bottom_without_replacing_desktop_pager(self):
+        self.assertIn('const PD_MOBILE_TWEET_STREAM_QUERY = "(max-width: 760px)";', self.dashboard_script)
+        self.assertIn("function pdBindMobilePostStream(", self.dashboard_script)
+        self.assertIn('data-persona-mobile-post-sentinel', self.dashboard_script)
+        self.assertIn("new IntersectionObserver(", self.dashboard_script)
+        self.assertIn("insertAdjacentHTML(\"beforeend\"", self.dashboard_script)
+        self.assertIn('id="personaPostPrev"', self.dashboard_script)
+        self.assertIn('id="personaPostNext"', self.dashboard_script)
+        self.assertIn("pdDisconnectMobilePostStream();", self.dashboard_script)
+
+    def test_mobile_tweet_surfaces_share_one_incremental_loading_manager(self):
+        self.assertIn('const MOBILE_TWEET_STREAM_QUERY = "(max-width: 760px)";', self.console_script)
+        self.assertIn("function mobileTweetStreamInfo(", self.console_script)
+        self.assertIn("function renderMobileTweetStreamFooter(", self.console_script)
+        self.assertIn("function bindMobileTweetStreamObservers(", self.console_script)
+        self.assertIn("new IntersectionObserver(", self.console_script)
+        self.assertIn('if (target === "persona-detail") renderPersonaDetail();', self.console_script)
+        self.assertIn('else if (target === "publishing") renderSimpleFlowModule("publishing");', self.console_script)
+        self.assertIn(".mobile-tweet-stream-footer", self.styles)
+
+    def test_mobile_draft_batches_keep_selection_against_the_full_source(self):
+        draft_rows_start = self.console_script.index("function renderPersonaDraftRows(")
+        draft_rows_end = self.console_script.index("\nfunction personaDraftViewMode(", draft_rows_start)
+        draft_rows = self.console_script[draft_rows_start:draft_rows_end]
+        table_rows_start = self.console_script.index("function renderPersonaDraftTableRows(")
+        table_rows_end = self.console_script.index("\nfunction renderPersonaPostBulkActions(", table_rows_start)
+        table_rows = self.console_script[table_rows_start:table_rows_end]
+        self.assertIn("syncPersonaSelectedPostIds(selectedPersona(), source, allRows)", draft_rows)
+        self.assertIn("syncPersonaSelectedPostIds(selectedPersona(), source, allRows)", table_rows)
+
+    def test_mobile_publish_sources_and_history_render_only_the_loaded_batch(self):
+        source_start = self.console_script.index("function renderPublishPostSelectionList(")
+        source_end = self.console_script.index("\nfunction renderPublishContentPreview(", source_start)
+        source_renderer = self.console_script[source_start:source_end]
+        history_start = self.console_script.index("function renderPublishHistorySelectionList(")
+        history_end = self.console_script.index("\nfunction renderPublishHistoryPreview(", history_start)
+        history_renderer = self.console_script[history_start:history_end]
+        self.assertIn('mobileTweetStreamInfo(rows, `publish-source:', source_renderer)
+        self.assertIn("stream.items.map(", source_renderer)
+        self.assertIn('renderMobileTweetStreamFooter(stream, "publishing")', source_renderer)
+        self.assertIn('mobileTweetStreamInfo(rows, `publish-history:', history_renderer)
+        self.assertIn("stream.items.map(", history_renderer)
+        self.assertIn('renderMobileTweetStreamFooter(stream, "publishing")', history_renderer)
+
+    def test_mobile_publish_preview_does_not_build_hidden_tabs_for_every_selected_post(self):
+        preview_start = self.console_script.index("function renderPublishContentPreview(")
+        preview_end = self.console_script.index("\nfunction renderPublishContentPanel(", preview_start)
+        preview = self.console_script[preview_start:preview_end]
+        self.assertIn("const previewPosts = isMobileTweetStreamMode()", preview)
+        self.assertIn("previewPosts.map(", preview)
+
+    def test_mobile_tweet_loading_shows_a_spinner_and_locks_scroll_until_layout_finishes(self):
+        self.assertIn("const MOBILE_TWEET_STREAM_MIN_LOADING_MS = 220;", self.console_script)
+        self.assertIn("function renderMobileTweetStreamLoadingIndicator()", self.console_script)
+        self.assertIn("function lockMobileTweetStreamScroll()", self.console_script)
+        self.assertIn("function unlockMobileTweetStreamScroll()", self.console_script)
+        self.assertIn("function cancelMobileTweetStreamLoading()", self.console_script)
+        self.assertIn('document.documentElement.classList.add("mobile-tweet-stream-scroll-locked")', self.console_script)
+        self.assertIn('event.preventDefault();', self.console_script)
+        self.assertIn("function finishMobileTweetStreamLoading(", self.console_script)
+        self.assertIn("mobileTweetStreamLoadingGeneration", self.console_script)
+        self.assertIn("!node.isConnected || !node.getClientRects().length", self.console_script)
+        self.assertIn('role="status" aria-live="polite" aria-atomic="true" aria-busy="false"', self.console_script)
+        self.assertIn('class="mobile-tweet-stream-spinner"', self.console_script)
+        self.assertIn('rootMargin: "0px 0px -72px 0px"', self.console_script)
+        self.assertIn("threshold: 0.85", self.console_script)
+        self.assertIn("@keyframes mobile-tweet-stream-spin", self.styles)
+        self.assertIn(".mobile-tweet-stream-scroll-locked", self.styles)
+
+    def test_dashboard_incremental_append_uses_the_same_loading_lock(self):
+        load_start = self.dashboard_script.index("function pdLoadNextMobilePostBatch(")
+        load_end = self.dashboard_script.index("\nfunction pdBindMobilePostStream(", load_start)
+        loader = self.dashboard_script[load_start:load_end]
+        self.assertIn("lockMobileTweetStreamScroll();", loader)
+        self.assertIn("renderMobileTweetStreamLoadingIndicator()", loader)
+        self.assertIn("finishMobileTweetStreamLoading(", loader)
+        self.assertIn("triggerStreamKey !== personaDashboardMobilePostKey", loader)
+        self.assertIn("!status?.isConnected", loader)
 
 
 if __name__ == "__main__":

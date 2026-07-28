@@ -4806,6 +4806,63 @@ body.page-admin {
   opacity: 0.45;
 }
 
+.persona-mobile-post-stream {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .persona-mobile-post-stream {
+    display: flex;
+    min-height: 42px;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 4px 2px;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 800;
+    text-align: center;
+  }
+
+  .persona-mobile-post-stream [data-persona-mobile-post-load] {
+    min-height: 34px;
+    padding: 6px 12px;
+  }
+
+  .persona-mobile-post-stream .mobile-tweet-stream-loading {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    color: #0f172a;
+  }
+
+  .persona-mobile-post-stream .mobile-tweet-stream-spinner {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 18px;
+    animation: mobile-tweet-stream-spin .7s linear infinite;
+  }
+
+  .persona-mobile-post-stream .mobile-tweet-stream-spinner circle {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.4;
+    stroke-linecap: round;
+    stroke-dasharray: 42 15;
+  }
+}
+
+@keyframes mobile-tweet-stream-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .persona-mobile-post-stream .mobile-tweet-stream-spinner {
+    animation: none;
+  }
+}
+
 .persona-post-table {
   width: 100%;
   min-width: 1120px;
@@ -4841,16 +4898,18 @@ body.page-admin {
 .persona-post-table th:nth-child(5),
 .persona-post-table th:nth-child(6),
 .persona-post-table th:nth-child(7),
+.persona-post-table th:nth-child(8),
 .persona-post-table td:nth-child(4),
 .persona-post-table td:nth-child(5),
 .persona-post-table td:nth-child(6),
-.persona-post-table td:nth-child(7) {
+.persona-post-table td:nth-child(7),
+.persona-post-table td:nth-child(8) {
   width: 86px;
   text-align: right;
 }
 
-.persona-post-table th:nth-child(8),
-.persona-post-table td:nth-child(8) {
+.persona-post-table th:nth-child(9),
+.persona-post-table td:nth-child(9) {
   width: 124px;
   text-align: right;
 }
@@ -5029,7 +5088,7 @@ body.page-admin {
 
 .persona-post-modal-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -5432,7 +5491,12 @@ body.page-admin {
   }
 
   .persona-post-modal-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .persona-post-modal-grid div {
+    padding: 6px;
   }
 
   .persona-post-info-list,

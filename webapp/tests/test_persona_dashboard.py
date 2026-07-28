@@ -605,6 +605,27 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(persona["post_metrics"][0]["media_items"][0]["url"], "data:image/png;base64,abc123")
         self.assertIn("浏览", persona["hot_score_formula"])
 
+    def test_post_metadata_keeps_reposts_and_shares_as_independent_metrics(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        archives[0]["posts"][0]["sourceMeta"] = {
+            "platform": "threads",
+            "originalContent": "post",
+            "metrics": {"send_count": 11},
+            "engagement": {"shareCount": 99, "repostCount": 7},
+            "capturedAt": "2026-06-30T04:00:00Z",
+        }
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        response = self.client.get("/api/persona_dashboard/overview")
+
+        self.assertEqual(response.status_code, 200)
+        rows = response.json()["personas"][0]["post_metrics"]
+        row = next(item for item in rows if item.get("id") == "post-1")
+        self.assertEqual(row["share_count"], 11)
+        self.assertEqual(row["repost_count"], 7)
+
     def test_overview_uses_owner_scoped_media_route_for_matched_archive_post(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"

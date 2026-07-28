@@ -212,6 +212,423 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(response.json()["login_password"], "top-secret")
         self.assertIn("no-store", response.headers["cache-control"])
 
+    def test_account_card_transfer_only_copies_username_password_and_totp(self):
+        admin, _identity = self._admin_client()
+        persona = admin.post(
+            "/api/persona_dashboard/personas",
+            json={"name": "Transfer source persona", "content": "Must not be copied."},
+        )
+        self.assertEqual(persona.status_code, 200, persona.text)
+        proxy = admin.post(
+            "/api/persona_dashboard/automation/proxies",
+            json={
+                "name": "Transfer source proxy",
+                "proxy_type": "http",
+                "host": "127.0.0.1",
+                "port": 8080,
+                "status": "active",
+            },
+        )
+        self.assertEqual(proxy.status_code, 200, proxy.text)
+        created = admin.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={
+                "platform": "threads",
+                "username": "portable-account",
+                "display_name": "Portable Account",
+                "login_username": "portable-login",
+                "login_password": "portable-secret",
+                "totp_secret_or_uri": "JBSWY3DPEHPK3PXP",
+                "persona_id": persona.json()["id"],
+                "proxy_id": proxy.json()["proxy"]["id"],
+                "status": "ready",
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        source = created.json()["account"]
+        account_id = source["id"]
+
+        transfer = admin.post(
+            f"/api/persona_dashboard/automation/accounts/{account_id}/card-transfer"
+        )
+        self.assertEqual(transfer.status_code, 200, transfer.text)
+        self.assertIn("no-store", transfer.headers["cache-control"])
+        token = transfer.json()["token"]
+        self.assertTrue(token.startswith("VECTO_ACCOUNT_CARD_V1."))
+        self.assertNotIn("portable-secret", transfer.text)
+        self.assertNotIn("JBSWY3DPEHPK3PXP", transfer.text)
+
+        preview = admin.post(
+            "/api/persona_dashboard/automation/accounts/card-transfer/preview",
+            json={"token": token},
+        )
+        self.assertEqual(preview.status_code, 200, preview.text)
+        card = preview.json()["card"]
+        self.assertEqual(card["schema"], "vecto.account-card")
+        self.assertEqual(card["version"], 1)
+        self.assertEqual(card["source_platform"], "threads")
+        self.assertEqual(card["username"], "portable-account")
+        self.assertTrue(card["login_password_configured"])
+        self.assertTrue(card["totp_configured"])
+        self.assertNotIn("display_name", card)
+        self.assertNotIn("login_username", card)
+        self.assertNotIn("login_password", card)
+        self.assertNotIn("totp_secret_or_uri", card)
+        self.assertNotIn("persona_id", card)
+        self.assertNotIn("proxy_id", card)
+        self.assertNotIn("status", card)
+        self.assertNotIn("profile_dir", card)
+
+        imported = admin.post(
+            "/api/persona_dashboard/automation/accounts/card-transfer/import",
+            json={"token": token, "target_platform": "instagram"},
+        )
+        self.assertEqual(imported.status_code, 200, imported.text)
+        copied = imported.json()["account"]
+        self.assertNotEqual(copied["id"], account_id)
+        self.assertEqual(copied["platform"], "instagram")
+        self.assertEqual(copied["username"], "portable-account")
+        self.assertEqual(copied["display_name"], "")
+        self.assertEqual(copied["status"], "pending_login")
+        self.assertTrue(copied["login_password_configured"])
+        self.assertEqual(copied["login_username"], "portable-account")
+        self.assertTrue(copied["totp_configured"])
+        self.assertEqual(copied["persona_id"], "")
+        self.assertEqual(copied["proxy_id"], "")
+        self.assertNotEqual(copied["profile_dir"], source["profile_dir"])
+        copied_credentials = admin.get(
+            f"/api/persona_dashboard/automation/accounts/{copied['id']}/credentials"
+        )
+        self.assertEqual(copied_credentials.status_code, 200, copied_credentials.text)
+        self.assertEqual(copied_credentials.json()["login_password"], "portable-secret")
+
+        overridden = admin.post(
+            "/api/persona_dashboard/automation/accounts/card-transfer/import",
+            json={
+                "token": token,
+                "target_platform": "instagram",
+                "username": "overridden-account",
+                "login_password": "overridden-secret",
+                "totp_secret_or_uri": "GEZDGNBVGY3TQOJQ",
+            },
+        )
+        self.assertEqual(overridden.status_code, 200, overridden.text)
+        overridden_account = overridden.json()["account"]
+        self.assertEqual(overridden_account["username"], "overridden-account")
+        self.assertEqual(overridden_account["display_name"], "")
+        self.assertEqual(overridden_account["login_username"], "overridden-account")
+        self.assertTrue(overridden_account["totp_configured"])
+        overridden_credentials = admin.get(
+            f"/api/persona_dashboard/automation/accounts/{overridden_account['id']}/credentials"
+        )
+        self.assertEqual(overridden_credentials.status_code, 200, overridden_credentials.text)
+        self.assertEqual(overridden_credentials.json()["login_password"], "overridden-secret")
+
+        rejected_sensitive_override = admin.post(
+            "/api/persona_dashboard/automation/accounts/card-transfer/import",
+            json={
+                "token": token,
+                "target_platform": "instagram",
+                "username": "must-not-create",
+                "display_name": "forbidden-display",
+                "login_username": "forbidden-login",
+                "persona_id": persona.json()["id"],
+                "proxy_id": proxy.json()["proxy"]["id"],
+                "status": "ready",
+                "profile_dir": "forbidden-profile",
+            },
+        )
+        self.assertEqual(
+            rejected_sensitive_override.status_code,
+            422,
+            rejected_sensitive_override.text,
+        )
+
+        stranger, _stranger_id = self._approved_client("card-transfer-stranger")
+        denied_preview = stranger.post(
+            "/api/persona_dashboard/automation/accounts/card-transfer/preview",
+            json={"token": token},
+        )
+        self.assertIn(denied_preview.status_code, {400, 403}, denied_preview.text)
+        self.assertNotIn("portable-secret", denied_preview.text)
+
+        same_platform = admin.post(
+            f"/api/persona_dashboard/automation/accounts/{account_id}/duplicate",
+            json={"target_platform": "threads"},
+        )
+        self.assertEqual(same_platform.status_code, 400, same_platform.text)
+
+    def test_server_side_duplicate_only_copies_username_password_and_totp(self):
+        admin, _identity = self._admin_client()
+        persona = admin.post(
+            "/api/persona_dashboard/personas",
+            json={"name": "Duplicate source persona", "content": "Must not be copied."},
+        )
+        self.assertEqual(persona.status_code, 200, persona.text)
+        proxy = admin.post(
+            "/api/persona_dashboard/automation/proxies",
+            json={
+                "name": "Duplicate source proxy",
+                "proxy_type": "http",
+                "host": "127.0.0.1",
+                "port": 8081,
+                "status": "active",
+            },
+        )
+        self.assertEqual(proxy.status_code, 200, proxy.text)
+        duplicate_source = admin.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={
+                "platform": "threads",
+                "username": "duplicate-card-account",
+                "display_name": "Duplicate Card",
+                "login_username": "duplicate-card-login",
+                "login_password": "duplicate-card-secret",
+                "totp_secret_or_uri": "JBSWY3DPEHPK3PXP",
+                "persona_id": persona.json()["id"],
+                "proxy_id": proxy.json()["proxy"]["id"],
+                "status": "ready",
+            },
+        )
+        self.assertEqual(duplicate_source.status_code, 200, duplicate_source.text)
+        source = duplicate_source.json()["account"]
+        duplicated = admin.post(
+            f"/api/persona_dashboard/automation/accounts/{source['id']}/duplicate",
+            json={"target_platform": "instagram"},
+        )
+        self.assertEqual(duplicated.status_code, 200, duplicated.text)
+        copied = duplicated.json()["account"]
+        self.assertEqual(copied["platform"], "instagram")
+        self.assertEqual(copied["username"], "duplicate-card-account")
+        self.assertEqual(copied["display_name"], "")
+        self.assertEqual(copied["login_username"], "duplicate-card-account")
+        self.assertTrue(copied["login_password_configured"])
+        self.assertEqual(copied["persona_id"], "")
+        self.assertEqual(copied["proxy_id"], "")
+        self.assertTrue(copied["totp_configured"])
+        self.assertEqual(copied["status"], "pending_login")
+        self.assertNotEqual(copied["profile_dir"], source["profile_dir"])
+
+        no_totp_source = admin.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={
+                "platform": "threads",
+                "username": "duplicate-without-totp",
+                "login_password": "duplicate-without-totp-secret",
+            },
+        )
+        self.assertEqual(no_totp_source.status_code, 200, no_totp_source.text)
+        with patch.object(
+            social_automation_api,
+            "encrypt_vault_secret",
+            side_effect=social_automation_api.PasswordVaultError("vault unavailable"),
+        ):
+            duplicated_without_totp = admin.post(
+                f"/api/persona_dashboard/automation/accounts/{no_totp_source.json()['account']['id']}/duplicate",
+                json={"target_platform": "instagram"},
+            )
+        self.assertEqual(duplicated_without_totp.status_code, 200, duplicated_without_totp.text)
+        self.assertFalse(duplicated_without_totp.json()["account"]["totp_configured"])
+
+    def test_account_card_transfer_apply_only_overwrites_username_password_and_totp(self):
+        owner, _owner_id = self._approved_client("card-apply-owner")
+        persona = owner.post(
+            "/api/persona_dashboard/personas",
+            json={"name": "Apply target persona", "content": "Must remain bound."},
+        )
+        self.assertEqual(persona.status_code, 200, persona.text)
+        proxy = owner.post(
+            "/api/persona_dashboard/automation/proxies",
+            json={
+                "name": "Apply target proxy",
+                "proxy_type": "http",
+                "host": "127.0.0.1",
+                "port": 8082,
+                "status": "active",
+            },
+        )
+        self.assertEqual(proxy.status_code, 200, proxy.text)
+        source = owner.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={
+                "platform": "threads",
+                "username": "apply-source",
+                "display_name": "Apply Source",
+                "login_username": "apply-source-login",
+                "login_password": "apply-source-password",
+                "totp_secret_or_uri": "GEZDGNBVGY3TQOJQ",
+            },
+        )
+        self.assertEqual(source.status_code, 200, source.text)
+        transfer = owner.post(
+            f"/api/persona_dashboard/automation/accounts/{source.json()['account']['id']}/card-transfer"
+        )
+        self.assertEqual(transfer.status_code, 200, transfer.text)
+        token = transfer.json()["token"]
+
+        target = owner.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={
+                "platform": "instagram",
+                "username": "apply-target",
+                "display_name": "Apply Target",
+                "login_username": "apply-target-login",
+                "login_password": "apply-target-password",
+                "persona_id": persona.json()["id"],
+                "proxy_id": proxy.json()["proxy"]["id"],
+                "totp_secret_or_uri": "JBSWY3DPEHPK3PXP",
+                "status": "ready",
+            },
+        )
+        self.assertEqual(target.status_code, 200, target.text)
+        target_before = target.json()["account"]
+        applied = owner.post(
+            f"/api/persona_dashboard/automation/accounts/{target_before['id']}/card-transfer/apply",
+            json={"token": token},
+        )
+        self.assertEqual(applied.status_code, 200, applied.text)
+        updated = applied.json()["account"]
+        self.assertEqual(updated["username"], "apply-source")
+        self.assertEqual(updated["display_name"], target_before["display_name"])
+        self.assertEqual(updated["login_username"], "apply-source")
+        self.assertTrue(updated["login_password_configured"])
+        self.assertEqual(updated["persona_id"], target_before["persona_id"])
+        self.assertEqual(updated["proxy_id"], target_before["proxy_id"])
+        self.assertTrue(updated["totp_configured"])
+        self.assertEqual(updated["status"], "ready")
+        self.assertEqual(updated["profile_dir"], target_before["profile_dir"])
+        with social_automation_api.db() as conn:
+            copied_totp_row = social_automation_api._social_account_totp_row(
+                conn,
+                updated["id"],
+            )
+        self.assertEqual(
+            social_automation_api._decrypt_social_account_totp_secret(copied_totp_row),
+            "GEZDGNBVGY3TQOJQ",
+        )
+        credentials = owner.get(
+            f"/api/persona_dashboard/automation/accounts/{updated['id']}/credentials"
+        )
+        self.assertEqual(credentials.status_code, 200, credentials.text)
+        self.assertEqual(credentials.json()["login_password"], "apply-source-password")
+
+        explicit_password = owner.post(
+            f"/api/persona_dashboard/automation/accounts/{updated['id']}/card-transfer/apply",
+            json={
+                "token": token,
+                "username": "explicit-apply-username",
+                "login_password": "explicit-apply-password",
+                "totp_secret_or_uri": "JBSWY3DPEHPK3PXP",
+            },
+        )
+        self.assertEqual(explicit_password.status_code, 200, explicit_password.text)
+        explicitly_updated = explicit_password.json()["account"]
+        self.assertEqual(explicitly_updated["username"], "explicit-apply-username")
+        explicit_credentials = owner.get(
+            f"/api/persona_dashboard/automation/accounts/{updated['id']}/credentials"
+        )
+        self.assertEqual(explicit_credentials.status_code, 200, explicit_credentials.text)
+        self.assertEqual(
+            explicit_credentials.json()["login_password"],
+            "explicit-apply-password",
+        )
+        with social_automation_api.db() as conn:
+            explicit_totp_row = social_automation_api._social_account_totp_row(
+                conn,
+                updated["id"],
+            )
+        self.assertEqual(
+            social_automation_api._decrypt_social_account_totp_secret(explicit_totp_row),
+            "JBSWY3DPEHPK3PXP",
+        )
+
+        source_without_totp = owner.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={
+                "platform": "threads",
+                "username": "apply-source-without-totp",
+                "login_password": "apply-source-without-totp-password",
+            },
+        )
+        self.assertEqual(source_without_totp.status_code, 200, source_without_totp.text)
+        transfer_without_totp = owner.post(
+            f"/api/persona_dashboard/automation/accounts/{source_without_totp.json()['account']['id']}/card-transfer"
+        )
+        self.assertEqual(
+            transfer_without_totp.status_code,
+            200,
+            transfer_without_totp.text,
+        )
+        cleared_totp = owner.post(
+            f"/api/persona_dashboard/automation/accounts/{updated['id']}/card-transfer/apply",
+            json={"token": transfer_without_totp.json()["token"]},
+        )
+        self.assertEqual(cleared_totp.status_code, 200, cleared_totp.text)
+        self.assertFalse(cleared_totp.json()["account"]["totp_configured"])
+
+        stranger, _stranger_id = self._approved_client("card-apply-stranger")
+        stranger_target = stranger.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={"platform": "instagram", "username": "stranger-apply-target"},
+        )
+        self.assertEqual(stranger_target.status_code, 200, stranger_target.text)
+        denied_foreign_token = stranger.post(
+            f"/api/persona_dashboard/automation/accounts/{stranger_target.json()['account']['id']}/card-transfer/apply",
+            json={"token": token},
+        )
+        self.assertIn(denied_foreign_token.status_code, {400, 403}, denied_foreign_token.text)
+        denied_foreign_account = stranger.post(
+            f"/api/persona_dashboard/automation/accounts/{updated['id']}/card-transfer/apply",
+            json={"token": token},
+        )
+        self.assertEqual(denied_foreign_account.status_code, 404, denied_foreign_account.text)
+
+    def test_account_card_transfer_lengths_are_consistent_between_generation_and_import(self):
+        admin, _identity = self._admin_client()
+        max_password = "P9!" * 1365 + "P"
+        created = admin.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={
+                "platform": "threads",
+                "username": "u" * 320,
+                "login_password": max_password,
+                "totp_secret_or_uri": "JBSWY3DPEHPK3PXP",
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        transfer = admin.post(
+            f"/api/persona_dashboard/automation/accounts/{created.json()['account']['id']}/card-transfer"
+        )
+        self.assertEqual(transfer.status_code, 200, transfer.text)
+        token = transfer.json()["token"]
+        self.assertLessEqual(
+            len(token),
+            social_automation_api.SOCIAL_ACCOUNT_CARD_TRANSFER_TOKEN_MAX_LENGTH,
+        )
+        preview = admin.post(
+            "/api/persona_dashboard/automation/accounts/card-transfer/preview",
+            json={"token": token},
+        )
+        self.assertEqual(preview.status_code, 200, preview.text)
+
+        too_long_password = admin.post(
+            "/api/persona_dashboard/automation/accounts",
+            json={
+                "platform": "threads",
+                "username": "oversized-password",
+                "login_password": "p" * 4097,
+            },
+        )
+        self.assertEqual(too_long_password.status_code, 422, too_long_password.text)
+        too_long_token = admin.post(
+            "/api/persona_dashboard/automation/accounts/card-transfer/preview",
+            json={
+                "token": "x"
+                * (social_automation_api.SOCIAL_ACCOUNT_CARD_TRANSFER_TOKEN_MAX_LENGTH + 1)
+            },
+        )
+        self.assertEqual(too_long_token.status_code, 422, too_long_token.text)
+
     def test_social_resources_are_isolated_between_ordinary_users(self):
         owner, owner_id = self._approved_client("owner_user")
         stranger, _stranger_id = self._approved_client("stranger_user")

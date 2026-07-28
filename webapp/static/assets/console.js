@@ -433,6 +433,7 @@ const state = {
   personaSelectedPostIds: {},
   personaPostSources: {},
   personaPostPages: {},
+  mobileTweetStreamLimits: {},
   personaPublishHistories: {},
   personaPublishAccountIds: {},
   personaPublishResults: {},
@@ -447,6 +448,7 @@ const state = {
   accountPasswordValues: {},
   accountPasswordVisible: {},
   accountPoolCreateDraft: {},
+  accountCardTransferToken: "",
   proxyPoolPage: 1,
   proxyPoolPageSize: 10,
   personaMediaTasks: {},
@@ -724,6 +726,7 @@ function clearTenantInMemoryState() {
   state.accountPasswordValues = {};
   state.accountPasswordVisible = {};
   state.accountPoolCreateDraft = {};
+  state.accountCardTransferToken = "";
   state.personaMediaTasks = {};
   state.personaGenerateRuns = {};
   state.personaGeneratedPreviews = {};
@@ -993,6 +996,10 @@ function bindMobileNavigation() {
   const backdrop = $("consoleNavBackdrop");
   if (!toggle || !closeButton || !sidebar || !backdrop) return;
   toggle.addEventListener("click", () => {
+    if (state.view === "accounts" && state.accountBrowserPanel === "browsers") {
+      setAccountBrowserPanel("accounts");
+      return;
+    }
     setMobileNavOpen(toggle.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
   });
   backdrop.addEventListener("click", () => setMobileNavOpen(false, { restoreFocus: true }));
@@ -3192,6 +3199,19 @@ function personaMediaTargetPost(persona = selectedPersona()) {
   return { source, post: selectedPersonaPost(persona) };
 }
 
+function personaDraftReferenceContent(persona, post, source = "posts") {
+  const storedContent = String(post?.content || "");
+  if (!persona || !post) return storedContent;
+  const draft = personaFormState(persona.id).draft || {};
+  const editingPostId = String(draft.editingPostId || "").trim();
+  const editingSource = draft.editingSource === "favorites" ? "favorites" : "posts";
+  const normalizedSource = source === "favorites" ? "favorites" : "posts";
+  if (!editingPostId || editingSource !== normalizedSource || editingPostId !== String(post.id || "")) {
+    return storedContent;
+  }
+  return draft.stagedReferenceContent === null ? storedContent : String(draft.stagedReferenceContent || "");
+}
+
 function personaMediaSelectionKey(personaId, source, postId) {
   return `${String(personaId || "").trim()}:${source === "favorites" ? "favorites" : "posts"}:${String(postId || "").trim()}`;
 }
@@ -3384,6 +3404,7 @@ function defaultPersonaDraftForm(overrides = {}) {
     editingSource: "posts",
     originalTitle: "",
     originalContent: "",
+    stagedReferenceContent: null,
     originalMediaSignature: "",
     mediaItems: [],
     mediaOps: [],
@@ -5776,6 +5797,7 @@ function syncPersonaDashboardStyles(view) {
 
 function setView(view) {
   if (view === "settings") view = "workspace";
+  cancelMobileTweetStreamLoading();
   const scrollSnapshot = snapshotConsoleScrollState();
   const layoutLocks = captureConsoleLayoutLocks();
   try {
@@ -6106,11 +6128,24 @@ function isMobilePersistentDockPage() {
   return state.view === "workspace" && ["personas", "tweet_generation", "publishing"].includes(state.activeModule);
 }
 
+function renderMobileNavToggleIcon(back = false) {
+  return `<svg class="mobile-nav-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${back
+    ? '<path d="M19 12H5"></path><path d="m11 18-6-6 6-6"></path>'
+    : '<rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M9 3v18"></path>'
+  }</svg>`;
+}
+
 function syncMobilePageToolbar() {
   const navToggle = $("mobileNavToggle");
   const title = $("mobilePageToolbarTitle");
   const icon = $("mobilePageToolbarIcon");
-  if (navToggle) navToggle.hidden = isMobilePersistentDockPage();
+  const showBrowserBack = state.view === "accounts" && state.accountBrowserPanel === "browsers";
+  if (navToggle) {
+    navToggle.hidden = !showBrowserBack && isMobilePersistentDockPage();
+    navToggle.classList.toggle("is-page-back", showBrowserBack);
+    navToggle.innerHTML = renderMobileNavToggleIcon(showBrowserBack);
+    setConsoleUiAttribute(navToggle, "aria-label", showBrowserBack ? "\u8fd4\u56de\u8d26\u53f7\u7ba1\u7406" : "\u6253\u5f00\u63a7\u5236\u53f0\u5bfc\u822a");
+  }
   if (!title || !icon) return;
 
   const descriptor = mobilePageToolbarDescriptor();
@@ -6216,6 +6251,7 @@ function setMenuClickHighlight(button, leaveScope = button) {
 }
 
 function setModule(moduleId) {
+  cancelMobileTweetStreamLoading();
   clearMsg("commandMsg");
   const previousModule = state.activeModule;
   state.activeModule = moduleId;
@@ -7017,14 +7053,15 @@ function renderPersonaDraftRows(posts, source = personaPostSource(), allRows = p
   if (!posts.length) return `<div class="empty-state">${isFavoriteSource ? "当前还没有收藏推文。可以在草稿里点击收藏，或从 Bot 同步已有收藏。" : "当前还没有推文草稿。先新建一条，再进入任务步骤。"}</div>`;
   const mode = personaDraftViewMode();
   const personaId = String(selectedPersona()?.id || "");
-  const selectedIds = new Set(syncPersonaSelectedPostIds(selectedPersona(), source, posts));
+  const selectedIds = new Set(syncPersonaSelectedPostIds(selectedPersona(), source, allRows));
   if (mode === "list") return renderPersonaDraftTableRows(posts, personaId, allRows);
   return `<div class="compact-list persona-draft-grid">${posts.map((post, index) => {
     const hotMeta = personaHotImportMeta(personaId, post.id);
     const mediaItems = personaDraftMediaPreviewItems(selectedPersona(), source, post);
     const isChecked = selectedIds.has(String(post.id || ""));
     const isSelected = String(post.id) === String(state.selectedPersonaPostId);
-    const displayTitle = personaDraftDisplayTitleForPost(post, allRows, index);
+    const fullIndex = allRows.findIndex((item) => String(item?.id || "") === String(post.id || ""));
+    const displayTitle = personaDraftDisplayTitleForPost(post, allRows, fullIndex >= 0 ? fullIndex : index);
     return `
     <article
       class="compact-row persona-draft-card ${isSelected ? "is-selected" : ""}"
@@ -7084,9 +7121,235 @@ function personaPostPageKey(persona = selectedPersona(), source = personaPostSou
   return `${String(persona?.id || "default")}::${source === "favorites" ? "favorites" : "posts"}`;
 }
 
+const MOBILE_TWEET_STREAM_QUERY = "(max-width: 760px)";
+const MOBILE_TWEET_STREAM_MIN_LOADING_MS = 220;
+const MOBILE_TWEET_STREAM_OBSERVER_OPTIONS = {
+  root: null,
+  rootMargin: "0px 0px -72px 0px",
+  threshold: 0.85,
+};
+let mobileTweetStreamObserver = null;
+let mobileTweetStreamPending = false;
+let mobileTweetStreamScrollLock = null;
+let mobileTweetStreamLoadingGeneration = 0;
+let mobileTweetStreamFinishTimer = 0;
+
+function isMobileTweetStreamMode() {
+  return Boolean(window.matchMedia?.(MOBILE_TWEET_STREAM_QUERY).matches);
+}
+
+function mobileTweetStreamInfo(rows = [], key = "", batchSize = 10) {
+  const allRows = Array.isArray(rows) ? rows : [];
+  const batch = Math.min(Math.max(Number(batchSize || 10), 5), 80);
+  const streamKey = String(key || "mobile-tweet-stream");
+  if (!isMobileTweetStreamMode()) {
+    return {
+      key: streamKey,
+      items: allRows,
+      loaded: allRows.length,
+      totalItems: allRows.length,
+      batchSize: batch,
+      hasMore: false,
+      mobile: false,
+    };
+  }
+  const storedLimit = Number(state.mobileTweetStreamLimits[streamKey] || batch);
+  const loaded = Math.min(allRows.length, Math.max(batch, storedLimit));
+  state.mobileTweetStreamLimits[streamKey] = loaded;
+  return {
+    key: streamKey,
+    items: allRows.slice(0, loaded),
+    loaded,
+    totalItems: allRows.length,
+    batchSize: batch,
+    hasMore: loaded < allRows.length,
+    mobile: true,
+  };
+}
+
+function renderMobileTweetStreamFooter(stream, target) {
+  if (!stream?.mobile || Number(stream.totalItems || 0) <= 0) return "";
+  const status = stream.hasMore ? "继续下滑加载" : "已全部加载";
+  return `
+    <div class="mobile-tweet-stream-footer ${stream.hasMore ? "" : "is-complete"}" role="status" aria-live="polite" aria-atomic="true" aria-busy="false">
+      <span>已显示 ${esc(stream.loaded)} / 共 ${esc(stream.totalItems)} 条</span>
+      ${stream.hasMore ? `
+        <span
+          class="mobile-tweet-stream-sentinel"
+          data-mobile-tweet-stream-key="${esc(stream.key)}"
+          data-mobile-tweet-stream-target="${esc(target)}"
+          data-mobile-tweet-stream-batch="${esc(stream.batchSize)}"
+          data-mobile-tweet-stream-total="${esc(stream.totalItems)}"
+        >${status}</span>
+        <button
+          type="button"
+          class="mobile-tweet-stream-fallback"
+          data-mobile-tweet-stream-load
+          data-mobile-tweet-stream-key="${esc(stream.key)}"
+          data-mobile-tweet-stream-target="${esc(target)}"
+          data-mobile-tweet-stream-batch="${esc(stream.batchSize)}"
+          data-mobile-tweet-stream-total="${esc(stream.totalItems)}"
+          hidden
+        >继续加载</button>
+      ` : `<span>${status}</span>`}
+    </div>`;
+}
+
+function renderMobileTweetStreamLoadingIndicator() {
+  return `
+    <span class="mobile-tweet-stream-loading">
+      <svg class="mobile-tweet-stream-spinner" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <circle cx="12" cy="12" r="9"></circle>
+      </svg>
+      <span>正在加载</span>
+    </span>`;
+}
+
+function lockMobileTweetStreamScroll() {
+  if (mobileTweetStreamScrollLock) return;
+  const lock = {
+    x: window.scrollX,
+    y: window.scrollY,
+    restoring: false,
+  };
+  const preventScroll = (event) => {
+    if (event.cancelable) event.preventDefault();
+  };
+  const preventScrollKey = (event) => {
+    if (event.target?.matches?.("input, textarea, select, [contenteditable='true']")) return;
+    if ([" ", "ArrowDown", "ArrowUp", "PageDown", "PageUp", "End", "Home"].includes(event.key)) {
+      event.preventDefault();
+    }
+  };
+  const restoreScroll = () => {
+    if (lock.restoring || Math.abs(window.scrollY - lock.y) < 1) return;
+    lock.restoring = true;
+    window.scrollTo(lock.x, lock.y);
+    window.requestAnimationFrame(() => { lock.restoring = false; });
+  };
+  lock.preventScroll = preventScroll;
+  lock.preventScrollKey = preventScrollKey;
+  lock.restoreScroll = restoreScroll;
+  mobileTweetStreamScrollLock = lock;
+  document.documentElement.classList.add("mobile-tweet-stream-scroll-locked");
+  document.body?.classList.add("mobile-tweet-stream-scroll-locked");
+  window.addEventListener("wheel", preventScroll, { passive: false, capture: true });
+  window.addEventListener("touchmove", preventScroll, { passive: false, capture: true });
+  window.addEventListener("keydown", preventScrollKey, true);
+  window.addEventListener("scroll", restoreScroll, { passive: true });
+}
+
+function unlockMobileTweetStreamScroll() {
+  const lock = mobileTweetStreamScrollLock;
+  if (!lock) return;
+  window.removeEventListener("wheel", lock.preventScroll, true);
+  window.removeEventListener("touchmove", lock.preventScroll, true);
+  window.removeEventListener("keydown", lock.preventScrollKey, true);
+  window.removeEventListener("scroll", lock.restoreScroll);
+  document.documentElement.classList.remove("mobile-tweet-stream-scroll-locked");
+  document.body?.classList.remove("mobile-tweet-stream-scroll-locked");
+  mobileTweetStreamScrollLock = null;
+}
+
+function cancelMobileTweetStreamLoading() {
+  mobileTweetStreamLoadingGeneration += 1;
+  if (mobileTweetStreamFinishTimer) window.clearTimeout(mobileTweetStreamFinishTimer);
+  mobileTweetStreamFinishTimer = 0;
+  mobileTweetStreamPending = false;
+  unlockMobileTweetStreamScroll();
+}
+
+function finishMobileTweetStreamLoading(startedAt, commit, onComplete) {
+  const generation = ++mobileTweetStreamLoadingGeneration;
+  const elapsed = Math.max(0, performance.now() - Number(startedAt || 0));
+  const remaining = Math.max(0, MOBILE_TWEET_STREAM_MIN_LOADING_MS - elapsed);
+  mobileTweetStreamFinishTimer = window.setTimeout(() => {
+    mobileTweetStreamFinishTimer = 0;
+    if (generation !== mobileTweetStreamLoadingGeneration) return;
+    window.requestAnimationFrame(() => {
+      if (generation !== mobileTweetStreamLoadingGeneration) return;
+      let commitError = null;
+      try {
+        commit();
+      } catch (error) {
+        commitError = error;
+      }
+      window.requestAnimationFrame(() => {
+        if (generation !== mobileTweetStreamLoadingGeneration) return;
+        unlockMobileTweetStreamScroll();
+        onComplete?.();
+        if (commitError) window.setTimeout(() => { throw commitError; }, 0);
+      });
+    });
+  }, remaining);
+}
+
+function disconnectMobileTweetStreamObserver() {
+  mobileTweetStreamObserver?.disconnect();
+  mobileTweetStreamObserver = null;
+}
+
+function advanceMobileTweetStream(node) {
+  if (!node || mobileTweetStreamPending) return;
+  const key = String(node.dataset.mobileTweetStreamKey || "");
+  const target = String(node.dataset.mobileTweetStreamTarget || "");
+  const batchSize = Math.min(Math.max(Number(node.dataset.mobileTweetStreamBatch || 10), 5), 80);
+  const totalItems = Math.max(0, Number(node.dataset.mobileTweetStreamTotal || 0));
+  if (!key || !target || !totalItems) return;
+  const current = Math.max(batchSize, Number(state.mobileTweetStreamLimits[key] || batchSize));
+  if (current >= totalItems) return;
+  mobileTweetStreamPending = true;
+  node.classList.add("is-loading");
+  node.innerHTML = renderMobileTweetStreamLoadingIndicator();
+  node.closest(".mobile-tweet-stream-footer")?.setAttribute("aria-busy", "true");
+  lockMobileTweetStreamScroll();
+  const startedAt = performance.now();
+  disconnectMobileTweetStreamObserver();
+  finishMobileTweetStreamLoading(startedAt, () => {
+    if (!node.isConnected || !node.getClientRects().length || !isMobileTweetStreamMode()) return;
+    state.mobileTweetStreamLimits[key] = Math.min(totalItems, current + batchSize);
+    if (target === "persona-detail") renderPersonaDetail();
+    else if (target === "publishing") renderSimpleFlowModule("publishing");
+  }, () => {
+    mobileTweetStreamPending = false;
+    bindMobileTweetStreamObservers();
+  });
+}
+
+function bindMobileTweetStreamObservers() {
+  disconnectMobileTweetStreamObserver();
+  if (!isMobileTweetStreamMode()) return;
+  const sentinels = Array.from(document.querySelectorAll("[data-mobile-tweet-stream-key]"))
+    .filter((node) => !node.hidden && node.getClientRects().length);
+  if (!sentinels.length) return;
+  if (!("IntersectionObserver" in window)) {
+    document.querySelectorAll("[data-mobile-tweet-stream-load]").forEach((button) => {
+      button.hidden = false;
+      button.addEventListener("click", () => advanceMobileTweetStream(button), { once: true });
+    });
+    return;
+  }
+  mobileTweetStreamObserver = new IntersectionObserver((entries) => {
+    const entry = entries.find((item) => item.isIntersecting);
+    if (entry) advanceMobileTweetStream(entry.target);
+  }, MOBILE_TWEET_STREAM_OBSERVER_OPTIONS);
+  sentinels
+    .filter((node) => node.classList.contains("mobile-tweet-stream-sentinel"))
+    .forEach((node) => mobileTweetStreamObserver.observe(node));
+}
+
 function personaPostPageInfo(persona = selectedPersona(), source = personaPostSource(persona), rows = []) {
   const pageSize = Math.min(Math.max(Number(state.personaPostPageSize || 10), 5), 80);
   const totalItems = Array.isArray(rows) ? rows.length : 0;
+  const mobileStream = mobileTweetStreamInfo(rows, `persona-detail:${personaPostPageKey(persona, source)}`, pageSize);
+  if (mobileStream.mobile) {
+    return {
+      ...mobileStream,
+      page: 1,
+      totalPages: 1,
+      pageSize,
+    };
+  }
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const key = personaPostPageKey(persona, source);
   const page = Math.min(Math.max(Number(state.personaPostPages[key] || 1), 1), totalPages);
@@ -7115,6 +7378,7 @@ function ensurePersonaPostPageForPost(persona = selectedPersona(), source = pers
 }
 
 function renderPersonaPostPager(pageInfo, source) {
+  if (pageInfo?.mobile) return renderMobileTweetStreamFooter(pageInfo, "persona-detail");
   if (!pageInfo || Number(pageInfo.totalItems || 0) <= Number(pageInfo.pageSize || 10)) return "";
   const { page, totalPages, pageSize, totalItems } = pageInfo;
   return `
@@ -7192,7 +7456,7 @@ function renderPersonaDraftPostActions(post, {
 
 function renderPersonaDraftTableRows(posts, personaId, allRows = posts) {
   const source = personaPostSource();
-  const selectedIds = new Set(syncPersonaSelectedPostIds(selectedPersona(), source, posts));
+  const selectedIds = new Set(syncPersonaSelectedPostIds(selectedPersona(), source, allRows));
   return `
     <div class="persona-draft-table" role="table" aria-label="草稿列表">
       <div class="persona-draft-table-head" role="row">
@@ -7213,7 +7477,7 @@ function renderPersonaDraftTableRows(posts, personaId, allRows = posts) {
         const fullIndex = allRows.findIndex((item) => String(item?.id || "") === postId);
         const displayTitle = hotMeta
           ? `第${Math.max(1, allRows.length - (fullIndex >= 0 ? fullIndex : index))}篇`
-          : personaDraftDisplayTitleForPost(post, allRows, index);
+          : personaDraftDisplayTitleForPost(post, allRows, fullIndex >= 0 ? fullIndex : index);
         return `
           <article
             class="persona-draft-table-row ${isSelected ? "is-selected" : ""}"
@@ -8607,6 +8871,17 @@ function renderEyeIcon() {
   </svg>`;
 }
 
+function renderFormListIcon() {
+  return `<svg class="ui-form-list-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <rect x="4" y="3" width="16" height="18" rx="2"></rect>
+    <path d="M9 8h7"></path>
+    <path d="M9 12h7"></path>
+    <path d="M9 16h5"></path>
+    <path d="m6.5 8 .7.7 1.3-1.4"></path>
+    <path d="m6.5 12 .7.7 1.3-1.4"></path>
+  </svg>`;
+}
+
 function renderZoomInIcon() {
   return `<svg class="ui-action-icon ui-zoom-in-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <circle cx="10.5" cy="10.5" r="5.75"></circle>
@@ -8698,12 +8973,26 @@ function renderClipboardIcon() {
   </svg>`;
 }
 
+function renderPasteIcon() {
+  return `<svg class="ui-action-icon ui-paste-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M9 5.5h6"></path>
+    <rect x="5" y="4" width="14" height="17" rx="2"></rect>
+    <path d="M12 9v7"></path>
+    <path d="m9 13 3 3 3-3"></path>
+  </svg>`;
+}
+
 async function copyTextToClipboard(value = "") {
   const text = String(value || "");
   if (!text) throw new Error("没有可复制的内容");
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (_) {
+      // Permission policies may expose Clipboard API while rejecting writes.
+      // Continue with the selection-based fallback below.
+    }
   }
   const input = document.createElement("textarea");
   input.value = text;
@@ -10143,6 +10432,22 @@ function automationPlanTaskForStep(step = "") {
   return "threads_warmup";
 }
 
+function automationPlanConflictKey(taskType = "") {
+  const normalized = String(taskType || "").trim();
+  if (normalized === "threads_auto_reply") return "threads_reply_comment";
+  return ["normal_publish", "threads_reply_comment", "threads_reply_hot", "threads_warmup"].includes(normalized)
+    ? normalized
+    : "";
+}
+
+function automationPlanHasTaskConflict(draft, taskType, exceptIndex = -1) {
+  const target = automationPlanConflictKey(taskType);
+  if (!target) return false;
+  return (draft?.items || []).some((item, index) => (
+    index !== exceptIndex && automationPlanConflictKey(item?.taskType) === target
+  ));
+}
+
 function automationPlanConfiguredSummary(item = {}) {
   if (!item.taskType) return "选择后打开原任务配置";
   if (!item.configured) return "尚未完成配置";
@@ -10198,6 +10503,10 @@ function openAutomationPlanNormalPublishConfigurator(index) {
   const modal = $("consoleModal");
   void request.then((confirmed) => {
     if (!confirmed) return;
+    if (automationPlanHasTaskConflict(draft, "normal_publish", index)) {
+      showMsg("commandMsg", "同一账号不能重复添加普通任务。", false);
+      return;
+    }
     const count = Number(modal?.querySelector("[data-automation-plan-normal-publish-count]")?.value || currentCount);
     item.taskType = "normal_publish";
     item.params = { publish_count: Number.isInteger(count) && count >= 1 && count <= 5 ? count : 1 };
@@ -10257,7 +10566,13 @@ function openAutomationPlanTaskConfigurator(index, options = null) {
     const addButton = event.target.closest("[data-automation-plan-add-configured]");
     if (!addButton) return;
     const kind = String(addButton.dataset.automationPlanAddConfigured || "warmup");
-    item.taskType = automationPlanTaskForStep(kind);
+    const taskType = automationPlanTaskForStep(kind);
+    const itemIndex = draft.items.indexOf(item);
+    if (automationPlanHasTaskConflict(draft, taskType, itemIndex)) {
+      showMsg("commandMsg", "同一账号不能重复添加同类型自动化任务。", false);
+      return;
+    }
+    item.taskType = taskType;
     item.params = cloneAutomationPlanPayload(buildPersonaThreadsTaskPayload(kind));
     item.configured = true;
     state.automationPlanEditorPayload = cloneAutomationPlanPayload(item.params);
@@ -10306,6 +10621,145 @@ function openAutomationPlanTaskDetails(index) {
     if (taskType === "normal_publish") openAutomationPlanNormalPublishConfigurator(index);
     else if (["threads_reply_comment", "threads_reply_hot", "threads_warmup"].includes(taskType)) openAutomationPlanTaskConfigurator(index);
     else openAutomationPlanTaskPicker(index);
+  }).catch(() => {});
+}
+
+function automationPlanTaskContent(task = {}) {
+  const payload = task?.payload && typeof task.payload === "object" ? task.payload : {};
+  return String(
+    payload.content
+    || payload.caption
+    || payload.text
+    || payload.archive_post_title
+    || payload.target_title
+    || ""
+  ).trim();
+}
+
+function automationPlanStrategyFieldLabel(key = "") {
+  return ({
+    strategy_id: "策略",
+    browse_limit: "浏览上限",
+    scroll_times: "滚动次数",
+    like_limit: "点赞上限",
+    max_comments: "留言上限",
+    max_posts: "扫描篇数",
+    max_replies: "回复上限",
+    max_age_days: "查看天数",
+    min_views: "最低浏览",
+    reply_scope: "回复范围",
+    target_urls: "目标链接",
+    reply_templates: "回复文案",
+    publish_count: "发布数量",
+    require_persona_relevance: "按人设筛选",
+  })[key] || key;
+}
+
+function automationPlanStrategyFieldValue(key = "", value = "") {
+  if (key === "reply_scope") return String(value) === "hot_posts" ? "热点推文" : "账号评论";
+  if (key === "strategy_id") {
+    const strategy = Object.values(PERSONA_THREADS_STRATEGIES)
+      .flat()
+      .find((entry) => entry.id === String(value || ""));
+    return strategy?.label || "已配置策略";
+  }
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean).join("\n");
+  if (typeof value === "boolean") return value ? "是" : "否";
+  if (value && typeof value === "object") return JSON.stringify(value);
+  return String(value ?? "").trim() || "未设置";
+}
+
+function renderAutomationPlanStrategyFields(item = {}) {
+  const params = item?.params && typeof item.params === "object"
+    ? item.params
+    : (item?.payload && typeof item.payload === "object" ? item.payload : {});
+  const hiddenKeys = new Set([
+    "content", "caption", "text", "archive_post_title", "target_title", "strategy_label", "comment_chance",
+    "publish_batch_id", "publish_sequence_index", "publish_sequence_total", "publish_sequence_targets",
+  ]);
+  const fields = Object.entries(params).filter(([key, value]) => (
+    !hiddenKeys.has(key)
+    && !String(key).startsWith("_")
+    && !/(password|token|secret|cookie|api[_-]?key)/i.test(String(key))
+    && value !== undefined
+    && value !== null
+    && value !== ""
+  ));
+  return fields.map(([key, value]) => {
+    const fieldValue = automationPlanStrategyFieldValue(key, value);
+    const wide = ["target_urls", "reply_templates"].includes(key) || fieldValue.length > 72;
+    return `<div class="automation-plan-detail-strategy${wide ? " automation-plan-detail-preview-wide" : ""}"><dt>${esc(automationPlanStrategyFieldLabel(key))}</dt><dd>${esc(fieldValue)}</dd></div>`;
+  }).join("");
+}
+
+function renderAutomationPlanDetailFormRows(rows = [], { runtime = false } = {}) {
+  return `<ol class="automation-plan-detail-preview">${rows.map((row, index) => {
+    const item = row?.item || row || {};
+    const task = row?.task || null;
+    const taskType = String(task?.task_type || item?.taskType || item?.task_type || "");
+    const detailItem = task
+      ? { ...item, taskType, params: { ...(item?.params || item?.payload || {}), ...(task?.payload || {}) }, configured: true }
+      : item;
+    const scheduledAt = Number(task?.scheduled_at || 0);
+    const taskContent = runtime ? automationPlanTaskContent(task) : "";
+    const timing = runtime && scheduledAt
+      ? formatScheduledTime(scheduledAt)
+      : automationReservationLabel(item?.reservationMinutes ?? item?.reservation_minutes);
+    return `<li>
+      <span>${index + 1}</span>
+      <div class="automation-plan-detail-preview-card">
+        <strong>${esc(automationPlanTaskLabel(taskType || "未添加"))}</strong>
+        <dl>
+          <div><dt>${runtime ? "执行时间" : "预约时间"}</dt><dd>${esc(timing)}</dd></div>
+          ${renderAutomationPlanStrategyFields(detailItem)}
+          ${taskContent ? `<div class="automation-plan-detail-preview-wide"><dt>任务内容</dt><dd>${esc(taskContent)}</dd></div>` : ""}
+        </dl>
+      </div>
+    </li>`;
+  }).join("")}</ol>`;
+}
+
+function automationPlanPlanItemForTask(plan = {}, task = {}) {
+  const taskType = String(task?.task_type || "");
+  return (Array.isArray(plan?.items) ? plan.items : []).find((item) => {
+    const plannedTaskType = String(item?.task_type || item?.taskType || "");
+    if (plannedTaskType === "normal_publish") return taskType === "publish_post";
+    return automationPlanConflictKey(plannedTaskType) === automationPlanConflictKey(taskType);
+  }) || {};
+}
+
+function openAutomationPlanDraftPreview() {
+  const { draft } = currentAutomationPlanDraft();
+  const items = normalizeAutomationPlanReservations(draft?.items || []);
+  if (!items.length) {
+    showMsg("commandMsg", "当前还没有可预览的自动化任务。", false);
+    return;
+  }
+  openConsoleModal({
+    title: "任务明细总览",
+    message: "按预约时间顺序展示当前尚未创建的自动化任务。",
+    contentHtml: renderAutomationPlanDetailFormRows(items),
+    confirmText: "关闭",
+    showCancel: false,
+    modalKey: "automation-plan-draft-preview",
+  }).catch(() => {});
+}
+
+function clearAutomationPlanDraft() {
+  const { draft } = currentAutomationPlanDraft();
+  if (!(draft?.items || []).length) return;
+  openConsoleModal({
+    title: "清空全部任务？",
+    message: "这会清空当前尚未创建的任务列表，不会影响已创建的自动化计划。",
+    confirmText: "清空任务",
+    cancelText: "保留",
+    danger: true,
+    modalKey: "clear-automation-plan-draft",
+  }).then((confirmed) => {
+    if (!confirmed) return;
+    draft.items = [];
+    draft.openTimePickerIndex = -1;
+    renderSimpleFlowModule("publishing");
   }).catch(() => {});
 }
 
@@ -10579,6 +11033,34 @@ function renderAutomationPlanCardAction(plan = {}) {
   >${renderTrashIcon()}</button>`;
 }
 
+function openAutomationPlanRunDetails(planId = "") {
+  const plan = (state.automationPlans || []).find((item) => String(item?.id || "") === String(planId || ""));
+  if (!plan) return;
+  const tasks = automationPlanRunTasks(plan);
+  const configuredItems = Array.isArray(plan?.items) ? plan.items : [];
+  const detailRows = tasks.length
+    ? tasks.map((task) => ({ task, item: automationPlanPlanItemForTask(plan, task) }))
+    : configuredItems;
+  openConsoleModal({
+    title: "执行任务明细",
+    message: `${plan.mode === "loop" ? "循环" : "列表"}模式 · 第 ${Number(plan.cycle_index || 0)} 轮`,
+    contentHtml: detailRows.length
+      ? renderAutomationPlanDetailFormRows(detailRows, { runtime: tasks.length > 0 })
+      : `<div class="empty-state">计划正在准备任务列表，请稍后刷新查看。</div>`,
+    confirmText: "关闭",
+    showCancel: false,
+    modalKey: `automation-plan-run-details-${String(plan.id || "")}`,
+  }).catch(() => {});
+}
+
+function renderAutomationPlanCardActions(plan = {}) {
+  const action = renderAutomationPlanCardAction(plan);
+  return `<div class="automation-plan-card-actions">
+    <button type="button" class="unified-action-icon-button" data-automation-plan-view-run-details="${esc(plan?.id || "")}" title="查看执行任务明细" aria-label="查看执行任务明细">${renderFormListIcon()}</button>
+    ${action}
+  </div>`;
+}
+
 function renderAutomationPlanRunRows(plan = {}) {
   const tasks = automationPlanRunTasks(plan);
   if (!tasks.length) return "";
@@ -10614,7 +11096,7 @@ function renderAutomationPlanHistory(persona = selectedPersona()) {
           <span>${esc(accountDisplayName(selectedSocialAccount(plan.account_id)))} · <b class="automation-plan-status is-${esc(String(plan.status || "").toLowerCase())}">${esc(automationPlanStatusLabel(plan.status))}</b>${plan.next_run_at ? ` · 下次 ${esc(formatScheduledTime(plan.next_run_at))}` : ""}</span>
         </div>
       </div>
-      ${renderAutomationPlanCardAction(plan)}
+      ${renderAutomationPlanCardActions(plan)}
       ${renderAutomationPlanRunRows(plan)}
       ${["active", "materializing"].includes(plan.status) ? `<button type="button" class="danger" data-automation-plan-cancel="${esc(plan.id)}">停止计划</button>` : ""}
     </article>`).join("")}</div>`;
@@ -10629,7 +11111,6 @@ function renderAutomationTaskPlanPanel(persona = selectedPersona()) {
       <section class="automation-plan-card automation-plan-card--builder">
         <div class="automation-plan-head">
           <div>
-            <strong>无人值守计划</strong>
             <span>确认创建计划时开始计时，每项按 30 分钟递进，最远安排到 24 小时内。</span>
           </div>
           <div class="automation-capsule-tabs automation-plan-mode" role="group" aria-label="自动化执行模式">
@@ -10644,7 +11125,13 @@ function renderAutomationTaskPlanPanel(persona = selectedPersona()) {
           ${account ? renderAutomationPlanCheckIcon() : renderInfoIcon()}
           <span>${account ? `当前人设将使用已绑定账号：${esc(accountDisplayName(account))}` : "当前人设未绑定执行账号，请先到账号池完成绑定。"}</span>
         </div>
-        <div class="automation-plan-table-head"><span>时间</span><span>任务</span></div>
+        <div class="automation-plan-table-head">
+          <span>时间</span>
+          <div><span>任务</span><div class="automation-plan-draft-actions">
+            <button type="button" class="unified-action-icon-button" data-automation-plan-draft-preview title="任务明细总览" aria-label="任务明细总览" ${draft.items.length ? "" : "disabled"}>${renderFormListIcon()}</button>
+            <button type="button" class="danger unified-action-icon-button" data-automation-plan-draft-clear title="清空全部任务" aria-label="清空全部任务" ${draft.items.length ? "" : "disabled"}>${renderTrashIcon()}</button>
+          </div></div>
+        </div>
         <ol class="automation-plan-list">${renderAutomationPlanRows(draft, platform)}</ol>
         <button type="button" class="automation-plan-add" data-automation-plan-add ${draft.items.length >= 49 || Number(draft.items.at(-1)?.reservationMinutes || 0) >= 1440 ? "disabled" : ""}>${renderPlusIcon()}<span>添加任务</span></button>
         <div class="automation-plan-submit-row">
@@ -10797,10 +11284,12 @@ function renderPublishPostSelectionList(persona = selectedPersona(), source = st
   const selectedIds = new Set(syncPublishSelectedPostIds(persona, cleanSource, rows));
   if (!rows.length) return `<div class="empty-state">当前还没有${cleanSource === "favorites" ? "收藏内容" : "草稿"}。</div>`;
   const personaId = String(persona?.id || "");
+  const stream = mobileTweetStreamInfo(rows, `publish-source:${personaId}:${cleanSource}`, 10);
   return `
     <div class="publish-post-list">
-      ${rows.map((post, index) => {
+      ${stream.items.map((post, index) => {
         const postId = String(post.id || "");
+        const fullIndex = rows.findIndex((item) => String(item?.id || "") === postId);
         const checked = selectedIds.has(postId);
         const mediaItems = personaPublishPostMediaItems(personaId, post);
         const hotMeta = personaHotImportMeta(personaId, post.id);
@@ -10809,10 +11298,10 @@ function renderPublishPostSelectionList(persona = selectedPersona(), source = st
             <label class="publish-post-card-main">
               <input type="checkbox" data-publish-post-id="${esc(postId)}" ${checked ? "checked" : ""} />
               <span class="publish-persona-check ${checked ? "is-checked" : ""}" aria-hidden="true"></span>
-              <span class="publish-post-card-index">${esc(index + 1)}</span>
+              <span class="publish-post-card-index">${esc((fullIndex >= 0 ? fullIndex : index) + 1)}</span>
               <span class="publish-post-card-copy">
                 <span class="publish-post-card-head">
-                  <strong>${esc(personaDraftDisplayTitleForPost(post, rows, index))}</strong>
+                  <strong>${esc(personaDraftDisplayTitleForPost(post, rows, fullIndex >= 0 ? fullIndex : index))}</strong>
                   ${renderMediaTypeBadge(mediaItems)}
                 </span>
                 <span class="publish-post-card-meta">${esc(formatTime(post.published_at || post.updated_at || post.created_at))}${hotMeta ? " · 热点导入" : ""}</span>
@@ -10822,7 +11311,8 @@ function renderPublishPostSelectionList(persona = selectedPersona(), source = st
             ${mediaItems.length ? `<div class="publish-post-card-media">${renderPublishPreviewMedia(mediaItems)}</div>` : ""}
           </article>`;
       }).join("")}
-    </div>`;
+    </div>
+    ${renderMobileTweetStreamFooter(stream, "publishing")}`;
 }
 
 function renderPublishContentPreview(persona = selectedPersona(), source = state.publishContentSource) {
@@ -10841,6 +11331,7 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
   const sourceRows = publishSourceRows(persona, cleanSource);
   const selectedPosts = selectedPublishPosts(persona, cleanSource);
   const activePost = activePublishPreviewPost(selectedPosts);
+  const previewPosts = isMobileTweetStreamMode() && activePost ? [activePost] : selectedPosts;
   return `
     <section class="publish-content-preview publish-content-preview--selection ${selectedPosts.length ? "" : "is-empty"}">
       <div class="publish-panel-head">
@@ -10850,22 +11341,24 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
       ${selectedPosts.length ? `
         <div class="publish-preview-tabs-layout">
           <div class="publish-preview-tabs" aria-label="任务内容标签页">
-            ${selectedPosts.map((post, index) => {
+            ${previewPosts.map((post, index) => {
               const postId = String(post.id || "");
               const active = postId === String(activePost?.id || "");
-              const previewTitle = personaDraftDisplayTitleForPost(post, sourceRows, index);
+              const fullIndex = sourceRows.findIndex((item) => String(item?.id || "") === postId);
+              const previewIndex = fullIndex >= 0 ? fullIndex : index;
+              const previewTitle = personaDraftDisplayTitleForPost(post, sourceRows, previewIndex);
               return `
                 <button
                   type="button"
                   class="${active ? "is-active" : ""}"
                   data-publish-preview-post="${esc(postId)}"
-                  aria-label="${esc(`第${index + 1}篇：${previewTitle}`)}"
+                  aria-label="${esc(`第${previewIndex + 1}篇：${previewTitle}`)}"
                   aria-pressed="${active ? "true" : "false"}"
                 >
-                  <span class="publish-preview-tab-index">${esc(index + 1)}</span>
+                  <span class="publish-preview-tab-index">${esc(previewIndex + 1)}</span>
                   <span class="publish-preview-tab-copy">
                     <strong>${esc(previewTitle)}</strong>
-                    <span>${esc(`第${index + 1}篇`)}</span>
+                    <span>${esc(`第${previewIndex + 1}篇`)}</span>
                   </span>
                 </button>`;
             }).join("")}
@@ -11047,14 +11540,59 @@ function activePublishHistoryRecord(rows = []) {
   return active;
 }
 
+function publishHistoryMetricEntries(record = {}) {
+  const source = record?.hot_metrics || record || {};
+  return [
+    ["热度", source.hot_score],
+    ["浏览", source.views],
+    ["点赞", source.likes],
+    ["评论", source.comments],
+    ["分享", source.shares],
+    ["转发", source.reposts],
+  ];
+}
+
+function formatPublishHistoryMetricUnit(number, divisor, suffix) {
+  const scaled = Number(number || 0) / divisor;
+  const rounded = Math.round(scaled * 10) / 10;
+  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}${suffix}`;
+}
+
+function publishHistoryMetricText(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return "0";
+  const absolute = Math.abs(number);
+  if (absolute >= 100000000) return formatPublishHistoryMetricUnit(number, 100000000, "亿");
+  if (absolute >= 1000000) return formatPublishHistoryMetricUnit(number, 1000000, "m");
+  if (absolute >= 10000) return formatPublishHistoryMetricUnit(number, 10000, "w");
+  if (absolute >= 1000) return formatPublishHistoryMetricUnit(number, 1000, "k");
+  return number.toLocaleString("zh-CN");
+}
+
+function renderPublishHistoryMetrics(record = {}, className = "") {
+  return `
+    <div class="publish-history-metrics ${esc(className)}">
+      ${publishHistoryMetricEntries(record).map(([label, value]) => `
+        <span title="${esc(`${label}：${Number(value || 0).toLocaleString("zh-CN")}`)}">
+          <small>${esc(label)}</small>
+          <strong>${esc(publishHistoryMetricText(value))}</strong>
+        </span>
+      `).join("")}
+    </div>`;
+}
+
 function renderPublishHistorySelectionList(persona = selectedPersona()) {
   const rows = personaPublishHistoryRows(persona);
   if (!rows.length) return `<div class="empty-state">当前人设还没有任务历史。</div>`;
   const activeId = String(state.publishHistoryPreviewId || rows[0]?.id || "");
+  const personaId = String(persona?.id || "");
+  const stream = mobileTweetStreamInfo(rows, `publish-history:${personaId}`, 10);
   return `
     <div class="publish-post-list">
-      ${rows.map((record, index) => {
+      ${stream.items.map((record, index) => {
         const recordId = String(record.id || "");
+        const fullIndex = rows.findIndex((item) => String(item?.id || "") === recordId);
+        const displayIndex = fullIndex >= 0 ? fullIndex : index;
         const active = recordId === activeId;
         const mediaItems = personaHistoryMediaItems(record);
         const platform = String(record.platform || record.publishPlatform || "").trim();
@@ -11063,10 +11601,10 @@ function renderPublishHistorySelectionList(persona = selectedPersona()) {
         return `
           <article class="publish-post-card publish-history-card ${active ? "is-selected" : ""}" data-publish-history-card="${esc(recordId)}">
             <div class="publish-history-card-main">
-              <span class="publish-post-card-index">${esc(index + 1)}</span>
+              <span class="publish-post-card-index">${esc(displayIndex + 1)}</span>
               <span class="publish-post-card-copy">
                 <span class="publish-post-card-head">
-                  <strong>${esc(publishHistoryRecordTitle(record, index))}</strong>
+                  <strong>${esc(publishHistoryRecordTitle(record, displayIndex))}</strong>
                   ${renderMediaTypeBadge(mediaItems)}
                 </span>
                 <span class="publish-post-card-meta">${esc(meta || "任务记录")}</span>
@@ -11076,10 +11614,12 @@ function renderPublishHistorySelectionList(persona = selectedPersona()) {
                 <button type="button" class="publish-history-card-action" data-publish-history-view="${esc(recordId)}" title="查看任务历史" aria-label="查看任务历史">${renderEyeIcon()}</button>
                 <button type="button" class="publish-history-card-action" data-publish-history-requeue="${esc(recordId)}" title="重入队" aria-label="重入队">${renderRequeueIcon()}</button>
               </span>
+              ${renderPublishHistoryMetrics(record, "publish-history-card-metrics")}
             </div>
           </article>`;
       }).join("")}
-    </div>`;
+    </div>
+    ${renderMobileTweetStreamFooter(stream, "publishing")}`;
 }
 
 function renderPublishHistoryPreview(persona = selectedPersona()) {
@@ -11088,14 +11628,6 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
   const activeMediaItems = activeRecord ? personaHistoryMediaItems(activeRecord) : [];
   const publishedUrl = safeExternalHttpUrl(activeRecord?.source_url || activeRecord?.published_url || activeRecord?.url || activeRecord?.post_url);
   const hotMetrics = activeRecord?.hot_metrics || activeRecord || {};
-  const metrics = activeRecord ? [
-    ["热度", hotMetrics.hot_score],
-    ["浏览", hotMetrics.views],
-    ["点赞", hotMetrics.likes],
-    ["评论", hotMetrics.comments],
-    ["分享", hotMetrics.shares],
-    ["转发", hotMetrics.reposts],
-  ] : [];
   const hotStatus = hotMetrics.complete
     ? `全量互动 · 更新于 ${formatTime(hotMetrics.refreshed_at) || "时间未知"}`
     : (hotMetrics.matched
@@ -11120,7 +11652,7 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
               ${activeRecord?.status ? `<span>${esc(statusLabel(activeRecord.status))}</span>` : ""}
             </div>
             <p>${esc(String(activeRecord?.content || activeRecord?.caption || activeRecord?.text || activeRecord?.source_url || "").trim() || "该记录没有正文或链接摘要。")}</p>
-            ${metrics.length ? `<div class="publish-history-metrics">${metrics.map(([label, value]) => `<span><small>${esc(label)}</small><strong>${esc(Number(value || 0).toLocaleString("zh-CN"))}</strong></span>`).join("")}</div>` : ""}
+            ${renderPublishHistoryMetrics(activeRecord)}
             <div class="publish-history-hot-status ${hotMetrics.complete ? "is-complete" : "is-stale"}">${esc(hotStatus)}</div>
             <div class="row-actions publish-history-actions">
               ${publishedUrl ? `<a href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看来源</a>` : ""}
@@ -11178,15 +11710,6 @@ async function openPublishHistoryRecordModal(historyId = "", persona = selectedP
   if (!record) return;
   const mediaItems = personaHistoryMediaItems(record);
   const publishedUrl = safeExternalHttpUrl(record.source_url || record.published_url || record.url || record.post_url);
-  const metricsSource = record.hot_metrics || record || {};
-  const metrics = [
-    ["热度", metricsSource.hot_score],
-    ["浏览", metricsSource.views],
-    ["点赞", metricsSource.likes],
-    ["评论", metricsSource.comments],
-    ["分享", metricsSource.shares],
-    ["转发", metricsSource.reposts],
-  ];
   const action = await openConsoleModal({
     title: "任务历史详情",
     contentHtml: `
@@ -11200,8 +11723,8 @@ async function openPublishHistoryRecordModal(historyId = "", persona = selectedP
           <span>${esc(formatTime(publishHistoryRecordTime(record)) || "时间未知")}</span>
           ${record.status ? `<span>${esc(statusLabel(record.status))}</span>` : ""}
         </div>
+        ${renderPublishHistoryMetrics(record, "publish-history-modal-metrics")}
         <p>${esc(String(record.content || record.caption || record.text || record.source_url || "").trim() || "该记录没有正文或链接摘要。")}</p>
-        <div class="publish-history-metrics">${metrics.map(([label, value]) => `<span><small>${esc(label)}</small><strong>${esc(Number(value || 0).toLocaleString("zh-CN"))}</strong></span>`).join("")}</div>
         ${publishedUrl ? `<a class="publish-history-modal-source" href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看来源</a>` : ""}
         ${renderPublishPreviewMedia(mediaItems)}
       </article>`,
@@ -11943,6 +12466,12 @@ function bindSimpleFlowInputs(moduleId) {
         openAutomationPlanTaskDetails(Number(node.dataset.automationPlanViewDetails));
       });
     });
+    document.querySelector("[data-automation-plan-draft-preview]")?.addEventListener("click", () => {
+      openAutomationPlanDraftPreview();
+    });
+    document.querySelector("[data-automation-plan-draft-clear]")?.addEventListener("click", () => {
+      clearAutomationPlanDraft();
+    });
     document.querySelectorAll("[data-automation-plan-remove]").forEach((node) => {
       node.addEventListener("click", () => {
         const { draft } = currentAutomationPlanDraft();
@@ -11993,6 +12522,11 @@ function bindSimpleFlowInputs(moduleId) {
     document.querySelectorAll("[data-automation-plan-browser-task]").forEach((node) => {
       node.addEventListener("click", () => {
         openLiveBrowserTaskView(node.dataset.automationPlanBrowserTask || "");
+      });
+    });
+    document.querySelectorAll("[data-automation-plan-view-run-details]").forEach((node) => {
+      node.addEventListener("click", () => {
+        openAutomationPlanRunDetails(node.dataset.automationPlanViewRunDetails || "");
       });
     });
     document.querySelectorAll("[data-automation-plan-cancel]").forEach((node) => {
@@ -12233,6 +12767,7 @@ function bindSimpleFlowInputs(moduleId) {
       renderSimpleFlowModule(moduleId);
     });
   });
+  bindMobileTweetStreamObservers();
 }
 
 function fillSimpleAccounts() {
@@ -15967,12 +16502,16 @@ function validateAutomationPlanDraft(draft, account) {
   if (items.length > 49) return "单个自动化计划最多包含 49 项任务。";
   const platform = String(account?.platform || "").trim().toLowerCase();
   const allowed = new Set(automationPlanTaskOptions(platform).map(([value]) => value));
+  const taskTypes = new Set();
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
     const taskType = String(item.taskType || "");
     const params = item.params || {};
     if (!taskType) return `请选择第 ${index + 1} 项要执行的任务。`;
     if (!allowed.has(taskType)) return `第 ${index + 1} 项任务不适用于当前执行账号。`;
+    const conflictKey = automationPlanConflictKey(taskType);
+    if (conflictKey && taskTypes.has(conflictKey)) return `同一账号不能重复添加${automationPlanTaskLabel(taskType)}。`;
+    if (conflictKey) taskTypes.add(conflictKey);
     if (Number(item.reservationMinutes) < 0 || Number(item.reservationMinutes) > 1440 || Number(item.reservationMinutes) % 30 !== 0) {
       return `第 ${index + 1} 项预约时间无效。`;
     }
@@ -16683,6 +17222,17 @@ async function createPersonaDraftPost() {
     ? `，并更新 ${queuedMediaOps.length} 项媒体操作`
     : (pendingMediaFiles.length ? `，并追加 ${pendingMediaFiles.length} 个媒体文件` : "");
   showMsg("commandMsg", editingPostId ? `${editingSource === "favorites" ? "收藏" : "草稿"}已更新：${result.title || result.id || "-"}${mediaSuffix}` : `草稿已保存：${result.title || result.id || "-"}${mediaSuffix}`, true);
+}
+
+async function stashPersonaDraftEdit() {
+  const persona = selectedPersona();
+  if (!persona) return;
+  snapshotPersonaCurrentForm();
+  const form = personaFormState(persona.id).draft;
+  if (!String(form.editingPostId || "").trim()) return;
+  form.stagedReferenceContent = String(form.content || "");
+  renderPersonaDetail();
+  showMsg("commandMsg", "\u5df2\u6682\u5b58\u4e3a\u914d\u56fe\u53c2\u8003\u6b63\u6587\uff1b\u4fee\u6539\u5c1a\u672a\u4fdd\u5b58\u3002", true);
 }
 
 async function fetchPersonaHotCandidates(refresh = false) {
@@ -17614,7 +18164,7 @@ async function watchPersonaMediaTask(personaId, postId, taskId) {
 async function submitPersonaMediaTask() {
   const persona = selectedPersona();
   const profile = selectedPersonaProfile();
-  const { post } = personaMediaTargetPost(persona);
+  const { source, post } = personaMediaTargetPost(persona);
   if (!persona || !profile || !post) {
     showMsg("commandMsg", "请先选中一条草稿。", false);
     return;
@@ -17640,7 +18190,7 @@ async function submitPersonaMediaTask() {
     showMsg("commandMsg", `当前任务至少需要 ${minImages} 张图片素材。`, false);
     return;
   }
-  const draftSourceText = String(post.content || "").trim();
+  const draftSourceText = personaDraftReferenceContent(persona, post, source).trim();
   normalizePersonaMediaGenerationForm(form);
   const generationContent = draftSourceText;
   const prompt = String(form.prompt || "").trim();
@@ -18281,17 +18831,15 @@ function syncPersonaMediaBulkSelectionState(editor) {
   });
   const toolbar = context.editor.querySelector(".persona-media-selection-toolbar");
   if (!toolbar) return;
+  toolbar.classList.toggle("is-all-selected", allSelected);
   const selectAll = toolbar.querySelector("[data-persona-media-select-all]");
   if (selectAll) {
     selectAll.innerHTML = allSelected ? renderClearSelectionIcon() : renderSelectAllIcon();
   }
   const count = toolbar.querySelector(".upload-selection-count");
   if (count) count.textContent = `已选 ${selected.size} / ${context.cards.length}`;
+  const actions = toolbar.querySelector(".persona-media-selection-actions") || toolbar;
   let deleteSelected = toolbar.querySelector("[data-persona-media-delete-selected]");
-  if (!selected.size) {
-    deleteSelected?.remove();
-    return;
-  }
   if (!deleteSelected) {
     deleteSelected = document.createElement("button");
     deleteSelected.type = "button";
@@ -18300,8 +18848,10 @@ function syncPersonaMediaBulkSelectionState(editor) {
     deleteSelected.title = "删除所选";
     deleteSelected.setAttribute("aria-label", "删除所选");
     deleteSelected.innerHTML = renderTrashIcon();
-    toolbar.appendChild(deleteSelected);
+    actions.appendChild(deleteSelected);
   }
+  deleteSelected.disabled = selected.size === 0;
+  deleteSelected.setAttribute("aria-disabled", selected.size ? "false" : "true");
 }
 
 function togglePersonaMediaBulkSelection(trigger, rawIndex) {
@@ -19160,6 +19710,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
     : String(mediaTaskOptions[0]?.[0] || "persona_post_image");
   mediaForm.taskType = currentTaskType;
   normalizePersonaMediaGenerationForm(mediaForm);
+  const referenceContent = personaDraftReferenceContent(persona, post, isFavoriteMedia ? "favorites" : "posts").trim();
   const mediaMeta = taskMeta[currentTaskType] || taskMeta.persona_post_image;
   const showAspectRatio = currentTaskType === "persona_post_image";
   const showVideoOptions = false;
@@ -19172,7 +19723,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
       <div class="persona-inline-panel persona-inline-panel--nested">
         <strong>当前${esc(sourceLabel)}正文</strong>
         ${renderPersonaHotOrigin(personaHotImportMeta(persona.id, post.id), { compact: true })}
-        <p>${esc(String(post.content || "").trim() || `当前${sourceLabel}没有正文。`)}</p>
+        <p>${esc(referenceContent || `当前${sourceLabel}没有正文。`)}</p>
       </div>
       <div class="persona-inline-panel persona-inline-panel--nested persona-media-operation-panel">
         ${isFavoriteMedia ? `<strong>收藏媒体</strong>` : renderPersonaMediaOperationTabs(operationMode)}
@@ -19337,14 +19888,14 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
       accept="image/*,video/*"
       data-persona-direct-media-input
     />
-    ${rows.length ? `<div class="upload-selection-toolbar persona-media-selection-toolbar">
+    ${rows.length ? `<div class="upload-selection-toolbar persona-media-selection-toolbar ${allSelected ? "is-all-selected" : ""}">
       <button type="button" class="upload-select-all bulk-selection-icon-button" data-persona-media-select-all title="${allSelected ? "取消全选" : "全选"}" aria-label="${allSelected ? "取消全选" : "全选"}">
         ${allSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}
       </button>
       <span class="upload-selection-count">已选 ${esc(selectedIndexes.size)} / ${esc(rows.length)}</span>
-      ${selectedIndexes.size ? `<button type="button" class="upload-delete-selected unified-action-icon-button" data-persona-media-delete-selected title="删除所选" aria-label="删除所选">
+      <button type="button" class="upload-delete-selected unified-action-icon-button" data-persona-media-delete-selected title="删除所选" aria-label="删除所选" ${selectedIndexes.size ? "" : "disabled"}>
         ${renderTrashIcon()}
-      </button>` : ""}
+      </button>
     </div>` : ""}
     <div
       class="persona-edit-media-grid"
@@ -20324,6 +20875,7 @@ function selectGeneratedPreviewPost(postId) {
 }
 
 function renderPersonaDetail() {
+  disconnectMobileTweetStreamObserver();
   const scrollSnapshot = snapshotConsoleScrollState();
   const layoutLocks = captureConsoleLayoutLocks();
   try {
@@ -20385,6 +20937,7 @@ function renderPersonaDetail() {
   state.renderedPersonaId = String(persona.id || "");
   bindPersonaAccountPlatformSwipe($("personaDetail"));
   bindPersonaDraftSaveLongPress($("personaDetail"));
+  bindMobileTweetStreamObservers();
   window.requestAnimationFrame(resizePersonaDraftEditContent);
   } finally {
     restoreConsoleScrollState(scrollSnapshot);
@@ -20505,6 +21058,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           <div class="row-actions">
             ${isEditingDraft ? `
               <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="使用 AI 重新生成当前推文" ${preflight.ready && !generateBusy ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent("正在重新生成", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : "AI 重新生成"}</button>
+              <button type="button" data-persona-stash-draft-edit>暂存草稿</button>
             ` : `
               <button type="button" class="primary" data-persona-create-post>保存草稿</button>
               <button type="button" data-persona-route-step="content:posts">查看草稿</button>
@@ -21006,18 +21560,34 @@ function normalizeAccountPoolPlatform(platform = state.accountPoolPlatform) {
 function selectAccountPoolPlatform(platform = "") {
   const next = normalizeAccountPoolPlatform(platform);
   if (next === normalizeAccountPoolPlatform()) return;
+  stageAccountPoolPlatformSelection(next);
+  renderSocialAccounts();
+  pulseAccountPoolPlatformCards();
+}
+
+function syncAccountPoolPlatformTabs(platform = state.accountPoolPlatform) {
+  const active = normalizeAccountPoolPlatform(platform);
+  document.querySelectorAll("[data-account-pool-platform-tabs] [data-account-pool-platform]").forEach((button) => {
+    const isActive = normalizeAccountPoolPlatform(button.dataset.accountPoolPlatform || "") === active;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+}
+
+function stageAccountPoolPlatformSelection(platform = "") {
+  const next = normalizeAccountPoolPlatform(platform);
   state.accountPoolPlatform = next;
   state.accountPoolAccountId = "";
   state.accountPoolSelectedAccountIds = [];
   resetAccountPoolCreateForm();
-  renderSocialAccounts();
-  pulseAccountPoolPlatformCards();
+  syncAccountPoolPlatformTabs(next);
 }
 
 let accountPoolPlatformTransitionPromise = null;
 let accountPoolActivePlatformMotion = null;
 let accountPoolPlatformSwipeSuppressClickUntil = 0;
 let accountPoolPlatformPulseTimer = 0;
+let accountPoolPlatformQueuedTarget = "";
 
 function pulseAccountPoolPlatformCards() {
   if (!window.matchMedia?.("(max-width: 760.98px)")?.matches) return;
@@ -21134,6 +21704,7 @@ async function settleAccountPoolPlatformMotion(motion, commit = false) {
   if (!motion || motion.discarded) return;
   const { contentWindow, currentContent, incomingContent, direction, width, next } = motion;
   const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  if (commit) stageAccountPoolPlatformSelection(next);
   contentWindow.classList.add("is-account-platform-settling");
   const destination = commit ? -direction * width : 0;
   if (!reduceMotion) {
@@ -21144,7 +21715,10 @@ async function settleAccountPoolPlatformMotion(motion, commit = false) {
   }
   if (motion.discarded) return;
   clearAccountPoolPlatformMotion(motion);
-  if (commit) selectAccountPoolPlatform(next);
+  if (commit) {
+    renderSocialAccounts();
+    pulseAccountPoolPlatformCards();
+  }
 }
 
 async function transitionAccountPoolPlatform(platform = "", direction = 0) {
@@ -21152,6 +21726,7 @@ async function transitionAccountPoolPlatform(platform = "", direction = 0) {
   const next = normalizeAccountPoolPlatform(platform);
   if (next === current) return;
   if (accountPoolPlatformTransitionPromise || accountPoolActivePlatformMotion) {
+    accountPoolPlatformQueuedTarget = next;
     return accountPoolPlatformTransitionPromise;
   }
 
@@ -21173,6 +21748,13 @@ async function transitionAccountPoolPlatform(platform = "", direction = 0) {
   } finally {
     if (accountPoolPlatformTransitionPromise === transition) {
       accountPoolPlatformTransitionPromise = null;
+    }
+    const queuedTarget = accountPoolPlatformQueuedTarget;
+    accountPoolPlatformQueuedTarget = "";
+    if (queuedTarget && queuedTarget !== normalizeAccountPoolPlatform()) {
+      const queuedIndex = accountPoolPlatforms.findIndex(([value]) => value === queuedTarget);
+      const activeIndex = accountPoolPlatforms.findIndex(([value]) => value === normalizeAccountPoolPlatform());
+      await transitionAccountPoolPlatform(queuedTarget, queuedIndex >= activeIndex ? 1 : -1);
     }
   }
 }
@@ -21398,6 +21980,11 @@ function renderAccountPoolCardActions(account, { context = "pool" } = {}) {
 function renderAccountPoolCard(account, { variant = "pool", active = false, checked = false, persona = null } = {}) {
   const accountId = String(account?.id || "");
   const isPersonaSettings = variant === "persona-settings";
+  const platform = normalizeAccountPoolPlatform(account?.platform || "threads");
+  const platformCopy = [
+    platformLabel(platform),
+    account?.display_name && account.display_name !== account.username ? account.display_name : "",
+  ].filter(Boolean).join(" · ");
   const boundPersona = persona || (account?.persona_id
     ? state.personas.find((item) => String(item?.id || "") === String(account.persona_id || ""))
     : null);
@@ -21412,8 +21999,14 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
     ${selectionControl}
     <div class="account-pool-card-main">
       <span class="account-pool-card-copy">
-        <strong title="${esc(account.username || accountId)}">${esc(account.username || accountId)}</strong>
-        <small>${esc(account.display_name && account.display_name !== account.username ? account.display_name : platformLabel(account.platform || "threads"))}</small>
+        <span class="account-pool-card-title-line">
+          <strong title="${esc(account.username || accountId)}">${esc(account.username || accountId)}</strong>
+          ${isPersonaSettings ? "" : `<button type="button" class="account-pool-card-copy-button" data-account-pool-copy-card="${esc(accountId)}" title="复制账号字段" aria-label="复制账号字段">${renderClipboardIcon()}</button>`}
+        </span>
+        <small class="account-pool-card-platform">
+          ${renderAccountPoolPlatformIcon(platform)}
+          <span>${esc(platformCopy)}</span>
+        </small>
       </span>
       <span class="account-pool-card-flags">
         <span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${esc(accountLastLoginCheckLabel(account))}</span>
@@ -21439,7 +22032,7 @@ function renderAccountPoolCards(accounts, selectedAccount, selectedAccountIds = 
   </button>`;
   const editToolbar = `<div class="account-pool-edit-toolbar" role="toolbar" aria-label="账号编辑操作">
     <span class="account-pool-selection-count">${esc(selectedCount ? `已选 ${selectedCount} 个` : "未选择")}</span>
-    <button type="button" data-account-pool-copy-selected title="复制账号" aria-label="复制账号" ${selectedCount ? "" : "disabled"}><span aria-hidden="true"></span></button>
+    <button type="button" data-account-pool-copy-selected title="复制账号卡" aria-label="复制账号卡" ${selectedCount ? "" : "disabled"}><span aria-hidden="true"></span></button>
     <button type="button" class="bulk-selection-icon-button" data-account-pool-select-all title="全选账号" aria-label="全选账号" ${accounts.length ? "" : "disabled"}>${renderSelectAllIcon()}</button>
     <button type="button" class="bulk-selection-icon-button" data-account-pool-clear-selected title="取消选择" aria-label="取消选择" ${selectedCount ? "" : "disabled"}>${renderClearSelectionIcon()}</button>
     <button type="button" class="danger unified-action-icon-button" data-account-pool-delete-selected title="删除账号" aria-label="删除账号" ${selectedCount ? "" : "disabled"}>${renderTrashIcon()}</button>
@@ -21677,6 +22270,7 @@ async function testProxyForm(prefix = "", proxy = null) {
 
 function syncAccountPoolCreateDraftFromForm() {
   state.accountPoolCreateDraft = {
+    ...(state.accountPoolCreateDraft || {}),
     username: String($("accountPoolUsername")?.value || "").trim(),
     login_password: String($("accountPoolLoginPassword")?.value || ""),
     totp_secret_or_uri: String($("accountPoolTotpSecret")?.value || "").trim(),
@@ -21692,6 +22286,7 @@ function renderAccountIdentityFields(account = null, mode = "create") {
   const editing = mode === "edit";
   const prefix = editing ? "accountPoolEdit" : "accountPool";
   const username = editing ? String(account?.username || "") : accountPoolDraftValue("username");
+  const transferredPassword = !editing && Boolean(state.accountPoolCreateDraft?.transfer_login_password_configured);
   return `<div class="account-create-form account-create-form--modal">
     <label>
       <span>账号用户名</span>
@@ -21701,14 +22296,21 @@ function renderAccountIdentityFields(account = null, mode = "create") {
       scope: editing ? "pool-edit" : "pool-create",
       inputId: editing ? "accountPoolEditLoginPassword" : "accountPoolLoginPassword",
     })}
+    ${transferredPassword ? `<p class="account-card-transfer-field-note">登录密码已从账号卡安全识别，留空即可沿用。</p>` : ""}
   </div>`;
 }
 
 function renderAccountEditorForm(account = null, mode = "create") {
   const editing = mode === "edit";
   const platform = account?.platform || normalizeAccountPoolPlatform();
+  const transferSource = String(state.accountPoolCreateDraft?.transfer_source_platform || "");
   return `<div class="account-pool-create-modal-body">
-    <p>平台：${esc(platformLabel(platform))}</p>
+    <div class="account-pool-editor-platform">
+      <span>平台：</span>
+      ${renderAccountPoolPlatformIcon(platform)}
+      <strong>${esc(platformLabel(platform))}</strong>
+      <small data-account-card-paste-summary ${transferSource ? "" : "hidden"}>${transferSource ? esc(`已识别 ${platformLabel(transferSource)} 账号卡，将创建为 ${platformLabel(platform)}`) : ""}</small>
+    </div>
     ${renderAccountIdentityFields(account, mode)}
     ${renderAccountTotpSection(account, mode)}
     ${renderAccountProxyPickerPanel(account)}
@@ -21735,10 +22337,23 @@ async function saveAccountPoolCreateForm(options) {
     showMsg("socialMsg", "请填写账号用户名。", false);
     return false;
   }
-  const result = await api("/api/persona_dashboard/automation/accounts", {
+  const transferToken = String(state.accountPoolCreateDraft?.transfer_token || "").trim();
+  const endpoint = transferToken
+    ? "/api/persona_dashboard/automation/accounts/card-transfer/import"
+    : "/api/persona_dashboard/automation/accounts";
+  const requestPayload = transferToken
+    ? {
+      token: transferToken,
+      target_platform: platform,
+      username: payload.username,
+      login_password: payload.login_password || null,
+      totp_secret_or_uri: payload.totp_secret_or_uri || null,
+    }
+    : payload;
+  const result = await api(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(requestPayload),
   });
   const account = result?.account || {};
   state.accountPoolPlatform = normalizeAccountPoolPlatform(account.platform || payload.platform);
@@ -21747,9 +22362,9 @@ async function saveAccountPoolCreateForm(options) {
   state.preferredAccountId = String(account.id || "");
   resetAccountPoolCreateForm();
   await loadSocial();
-  showMsg("socialMsg", payload.persona_id
-    ? "账号已保存，并已绑定当前人设。"
-    : "账号已保存。", true);
+  showMsg("socialMsg", transferToken
+    ? "账号、密码和 2FA 已复制；人设、代理和登录状态未复制。"
+    : (payload.persona_id ? "账号已保存，并已绑定当前人设。" : "账号已保存。"), true);
   return true;
 }
 
@@ -21758,32 +22373,151 @@ function accountPoolSelectedAccountsForAction() {
   return accountPoolAccounts().filter((account) => selectedIds.has(String(account.id || "")));
 }
 
-async function copyAccountPoolSelectedAccounts() {
+function applyAccountCardClipboardToCreateForm(modal, card) {
+  if (!modal) return false;
+  card = card || {};
+  const editing = modal.dataset.accountEditorMode === "edit";
+  const prefix = editing ? "accountPoolEdit" : "accountPool";
+  const targetPlatform = normalizeAccountPoolPlatform();
+  const sourcePlatform = String(card.source_platform || card.platform || "").trim().toLowerCase();
+  const fields = {
+    username: String(card.username || "").trim().replace(/^@+/, ""),
+    login_password: String(card.login_password || ""),
+  };
+  modal.dataset.accountTransferToken = String(card.transfer_token || "").trim();
+  if (!editing) {
+    state.accountPoolCreateDraft = {
+      ...(state.accountPoolCreateDraft || {}),
+      ...fields,
+      transfer_token: String(card.transfer_token || "").trim(),
+      transfer_source_platform: sourcePlatform,
+      transfer_login_password_configured: Boolean(card.login_password_configured || card.login_password),
+      transfer_totp_configured: Boolean(card.totp_configured),
+    };
+  }
+  const username = $(`${prefix}Username`);
+  const password = $(`${prefix}LoginPassword`);
+  if (username) username.value = fields.username;
+  if (password) {
+    password.value = fields.login_password;
+    if (editing) password.dataset.passwordDirty = card.transfer_token ? "false" : "true";
+    if (Boolean(card.login_password_configured) && !password.value) {
+      password.placeholder = "已安全识别，留空即可沿用";
+    }
+  }
+  const totpState = modal.querySelector("[data-account-totp-state]");
+  if (totpState) {
+    totpState.textContent = card.totp_configured
+      ? "2FA 已识别，保存时覆盖"
+      : "2FA 未配置，保存时移除";
+    totpState.dataset.totpStatus = card.totp_configured ? "pending" : "not_configured";
+  }
+  const totpInput = $("accountPoolTotpSecret");
+  if (totpInput && card.totp_configured && !totpInput.value) {
+    totpInput.placeholder = "已安全识别，保存时自动复制";
+  }
+  const summary = modal.querySelector("[data-account-card-paste-summary]");
+  if (summary) {
+    summary.hidden = false;
+    summary.textContent = sourcePlatform
+      ? `已识别 ${platformLabel(sourcePlatform)} 的账号、密码和 2FA，${editing ? "保存时覆盖" : `将创建为 ${platformLabel(targetPlatform)}`}`
+      : `已识别账号、密码和 2FA，${editing ? "保存时覆盖" : `将创建为 ${platformLabel(targetPlatform)}`}`;
+  }
+  return true;
+}
+
+async function copyAccountPoolCardToClipboard(accountId = "") {
+  const cleanId = String(accountId || "").trim();
+  if (!cleanId) throw new Error("账号不存在");
+  const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}/card-transfer`, {
+    method: "POST",
+  });
+  state.accountCardTransferToken = String(result?.token || "").trim();
+  await copyTextToClipboard(state.accountCardTransferToken);
+  showMsg("socialMsg", "账号、密码和 2FA 已复制。", true);
+}
+
+async function pasteAccountPoolCardFromClipboard(modal) {
+  let text = String(state.accountCardTransferToken || "").trim();
+  if (!text && navigator.clipboard?.readText) {
+    try {
+      text = await navigator.clipboard.readText();
+    } catch (_) {
+      text = window.prompt("浏览器未允许直接读取剪贴板，请在这里粘贴账号卡内容") || "";
+    }
+  } else if (!text) {
+    text = window.prompt("请粘贴账号卡内容") || "";
+  }
+  if (!text.startsWith("VECTO_ACCOUNT_CARD_V1.")) {
+    throw new Error("剪贴板中没有可识别的账号复制内容");
+  }
+  const result = await api("/api/persona_dashboard/automation/accounts/card-transfer/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: text }),
+  });
+  applyAccountCardClipboardToCreateForm(modal, {
+    ...(result?.card || {}),
+    transfer_token: text,
+  });
+  showMsg("socialMsg", "账号、密码和 2FA 已识别，请确认后保存。", true);
+}
+
+async function duplicateAccountPoolSelectedAccounts(targetPlatform = "") {
+  const rows = accountPoolSelectedAccountsForAction();
+  if (!rows.length) throw new Error("请先勾选账号");
+  const target = normalizeAccountPoolPlatform(targetPlatform);
+  const source = normalizeAccountPoolPlatform(rows[0]?.platform || "");
+  if (target === source) throw new Error("请选择其他平台复制账号卡");
+  const copied = [];
+  const failures = [];
+  for (const account of rows) {
+    try {
+      const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(account.id || "")}/duplicate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_platform: target }),
+      });
+      if (result?.account?.id) copied.push(String(result.account.id));
+    } catch (error) {
+      failures.push(`${accountDisplayName(account)}：${error.detail || error.message || "复制失败"}`);
+    }
+  }
+  if (!copied.length) throw new Error(failures[0] || "账号卡复制失败");
+  await loadSocial({ force: true });
+  state.accountPoolPlatform = target;
+  state.accountPoolSelectedAccountIds = copied;
+  state.accountPoolAccountId = copied[0] || "";
+  renderSocialAccounts();
+  showMsg("socialMsg", failures.length
+    ? `已复制 ${copied.length} 个账号卡，${failures.length} 个未复制：${failures.join("；")}`
+    : `已复制 ${copied.length} 个账号卡到 ${platformLabel(target)}。`, !failures.length);
+}
+
+async function openAccountPoolDuplicateModal() {
   const rows = accountPoolSelectedAccountsForAction();
   if (!rows.length) {
     showMsg("socialMsg", "请先勾选账号。", false);
     return;
   }
-  const text = rows.map((account) => [
-    `平台：${account.platform || ""}`,
-    `账号：${account.username || ""}`,
-    `显示名：${account.display_name || ""}`,
-    `状态：${statusLabel(account.status)}`,
-    `ID：${account.id || ""}`,
-  ].join("\n")).join("\n\n");
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch (_) {
-    const input = document.createElement("textarea");
-    input.value = text;
-    input.style.position = "fixed";
-    input.style.left = "-9999px";
-    document.body.appendChild(input);
-    input.select();
-    document.execCommand("copy");
-    input.remove();
+  const source = normalizeAccountPoolPlatform(rows[0]?.platform || "");
+  const target = accountPoolPlatforms.find(([platform]) => platform !== source)?.[0] || "";
+  if (!target) {
+    showMsg("socialMsg", "当前没有可复制到的其他平台。", false);
+    return;
   }
-  showMsg("socialMsg", `已复制 ${rows.length} 个账号信息。`, true);
+  const confirmed = await openConsoleModal({
+    title: "复制账号卡",
+    message: `将 ${rows.length} 个 ${platformLabel(source)} 账号复制到 ${platformLabel(target)}。只复制账号用户名、登录密码和 2FA；不会复制人设、代理、登录状态或浏览器会话。`,
+    contentHtml: `<div class="account-card-duplicate-route">
+      <span>${renderAccountPoolPlatformIcon(source)}<strong>${esc(platformLabel(source))}</strong></span>
+      <i class="ui-arrow-icon ui-arrow-icon--right" aria-hidden="true"></i>
+      <span>${renderAccountPoolPlatformIcon(target)}<strong>${esc(platformLabel(target))}</strong></span>
+    </div>`,
+    confirmText: "复制账号卡",
+    modalKey: "account-card-duplicate",
+  });
+  if (confirmed) await duplicateAccountPoolSelectedAccounts(target);
 }
 
 function selectAllAccountPoolAccounts() {
@@ -22207,19 +22941,20 @@ function renderAccountProxyPickerPanel(account = null) {
 
 function renderAccountTotpSection(account = null, mode = "edit") {
   const creating = mode === "create";
+  const transferredTotp = creating && Boolean(state.accountPoolCreateDraft?.transfer_totp_configured);
   return `<section class="account-totp-section" data-account-totp-section>
     <div class="account-totp-head">
       <div>
         <strong>两步验证 (2FA)</strong>
         <span>支持 Base32 密钥或 otpauth URI</span>
       </div>
-      <span class="account-totp-state" data-account-totp-state>${creating ? "2FA 未配置" : ""}</span>
+      <span class="account-totp-state" data-account-totp-state ${transferredTotp ? 'data-totp-status="pending"' : ""}>${creating ? (transferredTotp ? "2FA 已识别" : "2FA 未配置") : ""}</span>
     </div>
     <div class="account-totp-body" data-account-totp-body>
       ${creating ? `<div class="account-totp-entry">
         <label for="accountPoolTotpSecret">
           <span>2FA 密钥</span>
-          <input id="accountPoolTotpSecret" value="${esc(accountPoolDraftValue("totp_secret_or_uri"))}" placeholder="输入 Base32 或 otpauth://..." autocomplete="off" autocapitalize="off" spellcheck="false" />
+          <input id="accountPoolTotpSecret" value="${esc(accountPoolDraftValue("totp_secret_or_uri"))}" placeholder="${transferredTotp ? "已安全识别，保存时自动复制" : "输入 Base32 或 otpauth://..."}" autocomplete="off" autocapitalize="off" spellcheck="false" />
         </label>
         <div class="account-totp-entry-actions">
           <button type="button" class="primary account-inline-action" data-account-totp-create-stage>${renderPlusIcon()}<span>添加 2FA</span></button>
@@ -22619,12 +23354,17 @@ function openAccountPoolEditorModal(options) {
   modal.dataset.selectedProxyId = selectedProxyId;
   modal.dataset.originalProxyId = selectedProxyId;
   modal.dataset.accountProxyDirty = "false";
+  modal.dataset.accountEditorMode = mode;
+  modal.dataset.accountEditorId = accountId;
   modal.innerHTML = `
     <div class="console-modal-backdrop" data-account-pool-editor-cancel></div>
     <section class="console-modal-dialog account-pool-create-modal" role="dialog" aria-modal="true" aria-labelledby="accountPoolEditorModalTitle">
       <div class="console-modal-head">
         <strong id="accountPoolEditorModalTitle">${editing ? "编辑账号" : "添加账号"}</strong>
-        ${renderModalCloseButton("data-account-pool-editor-cancel")}
+        <div class="account-pool-create-modal-head-actions">
+          <button type="button" class="account-pool-paste-card-button" data-account-pool-paste-card title="${editing ? "粘贴并覆盖账号、密码和 2FA" : "粘贴账号、密码和 2FA"}" aria-label="${editing ? "粘贴并覆盖账号、密码和 2FA" : "粘贴账号、密码和 2FA"}">${renderPasteIcon()}</button>
+          ${renderModalCloseButton("data-account-pool-editor-cancel")}
+        </div>
       </div>
       <div class="console-modal-content">
         ${renderAccountEditorForm(account, mode)}
@@ -22652,6 +23392,16 @@ function openAccountPoolEditorModal(options) {
     return true;
   };
   modal.addEventListener("click", (event) => {
+    const pasteCard = event.target.closest("[data-account-pool-paste-card]");
+    if (pasteCard) {
+      pasteCard.disabled = true;
+      pasteAccountPoolCardFromClipboard(modal)
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "粘贴账号字段失败", false))
+        .finally(() => {
+          if (pasteCard.isConnected) pasteCard.disabled = false;
+        });
+      return;
+    }
     const totpCreateStage = event.target.closest("[data-account-totp-create-stage]");
     if (totpCreateStage) {
       syncAccountPoolCreateDraftFromForm();
@@ -22823,23 +23573,51 @@ async function saveAccountPoolEditForm(accountId = "") {
   }
   const payload = {
     username,
+    login_username: username,
   };
   const loginPasswordInput = $("accountPoolEditLoginPassword");
-  const loginPassword = loginPasswordInput?.dataset.passwordDirty === "true" ? String(loginPasswordInput.value || "") : "";
-  if (loginPassword) payload.login_password = loginPassword;
+  if (loginPasswordInput?.dataset.passwordDirty === "true") {
+    payload.login_password = String(loginPasswordInput.value || "");
+  }
   const editModal = $("consoleModal");
+  const transferToken = String(editModal?.dataset.accountTransferToken || "").trim();
   const selectedProxyId = String(editModal?.dataset.selectedProxyId || "").trim();
   const originalProxyId = String(editModal?.dataset.originalProxyId || account?.proxy_id || "").trim();
-  if (accountProxyBindingChanged(originalProxyId, selectedProxyId)) {
+  const proxyChanged = accountProxyBindingChanged(originalProxyId, selectedProxyId);
+  if (!transferToken && proxyChanged) {
     payload.expected_proxy_id = originalProxyId;
     if (selectedProxyId) payload.proxy_id = selectedProxyId;
     else payload.clear_residential_proxy = true;
   }
-  const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  let result = transferToken
+    ? await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}/card-transfer/apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: transferToken,
+        username: payload.username,
+        login_password: Object.prototype.hasOwnProperty.call(payload, "login_password")
+          ? payload.login_password
+          : null,
+      }),
+    })
+    : await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  if (transferToken && proxyChanged) {
+    const proxyPayload = {
+      expected_proxy_id: originalProxyId,
+    };
+    if (selectedProxyId) proxyPayload.proxy_id = selectedProxyId;
+    else proxyPayload.clear_residential_proxy = true;
+    result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(proxyPayload),
+    });
+  }
   state.accountPoolAccountId = String(result.account?.id || cleanId);
   await loadSocial({ force: true });
   renderSocialAccounts();
@@ -23612,7 +24390,7 @@ function renderLiveBrowserSessions() {
       <div class="live-browser-grid"></div>
     </section>
     <div class="live-browser-stop-all-dock" aria-label="浏览器任务操作">
-      <button type="button" class="danger live-browser-stop-all--bottom" data-social-cancel-all disabled>停止全部任务</button>
+      <button type="button" class="primary live-browser-stop-all--bottom" data-social-cancel-all disabled>停止全部任务</button>
     </div>
   `;
     panel = host.querySelector(".live-browser-panel");
@@ -25770,6 +26548,10 @@ function bindEvents() {
       generatePersonaDraftPosts().catch(() => {});
       return;
     }
+    if (event.target.closest("[data-persona-stash-draft-edit]")) {
+      stashPersonaDraftEdit().catch((error) => showMsg("commandMsg", error.detail || error.message || "暂存草稿失败", false));
+      return;
+    }
     const generatedViewButton = event.target.closest("[data-persona-generated-view]");
     if (generatedViewButton) {
       viewPersonaGeneratedPost(generatedViewButton.dataset.personaGeneratedView || "").catch(() => {});
@@ -27266,7 +28048,13 @@ function bindEvents() {
     }
     const accountCopySelected = event.target.closest("[data-account-pool-copy-selected]");
     if (accountCopySelected) {
-      copyAccountPoolSelectedAccounts().catch((error) => showMsg("socialMsg", error.detail || error.message || "复制账号失败", false));
+      openAccountPoolDuplicateModal().catch((error) => showMsg("socialMsg", error.detail || error.message || "复制账号卡失败", false));
+      return;
+    }
+    const accountCopyCard = event.target.closest("[data-account-pool-copy-card]");
+    if (accountCopyCard) {
+      copyAccountPoolCardToClipboard(accountCopyCard.dataset.accountPoolCopyCard || "")
+        .catch((error) => showMsg("socialMsg", error.detail || error.message || "复制账号字段失败", false));
       return;
     }
     const accountSelectAll = event.target.closest("[data-account-pool-select-all]");
@@ -27328,7 +28116,7 @@ function bindEvents() {
       return;
     }
     const accountCard = event.target.closest("[data-account-pool-account]");
-    const accountAction = event.target.closest("[data-social-open-login], [data-account-proxy-picker], [data-account-pool-edit], [data-account-pool-unbind], [data-social-delete-account], .account-pool-card-check");
+    const accountAction = event.target.closest("[data-social-open-login], [data-account-pool-copy-card], [data-account-proxy-picker], [data-account-pool-edit], [data-account-pool-unbind], [data-social-delete-account], .account-pool-card-check");
     if (accountCard && !accountAction) {
       selectAccountPoolAccount(accountCard.dataset.accountPoolAccount || "");
       renderSocialAccounts();

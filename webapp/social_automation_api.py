@@ -242,6 +242,15 @@ class StrictProxyModel(BaseModel):
         extra = "forbid"
 
 
+SOCIAL_ACCOUNT_CARD_TRANSFER_PREFIX = "VECTO_ACCOUNT_CARD_V1"
+SOCIAL_ACCOUNT_CARD_TRANSFER_TTL_SECONDS = 30 * 60
+SOCIAL_ACCOUNT_CARD_TRANSFER_TOKEN_MAX_LENGTH = 65536
+SOCIAL_ACCOUNT_USERNAME_MAX_LENGTH = 320
+SOCIAL_ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 512
+SOCIAL_ACCOUNT_LOGIN_USERNAME_MAX_LENGTH = 512
+SOCIAL_ACCOUNT_LOGIN_PASSWORD_MAX_LENGTH = 4096
+
+
 class SocialProxyPayload(StrictProxyModel):
     name: str = ""
     proxy_type: str = "http"
@@ -315,13 +324,13 @@ class SocialProxyCheckPayload(StrictProxyModel):
 class SocialAccountPayload(BaseModel):
     persona_id: str = ""
     platform: str = "instagram"
-    username: str = ""
-    display_name: str = ""
+    username: str = Field(default="", max_length=SOCIAL_ACCOUNT_USERNAME_MAX_LENGTH)
+    display_name: str = Field(default="", max_length=SOCIAL_ACCOUNT_DISPLAY_NAME_MAX_LENGTH)
     profile_dir: str = ""
     proxy_id: str = ""
     status: str = "pending_login"
-    login_username: str = ""
-    login_password: str = ""
+    login_username: str = Field(default="", max_length=SOCIAL_ACCOUNT_LOGIN_USERNAME_MAX_LENGTH)
+    login_password: str = Field(default="", max_length=SOCIAL_ACCOUNT_LOGIN_PASSWORD_MAX_LENGTH)
     totp_secret_or_uri: str = Field(default="", max_length=2048)
     residential_proxy: ResidentialProxyPayload | None = None
 
@@ -361,17 +370,38 @@ class SocialAccountPatchPayload(BaseModel):
     persona_id: str | None = None
     replace_existing_binding: bool = False
     require_unbound: bool = False
-    username: str | None = None
-    display_name: str | None = None
+    username: str | None = Field(default=None, max_length=SOCIAL_ACCOUNT_USERNAME_MAX_LENGTH)
+    display_name: str | None = Field(default=None, max_length=SOCIAL_ACCOUNT_DISPLAY_NAME_MAX_LENGTH)
     profile_dir: str | None = None
     proxy_id: str | None = None
     expected_proxy_id: str | None = None
     status: str | None = None
-    login_username: str | None = None
-    login_password: str | None = None
+    login_username: str | None = Field(default=None, max_length=SOCIAL_ACCOUNT_LOGIN_USERNAME_MAX_LENGTH)
+    login_password: str | None = Field(default=None, max_length=SOCIAL_ACCOUNT_LOGIN_PASSWORD_MAX_LENGTH)
     clear_login_credentials: bool | None = None
     clear_residential_proxy: bool | None = None
     residential_proxy: ResidentialProxyPayload | None = None
+
+
+class SocialAccountDuplicatePayload(StrictProxyModel):
+    target_platform: str = Field(max_length=32)
+
+
+class SocialAccountCardTransferTokenPayload(StrictProxyModel):
+    token: str = Field(min_length=1, max_length=SOCIAL_ACCOUNT_CARD_TRANSFER_TOKEN_MAX_LENGTH)
+
+
+class SocialAccountCardImportPayload(SocialAccountCardTransferTokenPayload):
+    target_platform: str = Field(max_length=32)
+    username: str | None = Field(default=None, max_length=SOCIAL_ACCOUNT_USERNAME_MAX_LENGTH)
+    login_password: str | None = Field(default=None, max_length=SOCIAL_ACCOUNT_LOGIN_PASSWORD_MAX_LENGTH)
+    totp_secret_or_uri: str | None = Field(default=None, max_length=2048)
+
+
+class SocialAccountCardApplyPayload(SocialAccountCardTransferTokenPayload):
+    username: str | None = Field(default=None, max_length=SOCIAL_ACCOUNT_USERNAME_MAX_LENGTH)
+    login_password: str | None = Field(default=None, max_length=SOCIAL_ACCOUNT_LOGIN_PASSWORD_MAX_LENGTH)
+    totp_secret_or_uri: str | None = Field(default=None, max_length=2048)
 
 
 class SocialAccountTotpPayload(BaseModel):
@@ -506,6 +536,339 @@ def _decrypt_social_account_totp_secret(row: Any) -> str:
         return decrypt_vault_secret(user_id, _social_account_totp_purpose(account_id), ciphertext)
     except PasswordVaultError as exc:
         raise RuntimeError("账号 2FA 密钥暂时不可用") from exc
+
+
+def _social_account_card_transfer_purpose(nonce: str) -> str:
+    clean_nonce = str(nonce or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{32}", clean_nonce):
+        raise HTTPException(status_code=400, detail="账号卡复制内容格式不正确")
+    return f"social-account-card-transfer:{clean_nonce}"
+
+
+def _social_account_card_transfer_fields(
+    account: Any,
+    *,
+    totp_secret_or_uri: str = "",
+) -> dict[str, str]:
+    item = dict(account)
+    fields = {
+        "username": str(item.get("username") or "").strip(),
+        "login_password": str(item.get("login_password") or ""),
+        "totp_secret_or_uri": str(totp_secret_or_uri or "").strip(),
+    }
+    limits = {
+        "username": SOCIAL_ACCOUNT_USERNAME_MAX_LENGTH,
+        "login_password": SOCIAL_ACCOUNT_LOGIN_PASSWORD_MAX_LENGTH,
+        "totp_secret_or_uri": 2048,
+    }
+    for name, limit in limits.items():
+        if len(fields[name]) > limit:
+            raise HTTPException(
+                status_code=422,
+                detail=f"账号字段 {name} 超过复制长度限制，请先缩短后重试",
+            )
+    return fields
+
+
+def _create_social_account_card_transfer(account_id: str, user_id: int) -> tuple[str, dict[str, Any]]:
+    clean_id = str(account_id or "").strip()
+    with db() as conn:
+        account = conn.execute(
+            "SELECT * FROM social_accounts WHERE id = ? AND user_id = ?",
+            (clean_id, int(user_id)),
+        ).fetchone()
+        if not account:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        totp_row = _social_account_totp_row(conn, clean_id)
+    totp_secret = ""
+    if totp_row is not None:
+        try:
+            totp_secret = _decrypt_social_account_totp_secret(totp_row)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+    now = int(time.time())
+    expires_at = now + SOCIAL_ACCOUNT_CARD_TRANSFER_TTL_SECONDS
+    payload = {
+        "schema": "vecto.account-card",
+        "version": 1,
+        "owner_user_id": int(user_id),
+        "source_account_id": clean_id,
+        "source_platform": str(account["platform"] or "").strip(),
+        "fields": _social_account_card_transfer_fields(
+            account,
+            totp_secret_or_uri=totp_secret,
+        ),
+        "created_at": now,
+        "expires_at": expires_at,
+    }
+    nonce = uuid.uuid4().hex
+    try:
+        encrypted = encrypt_vault_secret(
+            int(user_id),
+            _social_account_card_transfer_purpose(nonce),
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        )
+    except PasswordVaultError as exc:
+        raise HTTPException(status_code=503, detail="密码保险库不可用，暂时无法复制账号卡") from exc
+    token = f"{SOCIAL_ACCOUNT_CARD_TRANSFER_PREFIX}.{nonce}.{encrypted}"
+    if len(token) > SOCIAL_ACCOUNT_CARD_TRANSFER_TOKEN_MAX_LENGTH:
+        raise HTTPException(status_code=422, detail="账号卡复制内容过长，请缩短账号字段后重试")
+    return token, payload
+
+
+def _decode_social_account_card_transfer(token: str, user_id: int) -> dict[str, Any]:
+    value = str(token or "").strip()
+    parts = value.split(".", 2)
+    if len(parts) != 3 or parts[0] != SOCIAL_ACCOUNT_CARD_TRANSFER_PREFIX:
+        raise HTTPException(status_code=400, detail="无法识别账号卡复制内容")
+    nonce, encrypted = parts[1], parts[2]
+    try:
+        raw = decrypt_vault_secret(
+            int(user_id),
+            _social_account_card_transfer_purpose(nonce),
+            encrypted,
+        )
+        payload = json.loads(raw)
+    except (PasswordVaultError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="账号卡复制内容无效或不属于当前用户") from exc
+    if not isinstance(payload, dict) or payload.get("schema") != "vecto.account-card" or int(payload.get("version") or 0) != 1:
+        raise HTTPException(status_code=400, detail="账号卡复制内容版本不受支持")
+    if int(payload.get("owner_user_id") or -1) != int(user_id):
+        raise HTTPException(status_code=403, detail="账号卡复制内容不属于当前用户")
+    if int(payload.get("expires_at") or 0) < int(time.time()):
+        raise HTTPException(status_code=410, detail="账号卡复制内容已过期，请重新复制")
+    fields = payload.get("fields")
+    if not isinstance(fields, dict):
+        raise HTTPException(status_code=400, detail="账号卡复制内容缺少通用账号字段")
+    allowed_fields = {"username", "login_password", "totp_secret_or_uri"}
+    if set(fields) - allowed_fields:
+        raise HTTPException(status_code=400, detail="账号卡复制内容包含不支持的字段")
+    payload["fields"] = _social_account_card_transfer_fields(
+        {
+            "username": fields.get("username"),
+            "login_password": fields.get("login_password"),
+        },
+        totp_secret_or_uri=str(fields.get("totp_secret_or_uri") or ""),
+    )
+    return payload
+
+
+def _social_account_card_transfer_preview(payload: dict[str, Any]) -> dict[str, Any]:
+    fields = dict(payload.get("fields") or {})
+    return {
+        "schema": "vecto.account-card",
+        "version": 1,
+        "source_platform": str(payload.get("source_platform") or ""),
+        "username": str(fields.get("username") or ""),
+        "login_password_configured": bool(str(fields.get("login_password") or "")),
+        "totp_configured": bool(str(fields.get("totp_secret_or_uri") or "")),
+        "expires_at": int(payload.get("expires_at") or 0),
+    }
+
+
+def _social_account_payload_from_transfer(
+    fields: dict[str, Any],
+    *,
+    target_platform: str,
+    username: str | None = None,
+    login_password: str | None = None,
+    totp_secret_or_uri: str | None = None,
+) -> SocialAccountPayload:
+    source_username = str(fields.get("username") or "").strip()
+    clean_username = str(source_username if username is None else username).strip().lstrip("@")
+    resolved_password = (
+        str(fields.get("login_password") or "")
+        if login_password is None
+        else str(login_password or "")
+    )
+    resolved_totp = (
+        str(fields.get("totp_secret_or_uri") or "")
+        if totp_secret_or_uri is None
+        else str(totp_secret_or_uri or "")
+    )
+    return SocialAccountPayload(
+        persona_id="",
+        platform=_normalize_platform(target_platform),
+        username=clean_username,
+        display_name="",
+        proxy_id="",
+        status="pending_login",
+        login_username=clean_username,
+        login_password=resolved_password,
+        totp_secret_or_uri=resolved_totp,
+    )
+
+
+def _create_social_account_from_common_fields(
+    account_payload: SocialAccountPayload,
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    _require_persona_reference_access(account_payload.persona_id, user)
+    waived = _billing_admin_waived(user)
+    if waived:
+        mark_admin_billing_waived_payload(account_payload)
+    try:
+        return create_social_account(account_payload, owner_user_id=_identity_user_id(user))
+    finally:
+        if waived:
+            clear_admin_billing_waived_payload(account_payload)
+
+
+def _create_social_account_from_card_transfer(
+    transfer: dict[str, Any],
+    payload: SocialAccountCardImportPayload,
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    account_payload = _social_account_payload_from_transfer(
+        dict(transfer.get("fields") or {}),
+        target_platform=payload.target_platform,
+        username=payload.username,
+        login_password=payload.login_password,
+        totp_secret_or_uri=payload.totp_secret_or_uri,
+    )
+    return _create_social_account_from_common_fields(account_payload, user)
+
+
+def _encrypt_social_account_totp_for_account(
+    account_id: str,
+    user_id: int,
+    secret_or_uri: str,
+) -> str:
+    value = str(secret_or_uri or "").strip()
+    if not value:
+        return ""
+    secret = _normalize_social_account_totp_secret(value)
+    try:
+        return encrypt_vault_secret(
+            int(user_id),
+            _social_account_totp_purpose(account_id),
+            secret,
+        )
+    except PasswordVaultError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="密码保险库不可用，暂时无法保存 2FA 密钥",
+        ) from exc
+
+
+def _write_social_account_totp(
+    conn: sqlite3.Connection,
+    *,
+    account_id: str,
+    user_id: int,
+    ciphertext: str,
+    now: int,
+) -> None:
+    if not ciphertext:
+        conn.execute(
+            "DELETE FROM social_account_totp_secrets WHERE account_id = ? AND user_id = ?",
+            (account_id, int(user_id)),
+        )
+        return
+    conn.execute(
+        """
+        INSERT INTO social_account_totp_secrets(
+          account_id, user_id, secret_ciphertext, status,
+          last_used_counter, last_attempt_at, last_verified_at,
+          last_error, created_at, updated_at
+        )
+        VALUES (?, ?, ?, 'pending', -1, 0, 0, '', ?, ?)
+        ON CONFLICT(account_id) DO UPDATE SET
+          user_id = excluded.user_id,
+          secret_ciphertext = excluded.secret_ciphertext,
+          status = 'pending',
+          last_used_counter = -1,
+          last_attempt_at = 0,
+          last_verified_at = 0,
+          last_error = '',
+          updated_at = excluded.updated_at
+        """,
+        (account_id, int(user_id), ciphertext, int(now), int(now)),
+    )
+
+
+def _apply_social_account_card_transfer(
+    account: Any,
+    transfer: dict[str, Any],
+    payload: SocialAccountCardApplyPayload,
+) -> dict[str, Any]:
+    account_id = str(account["id"] or "")
+    owner_user_id = int(account["user_id"] or 0)
+    account_payload = _social_account_payload_from_transfer(
+        dict(transfer.get("fields") or {}),
+        target_platform=str(account["platform"] or ""),
+        username=payload.username,
+        login_password=payload.login_password,
+        totp_secret_or_uri=payload.totp_secret_or_uri,
+    )
+    username = str(account_payload.username or "").strip().lstrip("@")
+    if not username:
+        raise HTTPException(status_code=400, detail="账号 username 必填")
+    login_password = str(account_payload.login_password or "")
+    if login_password and _looks_like_non_password_text(login_password):
+        raise HTTPException(status_code=400, detail="登录密码内容看起来像说明文字，请填写真实密码")
+    totp_ciphertext = _encrypt_social_account_totp_for_account(
+        account_id,
+        owner_user_id,
+        account_payload.totp_secret_or_uri,
+    )
+    now = _now()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT * FROM social_accounts WHERE id = ? AND user_id = ?",
+            (account_id, owner_user_id),
+        ).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        if not str(existing["persona_id"] or "").strip():
+            duplicate = conn.execute(
+                """
+                SELECT id
+                FROM social_accounts
+                WHERE id != ? AND user_id = ? AND persona_id = ''
+                  AND platform = ? AND lower(username) = lower(?)
+                LIMIT 1
+                """,
+                (account_id, owner_user_id, str(existing["platform"] or ""), username),
+            ).fetchone()
+            if duplicate:
+                raise HTTPException(status_code=409, detail="同平台未绑定账号用户名重复")
+        try:
+            conn.execute(
+                """
+                UPDATE social_accounts
+                SET username = ?, login_username = ?, login_password = ?,
+                    login_credentials_updated_at = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    username,
+                    username,
+                    login_password,
+                    now,
+                    now,
+                    account_id,
+                    owner_user_id,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="账号用户名与现有账号冲突") from exc
+        _write_social_account_totp(
+            conn,
+            account_id=account_id,
+            user_id=owner_user_id,
+            ciphertext=totp_ciphertext,
+            now=now,
+        )
+        row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (account_id,)).fetchone()
+        proxy_row = (
+            conn.execute("SELECT * FROM social_proxies WHERE id = ?", (row["proxy_id"],)).fetchone()
+            if str(row["proxy_id"] or "")
+            else None
+        )
+        totp_row = _social_account_totp_row(conn, account_id)
+    return _account_public(row, proxy_row, totp_row)
 
 
 def _social_account_totp_code_payload(row: Any, *, at: int | float | None = None) -> dict[str, Any]:
@@ -1093,6 +1456,11 @@ def _automation_plan_task_rows(
 
 def _automation_plan_task_public(row: Any) -> dict[str, Any]:
     item = dict(row)
+    payload = _redact_sensitive(_loads(item.get("payload_json"), {}))
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.pop(_TASK_WORKER_LEASE_KEY, None)
+    payload.pop(_PUBLISH_BATCH_RESERVATION_KEY, None)
     return {
         "id": str(item.get("id") or ""),
         "task_type": str(item.get("task_type") or ""),
@@ -1103,6 +1471,7 @@ def _automation_plan_task_public(row: Any) -> dict[str, Any]:
         "error": str(item.get("error") or ""),
         "cycle_index": int(item.get("automation_plan_cycle") or 0),
         "sequence": int(item.get("automation_plan_sequence") or 0),
+        "payload": payload,
     }
 
 
@@ -1169,6 +1538,20 @@ def list_social_automation_plans(*, user_id: int) -> list[dict[str, Any]]:
         return [_automation_plan_public(row, conn=conn) for row in rows]
 
 
+def _automation_plan_conflict_key(task_type: str) -> str:
+    normalized = str(task_type or "").strip()
+    if normalized == "threads_auto_reply":
+        return "threads_reply_comment"
+    if normalized in {
+        AUTOMATION_PLAN_NORMAL_PUBLISH_TASK,
+        "threads_reply_comment",
+        "threads_reply_hot",
+        "threads_warmup",
+    }:
+        return normalized
+    return ""
+
+
 def _validate_automation_plan_payload(
     payload: SocialAutomationPlanPayload,
     account: Any,
@@ -1208,6 +1591,7 @@ def _validate_automation_plan_payload(
         },
     }.get(platform, set())
     normalized_items: list[dict[str, Any]] = []
+    conflict_keys: set[str] = set()
     previous_minutes = -1
     for index, item in enumerate(payload.items):
         minutes = int(item.reservation_minutes)
@@ -1219,6 +1603,11 @@ def _validate_automation_plan_payload(
         task_type = str(item.task_type or "").strip()
         if task_type not in allowed:
             raise HTTPException(status_code=400, detail=f"当前平台不支持第 {index + 1} 项任务：{task_type}")
+        conflict_key = _automation_plan_conflict_key(task_type)
+        if conflict_key and conflict_key in conflict_keys:
+            raise HTTPException(status_code=409, detail="同一账号不能重复添加同类型自动化任务")
+        if conflict_key:
+            conflict_keys.add(conflict_key)
         task_payload = dict(item.payload or {})
         _reject_external_automation_plan_metadata(task_payload)
         if task_type == AUTOMATION_PLAN_NORMAL_PUBLISH_TASK:
@@ -1532,29 +1921,60 @@ def create_social_automation_plan(
     )
     plan_id = _NEW_ID("automation_plan")
     now = _now()
-    with db() as conn:
-        conn.execute(
-            """
-            INSERT INTO social_automation_plans(
-              id, user_id, persona_id, account_id, platform, mode, status,
-              items_json, cycle_index, billing_admin_waived,
-              materialization_token, materializing_cycle,
-              last_error, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, 0, ?, '', 0, '', ?, ?)
-            """,
-            (
-                plan_id,
-                _identity_user_id(user),
-                persona_id,
-                str(payload.account_id),
-                platform,
-                mode,
-                json.dumps(items, ensure_ascii=False),
-                1 if _billing_admin_waived(user) else 0,
-                now,
-                now,
-            ),
-        )
+    requested_keys = {
+        key
+        for item in items
+        if (key := _automation_plan_conflict_key(str(item.get("task_type") or "")))
+    }
+    with _AUTOMATION_PLAN_LOCK:
+        with db() as conn:
+            active_rows = conn.execute(
+                """
+                SELECT items_json
+                FROM social_automation_plans
+                WHERE user_id = ? AND account_id = ?
+                  AND status IN ('active', 'materializing')
+                """,
+                (_identity_user_id(user), str(payload.account_id)),
+            ).fetchall()
+            active_keys: set[str] = set()
+            for row in active_rows:
+                try:
+                    active_items = json.loads(str(row["items_json"] or "[]"))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    active_items = []
+                if not isinstance(active_items, list):
+                    continue
+                for item in active_items:
+                    if not isinstance(item, dict):
+                        continue
+                    key = _automation_plan_conflict_key(str(item.get("task_type") or ""))
+                    if key:
+                        active_keys.add(key)
+            if requested_keys & active_keys:
+                raise HTTPException(status_code=409, detail="该账号已有同类型自动化任务正在执行，请先停止或删除原计划")
+            conn.execute(
+                """
+                INSERT INTO social_automation_plans(
+                  id, user_id, persona_id, account_id, platform, mode, status,
+                  items_json, cycle_index, billing_admin_waived,
+                  materialization_token, materializing_cycle,
+                  last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, 0, ?, '', 0, '', ?, ?)
+                """,
+                (
+                    plan_id,
+                    _identity_user_id(user),
+                    persona_id,
+                    str(payload.account_id),
+                    platform,
+                    mode,
+                    json.dumps(items, ensure_ascii=False),
+                    1 if _billing_admin_waived(user) else 0,
+                    now,
+                    now,
+                ),
+            )
     return _materialize_automation_plan(plan_id)
 
 
@@ -1911,6 +2331,96 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_accounts_dedupe(user: dict[str, Any] = Depends(get_current_user)):
         return {"ok": True, **dedupe_social_accounts(user_id=_identity_user_id(user))}
 
+    @app.post("/api/persona_dashboard/automation/accounts/card-transfer/preview")
+    def api_social_account_card_transfer_preview(
+        payload: SocialAccountCardTransferTokenPayload,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        transfer = _decode_social_account_card_transfer(payload.token, _identity_user_id(user))
+        response = JSONResponse(
+            content={"ok": True, "card": _social_account_card_transfer_preview(transfer)}
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/api/persona_dashboard/automation/accounts/card-transfer/import")
+    def api_social_account_card_transfer_import(
+        payload: SocialAccountCardImportPayload,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        transfer = _decode_social_account_card_transfer(payload.token, _identity_user_id(user))
+        return {
+            "ok": True,
+            "account": _create_social_account_from_card_transfer(transfer, payload, user),
+        }
+
+    @app.post("/api/persona_dashboard/automation/accounts/{account_id}/card-transfer/apply")
+    def api_social_account_card_transfer_apply(
+        account_id: str,
+        payload: SocialAccountCardApplyPayload,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        account = _require_account_access(account_id, user)
+        transfer = _decode_social_account_card_transfer(
+            payload.token,
+            _identity_user_id(user),
+        )
+        return {
+            "ok": True,
+            "account": _apply_social_account_card_transfer(account, transfer, payload),
+        }
+
+    @app.post("/api/persona_dashboard/automation/accounts/{account_id}/card-transfer")
+    def api_social_account_card_transfer(
+        account_id: str,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        _require_account_access(account_id, user)
+        token, transfer = _create_social_account_card_transfer(
+            account_id,
+            _identity_user_id(user),
+        )
+        response = JSONResponse(
+            content={
+                "ok": True,
+                "token": token,
+                "card": _social_account_card_transfer_preview(transfer),
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/api/persona_dashboard/automation/accounts/{account_id}/duplicate")
+    def api_social_account_duplicate(
+        account_id: str,
+        payload: SocialAccountDuplicatePayload,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        source = _require_account_access(account_id, user)
+        source_platform = _normalize_platform(source["platform"])
+        target_platform = _normalize_platform(payload.target_platform)
+        if target_platform == source_platform:
+            raise HTTPException(status_code=400, detail="请选择其他平台复制账号卡")
+        with db() as conn:
+            totp_row = _social_account_totp_row(conn, str(source["id"] or ""))
+        totp_secret = ""
+        if totp_row is not None:
+            try:
+                totp_secret = _decrypt_social_account_totp_secret(totp_row)
+            except RuntimeError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+        account_payload = _social_account_payload_from_transfer(
+            _social_account_card_transfer_fields(
+                source,
+                totp_secret_or_uri=totp_secret,
+            ),
+            target_platform=target_platform,
+        )
+        return {
+            "ok": True,
+            "account": _create_social_account_from_common_fields(account_payload, user),
+        }
+
     @app.get("/api/persona_dashboard/automation/accounts/{account_id}/credentials")
     def api_social_account_credentials(account_id: str, user: dict[str, Any] = Depends(get_current_user)):
         account = _require_account_access(account_id, user)
@@ -1933,40 +2443,20 @@ def register_social_automation_routes(app: FastAPI) -> None:
         account = _require_account_access(account_id, user)
         clean_id = str(account["id"] or "")
         owner_user_id = int(account["user_id"] or 0)
-        secret = _normalize_social_account_totp_secret(payload.secret_or_uri)
-        try:
-            ciphertext = encrypt_vault_secret(
-                owner_user_id,
-                _social_account_totp_purpose(clean_id),
-                secret,
-            )
-        except PasswordVaultError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="密码保险库不可用，暂时无法保存 2FA 密钥",
-            ) from exc
+        ciphertext = _encrypt_social_account_totp_for_account(
+            clean_id,
+            owner_user_id,
+            payload.secret_or_uri,
+        )
         now = int(time.time())
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                """
-                INSERT INTO social_account_totp_secrets(
-                  account_id, user_id, secret_ciphertext, status,
-                  last_used_counter, last_attempt_at, last_verified_at,
-                  last_error, created_at, updated_at
-                )
-                VALUES (?, ?, ?, 'pending', -1, 0, 0, '', ?, ?)
-                ON CONFLICT(account_id) DO UPDATE SET
-                  user_id = excluded.user_id,
-                  secret_ciphertext = excluded.secret_ciphertext,
-                  status = 'pending',
-                  last_used_counter = -1,
-                  last_attempt_at = 0,
-                  last_verified_at = 0,
-                  last_error = '',
-                  updated_at = excluded.updated_at
-                """,
-                (clean_id, owner_user_id, ciphertext, now, now),
+            _write_social_account_totp(
+                conn,
+                account_id=clean_id,
+                user_id=owner_user_id,
+                ciphertext=ciphertext,
+                now=now,
             )
             row = _social_account_totp_row(conn, clean_id)
         response = JSONResponse(

@@ -853,11 +853,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
 
         self.assertIn('class="danger live-browser-stop-all--head" data-social-cancel-all disabled', render)
-        self.assertIn('class="danger live-browser-stop-all--bottom" data-social-cancel-all disabled', render)
+        self.assertIn('class="primary live-browser-stop-all--bottom" data-social-cancel-all disabled', render)
         self.assertIn(".live-browser-head-actions", mobile_overrides)
         self.assertIn("display: none;", head_actions)
         self.assertIn(".live-browser-stop-all-dock", mobile_overrides)
         self.assertIn("position: fixed;", mobile_overrides)
+        self.assertIn("display: grid;", mobile_overrides)
+        self.assertIn("width: 100%;", mobile_overrides)
 
     def test_mobile_live_browser_placeholders_and_expanded_window_prioritizes_media(self):
         mobile_density_start = self.styles.index(
@@ -1768,7 +1770,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
-    def test_browser_list_hides_only_the_redundant_mobile_navigation_toggle(self):
+    def test_browser_list_replaces_the_redundant_mobile_navigation_toggle_with_back_navigation(self):
         persistent_page = self._section(
             "function isMobilePersistentDockPage",
             "\nfunction syncMobilePageToolbar",
@@ -1789,6 +1791,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             """
         )
         self._run_node(harness)
+        toolbar = self._section("function syncMobilePageToolbar", "\nfunction renderMobileTaskDock")
+        navigation = self._section("function bindMobileNavigation", "\nfunction setPersonaMobileSidebarOpen")
+        self.assertIn("const showBrowserBack", toolbar)
+        self.assertIn("renderMobileNavToggleIcon(showBrowserBack)", toolbar)
+        self.assertIn('showBrowserBack ? "\\u8fd4\\u56de\\u8d26\\u53f7\\u7ba1\\u7406"', toolbar)
+        self.assertIn('state.accountBrowserPanel === "browsers"', navigation)
+        self.assertIn('setAccountBrowserPanel("accounts")', navigation)
 
     def test_publish_toast_lane_rollover_does_not_merge_cancelled_batch(self):
         lane_key = self._function_source("socialTaskToastLaneKey")
@@ -2042,6 +2051,118 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("renderAccountPoolCards(accounts, selectedAccount)", pool)
         self.assertNotIn("accountPoolPersonaSidebar", pool)
         self.assertNotIn("renderPersonaPicker", pool)
+
+    def test_account_pool_copy_controls_only_transfer_username_password_and_totp(self):
+        card = self._section("function renderAccountPoolCard", "function renderAccountPoolCards")
+        cards = self._function_source("renderAccountPoolCards")
+        editor = self._function_source("openAccountPoolEditorModal")
+        identity = self._function_source("renderAccountIdentityFields")
+        copy_one = self._function_source("copyAccountPoolCardToClipboard")
+        paste = self._function_source("pasteAccountPoolCardFromClipboard")
+        apply = self._function_source("applyAccountCardClipboardToCreateForm")
+        duplicate = self._function_source("duplicateAccountPoolSelectedAccounts")
+        create_save = self._function_source("saveAccountPoolCreateForm")
+        edit_save = self._function_source("saveAccountPoolEditForm")
+        bind_events = self._function_source("bindEvents")
+
+        self.assertIn("data-account-pool-copy-card", card)
+        self.assertIn("renderAccountPoolPlatformIcon", card)
+        self.assertIn("account-pool-card-platform", card)
+        self.assertIn('title="复制账号卡"', cards)
+        self.assertIn("openAccountPoolDuplicateModal", bind_events)
+        self.assertIn("/card-transfer", copy_one)
+        self.assertNotIn("/credentials", copy_one)
+        self.assertIn("result?.token", copy_one)
+        self.assertNotIn("serializeAccountCardClipboard", self.source)
+        self.assertNotIn("parseAccountCardClipboard", self.source)
+        self.assertIn("data-account-pool-paste-card", editor)
+        self.assertNotIn('editing ? "" : `<button type="button" class="account-pool-paste-card-button"', editor)
+        self.assertIn("navigator.clipboard.readText", paste)
+        self.assertIn("VECTO_ACCOUNT_CARD_V1.", paste)
+        self.assertIn("applyAccountCardClipboardToCreateForm", paste)
+        self.assertIn("/duplicate", duplicate)
+        self.assertIn("target_platform", duplicate)
+        self.assertNotIn("display_name", create_save)
+        self.assertNotIn("display_name", edit_save)
+        self.assertNotIn("DisplayName", identity)
+        self.assertNotIn("LoginUsername", identity)
+        self.assertNotIn("显示名称", identity)
+        self.assertNotIn("登录账号", identity)
+        self.assertIn("transfer_totp_configured", apply)
+        self.assertIn("totp_secret_or_uri", create_save)
+        self.assertIn("/card-transfer/apply", edit_save)
+        self.assertIn("accountTransferToken", edit_save)
+
+    def test_account_pool_clipboard_keeps_secrets_inside_the_encrypted_token(self):
+        copy_one = self._function_source("copyAccountPoolCardToClipboard")
+        paste = self._function_source("pasteAccountPoolCardFromClipboard")
+        apply = self._function_source("applyAccountCardClipboardToCreateForm")
+
+        self.assertIn("copyTextToClipboard(state.accountCardTransferToken)", copy_one)
+        self.assertIn("VECTO_ACCOUNT_CARD_V1.", paste)
+        self.assertNotIn("JSON.parse", paste)
+        self.assertNotIn("login_password", copy_one)
+        self.assertNotIn("totp_secret_or_uri", copy_one)
+        self.assertNotIn("proxy_id", copy_one)
+        self.assertNotIn("persona_id", copy_one)
+        self.assertIn("normalizeAccountPoolPlatform()", apply)
+        self.assertIn('const prefix = editing ? "accountPoolEdit" : "accountPool"', apply)
+        self.assertIn("`${prefix}Username`", apply)
+        self.assertIn("`${prefix}LoginPassword`", apply)
+        self.assertNotIn("`${prefix}DisplayName`", apply)
+        self.assertNotIn("`${prefix}LoginUsername`", apply)
+        self.assertIn("transfer_totp_configured", apply)
+        self.assertNotIn("state.accountPoolPlatform =", apply)
+
+    def test_account_pool_clipboard_reuses_current_page_token_before_browser_read(self):
+        copy_one = self._function_source("copyAccountPoolCardToClipboard")
+        paste = self._function_source("pasteAccountPoolCardFromClipboard")
+        clear_tenant = self._function_source("clearTenantInMemoryState")
+
+        self.assertIn(
+            'state.accountCardTransferToken = String(result?.token || "").trim()',
+            copy_one,
+        )
+        self.assertIn(
+            'let text = String(state.accountCardTransferToken || "").trim()',
+            paste,
+        )
+        self.assertIn("if (!text && navigator.clipboard?.readText)", paste)
+        self.assertLess(
+            paste.index("state.accountCardTransferToken"),
+            paste.index("navigator.clipboard?.readText"),
+        )
+        self.assertIn('state.accountCardTransferToken = "";', clear_tenant)
+
+    def test_account_card_platform_logo_and_compact_status_copy_have_styles(self):
+        self.assertIn(".account-pool-card-platform", self.styles)
+        self.assertIn(".account-pool-card-platform > svg", self.styles)
+        self.assertIn(".account-pool-card-copy-button", self.styles)
+        self.assertIn(".account-pool-create-modal-head-actions", self.styles)
+        self.assertIn(".account-pool-paste-card-button", self.styles)
+        self.assertIn(".account-pool-card .account-pool-card-flags .status", self.styles)
+        self.assertIn(".account-pool-card .account-totp-badge", self.styles)
+        self.assertIn("font-size: 10px;", self.styles)
+
+    def test_account_clipboard_write_falls_back_when_permission_is_denied(self):
+        copy_text = self._function_source("copyTextToClipboard")
+
+        self.assertIn("navigator.clipboard?.writeText", copy_text)
+        self.assertIn("catch", copy_text)
+        self.assertIn('document.execCommand("copy")', copy_text)
+        self.assertLess(copy_text.index("catch"), copy_text.index('document.execCommand("copy")'))
+
+    def test_account_copy_and_paste_controls_have_mobile_touch_targets(self):
+        paste_start = self.styles.index(".account-pool-paste-card-button {")
+        copy_start = self.styles.index(".account-pool-card-copy-button {")
+        paste_rule = self.styles[paste_start:self.styles.index("}", paste_start) + 1]
+        copy_rule = self.styles[copy_start:self.styles.index("}", copy_start) + 1]
+
+        self.assertIn("min-width: 44px", paste_rule)
+        self.assertIn("min-height: 44px", paste_rule)
+        self.assertIn("min-width: 44px", copy_rule)
+        self.assertIn("min-height: 44px", copy_rule)
+
     def test_account_proxy_picker_replaces_legacy_edit_checkbox_and_keeps_single_binding(self):
         card = self._section("function renderAccountPoolCard", "function renderAccountPoolCards")
         picker = self._function_source("openAccountProxyPickerModal")

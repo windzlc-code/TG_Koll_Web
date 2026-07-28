@@ -37,5 +37,26 @@ class ConsoleLoadingOverlayTests(unittest.TestCase):
         self.assertIn('if (shouldShowPageLoader) pdSetConsoleLoading(true);', dashboard_js)
         self.assertIn('if (shouldShowPageLoader) pdSetConsoleLoading(false);', dashboard_js)
 
+    def test_dashboard_reentry_reuses_recent_data_without_showing_the_page_loader(self):
+        dashboard_js = (ROOT / "webapp" / "static" / "assets" / "persona-dashboard.js").read_text(encoding="utf-8")
+        self.assertIn('const PD_DASHBOARD_VIEW_CACHE_MS = 60 * 1000;', dashboard_js)
+        self.assertIn('let personaDashboardLoadPromise = null;', dashboard_js)
+        self.assertIn('if (personaDashboardLoadPromise) {', dashboard_js)
+        self.assertIn('if (personaDashboardData) {', dashboard_js)
+        self.assertIn('pdRenderDashboard();', dashboard_js)
+
+    def test_dashboard_reentry_refreshes_stale_data_silently(self):
+        dashboard_js = (ROOT / "webapp" / "static" / "assets" / "persona-dashboard.js").read_text(encoding="utf-8")
+        self.assertIn('function pdDashboardViewCacheIsFresh()', dashboard_js)
+        self.assertIn('if (!pdDashboardViewCacheIsFresh()) void pdLoadDashboard({ silent: true });', dashboard_js)
+        self.assertIn('const shouldShowPageLoader = !silent;', dashboard_js)
+
+    def test_manual_dashboard_refresh_remains_blocking(self):
+        dashboard_js = (ROOT / "webapp" / "static" / "assets" / "persona-dashboard.js").read_text(encoding="utf-8")
+        self.assertIn('refresh.addEventListener("click", () => pdLoadDashboard());', dashboard_js)
+        self.assertIn('if (!shouldShowPageLoader) return personaDashboardLoadPromise;', dashboard_js)
+        self.assertIn('return personaDashboardLoadPromise.finally(() => pdSetConsoleLoading(false));', dashboard_js)
+        self.assertIn('void pdLoadDashboard();', dashboard_js)
+
 if __name__ == "__main__":
     unittest.main()

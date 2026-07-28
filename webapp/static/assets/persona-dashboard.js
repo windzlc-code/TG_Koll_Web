@@ -130,11 +130,19 @@ let personaDashboardTabPage = 1;
 let personaDashboardPostModalKey = "";
 let personaDashboardGalleryIndex = -1;
 let personaDashboardAutoPollTimer = 0;
+let personaDashboardLastLoadedAt = 0;
+let personaDashboardLoadPromise = null;
 let personaDashboardPostSort = localStorage.getItem("personaDashboardPostSort") || "hot_desc";
 let personaDashboardPostTypeFilter = localStorage.getItem("personaDashboardPostTypeFilter") || "all";
+const PD_DASHBOARD_VIEW_CACHE_MS = 60 * 1000;
+const PD_MOBILE_TWEET_STREAM_QUERY = "(max-width: 760px)";
 const personaDashboardInitialParams = new URLSearchParams(window.location.search || "");
 const personaDashboardInitialPersonaId = String(personaDashboardInitialParams.get("persona_id") || personaDashboardInitialParams.get("persona") || "").trim();
 let personaDashboardInitialPersonaApplied = false;
+let personaDashboardMobilePostKey = "";
+let personaDashboardMobilePostLimit = 0;
+let personaDashboardMobilePostObserver = null;
+let personaDashboardMobilePostPending = false;
 
 const PD_LABELS = {
   likes: "点赞",
@@ -159,11 +167,20 @@ function pdLabel(value) {
   return PD_LABELS[key] || key || "-";
 }
 
+function pdFormatMetricUnit(value, divisor, suffix) {
+  const scaled = Number(value || 0) / divisor;
+  const rounded = Math.round(scaled * 10) / 10;
+  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}${suffix}`;
+}
+
 function pdNumber(value) {
   const n = Number(value || 0);
   if (!Number.isFinite(n)) return "0";
-  if (Math.abs(n) >= 100000000) return `${(n / 100000000).toFixed(1)}亿`;
-  if (Math.abs(n) >= 10000) return `${(n / 10000).toFixed(1)}万`;
+  const absolute = Math.abs(n);
+  if (absolute >= 100000000) return pdFormatMetricUnit(n, 100000000, "亿");
+  if (absolute >= 1000000) return pdFormatMetricUnit(n, 1000000, "m");
+  if (absolute >= 10000) return pdFormatMetricUnit(n, 10000, "w");
+  if (absolute >= 1000) return pdFormatMetricUnit(n, 1000, "k");
   return String(Math.round(n));
 }
 
@@ -315,7 +332,8 @@ function pdPostSortNumber(row, sort) {
   if (sort.startsWith("time_")) return pdPostTime(row);
   if (sort.startsWith("likes_")) return Number(row.like_count || 0);
   if (sort.startsWith("comments_")) return Number(row.comment_count || 0);
-  if (sort.startsWith("shares_")) return Number(row.share_count || row.repost_count || 0);
+  if (sort.startsWith("reposts_")) return Number(row.repost_count || 0);
+  if (sort.startsWith("shares_")) return Number(row.share_count || 0);
   if (sort.startsWith("views_")) return Number(row.view_count || 0);
   return pdPostHeat(row);
 }
@@ -339,7 +357,8 @@ function pdPostSortLabel(value) {
     time_asc: "发布时间最早",
     likes_desc: "点赞最多",
     comments_desc: "评论最多",
-    shares_desc: "转发/分享最多",
+    reposts_desc: "转发最多",
+    shares_desc: "分享最多",
     views_desc: "逐帖浏览最多",
   }[String(value || "")] || "热度最高");
 }
@@ -640,22 +659,34 @@ function pdRenderPublishHistory(persona) {
   `;
 }
 
-function pdRenderPersonaCard(persona) {
-  const hot = pdPersonaHot(persona);
-  const counts = persona.counts || {};
-  const rows = pdFilteredPostRows(persona);
-  const pageSize = Math.max(5, Math.min(100, Number(personaDashboardPageSize || 10)));
-  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
-  personaDashboardPostPage = Math.max(1, Math.min(pageCount, Number(personaDashboardPostPage || 1)));
-  const start = (personaDashboardPostPage - 1) * pageSize;
-  const metrics = [
-    ["帖子", counts.posts],
-    ["发布", counts.published],
-    ["互动", Number(hot.likes || 0) + Number(hot.comments || 0) + Number(hot.shares || 0) + Number(hot.reposts || 0)],
-    ["主页浏览", hot.recent_views],
-    ["逐帖浏览", hot.post_views],
-  ];
-  const postRows = rows.slice(start, start + pageSize).map((row) => `
+function pdIsMobileTweetStreamMode() {
+  return Boolean(window.matchMedia?.(PD_MOBILE_TWEET_STREAM_QUERY).matches);
+}
+
+function pdMobilePostStreamInfo(persona, rows, pageSize) {
+  const key = [
+    pdPersonaKey(persona),
+    pdPlatformFilter() || "all",
+    personaDashboardPostTypeFilter,
+    personaDashboardPostSort,
+    pageSize,
+  ].join("::");
+  if (key !== personaDashboardMobilePostKey) {
+    personaDashboardMobilePostKey = key;
+    personaDashboardMobilePostLimit = pageSize;
+  }
+  const loaded = Math.min(rows.length, Math.max(pageSize, Number(personaDashboardMobilePostLimit || pageSize)));
+  personaDashboardMobilePostLimit = loaded;
+  return {
+    key,
+    loaded,
+    total: rows.length,
+    hasMore: loaded < rows.length,
+  };
+}
+
+function pdRenderPostTableRow(row) {
+  return `
     <tr>
       <td class="persona-post-platform" data-label="平台">
         <span class="persona-post-platform-name">${pdEscape(row.platform || "-")}</span>
@@ -667,14 +698,137 @@ function pdRenderPersonaCard(persona) {
       <td class="persona-post-time" data-label="发布时间">${pdEscape(pdDate(row.published_at || row.captured_at))}</td>
       <td class="persona-post-number" data-label="点赞">${pdEscape(pdNumber(row.like_count))}</td>
       <td class="persona-post-number" data-label="评论">${pdEscape(pdNumber(row.comment_count))}</td>
-      <td class="persona-post-number" data-label="转发/分享">${pdEscape(pdNumber(row.share_count || row.repost_count))}</td>
+      <td class="persona-post-number" data-label="转发">${pdEscape(pdNumber(row.repost_count))}</td>
+      <td class="persona-post-number" data-label="分享">${pdEscape(pdNumber(row.share_count))}</td>
       <td class="persona-post-number" data-label="逐帖浏览">${pdEscape(pdNumber(row.view_count))}</td>
       <td class="persona-post-actions" data-label="操作">
         <button class="ghost" type="button" data-post-view="${pdEscape(row.post_key || "")}">查看</button>
         <button class="ghost persona-post-delete persona-selection-icon-button" type="button" data-post-delete="${pdEscape(row.post_key || "")}" title="删除" aria-label="删除">${renderTrashIcon()}</button>
       </td>
     </tr>
-  `).join("");
+  `;
+}
+
+function pdRenderMobilePostStreamStatus(stream) {
+  if (!stream.total) return "";
+  return `
+    <div class="persona-mobile-post-stream ${stream.hasMore ? "" : "is-complete"}" aria-live="polite">
+      <span>已显示 ${pdEscape(stream.loaded)} / 共 ${pdEscape(stream.total)} 条</span>
+      ${stream.hasMore ? `
+        <span data-persona-mobile-post-sentinel>继续下滑加载</span>
+        <button type="button" data-persona-mobile-post-load hidden>继续加载</button>
+      ` : `<span>已全部加载</span>`}
+    </div>
+  `;
+}
+
+function pdDisconnectMobilePostStream() {
+  personaDashboardMobilePostObserver?.disconnect();
+  personaDashboardMobilePostObserver = null;
+}
+
+function pdBindPostRowActions(root, persona) {
+  root?.querySelectorAll("[data-post-view]:not([data-post-action-bound])").forEach((node) => {
+    node.dataset.postActionBound = "true";
+    node.addEventListener("click", () => {
+      personaDashboardPostModalKey = String(node.getAttribute("data-post-view") || "");
+      personaDashboardGalleryIndex = -1;
+      pdRenderDashboard();
+    });
+  });
+  root?.querySelectorAll("[data-post-delete]:not([data-post-action-bound])").forEach((node) => {
+    node.dataset.postActionBound = "true";
+    node.addEventListener("click", () => {
+      const postKey = String(node.getAttribute("data-post-delete") || "");
+      if (persona && postKey) pdDeletePost(persona, postKey);
+    });
+  });
+}
+
+function pdLoadNextMobilePostBatch(persona) {
+  if (!pdIsMobileTweetStreamMode() || personaDashboardMobilePostPending) return;
+  const rows = pdFilteredPostRows(persona);
+  const pageSize = Math.max(5, Math.min(100, Number(personaDashboardPageSize || 10)));
+  const current = Math.min(rows.length, Math.max(pageSize, Number(personaDashboardMobilePostLimit || pageSize)));
+  if (current >= rows.length) return;
+  const triggerStreamKey = personaDashboardMobilePostKey;
+  const triggerRoot = personaDashboardRoot;
+  let committed = false;
+  personaDashboardMobilePostPending = true;
+  const status = pdEl("personaDashboardList")?.querySelector("[data-persona-mobile-post-sentinel]");
+  if (status) {
+    status.classList.add("is-loading");
+    status.innerHTML = renderMobileTweetStreamLoadingIndicator();
+  }
+  lockMobileTweetStreamScroll();
+  const startedAt = performance.now();
+  pdDisconnectMobilePostStream();
+  finishMobileTweetStreamLoading(startedAt, () => {
+    if (
+      !status?.isConnected
+      || !status.getClientRects().length
+      || triggerRoot !== personaDashboardRoot
+      || triggerStreamKey !== personaDashboardMobilePostKey
+      || !pdIsMobileTweetStreamMode()
+    ) return;
+    const next = Math.min(rows.length, current + pageSize);
+    const body = pdEl("personaDashboardList")?.querySelector(".persona-post-table tbody");
+    if (body) body.insertAdjacentHTML("beforeend", rows.slice(current, next).map(pdRenderPostTableRow).join(""));
+    personaDashboardMobilePostLimit = next;
+    const streamHost = pdEl("personaDashboardList")?.querySelector(".persona-mobile-post-stream");
+    if (streamHost) {
+      streamHost.outerHTML = pdRenderMobilePostStreamStatus({
+        loaded: next,
+        total: rows.length,
+        hasMore: next < rows.length,
+      });
+    }
+    pdBindPostRowActions(pdEl("personaDashboardList"), persona);
+    committed = true;
+  }, () => {
+    personaDashboardMobilePostPending = false;
+    if (committed) pdBindMobilePostStream(persona);
+  });
+}
+
+function pdBindMobilePostStream(persona) {
+  pdDisconnectMobilePostStream();
+  if (!pdIsMobileTweetStreamMode() || !persona) return;
+  const sentinel = pdEl("personaDashboardList")?.querySelector("[data-persona-mobile-post-sentinel]");
+  if (!sentinel) return;
+  if (!("IntersectionObserver" in window)) {
+    const fallback = pdEl("personaDashboardList")?.querySelector("[data-persona-mobile-post-load]");
+    if (fallback) {
+      fallback.hidden = false;
+      fallback.addEventListener("click", () => pdLoadNextMobilePostBatch(persona), { once: true });
+    }
+    return;
+  }
+  personaDashboardMobilePostObserver = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) pdLoadNextMobilePostBatch(persona);
+  }, MOBILE_TWEET_STREAM_OBSERVER_OPTIONS);
+  personaDashboardMobilePostObserver.observe(sentinel);
+}
+
+function pdRenderPersonaCard(persona) {
+  const hot = pdPersonaHot(persona);
+  const counts = persona.counts || {};
+  const rows = pdFilteredPostRows(persona);
+  const pageSize = Math.max(5, Math.min(100, Number(personaDashboardPageSize || 10)));
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  personaDashboardPostPage = Math.max(1, Math.min(pageCount, Number(personaDashboardPostPage || 1)));
+  const start = (personaDashboardPostPage - 1) * pageSize;
+  const mobileStream = pdMobilePostStreamInfo(persona, rows, pageSize);
+  const mobile = pdIsMobileTweetStreamMode();
+  const metrics = [
+    ["帖子", counts.posts],
+    ["发布", counts.published],
+    ["互动", Number(hot.likes || 0) + Number(hot.comments || 0) + Number(hot.shares || 0) + Number(hot.reposts || 0)],
+    ["主页浏览", hot.recent_views],
+    ["逐帖浏览", hot.post_views],
+  ];
+  const visibleRows = mobile ? rows.slice(0, mobileStream.loaded) : rows.slice(start, start + pageSize);
+  const postRows = visibleRows.map(pdRenderPostTableRow).join("");
   return `
     <article class="persona-detail-card">
       <div class="persona-detail-head">
@@ -692,9 +846,6 @@ function pdRenderPersonaCard(persona) {
       </div>
       <div class="persona-table-wrap">
         <div class="persona-table-toolbar">
-          <div class="persona-table-title">
-            <strong>发送推文指标</strong>
-          </div>
           <div class="persona-post-controls">
             <label>
               <span>内容</span>
@@ -715,23 +866,26 @@ function pdRenderPersonaCard(persona) {
                 <option value="time_asc" ${personaDashboardPostSort === "time_asc" ? "selected" : ""}>发布时间最早</option>
                 <option value="likes_desc" ${personaDashboardPostSort === "likes_desc" ? "selected" : ""}>点赞最多</option>
                 <option value="comments_desc" ${personaDashboardPostSort === "comments_desc" ? "selected" : ""}>评论最多</option>
-                <option value="shares_desc" ${personaDashboardPostSort === "shares_desc" ? "selected" : ""}>转发/分享最多</option>
+                <option value="reposts_desc" ${personaDashboardPostSort === "reposts_desc" ? "selected" : ""}>转发最多</option>
+                <option value="shares_desc" ${personaDashboardPostSort === "shares_desc" ? "selected" : ""}>分享最多</option>
                 <option value="views_desc" ${personaDashboardPostSort === "views_desc" ? "selected" : ""}>逐帖浏览最多</option>
               </select>
             </label>
           </div>
-          <span>第 ${pdEscape(String(personaDashboardPostPage))} / ${pdEscape(String(pageCount))} 页 · 共 ${pdEscape(String(rows.length))} 条</span>
+          <span>${mobile
+            ? `已显示 ${pdEscape(String(mobileStream.loaded))} / 共 ${pdEscape(String(rows.length))} 条`
+            : `第 ${pdEscape(String(personaDashboardPostPage))} / ${pdEscape(String(pageCount))} 页 · 共 ${pdEscape(String(rows.length))} 条`}</span>
         </div>
         <table class="persona-post-table">
-          <thead><tr><th>平台</th><th>推文内容 / 来源</th><th>发布时间</th><th>点赞</th><th>评论</th><th>转发/分享</th><th>逐帖浏览</th><th>操作</th></tr></thead>
-          <tbody>${postRows || `<tr class="persona-post-empty"><td colspan="8">暂无发送推文指标</td></tr>`}</tbody>
+          <thead><tr><th>平台</th><th>推文内容 / 来源</th><th>发布时间</th><th>点赞</th><th>评论</th><th>转发</th><th>分享</th><th>逐帖浏览</th><th>操作</th></tr></thead>
+          <tbody>${postRows || `<tr class="persona-post-empty"><td colspan="9">暂无发送推文指标</td></tr>`}</tbody>
         </table>
       </div>
-      <div class="persona-pager">
+      ${mobile ? pdRenderMobilePostStreamStatus(mobileStream) : `<div class="persona-pager">
         <button class="ghost" type="button" id="personaPostPrev" ${personaDashboardPostPage <= 1 ? "disabled" : ""}>上一页</button>
         <span>每页 ${pdEscape(String(pageSize))} 条</span>
         <button class="ghost" type="button" id="personaPostNext" ${personaDashboardPostPage >= pageCount ? "disabled" : ""}>下一页</button>
-      </div>
+      </div>`}
       ${pdRenderPostModal(persona)}
     </article>
   `;
@@ -890,7 +1044,8 @@ function pdRenderPostModal(persona) {
         <div class="persona-post-modal-grid">
           <div><span>点赞</span><strong>${pdEscape(pdNumber(row.like_count))}</strong></div>
           <div><span>评论</span><strong>${pdEscape(pdNumber(row.comment_count))}</strong></div>
-          <div><span>转发/分享</span><strong>${pdEscape(pdNumber(row.share_count || row.repost_count))}</strong></div>
+          <div><span>转发</span><strong>${pdEscape(pdNumber(row.repost_count))}</strong></div>
+          <div><span>分享</span><strong>${pdEscape(pdNumber(row.share_count))}</strong></div>
           <div><span>逐帖浏览</span><strong>${pdEscape(pdNumber(row.view_count))}</strong></div>
         </div>
         <section class="persona-post-section">
@@ -1119,13 +1274,8 @@ function pdRenderDashboard() {
     personaDashboardGalleryIndex = -1;
     pdRenderDashboard();
   });
-  list.querySelectorAll("[data-post-view]").forEach((node) => {
-    node.addEventListener("click", () => {
-      personaDashboardPostModalKey = String(node.getAttribute("data-post-view") || "");
-      personaDashboardGalleryIndex = -1;
-      pdRenderDashboard();
-    });
-  });
+  pdBindPostRowActions(list, selected);
+  pdBindMobilePostStream(selected);
   list.querySelectorAll("[data-post-media-index]").forEach((node) => {
     node.addEventListener("click", () => {
       personaDashboardGalleryIndex = Number(node.getAttribute("data-post-media-index") || 0);
@@ -1144,12 +1294,6 @@ function pdRenderDashboard() {
       pdRenderDashboard();
     });
   });
-  list.querySelectorAll("[data-post-delete]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const postKey = String(node.getAttribute("data-post-delete") || "");
-      if (selected && postKey) pdDeletePost(selected, postKey);
-    });
-  });
 }
 
 function pdSetMsg(text, type = "ok") {
@@ -1165,25 +1309,49 @@ function pdSetConsoleLoading(loading) {
   }));
 }
 
+function pdDashboardViewCacheIsFresh() {
+  return Boolean(
+    personaDashboardData
+    && personaDashboardLastLoadedAt
+    && Date.now() - personaDashboardLastLoadedAt < PD_DASHBOARD_VIEW_CACHE_MS,
+  );
+}
+
 async function pdLoadDashboard(options = {}) {
   const silent = Boolean(options && options.silent);
   const shouldShowPageLoader = !silent;
-  if (shouldShowPageLoader) pdSetConsoleLoading(true);
-  if (!silent) pdSetMsg("正在加载人设数据...", "ok");
-  try {
-    const data = await pdApi("/api/persona_dashboard/overview");
-    personaDashboardData = data;
-    const updated = pdEl("personaDashboardUpdated");
-    if (updated) {
-      const latest = data.summary && data.summary.latest_data_at;
-      updated.textContent = `缓存读取：${pdDate(data.updated_at)} · 最近数据：${pdDate(latest)}`;
+  if (personaDashboardLoadPromise) {
+    if (!shouldShowPageLoader) return personaDashboardLoadPromise;
+    pdSetConsoleLoading(true);
+    return personaDashboardLoadPromise.finally(() => pdSetConsoleLoading(false));
+  }
+  const request = (async () => {
+    if (shouldShowPageLoader) pdSetConsoleLoading(true);
+    if (!silent) pdSetMsg("正在加载人设数据...", "ok");
+    try {
+      const data = await pdApi("/api/persona_dashboard/overview");
+      personaDashboardData = data;
+      personaDashboardLastLoadedAt = Date.now();
+      const updated = pdEl("personaDashboardUpdated");
+      if (updated) {
+        const latest = data.summary && data.summary.latest_data_at;
+        updated.textContent = `缓存读取：${pdDate(data.updated_at)} · 最近数据：${pdDate(latest)}`;
+      }
+      if (!silent) pdSetMsg("");
+      pdRenderDashboard();
+      return data;
+    } catch (err) {
+      if (!silent) pdSetMsg(String((err && (err.detail || err.message)) || err || "加载失败"), "err");
+      return null;
+    } finally {
+      if (shouldShowPageLoader) pdSetConsoleLoading(false);
     }
-    if (!silent) pdSetMsg("");
-    pdRenderDashboard();
-  } catch (err) {
-    if (!silent) pdSetMsg(String((err && (err.detail || err.message)) || err || "加载失败"), "err");
+  })();
+  personaDashboardLoadPromise = request;
+  try {
+    return await request;
   } finally {
-    if (shouldShowPageLoader) pdSetConsoleLoading(false);
+    if (personaDashboardLoadPromise === request) personaDashboardLoadPromise = null;
   }
 }
 
@@ -1279,12 +1447,20 @@ function pdMountDashboard(root) {
   if (!root) return;
   personaDashboardRoot = root;
   pdBindDashboard(root);
-  pdLoadDashboard();
+  if (personaDashboardData) {
+    pdRenderDashboard();
+    if (!pdDashboardViewCacheIsFresh()) void pdLoadDashboard({ silent: true });
+  } else {
+    void pdLoadDashboard();
+  }
   pdStartAutoPoll();
 }
 
 function pdUnmountDashboard() {
   personaDashboardPlatformPickerOpen = false;
+  pdDisconnectMobilePostStream();
+  personaDashboardMobilePostPending = false;
+  cancelMobileTweetStreamLoading();
   pdStopAutoPoll();
 }
 

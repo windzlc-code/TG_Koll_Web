@@ -238,18 +238,31 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("justify-content: center;", upload_trigger_styles)
         self.assertIn("width: 100%;", upload_trigger_styles)
 
-    def test_persona_media_bulk_selection_only_renders_delete_when_selected(self):
+    def test_persona_media_bulk_selection_keeps_actions_visible_and_count_centered(self):
         self.assertIn("data-persona-media-select-index", self.script)
         self.assertIn("data-persona-media-select-all", self.script)
+        self.assertIn('persona-media-selection-toolbar ${allSelected ? "is-all-selected" : ""}', self.script)
+        self.assertIn('toolbar.classList.toggle("is-all-selected", allSelected);', self.script)
         self.assertIn("function togglePersonaMediaBulkSelection", self.script)
         self.assertIn("function deleteSelectedPersonaPostMedia", self.script)
+        self.assertIn('data-persona-media-delete-selected title="删除所选" aria-label="删除所选" ${selectedIndexes.size ? "" : "disabled"}', self.script)
+        self.assertIn("deleteSelected.disabled = selected.size === 0;", self.script)
         self.assertIn(
-            'selectedIndexes.size ? `<button type="button" class="upload-delete-selected unified-action-icon-button"',
-            self.script,
+            ".persona-media-selection-toolbar {\n  position: relative;\n  display: flex;\n  justify-content: flex-end;",
+            self.styles,
         )
-        self.assertIn("if (!selected.size) {", self.script)
-        self.assertIn("deleteSelected?.remove();", self.script)
-        self.assertIn(".upload-selection-toolbar [hidden] {", self.styles)
+        self.assertIn(
+            ".persona-media-selection-toolbar .upload-selection-count {\n  position: absolute;\n  left: 50%;",
+            self.styles,
+        )
+        self.assertIn(
+            ".persona-media-selection-toolbar .upload-delete-selected:disabled {",
+            self.styles,
+        )
+        self.assertIn(
+            ".persona-media-selection-toolbar .upload-delete-selected {\n  margin-left: 8px;",
+            self.styles,
+        )
 
     def test_persona_media_cards_have_order_badges_and_pointer_reordering(self):
         self.assertIn("data-persona-media-sort-grid", self.script)
@@ -275,9 +288,11 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             self.styles,
         )
         self.assertIn(
-            ".persona-unified-media-editor .persona-edit-media-grid {\n    grid-template-columns: repeat(2, minmax(0, 1fr));",
+            ".persona-unified-media-editor .persona-edit-media-grid {\n    grid-template-columns: repeat(3, minmax(0, 1fr));",
             self.styles,
         )
+        self.assertIn("border: 2px solid var(--accent);", self.styles)
+        self.assertIn("font-weight: 950;", self.styles)
         self.assertIn("const items = personaDraftMediaPreviewItems(persona, source, post);", self.script)
         self.assertIn("return Math.min(Math.max(hitIndex, 0), cards.length - 1);", self.script)
         self.assertNotIn("const adjustedSlot = insertSlot > fromIndex ? insertSlot - 1 : insertSlot;", self.script)

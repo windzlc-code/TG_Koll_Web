@@ -51,7 +51,29 @@ def test_editing_draft_copy_and_controls_share_the_compose_card_header():
     assert 'data-persona-exit-draft-edit' in panel
     assert 'data-persona-clear-draft-edit' in panel
     assert 'data-persona-generate-posts' in panel
+    assert 'data-persona-stash-draft-edit' in panel
     assert 'AI 重新生成' in panel
+
+
+def test_draft_edit_stash_only_updates_the_media_reference_without_saving():
+    script = CONSOLE_JS.read_text(encoding="utf-8")
+    start = script.index("async function stashPersonaDraftEdit()")
+    end = script.index("\nasync function fetchPersonaHotCandidates", start)
+    stash = script[start:end]
+
+    assert "form.stagedReferenceContent = String(form.content || \"\")" in stash
+    assert "renderPersonaDetail()" in stash
+    assert "api(" not in stash
+    assert 'method: "PATCH"' not in stash
+    assert "form.originalTitle" not in stash
+    assert "form.originalContent" not in stash
+    assert "loadPersonaDraftPosts" not in stash
+    assert "state.personaPanels.content = \"posts\"" not in stash
+    assert 'event.target.closest("[data-persona-stash-draft-edit]")' in script
+    assert "stagedReferenceContent: null" in script
+    assert "function personaDraftReferenceContent(persona, post, source = \"posts\")" in script
+    assert "const draftSourceText = personaDraftReferenceContent(persona, post, source).trim();" in script
+    assert "const referenceContent = personaDraftReferenceContent(persona, post, isFavoriteMedia ? \"favorites\" : \"posts\").trim();" in script
 
 
 def test_draft_exit_confirmation_uses_a_compact_left_right_action_layout():
