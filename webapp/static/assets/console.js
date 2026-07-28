@@ -6807,6 +6807,7 @@ function renderMediaPreviewButton(item, groupId, index, {
   caption = "",
   interactive = true,
   lowPriority = false,
+  deferLoad = false,
   zoomHint = false,
 } = {}) {
   const label = mediaPreviewLabel(item?.label, mediaKindLabel(item?.type));
@@ -6826,14 +6827,61 @@ function renderMediaPreviewButton(item, groupId, index, {
       ${unavailable
         ? `<div class="${esc(frameClass)} persona-media-frame--empty"><strong>媒体已失效</strong><small>源文件无法加载</small></div>`
         : type === "video"
-        ? `<video class="${esc(frameClass)}" src="${esc(displayUrl)}" data-media-source-url="${esc(displayUrl)}" muted playsinline preload="metadata" draggable="false" onerror="handlePersonaMediaFrameError(this)"></video>`
+        ? `<video class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} data-media-source-url="${esc(displayUrl)}" muted playsinline preload="${deferLoad ? "none" : "metadata"}" draggable="false" onerror="handlePersonaMediaFrameError(this)"></video>`
         : type === "audio"
           ? `<div class="${esc(frameClass)} ${esc(frameClass)}--audio"><strong>音频</strong><small>点击站内预览</small></div>`
-          : `<img class="${esc(frameClass)}" src="${esc(displayUrl)}" data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" decoding="async" draggable="false"${lowPriority ? ' fetchpriority="low"' : ""} onerror="handlePersonaMediaFrameError(this)" />`}
+          : `<img class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" decoding="async" draggable="false"${lowPriority ? ' fetchpriority="low"' : ""} onerror="handlePersonaMediaFrameError(this)" />`}
       ${canShowZoomHint ? `<span class="persona-image-library-zoom-hint" aria-hidden="true">${renderZoomInIcon()}</span>` : ""}
       <span>${esc(text)}</span>
     </${rootTag}>
   `;
+}
+
+let deferredMediaObserver = null;
+let deferredMediaHydrationFrame = 0;
+let deferredMediaHydrationTimer = 0;
+const DEFERRED_MEDIA_HYDRATION_DELAY_MS = 180;
+
+function cancelDeferredMediaHydration() {
+  deferredMediaObserver?.disconnect();
+  deferredMediaObserver = null;
+  if (deferredMediaHydrationFrame) window.cancelAnimationFrame(deferredMediaHydrationFrame);
+  if (deferredMediaHydrationTimer) window.clearTimeout(deferredMediaHydrationTimer);
+  deferredMediaHydrationFrame = 0;
+  deferredMediaHydrationTimer = 0;
+}
+
+function hydrateDeferredMediaNode(node) {
+  const source = String(node?.dataset?.deferredMediaSrc || "").trim();
+  if (!source || !node?.isConnected) return;
+  delete node.dataset.deferredMediaSrc;
+  node.setAttribute("src", source);
+  if (node.tagName === "VIDEO") node.load();
+}
+
+function scheduleDeferredMediaHydration(root = $("moduleBody")) {
+  cancelDeferredMediaHydration();
+  if (!root?.querySelector("[data-deferred-media-src]")) return;
+  deferredMediaHydrationFrame = window.requestAnimationFrame(() => {
+    deferredMediaHydrationFrame = 0;
+    deferredMediaHydrationTimer = window.setTimeout(() => {
+      deferredMediaHydrationTimer = 0;
+      const nodes = Array.from(root.querySelectorAll("[data-deferred-media-src]"));
+      if (!nodes.length) return;
+      if (!("IntersectionObserver" in window)) {
+        nodes.forEach(hydrateDeferredMediaNode);
+        return;
+      }
+      deferredMediaObserver = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          deferredMediaObserver?.unobserve(entry.target);
+          hydrateDeferredMediaNode(entry.target);
+        });
+      }, { root: null, rootMargin: "240px 0px", threshold: 0.01 });
+      nodes.forEach((node) => deferredMediaObserver.observe(node));
+    }, DEFERRED_MEDIA_HYDRATION_DELAY_MS);
+  });
 }
 
 function personaDraftMediaItems(personaId, post = {}) {
@@ -6988,6 +7036,7 @@ function personaHistoryMediaItems(row = {}) {
     items.push({
       url,
       previewUrl: reason ? "" : previewUrl,
+      thumbnailUrl: String(item?.thumbnail_url || item?.thumbnailUrl || "").trim(),
       type: guessMediaType(url, item?.type || ""),
       label: String(item?.label || item?.type || "").trim(),
       unavailable: Boolean(reason || !previewUrl),
@@ -7067,7 +7116,7 @@ function renderPersonaDraftCardMediaSlot(items = []) {
   }).replace("</button>", `${countBadge}</button>`);
 }
 
-function renderPublishPreviewMedia(items = []) {
+function renderPublishPreviewMedia(items = [], { deferLoad = false } = {}) {
   const rows = (Array.isArray(items) ? items : []).filter((item) => item && (item.previewUrl || item.unavailable));
   if (!rows.length) return `<div class="publish-preview-media-empty">当前内容没有媒体文件。</div>`;
   const previewRows = rows.filter((item) => item?.previewUrl && !item.unavailable);
@@ -7094,6 +7143,7 @@ function renderPublishPreviewMedia(items = []) {
               className: "publish-preview-media-button",
               frameClass: "publish-preview-media-frame",
               lowPriority: true,
+              deferLoad,
             })}
             <span class="publish-preview-media-badge">第 ${esc(index + 1)} 个 · ${esc(mediaKindLabel(item.type))}</span>
           </div>`;
@@ -7408,6 +7458,7 @@ function personaPostPageKey(persona = selectedPersona(), source = personaPostSou
 
 const MOBILE_TWEET_STREAM_QUERY = "(max-width: 760px)";
 const MOBILE_TWEET_STREAM_MIN_LOADING_MS = 220;
+const MOBILE_PUBLISH_HISTORY_BATCH_SIZE = 5;
 const MOBILE_TWEET_STREAM_OBSERVER_OPTIONS = {
   root: null,
   rootMargin: "0px 0px -72px 0px",
@@ -11893,7 +11944,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona()) {
   if (!rows.length) return `<div class="empty-state">当前人设还没有任务历史。</div>`;
   const activeId = String(state.publishHistoryPreviewId || rows[0]?.id || "");
   const personaId = String(persona?.id || "");
-  const stream = mobileTweetStreamInfo(rows, `publish-history:${personaId}`, 10);
+  const stream = mobileTweetStreamInfo(rows, `publish-history:${personaId}`, MOBILE_PUBLISH_HISTORY_BATCH_SIZE);
   return `
     <div class="publish-post-list">
       ${stream.items.map((record, index) => {
@@ -11923,7 +11974,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona()) {
               </span>
               ${renderPublishHistoryMetrics(record, "publish-history-card-metrics")}
             </div>
-            ${mediaItems.length ? `<div class="publish-post-card-media publish-history-card-media">${renderPublishPreviewMedia(mediaItems)}</div>` : ""}
+            ${mediaItems.length ? `<div class="publish-post-card-media publish-history-card-media">${renderPublishPreviewMedia(mediaItems, { deferLoad: isMobileTweetStreamMode() })}</div>` : ""}
           </article>`;
       }).join("")}
     </div>
@@ -11980,7 +12031,7 @@ function renderPublishHistoryPanel(persona = selectedPersona()) {
   const refreshStatus = ownsRefresh ? state.publishHistoryRefreshStatus : null;
   return `
     <div class="publish-content-layout">
-      ${renderPublishHistoryPreview(persona)}
+      ${isMobileTweetStreamMode() ? "" : renderPublishHistoryPreview(persona)}
       <section class="publish-post-picker publish-history-picker">
         <div class="publish-panel-head">
           <div><strong>任务历史</strong><span>${esc(persona?.name || "当前人设")}</span></div>
@@ -12440,17 +12491,17 @@ function renderSimpleFlowModule(moduleId) {
   let body = "";
   if (moduleId === "publishing") {
     const selectedPersonaForPublish = state.personas.find((item) => String(item.id) === String($("simplePersona")?.value || state.selectedPersonaId || "")) || selectedPersona();
+    const publishMode = normalizedPublishMode(branch);
     if (selectedPersonaForPublish && !state.personaProfiles[String(selectedPersonaForPublish.id)]) {
       loadPersonaProfile(selectedPersonaForPublish.id).then(() => {
         if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
       }).catch(() => {});
     }
-    if (selectedPersonaForPublish && !state.personaDraftPosts[String(selectedPersonaForPublish.id)]) {
+    if (publishMode !== "publish_history" && selectedPersonaForPublish && !state.personaDraftPosts[String(selectedPersonaForPublish.id)]) {
       loadPersonaDraftPosts(selectedPersonaForPublish.id).then(() => {
         if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
       }).catch(() => {});
     }
-    const publishMode = normalizedPublishMode(branch);
     const publishAccount = publishAccountForPersona(selectedPersonaForPublish);
     const modeTabs = renderPublishHeaderRow(publishMode, publishAccount);
     const personaSummary = renderPersonaProfileIdentity(selectedPersonaForPublish, null, {
@@ -13101,6 +13152,7 @@ function bindSimpleFlowInputs(moduleId) {
     });
   });
   bindMobileTweetStreamObservers();
+  scheduleDeferredMediaHydration($("moduleBody"));
 }
 
 function fillSimpleAccounts() {

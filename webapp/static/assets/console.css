@@ -22425,6 +22425,11 @@ body.console-page {
     contain-intrinsic-size: auto 420px;
   }
 
+  .publish-history-card {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 560px;
+  }
+
   .publish-history-preview {
     display: none;
   }
