@@ -4993,6 +4993,281 @@ def _run_threads_publish_post(
     return {"ok": True, "published": published, "url": permalink, "screenshot_path": shot}
 
 
+def _normalize_instagram_post_permalink(value: Any) -> str:
+    raw_url = str(value or "").strip()
+    if not raw_url:
+        return ""
+    parsed = urlparse(urljoin(INSTAGRAM_HOME, raw_url))
+    host = str(parsed.hostname or "").lower()
+    if host not in {"instagram.com", "www.instagram.com"}:
+        return ""
+    path = str(parsed.path or "").rstrip("/")
+    match = re.fullmatch(
+        r"/(?:[A-Za-z0-9._]+/)?(p|reel)/([^/\s]+)",
+        path,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    return f"https://www.instagram.com/{match.group(1).lower()}/{match.group(2)}/"
+
+
+def _normalize_instagram_profile_url(value: Any) -> str:
+    raw_url = str(value or "").strip()
+    if not raw_url:
+        return ""
+    parsed = urlparse(urljoin(INSTAGRAM_HOME, raw_url))
+    host = str(parsed.hostname or "").lower()
+    path = str(parsed.path or "").strip("/")
+    if host not in {"instagram.com", "www.instagram.com"}:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9._]+", path):
+        return ""
+    return f"https://www.instagram.com/{path}/"
+
+
+def _instagram_profile_url(account: dict[str, Any] | None) -> str:
+    username = str((account or {}).get("username") or (account or {}).get("login_username") or "").strip().lstrip("@")
+    return _normalize_instagram_profile_url(f"https://www.instagram.com/{username}/")
+
+
+def _find_instagram_post_permalinks(page) -> list[str] | None:
+    current_url = _normalize_instagram_post_permalink(getattr(page, "url", ""))
+    if current_url:
+        return [current_url]
+    try:
+        candidates = page.evaluate(
+            r"""() => Array.from(document.querySelectorAll('a[href]'))
+                .map(link => link.href || link.getAttribute('href') || '')
+                .filter(href => /\/(?:[A-Za-z0-9._]+\/)?(?:p|reel)\/[^/?#]+/i.test(href))"""
+        )
+    except Exception:
+        return None
+    permalinks: list[str] = []
+    for candidate in candidates if isinstance(candidates, list) else []:
+        permalink = _normalize_instagram_post_permalink(candidate)
+        if permalink and permalink not in permalinks:
+            permalinks.append(permalink)
+    return permalinks
+
+
+def _instagram_profile_page_ready(page, profile_url: str) -> bool:
+    expected_url = _normalize_instagram_profile_url(profile_url)
+    current_url = _normalize_instagram_profile_url(getattr(page, "url", ""))
+    if not expected_url or current_url != expected_url:
+        return False
+    body_text = _page_body_text_lower(page, timeout_ms=3500)
+    if not body_text:
+        return False
+    blocked_markers = (
+        "log in to instagram",
+        "sign up to see photos",
+        "sorry, this page isn't available",
+        "page isn't available",
+    )
+    return not any(marker in body_text for marker in blocked_markers)
+
+
+def _capture_instagram_profile_baseline(
+    page,
+    profile_url: str,
+    logger: AutomationLogger,
+) -> set[str] | None:
+    if not profile_url:
+        return None
+    last_error = ""
+    for attempt in range(2):
+        try:
+            _goto(
+                page,
+                profile_url,
+                logger,
+                "instagram_publish_baseline",
+                timeout_ms=20000,
+                networkidle_ms=2500,
+            )
+            permalinks = _find_instagram_post_permalinks(page)
+            if permalinks:
+                return set(permalinks)
+            if permalinks == [] and _instagram_profile_page_ready(page, profile_url):
+                return set()
+            last_error = "Instagram profile did not expose a stable post grid."
+        except Exception as exc:
+            last_error = str(exc)
+        if attempt == 0:
+            _sleep_between(0.8, 1.2)
+    logger.log(
+        "warn",
+        "instagram_publish_baseline_failed",
+        "发布前无法读取 Instagram 账号主页基线。",
+        {"profile_url": profile_url, "error": last_error[:500]},
+    )
+    return None
+
+
+def _wait_for_instagram_own_post(
+    page,
+    logger: AutomationLogger,
+    *,
+    profile_url: str,
+    previous_permalinks: set[str],
+    payload: dict[str, Any] | None = None,
+    cancel_event: Any | None = None,
+) -> dict[str, Any]:
+    target_url = _normalize_instagram_profile_url(profile_url)
+    if not target_url:
+        return {"confirmed": False, "reason": "Instagram 账号主页地址无效。", "url": ""}
+    confirm_seconds = _safe_int(
+        (payload or {}).get("profile_confirm_seconds")
+        or os.getenv("SOCIAL_AUTOMATION_INSTAGRAM_PROFILE_CONFIRM_SECONDS"),
+        120,
+    )
+    confirm_seconds = max(30, min(confirm_seconds, 300))
+    refresh_limit = _safe_int(
+        (payload or {}).get("profile_confirm_refreshes")
+        or os.getenv("SOCIAL_AUTOMATION_INSTAGRAM_PROFILE_CONFIRM_REFRESHES"),
+        2,
+    )
+    refresh_limit = max(0, min(refresh_limit, 3))
+    baseline = {
+        permalink
+        for value in previous_permalinks
+        if (permalink := _normalize_instagram_post_permalink(value))
+    }
+    try:
+        _goto(
+            page,
+            target_url,
+            logger,
+            "instagram_publish_profile",
+            timeout_ms=20000,
+            networkidle_ms=2500,
+        )
+    except Exception as exc:
+        _raise_if_cancelled(cancel_event)
+        logger.log(
+            "warn",
+            "instagram_publish_profile_open_slow",
+            "提交后打开 Instagram 账号主页超时，将继续轮询发布结果。",
+            {"profile_url": target_url, "error": str(exc)[:500]},
+        )
+    started_at = time.monotonic()
+    deadline = started_at + confirm_seconds
+    refresh_count = 0
+    while time.monotonic() < deadline:
+        _raise_if_cancelled(cancel_event)
+        current_permalinks = _find_instagram_post_permalinks(page)
+        if current_permalinks is not None:
+            new_permalinks = [
+                permalink
+                for permalink in current_permalinks
+                if permalink not in baseline
+            ]
+            if new_permalinks:
+                return {
+                    "confirmed": True,
+                    "reason": "已在 Instagram 账号主页定位到本次发布帖子的链接。",
+                    "url": new_permalinks[0],
+                }
+        now = time.monotonic()
+        refresh_due = (
+            refresh_count < refresh_limit
+            and now - started_at >= ((refresh_count + 1) * confirm_seconds / (refresh_limit + 1))
+        )
+        if refresh_due:
+            refresh_count += 1
+            try:
+                page.reload(wait_until="commit", timeout=10000)
+            except Exception as exc:
+                _raise_if_cancelled(cancel_event)
+                logger.log(
+                    "debug",
+                    "instagram_publish_profile_refresh",
+                    "Instagram 账号主页刷新未完成，将继续确认发布结果。",
+                    {"error": str(exc)[:500]},
+                )
+        _wait_for_cancellation(random.uniform(1.8, 2.6), cancel_event)
+    return {
+        "confirmed": False,
+        "reason": "发布已提交，但 Instagram 账号主页未看到本次发布内容。",
+        "url": str(getattr(page, "url", "") or target_url),
+    }
+
+
+def _instagram_publish_evidence_page_ready(page, permalink: str, caption: str) -> bool:
+    expected_url = _normalize_instagram_post_permalink(permalink)
+    current_url = _normalize_instagram_post_permalink(getattr(page, "url", ""))
+    if not expected_url or current_url != expected_url:
+        return False
+    try:
+        body_text = " ".join(str(page.locator("body").inner_text(timeout=3500) or "").lower().split())
+    except Exception:
+        return False
+    if not body_text:
+        return False
+    blocked_markers = (
+        "log in to instagram",
+        "sign up to see photos",
+        "sorry, this page isn't available",
+        "page isn't available",
+    )
+    if any(marker in body_text for marker in blocked_markers):
+        return False
+    normalized_caption = " ".join(str(caption or "").lower().split())
+    return not normalized_caption or normalized_caption in body_text
+
+
+def _capture_instagram_publish_evidence(
+    page,
+    permalink: str,
+    caption: str,
+    screenshot_dir: Path,
+    task: dict[str, Any],
+    logger: AutomationLogger,
+) -> str:
+    max_attempts = 3
+    last_error = ""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            _goto(
+                page,
+                permalink,
+                logger,
+                "instagram_publish_result",
+                timeout_ms=20000,
+                networkidle_ms=3500,
+            )
+            if not _instagram_publish_evidence_page_ready(page, permalink, caption):
+                raise RuntimeError("Instagram did not render the confirmed post and caption.")
+            _sleep_between(1.0, 1.6)
+            screenshot = _screenshot(page, screenshot_dir, task, "publish_done", logger)
+            if not screenshot:
+                raise RuntimeError("The validated Instagram publish evidence screenshot could not be saved.")
+            return screenshot
+        except Exception as exc:
+            last_error = str(exc)
+            if attempt < max_attempts:
+                logger.log(
+                    "warn",
+                    "instagram_publish_evidence_retry",
+                    "Instagram 发布凭证页面尚未稳定，正在重新打开帖子页面后重试。",
+                    {
+                        "url": permalink,
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "error": last_error[:500],
+                    },
+                )
+                _sleep_between(0.8, 1.2)
+    logger.log(
+        "warn",
+        "instagram_publish_evidence_not_ready",
+        "Instagram 发布已确认，但最终帖子页面连续重试后仍未稳定。",
+        {"url": permalink, "attempts": max_attempts, "error": last_error[:500]},
+    )
+    return ""
+
+
 def _run_publish_post(
     page,
     task,
@@ -5015,6 +5290,61 @@ def _run_publish_post(
             context_control,
             cancel_event,
         )
+    confirmation_state = payload.get("_publish_confirmation")
+    if isinstance(confirmation_state, dict) and confirmation_state.get("phase") == "confirm_only":
+        caption = str(confirmation_state.get("caption") or payload.get("caption") or "").strip()
+        profile_url = _normalize_instagram_profile_url(confirmation_state.get("profile_url"))
+        raw_baseline = confirmation_state.get("baseline_permalinks")
+        if not profile_url or not isinstance(raw_baseline, list):
+            raise RuntimeError("Instagram publish confirmation context is incomplete; refusing to publish again.")
+        previous_permalinks = {
+            permalink
+            for value in raw_baseline
+            if (permalink := _normalize_instagram_post_permalink(value))
+        }
+        with _temporary_background_page(page, logger, "instagram_publish_confirmation_background") as verification_page:
+            profile_confirmation = _wait_for_instagram_own_post(
+                verification_page,
+                logger,
+                profile_url=profile_url,
+                previous_permalinks=previous_permalinks,
+                payload=payload,
+                cancel_event=cancel_event,
+            )
+            permalink = (
+                _normalize_instagram_post_permalink(profile_confirmation.get("url"))
+                if profile_confirmation.get("confirmed")
+                else ""
+            )
+            shot = (
+                _capture_instagram_publish_evidence(
+                    verification_page,
+                    permalink,
+                    caption,
+                    screenshot_dir,
+                    task,
+                    logger,
+                )
+                if permalink
+                else ""
+            )
+        if not permalink or not shot:
+            reason = str(
+                profile_confirmation.get("reason")
+                or "Instagram publish is still awaiting permalink evidence."
+            )
+            raise PublishConfirmationPendingError(reason, "", confirmation_state)
+        published = {
+            **profile_confirmation,
+            "confirmed": True,
+            "submitted": True,
+            "url": permalink,
+            "permalink": permalink,
+            "profile_confirmed": True,
+            "confirmation_source": "profile_permalink",
+        }
+        return {"ok": True, "published": published, "url": permalink, "screenshot_path": shot}
+
     media_paths = [str(p) for p in (payload.get("media_paths") or []) if str(p or "").strip()]
     caption = str(payload.get("caption") or "").strip()
     if not media_paths:
@@ -5023,6 +5353,20 @@ def _run_publish_post(
     if missing:
         raise FileNotFoundError(f"媒体文件不存在：{missing[0]}")
     _goto(page, INSTAGRAM_HOME, logger, "publish_open")
+    profile_url = _instagram_profile_url(account)
+    if not profile_url:
+        raise RuntimeError("无法从 Instagram 账号信息确定主页地址。")
+    with _temporary_background_page(page, logger, "instagram_publish_baseline_background") as verification_page:
+        baseline_used_primary_page = verification_page is page
+        previous_permalinks = _capture_instagram_profile_baseline(
+            verification_page,
+            profile_url,
+            logger,
+        )
+    if previous_permalinks is None:
+        raise RuntimeError("发布前无法读取 Instagram 账号主页基线，已停止任务且未点击发布按钮。")
+    if baseline_used_primary_page:
+        _goto(page, INSTAGRAM_HOME, logger, "publish_open")
     if payload.get("warmup", True):
         _warmup_scroll(page, logger, 1)
     if not _click_text_button(page, logger, ["Create", "New post", "Create new post"], "publish_create"):
@@ -5043,6 +5387,16 @@ def _run_publish_post(
         text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
         logger.log("info", "publish_text_input", "正在填写 Instagram 帖子正文。", {"mode": text_input_mode, "chars": len(caption)})
         _type_text(page, caption, mode=text_input_mode, logger=logger, stage="publish_text_input")
+    confirmation_state = {
+        "phase": "confirm_only",
+        "platform": "instagram",
+        "profile_url": profile_url,
+        "baseline_permalinks": sorted(previous_permalinks),
+        "caption": caption,
+        "media_count": len(media_paths),
+        "submitted_at": int(time.time()),
+    }
+
     def submit_instagram() -> None:
         if not _click_text_button(page, logger, ["Share"], "publish_share"):
             raise RuntimeError("未找到 Instagram 分享按钮。")
@@ -5065,9 +5419,55 @@ def _run_publish_post(
             shot,
         )
         raise PublishOutcomeUnknownError(reason, shot)
-    _wait_for_cancellation(5, cancel_event)
-    shot = _screenshot(page, screenshot_dir, task, "publish_done", logger)
-    return {"ok": True, "published": success, "url": page.url, "screenshot_path": shot}
+    with _temporary_background_page(page, logger, "instagram_publish_evidence_background") as verification_page:
+        profile_confirmation = _wait_for_instagram_own_post(
+            verification_page,
+            logger,
+            profile_url=profile_url,
+            previous_permalinks=previous_permalinks,
+            payload=payload,
+            cancel_event=cancel_event,
+        )
+        permalink = (
+            _normalize_instagram_post_permalink(profile_confirmation.get("url"))
+            if profile_confirmation.get("confirmed")
+            else ""
+        )
+        shot = (
+            _capture_instagram_publish_evidence(
+                verification_page,
+                permalink,
+                caption,
+                screenshot_dir,
+                task,
+                logger,
+            )
+            if permalink
+            else ""
+        )
+    if not permalink or not shot:
+        reason = str(
+            profile_confirmation.get("reason")
+            or "Instagram 发布已提交，但尚未取得具体帖子页面截图。"
+        )
+        message = f"{reason} 为避免重复发布，任务只会继续确认，不会再次点击发布。"
+        logger.log(
+            "warn",
+            "instagram_publish_confirmation_pending",
+            message,
+            {"submit": success, "profile": profile_confirmation},
+        )
+        raise PublishConfirmationPendingError(message, "", confirmation_state)
+    published = {
+        **success,
+        **profile_confirmation,
+        "confirmed": True,
+        "url": permalink,
+        "permalink": permalink,
+        "profile_confirmed": True,
+        "confirmation_source": "profile_permalink",
+    }
+    return {"ok": True, "published": published, "url": permalink, "screenshot_path": shot}
 
 
 def _wait_for_publish_success(

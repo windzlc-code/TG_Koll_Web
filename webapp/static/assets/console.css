@@ -1142,7 +1142,7 @@ button.primary,
 }
 
 .persona-dashboard-view .persona-person-layout {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 0;
 }
 
@@ -6030,42 +6030,6 @@ body.persona-touch-dragging .persona-list-card:active {
   border-style: dashed;
 }
 
-.persona-list-card.persona-account-health--healthy {
-  border-color: var(--persona-status-success-ink);
-  background: color-mix(in srgb, var(--persona-status-success-ink) 6%, var(--panel-solid));
-  box-shadow: inset 0 0 0 1px var(--persona-status-success-ink);
-}
-
-.persona-list-card.persona-account-health--warning {
-  border-color: var(--persona-status-running-ink);
-  background: color-mix(in srgb, var(--persona-status-running-ink) 7%, var(--panel-solid));
-  box-shadow: inset 0 0 0 1px var(--persona-status-running-ink);
-}
-
-.persona-list-card.persona-account-health--danger {
-  border-color: var(--persona-status-error-ink);
-  background: color-mix(in srgb, var(--persona-status-error-ink) 7%, var(--panel-solid));
-  box-shadow: inset 0 0 0 1px var(--persona-status-error-ink);
-}
-
-.persona-list-card.persona-account-health--healthy:hover,
-.persona-list-card.persona-account-health--healthy.is-active {
-  border-color: var(--persona-status-success-ink);
-  box-shadow: inset 0 0 0 1px var(--persona-status-success-ink);
-}
-
-.persona-list-card.persona-account-health--warning:hover,
-.persona-list-card.persona-account-health--warning.is-active {
-  border-color: var(--persona-status-running-ink);
-  box-shadow: inset 0 0 0 1px var(--persona-status-running-ink);
-}
-
-.persona-list-card.persona-account-health--danger:hover,
-.persona-list-card.persona-account-health--danger.is-active {
-  border-color: var(--persona-status-error-ink);
-  box-shadow: inset 0 0 0 1px var(--persona-status-error-ink);
-}
-
 .persona-account-health-icon {
   display: inline-grid;
   place-items: center;
@@ -6102,7 +6066,7 @@ body.persona-touch-dragging .persona-list-card:active {
   min-width: 36px;
   max-width: 36px;
   min-height: 32px;
-  align-self: start;
+  align-self: center;
   padding: 0;
   border: 0;
   background: transparent;
@@ -8539,7 +8503,7 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-profile-identity--compact .persona-profile-list-toggle {
-  align-self: start;
+  align-self: center;
   width: 34px;
   min-width: 34px;
   height: 34px;
@@ -9163,11 +9127,57 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 8px;
 }
 
-.persona-account-picker > p {
+.persona-account-picker-intro {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   margin: 0;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.45;
+}
+
+.persona-account-picker-intro .persona-account-binding-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--accent);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.persona-account-picker-empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 18px 14px;
+  text-align: center;
+}
+
+.persona-account-picker-empty-state .persona-account-binding-icon {
+  width: 28px;
+  height: 28px;
+  color: var(--accent);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.persona-account-picker-empty-state strong {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.persona-account-picker-empty-state > span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .persona-account-picker-card {
@@ -9176,6 +9186,9 @@ body.persona-touch-dragging .persona-list-card:active {
   min-height: 0;
   max-width: none;
   grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "main main"
+    "meta action";
   gap: 6px 10px;
   padding: 10px 12px;
   border: 1px solid var(--line);
@@ -9197,51 +9210,76 @@ body.persona-touch-dragging .persona-list-card:active {
   opacity: 0.65;
 }
 
-.persona-account-picker-card-main,
-.persona-account-picker-card-status,
-.persona-account-picker-card-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.persona-account-picker-card-main {
-  grid-column: 1 / -1;
-}
-
-.persona-account-picker-card-copy {
+.persona-account-picker-card .account-pool-card-main {
   display: grid;
+  grid-area: main;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "platform status"
+    "username totp";
+  align-items: center;
+  gap: 4px 7px;
   min-width: 0;
-  gap: 1px;
 }
 
-.persona-account-picker-card-copy strong {
+.persona-account-picker-card .account-pool-card-platform {
+  grid-area: platform;
+  justify-self: start;
+}
+
+.persona-account-picker-card .account-pool-card-copy,
+.persona-account-picker-card .account-pool-card-title-line {
+  display: contents;
+}
+
+.persona-account-picker-card .account-pool-card-copy strong {
+  grid-area: username;
+  min-width: 0;
+  overflow: hidden;
   font-size: 15px;
   line-height: 1.2;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.persona-account-picker-card-copy small,
-.persona-account-picker-card-meta {
-  color: var(--muted);
-  font-size: 12px;
+.persona-account-picker-card .account-pool-card-flags {
+  display: contents;
 }
 
-.persona-account-picker-card-status {
-  flex: 0 0 auto;
+.persona-account-picker-card .account-pool-card-flags .status {
+  grid-area: status;
+  align-self: center;
+  justify-self: end;
 }
 
-.persona-account-picker-card-status .status {
+.persona-account-picker-card .account-totp-badge {
+  grid-area: totp;
+  align-self: center;
+  justify-self: end;
+}
+
+/* Keep picker status chips identical to the compact account-pool card. */
+.persona-account-picker-card .account-pool-card-flags .status,
+.persona-account-picker-card .account-totp-badge {
+  min-height: 20px;
+  padding: 2px 6px;
+  font-size: 10px;
+  line-height: 1.15;
+}
+
+.persona-account-picker-card .account-pool-card-flags .status {
   align-items: center;
   gap: 3px;
 }
 
 .persona-account-picker-card-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.persona-account-picker-card-meta {
   display: grid;
-  grid-column: 1;
-  grid-row: 2;
+  grid-area: meta;
   grid-template-columns: minmax(0, 1fr);
   justify-items: start;
   gap: 4px;
@@ -9256,33 +9294,49 @@ body.persona-touch-dragging .persona-list-card:active {
   overflow-wrap: anywhere;
 }
 
-.persona-account-picker-card-meta .persona-account-picker-binding {
+.persona-account-picker-card .persona-account-picker-binding {
   border-color: var(--accent);
   color: var(--accent-dark);
   font-weight: 800;
 }
 
-.persona-account-picker-card-meta .persona-account-picker-binding.is-bound {
+.persona-account-picker-card .persona-account-picker-binding.is-bound {
   border-color: #d6a957;
   background: #fff8e8;
   color: #9a5a00;
 }
 
-.persona-account-picker-card-meta .persona-account-picker-binding.is-current {
+.persona-account-picker-card .persona-account-picker-binding.is-current {
   border-color: #6f9f8b;
   background: #eef8f2;
   color: #18734d;
 }
 
 .persona-account-picker-card-action {
-  grid-column: 2;
-  grid-row: 2;
-  align-self: center;
-  padding: 2px 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  grid-area: action;
+  align-self: end;
+  padding-top: 2px;
   justify-self: end;
   color: var(--accent-dark);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 850;
+}
+
+.persona-account-picker-card-action.is-current { color: #18734d; }
+.persona-account-picker-card-action.is-replace { color: #9a5a00; }
+
+.persona-account-picker-card-action .persona-account-binding-icon,
+.persona-account-picker-card-action .ui-action-icon {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .persona-profile-editor-form label {
@@ -12727,6 +12781,20 @@ body.persona-media-sorting {
   box-shadow: var(--shadow);
   padding: 18px;
   isolation: isolate;
+  transform-origin: center bottom;
+  animation: vecto-console-modal-dialog-bottom-slide-in 180ms cubic-bezier(.22, .9, .3, 1) both;
+}
+
+@keyframes vecto-console-modal-dialog-bottom-slide-in {
+  from { transform: translateY(28px); }
+  to { transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console-modal,
+  .console-modal-dialog {
+    animation: none;
+  }
 }
 
 .console-modal-head {
@@ -14513,6 +14581,10 @@ body.persona-media-sorting {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.account-pool-layout--standalone > .account-pool-persona-shell {
+  display: none;
+}
+
 .account-pool-main,
 .account-pool-persona-shell {
   min-width: 0;
@@ -14817,6 +14889,29 @@ body.persona-media-sorting {
 .account-pool-add-button span::after {
   width: 3px;
   height: 15px;
+}
+
+.persona-account-add-button:not(.is-add) > span::before,
+.persona-account-add-button:not(.is-add) > span::after {
+  display: none;
+}
+
+.persona-account-add-button:not(.is-add):is(:hover, :focus-visible) > span,
+.persona-account-add-button:not(.is-add).is-opening > span,
+.persona-account-add-button:not(.is-add).is-modal-open > span,
+.persona-account-add-button:not(.is-add).is-closing > span {
+  transform: none;
+  animation: none;
+}
+
+.persona-account-add-button > span > .ui-action-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .account-pool-add-button strong {
@@ -16415,6 +16510,17 @@ button.proxy-market-link {
   cursor: pointer;
 }
 
+.account-pool-card > .persona-profile-list-toggle {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+}
+
 .account-pool-card--persona {
   padding-left: 12px;
 }
@@ -17895,7 +18001,58 @@ body.live-browser-modal-open {
 .task-row .task-status-text,
 .task-persona-queue-row .task-status-text {
   display: inline-flex;
-  font-size: 15px;
+  min-height: 24px;
+  max-width: 92px;
+  padding: 0 8px;
+  border-width: 1px;
+  font-size: 13px;
+}
+
+.publish-platform-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.automation-capsule-tabs.publish-platform-picker-tabs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  overflow: visible;
+}
+
+.publish-platform-picker-tabs button {
+  grid-column: 1;
+  min-width: 0;
+}
+
+.publish-platform-picker-tabs button > svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.publish-platform-picker-tabs button > svg.platform-brand-icon {
+  fill: currentColor;
+  stroke: none;
+}
+
+.publish-platform-picker-tabs button > small {
+  color: inherit;
+  font-size: 11px;
+  opacity: .72;
+}
+
+.publish-platform-picker-account {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .task-row .task-status-text.is-success,
@@ -20387,6 +20544,14 @@ body.console-page {
     overflow: hidden;
   }
 
+  .account-pool-layout--standalone > .account-pool-persona-shell {
+    display: grid;
+  }
+
+  .account-pool-card:not(.account-pool-card--persona) .row-actions {
+    padding-right: 38px;
+  }
+
   .persona-mobile-list-toggle {
     display: inline-flex;
   }
@@ -22377,6 +22542,14 @@ body.console-page {
     overflow-wrap: anywhere;
     -webkit-line-clamp: unset;
     line-clamp: unset;
+  }
+
+  .publish-history-card .publish-post-card-snippet {
+    display: block;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
   .persona-draft-card p {

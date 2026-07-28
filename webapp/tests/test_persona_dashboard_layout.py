@@ -806,6 +806,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("account-pool-add-row persona-account-action-row", panel)
         self.assertIn("persona-account-action-row", panel)
         self.assertIn("data-persona-account-add", panel)
+        self.assertIn("personaAccountPickerTriggerDisplay", panel)
+        self.assertIn("persona-account-add-button", panel)
         account_add_handler_start = self.console_script.index(
             'const personaAccountAdd = event.target.closest("[data-persona-account-add]");'
         )
@@ -847,10 +849,15 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         picker = self.console_script[picker_start:picker_end]
 
         self.assertNotIn("!String(account?.persona_id", picker)
-        self.assertIn("personaAccountPoolCandidates(normalizedPlatform)", picker)
+        self.assertIn("personaAccountPoolCandidates(normalizedPlatform, persona)", picker)
         self.assertIn("replace_existing_binding: true", picker)
         self.assertNotIn("require_unbound: true", picker)
-        self.assertIn("必要时替换该平台当前绑定", picker)
+        self.assertIn("persona-account-picker-intro", picker)
+        self.assertIn('renderPersonaAccountBindingIcon("bind")', picker)
+        self.assertIn("currentPersonaId", picker)
+        self.assertIn("String(account?.persona_id || \"\").trim() !== currentPersonaId", picker)
+        self.assertIn("persona-account-picker-empty-state", picker)
+        self.assertIn('renderPersonaAccountBindingIcon("replace")', picker)
 
     def test_persona_account_settings_reuses_the_mobile_platform_rail_and_swipe(self):
         self.assertIn("function bindPersonaAccountPlatformSwipe(host)", self.console_script)
@@ -1711,12 +1718,79 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             generation_panel.index("${renderPublishLinkSettings(persona)}"),
             generation_panel.index("renderPersonaInlineMediaComposer"),
         )
+
+    def test_account_pool_cards_open_the_existing_persona_binding_drawer(self):
+        card_start = self.console_script.index("function renderAccountPoolCard(account")
+        card_end = self.console_script.index("\nfunction renderAccountPoolCards", card_start)
+        card_renderer = self.console_script[card_start:card_end]
+        self.assertIn(
+            'renderPersonaProfileListToggle("accountPoolPersonaSidebar")',
+            card_renderer,
+        )
+
+        pool_start = self.console_script.index("function renderAccountPool()")
+        pool_end = self.console_script.index("\nfunction bindAccountPoolPlatformSwipe", pool_start)
+        pool_renderer = self.console_script[pool_start:pool_end]
+        self.assertIn(
+            "${renderAccountPoolPersonaSidebar(selectedAccount)}",
+            pool_renderer,
+        )
+
+        account_click_start = self.console_script.index(
+            'const personaMobileToggle = event.target.closest("[data-persona-mobile-list-toggle]");',
+            self.console_script.index('if ($("accountBrowserShell"))'),
+        )
+        account_click_end = self.console_script.index(
+            'if (event.target.closest("[data-persona-mobile-list-close]',
+            account_click_start,
+        )
+        account_click = self.console_script[account_click_start:account_click_end]
+        self.assertIn("selectAccountPoolAccount", account_click)
+        self.assertIn('setPersonaMobileSidebarOpen(true, "accountPoolPersonaSidebar")', account_click)
+
+        social_render_start = self.console_script.index("function renderSocialAccounts()")
+        social_render_end = self.console_script.index(
+            "\nfunction setAccountBrowserPanel",
+            social_render_start,
+        )
+        social_render = self.console_script[social_render_start:social_render_end]
+        self.assertIn("reopenAccountPoolPersonaSidebar", social_render)
+        self.assertIn(
+            'setPersonaMobileSidebarOpen(true, "accountPoolPersonaSidebar")',
+            social_render,
+        )
+
+        self.assertIn(".account-pool-card > .persona-profile-list-toggle {", self.styles)
+        self.assertIn(
+            ".account-pool-layout--standalone > .account-pool-persona-shell {",
+            self.styles,
+        )
         self.assertIn(".publish-link-settings {", self.styles)
         self.assertIn(".publish-link-settings button[data-persona-open-links] .ui-link-icon {", self.styles)
         self.assertIn(".persona-compose-media-stack > .publish-link-settings", self.styles)
         self.assertNotIn('<span class="publish-link-settings-label">', self.console_script)
         self.assertNotIn("publish-link-settings-label", self.styles)
         self.assertNotIn('<span class="publish-link-settings-label">临时链接</span>', self.console_script)
+
+    def test_persona_account_health_icon_precedes_ungrouped_badge(self):
+        card_start = self.console_script.index("function renderPersonaCard")
+        card_end = self.console_script.index("\nfunction renderPersonaFolder", card_start)
+        card_renderer = self.console_script[card_start:card_end]
+
+        title_start = card_renderer.index('class="persona-card-title"')
+        title_end = card_renderer.index("${isPublishContext", title_start)
+        title_markup = card_renderer[title_start:title_end]
+        self.assertLess(
+            title_markup.index("persona-account-health-icon"),
+            title_markup.index("persona-ungrouped-badge"),
+        )
+
+        status_start = card_renderer.index('class="persona-card-status"')
+        status_markup = card_renderer[status_start:]
+        self.assertLess(
+            status_markup.index("persona-account-health-icon"),
+            status_markup.index("persona-ungrouped-badge"),
+        )
 
     def test_link_templates_use_one_unified_ending_content_field(self):
         self.assertIn('label>结尾内容', self.console_script)
@@ -2469,11 +2543,15 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
     def test_persona_account_picker_shows_binding_status_without_browser_environment_copy(self):
         self.assertIn("function personaAccountBindingDisplay(", self.console_script)
+        self.assertIn("function personaAccountPickerTriggerDisplay(", self.console_script)
+        self.assertIn("function renderPersonaAccountBindingIcon(", self.console_script)
         self.assertIn('label: "可选 · 未绑定人设"', self.console_script)
         self.assertIn("已绑定人设：${currentPersona?.name || currentPersonaId}", self.console_script)
         self.assertIn("添加后替换", self.console_script)
         self.assertIn("persona-account-picker-binding", self.console_script)
         self.assertIn("persona-account-picker-proxy", self.console_script)
+        self.assertIn("persona-account-picker-card-action is-${esc(binding.actionKind)}", self.console_script)
+        self.assertIn("renderPersonaAccountBindingIcon(binding.actionKind)", self.console_script)
         self.assertNotIn("浏览器环境已配置", self.console_script)
         self.assertNotIn("浏览器环境未配置", self.console_script)
         self.assertNotIn("已配置浏览器环境", self.console_script)
@@ -2481,7 +2559,75 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("grid-template-columns: minmax(0, 1fr) auto;", self.styles)
         self.assertIn(".persona-account-picker-card-meta {\n  display: grid;", self.styles)
         self.assertIn("grid-template-columns: minmax(0, 1fr);", self.styles)
-        self.assertIn(".persona-account-picker-card-meta .persona-account-picker-binding.is-bound", self.styles)
+        self.assertIn(".persona-account-picker-card .persona-account-picker-binding.is-bound", self.styles)
+
+    def test_persona_account_picker_uses_stateful_icons_and_proxy_aligned_actions(self):
+        self.assertIn('action: "绑定账号", actionKind: "bind"', self.console_script)
+        self.assertIn('action: "已绑定",\n      actionKind: "current"', self.console_script)
+        self.assertIn('action: "替换绑定",\n    actionKind: "replace"', self.console_script)
+        self.assertIn('label: "更换账号"', self.console_script)
+        self.assertIn('label: "绑定账号"', self.console_script)
+        self.assertIn('label: "添加账号"', self.console_script)
+        card_start = self.styles.index(".persona-account-picker-card {")
+        card_rule = self.styles[card_start:self.styles.index("}", card_start) + 1]
+        self.assertIn('"meta action"', card_rule)
+        self.assertNotIn('"action action"', card_rule)
+        self.assertIn(".persona-account-picker-card-action.is-current", self.styles)
+        self.assertIn(".persona-account-picker-card-action.is-replace", self.styles)
+        self.assertIn(".persona-account-add-button:not(.is-add) > span::before", self.styles)
+
+    def test_shared_console_modal_uses_a_bottom_slide_without_fade_or_scale(self):
+        keyframe_start = self.styles.index("@keyframes vecto-console-modal-dialog-bottom-slide-in {")
+        dialog_start = self.styles.rindex(".console-modal-dialog {", 0, keyframe_start)
+        modal_start = self.styles.rindex(".console-modal {", 0, dialog_start)
+        modal_rule = self.styles[modal_start:self.styles.index("}", modal_start) + 1]
+        dialog_rule = self.styles[dialog_start:self.styles.index("}", dialog_start) + 1]
+        keyframe_rule = self.styles[keyframe_start:self.styles.index("}", self.styles.index("}", keyframe_start) + 1) + 1]
+
+        self.assertNotIn("animation:", modal_rule)
+        self.assertIn("transform-origin: center bottom;", dialog_rule)
+        self.assertIn("animation: vecto-console-modal-dialog-bottom-slide-in", dialog_rule)
+        self.assertIn("transform: translateY(28px);", keyframe_rule)
+        self.assertNotIn("opacity:", keyframe_rule)
+        self.assertNotIn("scale(", keyframe_rule)
+
+    def test_persona_account_picker_reuses_account_pool_identity_field_order(self):
+        picker_start = self.console_script.index("function renderPersonaAccountPoolPickerCard(")
+        picker_end = self.console_script.index("\nasync function bindPoolAccountToPersona", picker_start)
+        picker = self.console_script[picker_start:picker_end]
+        helper_start = self.console_script.index("function renderAccountPoolCardFields(")
+        helper_end = self.console_script.index("\nfunction renderAccountPoolCard(", helper_start)
+        helper = self.console_script[helper_start:helper_end]
+
+        self.assertIn("renderAccountPoolCardFields(account)", picker)
+        self.assertIn('"platform status"', self.styles)
+        self.assertIn('"username totp"', self.styles)
+        self.assertLess(helper.index("account-pool-card-platform"), helper.index("account-pool-card-copy"))
+        self.assertLess(helper.index("account-pool-card-copy"), helper.index("account-pool-card-flags"))
+
+    def test_persona_account_picker_reuses_compact_account_pool_status_styles(self):
+        selector = ".persona-account-picker-card .account-pool-card-flags .status,\n.persona-account-picker-card .account-totp-badge {"
+        start = self.styles.index(selector)
+        rule = self.styles[start:self.styles.index("}", start) + 1]
+
+        self.assertIn("min-height: 20px;", rule)
+        self.assertIn("padding: 2px 6px;", rule)
+        self.assertIn("font-size: 10px;", rule)
+        self.assertIn("line-height: 1.15;", rule)
+
+    def test_persona_account_picker_places_totp_on_the_account_pool_second_row(self):
+        main_selector = ".persona-account-picker-card .account-pool-card-main {"
+        main_start = self.styles.index(main_selector)
+        main_rule = self.styles[main_start:self.styles.index("}", main_start) + 1]
+        flags_selector = ".persona-account-picker-card .account-pool-card-flags {"
+        flags_start = self.styles.index(flags_selector)
+        flags_rule = self.styles[flags_start:self.styles.index("}", flags_start) + 1]
+
+        self.assertIn('"platform status"', main_rule)
+        self.assertIn('"username totp"', main_rule)
+        self.assertIn("display: contents;", flags_rule)
+        self.assertIn("grid-area: status;", self.styles)
+        self.assertIn("grid-area: totp;", self.styles)
 
     def test_mobile_persona_dashboard_posts_load_at_the_bottom_without_replacing_desktop_pager(self):
         self.assertIn('const PD_MOBILE_TWEET_STREAM_QUERY = "(max-width: 760px)";', self.dashboard_script)

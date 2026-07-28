@@ -2978,6 +2978,163 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertFalse(result["confirmed"])
 
+    def test_instagram_permalink_is_normalized_without_query_string(self):
+        self.assertEqual(
+            runner._normalize_instagram_post_permalink(
+                "https://instagram.com/p/ABC123/?utm_source=ig_web_copy_link"
+            ),
+            "https://www.instagram.com/p/ABC123/",
+        )
+        self.assertEqual(
+            runner._normalize_instagram_post_permalink(
+                "https://www.instagram.com/reel/REEL456/"
+            ),
+            "https://www.instagram.com/reel/REEL456/",
+        )
+        self.assertEqual(
+            runner._normalize_instagram_post_permalink(
+                "https://www.instagram.com/windzlc123/p/PROFILE_LINK/"
+            ),
+            "https://www.instagram.com/p/PROFILE_LINK/",
+        )
+        self.assertEqual(
+            runner._normalize_instagram_post_permalink(
+                "https://www.instagram.com/windzlc123/"
+            ),
+            "",
+        )
+
+    def test_instagram_publish_evidence_requires_permalink_and_caption(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/p/ABC123/?img_index=1"
+        page.locator.return_value.inner_text.return_value = (
+            "windzlc123\nInstagram 自动发布链路测试\n1 like"
+        )
+
+        self.assertTrue(
+            runner._instagram_publish_evidence_page_ready(
+                page,
+                "https://www.instagram.com/p/ABC123/",
+                "Instagram 自动发布链路测试",
+            )
+        )
+        self.assertFalse(
+            runner._instagram_publish_evidence_page_ready(
+                page,
+                "https://www.instagram.com/p/OTHER/",
+                "Instagram 自动发布链路测试",
+            )
+        )
+        self.assertFalse(
+            runner._instagram_publish_evidence_page_ready(
+                page,
+                "https://www.instagram.com/p/ABC123/",
+                "另一条并未发布的正文",
+            )
+        )
+
+    def test_instagram_final_screenshot_opens_confirmed_post_content(self):
+        page = mock.Mock()
+        permalink = "https://www.instagram.com/p/ABC123/"
+
+        with (
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(
+                runner,
+                "_instagram_publish_evidence_page_ready",
+                return_value=True,
+            ) as evidence_ready,
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_screenshot", return_value="instagram-final.png") as screenshot,
+        ):
+            result = runner._capture_instagram_publish_evidence(
+                page,
+                permalink,
+                "published caption",
+                Path("."),
+                {"id": "instagram-task"},
+                _Logger(),
+            )
+
+        self.assertEqual(result, "instagram-final.png")
+        goto.assert_called_once_with(
+            page,
+            permalink,
+            mock.ANY,
+            "instagram_publish_result",
+            timeout_ms=20000,
+            networkidle_ms=3500,
+        )
+        evidence_ready.assert_called_once_with(page, permalink, "published caption")
+        screenshot.assert_called_once_with(
+            page,
+            Path("."),
+            {"id": "instagram-task"},
+            "publish_done",
+            mock.ANY,
+        )
+
+    def test_instagram_publish_returns_permalink_and_concrete_post_screenshot(self):
+        page = mock.Mock()
+        page.url = runner.INSTAGRAM_HOME
+        media_path = Path(__file__).resolve()
+        permalink = "https://www.instagram.com/p/ABC123/"
+
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(
+                runner,
+                "_capture_instagram_profile_baseline",
+                return_value={"https://www.instagram.com/p/OLD/"},
+            ),
+            mock.patch.object(runner, "_click_text_button", return_value=True),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_type_text"),
+            mock.patch.object(runner, "_human_click"),
+            mock.patch.object(
+                runner,
+                "_run_publish_submit_action",
+                side_effect=lambda _control, _cancel, action: action(),
+            ),
+            mock.patch.object(
+                runner,
+                "_wait_for_publish_success",
+                return_value={"confirmed": True, "reason": "Post shared"},
+            ),
+            mock.patch.object(
+                runner,
+                "_wait_for_instagram_own_post",
+                return_value={"confirmed": True, "reason": "profile match", "url": permalink},
+            ) as confirm_profile,
+            mock.patch.object(
+                runner,
+                "_capture_instagram_publish_evidence",
+                return_value="instagram-evidence.png",
+            ) as capture_evidence,
+            mock.patch.object(runner, "_screenshot") as direct_screenshot,
+        ):
+            result = runner._run_publish_post(
+                page,
+                {"id": "instagram-publish"},
+                {
+                    "caption": "published caption",
+                    "media_paths": [str(media_path)],
+                    "warmup": False,
+                },
+                Path("."),
+                _Logger(),
+                "instagram",
+                {"username": "publisher"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["url"], permalink)
+        self.assertEqual(result["published"]["permalink"], permalink)
+        self.assertEqual(result["screenshot_path"], "instagram-evidence.png")
+        confirm_profile.assert_called_once()
+        capture_evidence.assert_called_once()
+        direct_screenshot.assert_not_called()
+
     def test_instagram_publish_confirmation_stops_immediately_when_cancelled(self):
         page = mock.Mock()
         page.url = runner.INSTAGRAM_HOME
@@ -3001,6 +3158,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             mock.patch.object(runner, "_goto"),
             mock.patch.object(runner, "_warmup_scroll"),
             mock.patch.object(runner, "_click_text_button", return_value=True),
+            mock.patch.object(runner, "_capture_instagram_profile_baseline", return_value=set()),
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner, "_run_publish_submit_action", side_effect=lambda _control, _cancel, action: action()),
             mock.patch.object(
@@ -3018,6 +3176,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                     Path("."),
                     _Logger(),
                     "instagram",
+                    {"username": "publisher"},
                 )
 
         self.assertTrue(raised.exception.publish_submitted)
