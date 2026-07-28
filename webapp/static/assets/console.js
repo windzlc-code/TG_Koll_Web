@@ -23611,6 +23611,9 @@ function renderLiveBrowserSessions() {
       </div>
       <div class="live-browser-grid"></div>
     </section>
+    <div class="live-browser-stop-all-dock" aria-label="浏览器任务操作">
+      <button type="button" class="danger live-browser-stop-all--bottom" data-social-cancel-all disabled>停止全部任务</button>
+    </div>
   `;
     panel = host.querySelector(".live-browser-panel");
   }
@@ -25088,6 +25091,14 @@ async function openScheduledSocialTaskEditor(task = {}) {
 
   setSelectedPersonaId(personaId);
   const taskType = String(task?.task_type || task?.type || "").trim();
+  const isAutomationPlanTask = (candidate, candidatePayload = {}) => Boolean(
+    String(candidate?.automation_plan_id || candidatePayload?._automation_plan_id || "").trim(),
+  );
+  if (isAutomationPlanTask(task, payload)) {
+    state.simpleBranches.publishing = "automation_tasks";
+    setWorkspaceModule("publishing");
+    return;
+  }
   if (taskType === "publish_post") {
     const source = String(payload.archive_post_source || "posts").trim() === "favorites" ? "favorites" : "posts";
     const postId = String(payload.archive_post_id || "").trim();

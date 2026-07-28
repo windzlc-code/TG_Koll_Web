@@ -19642,10 +19642,38 @@ body.console-page {
   }
 }
 
+.live-browser-stop-all-dock {
+  display: none;
+}
+
 /* Mobile browser monitor: keep the live surface focused. */
 @media (max-width: 760px) {
   .console-page .account-browser-page[data-account-browser-page="browsers"] .live-browser-head-actions {
     display: none;
+  }
+
+  .console-page .account-browser-page[data-account-browser-page="browsers"] {
+    padding-bottom: calc(var(--mobile-task-dock-height) + 58px);
+  }
+
+  .console-page .account-browser-page[data-account-browser-page="browsers"] .live-browser-stop-all-dock {
+    position: fixed;
+    z-index: 1400;
+    right: 0;
+    bottom: var(--mobile-task-dock-height);
+    left: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+    pointer-events: none;
+  }
+
+  .console-page .account-browser-page[data-account-browser-page="browsers"] .live-browser-stop-all--bottom {
+    grid-column: 2;
+    min-height: 50px;
+    padding: 9px 18px;
+    font-size: 16px;
+    font-weight: 900;
+    pointer-events: auto;
   }
 }
 

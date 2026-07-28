@@ -182,7 +182,7 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         self.assertIn("[data-automation-plan-view-details]", bindings)
         self.assertIn("openAutomationPlanTaskDetails", bindings)
 
-    def test_scheduled_social_log_exposes_an_edit_route_to_the_existing_task_pages(self):
+    def test_scheduled_social_log_routes_plan_tasks_back_to_automation(self):
         start = CONSOLE_JS.index("async function showSocialLog")
         end = CONSOLE_JS.index("async function openPersonalConsoleView", start)
         social_log = CONSOLE_JS[start:end]
@@ -193,9 +193,14 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         self.assertIn("isFutureScheduledSocialTask(task)", social_log)
         self.assertIn('extraActions: canEditScheduledTask ? [{ value: "edit", text: "编辑任务", primary: true }] : []', social_log)
         self.assertIn("if (action === \"edit\") await openScheduledSocialTaskEditor(task);", social_log)
-        self.assertIn('taskType === "publish_post"', editor)
+        self.assertIn("const isAutomationPlanTask", editor)
+        self.assertIn("if (isAutomationPlanTask(task, payload))", editor)
+        self.assertLess(
+            editor.index("if (isAutomationPlanTask(task, payload))"),
+            editor.index('if (taskType === "publish_post")'),
+        )
         self.assertIn('setWorkspaceModule("publishing")', editor)
-        self.assertIn('setWorkspaceModule("automation")', editor)
+        self.assertIn('state.simpleBranches.publishing = "automation_tasks"', editor)
 
     def test_selected_task_uses_replace_icon_and_plan_run_states_are_visible(self):
         rows = function_source("renderAutomationPlanRows", "automationPlanStatusLabel")

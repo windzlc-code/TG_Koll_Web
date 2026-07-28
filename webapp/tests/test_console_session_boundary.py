@@ -844,7 +844,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn(".live-browser-card-actions", mobile_controls)
         self.assertIn("justify-content: flex-start;", mobile_controls)
 
-    def test_mobile_browser_monitor_hides_head_actions_without_sticky_stop_button(self):
+    def test_mobile_browser_monitor_uses_a_sticky_stop_all_button(self):
         render = self._function_source("renderLiveBrowserSessions")
         mobile_overrides = self.styles[self.styles.index("/* Mobile browser monitor:"):]
         head_actions = self._css_block(
@@ -853,10 +853,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
 
         self.assertIn('class="danger live-browser-stop-all--head" data-social-cancel-all disabled', render)
-        self.assertNotIn("live-browser-stop-all--bottom", render)
+        self.assertIn('class="danger live-browser-stop-all--bottom" data-social-cancel-all disabled', render)
         self.assertIn(".live-browser-head-actions", mobile_overrides)
         self.assertIn("display: none;", head_actions)
-        self.assertNotIn("live-browser-stop-all--bottom", mobile_overrides)
+        self.assertIn(".live-browser-stop-all-dock", mobile_overrides)
+        self.assertIn("position: fixed;", mobile_overrides)
 
     def test_mobile_live_browser_placeholders_and_expanded_window_prioritizes_media(self):
         mobile_density_start = self.styles.index(
