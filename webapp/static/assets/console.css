@@ -2556,6 +2556,12 @@ textarea:focus {
   background: var(--panel-solid);
 }
 
+/* The active-plan stop control is the card's single primary action. */
+.automation-plan-card > [data-automation-plan-cancel] {
+  box-sizing: border-box;
+  width: 100%;
+}
+
 .automation-plan-head,
 .automation-plan-history-head,
 .automation-plan-submit-row,

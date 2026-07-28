@@ -25061,7 +25061,8 @@ async function showSocialLog(id) {
   const data = await api(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(id)}/logs`);
   const logs = Array.isArray(data.logs) ? data.logs : [];
   const task = data.task || state.socialTasks.find((item) => String(item.id || "") === String(id || "")) || {};
-  await openConsoleModal({
+  const canEditScheduledTask = isFutureScheduledSocialTask(task);
+  const action = await openConsoleModal({
     title: "自动化日志",
     contentHtml: renderTaskDetailLayout(task, logs, {
       kind: "social",
@@ -25070,7 +25071,41 @@ async function showSocialLog(id) {
     }),
     confirmText: "关闭",
     showCancel: false,
+    extraActions: canEditScheduledTask ? [{ value: "edit", text: "编辑任务", primary: true }] : [],
+    modalKey: "social-task-log",
   });
+  if (action === "edit") await openScheduledSocialTaskEditor(task);
+}
+
+async function openScheduledSocialTaskEditor(task = {}) {
+  const payload = socialTaskPayload(task);
+  const personaId = String(task?.persona_id || payload.persona_id || payload.archive_id || "").trim();
+  const persona = state.personas.find((item) => String(item?.id || "") === personaId) || null;
+  if (!persona) {
+    showMsg("commandMsg", "未找到该定时任务所属人设，无法打开编辑页面。", false);
+    return;
+  }
+
+  setSelectedPersonaId(personaId);
+  const taskType = String(task?.task_type || task?.type || "").trim();
+  if (taskType === "publish_post") {
+    const source = String(payload.archive_post_source || "posts").trim() === "favorites" ? "favorites" : "posts";
+    const postId = String(payload.archive_post_id || "").trim();
+    if (source === "favorites") await loadPersonaFavoritePosts(personaId);
+    else await loadPersonaDraftPosts(personaId);
+    state.publishContentSource = source;
+    if (postId) {
+      setSelectedPersonaPostId(postId);
+      setPublishSelectedPostIds(persona, source, [postId]);
+      ensurePersonaPostPageForPost(persona, source, postId, publishSourceRows(persona, source));
+    }
+    state.simpleBranches.publishing = "publish_now";
+    setWorkspaceModule("publishing");
+    return;
+  }
+
+  state.simpleBranches.automation = automationPlanStepForTask(taskType);
+  setWorkspaceModule("automation");
 }
 
 async function openPersonalConsoleView(view) {
