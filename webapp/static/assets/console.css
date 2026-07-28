@@ -15133,8 +15133,8 @@ body.persona-media-sorting {
   display: grid;
   grid-template-columns: minmax(150px, 1fr) 48px minmax(180px, 1.2fr) auto;
   align-items: center;
-  gap: 8px 12px;
-  padding: 9px 10px;
+  gap: 6px 10px;
+  padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--soft);
@@ -15177,18 +15177,24 @@ body.persona-media-sorting {
 
 .account-totp-code-value > button {
   display: inline-grid;
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  min-height: 32px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
   padding: 0;
-  border-radius: 8px;
+  border: 0;
+  background: transparent;
   place-items: center;
 }
 
 .account-totp-code-value > button .ui-action-icon {
-  width: 15px;
-  height: 15px;
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .account-totp-countdown {

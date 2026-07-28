@@ -21865,6 +21865,8 @@ function accountById(accountId = "") {
 }
 
 function accountPasswordMask(account) {
+  const passwordLength = Math.max(0, Math.trunc(Number(account?.login_password_length) || 0));
+  if (passwordLength) return "•".repeat(passwordLength);
   return account?.login_password_configured ? "••••••••" : "未设置";
 }
 
@@ -23068,7 +23070,6 @@ function createAccountTotpController(modal, account) {
           </div>
           <dl class="account-totp-meta">
             <div><dt>更新时间</dt><dd data-account-totp-updated>尚无记录</dd></div>
-            <div><dt>最近验证</dt><dd data-account-totp-verified>尚无记录</dd></div>
           </dl>
           <div class="account-totp-code-actions">
             <button type="button" class="account-inline-action" data-account-totp-update>${renderReplaceIcon()}<span>更新密钥</span></button>
@@ -23079,7 +23080,6 @@ function createAccountTotpController(modal, account) {
       card = body.querySelector("[data-account-totp-code-card]");
     }
     card.querySelector("[data-account-totp-updated]").textContent = accountTotpDateLabel(totp?.updated_at);
-    card.querySelector("[data-account-totp-verified]").textContent = accountTotpDateLabel(totp?.last_verified_at);
     const copyButton = card.querySelector("[data-account-totp-copy]");
     const codeValue = String(currentCode?.code || "").trim();
     if (currentCode) {

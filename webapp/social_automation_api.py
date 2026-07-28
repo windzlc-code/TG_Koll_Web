@@ -9655,6 +9655,7 @@ def _account_public(row: Any, proxy_row: Any | None = None, totp_row: Any | None
         "health_detail": str(item.get("health_detail") or ""),
         "login_username": str(item.get("login_username") or "") or str(item.get("username") or ""),
         "login_password_configured": bool(str(item.get("login_password") or "")),
+        "login_password_length": len(str(item.get("login_password") or "")),
         "login_credentials_updated_at": int(item.get("login_credentials_updated_at") or 0),
         "totp_configured": bool(totp["configured"]),
         "totp_status": str(totp["status"]),
