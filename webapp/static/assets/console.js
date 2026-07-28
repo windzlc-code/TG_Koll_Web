@@ -6280,6 +6280,55 @@ function scrollConsolePageToTop() {
   window.scrollTo({ top: 0, left: 0, behavior });
 }
 
+let mobileTaskDockPageAnimation = null;
+
+function mobileTaskDockNavigationDirection(button) {
+  const dock = button?.closest?.(".mobile-task-dock");
+  if (!dock) return 0;
+  const buttons = Array.from(dock.querySelectorAll(".mobile-task-dock-button"));
+  const currentIndex = buttons.findIndex((item) => item.classList.contains("is-active"));
+  const targetIndex = buttons.indexOf(button);
+  if (currentIndex < 0 || targetIndex < 0 || currentIndex === targetIndex) return 0;
+  return targetIndex > currentIndex ? 1 : -1;
+}
+
+function animateMobileTaskDockPage(direction) {
+  if (
+    !direction
+    || !window.matchMedia?.("(max-width: 820px)")?.matches
+    || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
+  ) return;
+  const main = document.querySelector(".console-main");
+  if (!main?.animate) return;
+  mobileTaskDockPageAnimation?.cancel();
+  const distance = Math.min(56, Math.max(32, Math.round(window.innerWidth * 0.12)));
+  const animation = main.animate(
+    [
+      { transform: `translate3d(${direction * distance}px, 0, 0)` },
+      { transform: "translate3d(0, 0, 0)" },
+    ],
+    {
+      duration: 180,
+      easing: "cubic-bezier(.2, .72, .2, 1)",
+    },
+  );
+  mobileTaskDockPageAnimation = animation;
+  animation.finished
+    .catch(() => {})
+    .finally(() => {
+      if (mobileTaskDockPageAnimation === animation) {
+        mobileTaskDockPageAnimation = null;
+      }
+    });
+}
+
+function commitMobileTaskDockNavigation(button, commit) {
+  const direction = mobileTaskDockNavigationDirection(button);
+  slideSegmentedButtonBackground(button).catch(() => {});
+  commit();
+  animateMobileTaskDockPage(direction);
+}
+
 function renderModuleMenu() {
   updateWorkspaceFlow();
   $("moduleMenu").innerHTML = `<div class="module-accordion">${modules.map((item) => {
@@ -26253,8 +26302,7 @@ function bindEvents() {
         setView(nextView);
       };
       if (dockButton) {
-        slideSegmentedButtonBackground(dockButton).catch(() => {});
-        commitView();
+        commitMobileTaskDockNavigation(dockButton, commitView);
         return;
       }
       setMenuClickHighlight(viewButton, viewButton.closest(".module-accordion-item") || viewButton);
@@ -26287,8 +26335,7 @@ function bindEvents() {
         else syncModuleMenuState();
       };
       if (dockButton) {
-        slideSegmentedButtonBackground(dockButton).catch(() => {});
-        commitModule();
+        commitMobileTaskDockNavigation(dockButton, commitModule);
         return;
       }
       setMenuClickHighlight(button, button.closest(".module-accordion-item") || button);

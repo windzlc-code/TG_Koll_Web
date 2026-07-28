@@ -744,11 +744,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("activeTransientWorkspaceState()", handler)
         self.assertEqual(handler.count("if (dockButton) {"), 2)
         self.assertEqual(
-            handler.count("slideSegmentedButtonBackground(dockButton).catch(() => {});"),
+            handler.count("commitMobileTaskDockNavigation(dockButton,"),
             2,
         )
-        self.assertIn("commitView();\n        return;", handler)
-        self.assertIn("commitModule();\n        return;", handler)
+        self.assertIn("commitMobileTaskDockNavigation(dockButton, commitView);", handler)
+        self.assertIn("commitMobileTaskDockNavigation(dockButton, commitModule);", handler)
         self.assertLess(
             handler.index("scrollConsolePageToTop();"),
             handler.index('event.target.closest("[data-workspace-view]")'),
@@ -2167,11 +2167,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("syncMobileTaskDockState(dock);", renderer)
         self.assertNotIn("--mobile-task-dock-offset", renderer)
         self.assertNotIn(".mobile-task-dock::before", dock_styles)
-        self.assertEqual(
-            navigation.count("slideSegmentedButtonBackground(dockButton).catch(() => {});"),
-            2,
-        )
-        self.assertNotIn("await slideSegmentedButtonBackground(dockButton)", navigation)
+        self.assertEqual(navigation.count("commitMobileTaskDockNavigation(dockButton,"), 2)
+        self.assertNotIn("await commitMobileTaskDockNavigation", navigation)
         self.assertIn(
             ".mobile-task-dock.is-segment-background-sliding::before {\n"
             "  will-change: transform;\n"
@@ -2190,6 +2187,27 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             'if (window.matchMedia("(max-width: 820px)").matches) renderSocialAccounts();',
             self.console_script,
         )
+
+    def test_mobile_task_dock_page_and_indicator_slide_start_in_the_same_commit(self):
+        start = self.console_script.index("function mobileTaskDockNavigationDirection(button)")
+        end = self.console_script.index("\nfunction renderModuleMenu()", start)
+        helper = self.console_script[start:end]
+
+        self.assertIn("function animateMobileTaskDockPage(direction)", helper)
+        self.assertIn('window.matchMedia?.("(max-width: 820px)")?.matches', helper)
+        self.assertIn('window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches', helper)
+        self.assertIn("mobileTaskDockPageAnimation?.cancel();", helper)
+        self.assertIn("transform: `translate3d(${direction * distance}px, 0, 0)`", helper)
+        self.assertIn('transform: "translate3d(0, 0, 0)"', helper)
+        self.assertIn("duration: 180", helper)
+        self.assertIn('easing: "cubic-bezier(.2, .72, .2, 1)"', helper)
+        self.assertIn("function commitMobileTaskDockNavigation(button, commit)", helper)
+        self.assertLess(
+            helper.index("slideSegmentedButtonBackground(button).catch(() => {});"),
+            helper.index("commit();"),
+        )
+        self.assertLess(helper.index("commit();"), helper.index("animateMobileTaskDockPage(direction);"))
+        self.assertNotIn("await ", helper)
 
     def test_draft_detail_omits_content_type_but_keeps_detail_media(self):
         detail = self.console_script[
