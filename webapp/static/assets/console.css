@@ -23160,11 +23160,11 @@ body.console-page {
   height: 44px;
   min-height: 44px;
   padding: 0 18px;
-  color: #e7f7f3;
-  background: rgb(14 49 46 / 84%);
-  border: 1px solid rgb(128 209 196 / 62%);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgb(0 0 0 / 32%);
+  color: #ffffff;
+  background: #1f2429;
+  border: 1px solid #1f2429;
+  border-radius: 7px;
+  box-shadow: 0 6px 16px rgb(15 23 42 / 26%);
   cursor: pointer;
   pointer-events: auto;
   transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 180ms ease;
@@ -23188,10 +23188,10 @@ body.console-page {
 
 .console-page .live-browser-input-toggle:hover,
 .console-page .live-browser-input-toggle[aria-expanded="true"] {
-  color: #f3fffc;
-  background: rgb(29 97 89 / 88%);
-  border-color: rgb(173 244 232 / 78%);
-  box-shadow: 0 5px 15px rgb(0 0 0 / 38%);
+  color: #ffffff;
+  background: #343a40;
+  border-color: #343a40;
+  box-shadow: 0 8px 18px rgb(15 23 42 / 32%);
 }
 
 .console-page .live-browser-tools {
@@ -23206,7 +23206,7 @@ body.console-page {
   overflow: hidden;
   opacity: 0;
   visibility: hidden;
-  color: #e7f7f3;
+  color: #181c20;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 7px;
@@ -23222,9 +23222,11 @@ body.console-page {
   gap: 6px;
   opacity: 1;
   visibility: visible;
-  background: rgb(7 25 25 / 94%);
-  border-color: rgb(102 206 191 / 62%);
-  box-shadow: 0 9px 24px rgb(0 0 0 / 48%);
+  background: rgb(236 239 243 / 78%);
+  border-color: rgb(215 219 224 / 86%);
+  box-shadow: 0 10px 28px rgb(15 23 42 / 24%), 0 1px 2px rgb(15 23 42 / 10%);
+  -webkit-backdrop-filter: blur(10px) saturate(115%);
+  backdrop-filter: blur(10px) saturate(115%);
   pointer-events: auto;
   transform: translateX(0);
   transition-delay: 0s;
@@ -23233,13 +23235,14 @@ body.console-page {
 .console-page .live-browser-tools input {
   display: block;
   flex: 1 1 0;
+  align-self: center;
   min-width: 0;
   height: 38px;
   min-height: 38px;
   padding: 7px 10px;
-  color: #eafff9;
-  background: #102523;
-  border: 1px solid rgb(118 197 185 / 68%);
+  color: #181c20;
+  background: #ffffff;
+  border: 1px solid #c8ced6;
   border-radius: 6px;
   font: inherit;
   line-height: 1.35;
@@ -23247,12 +23250,12 @@ body.console-page {
 }
 
 .console-page .live-browser-tools input:focus {
-  border-color: rgb(172 244 232 / 88%);
-  box-shadow: 0 0 0 2px rgb(91 202 185 / 24%);
+  border-color: #5b6168;
+  box-shadow: 0 0 0 3px rgb(52 58 64 / 12%);
 }
 
 .console-page .live-browser-tools input::placeholder {
-  color: #86aaa3;
+  color: #8a939d;
 }
 
 .console-page .live-browser-tools button {
@@ -23263,10 +23266,10 @@ body.console-page {
   height: 40px;
   min-height: 40px;
   padding: 0 12px;
-  color: #e7f7f3;
-  background: rgb(21 53 50 / 84%);
-  border: 1px solid rgb(125 204 192 / 58%);
-  border-radius: 5px;
+  color: #181c20;
+  background: #f8f9fa;
+  border: 1px solid #d7dbe0;
+  border-radius: 6px;
   font-size: 12px;
   font-weight: 700;
 }
@@ -23296,19 +23299,19 @@ body.console-page {
 .console-page .live-browser-tools .live-browser-tool-button:hover:not(:disabled),
 .console-page .live-browser-tools .live-browser-tool-button:focus-visible {
   transform: translateY(-1px);
-  box-shadow: 0 4px 10px rgb(0 0 0 / 28%);
+  box-shadow: 0 5px 12px rgb(15 23 42 / 16%);
 }
 
 .console-page .live-browser-tools [data-live-browser-type] {
   color: #fff;
-  background: rgb(20 117 105 / 88%);
-  border-color: rgb(113 224 208 / 72%);
+  background: #343a40;
+  border-color: #343a40;
 }
 
 .console-page .live-browser-tools [data-live-browser-key] {
-  color: #e7f7f3;
-  background: rgb(21 53 50 / 84%);
-  border-color: rgb(125 204 192 / 58%);
+  color: #343a40;
+  background: #f8f9fa;
+  border-color: #d7dbe0;
 }
 
 @media (max-width: 760px) {
