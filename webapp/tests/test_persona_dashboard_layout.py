@@ -2316,7 +2316,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("mobileTaskDockPageAnimation?.cancel();", helper)
         self.assertIn("left: `${direction * distance}px`", helper)
         self.assertIn('left: "0px"', helper)
-        self.assertNotIn("translate3d(", helper)
+        page_keyframes = helper[
+            helper.index("const keyframes = ["):
+            helper.index("const publishActionKeyframes = [")
+        ]
+        self.assertNotIn("translate3d(", page_keyframes)
         self.assertIn("duration: 180", helper)
         self.assertIn('easing: "cubic-bezier(.2, .72, .2, 1)"', helper)
         self.assertIn(

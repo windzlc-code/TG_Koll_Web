@@ -6371,6 +6371,7 @@ function scrollConsolePageToTop() {
 
 let mobileTaskDockPageAnimation = null;
 let mobileTaskDockToolbarAnimation = null;
+let mobileTaskDockPublishActionAnimation = null;
 let mobileTaskDockCommitToken = 0;
 let mobileTaskDockCommitFrame = 0;
 let mobileTaskDockPendingButton = null;
@@ -6402,13 +6403,19 @@ function animateMobileTaskDockPage(direction) {
   ) return;
   const page = document.querySelector(".console-main > .view.is-active");
   const toolbar = $("mobilePageToolbar");
-  if (!page?.animate && !toolbar?.animate) return;
+  const publishAction = page?.querySelector(".command-actions.publish-command-actions");
+  if (!page?.animate && !toolbar?.animate && !publishAction?.animate) return;
   mobileTaskDockPageAnimation?.cancel();
   mobileTaskDockToolbarAnimation?.cancel();
+  mobileTaskDockPublishActionAnimation?.cancel();
   const distance = Math.min(56, Math.max(32, Math.round(window.innerWidth * 0.12)));
   const keyframes = [
     { left: `${direction * distance}px` },
     { left: "0px" },
+  ];
+  const publishActionKeyframes = [
+    { transform: `translate3d(${direction * distance}px, 0, 0)` },
+    { transform: "translate3d(0, 0, 0)" },
   ];
   const timing = {
     duration: 180,
@@ -6416,8 +6423,12 @@ function animateMobileTaskDockPage(direction) {
   };
   const animation = page?.animate ? page.animate(keyframes, timing) : null;
   const toolbarAnimation = toolbar?.animate ? toolbar.animate(keyframes, timing) : null;
+  const publishActionAnimation = publishAction?.animate
+    ? publishAction.animate(publishActionKeyframes, timing)
+    : null;
   mobileTaskDockPageAnimation = animation;
   mobileTaskDockToolbarAnimation = toolbarAnimation;
+  mobileTaskDockPublishActionAnimation = publishActionAnimation;
   animation?.finished
     .catch(() => {})
     .finally(() => {
@@ -6430,6 +6441,13 @@ function animateMobileTaskDockPage(direction) {
     .finally(() => {
       if (mobileTaskDockToolbarAnimation === toolbarAnimation) {
         mobileTaskDockToolbarAnimation = null;
+      }
+    });
+  publishActionAnimation?.finished
+    .catch(() => {})
+    .finally(() => {
+      if (mobileTaskDockPublishActionAnimation === publishActionAnimation) {
+        mobileTaskDockPublishActionAnimation = null;
       }
     });
 }

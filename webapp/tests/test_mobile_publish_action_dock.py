@@ -9,6 +9,26 @@ STYLES = (ROOT / "webapp" / "static" / "assets" / "console.css").read_text(encod
 
 
 class MobilePublishActionDockTests(unittest.TestCase):
+    def test_fixed_publish_action_joins_mobile_page_slide(self):
+        start = SCRIPT.index("function animateMobileTaskDockPage(direction)")
+        end = SCRIPT.index("\nfunction commitMobileTaskDockNavigation", start)
+        helper = SCRIPT[start:end]
+
+        self.assertIn(
+            'page?.querySelector(".command-actions.publish-command-actions")',
+            helper,
+        )
+        self.assertIn("mobileTaskDockPublishActionAnimation?.cancel();", helper)
+        self.assertIn("publishAction.animate(publishActionKeyframes, timing)", helper)
+        self.assertIn(
+            'transform: `translate3d(${direction * distance}px, 0, 0)`',
+            helper,
+        )
+        self.assertIn('transform: "translate3d(0, 0, 0)"', helper)
+        self.assertNotIn('page?.querySelector(".command-actions")', helper)
+        self.assertNotIn('document.querySelector(".mobile-task-dock")', helper)
+        self.assertNotIn("#executeSimpleFlow", helper)
+
     def test_mobile_dock_reuses_the_existing_publish_action(self):
         self.assertIn('class="command-actions ${moduleId === "publishing" ? `publish-command-actions${publishSelectionExpanded ? " is-selection-expanded" : ""}` : ""}"', SCRIPT)
         self.assertIn('id="executeSimpleFlow"', SCRIPT)
