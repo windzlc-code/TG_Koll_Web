@@ -5945,7 +5945,7 @@ function syncPersonaDashboardStyles(view) {
 
 function setView(view) {
   if (view === "settings") view = "workspace";
-  cancelMobileDeferredModuleRender();
+  cancelMobileTaskDockCommit();
   cancelMobileTweetStreamLoading();
   const scrollSnapshot = snapshotConsoleScrollState();
   const layoutLocks = captureConsoleLayoutLocks();
@@ -6353,6 +6353,7 @@ function syncMobileTaskDockState(dock = $("mobileTaskDock")) {
 
 function isCurrentMobileTaskDockTarget(button) {
   if (!button?.classList.contains("mobile-task-dock-button")) return false;
+  if (mobileTaskDockPendingButton) return mobileTaskDockPendingButton === button;
   const moduleId = String(button.dataset.module || "");
   if (moduleId) return state.view === "workspace" && moduleId === state.activeModule;
 
@@ -6370,8 +6371,10 @@ function scrollConsolePageToTop() {
 
 let mobileTaskDockPageAnimation = null;
 let mobileTaskDockToolbarAnimation = null;
-let mobileDeferredModuleRenderToken = 0;
-let mobileDeferredModuleRenderFrame = 0;
+let mobileTaskDockCommitToken = 0;
+let mobileTaskDockCommitFrame = 0;
+let mobileTaskDockPendingButton = null;
+let mobileTaskDockFrozenPage = null;
 
 function mobileTaskDockNavigationDirection(button) {
   const dock = button?.closest?.(".mobile-task-dock");
@@ -6383,48 +6386,23 @@ function mobileTaskDockNavigationDirection(button) {
   return targetIndex > currentIndex ? 1 : -1;
 }
 
-function cancelMobileDeferredModuleRender() {
-  mobileDeferredModuleRenderToken += 1;
-  if (mobileDeferredModuleRenderFrame) {
-    window.cancelAnimationFrame(mobileDeferredModuleRenderFrame);
-    mobileDeferredModuleRenderFrame = 0;
+function cancelMobileTaskDockCommit() {
+  mobileTaskDockCommitToken += 1;
+  if (mobileTaskDockCommitFrame) {
+    window.cancelAnimationFrame(mobileTaskDockCommitFrame);
+    mobileTaskDockCommitFrame = 0;
   }
-  const moduleBody = $("moduleBody");
-  if (!moduleBody) return;
-  moduleBody.inert = false;
-  moduleBody.removeAttribute("aria-busy");
-  delete moduleBody.dataset.pendingModule;
+  mobileTaskDockPendingButton = null;
+  mobileTaskDockFrozenPage?.removeAttribute("aria-busy");
+  mobileTaskDockFrozenPage = null;
 }
 
-function scheduleMobileDeferredModuleRender(moduleId) {
-  const moduleBody = $("moduleBody");
-  if (!moduleBody) {
-    renderWorkspace(false, false);
-    return { deferredMobileRender: false };
-  }
-  const token = ++mobileDeferredModuleRenderToken;
-  moduleBody.inert = true;
-  moduleBody.setAttribute("aria-busy", "true");
-  moduleBody.dataset.pendingModule = moduleId;
-  mobileDeferredModuleRenderFrame = window.requestAnimationFrame(() => {
-    mobileDeferredModuleRenderFrame = window.requestAnimationFrame(() => {
-      mobileDeferredModuleRenderFrame = 0;
-      if (token !== mobileDeferredModuleRenderToken || state.activeModule !== moduleId) return;
-      try {
-        renderWorkspace(false, false);
-      } finally {
-        if (token === mobileDeferredModuleRenderToken) {
-          moduleBody.inert = false;
-          moduleBody.removeAttribute("aria-busy");
-          delete moduleBody.dataset.pendingModule;
-        }
-      }
-      syncTaskQueueAutoRefresh();
-      syncAccountStatusAutoRefresh();
-      syncLiveBrowserAutoRefresh();
-    });
-  });
-  return { deferredMobileRender: true };
+function previewMobileTaskDockToolbar(button) {
+  const title = $("mobilePageToolbarTitle");
+  const icon = $("mobilePageToolbarIcon");
+  const sourceIcon = button?.querySelector(".mobile-task-dock-icon");
+  if (title) title.textContent = button?.querySelector("span")?.textContent?.trim() || "";
+  if (icon && sourceIcon) icon.innerHTML = sourceIcon.innerHTML;
 }
 
 function animateMobileTaskDockPage(direction, { freezePage = false } = {}) {
@@ -6470,9 +6448,26 @@ function animateMobileTaskDockPage(direction, { freezePage = false } = {}) {
 function commitMobileTaskDockNavigation(button, commit) {
   const direction = mobileTaskDockNavigationDirection(button);
   slideSegmentedButtonBackground(button).catch(() => {});
-  const result = commit();
-  animateMobileTaskDockPage(direction, {
-    freezePage: Boolean(result?.deferredMobileRender),
+  previewMobileTaskDockToolbar(button);
+  animateMobileTaskDockPage(direction, { freezePage: true });
+  cancelMobileTaskDockCommit();
+  const token = ++mobileTaskDockCommitToken;
+  mobileTaskDockPendingButton = button;
+  mobileTaskDockFrozenPage = document.querySelector(".console-main > .view.is-active");
+  mobileTaskDockFrozenPage?.setAttribute("aria-busy", "true");
+  mobileTaskDockCommitFrame = window.requestAnimationFrame(() => {
+    mobileTaskDockCommitFrame = window.requestAnimationFrame(() => {
+      mobileTaskDockCommitFrame = 0;
+      if (token !== mobileTaskDockCommitToken) return;
+      mobileTaskDockPendingButton = null;
+      const frozenPage = mobileTaskDockFrozenPage;
+      mobileTaskDockFrozenPage = null;
+      try {
+        commit();
+      } finally {
+        frozenPage?.removeAttribute("aria-busy");
+      }
+    });
   });
 }
 
@@ -6536,38 +6531,20 @@ function setMenuClickHighlight(button, leaveScope = button) {
   leaveScope.addEventListener("mouseleave", clear, { once: true });
 }
 
-function setModule(moduleId, { deferMobileRender = false } = {}) {
+function setModule(moduleId) {
+  cancelMobileTaskDockCommit();
   cancelMobileTweetStreamLoading();
   clearMsg("commandMsg");
   const previousModule = state.activeModule;
-  const moduleBody = $("moduleBody");
-  const renderedModule = String(moduleBody?.dataset.renderedModule || previousModule || "");
   state.activeModule = moduleId;
   if (isPersonaWorkspaceModule(moduleId) && moduleId !== previousModule) {
     state.personaGroup = personaModuleDefaultGroup(moduleId);
     setPersonaGroupStep(state.personaGroup, state.personaPanels[state.personaGroup] || personaGroups[state.personaGroup]?.defaultStep || "", selectedPersonaProfile());
   }
-  const shouldDeferRender = deferMobileRender
-    && window.matchMedia?.("(max-width: 820px)")?.matches
-    && previousModule !== moduleId
-    && ["tweet_generation", "publishing"].includes(previousModule)
-    && ["tweet_generation", "publishing"].includes(moduleId);
-  if (shouldDeferRender) {
-    syncModuleMenuState();
-    $("moduleTitle").textContent = currentModule().label;
-    syncMobilePageToolbar();
-    if (renderedModule === moduleId) {
-      cancelMobileDeferredModuleRender();
-      return { deferredMobileRender: true };
-    }
-    return scheduleMobileDeferredModuleRender(moduleId);
-  }
-  cancelMobileDeferredModuleRender();
   renderWorkspace(false, false);
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
   syncLiveBrowserAutoRefresh();
-  return { deferredMobileRender: false };
 }
 
 function selectedBranch(moduleId) {
@@ -6593,7 +6570,6 @@ function renderWorkspace(renderMenu = true, preserveScroll = true) {
   else renderSimpleFlowModule(module.id);
   renderConfirmSummary();
   syncMobilePageToolbar();
-  $("moduleBody").dataset.renderedModule = module.id;
   };
   if (preserveScroll) return withConsoleScrollPreserved(render);
   consoleScrollPreserveDepth += 1;
@@ -26544,13 +26520,8 @@ function bindEvents() {
           state.workspaceMenuOpen = true;
           setView("workspace");
         }
-        if (moduleChanged) {
-          return setModule(nextModule, {
-            deferMobileRender: Boolean(dockButton && state.view === "workspace"),
-          });
-        }
+        if (moduleChanged) setModule(nextModule);
         else syncModuleMenuState();
-        return { deferredMobileRender: false };
       };
       if (dockButton) {
         commitMobileTaskDockNavigation(dockButton, commitModule);
