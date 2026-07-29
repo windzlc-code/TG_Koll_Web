@@ -1060,11 +1060,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("top: 0;", account_meta)
         self.assertIn("display: none;", task_summary)
         self.assertIn("display: grid;", mobile_summary)
-        self.assertIn("position: absolute;", mobile_summary)
-        self.assertIn("top: 50%;", mobile_summary)
-        self.assertNotIn("calc(50% - 20px)", mobile_summary)
-        self.assertIn("left: 50%;", mobile_summary)
-        self.assertIn("transform: translate(-50%, -50%);", mobile_summary)
+        self.assertIn("position: static;", mobile_summary)
+        self.assertIn("transform: none;", mobile_summary)
         self.assertIn("grid-template-columns: repeat(2, max-content);", mobile_summary)
         self.assertIn("justify-content: center;", mobile_summary)
         self.assertIn("align-items: center;", mobile_status)
@@ -1618,8 +1615,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             "grid-template-columns: minmax(0, 1fr) auto;",
             mobile_density,
         )
-        self.assertIn("grid-column: 1 / -1;", mobile_density)
-        self.assertIn("grid-row: 2;", mobile_density)
+        self.assertIn("flex: 0 1 auto;", mobile_density)
+        self.assertLess(
+            render_session.index('class="live-browser-mobile-summary"'),
+            render_session.index('class="live-browser-expand-button"'),
+        )
         self.assertIn("justify-content: center;", mobile_density)
         self.assertIn("max-width: none;", mobile_density)
         self.assertIn("justify-self: end;", mobile_density)

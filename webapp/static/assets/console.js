@@ -25756,12 +25756,12 @@ function renderLiveBrowserSession(session) {
           <span>任务数：<b data-live-browser-task-count>${esc(taskSummary.count)}</b></span>
           <span title="${esc(taskSummary.detail)}" aria-label="${esc(`任务目标：${taskSummary.detail}`)}">任务目标：<b data-live-browser-task-target>${esc(taskSummary.target)}</b></span>
         </div>
-        <div class="live-browser-mobile-summary" aria-label="任务信息">
-          <span data-live-browser-mobile-meta>${esc(`平台：${identity.platform} · 人设：${identity.persona}`)}</span>
-          <span>任务数：<b data-live-browser-mobile-task-count>${esc(taskSummary.count)}</b></span>
-          <span title="${esc(taskSummary.detail)}" aria-label="${esc(`任务目标：${taskSummary.detail}`)}">目标：<b data-live-browser-mobile-task-target>${esc(taskSummary.target)}</b></span>
-        </div>
         <div class="live-browser-card-actions">
+          <div class="live-browser-mobile-summary" aria-label="任务信息">
+            <span data-live-browser-mobile-meta>${esc(`平台：${identity.platform} · 人设：${identity.persona}`)}</span>
+            <span>任务数：<b data-live-browser-mobile-task-count>${esc(taskSummary.count)}</b></span>
+            <span title="${esc(taskSummary.detail)}" aria-label="${esc(`任务目标：${taskSummary.detail}`)}">目标：<b data-live-browser-mobile-task-target>${esc(taskSummary.target)}</b></span>
+          </div>
           <button type="button" class="live-browser-expand-button" data-live-browser-fullscreen="${esc(sessionId)}" title="放大窗口" aria-label="放大窗口" aria-pressed="false">${renderExpandIcon()}</button>
           ${renderLiveBrowserActionMenu(session, { canStopTask, canCloseWindow })}
           <span class="status ${esc(presentationStatus)}" data-live-browser-status>${esc(liveBrowserPresentationLabel(session))}</span>

@@ -23759,9 +23759,8 @@ body.console-page {
   }
 
   .console-page .live-browser-mobile-summary {
-    grid-column: 1 / -1;
-    grid-row: 2;
     display: flex;
+    flex: 0 1 auto;
     min-width: 0;
     gap: 2px;
     align-items: center;
@@ -23855,14 +23854,12 @@ body.console-page {
   }
 
   .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-mobile-summary {
-    position: absolute;
-    top: 50%;
-    left: 50%;
+    position: static;
     display: grid;
     grid-template-columns: repeat(2, max-content);
     gap: 1px 5px;
     justify-content: center;
-    transform: translate(-50%, -50%);
+    transform: none;
     font-size: 7px;
     line-height: 1.05;
   }
