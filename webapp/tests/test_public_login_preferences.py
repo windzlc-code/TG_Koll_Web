@@ -266,14 +266,24 @@ class PublicLoginUiSourceTests(unittest.TestCase):
 
     def test_login_and_logout_reuse_the_shared_account_feedback_modal(self):
         self.assertIn("function showAuthFeedback", self.site_nav_script)
+        self.assertIn("function confirmLogout", self.site_nav_script)
+        self.assertIn("site-auth-feedback-dismiss", self.site_nav_script)
+        self.assertIn("let settled = false;", self.site_nav_script)
+        self.assertIn('确认退出登录', self.site_nav_script)
+        self.assertIn('暂不退出', self.site_nav_script)
+        self.assertIn('退出登录', self.site_nav_script)
+        self.assertIn("const confirmed = await confirmLogout();", self.site_nav_script)
+        self.assertIn("if (!confirmed) return;", self.site_nav_script)
+        self.assertIn("function authFeedbackCopyByTime", self.site_nav_script)
+        self.assertIn("authFeedbackCopyByTime,", self.site_nav_script)
         self.assertIn('class="site-auth-feedback', self.site_nav_script)
         self.assertIn("showAuthFeedback,", self.site_nav_script)
-        self.assertIn("await window.VectoSiteNavigation?.showAuthFeedback?.({", self.script)
-        self.assertIn('title: "登录成功"', self.script)
+        self.assertIn('authFeedbackCopyByTime?.("login")', self.script)
+        self.assertIn('authFeedbackCopyByTime?.("logout")', self.console_js)
+        self.assertIn('authFeedbackCopyByTime?.("logout")', (self.static_dir / "assets" / "profile.js").read_text(encoding="utf-8"))
         self.assertIn('title: "登录失败"', self.script)
-        self.assertIn('title: "已退出登录"', self.site_nav_script)
+        self.assertIn('authFeedbackCopyByTime("logout")', self.site_nav_script)
         self.assertIn('title: "退出未完成"', self.site_nav_script)
-        self.assertIn('title: "已退出登录"', self.console_js)
 
     def test_home_navigation_opens_console_or_existing_login_dialog(self):
         page = (self.static_dir / "index.html").read_text(encoding="utf-8")
@@ -468,6 +478,50 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn("--public-warm: #f5f1ec", self.fixed_light_styles)
         self.assertNotIn(".home-canvas .home-media-card img {", self.fixed_light_styles)
         self.assertNotIn(".about-canvas .about-hero-shade {", self.fixed_light_styles)
+
+    def test_home_flow_summaries_keep_inline_end_breathing_room(self):
+        flow_content_rule = self.styles.split(
+            ".home-canvas .home-flow-board li div {", 1
+        )[1].split("}", 1)[0]
+        flow_summary_rule = self.styles.split(
+            ".home-canvas .home-flow-board small {", 1
+        )[1].split("}", 1)[0]
+
+        self.assertIn("padding-inline-end: 12px;", flow_content_rule)
+        self.assertIn("flex: 0 1 auto;", flow_summary_rule)
+        self.assertIn("padding-inline-end: 0;", self.styles)
+
+    def test_subscription_light_theme_keeps_readable_text_on_a_continuous_canvas(self):
+        pricing_band_rule = self.fixed_light_styles.split(
+            ':root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-comparison-band {',
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("color: var(--public-ink);", pricing_band_rule)
+        self.assertIn("background: linear-gradient(", pricing_band_rule)
+        self.assertNotIn("#30353a", pricing_band_rule)
+        self.assertIn(
+            ':root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-public-section {\n'
+            "  color: var(--public-ink);\n"
+            "  background: transparent;\n"
+            "}",
+            self.fixed_light_styles,
+        )
+        self.assertIn(
+            ':root[data-theme="light"] body[data-login-redirect="/subscription.html"] '
+            ".pricing-comparison-band :is(\n"
+            "  h2,\n"
+            "  h3\n"
+            ") {\n"
+            "  color: var(--public-ink);\n"
+            "}",
+            self.fixed_light_styles,
+        )
+        self.assertIn(
+            ':root[data-theme="light"] body[data-login-redirect="/subscription.html"] '
+            ".pricing-mobile-tier-switch button {\n"
+            "    color: var(--public-ink-soft);",
+            self.fixed_light_styles,
+        )
 
     def test_fixed_light_palette_also_covers_authenticated_shells(self):
         for selector in (

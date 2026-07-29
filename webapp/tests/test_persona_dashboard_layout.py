@@ -1965,12 +1965,19 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-chart-placeholder--line", self.styles)
 
     def test_unbound_persona_account_badge_uses_the_compact_account_label(self):
+        details_start = self.console_script.index("function personaExecutionAccountDetails(persona)")
+        details_end = self.console_script.index("\nfunction personaExecutionAccountLabel", details_start)
+        details = self.console_script[details_start:details_end]
+        self.assertIn('const platform = String(account?.platform || (handle ? "threads" : "")).trim().toLowerCase();', details)
+        self.assertIn('platformLabel: platform ? platformLabel(platform) : "",', details)
+
         start = self.console_script.index("function renderPersonaExecutionAccountBadge(persona)")
         end = self.console_script.index("\nfunction personaSummaryCounts", start)
         badge = self.console_script[start:end]
 
-        self.assertIn('const accountLabel = profileName || handle || "未绑定";', badge)
-        self.assertIn('const label = `账号：${accountLabel}`;', badge)
+        self.assertIn("personaExecutionAccountDetails(persona)", badge)
+        self.assertIn('`平台：${executionPlatform} · 账号：${accountLabel}`', badge)
+        self.assertIn('`账号：${accountLabel}`', badge)
 
     def test_draft_source_controls_are_wide_without_quick_select(self):
         self.assertNotIn("草稿快速选择", self.console_script)

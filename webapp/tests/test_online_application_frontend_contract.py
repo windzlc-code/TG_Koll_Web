@@ -42,6 +42,22 @@ class OnlineApplicationFrontendContractTests(unittest.TestCase):
             self.pricing_script,
         )
 
+    def test_usage_price_rows_do_not_render_redundant_billing_status(self):
+        static_dir = Path(__file__).resolve().parents[1] / "static"
+        pricing_styles = (static_dir / "assets" / "opc" / "pricing.css").read_text(encoding="utf-8")
+
+        self.assertNotIn("pricing-action-state", self.pricing_script)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) 104px;", pricing_styles)
+        self.assertIn("min-height: 36px;", pricing_styles)
+
+    def test_mobile_pricing_hides_section_rail_and_compacts_package_cards(self):
+        static_dir = Path(__file__).resolve().parents[1] / "static"
+        pricing_styles = (static_dir / "assets" / "opc" / "pricing.css").read_text(encoding="utf-8")
+
+        self.assertIn(".pricing-section-nav {\n    display: none;\n  }", pricing_styles)
+        self.assertIn(".pricing-package-card { min-height: 0; gap: 3px; padding: 8px; }", pricing_styles)
+        self.assertIn(".pricing-public-section { padding-top: 18px; padding-bottom: 18px; }", pricing_styles)
+
 
 if __name__ == "__main__":
     unittest.main()

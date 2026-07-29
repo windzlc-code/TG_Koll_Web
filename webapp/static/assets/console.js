@@ -2644,6 +2644,7 @@ function statusLabel(status) {
     threads_warmup: "Threads 养号",
     instagram_warmup: "Instagram 养号",
     threads_auto_reply: "Threads 自动回复",
+    instagram_auto_reply: "Instagram 自动回复",
     browse_feed: "浏览动态",
     login_wait_timeout: "登录等待超时",
     browser_launch: "启动浏览器",
@@ -5375,12 +5376,11 @@ function personaPublishPreflight(account) {
   return {
     login: latestSuccessfulSocialTask(accountId, ["check_login", "open_login"]),
     warmup: latestSuccessfulSocialTask(accountId, ["threads_warmup", "instagram_warmup"]),
-    reply: latestSuccessfulSocialTask(accountId, ["threads_auto_reply"]),
+    reply: latestSuccessfulSocialTask(accountId, ["threads_auto_reply", "instagram_auto_reply"]),
   };
 }
 
 function personaPublishPreflightRows(account) {
-  const platform = String(account?.platform || "").trim().toLowerCase();
   const preflight = personaPublishPreflight(account);
   const rows = [
     {
@@ -5391,7 +5391,7 @@ function personaPublishPreflightRows(account) {
         : "未找到成功记录。发布前必须先执行一次登录检查。",
     },
   ];
-  if (platform === "threads") {
+  {
     rows.push(
       {
         label: "最近养号",
@@ -5493,20 +5493,30 @@ function personaBindingLabel(persona) {
   return "未绑定";
 }
 
-function personaExecutionAccountLabel(persona) {
-  const account = accountForPersona(persona);
-  const profileName = String(account?.username || account?.account_username || "").trim();
-  const handle = String(persona?.threads_account?.handle || "").trim();
-  return profileName || handle || "未绑定执行账号";
-}
-
-function renderPersonaExecutionAccountBadge(persona) {
+function personaExecutionAccountDetails(persona) {
   const account = accountForPersona(persona);
   const profileName = String(account?.username || account?.account_username || "").trim();
   const handle = String(persona?.threads_account?.handle || "").trim();
   const accountLabel = profileName || handle || "未绑定";
-  const hasExecutionAccount = Boolean(account?.id || profileName || handle);
-  const label = `账号：${accountLabel}`;
+  const platform = String(account?.platform || (handle ? "threads" : "")).trim().toLowerCase();
+  return {
+    accountLabel,
+    hasExecutionAccount: Boolean(account?.id || profileName || handle),
+    platformLabel: platform ? platformLabel(platform) : "",
+  };
+}
+
+function personaExecutionAccountLabel(persona) {
+  const { accountLabel, hasExecutionAccount, platformLabel: executionPlatform } = personaExecutionAccountDetails(persona);
+  if (!hasExecutionAccount) return "未绑定执行账号";
+  return executionPlatform ? `${executionPlatform} · ${accountLabel}` : accountLabel;
+}
+
+function renderPersonaExecutionAccountBadge(persona) {
+  const { accountLabel, hasExecutionAccount, platformLabel: executionPlatform } = personaExecutionAccountDetails(persona);
+  const label = hasExecutionAccount && executionPlatform
+    ? `平台：${executionPlatform} · 账号：${accountLabel}`
+    : `账号：${accountLabel}`;
   return `<span class="persona-status-chip ${hasExecutionAccount ? "is-ready" : "is-warning"}">${esc(label)}</span>`;
 }
 
@@ -5595,16 +5605,18 @@ var PERSONA_THREADS_STRATEGIES = {
     { id: "hot_custom", label: "自定义热点回复", payload: { strategy_id: "hot_custom", max_posts: 5, max_replies: 3, max_age_days: 30, min_views: 0, reply_scope: "hot_posts" } },
   ],
   threads_warmup: [
-    { id: "tg_default", label: "默认养号", payload: { strategy_id: "tg_default", browse_limit: 30, scroll_times: 30, like_limit: 16, max_comments: 0, comment_chance: 0 } },
-    { id: "browse_only", label: "保守养号：只浏览", payload: { strategy_id: "browse_only", browse_limit: 30, scroll_times: 30, like_limit: 0, max_comments: 0, comment_chance: 0 } },
-    { id: "like_comment", label: "互动养号：点赞 + 留言", payload: { strategy_id: "like_comment", browse_limit: 30, scroll_times: 30, like_limit: 16, max_comments: 8, comment_chance: 100 } },
-    { id: "warmup_custom", label: "自定义养号", payload: { strategy_id: "warmup_custom", browse_limit: 30, scroll_times: 30, like_limit: 0, max_comments: 0, comment_chance: 0 } },
+    { id: "tg_default", label: "默认养号", payload: { strategy_id: "tg_default", browse_limit: 80, scroll_times: 80, like_limit: 16, like_chance: 100, max_comments: 0, comment_chance: 0 } },
+    { id: "browse_only", label: "保守养号：只浏览", payload: { strategy_id: "browse_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 0, comment_chance: 0 } },
+    { id: "comment_only", label: "评论养号：只留言", payload: { strategy_id: "comment_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 8, comment_chance: 100 } },
+    { id: "like_comment", label: "互动养号：点赞 + 留言", payload: { strategy_id: "like_comment", browse_limit: 80, scroll_times: 80, like_limit: 16, like_chance: 100, max_comments: 8, comment_chance: 100 } },
+    { id: "warmup_custom", label: "自定义养号", payload: { strategy_id: "warmup_custom", browse_limit: 80, scroll_times: 80, like_limit: 0, max_comments: 0, comment_chance: 0 } },
   ],
   instagram_warmup: [
-    { id: "tg_default", label: "默认养号", payload: { strategy_id: "tg_default", browse_limit: 30, scroll_times: 30, like_limit: 16, max_comments: 0, comment_chance: 0 } },
-    { id: "browse_only", label: "保守养号：只浏览", payload: { strategy_id: "browse_only", browse_limit: 30, scroll_times: 30, like_limit: 0, max_comments: 0, comment_chance: 0 } },
-    { id: "like_comment", label: "互动养号：点赞 + 留言", payload: { strategy_id: "like_comment", browse_limit: 30, scroll_times: 30, like_limit: 16, max_comments: 8, comment_chance: 100 } },
-    { id: "warmup_custom", label: "自定义养号", payload: { strategy_id: "warmup_custom", browse_limit: 30, scroll_times: 30, like_limit: 0, max_comments: 0, comment_chance: 0 } },
+    { id: "tg_default", label: "默认养号", payload: { strategy_id: "tg_default", browse_limit: 80, scroll_times: 80, like_limit: 16, like_chance: 100, max_comments: 0, comment_chance: 0 } },
+    { id: "browse_only", label: "保守养号：只浏览", payload: { strategy_id: "browse_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 0, comment_chance: 0 } },
+    { id: "comment_only", label: "评论养号：只留言", payload: { strategy_id: "comment_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 8, comment_chance: 100 } },
+    { id: "like_comment", label: "互动养号：点赞 + 留言", payload: { strategy_id: "like_comment", browse_limit: 80, scroll_times: 80, like_limit: 16, like_chance: 100, max_comments: 8, comment_chance: 100 } },
+    { id: "warmup_custom", label: "自定义养号", payload: { strategy_id: "warmup_custom", browse_limit: 80, scroll_times: 80, like_limit: 0, max_comments: 0, comment_chance: 0 } },
   ],
 };
 globalThis.PERSONA_THREADS_STRATEGIES = PERSONA_THREADS_STRATEGIES;
@@ -8404,9 +8416,9 @@ function renderPersonaLinkPresetTable(profile, presets, selectedPresetId) {
 
 function personaAutomationTaskTypesForStep(step) {
   if (step === "login") return ["open_login"];
-  if (step === "reply_comment" || step === "reply_hot") return ["threads_auto_reply"];
+  if (step === "reply_comment" || step === "reply_hot") return ["threads_auto_reply", "instagram_auto_reply"];
   if (step === "warmup") return ["threads_warmup", "instagram_warmup"];
-  if (["open_login", "browse_feed", "browse_profile", "comment_post", "reply_comment", "like_post", "share_post", "threads_auto_reply", "instagram_warmup"].includes(String(step || ""))) return [String(step)];
+  if (["open_login", "browse_feed", "browse_profile", "comment_post", "reply_comment", "like_post", "share_post", "threads_auto_reply", "instagram_auto_reply", "instagram_warmup"].includes(String(step || ""))) return [String(step)];
   return [];
 }
 
@@ -9837,6 +9849,7 @@ function taskOptionsForPlatform(platform, { includePublish = false } = {}) {
     const options = [
       ["browse_feed", "浏览 Feed"],
       ["instagram_warmup", "Instagram 养号"],
+      ["instagram_auto_reply", "Instagram 自动回复"],
       ["browse_profile", "浏览主页"],
       ["comment_post", "评论帖子"],
       ["reply_comment", "回复评论"],
@@ -9947,15 +9960,13 @@ function renderUnifiedAutomationModule(options = null) {
   const selectedAccount = persona ? selectedPersonaAutomationAccount(persona, platform) : null;
   const selectedAccountId = String(selectedAccount?.id || "");
   const warmupTaskType = platform === "instagram" ? "instagram_warmup" : "threads_warmup";
-  const replyTask = selectedAccountId ? activeSocialTaskFor({ accountId: selectedAccountId, taskType: "threads_auto_reply" }) : null;
+  const replyTaskType = platform === "instagram" ? "instagram_auto_reply" : "threads_auto_reply";
+  const replyTask = selectedAccountId ? activeSocialTaskFor({ accountId: selectedAccountId, taskType: replyTaskType }) : null;
   const warmupTask = selectedAccountId ? activeSocialTaskFor({ accountId: selectedAccountId, taskType: warmupTaskType }) : null;
-  const replyBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, "threads_auto_reply") || replyTask);
+  const replyBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, replyTaskType) || replyTask);
   const warmupBusy = Boolean(selectedAccountId) && (isActionLocked("social", selectedAccountId, warmupTaskType) || warmupTask);
-  const replyBusyStartedAt = actionTaskStartedAt(replyTask, "social", selectedAccountId, "threads_auto_reply");
+  const replyBusyStartedAt = actionTaskStartedAt(replyTask, "social", selectedAccountId, replyTaskType);
   const warmupBusyStartedAt = actionTaskStartedAt(warmupTask, "social", selectedAccountId, warmupTaskType);
-  const threadsOnlyNotice = platform !== "threads" && ["reply_comment", "reply_hot"].includes(currentStep)
-    ? `<div class="empty-state">当前操作只支持 Threads。请先切换到 Threads 平台。</div>`
-    : "";
   const strategyGroup = currentStep === "reply_hot"
     ? "threads_hot_reply"
     : currentStep === "warmup"
@@ -9979,7 +9990,7 @@ function renderUnifiedAutomationModule(options = null) {
         </div>
       </div>`;
   } else if (currentStep === "reply_comment" || currentStep === "reply_hot") {
-    operationPanel = threadsOnlyNotice || `
+    operationPanel = `
       <div class="automation-operation-card">
         <strong>${currentStep === "reply_hot" ? "自动回复热点推文" : "自动回复评论"}</strong>
         <label>策略
@@ -10021,7 +10032,7 @@ function renderUnifiedAutomationModule(options = null) {
         </div>
       </div>`;
   } else {
-    operationPanel = threadsOnlyNotice || `
+    operationPanel = `
       <div class="automation-operation-card">
         <strong>养号</strong>
         <label>策略
@@ -10032,13 +10043,13 @@ function renderUnifiedAutomationModule(options = null) {
         ${customStrategy ? `
           <div class="form-grid">
             <label>浏览篇数上限
-              <input id="personaAutoBrowseLimit" type="number" min="1" max="300" value="${esc(payload.browse_limit || payload.scroll_times || 30)}" />
+              <input id="personaAutoBrowseLimit" type="number" min="1" max="300" value="${esc(payload.browse_limit || payload.scroll_times || 80)}" />
             </label>
             <label>点赞上限
-              <input id="personaAutoLikeLimit" type="number" min="0" max="100" value="${esc(payload.like_limit || 0)}" />
+              <input id="personaAutoLikeLimit" type="number" min="0" max="16" value="${esc(payload.like_limit || 0)}" />
             </label>
             <label>留言上限
-              <input id="personaAutoMaxComments" type="number" min="0" max="50" value="${esc(payload.max_comments || 0)}" />
+              <input id="personaAutoMaxComments" type="number" min="0" max="8" value="${esc(payload.max_comments || 0)}" />
             </label>
           </div>
           <label>养号留言模板
@@ -10843,21 +10854,20 @@ function renderPublishHeaderRow(mode, account) {
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
 
 function automationPlanTaskOptions(platform = "threads") {
-  if (String(platform || "threads").trim().toLowerCase() === "instagram") {
-    return [["instagram_warmup", "养号"]];
-  }
+  const normalizedPlatform = String(platform || "threads").trim().toLowerCase();
   return [
     ["normal_publish", "普通任务"],
     ["threads_reply_comment", "自动回复评论"],
     ["threads_reply_hot", "自动回复热点"],
-    ["threads_warmup", "养号"],
+    [normalizedPlatform === "instagram" ? "instagram_warmup" : "threads_warmup", "养号"],
   ];
 }
 
 function automationPlanTaskLabel(taskType = "") {
   if (taskType === "instagram_warmup") return "养号";
+  if (taskType === "instagram_auto_reply") return "自动回复";
   if (taskType === "publish_post") return "发布内容";
-  if (taskType === "threads_auto_reply") return "自动回复";
+  if (["threads_auto_reply", "instagram_auto_reply"].includes(taskType)) return "自动回复";
   if (taskType === "browse_feed") return "浏览动态";
   const options = [...automationPlanTaskOptions("threads"), ...automationPlanTaskOptions("instagram")];
   return options.find(([value]) => value === taskType)?.[1] || taskType || "未选择";
@@ -11012,7 +11022,7 @@ function cloneAutomationPlanPayload(payload = {}) {
 
 function automationPlanStepForTask(taskType = "") {
   if (taskType === "threads_reply_hot") return "reply_hot";
-  if (taskType === "threads_reply_comment" || taskType === "threads_auto_reply") return "reply_comment";
+  if (taskType === "threads_reply_comment" || ["threads_auto_reply", "instagram_auto_reply"].includes(taskType)) return "reply_comment";
   return "warmup";
 }
 
@@ -11025,15 +11035,19 @@ function automationPlanTaskForStep(step = "", platform = "threads") {
 
 function automationPlanTaskTypeForPlatform(taskType = "", platform = "threads") {
   const normalized = String(taskType || "").trim();
+  const normalizedPlatform = String(platform || "").trim().toLowerCase();
   if (["threads_warmup", "instagram_warmup"].includes(normalized)) {
-    return String(platform || "").trim().toLowerCase() === "instagram" ? "instagram_warmup" : "threads_warmup";
+    return normalizedPlatform === "instagram" ? "instagram_warmup" : "threads_warmup";
+  }
+  if (["threads_auto_reply", "instagram_auto_reply"].includes(normalized)) {
+    return normalizedPlatform === "instagram" ? "instagram_auto_reply" : "threads_auto_reply";
   }
   return normalized;
 }
 
 function automationPlanConflictKey(taskType = "") {
   const normalized = String(taskType || "").trim();
-  if (normalized === "threads_auto_reply") return "threads_reply_comment";
+  if (["threads_auto_reply", "instagram_auto_reply"].includes(normalized)) return "threads_reply_comment";
   return ["normal_publish", "threads_reply_comment", "threads_reply_hot", "threads_warmup", "instagram_warmup"].includes(normalized)
     ? normalized
     : "";
@@ -14631,7 +14645,8 @@ function buildPersonaThreadsTaskPayload(kind, platform = selectedPersonaAutomati
       payload.max_replies = numberField("personaAutoMaxReplies", payload.max_replies || 3);
       if (kind === "reply_hot") {
         payload.min_views = numberField("personaAutoMinViews", payload.min_views || 0);
-        payload.target_urls = splitLines($("personaAutoTargetUrls")?.value || "");
+        const targetUrls = splitLines($("personaAutoTargetUrls")?.value || "");
+        if (targetUrls.length) payload.target_urls = targetUrls;
       }
     }
     const replyTemplates = splitLines($("personaAutoReplyText")?.value || "");
@@ -14639,10 +14654,10 @@ function buildPersonaThreadsTaskPayload(kind, platform = selectedPersonaAutomati
     return payload;
   }
   if (personaThreadsStrategyIsCustom(strategyGroup)) {
-    payload.browse_limit = numberField("personaAutoBrowseLimit", payload.browse_limit || payload.scroll_times || 30);
+    payload.browse_limit = numberField("personaAutoBrowseLimit", payload.browse_limit || payload.scroll_times || 80);
     payload.scroll_times = payload.browse_limit;
-    payload.like_limit = numberField("personaAutoLikeLimit", payload.like_limit || 0);
-    payload.max_comments = numberField("personaAutoMaxComments", payload.max_comments || 0);
+    payload.like_limit = Math.max(0, Math.min(16, numberField("personaAutoLikeLimit", payload.like_limit || 0)));
+    payload.max_comments = Math.max(0, Math.min(8, numberField("personaAutoMaxComments", payload.max_comments || 0)));
     payload.comment_chance = Number(payload.max_comments || 0) > 0 ? 100 : 0;
   }
   const replyTemplates = splitLines($("personaAutoReplyText")?.value || "");
@@ -14658,13 +14673,9 @@ async function runPersonaThreadsTask(kind) {
     showMsg("commandMsg", `请先绑定并选择 ${platformLabel(platform)} 执行账号。`, false);
     return;
   }
-  if (platform === "instagram" && kind !== "warmup") {
-    showMsg("commandMsg", "Instagram 当前只开放养号任务。", false);
-    return;
-  }
   const taskType = kind === "warmup"
     ? (platform === "instagram" ? "instagram_warmup" : "threads_warmup")
-    : "threads_auto_reply";
+    : (platform === "instagram" ? "instagram_auto_reply" : "threads_auto_reply");
   const lockParts = ["social", account.id, taskType];
   if (isActionLocked(...lockParts) || activeSocialTaskFor({ accountId: account.id, taskType })) {
     showMsg("commandMsg", `该账号已有${kind === "warmup" ? "养号" : "自动回复"}任务在队列或执行中，请等待完成。`, false);
@@ -14899,12 +14910,13 @@ async function logoutConsoleSession() {
   window.VectoSiteNavigation?.setLogoutPending(true);
   try {
     await api("/api/auth/logout", { method: "POST" });
-    await window.VectoSiteNavigation?.showAuthFeedback?.({
+    const logoutFeedback = window.VectoSiteNavigation?.authFeedbackCopyByTime?.("logout") || {
       kind: "logout",
-      title: "已退出登录",
-      message: "当前账号已安全退出，返回后可随时再次登录。",
-      actionText: "继续",
-    });
+      title: "退出成功，再见",
+      message: "辛苦了，期待下次见面。",
+      actionText: "知道了",
+    };
+    await window.VectoSiteNavigation?.showAuthFeedback?.(logoutFeedback);
     consoleBoundaryNavigationActive = true;
     clearTenantInMemoryState();
     purgeLegacyTenantContentCaches();
@@ -16297,7 +16309,7 @@ function automationScreenshotThumbnailUrl(urlValue) {
 function isAutomationResultScreenshotStage(stageValue) {
   return new Set([
     "publish_done", "comment_done", "reply_done", "like_done", "already_liked",
-    "share_done", "threads_auto_reply_done", "threads_warmup", "instagram_warmup", "browse_feed", "check_login", "login_complete",
+    "share_done", "threads_auto_reply_done", "instagram_auto_reply_done", "threads_warmup", "instagram_warmup", "browse_feed", "check_login", "login_complete",
   ]).has(String(stageValue || "").trim());
 }
 
@@ -17186,7 +17198,7 @@ function automationPlanSubmissionItem(item = {}, platform = "threads") {
     ? "threads_auto_reply"
     : item.taskType;
   taskType = automationPlanTaskTypeForPlatform(taskType, platform);
-  if (taskType === "threads_auto_reply") {
+  if (["threads_auto_reply", "instagram_auto_reply"].includes(taskType)) {
     params.reply_scope = String(params.reply_scope || (item.taskType === "threads_reply_hot" ? "hot_posts" : "comments"));
   }
   if (taskType === "normal_publish") {
@@ -26145,15 +26157,22 @@ function defaultPayloadForTask(taskType) {
   if (["threads_warmup", "instagram_warmup"].includes(taskType)) {
     return {
       strategy_id: "tg_default",
-      browse_limit: 30,
-      scroll_times: 30,
+      browse_limit: 80,
+      scroll_times: 80,
       like_limit: 16,
+      like_chance: 100,
       max_comments: 0,
       comment_chance: 0,
-      require_persona_relevance: false,
+      session_minutes: "7-10",
+      interaction_every_min_posts: 2,
+      interaction_every_max_posts: 3,
+      search_chance: taskType === "threads_warmup" ? 16 : 0,
+      stop_on_risk_limit: true,
+      risk_managed: false,
+      require_persona_relevance: true,
     };
   }
-  if (taskType === "threads_auto_reply") {
+  if (["threads_auto_reply", "instagram_auto_reply"].includes(taskType)) {
     return {
       strategy_id: "comment_recent_2d",
       reply_scope: "comments",

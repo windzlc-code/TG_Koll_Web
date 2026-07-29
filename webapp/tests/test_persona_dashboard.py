@@ -3470,6 +3470,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         archives[0].setdefault("setup", {}).setdefault("accountManagement", {}).setdefault("threads", {})["handle"] = "history_teacher"
         archives[0]["publishHistory"][0]["publishedAt"] = now_iso
+        archives[0]["publishHistory"][0]["publishedUrl"] = "https://www.threads.net/@history/post/abc"
         archives[0]["publishHistory"][0].setdefault("publishedMeta", {})["capturedAt"] = now_iso
         archives[0]["setup"]["hotMetrics"]["threads"]["postMetrics"][0]["capturedAt"] = now_iso
         archives_path.write_text(json.dumps(archives), encoding="utf-8")
@@ -3492,8 +3493,205 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["threads_handle"], "history_teacher")
         self.assertEqual(payload["reply_scope"], "comments")
         self.assertTrue(payload["target_urls"])
-        self.assertIn("https://www.threads.com/@history/post/abc", payload["target_urls"])
+        self.assertIn("https://www.threads.net/@history/post/abc", payload["target_urls"])
         self.assertTrue(payload["target_summaries"])
+        self.assertEqual(payload["persona_context"], "Persona intro for history topics.")
+        self.assertEqual(payload["ai_retry_count"], 3)
+        self.assertNotIn("reply_templates", payload)
+
+    def test_threads_hot_reply_targets_use_legacy_metrics_and_skip_replied_posts(self):
+        now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        archive = {
+            "publishHistory": [
+                {
+                    "publishedUrl": "https://www.threads.com/@history/post/replied?x=1",
+                    "publishedAt": now_iso,
+                    "engagement": {"viewCount": 9000, "likeCount": 80},
+                },
+                {
+                    "publishedUrl": "https://www.threads.net/@history/post/fresh/",
+                    "publishedAt": now_iso,
+                    "metrics": {"view_count": 1800, "comment_count": 12, "share_count": 4},
+                },
+            ],
+            "setup": {
+                "threadsOwnPostAutoReply": {
+                    "repliedPosts": [{"url": "https://www.threads.net/@history/post/replied/"}],
+                },
+            },
+        }
+
+        targets = social_automation_api._collect_threads_hot_reply_targets(
+            archive,
+            max_age_days=7,
+            min_views=1000,
+            limit=5,
+        )
+
+        self.assertEqual([item["url"] for item in targets], ["https://www.threads.net/@history/post/fresh"])
+        self.assertEqual(targets[0]["view_count"], 1800)
+        self.assertEqual(targets[0]["heat"], 1816)
+
+        comment_targets = social_automation_api._collect_threads_hot_reply_targets(
+            archive,
+            max_age_days=7,
+            min_views=0,
+            limit=5,
+            exclude_replied=False,
+        )
+        self.assertIn(
+            "https://www.threads.net/@history/post/replied",
+            [item["url"] for item in comment_targets],
+        )
+
+    def test_threads_hot_reply_empty_target_list_is_refilled(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        history = archives[0]["publishHistory"][0]
+        history["publishedUrl"] = "https://www.threads.com/@history/post/refill"
+        history["publishedAt"] = now_iso
+        history["publishedMeta"]["capturedAt"] = now_iso
+        history["publishedMeta"]["engagement"]["viewCount"] = 2400
+        archives_path.write_text(json.dumps(archives), encoding="utf-8")
+
+        payload = social_automation_api._enrich_threads_task_payload(
+            "persona-1",
+            "threads_auto_reply",
+            {
+                "strategy_id": "hot_posts",
+                "reply_scope": "hot_posts",
+                "target_urls": [],
+            },
+        )
+
+        self.assertIn("https://www.threads.net/@history/post/refill", payload["target_urls"])
+        refill = next(
+            item
+            for item in payload["target_summaries"]
+            if item["url"] == "https://www.threads.net/@history/post/refill"
+        )
+        self.assertEqual(refill["view_count"], 2400)
+
+    def test_threads_reply_rejects_requested_urls_outside_persona_archive(self):
+        now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        archive = {
+            "publishHistory": [{
+                "publishedUrl": "https://www.threads.com/@owner/post/allowed?source=web",
+                "publishedAt": now_iso,
+                "content": "owned post",
+            }],
+            "setup": {},
+        }
+        with mock.patch.object(
+            social_automation_api,
+            "_load_persona_archive",
+            return_value=archive,
+        ):
+            payload = social_automation_api._enrich_threads_task_payload(
+                "persona-1",
+                "threads_auto_reply",
+                {
+                    "strategy_id": "hot_posts",
+                    "reply_scope": "hot_posts",
+                    "target_urls": [
+                        "https://www.threads.net/@stranger/post/external",
+                        "https://www.threads.com/@owner/post/allowed?duplicate=1",
+                    ],
+                },
+            )
+
+        self.assertEqual(
+            payload["target_urls"],
+            ["https://www.threads.net/@owner/post/allowed"],
+        )
+        self.assertEqual(
+            [item["url"] for item in payload["target_summaries"]],
+            ["https://www.threads.net/@owner/post/allowed"],
+        )
+
+    def test_known_post_targets_round_trip_label_and_expected_text(self):
+        now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        archive = {
+            "setup": {
+                "threadsOwnPostAutoReply": {
+                    "knownPostTargets": [{
+                        "url": "https://www.threads.net/@owner/post/known",
+                        "label": "saved label",
+                        "expectedText": "saved expected text",
+                        "publishedAt": now_iso,
+                    }],
+                },
+            },
+        }
+
+        targets = social_automation_api._collect_threads_hot_reply_targets(
+            archive,
+            max_age_days=7,
+            min_views=0,
+            limit=5,
+            exclude_replied=False,
+        )
+
+        self.assertEqual(targets[0]["label"], "saved label")
+        self.assertEqual(targets[0]["expected_text"], "saved expected text")
+
+    def test_successful_hot_reply_writes_legacy_reply_history_once(self):
+        self._write_archives()
+        self._insert_social_account(account_id="acct-hot", platform="threads", username="history")
+        target_url = "https://www.threads.com/@history/post/hot-one?source=web"
+        self._insert_social_task(
+            task_id="task-hot-reply",
+            account_id="acct-hot",
+            platform="threads",
+            task_type="threads_auto_reply",
+            status="success",
+            payload={
+                "reply_scope": "hot_posts",
+                "target_summaries": [{
+                    "url": target_url,
+                    "label": "history topic",
+                    "view_count": 3200,
+                    "published_at": 1_720_000_000,
+                }],
+            },
+            result={
+                "repliedUrls": [target_url],
+                "repliedComments": [{
+                    "url": target_url,
+                    "replyText": "很值得继续讨论。",
+                }],
+            },
+        )
+
+        social_automation_api._sync_successful_task_to_persona_archive(
+            "task-hot-reply",
+            {
+                "repliedUrls": [target_url],
+                "repliedComments": [{
+                    "url": target_url,
+                    "replyText": "很值得继续讨论。",
+                }],
+            },
+        )
+        social_automation_api._sync_successful_task_to_persona_archive(
+            "task-hot-reply",
+            {
+                "repliedUrls": [target_url],
+                "repliedComments": [{
+                    "url": target_url,
+                    "replyText": "很值得继续讨论。",
+                }],
+            },
+        )
+
+        archive = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))[0]
+        reply_state = archive["setup"]["threadsOwnPostAutoReply"]
+        self.assertEqual(len(reply_state["repliedPosts"]), 1)
+        self.assertEqual(reply_state["repliedPosts"][0]["url"], "https://www.threads.net/@history/post/hot-one")
+        self.assertEqual(reply_state["repliedPosts"][0]["replyText"], "很值得继续讨论。")
+        self.assertEqual(reply_state["knownPostTargets"][0]["viewCount"], 3200)
 
     def test_automation_tasks_include_account_identity_fields(self):
         self._insert_social_account(

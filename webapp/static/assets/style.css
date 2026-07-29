@@ -9752,6 +9752,10 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   align-items: center;
 }
 
+.page-admin .admin-preference-button.admin-language-toggle {
+  flex: 0 0 auto;
+}
+
 :root .page-admin .admin-profile-menu :is(.admin-language-toggle, .site-user) {
   display: grid;
   inline-size: 38px;

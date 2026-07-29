@@ -160,7 +160,6 @@
 
     document.querySelector("#pricingActions").innerHTML = list(catalog.actions).map((item) => `<div class="pricing-action-row">
       <strong>${escapeHtml(item.name)}</strong><strong>${escapeHtml(item.points)} 點 / ${escapeHtml(item.unit)}</strong>
-      <span class="pricing-action-state ${item.implemented !== false ? "is-live" : ""}">${item.implemented !== false ? "已接入扣費" : "僅價格目錄"}</span>
     </div>`).join("");
 
     document.querySelector("#pricingPackages").innerHTML = list(catalog.packages).map((item, index) => {

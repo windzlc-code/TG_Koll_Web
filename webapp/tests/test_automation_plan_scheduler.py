@@ -231,9 +231,14 @@ class AutomationPlanSchedulerTests(unittest.TestCase):
                 ),
             ],
         )
-        social_api.create_social_automation_plan(active_plan, user=self.user)
-        with self.assertRaises(HTTPException) as active_rejected:
+        with patch.object(
+            social_api,
+            "_load_persona_archive",
+            return_value={"id": "persona-1", "name": "owner"},
+        ):
             social_api.create_social_automation_plan(active_plan, user=self.user)
+            with self.assertRaises(HTTPException) as active_rejected:
+                social_api.create_social_automation_plan(active_plan, user=self.user)
         self.assertEqual(active_rejected.exception.status_code, 409)
 
     def test_normal_publish_pauses_when_unpublished_drafts_are_insufficient(self):

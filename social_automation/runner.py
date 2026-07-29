@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import random
 import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Iterable, Protocol
 from urllib.parse import quote, quote_plus, urljoin, urlparse
 
 
@@ -22,12 +23,15 @@ MAX_MANUAL_LOGIN_TIMEOUT_SECONDS = 1800
 MAX_AUTO_TOTP_ATTEMPTS = 2
 AUTO_TOTP_RESULT_WAIT_SECONDS = 20
 AUTO_TOTP_MIN_SUBMIT_REMAINING_SECONDS = 3
+MAX_WARMUP_LIKES = 16
+MAX_WARMUP_COMMENTS = 8
 SUPPORTED_TASK_TYPES = {
     "check_login",
     "open_login",
     "browse_feed",
     "browse_profile",
     "instagram_warmup",
+    "instagram_auto_reply",
     "threads_warmup",
     "threads_auto_reply",
     "publish_post",
@@ -54,10 +58,17 @@ class AutomationLogger(Protocol):
 
 
 class NeedManualError(RuntimeError):
-    def __init__(self, message: str, status: str = "need_verification", screenshot_path: str = ""):
+    def __init__(
+        self,
+        message: str,
+        status: str = "need_verification",
+        screenshot_path: str = "",
+        health_status: str = "",
+    ):
         super().__init__(message)
         self.status = status
         self.screenshot_path = str(screenshot_path or "")
+        self.health_status = str(health_status or "")
 
 
 class AutoLoginFailedError(RuntimeError):
@@ -284,8 +295,8 @@ def run_social_task(
         raise UnsupportedActionError(f"不支持的平台：{platform}")
     if platform == "instagram" and task_type in {"threads_warmup", "threads_auto_reply"}:
         raise UnsupportedActionError(f"{task_type} 需要使用 Threads 账号。")
-    if platform == "threads" and task_type == "instagram_warmup":
-        raise UnsupportedActionError("instagram_warmup 需要使用 Instagram 账号。")
+    if platform == "threads" and task_type in {"instagram_warmup", "instagram_auto_reply"}:
+        raise UnsupportedActionError(f"{task_type} 需要使用 Instagram 账号。")
     if platform == "threads" and task_type not in {"open_login", "check_login", "browse_feed", "threads_warmup", "threads_auto_reply", "publish_post"}:
         raise UnsupportedActionError(f"{task_type} 尚未支持 Threads Web 自动化。")
     if platform == "instagram" and task_type == "repost_post":
@@ -398,18 +409,49 @@ def run_social_task(
 
         if task_type == "browse_feed":
             _raise_if_cancelled(cancel_event)
-            if platform == "threads":
-                return _run_threads_warmup(page, task, payload, screenshot_dir, logger)
-            return _run_browse_feed(page, task, payload, screenshot_dir, logger)
+            return _dispatch_browse_feed(
+                page,
+                task,
+                payload,
+                screenshot_dir,
+                logger,
+                platform=platform,
+            )
         if task_type == "instagram_warmup":
             _raise_if_cancelled(cancel_event)
             return _run_instagram_warmup(page, task, payload, screenshot_dir, logger, cancel_event=cancel_event)
+        if task_type == "instagram_auto_reply":
+            _raise_if_cancelled(cancel_event)
+            return _run_instagram_auto_reply(
+                page,
+                task,
+                payload,
+                screenshot_dir,
+                logger,
+                cancel_event=cancel_event,
+                account=account,
+            )
         if task_type == "threads_warmup":
             _raise_if_cancelled(cancel_event)
-            return _run_threads_warmup(page, task, payload, screenshot_dir, logger)
+            return _run_threads_warmup(
+                page,
+                task,
+                payload,
+                screenshot_dir,
+                logger,
+                cancel_event=cancel_event,
+            )
         if task_type == "threads_auto_reply":
             _raise_if_cancelled(cancel_event)
-            return _run_threads_auto_reply(page, task, payload, screenshot_dir, logger)
+            return _run_threads_auto_reply(
+                page,
+                task,
+                payload,
+                screenshot_dir,
+                logger,
+                cancel_event=cancel_event,
+                account=account,
+            )
         if task_type == "browse_profile":
             _raise_if_cancelled(cancel_event)
             return _run_browse_profile(page, task, payload, screenshot_dir, logger)
@@ -2469,7 +2511,7 @@ def _slow_human_scroll(page) -> dict[str, Any]:
     }
 
 
-def _warmup_session_seconds(payload: dict[str, Any], default_seconds: int = 8 * 60) -> int:
+def _warmup_session_seconds(payload: dict[str, Any], default_seconds: int | None = None) -> int:
     for key in ("session_seconds", "duration_seconds"):
         value = payload.get(key)
         if value is None or value == "":
@@ -2484,7 +2526,9 @@ def _warmup_session_seconds(payload: dict[str, Any], default_seconds: int = 8 * 
         return max(15, min(7200, int(random.uniform(low, high) * 60)))
     if len(numbers) == 1:
         return max(15, min(7200, int(numbers[0] * 60)))
-    return default_seconds
+    if default_seconds is not None:
+        return max(15, min(7200, int(default_seconds)))
+    return max(15, min(7200, int(random.uniform(7, 10) * 60)))
 
 
 def _payload_int(payload: dict[str, Any], keys: tuple[str, ...], default: int, min_value: int, max_value: int) -> int:
@@ -2498,11 +2542,179 @@ def _payload_int(payload: dict[str, Any], keys: tuple[str, ...], default: int, m
     return max(min_value, min(max_value, int(default)))
 
 
-def _run_browse_feed(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
-    _goto(page, INSTAGRAM_HOME, logger, "browse_feed")
+def _warmup_interaction_window(payload: dict[str, Any]) -> tuple[int, int]:
+    minimum = _payload_int(payload, ("interaction_every_min_posts",), 2, 1, 20)
+    maximum = _payload_int(payload, ("interaction_every_max_posts",), 3, minimum, 30)
+    return min(minimum, maximum), max(minimum, maximum)
+
+
+def _next_warmup_interaction_at(current_index: int, payload: dict[str, Any]) -> int:
+    minimum, maximum = _warmup_interaction_window(payload)
+    return max(0, int(current_index)) + random.randint(minimum, maximum)
+
+
+def _validate_warmup_completion(
+    platform: str,
+    *,
+    liked: int,
+    commented: int,
+    min_required_likes: int,
+    min_required_comments: int,
+    min_required_interactions: int,
+) -> None:
+    platform_name = _platform_name(platform)
+    if liked < min_required_likes:
+        raise RuntimeError(f"{platform_name} 养号未达到最低点赞目标：{liked}/{min_required_likes}")
+    if commented < min_required_comments:
+        raise RuntimeError(f"{platform_name} 养号未达到最低评论目标：{commented}/{min_required_comments}")
+    interactions = liked + commented
+    if interactions < min_required_interactions:
+        raise RuntimeError(
+            f"{platform_name} 养号未达到最低互动目标：{interactions}/{min_required_interactions}"
+        )
+
+
+def _warmup_minimum_targets(
+    payload: dict[str, Any],
+    *,
+    like_limit: int,
+    max_comments: int,
+) -> tuple[int, int, int]:
+    min_required_likes = _payload_int(
+        payload,
+        ("min_required_likes",),
+        1 if like_limit > 0 else 0,
+        0,
+        MAX_WARMUP_LIKES,
+    )
+    min_required_comments = _payload_int(
+        payload,
+        ("min_required_comments",),
+        0,
+        0,
+        MAX_WARMUP_COMMENTS,
+    )
+    min_required_interactions = _payload_int(
+        payload,
+        ("min_required_interactions",),
+        0,
+        0,
+        MAX_WARMUP_LIKES + MAX_WARMUP_COMMENTS,
+    )
+    if min_required_likes > like_limit:
+        raise RuntimeError("养号最低点赞目标不能大于本次点赞上限。")
+    if min_required_comments > max_comments:
+        raise RuntimeError("养号最低评论目标不能大于本次评论上限。")
+    if min_required_interactions > like_limit + max_comments:
+        raise RuntimeError("养号最低互动目标不能大于本次点赞与评论总上限。")
+    return min_required_likes, min_required_comments, min_required_interactions
+
+
+def _warmup_risk_state(page, platform: str) -> dict[str, str] | None:
+    url = str(page.url or "")
+    body_text = ""
+    with contextlib.suppress(Exception):
+        body_text = str(page.locator("body").inner_text(timeout=3000) or "").lower()
+    notice_text_parts: list[str] = []
+    for selector in ('[role="dialog"]', '[role="alert"]'):
+        with contextlib.suppress(Exception):
+            group = page.locator(selector)
+            for index in range(min(group.count(), 8)):
+                locator = group.nth(index)
+                if locator.is_visible(timeout=500):
+                    notice_text_parts.append(str(locator.inner_text(timeout=1000) or "").lower())
+    notice_text = " ".join(notice_text_parts)
+    restriction = _detect_platform_account_restriction(url, body_text, platform)
+    if restriction is not None:
+        return {
+            "status": str(restriction.get("status") or "cookie_expired"),
+            "health_status": str(restriction.get("health_status") or ""),
+            "reason": str(restriction.get("reason") or "账号已被限制。"),
+        }
+    has_verification_input = False
+    with contextlib.suppress(Exception):
+        verification_inputs = page.locator(
+            'input[autocomplete="one-time-code"], '
+            'input[name*="verification" i], input[name*="security_code" i]'
+        )
+        has_verification_input = any(
+            verification_inputs.nth(index).is_visible(timeout=500)
+            for index in range(min(verification_inputs.count(), 8))
+        )
+    if (
+        _is_verification_url(url)
+        or has_verification_input
+        or any(marker in notice_text for marker in _verification_text_markers())
+    ):
+        return {
+            "status": "need_verification",
+            "reason": f"{_platform_name(platform)} 触发了安全验证，养号任务已停止。",
+        }
+    risk_markers = (
+        "we restrict certain activity to protect our community",
+        "we limit how often you can do certain things",
+        "your account has been temporarily blocked",
+        "try again later. we limit how often",
+        "feedback_required",
+        "rate limit exceeded",
+        "操作过于频繁",
+        "暂时无法执行此操作",
+    )
+    if any(marker in notice_text for marker in risk_markers):
+        return {
+            "status": "need_verification",
+            "reason": f"{_platform_name(platform)} 触发了频率或风控限制，养号任务已停止。",
+        }
+    return None
+
+
+def _guard_warmup_risk(page, platform: str, payload: dict[str, Any], logger: AutomationLogger) -> None:
+    if not bool(payload.get("stop_on_risk_limit", False)):
+        return
+    risk = _warmup_risk_state(page, platform)
+    if risk is None:
+        return
+    logger.log("warn", f"{platform}_warmup_risk_limit", risk["reason"], {"status": risk["status"]})
+    raise NeedManualError(
+        risk["reason"],
+        risk["status"],
+        health_status=risk.get("health_status", ""),
+    )
+
+
+def _run_browse_feed(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    platform: str = "instagram",
+) -> dict[str, Any]:
+    home_url = THREADS_HOME if platform == "threads" else INSTAGRAM_HOME
+    _goto(page, home_url, logger, "browse_feed")
     _warmup_scroll(page, logger, int(payload.get("scroll_times") or 2))
     shot = _screenshot(page, screenshot_dir, task, "browse_feed", logger)
     return {"ok": True, "url": page.url, "screenshot_path": shot}
+
+
+def _dispatch_browse_feed(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    platform: str,
+) -> dict[str, Any]:
+    return _run_browse_feed(
+        page,
+        task,
+        payload,
+        screenshot_dir,
+        logger,
+        platform=platform,
+    )
 
 
 def _instagram_action_locators(page, label: str):
@@ -2515,8 +2727,8 @@ def _instagram_action_locators(page, label: str):
         if not action_label:
             continue
         selectors = [
-            f'xpath=//*[@aria-label="{action_label}" and (self::button or @role="button")]',
-            f'xpath=//*[@aria-label="{action_label}"]/ancestor::*[self::button or @role="button"][1]',
+            f'xpath=.//*[@aria-label="{action_label}" and (self::button or @role="button")]',
+            f'xpath=.//*[@aria-label="{action_label}"]/ancestor::*[self::button or @role="button"][1]',
         ]
         for selector in selectors:
             with contextlib.suppress(Exception):
@@ -2616,11 +2828,18 @@ def _wait_for_instagram_comment_echo(page, text: str, previous_count: int, timeo
     return False
 
 
-def _post_instagram_warmup_comment(page, logger: AutomationLogger, text: str) -> bool:
+def _post_instagram_warmup_comment(
+    page,
+    logger: AutomationLogger,
+    text: str,
+    *,
+    target_root=None,
+) -> bool:
     clean_text = str(text or "").strip()
     if not clean_text:
         return False
-    for group in _instagram_action_locators(page, "Comment"):
+    action_scope = target_root if target_root is not None else page
+    for group in _instagram_action_locators(action_scope, "Comment"):
         with contextlib.suppress(Exception):
             for index in range(min(group.count(), 20)):
                 button = group.nth(index)
@@ -2663,113 +2882,15 @@ def _run_instagram_warmup(
     *,
     cancel_event: Any | None = None,
 ) -> dict[str, Any]:
-    _goto(page, INSTAGRAM_HOME, logger, "instagram_warmup")
-    _dismiss_instagram_interstitials(page, logger)
-    browse_limit = _payload_int(payload, ("browse_limit", "browse_count", "scroll_times"), 30, 1, 300)
-    like_limit = _payload_int(payload, ("like_limit",), 0, 0, 100)
-    max_comments = _payload_int(payload, ("max_comments",), 0, 0, 50)
-    comment_chance = _payload_int(payload, ("comment_chance",), 0, 0, 100)
-    session_seconds = _warmup_session_seconds(payload)
-    strategy_id = str(payload.get("strategy_id") or "tg_default")
-    strategy_label = str(payload.get("strategy_label") or "默认养号：滑动 + 随机点赞")
-    min_required_likes = _payload_int(
+    return _run_platform_warmup(
+        page,
+        task,
         payload,
-        ("min_required_likes",),
-        1 if like_limit > 0 else 0,
-        0,
-        like_limit or 0,
+        screenshot_dir,
+        logger,
+        platform="instagram",
+        cancel_event=cancel_event,
     )
-    min_required_comments = _payload_int(
-        payload,
-        ("min_required_comments",),
-        1 if max_comments > 0 and comment_chance > 0 else 0,
-        0,
-        max_comments or 0,
-    )
-    logger.log("info", "instagram_warmup", "开始执行 Instagram 养号。", {
-        "strategy_id": strategy_id,
-        "strategy_label": strategy_label,
-        "browse_limit": browse_limit,
-        "session_seconds": session_seconds,
-        "like_limit": like_limit,
-        "max_comments": max_comments,
-        "comment_chance": comment_chance,
-    })
-    liked = 0
-    commented = 0
-    browsed = 0
-    comment_screenshots: list[str] = []
-    deadline = time.monotonic() + session_seconds
-    while time.monotonic() < deadline and browsed < browse_limit:
-        _raise_if_cancelled(cancel_event)
-        _dismiss_instagram_interstitials(page, logger)
-        elapsed_ratio = 1 - max(0, deadline - time.monotonic()) / max(1, session_seconds)
-        should_backfill_like = liked < min_required_likes and elapsed_ratio >= 0.25
-        if like_limit > liked and (should_backfill_like or random.random() < 0.34):
-            liked += _click_some_instagram_likes(page, logger, like_limit - liked)
-            _dismiss_instagram_interstitials(page, logger)
-        should_backfill_comment = commented < min_required_comments and elapsed_ratio >= 0.35
-        if (
-            max_comments > commented
-            and comment_chance > 0
-            and browsed > 0
-            and (should_backfill_comment or random.randint(1, 100) <= comment_chance)
-        ):
-            reply_text = _pick_persona_reply(payload)
-            if _post_instagram_warmup_comment(page, logger, reply_text):
-                commented += 1
-                shot_comment = _screenshot(
-                    page,
-                    screenshot_dir,
-                    task,
-                    f"instagram_warmup_comment_{commented}",
-                    logger,
-                )
-                if shot_comment:
-                    comment_screenshots.append(shot_comment)
-                logger.log("info", "instagram_warmup_comment", "Instagram 养号过程中已评论。", {
-                    "commented": commented,
-                    "text": str(reply_text or "")[:80],
-                })
-        scroll = _slow_human_scroll(page)
-        browsed += 1
-        logger.log("debug", "instagram_warmup", "已平滑浏览 Instagram 信息流。", {
-            "index": browsed,
-            "browse_limit": browse_limit,
-            "liked": liked,
-            "commented": commented,
-            **scroll,
-        })
-        if time.monotonic() >= deadline:
-            break
-        _sleep_between(5.0, 10.0)
-    _dismiss_instagram_interstitials(page, logger)
-    shot = _screenshot(page, screenshot_dir, task, "instagram_warmup", logger)
-    if liked < min_required_likes:
-        raise RuntimeError(f"Instagram 养号未达到最低点赞目标：{liked}/{min_required_likes}")
-    if commented < min_required_comments:
-        raise RuntimeError(f"Instagram 养号未达到最低评论目标：{commented}/{min_required_comments}")
-    logger.log("info", "completion_node", "Instagram 养号完成节点已确认。", {
-        "url": str(page.url or ""),
-        "liked": liked,
-        "commented": commented,
-        "scrolled": browsed,
-        "strategy_id": strategy_id,
-        "strategy_label": strategy_label,
-    }, shot)
-    return {
-        "ok": True,
-        "url": page.url,
-        "liked": liked,
-        "commented": commented,
-        "scrolled": browsed,
-        "browse_limit": browse_limit,
-        "target_seconds": session_seconds,
-        "strategy_id": strategy_id,
-        "strategy_label": strategy_label,
-        "commentScreenshots": comment_screenshots,
-        "screenshot_path": shot,
-    }
 
 
 def _threads_like_buttons(page):
@@ -2821,9 +2942,19 @@ def _click_some_threads_likes(page, logger: AutomationLogger, limit: int) -> int
                     with contextlib.suppress(Exception):
                         label = str(loc.get_attribute("aria-label") or "")
                     logger.log("debug", "threads_like_candidate", "已选中未点赞的 Threads 点赞按钮。", {"aria_label": label})
+                    unlike_before = _threads_unlike_count(page)
                     _human_click(page, loc, logger, "threads_like")
-                    clicked += 1
                     _sleep_between(1.0, 2.5)
+                    unlike_after = _threads_unlike_count(page)
+                    if unlike_after <= unlike_before:
+                        logger.log(
+                            "warn",
+                            "threads_warmup_like_unconfirmed",
+                            "Threads 点赞状态未变更，本次不计入成功数。",
+                            {"unlike_before": unlike_before, "unlike_after": unlike_after},
+                        )
+                        continue
+                    clicked += 1
                     if clicked >= limit:
                         return clicked
             except Exception:
@@ -2831,7 +2962,20 @@ def _click_some_threads_likes(page, logger: AutomationLogger, limit: int) -> int
     return clicked
 
 
-def _open_random_threads_post(page, logger: AutomationLogger) -> bool:
+def _threads_unlike_count(page) -> int:
+    total = 0
+    for label in ("Unlike", "取消赞", "取消讚"):
+        with contextlib.suppress(Exception):
+            total += int(page.locator(f'[aria-label="{label}"]').count())
+    return total
+
+
+def _open_random_threads_post(
+    page,
+    logger: AutomationLogger,
+    *,
+    cancel_event: Any | None = None,
+) -> bool:
     candidates = page.locator('a[href*="/post/"]')
     try:
         total = candidates.count()
@@ -2854,38 +2998,44 @@ def _open_random_threads_post(page, logger: AutomationLogger) -> bool:
                     continue
                 before_url = str(page.url or "")
                 _human_click(page, link, logger, "threads_open_post")
-                _sleep_between(2.0, 4.0)
+                _wait_for_cancellation(random.uniform(2.0, 4.0), cancel_event)
                 after_url = str(page.url or "")
                 opened = after_url != before_url or "/post/" in after_url
                 if not opened:
                     continue
                 logger.log("info", "threads_open_post", "已打开一条 Threads 帖子进行浏览。", {"url": after_url})
-                _sleep_between(6.0, 12.0)
+                _wait_for_cancellation(random.uniform(6.0, 12.0), cancel_event)
                 if random.random() < 0.55:
                     detail_scroll = _slow_human_scroll(page)
                     logger.log("debug", "threads_read_post", "已在打开的 Threads 帖子内浏览。", detail_scroll)
-                    _sleep_between(4.0, 9.0)
-                _return_threads_feed_after_post(page, logger)
+                    _wait_for_cancellation(random.uniform(4.0, 9.0), cancel_event)
+                _return_threads_feed_after_post(page, logger, cancel_event=cancel_event)
                 return True
             except Exception:
+                _raise_if_cancelled(cancel_event)
                 continue
     return False
 
 
-def _return_threads_feed_after_post(page, logger: AutomationLogger) -> None:
+def _return_threads_feed_after_post(
+    page,
+    logger: AutomationLogger,
+    *,
+    cancel_event: Any | None = None,
+) -> None:
     for _ in range(2):
         url = str(page.url or "").lower()
         if "/post/" not in url and "/media" not in url:
             break
         with contextlib.suppress(Exception):
             page.keyboard.press("Escape")
-            _sleep_between(0.8, 1.8)
+        _wait_for_cancellation(random.uniform(0.8, 1.8), cancel_event)
         try:
             page.go_back(wait_until="domcontentloaded", timeout=12000)
         except Exception:
             with contextlib.suppress(Exception):
                 page.keyboard.press("Alt+Left")
-        _sleep_between(2.5, 5.5)
+        _wait_for_cancellation(random.uniform(2.5, 5.5), cancel_event)
     final_url = str(page.url or "")
     if "/post/" in final_url.lower() or "/media" in final_url.lower():
         _goto(page, THREADS_HOME, logger, "threads_return_feed")
@@ -2893,95 +3043,379 @@ def _return_threads_feed_after_post(page, logger: AutomationLogger) -> None:
     logger.log("info", "threads_return_feed", "已从打开的 Threads 帖子返回信息流。", {"url": final_url})
 
 
-def _run_threads_warmup(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
-    _goto(page, THREADS_HOME, logger, "threads_warmup")
-    browse_limit = _payload_int(payload, ("browse_limit", "browse_count", "scroll_times"), 30, 1, 300)
-    like_limit = _payload_int(payload, ("like_limit",), 0, 0, 100)
-    max_comments = _payload_int(payload, ("max_comments",), 0, 0, 50)
+def _post_threads_warmup_comment(
+    page,
+    logger: AutomationLogger,
+    text: str,
+    *,
+    target_root=None,
+) -> bool:
+    clean_text = str(text or "").strip()
+    if not clean_text:
+        return False
+    button = _threads_reply_button(page, root=target_root)
+    if button is None:
+        return False
+    previous_count = _threads_published_reply_count(page, clean_text)
+    _human_click(page, button, logger, "threads_warmup_reply_button")
+    _sleep_between(1.0, 2.5)
+    box = _threads_text_box(page)
+    if box is None:
+        return False
+    _human_click(page, box, logger, "threads_warmup_reply_focus")
+    _human_type(page, clean_text, min_delay=0.10, max_delay=0.22)
+    if not _click_threads_reply_submit(
+        page,
+        box,
+        logger,
+        "threads_warmup_reply_submit",
+    ):
+        return False
+    if _wait_for_threads_reply_echo(page, clean_text, previous_count):
+        logger.log(
+            "info",
+            "threads_warmup_comment_confirmed",
+            "Threads 评论内容已在页面回显。",
+            {"text": clean_text[:80]},
+        )
+        return True
+    logger.log(
+        "warn",
+        "threads_warmup_comment_unconfirmed",
+        "Threads 评论提交后未检测到内容回显，本次不计入成功数。",
+        {"text": clean_text[:80]},
+    )
+    return False
+
+
+def _run_platform_warmup(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    platform: str,
+    cancel_event: Any | None = None,
+) -> dict[str, Any]:
+    clean_platform = str(platform or "").strip().lower()
+    if clean_platform not in {"threads", "instagram"}:
+        raise UnsupportedActionError(f"Unsupported warmup platform: {clean_platform}")
+
+    stage = f"{clean_platform}_warmup"
+    home_url = THREADS_HOME if clean_platform == "threads" else INSTAGRAM_HOME
+    _goto(page, home_url, logger, stage)
+    if clean_platform == "instagram":
+        _dismiss_instagram_interstitials(page, logger)
+
+    browse_limit = _payload_int(
+        payload,
+        ("browse_limit", "browse_count", "scroll_times"),
+        80,
+        1,
+        300,
+    )
+    like_limit = _payload_int(
+        payload,
+        ("like_limit",),
+        0,
+        0,
+        MAX_WARMUP_LIKES,
+    )
+    like_chance = _payload_int(
+        payload,
+        ("like_chance",),
+        100 if like_limit > 0 else 0,
+        0,
+        100,
+    )
+    max_comments = _payload_int(
+        payload,
+        ("max_comments",),
+        0,
+        0,
+        MAX_WARMUP_COMMENTS,
+    )
     comment_chance = _payload_int(payload, ("comment_chance",), 0, 0, 100)
+    search_chance = _payload_int(payload, ("search_chance",), 0, 0, 100)
     session_seconds = _warmup_session_seconds(payload)
     strategy_id = str(payload.get("strategy_id") or "tg_default")
-    strategy_label = str(payload.get("strategy_label") or "\u9ed8\u8ba4\u517b\u53f7\uff1a\u6ed1\u52a8 + \u968f\u673a\u70b9\u8d5e")
-    logger.log("info", "threads_warmup", "开始按人设自动化设置执行 Threads 养号。", {
-        "strategy_id": strategy_id,
-        "strategy_label": strategy_label,
-        "browse_limit": browse_limit,
-        "session_seconds": session_seconds,
-        "like_limit": like_limit,
-        "max_comments": max_comments,
-        "comment_chance": comment_chance,
-        "persona_name": payload.get("persona_name") or "",
-    })
+    strategy_label = str(payload.get("strategy_label") or "default_warmup")
+    (
+        min_required_likes,
+        min_required_comments,
+        min_required_interactions,
+    ) = _warmup_minimum_targets(
+        payload,
+        like_limit=like_limit,
+        max_comments=max_comments,
+    )
+
+    persona_topics = [
+        " ".join(str(item or "").split())[:60]
+        for item in (payload.get("persona_topics") or [])
+        if str(item or "").strip()
+    ]
+    if (
+        clean_platform == "threads"
+        and persona_topics
+        and random.randint(1, 100) <= search_chance
+    ):
+        search_topic = random.choice(persona_topics)
+        _goto(
+            page,
+            f"https://www.threads.net/search?q={quote_plus(search_topic)}",
+            logger,
+            "threads_warmup_interest_search",
+        )
+
+    logger.log(
+        "info",
+        stage,
+        f"Starting {clean_platform} warmup with the shared strategy executor.",
+        {
+            "strategy_id": strategy_id,
+            "strategy_label": strategy_label,
+            "browse_limit": browse_limit,
+            "session_seconds": session_seconds,
+            "like_limit": like_limit,
+            "like_chance": like_chance,
+            "max_comments": max_comments,
+            "comment_chance": comment_chance,
+            "search_chance": search_chance,
+            "persona_name": payload.get("persona_name") or "",
+        },
+    )
+
     liked = 0
     commented = 0
     browsed = 0
     opened_posts = 0
     like_backfills = 0
     comment_backfills = 0
-    min_required_likes = _payload_int(payload, ("min_required_likes",), 1 if like_limit > 0 else 0, 0, like_limit or 0)
-    min_required_comments = _payload_int(payload, ("min_required_comments",), 1 if max_comments > 0 and comment_chance > 0 else 0, 0, max_comments or 0)
     comment_screenshots: list[str] = []
+    used_comment_texts: set[str] = set()
     deadline = time.monotonic() + session_seconds
+    next_interaction_at = _next_warmup_interaction_at(0, payload)
+
     while time.monotonic() < deadline and browsed < browse_limit:
-        elapsed_ratio = 1 - max(0, deadline - time.monotonic()) / max(1, session_seconds)
-        should_backfill_like = liked < min_required_likes and elapsed_ratio >= 0.35
-        should_try_like = random.random() < 0.28 or should_backfill_like or (liked == 0 and elapsed_ratio >= 0.45 and random.random() < 0.75)
-        if like_limit > liked and browsed > 0 and should_try_like:
-            clicked_likes = _click_some_threads_likes(page, logger, like_limit - liked)
-            if clicked_likes:
-                liked += clicked_likes
+        _raise_if_cancelled(cancel_event)
+        if clean_platform == "instagram":
+            _dismiss_instagram_interstitials(page, logger)
+        _guard_warmup_risk(page, clean_platform, payload, logger)
+
+        elapsed_ratio = 1 - max(
+            0,
+            deadline - time.monotonic(),
+        ) / max(1, session_seconds)
+        interaction_due = browsed >= next_interaction_at
+        interacted = False
+        prefer_comment = (
+            interaction_due
+            and like_limit > liked
+            and max_comments > commented
+            and random.random() < 0.5
+        )
+        should_backfill_interaction = (
+            liked + commented < min_required_interactions
+            and elapsed_ratio >= 0.35
+        )
+        should_backfill_like = liked < min_required_likes or should_backfill_interaction
+        should_try_like = (
+            should_backfill_like
+            or random.randint(1, 100) <= like_chance
+        )
+        if (
+            like_limit > liked
+            and interaction_due
+            and not prefer_comment
+            and should_try_like
+        ):
+            if clean_platform == "threads":
+                clicked_likes = _click_some_threads_likes(page, logger, 1)
             else:
+                clicked_likes = _click_some_instagram_likes(page, logger, 1)
+                _dismiss_instagram_interstitials(page, logger)
+            liked += clicked_likes
+            interacted = clicked_likes > 0
+            if not clicked_likes:
                 like_backfills += 1
-                logger.log("warn", "threads_warmup_backfill", "点赞补量失败，正在切换目标。", {"attempts": like_backfills, "liked": liked, "target": min_required_likes})
-        should_open_post = browsed > 0 and (random.random() < 0.12 or (opened_posts == 0 and elapsed_ratio >= 0.3))
-        if should_open_post and _open_random_threads_post(page, logger):
-            opened_posts += 1
-        should_backfill_comment = commented < min_required_comments and elapsed_ratio >= 0.45
-        if max_comments > commented and comment_chance > 0 and browsed > 0 and (should_backfill_comment or random.randint(1, 100) <= comment_chance):
-            button = _threads_reply_button(page)
-            reply_text = _pick_persona_reply(payload)
-            if button is not None and str(reply_text or "").strip():
-                _human_click(page, button, logger, "threads_warmup_reply_button")
-                _sleep_between(1.0, 2.5)
-                box = _threads_text_box(page)
-                if box is not None:
-                    _human_click(page, box, logger, "threads_warmup_reply_focus")
-                    _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
-                    posted = _click_text_button(page, logger, ["Post", "Reply", "\u53d1\u5e03", "\u56de\u8986", "\u56de\u590d"], "threads_warmup_reply_submit")
-                    if posted:
-                        commented += 1
-                        shot_reply = _screenshot(page, screenshot_dir, task, f"threads_warmup_comment_{commented}", logger)
-                        if shot_reply:
-                            comment_screenshots.append(shot_reply)
-                        logger.log("info", "threads_warmup_comment", "Threads 养号过程中已评论。", {"commented": commented, "text": reply_text[:80]})
-                    else:
-                        comment_backfills += 1
-                        logger.log("warn", "threads_warmup_backfill", "评论补量失败，正在切换目标。", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments})
-                else:
-                    comment_backfills += 1
-                    logger.log("warn", "threads_warmup_backfill", "未找到可评论目标，继续浏览。", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments})
-            elif max_comments > commented:
+                logger.log(
+                    "warn",
+                    f"{stage}_like_backfill",
+                    "Like action was not confirmed; continuing to another target.",
+                    {
+                        "attempts": like_backfills,
+                        "liked": liked,
+                        "target": min_required_likes,
+                    },
+                )
+
+        if clean_platform == "threads":
+            should_open_post = browsed > 0 and (
+                random.random() < 0.12
+                or (opened_posts == 0 and elapsed_ratio >= 0.3)
+            )
+            if should_open_post and _open_random_threads_post(
+                page,
+                logger,
+                cancel_event=cancel_event,
+            ):
+                opened_posts += 1
+
+        should_backfill_comment = (
+            commented < min_required_comments
+            or should_backfill_interaction
+        ) and elapsed_ratio >= 0.45
+        if (
+            max_comments > commented
+            and comment_chance > 0
+            and interaction_due
+            and not interacted
+            and (
+                prefer_comment
+                or should_backfill_comment
+                or random.randint(1, 100) <= comment_chance
+            )
+        ):
+            target = _current_warmup_post_context(page, clean_platform)
+            target_text = str(target.get("text") or "")
+            reply_text = _pick_warmup_persona_reply(
+                payload,
+                target_text,
+                previous_replies=used_comment_texts,
+            )
+            if clean_platform == "threads":
+                posted = _post_threads_warmup_comment(
+                    page,
+                    logger,
+                    reply_text,
+                    target_root=target.get("root"),
+                )
+            else:
+                posted = _post_instagram_warmup_comment(
+                    page,
+                    logger,
+                    reply_text,
+                    target_root=target.get("root"),
+                )
+            if posted:
+                commented += 1
+                used_comment_texts.add(reply_text)
+                interacted = True
+                shot_comment = _screenshot(
+                    page,
+                    screenshot_dir,
+                    task,
+                    f"{stage}_comment_{commented}",
+                    logger,
+                )
+                if shot_comment:
+                    comment_screenshots.append(shot_comment)
+            else:
                 comment_backfills += 1
-                logger.log("warn", "threads_warmup_backfill", "未找到可评论目标，继续浏览。", {"attempts": comment_backfills, "commented": commented, "target": min_required_comments, "has_reply_text": bool(str(reply_text or "").strip())})
+                logger.log(
+                    "warn",
+                    f"{stage}_comment_backfill",
+                    "No confirmed comment target was available; continuing.",
+                    {
+                        "attempts": comment_backfills,
+                        "commented": commented,
+                        "target": min_required_comments,
+                        "has_reply_text": bool(str(reply_text or "").strip()),
+                    },
+                )
+
+        if interacted:
+            next_interaction_at = _next_warmup_interaction_at(browsed, payload)
         scroll = _slow_human_scroll(page)
         browsed += 1
         remaining_seconds = max(0, int(deadline - time.monotonic()))
-        logger.log("debug", "threads_warmup", "已平滑浏览 Threads 信息流。", {"index": browsed, "browse_limit": browse_limit, **scroll, "liked": liked, "commented": commented, "opened_posts": opened_posts, "remaining_seconds": remaining_seconds})
+        logger.log(
+            "debug",
+            stage,
+            f"Browsed {clean_platform} feed.",
+            {
+                "index": browsed,
+                "browse_limit": browse_limit,
+                "liked": liked,
+                "commented": commented,
+                "opened_posts": opened_posts,
+                "remaining_seconds": remaining_seconds,
+                **scroll,
+            },
+        )
         if remaining_seconds <= 0:
             break
-        _sleep_between(8.0, 16.0)
-    shot = _screenshot(page, screenshot_dir, task, "threads_warmup", logger)
+        _wait_for_cancellation(random.uniform(20.0, 45.0), cancel_event)
+
+    if clean_platform == "instagram":
+        _dismiss_instagram_interstitials(page, logger)
+    _guard_warmup_risk(page, clean_platform, payload, logger)
+    shot = _screenshot(page, screenshot_dir, task, stage, logger)
+    _validate_warmup_completion(
+        clean_platform,
+        liked=liked,
+        commented=commented,
+        min_required_likes=min_required_likes,
+        min_required_comments=min_required_comments,
+        min_required_interactions=min_required_interactions,
+    )
     logger.log(
         "info",
         "completion_node",
-        "Threads 养号完成节点已确认。",
-        {"url": str(page.url or ""), "liked": liked, "commented": commented, "scrolled": browsed, "browse_limit": browse_limit, "opened_posts": opened_posts, "target_seconds": session_seconds, "like_backfills": like_backfills, "comment_backfills": comment_backfills, "strategy_id": strategy_id, "strategy_label": strategy_label},
+        f"{clean_platform} warmup completion was confirmed.",
+        {
+            "url": str(page.url or ""),
+            "liked": liked,
+            "commented": commented,
+            "scrolled": browsed,
+            "opened_posts": opened_posts,
+            "like_backfills": like_backfills,
+            "comment_backfills": comment_backfills,
+            "strategy_id": strategy_id,
+            "strategy_label": strategy_label,
+        },
         shot,
     )
-    return {"ok": True, "url": page.url, "liked": liked, "commented": commented, "scrolled": browsed, "browse_limit": browse_limit, "opened_posts": opened_posts, "target_seconds": session_seconds, "likeBackfills": like_backfills, "commentBackfills": comment_backfills, "strategy_id": strategy_id, "strategy_label": strategy_label, "commentScreenshots": comment_screenshots, "screenshot_path": shot}
+    return {
+        "ok": True,
+        "url": page.url,
+        "liked": liked,
+        "commented": commented,
+        "scrolled": browsed,
+        "browse_limit": browse_limit,
+        "opened_posts": opened_posts,
+        "target_seconds": session_seconds,
+        "likeBackfills": like_backfills,
+        "commentBackfills": comment_backfills,
+        "strategy_id": strategy_id,
+        "strategy_label": strategy_label,
+        "commentScreenshots": comment_screenshots,
+        "screenshot_path": shot,
+    }
 
 
-def _threads_reply_button(page):
+def _run_threads_warmup(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    cancel_event: Any | None = None,
+) -> dict[str, Any]:
+    return _run_platform_warmup(
+        page,
+        task,
+        payload,
+        screenshot_dir,
+        logger,
+        platform="threads",
+        cancel_event=cancel_event,
+    )
+def _threads_reply_button(page, root=None):
+    scope = root if root is not None else page
     selectors = [
         '[aria-label="Reply"]',
         '[aria-label*="Reply" i]',
@@ -2991,7 +3425,7 @@ def _threads_reply_button(page):
     ]
     for selector in selectors:
         try:
-            loc = page.locator(selector).first
+            loc = scope.locator(selector).first
             if loc.count() and loc.is_visible(timeout=1500):
                 return loc
         except Exception:
@@ -3018,22 +3452,939 @@ def _threads_text_box(page):
     return None
 
 
-def _pick_persona_reply(payload: dict[str, Any]) -> str:
+def _pick_persona_reply(
+    payload: dict[str, Any],
+    target_text: str = "",
+    *,
+    previous_replies: Iterable[str] = (),
+) -> str:
     reply_text = str(payload.get("reply_text") or "").strip()
     if reply_text:
-        return reply_text[:180]
-    templates = [str(item or "").strip() for item in (payload.get("reply_templates") or []) if str(item or "").strip()]
-    if templates:
-        return random.choice(templates)[:180]
-    if bool(payload.get("require_persona_relevance", False)):
+        return reply_text[:220]
+    clean_target = " ".join(str(target_text or "").split())
+    if bool(payload.get("require_persona_relevance", False)) and not _target_matches_persona(
+        payload,
+        clean_target,
+    ):
         return ""
-    persona_name = str(payload.get("persona_name") or "").strip()
-    if persona_name:
-        return f"\u8fd9\u4e2a\u89d2\u5ea6\u633a\u9002\u5408 {persona_name} \u7ee7\u7eed\u89c2\u5bdf\u3002"
-    return "\u8fd9\u4e2a\u89d2\u5ea6\u503c\u5f97\u7ee7\u7eed\u89c2\u5bdf\u3002"
+    if not clean_target:
+        return ""
+    return _generate_persona_reply_with_ai(
+        payload,
+        clean_target,
+        limit=220,
+        previous_replies=previous_replies,
+    )
 
 
-def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
+def _persona_reply_generation_applicable(
+    payload: dict[str, Any],
+    target_text: str,
+) -> bool:
+    if str(payload.get("reply_text") or "").strip():
+        return True
+    clean_target = " ".join(str(target_text or "").split())
+    if not clean_target:
+        return False
+    if bool(payload.get("require_persona_relevance", False)):
+        return _target_matches_persona(payload, clean_target)
+    return True
+
+
+def _generate_persona_reply_with_ai(
+    payload: dict[str, Any],
+    target_text: str,
+    *,
+    limit: int,
+    previous_replies: Iterable[str] = (),
+) -> str:
+    clean_target = " ".join(str(target_text or "").split())[:1800]
+    if not clean_target:
+        return ""
+    try:
+        import get_gemini
+        from runtime_config_bootstrap import load_runtime_config
+
+        runtime = load_runtime_config()
+        host = str(runtime.get("llm_base_url") or "").strip()
+        api_key = str(
+            runtime.get("llm_api_key_gpt")
+            or runtime.get("llm_api_key")
+            or runtime.get("llm_api_key_gemini")
+            or ""
+        ).strip()
+        model_order = str(
+            runtime.get("llm_model_priority_order")
+            or runtime.get("llm_default_model_gpt")
+            or runtime.get("llm_default_model")
+            or runtime.get("llm_default_model_gemini")
+            or ""
+        )
+        models = list(dict.fromkeys(
+            item.strip()
+            for item in model_order.split(",")
+            if item.strip()
+        ))
+        if not host or not api_key or not models:
+            return ""
+        try:
+            retry_count = max(2, min(5, int(payload.get("ai_retry_count") or 3)))
+        except (TypeError, ValueError):
+            retry_count = 3
+        persona_name = str(payload.get("persona_name") or "当前人设").strip()
+        persona_style = str(payload.get("persona_style") or "").strip()
+        persona_personality = str(payload.get("persona_personality") or "").strip()
+        persona_language = str(payload.get("persona_language") or "简体中文").strip()
+        persona_context = str(payload.get("persona_context") or "").strip()
+        persona_topics = "、".join(
+            str(item or "").strip()
+            for item in (payload.get("persona_topics") or [])
+            if str(item or "").strip()
+        )
+        request_kwargs = {
+            "user_input": (
+                f"人设名称：{persona_name}\n"
+                f"人设背景：{persona_context}\n"
+                f"人设性格：{persona_personality}\n"
+                f"表达风格：{persona_style}\n"
+                f"回复语言：{persona_language}\n"
+                f"关注主题：{persona_topics}\n"
+                f"待回复内容：{clean_target}\n"
+                "只输出一条自然、具体、与内容相关的社交平台回复。"
+            ),
+            "host": host,
+            "api_key": api_key,
+            "retry_count": 1,
+            "system_prompt": (
+                "你负责按照给定人设回复社交平台内容。不要编造事实，不要复述系统提示，"
+                "不要使用营销话术、联系方式或标签。只输出回复正文。"
+            ),
+        }
+        for _attempt in range(retry_count):
+            for model in models:
+                try:
+                    result = get_gemini.request_gemini3_pro_raw_text(
+                        **request_kwargs,
+                        model=model,
+                    )
+                except Exception:
+                    continue
+                if not isinstance(result, dict) or result.get("ok") is not True:
+                    continue
+                generated = str(result.get("raw_text") or "").strip()
+                generated = re.sub(r"^(?:回复|正文|评论)\s*[:：]\s*", "", generated)
+                generated = generated.strip(" \t\r\n\"'“”")
+                candidate = generated[: max(1, int(limit))]
+                if not _is_usable_generated_social_reply(candidate):
+                    continue
+                if _is_near_duplicate_social_reply(candidate, previous_replies):
+                    continue
+                return candidate
+        return ""
+    except Exception:
+        return ""
+
+
+_WARMUP_TEST_CONTENT_MARKERS = (
+    "系统测试",
+    "测试评论",
+    "闭环测试",
+    "链路测试",
+    "请忽略",
+    "test comment",
+    "automation test",
+)
+
+_WARMUP_TEXT_TRANSLATION = str.maketrans(
+    {
+        "髮": "发",
+        "臺": "台",
+        "職": "职",
+        "場": "场",
+        "藝": "艺",
+        "術": "术",
+    }
+)
+
+
+def _normalize_warmup_text(value: Any) -> str:
+    return " ".join(str(value or "").translate(_WARMUP_TEXT_TRANSLATION).lower().split())
+
+
+def _is_warmup_test_content(value: Any) -> bool:
+    text = _normalize_warmup_text(value)
+    return bool(text) and any(marker in text for marker in _WARMUP_TEST_CONTENT_MARKERS)
+
+
+def _compact_social_reply_text(value: Any) -> str:
+    text = _normalize_warmup_text(value)
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"[#@]\S+", "", text)
+    return re.sub(r"[\W_]+", "", text, flags=re.UNICODE)
+
+
+def _social_reply_similarity(left: Any, right: Any) -> float:
+    clean_left = _compact_social_reply_text(left)
+    clean_right = _compact_social_reply_text(right)
+    if not clean_left or not clean_right:
+        return 0.0
+    if clean_left == clean_right:
+        return 1.0
+    if clean_left in clean_right or clean_right in clean_left:
+        return min(len(clean_left), len(clean_right)) / max(len(clean_left), len(clean_right))
+
+    def bigrams(value: str) -> set[str]:
+        if len(value) < 2:
+            return {value}
+        return {value[index : index + 2] for index in range(len(value) - 1)}
+
+    left_grams = bigrams(clean_left)
+    right_grams = bigrams(clean_right)
+    return len(left_grams & right_grams) / max(len(left_grams), len(right_grams))
+
+
+def _is_near_duplicate_social_reply(
+    reply_text: Any,
+    previous_replies: Iterable[str],
+) -> bool:
+    current = _compact_social_reply_text(reply_text)
+    if not current:
+        return True
+    return any(
+        _social_reply_similarity(current, previous) >= 0.72
+        for previous in previous_replies
+        if str(previous or "").strip()
+    )
+
+
+def _is_usable_generated_social_reply(value: Any) -> bool:
+    text = " ".join(str(value or "").split()).strip()
+    compact = _compact_social_reply_text(text)
+    if len(compact) < 4 or len(compact) > 220:
+        return False
+    if _is_warmup_test_content(text):
+        return False
+    if re.search(r"https?://|(?:^|\s)[#@]\S+", text, flags=re.IGNORECASE):
+        return False
+    if re.search(
+        r"(?:system prompt|assistant|作为\s*ai|作為\s*ai|系统提示|系統提示)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return False
+    if compact in {
+        "不错",
+        "不錯",
+        "支持",
+        "好看",
+        "有意思",
+        "认同",
+        "認同",
+        "学到了",
+        "學到了",
+        "值得看",
+        "期待后续",
+        "期待後續",
+    }:
+        return False
+    for unit_length in range(3, len(compact) // 2 + 1):
+        unit = compact[:unit_length]
+        repeated = (unit * ((len(compact) // unit_length) + 1))[: len(compact)]
+        if compact == repeated:
+            return False
+    return True
+
+
+def _matched_warmup_persona_topic(payload: dict[str, Any], target_text: str) -> str:
+    target = _normalize_warmup_text(target_text)
+    if not target:
+        return ""
+    topics = payload.get("persona_topics") if isinstance(payload.get("persona_topics"), list) else []
+    for raw_topic in sorted(topics, key=lambda item: len(str(item or "")), reverse=True):
+        topic = " ".join(str(raw_topic or "").split())[:30]
+        normalized = _normalize_warmup_text(topic)
+        if len(normalized) >= 2 and normalized in target and not _is_warmup_test_content(topic):
+            return topic
+    return ""
+
+
+def _pick_warmup_persona_reply(
+    payload: dict[str, Any],
+    target_text: str,
+    *,
+    previous_replies: Iterable[str] = (),
+) -> str:
+    topic = _matched_warmup_persona_topic(payload, target_text)
+    require_relevance = bool(payload.get("require_persona_relevance", True))
+    if require_relevance and not topic:
+        return ""
+    if not str(target_text or "").strip():
+        return ""
+    return _generate_persona_reply_with_ai(
+        payload,
+        target_text,
+        limit=120,
+        previous_replies=previous_replies,
+    )
+
+
+def _current_warmup_post_context(page, platform: str) -> dict[str, Any]:
+    platform_name = str(platform or "").strip().lower()
+    selectors = ("article",) if platform_name == "instagram" else ("article", "[data-pressable-container='true']")
+    viewport_height = 800.0
+    with contextlib.suppress(Exception):
+        viewport_height = float(page.evaluate("() => Math.max(1, window.innerHeight)") or viewport_height)
+    candidates: list[tuple[float, Any, str]] = []
+    for selector in selectors:
+        with contextlib.suppress(Exception):
+            group = page.locator(selector)
+            count = min(int(group.count()), 40)
+            if selector == "article" and count:
+                selectors = (selector,)
+            for index in range(count):
+                root = group.nth(index)
+                if not root.is_visible(timeout=500):
+                    continue
+                box = root.bounding_box(timeout=1000)
+                text = str(root.inner_text(timeout=1500) or "").strip()
+                if not box or len(text) < 8 or len(text) > 4000:
+                    continue
+                top = float(box.get("y") or 0)
+                height = float(box.get("height") or 0)
+                width = float(box.get("width") or 0)
+                if width <= 180 or height <= 80 or top + height <= 80 or top >= viewport_height - 40:
+                    continue
+                score = abs(top + height / 2 - viewport_height / 2)
+                candidates.append((score, root, text[:1600]))
+        if candidates and selector == "article":
+            break
+    if not candidates:
+        return {"text": "", "root": None}
+    _, root, text = min(candidates, key=lambda item: item[0])
+    return {"text": text, "root": root}
+
+
+def _current_warmup_post_text(page, platform: str) -> str:
+    return str(_current_warmup_post_context(page, platform).get("text") or "")
+
+
+_THREADS_COMMENT_BLOCKLIST = (
+    "加微信",
+    "加v",
+    "vx",
+    "whatsapp",
+    "telegram",
+    "点击链接",
+    "私信领取",
+    "免费领取",
+    "赚钱教程",
+    "代购",
+    "推广",
+    "傻逼",
+    "垃圾骗子",
+    "操你",
+    "去死",
+)
+
+_THREADS_COMMON_TOKENS = {
+    "这个",
+    "那个",
+    "今天",
+    "真的",
+    "一个",
+    "怎么",
+    "什么",
+    "还是",
+    "觉得",
+    "分享",
+    "可以",
+    "就是",
+    "非常",
+}
+
+
+def _threads_semantic_tokens(value: Any) -> set[str]:
+    text = " ".join(str(value or "").lower().split())
+    tokens = {
+        token
+        for token in re.findall(r"[a-z0-9_]{3,}", text)
+        if token not in _THREADS_COMMON_TOKENS
+    }
+    for segment in re.findall(r"[\u3400-\u9fff]{2,}", text):
+        for index in range(len(segment) - 1):
+            token = segment[index:index + 2]
+            if token not in _THREADS_COMMON_TOKENS:
+                tokens.add(token)
+    return tokens
+
+
+def _target_matches_persona(payload: dict[str, Any], target_text: Any) -> bool:
+    clean_target = " ".join(str(target_text or "").split())
+    if not clean_target:
+        return False
+    if _matched_warmup_persona_topic(payload, clean_target):
+        return True
+    topics = payload.get("persona_topics") if isinstance(payload.get("persona_topics"), list) else []
+    persona_reference = " ".join(
+        (
+            str(payload.get("persona_context") or ""),
+            str(payload.get("persona_style") or ""),
+            " ".join(str(item or "") for item in topics),
+        )
+    )
+    return bool(
+        _threads_semantic_tokens(clean_target)
+        & _threads_semantic_tokens(persona_reference)
+    )
+
+
+def _is_replyable_social_comment(
+    text: Any,
+    author: Any,
+    payload: dict[str, Any],
+    post_text: str,
+) -> bool:
+    clean_text = " ".join(str(text or "").split())
+    if len(clean_text) < 4 or len(clean_text) > 1200:
+        return False
+    semantic_chars = re.findall(r"[A-Za-z0-9\u3400-\u9fff]", clean_text)
+    if len(semantic_chars) < 3:
+        return False
+    lowered = clean_text.lower()
+    if "http://" in lowered or "https://" in lowered or any(marker in lowered for marker in _THREADS_COMMENT_BLOCKLIST):
+        return False
+    clean_author = str(author or "").strip().lower().lstrip("@")
+    own_handle = str(
+        payload.get("account_handle")
+        or payload.get("threads_handle")
+        or payload.get("instagram_handle")
+        or ""
+    ).strip().lower().lstrip("@")
+    if clean_author and own_handle and clean_author == own_handle:
+        return False
+    if not bool(payload.get("require_persona_relevance", True)):
+        return True
+    return _target_matches_persona(
+        payload,
+        f"{post_text}\n{clean_text}",
+    )
+
+
+def _threads_comment_candidates(page) -> list[dict[str, Any]]:
+    script = """
+    () => {
+      const articleCount = document.querySelectorAll("article").length;
+      const selector = articleCount > 1 ? "article" : "[data-pressable-container='true']";
+      const nodes = Array.from(document.querySelectorAll(selector));
+      return nodes.slice(1).map((node, offset) => {
+        const text = String(node.innerText || node.textContent || "").replace(/\\s+/g, " ").trim();
+        const authorLink = node.querySelector('a[href^="/@"]');
+        const href = String(authorLink?.getAttribute("href") || "");
+        const authorMatch = href.match(/^\\/@([^/?#]+)/);
+        const hasReply = Array.from(node.querySelectorAll('button, [role="button"], [aria-label]')).some((button) => {
+          const label = String(button.getAttribute("aria-label") || button.textContent || "").trim().toLowerCase();
+          return label === "reply" || label.includes("回复") || label.includes("回覆");
+        });
+        return {
+          root_selector: selector,
+          dom_index: offset + 1,
+          text: text.slice(0, 1200),
+          author: authorMatch ? authorMatch[1] : "",
+          has_reply: hasReply,
+        };
+      }).filter((item) => item.text && item.has_reply);
+    }
+    """
+    try:
+        rows = page.evaluate(script)
+    except Exception:
+        return []
+    return [dict(item) for item in rows if isinstance(item, dict)]
+
+
+def _threads_comment_reply_button(page, candidate: dict[str, Any]):
+    selector = str(candidate.get("root_selector") or "").strip()
+    try:
+        index = int(candidate.get("dom_index"))
+    except (TypeError, ValueError):
+        return None
+    if not selector or index < 0:
+        return None
+    expected_text = " ".join(str(candidate.get("text") or "").split())
+    expected_author = str(candidate.get("author") or "").strip().lower()
+    roots = []
+    with contextlib.suppress(Exception):
+        group = page.locator(selector)
+        if 0 <= index < int(group.count()):
+            roots.append(group.nth(index))
+        roots.extend(group.nth(item_index) for item_index in range(min(int(group.count()), 80)))
+    root = None
+    seen_indexes: set[int] = set()
+    for candidate_root in roots:
+        identity = id(candidate_root)
+        if identity in seen_indexes:
+            continue
+        seen_indexes.add(identity)
+        try:
+            current_text = " ".join(str(candidate_root.inner_text(timeout=1200) or "").split())
+            if expected_text and not (
+                expected_text[:240] in current_text
+                or current_text[:240] in expected_text
+            ):
+                continue
+            if expected_author:
+                href = str(
+                    candidate_root.locator('a[href^="/@"]').first.get_attribute("href", timeout=1000)
+                    or ""
+                )
+                match = re.match(r"^/@([^/?#]+)", href)
+                if not match or match.group(1).strip().lower() != expected_author:
+                    continue
+            root = candidate_root
+            break
+        except Exception:
+            continue
+    if root is None:
+        return None
+    for button_selector in (
+        '[aria-label="Reply"]',
+        '[aria-label*="Reply" i]',
+        '[aria-label*="回复"]',
+        '[aria-label*="回覆"]',
+        'button:has-text("Reply")',
+        '[role="button"]:has-text("回复")',
+        '[role="button"]:has-text("回覆")',
+    ):
+        try:
+            button = root.locator(button_selector).first
+            if button.count() and button.is_visible(timeout=1200):
+                return button
+        except Exception:
+            continue
+    return None
+
+
+def _threads_primary_post_context(page) -> dict[str, Any]:
+    for selector in ("article", "[data-pressable-container='true']"):
+        with contextlib.suppress(Exception):
+            group = page.locator(selector)
+            for index in range(min(int(group.count()), 12)):
+                root = group.nth(index)
+                if root.is_visible(timeout=1200):
+                    text = str(root.inner_text(timeout=2000) or "").strip()[:1600]
+                    if text:
+                        return {"text": text, "root": root}
+    return {"text": "", "root": None}
+
+
+def _threads_post_text(page) -> str:
+    return str(_threads_primary_post_context(page).get("text") or "")
+
+
+def _threads_published_reply_count(page, text: str) -> int:
+    clean_text = " ".join(str(text or "").split())
+    if not clean_text:
+        return 0
+    script = """
+    target => {
+      const normalize = value => String(value || "").replace(/\\s+/g, " ").trim();
+      const articles = Array.from(document.querySelectorAll("article"));
+      const selector = articles.length > 1 ? "article" : "[data-pressable-container='true']";
+      return Array.from(document.querySelectorAll(selector)).filter(root => {
+        if (root.closest("textarea, [contenteditable='true'], [role='textbox']")) return false;
+        if (root.querySelector("textarea, [contenteditable='true'], [role='textbox']")) return false;
+        const rect = root.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        const lines = String(root.innerText || root.textContent || "")
+          .split(/\\n+/)
+          .map(normalize)
+          .filter(Boolean);
+        return lines.includes(target);
+      }).length;
+    }
+    """
+    with contextlib.suppress(Exception):
+        return int(page.evaluate(script, clean_text) or 0)
+    return 0
+
+
+def _threads_exact_text_count(page, text: str) -> int:
+    return _threads_published_reply_count(page, text)
+
+
+def _wait_for_threads_reply_echo(page, text: str, previous_count: int, timeout_seconds: float = 12.0) -> bool:
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    while time.monotonic() < deadline:
+        with contextlib.suppress(Exception):
+            if _threads_published_reply_count(page, text) > int(previous_count):
+                return True
+        time.sleep(0.5)
+    return False
+
+
+def _click_threads_reply_submit(
+    page,
+    box,
+    logger: AutomationLogger,
+    stage: str,
+) -> bool:
+    labels = ("Post", "Reply", "\u53d1\u5e03", "\u56de\u8986", "\u56de\u590d")
+    scopes = []
+    for xpath in (
+        "xpath=ancestor::*[@role='dialog'][1]",
+        "xpath=ancestor::form[1]",
+        (
+            "xpath=ancestor::*[.//*[self::button or @role='button']"
+            "[normalize-space()='Post' or normalize-space()='Reply' or "
+            "normalize-space()='发布' or normalize-space()='回覆' or normalize-space()='回复']][1]"
+        ),
+    ):
+        with contextlib.suppress(Exception):
+            scope = box.locator(xpath)
+            if scope.count():
+                scopes.append(scope)
+    for scope in scopes:
+        for label in labels:
+            locators = (
+                scope.get_by_role("button", name=label).last,
+                scope.locator(f'button:has-text("{label}")').last,
+                scope.locator(f'[role="button"]:has-text("{label}")').last,
+                scope.locator(f'[aria-label="{label}"]').last,
+            )
+            for locator in locators:
+                with contextlib.suppress(Exception):
+                    if locator.count() and locator.is_visible(timeout=1200):
+                        return bool(_human_click(page, locator, logger, stage))
+    logger.log(
+        "warn",
+        f"{stage}_missing",
+        "未在当前回复编辑器内找到提交按钮，本次不执行页面级兜底点击。",
+    )
+    return False
+
+
+def _submit_threads_reply(
+    page,
+    button,
+    reply_text: str,
+    logger: AutomationLogger,
+    stage_prefix: str,
+) -> bool:
+    previous_count = _threads_published_reply_count(page, reply_text)
+    _human_click(page, button, logger, f"{stage_prefix}_button")
+    _sleep_between(1.0, 2.5)
+    box = _threads_text_box(page)
+    if box is None:
+        return False
+    _human_click(page, box, logger, f"{stage_prefix}_focus")
+    _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
+    if not _click_threads_reply_submit(page, box, logger, f"{stage_prefix}_submit"):
+        return False
+    if _wait_for_threads_reply_echo(page, reply_text, previous_count):
+        return True
+    logger.log(
+        "warn",
+        f"{stage_prefix}_unconfirmed",
+        "Threads 回复提交后未检测到内容回显，本次不计入成功数。",
+        {"text": reply_text[:80]},
+    )
+    return False
+
+
+def _target_summary_by_url(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    rows = payload.get("target_summaries") if isinstance(payload.get("target_summaries"), list) else []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").split("?", 1)[0].rstrip("/")
+        if url:
+            result[url] = item
+    return result
+
+
+def _social_comment_target_key(
+    platform: str,
+    post_url: Any,
+    author: Any,
+    comment_text: Any,
+) -> str:
+    clean_platform = str(platform or "").strip().lower()
+    clean_url = str(post_url or "").split("?", 1)[0].rstrip("/").lower()
+    clean_author = str(author or "").strip().lower().lstrip("@")
+    clean_comment = " ".join(str(comment_text or "").split()).lower()
+    identity = "\n".join(
+        (clean_platform, clean_url, clean_author, clean_comment),
+    )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _social_comment_identity_key(
+    platform: str,
+    author: Any,
+    comment_text: Any,
+) -> str:
+    clean_platform = str(platform or "").strip().lower()
+    clean_author = str(author or "").strip().lower().lstrip("@")
+    clean_comment = " ".join(str(comment_text or "").split()).lower()
+    identity = "\n".join((clean_platform, clean_author, clean_comment))
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _social_comment_text_key(platform: str, comment_text: Any) -> str:
+    clean_platform = str(platform or "").strip().lower()
+    clean_comment = " ".join(str(comment_text or "").split()).lower()
+    identity = "\n".join((clean_platform, clean_comment))
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _discover_owned_post_targets(
+    page,
+    platform: str,
+    account: dict[str, Any] | None,
+    payload: dict[str, Any],
+    logger: AutomationLogger,
+    *,
+    limit: int,
+    cancel_event: Any | None = None,
+) -> list[str]:
+    _raise_if_cancelled(cancel_event)
+    clean_platform = str(platform or "").strip().lower()
+    if clean_platform == "threads":
+        profile_url = _threads_profile_url(account)
+        normalize_post = _normalize_threads_post_permalink
+        find_posts = _find_threads_post_permalinks
+        owns_post = lambda url: _threads_permalink_belongs_to_profile(url, profile_url)
+    elif clean_platform == "instagram":
+        profile_url = _instagram_profile_url(account)
+        normalize_post = _normalize_instagram_post_permalink
+        find_posts = _find_instagram_post_permalinks
+        owns_post = lambda _url: True
+    else:
+        return []
+    if not profile_url:
+        return []
+
+    _goto(page, profile_url, logger, f"{clean_platform}_owned_posts")
+    _wait_for_cancellation(random.uniform(1.0, 2.0), cancel_event)
+    discovered = [
+        normalized
+        for value in (find_posts(page) or [])
+        if (normalized := normalize_post(value)) and owns_post(normalized)
+    ]
+    requested_values = payload.get("target_urls")
+    if not isinstance(requested_values, list):
+        requested_values = []
+    requested = {
+        normalized
+        for value in requested_values
+        if (normalized := normalize_post(value))
+    }
+    selected: list[str] = []
+    for url in discovered:
+        if requested and url not in requested:
+            continue
+        if url not in selected:
+            selected.append(url)
+        if len(selected) >= max(1, limit):
+            break
+    logger.log(
+        "info",
+        f"{clean_platform}_owned_posts",
+        f"已从 {_platform_name(clean_platform)} 绑定账号主页确认自有帖子目标。",
+        {
+            "profile_url": profile_url,
+            "discovered": len(discovered),
+            "selected": len(selected),
+        },
+    )
+    return selected
+
+
+def _instagram_primary_post_context(page) -> dict[str, Any]:
+    with contextlib.suppress(Exception):
+        articles = page.locator("article")
+        for index in range(min(int(articles.count()), 12)):
+            root = articles.nth(index)
+            if not root.is_visible(timeout=1200):
+                continue
+            text = str(root.inner_text(timeout=2000) or "").strip()[:1600]
+            if text:
+                return {"text": text, "root": root}
+    return {"text": "", "root": None}
+
+
+def _instagram_comment_candidates(page) -> list[dict[str, Any]]:
+    script = """
+    () => {
+      document.querySelectorAll("[data-vecto-comment-candidate]").forEach((node) => {
+        node.removeAttribute("data-vecto-comment-candidate");
+      });
+      const controls = Array.from(document.querySelectorAll("button, [role='button']"));
+      const rows = [];
+      for (const control of controls) {
+        const label = String(
+          control.innerText || control.textContent || control.getAttribute("aria-label") || ""
+        ).replace(/\\s+/g, " ").trim().toLowerCase();
+        if (!(label === "reply" || label.includes("回复") || label.includes("回覆"))) continue;
+        const root = control.closest("li, article") || control.parentElement;
+        if (!root || root.hasAttribute("data-vecto-comment-candidate")) continue;
+        const text = String(root.innerText || root.textContent || "").replace(/\\s+/g, " ").trim();
+        if (!text) continue;
+        const authorLink = root.querySelector('a[href^="/"]');
+        const authorPath = String(authorLink?.getAttribute("href") || "");
+        const authorMatch = authorPath.match(/^\\/([A-Za-z0-9._]+)\\/?$/);
+        const key = String(rows.length);
+        root.setAttribute("data-vecto-comment-candidate", key);
+        rows.push({
+          candidate_key: key,
+          text: text.slice(0, 1200),
+          author: authorMatch ? authorMatch[1] : "",
+        });
+      }
+      return rows;
+    }
+    """
+    with contextlib.suppress(Exception):
+        rows = page.evaluate(script)
+        return [dict(item) for item in rows if isinstance(item, dict)]
+    return []
+
+
+def _instagram_comment_reply_button(page, candidate: dict[str, Any]):
+    candidate_key = str(candidate.get("candidate_key") or "").strip()
+    if not candidate_key:
+        return None
+    with contextlib.suppress(Exception):
+        root = page.locator(
+            f'[data-vecto-comment-candidate="{candidate_key}"]'
+        ).first
+        if not root.count():
+            return None
+        for selector in (
+            'button:has-text("Reply")',
+            '[role="button"]:has-text("Reply")',
+            '[aria-label*="Reply" i]',
+            'button:has-text("回复")',
+            '[role="button"]:has-text("回复")',
+            'button:has-text("回覆")',
+        ):
+            button = root.locator(selector).first
+            if button.count() and button.is_visible(timeout=1200):
+                return button
+    return None
+
+
+def _submit_instagram_comment_reply(
+    page,
+    button,
+    reply_text: str,
+    logger: AutomationLogger,
+    stage_prefix: str,
+) -> bool:
+    clean_text = str(reply_text or "").strip()
+    if not clean_text:
+        return False
+    previous_count = _instagram_exact_text_count(page, clean_text)
+    if not _human_click(page, button, logger, f"{stage_prefix}_button"):
+        return False
+    _sleep_between(0.6, 1.2)
+    box = _instagram_warmup_comment_box(page)
+    if box is None:
+        return False
+    _human_click(page, box, logger, f"{stage_prefix}_focus")
+    _human_type(page, clean_text, min_delay=0.08, max_delay=0.18)
+    if not _click_text_button(
+        page,
+        logger,
+        ["Post", "发布"],
+        f"{stage_prefix}_submit",
+    ):
+        return False
+    return _wait_for_instagram_comment_echo(page, clean_text, previous_count)
+
+
+def _platform_primary_post_context(page, platform: str) -> dict[str, Any]:
+    if platform == "instagram":
+        return _instagram_primary_post_context(page)
+    return _threads_primary_post_context(page)
+
+
+def _platform_post_text(page, platform: str) -> str:
+    return str(_platform_primary_post_context(page, platform).get("text") or "")
+
+
+def _platform_comment_candidates(page, platform: str) -> list[dict[str, Any]]:
+    if platform == "instagram":
+        return _instagram_comment_candidates(page)
+    return _threads_comment_candidates(page)
+
+
+def _platform_comment_reply_button(
+    page,
+    platform: str,
+    candidate: dict[str, Any],
+):
+    if platform == "instagram":
+        return _instagram_comment_reply_button(page, candidate)
+    return _threads_comment_reply_button(page, candidate)
+
+
+def _platform_primary_reply_target(
+    page,
+    platform: str,
+    primary_post: dict[str, Any],
+):
+    if platform == "instagram":
+        return primary_post.get("root")
+    return _threads_reply_button(page, root=primary_post.get("root"))
+
+
+def _submit_platform_reply(
+    page,
+    platform: str,
+    target,
+    reply_text: str,
+    logger: AutomationLogger,
+    stage_prefix: str,
+    *,
+    comment_reply: bool,
+) -> bool:
+    if platform == "instagram":
+        if comment_reply:
+            return _submit_instagram_comment_reply(
+                page,
+                target,
+                reply_text,
+                logger,
+                stage_prefix,
+            )
+        return _post_instagram_warmup_comment(
+            page,
+            logger,
+            reply_text,
+            target_root=target,
+        )
+    return _submit_threads_reply(
+        page,
+        target,
+        reply_text,
+        logger,
+        stage_prefix,
+    )
+
+
+def _run_platform_hot_post_auto_reply(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    platform: str,
+    cancel_event: Any | None = None,
+) -> dict[str, Any]:
+    _raise_if_cancelled(cancel_event)
     max_posts = max(1, min(int(payload.get("max_posts") or 5), 20))
     max_replies = max(1, min(int(payload.get("max_replies") or 3), 10))
     strategy_id = str(payload.get("strategy_id") or "hot_posts")
@@ -3042,7 +4393,8 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
     if not isinstance(raw_targets, list):
         raw_targets = []
     target_urls = [str(item or "").strip() for item in raw_targets if str(item or "").strip()]
-    logger.log("info", "threads_hot_post_auto_reply", "开始执行 Threads 热点帖子自动回复。", {
+    platform_name = _platform_name(platform)
+    logger.log("info", f"{platform}_hot_post_auto_reply", f"开始执行 {platform_name} 热点帖子自动回复。", {
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,
         "target_count": len(target_urls),
@@ -3051,14 +4403,15 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
         "persona_name": payload.get("persona_name") or "",
     })
     if not target_urls:
-        shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
-        logger.log("warn", "completion_node", "没有可用的 Threads 热点帖子目标。", {
+        shot = _screenshot(page, screenshot_dir, task, f"{platform}_auto_reply_done", logger)
+        logger.log("warn", "completion_node", f"没有可用的 {platform_name} 热点帖子目标。", {
             "strategy_id": strategy_id,
             "strategy_label": strategy_label,
         }, shot)
         return {
             "ok": True,
-            "url": str(page.url or THREADS_HOME),
+            "noTarget": True,
+            "url": str(page.url or (INSTAGRAM_HOME if platform == "instagram" else THREADS_HOME)),
             "scannedPosts": 0,
             "scannedComments": 0,
             "replied": 0,
@@ -3069,66 +4422,108 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
             "strategy_label": strategy_label,
             "replyScreenshots": [],
             "repliedUrls": [],
+            "repliedComments": [],
             "screenshot_path": shot,
         }
 
     replied = 0
     scanned = 0
+    attempted_submissions = 0
+    reply_candidates = 0
+    operational_failures = 0
     reply_backfills = 0
     reply_screenshots: list[str] = []
     replied_urls: list[str] = []
+    replied_comments: list[dict[str, Any]] = []
+    used_reply_texts: set[str] = set()
+    summaries = _target_summary_by_url(payload)
     completion_reason = "max_posts_scanned"
     for url in target_urls[:max_posts]:
+        _raise_if_cancelled(cancel_event)
         scanned += 1
-        _goto(page, url, logger, "threads_hot_post_open")
+        _goto(page, url, logger, f"{platform}_hot_post_open")
         _sleep_between(1.5, 3.0)
-        button = _threads_reply_button(page)
-        reply_text = _pick_persona_reply(payload)
+        summary = summaries.get(url.split("?", 1)[0].rstrip("/"), {})
+        primary_post = _platform_primary_post_context(page, platform)
+        post_text = str(
+            summary.get("expected_text")
+            or summary.get("expectedText")
+            or summary.get("label")
+            or primary_post.get("text")
+            or ""
+        ).strip()
+        button = _platform_primary_reply_target(page, platform, primary_post)
+        generation_applicable = _persona_reply_generation_applicable(payload, post_text)
+        reply_text = _pick_persona_reply(
+            payload,
+            post_text,
+            previous_replies=used_reply_texts,
+        )
         if not str(reply_text or "").strip():
-            completion_reason = "no_persona_relevant_reply"
-            logger.log("warn", "threads_hot_post_reply_skip", "没有可用的人设相关回复候选内容。", {"url": url})
-            break
+            reply_backfills += 1
+            if generation_applicable:
+                reply_candidates += 1
+                operational_failures += 1
+                completion_reason = "reply_generation_failed"
+                logger.log("error", f"{platform}_reply_generation_failed", "模型多次重试后仍未生成可用回复，本目标已跳过。", {"url": url})
+            else:
+                completion_reason = "no_persona_relevant_reply"
+                logger.log("warn", f"{platform}_hot_post_reply_skip", "没有可用的人设相关回复候选内容。", {"url": url})
+            continue
+        reply_candidates += 1
         if button is None:
             reply_backfills += 1
-            logger.log("warn", "threads_auto_reply_backfill", "未找到可回复目标，正在切换目标。", {"attempts": reply_backfills, "url": url})
+            operational_failures += 1
+            completion_reason = "reply_target_missing"
+            logger.log("warn", f"{platform}_auto_reply_backfill", "未找到可回复目标，正在切换目标。", {"attempts": reply_backfills, "url": url})
             continue
-        _human_click(page, button, logger, "threads_hot_post_reply_button")
-        _sleep_between(1.0, 2.5)
-        box = _threads_text_box(page)
-        if box is None:
-            reply_backfills += 1
-            logger.log("warn", "threads_auto_reply_backfill", "未找到可回复目标，正在切换目标。", {"attempts": reply_backfills, "url": url})
-            continue
-        _human_click(page, box, logger, "threads_hot_post_reply_focus")
-        _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
-        posted = _click_text_button(page, logger, ["Post", "Reply", "\u53d1\u5e03", "\u56de\u8986", "\u56de\u590d"], "threads_hot_post_reply_submit")
+        attempted_submissions += 1
+        posted = _submit_platform_reply(
+            page,
+            platform,
+            button,
+            reply_text,
+            logger,
+            f"{platform}_hot_post_reply",
+            comment_reply=False,
+        )
         if posted:
             replied += 1
+            used_reply_texts.add(reply_text)
             replied_urls.append(url)
+            replied_comments.append({
+                "url": url,
+                "replyText": reply_text,
+                "scope": "hot_posts",
+            })
             _sleep_between(2.0, 4.0)
-            shot = _screenshot(page, screenshot_dir, task, f"threads_reply_{replied}", logger)
+            shot = _screenshot(page, screenshot_dir, task, f"{platform}_reply_{replied}", logger)
             if shot:
                 reply_screenshots.append(shot)
-            logger.log("info", "threads_hot_post_auto_reply", "已回复 Threads 热点帖子。", {"reply_index": replied, "url": url, "text": reply_text[:80]})
+            logger.log("info", f"{platform}_hot_post_auto_reply", f"已回复 {platform_name} 热点帖子。", {"reply_index": replied, "url": url, "text": reply_text[:80]})
             if replied >= max_replies:
                 completion_reason = "target_replies_reached"
                 break
         else:
             reply_backfills += 1
-            logger.log("warn", "threads_auto_reply_backfill", "回复补量失败，正在切换目标。", {"attempts": reply_backfills, "url": url})
-    shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
+            operational_failures += 1
+            completion_reason = "reply_submission_unconfirmed"
+            logger.log("warn", f"{platform}_auto_reply_backfill", "回复补量失败，正在切换目标。", {"attempts": reply_backfills, "url": url})
+    shot = _screenshot(page, screenshot_dir, task, f"{platform}_auto_reply_done", logger)
+    ok = replied > 0 or (reply_candidates == 0 and operational_failures == 0)
     logger.log(
-        "info",
+        "info" if ok else "error",
         "completion_node",
-        "Threads 热点帖子自动回复完成节点已确认。",
+        f"{platform_name} 热点帖子自动回复完成节点已确认。",
         {"url": str(page.url or ""), "scannedPosts": scanned, "replied": replied, "reply_backfills": reply_backfills, "completionReason": completion_reason, "strategy_id": strategy_id, "strategy_label": strategy_label},
         shot,
     )
     return {
-        "ok": True,
+        "ok": ok,
+        "noTarget": reply_candidates == 0,
         "url": page.url,
         "scannedPosts": scanned,
-        "scannedComments": scanned,
+        "scannedComments": 0,
         "replied": replied,
         "skipped": max(0, scanned - replied),
         "replyBackfills": reply_backfills,
@@ -3137,161 +4532,334 @@ def _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger
         "strategy_label": strategy_label,
         "replyScreenshots": reply_screenshots,
         "repliedUrls": replied_urls,
+        "repliedComments": replied_comments,
         "screenshot_path": shot,
     }
 
 
-def _run_threads_auto_reply(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
+def _run_threads_hot_post_auto_reply(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    cancel_event: Any | None = None,
+) -> dict[str, Any]:
+    return _run_platform_hot_post_auto_reply(
+        page,
+        task,
+        payload,
+        screenshot_dir,
+        logger,
+        platform="threads",
+        cancel_event=cancel_event,
+    )
+
+
+def _run_platform_auto_reply(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    platform: str,
+    cancel_event: Any | None = None,
+    account: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    _raise_if_cancelled(cancel_event)
     if str(payload.get("reply_scope") or "comments") == "hot_posts":
-        return _run_threads_hot_post_auto_reply(page, task, payload, screenshot_dir, logger)
+        return _run_platform_hot_post_auto_reply(
+            page,
+            task,
+            payload,
+            screenshot_dir,
+            logger,
+            platform=platform,
+            cancel_event=cancel_event,
+        )
     max_posts = max(1, min(int(payload.get("max_posts") or 5), 20))
     max_replies = max(1, min(int(payload.get("max_replies") or 3), 10))
     strategy_id = str(payload.get("strategy_id") or "tg_default")
     strategy_label = str(payload.get("strategy_label") or "\u81ea\u52a8\u56de\u590d\u8bc4\u8bba\uff1a\u6700\u8fd1 2 \u5929")
     require_persona_relevance = bool(payload.get("require_persona_relevance", True))
-    raw_targets = payload.get("target_urls") or []
-    if not isinstance(raw_targets, list):
+    raw_targets = payload.get("target_urls")
+    targets_were_provided = isinstance(raw_targets, list)
+    if not targets_were_provided:
         raw_targets = []
     target_urls = [str(item or "").strip() for item in raw_targets if str(item or "").strip()]
+    if account is not None and (not targets_were_provided or target_urls):
+        target_urls = _discover_owned_post_targets(
+            page,
+            platform,
+            account,
+            payload,
+            logger,
+            limit=max_posts,
+            cancel_event=cancel_event,
+        )
     replied = 0
-    scanned = 0
+    scanned_posts = 0
+    scanned_comments = 0
+    skipped = 0
+    attempted_submissions = 0
+    replyable_candidates = 0
+    operational_failures = 0
     reply_backfills = 0
     reply_screenshots: list[str] = []
     replied_urls: list[str] = []
-    logger.log("info", "threads_auto_reply", "开始执行人设驱动的 Threads 自动回复。", {
+    replied_comments: list[dict[str, Any]] = []
+    used_reply_texts: set[str] = set()
+    replied_comment_keys = {
+        str(item or "").strip()
+        for item in (
+            payload.get("replied_comment_keys")
+            if isinstance(payload.get("replied_comment_keys"), list)
+            else []
+        )
+        if str(item or "").strip()
+    }
+    replied_comment_history = (
+        payload.get("replied_comment_history")
+        if isinstance(payload.get("replied_comment_history"), list)
+        else []
+    )
+    replied_comment_identity_keys = {
+        _social_comment_identity_key(
+            platform,
+            item.get("author"),
+            item.get("comment"),
+        )
+        for item in replied_comment_history
+        if isinstance(item, dict) and str(item.get("comment") or "").strip()
+    }
+    replied_comment_text_keys = {
+        _social_comment_text_key(platform, item.get("comment"))
+        for item in replied_comment_history
+        if isinstance(item, dict) and str(item.get("comment") or "").strip()
+    }
+    summaries = _target_summary_by_url(payload)
+    logger.log("info", f"{platform}_auto_reply", f"开始执行人设驱动的 {_platform_name(platform)} 自动回复。", {
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,
         "max_posts": max_posts,
         "max_replies": max_replies,
         "require_persona_relevance": require_persona_relevance,
         "persona_name": payload.get("persona_name") or "",
-        "threads_handle": payload.get("threads_handle") or "",
+        "account_handle": payload.get(f"{platform}_handle") or "",
         "target_count": len(target_urls),
     })
     completion_reason = "max_posts_scanned"
+    if not target_urls:
+        shot = _screenshot(page, screenshot_dir, task, f"{platform}_auto_reply_done", logger)
+        return {
+            "ok": True,
+            "noTarget": True,
+            "url": str(page.url or (INSTAGRAM_HOME if platform == "instagram" else THREADS_HOME)),
+            "scannedPosts": 0,
+            "scannedComments": 0,
+            "replied": 0,
+            "skipped": 0,
+            "replyBackfills": 0,
+            "completionReason": "no_owned_post_targets",
+            "strategy_id": strategy_id,
+            "strategy_label": strategy_label,
+            "replyScreenshots": [],
+            "repliedUrls": [],
+            "repliedComments": [],
+            "screenshot_path": shot,
+        }
     if target_urls:
         for url in target_urls[:max_posts]:
-            scanned += 1
-            _goto(page, url, logger, "threads_comment_reply_open")
+            _raise_if_cancelled(cancel_event)
+            scanned_posts += 1
+            _goto(page, url, logger, f"{platform}_comment_reply_open")
             _sleep_between(1.5, 3.0)
-            button = _threads_reply_button(page)
-            reply_text = _pick_persona_reply(payload)
-            if require_persona_relevance and not str(reply_text or "").strip():
-                logger.log("warn", "threads_auto_reply_skip", "没有可用的人设相关回复候选内容。", {"strategy_id": strategy_id, "strategy_label": strategy_label, "url": url})
-                completion_reason = "no_persona_relevant_reply"
-                break
-            if button is None:
-                reply_backfills += 1
-                logger.log("warn", "threads_auto_reply_backfill", "未找到可回复目标，正在切换目标。", {"attempts": reply_backfills, "url": url})
-                continue
-            _human_click(page, button, logger, "threads_reply_button")
-            _sleep_between(1.0, 2.5)
-            box = _threads_text_box(page)
-            if box is None:
-                reply_backfills += 1
-                logger.log("warn", "threads_auto_reply_backfill", "未找到可回复目标，正在切换目标。", {"attempts": reply_backfills, "url": url})
-                continue
-            _human_click(page, box, logger, "threads_reply_focus")
-            _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
-            posted = _click_text_button(page, logger, ["Post", "Reply", "\u53d1\u5e03", "\u56de\u8986", "\u56de\u590d"], "threads_reply_submit")
-            if posted:
+            summary = summaries.get(url.split("?", 1)[0].rstrip("/"), {})
+            post_text = str(
+                summary.get("expected_text")
+                or summary.get("expectedText")
+                or summary.get("label")
+                or _platform_post_text(page, platform)
+                or ""
+            ).strip()
+            candidates = _platform_comment_candidates(page, platform)
+            scanned_comments += len(candidates)
+            for candidate in candidates:
+                _raise_if_cancelled(cancel_event)
+                comment_text = str(candidate.get("text") or "").strip()
+                author = str(candidate.get("author") or "").strip()
+                target_key = _social_comment_target_key(
+                    platform,
+                    url,
+                    author,
+                    comment_text,
+                )
+                identity_key = _social_comment_identity_key(
+                    platform,
+                    author,
+                    comment_text,
+                )
+                text_key = _social_comment_text_key(platform, comment_text)
+                if (
+                    target_key in replied_comment_keys
+                    or identity_key in replied_comment_identity_keys
+                    or text_key in replied_comment_text_keys
+                ):
+                    skipped += 1
+                    continue
+                if not _is_replyable_social_comment(comment_text, author, payload, post_text):
+                    skipped += 1
+                    continue
+                reply_text = _pick_persona_reply(
+                    payload,
+                    f"{post_text}\n评论：{comment_text}",
+                    previous_replies=used_reply_texts,
+                )
+                if require_persona_relevance and not str(reply_text or "").strip():
+                    skipped += 1
+                    target_text = f"{post_text}\n评论：{comment_text}"
+                    if _persona_reply_generation_applicable(payload, target_text):
+                        replyable_candidates += 1
+                        operational_failures += 1
+                        completion_reason = "reply_generation_failed"
+                        logger.log("error", f"{platform}_reply_generation_failed", "模型多次重试后仍未生成可用回复，本评论已跳过。", {"url": url, "author": author})
+                    continue
+                if not str(reply_text or "").strip():
+                    skipped += 1
+                    target_text = f"{post_text}\n评论：{comment_text}"
+                    if _persona_reply_generation_applicable(payload, target_text):
+                        replyable_candidates += 1
+                        operational_failures += 1
+                        completion_reason = "reply_generation_failed"
+                        logger.log("error", f"{platform}_reply_generation_failed", "模型多次重试后仍未生成可用回复，本评论已跳过。", {"url": url, "author": author})
+                    continue
+                replyable_candidates += 1
+                button = _platform_comment_reply_button(
+                    page,
+                    platform,
+                    candidate,
+                )
+                if button is None:
+                    reply_backfills += 1
+                    operational_failures += 1
+                    completion_reason = "reply_target_missing"
+                    continue
+                attempted_submissions += 1
+                posted = _submit_platform_reply(
+                    page,
+                    platform,
+                    button,
+                    reply_text,
+                    logger,
+                    f"{platform}_comment_reply",
+                    comment_reply=True,
+                )
+                if not posted:
+                    reply_backfills += 1
+                    operational_failures += 1
+                    completion_reason = "reply_submission_unconfirmed"
+                    continue
                 replied += 1
-                replied_urls.append(url)
+                used_reply_texts.add(reply_text)
+                if url not in replied_urls:
+                    replied_urls.append(url)
+                replied_comments.append({
+                    "url": url,
+                    "author": author,
+                    "comment": comment_text,
+                    "replyText": reply_text,
+                    "scope": "comments",
+                    "targetKey": target_key,
+                })
+                replied_comment_keys.add(target_key)
+                replied_comment_identity_keys.add(identity_key)
+                replied_comment_text_keys.add(text_key)
                 _sleep_between(2.0, 4.0)
-                shot = _screenshot(page, screenshot_dir, task, f"threads_reply_{replied}", logger)
+                shot = _screenshot(page, screenshot_dir, task, f"{platform}_reply_{replied}", logger)
                 if shot:
                     reply_screenshots.append(shot)
-                logger.log("info", "threads_auto_reply", "已使用人设文案完成回复。", {"reply_index": replied, "url": url, "text": reply_text[:80]})
+                logger.log("info", f"{platform}_auto_reply", "已使用人设文案完成回复。", {"reply_index": replied, "url": url, "text": reply_text[:80]})
                 if replied >= max_replies:
                     completion_reason = "target_replies_reached"
                     break
-            else:
-                reply_backfills += 1
-                logger.log("warn", "threads_auto_reply_backfill", "回复补量失败，正在切换目标。", {"attempts": reply_backfills, "url": url})
-        shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
+            if replied >= max_replies:
+                break
+        if scanned_comments == 0:
+            completion_reason = "no_comment_targets"
+        elif replyable_candidates == 0 and attempted_submissions == 0 and replied == 0:
+            completion_reason = "no_replyable_comments"
+        shot = _screenshot(page, screenshot_dir, task, f"{platform}_auto_reply_done", logger)
+        ok = replied > 0 or (replyable_candidates == 0 and operational_failures == 0)
         logger.log(
-            "info",
+            "info" if ok else "error",
             "completion_node",
-            "Threads 自动回复完成节点已确认。",
-            {"url": str(page.url or ""), "scannedPosts": scanned, "replied": replied, "reply_backfills": reply_backfills, "completionReason": completion_reason, "strategy_id": strategy_id, "strategy_label": strategy_label, "target_count": len(target_urls)},
+            f"{_platform_name(platform)} 自有帖子评论自动回复执行结束。",
+            {"url": str(page.url or ""), "scannedPosts": scanned_posts, "scannedComments": scanned_comments, "replied": replied, "reply_backfills": reply_backfills, "completionReason": completion_reason, "strategy_id": strategy_id, "strategy_label": strategy_label, "target_count": len(target_urls)},
             shot,
         )
         return {
-            "ok": True,
+            "ok": ok,
+            "noTarget": replyable_candidates == 0,
             "url": page.url,
-            "scannedPosts": scanned,
-            "scannedComments": scanned,
+            "scannedPosts": scanned_posts,
+            "scannedComments": scanned_comments,
             "replied": replied,
-            "skipped": max(0, scanned - replied),
+            "skipped": skipped,
             "replyBackfills": reply_backfills,
             "completionReason": completion_reason,
             "strategy_id": strategy_id,
             "strategy_label": strategy_label,
             "replyScreenshots": reply_screenshots,
             "repliedUrls": replied_urls,
+            "repliedComments": replied_comments,
             "screenshot_path": shot,
         }
-    _goto(page, THREADS_HOME, logger, "threads_auto_reply_open")
-    for index in range(max_posts):
-        scanned += 1
-        button = _threads_reply_button(page)
-        if button is not None:
-            reply_text = _pick_persona_reply(payload)
-            if require_persona_relevance and not str(reply_text or "").strip():
-                logger.log("warn", "threads_auto_reply_skip", "没有可用的人设相关回复候选内容。", {"strategy_id": strategy_id, "strategy_label": strategy_label})
-                completion_reason = "no_persona_relevant_reply"
-                break
-            _human_click(page, button, logger, "threads_reply_button")
-            _sleep_between(1.0, 2.5)
-            box = _threads_text_box(page)
-            if box is None:
-                reply_backfills += 1
-                logger.log("warn", "threads_auto_reply_backfill", "未找到可回复目标，正在切换目标。", {"attempts": reply_backfills, "index": index + 1})
-            else:
-                _human_click(page, box, logger, "threads_reply_focus")
-                _human_type(page, reply_text, min_delay=0.10, max_delay=0.22)
-                posted = _click_text_button(page, logger, ["Post", "Reply", "\u53d1\u5e03", "\u56de\u8986", "\u56de\u590d"], "threads_reply_submit")
-                if posted:
-                    replied += 1
-                    _sleep_between(2.0, 4.0)
-                    shot = _screenshot(page, screenshot_dir, task, f"threads_reply_{replied}", logger)
-                    if shot:
-                        reply_screenshots.append(shot)
-                    logger.log("info", "threads_auto_reply", "已使用人设文案完成回复。", {"reply_index": replied, "text": reply_text[:80]})
-                    if replied >= max_replies:
-                        completion_reason = "target_replies_reached"
-                        break
-                else:
-                    reply_backfills += 1
-                    logger.log("warn", "threads_auto_reply_backfill", "回复补量失败，正在切换目标。", {"attempts": reply_backfills, "index": index + 1})
-        else:
-            reply_backfills += 1
-            logger.log("warn", "threads_auto_reply_backfill", "未找到可回复目标，正在切换目标。", {"attempts": reply_backfills, "index": index + 1})
-        page.mouse.wheel(0, random.randint(550, 950))
-        _sleep_between(2.0, 5.0)
-    shot = _screenshot(page, screenshot_dir, task, "threads_auto_reply_done", logger)
-    logger.log(
-        "info",
-        "completion_node",
-        "Threads 自动回复完成节点已确认。",
-        {"url": str(page.url or ""), "scannedPosts": scanned, "replied": replied, "reply_backfills": reply_backfills, "completionReason": completion_reason, "strategy_id": strategy_id, "strategy_label": strategy_label},
-        shot,
+
+
+def _run_threads_auto_reply(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    cancel_event: Any | None = None,
+    account: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return _run_platform_auto_reply(
+        page,
+        task,
+        payload,
+        screenshot_dir,
+        logger,
+        platform="threads",
+        cancel_event=cancel_event,
+        account=account,
     )
-    return {
-        "ok": True,
-        "url": page.url,
-        "scannedPosts": scanned,
-        "scannedComments": scanned,
-        "replied": replied,
-        "skipped": max(0, scanned - replied),
-        "replyBackfills": reply_backfills,
-        "completionReason": completion_reason,
-        "strategy_id": strategy_id,
-        "strategy_label": strategy_label,
-        "replyScreenshots": reply_screenshots,
-        "repliedUrls": replied_urls,
-        "screenshot_path": shot,
-    }
+
+
+def _run_instagram_auto_reply(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    cancel_event: Any | None = None,
+    account: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return _run_platform_auto_reply(
+        page,
+        task,
+        payload,
+        screenshot_dir,
+        logger,
+        platform="instagram",
+        cancel_event=cancel_event,
+        account=account,
+    )
 
 
 def _run_browse_profile(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:

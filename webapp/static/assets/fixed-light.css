@@ -176,8 +176,7 @@
 :root[data-theme="light"] .home-canvas :is(
   .home-media-card span,
   .home-infra-visual span,
-  .home-hero-copy .home-kicker,
-  .home-hero-card-link span
+  .home-hero-copy .home-kicker
 ) {
   color: var(--public-on-dark-accent);
 }
@@ -581,19 +580,63 @@
   color: var(--public-on-dark-accent);
 }
 
-:root[data-theme="light"] body[data-login-redirect="/subscription.html"] :is(
-  .pricing-public-section,
-  .pricing-rights-band,
-  .pricing-packages-band
-) {
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-public-section {
   color: var(--public-ink);
-  background: var(--public-paper);
+  background: transparent;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-packages-band {
+  color: var(--public-ink);
+  background: #f4f7f9;
+  border-block: 1px solid #c7d1da;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] #plans {
+  margin-block: clamp(28px, 4vw, 48px);
+  padding-inline: clamp(16px, 2vw, 24px);
+  background: #f8fafb;
+  border: 1px solid #b8c5d0;
+  box-shadow: 0 14px 34px rgb(37 55 70 / 6%);
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rights-band {
+  color: var(--public-ink);
+  background: #e8edf2;
+  border-block: 1px solid #bdc9d3;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-public-heading .eyebrow {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 26px;
+  align-items: center;
+  padding: 4px 10px;
+  color: var(--public-cool-dark);
+  background: #dfe8ef;
+  border: 1px solid #bac9d5;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-packages-band .eyebrow {
+  background: #e8f0f5;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rights-band .eyebrow {
+  background: #f7f9fb;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-package-card {
+  border-color: #b9c6d1;
+  box-shadow: 0 8px 20px rgb(37 55 70 / 5%);
 }
 
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-subscription-card {
   color: var(--public-ink);
-  background: var(--public-cool-soft);
-  border-color: var(--public-line);
+  background: #f8fafb;
+  border-color: #aebdca;
+  box-shadow: 0 12px 28px rgb(37 55 70 / 8%);
 }
 
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-subscription-card :is(
@@ -605,8 +648,17 @@
   color: var(--public-ink);
 }
 
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-subscription-card .pricing-label {
+  color: var(--public-cool-dark);
+}
+
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-subscription-main {
   border-color: var(--public-line);
+  background: #dfe7ed;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-subscription-details {
+  background: #f8fafb;
 }
 
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-subscription-price small,
@@ -616,13 +668,18 @@
 }
 
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-comparison-band {
-  color: #f8fafc;
-  background: #30353a;
+  color: var(--public-ink);
+  background: linear-gradient(180deg, #dfe6ec 0%, #edf1f4 100%);
+  border-block: 1px solid #b7c3ce;
 }
 
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-comparison-heading .eyebrow,
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-tier-index {
-  color: var(--public-cool);
+  color: var(--public-cool-dark);
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-comparison-heading .eyebrow {
+  background: #f8fafb;
 }
 
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] :is(
@@ -634,7 +691,7 @@
 }
 
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-tier-overview {
-  background: var(--public-paper);
+  background: transparent;
   border-color: var(--public-line);
 }
 
@@ -645,11 +702,15 @@
 }
 
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-tier-overview article:nth-child(2) {
-  background: var(--public-cool-muted);
+  background: #d8e3eb;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-tier-overview article:nth-child(3) {
+  background: #edf2f6;
 }
 
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-tier-overview article:hover {
-  background: var(--public-surface);
+  background: #f5f7f9;
 }
 
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-comparison-scroll {
@@ -700,6 +761,67 @@
 
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .tier-no {
   color: var(--public-muted);
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rights-list {
+  gap: 10px;
+  border-top: 0;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rights-list li,
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rights-list li + li {
+  padding: 16px;
+  background: rgb(255 255 255 / 78%);
+  border: 1px solid #bcc9d3;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rights-list > li > span {
+  color: var(--public-cool-dark);
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] #usage {
+  margin-block: clamp(20px, 3vw, 32px);
+  padding: clamp(28px, 3vw, 40px) clamp(14px, 1.8vw, 20px);
+  background: #f6f8fa;
+  border: 1px solid #c0cad3;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] #usage .eyebrow {
+  background: #e7edf2;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-action-table {
+  padding-inline: clamp(10px, 1.4vw, 16px);
+  background: #fff;
+  border: 1px solid #b9c5cf;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-action-row:nth-child(even) {
+  background: #f4f7f9;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] #rules {
+  margin-bottom: clamp(38px, 5vw, 64px);
+  padding-inline: clamp(16px, 2vw, 24px);
+  background: #e4eaf0;
+  border: 1px solid #b6c3ce;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] #rules .eyebrow {
+  background: #f8fafb;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rule-grid article {
+  background: #f9fafb;
+  border-color: #b9c5cf;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rule-grid article:nth-child(2) {
+  background: #eef3f6;
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rule-grid article:nth-child(3) {
+  background: #dfe7ed;
 }
 
 /* Proxy marketplace */
@@ -1320,9 +1442,42 @@
     border-color: var(--public-line);
   }
 
+  :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-mobile-tier-switch button {
+    color: var(--public-ink-soft);
+    background: transparent;
+    border-color: var(--public-line);
+  }
+
   :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-mobile-tier-switch button[aria-pressed="true"] {
     color: #fff;
     background: var(--public-cool-dark);
+  }
+
+  :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rights-list > li > span {
+    font-size: 10px;
+  }
+
+  :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rights-list strong {
+    font-size: 13px;
+  }
+
+  :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rights-list p {
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.45;
+  }
+
+  :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rule-grid span {
+    font-size: 10px;
+  }
+
+  :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rule-grid h3 {
+    font-size: 14px;
+  }
+
+  :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-rule-grid p {
+    font-size: 11px;
+    line-height: 1.45;
   }
 }
 
@@ -1355,7 +1510,16 @@
   border-color: var(--public-line);
 }
 
-:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-tier-overview article:nth-child(2),
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-tier-overview article:nth-child(2) {
+  background: #d8e3eb;
+  border-color: var(--public-line);
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-tier-overview article:nth-child(3) {
+  background: #edf2f6;
+  border-color: var(--public-line);
+}
+
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-package-grid article:nth-child(2) {
   background: var(--public-paper);
   border-color: var(--public-line);
@@ -1449,10 +1613,13 @@
 
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-comparison-band :is(
   h2,
-  h3,
-  .pricing-tier-index
+  h3
 ) {
-  color: #f8fafc;
+  color: var(--public-ink);
+}
+
+:root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-comparison-band .pricing-tier-index {
+  color: var(--public-cool-dark);
 }
 
 :root[data-theme="light"] body[data-login-redirect="/subscription.html"] .pricing-comparison-band :is(
@@ -1460,7 +1627,7 @@
   .pricing-comparison-note,
   .pricing-tier-overview p
 ) {
-  color: #c7d0d8;
+  color: var(--public-muted);
 }
 
 :root[data-theme="light"] .proxy-market-page .proxy-market-filters {

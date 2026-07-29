@@ -24,10 +24,26 @@ class InstagramWarmupContractTests(unittest.TestCase):
         self.assertIn('data-persona-run-automation', CONSOLE_JS)
         self.assertNotIn('data-persona-run-threads', CONSOLE_JS)
 
+    def test_instagram_preflight_renders_shared_warmup_and_reply_rows(self):
+        renderer = CONSOLE_JS[
+            CONSOLE_JS.index("function personaPublishPreflightRows")
+            : CONSOLE_JS.index("function renderPersonaPublishPreflight")
+        ]
+        self.assertNotIn('if (platform === "threads")', renderer)
+        self.assertIn("preflight.warmup", renderer)
+        self.assertIn("preflight.reply", renderer)
+
     def test_immediate_plan_maps_warmup_to_the_selected_platform(self):
         self.assertIn("function automationPlanTaskTypeForPlatform", CONSOLE_JS)
-        self.assertIn('return String(platform || "").trim().toLowerCase() === "instagram" ? "instagram_warmup" : "threads_warmup";', CONSOLE_JS)
+        self.assertIn('return normalizedPlatform === "instagram" ? "instagram_warmup" : "threads_warmup";', CONSOLE_JS)
         self.assertIn('automationPlanSubmissionItem(item, account.platform || "threads")', CONSOLE_JS)
+
+    def test_instagram_auto_reply_uses_the_shared_platform_executor(self):
+        self.assertIn('"instagram_auto_reply",', RUNNER_PY)
+        self.assertIn("def _run_platform_auto_reply(", RUNNER_PY)
+        self.assertIn("return _run_instagram_auto_reply(", RUNNER_PY)
+        self.assertIn('platform === "instagram" ? "instagram_auto_reply" : "threads_auto_reply"', CONSOLE_JS)
+        self.assertNotIn("Instagram 当前只开放养号任务。", CONSOLE_JS)
 
     def test_api_and_runner_accept_instagram_warmup(self):
         self.assertGreaterEqual(API_PY.count('"instagram_warmup"'), 6)
@@ -35,7 +51,9 @@ class InstagramWarmupContractTests(unittest.TestCase):
         self.assertIn('if task_type in {"threads_warmup", "instagram_warmup"}:', API_PY)
         self.assertIn('"instagram_warmup",', RUNNER_PY)
         self.assertIn("return _run_instagram_warmup(", RUNNER_PY)
-        self.assertIn('"Instagram 养号完成节点已确认。"', RUNNER_PY)
+        self.assertIn("def _run_platform_warmup(", RUNNER_PY)
+        self.assertIn('platform="instagram"', RUNNER_PY)
+        self.assertIn('f"{clean_platform} warmup completion was confirmed."', RUNNER_PY)
 
 
 class SocialTaskPlatformContractTests(unittest.TestCase):
@@ -104,6 +122,7 @@ class SocialTaskPlatformContractTests(unittest.TestCase):
             ("account-threads", "threads", "instagram_warmup", "instagram"),
             ("account-instagram", "instagram", "threads_warmup", "threads"),
             ("account-instagram", "instagram", "threads_auto_reply", "threads"),
+            ("account-threads", "threads", "instagram_auto_reply", "instagram"),
         )
 
         for account_id, platform, task_type, required_platform in mismatches:
@@ -123,6 +142,7 @@ class SocialTaskPlatformContractTests(unittest.TestCase):
     def test_create_social_task_accepts_matched_and_shared_task_types(self):
         valid_tasks = (
             ("account-instagram", "instagram", "instagram_warmup", {}),
+            ("account-instagram", "instagram", "instagram_auto_reply", {}),
             ("account-threads", "threads", "threads_warmup", {}),
             ("account-threads", "threads", "threads_auto_reply", {}),
             ("account-instagram", "instagram", "open_login", {}),

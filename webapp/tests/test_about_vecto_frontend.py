@@ -55,16 +55,16 @@ class AboutVectoFrontendContractTests(unittest.TestCase):
             self.assertIn(control, self.about_markup)
         self.assertIn('["pricing", "console", "proxyMarket", "aboutVecto"].includes(page)', self.navigation_script)
         for heading in (
-            "六個階段，從公域訊號走到成交復盤",
-            "七個產品模組，覆蓋日常社媒作業",
-            "五類智能體沿同一目標協同",
-            "軟體中樞與落地服務雙引擎",
+            "六個階段，把內容投入沉澱成營運資產",
+            "七個產品模組，支撐內容與帳號日常營運",
+            "五類工作角色，各自負責一段營運鏈路",
+            "系統負責穩定執行，服務負責真正落地",
             "核心競爭力來自系統協作，而非單點功能",
         ):
             self.assertIn(heading, self.about_markup)
         self.assertIn("LIVE", self.about_markup)
         self.assertIn("ROADMAP", self.about_markup)
-        self.assertIn("實際可用範圍以控制台和交付方案為準", self.about_markup)
+        self.assertIn("已上線能力可直接進入工作流", self.about_markup)
 
     def test_about_assets_exist_and_all_local_image_references_resolve(self):
         image_paths = re.findall(r'<img[^>]+src="(/assets/[^"]+)"', self.about_markup)

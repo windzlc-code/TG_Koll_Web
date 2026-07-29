@@ -152,6 +152,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         self.assertEqual(social_automation_api.social_task_billing_sku("threads", "publish_post"), "threads_text_publish")
         self.assertEqual(social_automation_api.social_task_billing_sku("instagram", "publish_post"), "instagram_publish")
         self.assertEqual(social_automation_api.social_task_billing_sku("threads", "threads_auto_reply"), "threads_auto_reply_batch")
+        self.assertEqual(social_automation_api.social_task_billing_sku("instagram", "instagram_auto_reply"), "threads_auto_reply_batch")
         self.assertEqual(social_automation_api.social_task_billing_sku("instagram", "like_post"), "social_interaction")
 
     def test_removed_r18_task_types_cannot_be_submitted_or_retried(self):

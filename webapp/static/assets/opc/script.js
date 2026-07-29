@@ -679,12 +679,13 @@ async function submitUserLogin(forceTakeover = false) {
     else window.VectoSiteNavigation?.clearAdminConsoleContext?.();
     await window.VectoSiteNavigation?.refreshPublicSession?.();
     closeLogin();
-    await window.VectoSiteNavigation?.showAuthFeedback?.({
+    const loginFeedback = window.VectoSiteNavigation?.authFeedbackCopyByTime?.("login") || {
       kind: "success",
-      title: "登录成功",
-      message: isAdmin ? "管理员账号已登录，当前页面将保留不跳转。" : "账号已登录，当前页面将保留不跳转。",
-      actionText: "继续",
-    });
+      title: "登录成功，欢迎回来",
+      message: "很高兴见到你，今天也一起把内容运营做得更顺畅。",
+      actionText: "开始使用",
+    };
+    await window.VectoSiteNavigation?.showAuthFeedback?.(loginFeedback);
     window.history.replaceState({}, "", safeRedirect);
   } catch (error) {
     const detail = apiErrorDetail(error);
@@ -815,8 +816,10 @@ function initHomeExperience() {
         const isClone = scene.dataset.homeHeroClone === "true";
         const isActive = scene === activePhysicalScene;
         scene.classList.toggle("is-active", isActive);
-        scene.setAttribute("aria-hidden", String(isClone || !isActive));
-        scene.inert = isClone || !isActive;
+        scene.setAttribute("aria-hidden", String(isClone));
+        scene.inert = isClone;
+        const cardLink = scene.querySelector(".home-hero-card-shell");
+        if (cardLink) cardLink.tabIndex = isActive && !isClone ? 0 : -1;
         const video = scene.querySelector("[data-home-hero-video]");
         if (!video) return;
         const source = video.querySelector("source[data-src]");

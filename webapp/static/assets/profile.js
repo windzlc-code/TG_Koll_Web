@@ -486,6 +486,13 @@
     window.VectoSiteNavigation?.setLogoutPending(true);
     try {
       await api("/api/auth/logout", { method: "POST" });
+      const logoutFeedback = window.VectoSiteNavigation?.authFeedbackCopyByTime?.("logout") || {
+        kind: "logout",
+        title: "退出成功，再见",
+        message: "辛苦了，期待下次见面。",
+        actionText: "知道了",
+      };
+      await window.VectoSiteNavigation?.showAuthFeedback?.(logoutFeedback);
       window.location.replace("/");
     } catch (error) {
       window.VectoSiteNavigation?.setLogoutPending(

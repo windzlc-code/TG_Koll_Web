@@ -17,6 +17,7 @@
   let accountProfileLoading = false;
   let accountProfileLoadPromise = null;
   let logoutPending = false;
+  let logoutConfirmationOpen = false;
   let logoutMessage = "";
   let proxyMarketBadgeRequest = 0;
   let accountBillingRequest = 0;
@@ -1241,8 +1242,48 @@
     return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
   }
 
+  function authFeedbackCopyByTime(kind = "login", now = new Date()) {
+    const hour = Number(now?.getHours?.());
+    const currentHour = Number.isFinite(hour) ? hour : new Date().getHours();
+    let greeting = "夜深了";
+    let loginMessage = "忙完也别忘了好好休息。";
+    let logoutMessage = "夜深了，早点休息，明天见。";
+
+    if (currentHour >= 5 && currentHour < 10) {
+      greeting = "早上好";
+      loginMessage = "新的一天开始了，愿你今天的内容运营一切顺利。";
+      logoutMessage = "祝你今天一切顺利，稍后见。";
+    } else if (currentHour >= 10 && currentHour < 12) {
+      greeting = "上午好";
+      loginMessage = "节奏正好，愿今天的每一步都稳稳推进。";
+      logoutMessage = "祝你接下来的安排顺利，稍后见。";
+    } else if (currentHour >= 12 && currentHour < 14) {
+      greeting = "中午好";
+      loginMessage = "忙碌之余也记得补充能量，再继续向前。";
+      logoutMessage = "好好休息一下，稍后见。";
+    } else if (currentHour >= 14 && currentHour < 18) {
+      greeting = "下午好";
+      loginMessage = "下午的节奏正好，继续把想法落到实处。";
+      logoutMessage = "愿你接下来的时间从容顺利，稍后见。";
+    } else if (currentHour >= 18 && currentHour < 23) {
+      greeting = "晚上好";
+      loginMessage = "辛苦了，愿今晚的努力都有收获。";
+      logoutMessage = "辛苦了，今晚也请好好放松。";
+    }
+
+    const isLogout = kind === "logout";
+    return {
+      kind: isLogout ? "logout" : "success",
+      title: `${isLogout ? "退出成功" : "登录成功"}，${greeting}`,
+      message: isLogout ? logoutMessage : loginMessage,
+      actionText: isLogout ? "知道了" : "开始使用",
+    };
+  }
+
   function showAuthFeedback({ kind = "success", title = "操作完成", message = "", actionText = "知道了" } = {}) {
-    document.querySelectorAll("[data-site-auth-feedback]").forEach((node) => node.remove());
+    document.querySelectorAll("[data-site-auth-feedback]").forEach((node) => {
+      node.dispatchEvent(new CustomEvent("site-auth-feedback-dismiss"));
+    });
     return new Promise((resolve) => {
       const modal = document.createElement("div");
       modal.className = `site-auth-feedback is-${kind}`;
@@ -1256,14 +1297,22 @@
       modal.querySelector("strong").textContent = String(title || "操作完成");
       modal.querySelector("p").textContent = String(message || "");
       modal.querySelector(".site-auth-feedback-confirm").textContent = String(actionText || "知道了");
-      const close = () => {
-        if (!modal.isConnected) return;
-        modal.classList.add("is-leaving");
-        window.setTimeout(() => {
+      let settled = false;
+      const close = (immediate = false) => {
+        if (settled) return;
+        settled = true;
+        const finish = () => {
           modal.remove();
           resolve(true);
-        }, 180);
+        };
+        if (immediate || !modal.isConnected) {
+          finish();
+          return;
+        }
+        modal.classList.add("is-leaving");
+        window.setTimeout(finish, 180);
       };
+      modal.addEventListener("site-auth-feedback-dismiss", () => close(true));
       modal.querySelector(".site-auth-feedback-close").addEventListener("click", close);
       modal.querySelector(".site-auth-feedback-confirm").addEventListener("click", close);
       modal.addEventListener("click", (event) => {
@@ -1274,6 +1323,53 @@
       });
       document.body.append(modal);
       modal.querySelector(".site-auth-feedback-confirm")?.focus({ preventScroll: true });
+    });
+  }
+
+  function confirmLogout() {
+    document.querySelectorAll("[data-site-auth-feedback]").forEach((node) => {
+      node.dispatchEvent(new CustomEvent("site-auth-feedback-dismiss"));
+    });
+    return new Promise((resolve) => {
+      const modal = document.createElement("div");
+      modal.className = "site-auth-feedback is-logout is-confirmation";
+      modal.dataset.siteAuthFeedback = "true";
+      modal.innerHTML = `<section class="site-auth-feedback-dialog" role="alertdialog" aria-modal="true" aria-labelledby="siteLogoutConfirmTitle" aria-describedby="siteLogoutConfirmMessage">
+        <div class="site-auth-feedback-icon">${authFeedbackIcon("logout")}</div>
+        <div class="site-auth-feedback-copy"><strong id="siteLogoutConfirmTitle">确认退出登录</strong><p id="siteLogoutConfirmMessage">退出后需要重新登录才能继续使用。</p></div>
+        <button type="button" class="site-auth-feedback-close" aria-label="关闭">${closeIcon()}</button>
+        <div class="site-auth-feedback-actions">
+          <button type="button" class="site-auth-feedback-cancel">暂不退出</button>
+          <button type="button" class="site-auth-feedback-confirm is-danger">退出登录</button>
+        </div>
+      </section>`;
+      let settled = false;
+      const close = (confirmed = false, immediate = false) => {
+        if (settled) return;
+        settled = true;
+        const finish = () => {
+          modal.remove();
+          resolve(confirmed);
+        };
+        if (immediate || !modal.isConnected) {
+          finish();
+          return;
+        }
+        modal.classList.add("is-leaving");
+        window.setTimeout(finish, 180);
+      };
+      modal.addEventListener("site-auth-feedback-dismiss", () => close(false, true));
+      modal.querySelector(".site-auth-feedback-close").addEventListener("click", () => close(false));
+      modal.querySelector(".site-auth-feedback-cancel").addEventListener("click", () => close(false));
+      modal.querySelector(".site-auth-feedback-confirm").addEventListener("click", () => close(true));
+      modal.addEventListener("click", (event) => {
+        if (event.target === modal) close(false);
+      });
+      modal.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") close(false);
+      });
+      document.body.append(modal);
+      modal.querySelector(".site-auth-feedback-cancel")?.focus({ preventScroll: true });
     });
   }
 
@@ -1536,12 +1632,7 @@
         const data = await response.json().catch(() => ({}));
         throw new Error(data?.detail || copy[currentLanguage()].logoutFailed);
       }
-      await showAuthFeedback({
-        kind: "logout",
-        title: "已退出登录",
-        message: "当前账号已安全退出，返回后可随时再次登录。",
-        actionText: "继续",
-      });
+      await showAuthFeedback(authFeedbackCopyByTime("logout"));
       setAccount(null);
       if (currentSessionMode === "admin") clearAdminConsoleContext();
       currentSessionMode = "guest";
@@ -1606,12 +1697,19 @@
         });
       });
       menu.querySelector("[data-site-account-logout]")?.addEventListener("click", () => {
-        setLogoutPending(true);
-        if (header.dataset.siteMode === "public") {
-          void logoutPublicSession();
-          return;
-        }
-        window.dispatchEvent(new CustomEvent(EVENT_LOGOUT));
+        void (async () => {
+          if (logoutPending || logoutConfirmationOpen) return;
+          logoutConfirmationOpen = true;
+          const confirmed = await confirmLogout();
+          logoutConfirmationOpen = false;
+          if (!confirmed) return;
+          setLogoutPending(true);
+          if (header.dataset.siteMode === "public") {
+            void logoutPublicSession();
+            return;
+          }
+          window.dispatchEvent(new CustomEvent(EVENT_LOGOUT));
+        })();
       });
     });
   }
@@ -2000,6 +2098,8 @@
     openConsoleEntry,
     markAdminConsoleContext,
     clearAdminConsoleContext,
+    authFeedbackCopyByTime,
+    confirmLogout,
     showAuthFeedback,
     refreshPublicSession,
     syncProxyMarketBadge,

@@ -61,6 +61,7 @@ SOCIAL_TASK_TYPES = {
     "browse_feed",
     "browse_profile",
     "instagram_warmup",
+    "instagram_auto_reply",
     "threads_warmup",
     "threads_auto_reply",
     "publish_post",
@@ -72,6 +73,7 @@ SOCIAL_TASK_TYPES = {
 }
 SOCIAL_TASK_REQUIRED_PLATFORM = {
     "instagram_warmup": "instagram",
+    "instagram_auto_reply": "instagram",
     "threads_warmup": "threads",
     "threads_auto_reply": "threads",
 }
@@ -131,7 +133,7 @@ def social_task_billing_sku(platform: str, task_type: str) -> str:
             return "threads_text_publish"
         if clean_platform == "instagram":
             return "instagram_publish"
-    if clean_platform == "threads" and clean_task_type == "threads_auto_reply":
+    if clean_task_type in {"threads_auto_reply", "instagram_auto_reply"}:
         return "threads_auto_reply_batch"
     if clean_task_type in {"comment_post", "reply_comment", "like_post", "share_post", "repost_post"}:
         return "social_interaction"
@@ -1296,10 +1298,15 @@ def list_social_automation_plans(*, user_id: int) -> list[dict[str, Any]]:
         return [_automation_plan_public(row, conn=conn) for row in rows]
 
 
-def _automation_plan_conflict_key(task_type: str) -> str:
+def _automation_plan_conflict_key(
+    task_type: str,
+    payload: dict[str, Any] | None = None,
+) -> str:
     normalized = str(task_type or "").strip()
-    if normalized == "threads_auto_reply":
-        return "threads_reply_comment"
+    if normalized in {"threads_auto_reply", "instagram_auto_reply"}:
+        reply_scope = str((payload or {}).get("reply_scope") or "comments").strip()
+        platform = "instagram" if normalized.startswith("instagram_") else "threads"
+        return f"{platform}_reply_hot" if reply_scope == "hot_posts" else f"{platform}_reply_comment"
     if normalized in {
         AUTOMATION_PLAN_NORMAL_PUBLISH_TASK,
         "instagram_warmup",
@@ -1343,6 +1350,7 @@ def _validate_automation_plan_payload(
             "browse_feed",
             "browse_profile",
             "instagram_warmup",
+            "instagram_auto_reply",
             "comment_post",
             "reply_comment",
             "like_post",
@@ -1363,11 +1371,6 @@ def _validate_automation_plan_payload(
         task_type = str(item.task_type or "").strip()
         if task_type not in allowed:
             raise HTTPException(status_code=400, detail=f"当前平台不支持第 {index + 1} 项任务：{task_type}")
-        conflict_key = _automation_plan_conflict_key(task_type)
-        if conflict_key and conflict_key in conflict_keys:
-            raise HTTPException(status_code=409, detail="同一账号不能重复添加同类型自动化任务")
-        if conflict_key:
-            conflict_keys.add(conflict_key)
         task_payload = dict(item.payload or {})
         _reject_external_automation_plan_metadata(task_payload)
         if task_type == AUTOMATION_PLAN_NORMAL_PUBLISH_TASK:
@@ -1376,11 +1379,16 @@ def _validate_automation_plan_payload(
             _validate_user_task_media_paths(task_payload, user)
         if task_type == "publish_post" and not str(task_payload.get("content") or "").strip():
             raise HTTPException(status_code=400, detail=f"第 {index + 1} 项发布任务缺少发布内容")
-        if task_type == "threads_auto_reply":
+        if task_type in {"threads_auto_reply", "instagram_auto_reply"}:
             reply_scope = str(task_payload.get("reply_scope") or "comments").strip()
             if reply_scope not in {"comments", "hot_posts"}:
                 raise HTTPException(status_code=400, detail=f"第 {index + 1} 项自动回复范围无效")
             task_payload["reply_scope"] = reply_scope
+        conflict_key = _automation_plan_conflict_key(task_type, task_payload)
+        if conflict_key and conflict_key in conflict_keys:
+            raise HTTPException(status_code=409, detail="同一账号不能重复添加同类型自动化任务")
+        if conflict_key:
+            conflict_keys.add(conflict_key)
         normalized_items.append(
             {
                 "id": f"item_{index + 1}",
@@ -1941,6 +1949,10 @@ def _reconcile_social_automation_plans() -> None:
 
 
 def register_social_automation_routes(app: FastAPI) -> None:
+    @app.get("/api/health")
+    def api_health():
+        return {"ok": True, "service": "tg-koll-web-console"}
+
     @app.get("/api/persona_dashboard/automation/overview")
     def api_social_automation_overview(user: dict[str, Any] = Depends(get_current_user)):
         return build_social_automation_overview(
@@ -3502,6 +3514,7 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
     task_label = {
         "threads_warmup": "养号",
         "instagram_warmup": "养号",
+        "instagram_auto_reply": "自动回复",
         "threads_auto_reply": "自动回复",
         "publish_post": "发布内容",
         "browse_feed": "浏览首页",
@@ -3527,7 +3540,7 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
         comment_chance = _live_browser_summary_int(payload, "comment_chance")
         if max_comments > 0 and comment_chance > 0:
             fields.append({"label": "评论概率", "value": f"{comment_chance}%"})
-    elif task_type == "threads_auto_reply":
+    elif task_type in {"threads_auto_reply", "instagram_auto_reply"}:
         reply_scope = str(payload.get("reply_scope") or "comments").strip().lower()
         max_posts = _live_browser_summary_int(payload, "max_posts")
         max_replies = _live_browser_summary_int(payload, "max_replies")
@@ -3595,7 +3608,7 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
             else:
                 short_strategy = _live_browser_summary_text(strategy_label or "养号", limit=8)
         target = f"养号｜{short_strategy}｜浏览{browse_limit}·赞{like_limit}·评{max_comments}"
-    elif task_type == "threads_auto_reply":
+    elif task_type in {"threads_auto_reply", "instagram_auto_reply"}:
         short_strategy = "热点回复" if reply_scope == "hot_posts" else "评论回复"
         target = f"{short_strategy}｜扫{max_posts}·回{max_replies}·{max_age_days}天"
         if min_views > 0:
@@ -5368,7 +5381,7 @@ def _release_terminal_task_billing_reservations(conn: sqlite3.Connection, now: i
             OR (
                 t.status = 'need_manual'
                 AND t.finished_at != 0
-                AND t.task_type IN ('publish_post', 'threads_auto_reply')
+                AND t.task_type IN ('publish_post', 'threads_auto_reply', 'instagram_auto_reply')
             )
           )
           AND r.status = 'held'
@@ -5673,8 +5686,14 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
             and task_type in {"threads_warmup", "threads_auto_reply"}
         ) or (
             platform == "instagram"
-            and task_type == "instagram_warmup"
+            and task_type in {"instagram_warmup", "instagram_auto_reply"}
         ):
+            if task_type in {"threads_auto_reply", "instagram_auto_reply"}:
+                requested_targets = task_payload.get("target_urls")
+                task_payload["_target_urls_explicit"] = bool(
+                    isinstance(requested_targets, list)
+                    and any(str(item or "").strip() for item in requested_targets)
+                )
             task_payload = _enrich_threads_task_payload(persona_id, task_type, task_payload)
         if task_type == "open_login":
             active_login_rows = conn.execute(
@@ -7808,6 +7827,12 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
         if not _is_task_cancelled(str(task["id"])):
             detected_status = str(getattr(exc, "status", "") or "need_verification")
             manual_result = {"screenshot_path": str(getattr(exc, "screenshot_path", "") or "")}
+            health_status = str(getattr(exc, "health_status", "") or "").strip().lower()
+            if health_status in SOCIAL_ACCOUNT_HEALTH_STATUSES:
+                manual_result.update({
+                    "health_status": health_status,
+                    "health_reason": str(exc),
+                })
             if detected_status == "publish_submitted_unconfirmed":
                 manual_result.update({
                     "publish_submitted": True,
@@ -8437,6 +8462,17 @@ def _finish_task(
                     """,
                     (health_status, now, health_detail, now, str(task["account_id"])),
                 )
+        elif str((result or {}).get("health_status") or "").strip().lower() in SOCIAL_ACCOUNT_HEALTH_STATUSES:
+            health_status = str((result or {}).get("health_status") or "").strip().lower()
+            health_detail = str((result or {}).get("health_reason") or error or health_status)[:1000]
+            conn.execute(
+                """
+                UPDATE social_accounts
+                SET health_status = ?, health_checked_at = ?, health_detail = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (health_status, now, health_detail, now, str(task["account_id"])),
+            )
         elif status == "success" and normalized_account_status == "ready":
             conn.execute(
                 """
@@ -8633,6 +8669,7 @@ def _automation_action_label(task_type: str) -> str:
         "browse_feed": "网页自动化浏览首页",
         "browse_profile": "网页自动化浏览主页",
         "instagram_warmup": "Instagram 网页自动化养号",
+        "instagram_auto_reply": "Instagram 网页自动化按人设自动回复",
         "threads_warmup": "Threads 网页自动化养号",
         "threads_auto_reply": "Threads 网页自动化按人设自动回复",
         "check_login": "网页自动化登录检查",
@@ -8686,6 +8723,22 @@ def _load_persona_archive(persona_id: str) -> dict[str, Any] | None:
     return None
 
 
+_AUTOMATION_TEST_CONTENT_MARKERS = (
+    "系统测试",
+    "测试评论",
+    "闭环测试",
+    "链路测试",
+    "请忽略",
+    "test comment",
+    "automation test",
+)
+
+
+def _is_automation_test_content(value: Any) -> bool:
+    text = " ".join(str(value or "").lower().split())
+    return bool(text) and any(marker in text for marker in _AUTOMATION_TEST_CONTENT_MARKERS)
+
+
 def _collect_persona_reply_templates(archive: dict[str, Any] | None) -> list[str]:
     if not archive:
         return []
@@ -8695,6 +8748,8 @@ def _collect_persona_reply_templates(archive: dict[str, Any] | None) -> list[str
         if not isinstance(post, dict):
             continue
         text = str(post.get("content") or post.get("full_content") or post.get("title") or "").strip()
+        if _is_automation_test_content(text):
+            continue
         if 4 <= len(text) <= 90:
             candidates.append(text)
         elif len(text) > 90:
@@ -8718,6 +8773,80 @@ def _collect_persona_reply_templates(archive: dict[str, Any] | None) -> list[str
     return result[:8]
 
 
+def _collect_persona_comment_profile(archive: dict[str, Any] | None) -> dict[str, Any]:
+    if not archive:
+        return {
+            "persona_name": "",
+            "persona_style": "",
+            "persona_personality": "",
+            "persona_language": "",
+            "persona_context": "",
+            "persona_topics": [],
+        }
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    name = str(archive.get("name") or setup.get("personaName") or "").strip()
+    style = str(
+        setup.get("personaStyle")
+        or archive.get("personaStyle")
+        or archive.get("style")
+        or archive.get("tone")
+        or ""
+    ).strip()
+    personality = str(
+        setup.get("personaPersonality")
+        or archive.get("personaPersonality")
+        or archive.get("personality")
+        or ""
+    ).strip()
+    language = str(
+        setup.get("personaLanguage")
+        or archive.get("personaLanguage")
+        or archive.get("language")
+        or "简体中文"
+    ).strip()
+    context_parts = [
+        str(archive.get("content") or "").strip(),
+        str(setup.get("personaDescription") or "").strip(),
+        str(setup.get("contentTheme") or "").strip(),
+        str(setup.get("customTopic") or "").strip(),
+        str(setup.get("personaPersonality") or "").strip(),
+    ]
+    context = " ".join(part for part in context_parts if part)
+    topics: list[str] = []
+    def add_topic(value: Any) -> None:
+        topic = " ".join(str(value or "").split())
+        if not topic or _is_automation_test_content(topic) or topic in topics:
+            return
+        topics.append(topic[:30])
+
+    for key in ("genres", "interests"):
+        values = setup.get(key) if isinstance(setup.get(key), list) else []
+        for value in values:
+            add_topic(value)
+    if not topics:
+        for key in ("contentTheme", "customTopic"):
+            raw_value = setup.get(key)
+            values = raw_value if isinstance(raw_value, list) else [raw_value]
+            for value in values:
+                for topic in re.split(r"[,，、/|;；\r\n]+", str(value or "")):
+                    add_topic(topic)
+                    for marker in ("关注", "专注", "擅长", "围绕"):
+                        if marker in topic:
+                            add_topic(topic.split(marker, 1)[1])
+        add_topic(name)
+        role_topic = re.sub(r"^(?:资深|专业|海外)", "", name)
+        role_topic = re.sub(r"(?:观察者|创作者|博主|达人|专家|老师|店主|工程师|师|工)$", "", role_topic)
+        add_topic(role_topic)
+    return {
+        "persona_name": name,
+        "persona_style": style[:160],
+        "persona_personality": personality[:240],
+        "persona_language": language[:40],
+        "persona_context": context[:1200],
+        "persona_topics": topics[:20],
+    }
+
+
 def _parse_archive_time(value: Any) -> int:
     if value in {None, ""}:
         return 0
@@ -8738,10 +8867,98 @@ def _parse_archive_time(value: Any) -> int:
         return 0
 
 
-def _collect_threads_hot_reply_targets(archive: dict[str, Any] | None, *, max_age_days: int = 30, min_views: int = 0, limit: int = 5) -> list[dict[str, Any]]:
+def _normalize_threads_post_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("/"):
+        raw = f"https://www.threads.net{raw}"
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return ""
+    host = str(parsed.netloc or "").lower().split(":", 1)[0]
+    if host not in {"threads.net", "www.threads.net", "threads.com", "www.threads.com"}:
+        return ""
+    path = re.sub(r"/+", "/", str(parsed.path or "")).rstrip("/")
+    if not re.fullmatch(r"/@[^/\s]+/(?:post|thread)/[^/\s]+", path, flags=re.IGNORECASE):
+        return ""
+    return f"https://www.threads.net{path.replace('/thread/', '/post/')}"
+
+
+def _normalize_instagram_post_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("/"):
+        raw = f"https://www.instagram.com{raw}"
+    with contextlib.suppress(Exception):
+        parsed = urlparse(raw)
+        host = str(parsed.netloc or "").lower().split(":", 1)[0]
+        if host not in {"instagram.com", "www.instagram.com"}:
+            return ""
+        path = re.sub(r"/+", "/", str(parsed.path or "")).rstrip("/")
+        match = re.fullmatch(
+            r"/(?:[A-Za-z0-9._]+/)?(p|reel)/([^/\s]+)",
+            path,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            return f"https://www.instagram.com/{match.group(1).lower()}/{match.group(2)}/"
+    return ""
+
+
+def _archive_metric_number(item: dict[str, Any], *keys: str) -> int:
+    containers = [item]
+    for name in ("engagement", "metrics", "publishedMeta", "sourceMeta", "hotMetrics"):
+        value = item.get(name)
+        if isinstance(value, dict):
+            containers.append(value)
+            for nested_name in ("engagement", "metrics"):
+                nested = value.get(nested_name)
+                if isinstance(nested, dict):
+                    containers.append(nested)
+    for container in containers:
+        for key in keys:
+            value = container.get(key)
+            if value in {None, ""}:
+                continue
+            with contextlib.suppress(TypeError, ValueError):
+                return max(0, int(float(value)))
+    return 0
+
+
+def _collect_threads_hot_reply_targets(
+    archive: dict[str, Any] | None,
+    *,
+    max_age_days: int = 30,
+    min_views: int = 0,
+    limit: int = 5,
+    exclude_replied: bool = True,
+    include_hot_sources: bool = True,
+    platform: str = "threads",
+) -> list[dict[str, Any]]:
     if not archive:
         return []
     rows: list[dict[str, Any]] = []
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    clean_platform = str(platform or "threads").strip().lower()
+    normalize_url = (
+        _normalize_instagram_post_url
+        if clean_platform == "instagram"
+        else _normalize_threads_post_url
+    )
+    auto_reply = setup.get("socialAutoReply") if isinstance(setup.get("socialAutoReply"), dict) else {}
+    platform_reply = auto_reply.get(clean_platform) if isinstance(auto_reply.get(clean_platform), dict) else {}
+    own_reply = setup.get("threadsOwnPostAutoReply") if isinstance(setup.get("threadsOwnPostAutoReply"), dict) else {}
+    replied_posts = platform_reply.get("repliedPosts") if isinstance(platform_reply.get("repliedPosts"), list) else []
+    if clean_platform == "threads" and isinstance(own_reply.get("repliedPosts"), list):
+        replied_posts = [*replied_posts, *own_reply["repliedPosts"]]
+    replied_urls = {
+        normalized
+        for item in replied_posts
+        if isinstance(item, dict) and (normalized := normalize_url(item.get("url")))
+    }
 
     def add_row(item: Any, source: str = "") -> None:
         if not isinstance(item, dict):
@@ -8749,7 +8966,7 @@ def _collect_threads_hot_reply_targets(archive: dict[str, Any] | None, *, max_ag
         meta = item.get("sourceMeta") if isinstance(item.get("sourceMeta"), dict) else {}
         published_meta = item.get("publishedMeta") if isinstance(item.get("publishedMeta"), dict) else {}
         platform = str(item.get("platform") or item.get("sourcePlatform") or item.get("publishPlatform") or "").strip().lower()
-        url = str(
+        url = normalize_url(
             item.get("publishedUrl")
             or item.get("published_url")
             or item.get("sourceUrl")
@@ -8763,25 +8980,63 @@ def _collect_threads_hot_reply_targets(archive: dict[str, Any] | None, *, max_ag
             or published_meta.get("publishedUrl")
             or published_meta.get("sourceUrl")
             or ""
-        ).strip()
-        if not url or "threads." not in url.lower():
+        )
+        if not url or (exclude_replied and url in replied_urls):
             return
-        if platform and platform not in {"threads", "thread"}:
+        if platform and platform.rstrip("s") != clean_platform.rstrip("s"):
             return
-        view_count = int(float(item.get("view_count") or item.get("views") or item.get("post_views") or item.get("recent_views") or 0))
+        view_count = _archive_metric_number(
+            item,
+            "viewCount",
+            "view_count",
+            "views",
+            "postViews",
+            "post_views",
+            "recentViews",
+            "recent_views",
+            "plays",
+            "impressions",
+        )
         if view_count < max(0, min_views):
             return
-        published_ts = _parse_archive_time(item.get("published_at") or item.get("publishedAt") or item.get("captured_at") or item.get("createdAt") or item.get("created_at"))
-        if max_age_days > 0 and published_ts > 0 and published_ts < _now() - max_age_days * 86400:
-            return
+        published_ts = _parse_archive_time(
+            item.get("published_at")
+            or item.get("publishedAt")
+            or item.get("captured_at")
+            or item.get("capturedAt")
+            or item.get("createdAt")
+            or item.get("created_at")
+            or meta.get("publishedAt")
+            or meta.get("capturedAt")
+            or published_meta.get("publishedAt")
+            or published_meta.get("capturedAt")
+        )
+        if max_age_days > 0:
+            if published_ts <= 0 or published_ts < _now() - max_age_days * 86400:
+                return
         heat = view_count
-        heat += int(float(item.get("like_count") or item.get("likes") or 0))
-        heat += int(float(item.get("comment_count") or item.get("comments") or 0))
-        heat += int(float(item.get("share_count") or item.get("shares") or 0))
-        heat += int(float(item.get("repost_count") or item.get("reposts") or 0))
+        heat += _archive_metric_number(item, "likeCount", "like_count", "likes")
+        heat += _archive_metric_number(item, "commentCount", "comment_count", "comments")
+        heat += _archive_metric_number(item, "shareCount", "share_count", "shares")
+        heat += _archive_metric_number(item, "repostCount", "repost_count", "reposts")
         rows.append({
             "url": url,
-            "label": str(item.get("title") or item.get("content") or item.get("caption") or source or "Threads 热点推文")[:80],
+            "label": str(
+                item.get("label")
+                or item.get("title")
+                or item.get("content")
+                or item.get("caption")
+                or source
+                or f"{clean_platform.title()} 热点推文"
+            )[:80],
+            "expected_text": str(
+                item.get("expected_text")
+                or item.get("expectedText")
+                or item.get("content")
+                or item.get("caption")
+                or item.get("title")
+                or ""
+            )[:1200],
             "view_count": view_count,
             "heat": heat,
             "published_at": published_ts,
@@ -8798,33 +9053,35 @@ def _collect_threads_hot_reply_targets(archive: dict[str, Any] | None, *, max_ag
             if isinstance(post.get("publishedMeta"), dict):
                 add_row(post.get("publishedMeta"), "posts.publishedMeta")
     platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else {}
-    for post in platform_posts.get("threads") if isinstance(platform_posts.get("threads"), list) else []:
-        add_row(post, "platformPosts.threads")
-    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
-    for container_name in ("hotMetrics", "threadsHotMetrics"):
-        container = setup.get(container_name) if isinstance(setup.get(container_name), dict) else {}
-        candidate_containers = [container]
-        threads_container = container.get("threads") if isinstance(container.get("threads"), dict) else {}
-        if threads_container:
-            candidate_containers.append(threads_container)
-        for idx, candidate in enumerate(candidate_containers):
-            source_prefix = f"setup.{container_name}"
-            if idx == 1:
-                source_prefix += ".threads"
-            for key in ("postMetrics", "posts", "publishedTargets"):
-                for item in candidate.get(key) if isinstance(candidate.get(key), list) else []:
-                    add_row(item, f"{source_prefix}.{key}")
+    for post in platform_posts.get(clean_platform) if isinstance(platform_posts.get(clean_platform), list) else []:
+        add_row(post, f"platformPosts.{clean_platform}")
+    for item in archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []:
+        add_row(item, "publishHistory")
+    if include_hot_sources:
+        for container_name in ("hotMetrics", f"{clean_platform}HotMetrics"):
+            container = setup.get(container_name) if isinstance(setup.get(container_name), dict) else {}
+            candidate_containers = [container]
+            threads_container = container.get("threads") if isinstance(container.get("threads"), dict) else {}
+            if threads_container:
+                candidate_containers.append(threads_container)
+            for idx, candidate in enumerate(candidate_containers):
+                source_prefix = f"setup.{container_name}"
+                if idx == 1:
+                    source_prefix += ".threads"
+                for key in ("postMetrics", "posts", "publishedTargets"):
+                    for item in candidate.get(key) if isinstance(candidate.get(key), list) else []:
+                        add_row(item, f"{source_prefix}.{key}")
     for item in setup.get("publishHistory") if isinstance(setup.get("publishHistory"), list) else []:
         add_row(item, "setup.publishHistory")
-    own_reply = ((archive.get("setup") if isinstance(archive.get("setup"), dict) else {}) or {}).get("threadsOwnPostAutoReply")
-    if isinstance(own_reply, dict):
+    own_reply = setup.get("threadsOwnPostAutoReply")
+    if clean_platform == "threads" and isinstance(own_reply, dict):
         for target in own_reply.get("knownPostTargets") if isinstance(own_reply.get("knownPostTargets"), list) else []:
             add_row(target, "knownPostTargets")
 
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
     for row in sorted(rows, key=lambda item: (int(item.get("heat") or 0), int(item.get("published_at") or 0)), reverse=True):
-        url = str(row.get("url") or "").rstrip("/")
+        url = normalize_url(row.get("url"))
         if not url or url in seen:
             continue
         seen.add(url)
@@ -8834,55 +9091,167 @@ def _collect_threads_hot_reply_targets(archive: dict[str, Any] | None, *, max_ag
     return unique
 
 
+def _collect_threads_owned_post_targets(
+    archive: dict[str, Any] | None,
+    *,
+    max_age_days: int,
+    limit: int,
+    platform: str = "threads",
+) -> list[dict[str, Any]]:
+    return _collect_threads_hot_reply_targets(
+        archive,
+        max_age_days=max_age_days,
+        min_views=0,
+        limit=limit,
+        exclude_replied=False,
+        include_hot_sources=False,
+        platform=platform,
+    )
+
+
+def _select_threads_requested_targets(
+    eligible: list[dict[str, Any]],
+    requested_urls: Any,
+    *,
+    platform: str = "threads",
+) -> list[dict[str, Any]]:
+    normalize_url = (
+        _normalize_instagram_post_url
+        if platform == "instagram"
+        else _normalize_threads_post_url
+    )
+    eligible_by_url = {
+        normalized: {**item, "url": normalized}
+        for item in eligible
+        if isinstance(item, dict)
+        and (normalized := normalize_url(item.get("url")))
+    }
+    if not isinstance(requested_urls, list) or not requested_urls:
+        return list(eligible_by_url.values())
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_url in requested_urls:
+        normalized = normalize_url(raw_url)
+        if not normalized or normalized in seen or normalized not in eligible_by_url:
+            continue
+        seen.add(normalized)
+        selected.append(eligible_by_url[normalized])
+    return selected
+
+
 def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[str, Any]) -> dict[str, Any]:
     archive = _load_persona_archive(persona_id)
+    if archive is None:
+        raise HTTPException(status_code=409, detail="绑定的人设归档不存在，请重新选择人设。")
     next_payload = dict(payload or {})
-    if archive:
-        next_payload.setdefault("persona_name", str(archive.get("name") or ""))
-        setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
-        account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
-        threads = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
-        legacy_threads = archive.get("threads") if isinstance(archive.get("threads"), dict) else {}
-        handle = str(
-            threads.get("handle")
-            or setup.get("threadsHandle")
-            or legacy_threads.get("handle")
-            or archive.get("threadsHandle")
-            or ""
-        ).strip().lstrip("@")
-        if handle:
-            next_payload.setdefault("threads_handle", handle)
-        next_payload.setdefault("reply_templates", _collect_persona_reply_templates(archive))
+    comment_profile = _collect_persona_comment_profile(archive)
+    next_payload["persona_name"] = comment_profile["persona_name"]
+    next_payload["persona_style"] = comment_profile["persona_style"]
+    next_payload["persona_personality"] = comment_profile["persona_personality"]
+    next_payload["persona_language"] = comment_profile["persona_language"]
+    next_payload["persona_context"] = comment_profile["persona_context"]
+    next_payload["persona_topics"] = comment_profile["persona_topics"]
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+    task_platform = "instagram" if str(task_type).startswith("instagram_") else "threads"
+    platform_account = account_management.get(task_platform) if isinstance(account_management.get(task_platform), dict) else {}
+    legacy_platform = archive.get(task_platform) if isinstance(archive.get(task_platform), dict) else {}
+    handle = str(
+        platform_account.get("handle")
+        or platform_account.get("username")
+        or setup.get(f"{task_platform}Handle")
+        or legacy_platform.get("handle")
+        or legacy_platform.get("username")
+        or archive.get(f"{task_platform}Handle")
+        or ""
+    ).strip().lstrip("@")
+    if handle:
+        next_payload[f"{task_platform}_handle"] = handle
+        next_payload["account_handle"] = handle
     if task_type in {"threads_warmup", "instagram_warmup"}:
+        next_payload.pop("reply_templates", None)
         strategy_id = str(next_payload.get("strategy_id") or "tg_default")
         next_payload.setdefault("strategy_id", strategy_id)
         if strategy_id == "browse_only":
-            next_payload.setdefault("strategy_label", "保守养号：只浏览")
-            next_payload.setdefault("browse_limit", 30)
-            next_payload.setdefault("scroll_times", int(next_payload.get("browse_limit") or 30))
-            next_payload.setdefault("like_limit", 0)
+            next_payload["strategy_label"] = "保守养号：只浏览"
+            next_payload["browse_limit"] = 80
+            next_payload["scroll_times"] = 80
+            next_payload["like_limit"] = 0
+            next_payload["like_chance"] = 0
+            next_payload["max_comments"] = 0
+            next_payload["comment_chance"] = 0
+        elif strategy_id == "comment_only":
+            next_payload["strategy_label"] = "评论养号：只留言"
+            next_payload["browse_limit"] = 80
+            next_payload["scroll_times"] = 80
+            next_payload["like_limit"] = 0
+            next_payload["like_chance"] = 0
+            next_payload["max_comments"] = 8
+            next_payload["comment_chance"] = 100
+            next_payload["require_persona_relevance"] = True
+            next_payload["min_required_comments"] = 1
         elif strategy_id == "like_comment":
-            next_payload.setdefault("strategy_label", "互动养号：点赞/留言")
-            next_payload.setdefault("browse_limit", 30)
-            next_payload.setdefault("scroll_times", int(next_payload.get("browse_limit") or 30))
-            next_payload.setdefault("like_limit", 16)
-            next_payload.setdefault("max_comments", 8)
-            next_payload.setdefault("comment_chance", 100)
-            next_payload.setdefault("require_persona_relevance", True)
+            next_payload["strategy_label"] = "互动养号：点赞/留言"
+            next_payload["browse_limit"] = 80
+            next_payload["scroll_times"] = 80
+            next_payload["like_limit"] = 16
+            next_payload["like_chance"] = 100
+            next_payload["max_comments"] = 8
+            next_payload["comment_chance"] = 100
+            next_payload["require_persona_relevance"] = True
+            next_payload["min_required_likes"] = 0
+            next_payload["min_required_comments"] = 0
+            next_payload["min_required_interactions"] = 1
         elif strategy_id == "warmup_custom":
             next_payload.setdefault("strategy_label", "自定义养号")
-            next_payload.setdefault("browse_limit", 30)
-            next_payload.setdefault("scroll_times", int(next_payload.get("browse_limit") or 30))
+            next_payload.setdefault("browse_limit", 80)
+            next_payload.setdefault("scroll_times", int(next_payload.get("browse_limit") or 80))
             next_payload.setdefault("like_limit", 0)
             next_payload.setdefault("max_comments", 0)
         else:
-            next_payload.setdefault("strategy_label", "默认养号：滑动 + 随机点赞")
-            next_payload.setdefault("browse_limit", 30)
-            next_payload.setdefault("scroll_times", int(next_payload.get("browse_limit") or 30))
-            next_payload.setdefault("like_limit", 16)
-        next_payload.setdefault("browse_limit", int(next_payload.get("scroll_times") or 30))
+            next_payload["strategy_label"] = "默认养号：滑动 + 随机点赞"
+            next_payload["browse_limit"] = 80
+            next_payload["scroll_times"] = 80
+            next_payload["like_limit"] = 16
+            next_payload["like_chance"] = 100
+            next_payload["max_comments"] = 0
+            next_payload["comment_chance"] = 0
+            next_payload["min_required_likes"] = 1
+        next_payload.setdefault("browse_limit", int(next_payload.get("scroll_times") or 80))
+        if strategy_id == "warmup_custom":
+            next_payload.setdefault("session_minutes", "7-10")
+            next_payload.setdefault("interaction_every_min_posts", 2)
+            next_payload.setdefault("interaction_every_max_posts", 3)
+            next_payload.setdefault("search_chance", 0)
+            next_payload.setdefault("risk_managed", False)
+            next_payload.setdefault("stop_on_risk_limit", True)
+        else:
+            next_payload.pop("session_seconds", None)
+            next_payload.pop("duration_seconds", None)
+            next_payload["session_minutes"] = "7-10"
+            next_payload["interaction_every_min_posts"] = 2
+            next_payload["interaction_every_max_posts"] = 3
+            next_payload["search_chance"] = 16 if task_platform == "threads" else 0
+            next_payload["risk_managed"] = False
+            next_payload["stop_on_risk_limit"] = True
         next_payload.setdefault("comment_chance", 0)
-    if task_type == "threads_auto_reply":
+        try:
+            next_payload["like_limit"] = max(0, min(16, int(next_payload.get("like_limit") or 0)))
+        except (TypeError, ValueError):
+            next_payload["like_limit"] = 0
+        try:
+            next_payload["max_comments"] = max(0, min(8, int(next_payload.get("max_comments") or 0)))
+        except (TypeError, ValueError):
+            next_payload["max_comments"] = 0
+        try:
+            next_payload["comment_chance"] = max(0, min(100, int(next_payload.get("comment_chance") or 0)))
+        except (TypeError, ValueError):
+            next_payload["comment_chance"] = 0
+        next_payload.setdefault("require_persona_relevance", True)
+        next_payload.setdefault("ai_retry_count", 3)
+        next_payload.setdefault("min_required_comments", 0)
+    if task_type in {"threads_auto_reply", "instagram_auto_reply"}:
+        next_payload.pop("reply_templates", None)
         strategy_id = str(next_payload.get("strategy_id") or "tg_default")
         next_payload.setdefault("strategy_id", strategy_id)
         if strategy_id in {"safe_1d", "comment_recent_1d"}:
@@ -8890,19 +9259,19 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
             next_payload.setdefault("max_posts", 5)
             next_payload.setdefault("max_replies", 3)
             next_payload.setdefault("max_age_days", 1)
-            next_payload.setdefault("reply_scope", "comments")
+            next_payload["reply_scope"] = "comments"
         elif strategy_id in {"coverage_7d", "comment_recent_7d"}:
             next_payload.setdefault("strategy_label", "自动回复评论：最近 7 天")
             next_payload.setdefault("max_posts", 5)
             next_payload.setdefault("max_replies", 3)
             next_payload.setdefault("max_age_days", 7)
-            next_payload.setdefault("reply_scope", "comments")
+            next_payload["reply_scope"] = "comments"
         elif strategy_id == "comment_custom":
             next_payload.setdefault("strategy_label", "自定义评论回复")
             next_payload.setdefault("max_posts", 5)
             next_payload.setdefault("max_replies", 3)
             next_payload.setdefault("max_age_days", 2)
-            next_payload.setdefault("reply_scope", "comments")
+            next_payload["reply_scope"] = "comments"
         elif strategy_id in {"hot_posts", "hot_recent_7d", "hot_views_1000", "hot_custom"}:
             if strategy_id == "hot_recent_7d":
                 next_payload.setdefault("strategy_label", "热点推文：最近 7 天")
@@ -8919,31 +9288,68 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
             next_payload.setdefault("max_posts", 5)
             next_payload.setdefault("max_replies", 3)
             next_payload.setdefault("min_views", 0)
-            next_payload.setdefault("reply_scope", "hot_posts")
+            next_payload["reply_scope"] = "hot_posts"
             targets = _collect_threads_hot_reply_targets(
                 archive,
                 max_age_days=int(next_payload.get("max_age_days") or 30),
                 min_views=int(next_payload.get("min_views") or 0),
                 limit=int(next_payload.get("max_posts") or 5),
+                platform=task_platform,
             )
-            next_payload.setdefault("target_urls", [str(item.get("url") or "") for item in targets if item.get("url")])
-            next_payload.setdefault("target_summaries", targets)
+            selected_targets = _select_threads_requested_targets(
+                targets,
+                next_payload.get("target_urls"),
+                platform=task_platform,
+            )
+            next_payload["target_urls"] = [
+                str(item.get("url") or "")
+                for item in selected_targets
+                if item.get("url")
+            ]
+            next_payload["target_summaries"] = selected_targets
         else:
             next_payload.setdefault("strategy_label", "自动回复评论：最近 2 天")
             next_payload.setdefault("max_posts", 5)
             next_payload.setdefault("max_replies", 3)
             next_payload.setdefault("max_age_days", 2)
-            next_payload.setdefault("reply_scope", "comments")
+            next_payload["reply_scope"] = "comments"
         if str(next_payload.get("reply_scope") or "comments") == "comments":
-            comment_targets = _collect_threads_hot_reply_targets(
+            comment_targets = _collect_threads_owned_post_targets(
                 archive,
                 max_age_days=int(next_payload.get("max_age_days") or 2),
-                min_views=0,
                 limit=int(next_payload.get("max_posts") or 5),
+                platform=task_platform,
             )
-            next_payload.setdefault("target_urls", [str(item.get("url") or "") for item in comment_targets if item.get("url")])
-            next_payload.setdefault("target_summaries", comment_targets)
+            selected_targets = _select_threads_requested_targets(
+                comment_targets,
+                next_payload.get("target_urls"),
+                platform=task_platform,
+            )
+            next_payload["target_urls"] = [
+                str(item.get("url") or "")
+                for item in selected_targets
+                if item.get("url")
+            ]
+            next_payload["target_summaries"] = selected_targets
+            auto_reply = setup.get("socialAutoReply") if isinstance(setup.get("socialAutoReply"), dict) else {}
+            platform_reply = auto_reply.get(task_platform) if isinstance(auto_reply.get(task_platform), dict) else {}
+            replied_comments = platform_reply.get("repliedComments") if isinstance(platform_reply.get("repliedComments"), list) else []
+            next_payload["replied_comment_keys"] = [
+                key
+                for item in replied_comments
+                if isinstance(item, dict)
+                and (key := str(item.get("targetKey") or "").strip())
+            ][-1000:]
+            next_payload["replied_comment_history"] = [
+                {
+                    "author": str(item.get("author") or "").strip()[:120],
+                    "comment": str(item.get("comment") or "").strip()[:1000],
+                }
+                for item in replied_comments
+                if isinstance(item, dict) and str(item.get("comment") or "").strip()
+            ][-1000:]
         next_payload.setdefault("require_persona_relevance", True)
+        next_payload.setdefault("ai_retry_count", 3)
     return next_payload
 
 
@@ -9019,7 +9425,7 @@ def _build_archive_sync_records(task: dict[str, Any], account: dict[str, Any], p
     return publish_record, post_record
 
 
-def _sync_successful_task_to_persona_archive(task_id: str, result: dict[str, Any]) -> None:
+def _sync_successful_task_to_persona_archive_once(task_id: str, result: dict[str, Any]) -> None:
     try:
         with db() as conn:
             task_row = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
@@ -9032,7 +9438,8 @@ def _sync_successful_task_to_persona_archive(task_id: str, result: dict[str, Any
             ).fetchone()
         task = dict(task_row)
         account = dict(account_row) if account_row else {}
-        if str(task.get("task_type") or "").strip().lower() != "publish_post":
+        task_type = str(task.get("task_type") or "").strip().lower()
+        if task_type not in {"publish_post", "threads_auto_reply", "instagram_auto_reply"}:
             return
         persona_id = str(task.get("persona_id") or account.get("persona_id") or "").strip()
         if (
@@ -9045,6 +9452,158 @@ def _sync_successful_task_to_persona_archive(task_id: str, result: dict[str, Any
         payload = json.loads(str(task.get("payload_json") or "{}"))
         if not isinstance(payload, dict):
             payload = {}
+        if task_type in {"threads_auto_reply", "instagram_auto_reply"}:
+            reply_platform = "instagram" if task_type == "instagram_auto_reply" else "threads"
+            normalize_reply_url = (
+                _normalize_instagram_post_url
+                if reply_platform == "instagram"
+                else _normalize_threads_post_url
+            )
+            reply_scope = str(payload.get("reply_scope") or "comments").strip()
+            result_comments = [
+                item
+                for item in (
+                    result.get("repliedComments")
+                    if isinstance(result.get("repliedComments"), list)
+                    else []
+                )
+                if isinstance(item, dict)
+            ]
+            raw_replied_urls = result.get("repliedUrls") if isinstance(result.get("repliedUrls"), list) else []
+            replied_urls = [
+                normalized
+                for value in raw_replied_urls
+                if (normalized := normalize_reply_url(value))
+            ]
+            if not result_comments and not replied_urls:
+                return
+            reply_text_by_url: dict[str, str] = {}
+            for item in result_comments:
+                normalized = normalize_reply_url(item.get("url") or item.get("post_url"))
+                if normalized:
+                    reply_text_by_url[normalized] = str(item.get("replyText") or item.get("reply_text") or "").strip()[:220]
+            target_summaries = payload.get("target_summaries") if isinstance(payload.get("target_summaries"), list) else []
+            target_by_url = {
+                normalized: item
+                for item in target_summaries
+                if isinstance(item, dict) and (normalized := normalize_reply_url(item.get("url")))
+            }
+            replied_at = _iso_from_ts(task.get("finished_at") or task.get("updated_at") or _now())
+            with _archive_file_lock():
+                for path in _archive_paths_for_sync():
+                    raw = _read_json_file(path)
+                    archives = _extract_archive_list(raw)
+                    if not archives:
+                        continue
+                    changed = False
+                    for archive in archives:
+                        if str(archive.get("id") or "").strip() != persona_id:
+                            continue
+                        setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+                        auto_reply = setup.get("socialAutoReply") if isinstance(setup.get("socialAutoReply"), dict) else {}
+                        state = auto_reply.get(reply_platform) if isinstance(auto_reply.get(reply_platform), dict) else {}
+                        existing_replied_comments = state.get("repliedComments") if isinstance(state.get("repliedComments"), list) else []
+                        legacy_replied_comments = [
+                            item
+                            for item in existing_replied_comments
+                            if isinstance(item, dict)
+                            and not str(item.get("targetKey") or "").strip()
+                        ]
+                        replied_comments_by_key = {
+                            key: item
+                            for item in existing_replied_comments
+                            if isinstance(item, dict)
+                            and (key := str(item.get("targetKey") or "").strip())
+                        }
+                        for item in result_comments:
+                            target_key = str(item.get("targetKey") or "").strip()
+                            if not target_key:
+                                continue
+                            replied_comments_by_key[target_key] = {
+                                "targetKey": target_key,
+                                "url": normalize_reply_url(item.get("url") or item.get("post_url")),
+                                "author": str(item.get("author") or "").strip()[:120],
+                                "comment": str(item.get("comment") or "").strip()[:1000],
+                                "replyText": str(item.get("replyText") or item.get("reply_text") or "").strip()[:1000],
+                                "repliedAt": replied_at,
+                            }
+                        existing_replied_posts = state.get("repliedPosts") if isinstance(state.get("repliedPosts"), list) else []
+                        replied_by_url = {
+                            normalized: item
+                            for item in existing_replied_posts
+                            if isinstance(item, dict) and (normalized := normalize_reply_url(item.get("url")))
+                        }
+                        for url in replied_urls:
+                            replied_by_url[url] = {
+                                "url": url,
+                                "replyText": reply_text_by_url.get(url, ""),
+                                "repliedAt": replied_at,
+                            }
+                        existing_known_targets = state.get("knownPostTargets") if isinstance(state.get("knownPostTargets"), list) else []
+                        known_by_url = {
+                            normalized: item
+                            for item in existing_known_targets
+                            if isinstance(item, dict) and (normalized := normalize_reply_url(item.get("url")))
+                        }
+                        for url in replied_urls:
+                            source = target_by_url.get(url, {})
+                            existing = known_by_url.get(url, {})
+                            known_by_url[url] = {
+                                "url": url,
+                                "label": str(
+                                    source.get("label")
+                                    or existing.get("label")
+                                    or ""
+                                )[:80],
+                                "expectedText": str(
+                                    source.get("expected_text")
+                                    or source.get("expectedText")
+                                    or existing.get("expectedText")
+                                    or existing.get("expected_text")
+                                    or ""
+                                )[:1200],
+                                "viewCount": int(
+                                    source.get("view_count")
+                                    or source.get("viewCount")
+                                    or existing.get("viewCount")
+                                    or existing.get("view_count")
+                                    or 0
+                                ),
+                                "publishedAt": (
+                                    source.get("published_at")
+                                    or source.get("publishedAt")
+                                    or existing.get("publishedAt")
+                                    or existing.get("published_at")
+                                    or ""
+                                ),
+                                "rememberedAt": replied_at,
+                            }
+                        state["repliedComments"] = (
+                            legacy_replied_comments + list(replied_comments_by_key.values())
+                        )[-1000:]
+                        state["repliedPosts"] = list(replied_by_url.values())[-500:]
+                        state["knownPostTargets"] = list(known_by_url.values())[-500:]
+                        state["lastScope"] = reply_scope
+                        state["updatedAt"] = replied_at
+                        auto_reply[reply_platform] = state
+                        setup["socialAutoReply"] = auto_reply
+                        if reply_platform == "threads" and reply_scope == "hot_posts":
+                            setup["threadsOwnPostAutoReply"] = {
+                                **(
+                                    setup.get("threadsOwnPostAutoReply")
+                                    if isinstance(setup.get("threadsOwnPostAutoReply"), dict)
+                                    else {}
+                                ),
+                                "repliedPosts": state["repliedPosts"],
+                                "knownPostTargets": state["knownPostTargets"],
+                            }
+                        archive["setup"] = setup
+                        archive["updatedAt"] = replied_at
+                        changed = True
+                        break
+                    if changed:
+                        _write_archives_preserving_shape(path, raw, archives)
+            return
         publish_record, post_record = _build_archive_sync_records(task, account, payload, result or {})
         archive_post_source = str(payload.get("archive_post_source") or "posts").strip().lower()
         is_favorite_post_source = archive_post_source == "favorites"
@@ -9115,10 +9674,31 @@ def _sync_successful_task_to_persona_archive(task_id: str, result: dict[str, Any
                     break
                 if changed:
                     _write_archives_preserving_shape(path, raw, archives)
-    except Exception as exc:
-        with contextlib.suppress(Exception):
-            with db() as conn:
-                _insert_log(conn, task_id, "warn", "archive_sync", "自动化结果写入人设归档失败", {"error": str(exc)})
+    except Exception:
+        raise
+
+
+def _sync_successful_task_to_persona_archive(task_id: str, result: dict[str, Any]) -> bool:
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            _sync_successful_task_to_persona_archive_once(task_id, result)
+            return True
+        except Exception as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(0.05 * (attempt + 1))
+    with contextlib.suppress(Exception):
+        with db() as conn:
+            _insert_log(
+                conn,
+                task_id,
+                "error",
+                "archive_sync",
+                "自动化结果写入人设归档失败，已完成 3 次重试。",
+                {"error": str(last_error or "")},
+            )
+    return False
 
 
 def _fail_task_safely(task_id: str, exc: Exception) -> None:
@@ -9504,6 +10084,24 @@ def _extract_runtime_secrets(payload: dict[str, Any]) -> tuple[dict[str, Any], d
 
 def _runtime_task_payload(task: dict[str, Any], account: dict[str, Any]) -> dict[str, Any]:
     payload = dict(task.get("payload") or {})
+    task_type = str(task.get("task_type") or "").strip()
+    if task_type in {
+        "threads_warmup",
+        "instagram_warmup",
+        "threads_auto_reply",
+        "instagram_auto_reply",
+    }:
+        if (
+            task_type in {"threads_auto_reply", "instagram_auto_reply"}
+            and not bool(payload.get("_target_urls_explicit"))
+        ):
+            payload.pop("target_urls", None)
+            payload.pop("target_summaries", None)
+        payload = _enrich_threads_task_payload(
+            str(task.get("persona_id") or account.get("persona_id") or "").strip(),
+            task_type,
+            payload,
+        )
     owner_user_id = int(account.get("user_id") or task.get("user_id") or 0)
     preferences = effective_user_browser_preferences(get_user_browser_preferences(owner_user_id))
     review_hold = preferences["completion_policy"] == "review_hold"
