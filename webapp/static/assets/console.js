@@ -25423,6 +25423,7 @@ function updateLiveBrowserSessionCard(card, session) {
   if (modeSummary) modeSummary.textContent = `当前模式：${liveBrowserModeLabel(session)}`;
   if (ipSummary) ipSummary.textContent = `当前 IP：${liveBrowserCurrentIp(session)}`;
   if (interactionHint) interactionHint.textContent = liveBrowserInteractionHint(session);
+  syncLiveBrowserMobileSummaryAlignment(card);
 }
 
 function renderLiveBrowserLayoutToggle(layout = state.liveBrowserLayout) {
@@ -25905,6 +25906,7 @@ function setLiveBrowserModalControlsVisible(card, visible) {
   if (visible) {
     card.classList.add("is-live-browser-controls-visible");
     card.toggleAttribute("data-live-browser-controls-visible", true);
+    syncLiveBrowserMobileSummaryAlignment(card);
     return;
   }
   if (!card.classList.contains("is-live-browser-controls-visible")) {
@@ -25922,6 +25924,42 @@ function setLiveBrowserModalControlsVisible(card, visible) {
     card.removeAttribute("data-live-browser-controls-visible");
   }, LIVE_BROWSER_CONTROLS_EXIT_MS);
   liveBrowserControlsExitTimers.set(card, timer);
+}
+
+function syncLiveBrowserMobileSummaryAlignment(card) {
+  const summary = card?.querySelector(".live-browser-mobile-summary");
+  const status = card?.querySelector(".live-browser-card-actions > .status");
+  const isPortraitModal = Boolean(
+    summary
+    && status
+    && card.classList.contains("is-live-browser-modal")
+    && card.classList.contains("is-live-browser-controls-visible")
+    && window.matchMedia("(max-width: 760px) and (orientation: portrait)").matches,
+  );
+  if (!isPortraitModal) {
+    summary?.style.removeProperty("--live-browser-mobile-summary-align-y");
+    return;
+  }
+  window.requestAnimationFrame(() => {
+    if (!summary.isConnected || !status.isConnected) return;
+    const transform = getComputedStyle(card).transform;
+    const matrixMatch = String(transform || "").match(/^matrix(3d)?\((.+)\)$/);
+    const matrixValues = matrixMatch?.[2]
+      ?.split(",")
+      .map((value) => Number.parseFloat(value.trim())) || [];
+    const verticalToViewportX = Number(
+      matrixMatch?.[1] ? matrixValues[4] : matrixValues[2],
+    ) || 0;
+    if (Math.abs(verticalToViewportX) < 0.001) return;
+    const summaryRect = summary.getBoundingClientRect();
+    const statusRect = status.getBoundingClientRect();
+    const deltaX = (statusRect.left + statusRect.width / 2) - (summaryRect.left + summaryRect.width / 2);
+    const previousShift = Number.parseFloat(summary.style.getPropertyValue("--live-browser-mobile-summary-align-y")) || 0;
+    summary.style.setProperty(
+      "--live-browser-mobile-summary-align-y",
+      `${Math.round((previousShift + deltaX / verticalToViewportX) * 100) / 100}px`,
+    );
+  });
 }
 
 function toggleLiveBrowserModalControls(card) {
@@ -27191,7 +27229,10 @@ function bindEvents() {
   });
   document.addEventListener("wheel", handlePersonaImageLibraryWheel, { passive: false });
   $("moduleBody").addEventListener("scroll", schedulePersonaCardEditorMenuPosition, true);
-  window.addEventListener("resize", schedulePersonaCardEditorMenuPosition);
+  window.addEventListener("resize", () => {
+    schedulePersonaCardEditorMenuPosition();
+    document.querySelectorAll(".live-browser-card.is-live-browser-modal").forEach(syncLiveBrowserMobileSummaryAlignment);
+  });
   window.addEventListener("beforeunload", (event) => {
     const activeState = activeTransientWorkspaceState();
     if (!activeState) return;

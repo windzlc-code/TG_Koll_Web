@@ -19911,7 +19911,7 @@ body.console-page {
   }
 
   .console-page :is(
-    button:not(.account-password-toggle):not(.account-pool-card-copy-button),
+    button:not(.account-password-toggle):not(.account-pool-card-copy-button):not(.live-browser-expand-button),
     .button,
     .chip-button,
     a[role="button"],
@@ -23862,7 +23862,7 @@ body.console-page {
     grid-template-columns: repeat(2, max-content);
     gap: 1px 5px;
     justify-content: center;
-    transform: translate(-50%, -50%);
+    transform: translate(-50%, calc(-50% + var(--live-browser-mobile-summary-align-y, 0px)));
     font-size: 7px;
     line-height: 1.05;
   }

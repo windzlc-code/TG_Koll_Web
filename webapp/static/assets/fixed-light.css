@@ -99,8 +99,9 @@
   --home-white: var(--public-paper);
   --home-ink: var(--public-ink);
   --home-line: var(--public-line);
-  --home-mint: var(--public-cool);
-  --home-lime: var(--public-cool);
+  --home-accent: var(--public-cool);
+  --home-accent-dark: var(--public-cool-dark);
+  --home-accent-soft: var(--public-on-dark-accent);
   --home-coral: var(--public-warm-accent);
   background: var(--public-page);
 }

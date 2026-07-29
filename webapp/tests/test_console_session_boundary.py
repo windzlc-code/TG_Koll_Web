@@ -1064,7 +1064,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("top: 50%;", mobile_summary)
         self.assertNotIn("calc(50% - 20px)", mobile_summary)
         self.assertIn("left: 50%;", mobile_summary)
-        self.assertIn("transform: translate(-50%, -50%);", mobile_summary)
+        self.assertIn("--live-browser-mobile-summary-align-y", mobile_summary)
+        self.assertIn("transform: translate(-50%, calc(-50% + var(--live-browser-mobile-summary-align-y, 0px)));", mobile_summary)
         self.assertIn("grid-template-columns: repeat(2, max-content);", mobile_summary)
         self.assertIn("justify-content: center;", mobile_summary)
         self.assertIn("align-items: center;", mobile_status)
@@ -1073,6 +1074,24 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("live-browser-mobile-summary > span:nth-child(2)", portrait_styles)
         self.assertIn("live-browser-mobile-summary > span:nth-child(3)", portrait_styles)
         self.assertIn("background: rgb(13 18 19 / 42%);", portrait_styles)
+        self.assertIn("function syncLiveBrowserMobileSummaryAlignment(card)", self.source)
+        self.assertIn("verticalToViewportX", self.source)
+        self.assertIn("deltaX", self.source)
+        self.assertNotIn("DOMMatrixReadOnly", self.source)
+
+    def test_mobile_browser_action_controls_share_the_same_square_box(self):
+        mobile_controls = self._css_block(
+            ".console-page :is(\n    button:not(.account-password-toggle):not(.account-pool-card-copy-button):not(.live-browser-expand-button),",
+            self.styles.find("@media (max-width: 760px)"),
+        )
+        shared_controls = self._css_block(
+            ".console-page :is(\n  .live-browser-expand-button,\n  .live-browser-action-menu > summary\n) {",
+        )
+
+        self.assertIn("min-height: var(--mobile-touch-target);", mobile_controls)
+        self.assertIn("not(.live-browser-expand-button)", mobile_controls)
+        for declaration in ("width: 30px;", "height: 30px;", "min-height: 30px;", "border: 1px solid #394344;"):
+            self.assertIn(declaration, shared_controls)
 
     def test_expanded_live_browser_does_not_bind_native_frame_clicks_to_console_controls(self):
         toggle = self._function_source("toggleLiveBrowserModalControls")
@@ -1093,6 +1112,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const assert = require("node:assert/strict");
             const LIVE_BROWSER_CONTROLS_EXIT_MS = 30;
             const liveBrowserControlsExitTimers = new WeakMap();
+            function syncLiveBrowserMobileSummaryAlignment() {{}}
 
             class FakeClassList {{
               constructor(names) {{ this.names = new Set(names); }}
