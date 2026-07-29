@@ -1602,7 +1602,7 @@
           const view = String(button.dataset.siteOpenConsoleView || "");
           if (!["tasks", "console_settings"].includes(view)) return;
           setAccountMenuOpen(menu, false);
-          window.dispatchEvent(new CustomEvent(EVENT_CONSOLE_VIEW_REQUEST, { detail: { view } }));
+          openWorkspaceConsoleView(view);
         });
       });
       menu.querySelector("[data-site-account-logout]")?.addEventListener("click", () => {
@@ -1657,6 +1657,20 @@
       return;
     }
     window.location.assign(`/console.html?${new URLSearchParams({ view: targetView }).toString()}`);
+  }
+
+  function openWorkspaceConsoleView(view) {
+    if (!["tasks", "console_settings"].includes(view)) return;
+    if (window.location.pathname === "/console.html" || window.location.pathname === "/admin-console.html") {
+      window.dispatchEvent(new CustomEvent(EVENT_CONSOLE_VIEW_REQUEST, { detail: { view } }));
+      return;
+    }
+    if (currentSessionMode === "admin" || hasAdminConsoleContext()
+      || document.querySelector('meta[name="admin-console-session"]')?.content === "1") {
+      window.location.assign(adminConsoleTarget(view, storedAdminWorkspaceUserId()));
+      return;
+    }
+    window.location.assign(`/console.html?${new URLSearchParams({ view }).toString()}`);
   }
 
   function openProfilePage() {

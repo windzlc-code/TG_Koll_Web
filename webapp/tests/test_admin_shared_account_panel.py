@@ -20,8 +20,12 @@ class AdminSharedAccountPanelTests(unittest.TestCase):
         self.assertLess(self.html.index('id="adminProfileMenu"'), self.html.index('id="adminMobileDrawer"'))
         self.assertNotIn('id="adminProfileModal"', self.html)
         self.assertNotIn("openAdminProfileModal", self.admin_script)
-        self.assertIn("navigation.mountAccountMenu?.(accountHost, { page: \"home\" })", self.admin_script)
+        self.assertIn("navigation.mountAccountMenu?.(accountHost, { page: \"console\" })", self.admin_script)
         self.assertIn("navigation.setAccount?.(me)", self.admin_script)
+        self.assertIn('data-site-open-console-view="tasks"', self.navigation_script)
+        self.assertIn('data-site-open-console-view="console_settings"', self.navigation_script)
+        self.assertIn("openWorkspaceConsoleView(view)", self.navigation_script)
+        self.assertIn("window.location.assign(adminConsoleTarget(view, storedAdminWorkspaceUserId()))", self.navigation_script)
 
     def test_shared_navigation_exposes_account_menu_mount_api(self):
         self.assertIn('function mountAccountMenu(host, { page = "home" } = {})', self.navigation_script)

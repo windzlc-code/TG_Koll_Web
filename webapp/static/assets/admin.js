@@ -2397,7 +2397,7 @@ async function ensureAdmin() {
   const accountHost = el("adminSharedAccountHost");
   if (navigation && accountHost) {
     navigation.markAdminConsoleContext?.();
-    navigation.mountAccountMenu?.(accountHost, { page: "home" });
+    navigation.mountAccountMenu?.(accountHost, { page: "console" });
     navigation.setAccount?.(me);
   }
   if (el("accCurrentUsername")) el("accCurrentUsername").value = me.username || "";
