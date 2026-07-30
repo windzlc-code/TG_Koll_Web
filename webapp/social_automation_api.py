@@ -162,6 +162,9 @@ SOCIAL_TASK_STATUSES = {"preparing", "queued", "running", "success", "failed", "
 DAILY_PUBLISH_LIMIT = 15
 DAILY_PUBLISH_POLICY_CONFIG_KEY = "social_publish_policy"
 DAILY_PUBLISH_LIMIT_MESSAGE = "每日最多发布 15 篇。超过 15 篇会有封号风险，系统已强制禁止继续发布。"
+SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT = 2
+SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_FIRST_TASK = 768
+SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_ADDITIONAL_TASK = 1536
 SOCIAL_ACCOUNT_TOTP_PERIOD_SECONDS = 30
 SOCIAL_ACCOUNT_TOTP_MIN_VALIDITY_SECONDS = 15
 SOCIAL_MEDIA_EXTENSIONS = {
@@ -218,6 +221,11 @@ _WORKER_STATE: dict[str, Any] = {
     "last_error": "",
     "running_count": 0,
     "max_concurrency": 1,
+    "active_browser_slots": 0,
+    "resource_paused": False,
+    "resource_reason": "",
+    "memory_available_mb": 0,
+    "required_available_mb": 0,
 }
 _RUNNING_TASK_CONTROLS: dict[str, dict[str, Any]] = {}
 _RUNNING_TASK_CONTROLS_LOCK = threading.Lock()
@@ -3801,7 +3809,12 @@ def get_live_browser_settings() -> dict[str, Any]:
     defaults = {
         "standby_seconds": _bounded_env_int("SOCIAL_AUTOMATION_LIVE_BROWSER_STANDBY_SECONDS", 60, 0, 3600),
         "auto_close_seconds": _bounded_env_int("SOCIAL_AUTOMATION_LIVE_BROWSER_AUTO_CLOSE_SECONDS", 300, 10, 86400),
-        "max_concurrency": _bounded_env_int("SOCIAL_AUTOMATION_WORKER_CONCURRENCY", 2, 1, 12),
+        "max_concurrency": _bounded_env_int(
+            "SOCIAL_AUTOMATION_WORKER_CONCURRENCY",
+            SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
+            1,
+            SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
+        ),
         "text_input_mode": _normalize_text_input_mode(os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste")),
     }
     try:
@@ -3813,7 +3826,13 @@ def get_live_browser_settings() -> dict[str, Any]:
         return {
             "standby_seconds": max(0, min(int(raw.get("standby_seconds", defaults["standby_seconds"])), 3600)),
             "auto_close_seconds": max(10, min(int(raw.get("auto_close_seconds", defaults["auto_close_seconds"])), 86400)),
-            "max_concurrency": max(1, min(int(raw.get("max_concurrency", defaults["max_concurrency"])), 12)),
+            "max_concurrency": max(
+                1,
+                min(
+                    int(raw.get("max_concurrency", defaults["max_concurrency"])),
+                    SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
+                ),
+            ),
             "text_input_mode": _normalize_text_input_mode(raw.get("text_input_mode", defaults["text_input_mode"])),
         }
     except Exception:
@@ -3821,10 +3840,22 @@ def get_live_browser_settings() -> dict[str, Any]:
 
 
 def set_live_browser_settings(payload: LiveBrowserSettingsPayload) -> dict[str, Any]:
+    requested_concurrency = int(payload.max_concurrency)
+    if requested_concurrency > SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"当前服务器浏览器自动化最多允许 "
+                f"{SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT} 个并发任务，请调低后再保存。"
+            ),
+        )
     settings = {
         "standby_seconds": max(0, min(int(payload.standby_seconds), 3600)),
         "auto_close_seconds": max(10, min(int(payload.auto_close_seconds), 86400)),
-        "max_concurrency": max(1, min(int(payload.max_concurrency), 12)),
+        "max_concurrency": max(
+            1,
+            min(requested_concurrency, SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT),
+        ),
         "text_input_mode": _normalize_text_input_mode(payload.text_input_mode),
     }
     now = _now()
@@ -3879,7 +3910,13 @@ def get_user_browser_preferences(user_id: int) -> dict[str, Any]:
             "standby_seconds": max(0, min(int(row["standby_seconds"] or 0), 3600)),
             "auto_close_seconds": max(10, min(int(row["auto_close_seconds"] or 30), 86400)),
             "manual_timeout_seconds": max(300, min(int(row["manual_timeout_seconds"] or 900), 1800)),
-            "requested_concurrency": max(1, min(int(row["requested_concurrency"] or 1), 12)),
+            "requested_concurrency": max(
+                1,
+                min(
+                    int(row["requested_concurrency"] or 1),
+                    SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
+                ),
+            ),
             "text_input_mode": _normalize_text_input_mode(row["text_input_mode"]),
             "auto_configured": bool(row["auto_configured"]),
             "updated_at": int(row["updated_at"] or 0),
@@ -3890,7 +3927,13 @@ def get_user_browser_preferences(user_id: int) -> dict[str, Any]:
 
 def effective_user_browser_preferences(preferences: dict[str, Any]) -> dict[str, Any]:
     global_settings = get_live_browser_settings()
-    global_limit = max(1, min(int(global_settings.get("max_concurrency") or 2), 12))
+    global_limit = max(
+        1,
+        min(
+            int(global_settings.get("max_concurrency") or SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT),
+            SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
+        ),
+    )
     policy = _normalize_completion_policy(preferences.get("completion_policy"))
     hold_seconds = max(10, min(int(preferences.get("review_hold_seconds") or 30), 300))
     standby_seconds = max(0, min(int(preferences.get("standby_seconds") or 0), 3600))
@@ -3916,6 +3959,16 @@ def set_user_browser_preferences(
     clean_user_id = int(user_id or 0)
     if clean_user_id <= 0:
         raise HTTPException(status_code=401, detail="登录状态无效")
+    requested_concurrency = int(payload.requested_concurrency)
+    if requested_concurrency > SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"当前服务器每位用户最多允许 "
+                f"{SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT} 个浏览器自动化并发任务，"
+                "请调低后再保存。"
+            ),
+        )
     current_preferences = get_user_browser_preferences(clean_user_id)
     standby_seconds = (
         int(current_preferences.get("standby_seconds") or 0)
@@ -3933,7 +3986,10 @@ def set_user_browser_preferences(
         "standby_seconds": max(0, min(standby_seconds, 3600)),
         "auto_close_seconds": max(10, min(auto_close_seconds, 86400)),
         "manual_timeout_seconds": max(300, min(int(payload.manual_timeout_seconds), 1800)),
-        "requested_concurrency": max(1, min(int(payload.requested_concurrency), 12)),
+        "requested_concurrency": max(
+            1,
+            min(requested_concurrency, SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT),
+        ),
         "text_input_mode": _normalize_text_input_mode(payload.text_input_mode),
         "auto_configured": bool(auto_configured),
         "updated_at": _now(),
@@ -4028,7 +4084,16 @@ def browser_environment_recommendation(user_id: int) -> dict[str, Any]:
     total_mb = int(memory["memory_total_mb"] or 0)
     available_mb = int(memory["memory_available_mb"] or 0)
     swap_mb = int(memory["swap_total_mb"] or 0)
-    global_limit = max(1, min(int(get_live_browser_settings().get("max_concurrency") or 2), 12))
+    global_limit = max(
+        1,
+        min(
+            int(
+                get_live_browser_settings().get("max_concurrency")
+                or SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT
+            ),
+            SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
+        ),
+    )
     if cpu_cores <= 2 or (total_mb and total_mb <= 4096) or (available_mb and available_mb < 1024):
         resource_level = "limited"
         resource_label = "资源紧凑"
@@ -6330,7 +6395,12 @@ def run_social_automation_once() -> dict[str, Any] | None:
     _reconcile_social_automation_plans()
     with _WORKER_LOCK:
         _cleanup_worker_task_threads()
-        if _active_worker_thread_count() >= _social_worker_max_concurrency():
+        active_slots = _social_worker_slots_in_use()
+        if active_slots >= _social_worker_max_concurrency():
+            _refresh_worker_state()
+            return None
+        if not _browser_worker_resource_admission(active_slots=active_slots)["allow_launch"]:
+            _refresh_worker_state()
             return None
         task = _claim_next_task()
         if not task:
@@ -6355,10 +6425,20 @@ def _worker_loop() -> None:
 
 def _social_worker_max_concurrency() -> int:
     try:
-        value = int(get_live_browser_settings().get("max_concurrency", 2))
+        value = int(
+            get_live_browser_settings().get(
+                "max_concurrency",
+                SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
+            )
+        )
     except Exception:
-        value = _bounded_env_int("SOCIAL_AUTOMATION_WORKER_CONCURRENCY", 2, 1, 12)
-    return max(1, min(value, 12))
+        value = _bounded_env_int(
+            "SOCIAL_AUTOMATION_WORKER_CONCURRENCY",
+            SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
+            1,
+            SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
+        )
+    return max(1, min(value, SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT))
 
 
 def _cleanup_worker_task_threads() -> None:
@@ -6374,12 +6454,60 @@ def _active_worker_thread_count() -> int:
         return sum(1 for thread in _WORKER_TASK_THREADS.values() if thread.is_alive())
 
 
+def _social_worker_slots_in_use() -> int:
+    running_threads = _active_worker_thread_count()
+    try:
+        live_browser_count = len(_live_browser_sessions(user_id=None))
+    except Exception:
+        live_browser_count = 0
+    # Running tasks and their live sessions normally overlap. Using the larger
+    # number counts detached review/standby browsers without double counting
+    # browsers that are still owned by a running worker thread.
+    return max(running_threads, live_browser_count)
+
+
+def _browser_worker_resource_admission(*, active_slots: int | None = None) -> dict[str, Any]:
+    slots_in_use = _social_worker_slots_in_use() if active_slots is None else max(0, int(active_slots))
+    memory = _memory_environment()
+    available_mb = int(memory.get("memory_available_mb") or 0)
+    first_task_minimum_mb = _bounded_env_int(
+        "SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_FIRST_TASK",
+        SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_FIRST_TASK,
+        256,
+        8192,
+    )
+    additional_task_minimum_mb = _bounded_env_int(
+        "SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_ADDITIONAL_TASK",
+        SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_ADDITIONAL_TASK,
+        512,
+        16384,
+    )
+    required_mb = first_task_minimum_mb if slots_in_use <= 0 else additional_task_minimum_mb
+    # Fail open when /proc/meminfo is unavailable so non-Linux development and
+    # test environments retain their existing behavior.
+    allow_launch = available_mb <= 0 or available_mb >= required_mb
+    return {
+        "allow_launch": allow_launch,
+        "reason": "" if allow_launch else "low_memory",
+        "active_slots": slots_in_use,
+        "memory_available_mb": available_mb,
+        "required_available_mb": required_mb,
+    }
+
+
 def _refresh_worker_state() -> None:
     running_count = _active_worker_thread_count()
+    active_slots = _social_worker_slots_in_use()
+    resource_admission = _browser_worker_resource_admission(active_slots=active_slots)
     _WORKER_STATE.update({
         "running": running_count > 0,
         "running_count": running_count,
         "max_concurrency": _social_worker_max_concurrency(),
+        "active_browser_slots": active_slots,
+        "resource_paused": not bool(resource_admission["allow_launch"]),
+        "resource_reason": str(resource_admission["reason"]),
+        "memory_available_mb": int(resource_admission["memory_available_mb"]),
+        "required_available_mb": int(resource_admission["required_available_mb"]),
         "last_tick_at": _now(),
     })
 
@@ -6387,10 +6515,12 @@ def _refresh_worker_state() -> None:
 def _launch_available_social_tasks() -> int:
     launched = 0
     with _WORKER_LOCK:
-        while (
-            not _WORKER_STOP.is_set()
-            and _active_worker_thread_count() < _social_worker_max_concurrency()
-        ):
+        while not _WORKER_STOP.is_set():
+            active_slots = _social_worker_slots_in_use()
+            if active_slots >= _social_worker_max_concurrency():
+                break
+            if not _browser_worker_resource_admission(active_slots=active_slots)["allow_launch"]:
+                break
             task = _claim_next_task()
             if not task:
                 break

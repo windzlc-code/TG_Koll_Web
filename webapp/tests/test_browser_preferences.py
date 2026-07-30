@@ -54,7 +54,7 @@ class BrowserPreferencesTests(unittest.TestCase):
                 standby_seconds=60,
                 auto_close_seconds=300,
                 manual_timeout_seconds=1800,
-                requested_concurrency=8,
+                requested_concurrency=2,
                 text_input_mode="type",
             ),
             auto_configured=False,
@@ -66,6 +66,76 @@ class BrowserPreferencesTests(unittest.TestCase):
         self.assertEqual(effective["requested_concurrency"], 2)
         self.assertEqual(effective["standby_seconds"], 60)
         self.assertEqual(effective["auto_close_seconds"], 300)
+
+    def test_browser_concurrency_above_server_limit_is_rejected_with_clear_message(self):
+        with self.assertRaises(social_automation_api.HTTPException) as global_error:
+            social_automation_api.set_live_browser_settings(
+                social_automation_api.LiveBrowserSettingsPayload(
+                    standby_seconds=0,
+                    auto_close_seconds=30,
+                    max_concurrency=3,
+                    text_input_mode="paste",
+                )
+            )
+        self.assertEqual(global_error.exception.status_code, 400)
+        self.assertIn("最多允许 2", str(global_error.exception.detail))
+
+        with self.assertRaises(social_automation_api.HTTPException) as user_error:
+            social_automation_api.set_user_browser_preferences(
+                1,
+                social_automation_api.BrowserPreferencesPayload(
+                    requested_concurrency=3,
+                ),
+                auto_configured=False,
+            )
+        self.assertEqual(user_error.exception.status_code, 400)
+        self.assertIn("最多允许 2", str(user_error.exception.detail))
+
+    def test_legacy_concurrency_above_server_limit_is_read_as_two(self):
+        with db_module.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_browser_settings(
+                  user_id, completion_policy, review_hold_seconds, manual_timeout_seconds,
+                  requested_concurrency, text_input_mode, auto_configured, updated_at,
+                  standby_seconds, auto_close_seconds
+                ) VALUES (1, 'immediate_close', 30, 900, 4, 'paste', 0, 100, 0, 30)
+                """
+            )
+            conn.execute(
+                """
+                UPDATE admin_config
+                SET value_json = '{"standby_seconds":0,"auto_close_seconds":30,"max_concurrency":4,"text_input_mode":"paste"}'
+                WHERE key = 'live_browser_settings'
+                """
+            )
+
+        self.assertEqual(social_automation_api.get_live_browser_settings()["max_concurrency"], 2)
+        self.assertEqual(social_automation_api.get_user_browser_preferences(1)["requested_concurrency"], 2)
+
+    def test_worker_resource_gate_blocks_new_browser_when_memory_is_low(self):
+        with mock.patch.object(
+            social_automation_api,
+            "_memory_environment",
+            return_value={"memory_total_mb": 3584, "memory_available_mb": 1300, "swap_total_mb": 4096},
+        ):
+            blocked = social_automation_api._browser_worker_resource_admission(active_slots=1)
+            first_task = social_automation_api._browser_worker_resource_admission(active_slots=0)
+
+        self.assertFalse(blocked["allow_launch"])
+        self.assertEqual(blocked["reason"], "low_memory")
+        self.assertTrue(first_task["allow_launch"])
+
+    def test_standby_browsers_count_toward_worker_concurrency(self):
+        with (
+            mock.patch.object(social_automation_api, "_active_worker_thread_count", return_value=1),
+            mock.patch.object(
+                social_automation_api,
+                "_live_browser_sessions",
+                return_value=[{"id": "browser-1"}, {"id": "browser-2"}],
+            ),
+        ):
+            self.assertEqual(social_automation_api._social_worker_slots_in_use(), 2)
 
     def test_user_endpoint_can_save_own_preferences(self):
         app = FastAPI()
