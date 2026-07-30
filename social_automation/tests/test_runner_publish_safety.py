@@ -2758,6 +2758,31 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertFalse(result["confirmed"])
 
+    def test_threads_caption_confirmation_accepts_unique_new_permalink_when_dom_text_is_split(self):
+        old_permalink = "https://www.threads.net/@alice/post/OLD"
+        new_permalink = "https://www.threads.net/@alice/post/NEW"
+        page = _Page("https://www.threads.net/@alice")
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_find_threads_post_permalink", return_value=""),
+            mock.patch.object(
+                runner,
+                "_find_threads_post_permalinks",
+                return_value=[new_permalink, old_permalink],
+            ),
+        ):
+            result = runner._wait_for_threads_own_post(
+                page,
+                "new post body split across nested nodes",
+                _Logger(),
+                {"username": "alice"},
+                previous_permalinks={old_permalink},
+            )
+
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["url"], new_permalink)
+
     def test_threads_confirmation_refreshes_profile_while_waiting_for_delayed_post(self):
         page = mock.Mock(url="https://www.threads.net/@alice")
         with (

@@ -7056,7 +7056,15 @@ def _wait_for_threads_own_post(
         ]
         if str(caption or "").strip():
             matched_permalink = _find_threads_post_permalink(page, caption)
-            permalink = matched_permalink if matched_permalink in new_own_permalinks else ""
+            if matched_permalink in new_own_permalinks:
+                permalink = matched_permalink
+            else:
+                # Threads may split the post body across deeply nested nodes even
+                # though the timestamp permalink is already present. The profile
+                # baseline is captured immediately before submit and tasks for one
+                # account are serialized, so one newly added own permalink is
+                # sufficient confirmation without risking an old-post match.
+                permalink = new_own_permalinks[0] if len(new_own_permalinks) == 1 else ""
         else:
             permalink = new_own_permalinks[0] if len(new_own_permalinks) == 1 else ""
         if baseline_known and permalink:
