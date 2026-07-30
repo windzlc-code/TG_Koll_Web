@@ -82,8 +82,14 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
             "我已閱讀並同意《用戶服務協議》和《隱私政策》",
             registration_markup,
         )
-        self.assertIn('type="button" data-register-next', details_page_markup)
-        self.assertIn('type="button" data-register-back', email_page_markup)
+        self.assertIn(
+            'class="submit-button auth-primary auth-registration-next" type="button" data-register-next',
+            details_page_markup,
+        )
+        self.assertIn(
+            'class="auth-guest-link auth-switch-button" type="button" data-register-back',
+            email_page_markup,
+        )
         self.assertIn('id="registerVerificationStatus"', registration_markup)
         self.assertLess(
             email_page_markup.index('id="registerVerificationStatus"'),
@@ -234,7 +240,8 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertIn(".auth-registration-form .auth-form-status:empty", self.styles)
         self.assertNotIn(".auth-registration-steps {", self.styles)
         self.assertNotIn(".auth-registration-step.is-active", self.styles)
-        self.assertIn(".auth-registration-actions {", self.styles)
+        self.assertNotIn(".auth-registration-actions {", self.styles)
+        self.assertNotIn(".auth-registration-back {", self.styles)
         profile_rule = self.styles[
             self.styles.index(".auth-registration-profile {"):
             self.styles.index(".auth-registration-profile .field")
@@ -243,7 +250,6 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         mobile = self.styles[self.styles.index("@media (max-width: 560px)"):]
         self.assertIn("grid-template-columns: 1fr;", mobile)
         self.assertIn("grid-template-columns: minmax(0, 1fr) 112px;", mobile)
-        self.assertIn("grid-template-columns: 112px minmax(0, 1fr);", mobile)
         self.assertIn(".auth-google-button:focus-visible", self.styles)
 
 

@@ -587,43 +587,6 @@ select:focus {
   margin-top: 11px;
 }
 
-.auth-registration-actions {
-  display: grid;
-  grid-template-columns: 146px minmax(0, 1fr);
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.auth-registration-actions .submit-button {
-  width: 100%;
-}
-
-.auth-registration-back {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 42px;
-  gap: 7px;
-  padding: 0 12px;
-  color: var(--ink-soft);
-  background: #fff;
-  border: 1px solid #bccbd4;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 900;
-}
-
-.auth-registration-back:hover {
-  color: var(--teal-dark);
-  border-color: var(--teal-dark);
-}
-
-.auth-registration-back:focus-visible {
-  outline: 2px solid var(--teal);
-  outline-offset: 2px;
-}
-
 .auth-email-action {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 132px;
@@ -1704,18 +1667,6 @@ body.modal-open {
 
   .auth-registration-next {
     margin-top: 7px;
-  }
-
-  .auth-registration-actions {
-    grid-template-columns: 112px minmax(0, 1fr);
-    gap: 7px;
-    margin-top: 7px;
-  }
-
-  .auth-registration-back {
-    min-height: 40px;
-    padding-inline: 8px;
-    font-size: 11px;
   }
 
   .auth-registration-form .form-note {

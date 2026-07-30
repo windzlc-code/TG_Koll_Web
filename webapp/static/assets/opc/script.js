@@ -19,7 +19,7 @@ function registrationPanelMarkup() {
               <label class="field auth-placeholder-field" for="registerCompany"><span class="field-label">公司 / 團隊（選填）</span><input id="registerCompany" name="company" autocomplete="organization" maxlength="120" placeholder="請輸入公司或團隊名稱" aria-describedby="registerCompanyError" /><small class="field-error" id="registerCompanyError"></small></label>
               <label class="field auth-placeholder-field" for="registerUseCase"><span class="field-label">預計使用情境</span><select id="registerUseCase" name="use_case" aria-describedby="registerUseCaseError" required><option value="">請選擇預計使用情境</option><option value="OPC導入">OPC 導入與三帳代營運</option><option value="算力計費">算力計費與預算規劃</option><option value="私域轉化">獨立站與私域轉化閉環</option><option value="企業多套">企業多套 OPC 批量部署</option></select><small class="field-error" id="registerUseCaseError"></small></label>
             </div>
-            <button class="submit-button auth-registration-next" type="button" data-register-next><span>下一步</span><span aria-hidden="true">→</span></button>
+            <button class="submit-button auth-primary auth-registration-next" type="button" data-register-next><span>下一步</span><span aria-hidden="true">→</span></button>
           </section>
           <section class="auth-registration-page" data-register-page="email" hidden>
             <div class="auth-email-action">
@@ -30,10 +30,8 @@ function registrationPanelMarkup() {
             <p class="auth-verification-status" id="registerVerificationStatus" role="status" aria-live="polite"></p>
             <label class="field auth-placeholder-field auth-verification-code" for="registerVerificationCode"><span class="field-label">信箱驗證碼</span><input id="registerVerificationCode" name="verification_code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="請輸入 6 位數字驗證碼" aria-describedby="registerVerificationCodeError" required /><small class="field-error" id="registerVerificationCodeError"></small></label>
             <label class="consent auth-registration-consent" for="registerConsent"><input id="registerConsent" name="consent" type="checkbox" required /><span>我已閱讀並同意《用戶服務協議》和《隱私政策》，並同意平台為提供帳號註冊、身分驗證及帳戶管理服務而處理必要的個人資訊。</span></label>
-            <div class="auth-registration-actions">
-              <button class="auth-registration-back" type="button" data-register-back><span aria-hidden="true">←</span><span>返回上一步</span></button>
-              <button class="submit-button" type="submit"><span>驗證並建立帳號</span><span aria-hidden="true">→</span></button>
-            </div>
+            <button class="submit-button" type="submit"><span>驗證並建立帳號</span><span aria-hidden="true">→</span></button>
+            <button class="auth-guest-link auth-switch-button" type="button" data-register-back>← 返回上一步</button>
           </section>
         </div>
         <p class="form-status auth-form-status" id="formStatus" role="status" aria-live="polite"></p>
