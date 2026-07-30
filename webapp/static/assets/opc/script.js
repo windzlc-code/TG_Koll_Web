@@ -7,26 +7,34 @@ function registrationPanelMarkup() {
     <section class="auth-register-view" data-auth-view="register" hidden>
       <p class="form-kicker">建立 Vecto 帳號</p>
       <h2 id="registerTitle">註冊 Vecto 帳號</h2>
-      <p class="auth-copy">驗證電子信箱並設定登入資料，即可建立帳號。</p>
+      <p class="auth-copy" data-register-copy>設定登入資料後，再驗證電子信箱即可建立帳號。</p>
       <form class="lead-form auth-registration-form" id="accountRegistrationForm" novalidate>
         <div class="auth-registration-panel">
-          <div class="auth-email-action">
-            <label class="field auth-placeholder-field" for="registerEmail"><span class="field-label">電子信箱</span><input id="registerEmail" name="email" type="email" autocomplete="email" maxlength="254" placeholder="name@example.com" aria-describedby="registerEmailError" required /><small class="field-error" id="registerEmailError"></small></label>
-            <button class="auth-verification-button" type="button" data-register-verification data-state="idle">發送驗證碼</button>
-          </div>
-          <p class="auth-verification-hint">驗證碼寄出後，請在有效時間內填寫並完成註冊。</p>
-          <p class="auth-verification-status" id="registerVerificationStatus" role="status" aria-live="polite"></p>
-          <label class="field auth-placeholder-field auth-verification-code" for="registerVerificationCode"><span class="field-label">信箱驗證碼</span><input id="registerVerificationCode" name="verification_code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="請輸入 6 位數字驗證碼" aria-describedby="registerVerificationCodeError" required /><small class="field-error" id="registerVerificationCodeError"></small></label>
-          <div class="application-grid auth-registration-profile">
-            <label class="field auth-placeholder-field" for="registerFullName"><span class="field-label">姓名</span><input id="registerFullName" name="full_name" autocomplete="name" minlength="2" maxlength="80" placeholder="請輸入姓名" aria-describedby="registerFullNameError" required /><small class="field-error" id="registerFullNameError"></small></label>
-            <label class="field auth-placeholder-field" for="registerUsername"><span class="field-label">用戶名</span><input id="registerUsername" name="username" autocomplete="username" maxlength="32" placeholder="3-32 位英文、數字或 ._-" aria-describedby="registerUsernameError" required /><small class="field-error" id="registerUsernameError"></small></label>
-            <label class="field auth-placeholder-field" for="registerPassword"><span class="field-label">登入密碼</span><span class="auth-password-field"><input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="至少 8 位" aria-describedby="registerPasswordError" required /><button class="auth-password-toggle" type="button" data-register-password-toggle data-target="registerPassword" aria-label="顯示登入密碼" title="顯示登入密碼" aria-controls="registerPassword" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span><small class="field-error" id="registerPasswordError"></small></label>
-            <label class="field auth-placeholder-field" for="registerPasswordConfirmation"><span class="field-label">再次確認密碼</span><span class="auth-password-field"><input id="registerPasswordConfirmation" name="password_confirmation" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="請再次輸入密碼" aria-describedby="registerPasswordConfirmationError" required /><button class="auth-password-toggle" type="button" data-register-password-toggle data-target="registerPasswordConfirmation" aria-label="顯示確認密碼" title="顯示確認密碼" aria-controls="registerPasswordConfirmation" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span><small class="field-error" id="registerPasswordConfirmationError"></small></label>
-            <label class="field auth-placeholder-field" for="registerCompany"><span class="field-label">公司 / 團隊（選填）</span><input id="registerCompany" name="company" autocomplete="organization" maxlength="120" placeholder="請輸入公司或團隊名稱" aria-describedby="registerCompanyError" /><small class="field-error" id="registerCompanyError"></small></label>
-            <label class="field auth-placeholder-field" for="registerUseCase"><span class="field-label">預計使用情境</span><select id="registerUseCase" name="use_case" aria-describedby="registerUseCaseError" required><option value="">請選擇預計使用情境</option><option value="OPC導入">OPC 導入與三帳代營運</option><option value="算力計費">算力計費與預算規劃</option><option value="私域轉化">獨立站與私域轉化閉環</option><option value="企業多套">企業多套 OPC 批量部署</option></select><small class="field-error" id="registerUseCaseError"></small></label>
-          </div>
-          <label class="consent auth-registration-consent" for="registerConsent"><input id="registerConsent" name="consent" type="checkbox" required /><span>我已閱讀並同意《用戶服務協議》和《隱私政策》，並同意平台為提供帳號註冊、身分驗證及帳戶管理服務而處理必要的個人資訊。</span></label>
-          <button class="submit-button" type="submit"><span>驗證並建立帳號</span><span aria-hidden="true">→</span></button>
+          <section class="auth-registration-page" data-register-page="details">
+            <div class="application-grid auth-registration-profile">
+              <label class="field auth-placeholder-field" for="registerFullName"><span class="field-label">姓名</span><input id="registerFullName" name="full_name" autocomplete="name" minlength="2" maxlength="80" placeholder="請輸入姓名" aria-describedby="registerFullNameError" required /><small class="field-error" id="registerFullNameError"></small></label>
+              <label class="field auth-placeholder-field" for="registerUsername"><span class="field-label">用戶名</span><input id="registerUsername" name="username" autocomplete="username" maxlength="32" placeholder="3-32 位英文、數字或 ._-" aria-describedby="registerUsernameError" required /><small class="field-error" id="registerUsernameError"></small></label>
+              <label class="field auth-placeholder-field" for="registerPassword"><span class="field-label">登入密碼</span><span class="auth-password-field"><input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="至少 8 位" aria-describedby="registerPasswordError" required /><button class="auth-password-toggle" type="button" data-register-password-toggle data-target="registerPassword" aria-label="顯示登入密碼" title="顯示登入密碼" aria-controls="registerPassword" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span><small class="field-error" id="registerPasswordError"></small></label>
+              <label class="field auth-placeholder-field" for="registerPasswordConfirmation"><span class="field-label">再次確認密碼</span><span class="auth-password-field"><input id="registerPasswordConfirmation" name="password_confirmation" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="請再次輸入密碼" aria-describedby="registerPasswordConfirmationError" required /><button class="auth-password-toggle" type="button" data-register-password-toggle data-target="registerPasswordConfirmation" aria-label="顯示確認密碼" title="顯示確認密碼" aria-controls="registerPasswordConfirmation" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span><small class="field-error" id="registerPasswordConfirmationError"></small></label>
+              <label class="field auth-placeholder-field" for="registerCompany"><span class="field-label">公司 / 團隊（選填）</span><input id="registerCompany" name="company" autocomplete="organization" maxlength="120" placeholder="請輸入公司或團隊名稱" aria-describedby="registerCompanyError" /><small class="field-error" id="registerCompanyError"></small></label>
+              <label class="field auth-placeholder-field" for="registerUseCase"><span class="field-label">預計使用情境</span><select id="registerUseCase" name="use_case" aria-describedby="registerUseCaseError" required><option value="">請選擇預計使用情境</option><option value="OPC導入">OPC 導入與三帳代營運</option><option value="算力計費">算力計費與預算規劃</option><option value="私域轉化">獨立站與私域轉化閉環</option><option value="企業多套">企業多套 OPC 批量部署</option></select><small class="field-error" id="registerUseCaseError"></small></label>
+            </div>
+            <button class="submit-button auth-registration-next" type="button" data-register-next><span>下一步</span><span aria-hidden="true">→</span></button>
+          </section>
+          <section class="auth-registration-page" data-register-page="email" hidden>
+            <div class="auth-email-action">
+              <label class="field auth-placeholder-field" for="registerEmail"><span class="field-label">電子信箱</span><input id="registerEmail" name="email" type="email" autocomplete="email" maxlength="254" placeholder="name@example.com" aria-describedby="registerEmailError" required /><small class="field-error" id="registerEmailError"></small></label>
+              <button class="auth-verification-button" type="button" data-register-verification data-state="idle">發送驗證碼</button>
+            </div>
+            <p class="auth-verification-hint">驗證碼寄出後，請在有效時間內填寫並完成註冊。</p>
+            <p class="auth-verification-status" id="registerVerificationStatus" role="status" aria-live="polite"></p>
+            <label class="field auth-placeholder-field auth-verification-code" for="registerVerificationCode"><span class="field-label">信箱驗證碼</span><input id="registerVerificationCode" name="verification_code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="請輸入 6 位數字驗證碼" aria-describedby="registerVerificationCodeError" required /><small class="field-error" id="registerVerificationCodeError"></small></label>
+            <label class="consent auth-registration-consent" for="registerConsent"><input id="registerConsent" name="consent" type="checkbox" required /><span>我已閱讀並同意《用戶服務協議》和《隱私政策》，並同意平台為提供帳號註冊、身分驗證及帳戶管理服務而處理必要的個人資訊。</span></label>
+            <div class="auth-registration-actions">
+              <button class="auth-registration-back" type="button" data-register-back><span aria-hidden="true">←</span><span>返回上一步</span></button>
+              <button class="submit-button" type="submit"><span>驗證並建立帳號</span><span aria-hidden="true">→</span></button>
+            </div>
+          </section>
         </div>
         <p class="form-status auth-form-status" id="formStatus" role="status" aria-live="polite"></p>
       </form>
@@ -59,6 +67,11 @@ const applicationForm = document.querySelector("#accountRegistrationForm");
 const applicationStatus = document.querySelector("#formStatus");
 const registerVerificationStatus = document.querySelector("#registerVerificationStatus");
 const registerVerificationButton = applicationForm?.querySelector("[data-register-verification]");
+const registerPages = [...(applicationForm?.querySelectorAll("[data-register-page]") || [])];
+const registerNextButton = applicationForm?.querySelector("[data-register-next]");
+const registerBackButton = applicationForm?.querySelector("[data-register-back]");
+const registerTitle = authDialog?.querySelector("#registerTitle");
+const registerCopy = authDialog?.querySelector("[data-register-copy]");
 const registerPasswordToggles = [...(applicationForm?.querySelectorAll("[data-register-password-toggle]") || [])];
 const loginForm = document.querySelector("#homeLoginForm");
 const loginStatus = document.querySelector("#loginStatus");
@@ -77,6 +90,7 @@ let loginReturnFocus = null;
 let registerChallengeId = "";
 let registerChallengeEmail = "";
 let registerResendTimer = 0;
+let registerPage = "details";
 let registrationPolicyEnabled = null;
 let googleLoginButton = null;
 
@@ -514,31 +528,73 @@ function validateRegistrationEmail() {
   return valid;
 }
 
-function validateRegistrationDetails() {
-  if (!applicationForm || !registerChallengeId) {
-    setAuthStatus(applicationStatus, "請先發送並取得信箱驗證碼。", "error");
-    return false;
-  }
+function validateRegistrationProfile({ focusInvalid = true } = {}) {
+  if (!applicationForm) return false;
   const fullName = applicationForm.elements.full_name.value.trim();
   const company = applicationForm.elements.company.value.trim();
   const useCase = applicationForm.elements.use_case.value.trim();
   const password = applicationForm.elements.password.value;
   const passwordConfirmation = applicationForm.elements.password_confirmation.value;
-  const passwordsMatch = password === passwordConfirmation && Boolean(passwordConfirmation);
   const checks = [
-    [applicationForm.elements.verification_code, /^\d{6}$/.test(applicationForm.elements.verification_code.value.trim()), "請輸入 6 位數字驗證碼。"],
-    [applicationForm.elements.full_name, fullName.length >= 2 && fullName.length <= 80, "姓名需為 2-80 個字元。"],
-    [applicationForm.elements.username, validRegistrationUsername(applicationForm.elements.username.value), "用戶名需為 3-32 位英文、數字或 ._-。"],
-    [applicationForm.elements.password, password.length >= 8 && password.length <= 256, "密碼需為 8-256 位。"],
-    [applicationForm.elements.password_confirmation, passwordsMatch, "兩次輸入的密碼不一致。"],
+    [applicationForm.elements.full_name, fullName.length >= 2 && fullName.length <= 80, "姓名需要 2-80 個字元。"],
+    [applicationForm.elements.username, validRegistrationUsername(applicationForm.elements.username.value), "用戶名需要 3-32 位英文、數字或 ._-。"],
+    [applicationForm.elements.password, password.length >= 8 && password.length <= 256, "密碼需要 8-256 位。"],
+    [applicationForm.elements.password_confirmation, password === passwordConfirmation && Boolean(passwordConfirmation), "兩次輸入的密碼不一致。"],
     [applicationForm.elements.company, company.length <= 120, "公司或團隊名稱不能超過 120 個字元。"],
     [applicationForm.elements.use_case, Boolean(useCase), "請選擇預計使用情境。"],
   ];
-  let valid = validateRegistrationEmail();
+  let firstInvalid = null;
   checks.forEach(([input, passed, message]) => {
     setFieldError(input, passed ? "" : message);
-    if (!passed) valid = false;
+    if (!passed && !firstInvalid) firstInvalid = input;
   });
+  if (firstInvalid && focusInvalid) firstInvalid.focus();
+  if (firstInvalid) {
+    setAuthStatus(applicationStatus, "請先完成帳號資料，再進入信箱驗證。", "error");
+    return false;
+  }
+  setAuthStatus(applicationStatus);
+  return true;
+}
+
+function setRegistrationPage(page, { focus = true } = {}) {
+  const nextPage = page === "email" ? "email" : "details";
+  registerPage = nextPage;
+  registerPages.forEach((panel) => {
+    panel.hidden = panel.dataset.registerPage !== nextPage;
+  });
+  if (registerTitle) {
+    registerTitle.textContent = nextPage === "email" ? "驗證電子信箱" : "註冊 Vecto 帳號";
+  }
+  if (registerCopy) {
+    registerCopy.textContent = nextPage === "email"
+      ? "輸入可正常收信的電子信箱，取得驗證碼後即可完成註冊。"
+      : "設定登入資料後，再驗證電子信箱即可建立帳號。";
+  }
+  if (!focus) return;
+  const target = nextPage === "details"
+    ? applicationForm?.elements?.full_name
+    : applicationForm?.elements?.email;
+  window.setTimeout(() => target?.focus(), 40);
+}
+
+function openRegistrationEmailPage() {
+  if (!validateRegistrationProfile()) return;
+  setRegistrationPage("email");
+}
+
+function validateRegistrationVerification() {
+  if (!applicationForm || !registerChallengeId) {
+    setAuthStatus(applicationStatus, "請先發送並取得信箱驗證碼。", "error");
+    return false;
+  }
+  const verificationCodeValid = /^\d{6}$/.test(applicationForm.elements.verification_code.value.trim());
+  let valid = validateRegistrationEmail();
+  setFieldError(
+    applicationForm.elements.verification_code,
+    verificationCodeValid ? "" : "請輸入 6 位數字驗證碼。",
+  );
+  if (!verificationCodeValid) valid = false;
   if (!applicationForm.elements.consent.checked) {
     applicationForm.elements.consent.closest(".consent")?.classList.add("is-invalid");
     setAuthStatus(applicationStatus, "請先同意提交資料以建立帳號。", "error");
@@ -616,8 +672,10 @@ function showRegistrationError(error, fallback, statusTarget = applicationStatus
   const message = registrationStatusMessage(error, fallback);
   const target = registrationErrorField(detail.code);
   if (target) {
+    const verificationField = ["email", "verification_code"].includes(target.name);
+    setRegistrationPage(verificationField ? "email" : "details", { focus: false });
     setFieldError(target, message);
-    target.focus();
+    window.setTimeout(() => target.focus(), 40);
   }
   setAuthStatus(statusTarget, message, "error");
 }
@@ -669,10 +727,11 @@ function openRegister(event) {
       : document.activeElement instanceof HTMLElement ? document.activeElement : null;
   }
   setAuthView("register");
+  setRegistrationPage("details", { focus: false });
   loginModal.classList.add("is-open");
   loginModal.setAttribute("aria-hidden", "false");
   document.body.classList.add("modal-open");
-  window.setTimeout(() => applicationForm?.elements?.email?.focus(), 40);
+  window.setTimeout(() => applicationForm?.elements?.full_name?.focus(), 40);
 }
 
 function openGoogleSetup() {
@@ -932,6 +991,8 @@ async function sendRegistrationVerification() {
 }
 
 registerVerificationButton?.addEventListener("click", sendRegistrationVerification);
+registerNextButton?.addEventListener("click", openRegistrationEmailPage);
+registerBackButton?.addEventListener("click", () => setRegistrationPage("details"));
 
 applicationForm?.elements?.email?.addEventListener("input", () => {
   setFieldError(applicationForm.elements.email, "");
@@ -947,7 +1008,15 @@ applicationForm?.elements?.email?.addEventListener("change", updateRegisterVerif
 applicationForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   setAuthStatus(applicationStatus);
-  if (!validateRegistrationDetails()) return;
+  if (registerPage !== "email") {
+    openRegistrationEmailPage();
+    return;
+  }
+  if (!validateRegistrationProfile({ focusInvalid: false })) {
+    setRegistrationPage("details");
+    return;
+  }
+  if (!validateRegistrationVerification()) return;
   const submit = applicationForm.querySelector("button[type='submit']");
   submit.disabled = true;
   try {
@@ -969,6 +1038,7 @@ applicationForm?.addEventListener("submit", async (event) => {
     await window.VectoSiteNavigation?.refreshPublicSession?.();
     applicationForm.reset();
     resetRegistrationChallenge({ keepEmail: false });
+    setRegistrationPage("details", { focus: false });
     closeLogin();
     await window.VectoSiteNavigation?.showAuthFeedback?.({
       kind: "success",

@@ -29,28 +29,37 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertIn('api("/api/auth/register"', self.script)
         self.assertNotIn('api("/api/auth/apply"', self.script)
 
-    def test_registration_shows_all_account_fields_on_one_page(self):
+    def test_registration_splits_account_details_and_email_verification_into_two_pages(self):
         registration_markup = self.script[
             self.script.index("function registrationPanelMarkup"):
             self.script.index("function googleSetupPanelMarkup")
         ]
         self.assertIn("auth-registration-panel", registration_markup)
-        self.assertNotIn("data-register-email-step", registration_markup)
-        self.assertNotIn("data-register-details", registration_markup)
+        self.assertIn('data-register-page="details"', registration_markup)
+        self.assertIn('data-register-page="email"', registration_markup)
+        self.assertNotIn("auth-registration-steps", registration_markup)
+        self.assertNotIn("data-register-step-indicator", registration_markup)
         self.assertNotIn("步驟 1 / 2", registration_markup)
         self.assertNotIn("步驟 2 / 2", registration_markup)
-        field_positions = [
-            registration_markup.index('name="email"'),
-            registration_markup.index('name="verification_code"'),
-            registration_markup.index('name="full_name"'),
-            registration_markup.index('name="username"'),
-            registration_markup.index('name="password"'),
-            registration_markup.index('name="password_confirmation"'),
-            registration_markup.index('name="company"'),
-            registration_markup.index('name="use_case"'),
-            registration_markup.index('name="consent"'),
-        ]
-        self.assertEqual(field_positions, sorted(field_positions))
+        details_start = registration_markup.index('data-register-page="details"')
+        email_start = registration_markup.index('data-register-page="email"')
+        details_page_markup = registration_markup[details_start:email_start]
+        email_page_markup = registration_markup[email_start:]
+        for field in (
+            "full_name",
+            "username",
+            "password",
+            "password_confirmation",
+            "company",
+            "use_case",
+        ):
+            with self.subTest(page="details", field=field):
+                self.assertIn(f'name="{field}"', details_page_markup)
+                self.assertNotIn(f'name="{field}"', email_page_markup)
+        for field in ("email", "verification_code", "consent"):
+            with self.subTest(page="email", field=field):
+                self.assertNotIn(f'name="{field}"', details_page_markup)
+                self.assertIn(f'name="{field}"', email_page_markup)
         self.assertNotIn('name="phone"', registration_markup)
         self.assertNotIn("field-requirement", registration_markup)
         self.assertNotIn("使用者名稱", registration_markup)
@@ -73,12 +82,22 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
             "我已閱讀並同意《用戶服務協議》和《隱私政策》",
             registration_markup,
         )
+        self.assertIn('type="button" data-register-next', details_page_markup)
+        self.assertIn('type="button" data-register-back', email_page_markup)
         self.assertIn('id="registerVerificationStatus"', registration_markup)
         self.assertLess(
-            registration_markup.index('id="registerVerificationStatus"'),
-            registration_markup.index('name="verification_code"'),
+            email_page_markup.index('id="registerVerificationStatus"'),
+            email_page_markup.index('name="verification_code"'),
         )
-        self.assertIn('button class="submit-button" type="submit"', registration_markup)
+        self.assertIn('button class="submit-button" type="submit"', email_page_markup)
+        self.assertIn('let registerPage = "details";', self.script)
+        self.assertIn("function validateRegistrationProfile(", self.script)
+        self.assertIn("function setRegistrationPage(page", self.script)
+        self.assertIn('registerNextButton?.addEventListener("click", openRegistrationEmailPage)', self.script)
+        self.assertIn('registerBackButton?.addEventListener("click"', self.script)
+        self.assertIn('if (registerPage !== "email")', self.script)
+        self.assertIn('setRegistrationPage(verificationField ? "email" : "details"', self.script)
+        self.assertIn("applicationForm?.elements?.full_name?.focus()", self.script)
 
     def test_registration_confirms_password_and_uses_svg_visibility_toggles(self):
         registration_markup = self.script[
@@ -89,7 +108,7 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertEqual(registration_markup.count("data-register-password-toggle"), 2)
         self.assertGreaterEqual(registration_markup.count('class="auth-eye-icon"'), 2)
         self.assertIn("password_confirmation.value", self.script)
-        self.assertIn("passwordsMatch", self.script)
+        self.assertIn("password === passwordConfirmation", self.script)
         self.assertIn("setupRegisterPasswordToggle", self.script)
 
     def test_registration_uses_one_verification_button_for_send_and_resend(self):
@@ -213,6 +232,9 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertIn("accent-color: var(--teal-dark);", self.styles)
         self.assertIn("box-shadow: none !important;", self.styles)
         self.assertIn(".auth-registration-form .auth-form-status:empty", self.styles)
+        self.assertNotIn(".auth-registration-steps {", self.styles)
+        self.assertNotIn(".auth-registration-step.is-active", self.styles)
+        self.assertIn(".auth-registration-actions {", self.styles)
         profile_rule = self.styles[
             self.styles.index(".auth-registration-profile {"):
             self.styles.index(".auth-registration-profile .field")
@@ -221,6 +243,7 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         mobile = self.styles[self.styles.index("@media (max-width: 560px)"):]
         self.assertIn("grid-template-columns: 1fr;", mobile)
         self.assertIn("grid-template-columns: minmax(0, 1fr) 112px;", mobile)
+        self.assertIn("grid-template-columns: 112px minmax(0, 1fr);", mobile)
         self.assertIn(".auth-google-button:focus-visible", self.styles)
 
 
