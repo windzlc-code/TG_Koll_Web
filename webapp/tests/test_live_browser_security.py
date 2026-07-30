@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import sqlite3
+import threading
 from http.cookies import SimpleCookie
 from types import SimpleNamespace
 from unittest import mock
@@ -18,7 +19,7 @@ from webapp import social_automation_api
 from webapp.auth import get_current_user
 
 
-def test_live_browser_view_uses_stable_non_threaded_decoder():
+def test_live_browser_view_uses_stable_low_latency_decoder_settings():
     session = live_browser.LiveBrowserSession(
         id="live-task-1",
         task_id="task-1",
@@ -38,8 +39,15 @@ def test_live_browser_view_uses_stable_non_threaded_decoder():
     query = parse_qs(urlsplit(public["view_path"]).query)
 
     assert query["enable_threading"] == ["0"]
-    assert query["enable_webp"] == ["1"]
+    assert query["enable_webp"] == ["0"]
     assert query["video_quality"] == ["1"]
+    assert query["quality"] == ["4"]
+    assert query["dynamic_quality_min"] == ["2"]
+    assert query["dynamic_quality_max"] == ["6"]
+    assert query["video_time"] == ["4"]
+    assert query["video_out_time"] == ["1"]
+    assert query["framerate"] == ["30"]
+    assert query["compression"] == ["1"]
 
 
 def test_live_browser_admin_ticket_preserves_subresource_auth_for_only_one_session():
@@ -398,12 +406,12 @@ def test_live_browser_task_summary_exposes_only_concrete_strategy_fields():
     assert warmup["task_type"] == "threads_warmup"
     assert warmup["strategy_label"] == "默认养号：浏览 + 低频点赞"
     assert warmup["fields"] == [
-        {"label": "浏览", "value": "30 次"},
-        {"label": "点赞最多", "value": "16 次"},
-        {"label": "评论最多", "value": "0 次"},
+        {"label": "浏览", "value": "0/30"},
+        {"label": "点赞", "value": "0/16"},
+        {"label": "评论", "value": "0/0"},
     ]
-    assert warmup["target"] == "养号｜低频点赞｜浏览30·赞16·评0"
-    assert warmup["detail"] == "养号 · 默认养号：浏览 + 低频点赞 · 浏览 30 次 · 点赞最多 16 次 · 评论最多 0 次"
+    assert warmup["target"] == "养号｜低频点赞｜浏览0/30·赞0/16·评0/0"
+    assert warmup["detail"] == "养号 · 默认养号：浏览 + 低频点赞 · 浏览 0/30 · 点赞 0/16 · 评论 0/0"
     assert len(warmup["target"]) < len(warmup["detail"])
     assert "must-not-leak" not in json.dumps(warmup, ensure_ascii=False)
 
@@ -425,6 +433,38 @@ def test_live_browser_task_summary_exposes_only_concrete_strategy_fields():
     assert publish["count"] == 3
     assert publish["target"] == "发布2/3｜春日穿搭"
     assert publish["detail"] == "发布内容 · 第 2/3 篇 · 春日穿搭"
+
+
+def test_live_browser_warmup_summary_uses_latest_dynamic_progress():
+    warmup = social_automation_api._live_browser_task_summary(
+        {
+            "id": "warmup-progress",
+            "task_type": "instagram_warmup",
+            "task_group_count": 1,
+            "payload_json": json.dumps(
+                {
+                    "strategy_id": "warmup_custom",
+                    "strategy_label": "自定义养号",
+                    "browse_limit": 8,
+                    "like_limit": 2,
+                    "max_comments": 1,
+                },
+                ensure_ascii=False,
+            ),
+            "latest_progress_json": json.dumps(
+                {"index": 3, "browse_limit": 8, "liked": 1, "commented": 0},
+                ensure_ascii=False,
+            ),
+        }
+    )
+
+    assert warmup["progress"] == {
+        "browse": {"current": 3, "target": 8},
+        "like": {"current": 1, "target": 2},
+        "comment": {"current": 0, "target": 1},
+    }
+    assert warmup["target"] == "养号｜自定义｜浏览3/8·赞1/2·评0/1"
+    assert warmup["detail"] == "养号 · 自定义养号 · 浏览 3/8 · 点赞 1/2 · 评论 0/1"
 
 
 def test_live_browser_sessions_count_only_the_current_plan_cycle_and_refresh_current_strategy():
@@ -460,6 +500,23 @@ def test_live_browser_sessions_count_only_the_current_plan_cycle_and_refresh_cur
         "INSERT INTO social_automation_tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
+    connection.execute(
+        """
+        CREATE TABLE social_automation_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id TEXT NOT NULL,
+          stage TEXT NOT NULL,
+          data_json TEXT NOT NULL DEFAULT '{}',
+          created_at INTEGER NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO social_automation_logs(task_id, stage, data_json, created_at)
+        VALUES ('current', 'threads_warmup', '{"index":7,"liked":0,"commented":0}', 1)
+        """
+    )
     connection.commit()
 
     @contextlib.contextmanager
@@ -483,7 +540,7 @@ def test_live_browser_sessions_count_only_the_current_plan_cycle_and_refresh_cur
 
     assert current[0]["task_summary"]["count"] == 3
     assert current[0]["task_summary"]["strategy_id"] == "browse_only"
-    assert current[0]["task_summary"]["target"] == "养号｜只浏览｜浏览30·赞0·评0"
+    assert current[0]["task_summary"]["target"] == "养号｜只浏览｜浏览7/30·赞0/0·评0/0"
 
     sessions[0]["task_id"] = "next"
     with (
@@ -935,6 +992,68 @@ def test_websocket_rfb_input_is_blocked_when_task_permission_is_denied():
     target.send.assert_not_awaited()
 
 
+def test_websocket_reuses_short_lived_input_checks_for_pointer_bursts():
+    pointer_event = bytes((5, 0, 0, 10, 0, 20))
+
+    class BrowserSocket:
+        headers = {}
+
+        def __init__(self):
+            self.messages = [
+                {"type": "websocket.receive", "bytes": pointer_event},
+                {"type": "websocket.receive", "bytes": pointer_event},
+                {"type": "websocket.disconnect"},
+            ]
+
+        async def accept(self, **_kwargs):
+            return None
+
+        async def receive(self):
+            return self.messages.pop(0)
+
+        async def close(self, **_kwargs):
+            return None
+
+    class TargetSocket:
+        def __init__(self):
+            self.send = mock.AsyncMock()
+
+        async def recv(self):
+            await asyncio.Event().wait()
+
+        async def close(self):
+            return None
+
+    browser = BrowserSocket()
+    target = TargetSocket()
+    with (
+        mock.patch.object(
+            live_browser,
+            "get_live_browser_session",
+            return_value=SimpleNamespace(web_port=6901, task_id="task-1"),
+        ),
+        mock.patch.dict(
+            "sys.modules",
+            {"websockets": SimpleNamespace(connect=mock.AsyncMock(return_value=target))},
+        ),
+        mock.patch.object(
+            social_automation_api,
+            "_live_browser_input_allowed",
+            new=mock.AsyncMock(return_value=True),
+        ) as input_allowed,
+        mock.patch.object(
+            social_automation_api,
+            "_live_browser_write_access",
+            new=mock.AsyncMock(return_value=True),
+        ) as write_access,
+    ):
+        asyncio.run(social_automation_api._proxy_live_browser_websocket(browser, "live_task-1"))
+
+    assert target.send.await_count == 2
+    input_allowed.assert_awaited_once_with("task-1")
+    write_access.assert_awaited_once()
+
+
 def test_websocket_auth_resolves_admin_workspace_query():
     websocket = SimpleNamespace(
         cookies={"admin_session_token": "admin-session"},
@@ -1173,6 +1292,8 @@ def test_expired_registry_session_uses_process_stopping_cleanup():
 
 def test_starting_session_is_visible_before_kasmvnc_is_ready(tmp_path, monkeypatch):
     monkeypatch.setenv("SOCIAL_AUTOMATION_KASMVNC_WWW_DIR", str(tmp_path))
+    monkeypatch.delenv("SOCIAL_AUTOMATION_LIVE_BROWSER_WIDTH", raising=False)
+    monkeypatch.delenv("SOCIAL_AUTOMATION_LIVE_BROWSER_HEIGHT", raising=False)
     session_dir = tmp_path / "session"
     session_dir.mkdir()
     process = mock.Mock()
@@ -1198,7 +1319,7 @@ def test_starting_session_is_visible_before_kasmvnc_is_ready(tmp_path, monkeypat
             mock.patch.object(live_browser, "_allocate_display_number", return_value=91),
             mock.patch.object(live_browser, "_allocate_tcp_port", return_value=6901),
             mock.patch.object(live_browser.tempfile, "mkdtemp", return_value=str(session_dir)),
-            mock.patch.object(live_browser.subprocess, "Popen", return_value=process),
+            mock.patch.object(live_browser.subprocess, "Popen", return_value=process) as popen,
             mock.patch.object(live_browser, "_capture_session_process_identities"),
             mock.patch.object(live_browser, "_wait_for_live_browser_ready", side_effect=wait_until_ready),
             mock.patch.object(live_browser, "_save_session_registry", side_effect=record_registry),
@@ -1212,9 +1333,119 @@ def test_starting_session_is_visible_before_kasmvnc_is_ready(tmp_path, monkeypat
         assert observed["status"] == "starting"
         assert saved_statuses == ["starting", "running"]
         assert session.status == "running"
+        assert (session.width, session.height) == (1600, 900)
+        assert "1600x900" in popen.call_args.args[0]
     finally:
         live_browser._SESSIONS.clear()
         session_dir.rmdir()
+
+
+def test_parallel_starts_reserve_distinct_displays_before_process_launch(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOCIAL_AUTOMATION_KASMVNC_WWW_DIR", str(tmp_path))
+    temp_barrier = threading.Barrier(2)
+    ready_barrier = threading.Barrier(2)
+    temp_counter = iter(range(2))
+    observed = []
+
+    def make_temp_dir(*_args, **_kwargs):
+        path = tmp_path / f"session-{next(temp_counter)}"
+        path.mkdir()
+        temp_barrier.wait(timeout=3)
+        return str(path)
+
+    def make_process(*_args, **_kwargs):
+        process = mock.Mock()
+        process.pid = 5000 + len(observed)
+        process.poll.return_value = None
+        return process
+
+    def wait_until_ready(session):
+        observed.append((session.id, session.display, live_browser._SESSIONS.get(session.id)))
+        ready_barrier.wait(timeout=3)
+
+    live_browser._SESSIONS.clear()
+    try:
+        with (
+            mock.patch.object(live_browser, "live_browser_enabled", return_value=True),
+            mock.patch.object(live_browser, "_stop_standby_sessions_for_account"),
+            mock.patch.object(live_browser, "_cleanup_orphaned_live_browser_processes"),
+            mock.patch.object(live_browser.shutil, "which", return_value="/usr/bin/Xvnc"),
+            mock.patch.object(live_browser, "_running_xvnc_displays", return_value=set()),
+            mock.patch.object(live_browser, "_allocate_tcp_port", side_effect=[6901, 6902]),
+            mock.patch.object(live_browser.tempfile, "mkdtemp", side_effect=make_temp_dir),
+            mock.patch.object(live_browser.subprocess, "Popen", side_effect=make_process),
+            mock.patch.object(live_browser, "_capture_session_process_identities"),
+            mock.patch.object(live_browser, "_wait_for_live_browser_ready", side_effect=wait_until_ready),
+            mock.patch.object(live_browser, "_save_session_registry"),
+        ):
+            results = []
+            errors = []
+
+            def start(index):
+                try:
+                    results.append(
+                        live_browser.start_live_browser_session(
+                            task={"id": f"task-{index}", "task_type": "check_login", "platform": "threads"},
+                            account={"id": f"account-{index}", "username": f"user-{index}", "platform": "threads"},
+                        )
+                    )
+                except Exception as exc:
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=start, args=(index,)) for index in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5)
+
+        assert errors == []
+        assert all(not thread.is_alive() for thread in threads)
+        assert {session.display for session in results} == {":90", ":91"}
+        assert all(registered is live_browser._SESSIONS[session_id] for session_id, _, registered in observed)
+    finally:
+        live_browser._SESSIONS.clear()
+
+
+def test_parallel_session_registry_writes_are_atomic_and_keep_both_sessions(tmp_path, monkeypatch):
+    registry_path = tmp_path / "live_browser_sessions.json"
+    monkeypatch.setattr(live_browser, "_registry_path", lambda: registry_path)
+    sessions = [
+        live_browser.LiveBrowserSession(
+            id=f"live-task-{index}",
+            task_id=f"task-{index}",
+            account_id=f"account-{index}",
+            account_username=f"user-{index}",
+            platform="threads" if index == 0 else "instagram",
+            task_type="check_login",
+            display=f":{90 + index}",
+            width=1600,
+            height=900,
+            vnc_port=6900 + index,
+            web_port=6900 + index,
+            started_at=1,
+        )
+        for index in range(2)
+    ]
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def save(session):
+        try:
+            barrier.wait(timeout=3)
+            live_browser._save_session_registry(session)
+        except Exception as exc:
+            errors.append(exc)
+
+    workers = [threading.Thread(target=save, args=(session,)) for session in sessions]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=5)
+
+    assert errors == []
+    assert all(not worker.is_alive() for worker in workers)
+    assert set(live_browser._read_registry()) == {"live-task-0", "live-task-1"}
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_cancel_without_memory_control_reclaims_registry_session():

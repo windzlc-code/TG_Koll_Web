@@ -960,6 +960,49 @@ class AccountGovernanceTests(unittest.TestCase):
         self.assertEqual(str(row["lifecycle_status"]), "pending")
         self.assertEqual(int(row["is_disabled"]), 1)
 
+    def test_batch_suspend_and_enable_round_trip_for_approved_customer(self):
+        admin, _ = self._admin_client()
+        customer = self._create_customer(admin, "batch-lifecycle-customer")
+        customer_id = int(customer["id"])
+
+        suspended = admin.post(
+            "/api/admin/users/batch-actions",
+            headers=self.ORIGIN_HEADERS,
+            json={
+                "action": "suspend",
+                "user_ids": [customer_id],
+                "reason": "Temporary account suspension test",
+            },
+        )
+        self.assertEqual(suspended.status_code, 200, suspended.text)
+        self.assertEqual(suspended.json()["success"], 1)
+        with db_module.db() as conn:
+            row = conn.execute(
+                "SELECT lifecycle_status, is_disabled FROM users WHERE id = ?",
+                (customer_id,),
+            ).fetchone()
+        self.assertEqual(str(row["lifecycle_status"]), "suspended")
+        self.assertEqual(int(row["is_disabled"]), 1)
+
+        enabled = admin.post(
+            "/api/admin/users/batch-actions",
+            headers=self.ORIGIN_HEADERS,
+            json={
+                "action": "enable",
+                "user_ids": [customer_id],
+                "reason": "Restore approved customer access",
+            },
+        )
+        self.assertEqual(enabled.status_code, 200, enabled.text)
+        self.assertEqual(enabled.json()["success"], 1)
+        with db_module.db() as conn:
+            row = conn.execute(
+                "SELECT lifecycle_status, is_disabled FROM users WHERE id = ?",
+                (customer_id,),
+            ).fetchone()
+        self.assertEqual(str(row["lifecycle_status"]), "active")
+        self.assertEqual(int(row["is_disabled"]), 0)
+
     def test_service_account_credential_is_returned_once_and_only_digest_is_stored(self):
         admin, _ = self._admin_client()
         secret, recovery_codes = self._enable_admin_mfa(admin)

@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from cryptography.fernet import Fernet
@@ -160,16 +161,19 @@ class AccountSettingsApiTests(unittest.TestCase):
         page = customer.get("/profile.html")
         self.assertEqual(page.status_code, 200, page.text)
         self.assertIn('meta name="admin-console-session" content="0"', page.text)
+        self.assertIn('id="profileAccountEmail"', page.text)
+        self.assertNotIn('profileAvatarRemove', page.text)
 
-        saved = customer.patch(
-            "/api/me/profile",
-            json={
-                "full_name": "Updated Profile",
-                "avatar_url": "",
-                "profile_signature": "Profile signature",
-                "profile_tags": "AI，营销, 品牌",
-            },
-        )
+        with mock.patch.dict(os.environ, {"COMMERCIAL_BILLING_ENABLED": "1"}):
+            saved = customer.patch(
+                "/api/me/profile",
+                json={
+                    "full_name": "Updated Profile",
+                    "avatar_url": "",
+                    "profile_signature": "Profile signature",
+                    "profile_tags": "AI，营销, 品牌",
+                },
+            )
         self.assertEqual(saved.status_code, 200, saved.text)
         self.assertEqual(saved.json()["profile"]["full_name"], "Updated Profile")
         self.assertEqual(saved.json()["profile"]["profile_signature"], "Profile signature")

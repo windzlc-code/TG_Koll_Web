@@ -805,8 +805,21 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertTrue(clicked)
         self.assertEqual(locator.click.call_count, 2)
-        locator.wait_for.assert_any_call(state="visible", timeout=5000)
+        locator.wait_for.assert_any_call(state="visible", timeout=1500)
         page.mouse.click.assert_not_called()
+
+    def test_human_click_does_not_use_unbounded_dom_fallback_after_retry_failure(self):
+        page = mock.Mock()
+        page.viewport_size = {"width": 1280, "height": 720}
+        locator = mock.Mock()
+        locator.bounding_box.return_value = {"x": 100, "y": 200, "width": 120, "height": 40}
+        locator.click.side_effect = RuntimeError("target detached")
+
+        with mock.patch.object(runner, "_sleep_between"):
+            clicked = runner._human_click(page, locator, _Logger(), "safe_social_click")
+
+        self.assertFalse(clicked)
+        locator.evaluate.assert_not_called()
 
     def test_live_browser_viewport_records_actual_geometry_without_resizing_page(self):
         page = mock.Mock()
@@ -830,6 +843,31 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         page.set_viewport_size.assert_not_called()
         self.assertEqual(control["live_browser_viewport_width"], 1600)
         self.assertEqual(control["live_browser_viewport_height"], 810)
+
+    def test_live_browser_geometry_matches_historical_framebuffer(self):
+        session = mock.Mock(width=1600, height=900)
+
+        config = runner._live_browser_geometry_config(session)
+
+        self.assertEqual(
+            config,
+            {
+                "screen.width": 1600,
+                "screen.height": 900,
+                "screen.availWidth": 1600,
+                "screen.availHeight": 839,
+                "window.innerWidth": 1600,
+                "window.innerHeight": 839,
+                "window.outerWidth": 1600,
+                "window.outerHeight": 900,
+                "window.screenX": 0,
+                "window.screenY": 0,
+            },
+        )
+        self.assertEqual(
+            runner._live_browser_viewport_size(session),
+            {"width": 1600, "height": 839},
+        )
 
     def test_threads_feed_text_with_challenge_word_is_not_verification(self):
         page = _ThreadsShellPage(
@@ -1852,6 +1890,39 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertFalse(submitted)
         self.assertNotIn("Enter", page.keyboard.pressed)
         self.assertTrue(ack_event.is_set())
+
+    def test_instagram_remembered_profile_continues_without_retyping_credentials(self):
+        page = _Page(url="https://www.instagram.com/accounts/login/")
+        with (
+            mock.patch.object(
+                runner,
+                "_page_body_text_lower",
+                return_value="windzlc123 continue use another profile create new account",
+            ),
+            mock.patch.object(runner, "_click_text_button", return_value=True) as click,
+            mock.patch.object(runner, "_visible_first") as visible_first,
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_screenshot", return_value="remembered.png"),
+        ):
+            submitted = runner._auto_submit_login_form(
+                page,
+                "instagram",
+                {"login_username": "windzlc123", "login_password": "saved-password"},
+                _Logger(),
+                {"id": "remembered-profile-login"},
+                Path("."),
+            )
+
+        self.assertTrue(submitted)
+        click.assert_called_once_with(
+            page,
+            mock.ANY,
+            ["Continue", "继续"],
+            "instagram_remembered_profile_continue",
+            abort_if=mock.ANY,
+        )
+        visible_first.assert_not_called()
+        self.assertEqual(page.keyboard.typed, [])
 
     def test_system_manual_takeover_notifies_persistence_callback(self):
         event = threading.Event()

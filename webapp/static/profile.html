@@ -38,12 +38,30 @@
           <button id="profileAvatarButton" class="profile-avatar-picker" type="button" aria-label="上传新头像" aria-controls="profileAvatarFile" data-profile-i18n-aria-label="uploadAvatar">
             <span id="profileAvatarPreview" class="profile-avatar-preview" aria-hidden="true">V</span>
             <span class="profile-avatar-add" aria-hidden="true">
-              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+              <svg class="profile-avatar-icon-add" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+              <svg class="profile-avatar-icon-replace" viewBox="0 0 24 24" hidden><path d="M14.5 4.5 19.5 9.5M5 19l1.5-5.5L15.8 4.2a1.8 1.8 0 0 1 2.5 0l1.5 1.5a1.8 1.8 0 0 1 0 2.5L10.5 17.5 5 19Z"></path></svg>
             </span>
           </button>
           <input id="profileAvatarFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
           <p data-profile-i18n="avatarHelp">点击头像右下角的加号上传，最大 512KB。</p>
-          <button id="profileAvatarRemove" class="profile-avatar-remove" type="button" hidden data-profile-i18n="removeAvatar">移除头像</button>
+          <div class="profile-account-grid" aria-label="只读账号信息" data-profile-i18n-aria-label="readonlyAccountInfo">
+            <div>
+              <span data-profile-i18n="loginUsername">登录用户名</span>
+              <strong id="profileUsername">-</strong>
+            </div>
+            <div>
+              <span data-profile-i18n="accountId">账号 ID</span>
+              <strong id="profileAccountId">-</strong>
+            </div>
+            <div>
+              <span data-profile-i18n="accountType">账号类型</span>
+              <strong id="profileAccountRole">-</strong>
+            </div>
+            <div>
+              <span data-profile-i18n="email">邮箱</span>
+              <strong id="profileAccountEmail">-</strong>
+            </div>
+          </div>
         </div>
 
         <div class="profile-fields">
@@ -85,22 +103,11 @@
             </label>
           </div>
 
-          <div class="profile-account-grid" aria-label="只读账号信息" data-profile-i18n-aria-label="readonlyAccountInfo">
-            <div>
-              <span data-profile-i18n="loginUsername">登录用户名</span>
-              <strong id="profileUsername">-</strong>
-            </div>
-            <div>
-              <span data-profile-i18n="accountId">账号 ID</span>
-              <strong id="profileAccountId">-</strong>
-            </div>
-            <div>
-              <span data-profile-i18n="accountType">账号类型</span>
-              <strong id="profileAccountRole">-</strong>
-            </div>
-          </div>
-
           <div class="profile-actions">
+            <button id="profileChangePassword" class="profile-password-action" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v2"></path></svg>
+              <span data-profile-i18n="changePassword">修改密码</span>
+            </button>
             <button id="profileSave" class="profile-save" type="submit" data-profile-i18n="saveProfile">保存个人资料</button>
             <span id="profileStatus" class="profile-status" role="status" aria-live="polite"></span>
           </div>

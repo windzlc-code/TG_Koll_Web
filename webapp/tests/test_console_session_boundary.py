@@ -396,6 +396,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("请先绑定人设后再打开登录。", create_task)
         self.assertGreaterEqual(self.source.count("openLiveBrowserTaskView(activeTask.id)"), 3)
 
+    def test_open_login_browser_exit_refreshes_the_terminal_task_state(self):
+        refresh_source = self._javascript_function_source(self.source, "refreshLiveBrowserSessionsSoon")
+        self.assertIn("await refreshSocialTaskState(targetTaskId)", refresh_source)
+        self.assertIn("if (targetTaskId && !matched && observedTarget)", refresh_source)
+        self.assertIn("if (!taskFinished && attempt < attempts)", refresh_source)
+
     def test_console_header_boundary_has_no_drop_shadow(self):
         start = self.site_nav_styles.index('.site-header.is-scrolled,')
         end = self.site_nav_styles.index('}', start)
@@ -844,6 +850,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("grid-template-columns: minmax(0, 1fr);", desktop_rule)
         self.assertIn(wide_rule, wide_container)
         self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", wide_rule)
+        self.assertIn("align-items: stretch;", wide_rule)
         self.assertIn(".live-browser-card-head", compact_container)
         self.assertIn("flex-direction: column;", compact_container)
         self.assertIn(".live-browser-card-actions", compact_container)
@@ -980,6 +987,29 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("live-browser-card-identity > [data-live-browser-meta]", mobile_styles)
         self.assertIn("live-browser-mobile-summary", self.source)
 
+    def test_expanded_desktop_browser_header_keeps_translucent_true_centerline(self):
+        expanded_head = self._css_block(
+            ".live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-head {"
+        )
+        expanded_content_marker = (
+            ".live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-card-identity,"
+        )
+        expanded_content_start = self.styles.index(expanded_content_marker)
+        expanded_content = self._css_block(expanded_content_marker, expanded_content_start)
+        expanded_task = self._css_block(
+            ".live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-task-summary {",
+            expanded_content_start + len(expanded_content),
+        )
+
+        self.assertIn("top: 0;", expanded_head)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) auto;", expanded_head)
+        self.assertIn("background: rgb(5 12 13 / 74%);", expanded_head)
+        self.assertIn("align-items: center;", expanded_content)
+        self.assertIn("position: absolute;", expanded_task)
+        self.assertIn("top: 50%;", expanded_task)
+        self.assertIn("left: 50%;", expanded_task)
+        self.assertIn("transform: translate(-50%, -50%);", expanded_task)
+
     def test_mobile_persona_hot_fetch_controls_use_two_clean_rows(self):
         mobile_toolbar = self._css_block(
             ".console-page .persona-detail .persona-hot-fetch-toolbar {"
@@ -1076,13 +1106,126 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
         self.assertIn('[data-live-browser-modal-overlay-toggle], [data-live-browser-controls-toggle]', self.source)
         self.assertIn('class="live-browser-lock" data-live-browser-controls-toggle', self.source)
+        self.assertIn('data-live-browser-mobile-controls', self.source)
+        self.assertIn("isMobileLiveBrowserViewport()", toggle)
         self.assertIn("is-live-browser-controls-visible", toggle)
         self.assertNotIn("vecto-live-browser-toggle-console-frame", self.source)
-        self.assertIn("card.classList.remove(\"is-live-browser-controls-visible\");", opening)
+        self.assertIn("setLiveBrowserModalControlsVisible(card, !isMobileLiveBrowserViewport())", opening)
+
+    def test_mobile_expanded_browser_has_persistent_page_control_launcher(self):
+        launcher = self._css_block(".live-browser-mobile-controls-launcher {")
+        mobile_start = self.styles.index("@media (max-width: 760px)", self.styles.index("/* Expanded preview is media-first:"))
+        mobile_launcher = self._css_block(".live-browser-mobile-controls-launcher {", mobile_start)
+        desktop_start = self.styles.index("@media (min-width: 761px)", self.styles.index("/* Expanded preview is media-first:"))
+        desktop_controls = self._css_block(
+            ".live-browser-card.is-live-browser-modal .live-browser-card-head,",
+            desktop_start,
+        )
+
+        self.assertIn("display: none;", launcher)
+        self.assertIn("display: inline-flex;", mobile_launcher)
+        self.assertIn("pointer-events: auto;", mobile_launcher)
+        self.assertIn("opacity: 1;", desktop_controls)
+        self.assertIn("pointer-events: auto;", desktop_controls)
+        self.assertIn("visibility: visible;", desktop_controls)
+
+    def test_desktop_expanded_browser_chrome_reserves_space_outside_remote_canvas(self):
+        desktop_start = self.styles.index(
+            "@media (min-width: 761px)",
+            self.styles.index("/* Expanded preview is media-first:"),
+        )
+        desktop_card = self._css_block(
+            ".console-page [data-live-browser-card].live-browser-card.is-live-browser-modal {",
+            desktop_start,
+        )
+        desktop_head = self._css_block(
+            ".live-browser-card.is-live-browser-modal .live-browser-card-head,",
+            desktop_start,
+        )
+        desktop_frame = self._css_block(
+            ".live-browser-card.is-live-browser-modal .live-browser-frame,",
+            desktop_start,
+        )
+        desktop_note = self._css_block(
+            ".live-browser-card.is-live-browser-modal .live-browser-interaction-note,",
+            desktop_start,
+        )
+
+        self.assertIn("grid-template-rows: 48px minmax(0, 1fr) 32px;", desktop_card)
+        self.assertIn("position: relative;", desktop_head)
+        self.assertIn("grid-row: 1;", desktop_head)
+        self.assertIn("grid-row: 2;", desktop_frame)
+        self.assertIn("position: relative;", desktop_note)
+        self.assertIn("grid-row: 3;", desktop_note)
+        self.assertNotIn("border:", desktop_card)
+        self.assertNotIn("background:", desktop_card)
+        self.assertNotIn("padding:", desktop_head)
+        self.assertNotIn("background:", desktop_head)
+        self.assertNotIn("padding:", desktop_note)
+        self.assertNotIn("background:", desktop_note)
+
+    def test_mobile_page_control_sits_beside_account_tag_with_translucent_surface(self):
+        session_markup = self._function_source("renderLiveBrowserSession")
+        head_start = session_markup.index('<div class="live-browser-card-head">')
+        identity_start = session_markup.index('<div class="live-browser-card-identity">')
+        identity_end = session_markup.index("</div>", identity_start)
+        launcher_position = session_markup.index("data-live-browser-mobile-controls", identity_start)
+        task_summary_position = session_markup.index('<div class="live-browser-task-summary"', launcher_position)
+        self.assertGreater(launcher_position, identity_end)
+        self.assertGreater(launcher_position, head_start)
+        self.assertLess(launcher_position, task_summary_position)
+
+        mobile_start = self.styles.index(
+            "@media (max-width: 760px)",
+            self.styles.index("/* Mobile browser monitor:"),
+        )
+        mobile_launcher = self._css_block(
+            ".live-browser-card.is-live-browser-modal .live-browser-mobile-controls-launcher {",
+            mobile_start,
+        )
+        compact_identity = self._css_block(
+            ".live-browser-card.is-live-browser-modal:not(.is-live-browser-controls-visible) .live-browser-card-identity {",
+            mobile_start,
+        )
+
+        self.assertIn("position: absolute;", mobile_launcher)
+        self.assertIn("background: rgb(5 12 13 / 58%);", mobile_launcher)
+        self.assertIn("display: none;", compact_identity)
+
+    def test_live_browser_fallback_url_uses_same_low_latency_decoder_settings(self):
+        fallback_url = self._function_source("liveBrowserSessionUrl")
+
+        self.assertIn('quality: "4"', fallback_url)
+        self.assertIn('dynamic_quality_min: "2"', fallback_url)
+        self.assertIn('dynamic_quality_max: "6"', fallback_url)
+        self.assertIn('jpeg_video_quality: "4"', fallback_url)
+        self.assertIn('webp_video_quality: "-1"', fallback_url)
+        self.assertIn('video_time: "4"', fallback_url)
+        self.assertIn('framerate: "30"', fallback_url)
+        self.assertIn('compression: "1"', fallback_url)
+        self.assertIn('enable_webp: "0"', fallback_url)
+        self.assertIn('enable_threading: "0"', fallback_url)
+
+    def test_expanded_live_browser_restores_original_full_bleed_frame(self):
+        expanded_start = self.styles.index("/* Expanded preview is media-first:")
+        frame_start = self.styles.index(
+            ".live-browser-card.is-live-browser-modal .live-browser-frame,",
+            expanded_start,
+        )
+        frame_rule = self._css_block(
+            ".live-browser-card.is-live-browser-modal .live-browser-frame,",
+            frame_start,
+        )
+
+        self.assertIn("width: 100%;", frame_rule)
+        self.assertIn("height: 100%;", frame_rule)
+        self.assertIn("max-height: none;", frame_rule)
+        self.assertIn("aspect-ratio: auto;", frame_rule)
 
     def test_live_browser_controls_keep_visible_layout_until_exit_fade_finishes(self):
         cancel_controls_exit = self._function_source("cancelLiveBrowserControlsExit")
         set_controls_visible = self._function_source("setLiveBrowserModalControlsVisible")
+        sync_mobile_launcher = self._function_source("syncLiveBrowserMobileControlsLauncher")
         self.assertIn("const LIVE_BROWSER_CONTROLS_EXIT_MS = 220;", self.source)
         harness = textwrap.dedent(
             f"""
@@ -1120,6 +1263,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             }}
 
             {cancel_controls_exit}
+            {sync_mobile_launcher}
             {set_controls_visible}
             (async () => {{
 
@@ -1470,7 +1614,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("refreshLiveBrowserSessionsOnly", browser_refresh)
         self.assertIn("liveBrowserRefreshTokens[refreshKey]", browser_refresh)
         self.assertIn('matched.login_mode = "takeover_timeout"', browser_refresh)
-        self.assertIn("observedTarget || taskFinished", browser_refresh)
+        self.assertIn("targetTaskId && !matched && observedTarget", browser_refresh)
+        self.assertIn("await refreshSocialTaskState(targetTaskId)", browser_refresh)
+        self.assertIn("targetTaskId && !matched && taskFinished", browser_refresh)
         self.assertIn('["success", "failed", "cancelled"]', prompt_suppression)
         self.assertIn("人工接管请求已提交", interaction_hint)
         self.assertIn("到达后将自动开放操作", interaction_hint)
@@ -1484,9 +1630,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const callbacks = [];
             const window = {{ setTimeout(callback) {{ callbacks.push(callback); }} }};
             async function refreshLiveBrowserSessionsOnly() {{}}
+            async function refreshSocialTaskState(taskId) {{ return {{ id: taskId, status: "success" }}; }}
             function liveBrowserLoginMode(session) {{ return session.login_mode || "automatic"; }}
             function liveBrowserTaskStatus(session) {{ return session.task_status || session.status || "running"; }}
             function renderLiveBrowserSessions() {{}}
+            function renderSocialAccounts() {{}}
+            function isPersonaWorkspaceModule() {{ return false; }}
+            function renderPersonaDetail() {{}}
             function showMsg() {{}}
             {self._function_source("refreshLiveBrowserSessionsSoon")}
 
@@ -2282,10 +2432,23 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('state.accountClipboardText = "";', clear_tenant)
         self.assertNotIn("showMsg", paste)
 
+    def test_account_pool_copy_success_temporarily_replaces_the_copy_icon(self):
+        success = self._function_source("showAccountPoolCardCopySuccess")
+        bind_events = self._function_source("bindEvents")
+
+        self.assertIn('classList.add("is-copy-success")', success)
+        self.assertIn("window.setTimeout", success)
+        self.assertIn("1800", success)
+        self.assertIn('classList.remove("is-copy-success")', success)
+        self.assertIn("renderClipboardIcon()", success)
+        self.assertIn("renderAutomationPlanCheckIcon()", success)
+        self.assertIn(".then(() => showAccountPoolCardCopySuccess(accountCopyCard))", bind_events)
+
     def test_account_card_platform_logo_and_compact_status_copy_have_styles(self):
         self.assertIn(".account-pool-card-platform", self.styles)
         self.assertIn(".account-pool-card-platform > svg", self.styles)
         self.assertIn(".account-pool-card-copy-button", self.styles)
+        self.assertIn(".account-pool-card-copy-button.is-copy-success", self.styles)
         self.assertIn(".account-pool-create-modal-head-actions", self.styles)
         self.assertIn(".account-pool-paste-card-button", self.styles)
         self.assertIn(".account-pool-card .account-pool-card-flags .status", self.styles)

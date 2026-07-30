@@ -21,6 +21,25 @@ class AccountDrawerLoadingTests(unittest.TestCase):
         self.assertIn('node.setAttribute("aria-busy", identityLoading ? "true" : "false");', NAVIGATION)
         self.assertIn('identityLoading ? labels.billingLoading : labels.profileSignatureEmpty', NAVIGATION)
 
+    def test_drawer_keeps_email_with_the_personal_profile_fields(self):
+        self.assertIn('data-site-account-email', NAVIGATION)
+        self.assertIn('profileEmailEmpty', NAVIGATION)
+        self.assertIn('.site-account-profile-email {', STYLES)
+
+    def test_header_avatar_has_its_own_circular_clip(self):
+        header_avatar = STYLES.split('.site-user .site-user-avatar {', 1)[1].split('}', 1)[0]
+        self.assertIn('width: 20px;', header_avatar)
+        self.assertIn('height: 20px;', header_avatar)
+        self.assertIn('border-radius: 50%;', header_avatar)
+        self.assertIn('overflow: hidden;', header_avatar)
+        self.assertIn('.site-user-avatar.has-avatar {', STYLES)
+        self.assertIn('node.classList.toggle("has-avatar", Boolean(avatarUrl));', NAVIGATION)
+
+    def test_account_drawer_avatar_clips_uploaded_images_to_its_existing_circle(self):
+        drawer_avatar = STYLES.split('.site-account-avatar {', 1)[1].split('}', 1)[0]
+        self.assertIn('border-radius: 50%;', drawer_avatar)
+        self.assertIn('overflow: hidden;', drawer_avatar)
+
     def test_billing_metrics_use_one_svg_divided_information_board(self):
         self.assertEqual(CONSOLE.count('class="site-account-billing-icon"'), 6)
         self.assertEqual(NAVIGATION.count('class="site-account-billing-icon"'), 6)

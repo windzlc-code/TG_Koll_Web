@@ -11,6 +11,7 @@ const PERSONA_POSTS_CACHE_PREFIX = "wk-persona-posts-cache";
 const TASK_QUEUE_PERSONA_PAGE_SIZE_KEY = "wk-task-queue-persona-page-size";
 const TASK_QUEUE_REGULAR_PAGE_SIZE_KEY = "wk-task-queue-regular-page-size";
 const LIVE_BROWSER_LAYOUT_KEY = "wk-live-browser-layout";
+const LIVE_BROWSER_MOBILE_QUERY = "(max-width: 760px)";
 const SELECTED_PERSONA_STORAGE_KEY = "wk-selected-persona";
 const MOBILE_NAV_QUERY = "(max-width: 980px)";
 const REORDER_LONG_PRESS_MS = 420;
@@ -5502,6 +5503,7 @@ function personaExecutionAccountDetails(persona) {
   return {
     accountLabel,
     hasExecutionAccount: Boolean(account?.id || profileName || handle),
+    platform,
     platformLabel: platform ? platformLabel(platform) : "",
   };
 }
@@ -5513,11 +5515,22 @@ function personaExecutionAccountLabel(persona) {
 }
 
 function renderPersonaExecutionAccountBadge(persona) {
-  const { accountLabel, hasExecutionAccount, platformLabel: executionPlatform } = personaExecutionAccountDetails(persona);
-  const label = hasExecutionAccount && executionPlatform
-    ? `平台：${executionPlatform} · 账号：${accountLabel}`
-    : `账号：${accountLabel}`;
-  return `<span class="persona-status-chip ${hasExecutionAccount ? "is-ready" : "is-warning"}">${esc(label)}</span>`;
+  const { accountLabel, hasExecutionAccount, platform } = personaExecutionAccountDetails(persona);
+  const platforms = Array.from(new Set(
+    personaAccounts(persona)
+      .filter(isPublishPlatformAccount)
+      .map((account) => String(account?.platform || "").trim().toLowerCase())
+      .filter(Boolean),
+  ));
+  if (!platforms.length && platform) platforms.push(platform);
+  const platformLogos = platforms.length
+    ? `<span class="persona-execution-platform-logos" aria-label="已绑定平台">${platforms.map((item) => {
+      const label = platformLabel(item);
+      const isCurrent = item === platform;
+      return `<span class="persona-execution-platform-logo${isCurrent ? " is-current" : ""}" title="${esc(label)}" aria-label="${esc(label)}">${renderAccountPoolPlatformIcon(item)}</span>`;
+    }).join("")}</span>`
+    : "";
+  return `<span class="persona-status-chip ${hasExecutionAccount ? "is-ready" : "is-warning"}">${platformLogos}<span>账号：${esc(accountLabel)}</span></span>`;
 }
 
 function personaSummaryCounts(persona) {
@@ -9246,6 +9259,7 @@ async function bindPoolAccountToPersona(accountId = "", persona = selectedPerson
   const cleanAccountId = String(accountId || "").trim();
   const personaId = String(persona?.id || "").trim();
   const normalizedPlatform = String(platform || "").trim().toLowerCase();
+  const previousAccount = selectedPersonaAutomationAccount(persona, normalizedPlatform);
   const account = personaAccountPoolCandidates(normalizedPlatform, persona)
     .find((item) => String(item?.id || "") === cleanAccountId);
   if (!personaId || !account) throw new Error("该账号不存在或平台不匹配，请刷新后重新选择。");
@@ -9261,7 +9275,13 @@ async function bindPoolAccountToPersona(accountId = "", persona = selectedPerson
     await loadSocial({ force: true });
     renderPersonaDetail();
     renderConfirmSummary();
-    showMsg("commandMsg", "账号已添加到当前人设。", true);
+    showMsg(
+      "commandMsg",
+      previousAccount && String(previousAccount.id || "") !== cleanAccountId
+        ? `当前人设已更换为账号：${accountDisplayName(account)}。`
+        : `账号已绑定到当前人设：${accountDisplayName(account)}。`,
+      true,
+    );
     return true;
   } finally {
     state.accountPoolBinding = false;
@@ -9281,12 +9301,14 @@ async function openPersonaAccountPoolPickerModal(persona = selectedPersona(), pl
   // background instead of blocking the modal on the full social-data fan-out.
   void loadSocial({ render: false, force: true }).catch(() => {});
   const candidates = personaAccountPoolCandidates(normalizedPlatform, persona);
-  const emptyMessage = "请先在账号池添加其他账号。";
+  const currentAccount = selectedPersonaAutomationAccount(persona, normalizedPlatform);
+  const isReplacing = Boolean(currentAccount);
+  const emptyMessage = isReplacing ? "请先在账号池添加其他账号后再更换。" : "请先在账号池添加可绑定账号。";
   const request = openConsoleModal({
-    title: "从账号池添加账号",
+    title: isReplacing ? "更换当前账号" : "从账号池绑定账号",
     contentHtml: `<div class="persona-account-picker">
-      <p class="persona-account-picker-intro">${renderPersonaAccountBindingIcon("bind")}<span>选择其他账号进行绑定或替换。</span></p>
-      <div class="persona-account-picker-list">${candidates.length ? candidates.map((item) => renderPersonaAccountPoolPickerCard(item, persona)).join("") : `<div class="empty-state persona-account-picker-empty-state">${renderPersonaAccountBindingIcon("replace")}<strong>暂无可更换账号</strong><span>${esc(emptyMessage)}</span></div>`}</div>
+      <p class="persona-account-picker-intro">${renderPersonaAccountBindingIcon(isReplacing ? "replace" : "bind")}<span>${isReplacing ? "选择账号后将替换当前人设的绑定账号。" : "选择账号后将绑定到当前人设。"}</span></p>
+      <div class="persona-account-picker-list">${candidates.length ? candidates.map((item) => renderPersonaAccountPoolPickerCard(item, persona)).join("") : `<div class="empty-state persona-account-picker-empty-state">${renderPersonaAccountBindingIcon(isReplacing ? "replace" : "bind")}<strong>${isReplacing ? "暂无可更换账号" : "暂无可绑定账号"}</strong><span>${esc(emptyMessage)}</span></div>`}</div>
     </div>`,
     showCancel: false,
     showConfirm: false,
@@ -9567,6 +9589,29 @@ function renderClipboardIcon() {
     <rect x="8" y="8" width="11" height="12" rx="2"></rect>
     <path d="M16 8V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h1"></path>
   </svg>`;
+}
+
+const accountPoolCardCopyTimers = new WeakMap();
+
+function showAccountPoolCardCopySuccess(button) {
+  if (!button) return;
+  const pendingTimer = accountPoolCardCopyTimers.get(button);
+  if (pendingTimer) window.clearTimeout(pendingTimer);
+
+  button.classList.add("is-copy-success");
+  button.setAttribute("title", "已复制账号字段");
+  button.setAttribute("aria-label", "已复制账号字段");
+  button.innerHTML = renderAutomationPlanCheckIcon();
+
+  const restoreTimer = window.setTimeout(() => {
+    if (!button.isConnected) return;
+    button.classList.remove("is-copy-success");
+    button.setAttribute("title", "复制账号字段");
+    button.setAttribute("aria-label", "复制账号字段");
+    button.innerHTML = renderClipboardIcon();
+    accountPoolCardCopyTimers.delete(button);
+  }, 1800);
+  accountPoolCardCopyTimers.set(button, restoreTimer);
 }
 
 function renderMoreIcon() {
@@ -22224,6 +22269,18 @@ async function refreshLiveBrowserSessionsOnly() {
   return request;
 }
 
+async function refreshSocialTaskState(taskId = "") {
+  const cleanTaskId = String(taskId || "").trim();
+  if (!cleanTaskId) return null;
+  const data = await api(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(cleanTaskId)}`)
+    .catch(() => null);
+  const task = data?.task || null;
+  if (!task?.id) return null;
+  mergeSocialTaskState(task);
+  syncSocialTaskToast(task, { force: true });
+  return task;
+}
+
 function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 500) {
   const token = `${Date.now()}:${Math.random()}`;
   const targetTaskId = String(taskId || "").trim();
@@ -22246,14 +22303,35 @@ function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 50
     if (matched) observedTarget = true;
     const found = !targetTaskId || Boolean(matched);
     const takeoverPending = Boolean(matched) && liveBrowserLoginMode(matched) === "switching";
-    const targetTask = targetTaskId
+    let targetTask = targetTaskId
       ? (state.socialTasks || []).find((task) => String(task?.id || "") === targetTaskId)
       : null;
-    const taskFinished = Boolean(targetTask)
+    let taskFinished = Boolean(targetTask)
       && !["queued", "running", "need_manual"].includes(String(targetTask?.status || "").trim());
     if (!isCurrent()) return;
-    if (targetTaskId && !matched && (observedTarget || taskFinished)) {
+    if (targetTaskId && !matched && observedTarget) {
+      // The browser registry is removed before the worker's terminal task
+      // update reaches this page. Refresh the task itself so account actions
+      // cannot remain stuck in the local "执行中" state.
+      const refreshedTask = await refreshSocialTaskState(targetTaskId);
+      if (!isCurrent()) return;
+      if (refreshedTask) {
+        targetTask = refreshedTask;
+        taskFinished = !["queued", "running", "need_manual"].includes(String(refreshedTask.status || "").trim());
+      }
+      if (!taskFinished && attempt < attempts) {
+        window.setTimeout(() => run(attempt + 1), delayMs);
+        return;
+      }
       finish();
+      if (state.view === "accounts" || state.view === "social") renderSocialAccounts();
+      if (isPersonaWorkspaceModule()) renderPersonaDetail();
+      return;
+    }
+    if (targetTaskId && !matched && taskFinished) {
+      finish();
+      if (state.view === "accounts" || state.view === "social") renderSocialAccounts();
+      if (isPersonaWorkspaceModule()) renderPersonaDetail();
       return;
     }
     if (found && !takeoverPending) {
@@ -25784,6 +25862,10 @@ function renderLiveBrowserSession(session) {
           <strong id="${esc(liveBrowserDialogTitleId(sessionId))}" data-live-browser-title>${esc(title)}</strong>
           <span data-live-browser-meta>${esc(`平台：${identity.platform} · 人设：${identity.persona}`)}</span>
         </div>
+        <button type="button" class="live-browser-mobile-controls-launcher" data-live-browser-mobile-controls="${esc(sessionId)}" aria-expanded="false" aria-label="打开页面控制" title="打开页面控制">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect><path d="M3.5 9h17"></path><circle cx="7" cy="6.8" r=".7"></circle><circle cx="9.8" cy="6.8" r=".7"></circle></svg>
+          <span>页面控制</span>
+        </button>
         <div class="live-browser-task-summary" aria-label="任务信息">
           <span>任务数：<b data-live-browser-task-count>${esc(taskSummary.count)}</b></span>
           <span title="${esc(taskSummary.detail)}" aria-label="${esc(`任务目标：${taskSummary.detail}`)}">任务目标：<b data-live-browser-task-target>${esc(taskSummary.target)}</b></span>
@@ -25807,9 +25889,9 @@ function renderLiveBrowserSession(session) {
           referrerpolicy="no-referrer"
           allow="clipboard-read; clipboard-write"
           allowfullscreen
-        ></iframe>
-        <div class="live-browser-lock" data-live-browser-controls-toggle aria-hidden="true"><span>自动化执行中，等待进入人工处理状态后再操作。</span></div>
-        <div class="live-browser-manual-input" data-live-browser-manual-input data-expanded="false" ${interactionAllowed ? "" : "hidden"}>
+         ></iframe>
+         <div class="live-browser-lock" data-live-browser-controls-toggle aria-hidden="true"><span>自动化执行中，等待进入人工处理状态后再操作。</span></div>
+         <div class="live-browser-manual-input" data-live-browser-manual-input data-expanded="false" ${interactionAllowed ? "" : "hidden"}>
           <button type="button" class="live-browser-input-toggle" data-live-browser-input-toggle="${esc(sessionId)}" aria-expanded="false" title="输入验证码或文本" aria-label="输入验证码或文本">
             ${renderEditIcon()}<span>输入</span>
           </button>
@@ -25937,10 +26019,12 @@ function setLiveBrowserModalControlsVisible(card, visible) {
   if (visible) {
     card.classList.add("is-live-browser-controls-visible");
     card.toggleAttribute("data-live-browser-controls-visible", true);
+    syncLiveBrowserMobileControlsLauncher(card, true);
     return;
   }
   if (!card.classList.contains("is-live-browser-controls-visible")) {
     card.removeAttribute("data-live-browser-controls-visible");
+    syncLiveBrowserMobileControlsLauncher(card, false);
     return;
   }
   card.classList.add("is-live-browser-controls-exiting");
@@ -25952,11 +26036,28 @@ function setLiveBrowserModalControlsVisible(card, visible) {
       "is-live-browser-controls-exiting",
     );
     card.removeAttribute("data-live-browser-controls-visible");
+    syncLiveBrowserMobileControlsLauncher(card, false);
   }, LIVE_BROWSER_CONTROLS_EXIT_MS);
   liveBrowserControlsExitTimers.set(card, timer);
 }
 
+function isMobileLiveBrowserViewport() {
+  return Boolean(window.matchMedia?.(LIVE_BROWSER_MOBILE_QUERY).matches);
+}
+
+function syncLiveBrowserMobileControlsLauncher(card, visible) {
+  const launcher = card?.querySelector("[data-live-browser-mobile-controls]");
+  if (!launcher) return;
+  launcher.setAttribute("aria-expanded", visible ? "true" : "false");
+  launcher.setAttribute("aria-label", visible ? "收起页面控制" : "打开页面控制");
+  launcher.setAttribute("title", visible ? "收起页面控制" : "打开页面控制");
+}
+
 function toggleLiveBrowserModalControls(card) {
+  if (!isMobileLiveBrowserViewport()) {
+    setLiveBrowserModalControlsVisible(card, true);
+    return;
+  }
   setLiveBrowserModalControlsVisible(
     card,
     !card?.classList.contains("is-live-browser-controls-visible")
@@ -25984,8 +26085,7 @@ function requestLiveBrowserFullscreen(sessionId = "", trigger = null) {
   state.liveBrowserExpandedSessionId = String(sessionId || "");
   cancelLiveBrowserControlsExit(card);
   card.classList.add("is-live-browser-modal");
-  card.classList.remove("is-live-browser-controls-visible");
-  card.removeAttribute("data-live-browser-controls-visible");
+  setLiveBrowserModalControlsVisible(card, !isMobileLiveBrowserViewport());
   card.setAttribute("role", "dialog");
   card.setAttribute("aria-modal", "true");
   card.setAttribute("aria-labelledby", liveBrowserDialogTitleId(sessionId));
@@ -26109,20 +26209,20 @@ function liveBrowserSessionUrl(session) {
     autoconnect: "1",
     resize: "scale",
     reconnect: "1",
-    quality: "5",
-    dynamic_quality_min: "3",
-    dynamic_quality_max: "7",
-    jpeg_video_quality: "5",
-    webp_video_quality: "4",
+    quality: "4",
+    dynamic_quality_min: "2",
+    dynamic_quality_max: "6",
+    jpeg_video_quality: "4",
+    webp_video_quality: "-1",
     video_quality: "1",
-    video_time: "1",
+    video_time: "4",
     video_out_time: "1",
     video_scaling: "1",
     max_video_resolution_x: "960",
     max_video_resolution_y: "540",
-    framerate: "24",
-    compression: "2",
-    enable_webp: "1",
+    framerate: "30",
+    compression: "1",
+    enable_webp: "0",
     enable_webrtc: "0",
     enable_threading: "0",
   });
@@ -28915,7 +29015,7 @@ function bindEvents() {
       setPersonaMobileSidebarOpen(false);
       return;
     }
-    if (event.target.closest("[data-live-browser-modal-overlay-toggle], [data-live-browser-controls-toggle]")) {
+    if (event.target.closest("[data-live-browser-modal-overlay-toggle], [data-live-browser-controls-toggle], [data-live-browser-mobile-controls]")) {
       toggleLiveBrowserModalControls(
         event.target.closest("[data-live-browser-card]")
           || document.querySelector(".live-browser-card.is-live-browser-modal"),
@@ -29031,6 +29131,7 @@ function bindEvents() {
     const accountCopyCard = event.target.closest("[data-account-pool-copy-card]");
     if (accountCopyCard) {
       copyAccountPoolCardToClipboard(accountCopyCard.dataset.accountPoolCopyCard || "")
+        .then(() => showAccountPoolCardCopySuccess(accountCopyCard))
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "复制账号字段失败", false));
       return;
     }

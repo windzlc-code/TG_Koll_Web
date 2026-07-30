@@ -74,6 +74,15 @@ class RunnerProxyRedactionTests(unittest.TestCase):
                 logger,
             )
             with (
+                mock.patch(
+                    "social_automation.browser_runtime.verify_pinned_browser_runtime",
+                    return_value={
+                        "camoufox": "0.4.11",
+                        "browserforge": "1.2.4",
+                        "browser_version": "152.0.4",
+                        "browser_release": "beta.28",
+                    },
+                ),
                 mock.patch.object(manager, "_start_live_browser_session", return_value=None),
                 mock.patch.object(manager, "_enter_camoufox", side_effect=launch_error),
                 self.assertRaises(RuntimeError) as raised,

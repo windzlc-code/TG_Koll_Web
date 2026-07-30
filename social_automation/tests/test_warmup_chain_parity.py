@@ -39,6 +39,32 @@ class WarmupChainParityTests(TestCase):
         self.assertIn("短发造型", matched["matched"])
         self.assertFalse(unmatched["relevant"])
 
+    def test_search_relevance_uses_matching_visible_result_not_only_center_card(self):
+        unrelated = {"text": "今天的财经市场讨论。", "root": mock.Mock()}
+        matched = {"text": "理发师分享男士短发打理技巧。", "root": mock.Mock()}
+
+        def assess(_payload, text, **_kwargs):
+            return {
+                "relevant": "理发师" in text,
+                "matched": ["理发师"] if "理发师" in text else [],
+                "score": 5 if "理发师" in text else 0,
+                "keywords": ["理发师"],
+            }
+
+        with (
+            mock.patch.object(runner, "_generate_warmup_search_keywords_with_ai", return_value=["理发师"]),
+            mock.patch.object(runner, "_visible_warmup_post_contexts", return_value=[unrelated, matched], create=True),
+            mock.patch.object(runner, "_assess_warmup_post_relevance", side_effect=assess),
+        ):
+            selected = runner._ensure_warmup_relevant_surface(
+                mock.Mock(),
+                {"require_persona_relevance": True},
+                _Logger(),
+                platform="threads",
+            )
+
+        self.assertIs(selected["root"], matched["root"])
+
     def test_warmup_relevance_derives_searchable_keywords_from_persona_context(self):
         payload = {
             "persona_topics": [],
@@ -53,6 +79,21 @@ class WarmupChainParityTests(TestCase):
         self.assertTrue(relevance["relevant"])
         self.assertIn("理发", relevance["matched"])
 
+    def test_warmup_relevance_matches_topic_fragments_from_a_model_search_phrase(self):
+        payload = {
+            "persona_name": "理发师",
+            "persona_context": "专注发型设计、洗护和理发店日常。",
+        }
+
+        relevance = runner._score_warmup_post_relevance(
+            payload,
+            "今天分享一套洗发后的护发流程，听理发师的建议就没错。",
+            keywords=["油头复古理发店"],
+        )
+
+        self.assertTrue(relevance["relevant"])
+        self.assertIn("理发店", relevance["keywords"])
+
     def test_warmup_relevance_falls_back_to_persona_keyword_search(self):
         payload = {
             "persona_topics": ["理发"],
@@ -62,12 +103,17 @@ class WarmupChainParityTests(TestCase):
         contexts = iter((
             {"text": "今日财经市场热点。", "root": None},
             {"text": "科技产品发布会。", "root": None},
+            {"text": "体育赛事讨论。", "root": None},
             {"text": "理发店日常的短发打理技巧。", "root": None},
         ))
         page = _Page()
         logger = _Logger()
         with (
-            mock.patch.object(runner, "_current_warmup_post_context", side_effect=lambda *_args: next(contexts)),
+            mock.patch.object(
+                runner,
+                "_visible_warmup_post_contexts",
+                side_effect=lambda *_args, **_kwargs: [next(contexts)],
+            ),
             mock.patch.object(runner, "_slow_human_scroll"),
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner, "_goto") as goto,
@@ -83,6 +129,164 @@ class WarmupChainParityTests(TestCase):
         self.assertEqual(result["text"], "理发店日常的短发打理技巧。")
         self.assertIn("threads.net/search", goto.call_args.args[1])
         self.assertIn("q=", goto.call_args.args[1])
+
+    def test_model_keywords_are_used_before_lexical_fallback(self):
+        payload = {
+            "persona_name": "理发师",
+            "persona_context": "分享男士短发和发型打理。",
+            "persona_topics": ["理发", "短发"],
+        }
+        model_reply = {"ok": True, "raw_text": '["男士短发", "发型打理", "男士短发"]'}
+        with (
+            mock.patch.object(runner, "_warmup_ai_settings", return_value=("https://llm.example", "key", ["model-a"])),
+            mock.patch("get_gemini.request_gemini3_pro_raw_text", return_value=model_reply),
+        ):
+            keywords = runner._generate_warmup_search_keywords_with_ai(payload)
+
+        self.assertEqual(keywords[:2], ["男士短发", "发型打理"])
+        self.assertIn("理发", keywords)
+        self.assertEqual(payload["_warmup_generated_search_keywords"], keywords)
+        self.assertEqual(payload["_warmup_search_keyword_source"], "model:model-a")
+
+    def test_model_keyword_failure_falls_back_to_lexical_persona_terms(self):
+        payload = {
+            "persona_name": "理发师",
+            "persona_context": "分享短发造型与理发店日常。",
+            "persona_topics": ["理发"],
+        }
+        with (
+            mock.patch.object(runner, "_warmup_ai_settings", return_value=("https://llm.example", "key", ["model-a"])),
+            mock.patch("get_gemini.request_gemini3_pro_raw_text", return_value={"ok": False}),
+        ):
+            keywords = runner._generate_warmup_search_keywords_with_ai(payload)
+
+        self.assertIn("理发", keywords)
+        self.assertEqual(payload["_warmup_search_keyword_source"], "fallback:model_failed")
+
+    def test_generic_personality_words_are_not_used_as_search_queries(self):
+        self.assertEqual(
+            runner._sanitize_warmup_search_keywords(["搞笑", "生活日常", "理发搞笑", "男士短发"]),
+            ["理发搞笑", "男士短发"],
+        )
+
+    def test_lexical_fallback_prefers_persona_role_over_broad_topics(self):
+        keywords = runner._warmup_persona_keyword_candidates(
+            {
+                "persona_name": "理发师",
+                "persona_context": "资深理发师，分享理发店日常和发型打理。",
+                "persona_topics": ["搞笑", "生活日常", "职场趣事", "理发"],
+            },
+            limit=5,
+        )
+        self.assertEqual(keywords[0], "理发师")
+        self.assertNotIn("生活日", keywords)
+        self.assertNotIn("职场", keywords)
+
+    def test_model_can_confirm_semantically_relevant_post_without_exact_keyword(self):
+        payload = {
+            "persona_name": "理发师",
+            "persona_context": "分享发型打理与理发店日常。",
+            "persona_topics": ["理发"],
+        }
+        with (
+            mock.patch.object(runner, "_warmup_ai_settings", return_value=("https://llm.example", "key", ["model-a"])),
+            mock.patch(
+                "get_gemini.request_gemini3_pro_raw_text",
+                return_value={"ok": True, "raw_text": '{"relevant": true}'},
+            ),
+        ):
+            result = runner._assess_warmup_post_relevance(
+                payload,
+                "今天分享剪烫之后的居家护理方法。",
+                keywords=["理发"],
+            )
+
+        self.assertTrue(result["relevant"])
+        self.assertTrue(result["model_checked"])
+
+    def test_model_rejection_overrides_a_lexical_keyword_match(self):
+        payload = {"persona_topics": ["理发"]}
+        with (
+            mock.patch.object(runner, "_warmup_ai_settings", return_value=("https://llm.example", "key", ["model-a"])),
+            mock.patch(
+                "get_gemini.request_gemini3_pro_raw_text",
+                return_value={"ok": True, "raw_text": '{"relevant": false}'},
+            ),
+        ):
+            result = runner._assess_warmup_post_relevance(
+                payload,
+                "理发店抽奖推广，点击链接领取。",
+                keywords=["理发"],
+            )
+
+        self.assertFalse(result["relevant"])
+
+    def test_browse_only_rechecks_relevance_before_every_scroll_on_both_platforms(self):
+        payload = {
+            "session_seconds": 15,
+            "browse_limit": 2,
+            "like_limit": 0,
+            "max_comments": 0,
+            "require_persona_relevance": True,
+            "persona_topics": ["理发"],
+        }
+        relevant = {"text": "理发技巧", "root": mock.Mock()}
+        for platform, run in (("threads", runner._run_threads_warmup), ("instagram", runner._run_instagram_warmup)):
+            with (
+                self.subTest(platform=platform),
+                mock.patch.object(runner, "_goto"),
+                mock.patch.object(runner, "_guard_warmup_risk"),
+                mock.patch.object(runner, "_ensure_warmup_relevant_surface", return_value=relevant) as ensure,
+                mock.patch.object(runner, "_next_warmup_interaction_at", return_value=99),
+                mock.patch.object(runner, "_open_random_platform_post", return_value=False),
+                mock.patch.object(runner, "_slow_human_scroll", return_value={"delta": 320}) as scroll,
+                mock.patch.object(runner, "_wait_for_cancellation"),
+                mock.patch.object(runner, "_screenshot", return_value="warmup.png"),
+                mock.patch.object(runner.time, "monotonic", return_value=0),
+                mock.patch.object(runner, "_dismiss_instagram_interstitials", return_value=False),
+            ):
+                run(_Page(), {"id": f"{platform}-recheck"}, dict(payload), Path("."), _Logger())
+
+            self.assertEqual(ensure.call_count, 3)
+            self.assertEqual(scroll.call_count, 2)
+
+    def test_warmup_stops_before_second_scroll_when_relevance_is_lost(self):
+        payload = {
+            "session_seconds": 15,
+            "browse_limit": 2,
+            "like_limit": 0,
+            "max_comments": 0,
+            "require_persona_relevance": True,
+            "persona_topics": ["理发"],
+        }
+        relevant = {"text": "理发技巧", "root": mock.Mock()}
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_guard_warmup_risk"),
+            mock.patch.object(runner, "_ensure_warmup_relevant_surface", side_effect=[relevant, relevant, None]),
+            mock.patch.object(runner, "_next_warmup_interaction_at", return_value=99),
+            mock.patch.object(runner, "_slow_human_scroll", return_value={"delta": 320}) as scroll,
+            mock.patch.object(runner, "_wait_for_cancellation"),
+            mock.patch.object(runner.time, "monotonic", return_value=0),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "停止"):
+                runner._run_threads_warmup(_Page(), {"id": "lost-relevance"}, payload, Path("."), _Logger())
+
+        self.assertEqual(scroll.call_count, 1)
+
+    def test_threads_like_scope_is_the_verified_post_root(self):
+        page = mock.Mock()
+        root = mock.Mock()
+        with mock.patch.object(runner, "_threads_like_buttons", return_value=[]) as buttons:
+            runner._click_some_threads_likes(page, _Logger(), 1, target_root=root)
+        buttons.assert_called_once_with(root)
+
+    def test_instagram_like_scope_is_the_verified_post_root(self):
+        page = mock.Mock()
+        root = mock.Mock()
+        with mock.patch.object(runner, "_instagram_action_locators", return_value=[]) as locators:
+            runner._click_some_instagram_likes(page, _Logger(), 1, target_root=root)
+        locators.assert_called_once_with(root, "Like")
 
     def test_threads_browse_feed_does_not_start_the_full_warmup_chain(self):
         with (

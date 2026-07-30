@@ -1197,11 +1197,6 @@
   outline-color: rgb(53 107 145 / 28%);
 }
 
-:root[data-theme="light"] body.profile-page .profile-avatar-preview {
-  background: #e8f0f7;
-  border-color: #bfd0df;
-}
-
 :root[data-theme="light"] body.profile-page .profile-avatar-add {
   box-shadow: 0 6px 14px rgb(53 107 145 / 22%);
 }
@@ -1681,41 +1676,6 @@
 ) {
   border-color: var(--public-line);
   box-shadow: inset 3px 0 0 #68727d;
-}
-
-/* Profile and shared account menu use the same identity hierarchy. */
-:root[data-theme="light"] body.profile-page .profile-heading {
-  background-image:
-    linear-gradient(100deg, rgb(255 255 255 / 94%), rgb(237 244 250 / 91%)),
-    url("/assets/opc/vecto-ai-cockpit.png");
-  background-position: center;
-  background-size: cover;
-  border-color: var(--public-cool-line);
-  box-shadow: var(--profile-shadow);
-}
-
-:root[data-theme="light"] body.profile-page .profile-form {
-  background: rgb(255 255 255 / 96%);
-  border-color: var(--public-line);
-  box-shadow: var(--profile-shadow);
-}
-
-:root[data-theme="light"] body.profile-page .profile-avatar-column {
-  background: var(--public-cool-muted);
-  border-color: var(--public-cool-line);
-}
-
-:root[data-theme="light"] body.profile-page .profile-avatar-preview {
-  box-shadow: 0 0 0 4px var(--public-cool-muted);
-}
-
-:root[data-theme="light"] body.profile-page .profile-account-grid {
-  background: var(--public-cool-muted);
-  border: 1px solid var(--public-line);
-}
-
-:root[data-theme="light"] body.profile-page .profile-account-grid > div + div {
-  border-left-color: var(--public-line);
 }
 
 :root[data-theme="light"] .site-account-popover {

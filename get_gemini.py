@@ -349,6 +349,7 @@ def _request_openai_compatible_raw_text(
     retry_wait_seconds: float = 2.0,
     disable_proxy: bool = True,
     model: str = "",
+    request_timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     url = _resolve_openai_chat_completions_url(host=host, port=port)
     user_content = _build_openai_user_content(
@@ -384,6 +385,7 @@ def _request_openai_compatible_raw_text(
 
     retry_count = max(int(retry_count or 1), 1)
     retry_wait_seconds = max(float(retry_wait_seconds or 0.0), 0.0)
+    request_timeout = REQUEST_TIMEOUT_SECONDS if request_timeout_seconds is None else max(1.0, min(float(request_timeout_seconds), REQUEST_TIMEOUT_SECONDS))
     session = requests.Session()
     if disable_proxy:
         session.trust_env = False
@@ -392,7 +394,7 @@ def _request_openai_compatible_raw_text(
     response = None
     for attempt in range(1, retry_count + 1):
         try:
-            response = session.post(url, json=payload, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
+            response = session.post(url, json=payload, headers=headers, timeout=request_timeout)
             response.raise_for_status()
             last_exc = None
             break
@@ -645,6 +647,7 @@ def request_gemini3_pro_raw_text(
     disable_proxy: bool = True,
     logger=None,
     model: str = "",
+    request_timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     if _is_openai_compatible_model(model):
         return _request_openai_compatible_raw_text(
@@ -660,6 +663,7 @@ def request_gemini3_pro_raw_text(
             retry_wait_seconds=retry_wait_seconds,
             disable_proxy=disable_proxy,
             model=model,
+            request_timeout_seconds=request_timeout_seconds,
         )
 
     url = _resolve_gemini_request_url(host=host, port=port, model=model)
@@ -739,6 +743,7 @@ def request_gemini3_pro_raw_text(
 
     retry_count = max(int(retry_count or 1), 1)
     retry_wait_seconds = max(float(retry_wait_seconds or 0.0), 0.0)
+    request_timeout = REQUEST_TIMEOUT_SECONDS if request_timeout_seconds is None else max(1.0, min(float(request_timeout_seconds), REQUEST_TIMEOUT_SECONDS))
 
     session = requests.Session()
     if disable_proxy:
@@ -748,7 +753,7 @@ def request_gemini3_pro_raw_text(
     response = None
     for attempt in range(1, retry_count + 1):
         try:
-            response = session.post(url, json=payload, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
+            response = session.post(url, json=payload, headers=headers, timeout=request_timeout)
             response.raise_for_status()
             last_exc = None
             break

@@ -16,7 +16,8 @@ google-auth>=2.40.0,<3.0
 google-auth-oauthlib>=1.2.2,<2.0
 cryptography==48.0.0
 playwright==1.58.0
-camoufox[geoip]>=0.4.11
+camoufox[geoip]==0.4.11
+browserforge==1.2.4
 aiohttp-socks>=0.11.0
 imageio-ffmpeg>=0.6.0
 mutagen>=1.47.0

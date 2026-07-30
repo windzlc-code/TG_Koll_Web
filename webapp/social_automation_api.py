@@ -2977,14 +2977,36 @@ async def _proxy_live_browser_websocket(
 
     rfb_inspector = _RfbClientMessageInspector()
     control_audited = False
+    input_permission_checked_at = 0.0
+    input_permission_cached = False
+    write_access_checked_at = 0.0
+    write_access_cached = False
+
+    async def cached_input_permission() -> bool:
+        nonlocal input_permission_checked_at, input_permission_cached
+        now = time.monotonic()
+        if input_permission_checked_at and now - input_permission_checked_at < 0.25:
+            return input_permission_cached
+        input_permission_cached = await _live_browser_input_allowed(session.task_id)
+        input_permission_checked_at = time.monotonic()
+        return input_permission_cached
+
+    async def cached_write_access() -> bool:
+        nonlocal write_access_checked_at, write_access_cached
+        now = time.monotonic()
+        if write_access_checked_at and now - write_access_checked_at < 1.0:
+            return write_access_cached
+        write_access_cached = await _live_browser_write_access(session.task_id, user)
+        write_access_checked_at = time.monotonic()
+        return write_access_cached
 
     async def forward_client_message(payload: bytes | str) -> bool:
         nonlocal control_audited
         inspection_payload = payload if isinstance(payload, bytes) else payload.encode("latin1", "ignore")
         requires_input = rfb_inspector.requires_input_permission(inspection_payload)
-        if requires_input and not await _live_browser_input_allowed(session.task_id):
+        if requires_input and not await cached_input_permission():
             return False
-        if requires_input and not await _live_browser_write_access(session.task_id, user):
+        if requires_input and not await cached_write_access():
             return False
         if requires_input and not control_audited:
             _audit_admin_live_browser_action(user, "workspace.browser_session.control", session_id)
@@ -3511,6 +3533,7 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
     strategy_id = _live_browser_summary_text(payload.get("strategy_id"), limit=64)
     strategy_label = _live_browser_summary_text(payload.get("strategy_label"))
     fields: list[dict[str, str]] = []
+    progress: dict[str, dict[str, int]] = {}
     task_label = {
         "threads_warmup": "养号",
         "instagram_warmup": "养号",
@@ -3532,10 +3555,30 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
         browse_limit = _live_browser_summary_int(payload, "browse_limit", "scroll_times")
         like_limit = _live_browser_summary_int(payload, "like_limit")
         max_comments = _live_browser_summary_int(payload, "max_comments")
+        latest_progress = _loads(item.get("latest_progress_json"), {})
+        if not isinstance(latest_progress, dict):
+            latest_progress = {}
+        browsed = min(
+            browse_limit,
+            _live_browser_summary_int(latest_progress, "index", "scrolled", "browsed"),
+        )
+        liked = min(
+            like_limit,
+            _live_browser_summary_int(latest_progress, "liked", "like_count"),
+        )
+        commented = min(
+            max_comments,
+            _live_browser_summary_int(latest_progress, "commented", "comment_count"),
+        )
+        progress = {
+            "browse": {"current": browsed, "target": browse_limit},
+            "like": {"current": liked, "target": like_limit},
+            "comment": {"current": commented, "target": max_comments},
+        }
         fields = [
-            {"label": "浏览", "value": f"{browse_limit} 次"},
-            {"label": "点赞最多", "value": f"{like_limit} 次"},
-            {"label": "评论最多", "value": f"{max_comments} 次"},
+            {"label": "浏览", "value": f"{browsed}/{browse_limit}"},
+            {"label": "点赞", "value": f"{liked}/{like_limit}"},
+            {"label": "评论", "value": f"{commented}/{max_comments}"},
         ]
         comment_chance = _live_browser_summary_int(payload, "comment_chance")
         if max_comments > 0 and comment_chance > 0:
@@ -3607,7 +3650,10 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
                 short_strategy = "低频点赞"
             else:
                 short_strategy = _live_browser_summary_text(strategy_label or "养号", limit=8)
-        target = f"养号｜{short_strategy}｜浏览{browse_limit}·赞{like_limit}·评{max_comments}"
+        target = (
+            f"养号｜{short_strategy}｜"
+            f"浏览{browsed}/{browse_limit}·赞{liked}/{like_limit}·评{commented}/{max_comments}"
+        )
     elif task_type in {"threads_auto_reply", "instagram_auto_reply"}:
         short_strategy = "热点回复" if reply_scope == "hot_posts" else "评论回复"
         target = f"{short_strategy}｜扫{max_posts}·回{max_replies}·{max_age_days}天"
@@ -3637,6 +3683,7 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,
         "fields": fields,
+        "progress": progress,
         "target": target,
         "detail": detail,
     }
@@ -3684,6 +3731,14 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
                   task.finished_at,
                   task.automation_plan_id,
                   task.automation_plan_cycle,
+                  (
+                    SELECT progress_log.data_json
+                    FROM social_automation_logs AS progress_log
+                    WHERE progress_log.task_id = task.id
+                      AND progress_log.stage IN ('threads_warmup', 'instagram_warmup')
+                    ORDER BY progress_log.created_at DESC, progress_log.id DESC
+                    LIMIT 1
+                  ) AS latest_progress_json,
                   CASE
                     WHEN task.automation_plan_id != '' THEN (
                       SELECT COUNT(*)

@@ -101,7 +101,7 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         ):
             self.assertIn(f'id="{control_id}"', self.html)
         self.assertIn('/api/admin/users/batch-actions', self.script)
-        self.assertIn('<option value="add_credit">添加算力点</option>', self.html)
+        self.assertIn('<option value="add_credit">调整算力</option>', self.html)
         self.assertIn('action === "add_credit"', self.script)
         self.assertIn("delta_points", self.script)
         self.assertIn("idempotency_key", self.script)
@@ -119,10 +119,26 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         ):
             self.assertIn(f'class="{class_name}', self.html)
             self.assertIn(f".page-admin .{class_name}", self.styles)
-        self.assertIn("grid-template-columns: minmax(190px, 0.7fr) minmax(520px, 2.8fr) auto;", self.styles)
+        self.assertIn("grid-template-columns: auto minmax(155px, 0.55fr) minmax(460px, 2.25fr) auto;", self.styles)
         self.assertIn("height: 38px;", self.styles)
         self.assertIn(".page-admin [hidden]", self.styles)
         self.assertIn("display: none !important;", self.styles)
+
+    def test_primary_account_controls_are_batch_only_and_next_to_the_table(self):
+        compose_index = self.html.index('class="admin-compose-shell"')
+        batch_index = self.html.index('id="adminUserBatchBar"')
+        table_index = self.html.index('class="table-wrap admin-table-shell"')
+        self.assertLess(compose_index, batch_index)
+        self.assertLess(batch_index, table_index)
+        for action in ("add_credit", "enable", "suspend"):
+            self.assertIn(f'data-user-batch-action="{action}"', self.html)
+        self.assertIn("function selectUserBatchAction", self.script)
+        user_rows = self.script[
+            self.script.index("async function loadUsers")
+            : self.script.index("function detailRow")
+        ]
+        self.assertNotIn('addAction("人工调整算力点"', user_rows)
+        self.assertNotIn('"toggle"', user_rows)
 
     def test_governance_pages_and_step_up_fields_are_present(self):
         for page in ("overview", "users", "taxonomy", "audit", "security", "serviceAccounts"):

@@ -3790,9 +3790,6 @@ function ensureBillingLoaded(force = false) {
 const ADMIN_USER_ICONS = {
   detail: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>',
   billing: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z"/><path d="M9 8h6m-6 4h6m-6 4h4"/></svg>',
-  balance: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 7h15a3 3 0 0 1 3 3v8H3V7Z"/><path d="M3 7V5h14v2M16 12h5"/><circle cx="16" cy="12" r="1"/></svg>',
-  disable: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M7.1 5.7a8 8 0 1 0 9.8 0"/></svg>',
-  enable: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.7-1.5M12 14v3"/></svg>',
   archive: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M4 7h16v13H4V7Z"/><path d="M3 3h18v4H3V3Zm6 9h6"/></svg>',
   restore: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M4 7h16v13H4V7Z"/><path d="M3 3h18v4H3V3Zm6 10 3-3 3 3m-3-3v6"/></svg>',
   delete: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M4 7h16M9 3h6l1 4H8l1-4ZM7 7l1 14h8l1-14M10 11v6m4-6v6"/></svg>',
@@ -3927,8 +3924,29 @@ function syncUserBatchSelection() {
   if (el("adminBatchGroupField")) el("adminBatchGroupField").hidden = action !== "assign_group";
   if (el("adminBatchTagsField")) el("adminBatchTagsField").hidden = action !== "add_tags";
   if (el("adminBatchCreditField")) el("adminBatchCreditField").hidden = action !== "add_credit";
-  if (el("btnPreviewUserBatch")) el("btnPreviewUserBatch").disabled = adminState.userBatchInFlight || adminState.userBatchSelectionInFlight;
+  document.querySelectorAll("[data-user-batch-action]").forEach((button) => {
+    const active = String(button.dataset.userBatchAction || "") === action;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+    button.disabled = adminState.selectedUserIds.size === 0
+      || adminState.userBatchInFlight
+      || adminState.userBatchSelectionInFlight;
+  });
+  if (el("btnClearUserSelection")) el("btnClearUserSelection").disabled = adminState.selectedUserIds.size === 0;
+  if (el("btnPreviewUserBatch")) {
+    el("btnPreviewUserBatch").disabled = !action
+      || adminState.selectedUserIds.size === 0
+      || adminState.userBatchInFlight
+      || adminState.userBatchSelectionInFlight;
+  }
   if (el("btnRunUserBatch")) el("btnRunUserBatch").disabled = !adminState.userBatchPreview || adminState.userBatchInFlight;
+}
+
+function selectUserBatchAction(action) {
+  const select = el("adminUserBatchAction");
+  if (!select) return;
+  select.value = String(action || "");
+  select.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function clearUserBatchSelection() {
@@ -4224,10 +4242,6 @@ async function loadUsers(page = adminState.userListPage) {
     };
     addAction("查看详情", "user_detail", "detail");
     if (!u.is_admin) addAction("计费详情", "billing_detail", "billing", { name: u.username });
-    if (!archived && lifecycle === "active") {
-      if (!u.is_admin) addAction("人工调整算力点", "recharge", "balance", { name: u.username, unlimited: unlimited ? 1 : 0 });
-      addAction(u.is_disabled ? "启用" : "禁用", "toggle", u.is_disabled ? "enable" : "disable", { disabled: u.is_disabled ? 1 : 0 });
-    }
     if (!u.is_admin) {
       if (lifecycle === "deleted") addAction("恢复账号", "restore_user", "restore", { name: u.username });
       else addAction("软删除账号", "archive_user", "delete", { name: u.username });
@@ -8453,6 +8467,9 @@ function bindActions() {
     invalidateUserBatchPreview();
     syncUserBatchSelection();
     if (["assign_group", "add_tags"].includes(String(el("adminUserBatchAction")?.value || ""))) await loadTaxonomyWorkspace();
+  });
+  document.querySelectorAll("[data-user-batch-action]").forEach((button) => {
+    button.addEventListener("click", () => selectUserBatchAction(button.dataset.userBatchAction));
   });
   ["adminUserBatchReason", "adminUserBatchGroup", "adminUserBatchTags", "adminUserBatchCredit"].forEach((id) => {
     el(id)?.addEventListener("change", () => { invalidateUserBatchPreview(); syncUserBatchSelection(); });

@@ -31,7 +31,6 @@ class ProfileI18nTests(unittest.TestCase):
             "backToConsole",
             "avatar",
             "avatarHelp",
-            "removeAvatar",
             "displayName",
             "signature",
             "personalTags",
@@ -40,6 +39,7 @@ class ProfileI18nTests(unittest.TestCase):
             "loginUsername",
             "accountId",
             "accountType",
+            "changePassword",
             "saveProfile",
         ):
             self.assertIn(f'data-profile-i18n="{key}"', self.markup)
@@ -83,9 +83,17 @@ class ProfileI18nTests(unittest.TestCase):
             "displayNameLength",
             "profileSaved",
             "profileSaveFailed",
-            "avatarWillBeRemoved",
+            "passwordChanged",
         ):
             self.assertIn(f'"{key}"', self.source)
+
+        self.assertNotIn("profileAvatarRemove", self.markup)
+        self.assertNotIn("avatarWillBeRemoved", self.source)
+
+    def test_profile_save_refreshes_the_shared_navigation_avatar(self):
+        save_profile = self.source.split("async function saveProfile", 1)[1].split("async function logout", 1)[0]
+        self.assertIn('renderAccount({ ...(state.account || {}), ...(result.profile || result || {}) })', save_profile)
+        self.assertIn('window.VectoSiteNavigation?.setAccount(state.account)', save_profile)
 
     def test_profile_user_data_is_not_passed_through_ui_translation(self):
         direct_assignments = (

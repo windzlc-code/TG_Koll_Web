@@ -9367,19 +9367,49 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 }
 
 .page-admin .admin-user-batch-bar {
-  grid-template-columns: minmax(190px, 0.7fr) minmax(520px, 2.8fr) auto;
+  grid-template-columns: auto minmax(155px, 0.55fr) minmax(460px, 2.25fr) auto;
   align-items: center;
   gap: 8px;
   min-height: 60px;
   padding: 8px;
 }
 
+.page-admin .admin-user-batch-primary-actions,
 .page-admin .admin-user-batch-summary,
 .page-admin .admin-user-batch-actions {
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 6px;
+}
+
+.page-admin .admin-user-batch-primary-actions {
+  white-space: nowrap;
+}
+
+.page-admin .admin-user-batch-primary-button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.page-admin .admin-user-batch-primary-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.page-admin .admin-user-batch-primary-button.is-active {
+  color: #fff;
+  border-color: var(--ink, #193248);
+  background: var(--ink, #193248);
 }
 
 .page-admin .admin-user-batch-summary {
@@ -9629,7 +9659,12 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   }
 
   .page-admin .admin-user-batch-fields {
-    grid-column: 1 / -1;
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .page-admin .admin-user-batch-actions {
+    grid-column: 2;
     grid-row: 2;
   }
 }
@@ -9659,10 +9694,20 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
     grid-template-columns: 1fr;
   }
 
+  .page-admin .admin-user-batch-primary-actions,
   .page-admin .admin-user-batch-summary,
   .page-admin .admin-user-batch-fields,
   .page-admin .admin-user-batch-actions {
     grid-column: 1;
+  }
+
+  .page-admin .admin-user-batch-primary-actions {
+    grid-row: auto;
+    flex-wrap: wrap;
+  }
+
+  .page-admin .admin-user-batch-primary-button {
+    flex: 1 1 calc(50% - 3px);
   }
 
   .page-admin .admin-user-batch-summary {

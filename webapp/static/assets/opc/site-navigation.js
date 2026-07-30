@@ -113,6 +113,8 @@
       profileSignatureEmpty: "暂未填写个人简介",
       profileTags: "个人标签",
       profileTagsEmpty: "暂未添加个人标签",
+      profileEmail: "邮箱",
+      profileEmailEmpty: "暂未绑定邮箱",
       notificationCenter: "通知中心",
       notificationSystem: "系统消息",
       notificationOfficial: "官方消息",
@@ -192,6 +194,8 @@
       profileSignatureEmpty: "暫未填寫個人簡介",
       profileTags: "個人標籤",
       profileTagsEmpty: "暫未添加個人標籤",
+      profileEmail: "電子郵件",
+      profileEmailEmpty: "暫未綁定電子郵件",
       notificationCenter: "通知中心",
       notificationSystem: "系統消息",
       notificationOfficial: "官方消息",
@@ -519,6 +523,7 @@
   function renderAccountAvatar(node, className = "") {
     if (!node) return;
     const avatarUrl = safeAvatarUrl(currentAccount);
+    node.classList.toggle("has-avatar", Boolean(avatarUrl));
     node.textContent = "";
     if (avatarUrl) {
       const image = document.createElement("img");
@@ -571,6 +576,10 @@
           <div class="site-account-profile-field">
             <span class="site-account-profile-label" data-site-copy="profileTags"></span>
             <div class="site-account-tags" data-site-account-tags><span class="site-account-placeholder" data-site-copy="profileTagsEmpty"></span></div>
+          </div>
+          <div class="site-account-profile-field site-account-profile-email">
+            <span class="site-account-profile-label" data-site-copy="profileEmail"></span>
+            <p data-site-account-email data-site-copy="profileEmailEmpty"></p>
           </div>
         </div>
         <section class="site-account-billing" data-site-account-billing aria-labelledby="siteAccountBillingTitle">
@@ -957,6 +966,7 @@
     const identityLoading = accountProfileLoading && !currentAccount;
     const username = String(currentAccount?.full_name || currentAccount?.display_name || currentAccount?.username || "").trim() || labels.accountFallback;
     const signature = String(currentAccount?.profile_signature || currentAccount?.profileSignature || "").trim();
+    const email = String(currentAccount?.email || "").trim();
     const tagText = String(currentAccount?.profile_tags || currentAccount?.profileTags || "").trim();
     const tags = tagText
       ? tagText.split(/[,，\n]+/).map((item) => item.trim()).filter(Boolean).slice(0, 8)
@@ -976,6 +986,11 @@
       node.dataset.siteCopy = signature || identityLoading ? "" : "profileSignatureEmpty";
       node.textContent = signature || (identityLoading ? labels.billingLoading : labels.profileSignatureEmpty);
       node.classList.toggle("is-placeholder", !signature);
+    });
+    document.querySelectorAll("[data-site-account-email]").forEach((node) => {
+      node.dataset.siteCopy = email || identityLoading ? "" : "profileEmailEmpty";
+      node.textContent = email || (identityLoading ? labels.billingLoading : labels.profileEmailEmpty);
+      node.classList.toggle("is-placeholder", !email);
     });
     document.querySelectorAll("[data-site-account-tags]").forEach((node) => {
       if (!tags.length) {
@@ -1297,23 +1312,33 @@
     };
   }
 
-  function showAuthFeedback({ kind = "success", title = "操作完成", message = "", actionText = "知道了" } = {}) {
+  function showAuthFeedback({
+    kind = "success",
+    title = "操作完成",
+    message = "",
+    actionText = "知道了",
+    contentHtml = "",
+    dialogClass = "",
+    onOpen = null,
+  } = {}) {
     document.querySelectorAll("[data-site-auth-feedback]").forEach((node) => {
       node.dispatchEvent(new CustomEvent("site-auth-feedback-dismiss"));
     });
     return new Promise((resolve) => {
       const modal = document.createElement("div");
-      modal.className = `site-auth-feedback is-${kind}`;
+      modal.className = `site-auth-feedback is-${kind}${dialogClass ? ` ${dialogClass}` : ""}`;
       modal.dataset.siteAuthFeedback = "true";
       modal.innerHTML = `<section class="site-auth-feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="siteAuthFeedbackTitle">
         <div class="site-auth-feedback-icon">${authFeedbackIcon(kind)}</div>
         <div class="site-auth-feedback-copy"><strong id="siteAuthFeedbackTitle"></strong><p></p></div>
         <button type="button" class="site-auth-feedback-close" aria-label="关闭">${closeIcon()}</button>
-        <button type="button" class="site-auth-feedback-confirm"></button>
+        ${contentHtml ? `<div class="site-auth-feedback-content">${contentHtml}</div>` : ""}
+        ${actionText === false ? "" : '<button type="button" class="site-auth-feedback-confirm"></button>'}
       </section>`;
       modal.querySelector("strong").textContent = String(title || "操作完成");
       modal.querySelector("p").textContent = String(message || "");
-      modal.querySelector(".site-auth-feedback-confirm").textContent = String(actionText || "知道了");
+      const confirm = modal.querySelector(".site-auth-feedback-confirm");
+      if (confirm) confirm.textContent = String(actionText || "知道了");
       let settled = false;
       const close = (immediate = false) => {
         if (settled) return;
@@ -1331,7 +1356,7 @@
       };
       modal.addEventListener("site-auth-feedback-dismiss", () => close(true));
       modal.querySelector(".site-auth-feedback-close").addEventListener("click", close);
-      modal.querySelector(".site-auth-feedback-confirm").addEventListener("click", close);
+      confirm?.addEventListener("click", close);
       modal.addEventListener("click", (event) => {
         if (event.target === modal) close();
       });
@@ -1339,7 +1364,8 @@
         if (event.key === "Escape") close();
       });
       document.body.append(modal);
-      modal.querySelector(".site-auth-feedback-confirm")?.focus({ preventScroll: true });
+      if (typeof onOpen === "function") onOpen(modal, close);
+      (confirm || modal.querySelector("input, button:not(.site-auth-feedback-close)"))?.focus({ preventScroll: true });
     });
   }
 

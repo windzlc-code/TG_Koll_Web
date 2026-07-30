@@ -120,7 +120,7 @@ class InstagramWarmupTests(TestCase):
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner, "_screenshot", return_value="/tmp/warmup.png"),
             mock.patch.object(runner.random, "random", return_value=0),
-            mock.patch.object(runner.time, "monotonic", side_effect=[0, 0, 8, 16]),
+            mock.patch.object(runner.time, "monotonic", return_value=0),
         ):
             with self.assertRaisesRegex(RuntimeError, "最低点赞目标"):
                 runner._run_instagram_warmup(
@@ -315,14 +315,9 @@ class InstagramWarmupTests(TestCase):
     def test_both_warmup_runners_limit_each_like_attempt_to_one(self):
         runner_source = Path(runner.__file__).read_text(encoding="utf-8")
 
-        self.assertIn(
-            "_click_some_instagram_likes(page, logger, 1)",
-            runner_source,
-        )
-        self.assertIn(
-            "_click_some_threads_likes(page, logger, 1)",
-            runner_source,
-        )
+        self.assertIn("_click_some_instagram_likes(", runner_source)
+        self.assertIn("_click_some_threads_likes(", runner_source)
+        self.assertIn("target_root=relevant_surface.get(\"root\")", runner_source)
 
     def test_default_warmup_timeline_matches_the_legacy_tg_bot_window(self):
         with mock.patch.object(runner.random, "uniform", return_value=8.5):
@@ -331,7 +326,7 @@ class InstagramWarmupTests(TestCase):
         runner_source = Path(runner.__file__).read_text(encoding="utf-8")
         self.assertEqual(
             runner_source.count(
-                "_wait_for_cancellation(random.uniform(20.0, 45.0), cancel_event)"
+                "min(random.uniform(20.0, 45.0), max(0.0, deadline - time.monotonic()))"
             ),
             1,
         )

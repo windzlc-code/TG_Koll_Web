@@ -15,7 +15,6 @@
       avatar: "头像",
       uploadAvatar: "上传新头像",
       avatarHelp: "点击头像右下角的加号上传，最大 512KB。",
-      removeAvatar: "移除头像",
       displayName: "显示名称",
       displayNamePlaceholder: "请输入显示名称",
       displayNameHelp: "显示在右上角账号信息中，不会修改登录用户名。",
@@ -30,6 +29,19 @@
       phone: "手机号",
       phonePlaceholder: "填写联系电话",
       email: "邮箱",
+      changePassword: "修改密码",
+      passwordDialogTitle: "通过邮箱修改密码",
+      passwordDialogHelp: "验证码将发送至已验证的账号邮箱。",
+      sendVerificationCode: "发送验证码",
+      verificationCode: "邮箱验证码",
+      verificationCodePlaceholder: "输入 6 位验证码",
+      newPassword: "新密码",
+      confirmNewPassword: "确认新密码",
+      resetPassword: "确认修改密码",
+      passwordMismatch: "两次输入的新密码不一致。",
+      passwordCodeRequired: "请先发送并填写邮箱验证码。",
+      passwordCodeSent: "验证码已发送，请查收邮箱。",
+      passwordChanged: "密码已修改，请使用新密码登录。",
       readonlyAccountInfo: "只读账号信息",
       loginUsername: "登录用户名",
       accountId: "账号 ID",
@@ -51,7 +63,6 @@
       profileSaved: "个人资料已保存。",
       profileSaveFailed: "个人资料保存失败。",
       logoutFailed: "退出失败，请重试。",
-      avatarWillBeRemoved: "头像将在保存后移除。",
     },
     "zh-Hant": {
       pageTitle: "個人資料 - Vecto",
@@ -64,7 +75,6 @@
       avatar: "頭像",
       uploadAvatar: "上傳新頭像",
       avatarHelp: "點擊頭像右下角的加號上傳，最大 512KB。",
-      removeAvatar: "移除頭像",
       displayName: "顯示名稱",
       displayNamePlaceholder: "請輸入顯示名稱",
       displayNameHelp: "顯示在右上角帳號資訊中，不會修改登入使用者名稱。",
@@ -79,6 +89,19 @@
       phone: "手機號碼",
       phonePlaceholder: "填寫聯絡電話",
       email: "電子郵件",
+      changePassword: "修改密碼",
+      passwordDialogTitle: "透過電子郵件修改密碼",
+      passwordDialogHelp: "驗證碼將發送至已驗證的帳號電子郵件。",
+      sendVerificationCode: "發送驗證碼",
+      verificationCode: "電子郵件驗證碼",
+      verificationCodePlaceholder: "輸入 6 位驗證碼",
+      newPassword: "新密碼",
+      confirmNewPassword: "確認新密碼",
+      resetPassword: "確認修改密碼",
+      passwordMismatch: "兩次輸入的新密碼不一致。",
+      passwordCodeRequired: "請先發送並填寫電子郵件驗證碼。",
+      passwordCodeSent: "驗證碼已發送，請查收電子郵件。",
+      passwordChanged: "密碼已修改，請使用新密碼登入。",
       readonlyAccountInfo: "唯讀帳號資訊",
       loginUsername: "登入使用者名稱",
       accountId: "帳號 ID",
@@ -100,7 +123,6 @@
       profileSaved: "個人資料已儲存。",
       profileSaveFailed: "個人資料儲存失敗。",
       logoutFailed: "登出失敗，請重試。",
-      avatarWillBeRemoved: "頭像將在儲存後移除。",
     },
   };
   const PROFILE_I18N_ATTRIBUTES = {
@@ -303,7 +325,8 @@
     } else {
       preview.textContent = accountInitial();
     }
-    $("profileAvatarRemove")?.toggleAttribute("hidden", !state.avatarUrl);
+    document.querySelector(".profile-avatar-icon-add")?.toggleAttribute("hidden", Boolean(state.avatarUrl));
+    document.querySelector(".profile-avatar-icon-replace")?.toggleAttribute("hidden", !state.avatarUrl);
   }
 
   function normalizeTags(value = "") {
@@ -372,6 +395,7 @@
     if ($("profileEmail")) $("profileEmail").value = String(account?.email || "").trim();
     $("profileUsername").textContent = String(account?.username || "-");
     $("profileAccountId").textContent = account?.id ? `#${account.id}` : "-";
+    $("profileAccountEmail").textContent = String(account?.email || "-").trim() || "-";
     $("profileBackLink").href = isAdminSession
       ? `/admin-console.html${returnManageUserId ? `?manage_user_id=${encodeURIComponent(returnManageUserId)}` : ""}`
       : "/console.html";
@@ -470,6 +494,7 @@
       });
       state.dirty = false;
       renderAccount({ ...(state.account || {}), ...(result.profile || result || {}) });
+      window.VectoSiteNavigation?.setAccount(state.account);
       setStatusKey("profileSaved", "success");
     } catch (error) {
       if (handleSessionBoundary(error)) return;
@@ -502,17 +527,93 @@
     }
   }
 
+  function openPasswordResetDialog() {
+    const email = String(state.account?.email || "").trim();
+    if (!email) {
+      setStatus("请先在个人资料中保存已验证的邮箱。", "error");
+      return;
+    }
+    const language = currentProfileLanguage();
+    const showAuthFeedback = window.VectoSiteNavigation?.showAuthFeedback;
+    if (typeof showAuthFeedback !== "function") {
+      setStatus(profileText("profileSaveFailed", {}, language), "error");
+      return;
+    }
+    showAuthFeedback({
+      kind: "success",
+      title: profileText("passwordDialogTitle", {}, language),
+      message: profileText("passwordDialogHelp", {}, language),
+      actionText: false,
+      dialogClass: "is-form",
+      contentHtml: `<form class="site-auth-feedback-form" novalidate>
+        <div class="site-auth-feedback-email"><span>${profileText("email", {}, language)}</span><strong data-password-email></strong></div>
+        <label><span>${profileText("verificationCode", {}, language)}</span><div class="site-auth-feedback-code-row"><input name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="${profileText("verificationCodePlaceholder", {}, language)}" required /><button type="button" class="site-auth-feedback-form-action" data-password-send>${profileText("sendVerificationCode", {}, language)}</button></div></label>
+        <label><span>${profileText("newPassword", {}, language)}</span><input name="password" type="password" minlength="8" maxlength="256" autocomplete="new-password" required /></label>
+        <label><span>${profileText("confirmNewPassword", {}, language)}</span><input name="confirmPassword" type="password" minlength="8" maxlength="256" autocomplete="new-password" required /></label>
+        <p class="site-auth-feedback-form-status" role="status" aria-live="polite"></p>
+        <button type="submit" class="site-auth-feedback-form-action is-primary" data-password-submit>${profileText("resetPassword", {}, language)}</button>
+      </form>`,
+      onOpen(modal, close) {
+        const form = modal.querySelector(".site-auth-feedback-form");
+        const fields = form.elements;
+        modal.querySelector("[data-password-email]").textContent = email;
+        const status = modal.querySelector(".site-auth-feedback-form-status");
+        const send = modal.querySelector("[data-password-send]");
+        const submit = modal.querySelector("[data-password-submit]");
+        let challengeId = "";
+        const setDialogStatus = (key = "", tone = "") => {
+          status.textContent = key ? profileText(key, {}, language) : "";
+          status.className = `site-auth-feedback-form-status${tone ? ` is-${tone}` : ""}`;
+        };
+        send.addEventListener("click", async () => {
+          send.disabled = true;
+          setDialogStatus("");
+          try {
+            const result = await api("/api/auth/email-verification/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, purpose: "password_setup" }) });
+            challengeId = String(result?.challenge_id || "");
+            setDialogStatus("passwordCodeSent", "success");
+            fields.code.focus();
+          } catch (error) {
+            status.textContent = error.message || profileText("profileSaveFailed", {}, language);
+            status.className = "site-auth-feedback-form-status is-error";
+          } finally {
+            send.disabled = false;
+          }
+        });
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          if (!challengeId || !String(fields.code.value || "").trim()) {
+            setDialogStatus("passwordCodeRequired", "error");
+            return;
+          }
+          if (fields.password.value !== fields.confirmPassword.value) {
+            setDialogStatus("passwordMismatch", "error");
+            return;
+          }
+          submit.disabled = true;
+          setDialogStatus("");
+          try {
+            await api("/api/auth/password/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ challenge_id: challengeId, verification_code: String(fields.code.value || "").trim(), new_password: fields.password.value }) });
+            close();
+            await showAuthFeedback({ kind: "success", title: profileText("passwordChanged", {}, language), message: "", actionText: "知道了" });
+          } catch (error) {
+            status.textContent = error.message || profileText("profileSaveFailed", {}, language);
+            status.className = "site-auth-feedback-form-status is-error";
+          } finally {
+            submit.disabled = false;
+          }
+        });
+        send.focus({ preventScroll: true });
+      },
+    });
+  }
+
   $("profileAvatarButton")?.addEventListener("click", () => $("profileAvatarFile")?.click());
   $("profileAvatarFile")?.addEventListener("change", (event) => {
     readAvatarFile(event.target.files?.[0]);
     event.target.value = "";
   });
-  $("profileAvatarRemove")?.addEventListener("click", () => {
-    state.avatarUrl = "";
-    state.dirty = true;
-    renderAvatar();
-    setStatusKey("avatarWillBeRemoved");
-  });
+  $("profileChangePassword")?.addEventListener("click", openPasswordResetDialog);
   $("profileTagAdd")?.addEventListener("click", addTagFromInput);
   $("profileTagInput")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {

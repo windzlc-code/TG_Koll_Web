@@ -46,6 +46,7 @@ class LiveBrowserSession:
 _SESSIONS: dict[str, LiveBrowserSession] = {}
 _CLOSE_CALLBACKS: dict[str, Callable[[], None]] = {}
 _LOCK = threading.Lock()
+_REGISTRY_LOCK = threading.RLock()
 _ORPHAN_CLEANUP_DONE = False
 _SIGKILL = getattr(signal, "SIGKILL", 9)
 
@@ -86,30 +87,31 @@ def start_live_browser_session(
     account_id = str(account.get("id") or "")
     session_id = f"live_{task_id}"
 
+    temp_dir = tempfile.mkdtemp(prefix="wk_live_browser_")
     with _LOCK:
         if session_id in _SESSIONS:
+            shutil.rmtree(temp_dir, ignore_errors=True)
             return _SESSIONS[session_id]
         display_num = _allocate_display_number()
         web_port = _allocate_tcp_port()
-        vnc_port = web_port
-
-    temp_dir = tempfile.mkdtemp(prefix="wk_live_browser_")
-
-    session = LiveBrowserSession(
-        id=session_id,
-        task_id=task_id,
-        account_id=account_id,
-        account_username=str(account.get("username") or account.get("display_name") or account_id),
-        platform=str(task.get("platform") or account.get("platform") or ""),
-        task_type=str(task.get("task_type") or ""),
-        display=f":{display_num}",
-        width=width,
-        height=height,
-        vnc_port=vnc_port,
-        web_port=web_port,
-        started_at=int(time.time()),
-        temp_dir=temp_dir,
-    )
+        session = LiveBrowserSession(
+            id=session_id,
+            task_id=task_id,
+            account_id=account_id,
+            account_username=str(account.get("username") or account.get("display_name") or account_id),
+            platform=str(task.get("platform") or account.get("platform") or ""),
+            task_type=str(task.get("task_type") or ""),
+            display=f":{display_num}",
+            width=width,
+            height=height,
+            vnc_port=web_port,
+            web_port=web_port,
+            started_at=int(time.time()),
+            temp_dir=temp_dir,
+        )
+        # Reserve the display before Xvnc starts. Concurrent tasks previously
+        # both selected :90 during this launch gap and one browser then failed.
+        _SESSIONS[session.id] = session
 
     try:
         session.processes.append(
@@ -138,8 +140,6 @@ def start_live_browser_session(
             )
         )
         _capture_session_process_identities(session)
-        with _LOCK:
-            _SESSIONS[session.id] = session
         _save_session_registry(session)
         _wait_for_live_browser_ready(session)
         session.status = "running"
@@ -349,20 +349,25 @@ def _session_public(session: LiveBrowserSession) -> dict[str, Any]:
             "autoconnect": 1,
             "resize": "scale",
             "reconnect": 1,
-            "quality": 5,
-            "dynamic_quality_min": 3,
-            "dynamic_quality_max": 7,
-            "jpeg_video_quality": 5,
-            "webp_video_quality": 4,
+            # Keep the remote desktop responsive over the public websocket.
+            # JPEG decodes more smoothly on the main-thread fallback used below
+            # than WebP, especially on mobile Chromium while the page scrolls.
+            "quality": 4,
+            "dynamic_quality_min": 2,
+            "dynamic_quality_max": 6,
+            "jpeg_video_quality": 4,
+            "webp_video_quality": -1,
             "video_quality": 1,
-            "video_time": 1,
+            # Brief scrolling should stay in rectangle mode instead of
+            # immediately switching the whole surface into video mode.
+            "video_time": 4,
             "video_out_time": 1,
             "video_scaling": 1,
             "max_video_resolution_x": 960,
             "max_video_resolution_y": 540,
-            "framerate": 24,
-            "compression": 2,
-            "enable_webp": 1,
+            "framerate": 30,
+            "compression": 1,
+            "enable_webp": 0,
             "enable_webrtc": 0,
             # KasmVNC's bundled noVNC client uses the browser ImageDecoder API
             # when threading is enabled. Chrome can reject JPEG/WebP rectangles
@@ -411,31 +416,47 @@ def _registry_path() -> Path:
 
 
 def _read_registry() -> dict[str, dict[str, Any]]:
-    path = _registry_path()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    sessions = data.get("sessions", data)
-    if not isinstance(sessions, dict):
-        return {}
-    return {str(key): value for key, value in sessions.items() if isinstance(value, dict)}
+    with _REGISTRY_LOCK:
+        path = _registry_path()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        sessions = data.get("sessions", data)
+        if not isinstance(sessions, dict):
+            return {}
+        return {str(key): value for key, value in sessions.items() if isinstance(value, dict)}
 
 
 def _write_registry(sessions: dict[str, dict[str, Any]]) -> None:
-    path = _registry_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"sessions": sessions}, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    with _REGISTRY_LOCK:
+        path = _registry_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, tmp_name = tempfile.mkstemp(
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+        os.close(descriptor)
+        tmp = Path(tmp_name)
+        try:
+            tmp.write_text(
+                json.dumps({"sessions": sessions}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(tmp, path)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                tmp.unlink()
 
 
 def _save_session_registry(session: LiveBrowserSession) -> None:
-    sessions = _read_registry()
-    sessions[session.id] = _session_registry_row(session)
-    _write_registry(sessions)
+    with _REGISTRY_LOCK:
+        sessions = _read_registry()
+        sessions[session.id] = _session_registry_row(session)
+        _write_registry(sessions)
 
 
 def _session_registry_row(session: LiveBrowserSession) -> dict[str, Any]:
@@ -445,9 +466,10 @@ def _session_registry_row(session: LiveBrowserSession) -> dict[str, Any]:
 
 
 def _remove_session_registry(session_id: str) -> None:
-    sessions = _read_registry()
-    if sessions.pop(str(session_id), None) is not None:
-        _write_registry(sessions)
+    with _REGISTRY_LOCK:
+        sessions = _read_registry()
+        if sessions.pop(str(session_id), None) is not None:
+            _write_registry(sessions)
 
 
 def _load_registry_sessions() -> list[LiveBrowserSession]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import os
 import random
 import re
@@ -43,6 +44,7 @@ SUPPORTED_TASK_TYPES = {
 }
 
 _CAMOUFOX_LAUNCH_LOCK = threading.Lock()
+_DEFAULT_LIVE_BROWSER_CHROME_HEIGHT = 61
 
 
 class AutomationLogger(Protocol):
@@ -114,6 +116,37 @@ class PublishClickUncertainError(RuntimeError):
 
 class UnsupportedActionError(RuntimeError):
     pass
+
+
+def _live_browser_geometry_config(session: Any) -> dict[str, int]:
+    width = max(1024, _safe_int(getattr(session, "width", 1600), 1600))
+    height = max(640, _safe_int(getattr(session, "height", 900), 900))
+    chrome_height = _safe_int(
+        os.getenv("SOCIAL_AUTOMATION_LIVE_BROWSER_CHROME_HEIGHT"),
+        _DEFAULT_LIVE_BROWSER_CHROME_HEIGHT,
+    )
+    chrome_height = max(0, min(chrome_height, height - 1))
+    content_height = height - chrome_height
+    return {
+        "screen.width": width,
+        "screen.height": height,
+        "screen.availWidth": width,
+        "screen.availHeight": content_height,
+        "window.innerWidth": width,
+        "window.innerHeight": content_height,
+        "window.outerWidth": width,
+        "window.outerHeight": height,
+        "window.screenX": 0,
+        "window.screenY": 0,
+    }
+
+
+def _live_browser_viewport_size(session: Any) -> dict[str, int]:
+    geometry = _live_browser_geometry_config(session)
+    return {
+        "width": geometry["window.innerWidth"],
+        "height": geometry["window.innerHeight"],
+    }
 
 
 def _wait_for_publish_login_transition(
@@ -720,11 +753,14 @@ class _BrowserContextManager:
         self.live_session = None
 
     def __enter__(self):
+        from .browser_runtime import verify_pinned_browser_runtime
+
+        runtime_versions = verify_pinned_browser_runtime()
         try:
             from camoufox.sync_api import Camoufox
         except Exception as exc:
             raise RuntimeError(
-                "Camoufox 未安装，请先安装依赖：pip install camoufox playwright"
+                "Camoufox 未安装，请从项目锁定依赖恢复受管浏览器运行环境，禁止直接安装最新版。"
             ) from exc
 
         profile_dir = Path(str(self.account.get("profile_dir") or "")).expanduser().resolve()
@@ -742,13 +778,26 @@ class _BrowserContextManager:
             "humanize": float(os.getenv("SOCIAL_AUTOMATION_HUMANIZE_MAX_SECONDS", "0.5")),
         }
         if self.live_session is not None:
-            # Keep the native browser window aligned with the Xvnc framebuffer.
-            # Camoufox otherwise generates a random outer window geometry which
-            # can be restored by a persistent profile on the next launch.
+            geometry_config = _live_browser_geometry_config(self.live_session)
+            # Camoufox beta.28 randomizes both its screen fingerprint and inner
+            # viewport. Pin both to the real Xvnc framebuffer so the current
+            # build retains the same 1600x839 content area as beta.24.
             kwargs["window"] = (
-                int(getattr(self.live_session, "width", 1600) or 1600),
-                int(getattr(self.live_session, "height", 900) or 900),
+                geometry_config["window.outerWidth"],
+                geometry_config["window.outerHeight"],
             )
+            kwargs["viewport"] = {
+                "width": geometry_config["window.innerWidth"],
+                "height": geometry_config["window.innerHeight"],
+            }
+            kwargs["config"] = geometry_config
+            kwargs["i_know_what_im_doing"] = True
+            if self.context_control is not None:
+                self.context_control["live_browser_window_width"] = geometry_config["window.outerWidth"]
+                self.context_control["live_browser_window_height"] = geometry_config["window.outerHeight"]
+                self.context_control["live_browser_chrome_reserve_height"] = (
+                    geometry_config["window.outerHeight"] - geometry_config["window.innerHeight"]
+                )
         if proxy_config:
             kwargs["proxy"] = proxy_config
             kwargs["geoip"] = True
@@ -756,7 +805,12 @@ class _BrowserContextManager:
             "info",
             "browser_launch",
             "正在启动 Camoufox 指纹浏览器环境。",
-            {"profile_dir": str(profile_dir), "proxy": _masked_proxy(proxy_config), "headless": headless},
+            {
+                "profile_dir": str(profile_dir),
+                "proxy": _masked_proxy(proxy_config),
+                "headless": headless,
+                "runtime_versions": runtime_versions,
+            },
         )
         try:
             self._enter_camoufox(Camoufox, kwargs)
@@ -785,8 +839,8 @@ class _BrowserContextManager:
             safe_error = _redact_proxy_error(exc, proxy_config)
             self._stop_live_browser_session()
             raise RuntimeError(
-                "Camoufox 浏览器启动失败。请在 Windows 执行 `py -3 -m camoufox fetch`，"
-                "或在 Linux/macOS 执行 `python -m camoufox fetch` 下载浏览器构建。"
+                "Camoufox 浏览器启动失败。请从项目锁定依赖和服务器浏览器构建备份恢复，"
+                "禁止直接下载或升级浏览器版本。"
                 f"原始错误：{safe_error}"
             ) from None
         return self.context
@@ -1179,7 +1233,15 @@ def _sync_live_browser_viewport(page, context_control: dict[str, Any] | None, lo
             "info",
             "live_browser_viewport",
             "已固定实时监控浏览器外框并记录页面坐标系。",
-            {"framebuffer": expected, "geometry": geometry},
+            {
+                "framebuffer": expected,
+                "browser_window": {
+                    "width": _safe_int(context_control.get("live_browser_window_width"), expected["width"]),
+                    "height": _safe_int(context_control.get("live_browser_window_height"), expected["height"]),
+                },
+                "chrome_reserve_height": _safe_int(context_control.get("live_browser_chrome_reserve_height"), 0),
+                "geometry": geometry,
+            },
         )
     except Exception as exc:
         logger.log(
@@ -1339,11 +1401,14 @@ def _human_click(
 ) -> bool:
     if abort_if is not None and abort_if():
         return False
-    locator.wait_for(state="visible", timeout=30000)
+    # A stale social-DOM target should never leave the live view frozen for
+    # tens of seconds.  Fresh candidates were already visibility-probed by
+    # their callers, so a short confirmation window is sufficient here.
+    locator.wait_for(state="visible", timeout=2500)
     if abort_if is not None and abort_if():
         return False
     try:
-        locator.scroll_into_view_if_needed(timeout=5000)
+        locator.scroll_into_view_if_needed(timeout=1500)
         _sleep_between(0.2, 0.5)
     except Exception:
         pass
@@ -1351,7 +1416,7 @@ def _human_click(
     if abort_if is not None and abort_if():
         return False
     if not box:
-        locator.click(timeout=10000)
+        locator.click(timeout=2500)
         return True
     viewport = page.viewport_size
     if not viewport:
@@ -1365,13 +1430,13 @@ def _human_click(
             viewport = None
     viewport = viewport or {"width": 1280, "height": 720}
     if box["y"] < 0 or box["y"] + box["height"] > viewport["height"] or box["x"] < 0 or box["x"] + box["width"] > viewport["width"]:
-        locator.scroll_into_view_if_needed(timeout=5000)
+        locator.scroll_into_view_if_needed(timeout=1500)
         _sleep_between(0.2, 0.5)
         box = locator.bounding_box()
         if abort_if is not None and abort_if():
             return False
         if not box:
-            locator.click(timeout=10000)
+            locator.click(timeout=2500)
             return True
     rel_x = random.uniform(box["width"] * 0.25, box["width"] * 0.75)
     rel_y = random.uniform(box["height"] * 0.25, box["height"] * 0.75)
@@ -1379,23 +1444,30 @@ def _human_click(
     if abort_if is not None and abort_if():
         return False
     try:
-        locator.click(position={"x": rel_x, "y": rel_y}, timeout=5000)
+        locator.click(position={"x": rel_x, "y": rel_y}, timeout=2500)
         return True
     except Exception as exc:
         logger.log("warn", f"{stage}_locator_click_failed", "目标元素点击超时，正在重新定位后重试。", {"error": str(exc)[:500]})
     try:
         if abort_if is not None and abort_if():
             return False
-        locator.wait_for(state="visible", timeout=5000)
-        locator.scroll_into_view_if_needed(timeout=5000)
-        locator.click(timeout=10000)
+        locator.wait_for(state="visible", timeout=1500)
+        locator.scroll_into_view_if_needed(timeout=1500)
+        locator.click(timeout=2500)
         return True
     except Exception as exc:
         logger.log("warn", f"{stage}_locator_retry_failed", "重新定位点击失败，改用目标元素 DOM 点击兜底。", {"error": str(exc)[:500]})
-    if abort_if is not None and abort_if():
-        return False
-    locator.evaluate("(node) => node.click()")
-    return True
+    # Do not bypass Playwright's actionability checks with ``node.click()``.
+    # On dynamic social pages that fallback can hang on a stale node and makes
+    # an interaction appear successful without a browser-confirmed pointer
+    # action.  The caller treats False as a recoverable target miss.
+    logger.log(
+        "warn",
+        f"{stage}_aborted",
+        "The target could not be clicked safely; skipped without DOM fallback.",
+        {},
+    )
+    return False
 
 
 def _screenshot(page, screenshot_dir: Path, task: dict[str, Any], stage: str, logger: AutomationLogger) -> str:
@@ -2760,11 +2832,18 @@ def _dismiss_instagram_interstitials(page, logger: AutomationLogger) -> bool:
     return dismissed
 
 
-def _click_some_instagram_likes(page, logger: AutomationLogger, limit: int) -> int:
+def _click_some_instagram_likes(
+    page,
+    logger: AutomationLogger,
+    limit: int,
+    *,
+    target_root=None,
+) -> int:
     clicked = 0
     if limit <= 0:
         return clicked
-    for group in _instagram_action_locators(page, "Like"):
+    action_scope = target_root if target_root is not None else page
+    for group in _instagram_action_locators(action_scope, "Like"):
         with contextlib.suppress(Exception):
             indices = list(range(min(group.count(), 32)))
             random.shuffle(indices)
@@ -2910,11 +2989,13 @@ def _open_random_instagram_post(
     logger: AutomationLogger,
     *,
     cancel_event: Any | None = None,
+    target_root=None,
 ) -> bool:
     candidates: list[Any] = []
+    action_scope = target_root if target_root is not None else page
     for selector in ('a[href*="/p/"]', 'a[href*="/reel/"]', 'a[href*="/tv/"]'):
         with contextlib.suppress(Exception):
-            group = page.locator(selector)
+            group = action_scope.locator(selector)
             candidates.extend(group.nth(index) for index in range(min(int(group.count()), 48)))
     random.shuffle(candidates)
     for link in candidates:
@@ -2953,11 +3034,22 @@ def _open_random_platform_post(
     *,
     platform: str,
     cancel_event: Any | None = None,
+    target_root=None,
 ) -> bool:
     if platform == "threads":
-        return _open_random_threads_post(page, logger, cancel_event=cancel_event)
+        return _open_random_threads_post(
+            page,
+            logger,
+            cancel_event=cancel_event,
+            target_root=target_root,
+        )
     if platform == "instagram":
-        return _open_random_instagram_post(page, logger, cancel_event=cancel_event)
+        return _open_random_instagram_post(
+            page,
+            logger,
+            cancel_event=cancel_event,
+            target_root=target_root,
+        )
     raise UnsupportedActionError(f"Unsupported warmup platform: {platform}")
 
 
@@ -2981,15 +3073,20 @@ def _run_instagram_warmup(
     )
 
 
-def _threads_like_buttons(page):
+def _threads_like_buttons(scope):
     selectors = [
+        # Threads renders the accessible "Like" label on an inner SVG. Click
+        # its role=button ancestor first; clicking the SVG itself is fragile
+        # when a virtualized feed shifts after scrolling.
+        '[role="button"]:has([aria-label="Like"])',
+        '[role="button"]:has([aria-label*="赞"])',
         '[aria-label="Like"]',
         '[aria-label*="\u8d5e"]',
     ]
     locators = []
     for selector in selectors:
         try:
-            locators.append(page.locator(selector))
+            locators.append(scope.locator(selector))
         except Exception:
             continue
     return locators
@@ -3000,6 +3097,11 @@ def _is_threads_like_candidate(locator) -> bool:
     text = ""
     with contextlib.suppress(Exception):
         label = str(locator.get_attribute("aria-label") or "")
+    if not label:
+        # Current Threads action buttons put the accessible name on their
+        # nested SVG. Keep lookup scoped to the selected relevant card.
+        with contextlib.suppress(Exception):
+            label = str(locator.locator("[aria-label]").first.get_attribute("aria-label") or "")
     with contextlib.suppress(Exception):
         text = str(locator.inner_text(timeout=500) or "")
     probe = f"{label} {text}".strip().lower()
@@ -3011,11 +3113,18 @@ def _is_threads_like_candidate(locator) -> bool:
     return "like" in probe or "\u8d5e" in probe
 
 
-def _click_some_threads_likes(page, logger: AutomationLogger, limit: int) -> int:
+def _click_some_threads_likes(
+    page,
+    logger: AutomationLogger,
+    limit: int,
+    *,
+    target_root=None,
+) -> int:
     clicked = 0
     if limit <= 0:
         return clicked
-    for group in _threads_like_buttons(page):
+    action_scope = target_root if target_root is not None else page
+    for group in _threads_like_buttons(action_scope):
         try:
             total = group.count()
         except Exception:
@@ -3063,8 +3172,10 @@ def _open_random_threads_post(
     logger: AutomationLogger,
     *,
     cancel_event: Any | None = None,
+    target_root=None,
 ) -> bool:
-    candidates = page.locator('a[href*="/post/"]')
+    action_scope = target_root if target_root is not None else page
+    candidates = action_scope.locator('a[href*="/post/"]')
     try:
         total = candidates.count()
     except Exception:
@@ -3190,15 +3301,29 @@ _WARMUP_RELEVANCE_IGNORED_TERMS = {
     "中文", "简体中文", "簡體中文", "繁体中文", "繁體中文", "内容", "內容",
     "分享", "日常", "生活", "资深", "資深", "专业", "專業", "关注", "關注",
     "博主", "达人", "達人", "老师", "老師",
+    "搞笑", "生活日常", "生活方式", "职场趣事", "職場趣事", "日常吐槽",
 }
+
+_WARMUP_RELEVANCE_BLOCKLIST = (
+    "点击链接",
+    "私信领取",
+    "免费领取",
+    "抽奖",
+    "推广",
+    "代购",
+    "赚钱教程",
+)
 
 
 def _warmup_persona_keyword_candidates(payload: dict[str, Any], limit: int = 12) -> list[str]:
-    sources: list[Any] = []
+    # Prefer the explicit role/name. Topic lists can still contain useful
+    # concrete terms (for example "男士短发"), but broad entries are removed
+    # below before we fall back to the free-form persona context.
+    sources: list[Any] = [payload.get("persona_name")]
     topics = payload.get("persona_topics")
     if isinstance(topics, list):
         sources.extend(topics)
-    sources.extend((payload.get("persona_context"), payload.get("persona_name")))
+    sources.append(payload.get("persona_context"))
     candidates: list[str] = []
     seen: set[str] = set()
 
@@ -3209,6 +3334,9 @@ def _warmup_persona_keyword_candidates(payload: dict[str, Any], limit: int = 12)
             len(normalized) < 2
             or len(normalized) > 16
             or normalized in _WARMUP_RELEVANCE_IGNORED_TERMS
+            # Do not turn an ignored broad phrase into a seemingly valid
+            # fragment such as "生活日" or "职场" during n-gram fallback.
+            or any(normalized in term for term in _WARMUP_RELEVANCE_IGNORED_TERMS if len(term) > len(normalized))
             or _is_warmup_test_content(raw)
             or normalized in seen
         ):
@@ -3235,13 +3363,190 @@ def _warmup_persona_keyword_candidates(payload: dict[str, Any], limit: int = 12)
     return candidates[:limit]
 
 
-def _score_warmup_post_relevance(payload: dict[str, Any], target_text: Any) -> dict[str, Any]:
+def _sanitize_warmup_search_keywords(values: Iterable[Any], *, limit: int = 5) -> list[str]:
+    """Keep only short, human-searchable persona keywords from model output."""
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        raw = " ".join(str(value or "").split()).strip("-•,，。;；:：[]()（）\"'")
+        normalized = _normalize_warmup_text(raw).replace(" ", "")
+        if (
+            len(normalized) < 2
+            or len(normalized) > 16
+            or normalized in _WARMUP_RELEVANCE_IGNORED_TERMS
+            or any(normalized in term for term in _WARMUP_RELEVANCE_IGNORED_TERMS if len(term) > len(normalized))
+            or _is_warmup_test_content(raw)
+            or "http" in normalized.lower()
+            or normalized in seen
+        ):
+            continue
+        seen.add(normalized)
+        cleaned.append(raw[:32])
+        if len(cleaned) >= limit:
+            break
+    return cleaned
+
+
+def _warmup_relevance_keyword_set(
+    payload: dict[str, Any],
+    keywords: Iterable[Any] | None = None,
+    *,
+    limit: int = 24,
+) -> list[str]:
+    """Build the same concrete-term bank used by the TG warmup flow.
+
+    Search queries can be specific phrases, while a post often only contains
+    a stable two-to-four-character topic fragment (for example, ``理发店``
+    from ``油头复古理发店``).  Preserve those fragments for *relevance*
+    matching only; the actual search query remains the full, model-produced
+    phrase.
+    """
+    sources: list[Any] = []
+    if keywords is not None:
+        sources.extend(keywords)
+    sources.extend(_warmup_persona_keyword_candidates(payload, limit=24))
+    expanded: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        raw = " ".join(str(value or "").split()).strip()
+        normalized = _normalize_warmup_text(raw).replace(" ", "")
+        if (
+            len(normalized) < 2
+            or len(normalized) > 16
+            or normalized in _WARMUP_RELEVANCE_IGNORED_TERMS
+            or _is_warmup_test_content(raw)
+            or normalized in seen
+        ):
+            return
+        seen.add(normalized)
+        expanded.append(raw[:32])
+
+    for source in sources:
+        raw = " ".join(str(source or "").split())
+        add(raw)
+        for token in re.findall(r"[\u3400-\u9fff]{2,16}", raw):
+            add(token)
+            for size in range(2, min(4, len(token)) + 1):
+                for index in range(0, len(token) - size + 1):
+                    add(token[index:index + size])
+    return expanded[:limit]
+
+
+def _warmup_ai_settings() -> tuple[str, str, list[str]]:
+    try:
+        from runtime_config_bootstrap import load_runtime_config
+
+        runtime = load_runtime_config()
+        host = str(runtime.get("llm_base_url") or "").strip()
+        api_key = str(
+            runtime.get("llm_api_key_gpt")
+            or runtime.get("llm_api_key")
+            or runtime.get("llm_api_key_gemini")
+            or ""
+        ).strip()
+        model_order = str(
+            runtime.get("llm_model_priority_order")
+            or runtime.get("llm_default_model_gpt")
+            or runtime.get("llm_default_model")
+            or runtime.get("llm_default_model_gemini")
+            or ""
+        )
+        models = list(dict.fromkeys(item.strip() for item in model_order.split(",") if item.strip()))
+        return host, api_key, models
+    except Exception:
+        return "", "", []
+
+
+def _warmup_model_timeout_seconds(payload: dict[str, Any]) -> int:
+    return _payload_int(
+        payload,
+        ("warmup_model_timeout_seconds",),
+        12,
+        3,
+        30,
+    )
+
+
+def _generate_warmup_search_keywords_with_ai(payload: dict[str, Any]) -> list[str]:
+    """Generate TG-style persona queries while retaining concrete local fallbacks."""
+    fallback = _warmup_persona_keyword_candidates(payload, limit=5)
+    cached = payload.get("_warmup_generated_search_keywords")
+    if isinstance(cached, list):
+        payload.setdefault("_warmup_search_keyword_source", "cache")
+        return _sanitize_warmup_search_keywords(cached, limit=5) or fallback
+
+    host, api_key, models = _warmup_ai_settings()
+    if not host or not api_key or not models:
+        payload["_warmup_generated_search_keywords"] = list(fallback)
+        payload["_warmup_search_keyword_source"] = "fallback:model_unavailable"
+        return fallback
+
+    persona_name = str(payload.get("persona_name") or "当前人设").strip()
+    persona_context = str(payload.get("persona_context") or "").strip()[:900]
+    persona_topics = "、".join(
+        str(item or "").strip() for item in (payload.get("persona_topics") or []) if str(item or "").strip()
+    )[:300]
+    request_kwargs = {
+        "user_input": (
+            f"人设名称：{persona_name}\n人设背景：{persona_context}\n关注主题：{persona_topics}\n"
+            "为社交平台养号生成 3 到 5 个可直接搜索的中文短关键词。"
+            "每个词必须包含具体职业、工具、作品或场景，不得只输出性格、情绪或泛生活词。"
+            "只输出 JSON 数组，例如 [\"男士短发\",\"发型打理\"]；不得输出解释、测试词、营销词、链接或泛词。"
+        ),
+        "host": host,
+        "api_key": api_key,
+        "retry_count": 1,
+        "request_timeout_seconds": _warmup_model_timeout_seconds(payload),
+        "system_prompt": "你只负责从给定人设提炼真实、具体、适合内容搜索的关键词。",
+    }
+    try:
+        import get_gemini
+
+        for model in models:
+            try:
+                result = get_gemini.request_gemini3_pro_raw_text(**request_kwargs, model=model)
+            except Exception:
+                continue
+            if not isinstance(result, dict) or result.get("ok") is not True:
+                continue
+            raw = str(result.get("raw_text") or "").strip()
+            parsed: list[Any] = []
+            with contextlib.suppress(Exception):
+                candidate = json.loads(raw[raw.find("["): raw.rfind("]") + 1])
+                if isinstance(candidate, list):
+                    parsed = candidate
+            if not parsed:
+                parsed = re.split(r"[\n,，、;；]+", raw)
+            generated = _sanitize_warmup_search_keywords(parsed, limit=5)
+            if generated:
+                # TG's path never lets an LLM answer erase the locally derived
+                # persona terms.  Keep model queries first for search quality,
+                # then merge the deterministic candidates for recovery.
+                merged = _sanitize_warmup_search_keywords([*generated, *fallback], limit=5)
+                payload["_warmup_generated_search_keywords"] = list(merged)
+                payload["_warmup_search_keyword_source"] = f"model:{model}"
+                return merged
+    except Exception:
+        pass
+
+    payload["_warmup_generated_search_keywords"] = list(fallback)
+    payload["_warmup_search_keyword_source"] = "fallback:model_failed"
+    return fallback
+
+
+def _score_warmup_post_relevance(
+    payload: dict[str, Any],
+    target_text: Any,
+    *,
+    keywords: Iterable[Any] | None = None,
+) -> dict[str, Any]:
     target = _normalize_warmup_text(target_text).replace(" ", "")
-    keywords = _warmup_persona_keyword_candidates(payload)
+    cleaned_keywords = _warmup_relevance_keyword_set(payload, keywords, limit=24)
     matched: list[str] = []
     score = 0
     if target and not _is_warmup_test_content(target_text):
-        for keyword in keywords:
+        for keyword in cleaned_keywords:
             normalized = _normalize_warmup_text(keyword).replace(" ", "")
             if normalized and normalized in target:
                 matched.append(keyword)
@@ -3250,8 +3555,77 @@ def _score_warmup_post_relevance(payload: dict[str, Any], target_text: Any) -> d
         "relevant": score >= 3,
         "score": score,
         "matched": matched[:8],
-        "keywords": keywords,
+        "keywords": cleaned_keywords,
     }
+
+
+def _assess_warmup_post_relevance(
+    payload: dict[str, Any],
+    target_text: Any,
+    *,
+    keywords: Iterable[Any],
+) -> dict[str, Any]:
+    """Use an LLM when available; on failure, never weaken the lexical safety gate."""
+    lexical = _score_warmup_post_relevance(payload, target_text, keywords=keywords)
+    clean_target = " ".join(str(target_text or "").split())[:1200]
+    if not clean_target or _is_warmup_test_content(clean_target):
+        return lexical
+    # A concrete persona/topic phrase has already passed the same lexical gate
+    # as TG warmup.  Do not let an LLM's one-shot false negative reject an
+    # otherwise confirmed search result.  Risk/verification guards still run
+    # before any action is taken.
+    normalized_target = _normalize_warmup_text(clean_target).replace(" ", "")
+    if lexical["relevant"] and not any(term in normalized_target for term in _WARMUP_RELEVANCE_BLOCKLIST):
+        return {**lexical, "model_checked": False}
+    cache = payload.setdefault("_warmup_relevance_cache", {})
+    cache_key = hashlib.sha256(clean_target.encode("utf-8", "ignore")).hexdigest()
+    cached = cache.get(cache_key) if isinstance(cache, dict) else None
+    if isinstance(cached, bool):
+        return {**lexical, "relevant": cached, "model_checked": True}
+
+    host, api_key, models = _warmup_ai_settings()
+    if not host or not api_key or not models:
+        return {**lexical, "model_checked": False}
+    try:
+        import get_gemini
+
+        for model in models:
+            try:
+                result = get_gemini.request_gemini3_pro_raw_text(
+                    user_input=(
+                        f"人设：{payload.get('persona_name') or '当前人设'}\n"
+                        f"人设背景：{str(payload.get('persona_context') or '')[:700]}\n"
+                        f"人设关键词：{'、'.join(str(item) for item in keywords)}\n"
+                        f"帖子：{clean_target}\n"
+                        "帖子是否明确适合该人设自然浏览和互动？只输出 JSON：{\"relevant\":true} 或 {\"relevant\":false}。"
+                    ),
+                    host=host,
+                    api_key=api_key,
+                    retry_count=1,
+                    request_timeout_seconds=_warmup_model_timeout_seconds(payload),
+                    system_prompt="相关性审核必须保守；模糊、无关、测试或风险内容一律 false。",
+                    model=model,
+                )
+            except Exception:
+                continue
+            raw = str(result.get("raw_text") or "") if isinstance(result, dict) and result.get("ok") is True else ""
+            match = re.search(r'"relevant"\s*:\s*(true|false)', raw, re.IGNORECASE)
+            if not match:
+                continue
+            relevant = match.group(1).lower() == "true"
+            if isinstance(cache, dict):
+                cache[cache_key] = relevant
+            return {
+                **lexical,
+                # A positive model decision can admit a semantically relevant
+                # post even when its wording differs from the search keyword.
+                # A negative model decision always rejects it.
+                "relevant": relevant,
+                "model_checked": True,
+            }
+    except Exception:
+        pass
+    return {**lexical, "model_checked": False}
 
 
 def _ensure_warmup_relevant_surface(
@@ -3260,51 +3634,75 @@ def _ensure_warmup_relevant_surface(
     logger: AutomationLogger,
     *,
     platform: str,
+    phase: str = "initial",
 ) -> dict[str, Any] | None:
     """Locate a persona-relevant post, searching the platform only after feed probes miss."""
     require_relevance = bool(payload.get("require_persona_relevance", True))
-    keywords = _warmup_persona_keyword_candidates(payload)
+    keywords = _generate_warmup_search_keywords_with_ai(payload)
     if not require_relevance or not keywords:
         return _current_warmup_post_context(page, platform)
 
     stage = f"{platform}_warmup_relevance"
 
     def inspect(label: str) -> dict[str, Any] | None:
-        context = _current_warmup_post_context(page, platform)
-        relevance = _score_warmup_post_relevance(payload, context.get("text") or "")
-        if relevance["relevant"]:
-            context["relevance"] = relevance
-            logger.log(
-                "info",
-                stage,
-                "已定位人设相关内容。",
-                {"surface": label, "matched": relevance["matched"], "score": relevance["score"]},
+        contexts = _visible_warmup_post_contexts(page, platform, limit=12)
+        previews: list[str] = []
+        for candidate_index, context in enumerate(contexts):
+            candidate_text = str(context.get("text") or "")
+            relevance = _assess_warmup_post_relevance(
+                payload,
+                candidate_text,
+                keywords=keywords,
             )
-            return context
+            if relevance["relevant"]:
+                context["relevance"] = relevance
+                context["selection_reason"] = f"{label}:candidate_{candidate_index + 1}"
+                logger.log(
+                    "info",
+                    stage,
+                    "已定位人设相关内容。",
+                    {
+                        "surface": label,
+                        "candidate_index": candidate_index + 1,
+                        "matched": relevance["matched"],
+                        "score": relevance["score"],
+                    },
+                )
+                return context
+            if candidate_text:
+                previews.append(candidate_text[:80])
         logger.log(
             "debug",
             stage,
             "当前内容与人设不匹配，继续寻找相关内容。",
-            {"surface": label, "preview": str(context.get("text") or "")[:80], "keywords": keywords[:5]},
+            {
+                "surface": label,
+                "candidate_count": len(contexts),
+                "previews": previews[:3],
+                "keywords": keywords[:5],
+            },
         )
         return None
 
-    for probe in range(2):
+    probe_limit = 3 if phase == "initial" else 2
+    for probe in range(probe_limit):
         context = inspect(f"feed_probe_{probe + 1}")
         if context:
             return context
-        if probe == 0:
+        if probe < probe_limit - 1:
             _slow_human_scroll(page)
             _sleep_between(0.8, 1.6)
 
-    for keyword in random.sample(keywords, k=min(3, len(keywords))):
+    # Model output is ranked. Preserve its order so a useful primary term is
+    # never skipped merely because the random sample chose weaker fallbacks.
+    for keyword in keywords[:3]:
         logger.log("info", stage, "推荐流未命中人设内容，切换到人设关键词搜索。", {"keyword": keyword})
         _goto(page, _warmup_interest_search_url(platform, keyword), logger, f"{stage}_search")
-        for scan in range(2):
+        for scan in range(3):
             context = inspect(f"search:{keyword}:{scan + 1}")
             if context:
                 return context
-            if scan == 0:
+            if scan < 2:
                 _slow_human_scroll(page)
                 _sleep_between(0.8, 1.6)
 
@@ -3375,7 +3773,7 @@ def _run_platform_warmup(
         max_comments=max_comments,
     )
 
-    persona_keywords = _warmup_persona_keyword_candidates(payload)
+    persona_keywords = _generate_warmup_search_keywords_with_ai(payload)
 
     logger.log(
         "info",
@@ -3393,6 +3791,7 @@ def _run_platform_warmup(
             "search_chance": search_chance,
             "persona_name": payload.get("persona_name") or "",
             "persona_keywords": persona_keywords[:8],
+            "keyword_generation_source": payload.get("_warmup_search_keyword_source") or "unknown",
         },
     )
 
@@ -3401,6 +3800,7 @@ def _run_platform_warmup(
         payload,
         logger,
         platform=clean_platform,
+        phase="initial",
     )
     if bool(payload.get("require_persona_relevance", True)) and persona_keywords and not initial_surface:
         raise RuntimeError("当前推荐流与人设关键词均未找到相关内容，已停止避免无关互动。")
@@ -3422,20 +3822,26 @@ def _run_platform_warmup(
             _dismiss_instagram_interstitials(page, logger)
         _guard_warmup_risk(page, clean_platform, payload, logger)
 
+        # A scroll can replace the viewport entirely. Re-establish a relevant
+        # post before every browse, open, like, or comment action on both platforms.
+        relevant_surface = _ensure_warmup_relevant_surface(
+            page,
+            payload,
+            logger,
+            platform=clean_platform,
+            phase="browse",
+        )
+        if bool(payload.get("require_persona_relevance", True)) and persona_keywords and not relevant_surface:
+            raise RuntimeError("当前推荐流和搜索结果均未找到与人设相关的内容，已停止避免无关浏览或互动。")
+
         elapsed_ratio = 1 - max(
             0,
             deadline - time.monotonic(),
         ) / max(1, session_seconds)
-        interaction_due = browsed >= next_interaction_at
-        if interaction_due and (like_limit > liked or max_comments > commented):
-            relevant_surface = _ensure_warmup_relevant_surface(
-                page,
-                payload,
-                logger,
-                platform=clean_platform,
-            )
-            if bool(payload.get("require_persona_relevance", True)) and persona_keywords and not relevant_surface:
-                raise RuntimeError("当前推荐流与人设关键词均未找到相关内容，已停止避免无关互动。")
+        # ``browsed`` is the number of posts completed before the current
+        # candidate.  Schedule against the 1-based candidate position so an
+        # "every 1 post" strategy can interact with its very first post.
+        interaction_due = (browsed + 1) >= next_interaction_at
         interacted = False
         prefer_comment = (
             interaction_due
@@ -3459,9 +3865,19 @@ def _run_platform_warmup(
             and should_try_like
         ):
             if clean_platform == "threads":
-                clicked_likes = _click_some_threads_likes(page, logger, 1)
+                clicked_likes = _click_some_threads_likes(
+                    page,
+                    logger,
+                    1,
+                    target_root=relevant_surface.get("root") if relevant_surface else None,
+                )
             else:
-                clicked_likes = _click_some_instagram_likes(page, logger, 1)
+                clicked_likes = _click_some_instagram_likes(
+                    page,
+                    logger,
+                    1,
+                    target_root=relevant_surface.get("root") if relevant_surface else None,
+                )
                 _dismiss_instagram_interstitials(page, logger)
             liked += clicked_likes
             interacted = clicked_likes > 0
@@ -3487,6 +3903,7 @@ def _run_platform_warmup(
                 logger,
                 platform=clean_platform,
                 cancel_event=cancel_event,
+                target_root=relevant_surface.get("root") if relevant_surface else None,
         ):
             opened_posts += 1
 
@@ -3505,9 +3922,13 @@ def _run_platform_warmup(
                 or random.randint(1, 100) <= comment_chance
             )
         ):
-            target = _current_warmup_post_context(page, clean_platform)
+            target = relevant_surface or _current_warmup_post_context(page, clean_platform)
             target_text = str(target.get("text") or "")
-            target_relevance = _score_warmup_post_relevance(payload, target_text)
+            target_relevance = _assess_warmup_post_relevance(
+                payload,
+                target_text,
+                keywords=persona_keywords,
+            )
             if bool(payload.get("require_persona_relevance", True)) and not target_relevance["relevant"]:
                 logger.log(
                     "debug",
@@ -3571,7 +3992,7 @@ def _run_platform_warmup(
                         )
 
         if interacted:
-            next_interaction_at = _next_warmup_interaction_at(browsed, payload)
+            next_interaction_at = _next_warmup_interaction_at(browsed + 1, payload)
         scroll = _slow_human_scroll(page)
         browsed += 1
         remaining_seconds = max(0, int(deadline - time.monotonic()))
@@ -3591,7 +4012,12 @@ def _run_platform_warmup(
         )
         if remaining_seconds <= 0:
             break
-        _wait_for_cancellation(random.uniform(20.0, 45.0), cancel_event)
+        # Keep the declared session length authoritative.  A human-like idle
+        # pause must never carry a small validation run far past its deadline.
+        _wait_for_cancellation(
+            min(random.uniform(20.0, 45.0), max(0.0, deadline - time.monotonic())),
+            cancel_event,
+        )
 
     if clean_platform == "instagram":
         _dismiss_instagram_interstitials(page, logger)
@@ -3967,7 +4393,13 @@ def _pick_warmup_persona_reply(
     )
 
 
-def _current_warmup_post_context(page, platform: str) -> dict[str, Any]:
+def _visible_warmup_post_contexts(page, platform: str, *, limit: int = 12) -> list[dict[str, Any]]:
+    """Return visible post cards in visual order for relevance selection.
+
+    Search pages commonly show several candidate posts at once.  Selecting only
+    the center card can miss a relevant recent result that is already visible,
+    then incorrectly exhaust the search and stop the warmup.
+    """
     platform_name = str(platform or "").strip().lower()
     selectors = ("article",) if platform_name == "instagram" else ("article", "[data-pressable-container='true']")
     viewport_height = 800.0
@@ -3993,14 +4425,22 @@ def _current_warmup_post_context(page, platform: str) -> dict[str, Any]:
                 width = float(box.get("width") or 0)
                 if width <= 180 or height <= 80 or top + height <= 80 or top >= viewport_height - 40:
                     continue
-                score = abs(top + height / 2 - viewport_height / 2)
-                candidates.append((score, root, text[:1600]))
+                # Top-to-bottom is the platform's result/feed order; evaluating
+                # all visible cards lets us choose the first relevant candidate.
+                candidates.append((top, root, text[:1600]))
         if candidates and selector == "article":
             break
     if not candidates:
-        return {"text": "", "root": None}
-    _, root, text = min(candidates, key=lambda item: item[0])
-    return {"text": text, "root": root}
+        return []
+    return [
+        {"text": text, "root": root, "viewport_top": top}
+        for top, root, text in sorted(candidates, key=lambda item: item[0])[:max(1, int(limit))]
+    ]
+
+
+def _current_warmup_post_context(page, platform: str) -> dict[str, Any]:
+    contexts = _visible_warmup_post_contexts(page, platform, limit=1)
+    return contexts[0] if contexts else {"text": "", "root": None}
 
 
 def _current_warmup_post_text(page, platform: str) -> str:
@@ -5786,6 +6226,42 @@ def _auto_submit_login_form(
     takeover_requested = lambda: _manual_takeover_requested(context_control)
     start_shot = _screenshot(page, screenshot_dir, task, "auto_login_start", logger)
     logger.log("info", "auto_login_start", f"开始自动填写 {_platform_name(platform)} 登录凭据。", {"username": username, "url": _safe_navigation_url(page.url)}, start_shot)
+
+    if platform == "instagram":
+        body_text = _page_body_text_lower(page, timeout_ms=1200)
+        normalized_username = username.lower().lstrip("@")
+        remembered_profile = bool(
+            normalized_username
+            and normalized_username in body_text
+            and "continue" in body_text
+            and any(
+                marker in body_text
+                for marker in (
+                    "use another profile",
+                    "switch accounts",
+                    "使用其他个人资料",
+                    "使用其他帐号",
+                    "使用其他账号",
+                )
+            )
+        )
+        if remembered_profile:
+            logger.log(
+                "info",
+                "instagram_remembered_profile",
+                "检测到 Instagram 已记住当前账号，正在继续使用该账号登录。",
+                {"username": username, "url": _safe_navigation_url(page.url)},
+            )
+            clicked = _click_text_button(
+                page,
+                logger,
+                ["Continue", "继续"],
+                "instagram_remembered_profile_continue",
+                abort_if=takeover_requested,
+            )
+            if clicked:
+                _sleep_between(2.0, 4.0)
+                return True
 
     continue_clicked = False
     if platform == "threads":

@@ -1976,8 +1976,23 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         badge = self.console_script[start:end]
 
         self.assertIn("personaExecutionAccountDetails(persona)", badge)
-        self.assertIn('`平台：${executionPlatform} · 账号：${accountLabel}`', badge)
-        self.assertIn('`账号：${accountLabel}`', badge)
+        self.assertIn("personaAccounts(persona)", badge)
+        self.assertIn("persona-execution-platform-logos", badge)
+        self.assertIn('persona-execution-platform-logo${isCurrent ? " is-current" : ""}', badge)
+        self.assertIn('账号：${esc(accountLabel)}', badge)
+
+        active_logo_start = self.styles.index(".persona-execution-platform-logo.is-current")
+        active_logo_end = self.styles.index(".persona-execution-platform-logo svg", active_logo_start)
+        active_logo = self.styles[active_logo_start:active_logo_end]
+        self.assertIn("background: var(--accent);", active_logo)
+        self.assertIn("color: #fff;", active_logo)
+
+        mobile_identity_start = self.styles.rindex(".persona-profile-data-panel-head--identity {")
+        mobile_identity_end = self.styles.index(".persona-profile-list-toggle {", mobile_identity_start)
+        mobile_identity = self.styles[mobile_identity_start:mobile_identity_end]
+        self.assertIn("grid-template-columns: 88px minmax(0, 1fr) 36px;", mobile_identity)
+        self.assertIn(".persona-profile-data-panel-head--identity > strong", mobile_identity)
+        self.assertIn("justify-self: center;", mobile_identity)
 
     def test_draft_source_controls_are_wide_without_quick_select(self):
         self.assertNotIn("草稿快速选择", self.console_script)
