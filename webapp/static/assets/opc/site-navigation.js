@@ -1357,9 +1357,6 @@
       modal.addEventListener("site-auth-feedback-dismiss", () => close(true));
       modal.querySelector(".site-auth-feedback-close").addEventListener("click", close);
       confirm?.addEventListener("click", close);
-      modal.addEventListener("click", (event) => {
-        if (event.target === modal) close();
-      });
       modal.addEventListener("keydown", (event) => {
         if (event.key === "Escape") close();
       });
@@ -1420,9 +1417,6 @@
       modal.querySelector(".site-auth-feedback-close").addEventListener("click", () => close(false));
       modal.querySelector(".site-auth-feedback-cancel").addEventListener("click", () => close(false));
       modal.querySelector(".site-auth-feedback-confirm").addEventListener("click", () => close(true));
-      modal.addEventListener("click", (event) => {
-        if (event.target === modal) close(false);
-      });
       modal.addEventListener("keydown", (event) => {
         if (event.key === "Escape") close(false);
       });
@@ -1471,9 +1465,6 @@
     };
     overlay.querySelector("button").setAttribute("aria-label", labels.notificationClose);
     overlay.querySelector("button").addEventListener("click", close);
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) close();
-    });
     overlay.addEventListener("keydown", (event) => {
       if (event.key === "Escape") close();
     });
@@ -1511,8 +1502,9 @@
       notificationState.loading = false;
       renderNotifications();
       if (announce && !document.hidden) {
+        const importantUnread = notificationState.items.find((item) => !item.read && item.important);
         const latestUnread = notificationState.items.find((item) => !item.read);
-        if (latestUnread) showNotificationBroadcast(latestUnread);
+        if (importantUnread || latestUnread) showNotificationBroadcast(importantUnread || latestUnread);
       }
       return payload;
     } catch {
@@ -1898,6 +1890,7 @@
     bindAccountMenus(header);
     bindNotificationMenus(header);
     setAccount(account);
+    syncPublicAuthCtas(true);
     sync();
   }
 
@@ -1907,8 +1900,18 @@
     header.dataset.siteAuthState = "guest";
     currentSessionMode = "guest";
     setAccount(null);
+    syncPublicAuthCtas(false);
     proxyMarketBadgeRequest += 1;
     sync();
+  }
+
+  function syncPublicAuthCtas(isAuthenticated) {
+    document.querySelectorAll("[data-public-auth-guest]").forEach((node) => {
+      node.hidden = Boolean(isAuthenticated);
+    });
+    document.querySelectorAll("[data-public-auth-account]").forEach((node) => {
+      node.hidden = !isAuthenticated;
+    });
   }
 
   async function fetchSessionAccount({ admin = false, workspaceUserId = "" } = {}) {

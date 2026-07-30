@@ -968,6 +968,28 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         self.assertTrue(result["route_verified"])
         self.assertTrue(result["static_consistent"])
         self.assertEqual(result["residential_status"], "verified")
+        self.assertEqual(result["network_type"], "static_residential")
+
+    def test_proxy_check_accepts_connected_datacenter_and_reports_actual_type(self):
+        proxy = social_api.create_social_proxy(
+            social_api.SocialProxyPayload(host="market-datacenter.example", port=1080)
+        )
+        responses = [
+            self._json_response({"ip": "47.243.99.2"}),
+            self._json_response({"ip": "1.1.1.1"}),
+            self._json_response({"success": True, "ip": "1.1.1.1", "country_code": "JP"}),
+            self._json_response({
+                "ip": "1.1.1.1", "is_bogon": False, "is_datacenter": True,
+                "is_tor": False, "is_vpn": False, "company": {"type": "hosting"},
+            }),
+        ]
+        with mock.patch.object(social_api.requests, "get", side_effect=responses):
+            checked = social_api.check_social_proxy(proxy["id"])
+
+        result = checked["last_check_result"]
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["residential_status"], "rejected")
+        self.assertEqual(result["network_type"], "datacenter")
 
     def test_proxy_routes_and_exit_ip_list_field(self):
         app = social_api.FastAPI()

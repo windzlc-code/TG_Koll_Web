@@ -10453,7 +10453,7 @@ class CustomerTagPayload(BaseModel):
 class AdminUserBatchPayload(BaseModel):
     action: str = Field(min_length=2, max_length=80)
     user_ids: list[int] = Field(min_length=1, max_length=5000)
-    reason: str = Field(min_length=2, max_length=1000)
+    reason: str = Field(default="", max_length=1000)
     group_id: str = Field(default="", max_length=100)
     tag_ids: list[str] = Field(default_factory=list, max_length=100)
     delta_points: float = Field(default=0, ge=0, le=1_000_000)
@@ -21668,6 +21668,14 @@ def create_app() -> FastAPI:
         }
         if action not in allowed:
             raise HTTPException(status_code=400, detail="unsupported batch action")
+        reason = str(payload.reason or "").strip()
+        if not reason:
+            reason = {
+                "add_credit": "管理员批量调整算力（未填写说明）",
+                "enable": "管理员批量启用账号（未填写说明）",
+                "suspend": "管理员批量停用账号（未填写说明）",
+            }.get(action, f"管理员批量操作：{action}（未填写说明）")
+        payload.reason = reason
         if action == "add_credit" and float(payload.delta_points or 0) <= 0:
             raise HTTPException(status_code=400, detail="delta_points must be greater than zero")
         idempotency_key = str(payload.idempotency_key or "").strip()
@@ -21892,6 +21900,25 @@ def create_app() -> FastAPI:
                             reason=payload.reason,
                             actor_user_id=int(user.get("id") or 0),
                             at=started,
+                        )
+                        notification_copy = {
+                            "approve": ("账号审核已通过", "管理员已通过你的账号申请，现在可以正常使用。"),
+                            "reject": ("账号审核未通过", "管理员未通过你的账号申请，请在消息页查看并联系管理员。"),
+                            "enable": ("账号已启用", "管理员已重新启用你的账号，现在可以正常使用。"),
+                            "suspend": ("账号已停用", "管理员已临时停用你的账号，请在消息页查看并联系管理员。"),
+                            "lock": ("账号已锁定", "管理员已锁定你的账号，请在消息页查看并联系管理员。"),
+                            "archive": ("账号已归档", "管理员已归档你的账号，请在消息页查看并联系管理员。"),
+                        }
+                        notification_title, notification_body = notification_copy[action]
+                        create_notification(
+                            conn,
+                            user_id=target_id,
+                            category="official",
+                            title=notification_title,
+                            body=notification_body,
+                            source_key=f"admin-batch-{action}:{job_id}",
+                            important=action in {"reject", "enable", "suspend", "lock", "archive"},
+                            now=started,
                         )
                         governance.record_audit(
                             conn,

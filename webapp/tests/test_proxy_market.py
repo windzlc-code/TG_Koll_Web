@@ -399,6 +399,32 @@ class ProxyMarketTests(unittest.TestCase):
         self.assertEqual(proxy["city"], "板桥")
         self.assertEqual(proxy["isp"], "Synced ISP")
 
+    def test_admin_test_publish_syncs_detected_datacenter_type(self):
+        item = self._market_item("JP-DATACENTER")
+        customer, _ = self._customer("datacenter_buyer")
+        claim = customer.post(
+            f"/api/proxy-market/items/{item['id']}/claim",
+            headers={**self.origin, "Idempotency-Key": "datacenter-claim"},
+        )
+        self.assertEqual(claim.status_code, 200, claim.text)
+        check_result = {
+            "ok": True,
+            "network_type": "datacenter",
+            "latency_ms": 71,
+            "response": {"country": "Japan", "connection": {"isp": "Hosting Provider"}},
+        }
+        with patch("webapp.proxy_market._run_proxy_connection_check", return_value=check_result):
+            published = self.admin.post(
+                f"/api/admin/proxy-market/items/{item['id']}/test-and-publish",
+                headers=self.origin,
+                json={"host": "198.51.100.25", "port": 1080},
+            )
+
+        self.assertEqual(published.status_code, 200, published.text)
+        self.assertEqual(published.json()["item"]["ip_type"], "datacenter")
+        proxy = customer.get("/api/persona_dashboard/automation/proxies").json()["proxies"][0]
+        self.assertEqual(proxy["ip_type"], "datacenter")
+
     def test_draft_cannot_be_published_without_a_fresh_health_check(self):
         created = self.admin.post(
             "/api/admin/proxy-market/items",

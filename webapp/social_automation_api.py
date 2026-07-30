@@ -4866,6 +4866,18 @@ def _run_proxy_connection_check(proxy: dict[str, Any], *, previous_exit_ip: str 
         else:
             residential_status = "unknown"
             residential_reason = "网络可连接，但公开信誉数据不足以确认住宅属性"
+        if negative_flags["datacenter"]:
+            network_type = "datacenter"
+        elif negative_flags["vpn"]:
+            network_type = "vpn"
+        elif negative_flags["tor"]:
+            network_type = "tor"
+        elif negative_flags["bogon"]:
+            network_type = "bogon"
+        elif residential_status == "verified":
+            network_type = "static_residential"
+        else:
+            network_type = "unknown"
         connection = who.get("connection") if isinstance(who.get("connection"), dict) else {}
         normalized_response = {
             "success": True,
@@ -4893,21 +4905,20 @@ def _run_proxy_connection_check(proxy: dict[str, Any], *, previous_exit_ip: str 
                 "previous_exit_ip": previous_ip,
                 "residential_status": residential_status,
                 "residential_reason": residential_reason,
+                "network_type": network_type,
                 "response": normalized_response,
                 "reputation": {
                     **negative_flags,
                     "company_name": str(company.get("name") or "").strip(),
                     "company_type": company_type,
                 },
-                "ok": bool(route_verified and static_consistent and residential_status == "verified"),
+                "ok": bool(route_verified and static_consistent),
             }
         )
         if not route_verified:
             result["error"] = "代理出口与服务器直连出口相同，未确认流量经过代理"
         elif not static_consistent:
             result["error"] = "本次出口 IP 与重复检测或历史出口不一致，不符合静态 IP 要求"
-        elif residential_status != "verified":
-            result["error"] = residential_reason
     except Exception as exc:
         result.update({"ok": False, "error_code": type(exc).__name__, "error": _proxy_check_error_message(exc)})
     return _redact_sensitive(

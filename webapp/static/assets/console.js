@@ -370,6 +370,7 @@ const state = {
   socialFiles: [],
   tasks: [],
   personas: [],
+  personaOverviewLoaded: false,
   workspaceBootstrapPending: false,
   workspaceBootstrapNoticeVisible: false,
   workspaceBootstrapTimer: 0,
@@ -15026,6 +15027,7 @@ function handlePersonaImageLibraryWheel(event) {
 
 function applyPersonaOverviewData(data, { fromCache = false } = {}) {
   state.personas = Array.isArray(data.personas) ? data.personas : [];
+  state.personaOverviewLoaded = true;
   state.personaCollections = data.persona_groups && Array.isArray(data.persona_groups.groups)
     ? data.persona_groups
     : { groups: [], assigned_persona_ids: [] };
@@ -21691,6 +21693,34 @@ function renderPersonaDetail() {
   if (state.personaCreateMode && !isPersonaCreateModalOpen()) state.personaCreateMode = false;
   if (!persona) {
     state.renderedPersonaId = "";
+    if (!state.personaOverviewLoaded) {
+      $("personaDetail").innerHTML = `
+        <div class="persona-inline-panel is-flat persona-first-run-loading" role="status" aria-live="polite">
+          <strong>正在准备你的人设工作区...</strong>
+        </div>`;
+      return;
+    }
+    if (!state.personas.length) {
+      $("personaDetail").innerHTML = `
+        <div class="persona-inline-panel is-flat persona-first-run-empty">
+          <div class="persona-first-run-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"></circle><path d="M5.5 19c.8-4 3-6 6.5-6s5.7 2 6.5 6"></path><path d="M19 8v5"></path><path d="M16.5 10.5h5"></path></svg>
+          </div>
+          <div class="persona-first-run-copy">
+            <span>新手第 1 步</span>
+            <strong>先创建你的第一个人设</strong>
+            <p>告诉它叫什么、怎么说话、准备创作哪类内容。以后生成推文、配图和发布任务时，就不用每次从头设置。</p>
+            <small>创建完成后，我们会继续带你绑定账号；资料不用一次填满，之后随时都能修改。</small>
+          </div>
+          <div class="row-actions persona-first-run-actions">
+            <button type="button" class="primary" data-persona-open-create>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+              <span>创建第一个人设</span>
+            </button>
+          </div>
+        </div>`;
+      return;
+    }
     $("personaDetail").innerHTML = `
       <div class="persona-inline-panel is-flat">
         <strong>请选择一个人设</strong>
@@ -23149,6 +23179,18 @@ function proxyResidentialStatusLabel(value = "") {
   return { verified: "住宅属性通过", rejected: "非住宅网络", unknown: "住宅属性待确认" }[String(value || "").toLowerCase()] || "住宅属性待确认";
 }
 
+function proxyNetworkTypeLabel(value = "", residentialStatus = "") {
+  const labels = {
+    static_residential: "静态住宅 IP",
+    datacenter: "机房 IP",
+    vpn: "VPN IP",
+    tor: "Tor IP",
+    bogon: "保留地址",
+    unknown: "网络类型待确认",
+  };
+  return labels[String(value || "").toLowerCase()] || proxyResidentialStatusLabel(residentialStatus);
+}
+
 function renderProxyCheckResult(targetId = "", result = null) {
   const target = $(targetId);
   if (!target) return;
@@ -23160,7 +23202,7 @@ function renderProxyCheckResult(targetId = "", result = null) {
   target.classList.toggle("is-success", ok);
   target.classList.toggle("is-error", !ok);
   target.innerHTML = `
-    <div class="proxy-check-result-head"><strong>${ok ? "检测通过" : "检测未通过"}</strong><span>${esc(proxyResidentialStatusLabel(result?.residential_status))}</span></div>
+    <div class="proxy-check-result-head"><strong>${ok ? "检测通过" : "检测未通过"}</strong><span>${esc(proxyNetworkTypeLabel(result?.network_type, result?.residential_status))}</span></div>
     <dl>
       <div><dt>代理出口</dt><dd>${esc(result?.exit_ip || response.ip || "-")}</dd></div>
       <div><dt>位置</dt><dd>${esc(location)}</dd></div>

@@ -1003,6 +1003,90 @@ class AccountGovernanceTests(unittest.TestCase):
         self.assertEqual(str(row["lifecycle_status"]), "active")
         self.assertEqual(int(row["is_disabled"]), 0)
 
+    def test_primary_batch_actions_allow_empty_reason_and_keep_audit_reason(self):
+        admin, _ = self._admin_client()
+        customer = self._create_customer(admin, "batch-optional-reason")
+        customer_id = int(customer["id"])
+
+        operations = (
+            {"action": "suspend", "user_ids": [customer_id], "reason": ""},
+            {"action": "enable", "user_ids": [customer_id], "reason": ""},
+            {
+                "action": "add_credit",
+                "user_ids": [customer_id],
+                "delta_points": 5,
+                "reason": "",
+                "idempotency_key": "batch-optional-reason-credit",
+            },
+        )
+        for payload in operations:
+            response = admin.post(
+                "/api/admin/users/batch-actions",
+                headers=self.ORIGIN_HEADERS,
+                json=payload,
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["success"], 1, response.text)
+
+        with db_module.db() as conn:
+            jobs = conn.execute(
+                """
+                SELECT action, request_json
+                FROM admin_batch_jobs
+                WHERE created_by = (SELECT id FROM users WHERE username = 'admin')
+                ORDER BY created_at, id
+                """
+            ).fetchall()
+        recorded = {
+            str(row["action"]): str(json.loads(str(row["request_json"])).get("reason") or "").strip()
+            for row in jobs
+        }
+        for action in ("suspend", "enable", "add_credit"):
+            self.assertTrue(recorded.get(action), f"missing automatic audit reason for {action}")
+
+    def test_primary_batch_actions_notify_users_and_prioritize_status_changes(self):
+        admin, _ = self._admin_client()
+        customer = self._create_customer(admin, "batch-user-notifications")
+        customer_id = int(customer["id"])
+        operations = (
+            {"action": "suspend", "user_ids": [customer_id], "reason": ""},
+            {"action": "enable", "user_ids": [customer_id], "reason": ""},
+            {
+                "action": "add_credit",
+                "user_ids": [customer_id],
+                "delta_points": 5,
+                "reason": "",
+                "idempotency_key": "batch-user-notifications-credit",
+            },
+        )
+        for payload in operations:
+            response = admin.post(
+                "/api/admin/users/batch-actions",
+                headers=self.ORIGIN_HEADERS,
+                json=payload,
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["success"], 1, response.text)
+
+        with db_module.db() as conn:
+            notices = conn.execute(
+                """
+                SELECT title, action_json
+                FROM user_notifications
+                WHERE user_id = ? AND source_key LIKE 'admin-batch-%'
+                ORDER BY id
+                """,
+                (customer_id,),
+            ).fetchall()
+        self.assertEqual(len(notices), 3)
+        importance = {
+            str(row["title"]): bool(json.loads(str(row["action_json"])).get("important"))
+            for row in notices
+        }
+        self.assertTrue(importance["账号已停用"])
+        self.assertTrue(importance["账号已启用"])
+        self.assertFalse(importance["管理员已添加算力点"])
+
     def test_service_account_credential_is_returned_once_and_only_digest_is_stored(self):
         admin, _ = self._admin_client()
         secret, recovery_codes = self._enable_admin_mfa(admin)

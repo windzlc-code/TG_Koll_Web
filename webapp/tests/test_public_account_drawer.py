@@ -52,6 +52,16 @@ class PublicAccountDrawerTests(unittest.TestCase):
         self.assertIn('event.key !== "Enter" && event.key !== " "', self.navigation)
         self.assertIn("function showNotificationDialog(", self.navigation)
 
+    def test_shared_dialogs_require_an_explicit_close_and_prioritize_important_messages(self):
+        self.assertNotIn("if (event.target === overlay) close();", self.navigation)
+        self.assertNotIn("if (event.target === modal) close();", self.navigation)
+        notification_load = self.navigation[
+            self.navigation.index("async function loadNotifications")
+            : self.navigation.index("async function markNotificationsRead")
+        ]
+        self.assertIn("item.important", notification_load)
+        self.assertIn("importantUnread || latestUnread", notification_load)
+
     def test_opening_notification_drawer_does_not_mark_every_message_read(self):
         drawer_open = self.navigation[
             self.navigation.index("function setNotificationMenuOpen("):

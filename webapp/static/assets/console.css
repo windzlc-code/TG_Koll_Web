@@ -9771,6 +9771,74 @@ body.persona-touch-dragging .persona-list-card:active {
   background: transparent;
 }
 
+.persona-first-run-loading {
+  color: var(--muted);
+}
+
+.persona-first-run-empty {
+  align-content: start;
+  gap: 14px;
+  max-width: 620px;
+}
+
+.persona-first-run-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--soft);
+  color: var(--ink);
+}
+
+.persona-first-run-icon svg,
+.persona-first-run-actions svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.persona-first-run-copy {
+  display: grid;
+  gap: 7px;
+}
+
+.persona-first-run-copy > span {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+
+.persona-first-run-copy > strong {
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.persona-first-run-copy > p,
+.persona-first-run-copy > small {
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.persona-first-run-copy > small {
+  font-size: 13px;
+}
+
+.persona-first-run-actions button {
+  gap: 8px;
+}
+
+.persona-first-run-actions svg {
+  width: 18px;
+  height: 18px;
+}
+
 .persona-inline-panel--nested {
   background: var(--panel-solid);
 }
@@ -10678,9 +10746,9 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-execution-platform-logo.is-current {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #fff;
+  border-color: var(--brand-bg);
+  background: var(--brand-bg);
+  color: var(--panel-solid);
 }
 
 .persona-execution-platform-logo svg {
@@ -21076,6 +21144,40 @@ body.console-page {
     --mobile-control-gap: 6px;
   }
 
+  .console-page .persona-first-run-empty {
+    width: 100%;
+    max-width: 100%;
+    justify-items: center;
+    gap: 18px;
+    padding: 32px 18px 24px;
+    text-align: center;
+    box-sizing: border-box;
+  }
+
+  .console-page .persona-first-run-icon {
+    width: 58px;
+    height: 58px;
+    border-radius: 17px;
+  }
+
+  .console-page .persona-first-run-icon svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .console-page .persona-first-run-copy {
+    max-width: 390px;
+  }
+
+  .console-page .persona-first-run-copy > strong {
+    font-size: 24px;
+  }
+
+  .console-page .persona-first-run-actions {
+    width: 100%;
+    justify-content: center;
+  }
+
   .persona-mobile-drawer {
     width: var(--site-mobile-drawer-width);
     padding: 8px;
@@ -21515,6 +21617,18 @@ body.console-page {
     padding: 4px 7px;
     font-size: 12px;
     line-height: 1.25;
+  }
+
+  .console-page .persona-detail .persona-first-run-actions button {
+    width: min(100%, 300px);
+    height: 52px;
+    min-height: 52px;
+    justify-content: center;
+    padding: 0 22px;
+    border-radius: 12px;
+    font-size: 17px;
+    font-weight: 850;
+    line-height: 1.2;
   }
 
   .console-page .persona-detail {

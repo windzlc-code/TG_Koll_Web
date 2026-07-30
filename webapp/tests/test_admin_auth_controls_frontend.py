@@ -52,7 +52,8 @@ class AdminAuthControlsFrontendTests(unittest.TestCase):
         self.assertIn('method: "PATCH"', save)
         self.assertIn("password_login_enabled", save)
         self.assertIn("google_login_enabled", save)
-        self.assertIn("confirm(", save)
+        self.assertIn("requestAdminPublicAction", save)
+        self.assertIn("decision.confirmed", save)
 
         unlink = self.script[
             self.script.index("async function unlinkSelectedUserGoogle")
@@ -60,7 +61,8 @@ class AdminAuthControlsFrontendTests(unittest.TestCase):
         ]
         self.assertIn("/oauth-identities/google`", unlink)
         self.assertIn('method: "DELETE"', unlink)
-        self.assertIn("confirm(", unlink)
+        self.assertIn("requestAdminPublicAction", unlink)
+        self.assertIn("decision.confirmed", unlink)
         self.assertNotIn("verification_code", unlink)
         self.assertNotIn("access_token", unlink)
         self.assertNotIn("id_token", unlink)

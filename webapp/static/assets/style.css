@@ -821,8 +821,8 @@ a {
   inset: 0;
   z-index: 80;
   background: rgba(15, 23, 42, 0.4);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
   display: grid;
   place-items: center;
   padding: 18px;
@@ -851,6 +851,40 @@ a {
   padding: 20px 24px;
   border-bottom: 1px solid rgba(120, 131, 150, 0.15);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0));
+}
+
+.page-admin .modal-close-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  color: #475569;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.page-admin .modal-close-icon:hover,
+.page-admin .modal-close-icon:focus-visible {
+  color: #172033;
+  background: rgba(226, 232, 240, 0.72);
+  border: 0;
+  box-shadow: none;
+}
+
+.page-admin .modal-close-icon svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
 }
 
 .modal-title {
@@ -2439,6 +2473,33 @@ select:focus {
   width: min(440px, calc(100vw - 32px));
 }
 
+.admin-public-action-modal {
+  z-index: 96;
+}
+
+.admin-public-action-body {
+  display: grid;
+  gap: 16px;
+}
+
+.admin-public-action-message {
+  color: var(--ink);
+  line-height: 1.7;
+  white-space: pre-line;
+}
+
+.admin-public-action-input-field {
+  display: grid;
+  gap: 7px;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.admin-public-action-input-field textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
 .table-wrap {
   border: 1px solid var(--stroke);
   border-radius: 8px;
@@ -3009,6 +3070,13 @@ select:focus {
   min-width: 32px;
   min-height: 32px;
   padding: 0;
+}
+
+.page-admin .admin-user-action-label {
+  display: inline;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .page-admin .admin-user-icon-button.is-danger {
@@ -7296,9 +7364,9 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 
   .page-admin #secUsers .admin-user-table td.admin-user-actions {
     display: grid;
-    grid-template-columns: repeat(2, 40px);
+    grid-template-columns: 1fr;
     gap: 4px;
-    justify-content: center;
+    justify-content: stretch;
   }
 }
 
@@ -7837,8 +7905,28 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 
 .page-admin #secUsers .admin-user-table th:last-child,
 .page-admin #secUsers .admin-user-table td:last-child {
-  width: 196px;
-  min-width: 196px;
+  width: 230px;
+  min-width: 230px;
+}
+
+.page-admin #secUsers .admin-user-table td:last-child .admin-user-icon-button {
+  width: auto;
+  min-width: 0;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+@media (max-width: 720px) {
+  .page-admin #secUsers .admin-user-table th:last-child,
+  .page-admin #secUsers .admin-user-table td:last-child {
+    width: 112px;
+    min-width: 112px;
+  }
+
+  .page-admin #secUsers .admin-user-table td:last-child .admin-user-icon-button {
+    width: 100%;
+  }
 }
 
 @media (max-width: 1100px) {
@@ -7903,8 +7991,8 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 
   .page-admin #secUsers .admin-user-table th:last-child,
   .page-admin #secUsers .admin-user-table td:last-child {
-    width: 112px;
-    min-width: 112px;
+    width: 132px;
+    min-width: 132px;
   }
 }
 
@@ -9334,7 +9422,7 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   }
 }
 
-/* Account governance filters and preview-first batch operations. */
+/* Account governance filters and modal-driven batch operations. */
 .page-admin .admin-user-filter-bar,
 .page-admin .admin-user-batch-bar {
   display: grid;
@@ -9347,16 +9435,13 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   background: var(--panel-soft, #f7faf9);
 }
 
-.page-admin .admin-user-filter-bar label,
-.page-admin .admin-user-batch-fields label {
+.page-admin .admin-user-filter-bar label {
   min-width: 0;
   margin: 0;
 }
 
 .page-admin .admin-user-filter-bar input,
-.page-admin .admin-user-filter-bar select,
-.page-admin .admin-user-batch-fields input,
-.page-admin .admin-user-batch-fields select {
+.page-admin .admin-user-filter-bar select {
   width: 100%;
   min-height: 34px;
   margin: 0;
@@ -9367,16 +9452,16 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 }
 
 .page-admin .admin-user-batch-bar {
-  grid-template-columns: auto minmax(155px, 0.55fr) minmax(460px, 2.25fr) auto;
+  grid-template-columns: max-content max-content;
+  justify-content: start;
   align-items: center;
   gap: 8px;
-  min-height: 60px;
+  min-height: 52px;
   padding: 8px;
 }
 
 .page-admin .admin-user-batch-primary-actions,
-.page-admin .admin-user-batch-summary,
-.page-admin .admin-user-batch-actions {
+.page-admin .admin-user-batch-summary {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -9406,44 +9491,8 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   stroke-width: 1.8;
 }
 
-.page-admin .admin-user-batch-primary-button.is-active {
-  color: #fff;
-  border-color: var(--ink, #193248);
-  background: var(--ink, #193248);
-}
-
 .page-admin .admin-user-batch-summary {
-  justify-content: space-between;
-}
-
-.page-admin .admin-user-batch-fields {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-}
-
-.page-admin .admin-user-batch-fields label {
-  flex: 0.9 1 180px;
-}
-
-.page-admin .admin-user-batch-fields .admin-user-batch-reason {
-  flex: 1.35 1 260px;
-}
-
-.page-admin .admin-user-batch-actions {
-  justify-content: flex-end;
-  white-space: nowrap;
-}
-
-.page-admin .admin-user-batch-actions button,
-.page-admin .admin-user-batch-summary button {
-  min-height: 34px;
-  margin: 0;
-}
-
-.page-admin .admin-user-batch-actions button {
-  min-width: 78px;
+  justify-content: flex-start;
 }
 
 .page-admin .admin-user-batch-selection {
@@ -9457,17 +9506,31 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   color: var(--brand, #008b86);
 }
 
-.page-admin #adminUserBatchMsg {
-  grid-column: 1 / -1;
-  min-height: 0;
+.page-admin .admin-user-batch-modal-body {
+  display: grid;
+  gap: 14px;
+}
+
+.page-admin .admin-user-batch-modal-body label {
+  display: grid;
+  gap: 6px;
   margin: 0;
 }
 
-.page-admin #adminUserBatchTags {
-  height: 38px;
-  min-height: 38px;
-  max-height: 38px;
-  overflow-y: auto;
+.page-admin .admin-user-batch-modal-body textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.page-admin .admin-user-batch-modal-summary {
+  padding: 11px 12px;
+  border-left: 3px solid var(--brand, #008b86);
+  background: var(--panel-soft, #f4f8f7);
+  color: var(--admin-muted);
+}
+
+.page-admin .admin-user-batch-modal-summary strong {
+  color: var(--ink, #193248);
 }
 
 .page-admin .admin-user-select-heading,
@@ -9654,18 +9717,8 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   }
 
   .page-admin .admin-user-batch-bar {
-    grid-template-columns: minmax(190px, 1fr) auto;
+    grid-template-columns: max-content max-content;
     align-items: center;
-  }
-
-  .page-admin .admin-user-batch-fields {
-    grid-column: 1;
-    grid-row: 2;
-  }
-
-  .page-admin .admin-user-batch-actions {
-    grid-column: 2;
-    grid-row: 2;
   }
 }
 
@@ -9685,8 +9738,7 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
     flex-direction: column;
   }
 
-  .page-admin .admin-user-filter-bar label:first-child,
-  .page-admin #adminUserBatchMsg {
+  .page-admin .admin-user-filter-bar label:first-child {
     grid-column: 1 / -1;
   }
 
@@ -9695,9 +9747,7 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   }
 
   .page-admin .admin-user-batch-primary-actions,
-  .page-admin .admin-user-batch-summary,
-  .page-admin .admin-user-batch-fields,
-  .page-admin .admin-user-batch-actions {
+  .page-admin .admin-user-batch-summary {
     grid-column: 1;
   }
 
@@ -9712,26 +9762,6 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 
   .page-admin .admin-user-batch-summary {
     grid-row: auto;
-  }
-
-  .page-admin .admin-user-batch-fields {
-    grid-row: auto;
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .page-admin .admin-user-batch-fields label,
-  .page-admin .admin-user-batch-fields .admin-user-batch-reason {
-    flex: 0 0 auto;
-    width: 100%;
-  }
-
-  .page-admin .admin-user-batch-actions {
-    grid-row: auto;
-  }
-
-  .page-admin .admin-user-batch-actions button {
-    flex: 1 1 0;
   }
 
   .page-admin .admin-purge-form {
@@ -9877,11 +9907,11 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   }
 
   .page-admin .admin-user-table td:last-child .admin-user-icon-button {
-    width: 44px;
-    min-width: 44px;
+    width: 100%;
+    min-width: 0;
     height: 44px;
     min-height: 44px;
-    padding: 0;
+    padding: 0 10px;
   }
 
   .page-admin #secRuntime #btnSaveRuntime {

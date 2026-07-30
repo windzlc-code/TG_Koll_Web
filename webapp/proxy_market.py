@@ -1149,6 +1149,11 @@ def register_proxy_market_routes(app: FastAPI) -> None:
         )
         now = _now()
         response = result.get("response") if isinstance(result.get("response"), dict) else {}
+        detected_ip_type = str(result.get("network_type") or "").strip().lower()
+        if detected_ip_type not in {"static_residential", "datacenter"}:
+            detected_ip_type = str(current.get("ip_type") or "static_residential").strip().lower()
+        if detected_ip_type not in {"static_residential", "datacenter"}:
+            detected_ip_type = "static_residential"
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
             status_row = conn.execute(
@@ -1194,7 +1199,7 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             updated_count = conn.execute(
                 """
                 UPDATE proxy_market_items
-                SET proxy_type = ?, host = ?, port = ?, credential_owner_user_id = ?,
+                SET proxy_type = ?, host = ?, port = ?, ip_type = ?, credential_owner_user_id = ?,
                     username_ciphertext = ?, password_ciphertext = ?,
                     country = CASE WHEN ? != '' THEN ? ELSE country END,
                     region = CASE WHEN ? != '' THEN ? ELSE region END,
@@ -1209,6 +1214,7 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                     candidate["proxy_type"],
                     candidate["host"],
                     candidate["port"],
+                    detected_ip_type,
                     actor_id,
                     username_ciphertext,
                     password_ciphertext,
@@ -1240,7 +1246,7 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             conn.execute(
                 """
                 UPDATE social_proxies
-                SET proxy_type = ?, host = ?, port = ?, username = '', password = '',
+                SET proxy_type = ?, host = ?, port = ?, ip_type = ?, username = '', password = '',
                     country = ?, region = ?, city = ?, isp = ?, expires_at = ?,
                     status = 'active', last_check_at = ?, last_check_result = ?, updated_at = ?
                 WHERE market_item_id = ?
@@ -1249,6 +1255,7 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                     candidate["proxy_type"],
                     candidate["host"],
                     candidate["port"],
+                    detected_ip_type,
                     str(response.get("country") or current.get("country") or ""),
                     str(response.get("region") or current.get("region") or ""),
                     str(response.get("city") or current.get("city") or ""),

@@ -564,6 +564,70 @@ function closeAdminPublicPrompt() {
   modal.setAttribute("aria-hidden", "true");
 }
 
+let adminPublicActionResolver = null;
+let adminPublicActionRestoreFocus = null;
+
+function settleAdminPublicAction(outcome) {
+  const modal = el("adminPublicActionModal");
+  const resolve = adminPublicActionResolver;
+  const value = String(el("adminPublicActionInput")?.value || "");
+  adminPublicActionResolver = null;
+  if (modal) {
+    modal.style.display = "none";
+    modal.setAttribute("aria-hidden", "true");
+  }
+  const restoreFocus = adminPublicActionRestoreFocus;
+  adminPublicActionRestoreFocus = null;
+  if (restoreFocus instanceof HTMLElement && restoreFocus.isConnected) restoreFocus.focus();
+  if (resolve) {
+    resolve({
+      confirmed: outcome === "confirm",
+      cancelled: outcome === "cancel",
+      dismissed: outcome !== "confirm" && outcome !== "cancel",
+      value,
+    });
+  }
+}
+
+function requestAdminPublicAction({
+  title = "确认操作",
+  message = "",
+  confirmLabel = "确认",
+  cancelLabel = "取消",
+  tone = "primary",
+  inputLabel = "",
+  inputValue = "",
+  inputPlaceholder = "",
+} = {}) {
+  const modal = el("adminPublicActionModal");
+  if (!modal) return Promise.resolve({ confirmed: false, value: "" });
+  if (adminPublicActionResolver) settleAdminPublicAction("dismiss");
+  adminPublicActionRestoreFocus = document.activeElement;
+  setText("adminPublicActionTitle", title);
+  setText("adminPublicActionMessage", message);
+  setText("btnAdminPublicActionConfirm", confirmLabel);
+  setText("btnAdminPublicActionCancel", cancelLabel);
+  setMsg("adminPublicActionMsg", "");
+  const confirmButton = el("btnAdminPublicActionConfirm");
+  if (confirmButton) confirmButton.className = tone === "danger" ? "danger" : "primary";
+  const inputField = el("adminPublicActionInputField");
+  const input = el("adminPublicActionInput");
+  if (inputField) inputField.hidden = !inputLabel;
+  setText("adminPublicActionInputLabel", inputLabel);
+  if (input) {
+    input.value = inputValue;
+    input.placeholder = inputPlaceholder;
+  }
+  modal.style.display = "grid";
+  modal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => {
+    (inputLabel ? input : confirmButton)?.focus();
+  }, 0);
+  return new Promise((resolve) => {
+    adminPublicActionResolver = resolve;
+  });
+}
+
 function clearAccountMsgs() {
   setMsg("accountUsernameMsg", "");
   setMsg("accountPasswordMsg", "");
@@ -1514,7 +1578,7 @@ const adminState = {
   userListRole: "customer",
   userListFilters: {},
   selectedUserIds: new Set(),
-  userBatchPreview: null,
+  userBatchAction: "",
   userBatchIdempotencyKey: "",
   userBatchInFlight: false,
   userBatchSelectionInFlight: false,
@@ -2919,7 +2983,13 @@ async function saveSentimentCookieProfile() {
 async function clearSentimentCookieProfile() {
   const profileKey = String(el("sentimentCookieProfile")?.value || "").trim();
   if (!profileKey) throw new Error("请选择授权平台。");
-  if (!confirm(`确认清空 ${profileKey} 的 Cookie 吗？清空后该平台真实扫描会失效，直到重新授权。`)) return null;
+  const decision = await requestAdminPublicAction({
+    title: "清空授权 Cookie",
+    message: `确认清空 ${profileKey} 的 Cookie 吗？清空后该平台真实扫描会失效，直到重新授权。`,
+    confirmLabel: "确认清空",
+    tone: "danger",
+  });
+  if (!decision.confirmed) return null;
   const resp = await api(`/api/admin/sentiment/browser_auth/profiles/${encodeURIComponent(profileKey)}/cookies`, {
     method: "DELETE",
   });
@@ -3385,8 +3455,13 @@ async function publishBillingCatalog(versionId) {
   if (adminState.billingCatalogPublishing) return;
   const version = adminState.billingCatalogVersions.find((item) => String(item.id || "") === String(versionId || ""));
   const summary = billingCatalogPlanSummary(billingCatalogOf(version));
-  const prompt = `确认将“${summary.name}”发布给客户吗？\n\n月费：${formatBillingCatalogNtd(summary.price)}\nThreads 账号：${summary.accounts} 个\n免费图片：${summary.images} 张`;
-  if (!versionId || !confirm(prompt)) return;
+  if (!versionId) return;
+  const decision = await requestAdminPublicAction({
+    title: "发布订阅方案",
+    message: `确认将“${summary.name}”发布给客户吗？\n\n月费：${formatBillingCatalogNtd(summary.price)}\nThreads 账号：${summary.accounts} 个\n免费图片：${summary.images} 张`,
+    confirmLabel: "确认发布",
+  });
+  if (!decision.confirmed) return;
   const publishButtons = [...document.querySelectorAll('[data-billing-action="catalog-publish"]')];
   adminState.billingCatalogPublishing = true;
   publishButtons.forEach((button) => { button.disabled = true; });
@@ -3586,14 +3661,20 @@ async function loadBillingOrders({ append = false } = {}) {
 
 async function reviewBillingOrder(orderId, status) {
   const label = status === "approved" ? "批准" : "拒绝";
-  const note = prompt(`${label}方案申请 ${orderId}。请输入审批备注（可留空）：`, "");
-  if (note === null) return;
-  if (!confirm(`确认${label}方案申请 ${orderId} 吗？${status === "approved" ? "批准后客户权益将立即生效。" : ""}`)) return;
+  const decision = await requestAdminPublicAction({
+    title: `${label}方案申请`,
+    message: `确认${label}方案申请 ${orderId} 吗？${status === "approved" ? "批准后客户权益将立即生效。" : ""}`,
+    confirmLabel: `确认${label}`,
+    tone: status === "approved" ? "primary" : "danger",
+    inputLabel: "审批备注（可留空）",
+    inputPlaceholder: "填写本次审批说明",
+  });
+  if (!decision.confirmed) return;
   const action = status === "approved" ? "approve" : "reject";
   await api(`/api/admin/billing/orders/${encodeURIComponent(orderId)}/${action}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ note: note.trim() }),
+    body: JSON.stringify({ note: decision.value.trim() }),
   });
   await loadBillingOrders();
   setMsg("billingOrderMsg", `方案申请已${label}`, true);
@@ -3712,7 +3793,12 @@ async function submitBillingAdjustment() {
   if (adjustmentType === "subscription") {
     const quantity = Math.floor(amount);
     if (!Number.isInteger(amount) || quantity < 1 || quantity > 50) throw new Error("订阅套数必须是 1-50 的整数");
-    if (!confirm(`确认给客户 ID ${userId} 人工开通 ${quantity} 套月度订阅吗？`)) return;
+    const decision = await requestAdminPublicAction({
+      title: "开通月度订阅",
+      message: `确认给客户 ID ${userId} 人工开通 ${quantity} 套月度订阅吗？`,
+      confirmLabel: "确认开通",
+    });
+    if (!decision.confirmed) return;
     await api(`/api/admin/users/${userId}/billing/subscriptions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -3729,7 +3815,12 @@ async function submitBillingAdjustment() {
       : (wasUnlimited && deltaPoints === 0
         ? "关闭无限算力"
         : `调整 ${deltaPoints > 0 ? "+" : ""}${deltaPoints} 点并使用普通算力`);
-    if (!confirm(`确认将客户 ID ${userId} ${actionText}吗？`)) return;
+    const decision = await requestAdminPublicAction({
+      title: "调整客户算力",
+      message: `确认将客户 ID ${userId} ${actionText}吗？`,
+      confirmLabel: "确认调整",
+    });
+    if (!decision.confirmed) return;
     const adjustmentPayload = { delta_points: deltaPoints, reason: note };
     if (unlimited) adjustmentPayload.unlimited = true;
     else if (wasUnlimited) adjustmentPayload.unlimited = false;
@@ -3788,11 +3879,11 @@ function ensureBillingLoaded(force = false) {
 }
 
 const ADMIN_USER_ICONS = {
-  detail: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>',
-  billing: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z"/><path d="M9 8h6m-6 4h6m-6 4h4"/></svg>',
+  detail: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  billing: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h8M8 9h2"/></svg>',
   archive: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M4 7h16v13H4V7Z"/><path d="M3 3h18v4H3V3Zm6 9h6"/></svg>',
   restore: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M4 7h16v13H4V7Z"/><path d="M3 3h18v4H3V3Zm6 10 3-3 3 3m-3-3v6"/></svg>',
-  delete: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M4 7h16M9 3h6l1 4H8l1-4ZM7 7l1 14h8l1-14M10 11v6m4-6v6"/></svg>',
+  delete: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/></svg>',
 };
 
 function createAdminUserBadge(text, tone) {
@@ -3920,40 +4011,18 @@ function syncUserBatchSelection() {
       && adminState.selectedUserIds.size >= adminState.userListTotal;
     selectAll.indeterminate = adminState.selectedUserIds.size > 0 && !selectAll.checked;
   }
-  const action = String(el("adminUserBatchAction")?.value || "");
-  if (el("adminBatchGroupField")) el("adminBatchGroupField").hidden = action !== "assign_group";
-  if (el("adminBatchTagsField")) el("adminBatchTagsField").hidden = action !== "add_tags";
-  if (el("adminBatchCreditField")) el("adminBatchCreditField").hidden = action !== "add_credit";
   document.querySelectorAll("[data-user-batch-action]").forEach((button) => {
-    const active = String(button.dataset.userBatchAction || "") === action;
-    button.classList.toggle("is-active", active);
-    button.setAttribute("aria-pressed", active ? "true" : "false");
+    button.setAttribute("aria-pressed", "false");
     button.disabled = adminState.selectedUserIds.size === 0
       || adminState.userBatchInFlight
       || adminState.userBatchSelectionInFlight;
   });
-  if (el("btnClearUserSelection")) el("btnClearUserSelection").disabled = adminState.selectedUserIds.size === 0;
-  if (el("btnPreviewUserBatch")) {
-    el("btnPreviewUserBatch").disabled = !action
-      || adminState.selectedUserIds.size === 0
-      || adminState.userBatchInFlight
-      || adminState.userBatchSelectionInFlight;
-  }
-  if (el("btnRunUserBatch")) el("btnRunUserBatch").disabled = !adminState.userBatchPreview || adminState.userBatchInFlight;
-}
-
-function selectUserBatchAction(action) {
-  const select = el("adminUserBatchAction");
-  if (!select) return;
-  select.value = String(action || "");
-  select.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function clearUserBatchSelection() {
   adminState.selectedUserIds.clear();
-  adminState.userBatchPreview = null;
+  adminState.userBatchAction = "";
   adminState.userBatchIdempotencyKey = "";
-  setMsg("adminUserBatchMsg", "");
   syncUserBatchSelection();
 }
 
@@ -3962,34 +4031,80 @@ function createUserBatchIdempotencyKey() {
   return `admin-batch-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function invalidateUserBatchPreview() {
-  adminState.userBatchPreview = null;
+function resetUserBatchRequest() {
   adminState.userBatchIdempotencyKey = "";
+}
+
+const USER_BATCH_ACTION_CONFIG = Object.freeze({
+  add_credit: {
+    title: "调整算力",
+    subtitle: "为已选客户增加算力点",
+    confirmLabel: "确认调整",
+    reasonPlaceholder: "选填，例如：活动赠送或人工补充算力",
+  },
+  enable: {
+    title: "启用账号",
+    subtitle: "恢复已选客户的账号使用权限",
+    confirmLabel: "确认启用",
+    reasonPlaceholder: "选填，可填写本次启用账号的原因",
+  },
+  suspend: {
+    title: "停用账号",
+    subtitle: "临时停用已选客户的账号使用权限",
+    confirmLabel: "确认停用",
+    reasonPlaceholder: "选填，可填写本次停用账号的原因",
+  },
+});
+
+function openUserBatchModal(action) {
+  const normalizedAction = String(action || "");
+  const config = USER_BATCH_ACTION_CONFIG[normalizedAction];
+  if (!config) return;
+  if (!adminState.selectedUserIds.size) {
+    setMsg("userMsg", "请先勾选需要操作的客户账号。", false);
+    return;
+  }
+  adminState.userBatchAction = normalizedAction;
+  resetUserBatchRequest();
+  setText("adminUserBatchModalTitle", config.title);
+  setText("adminUserBatchModalSub", config.subtitle);
+  setText("adminUserBatchModalCount", adminState.selectedUserIds.size);
+  setText("btnAdminUserBatchConfirm", config.confirmLabel);
+  if (el("adminUserBatchCreditField")) el("adminUserBatchCreditField").hidden = normalizedAction !== "add_credit";
+  if (el("adminUserBatchCredit")) el("adminUserBatchCredit").value = normalizedAction === "add_credit" ? "1000" : "";
+  if (el("adminUserBatchReason")) {
+    el("adminUserBatchReason").value = "";
+    el("adminUserBatchReason").placeholder = config.reasonPlaceholder;
+  }
+  setMsg("adminUserBatchModalMsg", "");
+  const modal = el("adminUserBatchModal");
+  if (!modal) return;
+  modal.style.display = "grid";
+  modal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => {
+    (normalizedAction === "add_credit" ? el("adminUserBatchCredit") : el("adminUserBatchReason"))?.focus();
+  }, 0);
+}
+
+function closeUserBatchModal() {
+  if (adminState.userBatchInFlight) return;
+  const modal = el("adminUserBatchModal");
+  if (!modal) return;
+  modal.style.display = "none";
+  modal.setAttribute("aria-hidden", "true");
+  adminState.userBatchAction = "";
+  resetUserBatchRequest();
 }
 
 function buildUserBatchPayload(preview) {
   return {
-    action: String(el("adminUserBatchAction")?.value || ""),
+    action: String(adminState.userBatchAction || ""),
     user_ids: Array.from(adminState.selectedUserIds, (value) => Number(value)),
     reason: String(el("adminUserBatchReason")?.value || "").trim(),
-    group_id: String(el("adminUserBatchGroup")?.value || ""),
-    tag_ids: Array.from(el("adminUserBatchTags")?.selectedOptions || [], (option) => String(option.value)),
     delta_points: Number(el("adminUserBatchCredit")?.value || 0),
     idempotency_key: adminState.userBatchIdempotencyKey,
     preview: Boolean(preview),
   };
-}
-
-function userBatchSignature(payload) {
-  return JSON.stringify({
-    action: payload.action,
-    user_ids: [...payload.user_ids].sort((a, b) => a - b),
-    reason: payload.reason,
-    group_id: payload.group_id,
-    tag_ids: [...payload.tag_ids].sort(),
-    delta_points: payload.delta_points,
-    idempotency_key: payload.idempotency_key,
-  });
 }
 
 async function previewUserBatchAction() {
@@ -3999,50 +4114,54 @@ async function previewUserBatchAction() {
   const payload = buildUserBatchPayload(true);
   if (!payload.action) throw new Error("请选择批量操作");
   if (!payload.user_ids.length) throw new Error("请先勾选客户账号");
-  if (payload.reason.length < 2) throw new Error("请填写至少 2 个字符的操作原因");
-  if (payload.action === "assign_group" && !payload.group_id) throw new Error("请选择客户分组");
-  if (payload.action === "add_tags" && !payload.tag_ids.length) throw new Error("请至少选择一个客户标签");
   if (payload.action === "add_credit" && !(payload.delta_points > 0)) throw new Error("请输入大于 0 的算力点");
   const result = await api("/api/admin/users/batch-actions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  adminState.userBatchPreview = { ...payload, matched: Number(result.matched || 0) };
-  setMsg("adminUserBatchMsg", `影响预览：匹配 ${Number(result.matched || 0)} 个客户。确认账号与操作原因无误后再执行。`, true);
-  syncUserBatchSelection();
+  return result;
 }
 
-async function runUserBatchAction() {
+async function submitUserBatchModal() {
   if (adminState.userBatchInFlight) return;
-  const current = buildUserBatchPayload(false);
-  const preview = adminState.userBatchPreview;
-  if (!preview || userBatchSignature(current) !== userBatchSignature(preview)) {
-    invalidateUserBatchPreview();
-    syncUserBatchSelection();
-    throw new Error("操作内容已变化，请重新预览影响");
-  }
-  const label = el("adminUserBatchAction")?.selectedOptions?.[0]?.textContent || current.action;
-  if (!confirm(`确认对 ${preview.matched} 个客户执行“${label}”吗？`)) return;
   adminState.userBatchInFlight = true;
   syncUserBatchSelection();
-  let result;
+  const confirmButton = el("btnAdminUserBatchConfirm");
+  if (confirmButton) confirmButton.disabled = true;
+  setMsg("adminUserBatchModalMsg", "正在校验并执行操作...");
+  let result = null;
   try {
+    const previewResult = await previewUserBatchAction();
+    const current = buildUserBatchPayload(false);
+    if (Number(previewResult.matched || 0) !== current.user_ids.length) {
+      throw new Error("部分账号状态已变化，请关闭窗口后重新选择");
+    }
     result = await api("/api/admin/users/batch-actions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(current),
     });
     const replayNote = result.idempotent_replay ? "（重复请求已安全复用原作业）" : "";
-    setMsg("adminUserBatchMsg", `作业完成${replayNote}：成功 ${Number(result.success || 0)}，失败 ${Number(result.failed || 0)}，跳过 ${Number(result.skipped || 0)}。`, Number(result.failed || 0) === 0);
+    const message = `作业完成${replayNote}：成功 ${Number(result.success || 0)}，失败 ${Number(result.failed || 0)}，跳过 ${Number(result.skipped || 0)}。`;
+    setMsg("userMsg", message, Number(result.failed || 0) === 0);
     adminState.selectedUserIds.clear();
-    adminState.userBatchPreview = null;
-    adminState.userBatchIdempotencyKey = "";
+    adminState.userBatchAction = "";
+    resetUserBatchRequest();
+    const modal = el("adminUserBatchModal");
+    if (modal) {
+      modal.style.display = "none";
+      modal.setAttribute("aria-hidden", "true");
+    }
+  } catch (error) {
+    setMsg("adminUserBatchModalMsg", getErrorMessage(error), false);
+    throw error;
   } finally {
     adminState.userBatchInFlight = false;
+    if (confirmButton) confirmButton.disabled = false;
     syncUserBatchSelection();
   }
-  await Promise.all([loadUsers(), loadGovernanceDashboard({ force: true })]);
+  if (result) await Promise.all([loadUsers(), loadGovernanceDashboard({ force: true })]);
 }
 
 function buildAdminUserListParams({ limit, offset }) {
@@ -4072,8 +4191,7 @@ async function selectAllFilteredUsers() {
     });
     if (rows.length < pageSize) break;
   }
-  invalidateUserBatchPreview();
-  setMsg("adminUserBatchMsg", `已选择全部 ${adminState.selectedUserIds.size} 个筛选结果。`, true);
+  resetUserBatchRequest();
 }
 
 async function loadUsers(page = adminState.userListPage) {
@@ -4230,7 +4348,7 @@ async function loadUsers(page = adminState.userListPage) {
       button.innerHTML = ADMIN_USER_ICONS[icon] || ADMIN_USER_ICONS.detail;
       const actionLabel = createAdminDynamicUiText(label);
       actionLabel.id = `admin-user-action-${u.id}-${act}`;
-      actionLabel.className = "sr-only";
+      actionLabel.className = "admin-user-action-label";
       button.appendChild(actionLabel);
       button.setAttribute("aria-labelledby", `${actionLabel.id} ${accountName.id}`);
       button.title = label;
@@ -4240,11 +4358,11 @@ async function loadUsers(page = adminState.userListPage) {
       markAdminDynamicUiElement(button);
       actions.appendChild(button);
     };
-    addAction("查看详情", "user_detail", "detail");
-    if (!u.is_admin) addAction("计费详情", "billing_detail", "billing", { name: u.username });
+    addAction("查看", "user_detail", "detail");
+    if (!u.is_admin) addAction("详情", "billing_detail", "billing", { name: u.username });
     if (!u.is_admin) {
-      if (lifecycle === "deleted") addAction("恢复账号", "restore_user", "restore", { name: u.username });
-      else addAction("软删除账号", "archive_user", "delete", { name: u.username });
+      if (lifecycle === "deleted") addAction("恢复", "restore_user", "restore", { name: u.username });
+      else addAction("删除", "archive_user", "delete", { name: u.username });
     }
     tr.appendChild(actions);
     body.appendChild(tr);
@@ -4372,7 +4490,12 @@ async function saveSelectedUserAuthMethods() {
     setMsg("userAuthMethodMsg", "认证设置没有变化。", true);
     return;
   }
-  if (!confirm(`确认更新账号 ${user.username || user.id} 的登录方式吗？被停用的方式将立即无法用于新登录。`)) {
+  const decision = await requestAdminPublicAction({
+    title: "更新登录方式",
+    message: `确认更新账号 ${user.username || user.id} 的登录方式吗？被停用的方式将立即无法用于新登录。`,
+    confirmLabel: "确认更新",
+  });
+  if (!decision.confirmed) {
     syncSelectedUserAuthControls();
     return;
   }
@@ -4417,7 +4540,13 @@ async function unlinkSelectedUserGoogle() {
     setMsg("userAuthMethodMsg", "请先启用密码登录，再解绑 Google，避免用户失去全部登录方式。", false);
     return;
   }
-  if (!confirm(`确认解绑账号 ${user.username || user.id} 的 Google 身份吗？解绑后只能使用邮箱或用户名密码登录。`)) return;
+  const decision = await requestAdminPublicAction({
+    title: "解绑 Google 身份",
+    message: `确认解绑账号 ${user.username || user.id} 的 Google 身份吗？解绑后只能使用邮箱或用户名密码登录。`,
+    confirmLabel: "确认解绑",
+    tone: "danger",
+  });
+  if (!decision.confirmed) return;
   const targetUserId = String(user.id);
   adminState.userAuthMethodsInFlight = true;
   setMsg("userAuthMethodMsg", "");
@@ -4576,7 +4705,12 @@ async function revealSelectedUserPassword() {
   if (!user?.id || user.is_admin || adminState.userPasswordRevealInFlight) return;
   const stepUp = readUserStepUp();
   if (!stepUp) return;
-  if (!confirm(`确认查看账号 ${user.username || user.id} 的当前登录密码吗？请确保周围没有无关人员。`)) return;
+  const decision = await requestAdminPublicAction({
+    title: "查看当前密码",
+    message: `确认查看账号 ${user.username || user.id} 的当前登录密码吗？请确保周围没有无关人员。`,
+    confirmLabel: "确认查看",
+  });
+  if (!decision.confirmed) return;
   clearRevealedUserPassword();
   const targetUserId = String(user.id);
   const requestId = ++adminState.userPasswordRevealRequestId;
@@ -4724,7 +4858,12 @@ async function setSelectedUserPassword() {
   }
   const stepUp = readUserStepUp("userPasswordManualMsg");
   if (!stepUp) return;
-  if (!confirm(`确认修改账号 ${user.username || user.id} 的登录密码吗？该账号现有登录会话会立即失效。`)) return;
+  const decision = await requestAdminPublicAction({
+    title: "修改登录密码",
+    message: `确认修改账号 ${user.username || user.id} 的登录密码吗？该账号现有登录会话会立即失效。`,
+    confirmLabel: "确认修改",
+  });
+  if (!decision.confirmed) return;
 
   const targetUserId = String(user.id);
   const requestId = ++adminState.userPasswordSetRequestId;
@@ -4776,7 +4915,13 @@ async function resetSelectedUserPassword() {
   if (!user?.id || user.is_admin || adminState.userPasswordResetInFlight) return;
   const stepUp = readUserStepUp();
   if (!stepUp) return;
-  if (!confirm(`确认重置账号 ${user.username || user.id} 的登录密码吗？该账号现有登录会话会立即失效。`)) return;
+  const decision = await requestAdminPublicAction({
+    title: "重置登录密码",
+    message: `确认重置账号 ${user.username || user.id} 的登录密码吗？该账号现有登录会话会立即失效。`,
+    confirmLabel: "确认重置",
+    tone: "danger",
+  });
+  if (!decision.confirmed) return;
   const targetUserId = String(user.id);
   const requestId = ++adminState.userPasswordResetRequestId;
   adminState.userPasswordResetInFlight = true;
@@ -4880,7 +5025,13 @@ async function revokeSelectedUserSessions() {
   const user = adminState.selectedUser;
   if (!user?.id) return;
   const targetUserId = String(user.id);
-  if (!confirm(`确认撤销账号 ${user.username || user.id} 的全部有效登录会话吗？`)) return;
+  const decision = await requestAdminPublicAction({
+    title: "撤销登录会话",
+    message: `确认撤销账号 ${user.username || user.id} 的全部有效登录会话吗？`,
+    confirmLabel: "确认撤销",
+    tone: "danger",
+  });
+  if (!decision.confirmed) return;
   const button = el("btnRevokeUserSessions");
   if (button) button.disabled = true;
   try {
@@ -4964,7 +5115,13 @@ async function restoreSelectedUserPassword(historyId, button) {
   const targetUserId = String(user.id);
   const stepUp = readUserStepUp();
   if (!stepUp) return;
-  if (!confirm(`确认恢复账号 ${user.username || user.id} 的历史密码吗？该账号现有登录会话会立即失效。`)) return;
+  const decision = await requestAdminPublicAction({
+    title: "恢复历史密码",
+    message: `确认恢复账号 ${user.username || user.id} 的历史密码吗？该账号现有登录会话会立即失效。`,
+    confirmLabel: "确认恢复",
+    tone: "danger",
+  });
+  if (!decision.confirmed) return;
   button.disabled = true;
   try {
     const response = await api(`/api/admin/users/${encodeURIComponent(targetUserId)}/restore-password`, {
@@ -5026,7 +5183,13 @@ async function purgeSelectedUser(event) {
   if (payload.confirm_username !== String(user.username || "")) throw new Error("请输入完整客户用户名确认");
   if (!payload.admin_password || !payload.totp_code) throw new Error("请输入管理员密码和动态验证码");
   if (payload.reason.length < 2) throw new Error("请填写至少 2 个字符的永久删除原因");
-  if (!confirm(`最后确认：永久删除 ${user.username} 及其全部关联资源？此操作无法撤销。`)) return;
+  const decision = await requestAdminPublicAction({
+    title: "永久删除客户",
+    message: `最后确认：永久删除 ${user.username} 及其全部关联资源？此操作无法撤销。`,
+    confirmLabel: "永久删除",
+    tone: "danger",
+  });
+  if (!decision.confirmed) return;
   const result = await api(`/api/admin/users/${user.id}/purge`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
@@ -5953,7 +6116,13 @@ async function saveServiceAccount(button) {
 async function rotateServiceAccount(button) {
   const payload = readServiceAccountStepUp();
   if (!payload) return;
-  if (!confirm("轮换后旧凭证会立即失效，确认继续吗？")) return;
+  const decision = await requestAdminPublicAction({
+    title: "轮换服务凭证",
+    message: "轮换后旧凭证会立即失效，确认继续吗？",
+    confirmLabel: "确认轮换",
+    tone: "danger",
+  });
+  if (!decision.confirmed) return;
   button.disabled = true;
   try {
     const result = await api(`/api/admin/service-accounts/${encodeURIComponent(button.dataset.serviceRotate || "")}/rotate`, {
@@ -6535,7 +6704,7 @@ function setProxyMarketEditorBusy(busy) {
   syncProxyMarketEditorActions();
 }
 
-function applyProxyMarketSmartInput({ quiet = false } = {}) {
+async function applyProxyMarketSmartInput({ quiet = false } = {}) {
   const input = el("proxyMarketSmartInput");
   if (!input?.value?.trim()) return null;
   const rawInput = input.value;
@@ -6559,14 +6728,18 @@ function applyProxyMarketSmartInput({ quiet = false } = {}) {
     && (parsedHost !== selectedHost || parsedPort !== selectedPort)
   );
   if (endpointChanged) {
-    const createAsNew = typeof window.confirm === "function" && window.confirm(
-      `当前正在编辑 ${selectedItem.sku || selectedItem.id}，识别到的是另一条代理地址。\n\n`
-      + "点击“确定”切换为新建库存；点击“取消”才会继续覆盖当前库存。",
-    );
-    if (createAsNew) {
+    const decision = await requestAdminPublicAction({
+      title: "发现新的代理地址",
+      message: `当前正在编辑 ${selectedItem.sku || selectedItem.id}，识别到的是另一条代理地址。\n\n选择“新建库存”将保留原记录；选择“覆盖当前”才会继续修改当前库存。`,
+      confirmLabel: "新建库存",
+      cancelLabel: "覆盖当前",
+    });
+    if (decision.confirmed) {
       resetProxyMarketEditor();
       if (input) input.value = rawInput;
       switchedToNew = true;
+    } else if (!decision.cancelled) {
+      return null;
     }
   }
   const previousHost = el("proxyMarketHost")?.value?.trim() || "";
@@ -6862,7 +7035,9 @@ function renderProxyMarketItems(payload = {}) {
     endpoint.className = "proxy-market-endpoint";
     endpoint.textContent = `${String(item.proxy_type || "").toUpperCase()} ${item.host || "-"}:${Number(item.port || 0) || "-"}`;
     const location = document.createElement("span");
-    const locationText = [item.country, item.region, item.city, item.isp].filter(Boolean).join(" · ");
+    const ipType = String(item.ip_type || "static_residential").trim().toLowerCase();
+    const typeLabel = ipType === "datacenter" ? "机房 IP" : "静态住宅 IP";
+    const locationText = [typeLabel, item.country, item.region, item.city, item.isp].filter(Boolean).join(" · ");
     if (locationText) location.textContent = locationText;
     else location.appendChild(createAdminDynamicUiText("未标注地区"));
     endpointCell.append(endpoint, location);
@@ -7454,7 +7629,13 @@ async function updateProxyMarketStatus(itemId, status, control) {
 async function archiveProxyMarketItem(itemId, button) {
   const item = proxyMarketItemById(itemId);
   if (!item) return;
-  if (!confirm(`确认归档 ${item.sku || item.id} 吗？商城将停止展示，关联代理也会被禁用。`)) return;
+  const decision = await requestAdminPublicAction({
+    title: "归档代理库存",
+    message: `确认归档 ${item.sku || item.id} 吗？商城将停止展示，关联代理也会被禁用。`,
+    confirmLabel: "确认归档",
+    tone: "danger",
+  });
+  if (!decision.confirmed) return;
   button.disabled = true;
   try {
     const result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/archive`, { method: "POST" });
@@ -7474,7 +7655,13 @@ async function revokeProxyMarketAllocation(allocationId, button) {
   const impact = boundCount || taskCount
     ? `\n\n此操作会停止 ${taskCount} 个运行任务，并解除 ${boundCount} 个账号绑定。`
     : "";
-  if (!confirm(`确认回收客户 ${allocation.username || allocation.user_id || "-"} 的 ${allocation.sku || allocation.item_id || "代理"} 吗？${impact}`)) return;
+  const decision = await requestAdminPublicAction({
+    title: "回收客户代理",
+    message: `确认回收客户 ${allocation.username || allocation.user_id || "-"} 的 ${allocation.sku || allocation.item_id || "代理"} 吗？${impact}`,
+    confirmLabel: "确认回收",
+    tone: "danger",
+  });
+  if (!decision.confirmed) return;
   button.disabled = true;
   try {
     await api(`/api/admin/proxy-market/allocations/${encodeURIComponent(allocationId)}/revoke`, {
@@ -7594,23 +7781,6 @@ async function loadTaxonomyWorkspace() {
       adminState.customerTagRows = tags?.items || [];
       renderTaxonomyList("customerGroupList", adminState.customerGroupRows, "group");
       renderTaxonomyList("customerTagList", adminState.customerTagRows, "tag");
-      const groupSelect = el("adminUserBatchGroup");
-      if (groupSelect) {
-        const selected = groupSelect.value;
-        groupSelect.replaceChildren(new Option("选择客户分组", ""));
-        adminState.customerGroupRows.forEach((item) => groupSelect.add(new Option(String(item.name || item.id), String(item.id))));
-        groupSelect.value = selected;
-      }
-      const tagSelect = el("adminUserBatchTags");
-      if (tagSelect) {
-        const selected = new Set(Array.from(tagSelect.selectedOptions, (option) => option.value));
-        tagSelect.replaceChildren();
-        adminState.customerTagRows.forEach((item) => {
-          const option = new Option(String(item.name || item.id), String(item.id));
-          option.selected = selected.has(option.value);
-          tagSelect.add(option);
-        });
-      }
       setMsg("taxonomyMsg", "");
       return { groups, tags };
     })
@@ -7898,7 +8068,13 @@ async function runTaskAction(act, id) {
     return true;
   }
   if (act === "delete_task") {
-    if (!confirm(`确认删除生成记录 ${id} 吗？`)) return true;
+    const decision = await requestAdminPublicAction({
+      title: "删除生成记录",
+      message: `确认删除生成记录 ${id} 吗？`,
+      confirmLabel: "确认删除",
+      tone: "danger",
+    });
+    if (!decision.confirmed) return true;
     await api(`/api/admin/tasks/${id}`, { method: "DELETE" });
     await loadTasks();
     return true;
@@ -8168,7 +8344,11 @@ function bindActions() {
       setProxyMarketSmartResult("浏览器未允许读取剪贴板，请手动粘贴后识别。", "error");
     }
   });
-  el("btnParseProxyMarketSmartInput")?.addEventListener("click", () => applyProxyMarketSmartInput());
+  el("btnParseProxyMarketSmartInput")?.addEventListener("click", () => {
+    void applyProxyMarketSmartInput().catch((error) => {
+      setProxyMarketSmartResult(getErrorMessage(error), "error");
+    });
+  });
   el("btnInspectProxyMarketConnection")?.addEventListener("click", async () => {
     try {
       await inspectProxyMarketConnection();
@@ -8312,9 +8492,6 @@ function bindActions() {
   el("adminMfaVerifyCode")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") { event.preventDefault(); void verifyMfaSetup(); }
   });
-  el("adminMfaModal")?.addEventListener("click", (event) => {
-    if (event.target === event.currentTarget) setMfaModalOpen(false);
-  });
   el("btnSaveRuntime").addEventListener("click", async () => {
     setMsg("runtimeMsg", "");
     try {
@@ -8440,15 +8617,14 @@ function bindActions() {
       return;
     }
     adminState.userBatchSelectionInFlight = true;
-    invalidateUserBatchPreview();
-    setMsg("adminUserBatchMsg", "正在选择全部筛选结果...");
+    resetUserBatchRequest();
     syncUserBatchSelection();
     try {
       await selectAllFilteredUsers();
     } catch (error) {
       adminState.selectedUserIds.clear();
       event.currentTarget.checked = false;
-      setMsg("adminUserBatchMsg", getErrorMessage(error), false);
+      setMsg("userMsg", getErrorMessage(error), false);
     } finally {
       adminState.userBatchSelectionInFlight = false;
       syncUserBatchSelection();
@@ -8460,29 +8636,21 @@ function bindActions() {
     const id = String(input.dataset.userSelect || "");
     if (input.checked) adminState.selectedUserIds.add(id);
     else adminState.selectedUserIds.delete(id);
-    invalidateUserBatchPreview();
+    resetUserBatchRequest();
     syncUserBatchSelection();
-  });
-  el("adminUserBatchAction")?.addEventListener("change", async () => {
-    invalidateUserBatchPreview();
-    syncUserBatchSelection();
-    if (["assign_group", "add_tags"].includes(String(el("adminUserBatchAction")?.value || ""))) await loadTaxonomyWorkspace();
   });
   document.querySelectorAll("[data-user-batch-action]").forEach((button) => {
-    button.addEventListener("click", () => selectUserBatchAction(button.dataset.userBatchAction));
+    button.addEventListener("click", () => openUserBatchModal(button.dataset.userBatchAction));
   });
-  ["adminUserBatchReason", "adminUserBatchGroup", "adminUserBatchTags", "adminUserBatchCredit"].forEach((id) => {
-    el(id)?.addEventListener("change", () => { invalidateUserBatchPreview(); syncUserBatchSelection(); });
-    el(id)?.addEventListener("input", () => { invalidateUserBatchPreview(); syncUserBatchSelection(); });
+  el("btnAdminUserBatchClose")?.addEventListener("click", closeUserBatchModal);
+  el("btnAdminUserBatchCancel")?.addEventListener("click", closeUserBatchModal);
+  el("btnAdminUserBatchConfirm")?.addEventListener("click", async () => {
+    try {
+      await submitUserBatchModal();
+    } catch {
+      // Error details are displayed inside the modal.
+    }
   });
-  el("btnClearUserSelection")?.addEventListener("click", clearUserBatchSelection);
-  el("btnPreviewUserBatch")?.addEventListener("click", async () => {
-    try { await previewUserBatchAction(); } catch (error) { setMsg("adminUserBatchMsg", getErrorMessage(error), false); }
-  });
-  el("btnRunUserBatch")?.addEventListener("click", async () => {
-    try { await runUserBatchAction(); } catch (error) { setMsg("adminUserBatchMsg", getErrorMessage(error), false); }
-  });
-
   document.querySelectorAll("[data-user-role]").forEach((button) => {
     button.addEventListener("click", async () => {
       const nextRole = button.dataset.userRole === "admin" ? "admin" : "customer";
@@ -8691,9 +8859,9 @@ function bindActions() {
   }
   el("btnAdminPublicPromptClose")?.addEventListener("click", closeAdminPublicPrompt);
   el("btnAdminPublicPromptDone")?.addEventListener("click", closeAdminPublicPrompt);
-  el("adminPublicPromptModal")?.addEventListener("click", (event) => {
-    if (event.target === event.currentTarget) closeAdminPublicPrompt();
-  });
+  el("btnAdminPublicActionClose")?.addEventListener("click", () => settleAdminPublicAction("dismiss"));
+  el("btnAdminPublicActionCancel")?.addEventListener("click", () => settleAdminPublicAction("cancel"));
+  el("btnAdminPublicActionConfirm")?.addEventListener("click", () => settleAdminPublicAction("confirm"));
   if (el("btnTaskInspectDone")) {
     el("btnTaskInspectDone").addEventListener("click", () => closeTaskInspectModal());
   }
@@ -8704,11 +8872,6 @@ function bindActions() {
       } catch (err) {
         setMsg("taskMsg", err.message || String(err), false);
       }
-    });
-  }
-  if (el("taskInspectModal")) {
-    el("taskInspectModal").addEventListener("click", (e) => {
-      if (e.target === e.currentTarget) closeTaskInspectModal();
     });
   }
   if (el("btnRechargeClose")) {
@@ -8725,11 +8888,6 @@ function bindActions() {
     });
   }
   el("rechargeUnlimited")?.addEventListener("change", syncRechargeUnlimitedMode);
-  if (el("rechargeModal")) {
-    el("rechargeModal").addEventListener("click", (e) => {
-      if (e.target === e.currentTarget) closeRechargeModal();
-    });
-  }
   if (el("btnUserDetailClose")) {
     el("btnUserDetailClose").addEventListener("click", closeUserDetailModal);
   }
@@ -8753,7 +8911,13 @@ function bindActions() {
   }
   if (el("btnRejectUser")) {
     el("btnRejectUser").addEventListener("click", async () => {
-      if (!confirm("确认拒绝该账号的使用申请吗？")) return;
+      const decision = await requestAdminPublicAction({
+        title: "拒绝账号申请",
+        message: "确认拒绝该账号的使用申请吗？",
+        confirmLabel: "确认拒绝",
+        tone: "danger",
+      });
+      if (!decision.confirmed) return;
       try {
         await reviewSelectedUser("rejected");
       } catch (err) {
@@ -8855,15 +9019,16 @@ function bindActions() {
       }
     });
   }
-  if (el("userDetailModal")) {
-    el("userDetailModal").addEventListener("click", (e) => {
-      if (e.target === e.currentTarget) closeUserDetailModal();
-    });
-  }
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && el("adminPublicActionModal")?.getAttribute("aria-hidden") === "false") {
+      e.preventDefault();
+      settleAdminPublicAction("dismiss");
+      return;
+    }
     if (trapUserDetailFocus(e)) return;
     if (e.key === "Escape") {
       closeAdminPublicPrompt();
+      closeUserBatchModal();
       closeTaskInspectModal();
       closeRechargeModal();
       closeUserDetailModal();
@@ -9038,7 +9203,13 @@ function bindActions() {
     }
     if (act === "archive_user") {
       const name = btn.dataset.name || id;
-      if (!confirm(`确认软删除客户 ${name} 吗？账号身份将立即下线，但人设、推文、任务、额度流水和其他业务数据都会保留，可由管理员恢复。`)) return;
+      const decision = await requestAdminPublicAction({
+        title: "删除客户账号",
+        message: `确认删除客户 ${name} 吗？账号身份将立即下线，但人设、推文、任务、额度流水和其他业务数据都会保留，可由管理员恢复。`,
+        confirmLabel: "确认删除",
+        tone: "danger",
+      });
+      if (!decision.confirmed) return;
       try {
         await api(`/api/admin/users/${id}`, { method: "DELETE" });
         await loadUsers();
@@ -9050,7 +9221,12 @@ function bindActions() {
     }
     if (act === "restore_user") {
       const name = btn.dataset.name || id;
-      if (!confirm(`确认恢复客户 ${name} 的登录权限吗？`)) return;
+      const decision = await requestAdminPublicAction({
+        title: "恢复客户账号",
+        message: `确认恢复客户 ${name} 的登录权限吗？`,
+        confirmLabel: "确认恢复",
+      });
+      if (!decision.confirmed) return;
       try {
         await api(`/api/admin/users/${id}/restore`, { method: "POST" });
         await loadUsers();

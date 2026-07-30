@@ -734,20 +734,7 @@
           </div>
           <div class="admin-user-batch-summary">
             <div class="admin-user-batch-selection"><strong id="adminSelectedUserCount">0</strong><span>个客户已选择</span></div>
-            <button id="btnClearUserSelection" type="button" class="ghost">清除选择</button>
           </div>
-          <div class="admin-user-batch-fields">
-            <label><span class="sr-only">批量操作</span><select id="adminUserBatchAction"><option value="">更多批量操作</option><option value="approve">审核通过</option><option value="reject">拒绝申请</option><option value="enable">启用账号</option><option value="suspend">临时停用</option><option value="lock">安全锁定</option><option value="archive">只读归档</option><option value="revoke_sessions">强制全部下线</option><option value="assign_group">调整分组</option><option value="add_tags">添加标签</option><option value="add_credit">调整算力</option></select></label>
-            <label class="admin-user-batch-reason"><span class="sr-only">批量操作原因</span><input id="adminUserBatchReason" maxlength="500" placeholder="填写操作原因"></label>
-            <label id="adminBatchGroupField" hidden><span class="sr-only">客户分组</span><select id="adminUserBatchGroup"><option value="">选择客户分组</option></select></label>
-            <label id="adminBatchTagsField" hidden><span class="sr-only">客户标签</span><select id="adminUserBatchTags" multiple aria-label="客户标签"></select></label>
-            <label id="adminBatchCreditField" hidden><span class="sr-only">调整算力</span><input id="adminUserBatchCredit" type="number" min="0.01" max="1000000" step="0.01" placeholder="输入增加点数"></label>
-          </div>
-          <div class="admin-user-batch-actions">
-            <button id="btnPreviewUserBatch" type="button" class="ghost">预览影响</button>
-            <button id="btnRunUserBatch" type="button" class="primary" disabled>确认执行</button>
-          </div>
-          <div id="adminUserBatchMsg" class="msg" role="status" aria-live="polite"></div>
         </div>
         <div class="table-wrap admin-table-shell">
           <table class="table admin-user-table">
@@ -1754,17 +1741,74 @@
     </main>
   </div>
 
+  <div id="adminUserBatchModal" class="modal-overlay" style="display:none" aria-hidden="true">
+    <div id="adminUserBatchModalDialog" class="modal-card modal-card-narrow admin-user-batch-modal" role="dialog" aria-modal="true" aria-labelledby="adminUserBatchModalTitle" tabindex="-1">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="adminUserBatchModalTitle">账号总控</div>
+          <div class="small" id="adminUserBatchModalSub">请填写本次操作内容</div>
+        </div>
+        <button id="btnAdminUserBatchClose" type="button" class="modal-close-icon" aria-label="关闭账号总控窗口">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+        </button>
+      </div>
+      <div class="modal-body admin-user-batch-modal-body">
+        <div class="admin-user-batch-modal-summary">
+          本次将处理 <strong id="adminUserBatchModalCount">0</strong> 个已选客户账号
+        </div>
+        <label id="adminUserBatchCreditField" for="adminUserBatchCredit" hidden>
+          <span>增加算力点</span>
+          <input id="adminUserBatchCredit" type="number" min="0.01" max="1000000" step="0.01" inputmode="decimal" placeholder="输入增加点数">
+        </label>
+        <label for="adminUserBatchReason">
+          <span>操作原因（选填）</span>
+          <textarea id="adminUserBatchReason" maxlength="500" rows="3" placeholder="选填，例如：活动赠送或人工补充算力"></textarea>
+        </label>
+        <div id="adminUserBatchModalMsg" class="msg" role="status" aria-live="polite"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="btnAdminUserBatchCancel" type="button" class="ghost">取消</button>
+        <button id="btnAdminUserBatchConfirm" type="button" class="primary">确认执行</button>
+      </div>
+    </div>
+  </div>
+
   <div id="adminPublicPromptModal" class="modal-overlay" style="display:none" aria-hidden="true">
     <div id="adminPublicPromptDialog" class="modal-card modal-card-narrow" role="dialog" aria-modal="true" aria-labelledby="adminPublicPromptTitle" tabindex="-1">
       <div class="modal-header">
         <div class="modal-title" id="adminPublicPromptTitle">操作提示</div>
-        <button id="btnAdminPublicPromptClose" type="button" class="ghost" aria-label="关闭提示">关闭</button>
+        <button id="btnAdminPublicPromptClose" type="button" class="modal-close-icon" aria-label="关闭提示">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+        </button>
       </div>
       <div class="modal-body">
         <div id="adminPublicPromptMessage" class="msg" role="status" aria-live="polite" aria-atomic="true"></div>
       </div>
       <div class="modal-footer">
         <button id="btnAdminPublicPromptDone" type="button" class="primary">知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="adminPublicActionModal" class="modal-overlay admin-public-action-modal" style="display:none" aria-hidden="true">
+    <div id="adminPublicActionDialog" class="modal-card modal-card-narrow" role="dialog" aria-modal="true" aria-labelledby="adminPublicActionTitle" aria-describedby="adminPublicActionMessage" tabindex="-1">
+      <div class="modal-header">
+        <div class="modal-title" id="adminPublicActionTitle">确认操作</div>
+        <button id="btnAdminPublicActionClose" type="button" class="modal-close-icon" aria-label="关闭确认窗口">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+        </button>
+      </div>
+      <div class="modal-body admin-public-action-body">
+        <div id="adminPublicActionMessage" class="admin-public-action-message"></div>
+        <label id="adminPublicActionInputField" class="admin-public-action-input-field" for="adminPublicActionInput" hidden>
+          <span id="adminPublicActionInputLabel">补充说明</span>
+          <textarea id="adminPublicActionInput" rows="3"></textarea>
+        </label>
+        <div id="adminPublicActionMsg" class="msg" role="status" aria-live="polite"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="btnAdminPublicActionCancel" type="button" class="ghost">取消</button>
+        <button id="btnAdminPublicActionConfirm" type="button" class="primary">确认</button>
       </div>
     </div>
   </div>
@@ -1776,7 +1820,9 @@
           <div class="modal-title" id="taskInspectTitle">生成详情</div>
           <div class="small" id="taskInspectSub">-</div>
         </div>
-        <button id="btnTaskInspectClose" type="button" class="ghost">关闭</button>
+        <button id="btnTaskInspectClose" type="button" class="modal-close-icon" aria-label="关闭生成详情">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+        </button>
       </div>
       <div class="modal-body">
         <div id="taskInspectBody"></div>
@@ -1798,7 +1844,9 @@
           <div class="modal-title" id="rechargeTitle">人工算力调整</div>
           <div class="small" id="rechargeSub">-</div>
         </div>
-        <button id="btnRechargeClose" type="button" class="ghost">关闭</button>
+        <button id="btnRechargeClose" type="button" class="modal-close-icon" aria-label="关闭算力调整">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+        </button>
       </div>
       <div class="modal-body">
         <label class="switch admin-billing-unlimited-option">
@@ -1826,7 +1874,9 @@
         </div>
         <div class="admin-user-detail-header-actions">
           <button id="btnManageUserWorkspace" type="button" class="primary">登录用户控制台</button>
-          <button id="btnUserDetailClose" type="button" class="ghost">关闭</button>
+          <button id="btnUserDetailClose" type="button" class="modal-close-icon" aria-label="关闭账号详细资料">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+          </button>
         </div>
       </div>
       <div class="modal-body">
@@ -1971,7 +2021,9 @@
     <div class="modal-card admin-mfa-modal" role="dialog" aria-modal="true" aria-labelledby="adminMfaTitle">
       <div class="modal-header">
         <div><div class="modal-title" id="adminMfaTitle">设置动态验证</div><div class="small">管理员敏感操作必须使用 MFA。</div></div>
-        <button id="btnCloseMfaSetup" type="button" class="ghost">关闭</button>
+        <button id="btnCloseMfaSetup" type="button" class="modal-close-icon" aria-label="关闭动态验证设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+        </button>
       </div>
       <div class="modal-body">
         <div id="adminMfaIntro" class="admin-mfa-intro">

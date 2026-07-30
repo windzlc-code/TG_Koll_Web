@@ -43,6 +43,7 @@ class NotificationBroadcastPayload(BaseModel):
     action_label: str = Field(default="", max_length=60)
     source_key: str = Field(default="", max_length=160)
     expires_at: int = Field(default=0, ge=0)
+    important: bool = False
 
 
 def _now() -> int:
@@ -71,12 +72,14 @@ def create_notification(
     action_url: str = "",
     action_label: str = "",
     expires_at: int = 0,
+    important: bool = False,
     now: int | None = None,
 ) -> bool:
     clean_category = _validate_category(category)
     action = {
         "url": str(action_url or "").strip(),
         "label": str(action_label or "").strip(),
+        "important": bool(important),
     }
     cursor = conn.execute(
         """
@@ -116,16 +119,19 @@ def _notification_row(row) -> dict[str, Any]:
         action = json.loads(str(row["action_json"] or "{}"))
     except (TypeError, ValueError):
         action = {}
+    if not isinstance(action, dict):
+        action = {}
     return {
         "id": int(row["id"]),
         "category": str(row["category"]),
         "title": str(row["title"]),
         "body": str(row["body"] or ""),
-        "action": action if isinstance(action, dict) else {},
+        "action": action,
         "read": int(row["read_at"] or 0) > 0,
         "read_at": int(row["read_at"] or 0),
         "created_at": int(row["created_at"] or 0),
         "expires_at": int(row["expires_at"] or 0),
+        "important": bool(action.get("important")),
     }
 
 
@@ -226,6 +232,7 @@ def register_notification_routes(app: FastAPI) -> None:
         action = {
             "url": str(payload.action_url or "").strip(),
             "label": str(payload.action_label or "").strip(),
+            "important": bool(payload.important),
         }
         source_key = str(payload.source_key or "").strip()
         now = _now()

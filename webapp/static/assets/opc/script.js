@@ -1090,8 +1090,8 @@ applicationForm?.addEventListener("submit", async (event) => {
     closeLogin();
     await window.VectoSiteNavigation?.showAuthFeedback?.({
       kind: "success",
-      title: "帳號建立成功",
-      message: "信箱已完成驗證，歡迎開始使用 Vecto。",
+      title: "帳號建立成功，5 點算力已到帳",
+      message: "歡迎加入 Vecto。贈送算力已放入你的帳戶，可用於 AI 推文與配圖等功能。接下來先建立第一個人設，我們會一步一步帶你完成設定。",
       actionText: "開始使用",
     });
   } catch (error) {

@@ -92,16 +92,18 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             "adminUserSubscription",
             "adminUserBatchBar",
             "adminSelectAllUsers",
-            "adminBatchCreditField",
+            "adminUserBatchModal",
+            "adminUserBatchModalTitle",
+            "adminUserBatchModalCount",
+            "adminUserBatchCreditField",
             "adminUserBatchCredit",
-            "btnPreviewUserBatch",
-            "btnRunUserBatch",
+            "adminUserBatchReason",
+            "btnAdminUserBatchConfirm",
             "userPurgeSection",
             "userPurgeForm",
         ):
             self.assertIn(f'id="{control_id}"', self.html)
         self.assertIn('/api/admin/users/batch-actions', self.script)
-        self.assertIn('<option value="add_credit">调整算力</option>', self.html)
         self.assertIn('action === "add_credit"', self.script)
         self.assertIn("delta_points", self.script)
         self.assertIn("idempotency_key", self.script)
@@ -111,18 +113,79 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('/purge-preview', self.script)
         self.assertIn('method: "DELETE"', self.script)
 
-    def test_account_batch_controls_use_stable_grouped_layout(self):
-        for class_name in (
-            "admin-user-batch-summary",
-            "admin-user-batch-fields",
-            "admin-user-batch-actions",
+    def test_account_batch_controls_use_three_modal_actions_only(self):
+        self.assertIn('class="admin-user-batch-summary', self.html)
+        self.assertIn(".page-admin .admin-user-batch-summary", self.styles)
+        for obsolete_id in (
+            "btnClearUserSelection",
+            "adminUserBatchAction",
+            "adminBatchGroupField",
+            "adminBatchTagsField",
+            "btnPreviewUserBatch",
+            "btnRunUserBatch",
+            "adminUserBatchMsg",
         ):
-            self.assertIn(f'class="{class_name}', self.html)
-            self.assertIn(f".page-admin .{class_name}", self.styles)
-        self.assertIn("grid-template-columns: auto minmax(155px, 0.55fr) minmax(460px, 2.25fr) auto;", self.styles)
-        self.assertIn("height: 38px;", self.styles)
+            self.assertNotIn(f'id="{obsolete_id}"', self.html)
+        self.assertIn("function openUserBatchModal", self.script)
+        self.assertIn("async function submitUserBatchModal", self.script)
+        self.assertIn("await previewUserBatchAction()", self.script)
+        self.assertIn("buildUserBatchPayload(false)", self.script)
         self.assertIn(".page-admin [hidden]", self.styles)
         self.assertIn("display: none !important;", self.styles)
+
+    def test_batch_reason_is_optional_and_modal_blur_is_light(self):
+        batch_modal = self.html[
+            self.html.index('id="adminUserBatchModal"')
+            : self.html.index('id="adminPublicPromptModal"')
+        ]
+        self.assertIn("操作原因（选填）", batch_modal)
+        self.assertIn("选填，例如", batch_modal)
+        batch_script = self.script[
+            self.script.index("const USER_BATCH_ACTION_CONFIG")
+            : self.script.index("function buildAdminUserListParams")
+        ]
+        self.assertNotIn("payload.reason.length", batch_script)
+        self.assertNotIn("至少 2 个字符的操作原因", batch_script)
+        modal_overlay = self.styles[
+            self.styles.index(".modal-overlay {")
+            : self.styles.index(".modal-card {")
+        ]
+        self.assertIn("backdrop-filter: blur(2px);", modal_overlay)
+        self.assertIn("-webkit-backdrop-filter: blur(2px);", modal_overlay)
+        self.assertNotIn("blur(8px)", modal_overlay)
+
+    def test_public_modals_use_borderless_svg_close_and_ignore_backdrop_clicks(self):
+        for button_id in (
+            "btnAdminUserBatchClose",
+            "btnAdminPublicPromptClose",
+            "btnAdminPublicActionClose",
+            "btnTaskInspectClose",
+            "btnRechargeClose",
+            "btnUserDetailClose",
+            "btnCloseMfaSetup",
+        ):
+            marker = self.html[self.html.index(f'id="{button_id}"') :]
+            button = marker[: marker.index("</button>")]
+            self.assertIn('class="modal-close-icon"', button)
+            self.assertIn("<svg", button)
+            self.assertNotIn(">关闭", button)
+        close_style = self.styles[
+            self.styles.index(".page-admin .modal-close-icon {")
+            : self.styles.index(".page-admin .modal-close-icon svg")
+        ]
+        self.assertIn("border: 0;", close_style)
+        self.assertIn("background: transparent;", close_style)
+        for modal_id in (
+            "adminMfaModal",
+            "adminUserBatchModal",
+            "adminPublicPromptModal",
+            "adminPublicActionModal",
+            "taskInspectModal",
+            "rechargeModal",
+            "userDetailModal",
+        ):
+            self.assertNotIn(f'el("{modal_id}")?.addEventListener("click"', self.script)
+            self.assertNotIn(f'if (el("{modal_id}")) {{', self.script)
 
     def test_primary_account_controls_are_batch_only_and_next_to_the_table(self):
         compose_index = self.html.index('class="admin-compose-shell"')
@@ -132,13 +195,51 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertLess(batch_index, table_index)
         for action in ("add_credit", "enable", "suspend"):
             self.assertIn(f'data-user-batch-action="{action}"', self.html)
-        self.assertIn("function selectUserBatchAction", self.script)
+        self.assertIn("openUserBatchModal(button.dataset.userBatchAction)", self.script)
         user_rows = self.script[
             self.script.index("async function loadUsers")
             : self.script.index("function detailRow")
         ]
         self.assertNotIn('addAction("人工调整算力点"', user_rows)
         self.assertNotIn('"toggle"', user_rows)
+        self.assertIn('actionLabel.className = "admin-user-action-label"', user_rows)
+        self.assertIn(".page-admin .admin-user-action-label", self.styles)
+
+    def test_user_row_actions_use_standard_icons_and_concise_labels(self):
+        user_rows = self.script[
+            self.script.index("const ADMIN_USER_ICONS")
+            : self.script.index("function detailRow")
+        ]
+        self.assertIn('addAction("查看", "user_detail", "detail")', user_rows)
+        self.assertIn('addAction("详情", "billing_detail", "billing"', user_rows)
+        self.assertIn('addAction("删除", "archive_user", "delete"', user_rows)
+        self.assertNotIn('addAction("查看详情"', user_rows)
+        self.assertNotIn('addAction("计费详情"', user_rows)
+        self.assertNotIn('addAction("软删除账号"', user_rows)
+        self.assertIn('M14 2H6a2 2 0 0 0-2 2v16', user_rows)
+        self.assertIn('M3 6h18M8 6V4h8v2', user_rows)
+
+    def test_admin_operations_use_shared_action_modal(self):
+        for control_id in (
+            "adminPublicActionModal",
+            "adminPublicActionDialog",
+            "adminPublicActionTitle",
+            "adminPublicActionMessage",
+            "adminPublicActionInputField",
+            "adminPublicActionInput",
+            "btnAdminPublicActionCancel",
+            "btnAdminPublicActionConfirm",
+        ):
+            self.assertIn(f'id="{control_id}"', self.html)
+        self.assertIn("function requestAdminPublicAction", self.script)
+        self.assertIn("function settleAdminPublicAction", self.script)
+        self.assertNotIn("window.confirm", self.script)
+        self.assertNotRegex(self.script, r"(?<![A-Za-z])confirm\(")
+        self.assertNotRegex(self.script, r"(?<![A-Za-z])prompt\(")
+        self.assertIn(".admin-public-action-modal", self.styles)
+
+    def test_select_all_progress_does_not_leak_into_create_user_message(self):
+        self.assertNotIn('setMsg("userMsg", "正在选择全部筛选结果...")', self.script)
 
     def test_governance_pages_and_step_up_fields_are_present(self):
         for page in ("overview", "users", "taxonomy", "audit", "security", "serviceAccounts"):

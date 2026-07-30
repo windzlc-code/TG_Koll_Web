@@ -40,6 +40,18 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script,
         )
 
+    def test_empty_persona_workspace_has_a_mobile_first_run_guide_without_replacing_selection_copy(self):
+        self.assertIn("personaOverviewLoaded: false", self.console_script)
+        self.assertIn("state.personaOverviewLoaded = true", self.console_script)
+        self.assertIn("persona-first-run-empty", self.console_script)
+        self.assertIn("先创建你的第一个人设", self.console_script)
+        self.assertIn("创建第一个人设", self.console_script)
+        self.assertIn("请选择一个人设", self.console_script)
+        self.assertIn(".console-page .persona-first-run-empty", self.styles)
+        self.assertIn(".console-page .persona-detail .persona-first-run-actions button", self.styles)
+        self.assertIn("width: min(100%, 300px);", self.styles)
+        self.assertIn("min-height: 52px;", self.styles)
+
     def test_legacy_persona_automation_panel_is_fully_removed(self):
         self.assertNotIn("社媒自动化执行", self.dashboard_script)
         self.assertNotIn("pdRenderAutomationPanel", self.dashboard_script)
@@ -1984,8 +1996,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         active_logo_start = self.styles.index(".persona-execution-platform-logo.is-current")
         active_logo_end = self.styles.index(".persona-execution-platform-logo svg", active_logo_start)
         active_logo = self.styles[active_logo_start:active_logo_end]
-        self.assertIn("background: var(--accent);", active_logo)
-        self.assertIn("color: #fff;", active_logo)
+        self.assertIn("background: var(--brand-bg);", active_logo)
+        self.assertIn("color: var(--panel-solid);", active_logo)
 
         mobile_identity_start = self.styles.rindex(".persona-profile-data-panel-head--identity {")
         mobile_identity_end = self.styles.index(".persona-profile-list-toggle {", mobile_identity_start)

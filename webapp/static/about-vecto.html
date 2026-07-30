@@ -257,14 +257,15 @@
         <div class="about-shell">
           <p class="about-kicker">START WITH YOUR WORKFLOW</p>
           <h2>從一個人設、一個帳號開始，<br />建立自己的社媒營運系統</h2>
-          <div><a class="button button-primary" href="/?register=1" data-open-register>註冊帳號</a><button class="button button-ghost" type="button" data-open-login>登入現有帳號</button></div>
+          <div><a class="button button-primary" href="/?register=1" data-open-register data-public-auth-guest>註冊帳號</a><button class="button button-ghost" type="button" data-open-login data-public-auth-guest>登入現有帳號</button><a class="button button-primary" href="/console.html" data-console-entry data-public-auth-account hidden>進入控制台</a></div>
         </div>
       </section>
     </main>
 
     <footer class="site-footer">
       <div class="footer-brand"><span class="footer-logo-frame" aria-hidden="true"><img class="footer-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" /></span><div><strong>Vecto 維拓</strong><span>OPC 超級個體 AI 駕駛艙</span></div></div>
-      <a class="button button-primary" href="/?register=1" data-open-register>註冊遊客帳號</a>
+      <a class="button button-primary" href="/?register=1" data-open-register data-public-auth-guest>註冊遊客帳號</a>
+      <a class="button button-primary" href="/console.html" data-console-entry data-public-auth-account hidden>進入控制台</a>
     </footer>
 
     <div class="auth-overlay" id="loginModal" aria-hidden="true">

@@ -34,6 +34,15 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertIn('api("/api/auth/register"', self.script)
         self.assertNotIn('api("/api/auth/apply"', self.script)
 
+    def test_registration_success_immediately_explains_the_welcome_compute_credit(self):
+        registration_submit = self.script[
+            self.script.index("applicationForm?.addEventListener(\"submit\""):
+            self.script.index("googleLoginButton?.addEventListener", self.script.index("applicationForm?.addEventListener(\"submit\""))
+        ]
+        self.assertIn("5 點算力已到帳", registration_submit)
+        self.assertIn("贈送算力已放入你的帳戶", registration_submit)
+        self.assertIn("showAuthFeedback", registration_submit)
+
     def test_registration_splits_account_details_and_email_verification_into_two_pages(self):
         registration_markup = self.script[
             self.script.index("function registrationPanelMarkup"):
@@ -353,6 +362,18 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         ):
             with self.subTest(token=legacy_token):
                 self.assertNotIn(legacy_token, global_theme)
+
+    def test_public_ctas_follow_the_resolved_session_state(self):
+        navigation = (STATIC_DIR / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
+        self.assertIn("function syncPublicAuthCtas(isAuthenticated)", navigation)
+        self.assertIn("syncPublicAuthCtas(true);", navigation)
+        self.assertIn("syncPublicAuthCtas(false);", navigation)
+        for page_name in ("index.html", "pricing.html", "about-vecto.html"):
+            with self.subTest(page=page_name):
+                markup = (STATIC_DIR / page_name).read_text(encoding="utf-8")
+                self.assertIn("data-public-auth-guest", markup)
+                self.assertIn("data-public-auth-account hidden", markup)
+                self.assertIn("data-console-entry data-public-auth-account", markup)
 
 
 if __name__ == "__main__":
