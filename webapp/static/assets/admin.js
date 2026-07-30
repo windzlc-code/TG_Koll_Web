@@ -5176,7 +5176,7 @@ function updateGovernanceChart(canvasId, rows, series) {
   const items = Array.isArray(rows) ? rows : [];
   const palette = {
     "series-blue": { border: "#2563eb", background: "rgba(37, 99, 235, 0.10)" },
-    "series-green": { border: "#0f9d78", background: "rgba(15, 157, 120, 0.10)" },
+    "series-success": { border: "#356b91", background: "rgba(53, 107, 145, 0.10)" },
     "series-red": { border: "#dc2626", background: "rgba(220, 38, 38, 0.08)" },
   };
   const labels = {
@@ -5347,16 +5347,16 @@ function renderGovernanceDashboard(payload = {}) {
   healthKpi?.classList.toggle("is-health", String(summary.service_health) === "healthy");
   updateGovernanceChart("governanceUsersChart", payload.trends?.users || [], [
     { key: "created", className: "series-blue" },
-    { key: "activated", className: "series-green" },
+    { key: "activated", className: "series-success" },
   ]);
   updateGovernanceChart("governanceTasksChart", payload.trends?.tasks || [], [
-    { key: "success", className: "series-green" },
+    { key: "success", className: "series-success" },
     { key: "failed", className: "series-red" },
   ]);
   updateGovernanceChart("governanceBillingChart", payload.trends?.billing || [], [
     { key: "credited_units", className: "series-blue" },
     { key: "consumed_units", className: "series-red" },
-    { key: "refunded_units", className: "series-green" },
+    { key: "refunded_units", className: "series-success" },
   ]);
   renderGovernanceDistribution("governanceLifecycleDistribution", payload.distributions?.lifecycle || [], {
     active: "活跃", pending: "待审核", suspended: "已停用", archived: "已归档", deleted: "已软删除", locked: "已锁定", rejected: "已拒绝",

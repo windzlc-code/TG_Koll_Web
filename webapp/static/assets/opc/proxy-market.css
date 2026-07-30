@@ -377,7 +377,7 @@
 .proxy-availability::before {
   width: 7px;
   height: 7px;
-  background: #31b86f;
+  background: #356b91;
   border-radius: 50%;
   content: "";
 }

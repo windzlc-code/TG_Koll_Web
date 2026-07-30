@@ -13,6 +13,10 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         cls.script = SCRIPT_PATH.read_text(encoding="utf-8")
         cls.styles = STYLES_PATH.read_text(encoding="utf-8")
         cls.fixed_light = (STATIC_DIR / "assets" / "fixed-light.css").read_text(encoding="utf-8")
+        cls.shared_styles = (STATIC_DIR / "assets" / "style.css").read_text(encoding="utf-8")
+        cls.proxy_styles = (STATIC_DIR / "assets" / "opc" / "proxy-market.css").read_text(encoding="utf-8")
+        cls.admin_script = (STATIC_DIR / "assets" / "admin.js").read_text(encoding="utf-8")
+        cls.admin_markup = (STATIC_DIR / "admin.html").read_text(encoding="utf-8")
         cls.google_svg = (STATIC_DIR / "assets" / "opc" / "google-g-gradient.svg").read_text(encoding="utf-8")
         cls.auth_script = (STATIC_DIR / "assets" / "auth.js").read_text(encoding="utf-8")
         cls.change_password = (STATIC_DIR / "change-password.html").read_text(encoding="utf-8")
@@ -277,7 +281,15 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertIn(".auth-google-button:focus-visible", self.styles)
 
     def test_public_theme_contains_no_legacy_green_action_palette(self):
-        public_theme = f"{self.styles}\n{self.fixed_light}".lower()
+        registration_theme = f"{self.styles}\n{self.fixed_light}".lower()
+        global_theme = "\n".join((
+            self.styles,
+            self.fixed_light,
+            self.shared_styles,
+            self.proxy_styles,
+            self.admin_script,
+            self.admin_markup,
+        )).lower()
         for legacy_color in (
             "#0c9a9a",
             "#087071",
@@ -304,11 +316,25 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
             "#527361",
         ):
             with self.subTest(color=legacy_color):
-                self.assertNotIn(legacy_color, public_theme)
+                self.assertNotIn(legacy_color, registration_theme)
         self.assertIn("--teal: #4b6478;", self.styles)
         self.assertIn("--teal-dark: #253746;", self.styles)
-        self.assertIn("--green: #356b91;", self.styles)
+        self.assertIn("--success-accent: #356b91;", self.styles)
         self.assertIn("--public-success: #356b91;", self.fixed_light)
+        for legacy_token in (
+            "--green",
+            "--admin-green",
+            "--gov-green",
+            "series-green",
+            "is-green",
+            "#31b86f",
+            "#188a52",
+            "#e8f6ee",
+            "#0f9d78",
+            "rgba(15, 157, 120",
+        ):
+            with self.subTest(token=legacy_token):
+                self.assertNotIn(legacy_token, global_theme)
 
 
 if __name__ == "__main__":

@@ -5603,7 +5603,7 @@ body.page-admin {
   --admin-line: #d7e2df;
   --admin-teal: #0c9a9a;
   --admin-teal-dark: #087071;
-  --admin-green: #31b86f;
+  --admin-success-accent: #356b91;
   --admin-coral: #e75d4f;
   background: var(--admin-surface);
   color: var(--admin-ink);
@@ -5740,7 +5740,7 @@ body.page-admin {
   bottom: 7px;
   width: 3px;
   border-radius: 0 2px 2px 0;
-  background: var(--admin-green);
+  background: var(--admin-success-accent);
 }
 
 .page-admin .admin-sidebar-actions {
@@ -8547,8 +8547,8 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 .page-admin {
   --gov-blue: #2474c6;
   --gov-blue-soft: #eaf3fc;
-  --gov-green: #188a52;
-  --gov-green-soft: #e8f6ee;
+  --gov-success-accent: #356b91;
+  --gov-success-soft: #e8f0f7;
   --gov-amber: #a96308;
   --gov-amber-soft: #fff5df;
   --gov-red: #c43e46;
@@ -8624,7 +8624,7 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 .page-admin .admin-live-status i {
   width: 8px;
   height: 8px;
-  background: var(--gov-green);
+  background: var(--gov-success-accent);
   border-radius: 50%;
 }
 
@@ -8666,8 +8666,8 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 
 .page-admin .admin-governance-kpi.is-success,
 .page-admin .admin-governance-kpi.is-health {
-  border-top-color: var(--gov-green);
-  background: linear-gradient(180deg, var(--gov-green-soft), #fff 54%);
+  border-top-color: var(--gov-success-accent);
+  background: linear-gradient(180deg, var(--gov-success-soft), #fff 54%);
 }
 
 .page-admin .admin-governance-kpi.is-warning {
@@ -8756,8 +8756,8 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   background: var(--gov-blue);
 }
 
-.page-admin .admin-chart-legend .is-green {
-  background: var(--gov-green);
+.page-admin .admin-chart-legend .is-success {
+  background: var(--gov-success-accent);
 }
 
 .page-admin .admin-chart-legend .is-red {
@@ -8819,7 +8819,7 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 }
 
 .page-admin .admin-distribution-fill.is-success {
-  background: var(--gov-green);
+  background: var(--gov-success-accent);
 }
 
 .page-admin .admin-distribution-fill.is-warning {
@@ -8908,7 +8908,7 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 .page-admin .admin-semantic-badge.is-success {
   color: #11643b;
   border-color: #9fd5b8;
-  background: var(--gov-green-soft);
+  background: var(--gov-success-soft);
 }
 
 .page-admin .admin-semantic-badge.is-warning {

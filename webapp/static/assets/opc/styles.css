@@ -9,7 +9,7 @@
   --line: #d7e0e7;
   --teal: #4b6478;
   --teal-dark: #253746;
-  --green: #356b91;
+  --success-accent: #356b91;
   --amber: #f0ac38;
   --coral: #e75d4f;
   --dark: #101820;
@@ -318,7 +318,7 @@ select:focus {
   height: 18px;
   min-height: 18px;
   margin: 3px 0 0;
-  accent-color: var(--green);
+  accent-color: var(--success-accent);
 }
 
 .submit-button,
@@ -514,7 +514,7 @@ select:focus {
   height: 18px;
   min-height: 18px;
   margin: 0;
-  accent-color: var(--green);
+  accent-color: var(--success-accent);
 }
 
 .auth-close {
@@ -696,7 +696,7 @@ select:focus {
 }
 
 .auth-verification-status[data-state="success"] {
-  color: var(--green);
+  color: var(--success-accent);
 }
 
 .auth-verification-code {
@@ -794,7 +794,7 @@ select:focus {
 }
 
 .auth-form-status[data-state="success"] {
-  color: var(--green);
+  color: var(--success-accent);
 }
 
 .auth-provider-divider {
@@ -1190,7 +1190,7 @@ body.modal-open {
 .difference-lead {
   margin: 0;
   padding-left: 22px;
-  border-left: 3px solid var(--green);
+  border-left: 3px solid var(--success-accent);
   color: var(--ink-soft);
   font-size: 17px;
 }

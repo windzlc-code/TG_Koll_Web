@@ -28,7 +28,7 @@
   --muted: var(--public-muted);
   --teal: var(--public-cool);
   --teal-dark: var(--public-cool-dark);
-  --green: var(--public-success);
+  --success-accent: var(--public-success);
   --amber: var(--public-warm-accent);
 }
 
@@ -1055,7 +1055,7 @@
   --admin-line: #aeb8c1;
   --admin-teal: var(--public-cool);
   --admin-teal-dark: var(--public-cool-dark);
-  --admin-green: var(--public-success);
+  --admin-success-accent: var(--public-success);
   --admin-coral: #d94c45;
   background: #dfe4e8;
 }
