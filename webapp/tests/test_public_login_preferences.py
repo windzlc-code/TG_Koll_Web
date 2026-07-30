@@ -293,6 +293,24 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('authFeedbackCopyByTime("logout")', self.site_nav_script)
         self.assertIn('title: "退出未完成"', self.site_nav_script)
 
+    def test_google_oauth_login_and_logout_reuse_shared_feedback(self):
+        self.assertIn(
+            'const GOOGLE_AUTH_FEEDBACK_STORAGE_KEY = "vecto-google-auth-feedback-pending"',
+            self.script,
+        )
+        self.assertIn(
+            "window.sessionStorage.setItem(GOOGLE_AUTH_FEEDBACK_STORAGE_KEY, \"1\")",
+            self.script,
+        )
+        self.assertIn("function showPendingGoogleAuthFeedback()", self.site_nav_script)
+        self.assertIn('authFeedbackCopyByTime("login")', self.site_nav_script)
+        self.assertIn("Google ${feedback.title}", self.site_nav_script)
+        self.assertIn(
+            "window.sessionStorage.removeItem(GOOGLE_AUTH_FEEDBACK_STORAGE_KEY)",
+            self.script,
+        )
+        self.assertIn('authFeedbackCopyByTime("logout")', self.site_nav_script)
+
     def test_home_navigation_opens_console_or_existing_login_dialog(self):
         page = (self.static_dir / "index.html").read_text(encoding="utf-8")
         pricing = (self.static_dir / "pricing.html").read_text(encoding="utf-8")

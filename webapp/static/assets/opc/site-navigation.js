@@ -9,6 +9,7 @@
   const EVENT_CONSOLE_VIEW_REQUEST = "vecto:account-console-view-request";
   const NOTIFICATION_STORAGE_KEY = "vecto-notifications-updated";
   const NOTIFICATION_POLL_MS = 15000;
+  const GOOGLE_AUTH_FEEDBACK_STORAGE_KEY = "vecto-google-auth-feedback-pending";
   const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
   const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
   const DEFAULT_LANGUAGE = document.documentElement.lang === "zh-Hant" ? "zh-Hant" : "zh-Hans";
@@ -23,6 +24,7 @@
   let accountBillingRequest = 0;
   let notificationRequest = 0;
   let notificationPollTimer = 0;
+  let googleAuthFeedbackShowing = false;
   const accountPanelCloseTimers = new WeakMap();
   const notificationPanelCloseTimers = new WeakMap();
   const mobileMenuCloseTimers = new WeakMap();
@@ -121,6 +123,7 @@
       notificationUnread: "新消息",
       notificationMarkAllRead: "全部已读",
       notificationBroadcast: "重要通知",
+      notificationDetail: "消息详情",
       notificationAction: "查看详情",
     },
     "zh-Hant": {
@@ -199,6 +202,7 @@
       notificationUnread: "新消息",
       notificationMarkAllRead: "全部已讀",
       notificationBroadcast: "重要通知",
+      notificationDetail: "消息詳情",
       notificationAction: "查看詳情",
     },
   };
@@ -1022,6 +1026,7 @@
       void loadAccountBilling();
       startNotificationPolling();
       void loadNotifications();
+      void showPendingGoogleAuthFeedback();
     } else {
       stopNotificationPolling();
       renderNotifications();
@@ -1141,6 +1146,10 @@
     card.className = "site-notification-item";
     card.classList.toggle("is-unread", !item.read);
     card.dataset.siteNotificationId = String(notificationNumber(item.id));
+    card.tabIndex = 0;
+    card.setAttribute("role", "button");
+    card.setAttribute("aria-haspopup", "dialog");
+    card.setAttribute("aria-label", `${labels.notificationAction}：${String(item.title || labels.notificationCenter)}`);
 
     const meta = document.createElement("div");
     meta.className = "site-notification-item-meta";
@@ -1165,11 +1174,20 @@
       action.className = "site-notification-item-action";
       action.href = actionUrl;
       action.textContent = String(item.action?.label || labels.notificationAction);
-      action.addEventListener("click", () => void markNotificationsRead({ ids: [item.id] }));
+      action.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void markNotificationsRead({ ids: [item.id] });
+      });
       card.append(action);
     }
-    card.addEventListener("click", () => {
-      if (!item.read) void markNotificationsRead({ ids: [item.id] });
+    card.addEventListener("click", (event) => {
+      if (event.target.closest("a")) return;
+      showNotificationDetail(item);
+    });
+    card.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      showNotificationDetail(item);
     });
     return card;
   }
@@ -1326,6 +1344,21 @@
     });
   }
 
+  function showPendingGoogleAuthFeedback() {
+    if (googleAuthFeedbackShowing || !currentAccount || currentSessionMode === "guest") return null;
+    if (sessionValue(GOOGLE_AUTH_FEEDBACK_STORAGE_KEY) !== "1") return null;
+    removeSessionValue(GOOGLE_AUTH_FEEDBACK_STORAGE_KEY);
+    googleAuthFeedbackShowing = true;
+    const feedback = authFeedbackCopyByTime("login");
+    return showAuthFeedback({
+      ...feedback,
+      title: `Google ${feedback.title}`,
+      message: `Google 授权验证已完成。${feedback.message}`,
+    }).finally(() => {
+      googleAuthFeedbackShowing = false;
+    });
+  }
+
   function confirmLogout() {
     document.querySelectorAll("[data-site-auth-feedback]").forEach((node) => {
       node.dispatchEvent(new CustomEvent("site-auth-feedback-dismiss"));
@@ -1373,17 +1406,14 @@
     });
   }
 
-  function showNotificationBroadcast(item) {
-    if (!item || item.read || !notificationNumber(item.id)) return;
-    const announceKey = notificationAnnounceKey(item);
-    if (window.sessionStorage.getItem(announceKey) === "1") return;
-    window.sessionStorage.setItem(announceKey, "1");
+  function showNotificationDialog(item, { announcement = false, markReadOnClose = false } = {}) {
+    if (!item || !notificationNumber(item.id)) return null;
     closeNotificationBroadcast();
     const labels = copy[currentLanguage()];
     const overlay = document.createElement("div");
-    overlay.className = "site-notification-broadcast";
+    overlay.className = `site-notification-broadcast ${announcement ? "is-announcement" : "is-detail"}`;
     overlay.dataset.siteNotificationBroadcast = "true";
-    overlay.innerHTML = `<section class="site-notification-broadcast-dialog" role="alertdialog" aria-modal="true">
+    overlay.innerHTML = `<section class="site-notification-broadcast-dialog" role="${announcement ? "alertdialog" : "dialog"}" aria-modal="true">
       <div class="site-notification-broadcast-head">
         <span>${notificationIcon()}</span>
         <strong></strong>
@@ -1393,7 +1423,9 @@
       <p></p>
       <div class="site-notification-broadcast-actions"></div>
     </section>`;
-    overlay.querySelector(".site-notification-broadcast-head strong").textContent = labels.notificationBroadcast;
+    overlay.querySelector(".site-notification-broadcast-head strong").textContent = announcement
+      ? labels.notificationBroadcast
+      : labels.notificationDetail;
     overlay.querySelector("h2").textContent = String(item.title || labels.notificationCenter);
     overlay.querySelector("p").textContent = String(item.body || "");
     const actions = overlay.querySelector(".site-notification-broadcast-actions");
@@ -1402,10 +1434,14 @@
       const action = document.createElement("a");
       action.href = actionUrl;
       action.textContent = String(item.action?.label || labels.notificationAction);
+      action.addEventListener("click", () => void markNotificationsRead({ ids: [item.id] }));
       actions.append(action);
     }
+    let closed = false;
     const close = () => {
-      void markNotificationsRead({ ids: [item.id] });
+      if (closed) return;
+      closed = true;
+      if (markReadOnClose && !item.read) void markNotificationsRead({ ids: [item.id] });
       overlay.remove();
     };
     overlay.querySelector("button").setAttribute("aria-label", labels.notificationClose);
@@ -1413,8 +1449,26 @@
     overlay.addEventListener("click", (event) => {
       if (event.target === overlay) close();
     });
+    overlay.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") close();
+    });
     document.body.append(overlay);
     overlay.querySelector("button").focus({ preventScroll: true });
+    return overlay;
+  }
+
+  function showNotificationDetail(item) {
+    const overlay = showNotificationDialog(item);
+    if (overlay && !item.read) void markNotificationsRead({ ids: [item.id] });
+    return overlay;
+  }
+
+  function showNotificationBroadcast(item) {
+    if (!item || item.read || !notificationNumber(item.id)) return null;
+    const announceKey = notificationAnnounceKey(item);
+    if (window.sessionStorage.getItem(announceKey) === "1") return null;
+    window.sessionStorage.setItem(announceKey, "1");
+    return showNotificationDialog(item, { announcement: true, markReadOnClose: true });
   }
 
   async function loadNotifications({ announce = true, force = false } = {}) {

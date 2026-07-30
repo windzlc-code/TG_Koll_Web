@@ -838,6 +838,8 @@ body.site-mobile-menu-active {
   background: transparent;
   border: 0;
   border-radius: 8px;
+  outline: none;
+  box-shadow: none;
   cursor: pointer;
 }
 
@@ -847,6 +849,8 @@ body.site-mobile-menu-active {
 .site-notification-broadcast-head button:focus-visible {
   color: #172033;
   background: #eef2f4;
+  outline: none;
+  box-shadow: none;
 }
 
 .site-notification-close svg,
@@ -883,14 +887,16 @@ body.site-mobile-menu-active {
   text-overflow: ellipsis;
   white-space: nowrap;
   background: transparent;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 6px;
+  box-sizing: border-box;
   cursor: pointer;
 }
 
 .site-notification-tabs button[aria-selected="true"] {
   color: #ffffff;
   background: #22384b;
+  border-color: #22384b;
 }
 
 .site-notification-tab-count {
@@ -933,12 +939,28 @@ body.site-mobile-menu-active {
   background: #f7f9fa;
   border: 1px solid #d9e1e4;
   border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease;
 }
 
 .site-notification-item.is-unread {
   background: #edf5f7;
   border-color: var(--site-notification-unread);
-  box-shadow: inset 3px 0 0 var(--site-notification-unread);
+  border-width: 1px;
+  box-shadow: none;
+}
+
+.site-notification-item:hover,
+.site-notification-item:focus-visible {
+  background: #f0f4f6;
+  border-color: #8fa6b4;
+  outline: none;
+}
+
+.site-notification-item.is-unread:hover,
+.site-notification-item.is-unread:focus-visible {
+  background: #e8f2f5;
+  border-color: var(--site-notification-unread);
 }
 
 .site-notification-item-meta {
@@ -1047,6 +1069,8 @@ body.site-mobile-menu-active {
   background: transparent;
   border: 0;
   border-radius: 8px;
+  outline: none;
+  box-shadow: none;
   cursor: pointer;
 }
 
@@ -1071,6 +1095,10 @@ body.site-mobile-menu-active {
   display: flex;
   justify-content: flex-end;
   margin-top: 18px;
+}
+
+.site-notification-broadcast-actions:empty {
+  display: none;
 }
 
 .site-notification-broadcast-actions a {

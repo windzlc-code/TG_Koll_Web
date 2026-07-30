@@ -44,6 +44,39 @@ class PublicAccountDrawerTests(unittest.TestCase):
         self.assertIn("max-height: none;", desktop_block)
         self.assertNotIn("calc(var(--site-header-height, 68px) + 12px)", desktop_block)
 
+    def test_notification_cards_open_shared_detail_and_mark_read(self):
+        self.assertIn('card.setAttribute("role", "button")', self.navigation)
+        self.assertIn('card.setAttribute("aria-haspopup", "dialog")', self.navigation)
+        self.assertIn("showNotificationDetail(item)", self.navigation)
+        self.assertIn("void markNotificationsRead({ ids: [item.id] })", self.navigation)
+        self.assertIn('event.key !== "Enter" && event.key !== " "', self.navigation)
+        self.assertIn("function showNotificationDialog(", self.navigation)
+
+    def test_notification_controls_and_unread_cards_use_consistent_borders(self):
+        close_rule = self.navigation_css[
+            self.navigation_css.index(".site-notification-close {"):
+            self.navigation_css.index(".site-notification-close svg")
+        ]
+        self.assertIn("border: 0;", close_rule)
+        self.assertIn("outline: none;", close_rule)
+        broadcast_close_rule = self.navigation_css[
+            self.navigation_css.rindex(".site-notification-broadcast-head button {"):
+            self.navigation_css.rindex(".site-notification-broadcast-head button svg")
+        ]
+        self.assertIn("border: 0;", broadcast_close_rule)
+        self.assertIn("outline: none;", broadcast_close_rule)
+        tab_rule = self.navigation_css[
+            self.navigation_css.index(".site-notification-tabs button {"):
+            self.navigation_css.index('.site-notification-tabs button[aria-selected="true"]')
+        ]
+        self.assertIn("border: 1px solid transparent;", tab_rule)
+        unread_rule = self.navigation_css[
+            self.navigation_css.index(".site-notification-item.is-unread {"):
+            self.navigation_css.index(".site-notification-item-meta {")
+        ]
+        self.assertIn("border-width: 1px;", unread_rule)
+        self.assertNotIn("box-shadow: inset", unread_rule)
+
 
 if __name__ == "__main__":
     unittest.main()

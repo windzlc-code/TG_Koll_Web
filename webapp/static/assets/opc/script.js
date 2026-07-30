@@ -1,6 +1,7 @@
 const header = document.querySelector("[data-header]");
 const loginModal = document.querySelector("#loginModal");
 const authDialog = loginModal?.querySelector(".auth-dialog");
+const GOOGLE_AUTH_FEEDBACK_STORAGE_KEY = "vecto-google-auth-feedback-pending";
 
 function registrationPanelMarkup() {
   return `
@@ -811,10 +812,18 @@ function openRequestedLogin() {
     );
   }
   if (googleSetupRequested) {
+    try {
+      window.sessionStorage.removeItem(GOOGLE_AUTH_FEEDBACK_STORAGE_KEY);
+    } catch {}
     document.body.dataset.googleReturnUrl = safeLoginReturnUrl(
       currentUrl.searchParams.get("return_url"),
       "/",
     );
+  }
+  if (oauthError) {
+    try {
+      window.sessionStorage.removeItem(GOOGLE_AUTH_FEEDBACK_STORAGE_KEY);
+    } catch {}
   }
   currentUrl.searchParams.delete("login");
   currentUrl.searchParams.delete("register");
@@ -1098,6 +1107,9 @@ googleLoginButton?.addEventListener("click", () => {
     `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
     "/",
   );
+  try {
+    window.sessionStorage.setItem(GOOGLE_AUTH_FEEDBACK_STORAGE_KEY, "1");
+  } catch {}
   googleLoginButton.disabled = true;
   window.location.assign(`/api/auth/google/start?return_url=${encodeURIComponent(returnUrl)}`);
 });
