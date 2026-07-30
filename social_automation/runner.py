@@ -6191,7 +6191,12 @@ def _try_auto_totp_challenge(
                 if current_status == "account_confirmation_required":
                     _report_totp_outcome(context_control, "verified")
                     return {**_safe_login_status(current), "challenge_type": current_type}
-                if current_type != "none" or current_status in {"need_verification", "invalid_credentials"}:
+                if current_status == "need_verification" and current_type == "none":
+                    # Meta can replace the TOTP form before its login-state text
+                    # settles. Keep polling instead of treating that brief
+                    # cross-page state as a rejected code.
+                    continue
+                if current_type != "none" or current_status == "invalid_credentials":
                     _report_totp_outcome(context_control, "failed")
                     _clear_verification_code(page, code_input)
                     return {

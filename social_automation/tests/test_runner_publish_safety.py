@@ -1301,6 +1301,77 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         provider.assert_called_once_with()
         outcome.assert_called_once_with("verified")
 
+    def test_totp_submit_waits_through_stale_verification_state_until_ready(self):
+        page, _body = self._totp_verification_page(
+            "Enter the 6-digit code from your authentication app."
+        )
+        page.url = "https://www.instagram.com/accounts/login/two_step_verification"
+        code_input = page.locator('input[autocomplete="one-time-code"]')
+        authenticator = {
+            "type": "authenticator_totp",
+            "url": page.url,
+            "has_code_input": True,
+            "code_input": code_input,
+        }
+        transitioned = {
+            "type": "none",
+            "url": "https://www.instagram.com/accounts/onetap/",
+            "has_code_input": False,
+            "code_input": None,
+        }
+        provider = mock.Mock(
+            return_value={
+                "available": True,
+                "code": "123456",
+                "counter": 100,
+                "expires_at": 3030,
+                "valid_for_seconds": 20,
+            }
+        )
+        outcome = mock.Mock()
+
+        with (
+            mock.patch.object(
+                runner,
+                "_classify_verification_challenge",
+                side_effect=[authenticator, authenticator, transitioned],
+            ),
+            mock.patch.object(
+                runner,
+                "_detect_platform_login_state",
+                side_effect=[
+                    {"status": "need_verification"},
+                    {"status": "ready"},
+                ],
+            ),
+            mock.patch.object(
+                runner,
+                "_confirm_platform_ready",
+                return_value={"status": "ready"},
+            ),
+            mock.patch.object(runner, "_wait_interruptibly", return_value=True),
+            mock.patch.object(runner, "_clear_and_type"),
+            mock.patch.object(runner, "_click_text_button", return_value=True),
+            mock.patch.object(runner.time, "monotonic", side_effect=range(100)),
+            mock.patch.object(runner.time, "time", return_value=3000),
+        ):
+            result = runner._try_auto_totp_challenge(
+                page,
+                {"id": "totp-stale-transition"},
+                Path("."),
+                _Logger(),
+                "instagram",
+                None,
+                {
+                    "totp_code_provider": provider,
+                    "totp_outcome_callback": outcome,
+                },
+            )
+
+        self.assertEqual(result["status"], "ready")
+        provider.assert_called_once_with()
+        outcome.assert_called_once_with("verified")
+
     def test_totp_expiring_before_submit_is_cleared_and_replaced_next_period(self):
         page, _body = self._totp_verification_page(
             "Enter the 6-digit code from your authentication app."
