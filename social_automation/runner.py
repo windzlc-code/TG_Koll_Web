@@ -7987,6 +7987,7 @@ def _run_publish_post(
         raise RuntimeError("发布前无法读取 Instagram 账号主页基线，已停止任务且未点击发布按钮。")
     if baseline_used_primary_page:
         _goto(page, INSTAGRAM_HOME, logger, "publish_open")
+    _dismiss_instagram_interstitials(page, logger)
     if payload.get("warmup", True):
         _warmup_scroll(page, logger, 1)
     if not _click_text_button(page, logger, ["Create", "New post", "Create new post"], "publish_create"):
