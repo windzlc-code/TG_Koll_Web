@@ -1644,8 +1644,12 @@
 }
 
 :root[data-theme="light"] .auth-dialog .auth-close {
-  background: var(--public-cool-muted);
-  border-color: var(--public-line);
+  background: transparent;
+  border: 0;
+}
+
+:root[data-theme="light"] .auth-dialog .auth-close:hover {
+  background: rgba(37, 55, 70, 0.08);
 }
 
 :root[data-theme="light"] .auth-dialog :is(.auth-eyebrow, .form-kicker) {

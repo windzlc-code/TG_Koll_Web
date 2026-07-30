@@ -260,6 +260,24 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertNotIn(".auth-registration-back {", self.styles)
         self.assertIn(".auth-registration-page-back {", self.styles)
         self.assertIn(".auth-registration-back-icon {", self.styles)
+        registration_back_rule = self.styles[
+            self.styles.index(".auth-registration-page-back {"):
+            self.styles.index(".auth-registration-back-icon {")
+        ]
+        self.assertIn("right: auto;", registration_back_rule)
+        self.assertIn("left: 14px;", registration_back_rule)
+        close_rule = self.styles[
+            self.styles.index(".auth-close {"):
+            self.styles.index(".auth-close:hover")
+        ]
+        self.assertIn("background: transparent;", close_rule)
+        self.assertIn("border: 0;", close_rule)
+        light_close_rule = self.fixed_light[
+            self.fixed_light.index(':root[data-theme="light"] .auth-dialog .auth-close {'):
+            self.fixed_light.index(':root[data-theme="light"] .auth-dialog .auth-close:hover')
+        ]
+        self.assertIn("background: transparent;", light_close_rule)
+        self.assertIn("border: 0;", light_close_rule)
         email_action_rule = self.styles[
             self.styles.index(".auth-email-action {"):
             self.styles.index(".auth-email-action .field")
