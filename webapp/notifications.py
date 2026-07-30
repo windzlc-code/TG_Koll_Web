@@ -60,6 +60,44 @@ def _validate_category(value: str) -> str:
     return category
 
 
+def create_notification(
+    conn,
+    *,
+    user_id: int,
+    category: str,
+    title: str,
+    body: str = "",
+    source_key: str = "",
+    action_url: str = "",
+    action_label: str = "",
+    expires_at: int = 0,
+    now: int | None = None,
+) -> bool:
+    clean_category = _validate_category(category)
+    action = {
+        "url": str(action_url or "").strip(),
+        "label": str(action_label or "").strip(),
+    }
+    cursor = conn.execute(
+        """
+        INSERT OR IGNORE INTO user_notifications (
+          user_id, category, title, body, action_json, source_key, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(user_id),
+            clean_category,
+            str(title or "").strip()[:120],
+            str(body or "").strip()[:2000],
+            json.dumps(action, ensure_ascii=False, separators=(",", ":")),
+            str(source_key or "").strip()[:160],
+            int(now or _now()),
+            max(int(expires_at or 0), 0),
+        ),
+    )
+    return int(cursor.rowcount or 0) > 0
+
+
 def _seed_default_notifications(conn, user_id: int) -> None:
     now = _now()
     for category, title, body, source_key in DEFAULT_NOTIFICATIONS:

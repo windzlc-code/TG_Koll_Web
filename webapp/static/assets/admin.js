@@ -3921,6 +3921,7 @@ function syncUserBatchSelection() {
   const action = String(el("adminUserBatchAction")?.value || "");
   if (el("adminBatchGroupField")) el("adminBatchGroupField").hidden = action !== "assign_group";
   if (el("adminBatchTagsField")) el("adminBatchTagsField").hidden = action !== "add_tags";
+  if (el("adminBatchCreditField")) el("adminBatchCreditField").hidden = action !== "add_credit";
   if (el("btnRunUserBatch")) el("btnRunUserBatch").disabled = !adminState.userBatchPreview;
 }
 
@@ -3938,6 +3939,7 @@ function buildUserBatchPayload(preview) {
     reason: String(el("adminUserBatchReason")?.value || "").trim(),
     group_id: String(el("adminUserBatchGroup")?.value || ""),
     tag_ids: Array.from(el("adminUserBatchTags")?.selectedOptions || [], (option) => String(option.value)),
+    delta_points: Number(el("adminUserBatchCredit")?.value || 0),
     preview: Boolean(preview),
   };
 }
@@ -3949,6 +3951,7 @@ function userBatchSignature(payload) {
     reason: payload.reason,
     group_id: payload.group_id,
     tag_ids: [...payload.tag_ids].sort(),
+    delta_points: payload.delta_points,
   });
 }
 
@@ -3959,6 +3962,7 @@ async function previewUserBatchAction() {
   if (payload.reason.length < 2) throw new Error("请填写至少 2 个字符的操作原因");
   if (payload.action === "assign_group" && !payload.group_id) throw new Error("请选择客户分组");
   if (payload.action === "add_tags" && !payload.tag_ids.length) throw new Error("请至少选择一个客户标签");
+  if (payload.action === "add_credit" && !(payload.delta_points > 0)) throw new Error("请输入大于 0 的算力点");
   const result = await api("/api/admin/users/batch-actions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -8379,7 +8383,7 @@ function bindActions() {
     syncUserBatchSelection();
     if (["assign_group", "add_tags"].includes(String(el("adminUserBatchAction")?.value || ""))) await loadTaxonomyWorkspace();
   });
-  ["adminUserBatchReason", "adminUserBatchGroup", "adminUserBatchTags"].forEach((id) => {
+  ["adminUserBatchReason", "adminUserBatchGroup", "adminUserBatchTags", "adminUserBatchCredit"].forEach((id) => {
     el(id)?.addEventListener("change", () => { adminState.userBatchPreview = null; syncUserBatchSelection(); });
     el(id)?.addEventListener("input", () => { adminState.userBatchPreview = null; syncUserBatchSelection(); });
   });

@@ -92,6 +92,8 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             "adminUserSubscription",
             "adminUserBatchBar",
             "adminSelectAllUsers",
+            "adminBatchCreditField",
+            "adminUserBatchCredit",
             "btnPreviewUserBatch",
             "btnRunUserBatch",
             "userPurgeSection",
@@ -99,6 +101,9 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         ):
             self.assertIn(f'id="{control_id}"', self.html)
         self.assertIn('/api/admin/users/batch-actions', self.script)
+        self.assertIn('<option value="add_credit">添加算力点</option>', self.html)
+        self.assertIn('action === "add_credit"', self.script)
+        self.assertIn("delta_points", self.script)
         self.assertIn('/purge-preview', self.script)
         self.assertIn('method: "DELETE"', self.script)
 

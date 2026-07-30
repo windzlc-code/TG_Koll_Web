@@ -231,7 +231,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
                 with self.subTest(source=str(source_path), marker=marker):
                     self.assertNotIn(marker, source)
 
-    def test_supported_task_retry_still_enforces_subscription(self):
+    def test_supported_task_retry_requires_points_without_subscription(self):
         task_id = "supported-retry-billing-gate"
         with db_module.db() as conn:
             server._insert_task_record_in_transaction(
@@ -249,14 +249,9 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         response = self.customer.post(f"/api/tasks/{task_id}/retry")
 
         self.assertEqual(response.status_code, 402, response.text)
-        self.assertEqual(response.json()["code"], "SUBSCRIPTION_REQUIRED")
+        self.assertEqual(response.json()["code"], "INSUFFICIENT_POINTS")
 
-    def test_user_facing_ai_operation_deducts_catalog_price(self):
-        subscription = self.admin.post(
-            f"/api/admin/users/{self.user_id}/billing/subscriptions",
-            json={"quantity": 1, "renewal_subscription_ids": [], "note": "billing deduction test"},
-        )
-        self.assertEqual(subscription.status_code, 200, subscription.text)
+    def test_user_facing_ai_operation_uses_points_without_subscription(self):
         credit = self.admin.post(
             f"/api/admin/users/{self.user_id}/billing/adjustments",
             json={"delta_points": 1, "reason": "billing deduction test"},
@@ -309,7 +304,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
 
         blocked_write = self.customer.post("/api/tasks/get_gemini", data={"user_input": "billing gate"})
         self.assertEqual(blocked_write.status_code, 402, blocked_write.text)
-        self.assertEqual(blocked_write.json()["code"], "SUBSCRIPTION_REQUIRED")
+        self.assertEqual(blocked_write.json()["code"], "INSUFFICIENT_POINTS")
 
         body = {
             "sku": "credits_100",
@@ -372,7 +367,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         self.assertEqual(summary.status_code, 200, summary.text)
         self.assertEqual(summary.json()["points"], 100)
         self.assertTrue(summary.json()["subscription_active"])
-        self.assertEqual(summary.json()["threads_account_limit"], 3)
+        self.assertIsNone(summary.json()["threads_account_limit"])
         self.assertEqual(summary.json()["free_images"]["monthly_remaining"], 10)
         self.assertTrue(any(item["event_type"] == "credit_pack_approved" for item in ledger.json()["items"]))
 

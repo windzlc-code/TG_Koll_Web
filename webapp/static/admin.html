@@ -691,10 +691,11 @@
             <button id="btnClearUserSelection" type="button" class="ghost">清除选择</button>
           </div>
           <div class="admin-user-batch-fields">
-            <label><span class="sr-only">批量操作</span><select id="adminUserBatchAction"><option value="">选择批量操作</option><option value="approve">审核通过</option><option value="reject">拒绝申请</option><option value="enable">启用账号</option><option value="suspend">临时停用</option><option value="lock">安全锁定</option><option value="archive">只读归档</option><option value="revoke_sessions">强制全部下线</option><option value="assign_group">调整分组</option><option value="add_tags">添加标签</option></select></label>
+            <label><span class="sr-only">批量操作</span><select id="adminUserBatchAction"><option value="">选择批量操作</option><option value="approve">审核通过</option><option value="reject">拒绝申请</option><option value="enable">启用账号</option><option value="suspend">临时停用</option><option value="lock">安全锁定</option><option value="archive">只读归档</option><option value="revoke_sessions">强制全部下线</option><option value="assign_group">调整分组</option><option value="add_tags">添加标签</option><option value="add_credit">添加算力点</option></select></label>
             <label class="admin-user-batch-reason"><span class="sr-only">批量操作原因</span><input id="adminUserBatchReason" maxlength="500" placeholder="填写操作原因"></label>
             <label id="adminBatchGroupField" hidden><span class="sr-only">客户分组</span><select id="adminUserBatchGroup"><option value="">选择客户分组</option></select></label>
             <label id="adminBatchTagsField" hidden><span class="sr-only">客户标签</span><select id="adminUserBatchTags" multiple aria-label="客户标签"></select></label>
+            <label id="adminBatchCreditField" hidden><span class="sr-only">添加算力点</span><input id="adminUserBatchCredit" type="number" min="0.01" max="1000000" step="0.01" placeholder="输入赠送点数"></label>
           </div>
           <div class="admin-user-batch-actions">
             <button id="btnPreviewUserBatch" type="button" class="ghost">预览影响</button>
@@ -713,7 +714,7 @@
               <input id="newUserPassword" type="password" minlength="8" autocomplete="new-password" placeholder="输入登录密码">
             </label>
             <label class="admin-user-create-field admin-user-balance-field" id="newUserBalanceField">
-              <span>初始算力点</span>
+              <span>额外初始算力点（基础赠送 5 点）</span>
               <input id="newUserBalance" type="number" min="0" value="0">
             </label>
             <button id="btnCreateUser" class="primary admin-create-user-button" type="button">

@@ -555,6 +555,55 @@ class AccountGovernanceTests(unittest.TestCase):
         self.assertEqual(dashboard.status_code, 200, dashboard.text)
         self.assertEqual(dashboard.json()["summary"]["wallet_points"], 12.5)
 
+    def test_batch_credit_adjustment_updates_only_selected_customers_and_notifies_them(self):
+        admin, _identity = self._admin_client()
+        selected_a = self._create_customer(admin, "batch-credit-a")
+        selected_b = self._create_customer(admin, "batch-credit-b")
+        untouched = self._create_customer(admin, "batch-credit-untouched")
+        selected_ids = [int(selected_a["id"]), int(selected_b["id"])]
+        payload = {
+            "action": "add_credit",
+            "user_ids": selected_ids,
+            "delta_points": 2.5,
+            "reason": "New user launch campaign",
+        }
+
+        preview = admin.post(
+            "/api/admin/users/batch-actions",
+            headers=self.ORIGIN_HEADERS,
+            json={**payload, "preview": True},
+        )
+        applied = admin.post(
+            "/api/admin/users/batch-actions",
+            headers=self.ORIGIN_HEADERS,
+            json=payload,
+        )
+
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertEqual(preview.json()["matched"], 2)
+        self.assertEqual(applied.status_code, 200, applied.text)
+        self.assertEqual(applied.json()["success"], 2)
+        with db_module.db() as conn:
+            balances = {
+                int(row["user_id"]): int(row["credit_units"])
+                for row in conn.execute(
+                    "SELECT user_id, credit_units FROM billing_wallets WHERE user_id IN (?, ?, ?)",
+                    (*selected_ids, int(untouched["id"])),
+                ).fetchall()
+            }
+            notices = conn.execute(
+                "SELECT user_id, title, body FROM user_notifications WHERE user_id IN (?, ?) AND source_key = ?",
+                (*selected_ids, f"admin-batch-credit:{applied.json()['job_id']}"),
+            ).fetchall()
+        self.assertEqual(balances[selected_ids[0]], 7.5 * server.commercial_billing.POINT_SCALE)
+        self.assertEqual(balances[selected_ids[1]], 7.5 * server.commercial_billing.POINT_SCALE)
+        self.assertEqual(
+            balances[int(untouched["id"])],
+            5 * server.commercial_billing.POINT_SCALE,
+        )
+        self.assertEqual(len(notices), 2)
+        self.assertTrue(all("2.5" in str(row["body"]) for row in notices))
+
     def test_dashboard_groups_tags_batches_audit_redaction_and_alerts(self):
         admin, identity = self._admin_client()
         customer = self._create_customer(admin, "governed-customer")

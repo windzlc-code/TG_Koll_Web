@@ -168,11 +168,21 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
                 "SELECT * FROM user_auth_emails WHERE user_id = ?",
                 (int(user["id"]),),
             ).fetchone()
+            wallet = conn.execute(
+                "SELECT credit_units FROM billing_wallets WHERE user_id = ?",
+                (int(user["id"]),),
+            ).fetchone()
+            welcome = conn.execute(
+                "SELECT title, body FROM user_notifications WHERE user_id = ? AND source_key = 'welcome-credit-v1'",
+                (int(user["id"]),),
+            ).fetchone()
             challenge = conn.execute(
                 "SELECT code_digest, consumed_at FROM email_verification_challenges"
             ).fetchone()
         self.assertEqual(user["approval_status"], "approved")
         self.assertEqual(int(user["is_disabled"]), 0)
+        self.assertEqual(int(wallet["credit_units"]), 5 * server.commercial_billing.POINT_SCALE)
+        self.assertIn("5", str(welcome["title"]))
         self.assertEqual(user["full_name"], "Verified Email User")
         self.assertEqual(user["phone"], "")
         self.assertEqual(user["company"], "Vecto QA")
@@ -355,6 +365,20 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
         self.assertEqual(me.status_code, 200, me.text)
         self.assertFalse(me.json()["password_login_enabled"])
         self.assertEqual(me.json()["verified_email"], "google.user@gmail.com")
+        with db_module.db() as conn:
+            google_user = conn.execute(
+                "SELECT id FROM users WHERE username = 'google-user'"
+            ).fetchone()
+            wallet = conn.execute(
+                "SELECT credit_units FROM billing_wallets WHERE user_id = ?",
+                (int(google_user["id"]),),
+            ).fetchone()
+            welcome = conn.execute(
+                "SELECT title FROM user_notifications WHERE user_id = ? AND source_key = 'welcome-credit-v1'",
+                (int(google_user["id"]),),
+            ).fetchone()
+        self.assertEqual(int(wallet["credit_units"]), 5 * server.commercial_billing.POINT_SCALE)
+        self.assertIsNotNone(welcome)
 
         delivered = {}
 

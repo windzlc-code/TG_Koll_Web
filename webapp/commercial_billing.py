@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 POINT_SCALE = 100
+NEW_USER_WELCOME_POINTS = 5
 LEGACY_R18_ACTION_SKUS = {
     "oral_video_second",
     "ad_video_480p_second",
@@ -513,22 +514,12 @@ def _active_subscription_count(conn: sqlite3.Connection, user_id: int, now: int)
 
 
 def require_write_access(conn: sqlite3.Connection, user_id: int, *, admin_waived: bool = False, now: int | None = None) -> dict[str, Any]:
-    wallet = ensure_wallet(conn, int(user_id), now=now)
-    if not enforcement_enabled() or admin_waived or str(wallet["billing_mode"]) == "legacy":
-        return wallet
-    current = int(now or _now())
-    if _active_subscription_count(conn, int(user_id), current) <= 0:
-        raise BillingError("SUBSCRIPTION_REQUIRED", "订阅已到期，请先续费后再执行操作", 402)
-    return wallet
+    return ensure_wallet(conn, int(user_id), now=now)
 
 
 def threads_account_limit(conn: sqlite3.Connection, user_id: int, *, now: int | None = None) -> int | None:
-    wallet = ensure_wallet(conn, int(user_id), now=now)
-    if not enforcement_enabled() or str(wallet["billing_mode"]) == "legacy":
-        return None
-    catalog = get_active_catalog(conn)
-    per_subscription = int((catalog.get("subscription") or {}).get("threads_accounts") or 3)
-    return _active_subscription_count(conn, int(user_id), int(now or _now())) * per_subscription
+    ensure_wallet(conn, int(user_id), now=now)
+    return None
 
 
 def _insert_ledger(
@@ -559,6 +550,95 @@ def _insert_ledger(
             str(ref_type), str(ref_id), str(order_id), str(reservation_id), _dumps(meta or {}), str(idempotency_key), int(now or _now()),
         ),
     )
+
+
+def initialize_new_user_wallet(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    extra_points: Any = 0,
+    actor_user_id: int = 0,
+    source: str = "registration",
+    now: int | None = None,
+) -> dict[str, Any]:
+    """Create an enforced wallet and apply the idempotent new-user grants."""
+    _ensure_immediate_transaction(conn)
+    current = int(now or _now())
+    target_id = int(user_id)
+    user = conn.execute("SELECT id, is_admin FROM users WHERE id = ?", (target_id,)).fetchone()
+    if user is None:
+        raise BillingError("USER_NOT_FOUND", "账号不存在", 404)
+    if bool(int(user["is_admin"] or 0)):
+        raise BillingError("ADMIN_WALLET_NOT_SUPPORTED", "管理员账号不参与客户算力点赠送", 409)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO billing_wallets(
+          user_id, credit_units, billing_mode, migrated_legacy_balance, created_at, updated_at
+        ) VALUES (?, 0, 'enforced', 0, ?, ?)
+        """,
+        (target_id, current, current),
+    )
+    conn.execute(
+        "UPDATE billing_wallets SET billing_mode = 'enforced', updated_at = ? WHERE user_id = ?",
+        (current, target_id),
+    )
+
+    grants = [
+        (
+            NEW_USER_WELCOME_POINTS * POINT_SCALE,
+            "welcome_credit",
+            f"welcome-credit-v1:{target_id}",
+            "welcome_credit",
+            "v1",
+            {"points": NEW_USER_WELCOME_POINTS, "source": str(source or "registration")},
+        )
+    ]
+    extra_units = units_from_points(extra_points)
+    if extra_units > 0:
+        grants.append(
+            (
+                extra_units,
+                "admin_initial_credit",
+                f"new-user-extra:{str(source or 'registration')}:{target_id}",
+                "user_create",
+                str(target_id),
+                {
+                    "points": points_from_units(extra_units),
+                    "source": str(source or "registration"),
+                    "actor_user_id": int(actor_user_id or 0),
+                },
+            )
+        )
+
+    for amount_units, event_type, idempotency_key, ref_type, ref_id, meta in grants:
+        if conn.execute(
+            "SELECT 1 FROM billing_ledger WHERE idempotency_key = ?",
+            (idempotency_key,),
+        ).fetchone() is not None:
+            continue
+        wallet = conn.execute(
+            "SELECT credit_units FROM billing_wallets WHERE user_id = ?",
+            (target_id,),
+        ).fetchone()
+        after = int(wallet["credit_units"] or 0) + int(amount_units)
+        conn.execute(
+            "UPDATE billing_wallets SET credit_units = ?, updated_at = ? WHERE user_id = ?",
+            (after, current, target_id),
+        )
+        _insert_ledger(
+            conn,
+            user_id=target_id,
+            asset_type="credit",
+            event_type=event_type,
+            amount_units=int(amount_units),
+            balance_after_units=after,
+            ref_type=ref_type,
+            ref_id=ref_id,
+            idempotency_key=idempotency_key,
+            meta=meta,
+            now=current,
+        )
+    return ensure_wallet(conn, target_id, now=current)
 
 
 def _reservation_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
@@ -624,7 +704,7 @@ def reserve_charge(
     existing = conn.execute("SELECT * FROM billing_reservations WHERE idempotency_key = ?", (idem,)).fetchone()
     if existing is not None:
         return _reservation_public(existing)
-    wallet = require_write_access(conn, int(user_id), admin_waived=admin_waived, now=current)
+    wallet = ensure_wallet(conn, int(user_id), now=current)
     rate_units, catalog_version_id = action_rate_units(conn, str(sku))
     unlimited_compute = bool(int(wallet.get("unlimited_compute") or 0))
     waived_reason = (
@@ -1220,8 +1300,6 @@ def billing_summary(conn: sqlite3.Connection, user_id: int, *, now: int | None =
         (int(user_id),),
     ).fetchall()
     active_count = _active_subscription_count(conn, int(user_id), current)
-    catalog = get_active_catalog(conn)
-    threads_per = int((catalog.get("subscription") or {}).get("threads_accounts") or 3)
     monthly_remaining = sum(int(row["remaining_count"] or 0) for row in grants if str(row["source_type"]) == "subscription_monthly" and int(row["available_at"] or 0) <= current and int(row["expires_at"] or 0) > current)
     permanent_remaining = sum(int(row["remaining_count"] or 0) for row in grants if int(row["expires_at"] or 0) == 0 and int(row["available_at"] or 0) <= current)
     return {
@@ -1233,7 +1311,7 @@ def billing_summary(conn: sqlite3.Connection, user_id: int, *, now: int | None =
         "points": points_from_units(int(wallet["credit_units"])),
         "subscription_active": active_count > 0 or str(wallet["billing_mode"]) == "legacy",
         "active_subscription_count": active_count,
-        "threads_account_limit": None if str(wallet["billing_mode"]) == "legacy" else active_count * threads_per,
+        "threads_account_limit": None,
         "free_images": {"monthly_remaining": monthly_remaining, "permanent_remaining": permanent_remaining, "total_remaining": monthly_remaining + permanent_remaining},
         "subscriptions": [
             {

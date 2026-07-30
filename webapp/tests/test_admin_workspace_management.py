@@ -561,7 +561,7 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         self.assertEqual(int(before["revoked_at"] or 0), 0)
         self.assertEqual(int(after["revoked_at"] or 0), 0)
 
-    def test_admin_workspace_login_helpers_bypass_subscription_without_charging(self):
+    def test_login_helpers_are_free_without_subscription_or_charging(self):
         customer, user_id = self._create_customer("waived_login_owner")
         resources = self._seed_workspace(customer, user_id, "waived-login")
         now = server._now_ts()
@@ -589,13 +589,13 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
                 headers=headers,
                 json={},
             )
-            customer_blocked = customer.post(
+            customer_check = customer.post(
                 f"/api/persona_dashboard/automation/accounts/{resources['account_id']}/check_login"
             )
 
         self.assertEqual(checked.status_code, 200, checked.text)
         self.assertEqual(opened.status_code, 200, opened.text)
-        self.assertEqual(customer_blocked.status_code, 402, customer_blocked.text)
+        self.assertEqual(customer_check.status_code, 200, customer_check.text)
         with server.db() as conn:
             wallet = conn.execute("SELECT credit_units FROM billing_wallets WHERE user_id = ?", (user_id,)).fetchone()
             tasks = conn.execute(

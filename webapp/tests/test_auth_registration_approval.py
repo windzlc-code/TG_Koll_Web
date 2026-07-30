@@ -96,9 +96,19 @@ class RegistrationApprovalTests(unittest.TestCase):
         with db_module.db() as conn:
             user = conn.execute("SELECT * FROM users WHERE username = ?", ("guest001",)).fetchone()
             sessions = conn.execute("SELECT COUNT(*) AS count FROM sessions WHERE user_id = ?", (int(user["id"]),)).fetchone()
+            wallet = conn.execute(
+                "SELECT credit_units FROM billing_wallets WHERE user_id = ?",
+                (int(user["id"]),),
+            ).fetchone()
+            welcome = conn.execute(
+                "SELECT title, body FROM user_notifications WHERE user_id = ? AND source_key = 'welcome-credit-v1'",
+                (int(user["id"]),),
+            ).fetchone()
         self.assertEqual(user["approval_status"], "pending")
         self.assertEqual(user["full_name"], "测试访客")
         self.assertEqual(int(sessions["count"]), 0)
+        self.assertEqual(int(wallet["credit_units"]), 5 * server.commercial_billing.POINT_SCALE)
+        self.assertIn("5", str(welcome["title"]))
 
     def test_registration_and_admin_creation_enforce_role_password_minimums(self):
         short_application = self.application_payload()
@@ -355,6 +365,17 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(created.status_code, 200)
         created_user = created.json()["user"]
         user_id = int(created_user["id"])
+        with db_module.db() as conn:
+            wallet = conn.execute(
+                "SELECT credit_units FROM billing_wallets WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            welcome = conn.execute(
+                "SELECT title FROM user_notifications WHERE user_id = ? AND source_key = 'welcome-credit-v1'",
+                (user_id,),
+            ).fetchone()
+        self.assertEqual(int(wallet["credit_units"]), 5 * server.commercial_billing.POINT_SCALE)
+        self.assertIsNotNone(welcome)
 
         user = TestClient(self.app)
         self.assertEqual(

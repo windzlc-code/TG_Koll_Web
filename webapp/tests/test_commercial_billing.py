@@ -89,6 +89,28 @@ class CommercialBillingTests(unittest.TestCase):
             commercial_billing.approve_order(conn, order["id"], actor_user_id=self.admin_id, now=now)
             commercial_billing.approve_order(conn, order["id"], actor_user_id=self.admin_id, now=now + 1)
 
+    def test_new_user_welcome_credit_is_idempotent(self):
+        with db_module.db() as conn:
+            first = commercial_billing.initialize_new_user_wallet(
+                conn,
+                user_id=self.user_id,
+                source="test_registration",
+                now=200,
+            )
+            second = commercial_billing.initialize_new_user_wallet(
+                conn,
+                user_id=self.user_id,
+                source="test_registration",
+                now=201,
+            )
+            entries = conn.execute(
+                "SELECT COUNT(*) AS count FROM billing_ledger WHERE idempotency_key = ?",
+                (f"welcome-credit-v1:{self.user_id}",),
+            ).fetchone()
+        self.assertEqual(first["credit_units"], 5 * commercial_billing.POINT_SCALE)
+        self.assertEqual(second["credit_units"], 5 * commercial_billing.POINT_SCALE)
+        self.assertEqual(int(entries["count"]), 1)
+
     def test_catalog_is_seeded_once_with_all_public_prices(self):
         db_module.init_db()
         with db_module.db() as conn:
@@ -143,7 +165,7 @@ class CommercialBillingTests(unittest.TestCase):
         self.assertIn("social_interaction", actions)
         self.assertEqual(len([item for item in versions if item["status"] == "active"]), 1)
 
-    def test_unlimited_compute_keeps_subscription_gate_but_never_deducts_points(self):
+    def test_unlimited_compute_never_requires_subscription_or_deducts_points(self):
         now = 1_700_000_000
         with db_module.db() as conn:
             result = commercial_billing.set_unlimited_compute(
@@ -155,19 +177,18 @@ class CommercialBillingTests(unittest.TestCase):
                 now=now,
             )
             self.assertTrue(result["unlimited_compute"])
-            with self.assertRaises(commercial_billing.BillingError) as raised:
-                commercial_billing.reserve_charge(
-                    conn,
-                    user_id=self.user_id,
-                    ref_type="normal_task",
-                    ref_id="unlimited-without-subscription",
-                    sku="basic_text_post",
-                    quantity=1,
-                    now=now,
-                )
-            self.assertEqual(raised.exception.code, "SUBSCRIPTION_REQUIRED")
+            without_subscription = commercial_billing.reserve_charge(
+                conn,
+                user_id=self.user_id,
+                ref_type="normal_task",
+                ref_id="unlimited-without-subscription",
+                sku="basic_text_post",
+                quantity=1,
+                now=now,
+            )
+            self.assertEqual(without_subscription["status"], "held")
+            self.assertTrue(without_subscription["unlimited_compute"])
 
-        self._approve_subscription(now=now)
         with db_module.db() as conn:
             before = commercial_billing.billing_summary(conn, self.user_id, now=now)
             held = commercial_billing.reserve_charge(
@@ -195,6 +216,10 @@ class CommercialBillingTests(unittest.TestCase):
         self.assertEqual(before["points"], after["points"])
         self.assertTrue(after["unlimited_compute"])
         self.assertTrue(any(entry["event_type"] == "unlimited_compute_settled" for entry in entries))
+
+    def test_free_accounts_have_no_subscription_based_threads_account_limit(self):
+        with db_module.db() as conn:
+            self.assertIsNone(commercial_billing.threads_account_limit(conn, self.user_id))
 
     def test_disabling_unlimited_compute_restores_normal_balance_checks(self):
         now = 1_700_000_000
@@ -257,7 +282,7 @@ class CommercialBillingTests(unittest.TestCase):
         self.assertEqual(summary["billing_mode"], "enforced")
         self.assertTrue(summary["subscription_active"])
         self.assertEqual(summary["points"], 12)
-        self.assertEqual(summary["threads_account_limit"], 3)
+        self.assertIsNone(summary["threads_account_limit"])
         self.assertIsNotNone(marker)
 
     def test_subscription_approval_enables_enforcement_and_monthly_images(self):
@@ -267,7 +292,7 @@ class CommercialBillingTests(unittest.TestCase):
             summary = commercial_billing.billing_summary(conn, self.user_id, now=now)
         self.assertEqual(summary["billing_mode"], "enforced")
         self.assertTrue(summary["subscription_active"])
-        self.assertEqual(summary["threads_account_limit"], 3)
+        self.assertIsNone(summary["threads_account_limit"])
         self.assertEqual(summary["free_images"]["monthly_remaining"], 10)
 
     def test_credit_pack_approval_is_idempotent(self):

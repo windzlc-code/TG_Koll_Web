@@ -119,7 +119,7 @@ from .social_automation_api import (
     wake_social_automation_worker,
 )
 from .proxy_market import register_proxy_market_routes
-from .notifications import register_notification_routes
+from .notifications import create_notification, register_notification_routes
 
 
 logger = logging.getLogger(__name__)
@@ -4490,6 +4490,38 @@ def _reserve_username(conn: sqlite3.Connection, user_id: int, username: str, now
         "INSERT OR IGNORE INTO username_reservations(username, user_id, created_at) VALUES (?, ?, ?)",
         (clean_username, owner_id, int(now if now is not None else _now_ts())),
     )
+
+
+def _initialize_new_customer_benefits(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    source: str,
+    now: int,
+    extra_points: float = 0,
+    actor_user_id: int = 0,
+) -> dict[str, Any]:
+    wallet = commercial_billing.initialize_new_user_wallet(
+        conn,
+        user_id=int(user_id),
+        extra_points=extra_points,
+        actor_user_id=int(actor_user_id or 0),
+        source=source,
+        now=now,
+    )
+    create_notification(
+        conn,
+        user_id=int(user_id),
+        category="official",
+        title="新用户赠送 5 点算力点",
+        body=(
+            "欢迎加入 Vecto。系统已赠送 5 点算力点，可用于 AI 内容生成等需要算力点的功能；"
+            "其他基础功能免费开放。"
+        ),
+        source_key="welcome-credit-v1",
+        now=now,
+    )
+    return wallet
 
 
 def _ensure_admin_seed() -> None:
@@ -10424,6 +10456,7 @@ class AdminUserBatchPayload(BaseModel):
     reason: str = Field(min_length=2, max_length=1000)
     group_id: str = Field(default="", max_length=100)
     tag_ids: list[str] = Field(default_factory=list, max_length=100)
+    delta_points: float = Field(default=0, ge=0, le=1_000_000)
     preview: bool = False
 
 
@@ -17379,56 +17412,6 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     @app.middleware("http")
-    async def enforce_active_commercial_subscription(request: Request, call_next):
-        path = str(request.url.path or "")
-        is_write = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
-        exempt = (
-            path.startswith("/api/auth/")
-            or path.startswith("/api/billing/")
-            or path.startswith("/api/proxy-market/")
-            or path == "/api/notifications/read"
-            or path.startswith("/api/admin/")
-            or path.startswith("/api/internal/")
-            or path.endswith("/cancel")
-            or path.endswith("/cancel_all")
-            or path.endswith("/retry")
-        )
-        if not (commercial_billing.enforcement_enabled() and is_write and path.startswith("/api/") and not exempt):
-            return await call_next(request)
-        workspace_target = (
-            request.headers.get("X-Admin-Workspace-User-ID")
-            or request.query_params.get("admin_workspace_user_id")
-        )
-        uses_admin_session = request_uses_admin_session(request, workspace_target)
-        session_token = session_token_for_request(
-            request,
-            request.cookies.get(SESSION_COOKIE),
-            request.cookies.get(ADMIN_SESSION_COOKIE),
-            admin_workspace_user_id=workspace_target,
-        )
-        if not session_token:
-            return await call_next(request)
-        try:
-            session_user = _get_session_user_for_token(
-                session_token,
-                expected_admin_session=uses_admin_session,
-            )
-        except HTTPException:
-            return await call_next(request)
-        if int(session_user.get("is_admin") or 0) == 1:
-            return await call_next(request)
-        try:
-            with db() as conn:
-                commercial_billing.require_write_access(conn, int(session_user.get("id") or 0))
-        except commercial_billing.BillingError as exc:
-            return JSONResponse(
-                status_code=int(exc.status_code),
-                content={"detail": str(exc.detail), "code": str(exc.code)},
-                headers={"X-Billing-Code": str(exc.code)},
-            )
-        return await call_next(request)
-
-    @app.middleware("http")
     async def reject_cross_origin_authenticated_writes(request: Request, call_next):
         path = str(request.url.path or "")
         method = request.method.upper()
@@ -17918,9 +17901,11 @@ def create_app() -> FastAPI:
                     (username, password_hash, full_name, email, phone, company, use_case, now, now),
                 )
                 user_id = int(inserted.lastrowid or 0)
-                conn.execute(
-                    "INSERT INTO billing_wallets(user_id, credit_units, billing_mode, migrated_legacy_balance, created_at, updated_at) VALUES (?, 0, 'enforced', 0, ?, ?)",
-                    (user_id, now, now),
+                _initialize_new_customer_benefits(
+                    conn,
+                    user_id=user_id,
+                    source="public_application",
+                    now=now,
                 )
                 _reserve_username(conn, user_id, username, now)
                 vault_ciphertext = _encrypt_password_for_vault(user_id, password)
@@ -18137,14 +18122,11 @@ def create_app() -> FastAPI:
                     """,
                     (user_id, email, str(payload.email or "").strip(), now, now, now),
                 )
-                conn.execute(
-                    """
-                    INSERT INTO billing_wallets(
-                      user_id, credit_units, billing_mode, migrated_legacy_balance,
-                      created_at, updated_at
-                    ) VALUES (?, 0, 'enforced', 0, ?, ?)
-                    """,
-                    (user_id, now, now),
+                _initialize_new_customer_benefits(
+                    conn,
+                    user_id=user_id,
+                    source="email_registration",
+                    now=now,
                 )
                 session_hours = int(_auth_login_policy(runtime)["session_hours"])
                 token = create_session(
@@ -18695,14 +18677,11 @@ def create_app() -> FastAPI:
                         now,
                     ),
                 )
-                conn.execute(
-                    """
-                    INSERT INTO billing_wallets(
-                      user_id, credit_units, billing_mode, migrated_legacy_balance,
-                      created_at, updated_at
-                    ) VALUES (?, 0, 'enforced', 0, ?, ?)
-                    """,
-                    (user_id, now, now),
+                _initialize_new_customer_benefits(
+                    conn,
+                    user_id=user_id,
+                    source="google_oauth",
+                    now=now,
                 )
                 completed = conn.execute(
                     """
@@ -21682,9 +21661,14 @@ def create_app() -> FastAPI:
     ):
         _require_same_origin(request)
         action = str(payload.action or "").strip().lower()
-        allowed = {"approve", "reject", "enable", "suspend", "lock", "archive", "revoke_sessions", "assign_group", "add_tags"}
+        allowed = {
+            "approve", "reject", "enable", "suspend", "lock", "archive",
+            "revoke_sessions", "assign_group", "add_tags", "add_credit",
+        }
         if action not in allowed:
             raise HTTPException(status_code=400, detail="unsupported batch action")
+        if action == "add_credit" and float(payload.delta_points or 0) <= 0:
+            raise HTTPException(status_code=400, detail="delta_points must be greater than zero")
         user_ids = list(dict.fromkeys(int(item) for item in payload.user_ids if int(item) > 0))
         placeholders = ",".join("?" for _ in user_ids)
         with db() as conn:
@@ -21730,6 +21714,43 @@ def create_app() -> FastAPI:
                         result_status = "skipped"
                         message = "administrator lifecycle is not changed by customer batch actions"
                         skipped += 1
+                    elif action == "add_credit":
+                        result = commercial_billing.adjust_credit(
+                            conn,
+                            user_id=target_id,
+                            delta_units=commercial_billing.units_from_points(payload.delta_points),
+                            actor_user_id=int(user.get("id") or 0),
+                            reason=payload.reason,
+                            now=started,
+                        )
+                        display_points = commercial_billing.points_from_units(
+                            commercial_billing.units_from_points(payload.delta_points)
+                        )
+                        create_notification(
+                            conn,
+                            user_id=target_id,
+                            category="official",
+                            title="管理员已添加算力点",
+                            body=f"管理员已为你的账号添加 {display_points:g} 点算力点，当前余额为 {float(result['points']):g} 点。",
+                            source_key=f"admin-batch-credit:{job_id}",
+                            now=started,
+                        )
+                        governance.record_audit(
+                            conn,
+                            actor_user_id=int(user.get("id") or 0),
+                            target_user_id=target_id,
+                            action="user.batch_add_credit",
+                            resource_type="billing_wallet",
+                            resource_id=str(target_id),
+                            reason=payload.reason,
+                            after={
+                                "delta_points": display_points,
+                                "balance_points": result["points"],
+                            },
+                            risk_level="medium",
+                            **governance.request_context(request),
+                        )
+                        success += 1
                     elif action == "revoke_sessions":
                         revoked = conn.execute(
                             "UPDATE sessions SET revoked_at = ?, revoke_reason = 'admin_batch_revoke' WHERE user_id = ? AND revoked_at = 0",
@@ -22567,24 +22588,14 @@ def create_app() -> FastAPI:
                 )
                 created_user_id = int(inserted.lastrowid or 0)
                 if not bool(payload.is_admin):
-                    initial_units = max(int(payload.balance_cents or 0), 0) * commercial_billing.POINT_SCALE
-                    conn.execute(
-                        "INSERT INTO billing_wallets(user_id, credit_units, billing_mode, migrated_legacy_balance, created_at, updated_at) VALUES (?, ?, 'enforced', 0, ?, ?)",
-                        (created_user_id, initial_units, now, now),
+                    _initialize_new_customer_benefits(
+                        conn,
+                        user_id=created_user_id,
+                        source="admin_create",
+                        now=now,
+                        extra_points=max(float(payload.balance_cents or 0), 0),
+                        actor_user_id=int(user.get("id") or 0),
                     )
-                    if initial_units:
-                        conn.execute(
-                            "INSERT INTO billing_ledger(id, user_id, asset_type, event_type, amount_units, balance_after_units, ref_type, ref_id, meta_json, idempotency_key, created_at) VALUES (?, ?, 'credit', 'admin_initial_credit', ?, ?, 'user_create', ?, '{}', ?, ?)",
-                            (
-                                _new_id("bill_entry"),
-                                created_user_id,
-                                initial_units,
-                                initial_units,
-                                str(created_user_id),
-                                f"user_create:{created_user_id}:credit",
-                                now,
-                            ),
-                        )
                 _reserve_username(conn, created_user_id, username, now)
                 if not bool(payload.is_admin):
                     vault_ciphertext = _encrypt_password_for_vault(created_user_id, password)
