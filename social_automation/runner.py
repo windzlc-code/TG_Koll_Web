@@ -25,6 +25,12 @@ MAX_AUTO_TOTP_ATTEMPTS = 2
 AUTO_TOTP_RESULT_WAIT_SECONDS = 20
 AUTO_TOTP_MIN_SUBMIT_REMAINING_SECONDS = 3
 AUTO_TOTP_CHALLENGE_READY_WAIT_SECONDS = 10
+GENERIC_VERIFICATION_CODE_INPUT_SELECTOR = (
+    'input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"])'
+    ':not([type="submit"]):not([type="button"]):not([type="password"])'
+    ':not([type="email"]):not([autocomplete="username"])'
+    ':not([autocomplete="current-password"])'
+)
 MAX_WARMUP_LIKES = 16
 MAX_WARMUP_COMMENTS = 6
 SUPPORTED_TASK_TYPES = {
@@ -5679,6 +5685,7 @@ def _verification_code_input(page):
             'input[placeholder*="code" i]',
             'input[inputmode="numeric"]',
             'input[type="tel"]',
+            GENERIC_VERIFICATION_CODE_INPUT_SELECTOR,
         ],
         timeout_ms=500,
     )

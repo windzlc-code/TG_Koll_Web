@@ -1201,6 +1201,37 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         outcome.assert_called_with("verified")
         wait_manual.assert_not_called()
 
+    def test_authenticator_challenge_detects_unlabelled_code_input(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/accounts/login/two_step_verification"
+        body = mock.Mock()
+        body.inner_text.return_value = (
+            "Go to your authentication app. Enter the 6-digit code. "
+            "Trust this device. Try another way."
+        )
+        missing = mock.Mock()
+        missing.first = missing
+        missing.count.return_value = 0
+        code_input = mock.Mock()
+        code_input.first = code_input
+        code_input.count.return_value = 1
+        code_input.is_visible.return_value = True
+
+        def locator(selector):
+            if selector == "body":
+                return body
+            if selector == runner.GENERIC_VERIFICATION_CODE_INPUT_SELECTOR:
+                return code_input
+            return missing
+
+        page.locator.side_effect = locator
+
+        challenge = runner._classify_verification_challenge(page)
+
+        self.assertEqual(challenge["type"], "authenticator_totp")
+        self.assertTrue(challenge["has_code_input"])
+        self.assertIs(challenge["code_input"], code_input)
+
     def test_authenticator_challenge_waits_for_delayed_code_input_before_manual_fallback(self):
         page, _body = self._totp_verification_page(
             "Go to your authentication app."
