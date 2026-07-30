@@ -848,7 +848,7 @@ body.site-mobile-menu-active {
 .site-notification-broadcast-head button:hover,
 .site-notification-broadcast-head button:focus-visible {
   color: #172033;
-  background: #eef2f4;
+  background: transparent;
   outline: none;
   box-shadow: none;
 }

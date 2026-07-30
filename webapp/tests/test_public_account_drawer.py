@@ -65,6 +65,12 @@ class PublicAccountDrawerTests(unittest.TestCase):
         ]
         self.assertIn("border: 0;", broadcast_close_rule)
         self.assertIn("outline: none;", broadcast_close_rule)
+        close_interaction_rule = self.navigation_css[
+            self.navigation_css.index(".site-notification-close:hover,"):
+            self.navigation_css.index(".site-notification-close svg")
+        ]
+        self.assertIn("background: transparent;", close_interaction_rule)
+        self.assertNotIn("background: #eef2f4;", close_interaction_rule)
         tab_rule = self.navigation_css[
             self.navigation_css.index(".site-notification-tabs button {"):
             self.navigation_css.index('.site-notification-tabs button[aria-selected="true"]')
