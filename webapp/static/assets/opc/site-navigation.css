@@ -261,18 +261,26 @@ html {
   height: 40px;
   padding: 0;
   color: rgba(255, 255, 255, 0.86);
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 8px;
   cursor: pointer;
+  transition: color 160ms ease, background 160ms ease, border-color 160ms ease;
 }
 
-.site-icon-button:hover,
-.site-subscription-link:hover,
-.site-mobile-console:hover,
-.site-menu-toggle:hover {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.14);
+@media (min-width: 821px) {
+  .site-icon-button:hover,
+  .site-icon-button:focus-visible,
+  .site-subscription-link:hover,
+  .site-subscription-link:focus-visible,
+  .site-mobile-console:hover,
+  .site-mobile-console:focus-visible,
+  .site-menu-toggle:hover,
+  .site-menu-toggle:focus-visible {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.22);
+  }
 }
 
 .site-icon-button svg,
@@ -284,8 +292,8 @@ html {
   display: block;
   flex: 0 0 auto;
   margin: 0;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
@@ -599,14 +607,19 @@ body.site-mobile-menu-active {
 .site-header .site-admin-entry {
   padding: 0 13px;
   color: rgba(255, 255, 255, 0.9);
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: transparent;
+  border: 1px solid transparent;
   cursor: pointer;
+  transition: color 160ms ease, background 160ms ease, border-color 160ms ease;
 }
 
-.site-header .site-admin-entry:hover {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.14);
+@media (min-width: 821px) {
+  .site-header .site-admin-entry:hover,
+  .site-header .site-admin-entry:focus-visible {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.22);
+  }
 }
 
 .site-user {
@@ -731,8 +744,8 @@ body.site-mobile-menu-active {
 
 .site-notification-icon {
   display: block;
-  width: 19px;
-  height: 19px;
+  width: 21px;
+  height: 21px;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
@@ -740,20 +753,28 @@ body.site-mobile-menu-active {
   stroke-linejoin: round;
 }
 
-.site-notification-dot {
+.site-notification-badge {
   position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 9px;
-  height: 9px;
+  top: -6px;
+  right: -8px;
+  display: inline-grid;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
   box-sizing: border-box;
+  place-items: center;
+  color: #ffffff;
   background: var(--site-notification-unread);
-  border: 2px solid #131d1f;
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px var(--site-notification-unread-ring);
+  border: 1px solid #131d1f;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.site-notification-dot[hidden] {
+.site-notification-badge[hidden] {
   display: none;
 }
 
@@ -1307,9 +1328,7 @@ body.site-account-panel-active {
   align-items: baseline;
   gap: 5px;
   margin-top: 2px;
-  color: #879592;
-  font-size: 10px;
-  font-weight: 700;
+  letter-spacing: .02em;
 }
 
 .site-account-id-line strong {
@@ -1446,7 +1465,7 @@ body.site-account-panel-active {
   overflow: hidden;
   padding: 0;
   background:
-    linear-gradient(#f9fbfc, #f9fbfc) padding-box,
+    linear-gradient(#ffffff, #ffffff) padding-box,
     linear-gradient(135deg, rgba(29, 52, 70, .72), rgba(45, 86, 96, .48) 58%, rgba(139, 175, 176, .28)) border-box;
   border: 1px solid transparent;
   border-radius: 14px;
@@ -1507,7 +1526,8 @@ body.site-account-panel-active {
 .site-account-billing-card strong {
   overflow: hidden;
   color: #1d3446;
-  font-size: 13px;
+  font-size: 15px;
+  font-weight: 800;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
   text-overflow: ellipsis;
@@ -1528,7 +1548,7 @@ body.site-account-panel-active {
   min-height: 34px;
   padding: 0 8px;
   color: #2b4759;
-  background: #e6eef2;
+  background: #ffffff;
   border: 1px solid #abc1cb;
   border-radius: 9px;
   box-shadow: none;
@@ -1669,16 +1689,14 @@ body.site-account-panel-active {
 .site-account-popover {
   gap: 14px;
   color: #162a38;
-  background:
-    radial-gradient(circle at 100% 0%, rgba(88, 146, 142, .12), transparent 31%),
-    linear-gradient(135deg, #eef2f5 0%, #f8fafb 48%, #eef4f3 100%);
+  background: #ffffff;
   box-shadow: -20px 0 54px rgba(20, 44, 62, .2);
 }
 
 .site-account-summary {
-  grid-template-columns: 54px minmax(0, 1fr) 44px;
-  gap: 12px;
-  padding: 18px;
+  grid-template-columns: 64px minmax(0, 1fr) 44px;
+  gap: 14px;
+  padding: 20px;
   color: #f5fbfd;
   background: linear-gradient(135deg, #1d3446 0%, #274559 58%, #2d5660 100%);
   border: 1px solid rgba(227, 241, 243, .16);
@@ -1687,19 +1705,18 @@ body.site-account-panel-active {
 }
 
 .site-account-summary .site-account-avatar {
-  width: 54px;
-  height: 54px;
-  color: #e8f6f6;
-  background: rgba(226, 246, 246, .1);
-  border-color: rgba(226, 246, 246, .26);
+  width: 64px;
+  height: 64px;
+  color: #1d4655;
+  background: #ffffff;
+  border-color: #ffffff;
 }
 
-.site-account-summary .site-account-avatar svg { width: 25px; height: 25px; }
+.site-account-summary .site-account-avatar svg { width: 29px; height: 29px; }
 .site-account-identity { gap: 4px; }
 .site-account-identity strong { color: #fff; font-size: 20px; font-weight: 850; letter-spacing: -.02em; }
-.site-account-identity > span:not(.site-account-id-line) { color: rgba(231, 243, 245, .74); font-size: 13px; font-weight: 650; }
-.site-account-identity .site-account-id-line { color: rgba(231, 243, 245, .58); font-size: 11px; letter-spacing: .05em; }
-.site-account-id-line strong { color: #d9eff0; font-size: 15px; font-weight: 800; }
+.site-account-identity > span:not(.site-account-id-line) { color: #bfd3d9; font-size: 12px; font-weight: 650; }
+.site-account-id-line > strong { color: #b8b8b8; font-size: 11px; font-weight: 800; }
 
 .site-account-close {
   color: #d8ecee;
@@ -1718,7 +1735,7 @@ body.site-account-panel-active {
 
 .site-account-profile-fields,
 .site-account-preferences {
-  background: #f8fbfc;
+  background: #ffffff;
   border: 1px solid #c5d5dc;
   border-radius: 13px;
   box-shadow: none;
@@ -1738,20 +1755,21 @@ body.site-account-panel-active {
 }
 
 .site-account-profile-field + .site-account-profile-field { border-left: 1px solid #dbe4e7; }
-.site-account-profile-label,
-.site-account-billing-copy > span,
-.site-account-section-label { color: #6b7c87; }
-.site-account-profile-field p { color: #40545f; }
+.site-account-profile-label { color: #6b7c87; font-size: 12px; font-weight: 800; }
+.site-account-profile-field p { color: #40545f; font-size: 12px; }
+.site-account-billing-copy > span { color: #6b7c87; font-size: 11px; font-weight: 700; }
+.site-account-section-label { color: #6b7c87; font-size: 12px; font-weight: 800; }
 
 .site-account-tags span {
   color: #365b6c;
-  background: #eaf1f5;
+  background: #ffffff;
   border-color: #c9d8e1;
+  font-size: 12px;
 }
 
 .site-account-section-head > span:first-child {
   color: #203b4f;
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 850;
   letter-spacing: .01em;
 }
@@ -1761,7 +1779,7 @@ body.site-account-panel-active {
   gap: 7px;
   margin-top: 0;
   padding: 12px;
-  background: #f8fbfc;
+  background: #ffffff;
   border: 1px solid #c5d5dc;
   border-radius: 13px;
   box-shadow: none;
@@ -1769,7 +1787,7 @@ body.site-account-panel-active {
 
 .site-account-workspace-actions button {
   min-height: 38px;
-  background: #dce8ee;
+  background: #ffffff;
   border-color: #aac1cd;
   box-shadow: none;
 }
@@ -1804,7 +1822,7 @@ body.site-account-panel-active {
 
 .site-account-preference {
   color: #315066;
-  background: #dce8ee;
+  background: #ffffff;
   border-color: #aac1cd;
   border-radius: 9px;
 }
@@ -2086,7 +2104,7 @@ body.site-account-panel-active {
   }
 
 .site-account-summary {
-    grid-template-columns: 54px minmax(0, 1fr) 44px;
+    grid-template-columns: 64px minmax(0, 1fr) 44px;
   }
 
   .site-account-close {

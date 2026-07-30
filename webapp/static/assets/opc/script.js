@@ -5,36 +5,61 @@ const authDialog = loginModal?.querySelector(".auth-dialog");
 function registrationPanelMarkup() {
   return `
     <section class="auth-register-view" data-auth-view="register" hidden>
-      <p class="form-kicker">帳號註冊</p>
-      <h2 id="registerTitle">註冊遊客帳號</h2>
-      <p class="auth-copy">設定登入帳號並提交基本資料。管理員審核通過後，即可使用本次設定的帳號密碼登入 Web 任務控制台。</p>
+      <p class="form-kicker">建立 Vecto 帳號</p>
+      <h2 id="registerTitle">註冊 Vecto 帳號</h2>
+      <p class="auth-copy">驗證電子信箱並設定登入資料，即可建立帳號。</p>
       <form class="lead-form auth-registration-form" id="accountRegistrationForm" novalidate>
-        <div class="application-grid">
-          <label class="field" for="fullName"><span>姓名</span><input id="fullName" name="fullName" autocomplete="name" placeholder="請輸入姓名" aria-describedby="fullNameError" required /><small class="field-error" id="fullNameError"></small></label>
-          <label class="field" for="username"><span>登入帳號</span><input id="username" name="username" autocomplete="username" placeholder="3-32 位英文、數字或 ._-" aria-describedby="usernameError" required /><small class="field-error" id="usernameError"></small></label>
-          <label class="field" for="applyPassword"><span>登入密碼</span><input id="applyPassword" name="password" type="password" autocomplete="new-password" minlength="8" placeholder="至少 8 位" aria-describedby="applyPasswordError" required /><small class="field-error" id="applyPasswordError"></small></label>
-          <label class="field" for="email"><span>電子信箱</span><input id="email" name="email" type="email" autocomplete="email" placeholder="name@company.com" aria-describedby="emailError" /><small class="field-error" id="emailError"></small></label>
+        <div class="auth-registration-panel">
+          <div class="auth-email-action">
+            <label class="field auth-placeholder-field" for="registerEmail"><span class="field-label">電子信箱</span><input id="registerEmail" name="email" type="email" autocomplete="email" maxlength="254" placeholder="name@example.com" aria-describedby="registerEmailError" required /><small class="field-error" id="registerEmailError"></small></label>
+            <button class="auth-verification-button" type="button" data-register-verification data-state="idle">發送驗證碼</button>
+          </div>
+          <p class="auth-verification-hint">驗證碼寄出後，請在有效時間內填寫並完成註冊。</p>
+          <p class="auth-verification-status" id="registerVerificationStatus" role="status" aria-live="polite"></p>
+          <label class="field auth-placeholder-field auth-verification-code" for="registerVerificationCode"><span class="field-label">信箱驗證碼</span><input id="registerVerificationCode" name="verification_code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="請輸入 6 位數字驗證碼" aria-describedby="registerVerificationCodeError" required /><small class="field-error" id="registerVerificationCodeError"></small></label>
+          <div class="application-grid auth-registration-profile">
+            <label class="field auth-placeholder-field" for="registerFullName"><span class="field-label">姓名</span><input id="registerFullName" name="full_name" autocomplete="name" minlength="2" maxlength="80" placeholder="請輸入姓名" aria-describedby="registerFullNameError" required /><small class="field-error" id="registerFullNameError"></small></label>
+            <label class="field auth-placeholder-field" for="registerUsername"><span class="field-label">用戶名</span><input id="registerUsername" name="username" autocomplete="username" maxlength="32" placeholder="3-32 位英文、數字或 ._-" aria-describedby="registerUsernameError" required /><small class="field-error" id="registerUsernameError"></small></label>
+            <label class="field auth-placeholder-field" for="registerPassword"><span class="field-label">登入密碼</span><span class="auth-password-field"><input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="至少 8 位" aria-describedby="registerPasswordError" required /><button class="auth-password-toggle" type="button" data-register-password-toggle data-target="registerPassword" aria-label="顯示登入密碼" title="顯示登入密碼" aria-controls="registerPassword" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span><small class="field-error" id="registerPasswordError"></small></label>
+            <label class="field auth-placeholder-field" for="registerPasswordConfirmation"><span class="field-label">再次確認密碼</span><span class="auth-password-field"><input id="registerPasswordConfirmation" name="password_confirmation" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="請再次輸入密碼" aria-describedby="registerPasswordConfirmationError" required /><button class="auth-password-toggle" type="button" data-register-password-toggle data-target="registerPasswordConfirmation" aria-label="顯示確認密碼" title="顯示確認密碼" aria-controls="registerPasswordConfirmation" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span><small class="field-error" id="registerPasswordConfirmationError"></small></label>
+            <label class="field auth-placeholder-field" for="registerCompany"><span class="field-label">公司 / 團隊（選填）</span><input id="registerCompany" name="company" autocomplete="organization" maxlength="120" placeholder="請輸入公司或團隊名稱" aria-describedby="registerCompanyError" /><small class="field-error" id="registerCompanyError"></small></label>
+            <label class="field auth-placeholder-field" for="registerUseCase"><span class="field-label">預計使用情境</span><select id="registerUseCase" name="use_case" aria-describedby="registerUseCaseError" required><option value="">請選擇預計使用情境</option><option value="OPC導入">OPC 導入與三帳代營運</option><option value="算力計費">算力計費與預算規劃</option><option value="私域轉化">獨立站與私域轉化閉環</option><option value="企業多套">企業多套 OPC 批量部署</option></select><small class="field-error" id="registerUseCaseError"></small></label>
+          </div>
+          <label class="consent auth-registration-consent" for="registerConsent"><input id="registerConsent" name="consent" type="checkbox" required /><span>我已閱讀並同意《用戶服務協議》和《隱私政策》，並同意平台為提供帳號註冊、身分驗證及帳戶管理服務而處理必要的個人資訊。</span></label>
+          <button class="submit-button" type="submit"><span>驗證並建立帳號</span><span aria-hidden="true">→</span></button>
         </div>
-        <div class="application-grid">
-          <label class="field" for="company"><span>公司 / 團隊</span><input id="company" name="company" type="text" autocomplete="organization" placeholder="公司或團隊名稱（選填）" /><small class="field-error"></small></label>
-          <label class="field" for="phone"><span>聯絡電話</span><input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="請輸入可聯絡的電話" aria-describedby="phoneError" required /><small class="field-error" id="phoneError"></small></label>
-        </div>
-        <label class="field" for="interest"><span>預計使用情境</span><select id="interest" name="useCase"><option value="OPC導入">OPC 導入與三帳代營運</option><option value="算力計費">算力計費與預算規劃</option><option value="私域轉化">獨立站與私域轉化閉環</option><option value="企業多套">企業多套 OPC 批量部署</option></select></label>
-        <label class="consent" for="consent"><input id="consent" name="consent" type="checkbox" required /><span>我同意提交以上資料供管理員審核帳號註冊資格。</span></label>
-        <button class="submit-button" type="submit"><span>提交註冊申請</span><span aria-hidden="true">→</span></button>
-        <p class="form-note">提交後需等待管理員審核，不會立即登入。審核通過後請返回登入頁使用本次設定的帳號密碼。</p>
-        <p class="form-status" id="formStatus" role="status" aria-live="polite"></p>
+        <p class="form-status auth-form-status" id="formStatus" role="status" aria-live="polite"></p>
       </form>
       <button class="auth-guest-link auth-switch-button" type="button" data-open-login>已有帳號？返回登入</button>
+    </section>`;
+}
+
+function googleSetupPanelMarkup() {
+  return `
+    <section class="auth-google-setup-view" data-auth-view="google-setup" hidden>
+      <p class="form-kicker">Google 帳號設定</p>
+      <h2 id="googleSetupTitle">建立唯一使用者名稱</h2>
+      <p class="auth-copy">Google 信箱已完成驗證。設定一個不重複的使用者名稱，即可完成登入。</p>
+      <form class="lead-form auth-google-setup-form" id="googleSetupForm" novalidate>
+        <label class="field" for="googleSetupUsername"><span>使用者名稱</span><input id="googleSetupUsername" name="username" autocomplete="username" placeholder="3-32 位英文、數字或 ._-" aria-describedby="googleSetupUsernameError" required /><small class="field-error" id="googleSetupUsernameError"></small></label>
+        <button class="submit-button" type="submit"><span>完成帳號設定</span><span aria-hidden="true">→</span></button>
+        <p class="form-status auth-form-status" id="googleSetupStatus" role="status" aria-live="polite"></p>
+      </form>
     </section>`;
 }
 
 if (authDialog && !authDialog.querySelector("[data-auth-view='register']")) {
   authDialog.insertAdjacentHTML("beforeend", registrationPanelMarkup());
 }
+if (authDialog && !authDialog.querySelector("[data-auth-view='google-setup']")) {
+  authDialog.insertAdjacentHTML("beforeend", googleSetupPanelMarkup());
+}
 
 const applicationForm = document.querySelector("#accountRegistrationForm");
 const applicationStatus = document.querySelector("#formStatus");
+const registerVerificationStatus = document.querySelector("#registerVerificationStatus");
+const registerVerificationButton = applicationForm?.querySelector("[data-register-verification]");
+const registerPasswordToggles = [...(applicationForm?.querySelectorAll("[data-register-password-toggle]") || [])];
 const loginForm = document.querySelector("#homeLoginForm");
 const loginStatus = document.querySelector("#loginStatus");
 const loginPassword = document.querySelector("#loginPassword");
@@ -42,10 +67,60 @@ const loginPasswordToggle = document.querySelector("[data-login-password-toggle]
 const loginRemember = loginForm?.elements?.remember_me || null;
 const loginTakeover = document.querySelector("[data-login-takeover]");
 const registerView = authDialog?.querySelector("[data-auth-view='register']");
+const googleSetupView = authDialog?.querySelector("[data-auth-view='google-setup']");
+const googleSetupForm = document.querySelector("#googleSetupForm");
+const googleSetupStatus = document.querySelector("#googleSetupStatus");
 const loginViewElements = authDialog
-  ? [...authDialog.children].filter((element) => !element.matches(".auth-close, [data-auth-view='register']"))
+  ? [...authDialog.children].filter((element) => !element.matches(".auth-close, [data-auth-view='register'], [data-auth-view='google-setup']"))
   : [];
 let loginReturnFocus = null;
+let registerChallengeId = "";
+let registerChallengeEmail = "";
+let registerResendTimer = 0;
+let registrationPolicyEnabled = null;
+let googleLoginButton = null;
+
+function ensureLoginAuthEnhancements() {
+  if (!loginForm) return;
+  const identifierInput = loginForm.elements?.username;
+  const identifierLabel = identifierInput?.closest(".field")?.querySelector(":scope > span");
+  if (identifierLabel) identifierLabel.textContent = "電子信箱或使用者名稱";
+  if (identifierInput) {
+    identifierInput.placeholder = "name@example.com 或使用者名稱";
+  }
+  if (loginForm.querySelector("[data-google-login]")) {
+    googleLoginButton = loginForm.querySelector("[data-google-login]");
+    return;
+  }
+  const divider = document.createElement("div");
+  divider.className = "auth-provider-divider";
+  divider.dataset.googleLoginContainer = "";
+  const dividerLabel = document.createElement("span");
+  dividerLabel.textContent = "或";
+  divider.append(dividerLabel);
+
+  googleLoginButton = document.createElement("button");
+  googleLoginButton.className = "auth-google-button";
+  googleLoginButton.type = "button";
+  googleLoginButton.dataset.googleLogin = "";
+  googleLoginButton.setAttribute("aria-label", "使用 Google 帳號登入");
+  const icon = document.createElement("img");
+  icon.className = "auth-google-mark";
+  icon.src = "/assets/opc/google-g-gradient.svg";
+  icon.alt = "";
+  icon.width = 20;
+  icon.height = 20;
+  icon.setAttribute("aria-hidden", "true");
+  const label = document.createElement("span");
+  label.textContent = "使用 Google 帳號登入";
+  googleLoginButton.append(icon, label);
+
+  const submitButton = loginForm.querySelector(".submit-button");
+  if (submitButton) submitButton.after(divider, googleLoginButton);
+  else loginForm.append(divider, googleLoginButton);
+}
+
+ensureLoginAuthEnhancements();
 
 function ensureLoginMfaField() {
   if (!loginForm) return null;
@@ -243,7 +318,7 @@ function markPublicStaticUi(root = document.body, { dynamic = false } = {}) {
   root.querySelectorAll?.("[title], [aria-label], [placeholder], [data-mobile-label]")
     .forEach((node) => attributeNodes.push(node));
   attributeNodes.forEach((node) => markPublicUiElement(node, { dynamic }));
-  [applicationStatus, loginStatus, loginPasswordToggle, ...document.querySelectorAll(".field-error")]
+  [applicationStatus, registerVerificationStatus, loginStatus, loginPasswordToggle, ...document.querySelectorAll(".field-error")]
     .forEach((node) => markPublicUiElement(node, { dynamic: true }));
 }
 
@@ -387,7 +462,14 @@ async function api(path, options = {}) {
   } catch {
     data = { detail: text || `HTTP ${response.status}` };
   }
-  if (!response.ok) throw data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    data = { detail: text || `HTTP ${response.status}` };
+  }
+  if (!response.ok) {
+    data.httpStatus = response.status;
+    data.requestPath = path;
+    throw data;
+  }
   return data;
 }
 
@@ -413,29 +495,131 @@ function setFieldError(input, message) {
   if (error) error.textContent = message;
 }
 
-function validateApplication(form) {
+function setAuthStatus(element, message = "", state = "") {
+  if (!element) return;
+  element.textContent = String(message || "");
+  if (state) element.dataset.state = state;
+  else delete element.dataset.state;
+}
+
+function validRegistrationUsername(value) {
+  return /^[A-Za-z0-9._-]{3,32}$/.test(String(value || "").trim());
+}
+
+function validateRegistrationEmail() {
+  const input = applicationForm?.elements?.email;
+  if (!input) return false;
+  const valid = Boolean(input.value.trim()) && input.validity.valid;
+  setFieldError(input, valid ? "" : "請輸入格式正確且可收信的電子信箱。");
+  return valid;
+}
+
+function validateRegistrationDetails() {
+  if (!applicationForm || !registerChallengeId) {
+    setAuthStatus(applicationStatus, "請先發送並取得信箱驗證碼。", "error");
+    return false;
+  }
+  const fullName = applicationForm.elements.full_name.value.trim();
+  const company = applicationForm.elements.company.value.trim();
+  const useCase = applicationForm.elements.use_case.value.trim();
+  const password = applicationForm.elements.password.value;
+  const passwordConfirmation = applicationForm.elements.password_confirmation.value;
+  const passwordsMatch = password === passwordConfirmation && Boolean(passwordConfirmation);
   const checks = [
-    [form.fullName, form.fullName.value.trim().length >= 2, "請填寫姓名。"],
-    [form.username, /^[A-Za-z0-9._-]{3,32}$/.test(form.username.value.trim()), "帳號需為 3-32 位英文、數字或 ._-。"],
-    [form.password, form.password.value.length >= 8, "密碼至少需要 8 位。"],
-    [form.phone, form.phone.value.trim().length >= 6, "請填寫可聯絡的電話。"],
+    [applicationForm.elements.verification_code, /^\d{6}$/.test(applicationForm.elements.verification_code.value.trim()), "請輸入 6 位數字驗證碼。"],
+    [applicationForm.elements.full_name, fullName.length >= 2 && fullName.length <= 80, "姓名需為 2-80 個字元。"],
+    [applicationForm.elements.username, validRegistrationUsername(applicationForm.elements.username.value), "用戶名需為 3-32 位英文、數字或 ._-。"],
+    [applicationForm.elements.password, password.length >= 8 && password.length <= 256, "密碼需為 8-256 位。"],
+    [applicationForm.elements.password_confirmation, passwordsMatch, "兩次輸入的密碼不一致。"],
+    [applicationForm.elements.company, company.length <= 120, "公司或團隊名稱不能超過 120 個字元。"],
+    [applicationForm.elements.use_case, Boolean(useCase), "請選擇預計使用情境。"],
   ];
-  let valid = true;
+  let valid = validateRegistrationEmail();
   checks.forEach(([input, passed, message]) => {
     setFieldError(input, passed ? "" : message);
     if (!passed) valid = false;
   });
-  if (form.email.value && !form.email.validity.valid) {
-    setFieldError(form.email, "電子信箱格式不正確。");
+  if (!applicationForm.elements.consent.checked) {
+    applicationForm.elements.consent.closest(".consent")?.classList.add("is-invalid");
+    setAuthStatus(applicationStatus, "請先同意提交資料以建立帳號。", "error");
     valid = false;
   } else {
-    setFieldError(form.email, "");
-  }
-  if (!form.consent.checked) {
-    applicationStatus.textContent = "請先同意提交資料供帳號審核。";
-    valid = false;
+    applicationForm.elements.consent.closest(".consent")?.classList.remove("is-invalid");
   }
   return valid;
+}
+
+function registrationErrorField(code) {
+  if (!applicationForm) return null;
+  const normalized = String(code || "").toLowerCase();
+  if (["email_invalid", "invalid_email", "email_in_use", "email_already_registered", "unsupported_email_provider", "email_not_allowed"].includes(normalized)) {
+    return applicationForm.elements.email;
+  }
+  if ([
+    "verification_code_invalid",
+    "code_invalid",
+    "verification_code_expired",
+    "challenge_expired",
+    "challenge_invalid",
+    "challenge_not_found",
+    "challenge_mismatch",
+    "challenge_not_sent",
+    "challenge_consumed",
+    "challenge_invalidated",
+    "challenge_attempts_exceeded",
+    "verification_attempts_exceeded",
+  ].includes(normalized)) {
+    return applicationForm.elements.verification_code;
+  }
+  if (["username_taken", "username_exists", "username_invalid", "invalid_username"].includes(normalized)) {
+    return applicationForm.elements.username;
+  }
+  if (["full_name_invalid", "invalid_full_name"].includes(normalized)) {
+    return applicationForm.elements.full_name;
+  }
+  if (["company_invalid", "invalid_company"].includes(normalized)) {
+    return applicationForm.elements.company;
+  }
+  if (["use_case_invalid", "invalid_use_case"].includes(normalized)) {
+    return applicationForm.elements.use_case;
+  }
+  if (["password_invalid", "weak_password"].includes(normalized)) {
+    return applicationForm.elements.password;
+  }
+  return null;
+}
+
+function registrationStatusMessage(error, fallback) {
+  const detail = apiErrorDetail(error);
+  const code = detail.code.toLowerCase();
+  const status = Number(error?.httpStatus || 0);
+  if (status === 404 || /^not found$/i.test(detail.message)) {
+    return "驗證碼服務暫時不可用，請重新整理頁面後再試。";
+  }
+  if (code === "resend_too_soon") {
+    return "請等待倒數結束後再重新發送驗證碼。";
+  }
+  if (code === "email_rate_limited") {
+    return "此信箱取得驗證碼的次數過多，請稍後再試。";
+  }
+  if (code === "ip_rate_limited") {
+    return "目前網路取得驗證碼的次數過多，請稍後再試。";
+  }
+  if (status >= 500) {
+    return "驗證碼目前無法寄出，請稍後再試。";
+  }
+  return detail.message || fallback;
+}
+
+function showRegistrationError(error, fallback, statusTarget = applicationStatus) {
+  const detail = apiErrorDetail(error);
+  const message = registrationStatusMessage(error, fallback);
+  const target = registrationErrorField(detail.code);
+  if (target) {
+    setFieldError(target, message);
+    target.focus();
+  }
+  setAuthStatus(statusTarget, message, "error");
 }
 
 function loginFocusableElements() {
@@ -446,14 +630,19 @@ function loginFocusableElements() {
 
 function setAuthView(view) {
   const registering = view === "register";
+  const completingGoogle = view === "google-setup";
   loginViewElements.forEach((element) => {
-    element.hidden = registering;
+    element.hidden = registering || completingGoogle;
   });
   if (registerView) registerView.hidden = !registering;
+  if (googleSetupView) googleSetupView.hidden = !completingGoogle;
   authDialog?.classList.toggle("is-registering", registering);
-  authDialog?.setAttribute("aria-labelledby", registering ? "registerTitle" : "loginTitle");
-  if (loginStatus) loginStatus.textContent = "";
-  if (applicationStatus) applicationStatus.textContent = "";
+  authDialog?.classList.toggle("is-google-setup", completingGoogle);
+  authDialog?.setAttribute("aria-labelledby", completingGoogle ? "googleSetupTitle" : registering ? "registerTitle" : "loginTitle");
+  setAuthStatus(loginStatus);
+  setAuthStatus(applicationStatus);
+  setAuthStatus(registerVerificationStatus);
+  setAuthStatus(googleSetupStatus);
   if (loginTakeover) loginTakeover.hidden = true;
 }
 
@@ -483,7 +672,16 @@ function openRegister(event) {
   loginModal.classList.add("is-open");
   loginModal.setAttribute("aria-hidden", "false");
   document.body.classList.add("modal-open");
-  window.setTimeout(() => applicationForm?.elements?.fullName?.focus(), 40);
+  window.setTimeout(() => applicationForm?.elements?.email?.focus(), 40);
+}
+
+function openGoogleSetup() {
+  if (!loginModal || !googleSetupView) return;
+  setAuthView("google-setup");
+  loginModal.classList.add("is-open");
+  loginModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  window.setTimeout(() => googleSetupForm?.elements?.username?.focus(), 40);
 }
 
 function setLoginPasswordRevealed(revealed) {
@@ -495,6 +693,23 @@ function setLoginPasswordRevealed(revealed) {
   setPublicUiAttribute(loginPasswordToggle, "aria-label", label);
   setPublicUiAttribute(loginPasswordToggle, "title", label);
 }
+
+function setupRegisterPasswordToggle(toggle) {
+  const input = document.getElementById(toggle?.dataset?.target || "");
+  if (!input) return;
+  toggle.addEventListener("click", () => {
+    const revealed = input.type === "password";
+    input.type = revealed ? "text" : "password";
+    toggle.classList.toggle("is-visible", revealed);
+    toggle.setAttribute("aria-pressed", revealed ? "true" : "false");
+    const label = revealed ? "隱藏密碼" : "顯示密碼";
+    setPublicUiAttribute(toggle, "aria-label", label);
+    setPublicUiAttribute(toggle, "title", label);
+    input.focus({ preventScroll: true });
+  });
+}
+
+registerPasswordToggles.forEach(setupRegisterPasswordToggle);
 
 function closeLogin() {
   if (!loginModal?.classList.contains("is-open")) return;
@@ -517,7 +732,9 @@ function openRequestedLogin() {
   const currentUrl = new URL(window.location.href);
   const loginRequested = currentUrl.searchParams.get("login") === "1";
   const registerRequested = currentUrl.searchParams.get("register") === "1";
-  if (!loginRequested && !registerRequested) return;
+  const googleSetupRequested = currentUrl.searchParams.get("google_setup") === "1";
+  const oauthError = String(currentUrl.searchParams.get("oauth_error") || "").trim().toLowerCase();
+  if (!loginRequested && !registerRequested && !googleSetupRequested) return;
   if (loginRequested) {
     const fallback = String(document.body.dataset.loginRedirect || "/console.html");
     document.body.dataset.loginRedirect = safeLoginReturnUrl(
@@ -525,12 +742,39 @@ function openRequestedLogin() {
       fallback,
     );
   }
+  if (googleSetupRequested) {
+    document.body.dataset.googleReturnUrl = safeLoginReturnUrl(
+      currentUrl.searchParams.get("return_url"),
+      "/",
+    );
+  }
   currentUrl.searchParams.delete("login");
   currentUrl.searchParams.delete("register");
+  currentUrl.searchParams.delete("google_setup");
+  currentUrl.searchParams.delete("oauth_error");
   currentUrl.searchParams.delete("return_url");
   window.history.replaceState({}, "", `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
-  if (registerRequested) openRegister();
-  else openLogin();
+  if (googleSetupRequested) openGoogleSetup();
+  else if (registerRequested) openRegister();
+  else {
+    openLogin();
+    if (oauthError) {
+      const oauthMessages = {
+        provider_denied: "你已取消 Google 授权，请重试。",
+        oauth_state_invalid: "Google 登录请求已过期，请重新开始登录。",
+        google_verification_failed: "Google 身份验证失败，请重试。",
+        google_login_disabled: "此账号的 Google 登录已被管理员停用。",
+        google_login_unavailable: "Google 登录当前不可用，请稍后重试。",
+        google_identity_conflict: "此 Google 账号已绑定其他用户。",
+        account_unavailable: "账号当前不可登录，请联系管理员。",
+      };
+      setAuthStatus(
+        loginStatus,
+        oauthMessages[oauthError] || "Google 登录失败，请重试。",
+        "error",
+      );
+    }
+  }
 }
 
 document.addEventListener("click", (event) => {
@@ -582,35 +826,6 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-applicationForm?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  applicationStatus.textContent = "";
-  if (!validateApplication(applicationForm)) return;
-  const submit = applicationForm.querySelector("button[type='submit']");
-  submit.disabled = true;
-  try {
-    const result = await api("/api/auth/apply", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        full_name: applicationForm.fullName.value.trim(),
-        username: applicationForm.username.value.trim(),
-        password: applicationForm.password.value,
-        email: applicationForm.email.value.trim(),
-        phone: applicationForm.phone.value.trim(),
-        company: applicationForm.company.value.trim(),
-        use_case: applicationForm.useCase.value,
-      }),
-    });
-    applicationStatus.textContent = result.message || "註冊申請已提交，請等待管理員審核。";
-    applicationForm.reset();
-  } catch (error) {
-    applicationStatus.textContent = error.detail || "註冊申請提交失敗，請稍後再試。";
-  } finally {
-    submit.disabled = false;
-  }
-});
-
 function safeLoginReturnUrl(value, fallback = "/console.html") {
   const candidate = String(value || "").trim();
   if (!candidate.startsWith("/") || candidate.startsWith("//") || candidate.includes("\\") || /[\u0000-\u001f]/.test(candidate)) {
@@ -628,6 +843,197 @@ function safeLoginReturnUrl(value, fallback = "/console.html") {
     return fallback;
   }
 }
+
+function registrationEmailIsValid() {
+  const input = applicationForm?.elements?.email;
+  return Boolean(input?.value.trim()) && input.validity.valid;
+}
+
+function updateRegisterVerificationAvailability() {
+  if (!registerVerificationButton) return;
+  const state = registerVerificationButton.dataset.state || "idle";
+  const busy = state === "sending" || state === "countdown";
+  const available = registrationPolicyEnabled !== false;
+  const emailValid = registrationEmailIsValid();
+  registerVerificationButton.dataset.registrationEnabled = String(available);
+  registerVerificationButton.disabled = busy || !available || !emailValid;
+}
+
+function resetRegistrationChallenge({ keepEmail = true } = {}) {
+  window.clearInterval(registerResendTimer);
+  registerResendTimer = 0;
+  registerChallengeId = "";
+  registerChallengeEmail = "";
+  if (!keepEmail && applicationForm?.elements?.email) applicationForm.elements.email.value = "";
+  if (applicationForm?.elements?.verification_code) applicationForm.elements.verification_code.value = "";
+  if (registerVerificationButton) {
+    registerVerificationButton.dataset.state = "idle";
+    registerVerificationButton.textContent = "發送驗證碼";
+    registerVerificationButton.removeAttribute("aria-busy");
+    updateRegisterVerificationAvailability();
+  }
+}
+
+function startRegisterResendCountdown(seconds) {
+  if (!registerVerificationButton) return;
+  window.clearInterval(registerResendTimer);
+  let remaining = Math.max(1, Math.round(Number(seconds) || 60));
+  const render = () => {
+    const registrationAvailable = registrationPolicyEnabled !== false;
+    registerVerificationButton.disabled = remaining > 0 || !registrationAvailable;
+    registerVerificationButton.dataset.state = remaining > 0 ? "countdown" : "ready";
+    registerVerificationButton.textContent = remaining > 0 ? `${remaining} 秒後可重發` : "重新發送驗證碼";
+    registerVerificationButton.removeAttribute("aria-busy");
+  };
+  render();
+  registerResendTimer = window.setInterval(() => {
+    remaining -= 1;
+    render();
+    if (remaining <= 0) {
+      window.clearInterval(registerResendTimer);
+      registerResendTimer = 0;
+    }
+  }, 1000);
+}
+
+async function sendRegistrationVerification() {
+  if (!applicationForm || !registerVerificationButton) return;
+  setAuthStatus(registerVerificationStatus);
+  if (!validateRegistrationEmail()) return;
+  const email = applicationForm.elements.email.value.trim();
+  const defaultText = registerVerificationButton.textContent;
+  registerVerificationButton.disabled = true;
+  registerVerificationButton.dataset.state = "sending";
+  registerVerificationButton.textContent = "發送中…";
+  registerVerificationButton.setAttribute("aria-busy", "true");
+  try {
+    const result = await api("/api/auth/email-verification/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, purpose: "register" }),
+    });
+    const challengeId = String(result?.challenge_id || "").trim();
+    if (!challengeId) {
+      throw { detail: { code: "challenge_missing", message: "驗證服務未回傳有效憑證，請稍後再試。" } };
+    }
+    registerChallengeId = challengeId;
+    registerChallengeEmail = email.toLowerCase();
+    const expiresMinutes = Math.max(1, Math.round((Number(result?.expires_in) || 600) / 60));
+    setAuthStatus(registerVerificationStatus, `驗證碼已寄出，有效時間約 ${expiresMinutes} 分鐘。`, "success");
+    startRegisterResendCountdown(result?.resend_after);
+    window.setTimeout(() => applicationForm.elements.verification_code?.focus(), 40);
+  } catch (error) {
+    registerVerificationButton.textContent = defaultText;
+    registerVerificationButton.dataset.state = registerChallengeId ? "ready" : "idle";
+    registerVerificationButton.removeAttribute("aria-busy");
+    updateRegisterVerificationAvailability();
+    showRegistrationError(error, "驗證碼發送失敗，請稍後再試。", registerVerificationStatus);
+  }
+}
+
+registerVerificationButton?.addEventListener("click", sendRegistrationVerification);
+
+applicationForm?.elements?.email?.addEventListener("input", () => {
+  setFieldError(applicationForm.elements.email, "");
+  updateRegisterVerificationAvailability();
+  if (!registerChallengeId) return;
+  if (applicationForm.elements.email.value.trim().toLowerCase() !== registerChallengeEmail) {
+    resetRegistrationChallenge();
+    setAuthStatus(registerVerificationStatus, "信箱已變更，請重新發送驗證碼。", "info");
+  }
+});
+applicationForm?.elements?.email?.addEventListener("change", updateRegisterVerificationAvailability);
+
+applicationForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  setAuthStatus(applicationStatus);
+  if (!validateRegistrationDetails()) return;
+  const submit = applicationForm.querySelector("button[type='submit']");
+  submit.disabled = true;
+  try {
+    await api("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: applicationForm.elements.email.value.trim(),
+        challenge_id: registerChallengeId,
+        verification_code: applicationForm.elements.verification_code.value.trim(),
+        full_name: applicationForm.elements.full_name.value.trim(),
+        username: applicationForm.elements.username.value.trim(),
+        password: applicationForm.elements.password.value,
+        company: applicationForm.elements.company.value.trim(),
+        use_case: applicationForm.elements.use_case.value,
+        consent: applicationForm.elements.consent.checked,
+      }),
+    });
+    await window.VectoSiteNavigation?.refreshPublicSession?.();
+    applicationForm.reset();
+    resetRegistrationChallenge({ keepEmail: false });
+    closeLogin();
+    await window.VectoSiteNavigation?.showAuthFeedback?.({
+      kind: "success",
+      title: "帳號建立成功",
+      message: "信箱已完成驗證，歡迎開始使用 Vecto。",
+      actionText: "開始使用",
+    });
+  } catch (error) {
+    showRegistrationError(error, "帳號建立失敗，請檢查資料後再試。");
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+googleLoginButton?.addEventListener("click", () => {
+  const currentUrl = new URL(window.location.href);
+  const returnUrl = safeLoginReturnUrl(
+    `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
+    "/",
+  );
+  googleLoginButton.disabled = true;
+  window.location.assign(`/api/auth/google/start?return_url=${encodeURIComponent(returnUrl)}`);
+});
+
+googleSetupForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  setAuthStatus(googleSetupStatus);
+  const usernameInput = googleSetupForm.elements.username;
+  if (!validRegistrationUsername(usernameInput.value)) {
+    setFieldError(usernameInput, "使用者名稱需為 3-32 位英文、數字或 ._-。");
+    usernameInput.focus();
+    return;
+  }
+  const submit = googleSetupForm.querySelector("button[type='submit']");
+  submit.disabled = true;
+  try {
+    await api("/api/auth/google/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: usernameInput.value.trim() }),
+    });
+    await window.VectoSiteNavigation?.refreshPublicSession?.();
+    const returnUrl = safeLoginReturnUrl(document.body.dataset.googleReturnUrl, "/");
+    googleSetupForm.reset();
+    closeLogin();
+    await window.VectoSiteNavigation?.showAuthFeedback?.({
+      kind: "success",
+      title: "Google 登入成功",
+      message: "使用者名稱已建立，歡迎回到 Vecto。",
+      actionText: "開始使用",
+    });
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (returnUrl !== currentUrl) window.location.assign(returnUrl);
+  } catch (error) {
+    const detail = apiErrorDetail(error);
+    const message = detail.message || "無法完成 Google 帳號設定，請稍後再試。";
+    if (["username_taken", "username_exists", "username_invalid", "invalid_username"].includes(detail.code.toLowerCase())) {
+      setFieldError(usernameInput, message);
+      usernameInput.focus();
+    }
+    setAuthStatus(googleSetupStatus, message, "error");
+  } finally {
+    submit.disabled = false;
+  }
+});
 
 async function submitUserLogin(forceTakeover = false) {
   if (!loginForm || !loginStatus) return;
@@ -722,21 +1128,59 @@ loginForm?.addEventListener("input", () => {
 openRequestedLogin();
 
 async function loadLoginPolicy() {
-  if (!loginForm || !loginRemember) return;
+  if (!loginForm) return;
   try {
     const policy = await api("/api/auth/policy");
     const enabled = policy.remember_login_enabled !== false;
-    loginRemember.disabled = !enabled;
-    loginRemember.checked = enabled && policy.remember_login_default === true;
+    if (loginRemember) {
+      loginRemember.disabled = !enabled;
+      loginRemember.checked = enabled && policy.remember_login_default === true;
+    }
     const rememberField = loginForm.querySelector("[data-login-remember]");
     if (rememberField) rememberField.hidden = !enabled;
+    const googleEnabled = policy.google_login_enabled !== false;
+    const googleContainer = loginForm.querySelector("[data-google-login-container]");
+    if (googleLoginButton) {
+      googleLoginButton.hidden = !googleEnabled;
+      googleLoginButton.disabled = false;
+    }
+    if (googleContainer) googleContainer.hidden = !googleEnabled;
+
+    const registrationEnabled = policy.email_registration_enabled !== false;
+    registrationPolicyEnabled = registrationEnabled;
+    document.querySelectorAll("[data-open-register]").forEach((trigger) => {
+      trigger.hidden = !registrationEnabled;
+      trigger.setAttribute("aria-disabled", registrationEnabled ? "false" : "true");
+    });
+    updateRegisterVerificationAvailability();
+    if (!registrationEnabled && !registerView?.hidden) {
+      setAuthStatus(applicationStatus, "信箱註冊目前暫停服務，請稍後再試。", "info");
+    }
   } catch {
-    loginRemember.checked = false;
+    registrationPolicyEnabled = null;
+    updateRegisterVerificationAvailability();
+    if (loginRemember) loginRemember.checked = false;
+    const googleContainer = loginForm.querySelector("[data-google-login-container]");
+    if (googleLoginButton) {
+      googleLoginButton.hidden = false;
+      googleLoginButton.disabled = false;
+    }
+    if (googleContainer) googleContainer.hidden = false;
   }
 }
 
 applicationForm?.querySelectorAll("input").forEach((input) => {
   input.addEventListener("input", () => setFieldError(input, ""));
+});
+applicationForm?.querySelectorAll("select").forEach((select) => {
+  select.addEventListener("change", () => setFieldError(select, ""));
+});
+applicationForm?.elements?.consent?.addEventListener("change", () => {
+  applicationForm.elements.consent.closest(".consent")?.classList.remove("is-invalid");
+});
+googleSetupForm?.elements?.username?.addEventListener("input", () => {
+  setFieldError(googleSetupForm.elements.username, "");
+  setAuthStatus(googleSetupStatus);
 });
 
 function initHomeExperience() {
@@ -1002,6 +1446,9 @@ function initHomeExperience() {
 
 window.addEventListener("scroll", setHeaderState, { passive: true });
 window.addEventListener("vecto:language-change", (event) => applyPublicLanguage(event.detail?.language));
+window.addEventListener("pageshow", updateRegisterVerificationAvailability);
+updateRegisterVerificationAvailability();
+window.setTimeout(updateRegisterVerificationAvailability, 160);
 markPublicStaticUi();
 applyPublicLanguage(window.VectoSiteNavigation?.currentLanguage() || "zh-Hant");
 startPublicLanguageObserver();

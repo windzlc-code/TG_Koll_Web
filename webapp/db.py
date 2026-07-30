@@ -422,6 +422,151 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE social_automation_tasks ADD COLUMN {column} {definition}")
 
 
+def _ensure_auth_identity_schema(conn: sqlite3.Connection) -> None:
+    """Create the verified-email and OAuth identity stores.
+
+    ``users.email`` remains editable profile data.  Authentication code must use
+    ``user_auth_emails.email_normalized`` for verified email login and
+    ``oauth_identities(provider, provider_subject)`` for federated identities.
+    """
+
+    statements = (
+        """
+        CREATE TABLE IF NOT EXISTS user_auth_emails (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          email_normalized TEXT NOT NULL COLLATE NOCASE,
+          email_original TEXT NOT NULL DEFAULT '',
+          verified_at INTEGER NOT NULL,
+          is_primary INTEGER NOT NULL DEFAULT 1 CHECK(is_primary IN (0, 1)),
+          login_enabled INTEGER NOT NULL DEFAULT 1 CHECK(login_enabled IN (0, 1)),
+          source TEXT NOT NULL DEFAULT 'email_registration',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(email_normalized),
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS email_verification_challenges (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER,
+          email_normalized TEXT NOT NULL COLLATE NOCASE,
+          purpose TEXT NOT NULL CHECK(
+            purpose IN ('registration', 'password_setup', 'email_binding')
+          ),
+          code_digest TEXT NOT NULL,
+          send_status TEXT NOT NULL DEFAULT 'pending' CHECK(
+            send_status IN ('pending', 'sent', 'failed')
+          ),
+          sent_at INTEGER NOT NULL DEFAULT 0,
+          resend_available_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL,
+          attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+          max_attempts INTEGER NOT NULL DEFAULT 5 CHECK(max_attempts > 0),
+          consumed_at INTEGER NOT NULL DEFAULT 0,
+          invalidated_at INTEGER NOT NULL DEFAULT 0,
+          request_ip TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS oauth_identities (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          provider TEXT NOT NULL,
+          provider_subject TEXT NOT NULL,
+          email_normalized TEXT NOT NULL DEFAULT '' COLLATE NOCASE,
+          email_verified INTEGER NOT NULL DEFAULT 0 CHECK(email_verified IN (0, 1)),
+          profile_json TEXT NOT NULL DEFAULT '{}',
+          login_enabled INTEGER NOT NULL DEFAULT 1 CHECK(login_enabled IN (0, 1)),
+          last_login_at INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(provider, provider_subject),
+          UNIQUE(user_id, provider),
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS oauth_authorization_flows (
+          state_digest TEXT PRIMARY KEY,
+          provider TEXT NOT NULL,
+          nonce_digest TEXT NOT NULL,
+          flow_token_digest TEXT NOT NULL DEFAULT '',
+          onboarding_token_digest TEXT NOT NULL DEFAULT '',
+          return_path TEXT NOT NULL DEFAULT '/',
+          context_json TEXT NOT NULL DEFAULT '{}',
+          request_ip TEXT NOT NULL DEFAULT '',
+          user_id INTEGER,
+          expires_at INTEGER NOT NULL,
+          consumed_at INTEGER NOT NULL DEFAULT 0,
+          onboarding_expires_at INTEGER NOT NULL DEFAULT 0,
+          completed_at INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """,
+    )
+    for statement in statements:
+        conn.execute(statement)
+
+    oauth_flow_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(oauth_authorization_flows)").fetchall()
+    }
+    for column, definition in {
+        "flow_token_digest": "TEXT NOT NULL DEFAULT ''",
+        "onboarding_token_digest": "TEXT NOT NULL DEFAULT ''",
+        "onboarding_expires_at": "INTEGER NOT NULL DEFAULT 0",
+        "completed_at": "INTEGER NOT NULL DEFAULT 0",
+    }.items():
+        if column not in oauth_flow_columns:
+            conn.execute(
+                f"ALTER TABLE oauth_authorization_flows ADD COLUMN {column} {definition}"
+            )
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_auth_emails_user "
+        "ON user_auth_emails(user_id, login_enabled)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_auth_emails_primary "
+        "ON user_auth_emails(user_id) WHERE is_primary = 1"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_email_challenges_email "
+        "ON email_verification_challenges(email_normalized, purpose, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_email_challenges_ip "
+        "ON email_verification_challenges(request_ip, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_email_challenges_expiry "
+        "ON email_verification_challenges(expires_at, consumed_at, invalidated_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_oauth_identities_user "
+        "ON oauth_identities(user_id, login_enabled)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_oauth_flows_expiry "
+        "ON oauth_authorization_flows(expires_at, consumed_at)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_flows_flow_token "
+        "ON oauth_authorization_flows(flow_token_digest) WHERE flow_token_digest != ''"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_flows_onboarding_token "
+        "ON oauth_authorization_flows(onboarding_token_digest) "
+        "WHERE onboarding_token_digest != ''"
+    )
+
+
 def init_db() -> None:
     os.makedirs(os.path.dirname(get_db_path()), exist_ok=True)
     with db() as conn:
@@ -449,6 +594,9 @@ def init_db() -> None:
               approved_at INTEGER NOT NULL DEFAULT 0,
               approved_by INTEGER NOT NULL DEFAULT 0,
               last_login_at INTEGER NOT NULL DEFAULT 0,
+              password_login_enabled INTEGER NOT NULL DEFAULT 1
+                CHECK(password_login_enabled IN (0, 1)),
+              last_login_method TEXT NOT NULL DEFAULT '',
               must_change_password INTEGER NOT NULL DEFAULT 0,
               password_expires_at INTEGER NOT NULL DEFAULT 0,
               deleted_at INTEGER NOT NULL DEFAULT 0,
@@ -812,6 +960,7 @@ def init_db() -> None:
             )
             """
         )
+        _ensure_auth_identity_schema(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS user_notifications (
@@ -932,6 +1081,10 @@ def init_db() -> None:
             "approved_at": "INTEGER NOT NULL DEFAULT 0",
             "approved_by": "INTEGER NOT NULL DEFAULT 0",
             "last_login_at": "INTEGER NOT NULL DEFAULT 0",
+            "password_login_enabled": (
+                "INTEGER NOT NULL DEFAULT 1 CHECK(password_login_enabled IN (0, 1))"
+            ),
+            "last_login_method": "TEXT NOT NULL DEFAULT ''",
             "must_change_password": "INTEGER NOT NULL DEFAULT 0",
             "password_expires_at": "INTEGER NOT NULL DEFAULT 0",
             "deleted_at": "INTEGER NOT NULL DEFAULT 0",

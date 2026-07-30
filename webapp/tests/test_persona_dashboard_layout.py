@@ -2506,7 +2506,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             'class="persona-menu-tab persona-menu-tab--action persona-menu-tab--danger" data-persona-delete',
             self.console_script,
         )
-        self.assertIn('data-persona-delete-group="${esc(group.id)}"><span>删除</span></button>', self.console_script)
+        self.assertIn(
+            'data-persona-delete-group="${esc(group.id)}"><span class="persona-menu-icon" aria-hidden="true">${renderTrashIcon()}</span><span>删除</span></button>',
+            self.console_script,
+        )
         for action in (
             'data-persona-delete-memory="${esc(row.id)}">删除</button>',
             'data-persona-delete-preset-id="${esc(presetId)}">删除</button>',

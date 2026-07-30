@@ -680,6 +680,8 @@
           <label><span class="sr-only">风险等级</span><select id="adminUserRisk"><option value="">全部风险</option><option value="low">低风险</option><option value="medium">中风险</option><option value="high">高风险</option><option value="critical">严重风险</option></select></label>
           <label class="admin-customer-filter"><span class="sr-only">订阅状态</span><select id="adminUserSubscription"><option value="">全部订阅</option><option value="active">有效订阅</option><option value="expiring">即将到期</option><option value="expired">已到期</option><option value="legacy">Legacy</option></select></label>
           <label><span class="sr-only">在线状态</span><select id="adminUserOnline"><option value="">全部会话</option><option value="online">在线</option><option value="offline">离线</option></select></label>
+          <label class="admin-customer-filter"><span class="sr-only">认证方式</span><select id="adminUserAuthMethod"><option value="">全部认证方式</option><option value="password">密码登录</option><option value="google">Google 登录</option></select></label>
+          <label class="admin-customer-filter"><span class="sr-only">邮箱状态</span><select id="adminUserEmailStatus"><option value="">全部邮箱状态</option><option value="verified">邮箱已验证</option><option value="unverified">邮箱未验证</option><option value="missing">未绑定邮箱</option></select></label>
           <button type="submit" class="primary">筛选</button>
           <button id="btnResetUserFilters" type="button" class="ghost">重置</button>
         </form>
@@ -742,6 +744,7 @@
                 <th scope="col">姓名 / 公司</th>
                 <th scope="col">角色</th>
                 <th scope="col">状态</th>
+                <th scope="col">认证</th>
                 <th scope="col" class="admin-stat-column">人设</th>
                 <th scope="col" class="admin-stat-column">创建推文</th>
                 <th scope="col" class="admin-stat-column">已发推文</th>
@@ -1664,6 +1667,12 @@
 
           <div class="admin-config-card admin-runtime-panel admin-runtime-card-compact">
             <div class="admin-config-card-title">登录与 Cookie</div>
+            <div class="small">控制公开注册和登录入口；关闭后不影响管理员后台登录。</div>
+            <label>邮箱验证码注册</label>
+            <label class="switch"><input id="rtEmailRegistrationEnabled" type="checkbox"> 允许新用户注册</label>
+            <label>Google 授权登录</label>
+            <label class="switch"><input id="rtGoogleLoginEnabled" type="checkbox"> 允许 Google 登录</label>
+            <div id="rtGoogleAuthStatus" class="small admin-runtime-auth-status" role="status" aria-live="polite"></div>
             <label>记住登录</label>
             <label class="switch"><input id="rtRememberLoginEnabled" type="checkbox"> 启用</label>
             <label>登录页默认选择</label>
@@ -1807,6 +1816,37 @@
       </div>
       <div class="modal-body">
         <div class="admin-user-detail-grid" id="userDetailBody"></div>
+        <section class="admin-user-auth-section" id="userAuthSection" aria-labelledby="userAuthTitle">
+          <div class="admin-user-auth-heading">
+            <div>
+              <strong id="userAuthTitle">认证方式与登录控制</strong>
+              <span>停用单一登录方式不会删除账号；至少保留一种可用方式。</span>
+            </div>
+            <button id="btnSaveUserAuthMethods" type="button" class="primary">保存认证设置</button>
+          </div>
+          <div class="admin-user-auth-email">
+            <div>
+              <span>已验证登录邮箱</span>
+              <strong id="userVerifiedEmail">-</strong>
+              <small id="userVerifiedEmailMeta">未验证</small>
+            </div>
+            <span id="userEmailVerificationBadge" class="admin-user-badge admin-user-badge-disabled">未验证</span>
+          </div>
+          <div class="admin-user-auth-methods">
+            <label class="admin-user-auth-method" for="userPasswordLoginEnabled">
+              <input id="userPasswordLoginEnabled" type="checkbox">
+              <span><strong>密码登录</strong><small id="userPasswordAuthHint">邮箱或用户名 + 密码</small></span>
+            </label>
+            <label class="admin-user-auth-method" for="userGoogleLoginEnabled">
+              <input id="userGoogleLoginEnabled" type="checkbox">
+              <span><strong>Google 登录</strong><small id="userGoogleAuthHint">尚未绑定 Google 身份</small></span>
+            </label>
+          </div>
+          <div class="admin-user-auth-footer">
+            <div id="userAuthMethodMsg" class="msg" role="status" aria-live="polite" aria-atomic="true"></div>
+            <button id="btnUnlinkUserGoogle" type="button" class="danger">解绑 Google</button>
+          </div>
+        </section>
         <section class="admin-user-password-section" id="userPasswordSection" aria-labelledby="userPasswordTitle">
           <div class="admin-user-password-heading">
             <div>

@@ -24,7 +24,6 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         markers = (
             "renderPersonaProfileIdentity(persona, profile)",
             "renderPersonaDataPanel(persona)",
-            "renderPersonaImagePanel(persona)",
             "renderPersonaAccountPanelV2(persona, account, profile, \"binding\")",
         )
         positions = [overview.index(marker) for marker in markers]
@@ -61,9 +60,7 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         self.assertIn("showConfirm = true", source)
         self.assertGreaterEqual(source.count("showConfirm: false"), 2)
         self.assertIn("persona-profile-overview-layout", source)
-        self.assertIn("persona-profile-intro-actions", source)
         self.assertIn("persona-profile-data-panel", source)
-        self.assertIn("persona-profile-image-settings-panel", source)
         self.assertIn("persona-profile-account-panel", source)
         self.assertIn("persona-hot-summary-card--profile", source)
         self.assertIn("persona-hot-summary-card--hot", source)

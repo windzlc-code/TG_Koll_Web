@@ -251,7 +251,7 @@
         <h2 id="loginTitle">帳號登入</h2>
         <p class="auth-copy">登入後留在方案頁提交線上申請；申請送出後先等待管理員批准，不會立即開通或增加算力。</p>
         <form id="homeLoginForm" novalidate>
-          <label class="field" for="loginUsername"><span>帳號</span><input id="loginUsername" name="username" autocomplete="username" required /></label>
+          <label class="field" for="loginUsername"><span>電子信箱或使用者名稱</span><input id="loginUsername" name="username" autocomplete="username" placeholder="name@example.com 或使用者名稱" required /></label>
           <label class="field" for="loginPassword">
             <span>密碼</span>
             <span class="auth-password-field">
@@ -267,6 +267,8 @@
           </label>
           <label class="auth-remember" data-login-remember><input name="remember_me" type="checkbox" /> <span>記住帳號與登入狀態</span></label>
           <button class="submit-button" type="submit"><span>登入並繼續</span><span aria-hidden="true">→</span></button>
+          <div class="auth-provider-divider" data-google-login-container><span>或</span></div>
+          <button class="auth-google-button" type="button" data-google-login aria-label="使用 Google 帳號登入"><img class="auth-google-mark" src="/assets/opc/google-g-gradient.svg" alt="" width="20" height="20" aria-hidden="true" /><span>使用 Google 帳號登入</span></button>
           <p class="form-status" id="loginStatus" role="status" aria-live="polite"></p>
           <button class="auth-takeover-button" type="button" data-login-takeover hidden>強制登入此帳號</button>
         </form>

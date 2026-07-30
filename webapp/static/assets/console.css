@@ -5856,6 +5856,7 @@ body.upload-media-sorting {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 6px;
   width: 100%;
   max-width: 100%;
@@ -6198,24 +6199,41 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-card-edit {
-  width: 36px;
-  min-width: 36px;
-  max-width: 36px;
-  min-height: 32px;
+  display: inline-grid;
+  width: 28px;
+  min-width: 28px;
+  max-width: 28px;
+  min-height: 28px;
+  place-items: center;
   align-self: center;
   padding: 0;
   border: 0;
+  border-radius: 50%;
   background: transparent;
   color: var(--ink);
   cursor: pointer;
-  font-size: 20px;
-  font-weight: 900;
-  line-height: 1;
+  line-height: 0;
+  transform-origin: center;
+  transition: color var(--motion-fast), transform 150ms cubic-bezier(.22, .8, .24, 1);
+}
+
+.persona-card-edit .ui-more-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  stroke: none;
 }
 
 .persona-card-edit:hover,
 .persona-card-edit:focus-visible {
+  background: transparent;
   color: var(--accent);
+}
+
+.persona-card-edit:active {
+  transform: scale(.86);
+  transition-duration: 70ms;
 }
 
 .persona-card-menu {
@@ -6236,19 +6254,6 @@ body.persona-touch-dragging .persona-list-card:active {
   animation: personaMenuReveal 160ms cubic-bezier(.22, .8, .24, 1) both;
 }
 
-.persona-card-menu::before {
-  content: "";
-  position: absolute;
-  top: -7px;
-  right: 16px;
-  width: 12px;
-  height: 12px;
-  border-left: 1px solid var(--line);
-  border-top: 1px solid var(--line);
-  background: var(--panel-solid);
-  transform: rotate(45deg);
-}
-
 .persona-card-menu--group {
   width: min(228px, calc(100vw - 36px));
 }
@@ -6262,18 +6267,18 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-menu-tab {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  justify-items: center;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  justify-items: start;
   align-items: center;
-  gap: 0;
+  gap: 8px;
   width: 100%;
-  min-height: 34px;
-  padding: 6px 22px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel-solid);
+  min-height: 38px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
   color: var(--ink);
-  text-align: center;
+  text-align: left;
 }
 
 .persona-menu-tab::after {
@@ -6287,7 +6292,6 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-menu-tab:hover,
 .persona-menu-tab:focus-visible {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
-  border-color: var(--hover-border);
 }
 
 .persona-menu-tab:disabled {
@@ -6391,10 +6395,10 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-card-submenu {
   position: fixed;
   display: grid;
-  gap: 6px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  gap: 0;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, var(--accent) 18%);
+  border-radius: 16px;
   background: var(--panel-solid);
   opacity: 1;
 }
@@ -6404,9 +6408,9 @@ body.persona-touch-dragging .persona-list-card:active {
   right: auto !important;
   left: var(--persona-menu-left, 0) !important;
   z-index: 5200;
-  width: var(--persona-menu-width, 180px) !important;
-  box-shadow: 0 16px 36px rgba(15, 23, 42, .22);
-  animation: personaMenuFade 120ms ease-out both !important;
+  width: var(--persona-menu-width, 168px) !important;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, .14);
+  animation: personaMenuReveal 160ms cubic-bezier(.22, .8, .24, 1) both !important;
 }
 
 .persona-card-menu--group {
@@ -6423,8 +6427,8 @@ body.persona-touch-dragging .persona-list-card:active {
   right: auto !important;
   left: var(--persona-submenu-left, 0) !important;
   z-index: 5210;
-  width: var(--persona-submenu-width, 190px) !important;
-  box-shadow: 0 16px 36px rgba(15, 23, 42, .22);
+  width: var(--persona-submenu-width, 168px) !important;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, .14);
   transform-origin: top left;
   visibility: hidden;
   opacity: 0;
@@ -6469,9 +6473,17 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-menu-tab--action {
-  padding-right: 22px;
+  padding-inline: 10px;
 }
 
+.persona-menu-tab--danger {
+  margin-top: 5px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: 0 0 9px 9px;
+}
+
+.persona-menu-tab--danger,
 .persona-menu-tab--danger span,
 .persona-menu-tab--danger small {
   color: var(--danger);
@@ -8883,6 +8895,26 @@ body.persona-touch-dragging .persona-list-card:active {
   background: var(--accent);
   color: var(--accent-contrast, #fff);
   font-weight: 850;
+}
+
+.persona-menu-tab .persona-menu-icon {
+  display: inline-grid;
+  grid-column: 1;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  color: currentColor;
+}
+
+.persona-menu-tab .persona-menu-icon svg {
+  display: block;
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
 }
 
 .persona-profile-editor-launch:hover,

@@ -462,7 +462,7 @@
   function notificationMenuMarkup() {
     return `<div class="site-notification-menu" data-site-notification-menu>
       <button class="site-icon-button site-notification-trigger" type="button" aria-controls="siteNotificationPopover" aria-haspopup="dialog" aria-expanded="false" data-site-notification-trigger>
-        ${notificationIcon()}<span class="site-notification-dot" data-site-notification-dot hidden></span>
+        ${notificationIcon()}<span class="site-notification-badge" data-site-notification-badge hidden aria-hidden="true"></span>
       </button>
       <aside id="siteNotificationPopover" class="site-notification-popover" data-site-notification-popover hidden role="dialog">
         <div class="site-notification-head">
@@ -553,7 +553,7 @@
           <span class="site-account-identity">
             <strong data-site-account-name></strong>
             <span data-site-account-role></span>
-            <span class="site-account-id-line"><span data-site-copy="accountId"></span><strong data-site-account-id>-</strong></span>
+            <span class="site-account-id-line"><strong data-site-copy="accountId"></strong><strong data-site-account-id>-</strong></span>
           </span>
           <button class="site-account-close" type="button" aria-label="" title="" data-site-account-close>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
@@ -961,7 +961,7 @@
     document.querySelectorAll("[data-site-account-name]").forEach((node) => node.textContent = username);
     document.querySelectorAll("[data-site-account-role]").forEach((node) => node.textContent = accountRoleLabel(currentAccount, labels));
     document.querySelectorAll("[data-site-account-id]").forEach((node) => {
-      node.textContent = currentAccount?.id ? `#${currentAccount.id}` : (identityLoading ? "…" : "-");
+      node.textContent = currentAccount?.id ? String(currentAccount.id) : (identityLoading ? "…" : "-");
     });
     document.querySelectorAll("[data-site-account-menu]").forEach((node) => {
       node.setAttribute("aria-busy", identityLoading ? "true" : "false");
@@ -1183,9 +1183,9 @@
         ? `${labels.notificationCenter}，${totalUnread} 条${labels.notificationUnread}`
         : labels.notificationCenter);
     });
-    document.querySelectorAll("[data-site-notification-dot]").forEach((dot) => {
-      dot.hidden = totalUnread <= 0;
-      dot.setAttribute("aria-label", totalUnread ? `${totalUnread} ${labels.notificationUnread}` : "");
+    document.querySelectorAll("[data-site-notification-badge]").forEach((badge) => {
+      badge.textContent = totalUnread > 99 ? "99+" : String(totalUnread);
+      badge.hidden = totalUnread <= 0;
     });
     document.querySelectorAll("[data-site-notification-close]").forEach((button) => {
       button.title = labels.notificationClose;

@@ -3596,15 +3596,15 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
             "browse_only": "只浏览",
             "like_comment": "点赞留言",
             "warmup_custom": "自定义",
-            "tg_default": "随机点赞",
+            "tg_default": "低频点赞",
         }.get(strategy_id)
         if not short_strategy:
             if "只浏览" in strategy_label:
                 short_strategy = "只浏览"
             elif "留言" in strategy_label or "评论" in strategy_label:
                 short_strategy = "点赞留言"
-            elif "随机点赞" in strategy_label:
-                short_strategy = "随机点赞"
+            elif "低频点赞" in strategy_label or "随机点赞" in strategy_label:
+                short_strategy = "低频点赞"
             else:
                 short_strategy = _live_browser_summary_text(strategy_label or "养号", limit=8)
         target = f"养号｜{short_strategy}｜浏览{browse_limit}·赞{like_limit}·评{max_comments}"
@@ -9181,22 +9181,22 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
             next_payload["max_comments"] = 0
             next_payload["comment_chance"] = 0
         elif strategy_id == "comment_only":
-            next_payload["strategy_label"] = "评论养号：只留言"
+            next_payload["strategy_label"] = "评论养号：浏览 + 人设留言"
             next_payload["browse_limit"] = 80
             next_payload["scroll_times"] = 80
             next_payload["like_limit"] = 0
             next_payload["like_chance"] = 0
-            next_payload["max_comments"] = 8
+            next_payload["max_comments"] = 4
             next_payload["comment_chance"] = 100
             next_payload["require_persona_relevance"] = True
             next_payload["min_required_comments"] = 1
         elif strategy_id == "like_comment":
-            next_payload["strategy_label"] = "互动养号：点赞/留言"
+            next_payload["strategy_label"] = "互动养号：低频点赞 + 人设留言"
             next_payload["browse_limit"] = 80
             next_payload["scroll_times"] = 80
-            next_payload["like_limit"] = 16
+            next_payload["like_limit"] = 7
             next_payload["like_chance"] = 100
-            next_payload["max_comments"] = 8
+            next_payload["max_comments"] = 4
             next_payload["comment_chance"] = 100
             next_payload["require_persona_relevance"] = True
             next_payload["min_required_likes"] = 0
@@ -9209,10 +9209,10 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
             next_payload.setdefault("like_limit", 0)
             next_payload.setdefault("max_comments", 0)
         else:
-            next_payload["strategy_label"] = "默认养号：滑动 + 随机点赞"
+            next_payload["strategy_label"] = "默认养号：浏览 + 低频点赞"
             next_payload["browse_limit"] = 80
             next_payload["scroll_times"] = 80
-            next_payload["like_limit"] = 16
+            next_payload["like_limit"] = 8
             next_payload["like_chance"] = 100
             next_payload["max_comments"] = 0
             next_payload["comment_chance"] = 0
@@ -9222,16 +9222,16 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
             next_payload.setdefault("session_minutes", "7-10")
             next_payload.setdefault("interaction_every_min_posts", 2)
             next_payload.setdefault("interaction_every_max_posts", 3)
-            next_payload.setdefault("search_chance", 0)
+            next_payload.setdefault("search_chance", 16)
             next_payload.setdefault("risk_managed", False)
-            next_payload.setdefault("stop_on_risk_limit", True)
+            next_payload["stop_on_risk_limit"] = True
         else:
             next_payload.pop("session_seconds", None)
             next_payload.pop("duration_seconds", None)
             next_payload["session_minutes"] = "7-10"
             next_payload["interaction_every_min_posts"] = 2
             next_payload["interaction_every_max_posts"] = 3
-            next_payload["search_chance"] = 16 if task_platform == "threads" else 0
+            next_payload["search_chance"] = 16
             next_payload["risk_managed"] = False
             next_payload["stop_on_risk_limit"] = True
         next_payload.setdefault("comment_chance", 0)
@@ -9240,7 +9240,7 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
         except (TypeError, ValueError):
             next_payload["like_limit"] = 0
         try:
-            next_payload["max_comments"] = max(0, min(8, int(next_payload.get("max_comments") or 0)))
+            next_payload["max_comments"] = max(0, min(6, int(next_payload.get("max_comments") or 0)))
         except (TypeError, ValueError):
             next_payload["max_comments"] = 0
         try:

@@ -11,6 +11,9 @@ uvicorn>=0.30.0
 websockets>=16.0
 python-multipart>=0.0.9
 python-dotenv>=1.0.0
+email-validator>=2.2.0,<3.0
+google-auth>=2.40.0,<3.0
+google-auth-oauthlib>=1.2.2,<2.0
 cryptography==48.0.0
 playwright==1.58.0
 camoufox[geoip]>=0.4.11

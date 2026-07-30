@@ -24,7 +24,7 @@ MAX_AUTO_TOTP_ATTEMPTS = 2
 AUTO_TOTP_RESULT_WAIT_SECONDS = 20
 AUTO_TOTP_MIN_SUBMIT_REMAINING_SECONDS = 3
 MAX_WARMUP_LIKES = 16
-MAX_WARMUP_COMMENTS = 8
+MAX_WARMUP_COMMENTS = 6
 SUPPORTED_TASK_TYPES = {
     "check_login",
     "open_login",
@@ -2873,6 +2873,94 @@ def _post_instagram_warmup_comment(
     return False
 
 
+def _is_instagram_post_url(value: Any) -> bool:
+    url = str(value or "").lower()
+    return any(marker in url for marker in ("/p/", "/reel/", "/tv/"))
+
+
+def _return_instagram_feed_after_post(
+    page,
+    logger: AutomationLogger,
+    *,
+    cancel_event: Any | None = None,
+) -> None:
+    for _ in range(2):
+        if not _is_instagram_post_url(page.url):
+            break
+        with contextlib.suppress(Exception):
+            page.keyboard.press("Escape")
+        _wait_for_cancellation(random.uniform(0.8, 1.8), cancel_event)
+        if not _is_instagram_post_url(page.url):
+            break
+        try:
+            page.go_back(wait_until="domcontentloaded", timeout=12000)
+        except Exception:
+            with contextlib.suppress(Exception):
+                page.keyboard.press("Alt+Left")
+        _wait_for_cancellation(random.uniform(2.5, 5.5), cancel_event)
+    final_url = str(page.url or "")
+    if _is_instagram_post_url(final_url):
+        _goto(page, INSTAGRAM_HOME, logger, "instagram_return_feed")
+        final_url = str(page.url or "")
+    logger.log("info", "instagram_return_feed", "已从打开的 Instagram 帖子返回信息流。", {"url": final_url})
+
+
+def _open_random_instagram_post(
+    page,
+    logger: AutomationLogger,
+    *,
+    cancel_event: Any | None = None,
+) -> bool:
+    candidates: list[Any] = []
+    for selector in ('a[href*="/p/"]', 'a[href*="/reel/"]', 'a[href*="/tv/"]'):
+        with contextlib.suppress(Exception):
+            group = page.locator(selector)
+            candidates.extend(group.nth(index) for index in range(min(int(group.count()), 48)))
+    random.shuffle(candidates)
+    for link in candidates:
+        try:
+            if not link.is_visible(timeout=800):
+                continue
+            box = link.bounding_box()
+            if not box or box["width"] < 20 or box["height"] < 12 or box["y"] < 80:
+                continue
+            href = str(link.get_attribute("href") or "")
+            if not _is_instagram_post_url(href):
+                continue
+            before_url = str(page.url or "")
+            _human_click(page, link, logger, "instagram_open_post")
+            _wait_for_cancellation(random.uniform(2.0, 4.0), cancel_event)
+            after_url = str(page.url or "")
+            if after_url == before_url and not _is_instagram_post_url(after_url):
+                continue
+            logger.log("info", "instagram_open_post", "已打开一条 Instagram 帖子进行浏览。", {"url": after_url})
+            _wait_for_cancellation(random.uniform(6.0, 12.0), cancel_event)
+            if random.random() < 0.55:
+                detail_scroll = _slow_human_scroll(page)
+                logger.log("debug", "instagram_read_post", "已在打开的 Instagram 帖子内浏览。", detail_scroll)
+                _wait_for_cancellation(random.uniform(4.0, 9.0), cancel_event)
+            _return_instagram_feed_after_post(page, logger, cancel_event=cancel_event)
+            return True
+        except Exception:
+            _raise_if_cancelled(cancel_event)
+            continue
+    return False
+
+
+def _open_random_platform_post(
+    page,
+    logger: AutomationLogger,
+    *,
+    platform: str,
+    cancel_event: Any | None = None,
+) -> bool:
+    if platform == "threads":
+        return _open_random_threads_post(page, logger, cancel_event=cancel_event)
+    if platform == "instagram":
+        return _open_random_instagram_post(page, logger, cancel_event=cancel_event)
+    raise UnsupportedActionError(f"Unsupported warmup platform: {platform}")
+
+
 def _run_instagram_warmup(
     page,
     task,
@@ -3088,6 +3176,142 @@ def _post_threads_warmup_comment(
     return False
 
 
+def _warmup_interest_search_url(platform: str, topic: str) -> str:
+    query = quote_plus(" ".join(str(topic or "").split()))
+    if platform == "threads":
+        return f"https://www.threads.net/search?q={query}"
+    if platform == "instagram":
+        return f"https://www.instagram.com/explore/search/keyword/?q={query}"
+    raise UnsupportedActionError(f"Unsupported warmup platform: {platform}")
+
+
+_WARMUP_RELEVANCE_IGNORED_TERMS = {
+    "人设", "人格", "风格", "語氣", "语气", "自然", "真实", "真實",
+    "中文", "简体中文", "簡體中文", "繁体中文", "繁體中文", "内容", "內容",
+    "分享", "日常", "生活", "资深", "資深", "专业", "專業", "关注", "關注",
+    "博主", "达人", "達人", "老师", "老師",
+}
+
+
+def _warmup_persona_keyword_candidates(payload: dict[str, Any], limit: int = 12) -> list[str]:
+    sources: list[Any] = []
+    topics = payload.get("persona_topics")
+    if isinstance(topics, list):
+        sources.extend(topics)
+    sources.extend((payload.get("persona_context"), payload.get("persona_name")))
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        raw = " ".join(str(value or "").split())[:80]
+        normalized = _normalize_warmup_text(raw).replace(" ", "")
+        if (
+            len(normalized) < 2
+            or len(normalized) > 16
+            or normalized in _WARMUP_RELEVANCE_IGNORED_TERMS
+            or _is_warmup_test_content(raw)
+            or normalized in seen
+        ):
+            return
+        seen.add(normalized)
+        candidates.append(raw)
+
+    for source in sources:
+        text = " ".join(str(source or "").split())
+        if not text:
+            continue
+        for piece in re.split(r"[，,。.!！？?、；;：:/|｜\n]+", text):
+            add(piece)
+            for marker in ("关注", "關注", "专注", "專注", "擅长", "擅長", "围绕", "圍繞"):
+                if marker in piece:
+                    add(piece.split(marker, 1)[1])
+        for match in re.findall(r"[\u3400-\u9fff]{2,12}", text):
+            add(match)
+            for size in range(2, min(4, len(match)) + 1):
+                for index in range(0, len(match) - size + 1):
+                    add(match[index:index + size])
+        if len(candidates) >= limit:
+            break
+    return candidates[:limit]
+
+
+def _score_warmup_post_relevance(payload: dict[str, Any], target_text: Any) -> dict[str, Any]:
+    target = _normalize_warmup_text(target_text).replace(" ", "")
+    keywords = _warmup_persona_keyword_candidates(payload)
+    matched: list[str] = []
+    score = 0
+    if target and not _is_warmup_test_content(target_text):
+        for keyword in keywords:
+            normalized = _normalize_warmup_text(keyword).replace(" ", "")
+            if normalized and normalized in target:
+                matched.append(keyword)
+                score += 5 if len(normalized) >= 4 else 3
+    return {
+        "relevant": score >= 3,
+        "score": score,
+        "matched": matched[:8],
+        "keywords": keywords,
+    }
+
+
+def _ensure_warmup_relevant_surface(
+    page,
+    payload: dict[str, Any],
+    logger: AutomationLogger,
+    *,
+    platform: str,
+) -> dict[str, Any] | None:
+    """Locate a persona-relevant post, searching the platform only after feed probes miss."""
+    require_relevance = bool(payload.get("require_persona_relevance", True))
+    keywords = _warmup_persona_keyword_candidates(payload)
+    if not require_relevance or not keywords:
+        return _current_warmup_post_context(page, platform)
+
+    stage = f"{platform}_warmup_relevance"
+
+    def inspect(label: str) -> dict[str, Any] | None:
+        context = _current_warmup_post_context(page, platform)
+        relevance = _score_warmup_post_relevance(payload, context.get("text") or "")
+        if relevance["relevant"]:
+            context["relevance"] = relevance
+            logger.log(
+                "info",
+                stage,
+                "已定位人设相关内容。",
+                {"surface": label, "matched": relevance["matched"], "score": relevance["score"]},
+            )
+            return context
+        logger.log(
+            "debug",
+            stage,
+            "当前内容与人设不匹配，继续寻找相关内容。",
+            {"surface": label, "preview": str(context.get("text") or "")[:80], "keywords": keywords[:5]},
+        )
+        return None
+
+    for probe in range(2):
+        context = inspect(f"feed_probe_{probe + 1}")
+        if context:
+            return context
+        if probe == 0:
+            _slow_human_scroll(page)
+            _sleep_between(0.8, 1.6)
+
+    for keyword in random.sample(keywords, k=min(3, len(keywords))):
+        logger.log("info", stage, "推荐流未命中人设内容，切换到人设关键词搜索。", {"keyword": keyword})
+        _goto(page, _warmup_interest_search_url(platform, keyword), logger, f"{stage}_search")
+        for scan in range(2):
+            context = inspect(f"search:{keyword}:{scan + 1}")
+            if context:
+                return context
+            if scan == 0:
+                _slow_human_scroll(page)
+                _sleep_between(0.8, 1.6)
+
+    logger.log("warn", stage, "未找到与人设相关的内容，停止本次养号以避免无关互动。", {"keywords": keywords[:5]})
+    return None
+
+
 def _run_platform_warmup(
     page,
     task,
@@ -3151,23 +3375,7 @@ def _run_platform_warmup(
         max_comments=max_comments,
     )
 
-    persona_topics = [
-        " ".join(str(item or "").split())[:60]
-        for item in (payload.get("persona_topics") or [])
-        if str(item or "").strip()
-    ]
-    if (
-        clean_platform == "threads"
-        and persona_topics
-        and random.randint(1, 100) <= search_chance
-    ):
-        search_topic = random.choice(persona_topics)
-        _goto(
-            page,
-            f"https://www.threads.net/search?q={quote_plus(search_topic)}",
-            logger,
-            "threads_warmup_interest_search",
-        )
+    persona_keywords = _warmup_persona_keyword_candidates(payload)
 
     logger.log(
         "info",
@@ -3184,8 +3392,18 @@ def _run_platform_warmup(
             "comment_chance": comment_chance,
             "search_chance": search_chance,
             "persona_name": payload.get("persona_name") or "",
+            "persona_keywords": persona_keywords[:8],
         },
     )
+
+    initial_surface = _ensure_warmup_relevant_surface(
+        page,
+        payload,
+        logger,
+        platform=clean_platform,
+    )
+    if bool(payload.get("require_persona_relevance", True)) and persona_keywords and not initial_surface:
+        raise RuntimeError("当前推荐流与人设关键词均未找到相关内容，已停止避免无关互动。")
 
     liked = 0
     commented = 0
@@ -3209,6 +3427,15 @@ def _run_platform_warmup(
             deadline - time.monotonic(),
         ) / max(1, session_seconds)
         interaction_due = browsed >= next_interaction_at
+        if interaction_due and (like_limit > liked or max_comments > commented):
+            relevant_surface = _ensure_warmup_relevant_surface(
+                page,
+                payload,
+                logger,
+                platform=clean_platform,
+            )
+            if bool(payload.get("require_persona_relevance", True)) and persona_keywords and not relevant_surface:
+                raise RuntimeError("当前推荐流与人设关键词均未找到相关内容，已停止避免无关互动。")
         interacted = False
         prefer_comment = (
             interaction_due
@@ -3251,17 +3478,17 @@ def _run_platform_warmup(
                     },
                 )
 
-        if clean_platform == "threads":
-            should_open_post = browsed > 0 and (
-                random.random() < 0.12
-                or (opened_posts == 0 and elapsed_ratio >= 0.3)
-            )
-            if should_open_post and _open_random_threads_post(
+        should_open_post = browsed > 0 and (
+            random.random() < 0.12
+            or (opened_posts == 0 and elapsed_ratio >= 0.3)
+        )
+        if should_open_post and _open_random_platform_post(
                 page,
                 logger,
+                platform=clean_platform,
                 cancel_event=cancel_event,
-            ):
-                opened_posts += 1
+        ):
+            opened_posts += 1
 
         should_backfill_comment = (
             commented < min_required_comments
@@ -3280,51 +3507,68 @@ def _run_platform_warmup(
         ):
             target = _current_warmup_post_context(page, clean_platform)
             target_text = str(target.get("text") or "")
-            reply_text = _pick_warmup_persona_reply(
-                payload,
-                target_text,
-                previous_replies=used_comment_texts,
-            )
-            if clean_platform == "threads":
-                posted = _post_threads_warmup_comment(
-                    page,
-                    logger,
-                    reply_text,
-                    target_root=target.get("root"),
-                )
-            else:
-                posted = _post_instagram_warmup_comment(
-                    page,
-                    logger,
-                    reply_text,
-                    target_root=target.get("root"),
-                )
-            if posted:
-                commented += 1
-                used_comment_texts.add(reply_text)
-                interacted = True
-                shot_comment = _screenshot(
-                    page,
-                    screenshot_dir,
-                    task,
-                    f"{stage}_comment_{commented}",
-                    logger,
-                )
-                if shot_comment:
-                    comment_screenshots.append(shot_comment)
-            else:
-                comment_backfills += 1
+            target_relevance = _score_warmup_post_relevance(payload, target_text)
+            if bool(payload.get("require_persona_relevance", True)) and not target_relevance["relevant"]:
                 logger.log(
-                    "warn",
-                    f"{stage}_comment_backfill",
-                    "No confirmed comment target was available; continuing.",
-                    {
-                        "attempts": comment_backfills,
-                        "commented": commented,
-                        "target": min_required_comments,
-                        "has_reply_text": bool(str(reply_text or "").strip()),
-                    },
+                    "debug",
+                    f"{stage}_comment_skip",
+                    "打开的帖子与人设不匹配，跳过留言。",
+                    {"preview": target_text[:80], "keywords": target_relevance["keywords"][:5]},
                 )
+            else:
+                reply_text = _pick_warmup_persona_reply(
+                    payload,
+                    target_text,
+                    previous_replies=used_comment_texts,
+                )
+                if not reply_text:
+                    logger.log(
+                        "debug",
+                        f"{stage}_comment_skip",
+                        "未生成符合人设的留言，跳过当前帖子。",
+                        {"preview": target_text[:80]},
+                    )
+                else:
+                    if clean_platform == "threads":
+                        posted = _post_threads_warmup_comment(
+                            page,
+                            logger,
+                            reply_text,
+                            target_root=target.get("root"),
+                        )
+                    else:
+                        posted = _post_instagram_warmup_comment(
+                            page,
+                            logger,
+                            reply_text,
+                            target_root=target.get("root"),
+                        )
+                    if posted:
+                        commented += 1
+                        used_comment_texts.add(reply_text)
+                        interacted = True
+                        shot_comment = _screenshot(
+                            page,
+                            screenshot_dir,
+                            task,
+                            f"{stage}_comment_{commented}",
+                            logger,
+                        )
+                        if shot_comment:
+                            comment_screenshots.append(shot_comment)
+                    else:
+                        comment_backfills += 1
+                        logger.log(
+                            "warn",
+                            f"{stage}_comment_backfill",
+                            "No confirmed comment target was available; continuing.",
+                            {
+                                "attempts": comment_backfills,
+                                "commented": commented,
+                                "target": min_required_comments,
+                                "has_reply_text": True,
+                            },
+                        )
 
         if interacted:
             next_interaction_at = _next_warmup_interaction_at(browsed, payload)
@@ -3696,16 +3940,9 @@ def _is_usable_generated_social_reply(value: Any) -> bool:
 
 
 def _matched_warmup_persona_topic(payload: dict[str, Any], target_text: str) -> str:
-    target = _normalize_warmup_text(target_text)
-    if not target:
-        return ""
-    topics = payload.get("persona_topics") if isinstance(payload.get("persona_topics"), list) else []
-    for raw_topic in sorted(topics, key=lambda item: len(str(item or "")), reverse=True):
-        topic = " ".join(str(raw_topic or "").split())[:30]
-        normalized = _normalize_warmup_text(topic)
-        if len(normalized) >= 2 and normalized in target and not _is_warmup_test_content(topic):
-            return topic
-    return ""
+    relevance = _score_warmup_post_relevance(payload, target_text)
+    matched = relevance.get("matched") if isinstance(relevance.get("matched"), list) else []
+    return str(matched[0] or "") if matched else ""
 
 
 def _pick_warmup_persona_reply(
@@ -3714,6 +3951,8 @@ def _pick_warmup_persona_reply(
     *,
     previous_replies: Iterable[str] = (),
 ) -> str:
+    if _is_warmup_test_content(target_text):
+        return ""
     topic = _matched_warmup_persona_topic(payload, target_text)
     require_relevance = bool(payload.get("require_persona_relevance", True))
     if require_relevance and not topic:

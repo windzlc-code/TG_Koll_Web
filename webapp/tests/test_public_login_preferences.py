@@ -73,6 +73,10 @@ class PublicLoginPreferenceTests(unittest.TestCase):
         self.assertEqual(
             policy.json(),
             {
+                "email_registration_enabled": False,
+                "google_login_enabled": False,
+                "email_delivery_available": False,
+                "smtp_available": False,
                 "remember_login_enabled": True,
                 "remember_login_default": False,
                 "remember_login_days": 30,
@@ -112,6 +116,10 @@ class PublicLoginPreferenceTests(unittest.TestCase):
         self.assertEqual(
             policy.json(),
             {
+                "email_registration_enabled": False,
+                "google_login_enabled": False,
+                "email_delivery_available": False,
+                "smtp_available": False,
                 "remember_login_enabled": True,
                 "remember_login_default": True,
                 "remember_login_days": 7,
@@ -627,9 +635,10 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('id="accountRegistrationForm"', self.script)
         self.assertIn('data-auth-view="register"', self.script)
         self.assertIn('event.target.closest("[data-open-register]")', self.script)
-        self.assertIn('api("/api/auth/apply"', self.script)
-        self.assertIn("註冊遊客帳號", self.script)
-        self.assertIn("管理員審核通過後", self.script)
+        self.assertIn('api("/api/auth/email-verification/send"', self.script)
+        self.assertIn('api("/api/auth/register"', self.script)
+        self.assertIn("註冊 Vecto 帳號", self.script)
+        self.assertIn("驗證並建立帳號", self.script)
         self.assertNotIn("#contact", self.site_nav_script)
         self.assertIn('login: "登录"', self.site_nav_script)
         self.assertIn('login: "登入"', self.site_nav_script)

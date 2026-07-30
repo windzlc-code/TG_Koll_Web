@@ -5605,17 +5605,17 @@ var PERSONA_THREADS_STRATEGIES = {
     { id: "hot_custom", label: "自定义热点回复", payload: { strategy_id: "hot_custom", max_posts: 5, max_replies: 3, max_age_days: 30, min_views: 0, reply_scope: "hot_posts" } },
   ],
   threads_warmup: [
-    { id: "tg_default", label: "默认养号", payload: { strategy_id: "tg_default", browse_limit: 80, scroll_times: 80, like_limit: 16, like_chance: 100, max_comments: 0, comment_chance: 0 } },
+    { id: "tg_default", label: "默认养号：浏览 + 低频点赞", payload: { strategy_id: "tg_default", browse_limit: 80, scroll_times: 80, like_limit: 8, like_chance: 100, max_comments: 0, comment_chance: 0 } },
     { id: "browse_only", label: "保守养号：只浏览", payload: { strategy_id: "browse_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 0, comment_chance: 0 } },
-    { id: "comment_only", label: "评论养号：只留言", payload: { strategy_id: "comment_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 8, comment_chance: 100 } },
-    { id: "like_comment", label: "互动养号：点赞 + 留言", payload: { strategy_id: "like_comment", browse_limit: 80, scroll_times: 80, like_limit: 16, like_chance: 100, max_comments: 8, comment_chance: 100 } },
+    { id: "comment_only", label: "评论养号：浏览 + 人设留言", payload: { strategy_id: "comment_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 4, comment_chance: 100 } },
+    { id: "like_comment", label: "互动养号：低频点赞 + 人设留言", payload: { strategy_id: "like_comment", browse_limit: 80, scroll_times: 80, like_limit: 7, like_chance: 100, max_comments: 4, comment_chance: 100 } },
     { id: "warmup_custom", label: "自定义养号", payload: { strategy_id: "warmup_custom", browse_limit: 80, scroll_times: 80, like_limit: 0, max_comments: 0, comment_chance: 0 } },
   ],
   instagram_warmup: [
-    { id: "tg_default", label: "默认养号", payload: { strategy_id: "tg_default", browse_limit: 80, scroll_times: 80, like_limit: 16, like_chance: 100, max_comments: 0, comment_chance: 0 } },
+    { id: "tg_default", label: "默认养号：浏览 + 低频点赞", payload: { strategy_id: "tg_default", browse_limit: 80, scroll_times: 80, like_limit: 8, like_chance: 100, max_comments: 0, comment_chance: 0 } },
     { id: "browse_only", label: "保守养号：只浏览", payload: { strategy_id: "browse_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 0, comment_chance: 0 } },
-    { id: "comment_only", label: "评论养号：只留言", payload: { strategy_id: "comment_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 8, comment_chance: 100 } },
-    { id: "like_comment", label: "互动养号：点赞 + 留言", payload: { strategy_id: "like_comment", browse_limit: 80, scroll_times: 80, like_limit: 16, like_chance: 100, max_comments: 8, comment_chance: 100 } },
+    { id: "comment_only", label: "评论养号：浏览 + 人设留言", payload: { strategy_id: "comment_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 4, comment_chance: 100 } },
+    { id: "like_comment", label: "互动养号：低频点赞 + 人设留言", payload: { strategy_id: "like_comment", browse_limit: 80, scroll_times: 80, like_limit: 7, like_chance: 100, max_comments: 4, comment_chance: 100 } },
     { id: "warmup_custom", label: "自定义养号", payload: { strategy_id: "warmup_custom", browse_limit: 80, scroll_times: 80, like_limit: 0, max_comments: 0, comment_chance: 0 } },
   ],
 };
@@ -9569,6 +9569,14 @@ function renderClipboardIcon() {
   </svg>`;
 }
 
+function renderMoreIcon() {
+  return `<svg class="ui-more-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <circle cx="6" cy="12" r="1.6"></circle>
+    <circle cx="12" cy="12" r="1.6"></circle>
+    <circle cx="18" cy="12" r="1.6"></circle>
+  </svg>`;
+}
+
 function renderPasteIcon() {
   return `<svg class="ui-action-icon ui-paste-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <path d="M9 5.5h6"></path>
@@ -10049,7 +10057,7 @@ function renderUnifiedAutomationModule(options = null) {
               <input id="personaAutoLikeLimit" type="number" min="0" max="16" value="${esc(payload.like_limit || 0)}" />
             </label>
             <label>留言上限
-              <input id="personaAutoMaxComments" type="number" min="0" max="8" value="${esc(payload.max_comments || 0)}" />
+              <input id="personaAutoMaxComments" type="number" min="0" max="6" value="${esc(payload.max_comments || 0)}" />
             </label>
           </div>
           <label>养号留言模板
@@ -14657,7 +14665,7 @@ function buildPersonaThreadsTaskPayload(kind, platform = selectedPersonaAutomati
     payload.browse_limit = numberField("personaAutoBrowseLimit", payload.browse_limit || payload.scroll_times || 80);
     payload.scroll_times = payload.browse_limit;
     payload.like_limit = Math.max(0, Math.min(16, numberField("personaAutoLikeLimit", payload.like_limit || 0)));
-    payload.max_comments = Math.max(0, Math.min(8, numberField("personaAutoMaxComments", payload.max_comments || 0)));
+    payload.max_comments = Math.max(0, Math.min(6, numberField("personaAutoMaxComments", payload.max_comments || 0)));
     payload.comment_chance = Number(payload.max_comments || 0) > 0 ? 100 : 0;
   }
   const replyTemplates = splitLines($("personaAutoReplyText")?.value || "");
@@ -19735,6 +19743,7 @@ function renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) {
       <div class="persona-menu-tabs" aria-label="选择加入分组">
         ${availableGroups.map((group) => `
           <button type="button" class="persona-menu-tab persona-menu-tab--action" data-persona-add-to-group="${esc(personaId)}" data-group-id="${esc(group.id)}">
+            <span class="persona-menu-icon" aria-hidden="true">${renderPlusIcon()}</span>
             <span>${esc(group.name)}</span>
           </button>
         `).join("")}
@@ -19744,22 +19753,26 @@ function renderPersonaCardEditorMenu(persona, currentGroups, availableGroups) {
   const actionButtons = [
     availableGroups.length ? `
         <button type="button" class="persona-menu-tab persona-menu-tab--submenu ${mode === "add" ? "is-active" : ""}" data-persona-editor-mode="${esc(personaId)}:add">
+          <span class="persona-menu-icon" aria-hidden="true">${renderPlusIcon()}</span>
           <span>加入分组</span>
         </button>` : "",
     currentGroup ? `
         <button type="button" class="persona-menu-tab persona-menu-tab--action" data-persona-remove-from-group="${esc(personaId)}" data-group-id="${esc(currentGroup.id)}">
+          <span class="persona-menu-icon" aria-hidden="true">${renderCloseIcon()}</span>
           <span>移出分组</span>
         </button>` : "",
     `
         <button type="button" class="persona-menu-tab persona-menu-tab--action" data-persona-rename="${esc(personaId)}">
+          <span class="persona-menu-icon" aria-hidden="true">${renderEditIcon()}</span>
           <span>重命名人设</span>
         </button>`,
     `
         <button type="button" class="persona-menu-tab persona-menu-tab--action" data-persona-duplicate="${esc(personaId)}">
+          <span class="persona-menu-icon" aria-hidden="true">${renderClipboardIcon()}</span>
           <span>复制人设</span>
         </button>`,
     `
-        <button type="button" class="persona-menu-tab persona-menu-tab--action persona-menu-tab--danger" data-persona-delete data-persona-delete-id="${esc(personaId)}"><span>删除</span></button>`,
+        <button type="button" class="persona-menu-tab persona-menu-tab--action persona-menu-tab--danger" data-persona-delete data-persona-delete-id="${esc(personaId)}"><span class="persona-menu-icon" aria-hidden="true">${renderTrashIcon()}</span><span>删除</span></button>`,
   ].join("");
   return `
     <div class="persona-card-menu" data-persona-editor-menu="${esc(personaId)}">
@@ -19780,7 +19793,7 @@ function positionPersonaCardEditorMenu() {
   const gap = 8;
   const margin = 10;
   const buttonRect = editButton.getBoundingClientRect();
-  const menuWidth = Math.min(190, Math.max(156, window.innerWidth - margin * 2));
+  const menuWidth = Math.min(172, Math.max(140, window.innerWidth - margin * 2));
   const menuHeight = menu.offsetHeight || 128;
   const top = Math.min(Math.max(margin, buttonRect.bottom + gap), Math.max(margin, window.innerHeight - menuHeight - margin));
   const left = Math.min(Math.max(margin, buttonRect.right - menuWidth), Math.max(margin, window.innerWidth - menuWidth - margin));
@@ -19792,7 +19805,7 @@ function positionPersonaCardEditorMenu() {
   const menuRect = menu.getBoundingClientRect();
   const renderedMenuLeft = menuRect.left;
   const renderedMenuWidth = menuRect.width || menuWidth;
-  const submenuWidth = Math.min(190, Math.max(156, window.innerWidth - margin * 2));
+  const submenuWidth = Math.min(172, Math.max(140, window.innerWidth - margin * 2));
   const submenuHeight = submenu.offsetHeight || 128;
   const rightLeft = renderedMenuLeft + renderedMenuWidth + gap;
   const hasRightRoom = rightLeft + submenuWidth <= window.innerWidth - margin;
@@ -19842,6 +19855,24 @@ function schedulePersonaCardEditorMenuPosition() {
   requestAnimationFrame(positionPersonaCardEditorMenu);
 }
 
+function updatePersonaCardEditorSubmenu(personaId, mode) {
+  const portal = document.getElementById("personaCardEditorPortal");
+  const persona = state.personas.find((item) => String(item.id || "") === String(personaId || ""));
+  if (!portal || !persona) return;
+  const currentGroups = personaGroupsForPersona(persona.id);
+  const availableGroups = personaCollectionGroups().filter((group) => !currentGroups.some((item) => item.id === group.id));
+  const modeButton = portal.querySelector(`[data-persona-editor-mode="${CSS.escape(`${personaId}:add`)}"]`);
+  modeButton?.classList.toggle("is-active", mode === "add");
+  portal.querySelector(`[data-persona-editor-submenu="${CSS.escape(personaId)}"]`)?.remove();
+  if (mode !== "add" || !availableGroups.length) return;
+  const template = document.createElement("template");
+  template.innerHTML = renderPersonaCardEditorMenu(persona, currentGroups, availableGroups);
+  const submenu = template.content.querySelector(`[data-persona-editor-submenu="${CSS.escape(personaId)}"]`);
+  if (!submenu) return;
+  portal.appendChild(submenu);
+  schedulePersonaCardEditorMenuPosition();
+}
+
 function handlePersonaCardEditorPortalClick(event) {
   if (event.currentTarget?.id !== "personaCardEditorPortal") return;
   const personaEditorBack = event.target.closest("[data-persona-editor-back]");
@@ -19860,7 +19891,7 @@ function handlePersonaCardEditorPortalClick(event) {
     if (personaId) {
       state.personaListEditorId = personaId;
       state.personaListEditorMode = mode || "";
-      renderActivePersonaListSurface();
+      updatePersonaCardEditorSubmenu(personaId, mode || "");
     }
     return;
   }
@@ -20001,7 +20032,7 @@ function renderPersonaCard(persona, groupId = "", options = {}) {
           <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
         </svg>
       </button>` : ""}
-      ${isPublishContext ? "" : (allowEdit ? `<button type="button" class="persona-card-edit" data-persona-edit="${esc(persona.id)}" title="编辑分组" aria-label="编辑分组">...</button>` : "")}
+      ${isPublishContext ? "" : (allowEdit ? `<button type="button" class="persona-card-edit" data-persona-edit="${esc(persona.id)}" title="更多操作" aria-label="更多操作">${renderMoreIcon()}</button>` : "")}
     </article>`;
 }
 
@@ -20055,14 +20086,15 @@ function renderPersonaFolder(group, map, options = {}) {
           </span>
         </${batchMode ? "button" : "div"}>
         `}
-        ${allowGroupEdit ? `<button type="button" class="persona-card-edit" data-persona-edit-group="${esc(group.id)}" title="编辑分组" aria-label="编辑分组">...</button>` : ""}
+        ${allowGroupEdit ? `<button type="button" class="persona-card-edit" data-persona-edit-group="${esc(group.id)}" title="更多操作" aria-label="更多操作">${renderMoreIcon()}</button>` : ""}
         ${allowGroupEdit && editing ? `
           <div class="persona-card-menu persona-card-menu--group">
             <div class="persona-menu-tabs" aria-label="分组操作">
               <button type="button" class="persona-menu-tab persona-menu-tab--action" data-persona-rename-group="${esc(group.id)}">
+                <span class="persona-menu-icon" aria-hidden="true">${renderEditIcon()}</span>
                 <span>重命名</span>
               </button>
-              <button type="button" class="persona-menu-tab persona-menu-tab--action persona-menu-tab--danger" data-persona-delete-group="${esc(group.id)}"><span>删除</span></button>
+              <button type="button" class="persona-menu-tab persona-menu-tab--action persona-menu-tab--danger" data-persona-delete-group="${esc(group.id)}"><span class="persona-menu-icon" aria-hidden="true">${renderTrashIcon()}</span><span>删除</span></button>
             </div>
           </div>
         ` : ""}
@@ -26159,14 +26191,14 @@ function defaultPayloadForTask(taskType) {
       strategy_id: "tg_default",
       browse_limit: 80,
       scroll_times: 80,
-      like_limit: 16,
+      like_limit: 8,
       like_chance: 100,
       max_comments: 0,
       comment_chance: 0,
       session_minutes: "7-10",
       interaction_every_min_posts: 2,
       interaction_every_max_posts: 3,
-      search_chance: taskType === "threads_warmup" ? 16 : 0,
+      search_chance: 16,
       stop_on_risk_limit: true,
       risk_managed: false,
       require_persona_relevance: true,

@@ -69,6 +69,10 @@
   box-shadow: 0 0 0 3px rgb(53 107 145 / 14%);
 }
 
+:root[data-theme="light"] .auth-password-field input:focus {
+  box-shadow: none;
+}
+
 :root[data-theme="light"] :is(
   .home-canvas,
   .about-canvas,
@@ -1374,13 +1378,13 @@
 :root[data-theme="light"] .site-account-avatar,
 :root[data-theme="light"] .site-account-tags span {
   color: var(--public-cool-dark);
-  background: var(--public-cool-soft);
+  background: #ffffff;
   border-color: #c4d6e4;
 }
 
 :root[data-theme="light"] .site-account-action-row button {
   color: var(--public-cool-dark);
-  background: var(--public-cool-soft);
+  background: #ffffff;
   border-color: #c4d6e4;
 }
 
@@ -1395,7 +1399,7 @@
 
 :root[data-theme="light"] .site-account-preference {
   color: var(--public-ink-soft);
-  background: var(--public-cool-muted);
+  background: #ffffff;
   border-color: var(--public-line);
 }
 

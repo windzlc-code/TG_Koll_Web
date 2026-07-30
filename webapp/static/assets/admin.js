@@ -572,6 +572,11 @@ function clearAccountMsgs() {
 function getErrorMessage(err) {
   if (!err) return "未知错误";
   if (typeof err === "string") return err;
+  if (err.detail?.code === "auth_provider_not_configured") {
+    return err.detail.provider === "google"
+      ? "Google OAuth 凭据尚未配置，不能启用 Google 登录。"
+      : "邮箱发件凭据尚未配置，不能启用邮箱验证码注册。";
+  }
   if (typeof err.detail?.message === "string" && err.detail.message.trim()) return err.detail.message.trim();
   if (typeof err.detail === "string" && err.detail.trim()) return err.detail.trim();
   if (typeof err.message === "string" && err.message.trim()) return err.message.trim();
@@ -586,7 +591,11 @@ function formatRuntimeConfigError(action, err) {
 
 function runtimeConfigResponseToConfig(resp) {
   if (resp && typeof resp.runtime_config === "object" && resp.runtime_config) {
-    return resp.runtime_config;
+    const config = { ...resp.runtime_config };
+    for (const key of ("auth_email_delivery_configured auth_email_smtp_configured auth_google_oauth_configured".split(" "))) {
+      if (Object.prototype.hasOwnProperty.call(resp, key)) config[key] = resp[key];
+    }
+    return config;
   }
   if (resp && typeof resp === "object") return resp;
   return null;
@@ -1520,6 +1529,8 @@ const adminState = {
   userPasswordRevealInFlight: false,
   userPasswordRevealTimer: null,
   userReviewInFlight: false,
+  userAuthMethodsInFlight: false,
+  googleOauthConfigured: false,
   userDetailReturnFocus: null,
   userDetailInertElements: [],
   activePage: "overview",
@@ -2445,7 +2456,27 @@ function runtimeFormToPayload() {
     auth_remember_login_default: !!el("rtRememberLoginDefault").checked,
     auth_remember_login_days: Number(el("rtRememberLoginDays").value || 30),
     auth_session_hours: Number(el("rtSessionHours").value || 12),
+    auth_email_registration_enabled: !!el("rtEmailRegistrationEnabled")?.checked,
+    auth_google_login_enabled: !!el("rtGoogleLoginEnabled")?.checked,
   };
+}
+
+function syncRuntimeAuthProviderAvailability() {
+  const googleToggle = el("rtGoogleLoginEnabled");
+  const status = el("rtGoogleAuthStatus");
+  if (!googleToggle || !status) return;
+  const configured = Boolean(adminState.googleOauthConfigured);
+  googleToggle.disabled = !configured && !googleToggle.checked;
+  if (configured) {
+    status.textContent = "Google OAuth 凭据已配置，可安全启用授权登录。";
+    status.dataset.state = "ready";
+  } else if (googleToggle.checked) {
+    status.textContent = "Google OAuth 凭据未配置，当前入口不可用；请关闭开关并保存。";
+    status.dataset.state = "warning";
+  } else {
+    status.textContent = "Google OAuth 凭据未配置，完成服务器配置后才能开启。";
+    status.dataset.state = "unavailable";
+  }
 }
 
 function fillRuntimeForm(data) {
@@ -2495,6 +2526,16 @@ function fillRuntimeForm(data) {
   el("rtRememberLoginDefault").checked = v.auth_remember_login_default === true;
   el("rtRememberLoginDays").value = String(v.auth_remember_login_days || 30);
   el("rtSessionHours").value = String(v.auth_session_hours || 12);
+  if (el("rtEmailRegistrationEnabled")) {
+    el("rtEmailRegistrationEnabled").checked = v.auth_email_registration_enabled === true;
+  }
+  if (hasRuntimeField("auth_google_oauth_configured")) {
+    adminState.googleOauthConfigured = v.auth_google_oauth_configured === true;
+  }
+  if (el("rtGoogleLoginEnabled")) {
+    el("rtGoogleLoginEnabled").checked = v.auth_google_login_enabled === true;
+  }
+  syncRuntimeAuthProviderAvailability();
 }
 
 async function loadRuntime() {
@@ -3811,6 +3852,44 @@ const USER_LIFECYCLE_META = {
   deleted: ["软删除", "deleted"],
 };
 
+function normalizeUserAuthMethods(user = {}) {
+  const methods = user.auth_methods && typeof user.auth_methods === "object" && !Array.isArray(user.auth_methods)
+    ? user.auth_methods
+    : {};
+  const password = methods.password && typeof methods.password === "object" ? methods.password : {};
+  const google = methods.google && typeof methods.google === "object" ? methods.google : {};
+  const hasOwn = (source, key) => Object.prototype.hasOwnProperty.call(source || {}, key);
+  const passwordConfigured = hasOwn(password, "configured")
+    ? Boolean(password.configured)
+    : Boolean(user.password_configured);
+  const passwordEnabled = hasOwn(password, "enabled")
+    ? Boolean(password.enabled)
+    : (hasOwn(user, "password_login_enabled") ? Boolean(user.password_login_enabled) : passwordConfigured);
+  const googleBound = hasOwn(google, "bound")
+    ? Boolean(google.bound)
+    : Boolean(user.google_identity_bound || user.google_bound);
+  const googleEnabled = hasOwn(google, "enabled")
+    ? Boolean(google.enabled)
+    : (hasOwn(user, "google_login_enabled") ? Boolean(user.google_login_enabled) : googleBound);
+  return { passwordConfigured, passwordEnabled, googleBound, googleEnabled };
+}
+
+function userLoginMethodLabel(method) {
+  const normalized = String(method || "").trim().toLowerCase();
+  if (normalized === "password") return "密码";
+  if (normalized === "google") return "Google";
+  if (normalized === "email_registration") return "邮箱注册";
+  return normalized || "尚无记录";
+}
+
+function userAuthMethodsLabel(user = {}) {
+  const auth = normalizeUserAuthMethods(user);
+  const active = [];
+  if (auth.passwordEnabled) active.push("密码");
+  if (auth.googleEnabled) active.push("Google");
+  return active.length ? active.join(" + ") : "无可用登录方式";
+}
+
 function readUserListFilters() {
   return {
     query: String(el("adminUserQuery")?.value || "").trim(),
@@ -3818,6 +3897,8 @@ function readUserListFilters() {
     risk_level: String(el("adminUserRisk")?.value || ""),
     subscription_status: adminState.userListRole === "customer" ? String(el("adminUserSubscription")?.value || "") : "",
     online: String(el("adminUserOnline")?.value || ""),
+    auth_method: adminState.userListRole === "customer" ? String(el("adminUserAuthMethod")?.value || "") : "",
+    email_status: adminState.userListRole === "customer" ? String(el("adminUserEmailStatus")?.value || "") : "",
   };
 }
 
@@ -3964,7 +4045,7 @@ async function loadUsers(page = adminState.userListPage) {
     const emptyRow = document.createElement("tr");
     const emptyCell = document.createElement("td");
     emptyCell.className = "admin-user-empty";
-    emptyCell.colSpan = 10;
+    emptyCell.colSpan = 11;
     emptyCell.textContent = role === "admin" ? "暂无管理员账号" : "暂无客户账号";
     markAdminDynamicUiElement(emptyCell);
     emptyRow.appendChild(emptyCell);
@@ -3995,7 +4076,10 @@ async function loadUsers(page = adminState.userListPage) {
     accountName.textContent = String(u.username || "-");
     const accountId = document.createElement("span");
     accountId.textContent = `ID ${u.id}`;
-    accountCell.append(accountName, accountId);
+    const accountEmail = document.createElement("span");
+    accountEmail.className = "admin-user-account-email";
+    accountEmail.textContent = u.verified_email ? String(u.verified_email) : "未绑定验证邮箱";
+    accountCell.append(accountName, accountId, accountEmail);
     tr.appendChild(accountCell);
 
     const companyCell = document.createElement("td");
@@ -4010,6 +4094,24 @@ async function loadUsers(page = adminState.userListPage) {
     const stateCell = document.createElement("td");
     stateCell.appendChild(createAdminUserBadge(state, stateTone));
     tr.appendChild(stateCell);
+
+    const auth = normalizeUserAuthMethods(u);
+    const authCell = document.createElement("td");
+    authCell.className = "admin-user-auth-cell";
+    const authBadges = document.createElement("div");
+    authBadges.className = "admin-user-auth-badges";
+    authBadges.appendChild(createAdminUserBadge(
+      auth.passwordConfigured ? (auth.passwordEnabled ? "密码" : "密码停用") : "无密码",
+      auth.passwordEnabled ? "enabled" : "disabled",
+    ));
+    authBadges.appendChild(createAdminUserBadge(
+      auth.googleBound ? (auth.googleEnabled ? "Google" : "Google 停用") : "未绑 Google",
+      auth.googleEnabled ? "enabled" : "disabled",
+    ));
+    const lastMethod = document.createElement("span");
+    lastMethod.textContent = `最近：${userLoginMethodLabel(u.last_login_method)}`;
+    authCell.append(authBadges, lastMethod);
+    tr.appendChild(authCell);
 
     [u.persona_count, u.created_post_count, u.published_post_count].forEach((value) => {
       const td = document.createElement("td");
@@ -4073,15 +4175,196 @@ async function loadUsers(page = adminState.userListPage) {
   if (focusSelector) body.querySelector(focusSelector)?.focus();
 }
 
-function detailRow(label, value) {
+function detailRow(label, value, field = "") {
   const row = document.createElement("div");
   row.className = "admin-user-detail-item";
+  if (field) row.dataset.userDetailField = field;
   const title = document.createElement("span");
   const content = document.createElement("strong");
   title.textContent = label;
   content.textContent = String(value === null || value === undefined || value === "" ? "-" : value);
   row.append(title, content);
   return row;
+}
+
+function syncSelectedUserAuthControls() {
+  const user = adminState.selectedUser;
+  const section = el("userAuthSection");
+  if (!section) return;
+  const hidden = !user || !!user.is_admin;
+  section.hidden = hidden;
+  if (hidden) return;
+  const auth = normalizeUserAuthMethods(user);
+  const archived = Number(user.deleted_at || 0) > 0 || ["archived", "deleted"].includes(String(user.lifecycle_status || ""));
+  const busy = Boolean(adminState.userAuthMethodsInFlight);
+  const passwordToggle = el("userPasswordLoginEnabled");
+  const googleToggle = el("userGoogleLoginEnabled");
+  const saveButton = el("btnSaveUserAuthMethods");
+  const unlinkButton = el("btnUnlinkUserGoogle");
+  const verifiedEmail = String(user.verified_email || "");
+  const verifiedAt = Number(user.email_verified_at || 0);
+
+  setText("userVerifiedEmail", verifiedEmail || "未绑定");
+  setText(
+    "userVerifiedEmailMeta",
+    verifiedEmail && verifiedAt ? `验证于 ${formatTime(verifiedAt)}` : "该账号没有可用于登录的已验证邮箱",
+  );
+  const emailBadge = el("userEmailVerificationBadge");
+  if (emailBadge) {
+    emailBadge.textContent = verifiedEmail ? "已验证" : "未验证";
+    emailBadge.className = `admin-user-badge admin-user-badge-${verifiedEmail ? "enabled" : "disabled"}`;
+  }
+
+  if (passwordToggle) {
+    passwordToggle.checked = auth.passwordEnabled;
+    passwordToggle.disabled = busy || archived || !auth.passwordConfigured;
+  }
+  setText(
+    "userPasswordAuthHint",
+    auth.passwordConfigured
+      ? (auth.passwordEnabled ? "已启用邮箱或用户名 + 密码登录" : "已配置密码，但当前禁止密码登录")
+      : "尚未设置本地密码，请先在下方设置密码",
+  );
+
+  if (googleToggle) {
+    googleToggle.checked = auth.googleEnabled;
+    googleToggle.disabled = busy || archived || !auth.googleBound;
+  }
+  setText(
+    "userGoogleAuthHint",
+    auth.googleBound
+      ? (auth.googleEnabled ? "已绑定且允许 Google 登录" : "已绑定，但当前禁止 Google 登录")
+      : "尚未绑定 Google 身份",
+  );
+
+  if (saveButton) {
+    saveButton.disabled = busy || archived;
+    saveButton.textContent = busy ? "正在保存..." : "保存认证设置";
+  }
+  if (unlinkButton) {
+    unlinkButton.hidden = !auth.googleBound;
+    unlinkButton.disabled = busy || archived || !auth.passwordEnabled;
+    unlinkButton.title = auth.passwordEnabled
+      ? "解除该账号的 Google 身份绑定"
+      : "解绑前必须先启用密码登录，避免用户失去全部登录方式";
+  }
+}
+
+function applySelectedUserAuthMethods(authMethods) {
+  if (!adminState.selectedUser || !authMethods || typeof authMethods !== "object") return;
+  adminState.selectedUser.auth_methods = authMethods;
+  const password = authMethods.password;
+  if (password && typeof password === "object") {
+    adminState.selectedUser.password_configured = Boolean(password.configured);
+    adminState.selectedUser.password_login_enabled = Boolean(password.enabled);
+  }
+  const google = authMethods.google;
+  if (google && typeof google === "object") {
+    adminState.selectedUser.google_identity_bound = Boolean(google.bound);
+    adminState.selectedUser.google_login_enabled = Boolean(google.enabled);
+  }
+  const authSummary = document.querySelector('[data-user-detail-field="auth-methods"] strong');
+  if (authSummary) authSummary.textContent = userAuthMethodsLabel(adminState.selectedUser);
+}
+
+async function saveSelectedUserAuthMethods() {
+  const user = adminState.selectedUser;
+  if (!user?.id || user.is_admin || adminState.userAuthMethodsInFlight) return;
+  const current = normalizeUserAuthMethods(user);
+  const next = {
+    password_login_enabled: Boolean(el("userPasswordLoginEnabled")?.checked),
+    google_login_enabled: Boolean(el("userGoogleLoginEnabled")?.checked),
+  };
+  if (next.password_login_enabled && !current.passwordConfigured) {
+    setMsg("userAuthMethodMsg", "该账号尚未设置本地密码，不能启用密码登录。", false);
+    return;
+  }
+  if (next.google_login_enabled && !current.googleBound) {
+    setMsg("userAuthMethodMsg", "该账号尚未绑定 Google 身份，不能启用 Google 登录。", false);
+    return;
+  }
+  if (!next.password_login_enabled && !next.google_login_enabled) {
+    setMsg("userAuthMethodMsg", "必须至少保留一种可用登录方式。", false);
+    return;
+  }
+  if (
+    next.password_login_enabled === current.passwordEnabled
+    && next.google_login_enabled === current.googleEnabled
+  ) {
+    setMsg("userAuthMethodMsg", "认证设置没有变化。", true);
+    return;
+  }
+  if (!confirm(`确认更新账号 ${user.username || user.id} 的登录方式吗？被停用的方式将立即无法用于新登录。`)) {
+    syncSelectedUserAuthControls();
+    return;
+  }
+  const targetUserId = String(user.id);
+  adminState.userAuthMethodsInFlight = true;
+  setMsg("userAuthMethodMsg", "");
+  syncSelectedUserAuthControls();
+  syncUserDetailActionState();
+  try {
+    const result = await api(`/api/admin/users/${encodeURIComponent(targetUserId)}/auth-methods`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(next),
+    });
+    if (!selectedUserStillMatches(targetUserId)) return;
+    applySelectedUserAuthMethods(result.auth_methods || {
+      password: { configured: current.passwordConfigured, enabled: next.password_login_enabled },
+      google: { bound: current.googleBound, enabled: next.google_login_enabled },
+    });
+    setMsg("userAuthMethodMsg", "认证方式已更新。", true);
+    await loadUsers();
+  } catch (error) {
+    if (selectedUserStillMatches(targetUserId)) {
+      setMsg("userAuthMethodMsg", getErrorMessage(error), false);
+      syncSelectedUserAuthControls();
+    }
+  } finally {
+    adminState.userAuthMethodsInFlight = false;
+    if (selectedUserStillMatches(targetUserId)) {
+      syncSelectedUserAuthControls();
+      syncUserDetailActionState();
+    }
+  }
+}
+
+async function unlinkSelectedUserGoogle() {
+  const user = adminState.selectedUser;
+  if (!user?.id || user.is_admin || adminState.userAuthMethodsInFlight) return;
+  const current = normalizeUserAuthMethods(user);
+  if (!current.googleBound) return;
+  if (!current.passwordEnabled) {
+    setMsg("userAuthMethodMsg", "请先启用密码登录，再解绑 Google，避免用户失去全部登录方式。", false);
+    return;
+  }
+  if (!confirm(`确认解绑账号 ${user.username || user.id} 的 Google 身份吗？解绑后只能使用邮箱或用户名密码登录。`)) return;
+  const targetUserId = String(user.id);
+  adminState.userAuthMethodsInFlight = true;
+  setMsg("userAuthMethodMsg", "");
+  syncSelectedUserAuthControls();
+  syncUserDetailActionState();
+  try {
+    const result = await api(`/api/admin/users/${encodeURIComponent(targetUserId)}/oauth-identities/google`, {
+      method: "DELETE",
+    });
+    if (!selectedUserStillMatches(targetUserId)) return;
+    applySelectedUserAuthMethods(result.auth_methods || {
+      password: { configured: current.passwordConfigured, enabled: current.passwordEnabled },
+      google: { bound: false, enabled: false },
+    });
+    setMsg("userAuthMethodMsg", "Google 身份已解绑。", true);
+    await loadUsers();
+  } catch (error) {
+    if (selectedUserStillMatches(targetUserId)) setMsg("userAuthMethodMsg", getErrorMessage(error), false);
+  } finally {
+    adminState.userAuthMethodsInFlight = false;
+    if (selectedUserStillMatches(targetUserId)) {
+      syncSelectedUserAuthControls();
+      syncUserDetailActionState();
+    }
+  }
 }
 
 function clearUserPasswordReset() {
@@ -4306,7 +4589,9 @@ function trapUserDetailFocus(event) {
 
 function syncUserDetailActionState() {
   const user = adminState.selectedUser;
-  const busy = adminState.userPasswordResetInFlight || adminState.userPasswordSetInFlight;
+  const busy = adminState.userPasswordResetInFlight
+    || adminState.userPasswordSetInFlight
+    || adminState.userAuthMethodsInFlight;
   if (el("btnUserDetailClose")) el("btnUserDetailClose").disabled = busy;
   if (el("btnManageUserWorkspace")) {
     el("btnManageUserWorkspace").hidden = !user || !!user.is_admin;
@@ -4341,6 +4626,7 @@ function syncUserDetailActionState() {
   const archived = Number(user?.deleted_at || 0) > 0;
   if (el("btnApproveUser")) el("btnApproveUser").disabled = busy || archived || !user || !!user.is_admin || user.approval_status === "approved";
   if (el("btnRejectUser")) el("btnRejectUser").disabled = busy || archived || !user || !!user.is_admin || user.approval_status !== "pending";
+  syncSelectedUserAuthControls();
 }
 
 async function setSelectedUserPassword() {
@@ -4389,6 +4675,10 @@ async function setSelectedUserPassword() {
     if (Number(response.updated_at || 0) > 0) {
       adminState.selectedUser.updated_at = Number(response.updated_at);
     }
+    adminState.selectedUser.password_configured = true;
+    if (adminState.selectedUser.auth_methods?.password) {
+      adminState.selectedUser.auth_methods.password.configured = true;
+    }
     setUserPasswordRevealAvailability(true);
     clearManualUserPassword();
     clearUserStepUp();
@@ -4431,6 +4721,10 @@ async function resetSelectedUserPassword() {
     if (!responseStillCurrent) return;
     if (Number(response.updated_at || 0) > 0) {
       adminState.selectedUser.updated_at = Number(response.updated_at);
+    }
+    adminState.selectedUser.password_configured = true;
+    if (adminState.selectedUser.auth_methods?.password) {
+      adminState.selectedUser.auth_methods.password.configured = true;
     }
     clearRevealedUserPassword();
     setUserPasswordRevealAvailability(true);
@@ -4667,8 +4961,8 @@ async function purgeSelectedUser(event) {
 }
 
 async function openUserDetailModal(id) {
-  if (adminState.userPasswordResetInFlight || adminState.userPasswordSetInFlight) {
-    setMsg("userDetailMsg", "密码正在保存，请等待操作完成后再切换账号。", false);
+  if (adminState.userPasswordResetInFlight || adminState.userPasswordSetInFlight || adminState.userAuthMethodsInFlight) {
+    setMsg("userDetailMsg", "账号设置正在保存，请等待操作完成后再切换账号。", false);
     return;
   }
   clearRevealedUserPassword();
@@ -4687,7 +4981,9 @@ async function openUserDetailModal(id) {
     detailRow("账号 ID", user.id),
     detailRow("姓名", user.full_name),
     detailRow("公司 / 团队", user.company),
-    detailRow("电子邮箱", user.email),
+    detailRow("资料邮箱", user.email),
+    detailRow("已验证登录邮箱", user.verified_email || "未绑定"),
+    detailRow("邮箱验证时间", user.email_verified_at ? formatTime(user.email_verified_at) : "尚未验证"),
     detailRow("联系电话", user.phone),
     detailRow("账号角色", user.is_admin ? "管理员" : "客户"),
     detailRow("账号状态", (USER_LIFECYCLE_META[String(user.lifecycle_status || "")] || [user.is_disabled ? "已禁用" : "已启用"])[0]),
@@ -4697,6 +4993,8 @@ async function openUserDetailModal(id) {
         ? (user.password_reveal_available === false ? "已设置（历史账号，重置后可查看）" : "已设置")
         : "未设置",
     ),
+    detailRow("可用认证方式", userAuthMethodsLabel(user), "auth-methods"),
+    detailRow("最近登录方式", userLoginMethodLabel(user.last_login_method)),
     detailRow("申请类型", user.account_type === "guest" ? "游客申请" : "后台创建"),
     detailRow("审核状态", user.approval_status),
     detailRow(
@@ -4725,6 +5023,8 @@ async function openUserDetailModal(id) {
   clearUserPasswordReset();
   clearManualUserPassword();
   setUserPasswordRevealAvailability(user.password_reveal_available);
+  setMsg("userAuthMethodMsg", "");
+  syncSelectedUserAuthControls();
   el("userPasswordSection").hidden = !!user.is_admin;
   el("userPasswordHistorySection").hidden = !!user.is_admin;
   const purgeSection = el("userPurgeSection");
@@ -4746,8 +5046,8 @@ async function openUserDetailModal(id) {
 function closeUserDetailModal() {
   const modal = el("userDetailModal");
   if (!modal || modal.getAttribute("aria-hidden") === "true") return;
-  if (adminState.userPasswordResetInFlight || adminState.userPasswordSetInFlight) {
-    setMsg("userDetailMsg", "密码正在保存，完成前不能关闭此窗口。", false);
+  if (adminState.userPasswordResetInFlight || adminState.userPasswordSetInFlight || adminState.userAuthMethodsInFlight) {
+    setMsg("userDetailMsg", "账号设置正在保存，完成前不能关闭此窗口。", false);
     el("userDetailDialog")?.focus();
     return false;
   }
@@ -4760,6 +5060,7 @@ function closeUserDetailModal() {
   clearUserPasswordReset();
   clearManualUserPassword();
   clearUserStepUp();
+  setMsg("userAuthMethodMsg", "");
   el("userSessionList")?.replaceChildren();
   el("userPasswordHistoryList")?.replaceChildren();
   modal.style.display = "none";
@@ -7945,6 +8246,7 @@ function bindActions() {
       setMsg("runtimeMsg", formatRuntimeConfigError("保存", err), false);
     }
   });
+  el("rtGoogleLoginEnabled")?.addEventListener("change", syncRuntimeAuthProviderAvailability);
 
   [
     ["btnAddLlmGptModel", "rtLlmGptModelInput", "llmGptModels"],
@@ -8339,6 +8641,8 @@ function bindActions() {
   if (el("btnUserDetailClose")) {
     el("btnUserDetailClose").addEventListener("click", closeUserDetailModal);
   }
+  el("btnSaveUserAuthMethods")?.addEventListener("click", () => void saveSelectedUserAuthMethods());
+  el("btnUnlinkUserGoogle")?.addEventListener("click", () => void unlinkSelectedUserGoogle());
   if (el("btnManageUserWorkspace")) {
     el("btnManageUserWorkspace").addEventListener("click", () => {
       const user = adminState.selectedUser;

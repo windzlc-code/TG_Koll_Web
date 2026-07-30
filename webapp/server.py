@@ -58,6 +58,33 @@ from .auth import (
     verify_password,
 )
 from .db import db, get_admin_config, init_db, set_admin_config
+from .auth_email import (
+    VERIFICATION_RESEND_SECONDS,
+    VERIFICATION_TTL_SECONDS,
+    AuthEmailConfigurationError,
+    VerificationChallengeError,
+    VerificationDeliveryError,
+    VerificationRateLimitError,
+    create_email_challenge,
+    email_delivery_available,
+    email_delivery_provider,
+    email_registration_enabled,
+    mark_challenge_failed,
+    mark_challenge_sent,
+    normalize_email,
+    send_verification_email,
+    verify_and_consume_challenge,
+)
+from .google_oauth import (
+    GoogleOAuthConfigurationError,
+    GoogleOAuthError,
+    create_google_authorization,
+    exchange_google_code,
+    generate_oauth_token,
+    google_login_enabled,
+    google_oauth_configured,
+    oauth_token_digest,
+)
 from . import commercial_billing
 from . import governance
 from .password_vault import (
@@ -105,6 +132,8 @@ OUTPUT_ROOT = DATA_DIR / "outputs"
 TOOL_R18_UPLOAD_ROOT = Path(os.getenv("TOOL_R18_UPLOAD_HOST_DIR", str(DATA_DIR / "tool_r18_uploads"))).resolve()
 RUNTIME_CONFIG_PATH = Path(os.getenv("APP_RUNTIME_CONFIG_PATH", str(DATA_DIR / "runtime_config.json"))).resolve()
 TOOL_R18_RUNTIME_DIR = Path(os.getenv("TOOL_R18_RUNTIME_DIR", str(ROOT_DIR / "tool_r18" / ".runtime" / "automatic-script"))).resolve()
+GOOGLE_OAUTH_FLOW_COOKIE = "google_oauth_flow"
+GOOGLE_OAUTH_ONBOARDING_COOKIE = "google_oauth_onboarding"
 
 
 def _resolve_sentiment_config_path() -> Path:
@@ -136,6 +165,8 @@ SECRET_KEY_HINTS = {
     "session",
 }
 NON_SECRET_RUNTIME_KEYS = {
+    "auth_email_registration_enabled",
+    "auth_google_login_enabled",
     "auth_remember_login_enabled",
     "auth_remember_login_default",
     "auth_remember_login_days",
@@ -217,6 +248,8 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "cleanup_enabled": True,
     "cleanup_time": "03:30",
     "cleanup_retention_days": 7,
+    "auth_email_registration_enabled": False,
+    "auth_google_login_enabled": False,
     "auth_remember_login_enabled": True,
     "auth_remember_login_default": False,
     "auth_remember_login_days": 30,
@@ -456,6 +489,11 @@ def _require_same_origin(request: Request) -> None:
     expected = _origin_parts(f"{scheme}://{request.headers.get('host', '')}")
     if expected is None or _origin_parts(supplied) != expected:
         raise HTTPException(status_code=403, detail="cross-origin request rejected")
+
+
+def _require_same_origin_when_supplied(request: Request) -> None:
+    if request.headers.get("origin") or request.headers.get("referer"):
+        _require_same_origin(request)
 
 
 def _new_id(prefix: str) -> str:
@@ -1565,6 +1603,15 @@ def _redact_runtime_config(runtime: dict[str, Any]) -> dict[str, Any]:
         redacted[key] = ""
         redacted[f"{key}_configured"] = bool(value)
         redacted[f"{key}_masked"] = _mask_secret_exact_length(value) if value else ""
+    redacted["auth_google_oauth_configured"] = google_oauth_configured()
+    delivery_configured = email_delivery_available()
+    redacted["auth_smtp_configured"] = delivery_configured
+    redacted["auth_email_smtp_configured"] = delivery_configured
+    redacted["auth_email_delivery_configured"] = delivery_configured
+    try:
+        redacted["auth_email_delivery_provider"] = email_delivery_provider()
+    except AuthEmailConfigurationError:
+        redacted["auth_email_delivery_provider"] = "unavailable"
     return redacted
 
 
@@ -4098,6 +4145,14 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     merged["cleanup_enabled"] = _to_bool(merged.get("cleanup_enabled"), True)
     merged["cleanup_time"] = str(merged.get("cleanup_time") or "03:30").strip() or "03:30"
     merged["cleanup_retention_days"] = max(_to_int(merged.get("cleanup_retention_days"), 7), 1)
+    merged["auth_email_registration_enabled"] = _to_bool(
+        merged.get("auth_email_registration_enabled"),
+        False,
+    )
+    merged["auth_google_login_enabled"] = _to_bool(
+        merged.get("auth_google_login_enabled"),
+        False,
+    )
     merged["auth_remember_login_enabled"] = _to_bool(merged.get("auth_remember_login_enabled"), True)
     merged["auth_remember_login_default"] = _to_bool(merged.get("auth_remember_login_default"), False)
     merged["auth_remember_login_days"] = min(max(_to_int(merged.get("auth_remember_login_days"), 30), 1), 90)
@@ -4108,11 +4163,46 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
 def _auth_login_policy(runtime: dict[str, Any] | None) -> dict[str, Any]:
     source = runtime if isinstance(runtime, dict) else {}
     enabled = _to_bool(source.get("auth_remember_login_enabled"), True)
+    delivery_ready = email_delivery_available()
+    google_ready = google_oauth_configured()
     return {
+        "email_registration_enabled": bool(
+            _to_bool(source.get("auth_email_registration_enabled"), False)
+            and email_registration_enabled()
+            and delivery_ready
+        ),
+        "google_login_enabled": bool(
+            _to_bool(source.get("auth_google_login_enabled"), False)
+            and google_login_enabled()
+            and google_ready
+        ),
+        "email_delivery_available": delivery_ready,
+        "smtp_available": delivery_ready,
         "remember_login_enabled": enabled,
         "remember_login_default": enabled and _to_bool(source.get("auth_remember_login_default"), False),
         "remember_login_days": min(max(_to_int(source.get("auth_remember_login_days"), 30), 1), 90),
         "session_hours": min(max(_to_int(source.get("auth_session_hours"), 12), 1), 72),
+    }
+
+
+def _user_auth_methods_payload(user: dict[str, Any]) -> dict[str, Any]:
+    password_configured = bool(int(user.get("password_configured") or 0))
+    password_enabled = bool(
+        password_configured and int(user.get("password_login_enabled", 1) or 0)
+    )
+    google_bound = bool(int(user.get("google_identity_bound") or 0))
+    google_enabled = bool(
+        google_bound and int(user.get("google_login_enabled") or 0)
+    )
+    return {
+        "password": {
+            "configured": password_configured,
+            "enabled": password_enabled,
+        },
+        "google": {
+            "bound": google_bound,
+            "enabled": google_enabled,
+        },
     }
 
 
@@ -10129,6 +10219,24 @@ class RegisterPayload(BaseModel):
     phone: str = ""
     company: str = ""
     use_case: str = ""
+    challenge_id: str = Field(default="", max_length=120)
+    verification_code: str = Field(default="", max_length=16)
+    consent: bool = False
+
+
+class EmailVerificationSendPayload(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    purpose: str = Field(default="register", max_length=32)
+
+
+class GoogleCompletePayload(BaseModel):
+    username: str = Field(min_length=3, max_length=32)
+
+
+class InitialPasswordSetupPayload(BaseModel):
+    challenge_id: str = Field(min_length=8, max_length=120)
+    verification_code: str = Field(min_length=4, max_length=16)
+    new_password: str = Field(min_length=8, max_length=256)
 
 
 class LoginPayload(BaseModel):
@@ -10200,6 +10308,8 @@ class RuntimeConfigPayload(BaseModel):
     cleanup_enabled: bool = True
     cleanup_time: str = "03:30"
     cleanup_retention_days: int = 7
+    auth_email_registration_enabled: bool = False
+    auth_google_login_enabled: bool = False
     auth_remember_login_enabled: bool = True
     auth_remember_login_default: bool = False
     auth_remember_login_days: int = Field(default=30, ge=1, le=90)
@@ -10232,6 +10342,11 @@ class RechargePayload(BaseModel):
 
 class UserTogglePayload(BaseModel):
     is_disabled: bool
+
+
+class AdminAuthMethodsPayload(BaseModel):
+    password_login_enabled: bool | None = None
+    google_login_enabled: bool | None = None
 
 
 class UserApprovalPayload(BaseModel):
@@ -17758,8 +17873,7 @@ def create_app() -> FastAPI:
     register_notification_routes(app)
 
     @app.post("/api/auth/apply")
-    @app.post("/api/auth/register")
-    def api_register(payload: RegisterPayload, request: Request):
+    def api_apply(payload: RegisterPayload, request: Request):
         if not _public_register_enabled():
             raise HTTPException(status_code=403, detail="当前未开放账号申请")
         username = str(payload.username or "").strip()
@@ -17825,6 +17939,285 @@ def create_app() -> FastAPI:
             "message": "申请已提交，请等待管理员授权后登录",
         }
 
+    def _verification_purpose(value: str) -> str:
+        clean = str(value or "").strip().lower()
+        aliases = {
+            "register": "registration",
+            "registration": "registration",
+            "set_password": "password_setup",
+            "password_setup": "password_setup",
+        }
+        purpose = aliases.get(clean)
+        if purpose is None:
+            raise HTTPException(status_code=400, detail="unsupported verification purpose")
+        return purpose
+
+    @app.post("/api/auth/email-verification/send")
+    def api_send_email_verification(payload: EmailVerificationSendPayload, request: Request):
+        _require_same_origin_when_supplied(request)
+        purpose = _verification_purpose(payload.purpose)
+        try:
+            email = normalize_email(payload.email)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="email format is invalid") from exc
+        with db() as conn:
+            try:
+                runtime = _get_runtime_config(conn)
+            except RuntimeConfigFileError as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            policy = _auth_login_policy(runtime)
+            if purpose == "registration":
+                if not policy["email_registration_enabled"]:
+                    raise HTTPException(status_code=503, detail="email registration is not available")
+                existing = conn.execute(
+                    "SELECT 1 FROM user_auth_emails WHERE email_normalized = ? COLLATE NOCASE",
+                    (email,),
+                ).fetchone()
+                if existing is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "email_already_registered",
+                            "message": "该电子邮箱已注册，请返回登录或使用其他邮箱。",
+                        },
+                    )
+            else:
+                token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
+                current_user = _get_session_user_allowing_password_change(
+                    token,
+                    expected_admin_session=False,
+                )
+                owned = conn.execute(
+                    """
+                    SELECT 1 FROM user_auth_emails
+                    WHERE user_id = ? AND email_normalized = ? COLLATE NOCASE
+                      AND login_enabled = 1
+                    """,
+                    (int(current_user["id"]), email),
+                ).fetchone()
+                if owned is None:
+                    raise HTTPException(status_code=403, detail="verified account email is required")
+                if not email_delivery_available():
+                    raise HTTPException(status_code=503, detail="email verification is not available")
+        now = _now_ts()
+        try:
+            with db() as conn:
+                challenge_id, code, expires_at = create_email_challenge(
+                    conn,
+                    email,
+                    purpose,
+                    _request_client_ip(request),
+                    now,
+                )
+        except VerificationRateLimitError as exc:
+            raise HTTPException(
+                status_code=429,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        except (AuthEmailConfigurationError, ValueError) as exc:
+            raise HTTPException(status_code=503, detail="email verification is not configured") from exc
+        try:
+            send_verification_email(
+                email,
+                code,
+                VERIFICATION_TTL_SECONDS,
+                idempotency_key=challenge_id,
+            )
+        except (VerificationDeliveryError, AuthEmailConfigurationError, ValueError) as exc:
+            with db() as conn:
+                mark_challenge_failed(conn, challenge_id, _now_ts())
+            raise HTTPException(status_code=503, detail="verification email could not be sent") from exc
+        with db() as conn:
+            if not mark_challenge_sent(conn, challenge_id, _now_ts()):
+                raise HTTPException(status_code=409, detail="verification challenge is no longer valid")
+        return {
+            "ok": True,
+            "challenge_id": challenge_id,
+            "expires_in": max(expires_at - now, 0),
+            "resend_after": VERIFICATION_RESEND_SECONDS,
+        }
+
+    @app.post("/api/auth/register")
+    def api_register(payload: RegisterPayload, request: Request):
+        _require_same_origin_when_supplied(request)
+        if not _public_register_enabled():
+            raise HTTPException(status_code=403, detail="registration is disabled")
+        client_ip = _request_client_ip(request)
+        _enforce_auth_rate_limit("register_ip", client_ip, limit=10, window_seconds=3600)
+        username = str(payload.username or "").strip()
+        password = str(payload.password or "")
+        full_name = str(payload.full_name or "").strip()
+        phone = str(payload.phone or "").strip()
+        company = str(payload.company or "").strip()
+        use_case = str(payload.use_case or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._-]{3,32}", username):
+            raise HTTPException(status_code=400, detail="username must be 3-32 letters, numbers, or ._-")
+        if len(password) < _minimum_password_length(is_admin=False) or len(password) > 256:
+            raise HTTPException(status_code=400, detail="password must be 8-256 characters")
+        if len(full_name) < 2 or len(full_name) > 80:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "full_name_invalid", "message": "姓名需为 2-80 个字符"},
+            )
+        if len(phone) > 32:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "phone_invalid", "message": "联系电话不能超过 32 个字符"},
+            )
+        if len(company) > 120:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "company_invalid", "message": "公司或团队名称不能超过 120 个字符"},
+            )
+        if not use_case or len(use_case) > 1000:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "use_case_invalid", "message": "请选择有效的预计使用情境"},
+            )
+        if payload.consent is not True:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "consent_required", "message": "请同意提交资料后继续注册"},
+            )
+        try:
+            email = normalize_email(payload.email)
+            password_hash = hash_password(password)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        now = _now_ts()
+        with db() as conn:
+            try:
+                runtime = _get_runtime_config(conn)
+            except RuntimeConfigFileError as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            if not _auth_login_policy(runtime)["email_registration_enabled"]:
+                raise HTTPException(status_code=503, detail="email registration is not available")
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                verify_and_consume_challenge(
+                    conn,
+                    payload.challenge_id,
+                    email,
+                    "registration",
+                    payload.verification_code,
+                    now,
+                )
+                if conn.execute(
+                    "SELECT 1 FROM user_auth_emails WHERE email_normalized = ? COLLATE NOCASE",
+                    (email,),
+                ).fetchone() is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "email_already_registered",
+                            "message": "该电子邮箱已注册，请返回登录或使用其他邮箱。",
+                        },
+                    )
+                inserted = conn.execute(
+                    """
+                    INSERT INTO users(
+                      username, password_hash, is_admin, is_disabled, balance_cents,
+                      account_type, approval_status, full_name, email, phone, company, use_case,
+                      lifecycle_status, source_channel, approved_at,
+                      password_login_enabled, created_at, updated_at
+                    ) VALUES (?, ?, 0, 0, 0, 'self_service', 'approved', ?, ?, ?, ?, ?,
+                              'active', 'email_verification', ?, 1, ?, ?)
+                    """,
+                    (username, password_hash, full_name, email, phone, company, use_case, now, now, now),
+                )
+                user_id = int(inserted.lastrowid or 0)
+                _reserve_username(conn, user_id, username, now)
+                conn.execute(
+                    """
+                    INSERT INTO user_auth_emails(
+                      user_id, email_normalized, email_original, verified_at,
+                      is_primary, login_enabled, source, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 1, 1, 'email_registration', ?, ?)
+                    """,
+                    (user_id, email, str(payload.email or "").strip(), now, now, now),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO billing_wallets(
+                      user_id, credit_units, billing_mode, migrated_legacy_balance,
+                      created_at, updated_at
+                    ) VALUES (?, 0, 'enforced', 0, ?, ?)
+                    """,
+                    (user_id, now, now),
+                )
+                session_hours = int(_auth_login_policy(runtime)["session_hours"])
+                token = create_session(
+                    conn,
+                    user_id,
+                    ttl_seconds=session_hours * 3600,
+                    request=request,
+                    is_admin_session=False,
+                )
+                conn.execute(
+                    """
+                    UPDATE users
+                    SET last_login_at = ?, last_login_ip = ?, last_login_user_agent = ?,
+                        last_login_method = 'email_registration'
+                    WHERE id = ?
+                    """,
+                    (now, client_ip, str(request.headers.get("user-agent") or "")[:500], user_id),
+                )
+                governance.record_audit(
+                    conn,
+                    actor_user_id=user_id,
+                    target_user_id=user_id,
+                    action="auth.email_registration",
+                    resource_type="user",
+                    resource_id=str(user_id),
+                    after={
+                        "username": username,
+                        "email_domain": email.rsplit("@", 1)[-1],
+                        "verified": True,
+                    },
+                    risk_level="low",
+                    **governance.request_context(request),
+                )
+            except VerificationChallengeError as exc:
+                # Keep failed-attempt counters and invalidation even though
+                # the request returns an HTTP error.
+                conn.commit()
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": exc.code, "message": str(exc)},
+                ) from exc
+            except HTTPException:
+                raise
+            except sqlite3.IntegrityError as exc:
+                message = str(exc).upper()
+                detail = (
+                    "username is already reserved"
+                    if "USERNAME" in message or "RESERVED" in message
+                    else {
+                        "code": "email_already_registered",
+                        "message": "该电子邮箱已注册，请返回登录或使用其他邮箱。",
+                    }
+                )
+                raise HTTPException(status_code=409, detail=detail) from exc
+        response = JSONResponse(
+            content={
+                "ok": True,
+                "id": user_id,
+                "username": username,
+                "email": email,
+                "approval_status": "approved",
+                "is_admin": False,
+                "message": "registration completed",
+            }
+        )
+        response.set_cookie(
+            key=SESSION_COOKIE,
+            value=token,
+            httponly=True,
+            samesite="lax",
+            secure=_session_cookie_secure(request),
+        )
+        return response
+
     @app.get("/api/auth/policy")
     def api_auth_policy():
         try:
@@ -17833,6 +18226,547 @@ def create_app() -> FastAPI:
         except RuntimeConfigFileError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return _auth_login_policy(runtime)
+
+    def _google_callback_uri() -> str:
+        configured = str(os.getenv("GOOGLE_OAUTH_REDIRECT_URI", "") or "").strip()
+        if configured:
+            return configured
+        origin = str(
+            os.getenv("HTTPS_CANONICAL_ORIGIN", "https://www.vecto-ai.cn") or ""
+        ).strip().rstrip("/")
+        return f"{origin}/api/auth/google/callback"
+
+    def _oauth_error_redirect(code: str) -> RedirectResponse:
+        clean_code = re.sub(r"[^a-z0-9_-]", "", str(code or "").lower())[:64] or "oauth_failed"
+        response = RedirectResponse(
+            url=f"/?login=1&oauth_error={quote(clean_code, safe='')}",
+            status_code=302,
+        )
+        response.delete_cookie(GOOGLE_OAUTH_FLOW_COOKIE, path="/")
+        response.delete_cookie(GOOGLE_OAUTH_ONBOARDING_COOKIE, path="/")
+        return response
+
+    def _google_customer_login_response(
+        conn: sqlite3.Connection,
+        user: dict[str, Any],
+        request: Request,
+        return_path: str,
+    ) -> RedirectResponse:
+        if bool(int(user.get("is_admin") or 0)):
+            raise HTTPException(status_code=403, detail="administrator Google login is not enabled")
+        if str(user.get("approval_status") or "approved") != "approved":
+            raise HTTPException(status_code=403, detail="account is not approved")
+        if int(user.get("is_disabled") or 0) == 1 or int(user.get("deleted_at") or 0) > 0:
+            raise HTTPException(status_code=403, detail="account is disabled")
+        now = _now_ts()
+        conn.execute(
+            """
+            UPDATE sessions
+            SET revoked_at = ?, revoke_reason = 'google_login_replaced_session'
+            WHERE user_id = ? AND revoked_at = 0
+            """,
+            (now, int(user["id"])),
+        )
+        try:
+            runtime = _get_runtime_config(conn)
+        except RuntimeConfigFileError:
+            runtime = DEFAULT_RUNTIME_CONFIG
+        ttl_seconds = int(_auth_login_policy(runtime)["session_hours"]) * 3600
+        token = create_session(
+            conn,
+            int(user["id"]),
+            ttl_seconds=ttl_seconds,
+            request=request,
+            is_admin_session=False,
+        )
+        conn.execute(
+            """
+            UPDATE users
+            SET last_login_at = ?, last_login_ip = ?, last_login_user_agent = ?,
+                last_device_id = ?, last_login_method = 'google',
+                failed_login_count = 0, failed_login_window_at = 0,
+                updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END
+            WHERE id = ?
+            """,
+            (
+                now,
+                _request_client_ip(request),
+                str(request.headers.get("user-agent") or "")[:500],
+                str(request.headers.get("x-device-id") or "")[:128],
+                now,
+                now,
+                int(user["id"]),
+            ),
+        )
+        governance.record_audit(
+            conn,
+            actor_user_id=int(user["id"]),
+            target_user_id=int(user["id"]),
+            action="auth.login",
+            resource_type="session",
+            resource_id=governance.token_digest(token)[:16],
+            after={"is_admin": False, "method": "google"},
+            risk_level="low",
+            **governance.request_context(request),
+        )
+        response = RedirectResponse(
+            url=_safe_local_return_url(return_path, "/"),
+            status_code=302,
+        )
+        response.set_cookie(
+            key=SESSION_COOKIE,
+            value=token,
+            httponly=True,
+            samesite="lax",
+            secure=_session_cookie_secure(request),
+        )
+        response.delete_cookie(GOOGLE_OAUTH_FLOW_COOKIE, path="/")
+        response.delete_cookie(GOOGLE_OAUTH_ONBOARDING_COOKIE, path="/")
+        return response
+
+    @app.get("/api/auth/google/start")
+    def api_google_start(request: Request, return_url: str = "/"):
+        safe_return = _safe_local_return_url(return_url, "/")
+        client_ip = _request_client_ip(request)
+        _enforce_auth_rate_limit(
+            "google_oauth_start_ip",
+            client_ip,
+            limit=20,
+            window_seconds=600,
+        )
+        with db() as conn:
+            try:
+                runtime = _get_runtime_config(conn)
+            except RuntimeConfigFileError as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            if not _auth_login_policy(runtime)["google_login_enabled"]:
+                raise HTTPException(status_code=503, detail="Google login is not available")
+        state = generate_oauth_token()
+        nonce = generate_oauth_token()
+        try:
+            authorization_url = create_google_authorization(
+                state,
+                nonce,
+                _google_callback_uri(),
+            )
+        except GoogleOAuthConfigurationError as exc:
+            raise HTTPException(status_code=503, detail="Google login is not configured") from exc
+        now = _now_ts()
+        with db() as conn:
+            conn.execute(
+                """
+                DELETE FROM oauth_authorization_flows
+                WHERE expires_at <= ?
+                   OR (consumed_at > 0 AND consumed_at <= ?)
+                """,
+                (now, now - 3600),
+            )
+            active_flows = conn.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM oauth_authorization_flows
+                WHERE provider = 'google'
+                  AND request_ip = ?
+                  AND consumed_at = 0
+                  AND expires_at > ?
+                """,
+                (client_ip, now),
+            ).fetchone()
+            if int(active_flows["total"] or 0) >= 10:
+                raise HTTPException(
+                    status_code=429,
+                    detail="too many pending Google login attempts",
+                    headers={"Retry-After": "600"},
+                )
+            conn.execute(
+                """
+                INSERT INTO oauth_authorization_flows(
+                  state_digest, provider, nonce_digest, flow_token_digest,
+                  return_path, context_json, request_ip, expires_at,
+                  consumed_at, created_at
+                ) VALUES (?, 'google', ?, ?, ?, '{}', ?, ?, 0, ?)
+                """,
+                (
+                    oauth_token_digest(state),
+                    oauth_token_digest(nonce),
+                    oauth_token_digest(nonce),
+                    safe_return,
+                    client_ip,
+                    now + 600,
+                    now,
+                ),
+            )
+        response = RedirectResponse(url=authorization_url, status_code=302)
+        response.set_cookie(
+            key=GOOGLE_OAUTH_FLOW_COOKIE,
+            value=nonce,
+            httponly=True,
+            max_age=600,
+            samesite="lax",
+            secure=_session_cookie_secure(request),
+            path="/",
+        )
+        return response
+
+    @app.get("/api/auth/google/callback")
+    def api_google_callback(
+        request: Request,
+        state: str = "",
+        code: str = "",
+        error: str = "",
+    ):
+        if error:
+            return _oauth_error_redirect("provider_denied")
+        flow_cookie = str(request.cookies.get(GOOGLE_OAUTH_FLOW_COOKIE) or "").strip()
+        if not state or not code or not flow_cookie:
+            return _oauth_error_redirect("oauth_state_invalid")
+        now = _now_ts()
+        try:
+            state_digest = oauth_token_digest(state)
+            cookie_digest = oauth_token_digest(flow_cookie)
+        except ValueError:
+            return _oauth_error_redirect("oauth_state_invalid")
+        with db() as conn:
+            row = conn.execute(
+                "SELECT * FROM oauth_authorization_flows WHERE state_digest = ? AND provider = 'google'",
+                (state_digest,),
+            ).fetchone()
+            if (
+                row is None
+                or int(row["consumed_at"] or 0) > 0
+                or int(row["expires_at"] or 0) <= now
+                or not hmac.compare_digest(str(row["nonce_digest"] or ""), cookie_digest)
+                or not hmac.compare_digest(str(row["flow_token_digest"] or ""), cookie_digest)
+            ):
+                return _oauth_error_redirect("oauth_state_invalid")
+            try:
+                runtime = _get_runtime_config(conn)
+            except RuntimeConfigFileError:
+                return _oauth_error_redirect("google_login_unavailable")
+            if not _auth_login_policy(runtime)["google_login_enabled"]:
+                conn.execute(
+                    """
+                    UPDATE oauth_authorization_flows
+                    SET consumed_at = ?
+                    WHERE state_digest = ? AND consumed_at = 0
+                    """,
+                    (now, state_digest),
+                )
+                return _oauth_error_redirect("google_login_unavailable")
+            consumed = conn.execute(
+                """
+                UPDATE oauth_authorization_flows
+                SET consumed_at = ?
+                WHERE state_digest = ? AND consumed_at = 0 AND expires_at > ?
+                """,
+                (now, state_digest, now),
+            )
+            if consumed.rowcount != 1:
+                return _oauth_error_redirect("oauth_state_invalid")
+            return_path = _safe_local_return_url(str(row["return_path"] or "/"), "/")
+        try:
+            claims = exchange_google_code(
+                code,
+                _google_callback_uri(),
+                flow_cookie,
+            )
+        except (GoogleOAuthError, GoogleOAuthConfigurationError):
+            return _oauth_error_redirect("google_verification_failed")
+        subject = str(claims["sub"])
+        email = str(claims["email"])
+        profile_json = json.dumps(
+            {
+                "name": str(claims.get("name") or "")[:500],
+                "picture": str(claims.get("picture") or "")[:2048],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        with db() as conn:
+            identity = conn.execute(
+                """
+                SELECT users.*, oauth_identities.login_enabled AS google_login_enabled
+                FROM oauth_identities
+                JOIN users ON users.id = oauth_identities.user_id
+                WHERE oauth_identities.provider = 'google'
+                  AND oauth_identities.provider_subject = ?
+                """,
+                (subject,),
+            ).fetchone()
+            if identity is not None:
+                identity_data = dict(identity)
+                if int(identity_data.get("google_login_enabled") or 0) != 1:
+                    return _oauth_error_redirect("google_login_disabled")
+                conn.execute(
+                    """
+                    UPDATE oauth_identities
+                    SET email_normalized = ?, email_verified = 1, profile_json = ?,
+                        last_login_at = ?, updated_at = ?
+                    WHERE provider = 'google' AND provider_subject = ?
+                    """,
+                    (email, profile_json, now, now, subject),
+                )
+                try:
+                    return _google_customer_login_response(
+                        conn,
+                        identity_data,
+                        request,
+                        return_path,
+                    )
+                except HTTPException:
+                    return _oauth_error_redirect("account_unavailable")
+            verified_email = conn.execute(
+                """
+                SELECT users.*
+                FROM user_auth_emails
+                JOIN users ON users.id = user_auth_emails.user_id
+                WHERE user_auth_emails.email_normalized = ? COLLATE NOCASE
+                  AND user_auth_emails.login_enabled = 1
+                """,
+                (email,),
+            ).fetchone()
+            if verified_email is not None:
+                linked_user = dict(verified_email)
+                existing_provider = conn.execute(
+                    "SELECT 1 FROM oauth_identities WHERE user_id = ? AND provider = 'google'",
+                    (int(linked_user["id"]),),
+                ).fetchone()
+                if existing_provider is not None:
+                    return _oauth_error_redirect("google_identity_conflict")
+                conn.execute(
+                    """
+                    INSERT INTO oauth_identities(
+                      user_id, provider, provider_subject, email_normalized,
+                      email_verified, profile_json, login_enabled, last_login_at,
+                      created_at, updated_at
+                    ) VALUES (?, 'google', ?, ?, 1, ?, 1, ?, ?, ?)
+                    """,
+                    (int(linked_user["id"]), subject, email, profile_json, now, now, now),
+                )
+                try:
+                    return _google_customer_login_response(
+                        conn,
+                        linked_user,
+                        request,
+                        return_path,
+                    )
+                except HTTPException:
+                    return _oauth_error_redirect("account_unavailable")
+            onboarding_token = generate_oauth_token()
+            onboarding_expires_at = now + 600
+            conn.execute(
+                """
+                UPDATE oauth_authorization_flows
+                SET onboarding_token_digest = ?, onboarding_expires_at = ?,
+                    context_json = ?
+                WHERE state_digest = ? AND completed_at = 0
+                """,
+                (
+                    oauth_token_digest(onboarding_token),
+                    onboarding_expires_at,
+                    json.dumps(
+                        {
+                            "sub": subject,
+                            "email": email,
+                            "name": str(claims.get("name") or "")[:500],
+                            "picture": str(claims.get("picture") or "")[:2048],
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    state_digest,
+                ),
+            )
+        response = RedirectResponse(
+            url=f"/?google_setup=1&return_url={quote(return_path, safe='')}",
+            status_code=302,
+        )
+        response.set_cookie(
+            key=GOOGLE_OAUTH_ONBOARDING_COOKIE,
+            value=onboarding_token,
+            httponly=True,
+            max_age=600,
+            samesite="lax",
+            secure=_session_cookie_secure(request),
+            path="/",
+        )
+        response.delete_cookie(GOOGLE_OAUTH_FLOW_COOKIE, path="/")
+        return response
+
+    @app.post("/api/auth/google/complete")
+    def api_google_complete(payload: GoogleCompletePayload, request: Request):
+        _require_same_origin(request)
+        username = str(payload.username or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._-]{3,32}", username):
+            raise HTTPException(status_code=400, detail="username must be 3-32 letters, numbers, or ._-")
+        onboarding_token = str(
+            request.cookies.get(GOOGLE_OAUTH_ONBOARDING_COOKIE) or ""
+        ).strip()
+        if not onboarding_token:
+            raise HTTPException(status_code=401, detail="Google onboarding session expired")
+        now = _now_ts()
+        with db() as conn:
+            try:
+                runtime = _get_runtime_config(conn)
+            except RuntimeConfigFileError as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            if not _auth_login_policy(runtime)["google_login_enabled"]:
+                raise HTTPException(status_code=503, detail="Google login is not available")
+            conn.execute("BEGIN IMMEDIATE")
+            flow = conn.execute(
+                """
+                SELECT * FROM oauth_authorization_flows
+                WHERE onboarding_token_digest = ?
+                  AND provider = 'google'
+                  AND consumed_at > 0
+                  AND completed_at = 0
+                  AND onboarding_expires_at > ?
+                """,
+                (oauth_token_digest(onboarding_token), now),
+            ).fetchone()
+            if flow is None:
+                raise HTTPException(status_code=401, detail="Google onboarding session expired")
+            try:
+                claims = json.loads(str(flow["context_json"] or "{}"))
+                subject = str(claims["sub"])
+                email = normalize_email(str(claims["email"]))
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise HTTPException(status_code=400, detail="Google onboarding data is invalid") from exc
+            if conn.execute(
+                "SELECT 1 FROM user_auth_emails WHERE email_normalized = ? COLLATE NOCASE",
+                (email,),
+            ).fetchone() is not None:
+                raise HTTPException(status_code=409, detail="email is already registered; restart Google login")
+            try:
+                inserted = conn.execute(
+                    """
+                    INSERT INTO users(
+                      username, password_hash, is_admin, is_disabled, balance_cents,
+                      account_type, approval_status, full_name, email,
+                      lifecycle_status, source_channel, approved_at,
+                      password_login_enabled, created_at, updated_at
+                    ) VALUES (?, ?, 0, 0, 0, 'self_service', 'approved', ?, ?,
+                              'active', 'google_oauth', ?, 0, ?, ?)
+                    """,
+                    (
+                        username,
+                        "",
+                        str(claims.get("name") or username)[:80],
+                        email,
+                        now,
+                        now,
+                        now,
+                    ),
+                )
+                user_id = int(inserted.lastrowid or 0)
+                _reserve_username(conn, user_id, username, now)
+                conn.execute(
+                    """
+                    INSERT INTO user_auth_emails(
+                      user_id, email_normalized, email_original, verified_at,
+                      is_primary, login_enabled, source, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 1, 1, 'google_oauth', ?, ?)
+                    """,
+                    (user_id, email, email, now, now, now),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO oauth_identities(
+                      user_id, provider, provider_subject, email_normalized,
+                      email_verified, profile_json, login_enabled, last_login_at,
+                      created_at, updated_at
+                    ) VALUES (?, 'google', ?, ?, 1, ?, 1, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        subject,
+                        email,
+                        json.dumps(
+                            {
+                                "name": str(claims.get("name") or "")[:500],
+                                "picture": str(claims.get("picture") or "")[:2048],
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        now,
+                        now,
+                        now,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO billing_wallets(
+                      user_id, credit_units, billing_mode, migrated_legacy_balance,
+                      created_at, updated_at
+                    ) VALUES (?, 0, 'enforced', 0, ?, ?)
+                    """,
+                    (user_id, now, now),
+                )
+                completed = conn.execute(
+                    """
+                    UPDATE oauth_authorization_flows
+                    SET user_id = ?, completed_at = ?
+                    WHERE state_digest = ? AND completed_at = 0
+                    """,
+                    (user_id, now, str(flow["state_digest"])),
+                )
+                if completed.rowcount != 1:
+                    raise HTTPException(status_code=409, detail="Google onboarding was already completed")
+                ttl_seconds = int(_auth_login_policy(runtime)["session_hours"]) * 3600
+                token = create_session(
+                    conn,
+                    user_id,
+                    ttl_seconds=ttl_seconds,
+                    request=request,
+                    is_admin_session=False,
+                )
+                conn.execute(
+                    """
+                    UPDATE users
+                    SET last_login_at = ?, last_login_ip = ?, last_login_user_agent = ?,
+                        last_login_method = 'google'
+                    WHERE id = ?
+                    """,
+                    (now, _request_client_ip(request), str(request.headers.get("user-agent") or "")[:500], user_id),
+                )
+                governance.record_audit(
+                    conn,
+                    actor_user_id=user_id,
+                    target_user_id=user_id,
+                    action="auth.google_registration",
+                    resource_type="user",
+                    resource_id=str(user_id),
+                    after={
+                        "username": username,
+                        "email_domain": email.rsplit("@", 1)[-1],
+                        "password_login_enabled": False,
+                    },
+                    risk_level="low",
+                    **governance.request_context(request),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise HTTPException(status_code=409, detail="username is already reserved") from exc
+        response = JSONResponse(
+            content={
+                "ok": True,
+                "id": user_id,
+                "username": username,
+                "email": email,
+                "approval_status": "approved",
+                "is_admin": False,
+                "password_login_enabled": False,
+            }
+        )
+        response.set_cookie(
+            key=SESSION_COOKIE,
+            value=token,
+            httponly=True,
+            samesite="lax",
+            secure=_session_cookie_secure(request),
+        )
+        response.delete_cookie(GOOGLE_OAUTH_ONBOARDING_COOKIE, path="/")
+        return response
 
     def _login_response(payload: LoginPayload, request: Request, *, expected_admin: bool | None = None) -> JSONResponse:
         username = str(payload.username or "").strip()
@@ -17863,7 +18797,30 @@ def create_app() -> FastAPI:
                 if remember_login
                 else int(auth_policy["session_hours"]) * 3600
             )
-            row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+            if "@" in username:
+                try:
+                    email_identifier = normalize_email(username)
+                except ValueError:
+                    email_identifier = ""
+                row = (
+                    conn.execute(
+                        """
+                        SELECT users.*
+                        FROM user_auth_emails
+                        JOIN users ON users.id = user_auth_emails.user_id
+                        WHERE user_auth_emails.email_normalized = ? COLLATE NOCASE
+                          AND user_auth_emails.login_enabled = 1
+                        """,
+                        (email_identifier,),
+                    ).fetchone()
+                    if email_identifier
+                    else None
+                )
+            else:
+                row = conn.execute(
+                    "SELECT * FROM users WHERE username = ? COLLATE NOCASE",
+                    (username,),
+                ).fetchone()
             if row is None:
                 record_invalid_credentials()
                 raise HTTPException(status_code=401, detail="用户名或密码错误")
@@ -17875,6 +18832,46 @@ def create_app() -> FastAPI:
                     record_invalid_credentials()
                     raise HTTPException(status_code=401, detail="用户名或密码错误")
                 user = dict(locked_row)
+            if int(user.get("password_login_enabled", 1) or 0) != 1:
+                record_invalid_credentials()
+                raise HTTPException(status_code=401, detail="用户名或密码错误")
+            failed_lock_until = int(user.get("locked_until") or 0)
+            failed_lock_reason = str(user.get("lifecycle_reason") or "")
+            if failed_lock_reason == "too_many_failed_logins" and failed_lock_until > _now_ts():
+                retry_after = max(failed_lock_until - _now_ts(), 1)
+                raise HTTPException(
+                    status_code=429,
+                    detail="登录尝试次数过多，请稍后重试",
+                    headers={"Retry-After": str(retry_after)},
+                )
+            if (
+                failed_lock_reason == "too_many_failed_logins"
+                and failed_lock_until > 0
+                and failed_lock_until <= _now_ts()
+            ):
+                unlocked_at = _now_ts()
+                conn.execute(
+                    """
+                    UPDATE users
+                    SET lifecycle_status = 'active', lifecycle_reason = '',
+                        locked_at = 0, locked_until = 0,
+                        failed_login_count = 0, failed_login_window_at = 0,
+                        updated_at = MAX(updated_at, ?),
+                        row_version = row_version + 1
+                    WHERE id = ?
+                    """,
+                    (unlocked_at, int(user["id"])),
+                )
+                user.update(
+                    {
+                        "lifecycle_status": "active",
+                        "lifecycle_reason": "",
+                        "locked_at": 0,
+                        "locked_until": 0,
+                        "failed_login_count": 0,
+                        "failed_login_window_at": 0,
+                    }
+                )
             if not verify_password(password, str(user.get("password_hash") or "")):
                 failed_now = _now_ts()
                 window_at = int(user.get("failed_login_window_at") or 0)
@@ -17886,7 +18883,7 @@ def create_app() -> FastAPI:
                 if not bool(int(user.get("is_admin") or 0)) and failed_count >= 8:
                     conn.execute(
                         "UPDATE users SET lifecycle_status = 'locked', lifecycle_reason = 'too_many_failed_logins', "
-                        "is_disabled = 1, locked_at = ?, locked_until = ?, row_version = row_version + 1 WHERE id = ?",
+                        "locked_at = ?, locked_until = ?, row_version = row_version + 1 WHERE id = ?",
                         (failed_now, failed_now + 1800, int(user["id"])),
                     )
                     governance.upsert_alert(
@@ -17910,6 +18907,7 @@ def create_app() -> FastAPI:
                         fingerprint=f"admin-login-failures:{int(user['id'])}:{failed_now // 900}",
                         created_at=failed_now,
                     )
+                conn.commit()
                 record_invalid_credentials()
                 raise HTTPException(status_code=401, detail="用户名或密码错误")
             is_admin = bool(int(user.get("is_admin") or 0))
@@ -18019,6 +19017,7 @@ def create_app() -> FastAPI:
                 conn.execute(
                     "UPDATE users SET last_login_at = ?, last_login_ip = ?, last_login_user_agent = ?, "
                     "last_device_id = ?, failed_login_count = 0, failed_login_window_at = 0, "
+                    "last_login_method = 'password', "
                     "updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END WHERE id = ?",
                     (
                         login_at,
@@ -18037,7 +19036,12 @@ def create_app() -> FastAPI:
                     action="auth.login",
                     resource_type="session",
                     resource_id=governance.token_digest(token)[:16],
-                    after={"is_admin": is_admin, "device_id": login_device_id, "remember_login": remember_login},
+                    after={
+                        "is_admin": is_admin,
+                        "device_id": login_device_id,
+                        "remember_login": remember_login,
+                        "method": "password",
+                    },
                     risk_level="low",
                     **governance.request_context(request),
                 )
@@ -18114,6 +19118,70 @@ def create_app() -> FastAPI:
         response = JSONResponse(content={"ok": True})
         response.delete_cookie(ADMIN_SESSION_COOKIE if admin_logout else SESSION_COOKIE)
         return response
+
+    @app.post("/api/auth/password/setup")
+    def api_setup_initial_password(
+        payload: InitialPasswordSetupPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        _require_same_origin(request)
+        if _is_admin(user) or _is_admin_workspace(user):
+            raise HTTPException(status_code=403, detail="customer account required")
+        new_password = str(payload.new_password or "")
+        if len(new_password) < _minimum_password_length(is_admin=False) or len(new_password) > 256:
+            raise HTTPException(status_code=400, detail="password must be 8-256 characters")
+        now = _now_ts()
+        with db() as conn:
+            email_row = conn.execute(
+                """
+                SELECT email_normalized
+                FROM user_auth_emails
+                WHERE user_id = ? AND is_primary = 1 AND login_enabled = 1
+                """,
+                (int(user["id"]),),
+            ).fetchone()
+            if email_row is None:
+                raise HTTPException(status_code=409, detail="verified account email is required")
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                verify_and_consume_challenge(
+                    conn,
+                    payload.challenge_id,
+                    str(email_row["email_normalized"]),
+                    "password_setup",
+                    payload.verification_code,
+                    now,
+                )
+            except VerificationChallengeError as exc:
+                conn.commit()
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": exc.code, "message": str(exc)},
+                ) from exc
+            new_hash = hash_password(new_password)
+            conn.execute(
+                """
+                UPDATE users
+                SET password_hash = ?, password_login_enabled = 1,
+                    must_change_password = 0, password_expires_at = 0,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (new_hash, now, int(user["id"])),
+            )
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user["id"]),
+                target_user_id=int(user["id"]),
+                action="auth.password_setup",
+                resource_type="user",
+                resource_id=str(user["id"]),
+                after={"password_login_enabled": True},
+                risk_level="medium",
+                **governance.request_context(request),
+            )
+        return {"ok": True, "password_login_enabled": True}
 
     @app.post("/api/auth/change_password")
     def api_change_password(
@@ -18272,6 +19340,40 @@ def create_app() -> FastAPI:
         profile = _user_profile_payload(dict(row))
         return {"ok": True, "profile": profile, **profile}
 
+    def _me_auth_metadata(account: dict[str, Any]) -> dict[str, Any]:
+        account_id = int(account.get("id") or 0)
+        with db() as conn:
+            email_row = conn.execute(
+                """
+                SELECT email_normalized, verified_at
+                FROM user_auth_emails
+                WHERE user_id = ? AND is_primary = 1
+                LIMIT 1
+                """,
+                (account_id,),
+            ).fetchone()
+            google_row = conn.execute(
+                """
+                SELECT login_enabled
+                FROM oauth_identities
+                WHERE user_id = ? AND provider = 'google'
+                LIMIT 1
+                """,
+                (account_id,),
+            ).fetchone()
+        auth_source = {
+            "password_configured": 1 if str(account.get("password_hash") or "") else 0,
+            "password_login_enabled": int(account.get("password_login_enabled", 1) or 0),
+            "google_identity_bound": 1 if google_row is not None else 0,
+            "google_login_enabled": int(google_row["login_enabled"] or 0) if google_row else 0,
+        }
+        return {
+            "verified_email": str(email_row["email_normalized"] or "") if email_row else "",
+            "email_verified_at": int(email_row["verified_at"] or 0) if email_row else 0,
+            "password_login_enabled": bool(auth_source["password_login_enabled"]),
+            "auth_methods": _user_auth_methods_payload(auth_source),
+        }
+
     @app.get("/api/me")
     def api_me(user: dict[str, Any] = Depends(_get_user_allowing_password_change)):
         if _is_admin_workspace(user):
@@ -18298,6 +19400,7 @@ def create_app() -> FastAPI:
                 "acting_admin": True,
                 "admin_user_id": _identity_user_id(user),
                 "publish_policy": get_daily_publish_policy(_workspace_user_id(user), admin_waived=True),
+                **_me_auth_metadata(target_user),
             }
         return {
             "id": int(user.get("id") or 0),
@@ -18315,6 +19418,7 @@ def create_app() -> FastAPI:
             "must_change_password": bool(int(user.get("must_change_password") or 0)),
             "password_expires_at": _password_expiry(user),
             "publish_policy": get_daily_publish_policy(_identity_user_id(user), admin_waived=bool(int(user.get("is_admin") or 0))),
+            **_me_auth_metadata(user),
         }
 
     @app.get("/api/auth/me")
@@ -21220,6 +22324,8 @@ def create_app() -> FastAPI:
         created_to: int = 0,
         last_activity_from: int = 0,
         last_activity_to: int = 0,
+        auth_method: str = "",
+        email_status: str = "",
         user: dict[str, Any] = Depends(require_admin),
     ):
         lim = min(max(int(limit or 200), 1), 1000)
@@ -21301,6 +22407,27 @@ def create_app() -> FastAPI:
         if int(last_activity_to or 0) > 0:
             clauses.append("last_login_at <= ?")
             where_params.append(int(last_activity_to))
+        clean_auth_method = str(auth_method or "").strip().lower()
+        if clean_auth_method == "password":
+            clauses.append("password_hash != '' AND password_login_enabled = 1")
+        elif clean_auth_method == "google":
+            clauses.append(
+                "id IN (SELECT user_id FROM oauth_identities "
+                "WHERE provider = 'google' AND login_enabled = 1)"
+            )
+        elif clean_auth_method == "email":
+            clauses.append(
+                "id IN (SELECT user_id FROM user_auth_emails WHERE login_enabled = 1)"
+            )
+        elif clean_auth_method:
+            raise HTTPException(status_code=400, detail="invalid auth method")
+        clean_email_status = str(email_status or "").strip().lower()
+        if clean_email_status == "verified":
+            clauses.append("id IN (SELECT user_id FROM user_auth_emails WHERE login_enabled = 1)")
+        elif clean_email_status == "unverified":
+            clauses.append("id NOT IN (SELECT user_id FROM user_auth_emails WHERE login_enabled = 1)")
+        elif clean_email_status:
+            raise HTTPException(status_code=400, detail="invalid email status")
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with db() as conn:
             account_counts = conn.execute(
@@ -21327,11 +22454,35 @@ def create_app() -> FastAPI:
                 f"""
                 SELECT id, username, is_admin, is_disabled, balance_cents, account_type,
                        approval_status, full_name, email, phone, company, use_case, admin_note,
-                       approved_at, approved_by, last_login_at, must_change_password,
+                       approved_at, approved_by, last_login_at, last_login_method,
+                       password_login_enabled, must_change_password,
                        password_expires_at, deleted_at, deleted_by, created_at, updated_at,
                        lifecycle_status, lifecycle_reason, risk_level, owner_admin_id,
                         source_channel, last_login_ip, last_login_user_agent, last_device_id,
                         row_version,
+                        CASE WHEN password_hash != '' THEN 1 ELSE 0 END AS password_configured,
+                        COALESCE(
+                          (SELECT email_normalized FROM user_auth_emails
+                           WHERE user_auth_emails.user_id = users.id AND is_primary = 1
+                           ORDER BY verified_at DESC LIMIT 1),
+                          ''
+                        ) AS verified_email,
+                        COALESCE(
+                          (SELECT verified_at FROM user_auth_emails
+                           WHERE user_auth_emails.user_id = users.id AND is_primary = 1
+                           ORDER BY verified_at DESC LIMIT 1),
+                          0
+                        ) AS email_verified_at,
+                        CASE WHEN EXISTS(
+                          SELECT 1 FROM oauth_identities
+                          WHERE oauth_identities.user_id = users.id AND provider = 'google'
+                        ) THEN 1 ELSE 0 END AS google_identity_bound,
+                        COALESCE(
+                          (SELECT login_enabled FROM oauth_identities
+                           WHERE oauth_identities.user_id = users.id AND provider = 'google'
+                           LIMIT 1),
+                          0
+                        ) AS google_login_enabled,
                         COALESCE((SELECT credit_units FROM billing_wallets WHERE billing_wallets.user_id = users.id), 0) AS credit_units,
                         COALESCE((SELECT billing_mode FROM billing_wallets WHERE billing_wallets.user_id = users.id), '') AS billing_mode,
                         COALESCE((SELECT unlimited_compute FROM billing_wallets WHERE billing_wallets.user_id = users.id), 0) AS unlimited_compute,
@@ -21348,6 +22499,7 @@ def create_app() -> FastAPI:
         items = []
         for row in rows:
             item = dict(row)
+            item["auth_methods"] = _user_auth_methods_payload(item)
             item.update(content_metrics.get(int(row["id"]), {}))
             items.append(item)
         return {
@@ -21479,12 +22631,18 @@ def create_app() -> FastAPI:
                           target.balance_cents, target.account_type, target.approval_status,
                           target.full_name, target.email, target.phone, target.company,
                           target.use_case, target.admin_note, target.approved_at, target.approved_by,
-                           target.last_login_at, target.must_change_password, target.password_expires_at,
+                           target.last_login_at, target.last_login_method,
+                           target.password_login_enabled, target.must_change_password,
+                           target.password_expires_at,
                            target.deleted_at, target.deleted_by, target.created_at, target.updated_at,
                            target.lifecycle_status, target.lifecycle_reason, target.risk_level,
                            target.owner_admin_id, target.source_channel, target.last_login_ip,
                            target.last_login_user_agent, target.last_device_id, target.row_version,
                            CASE WHEN target.password_hash <> '' THEN 1 ELSE 0 END AS password_configured,
+                           COALESCE(auth_email.email_normalized, '') AS verified_email,
+                           COALESCE(auth_email.verified_at, 0) AS email_verified_at,
+                           CASE WHEN google_identity.id IS NOT NULL THEN 1 ELSE 0 END AS google_identity_bound,
+                           COALESCE(google_identity.login_enabled, 0) AS google_login_enabled,
                            CASE
                              WHEN target.is_admin = 1 THEN 'prohibited'
                              WHEN vault.user_id IS NOT NULL THEN 'available'
@@ -21494,6 +22652,10 @@ def create_app() -> FastAPI:
                    FROM users AS target
                    LEFT JOIN users AS approver ON approver.id = target.approved_by
                    LEFT JOIN password_vault AS vault ON vault.user_id = target.id
+                   LEFT JOIN user_auth_emails AS auth_email
+                     ON auth_email.user_id = target.id AND auth_email.is_primary = 1
+                   LEFT JOIN oauth_identities AS google_identity
+                     ON google_identity.user_id = target.id AND google_identity.provider = 'google'
                    WHERE target.id = ?""",
                 (int(target_user_id),),
             ).fetchone()
@@ -21529,6 +22691,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="客户账号不存在")
         user_payload = dict(row)
         user_payload["password_reveal_available"] = user_payload.get("password_reveal_status") == "available"
+        user_payload["auth_methods"] = _user_auth_methods_payload(user_payload)
         return {
             "user": user_payload,
             "resource_counts": resource_counts,
@@ -21537,6 +22700,175 @@ def create_app() -> FastAPI:
             "active_session_count": active_session_count,
             "open_alert_count": open_alert_count,
         }
+
+    @app.patch("/api/admin/users/{target_user_id}/auth-methods")
+    def api_admin_update_user_auth_methods(
+        target_user_id: int,
+        payload: AdminAuthMethodsPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        target_id = int(target_user_id)
+        if payload.password_login_enabled is None and payload.google_login_enabled is None:
+            raise HTTPException(status_code=400, detail="at least one authentication method is required")
+        now = _now_ts()
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT users.id, users.is_admin, users.is_disabled, users.deleted_at,
+                       users.password_hash, users.password_login_enabled,
+                       CASE WHEN users.password_hash != '' THEN 1 ELSE 0 END AS password_configured,
+                       CASE WHEN oauth_identities.id IS NOT NULL THEN 1 ELSE 0 END AS google_identity_bound,
+                       COALESCE(oauth_identities.login_enabled, 0) AS google_login_enabled
+                FROM users
+                LEFT JOIN oauth_identities
+                  ON oauth_identities.user_id = users.id
+                 AND oauth_identities.provider = 'google'
+                WHERE users.id = ?
+                """,
+                (target_id,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="customer account does not exist")
+            target = dict(row)
+            if int(target.get("is_admin") or 0) == 1:
+                raise HTTPException(status_code=400, detail="administrator authentication methods cannot be changed here")
+            password_configured = bool(str(target.get("password_hash") or ""))
+            google_bound = bool(int(target.get("google_identity_bound") or 0))
+            next_password = (
+                bool(payload.password_login_enabled)
+                if payload.password_login_enabled is not None
+                else bool(int(target.get("password_login_enabled") or 0))
+            )
+            next_google = (
+                bool(payload.google_login_enabled)
+                if payload.google_login_enabled is not None
+                else bool(int(target.get("google_login_enabled") or 0))
+            )
+            if next_password and not password_configured:
+                raise HTTPException(status_code=409, detail="this account has no configured password")
+            if next_google and not google_bound:
+                raise HTTPException(status_code=409, detail="this account has no linked Google identity")
+            if (
+                not next_password
+                and not next_google
+                and int(target.get("is_disabled") or 0) == 0
+                and int(target.get("deleted_at") or 0) == 0
+            ):
+                raise HTTPException(status_code=409, detail="an active account must keep at least one login method")
+            conn.execute(
+                "UPDATE users SET password_login_enabled = ?, updated_at = ? WHERE id = ?",
+                (1 if next_password else 0, now, target_id),
+            )
+            if google_bound:
+                conn.execute(
+                    """
+                    UPDATE oauth_identities
+                    SET login_enabled = ?, updated_at = ?
+                    WHERE user_id = ? AND provider = 'google'
+                    """,
+                    (1 if next_google else 0, now, target_id),
+                )
+            if not next_password or not next_google:
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET revoked_at = ?, revoke_reason = 'authentication_method_changed'
+                    WHERE user_id = ? AND revoked_at = 0
+                    """,
+                    (now, target_id),
+                )
+            after_row = {
+                "password_configured": 1 if password_configured else 0,
+                "password_login_enabled": 1 if next_password else 0,
+                "google_identity_bound": 1 if google_bound else 0,
+                "google_login_enabled": 1 if next_google else 0,
+            }
+            auth_methods = _user_auth_methods_payload(after_row)
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                target_user_id=target_id,
+                action="user.auth_methods_update",
+                resource_type="user",
+                resource_id=str(target_id),
+                before=_user_auth_methods_payload(target),
+                after=auth_methods,
+                risk_level="high",
+                **governance.request_context(request),
+            )
+        return {"ok": True, "auth_methods": auth_methods, "updated_at": now}
+
+    @app.delete("/api/admin/users/{target_user_id}/oauth-identities/google")
+    def api_admin_unlink_user_google(
+        target_user_id: int,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        target_id = int(target_user_id)
+        now = _now_ts()
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT users.id, users.is_admin, users.password_hash,
+                       users.password_login_enabled,
+                       CASE WHEN users.password_hash != '' THEN 1 ELSE 0 END AS password_configured,
+                       CASE WHEN oauth_identities.id IS NOT NULL THEN 1 ELSE 0 END AS google_identity_bound,
+                       COALESCE(oauth_identities.login_enabled, 0) AS google_login_enabled
+                FROM users
+                LEFT JOIN oauth_identities
+                  ON oauth_identities.user_id = users.id
+                 AND oauth_identities.provider = 'google'
+                WHERE users.id = ?
+                """,
+                (target_id,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="customer account does not exist")
+            target = dict(row)
+            if int(target.get("is_admin") or 0) == 1:
+                raise HTTPException(status_code=400, detail="administrator Google identity cannot be changed here")
+            if not str(target.get("password_hash") or "") or int(target.get("password_login_enabled") or 0) != 1:
+                raise HTTPException(status_code=409, detail="enable a configured password before unlinking Google")
+            deleted = conn.execute(
+                "DELETE FROM oauth_identities WHERE user_id = ? AND provider = 'google'",
+                (target_id,),
+            )
+            if deleted.rowcount != 1:
+                raise HTTPException(status_code=404, detail="Google identity is not linked")
+            conn.execute(
+                """
+                UPDATE sessions
+                SET revoked_at = ?, revoke_reason = 'google_identity_unlinked'
+                WHERE user_id = ? AND revoked_at = 0
+                """,
+                (now, target_id),
+            )
+            auth_methods = _user_auth_methods_payload(
+                {
+                    "password_configured": 1,
+                    "password_login_enabled": 1,
+                    "google_identity_bound": 0,
+                    "google_login_enabled": 0,
+                }
+            )
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                target_user_id=target_id,
+                action="user.google_identity_unlink",
+                resource_type="user",
+                resource_id=str(target_id),
+                before=_user_auth_methods_payload(target),
+                after=auth_methods,
+                risk_level="high",
+                **governance.request_context(request),
+            )
+        return {"ok": True, "auth_methods": auth_methods, "updated_at": now}
 
     @app.post("/api/admin/users/{target_user_id}/reveal-password")
     def api_admin_reveal_user_password(
@@ -22352,6 +23684,7 @@ def create_app() -> FastAPI:
                         "billing_wallets",
                     ):
                         conn.execute(f"DELETE FROM {billing_table} WHERE user_id = ?", (target_id,))
+                    conn.execute("DELETE FROM username_reservations WHERE user_id = ?", (target_id,))
                     deleted_user = conn.execute("DELETE FROM users WHERE id = ?", (target_id,))
                     if deleted_user.rowcount != 1:
                         raise RuntimeError(f"purge target disappeared before commit: {target_id}")

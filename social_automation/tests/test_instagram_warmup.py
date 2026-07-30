@@ -69,6 +69,7 @@ class InstagramWarmupTests(TestCase):
             "like_limit": 1,
             "max_comments": 1,
             "comment_chance": 100,
+            "require_persona_relevance": False,
             "reply_templates": ["测试评论"],
         }
         with (
@@ -76,7 +77,11 @@ class InstagramWarmupTests(TestCase):
             mock.patch.object(runner, "_dismiss_instagram_interstitials", return_value=False),
             mock.patch.object(runner, "_click_some_instagram_likes", return_value=1),
             mock.patch.object(runner, "_post_instagram_warmup_comment", return_value=True),
-            mock.patch.object(runner, "_current_warmup_post_text", return_value="理发技巧"),
+            mock.patch.object(
+                runner,
+                "_current_warmup_post_context",
+                return_value={"text": "理发技巧", "root": None},
+            ),
             mock.patch.object(runner, "_pick_warmup_persona_reply", return_value="理发这个细节很实用。"),
             mock.patch.object(runner, "_slow_human_scroll", return_value={"delta": 320}),
             mock.patch.object(runner, "_sleep_between"),

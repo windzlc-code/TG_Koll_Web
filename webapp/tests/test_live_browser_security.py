@@ -381,7 +381,7 @@ def test_live_browser_task_summary_exposes_only_concrete_strategy_fields():
             "task_group_count": 3,
             "payload_json": json.dumps(
                 {
-                    "strategy_label": "默认养号：滑动 + 随机点赞",
+                    "strategy_label": "默认养号：浏览 + 低频点赞",
                     "browse_limit": 30,
                     "like_limit": 16,
                     "max_comments": 0,
@@ -396,14 +396,14 @@ def test_live_browser_task_summary_exposes_only_concrete_strategy_fields():
 
     assert warmup["count"] == 3
     assert warmup["task_type"] == "threads_warmup"
-    assert warmup["strategy_label"] == "默认养号：滑动 + 随机点赞"
+    assert warmup["strategy_label"] == "默认养号：浏览 + 低频点赞"
     assert warmup["fields"] == [
         {"label": "浏览", "value": "30 次"},
         {"label": "点赞最多", "value": "16 次"},
         {"label": "评论最多", "value": "0 次"},
     ]
-    assert warmup["target"] == "养号｜随机点赞｜浏览30·赞16·评0"
-    assert warmup["detail"] == "养号 · 默认养号：滑动 + 随机点赞 · 浏览 30 次 · 点赞最多 16 次 · 评论最多 0 次"
+    assert warmup["target"] == "养号｜低频点赞｜浏览30·赞16·评0"
+    assert warmup["detail"] == "养号 · 默认养号：浏览 + 低频点赞 · 浏览 30 次 · 点赞最多 16 次 · 评论最多 0 次"
     assert len(warmup["target"]) < len(warmup["detail"])
     assert "must-not-leak" not in json.dumps(warmup, ensure_ascii=False)
 
