@@ -430,6 +430,77 @@ class WarmupChainParityTests(TestCase):
         )
         goto.assert_not_called()
 
+    def test_instagram_keyword_search_activates_suggestion_and_opens_result(self):
+        page = mock.Mock()
+        search_input = mock.Mock()
+
+        with (
+            mock.patch.object(runner, "_warmup_search_input_locator", return_value=search_input),
+            mock.patch.object(runner, "_human_click", return_value=True),
+            mock.patch.object(runner, "_type_text"),
+            mock.patch.object(runner, "_warmup_search_result_signature", return_value=("old",)),
+            mock.patch.object(
+                runner,
+                "_submit_instagram_warmup_search",
+                return_value="click_type_suggestion_open_result",
+            ) as submit,
+            mock.patch.object(runner, "_wait_for_warmup_search_results", return_value=True),
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            driver = runner._search_warmup_interest_surface(
+                page,
+                "instagram",
+                "barber stories",
+                _Logger(),
+            )
+
+        self.assertEqual(driver, "ui")
+        submit.assert_called_once_with(
+            page,
+            "barber stories",
+            mock.ANY,
+            "instagram_warmup_relevance_search",
+        )
+        self.assertNotIn(mock.call("Enter"), page.keyboard.press.call_args_list)
+
+    def test_instagram_search_submission_clicks_suggestion_then_grid_post(self):
+        page = mock.Mock()
+        suggestion = mock.Mock()
+        suggestions = mock.Mock()
+        suggestions.count.return_value = 1
+        suggestions.nth.return_value = suggestion
+        suggestion.is_visible.return_value = True
+        suggestion.bounding_box.return_value = {
+            "x": 40,
+            "y": 120,
+            "width": 260,
+            "height": 44,
+        }
+        page.get_by_text.return_value = suggestions
+        result_link = mock.Mock()
+
+        with (
+            mock.patch.object(runner, "_human_click", return_value=True) as click,
+            mock.patch.object(runner, "_warmup_search_result_signature", return_value=()),
+            mock.patch.object(
+                runner,
+                "_visible_instagram_search_post_link",
+                return_value=result_link,
+            ),
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            interaction = runner._submit_instagram_warmup_search(
+                page,
+                "barber stories",
+                _Logger(),
+                "instagram_warmup_relevance_search",
+            )
+
+        self.assertEqual(interaction, "click_type_suggestion_open_result")
+        self.assertEqual(click.call_args_list[0].args[1], suggestion)
+        self.assertEqual(click.call_args_list[1].args[1], result_link)
+        self.assertNotIn(mock.call("Enter"), page.keyboard.press.call_args_list)
+
     def test_keyword_search_opens_search_ui_only_when_input_is_not_already_visible(self):
         page = mock.Mock()
         search_entry = mock.Mock()

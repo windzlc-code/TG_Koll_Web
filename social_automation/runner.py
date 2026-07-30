@@ -3791,6 +3791,86 @@ def _wait_for_warmup_search_results(
     return False
 
 
+def _visible_instagram_search_post_link(page):
+    """Return the first visible Instagram search-grid post link."""
+    for selector in (
+        'a[href*="/p/"]',
+        'a[href*="/reel/"]',
+        'a[href*="/tv/"]',
+    ):
+        try:
+            links = page.locator(selector)
+            for index in range(min(int(links.count()), 24)):
+                link = links.nth(index)
+                if not link.is_visible(timeout=500):
+                    continue
+                box = link.bounding_box()
+                if not box:
+                    continue
+                if float(box.get("width") or 0) < 40 or float(box.get("height") or 0) < 40:
+                    continue
+                if float(box.get("y") or 0) < 70:
+                    continue
+                return link
+        except Exception:
+            continue
+    return None
+
+
+def _submit_instagram_warmup_search(
+    page,
+    keyword: str,
+    logger: AutomationLogger,
+    stage: str,
+) -> str:
+    """Activate an Instagram search suggestion and open one result post.
+
+    Instagram's desktop search drawer does not submit a keyword when Enter is
+    pressed while the text input is focused. The query suggestion must be
+    activated first; its result grid must then be opened before the shared
+    article-based relevance calibration can inspect post text.
+    """
+    interaction = "click_type_suggestion"
+    suggestion_clicked = False
+    try:
+        candidates = page.get_by_text(keyword, exact=True)
+        for index in range(min(int(candidates.count()), 12)):
+            candidate = candidates.nth(index)
+            if not candidate.is_visible(timeout=500):
+                continue
+            box = candidate.bounding_box()
+            if not box or float(box.get("y") or 0) < 70:
+                continue
+            if _human_click(page, candidate, logger, f"{stage}_suggestion"):
+                suggestion_clicked = True
+                break
+    except Exception:
+        suggestion_clicked = False
+
+    if not suggestion_clicked:
+        interaction = "click_type_arrow_enter"
+        page.keyboard.press("ArrowDown")
+        _sleep_between(0.2, 0.4)
+        page.keyboard.press("Enter")
+
+    with contextlib.suppress(Exception):
+        page.wait_for_load_state("domcontentloaded", timeout=10000)
+
+    deadline = time.monotonic() + 16.0
+    while time.monotonic() < deadline:
+        if _warmup_search_result_signature(page, "instagram"):
+            return interaction
+        post_link = _visible_instagram_search_post_link(page)
+        if post_link is not None:
+            if not _human_click(page, post_link, logger, f"{stage}_open_result"):
+                raise RuntimeError("Instagram search result click was not confirmed")
+            with contextlib.suppress(Exception):
+                page.wait_for_load_state("domcontentloaded", timeout=10000)
+            return f"{interaction}_open_result"
+        _sleep_between(0.5, 0.8)
+    raise RuntimeError("Instagram search suggestion did not expose a result post")
+
+
 def _search_warmup_interest_surface(
     page,
     platform: str,
@@ -3842,15 +3922,24 @@ def _search_warmup_interest_surface(
             stage=f"{stage}_type",
         )
         previous_signature = _warmup_search_result_signature(page, platform)
+        if platform == "instagram":
+            interaction = _submit_instagram_warmup_search(
+                page,
+                clean_keyword,
+                logger,
+                stage,
+            )
+        else:
+            interaction = "click_type_enter"
+            page.keyboard.press("Enter")
+            with contextlib.suppress(Exception):
+                page.wait_for_load_state("domcontentloaded", timeout=10000)
         logger.log(
             "info",
             stage,
             "已通过页面搜索入口输入人设关键词并提交。",
-            {"keyword": clean_keyword, "interaction": "click_type_enter"},
+            {"keyword": clean_keyword, "interaction": interaction},
         )
-        page.keyboard.press("Enter")
-        with contextlib.suppress(Exception):
-            page.wait_for_load_state("domcontentloaded", timeout=10000)
         if not _wait_for_warmup_search_results(
             page,
             platform,
