@@ -1515,6 +1515,9 @@ const adminState = {
   userListFilters: {},
   selectedUserIds: new Set(),
   userBatchPreview: null,
+  userBatchIdempotencyKey: "",
+  userBatchInFlight: false,
+  userBatchSelectionInFlight: false,
   userCustomerCount: 0,
   userAdminCount: 0,
   userPasswordResetRequestId: 0,
@@ -3915,21 +3918,35 @@ function syncUserBatchSelection() {
   const selectAll = el("adminSelectAllUsers");
   if (selectAll) {
     selectAll.hidden = !isCustomer;
-    selectAll.checked = Boolean(selectable.length) && selectable.every((input) => input.checked);
-    selectAll.indeterminate = selectable.some((input) => input.checked) && !selectAll.checked;
+    selectAll.disabled = adminState.userBatchSelectionInFlight;
+    selectAll.checked = adminState.userListTotal > 0
+      && adminState.selectedUserIds.size >= adminState.userListTotal;
+    selectAll.indeterminate = adminState.selectedUserIds.size > 0 && !selectAll.checked;
   }
   const action = String(el("adminUserBatchAction")?.value || "");
   if (el("adminBatchGroupField")) el("adminBatchGroupField").hidden = action !== "assign_group";
   if (el("adminBatchTagsField")) el("adminBatchTagsField").hidden = action !== "add_tags";
   if (el("adminBatchCreditField")) el("adminBatchCreditField").hidden = action !== "add_credit";
-  if (el("btnRunUserBatch")) el("btnRunUserBatch").disabled = !adminState.userBatchPreview;
+  if (el("btnPreviewUserBatch")) el("btnPreviewUserBatch").disabled = adminState.userBatchInFlight || adminState.userBatchSelectionInFlight;
+  if (el("btnRunUserBatch")) el("btnRunUserBatch").disabled = !adminState.userBatchPreview || adminState.userBatchInFlight;
 }
 
 function clearUserBatchSelection() {
   adminState.selectedUserIds.clear();
   adminState.userBatchPreview = null;
+  adminState.userBatchIdempotencyKey = "";
   setMsg("adminUserBatchMsg", "");
   syncUserBatchSelection();
+}
+
+function createUserBatchIdempotencyKey() {
+  if (typeof window.crypto?.randomUUID === "function") return `admin-batch-${window.crypto.randomUUID()}`;
+  return `admin-batch-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function invalidateUserBatchPreview() {
+  adminState.userBatchPreview = null;
+  adminState.userBatchIdempotencyKey = "";
 }
 
 function buildUserBatchPayload(preview) {
@@ -3940,6 +3957,7 @@ function buildUserBatchPayload(preview) {
     group_id: String(el("adminUserBatchGroup")?.value || ""),
     tag_ids: Array.from(el("adminUserBatchTags")?.selectedOptions || [], (option) => String(option.value)),
     delta_points: Number(el("adminUserBatchCredit")?.value || 0),
+    idempotency_key: adminState.userBatchIdempotencyKey,
     preview: Boolean(preview),
   };
 }
@@ -3952,10 +3970,14 @@ function userBatchSignature(payload) {
     group_id: payload.group_id,
     tag_ids: [...payload.tag_ids].sort(),
     delta_points: payload.delta_points,
+    idempotency_key: payload.idempotency_key,
   });
 }
 
 async function previewUserBatchAction() {
+  if (!adminState.userBatchIdempotencyKey) {
+    adminState.userBatchIdempotencyKey = createUserBatchIdempotencyKey();
+  }
   const payload = buildUserBatchPayload(true);
   if (!payload.action) throw new Error("请选择批量操作");
   if (!payload.user_ids.length) throw new Error("请先勾选客户账号");
@@ -3974,25 +3996,66 @@ async function previewUserBatchAction() {
 }
 
 async function runUserBatchAction() {
+  if (adminState.userBatchInFlight) return;
   const current = buildUserBatchPayload(false);
   const preview = adminState.userBatchPreview;
   if (!preview || userBatchSignature(current) !== userBatchSignature(preview)) {
-    adminState.userBatchPreview = null;
+    invalidateUserBatchPreview();
     syncUserBatchSelection();
     throw new Error("操作内容已变化，请重新预览影响");
   }
   const label = el("adminUserBatchAction")?.selectedOptions?.[0]?.textContent || current.action;
   if (!confirm(`确认对 ${preview.matched} 个客户执行“${label}”吗？`)) return;
-  const result = await api("/api/admin/users/batch-actions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(current),
-  });
-  setMsg("adminUserBatchMsg", `作业完成：成功 ${Number(result.success || 0)}，失败 ${Number(result.failed || 0)}，跳过 ${Number(result.skipped || 0)}。`, Number(result.failed || 0) === 0);
-  adminState.selectedUserIds.clear();
-  adminState.userBatchPreview = null;
+  adminState.userBatchInFlight = true;
   syncUserBatchSelection();
+  let result;
+  try {
+    result = await api("/api/admin/users/batch-actions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(current),
+    });
+    const replayNote = result.idempotent_replay ? "（重复请求已安全复用原作业）" : "";
+    setMsg("adminUserBatchMsg", `作业完成${replayNote}：成功 ${Number(result.success || 0)}，失败 ${Number(result.failed || 0)}，跳过 ${Number(result.skipped || 0)}。`, Number(result.failed || 0) === 0);
+    adminState.selectedUserIds.clear();
+    adminState.userBatchPreview = null;
+    adminState.userBatchIdempotencyKey = "";
+  } finally {
+    adminState.userBatchInFlight = false;
+    syncUserBatchSelection();
+  }
   await Promise.all([loadUsers(), loadGovernanceDashboard({ force: true })]);
+}
+
+function buildAdminUserListParams({ limit, offset }) {
+  const role = adminState.userListRole === "admin" ? "admin" : "customer";
+  const params = new URLSearchParams({
+    role,
+    limit: String(limit),
+    offset: String(offset),
+  });
+  Object.entries(adminState.userListFilters).forEach(([key, value]) => {
+    if (value !== "" && value !== null && value !== undefined) params.set(key, String(value));
+  });
+  return params;
+}
+
+async function selectAllFilteredUsers() {
+  const total = Math.max(0, Number(adminState.userListTotal || 0));
+  if (total > 5000) throw new Error("筛选结果超过 5000 个，请缩小筛选范围后再全选");
+  adminState.selectedUserIds.clear();
+  const pageSize = 1000;
+  for (let offset = 0; offset < total; offset += pageSize) {
+    const params = buildAdminUserListParams({ limit: pageSize, offset });
+    const payload = await api(`/api/admin/users?${params.toString()}`);
+    const rows = Array.isArray(payload.items) ? payload.items : [];
+    rows.forEach((user) => {
+      if (!user.is_admin) adminState.selectedUserIds.add(String(user.id));
+    });
+    if (rows.length < pageSize) break;
+  }
+  invalidateUserBatchPreview();
+  setMsg("adminUserBatchMsg", `已选择全部 ${adminState.selectedUserIds.size} 个筛选结果。`, true);
 }
 
 async function loadUsers(page = adminState.userListPage) {
@@ -4001,13 +4064,10 @@ async function loadUsers(page = adminState.userListPage) {
   adminState.userListPage = requestedPage;
   const requestId = ++adminState.userListRequestId;
   const role = adminState.userListRole === "admin" ? "admin" : "customer";
-  const filters = adminState.userListFilters;
-  const params = new URLSearchParams({
-    role,
-    limit: String(pageSize),
-    offset: String((requestedPage - 1) * pageSize),
+  const params = buildAdminUserListParams({
+    limit: pageSize,
+    offset: (requestedPage - 1) * pageSize,
   });
-  Object.entries(filters).forEach(([key, value]) => { if (value !== "" && value !== null && value !== undefined) params.set(key, String(value)); });
   const body = el("userBody");
   body?.setAttribute("aria-busy", "true");
   let payload;
@@ -8360,14 +8420,25 @@ function bindActions() {
     clearUserBatchSelection();
     try { await loadUsers(1); } catch (error) { setMsg("userMsg", getErrorMessage(error), false); }
   });
-  el("adminSelectAllUsers")?.addEventListener("change", (event) => {
-    document.querySelectorAll("input[data-user-select]").forEach((input) => {
-      const id = String(input.dataset.userSelect || "");
-      if (event.currentTarget.checked) adminState.selectedUserIds.add(id);
-      else adminState.selectedUserIds.delete(id);
-    });
-    adminState.userBatchPreview = null;
+  el("adminSelectAllUsers")?.addEventListener("change", async (event) => {
+    if (!event.currentTarget.checked) {
+      clearUserBatchSelection();
+      return;
+    }
+    adminState.userBatchSelectionInFlight = true;
+    invalidateUserBatchPreview();
+    setMsg("adminUserBatchMsg", "正在选择全部筛选结果...");
     syncUserBatchSelection();
+    try {
+      await selectAllFilteredUsers();
+    } catch (error) {
+      adminState.selectedUserIds.clear();
+      event.currentTarget.checked = false;
+      setMsg("adminUserBatchMsg", getErrorMessage(error), false);
+    } finally {
+      adminState.userBatchSelectionInFlight = false;
+      syncUserBatchSelection();
+    }
   });
   el("userBody")?.addEventListener("change", (event) => {
     const input = event.target.closest?.("input[data-user-select]");
@@ -8375,17 +8446,17 @@ function bindActions() {
     const id = String(input.dataset.userSelect || "");
     if (input.checked) adminState.selectedUserIds.add(id);
     else adminState.selectedUserIds.delete(id);
-    adminState.userBatchPreview = null;
+    invalidateUserBatchPreview();
     syncUserBatchSelection();
   });
   el("adminUserBatchAction")?.addEventListener("change", async () => {
-    adminState.userBatchPreview = null;
+    invalidateUserBatchPreview();
     syncUserBatchSelection();
     if (["assign_group", "add_tags"].includes(String(el("adminUserBatchAction")?.value || ""))) await loadTaxonomyWorkspace();
   });
   ["adminUserBatchReason", "adminUserBatchGroup", "adminUserBatchTags", "adminUserBatchCredit"].forEach((id) => {
-    el(id)?.addEventListener("change", () => { adminState.userBatchPreview = null; syncUserBatchSelection(); });
-    el(id)?.addEventListener("input", () => { adminState.userBatchPreview = null; syncUserBatchSelection(); });
+    el(id)?.addEventListener("change", () => { invalidateUserBatchPreview(); syncUserBatchSelection(); });
+    el(id)?.addEventListener("input", () => { invalidateUserBatchPreview(); syncUserBatchSelection(); });
   });
   el("btnClearUserSelection")?.addEventListener("click", clearUserBatchSelection);
   el("btnPreviewUserBatch")?.addEventListener("click", async () => {

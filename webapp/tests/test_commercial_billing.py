@@ -111,6 +111,40 @@ class CommercialBillingTests(unittest.TestCase):
         self.assertEqual(second["credit_units"], 5 * commercial_billing.POINT_SCALE)
         self.assertEqual(int(entries["count"]), 1)
 
+    def test_billing_enforcement_defaults_to_enabled_and_blocks_zero_point_wallets(self):
+        os.environ.pop("COMMERCIAL_BILLING_ENABLED", None)
+        with db_module.db() as conn:
+            self.assertTrue(commercial_billing.enforcement_enabled())
+            with self.assertRaises(commercial_billing.BillingError) as raised:
+                commercial_billing.reserve_charge(
+                    conn,
+                    user_id=self.user_id,
+                    ref_type="normal_task",
+                    ref_id="default-enforcement",
+                    sku="basic_text_post",
+                    quantity=1,
+                    now=300,
+                )
+        self.assertEqual(raised.exception.code, "INSUFFICIENT_POINTS")
+
+    def test_legacy_wallets_are_not_waived_when_billing_is_enabled(self):
+        with db_module.db() as conn:
+            conn.execute(
+                "UPDATE billing_wallets SET billing_mode = 'legacy', credit_units = 0 WHERE user_id = ?",
+                (self.user_id,),
+            )
+            with self.assertRaises(commercial_billing.BillingError) as raised:
+                commercial_billing.reserve_charge(
+                    conn,
+                    user_id=self.user_id,
+                    ref_type="normal_task",
+                    ref_id="legacy-enforcement",
+                    sku="basic_text_post",
+                    quantity=1,
+                    now=301,
+                )
+        self.assertEqual(raised.exception.code, "INSUFFICIENT_POINTS")
+
     def test_catalog_is_seeded_once_with_all_public_prices(self):
         db_module.init_db()
         with db_module.db() as conn:

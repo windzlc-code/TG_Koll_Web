@@ -14,9 +14,11 @@ import webapp.social_automation_api as social_automation_api
 class SocialTaskCancellationTests(unittest.TestCase):
     def setUp(self):
         self._old_db_path = os.environ.get("APP_DB_PATH")
+        self._old_billing_enabled = os.environ.get("COMMERCIAL_BILLING_ENABLED")
         self._tmpdir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = Path(self._tmpdir.name) / "app.db"
         os.environ["APP_DB_PATH"] = str(self.db_path)
+        os.environ["COMMERCIAL_BILLING_ENABLED"] = "0"
         init_db()
         with sqlite3.connect(self.db_path) as conn:
             created = conn.execute(
@@ -37,6 +39,10 @@ class SocialTaskCancellationTests(unittest.TestCase):
             os.environ.pop("APP_DB_PATH", None)
         else:
             os.environ["APP_DB_PATH"] = self._old_db_path
+        if self._old_billing_enabled is None:
+            os.environ.pop("COMMERCIAL_BILLING_ENABLED", None)
+        else:
+            os.environ["COMMERCIAL_BILLING_ENABLED"] = self._old_billing_enabled
         self._tmpdir.cleanup()
 
     def _insert_task(

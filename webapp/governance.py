@@ -419,6 +419,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
           action TEXT NOT NULL,
           status TEXT NOT NULL DEFAULT 'pending',
           request_json TEXT NOT NULL DEFAULT '{}',
+          idempotency_key TEXT NOT NULL DEFAULT '',
           total_count INTEGER NOT NULL DEFAULT 0,
           success_count INTEGER NOT NULL DEFAULT 0,
           failed_count INTEGER NOT NULL DEFAULT 0,
@@ -430,6 +431,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    batch_job_columns = {
+        str(row["name"]) for row in conn.execute("PRAGMA table_info(admin_batch_jobs)").fetchall()
+    }
+    if "idempotency_key" not in batch_job_columns:
+        conn.execute(
+            "ALTER TABLE admin_batch_jobs ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''"
+        )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS admin_batch_job_results (
@@ -454,6 +462,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_security_alert_status ON security_alerts(status, severity, last_seen_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_batch_jobs_created ON admin_batch_jobs(created_at DESC)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_batch_jobs_idempotency "
+        "ON admin_batch_jobs(created_by, idempotency_key) WHERE idempotency_key <> ''",
     )
     for statement in indexes:
         conn.execute(statement)

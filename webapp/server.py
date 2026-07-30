@@ -10452,11 +10452,12 @@ class CustomerTagPayload(BaseModel):
 
 class AdminUserBatchPayload(BaseModel):
     action: str = Field(min_length=2, max_length=80)
-    user_ids: list[int] = Field(min_length=1, max_length=500)
+    user_ids: list[int] = Field(min_length=1, max_length=5000)
     reason: str = Field(min_length=2, max_length=1000)
     group_id: str = Field(default="", max_length=100)
     tag_ids: list[str] = Field(default_factory=list, max_length=100)
     delta_points: float = Field(default=0, ge=0, le=1_000_000)
+    idempotency_key: str = Field(default="", max_length=160)
     preview: bool = False
 
 
@@ -21669,9 +21670,40 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="unsupported batch action")
         if action == "add_credit" and float(payload.delta_points or 0) <= 0:
             raise HTTPException(status_code=400, detail="delta_points must be greater than zero")
+        idempotency_key = str(payload.idempotency_key or "").strip()
+        if action == "add_credit" and not payload.preview and len(idempotency_key) < 8:
+            raise HTTPException(status_code=400, detail="idempotency_key is required for credit adjustments")
+        actor_user_id = int(user.get("id") or 0)
         user_ids = list(dict.fromkeys(int(item) for item in payload.user_ids if int(item) > 0))
         placeholders = ",".join("?" for _ in user_ids)
+        request_data = payload.model_dump()
+        request_data["preview"] = False
+        request_json = governance.json_text(request_data)
+
+        def replay_response(row: sqlite3.Row) -> dict[str, Any]:
+            if str(row["action"] or "") != action or str(row["request_json"] or "") != request_json:
+                raise HTTPException(status_code=409, detail="idempotency_key was already used for another batch request")
+            return {
+                "ok": True,
+                "job_id": str(row["id"]),
+                "success": int(row["success_count"] or 0),
+                "failed": int(row["failed_count"] or 0),
+                "skipped": int(row["skipped_count"] or 0),
+                "idempotent_replay": True,
+            }
+
         with db() as conn:
+            if not payload.preview and idempotency_key:
+                existing_job = conn.execute(
+                    """
+                    SELECT id, action, status, request_json, success_count, failed_count, skipped_count
+                    FROM admin_batch_jobs
+                    WHERE created_by = ? AND idempotency_key = ?
+                    """,
+                    (actor_user_id, idempotency_key),
+                ).fetchone()
+                if existing_job is not None:
+                    return replay_response(existing_job)
             if action == "add_tags":
                 requested_tag_ids = list(dict.fromkeys(str(item).strip() for item in payload.tag_ids if str(item).strip()))
                 if not requested_tag_ids:
@@ -21700,15 +21732,44 @@ def create_app() -> FastAPI:
                 return {"preview": True, "action": action, "matched": len(impact), "items": impact}
             job_id = _new_id("admin_batch")
             started = _now_ts()
-            conn.execute(
-                "INSERT INTO admin_batch_jobs(id, action, status, request_json, total_count, created_by, created_at, started_at) VALUES (?, ?, 'running', ?, ?, ?, ?, ?)",
-                (job_id, action, governance.json_text(payload.model_dump()), len(impact), int(user.get("id") or 0), started, started),
-            )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO admin_batch_jobs(
+                      id, action, status, request_json, idempotency_key,
+                      total_count, created_by, created_at, started_at
+                    ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job_id,
+                        action,
+                        request_json,
+                        idempotency_key,
+                        len(impact),
+                        actor_user_id,
+                        started,
+                        started,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                existing_job = conn.execute(
+                    """
+                    SELECT id, action, status, request_json, success_count, failed_count, skipped_count
+                    FROM admin_batch_jobs
+                    WHERE created_by = ? AND idempotency_key = ?
+                    """,
+                    (actor_user_id, idempotency_key),
+                ).fetchone()
+                if existing_job is None:
+                    raise
+                return replay_response(existing_job)
             success = failed = skipped = 0
             for row in rows:
                 target_id = int(row["id"])
                 result_status = "success"
                 message = ""
+                savepoint = f"admin_batch_user_{target_id}"
+                conn.execute(f"SAVEPOINT {savepoint}")
                 try:
                     if int(row["is_admin"] or 0) == 1 and action not in {"revoke_sessions"}:
                         result_status = "skipped"
@@ -21847,11 +21908,16 @@ def create_app() -> FastAPI:
                         )
                         success += 1
                 except StopIteration:
-                    pass
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 except Exception as exc:
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                     result_status = "failed"
                     message = str(exc)[:500]
                     failed += 1
+                else:
+                    conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 conn.execute(
                     "INSERT INTO admin_batch_job_results(id, job_id, user_id, status, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                     (_new_id("batch_result"), job_id, target_id, result_status, message, _now_ts()),
@@ -21872,7 +21938,14 @@ def create_app() -> FastAPI:
                 **governance.request_context(request),
             )
         _invalidate_admin_dashboard_cache()
-        return {"ok": True, "job_id": job_id, "success": success, "failed": failed, "skipped": skipped}
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "success": success,
+            "failed": failed,
+            "skipped": skipped,
+            "idempotent_replay": False,
+        }
 
     @app.get("/api/admin/users/{target_user_id}/sessions")
     def api_admin_user_sessions(target_user_id: int, user: dict[str, Any] = Depends(require_admin)):

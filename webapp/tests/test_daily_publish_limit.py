@@ -15,10 +15,12 @@ class DailyPublishLimitTests(unittest.TestCase):
     def setUp(self):
         self._old_db_path = os.environ.get("APP_DB_PATH")
         self._old_timezone = os.environ.get("WEBAPP_TIMEZONE")
+        self._old_billing_enabled = os.environ.get("COMMERCIAL_BILLING_ENABLED")
         self._tmpdir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = Path(self._tmpdir.name) / "app.db"
         os.environ["APP_DB_PATH"] = str(self.db_path)
         os.environ["WEBAPP_TIMEZONE"] = "Asia/Shanghai"
+        os.environ["COMMERCIAL_BILLING_ENABLED"] = "0"
         init_db()
         with sqlite3.connect(self.db_path) as conn:
             customer = conn.execute(
@@ -71,6 +73,10 @@ class DailyPublishLimitTests(unittest.TestCase):
             os.environ.pop("WEBAPP_TIMEZONE", None)
         else:
             os.environ["WEBAPP_TIMEZONE"] = self._old_timezone
+        if self._old_billing_enabled is None:
+            os.environ.pop("COMMERCIAL_BILLING_ENABLED", None)
+        else:
+            os.environ["COMMERCIAL_BILLING_ENABLED"] = self._old_billing_enabled
         self._tmpdir.cleanup()
 
     def _insert_account(self, conn, account_id, user_id, persona_id):

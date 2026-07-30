@@ -113,7 +113,7 @@ def _env_enabled(name: str, default: str = "0") -> bool:
 
 
 def enforcement_enabled() -> bool:
-    return _env_enabled("COMMERCIAL_BILLING_ENABLED")
+    return _env_enabled("COMMERCIAL_BILLING_ENABLED", "1")
 
 
 def add_calendar_month(start_ts: int) -> int:
@@ -710,7 +710,7 @@ def reserve_charge(
     waived_reason = (
         "feature_disabled"
         if not enforcement_enabled()
-        else ("admin" if admin_waived else ("legacy" if str(wallet["billing_mode"]) == "legacy" else ""))
+        else ("admin" if admin_waived else "")
     )
     reservation_id = _id("bill_hold")
     if waived_reason:

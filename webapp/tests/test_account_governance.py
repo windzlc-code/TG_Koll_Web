@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -151,6 +152,12 @@ class AccountGovernanceTests(unittest.TestCase):
             session_columns = {
                 str(row["name"]) for row in conn.execute("PRAGMA table_info(sessions)")
             }
+            batch_job_columns = {
+                str(row["name"]) for row in conn.execute("PRAGMA table_info(admin_batch_jobs)")
+            }
+            batch_job_indexes = {
+                str(row["name"]) for row in conn.execute("PRAGMA index_list(admin_batch_jobs)")
+            }
             migration = conn.execute(
                 "SELECT description, applied_at FROM schema_migrations WHERE version = 'governance_v1'"
             ).fetchone()
@@ -177,6 +184,8 @@ class AccountGovernanceTests(unittest.TestCase):
                 "is_admin_session",
             }.issubset(session_columns)
         )
+        self.assertIn("idempotency_key", batch_job_columns)
+        self.assertIn("idx_batch_jobs_idempotency", batch_job_indexes)
         self.assertIsNotNone(migration)
         self.assertGreater(int(migration["applied_at"]), 0)
         self.assertEqual(
@@ -566,6 +575,7 @@ class AccountGovernanceTests(unittest.TestCase):
             "user_ids": selected_ids,
             "delta_points": 2.5,
             "reason": "New user launch campaign",
+            "idempotency_key": "batch-credit-launch-campaign-v1",
         }
 
         preview = admin.post(
@@ -603,6 +613,94 @@ class AccountGovernanceTests(unittest.TestCase):
         )
         self.assertEqual(len(notices), 2)
         self.assertTrue(all("2.5" in str(row["body"]) for row in notices))
+
+    def test_batch_credit_rolls_back_target_when_notification_fails(self):
+        admin, _identity = self._admin_client()
+        customer = self._create_customer(admin, "batch-credit-rollback")
+        user_id = int(customer["id"])
+        payload = {
+            "action": "add_credit",
+            "user_ids": [user_id],
+            "delta_points": 2.5,
+            "reason": "Failure rollback coverage",
+            "idempotency_key": "batch-credit-rollback-v1",
+        }
+        with mock.patch("webapp.server.create_notification", side_effect=RuntimeError("notification failed")):
+            applied = admin.post(
+                "/api/admin/users/batch-actions",
+                headers=self.ORIGIN_HEADERS,
+                json=payload,
+            )
+        self.assertEqual(applied.status_code, 200, applied.text)
+        self.assertEqual(applied.json()["failed"], 1)
+        with db_module.db() as conn:
+            wallet = conn.execute(
+                "SELECT credit_units FROM billing_wallets WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            adjustments = conn.execute(
+                "SELECT COUNT(*) AS count FROM billing_ledger WHERE user_id = ? AND event_type = 'admin_adjustment'",
+                (user_id,),
+            ).fetchone()
+        self.assertEqual(int(wallet["credit_units"]), 5 * server.commercial_billing.POINT_SCALE)
+        self.assertEqual(int(adjustments["count"]), 0)
+
+    def test_batch_credit_replay_uses_idempotency_key_without_double_grant(self):
+        admin, _identity = self._admin_client()
+        customer = self._create_customer(admin, "batch-credit-idempotent")
+        user_id = int(customer["id"])
+        payload = {
+            "action": "add_credit",
+            "user_ids": [user_id],
+            "delta_points": 2.5,
+            "reason": "Idempotency coverage",
+            "idempotency_key": "batch-credit-idempotency-v1",
+        }
+        first = admin.post(
+            "/api/admin/users/batch-actions",
+            headers=self.ORIGIN_HEADERS,
+            json=payload,
+        )
+        replay = admin.post(
+            "/api/admin/users/batch-actions",
+            headers=self.ORIGIN_HEADERS,
+            json=payload,
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertEqual(replay.json()["job_id"], first.json()["job_id"])
+        self.assertTrue(replay.json()["idempotent_replay"])
+        with db_module.db() as conn:
+            wallet = conn.execute(
+                "SELECT credit_units FROM billing_wallets WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            adjustments = conn.execute(
+                "SELECT COUNT(*) AS count FROM billing_ledger WHERE user_id = ? AND event_type = 'admin_adjustment'",
+                (user_id,),
+            ).fetchone()
+        self.assertEqual(int(wallet["credit_units"]), 7.5 * server.commercial_billing.POINT_SCALE)
+        self.assertEqual(int(adjustments["count"]), 1)
+
+        conflicting_payload = {
+            **payload,
+            "delta_points": 3,
+        }
+        conflict = admin.post(
+            "/api/admin/users/batch-actions",
+            headers=self.ORIGIN_HEADERS,
+            json=conflicting_payload,
+        )
+        self.assertEqual(conflict.status_code, 409, conflict.text)
+        with db_module.db() as conn:
+            wallet_after_conflict = conn.execute(
+                "SELECT credit_units FROM billing_wallets WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        self.assertEqual(
+            int(wallet_after_conflict["credit_units"]),
+            7.5 * server.commercial_billing.POINT_SCALE,
+        )
 
     def test_dashboard_groups_tags_batches_audit_redaction_and_alerts(self):
         admin, identity = self._admin_client()

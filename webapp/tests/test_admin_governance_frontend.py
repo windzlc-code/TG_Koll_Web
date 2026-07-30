@@ -104,6 +104,10 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('<option value="add_credit">添加算力点</option>', self.html)
         self.assertIn('action === "add_credit"', self.script)
         self.assertIn("delta_points", self.script)
+        self.assertIn("idempotency_key", self.script)
+        self.assertIn("userBatchInFlight", self.script)
+        self.assertIn("selectAllFilteredUsers", self.script)
+        self.assertIn('aria-label="选择全部筛选结果"', self.html)
         self.assertIn('/purge-preview', self.script)
         self.assertIn('method: "DELETE"', self.script)
 
