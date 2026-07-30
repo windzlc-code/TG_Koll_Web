@@ -5587,7 +5587,8 @@ def _click_text_button(
                 if loc.count() and loc.is_visible(timeout=2500):
                     if abort_if is not None and abort_if():
                         return False
-                    return _human_click(page, loc, logger, stage, abort_if=abort_if)
+                    if _human_click(page, loc, logger, stage, abort_if=abort_if):
+                        return True
             except Exception:
                 continue
         if abort_if is not None and abort_if():

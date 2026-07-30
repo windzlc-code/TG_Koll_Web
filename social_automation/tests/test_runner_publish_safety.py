@@ -169,6 +169,28 @@ class _RecordingLogger:
 
 
 class RunnerPublishSafetyTests(unittest.TestCase):
+    def test_click_text_button_uses_dom_fallback_after_safe_click_miss(self):
+        page = mock.Mock()
+        locator = mock.Mock()
+        locator.count.return_value = 1
+        locator.is_visible.return_value = True
+        page.get_by_role.return_value.first = locator
+        page.get_by_text.return_value.first = locator
+        page.locator.return_value.first = locator
+        page.evaluate.return_value = True
+
+        with mock.patch.object(runner, "_human_click", return_value=False) as human_click:
+            clicked = runner._click_text_button(
+                page,
+                _Logger(),
+                ["Create"],
+                "publish_create",
+            )
+
+        self.assertTrue(clicked)
+        self.assertGreaterEqual(human_click.call_count, 1)
+        page.evaluate.assert_called_once()
+
     def test_publish_submit_guard_blocks_cancelled_action(self):
         cancelled = threading.Event()
         cancelled.set()
