@@ -24,6 +24,7 @@ MAX_MANUAL_LOGIN_TIMEOUT_SECONDS = 1800
 MAX_AUTO_TOTP_ATTEMPTS = 2
 AUTO_TOTP_RESULT_WAIT_SECONDS = 20
 AUTO_TOTP_MIN_SUBMIT_REMAINING_SECONDS = 3
+AUTO_TOTP_CHALLENGE_READY_WAIT_SECONDS = 10
 MAX_WARMUP_LIKES = 16
 MAX_WARMUP_COMMENTS = 6
 SUPPORTED_TASK_TYPES = {
@@ -5768,6 +5769,39 @@ def _classify_verification_challenge(page) -> dict[str, Any]:
     }
 
 
+def _wait_for_verification_challenge_ready(
+    page,
+    cancel_event: Any | None,
+    context_control: dict[str, Any] | None,
+) -> dict[str, Any]:
+    challenge = _classify_verification_challenge(page)
+    challenge_type = str(challenge.get("type") or "")
+    terminal_types = {
+        "authenticator_totp",
+        "sms_code",
+        "email_code",
+        "identity_challenge",
+        "method_selection",
+    }
+    if challenge_type in terminal_types:
+        return challenge
+    if not _is_verification_url(str(page.url or "")) and challenge_type not in {
+        "unknown_challenge",
+        "unknown_code",
+    }:
+        return challenge
+
+    deadline = time.monotonic() + AUTO_TOTP_CHALLENGE_READY_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        if not _wait_interruptibly(0.25, cancel_event, context_control):
+            return challenge
+        challenge = _classify_verification_challenge(page)
+        challenge_type = str(challenge.get("type") or "")
+        if challenge_type in terminal_types:
+            return challenge
+    return challenge
+
+
 def _totp_provider(context_control: dict[str, Any] | None) -> Callable[[], dict[str, Any]] | None:
     if not isinstance(context_control, dict):
         return None
@@ -5857,8 +5891,22 @@ def _try_auto_totp_challenge(
     cancel_event: Any | None,
     context_control: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    challenge = _classify_verification_challenge(page)
+    challenge = _wait_for_verification_challenge_ready(
+        page,
+        cancel_event,
+        context_control,
+    )
     if str(challenge.get("type") or "") != "authenticator_totp":
+        logger.log(
+            "debug",
+            "auto_totp_not_applicable",
+            "当前验证页不是身份验证器验证码，已保留页面供后续验证流程处理。",
+            {
+                "challenge_type": str(challenge.get("type") or "none"),
+                "has_code_input": bool(challenge.get("has_code_input")),
+                "url": _safe_navigation_url(page.url),
+            },
+        )
         return None
     provider = _totp_provider(context_control)
     if provider is None:
