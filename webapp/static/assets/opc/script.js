@@ -8,6 +8,9 @@ function registrationPanelMarkup() {
       <p class="form-kicker">建立 Vecto 帳號</p>
       <h2 id="registerTitle">註冊 Vecto 帳號</h2>
       <p class="auth-copy" data-register-copy>設定登入資料後，再驗證電子信箱即可建立帳號。</p>
+      <button class="auth-close auth-registration-page-back" type="button" data-register-back hidden aria-label="返回上一步" title="返回上一步">
+        <svg class="auth-registration-back-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+      </button>
       <form class="lead-form auth-registration-form" id="accountRegistrationForm" novalidate>
         <div class="auth-registration-panel">
           <section class="auth-registration-page" data-register-page="details">
@@ -26,12 +29,10 @@ function registrationPanelMarkup() {
               <label class="field auth-placeholder-field" for="registerEmail"><span class="field-label">電子信箱</span><input id="registerEmail" name="email" type="email" autocomplete="email" maxlength="254" placeholder="name@example.com" aria-describedby="registerEmailError" required /><small class="field-error" id="registerEmailError"></small></label>
               <button class="auth-verification-button" type="button" data-register-verification data-state="idle">發送驗證碼</button>
             </div>
-            <p class="auth-verification-hint">驗證碼寄出後，請在有效時間內填寫並完成註冊。</p>
-            <p class="auth-verification-status" id="registerVerificationStatus" role="status" aria-live="polite"></p>
+            <p class="auth-verification-status" id="registerVerificationStatus" data-state="info" role="status" aria-live="polite">輸入電子信箱後即可發送驗證碼。</p>
             <label class="field auth-placeholder-field auth-verification-code" for="registerVerificationCode"><span class="field-label">信箱驗證碼</span><input id="registerVerificationCode" name="verification_code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="請輸入 6 位數字驗證碼" aria-describedby="registerVerificationCodeError" required /><small class="field-error" id="registerVerificationCodeError"></small></label>
             <label class="consent auth-registration-consent" for="registerConsent"><input id="registerConsent" name="consent" type="checkbox" required /><span>我已閱讀並同意《用戶服務協議》和《隱私政策》，並同意平台為提供帳號註冊、身分驗證及帳戶管理服務而處理必要的個人資訊。</span></label>
             <button class="submit-button" type="submit"><span>驗證並建立帳號</span><span aria-hidden="true">→</span></button>
-            <button class="auth-guest-link auth-switch-button" type="button" data-register-back>← 返回上一步</button>
           </section>
         </div>
         <p class="form-status auth-form-status" id="formStatus" role="status" aria-live="polite"></p>
@@ -67,7 +68,7 @@ const registerVerificationStatus = document.querySelector("#registerVerification
 const registerVerificationButton = applicationForm?.querySelector("[data-register-verification]");
 const registerPages = [...(applicationForm?.querySelectorAll("[data-register-page]") || [])];
 const registerNextButton = applicationForm?.querySelector("[data-register-next]");
-const registerBackButton = applicationForm?.querySelector("[data-register-back]");
+const registerBackButton = authDialog?.querySelector("[data-register-back]");
 const registerTitle = authDialog?.querySelector("#registerTitle");
 const registerCopy = authDialog?.querySelector("[data-register-copy]");
 const registerPasswordToggles = [...(applicationForm?.querySelectorAll("[data-register-password-toggle]") || [])];
@@ -518,11 +519,13 @@ function validRegistrationUsername(value) {
   return /^[A-Za-z0-9._-]{3,32}$/.test(String(value || "").trim());
 }
 
-function validateRegistrationEmail() {
+function validateRegistrationEmail({ showFieldError = true } = {}) {
   const input = applicationForm?.elements?.email;
   if (!input) return false;
   const valid = Boolean(input.value.trim()) && input.validity.valid;
-  setFieldError(input, valid ? "" : "請輸入格式正確且可收信的電子信箱。");
+  if (showFieldError) {
+    setFieldError(input, valid ? "" : "請輸入格式正確且可收信的電子信箱。");
+  }
   return valid;
 }
 
@@ -561,6 +564,9 @@ function setRegistrationPage(page, { focus = true } = {}) {
   registerPages.forEach((panel) => {
     panel.hidden = panel.dataset.registerPage !== nextPage;
   });
+  if (registerBackButton) {
+    registerBackButton.hidden = nextPage !== "email";
+  }
   if (registerTitle) {
     registerTitle.textContent = nextPage === "email" ? "驗證電子信箱" : "註冊 Vecto 帳號";
   }
@@ -568,6 +574,9 @@ function setRegistrationPage(page, { focus = true } = {}) {
     registerCopy.textContent = nextPage === "email"
       ? "輸入可正常收信的電子信箱，取得驗證碼後即可完成註冊。"
       : "設定登入資料後，再驗證電子信箱即可建立帳號。";
+  }
+  if (nextPage === "email") {
+    updateRegisterEmailMessage();
   }
   if (!focus) return;
   const target = nextPage === "details"
@@ -669,13 +678,14 @@ function showRegistrationError(error, fallback, statusTarget = applicationStatus
   const detail = apiErrorDetail(error);
   const message = registrationStatusMessage(error, fallback);
   const target = registrationErrorField(detail.code);
+  const verificationField = Boolean(target && ["email", "verification_code"].includes(target.name));
+  const useStatusOnly = statusTarget === registerVerificationStatus && verificationField;
   if (target) {
-    const verificationField = ["email", "verification_code"].includes(target.name);
     setRegistrationPage(verificationField ? "email" : "details", { focus: false });
-    setFieldError(target, message);
+    setFieldError(target, useStatusOnly ? "" : message);
     window.setTimeout(() => target.focus(), 40);
   }
-  setAuthStatus(statusTarget, message, "error");
+  setAuthStatus(statusTarget, target && !useStatusOnly ? "" : message, "error");
 }
 
 function loginFocusableElements() {
@@ -697,7 +707,8 @@ function setAuthView(view) {
   authDialog?.setAttribute("aria-labelledby", completingGoogle ? "googleSetupTitle" : registering ? "registerTitle" : "loginTitle");
   setAuthStatus(loginStatus);
   setAuthStatus(applicationStatus);
-  setAuthStatus(registerVerificationStatus);
+  if (registering) updateRegisterEmailMessage();
+  else setAuthStatus(registerVerificationStatus);
   setAuthStatus(googleSetupStatus);
   if (loginTakeover) loginTakeover.hidden = true;
 }
@@ -906,6 +917,22 @@ function registrationEmailIsValid() {
   return Boolean(input?.value.trim()) && input.validity.valid;
 }
 
+function updateRegisterEmailMessage() {
+  const input = applicationForm?.elements?.email;
+  if (!input || !registerVerificationStatus) return;
+  const email = input.value.trim();
+  if (!email) {
+    setAuthStatus(registerVerificationStatus, "輸入電子信箱後即可發送驗證碼。", "info");
+    return;
+  }
+  if (!input.validity.valid) {
+    setAuthStatus(registerVerificationStatus, "請輸入格式正確且可收信的電子信箱。", "error");
+    return;
+  }
+  if (registerChallengeId && email.toLowerCase() === registerChallengeEmail) return;
+  setAuthStatus(registerVerificationStatus, "電子信箱格式正確，可以發送驗證碼。", "info");
+}
+
 function updateRegisterVerificationAvailability() {
   if (!registerVerificationButton) return;
   const state = registerVerificationButton.dataset.state || "idle";
@@ -931,16 +958,24 @@ function resetRegistrationChallenge({ keepEmail = true } = {}) {
   }
 }
 
-function startRegisterResendCountdown(seconds) {
+function startRegisterResendCountdown(seconds, expiresMinutes) {
   if (!registerVerificationButton) return;
   window.clearInterval(registerResendTimer);
   let remaining = Math.max(1, Math.round(Number(seconds) || 60));
   const render = () => {
     const registrationAvailable = registrationPolicyEnabled !== false;
+    const expiry = Math.max(1, Math.round(Number(expiresMinutes) || 10));
     registerVerificationButton.disabled = remaining > 0 || !registrationAvailable;
     registerVerificationButton.dataset.state = remaining > 0 ? "countdown" : "ready";
     registerVerificationButton.textContent = remaining > 0 ? `${remaining} 秒後可重發` : "重新發送驗證碼";
     registerVerificationButton.removeAttribute("aria-busy");
+    setAuthStatus(
+      registerVerificationStatus,
+      remaining > 0
+        ? `驗證碼已寄出，${remaining} 秒後可重新發送；有效時間約 ${expiry} 分鐘。`
+        : `驗證碼已寄出，可以重新發送；請在 ${expiry} 分鐘內完成驗證。`,
+      remaining > 0 ? "success" : "info",
+    );
   };
   render();
   registerResendTimer = window.setInterval(() => {
@@ -955,10 +990,15 @@ function startRegisterResendCountdown(seconds) {
 
 async function sendRegistrationVerification() {
   if (!applicationForm || !registerVerificationButton) return;
-  setAuthStatus(registerVerificationStatus);
-  if (!validateRegistrationEmail()) return;
+  if (!validateRegistrationEmail({ showFieldError: false })) {
+    setFieldError(applicationForm.elements.email, "");
+    updateRegisterEmailMessage();
+    applicationForm.elements.email.focus();
+    return;
+  }
   const email = applicationForm.elements.email.value.trim();
   const defaultText = registerVerificationButton.textContent;
+  setAuthStatus(registerVerificationStatus, "正在發送驗證碼…", "info");
   registerVerificationButton.disabled = true;
   registerVerificationButton.dataset.state = "sending";
   registerVerificationButton.textContent = "發送中…";
@@ -976,8 +1016,7 @@ async function sendRegistrationVerification() {
     registerChallengeId = challengeId;
     registerChallengeEmail = email.toLowerCase();
     const expiresMinutes = Math.max(1, Math.round((Number(result?.expires_in) || 600) / 60));
-    setAuthStatus(registerVerificationStatus, `驗證碼已寄出，有效時間約 ${expiresMinutes} 分鐘。`, "success");
-    startRegisterResendCountdown(result?.resend_after);
+    startRegisterResendCountdown(result?.resend_after, expiresMinutes);
     window.setTimeout(() => applicationForm.elements.verification_code?.focus(), 40);
   } catch (error) {
     registerVerificationButton.textContent = defaultText;
@@ -995,11 +1034,13 @@ registerBackButton?.addEventListener("click", () => setRegistrationPage("details
 applicationForm?.elements?.email?.addEventListener("input", () => {
   setFieldError(applicationForm.elements.email, "");
   updateRegisterVerificationAvailability();
-  if (!registerChallengeId) return;
-  if (applicationForm.elements.email.value.trim().toLowerCase() !== registerChallengeEmail) {
+  const email = applicationForm.elements.email.value.trim().toLowerCase();
+  if (registerChallengeId && email !== registerChallengeEmail) {
     resetRegistrationChallenge();
     setAuthStatus(registerVerificationStatus, "信箱已變更，請重新發送驗證碼。", "info");
+    return;
   }
+  updateRegisterEmailMessage();
 });
 applicationForm?.elements?.email?.addEventListener("change", updateRegisterVerificationAvailability);
 

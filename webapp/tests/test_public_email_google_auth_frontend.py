@@ -12,6 +12,7 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.script = SCRIPT_PATH.read_text(encoding="utf-8")
         cls.styles = STYLES_PATH.read_text(encoding="utf-8")
+        cls.fixed_light = (STATIC_DIR / "assets" / "fixed-light.css").read_text(encoding="utf-8")
         cls.google_svg = (STATIC_DIR / "assets" / "opc" / "google-g-gradient.svg").read_text(encoding="utf-8")
         cls.auth_script = (STATIC_DIR / "assets" / "auth.js").read_text(encoding="utf-8")
         cls.change_password = (STATIC_DIR / "change-password.html").read_text(encoding="utf-8")
@@ -87,9 +88,13 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
             details_page_markup,
         )
         self.assertIn(
-            'class="auth-guest-link auth-switch-button" type="button" data-register-back',
-            email_page_markup,
+            'class="auth-close auth-registration-page-back" type="button" data-register-back',
+            registration_markup,
         )
+        self.assertIn('aria-label="返回上一步"', registration_markup)
+        self.assertIn('class="auth-registration-back-icon"', registration_markup)
+        self.assertNotIn("auth-verification-hint", registration_markup)
+        self.assertIn("輸入電子信箱後即可發送驗證碼。", email_page_markup)
         self.assertIn('id="registerVerificationStatus"', registration_markup)
         self.assertLess(
             email_page_markup.index('id="registerVerificationStatus"'),
@@ -126,10 +131,12 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertNotIn("data-send-register-code", registration_markup)
         self.assertNotIn("data-resend-register-code", registration_markup)
         self.assertNotIn("registerResendCode", self.script)
-        self.assertIn("function startRegisterResendCountdown(seconds)", self.script)
+        self.assertIn("function startRegisterResendCountdown(seconds, expiresMinutes)", self.script)
         self.assertIn("result?.resend_after", self.script)
         self.assertIn("秒後可重發", self.script)
         self.assertIn("重新發送驗證碼", self.script)
+        self.assertIn("function updateRegisterEmailMessage()", self.script)
+        self.assertIn("秒後可重新發送", self.script)
         self.assertIn("window.setInterval", self.script)
         self.assertIn(".auth-verification-button", self.styles)
 
@@ -213,7 +220,7 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
             self.script.index("async function submitUserLogin")
         ]
         self.assertIn("apiErrorDetail(error)", registration_slice)
-        self.assertIn("setFieldError(target, message)", registration_slice)
+        self.assertIn('setFieldError(target, useStatusOnly ? "" : message);', registration_slice)
         self.assertIn("email_already_registered", registration_slice)
         self.assertIn("element.textContent = String(message || \"\")", self.script)
         self.assertNotIn("innerHTML = result", registration_slice)
@@ -222,6 +229,11 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertIn("registrationStatusMessage(error, fallback)", self.script)
         self.assertIn("驗證碼服務暫時不可用，請重新整理頁面後再試。", self.script)
         self.assertIn("registerVerificationStatus", self.script)
+        self.assertIn(
+            "const useStatusOnly = statusTarget === registerVerificationStatus && verificationField;",
+            self.script,
+        )
+        self.assertIn('setFieldError(target, useStatusOnly ? "" : message);', self.script)
 
     def test_auth_dialog_is_mobile_and_keyboard_accessible(self):
         self.assertIn('event.key !== "Tab"', self.script)
@@ -242,6 +254,18 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertNotIn(".auth-registration-step.is-active", self.styles)
         self.assertNotIn(".auth-registration-actions {", self.styles)
         self.assertNotIn(".auth-registration-back {", self.styles)
+        self.assertIn(".auth-registration-page-back {", self.styles)
+        self.assertIn(".auth-registration-back-icon {", self.styles)
+        email_action_rule = self.styles[
+            self.styles.index(".auth-email-action {"):
+            self.styles.index(".auth-email-action .field")
+        ]
+        self.assertIn("align-items: start;", email_action_rule)
+        verification_button_rule = self.styles[
+            self.styles.index(".auth-verification-button {"):
+            self.styles.index(".auth-verification-button:hover")
+        ]
+        self.assertIn("margin-top: 22px;", verification_button_rule)
         profile_rule = self.styles[
             self.styles.index(".auth-registration-profile {"):
             self.styles.index(".auth-registration-profile .field")
@@ -251,6 +275,40 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertIn("grid-template-columns: 1fr;", mobile)
         self.assertIn("grid-template-columns: minmax(0, 1fr) 112px;", mobile)
         self.assertIn(".auth-google-button:focus-visible", self.styles)
+
+    def test_public_theme_contains_no_legacy_green_action_palette(self):
+        public_theme = f"{self.styles}\n{self.fixed_light}".lower()
+        for legacy_color in (
+            "#0c9a9a",
+            "#087071",
+            "#31b86f",
+            "#eafff4",
+            "#35d37f",
+            "#cffff0",
+            "#33c878",
+            "#9ff7d1",
+            "#62e6a2",
+            "#a9ffd6",
+            "#f9fbfa",
+            "#f3fbf8",
+            "#edf6f3",
+            "#f3f7f5",
+            "#eaf2f0",
+            "#f4f8f6",
+            "#eff5f3",
+            "#f2faf6",
+            "#e0e8e3",
+            "#123033",
+            "#2d5558",
+            "#b9dec9",
+            "#527361",
+        ):
+            with self.subTest(color=legacy_color):
+                self.assertNotIn(legacy_color, public_theme)
+        self.assertIn("--teal: #4b6478;", self.styles)
+        self.assertIn("--teal-dark: #253746;", self.styles)
+        self.assertIn("--green: #356b91;", self.styles)
+        self.assertIn("--public-success: #356b91;", self.fixed_light)
 
 
 if __name__ == "__main__":

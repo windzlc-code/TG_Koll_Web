@@ -18,7 +18,7 @@
   --public-warm-accent: #8a674d;
   --public-action-gradient: linear-gradient(#253746, #253746);
   --public-action-gradient-hover: linear-gradient(#34495e, #34495e);
-  --public-success: #27845a;
+  --public-success: #356b91;
   --paper: var(--public-paper);
   --surface: var(--public-page);
   --surface-strong: var(--public-surface);
@@ -837,12 +837,12 @@
 
 :root[data-theme="light"] .proxy-market-page .proxy-market-facts {
   color: #f8fafc;
-  background: #123033;
-  border-color: #2d5558;
+  background: #182b3a;
+  border-color: #34495e;
 }
 
 :root[data-theme="light"] .proxy-market-page .proxy-market-facts > div {
-  border-color: #2d5558;
+  border-color: #34495e;
 }
 
 :root[data-theme="light"] .proxy-market-page .proxy-market-facts strong {
@@ -850,7 +850,7 @@
 }
 
 :root[data-theme="light"] .proxy-market-page .proxy-market-facts span {
-  color: #b9cecf;
+  color: #b9c9d7;
 }
 
 :root[data-theme="light"] .proxy-market-page .proxy-market-account {
@@ -859,8 +859,8 @@
 }
 
 :root[data-theme="light"] .proxy-market-page .proxy-market-account.is-authenticated {
-  background: #f2faf6;
-  border-color: #b9dec9;
+  background: #f2f6fa;
+  border-color: #c4d6e4;
 }
 
 :root[data-theme="light"] .proxy-market-page .proxy-market-account-copy span,
@@ -891,8 +891,8 @@
 :root[data-theme="light"] .proxy-market-page .proxy-claim-success {
   color: var(--public-ink);
   background: var(--public-paper);
-  border-color: #b9dec9;
-  box-shadow: 0 18px 52px rgb(50 73 64 / 14%);
+  border-color: #c4d6e4;
+  box-shadow: 0 18px 52px rgb(41 55 75 / 14%);
 }
 
 :root[data-theme="light"] .proxy-market-page .proxy-claim-success :is(h2, p:not(.eyebrow)) {
@@ -1033,7 +1033,7 @@
 
 :root[data-theme="light"] .console-page .persona-content-tabs.persona-publish-content-tabs button.is-active {
   border-color: var(--vecto-action-border);
-  background-color: #071112;
+  background-color: #101820;
   background-image: var(--vecto-action-static-gradient);
   color: var(--vecto-action-ink);
   box-shadow: none;
@@ -1794,8 +1794,8 @@
   .admin-governance-kpi.is-success,
   .admin-governance-kpi.is-health
 ) {
-  border-top-color: #527361;
-  background: linear-gradient(90deg, #e0e8e3 0 30%, #f8fafb 30% 100%);
+  border-top-color: #526b7d;
+  background: linear-gradient(90deg, #e0e6ec 0 30%, #f8fafb 30% 100%);
 }
 
 :root[data-theme="light"] .page-admin .admin-governance-kpi.is-warning {
@@ -1868,7 +1868,7 @@
   }
 
   :root[data-theme="light"] .page-admin .admin-governance-kpi:is(.is-success, .is-health) {
-    background: linear-gradient(90deg, #e0e8e3 0 22%, #f8fafb 22% 100%);
+    background: linear-gradient(90deg, #e0e6ec 0 22%, #f8fafb 22% 100%);
   }
 
   :root[data-theme="light"] .page-admin .admin-governance-kpi:is(.is-warning, .is-danger) {
