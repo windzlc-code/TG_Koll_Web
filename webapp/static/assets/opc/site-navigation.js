@@ -923,7 +923,6 @@
       syncAccountPanelScrollLock();
       document.querySelectorAll("[data-site-mobile-menu].is-open").forEach((mobileMenu) => setMobileMenuOpen(mobileMenu, false));
       document.querySelectorAll("[data-site-account-menu].is-open").forEach((accountMenu) => setAccountMenuOpen(accountMenu, false));
-      void markNotificationsRead({ all: true });
       window.dispatchEvent(new CustomEvent(EVENT_NOTIFICATION_MENU_OPEN));
       return;
     }

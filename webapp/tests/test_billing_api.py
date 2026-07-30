@@ -281,6 +281,27 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         self.assertEqual(before["points"], 1)
         self.assertEqual(after["points"], 0.7)
 
+    def test_notification_read_is_not_blocked_by_subscription_gate(self):
+        listed = self.customer.get("/api/notifications?limit=100")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        unread_items = [item for item in listed.json()["items"] if not item["read"]]
+        self.assertTrue(unread_items)
+        unread_before = int(listed.json()["unread"]["total"])
+
+        marked = self.customer.post(
+            "/api/notifications/read",
+            json={"ids": [unread_items[0]["id"]]},
+        )
+
+        self.assertEqual(marked.status_code, 200, marked.text)
+        self.assertEqual(int(marked.json()["unread"]["total"]), unread_before - 1)
+        refreshed = self.customer.get("/api/notifications?limit=100")
+        refreshed_item = next(
+            item for item in refreshed.json()["items"]
+            if int(item["id"]) == int(unread_items[0]["id"])
+        )
+        self.assertTrue(refreshed_item["read"])
+
     def test_online_application_stays_pending_until_admin_approval(self):
         catalog = self.customer.get("/api/billing/catalog")
         self.assertEqual(catalog.status_code, 200, catalog.text)

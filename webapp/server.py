@@ -17386,6 +17386,7 @@ def create_app() -> FastAPI:
             path.startswith("/api/auth/")
             or path.startswith("/api/billing/")
             or path.startswith("/api/proxy-market/")
+            or path == "/api/notifications/read"
             or path.startswith("/api/admin/")
             or path.startswith("/api/internal/")
             or path.endswith("/cancel")

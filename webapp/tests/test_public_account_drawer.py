@@ -52,6 +52,13 @@ class PublicAccountDrawerTests(unittest.TestCase):
         self.assertIn('event.key !== "Enter" && event.key !== " "', self.navigation)
         self.assertIn("function showNotificationDialog(", self.navigation)
 
+    def test_opening_notification_drawer_does_not_mark_every_message_read(self):
+        drawer_open = self.navigation[
+            self.navigation.index("function setNotificationMenuOpen("):
+            self.navigation.index("function accountRoleLabel(")
+        ]
+        self.assertNotIn("markNotificationsRead({ all: true })", drawer_open)
+
     def test_notification_controls_and_unread_cards_use_consistent_borders(self):
         close_rule = self.navigation_css[
             self.navigation_css.index(".site-notification-close {"):
