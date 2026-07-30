@@ -70,6 +70,15 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertNotIn('class="admin-rail-note"', self.html)
         self.assertNotIn("openAdminProfileModal", self.script)
 
+    def test_billing_admin_exposes_safe_refund_and_subscription_termination(self):
+        self.assertIn('<option value="refunded">已冲销</option>', self.html)
+        self.assertIn('id="billingSubscriptionBody"', self.html)
+        self.assertIn('"order-refund"', self.script)
+        self.assertIn('"subscription-terminate"', self.script)
+        self.assertIn("支付渠道退款仍需另行完成", self.script)
+        self.assertIn("/refund", self.script)
+        self.assertIn("/terminate", self.script)
+
     def test_admin_creation_requires_and_submits_step_up_only_for_admins(self):
         for field_id in (
             "adminCreateStepUpPanel",
@@ -97,6 +106,14 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             "adminUserBatchModalCount",
             "adminUserBatchCreditField",
             "adminUserBatchCredit",
+            "adminUserBatchUnlimited",
+            "adminUserBatchCreditShortcuts",
+            "adminUserBatchCreditShortcutList",
+            "btnAdminUserBatchCreditShortcutAdd",
+            "adminUserBatchCreditShortcutForm",
+            "adminUserBatchCreditShortcutName",
+            "adminUserBatchCreditShortcutPoints",
+            "btnAdminUserBatchCreditShortcutSave",
             "adminUserBatchReason",
             "btnAdminUserBatchConfirm",
             "userPurgeSection",
@@ -109,6 +126,25 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn("idempotency_key", self.script)
         self.assertIn("userBatchInFlight", self.script)
         self.assertIn("selectAllFilteredUsers", self.script)
+        self.assertIn("userBatchSelectionMeta", self.script)
+        self.assertIn("userBatchActionAvailable", self.script)
+        self.assertIn("button.dataset.userBatchAction", self.script)
+        self.assertIn('payload.unlimited = Boolean(el("adminUserBatchUnlimited")?.checked)', self.script)
+        self.assertIn("ADMIN_CREDIT_SHORTCUTS_STORAGE_KEY", self.script)
+        self.assertIn("renderAdminCreditShortcuts", self.script)
+        self.assertIn("saveAdminCreditShortcut", self.script)
+        self.assertIn("removeAdminCreditShortcut", self.script)
+        self.assertIn("syncAdminCreditShortcutToggle", self.script)
+        self.assertIn('credit.value = String(shortcut.points)', self.script)
+        self.assertIn("localStorage.setItem(ADMIN_CREDIT_SHORTCUTS_STORAGE_KEY", self.script)
+        self.assertLess(
+            self.html.index('id="adminUserBatchCreditShortcuts"'),
+            self.html.index('id="adminUserBatchUnlimitedField"'),
+        )
+        self.assertLess(
+            self.html.index('id="adminUserBatchCreditShortcuts"'),
+            self.html.index('id="adminUserBatchCreditField"'),
+        )
         self.assertIn('aria-label="选择全部筛选结果"', self.html)
         self.assertIn('/purge-preview', self.script)
         self.assertIn('method: "DELETE"', self.script)

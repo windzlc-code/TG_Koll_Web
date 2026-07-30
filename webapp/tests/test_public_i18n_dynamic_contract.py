@@ -68,6 +68,9 @@ class PublicI18nDynamicContractTests(unittest.TestCase):
             "function renderMobileMenu(",
         )
         self.assertIn("data-site-account-close", account_markup)
+        self.assertIn('data-site-open-console-view="tasks"', account_markup)
+        self.assertIn('data-site-open-console-view="console_settings"', account_markup)
+        self.assertNotIn('page === "console"', account_markup)
         self.assertNotIn('aria-label="关闭个人信息"', account_markup)
         self.assertNotIn('title="关闭个人信息"', account_markup)
 

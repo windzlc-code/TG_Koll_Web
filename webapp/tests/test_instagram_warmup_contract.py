@@ -24,6 +24,28 @@ class InstagramWarmupContractTests(unittest.TestCase):
         self.assertIn('data-persona-run-automation', CONSOLE_JS)
         self.assertNotIn('data-persona-run-threads', CONSOLE_JS)
 
+    def test_preset_comment_caps_are_three_while_custom_cap_stays_six(self):
+        self.assertEqual(
+            CONSOLE_JS.count(
+                'id: "comment_only", label: "评论养号：浏览 + 人设留言", '
+                'payload: { strategy_id: "comment_only", browse_limit: 80, '
+                'scroll_times: 80, like_limit: 0, like_chance: 0, '
+                'max_comments: 3, comment_chance: 100 }'
+            ),
+            2,
+        )
+        self.assertEqual(
+            CONSOLE_JS.count(
+                'id: "like_comment", label: "互动养号：低频点赞 + 人设留言", '
+                'payload: { strategy_id: "like_comment", browse_limit: 80, '
+                'scroll_times: 80, like_limit: 7, like_chance: 100, '
+                'max_comments: 3, comment_chance: 100 }'
+            ),
+            2,
+        )
+        self.assertIn('id="personaAutoMaxComments" type="number" min="0" max="6"', CONSOLE_JS)
+        self.assertIn("Math.min(6, numberField(\"personaAutoMaxComments\"", CONSOLE_JS)
+
     def test_instagram_preflight_renders_shared_warmup_and_reply_rows(self):
         renderer = CONSOLE_JS[
             CONSOLE_JS.index("function personaPublishPreflightRows")

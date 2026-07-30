@@ -15,6 +15,8 @@ class SocialTaskCancellationTests(unittest.TestCase):
     def setUp(self):
         self._old_db_path = os.environ.get("APP_DB_PATH")
         self._old_billing_enabled = os.environ.get("COMMERCIAL_BILLING_ENABLED")
+        self._old_worker_stop = social_automation_api._WORKER_STOP.is_set()
+        social_automation_api._WORKER_STOP.clear()
         self._tmpdir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = Path(self._tmpdir.name) / "app.db"
         os.environ["APP_DB_PATH"] = str(self.db_path)
@@ -43,6 +45,10 @@ class SocialTaskCancellationTests(unittest.TestCase):
             os.environ.pop("COMMERCIAL_BILLING_ENABLED", None)
         else:
             os.environ["COMMERCIAL_BILLING_ENABLED"] = self._old_billing_enabled
+        if self._old_worker_stop:
+            social_automation_api._WORKER_STOP.set()
+        else:
+            social_automation_api._WORKER_STOP.clear()
         self._tmpdir.cleanup()
 
     def _insert_task(
@@ -1484,6 +1490,181 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertTrue(completed)
         settle.assert_called_once()
         release.assert_not_called()
+
+    def _attach_metered_reservation(
+        self,
+        task_id: str,
+        *,
+        reservation_id: str,
+        sku: str,
+        committed_quantity: int = 0,
+        publish_committed: bool = False,
+    ) -> None:
+        payload = {"_billing_committed_quantity": committed_quantity} if committed_quantity else {}
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE billing_wallets
+                SET credit_units = 90
+                WHERE user_id = ?
+                """,
+                (self.user_id,),
+            )
+            conn.execute(
+                """
+                UPDATE social_automation_tasks
+                SET billing_reservation_id = ?, payload_json = ?,
+                    daily_publish_committed = ?
+                WHERE id = ?
+                """,
+                (
+                    reservation_id,
+                    json.dumps(payload),
+                    1 if publish_committed else 0,
+                    task_id,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO billing_reservations(
+                  id, user_id, ref_type, ref_id, sku, status,
+                  reserved_credit_units, catalog_version_id, meta_json,
+                  idempotency_key, created_at, updated_at
+                ) VALUES (?, ?, 'social_task', ?, ?, 'held', 10, '',
+                          '{"quantity":1,"unit_credit_units":10}',
+                          ?, 1, 1)
+                """,
+                (
+                    reservation_id,
+                    self.user_id,
+                    task_id,
+                    sku,
+                    f"boundary:{reservation_id}",
+                ),
+            )
+
+    def _billing_state(self, reservation_id: str) -> tuple[str, int, int]:
+        with sqlite3.connect(self.db_path) as conn:
+            reservation = conn.execute(
+                """
+                SELECT status, settled_credit_units
+                FROM billing_reservations
+                WHERE id = ?
+                """,
+                (reservation_id,),
+            ).fetchone()
+            wallet = conn.execute(
+                "SELECT credit_units FROM billing_wallets WHERE user_id = ?",
+                (self.user_id,),
+            ).fetchone()
+        return str(reservation[0]), int(reservation[1]), int(wallet[0])
+
+    def test_cancel_committed_publish_settles_instead_of_refunding(self):
+        task_id = "cancel-committed-publish"
+        reservation_id = "cancel-committed-publish-hold"
+        self._insert_task(task_id, "running")
+        self._attach_metered_reservation(
+            task_id,
+            reservation_id=reservation_id,
+            sku="threads_text_publish",
+            publish_committed=True,
+        )
+
+        with (
+            mock.patch.object(social_automation_api, "_force_stop_running_task"),
+            mock.patch.object(social_automation_api, "wake_social_automation_worker"),
+        ):
+            social_automation_api.cancel_social_task(task_id, "cancel after submit")
+
+        self.assertEqual(self._billing_state(reservation_id), ("settled", 10, 90))
+
+    def test_batch_cancel_settles_committed_item_and_refunds_unsubmitted_item(self):
+        committed_id = "batch-cancel-committed"
+        queued_id = "batch-cancel-queued"
+        committed_hold = "batch-cancel-committed-hold"
+        queued_hold = "batch-cancel-queued-hold"
+        self._insert_task(committed_id, "running")
+        self._insert_task(queued_id, "queued")
+        self._attach_metered_reservation(
+            committed_id,
+            reservation_id=committed_hold,
+            sku="threads_text_publish",
+            publish_committed=True,
+        )
+        self._attach_metered_reservation(
+            queued_id,
+            reservation_id=queued_hold,
+            sku="threads_text_publish",
+        )
+
+        with social_automation_api.db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM social_automation_tasks WHERE id IN (?, ?)",
+                (committed_id, queued_id),
+            ).fetchall()
+            social_automation_api.cancel_social_tasks_in_transaction(
+                conn,
+                list(rows),
+                reason="batch cancel",
+                now=20,
+            )
+
+        self.assertEqual(self._billing_state(committed_hold), ("settled", 10, 100))
+        self.assertEqual(self._billing_state(queued_hold), ("released", 0, 100))
+
+    def test_clear_committed_publish_settles_before_deleting_task(self):
+        task_id = "clear-committed-publish"
+        reservation_id = "clear-committed-publish-hold"
+        self._insert_task(task_id, "failed")
+        self._attach_metered_reservation(
+            task_id,
+            reservation_id=reservation_id,
+            sku="threads_text_publish",
+            publish_committed=True,
+        )
+
+        with mock.patch.object(social_automation_api, "wake_social_automation_worker"):
+            deleted = social_automation_api.clear_social_task(task_id)
+
+        self.assertEqual(deleted, 1)
+        self.assertEqual(self._billing_state(reservation_id), ("settled", 10, 90))
+
+    def test_failed_interaction_with_durable_commit_settles_instead_of_refunding(self):
+        task_id = "failed-committed-comment"
+        reservation_id = "failed-committed-comment-hold"
+        self._insert_task(task_id, "running", task_type="comment_post")
+        self._attach_metered_reservation(
+            task_id,
+            reservation_id=reservation_id,
+            sku="social_interaction",
+            committed_quantity=1,
+        )
+
+        completed = social_automation_api._finish_task(
+            task_id,
+            "failed",
+            {},
+            "browser closed after comment submit",
+        )
+
+        self.assertTrue(completed)
+        self.assertEqual(self._billing_state(reservation_id), ("settled", 10, 90))
+
+    def test_terminal_cleanup_settles_durably_committed_interaction(self):
+        task_id = "cleanup-committed-comment"
+        reservation_id = "cleanup-committed-comment-hold"
+        self._insert_task(task_id, "failed", task_type="comment_post")
+        self._attach_metered_reservation(
+            task_id,
+            reservation_id=reservation_id,
+            sku="social_interaction",
+            committed_quantity=1,
+        )
+
+        with social_automation_api.db() as conn:
+            social_automation_api._release_terminal_task_billing_reservations(conn, 100)
+
+        self.assertEqual(self._billing_state(reservation_id), ("settled", 10, 90))
 
 
 if __name__ == "__main__":

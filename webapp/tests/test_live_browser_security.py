@@ -467,6 +467,32 @@ def test_live_browser_warmup_summary_uses_latest_dynamic_progress():
     assert warmup["detail"] == "养号 · 自定义养号 · 浏览 3/8 · 点赞 1/2 · 评论 0/1"
 
 
+def test_live_browser_comment_only_summary_never_says_like_comment():
+    warmup = social_automation_api._live_browser_task_summary(
+        {
+            "id": "comment-only-summary",
+            "task_type": "threads_warmup",
+            "task_group_count": 1,
+            "payload_json": json.dumps(
+                {
+                    "strategy_id": "comment_only",
+                    "strategy_label": "评论养号：浏览 + 人设留言",
+                    "browse_limit": 80,
+                    "like_limit": 0,
+                    "max_comments": 3,
+                    "comment_chance": 100,
+                },
+                ensure_ascii=False,
+            ),
+        }
+    )
+
+    assert "评论留言" in warmup["target"]
+    assert "点赞留言" not in warmup["target"]
+    assert warmup["progress"]["like"]["target"] == 0
+    assert warmup["progress"]["comment"]["target"] == 3
+
+
 def test_live_browser_sessions_count_only_the_current_plan_cycle_and_refresh_current_strategy():
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row

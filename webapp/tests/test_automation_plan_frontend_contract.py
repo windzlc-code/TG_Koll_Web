@@ -359,6 +359,9 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         self.assertIn("当前人设未绑定执行账号", panel)
         self.assertIn('title = "选择发布平台"', picker)
         self.assertIn('modalKey = "publish-platform-picker"', picker)
+        self.assertIn('renderAccountPoolPlatformIcon(option.platform)', picker)
+        self.assertNotIn('option.count', picker)
+        self.assertNotIn('<small>', picker)
         self.assertIn("choosePublishPlatformAccount(persona, {", submit)
         self.assertIn('title: "选择执行平台"', submit)
         self.assertIn('confirmText: "创建并执行"', submit)
@@ -421,9 +424,13 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
             'document.querySelectorAll("[data-automation-plan-time]")', 1
         )[0]
 
-        self.assertIn('node.addEventListener("click", (event) => {', mode_bindings)
+        self.assertIn('node.addEventListener("click", async (event) => {', mode_bindings)
         self.assertIn("event.__vectoSegmentSlideHandled = true;", mode_bindings)
-        self.assertIn('draft.mode = node.dataset.automationPlanMode === "loop" ? "loop" : "list";', mode_bindings)
+        self.assertIn('const nextMode = node.dataset.automationPlanMode === "loop" ? "loop" : "list";', mode_bindings)
+        self.assertIn("await slideSegmentedButtonBackground(node, {", mode_bindings)
+        self.assertIn("draft.mode = nextMode;", mode_bindings)
+        self.assertIn("commit: () => {", mode_bindings)
+        self.assertIn("resolveButton: () => document.querySelector(", mode_bindings)
         self.assertNotIn("await waitForSegmentedBackgroundSlide", mode_bindings)
 
     def test_reopening_task_picker_or_configurator_cleans_up_previous_modal_handlers(self):
@@ -436,7 +443,7 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         self.assertIn('if (!confirmed) return;', normal_config)
         self.assertIn('item.taskType = "normal_publish";', normal_config)
         self.assertIn('item.configured = true;', normal_config)
-        self.assertIn('const onAutomationTaskConfigure = (event) => {', automation_config)
+        self.assertIn('const onAutomationTaskConfigure = async (event) => {', automation_config)
         self.assertIn('modal?.removeEventListener("click", onAutomationTaskConfigure);', automation_config)
         self.assertIn('modal?.removeEventListener("change", onAutomationTaskConfigureChange);', automation_config)
         self.assertIn('const onAutomationTaskPick = (event) => {', picker)

@@ -703,6 +703,39 @@ def reserve_charge(
     idem = str(idempotency_key or f"reserve:{ref_type}:{ref_id}:{sku}")
     existing = conn.execute("SELECT * FROM billing_reservations WHERE idempotency_key = ?", (idem,)).fetchone()
     if existing is not None:
+        existing_meta = _loads(existing["meta_json"], {})
+        existing_request = (
+            int(existing["user_id"]),
+            str(existing["ref_type"]),
+            str(existing["ref_id"]),
+            str(existing["sku"]),
+            int(existing_meta.get("quantity") or 0),
+            bool(
+                existing_meta.get(
+                    "image",
+                    int(existing["reserved_image_count"] or 0) > 0,
+                )
+            ),
+            bool(
+                existing_meta.get("admin_waived")
+                or str(existing_meta.get("waived_reason") or "") == "admin"
+            ),
+        )
+        requested_request = (
+            int(user_id),
+            str(ref_type),
+            str(ref_id),
+            str(sku),
+            qty,
+            bool(image),
+            bool(admin_waived),
+        )
+        if existing_request != requested_request:
+            raise BillingError(
+                "RESERVATION_IDEMPOTENCY_CONFLICT",
+                "Idempotency key is already bound to a different reservation request",
+                409,
+            )
         return _reservation_public(existing)
     wallet = ensure_wallet(conn, int(user_id), now=current)
     rate_units, catalog_version_id = action_rate_units(conn, str(sku))
@@ -716,7 +749,26 @@ def reserve_charge(
     if waived_reason:
         conn.execute(
             "INSERT INTO billing_reservations(id, user_id, ref_type, ref_id, sku, status, catalog_version_id, meta_json, idempotency_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'waived', ?, ?, ?, ?, ?)",
-            (reservation_id, int(user_id), str(ref_type), str(ref_id), str(sku), catalog_version_id, _dumps({"quantity": qty, "unit_credit_units": rate_units, "waived_reason": waived_reason}), idem, current, current),
+            (
+                reservation_id,
+                int(user_id),
+                str(ref_type),
+                str(ref_id),
+                str(sku),
+                catalog_version_id,
+                _dumps(
+                    {
+                        "quantity": qty,
+                        "unit_credit_units": rate_units,
+                        "image": bool(image),
+                        "admin_waived": bool(admin_waived),
+                        "waived_reason": waived_reason,
+                    }
+                ),
+                idem,
+                current,
+                current,
+            ),
         )
         if admin_waived:
             _insert_ledger(
@@ -731,6 +783,7 @@ def reserve_charge(
             "quantity": qty,
             "unit_credit_units": rate_units,
             "image": bool(image),
+            "admin_waived": False,
             "unlimited_compute": True,
             "theoretical_credit_units": qty * rate_units,
         }
@@ -802,7 +855,13 @@ def reserve_charge(
         raise BillingError("INSUFFICIENT_POINTS", "算力点不足，请先提交储值申请", 402)
     if credit_units:
         conn.execute("UPDATE billing_wallets SET credit_units = credit_units - ?, updated_at = ? WHERE user_id = ?", (credit_units, current, int(user_id)))
-    meta = {"quantity": qty, "unit_credit_units": rate_units, "image": bool(image), "grant_holds": grant_holds}
+    meta = {
+        "quantity": qty,
+        "unit_credit_units": rate_units,
+        "image": bool(image),
+        "admin_waived": False,
+        "grant_holds": grant_holds,
+    }
     conn.execute(
         """
         INSERT INTO billing_reservations(
@@ -1061,6 +1120,9 @@ def order_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         "reviewed_by": int(item.get("reviewed_by") or 0),
         "reviewed_at": int(item.get("reviewed_at") or 0),
         "review_note": str(item.get("review_note") or ""),
+        "refunded_by": int(item.get("refunded_by") or 0),
+        "refunded_at": int(item.get("refunded_at") or 0),
+        "refund_note": str(item.get("refund_note") or ""),
         "created_at": int(item.get("created_at") or 0),
         "updated_at": int(item.get("updated_at") or 0),
     }
@@ -1212,6 +1274,480 @@ def cancel_order(conn: sqlite3.Connection, order_id: str, *, user_id: int, now: 
     return order_public(conn.execute("SELECT * FROM billing_orders WHERE id = ?", (str(order_id),)).fetchone())
 
 
+def _subscription_public(
+    row: sqlite3.Row | dict[str, Any],
+    *,
+    now: int,
+) -> dict[str, Any]:
+    item = dict(row)
+    stored_status = str(item.get("status") or "")
+    current_period_end = int(item.get("current_period_end") or 0)
+    status = stored_status
+    if stored_status != "cancelled" and current_period_end <= int(now):
+        status = "expired"
+    return {
+        "id": str(item.get("id") or ""),
+        "user_id": int(item.get("user_id") or 0),
+        "plan_sku": str(item.get("plan_sku") or ""),
+        "status": status,
+        "current_period_end": current_period_end,
+        "created_at": int(item.get("created_at") or 0),
+        "updated_at": int(item.get("updated_at") or 0),
+    }
+
+
+def _image_balance(conn: sqlite3.Connection, user_id: int, now: int) -> int:
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(remaining_count), 0) AS c
+        FROM billing_image_grants
+        WHERE user_id = ?
+          AND remaining_count > 0
+          AND available_at <= ?
+          AND (expires_at = 0 OR expires_at > ?)
+        """,
+        (int(user_id), int(now), int(now)),
+    ).fetchone()
+    return int(row["c"] or 0)
+
+
+def _ensure_image_grants_not_held(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    grant_ids: set[str],
+) -> None:
+    if not grant_ids:
+        return
+    held = conn.execute(
+        """
+        SELECT id, meta_json
+        FROM billing_reservations
+        WHERE user_id = ? AND status = 'held' AND reserved_image_count > 0
+        """,
+        (int(user_id),),
+    ).fetchall()
+    for reservation in held:
+        meta = _loads(reservation["meta_json"], {})
+        reservation_grants = {
+            str(item.get("grant_id") or "")
+            for item in (meta.get("grant_holds") or [])
+            if isinstance(item, dict)
+        }
+        if grant_ids.intersection(reservation_grants):
+            raise BillingError(
+                "SUBSCRIPTION_BENEFITS_IN_USE",
+                "Subscription images are reserved by an active task; finish or cancel it before reversing access",
+                409,
+            )
+
+
+def _revoke_remaining_image_grant(
+    conn: sqlite3.Connection,
+    grant: sqlite3.Row,
+    *,
+    user_id: int,
+    event_type: str,
+    order_id: str = "",
+    subscription_id: str = "",
+    actor_user_id: int,
+    reason: str,
+    now: int,
+) -> int:
+    remaining = int(grant["remaining_count"] or 0)
+    if remaining <= 0:
+        return 0
+    conn.execute(
+        "UPDATE billing_image_grants SET remaining_count = 0, updated_at = ? "
+        "WHERE id = ? AND remaining_count = ?",
+        (int(now), str(grant["id"]), remaining),
+    )
+    _insert_ledger(
+        conn,
+        user_id=int(user_id),
+        asset_type="image",
+        event_type=str(event_type),
+        amount_units=-remaining,
+        balance_after_units=_image_balance(conn, int(user_id), int(now)),
+        order_id=str(order_id),
+        ref_type="subscription" if subscription_id else "order",
+        ref_id=str(subscription_id or order_id),
+        idempotency_key=f"grant:{grant['id']}:{event_type}",
+        meta={
+            "grant_id": str(grant["id"]),
+            "revoked_remaining": remaining,
+            "actor_user_id": int(actor_user_id),
+            "reason": str(reason),
+        },
+        now=int(now),
+    )
+    return remaining
+
+
+def _recompute_subscription_state(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    *,
+    now: int,
+) -> sqlite3.Row:
+    remaining = conn.execute(
+        """
+        SELECT MAX(end_at) AS max_end
+        FROM billing_subscription_periods
+        WHERE subscription_id = ? AND status != 'cancelled'
+        """,
+        (str(subscription_id),),
+    ).fetchone()
+    max_end = int(remaining["max_end"] or 0)
+    if max_end <= 0:
+        status = "cancelled"
+        current_period_end = int(now)
+    elif max_end <= int(now):
+        status = "expired"
+        current_period_end = max_end
+    else:
+        status = "active"
+        current_period_end = max_end
+    conn.execute(
+        "UPDATE billing_subscriptions "
+        "SET status = ?, current_period_end = ?, updated_at = ? WHERE id = ?",
+        (status, current_period_end, int(now), str(subscription_id)),
+    )
+    return conn.execute(
+        "SELECT * FROM billing_subscriptions WHERE id = ?",
+        (str(subscription_id),),
+    ).fetchone()
+
+
+def terminate_subscription(
+    conn: sqlite3.Connection,
+    subscription_id: str,
+    *,
+    actor_user_id: int,
+    reason: str,
+    now: int | None = None,
+) -> dict[str, Any]:
+    termination_reason = str(reason or "").strip()
+    if not termination_reason:
+        raise BillingError(
+            "SUBSCRIPTION_TERMINATION_REASON_REQUIRED",
+            "Subscription termination requires an audit reason",
+            400,
+        )
+    _ensure_immediate_transaction(conn)
+    current = int(now or _now())
+    subscription = conn.execute(
+        "SELECT * FROM billing_subscriptions WHERE id = ?",
+        (str(subscription_id),),
+    ).fetchone()
+    if subscription is None:
+        raise BillingError("SUBSCRIPTION_NOT_FOUND", "Subscription not found", 404)
+    if str(subscription["status"]) == "cancelled":
+        return _subscription_public(subscription, now=current)
+
+    user_id = int(subscription["user_id"])
+    periods = conn.execute(
+        """
+        SELECT *
+        FROM billing_subscription_periods
+        WHERE subscription_id = ? AND status != 'cancelled' AND end_at > ?
+        ORDER BY start_at
+        """,
+        (str(subscription_id), current),
+    ).fetchall()
+    grants_by_period: dict[str, sqlite3.Row] = {}
+    for period in periods:
+        grant = conn.execute(
+            "SELECT * FROM billing_image_grants "
+            "WHERE source_type = 'subscription_monthly' AND source_ref = ?",
+            (str(period["id"]),),
+        ).fetchone()
+        if grant is not None:
+            grants_by_period[str(period["id"])] = grant
+    _ensure_image_grants_not_held(
+        conn,
+        user_id=user_id,
+        grant_ids={str(grant["id"]) for grant in grants_by_period.values()},
+    )
+    for period in periods:
+        conn.execute(
+            "UPDATE billing_subscription_periods SET status = 'cancelled' "
+            "WHERE id = ? AND status != 'cancelled'",
+            (str(period["id"]),),
+        )
+        grant = grants_by_period.get(str(period["id"]))
+        if grant is not None:
+            _revoke_remaining_image_grant(
+                conn,
+                grant,
+                user_id=user_id,
+                event_type="subscription_images_terminated",
+                subscription_id=str(subscription_id),
+                actor_user_id=int(actor_user_id),
+                reason=termination_reason,
+                now=current,
+            )
+
+    conn.execute(
+        "UPDATE billing_subscriptions "
+        "SET status = 'cancelled', current_period_end = ?, updated_at = ? "
+        "WHERE id = ? AND status != 'cancelled'",
+        (current, current, str(subscription_id)),
+    )
+    _insert_ledger(
+        conn,
+        user_id=user_id,
+        asset_type="subscription",
+        event_type="subscription_terminated",
+        amount_units=-1,
+        balance_after_units=_active_subscription_count(conn, user_id, current),
+        ref_type="subscription",
+        ref_id=str(subscription_id),
+        idempotency_key=f"subscription:{subscription_id}:terminated",
+        meta={
+            "actor_user_id": int(actor_user_id),
+            "reason": termination_reason,
+            "cancelled_period_ids": [str(period["id"]) for period in periods],
+        },
+        now=current,
+    )
+    updated = conn.execute(
+        "SELECT * FROM billing_subscriptions WHERE id = ?",
+        (str(subscription_id),),
+    ).fetchone()
+    return _subscription_public(updated, now=current)
+
+
+def refund_approved_order(
+    conn: sqlite3.Connection,
+    order_id: str,
+    *,
+    actor_user_id: int,
+    reason: str,
+    now: int | None = None,
+) -> dict[str, Any]:
+    """Reverse unused entitlements from a manually approved order.
+
+    This records the internal entitlement reversal only. Any payment-provider
+    refund remains an explicit external/manual operation.
+    """
+    refund_reason = str(reason or "").strip()
+    if not refund_reason:
+        raise BillingError(
+            "REFUND_REASON_REQUIRED",
+            "Approved order refund requires an audit reason",
+            400,
+        )
+    _ensure_immediate_transaction(conn)
+    current = int(now or _now())
+    row = conn.execute(
+        "SELECT * FROM billing_orders WHERE id = ?",
+        (str(order_id),),
+    ).fetchone()
+    if row is None:
+        raise BillingError("ORDER_NOT_FOUND", "Order not found", 404)
+    if str(row["status"]) == "refunded":
+        return order_public(row)
+    if str(row["status"]) != "approved":
+        raise BillingError(
+            "ORDER_NOT_APPROVED",
+            "Only approved orders can be refunded",
+            409,
+        )
+
+    user_id = int(row["user_id"])
+    snapshot = _loads(row["price_snapshot_json"], {})
+    item = snapshot.get("item") if isinstance(snapshot.get("item"), dict) else {}
+    quantity = int(row["quantity"] or 1)
+    wallet = ensure_wallet(conn, user_id, now=current)
+
+    if str(row["kind"]) == "credit_pack":
+        credit_units = int(item.get("total_points") or 0) * POINT_SCALE * quantity
+        bonus_images = int(item.get("bonus_images") or 0) * quantity
+        balance = int(wallet["credit_units"])
+        if balance < credit_units:
+            raise BillingError(
+                "ORDER_BENEFITS_ALREADY_USED",
+                "The credited points have already been used and cannot be safely reclaimed",
+                409,
+            )
+        bonus_grant = None
+        if bonus_images > 0:
+            bonus_grant = conn.execute(
+                "SELECT * FROM billing_image_grants "
+                "WHERE source_type = 'credit_pack_bonus' AND source_ref = ?",
+                (str(row["id"]),),
+            ).fetchone()
+            if (
+                bonus_grant is None
+                or int(bonus_grant["total_count"] or 0) != bonus_images
+                or int(bonus_grant["remaining_count"] or 0) != bonus_images
+            ):
+                raise BillingError(
+                    "ORDER_BENEFITS_ALREADY_USED",
+                    "The bonus images have already been used and cannot be safely reclaimed",
+                    409,
+                )
+
+        if credit_units > 0:
+            conn.execute(
+                "UPDATE billing_wallets SET credit_units = credit_units - ?, updated_at = ? "
+                "WHERE user_id = ? AND credit_units >= ?",
+                (credit_units, current, user_id, credit_units),
+            )
+            _insert_ledger(
+                conn,
+                user_id=user_id,
+                asset_type="credit",
+                event_type="credit_pack_refunded",
+                amount_units=-credit_units,
+                balance_after_units=balance - credit_units,
+                order_id=str(row["id"]),
+                ref_type="order",
+                ref_id=str(row["id"]),
+                idempotency_key=f"order:{row['id']}:credit_refund",
+                meta={
+                    "actor_user_id": int(actor_user_id),
+                    "reason": refund_reason,
+                    "sku": str(row["sku"]),
+                    "quantity": quantity,
+                },
+                now=current,
+            )
+        if bonus_grant is not None:
+            _revoke_remaining_image_grant(
+                conn,
+                bonus_grant,
+                user_id=user_id,
+                event_type="credit_pack_bonus_revoked",
+                order_id=str(row["id"]),
+                actor_user_id=int(actor_user_id),
+                reason=refund_reason,
+                now=current,
+            )
+    else:
+        periods = conn.execute(
+            "SELECT * FROM billing_subscription_periods "
+            "WHERE source_order_id = ? ORDER BY start_at",
+            (str(row["id"]),),
+        ).fetchall()
+        if not periods:
+            raise BillingError(
+                "ORDER_REFUND_UNSAFE",
+                "The approved subscription order has no entitlement periods to reverse",
+                409,
+            )
+        grants_by_period: dict[str, sqlite3.Row] = {}
+        for period in periods:
+            grant = conn.execute(
+                "SELECT * FROM billing_image_grants "
+                "WHERE source_type = 'subscription_monthly' AND source_ref = ?",
+                (str(period["id"]),),
+            ).fetchone()
+            if grant is not None:
+                grants_by_period[str(period["id"])] = grant
+        _ensure_image_grants_not_held(
+            conn,
+            user_id=user_id,
+            grant_ids={str(grant["id"]) for grant in grants_by_period.values()},
+        )
+        affected_subscription_ids: set[str] = set()
+        for period in periods:
+            subscription_id = str(period["subscription_id"])
+            affected_subscription_ids.add(subscription_id)
+            if str(period["status"]) != "cancelled":
+                conn.execute(
+                    "UPDATE billing_subscription_periods SET status = 'cancelled' "
+                    "WHERE id = ? AND status != 'cancelled'",
+                    (str(period["id"]),),
+                )
+                _insert_ledger(
+                    conn,
+                    user_id=user_id,
+                    asset_type="subscription",
+                    event_type="subscription_period_refunded",
+                    amount_units=-1,
+                    balance_after_units=_active_subscription_count(
+                        conn,
+                        user_id,
+                        current,
+                    ),
+                    order_id=str(row["id"]),
+                    ref_type="subscription",
+                    ref_id=subscription_id,
+                    idempotency_key=f"period:{period['id']}:refunded",
+                    meta={
+                        "period_id": str(period["id"]),
+                        "actor_user_id": int(actor_user_id),
+                        "reason": refund_reason,
+                    },
+                    now=current,
+                )
+            grant = grants_by_period.get(str(period["id"]))
+            if grant is not None:
+                _revoke_remaining_image_grant(
+                    conn,
+                    grant,
+                    user_id=user_id,
+                    event_type="subscription_images_refunded",
+                    order_id=str(row["id"]),
+                    subscription_id=subscription_id,
+                    actor_user_id=int(actor_user_id),
+                    reason=refund_reason,
+                    now=current,
+                )
+        for subscription_id in affected_subscription_ids:
+            _recompute_subscription_state(
+                conn,
+                subscription_id,
+                now=current,
+            )
+
+    conn.execute(
+        """
+        UPDATE billing_orders
+        SET status = 'refunded', refunded_by = ?, refunded_at = ?,
+            refund_note = ?, updated_at = ?
+        WHERE id = ? AND status = 'approved'
+        """,
+        (
+            int(actor_user_id),
+            current,
+            refund_reason[:1000],
+            current,
+            str(row["id"]),
+        ),
+    )
+    _insert_ledger(
+        conn,
+        user_id=user_id,
+        asset_type="audit",
+        event_type="order_refunded",
+        amount_units=0,
+        balance_after_units=int(
+            conn.execute(
+                "SELECT credit_units FROM billing_wallets WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()["credit_units"]
+        ),
+        order_id=str(row["id"]),
+        ref_type="order",
+        ref_id=str(row["id"]),
+        idempotency_key=f"order:{row['id']}:refunded",
+        meta={
+            "actor_user_id": int(actor_user_id),
+            "reason": refund_reason,
+            "kind": str(row["kind"]),
+        },
+        now=current,
+    )
+    updated = conn.execute(
+        "SELECT * FROM billing_orders WHERE id = ?",
+        (str(row["id"]),),
+    ).fetchone()
+    return order_public(updated)
+
+
 def adjust_credit(conn: sqlite3.Connection, *, user_id: int, delta_units: int, actor_user_id: int, reason: str, now: int | None = None) -> dict[str, Any]:
     if not str(reason or "").strip():
         raise BillingError("ADJUSTMENT_REASON_REQUIRED", "人工调整必须填写原因", 400)
@@ -1309,7 +1845,7 @@ def billing_summary(conn: sqlite3.Connection, user_id: int, *, now: int | None =
         "unlimited_compute": bool(int(wallet.get("unlimited_compute") or 0)),
         "credit_units": int(wallet["credit_units"]),
         "points": points_from_units(int(wallet["credit_units"])),
-        "subscription_active": active_count > 0 or str(wallet["billing_mode"]) == "legacy",
+        "subscription_active": active_count > 0,
         "active_subscription_count": active_count,
         "threads_account_limit": None,
         "free_images": {"monthly_remaining": monthly_remaining, "permanent_remaining": permanent_remaining, "total_remaining": monthly_remaining + permanent_remaining},
@@ -1317,7 +1853,7 @@ def billing_summary(conn: sqlite3.Connection, user_id: int, *, now: int | None =
             {
                 "id": str(row["id"]),
                 "plan_sku": str(row["plan_sku"]),
-                "status": "expired" if int(row["current_period_end"] or 0) <= current else str(row["status"]),
+                "status": _subscription_public(row, now=current)["status"],
                 "current_period_end": int(row["current_period_end"]),
                 "created_at": int(row["created_at"]),
             }
@@ -1330,9 +1866,13 @@ def billing_summary(conn: sqlite3.Connection, user_id: int, *, now: int | None =
                 "start_at": int(row["start_at"]),
                 "end_at": int(row["end_at"]),
                 "status": (
-                    "expired"
-                    if int(row["end_at"] or 0) <= current
-                    else ("scheduled" if int(row["start_at"] or 0) > current else "active")
+                    "cancelled"
+                    if str(row["status"]) == "cancelled"
+                    else (
+                        "expired"
+                        if int(row["end_at"] or 0) <= current
+                        else ("scheduled" if int(row["start_at"] or 0) > current else "active")
+                    )
                 ),
             }
             for row in periods

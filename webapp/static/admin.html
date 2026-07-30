@@ -1407,6 +1407,7 @@
                 <select id="billingOrderStatus">
                   <option value="pending">待审批</option>
                   <option value="approved">已批准</option>
+                  <option value="refunded">已冲销</option>
                   <option value="rejected">已拒绝</option>
                   <option value="cancelled">已取消</option>
                   <option value="all">全部申请</option>
@@ -1455,6 +1456,21 @@
             <div id="billingUserPlaceholder" class="admin-billing-empty-panel">从客户账号列表点击计费按钮，或输入客户 ID 查询。</div>
             <div id="billingUserWorkspace" hidden>
               <div id="billingUserSummary" class="admin-billing-summary-grid" aria-live="polite"></div>
+              <div class="table-wrap admin-billing-table-wrap">
+                <table class="table admin-billing-table">
+                  <caption class="sr-only">客户订阅明细</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">订阅</th>
+                      <th scope="col">方案</th>
+                      <th scope="col">状态</th>
+                      <th scope="col">当前周期结束</th>
+                      <th scope="col">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="billingSubscriptionBody"></tbody>
+                </table>
+              </div>
               <div class="admin-billing-user-layout">
                 <div class="table-wrap admin-billing-table-wrap">
                   <table class="table admin-billing-table">
@@ -1756,9 +1772,37 @@
         <div class="admin-user-batch-modal-summary">
           本次将处理 <strong id="adminUserBatchModalCount">0</strong> 个已选客户账号
         </div>
+        <section id="adminUserBatchCreditShortcuts" class="admin-credit-shortcuts" hidden aria-labelledby="adminUserBatchCreditShortcutsTitle">
+          <div class="admin-credit-shortcuts-head">
+            <span id="adminUserBatchCreditShortcutsTitle">快捷输入</span>
+            <button id="btnAdminUserBatchCreditShortcutAdd" type="button" class="admin-credit-shortcut-add" aria-expanded="false" aria-controls="adminUserBatchCreditShortcutForm">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+              <span>自定义标签</span>
+            </button>
+          </div>
+          <div id="adminUserBatchCreditShortcutList" class="admin-credit-shortcut-list" role="list"></div>
+          <form id="adminUserBatchCreditShortcutForm" class="admin-credit-shortcut-form" hidden>
+            <label for="adminUserBatchCreditShortcutName">
+              <span>标签名</span>
+              <input id="adminUserBatchCreditShortcutName" maxlength="16" autocomplete="off" placeholder="例如：活动额度">
+            </label>
+            <label for="adminUserBatchCreditShortcutPoints">
+              <span>算力点</span>
+              <input id="adminUserBatchCreditShortcutPoints" type="number" min="0" max="1000000" step="0.01" inputmode="decimal" placeholder="例如：2000">
+            </label>
+            <button id="btnAdminUserBatchCreditShortcutSave" type="submit" class="primary">添加</button>
+          </form>
+          <div id="adminUserBatchCreditShortcutMsg" class="admin-credit-shortcut-msg" role="status" aria-live="polite"></div>
+        </section>
+        <div id="adminUserBatchUnlimitedField" hidden>
+          <label class="switch admin-billing-unlimited-option" for="adminUserBatchUnlimited">
+            <input id="adminUserBatchUnlimited" type="checkbox">
+            <span>无限算力</span>
+          </label>
+        </div>
         <label id="adminUserBatchCreditField" for="adminUserBatchCredit" hidden>
-          <span>增加算力点</span>
-          <input id="adminUserBatchCredit" type="number" min="0.01" max="1000000" step="0.01" inputmode="decimal" placeholder="输入增加点数">
+          <span>调整后算力点</span>
+          <input id="adminUserBatchCredit" type="number" min="0" max="1000000" step="0.01" inputmode="decimal" placeholder="输入新的算力点">
         </label>
         <label for="adminUserBatchReason">
           <span>操作原因（选填）</span>

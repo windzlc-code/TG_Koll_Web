@@ -14,6 +14,7 @@ import webapp.server as server
 
 class BillingApiClosedLoopTests(unittest.TestCase):
     def setUp(self):
+        social_automation_api.stop_social_automation_worker(timeout_seconds=1)
         self.old_env = {
             key: os.environ.get(key)
             for key in (
@@ -71,6 +72,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
     def tearDown(self):
         self.customer.close()
         self.admin.close()
+        social_automation_api.stop_social_automation_worker(timeout_seconds=1)
         server.RUNTIME_CONFIG_PATH = self.old_runtime_path
         for key, value in self.old_env.items():
             if value is None:
@@ -581,6 +583,95 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         self.assertEqual(admin_orders.json()["global_pending_count"], 0)
         self.assertEqual(admin_orders.json()["pending_count"], 0)
         self.assertEqual(admin_orders.json()["items"][0]["id"], order_id)
+
+    def test_admin_can_refund_unused_order_and_terminate_subscription(self):
+        created = self.customer.post(
+            "/api/billing/orders",
+            json={
+                "sku": "credits_100",
+                "quantity": 1,
+                "note": "refund boundary",
+                "idempotency_key": "refund-boundary-order",
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        order_id = created.json()["order"]["id"]
+        approved = self.admin.post(
+            f"/api/admin/billing/orders/{order_id}/approve",
+            json={"note": "approved for refund test"},
+        )
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertEqual(self.customer.get("/api/billing/summary").json()["points"], 100)
+
+        customer_refund = self.customer.post(
+            f"/api/admin/billing/orders/{order_id}/refund",
+            json={"note": "must not refund"},
+        )
+        blank_refund = self.admin.post(
+            f"/api/admin/billing/orders/{order_id}/refund",
+            json={"note": ""},
+        )
+        refunded = self.admin.post(
+            f"/api/admin/billing/orders/{order_id}/refund",
+            json={"note": "duplicate payment"},
+        )
+        replayed_refund = self.admin.post(
+            f"/api/admin/billing/orders/{order_id}/refund",
+            json={"note": "duplicate callback"},
+        )
+        self.assertEqual(customer_refund.status_code, 401, customer_refund.text)
+        self.assertEqual(blank_refund.status_code, 400, blank_refund.text)
+        self.assertEqual(refunded.status_code, 200, refunded.text)
+        self.assertEqual(refunded.json()["order"]["status"], "refunded")
+        self.assertEqual(refunded.json()["order"]["refund_note"], "duplicate payment")
+        self.assertEqual(replayed_refund.status_code, 200, replayed_refund.text)
+        self.assertEqual(replayed_refund.json()["order"], refunded.json()["order"])
+        self.assertEqual(self.customer.get("/api/billing/summary").json()["points"], 0)
+
+        refunded_orders = self.admin.get(
+            f"/api/admin/billing/orders?status=refunded&user_id={self.user_id}"
+        )
+        self.assertEqual(refunded_orders.status_code, 200, refunded_orders.text)
+        self.assertEqual([item["id"] for item in refunded_orders.json()["items"]], [order_id])
+
+        opened = self.admin.post(
+            f"/api/admin/users/{self.user_id}/billing/subscriptions",
+            json={
+                "quantity": 1,
+                "renewal_subscription_ids": [],
+                "note": "subscription termination test",
+            },
+        )
+        self.assertEqual(opened.status_code, 200, opened.text)
+        active_summary = self.customer.get("/api/billing/summary").json()
+        subscription_id = active_summary["subscriptions"][0]["id"]
+        self.assertTrue(active_summary["subscription_active"])
+
+        customer_terminate = self.customer.post(
+            f"/api/admin/billing/subscriptions/{subscription_id}/terminate",
+            json={"note": "must not terminate"},
+        )
+        blank_terminate = self.admin.post(
+            f"/api/admin/billing/subscriptions/{subscription_id}/terminate",
+            json={"note": ""},
+        )
+        terminated = self.admin.post(
+            f"/api/admin/billing/subscriptions/{subscription_id}/terminate",
+            json={"note": "customer requested termination"},
+        )
+        repeated_termination = self.admin.post(
+            f"/api/admin/billing/subscriptions/{subscription_id}/terminate",
+            json={"note": "duplicate request"},
+        )
+        self.assertEqual(customer_terminate.status_code, 401, customer_terminate.text)
+        self.assertEqual(blank_terminate.status_code, 400, blank_terminate.text)
+        self.assertEqual(terminated.status_code, 200, terminated.text)
+        self.assertEqual(terminated.json()["subscription"]["status"], "cancelled")
+        self.assertEqual(repeated_termination.status_code, 200, repeated_termination.text)
+        self.assertEqual(repeated_termination.json(), terminated.json())
+        inactive_summary = self.customer.get("/api/billing/summary").json()
+        self.assertFalse(inactive_summary["subscription_active"])
+        self.assertEqual(inactive_summary["free_images"]["monthly_remaining"], 0)
 
     def test_public_pricing_is_independent_from_console_billing(self):
         with TestClient(self.app) as anonymous:

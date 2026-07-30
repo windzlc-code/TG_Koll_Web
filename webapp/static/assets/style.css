@@ -9517,6 +9517,189 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   margin: 0;
 }
 
+.page-admin .admin-user-batch-modal-body .admin-billing-unlimited-option {
+  display: inline-flex;
+}
+
+.page-admin #adminUserBatchUnlimitedField .admin-billing-unlimited-option,
+.page-admin #adminUserBatchUnlimitedField .admin-billing-unlimited-option:has(input:checked) {
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.page-admin .admin-credit-shortcuts {
+  display: grid;
+  gap: 8px;
+}
+
+.page-admin .admin-credit-shortcuts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--admin-ink);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.page-admin .admin-credit-shortcut-add {
+  display: inline-flex;
+  width: auto;
+  min-height: 28px;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--brand, #008b86);
+  font-size: 12px;
+}
+
+.page-admin .admin-credit-shortcut-add svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+}
+
+.page-admin .admin-credit-shortcut-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.page-admin .admin-credit-shortcut {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--admin-line);
+  border-radius: 7px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.page-admin .admin-credit-shortcut-apply {
+  display: grid;
+  width: 100%;
+  min-height: 54px;
+  align-content: center;
+  justify-items: start;
+  gap: 2px;
+  padding: 7px 25px 7px 9px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--admin-ink);
+  text-align: left;
+}
+
+.page-admin .admin-credit-shortcut-apply span {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--admin-muted);
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-admin .admin-credit-shortcut-apply strong {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.page-admin .admin-credit-shortcut:has(.admin-credit-shortcut-apply:hover),
+.page-admin .admin-credit-shortcut:has(.admin-credit-shortcut-apply:focus-visible) {
+  border-color: color-mix(in srgb, var(--brand, #008b86) 55%, var(--admin-line));
+  background: #f4f9f8;
+}
+
+.page-admin .admin-credit-shortcut-remove {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: grid;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--admin-muted);
+}
+
+.page-admin .admin-credit-shortcut-remove svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+}
+
+.page-admin .admin-credit-shortcut-remove:hover {
+  color: var(--danger, #c62828);
+}
+
+.page-admin .admin-credit-shortcut-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, .8fr) auto;
+  align-items: end;
+  gap: 7px;
+  padding: 9px;
+  border-left: 2px solid var(--brand, #008b86);
+  background: var(--panel-soft, #f4f8f7);
+}
+
+.page-admin .admin-credit-shortcut-form label {
+  gap: 4px;
+}
+
+.page-admin .admin-credit-shortcut-form label > span {
+  color: var(--admin-muted);
+  font-size: 11px;
+}
+
+.page-admin .admin-credit-shortcut-form input {
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 8px;
+}
+
+.page-admin .admin-credit-shortcut-form button {
+  width: auto;
+  min-height: 34px;
+  padding: 6px 11px;
+}
+
+.page-admin .admin-credit-shortcut-msg {
+  min-height: 16px;
+  color: var(--danger, #c62828);
+  font-size: 11px;
+}
+
+@media (max-width: 560px) {
+  .page-admin .admin-credit-shortcut-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-admin .admin-credit-shortcut-form {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .page-admin .admin-credit-shortcut-form button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}
+
 .page-admin .admin-user-batch-modal-body textarea {
   min-height: 92px;
   resize: vertical;

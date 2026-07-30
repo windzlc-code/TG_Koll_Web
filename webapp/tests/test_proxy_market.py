@@ -229,6 +229,80 @@ class ProxyMarketTests(unittest.TestCase):
         self.assertFalse(stale_result["available"])
         self.assertEqual(stale_result["availability_reason"], "health_stale")
 
+    def test_health_monitor_refreshes_due_published_item_without_changing_expiry(self):
+        item = self._market_item("TW-TPE-HEALTH-MONITOR")
+        now = int(time.time())
+        with db() as conn:
+            conn.execute(
+                "UPDATE proxy_market_items SET last_check_at = ?, expires_at = 0 WHERE id = ?",
+                (now - proxy_market.DEFAULT_HEALTH_MAX_AGE_SECONDS, item["id"]),
+            )
+        check = {
+            "ok": True,
+            "latency_ms": 22,
+            "response": {
+                "country": "TW",
+                "region": "Taipei",
+                "city": "Taipei",
+                "connection": {"isp": "QA ISP"},
+            },
+        }
+        with patch("webapp.proxy_market._run_proxy_connection_check", return_value=check) as connection_check:
+            summary = proxy_market.run_proxy_market_health_maintenance_once(now=now)
+        self.assertEqual(summary, {"checked": 1, "healthy": 1, "failed": 0, "skipped": 0})
+        connection_check.assert_called_once()
+        with db() as conn:
+            updated = conn.execute(
+                "SELECT status, health_status, last_check_at, expires_at FROM proxy_market_items WHERE id = ?",
+                (item["id"],),
+            ).fetchone()
+        self.assertEqual((updated["status"], updated["health_status"]), ("active", "healthy"))
+        self.assertEqual(int(updated["last_check_at"]), now)
+        self.assertEqual(int(updated["expires_at"]), 0)
+
+    def test_health_monitor_moves_failed_unallocated_item_to_maintenance(self):
+        item = self._market_item("TW-TPE-HEALTH-FAILURE")
+        now = int(time.time())
+        with db() as conn:
+            conn.execute(
+                "UPDATE proxy_market_items SET last_check_at = ? WHERE id = ?",
+                (now - proxy_market.DEFAULT_HEALTH_MAX_AGE_SECONDS, item["id"]),
+            )
+        with patch("webapp.proxy_market._run_proxy_connection_check", return_value={"ok": False, "error": "offline"}):
+            summary = proxy_market.run_proxy_market_health_maintenance_once(now=now)
+        self.assertEqual(summary, {"checked": 1, "healthy": 0, "failed": 1, "skipped": 0})
+        with db() as conn:
+            updated = conn.execute(
+                "SELECT status, health_status FROM proxy_market_items WHERE id = ?",
+                (item["id"],),
+            ).fetchone()
+        self.assertEqual((updated["status"], updated["health_status"]), ("maintenance", "failed"))
+
+    def test_health_monitor_recovers_failed_item_after_retry_window(self):
+        item = self._market_item("TW-TPE-HEALTH-RECOVERY")
+        now = int(time.time())
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE proxy_market_items
+                SET status = 'maintenance', health_status = 'failed', last_check_at = ?
+                WHERE id = ?
+                """,
+                (now - proxy_market.HEALTH_FAILURE_RECHECK_SECONDS, item["id"]),
+            )
+        with patch(
+            "webapp.proxy_market._run_proxy_connection_check",
+            return_value={"ok": True, "latency_ms": 18, "response": {"connection": {}}},
+        ):
+            summary = proxy_market.run_proxy_market_health_maintenance_once(now=now)
+        self.assertEqual(summary, {"checked": 1, "healthy": 1, "failed": 0, "skipped": 0})
+        with db() as conn:
+            updated = conn.execute(
+                "SELECT status, health_status FROM proxy_market_items WHERE id = ?",
+                (item["id"],),
+            ).fetchone()
+        self.assertEqual((updated["status"], updated["health_status"]), ("active", "healthy"))
+
     def test_claim_is_exclusive_idempotent_and_release_returns_inventory(self):
         item = self._market_item()
         customer, _ = self._customer("proxy_buyer")

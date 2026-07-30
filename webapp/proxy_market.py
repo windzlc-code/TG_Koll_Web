@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
+import threading
 import time
 import uuid
 from typing import Any
@@ -28,9 +30,16 @@ from .social_automation_api import (
 MARKET_SETTINGS_KEY = "proxy_market_settings"
 DEFAULT_CLAIM_LIMIT = 3
 DEFAULT_HEALTH_MAX_AGE_SECONDS = 24 * 60 * 60
+DEFAULT_HEALTH_MONITOR_POLL_SECONDS = 60
+HEALTH_FAILURE_RECHECK_SECONDS = 5 * 60
 ITEM_STATUSES = {"draft", "active", "allocated", "maintenance", "disabled", "archived"}
 HEALTH_STATUSES = {"pending", "healthy", "failed"}
 PROXY_TYPES = {"http", "https", "socks5"}
+
+_HEALTH_MONITOR_THREAD: threading.Thread | None = None
+_HEALTH_MONITOR_STOP = threading.Event()
+_HEALTH_MONITOR_WAKE = threading.Event()
+_HEALTH_MONITOR_LOCK = threading.Lock()
 
 
 class ProxyMarketItemPayload(BaseModel):
@@ -198,6 +207,164 @@ def _decrypt_credentials(item: dict[str, Any]) -> tuple[str, str]:
         return decrypt_market_credentials(item)
     except PasswordVaultError as exc:
         raise HTTPException(status_code=503, detail="商城代理凭据暂时不可用") from exc
+
+
+def _last_market_exit_ip(item: dict[str, Any]) -> str:
+    result = _safe_check_result(item.get("last_check_result_json"))
+    response = result.get("response") if isinstance(result.get("response"), dict) else {}
+    return str(response.get("ip") or result.get("exit_ip") or result.get("ip") or "").strip()
+
+
+def _health_recheck_after_seconds(health_max_age_seconds: int) -> int:
+    window = max(300, int(health_max_age_seconds or DEFAULT_HEALTH_MAX_AGE_SECONDS))
+    lead_seconds = min(300, max(30, window // 10))
+    return max(0, window - lead_seconds)
+
+
+def _health_monitor_poll_seconds() -> int:
+    try:
+        requested = int(os.getenv("PROXY_MARKET_HEALTH_MONITOR_POLL_SECONDS", str(DEFAULT_HEALTH_MONITOR_POLL_SECONDS)))
+    except (TypeError, ValueError):
+        requested = DEFAULT_HEALTH_MONITOR_POLL_SECONDS
+    return max(15, min(3600, requested))
+
+
+def run_proxy_market_health_maintenance_once(*, now: int | None = None, limit: int = 8) -> dict[str, int]:
+    """Refresh marketplace health before it expires without changing lease expiry or pricing."""
+    checked_at = int(now if now is not None else _now())
+    batch_limit = max(1, min(int(limit or 1), 32))
+    with db() as conn:
+        settings = _settings(conn)
+        recheck_after = _health_recheck_after_seconds(settings["health_max_age_seconds"])
+        rows = conn.execute(
+            """
+            SELECT item.*
+            FROM proxy_market_items AS item
+            WHERE (item.expires_at = 0 OR item.expires_at > ?)
+              AND (
+                (item.status IN ('active', 'allocated') AND item.last_check_at <= ?)
+                OR (
+                  item.status = 'maintenance'
+                  AND item.health_status = 'failed'
+                  AND item.last_check_at <= ?
+                )
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM social_automation_tasks AS task
+                JOIN social_accounts AS account ON account.id = task.account_id
+                JOIN social_proxies AS proxy ON proxy.id = account.proxy_id
+                WHERE proxy.market_item_id = item.id
+                  AND task.status IN ('preparing', 'queued', 'running', 'need_manual')
+              )
+            ORDER BY item.last_check_at ASC, item.updated_at ASC
+            LIMIT ?
+            """,
+            (checked_at, checked_at - recheck_after, checked_at - HEALTH_FAILURE_RECHECK_SECONDS, batch_limit),
+        ).fetchall()
+
+    summary = {"checked": 0, "healthy": 0, "failed": 0, "skipped": 0}
+    for row in rows:
+        item = dict(row)
+        try:
+            username, password = _decrypt_credentials(item)
+        except HTTPException:
+            summary["skipped"] += 1
+            continue
+        candidate = {
+            "proxy_type": str(item.get("proxy_type") or "socks5").strip().lower(),
+            "host": str(item.get("host") or "").strip(),
+            "port": int(item.get("port") or 0),
+            "username": username,
+            "password": password,
+        }
+        result = _run_proxy_connection_check(candidate, previous_exit_ip=_last_market_exit_ip(item))
+        is_healthy = bool(result.get("ok"))
+        response = result.get("response") if isinstance(result.get("response"), dict) else {}
+        connection = response.get("connection") if isinstance(response.get("connection"), dict) else {}
+        next_status = str(item.get("status") or "active")
+        if is_healthy and next_status == "maintenance":
+            next_status = "active"
+        elif not is_healthy and next_status == "active":
+            next_status = "maintenance"
+        with db() as conn:
+            updated = conn.execute(
+                """
+                UPDATE proxy_market_items
+                SET status = ?, health_status = ?, latency_ms = ?, last_check_at = ?,
+                    last_check_result_json = ?, country = CASE WHEN ? != '' THEN ? ELSE country END,
+                    region = CASE WHEN ? != '' THEN ? ELSE region END,
+                    city = CASE WHEN ? != '' THEN ? ELSE city END,
+                    isp = CASE WHEN ? != '' THEN ? ELSE isp END,
+                    updated_at = ?
+                WHERE id = ? AND version = ?
+                  AND (
+                    status IN ('active', 'allocated')
+                    OR (status = 'maintenance' AND health_status = 'failed')
+                  )
+                """,
+                (
+                    next_status,
+                    "healthy" if is_healthy else "failed",
+                    int(result.get("latency_ms") or 0),
+                    checked_at,
+                    json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                    str(response.get("country") or ""),
+                    str(response.get("country") or ""),
+                    str(response.get("region") or ""),
+                    str(response.get("region") or ""),
+                    str(response.get("city") or ""),
+                    str(response.get("city") or ""),
+                    str(connection.get("isp") or connection.get("org") or ""),
+                    str(connection.get("isp") or connection.get("org") or ""),
+                    checked_at,
+                    str(item["id"]),
+                    int(item.get("version") or 1),
+                ),
+            ).rowcount
+        if not updated:
+            summary["skipped"] += 1
+            continue
+        summary["checked"] += 1
+        summary["healthy" if is_healthy else "failed"] += 1
+    return summary
+
+
+def _health_monitor_loop() -> None:
+    while not _HEALTH_MONITOR_STOP.is_set():
+        try:
+            run_proxy_market_health_maintenance_once()
+        except Exception:
+            pass
+        _HEALTH_MONITOR_WAKE.wait(timeout=_health_monitor_poll_seconds())
+        _HEALTH_MONITOR_WAKE.clear()
+
+
+def ensure_proxy_market_health_monitor_started() -> None:
+    global _HEALTH_MONITOR_THREAD
+    if str(os.getenv("PROXY_MARKET_HEALTH_MONITOR_ENABLED", "1")).strip().lower() in {"0", "false", "no", "off"}:
+        return
+    with _HEALTH_MONITOR_LOCK:
+        if _HEALTH_MONITOR_THREAD and _HEALTH_MONITOR_THREAD.is_alive():
+            return
+        _HEALTH_MONITOR_STOP.clear()
+        _HEALTH_MONITOR_THREAD = threading.Thread(
+            target=_health_monitor_loop,
+            name="proxy-market-health-monitor",
+            daemon=True,
+        )
+        _HEALTH_MONITOR_THREAD.start()
+
+
+def stop_proxy_market_health_monitor(*, timeout_seconds: float = 5.0) -> None:
+    global _HEALTH_MONITOR_THREAD
+    _HEALTH_MONITOR_STOP.set()
+    _HEALTH_MONITOR_WAKE.set()
+    worker = _HEALTH_MONITOR_THREAD
+    if worker and worker.is_alive() and worker is not threading.current_thread():
+        worker.join(timeout=max(0.0, float(timeout_seconds)))
+    if worker is None or not worker.is_alive():
+        _HEALTH_MONITOR_THREAD = None
 
 
 def _require_enabled_user(conn: sqlite3.Connection, user_id: int) -> dict[str, Any]:

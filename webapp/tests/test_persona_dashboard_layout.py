@@ -699,7 +699,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         view_start = selector_end
         view_end = self.console_script.index("\nfunction currentBranch", view_start)
         view = self.console_script[view_start:view_end]
-        handler_start = self.console_script.index('  $("taskTable").addEventListener("click", (event) => {')
+        handler_start = self.console_script.index('  $("taskTable").addEventListener("click", async (event) => {')
         handler_end = self.console_script.index("\n  });", handler_start)
         handler = self.console_script[handler_start:handler_end]
 
@@ -1992,6 +1992,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("persona-execution-platform-logos", badge)
         self.assertIn('persona-execution-platform-logo${isCurrent ? " is-current" : ""}', badge)
         self.assertIn('账号：${esc(accountLabel)}', badge)
+        self.assertIn('const accountSyncPending = !state.socialDataLoadedAt && !hasExecutionAccount;', badge)
+        self.assertIn('accountSyncPending ? "账号同步中"', badge)
+        self.assertIn('accountSyncPending ? "is-loading" : "is-warning"', badge)
+        self.assertIn('.persona-status-chip.is-loading {', self.styles)
 
         active_logo_start = self.styles.index(".persona-execution-platform-logo.is-current")
         active_logo_end = self.styles.index(".persona-execution-platform-logo svg", active_logo_start)
@@ -2048,6 +2052,109 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('.persona-content-tabs.account-browser-tabs button {\n  font-weight: inherit;', self.styles)
         self.assertIn('.console-page .persona-content-tabs {\n    grid-template-columns: repeat(3, minmax(0, 1fr));', self.styles)
         self.assertIn('.console-page .persona-detail.persona-detail--content {', self.styles)
+
+    def test_tweet_generation_reuses_platform_cards_and_filters_archives_by_platform(self):
+        platform_helpers = self.console_script[
+            self.console_script.index("function personaContentPlatform"):
+            self.console_script.index("function personaDraftPosts")
+        ]
+        content_panel = self.console_script[
+            self.console_script.index("function renderPersonaContentPanel"):
+            self.console_script.index("function refreshLiveBrowserSessionsSoon")
+        ]
+        payload = self.console_script[
+            self.console_script.index("function generatePersonaPayloadFromState"):
+            self.console_script.index("function personaGenerateRunState")
+        ]
+        create_post = self.console_script[
+            self.console_script.index("async function createPersonaDraftPost"):
+            self.console_script.index("async function stashPersonaDraftEdit")
+        ]
+
+        self.assertIn("state.personaContentPlatforms", platform_helpers)
+        self.assertIn('return "threads";', platform_helpers)
+        self.assertIn("personaPostMatchesContentPlatform", platform_helpers)
+        self.assertIn("function renderPersonaContentPlatformRail", self.console_script)
+        self.assertIn("account-pool-platforms account-pool-platform-tabs persona-content-platform-tabs", self.console_script)
+        self.assertIn("renderAccountPoolPlatformIcon(value)", self.console_script)
+        self.assertGreaterEqual(content_panel.count("renderPersonaContentPlatformRail"), 2)
+        self.assertIn("platform: personaContentPlatform(persona)", payload)
+        self.assertIn("platform: personaContentPlatform(persona)", create_post)
+        self.assertIn(".persona-content-platform-tabs {", self.styles)
+        self.assertIn("overflow-x: auto;", self.styles[self.styles.index(".persona-content-platform-tabs {"):])
+
+    def test_persona_header_platform_logos_and_counts_share_content_platform_state(self):
+        badge = self.console_script[
+            self.console_script.index("function renderPersonaExecutionAccountBadge(persona)"):
+            self.console_script.index("\nfunction personaSummaryCounts", self.console_script.index("function renderPersonaExecutionAccountBadge(persona)"))
+        ]
+        summary = self.console_script[
+            self.console_script.index("function personaSummaryCounts(persona)"):
+            self.console_script.index("\nfunction currentPersonaGroupStep", self.console_script.index("function personaSummaryCounts(persona)"))
+        ]
+        identity = self.console_script[
+            self.console_script.index("function renderPersonaProfileIdentity"):
+            self.console_script.index("\nfunction renderPersonaContentOverview", self.console_script.index("function renderPersonaProfileIdentity"))
+        ]
+
+        self.assertIn("personaContentPlatform(persona)", badge)
+        self.assertIn("accountPoolPlatforms.map", badge)
+        self.assertIn('data-persona-content-platform="${esc(item)}"', badge)
+        self.assertIn('<span class="persona-execution-platform-logo', badge)
+        self.assertNotIn('type="button"', badge)
+        self.assertIn("allDrafts", summary)
+        self.assertIn("allFavorites", summary)
+        self.assertIn("totalDraftCount", summary)
+        self.assertIn("totalFavoriteCount", summary)
+        self.assertIn("selectedPlatformLabel", identity)
+        self.assertIn("totalDraftCount", identity)
+        self.assertIn("totalFavoriteCount", identity)
+        self.assertEqual(identity.count("data-persona-platform-summary"), 2)
+        self.assertEqual(identity.count("data-persona-total-drafts"), 2)
+        self.assertEqual(identity.count("data-persona-total-favorites"), 2)
+        summary_grid = self.styles[
+            self.styles.index(".persona-profile-summary-grid {"):
+            self.styles.index("}", self.styles.index(".persona-profile-summary-grid {"))
+        ]
+        self.assertIn(
+            "grid-template-columns: minmax(0, .8fr) minmax(0, 1.35fr) repeat(2, minmax(0, .72fr));",
+            summary_grid,
+        )
+
+    def test_generate_and_archive_panels_keep_platform_rail_at_the_same_vertical_offset(self):
+        self.assertNotIn(
+            ".persona-detail--content .persona-generate-panel {\n"
+            "    gap: var(--mobile-module-gap);",
+            self.styles,
+        )
+
+    def test_new_tweet_composer_and_platform_switch_have_mis_touch_guards(self):
+        transient = self.console_script[
+            self.console_script.index("function activePersonaDraftComposerTransientState"):
+            self.console_script.index("function activeTransientWorkspaceState")
+        ]
+        handler_start = self.console_script.index('const contentPlatformButton = event.target.closest("[data-persona-content-platform]");')
+        handler = self.console_script[
+            handler_start:
+            self.console_script.index('const contentTabButton = event.target.closest("[data-persona-content-tab]");', handler_start)
+        ]
+
+        self.assertIn("personaDraftTitle", transient)
+        self.assertIn("personaDraftContent", transient)
+        self.assertIn("personaPostMediaUploadFiles", transient)
+        self.assertIn('kind: "persona_draft_composer"', transient)
+        self.assertIn("confirmPersonaContentPlatformSwitch", handler)
+        self.assertIn("resetPersonaNewDraftComposer", handler)
+        self.assertIn("setPersonaContentPlatform", handler)
+        self.assertIn('state.activeModule === "publishing"', handler)
+        self.assertIn('renderSimpleFlowModule("publishing")', handler)
+        publish_selection = self.console_script[
+            self.console_script.index("function publishSelectionKey("):
+            self.console_script.index("\nfunction publishSourceRows", self.console_script.index("function publishSelectionKey("))
+        ]
+        self.assertIn("personaContentPlatform(persona)", publish_selection)
+        self.assertIn("activePersonaDraftComposerTransientState", self.console_script)
+        self.assertIn('window.addEventListener("beforeunload"', self.console_script)
         self.assertIn('gap: var(--mobile-control-gap);', self.styles)
         self.assertIn('min-height: var(--mobile-touch-target);', self.styles)
 
@@ -2283,15 +2390,48 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('button.classList.contains("is-pending")', slider)
         self.assertIn('group.style.setProperty("--segment-slide-background", slideStyle.background);', slider)
         self.assertNotIn("activeStyle.backgroundColor", slider)
-        self.assertIn(
+        self.assertNotIn(
             "if (segmentedButton) await waitForSegmentedBackgroundSlide(event, segmentedButton);",
             self.console_script,
         )
-        self.assertIn("await waitForSegmentedBackgroundSlide(event, node);", self.console_script)
-        self.assertIn("await waitForSegmentedBackgroundSlide(event, completionPolicy);", self.console_script)
+        self.assertNotIn("await waitForSegmentedBackgroundSlide(", self.console_script)
+        self.assertNotIn("commitSegmentedBackgroundChange", self.console_script)
         self.assertNotIn("animation:", interaction)
         self.assertNotIn("left 180ms cubic-bezier(.2, .72, .2, 1)", interaction)
         self.assertNotIn("scale(", slider)
+
+    def test_segmented_page_switches_commit_content_when_the_slide_starts(self):
+        module_handler = self.console_script[
+            self.console_script.index('$("moduleBody").addEventListener("click"'):
+            self.console_script.index('\n  $("moduleBody").addEventListener("change"')
+        ]
+        settings_handler = self.console_script[
+            self.console_script.index('$("consoleSettingsBody").addEventListener("click"'):
+            self.console_script.index('\n  $("consoleSettingsBody").addEventListener("input"')
+        ]
+        automation_handler = self.console_script[
+            self.console_script.index('if (moduleId === "automation") {'):
+            self.console_script.index('\n  document.querySelectorAll("[data-matrix-persona]")')
+        ]
+
+        self.assertNotIn("await waitForSegmentedBackgroundSlide", module_handler)
+        self.assertNotIn("await waitForSegmentedBackgroundSlide", settings_handler)
+        self.assertNotIn("await waitForSegmentedBackgroundSlide", automation_handler)
+        for selector in (
+            "[data-persona-content-tab]",
+            "[data-persona-compose-mode]",
+            "[data-persona-media-operation]",
+            "[data-persona-draft-view]",
+        ):
+            self.assertIn(selector, module_handler)
+        self.assertGreaterEqual(module_handler.count("await slideSegmentedButtonBackground("), 4)
+        self.assertGreaterEqual(settings_handler.count("await slideSegmentedButtonBackground("), 2)
+        self.assertGreaterEqual(automation_handler.count("await slideSegmentedButtonBackground("), 2)
+        self.assertGreaterEqual(module_handler.count("event.__vectoSegmentSlideHandled = true;"), 4)
+        self.assertGreaterEqual(settings_handler.count("event.__vectoSegmentSlideHandled = true;"), 2)
+        self.assertGreaterEqual(automation_handler.count("event.__vectoSegmentSlideHandled = true;"), 2)
+        self.assertIn("commit: () => {", module_handler)
+        self.assertIn("resolveButton: () =>", module_handler)
 
     def test_publish_segmented_tabs_commit_content_when_the_slide_starts(self):
         mode_handler = self.console_script[
@@ -2315,6 +2455,49 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script.index("commit();", self.console_script.index("async function slideSegmentedButtonBackground")),
             self.console_script.index('group.classList.add("is-segment-background-sliding")', self.console_script.index("async function slideSegmentedButtonBackground")),
         )
+
+    def test_child_pages_and_public_modals_reuse_the_task_segment_slide(self):
+        publish_picker = self.console_script[
+            self.console_script.index("async function choosePublishPlatformAccount"):
+            self.console_script.index("\nfunction publishPlatformLabel")
+        ]
+        automation_modal = self.console_script[
+            self.console_script.index("function openAutomationPlanTaskConfigurator"):
+            self.console_script.index("\nfunction openAutomationPlanTaskDetails")
+        ]
+        automation_mode = self.console_script[
+            self.console_script.index('document.querySelectorAll("[data-automation-plan-mode]")'):
+            self.console_script.index('document.querySelectorAll("[data-automation-plan-time]")')
+        ]
+        queue_panel = self.console_script[
+            self.console_script.index('const taskQueuePanelButton = event.target.closest("[data-task-queue-panel]")'):
+            self.console_script.index('const taskQueuePageButton = event.target.closest("[data-task-queue-page]")')
+        ]
+
+        self.assertIn('tab.addEventListener("click", async (event) => {', publish_picker)
+        self.assertIn("await slideSegmentedButtonBackground(tab, {", publish_picker)
+        self.assertIn("resolveButton: () => modal?.querySelector(", publish_picker)
+        self.assertIn("const onAutomationTaskConfigure = async (event) => {", automation_modal)
+        self.assertIn("await slideSegmentedButtonBackground(stepButton, {", automation_modal)
+        self.assertIn("resolveButton: () => modal?.querySelector(", automation_modal)
+        self.assertIn('node.addEventListener("click", async (event) => {', automation_mode)
+        self.assertIn("await slideSegmentedButtonBackground(node, {", automation_mode)
+        self.assertIn("resolveButton: () => document.querySelector(", automation_mode)
+        self.assertIn("await slideSegmentedButtonBackground(taskQueuePanelButton, {", queue_panel)
+        self.assertIn("resolveButton: () => document.querySelector(", queue_panel)
+
+    def test_account_pool_and_proxy_tabs_reuse_the_task_segment_slide(self):
+        handler_start = self.console_script.index('const tab = event.target.closest("[data-account-browser-tab]")')
+        account_browser_handler = self.console_script[
+            handler_start:
+            self.console_script.index('const accountPasswordToggle = event.target.closest("[data-account-password-toggle]")', handler_start)
+        ]
+
+        self.assertIn('".account-browser-tabs > button"', self.console_script)
+        self.assertIn("event.__vectoSegmentSlideHandled = true;", account_browser_handler)
+        self.assertIn("await slideSegmentedButtonBackground(tab, {", account_browser_handler)
+        self.assertIn("commit: () => setAccountBrowserPanel(nextPanel)", account_browser_handler)
+        self.assertIn("resolveButton: () => document.querySelector(", account_browser_handler)
 
     def test_mobile_task_dock_reuses_fixed_size_segment_slide_without_delaying_navigation(self):
         renderer = self.console_script[
@@ -2357,7 +2540,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
     def test_mobile_task_dock_reads_stable_live_geometry_instead_of_animation_cache(self):
         slider = self.console_script[
             self.console_script.index("async function slideSegmentedButtonBackground"):
-            self.console_script.index("\nasync function waitForSegmentedBackgroundSlide")
+            self.console_script.index("\nfunction bindEvents()")
         ]
         dock_state = self.console_script[
             self.console_script.index("function syncMobileTaskDockState"):

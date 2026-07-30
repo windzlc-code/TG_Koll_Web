@@ -44,11 +44,11 @@ const SENTIMENT_HOT_CANDIDATE_POOL_TARGET = 400;
 const THREADS_SEARCH_CACHE_CANDIDATE_LIMIT = 2000;
 const THREADS_SEARCH_CACHE_MAX_ROWS_PER_ARCHIVE = 40;
 const THREADS_BROWSER_QUERY_LIMIT = 18;
-// Keep the total number of in-flight GraphQL requests bounded. Four pages are
-// still used for coverage, but three requests per page avoids the burst that
-// previously caused Threads to throttle or abort otherwise valid searches.
+// Keep the total number of in-flight GraphQL requests bounded. Two pages retain
+// parallel coverage without letting one server-side browser lease fan out into
+// an unbounded number of renderer processes.
 const THREADS_BROWSER_QUERY_BATCH_SIZE = 3;
-const THREADS_BROWSER_PAGE_LIMIT = 4;
+const THREADS_BROWSER_PAGE_LIMIT = 2;
 const THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT = 3;
 // Threads can render the search page first and emit its GraphQL request a few
 // seconds later. Keep the capture listener alive long enough to observe that
@@ -165,6 +165,38 @@ function buildLocalChromiumLaunchOptions() {
     headless: true,
     ...(executablePath ? { executablePath } : {}),
     args: ["--no-sandbox", "--disable-dev-shm-usage"],
+  };
+}
+
+export function boundedBrowserPageConcurrency(requested = 2): number {
+  const configured = Number(process.env.SENTIMENT_BROWSER_PAGE_CONCURRENCY || 2);
+  const serverLimit = Number.isFinite(configured)
+    ? Math.min(2, Math.max(1, Math.floor(configured)))
+    : 2;
+  const cleanRequested = Number.isFinite(requested)
+    ? Math.max(1, Math.floor(requested))
+    : 1;
+  return Math.min(serverLimit, cleanRequested);
+}
+
+let sentimentBrowserWorkTail: Promise<void> = Promise.resolve();
+
+export async function acquireSentimentBrowserWorkSlot(): Promise<() => void> {
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const previous = sentimentBrowserWorkTail;
+  sentimentBrowserWorkTail = previous.then(
+    () => current,
+    () => current,
+  );
+  await previous.catch(() => undefined);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    releaseCurrent();
   };
 }
 
@@ -2136,7 +2168,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   if (hasSearchKeywords && args.refresh === true && candidates.length >= limit && cachedReadyCount < semanticSourceTarget) {
     warnings.push(`當前相關候選不足，已繼續補充實時來源。`);
   }
-  let instagramAuthenticatedCandidatesPromise: Promise<SentimentHotCandidate[]> | null = null;
+  let instagramAuthenticatedCandidatesTask: (() => Promise<SentimentHotCandidate[]>) | null = null;
   let instagramReaderCandidatesPromise: Promise<SentimentHotCandidate[]> | null = null;
   if (shouldFetchLiveCandidates) {
     const instagramTimeoutMs = Math.min(SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS, remainingSentimentHotTotalBudgetMs(startedAt, 18_000));
@@ -2145,22 +2177,22 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       args.refresh ? Date.now() + candidates.length : candidates.length,
       args.refresh === true,
     );
-    instagramAuthenticatedCandidatesPromise = withSentimentTimeout(
-      fetchInstagramAuthenticatedSearchCandidates({
-        archiveId,
-        keywords,
-        queries: instagramQueries.slice(0, INSTAGRAM_AUTHENTICATED_QUERY_LIMIT),
-        limit: poolLimit,
-        freshnessDays: operationalFreshnessDays,
-        searchMode,
-        deadlineAt: Date.now() + instagramTimeoutMs - 3_000,
-      }),
-      instagramTimeoutMs,
-      [],
-    ).catch((error) => {
-      warnings.push("Instagram 登入態抓取失敗：" + (error instanceof Error ? error.message : String(error)));
-      return [];
-    });
+    instagramAuthenticatedCandidatesTask = () => withSentimentTimeout(
+        fetchInstagramAuthenticatedSearchCandidates({
+          archiveId,
+          keywords,
+          queries: instagramQueries.slice(0, INSTAGRAM_AUTHENTICATED_QUERY_LIMIT),
+          limit: poolLimit,
+          freshnessDays: operationalFreshnessDays,
+          searchMode,
+          deadlineAt: Date.now() + instagramTimeoutMs - 3_000,
+        }),
+        instagramTimeoutMs,
+        [],
+      ).catch((error) => {
+        warnings.push("Instagram 登入態抓取失敗：" + (error instanceof Error ? error.message : String(error)));
+        return [];
+      });
     instagramReaderCandidatesPromise = withSentimentTimeout(
       fetchInstagramReaderSearchCandidates({
         archiveId,
@@ -2301,13 +2333,13 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   }
 
   const hasFastReturnCandidates = cachedReadyCount >= semanticSourceTarget;
-  if (shouldFetchLiveCandidates && (instagramAuthenticatedCandidatesPromise || instagramReaderCandidatesPromise)) {
+  if (shouldFetchLiveCandidates && (instagramAuthenticatedCandidatesTask || instagramReaderCandidatesPromise)) {
     const beforeInstagramCount = candidates.length;
     const [authenticatedCandidates, readerCandidates] = await measureSentimentStage(
       warnings,
       "instagram-parallel-search",
       () => Promise.all([
-        instagramAuthenticatedCandidatesPromise || Promise.resolve([]),
+        instagramAuthenticatedCandidatesTask?.() || Promise.resolve([]),
         instagramReaderCandidatesPromise || Promise.resolve([]),
       ]),
     );
@@ -3811,6 +3843,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
     console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} sessionid=0 cookies=${cookies.length} status=skip_no_session`);
     return [];
   }
+  const releaseBrowserSlot = await acquireSentimentBrowserWorkSlot();
   console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} sessionid=${sessionCookieCount} cookies=${cookies.length} queries=${args.queries.length} leading=${JSON.stringify(args.queries.slice(0, 6))} status=start`);
   const excluded = args.excludeIds || getSentimentHotRefreshExcludedIds(args.archiveId);
   const excludedHistoryKeys = new Set<string>();
@@ -3878,7 +3911,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
             enrichThreadsCandidateDetails(batch.map(([, candidate]) => candidate), {
               force: true,
               browserContext: context,
-              browserConcurrency: batch.length,
+              browserConcurrency: boundedBrowserPageConcurrency(batch.length),
             }),
             Math.max(THREADS_BROWSER_DETAIL_RESCUE_MIN_REMAINING_MS, Math.min(15_000, remainingMs - 500)),
             batch.map(([, candidate]) => candidate),
@@ -4189,6 +4222,8 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   } catch (error) {
     console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=error message=${JSON.stringify(error instanceof Error ? error.message : String(error))}`);
     // Playwright is optional; reader/cache/database paths still keep the Telegram flow alive.
+  } finally {
+    releaseBrowserSlot();
   }
   console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=done total=${results.length} pages=${stats.pages} queries=${stats.queries} graphql=${stats.graphql} hydration=${stats.hydration} accepted=${stats.accepted} rejected=${JSON.stringify(stats.rejected)}`);
   return sortSentimentHotCandidatePool(results, args.keywords, args.limit, args.searchMode);
@@ -4400,6 +4435,7 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
     .filter((query) => query.length >= 2 && hasHan(query)))]
     .slice(0, INSTAGRAM_AUTHENTICATED_QUERY_LIMIT);
   if (!queries.length) return [];
+  const releaseBrowserSlot = await acquireSentimentBrowserWorkSlot();
 
   const excluded = args.excludeIds || getSentimentHotRefreshExcludedIds(args.archiveId);
   const results: SentimentHotCandidate[] = [];
@@ -4534,6 +4570,7 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
     console.info(`[sentiment_hot_instagram_account_search] archiveId=${args.archiveId} status=error error=${JSON.stringify(error instanceof Error ? error.message : String(error))}`);
   } finally {
     await browser?.close?.().catch(() => undefined);
+    releaseBrowserSlot();
   }
   console.info(
     `[sentiment_hot_instagram_account_search] archiveId=${args.archiveId}`
@@ -5285,7 +5322,7 @@ async function collectThreadsViewCountsFromPostPages(args: {
   posts: ThreadsGraphqlProfilePostAggregate[];
 }): Promise<{ totalViews: number; resolvedPosts: number; viewsByUrl: Record<string, number> }> {
   if (!args.posts.length) return { totalViews: 0, resolvedPosts: 0, viewsByUrl: {} };
-  const workers = Math.min(4, args.posts.length);
+  const workers = Math.min(boundedBrowserPageConcurrency(args.posts.length), args.posts.length);
   let cursor = 0;
   let totalViews = 0;
   let resolvedPosts = 0;
@@ -6187,7 +6224,7 @@ async function readThreadsBrowserDetailMetricsFromPage(page: any, sourceUrl: str
   return parseThreadsBrowserPostDetailMetrics({ text: detailText, actionTexts });
 }
 
-async function fetchThreadsBrowserDetailMetricsBatch(sourceUrls: string[], concurrency = 3, existingContext?: any) {
+async function fetchThreadsBrowserDetailMetricsBatch(sourceUrls: string[], concurrency = 2, existingContext?: any) {
   if (process.env.VITEST_WORKER_ID) return null;
   const normalizedUrls = [...new Set(sourceUrls.map(normalizeThreadsPostUrl).filter(Boolean))];
   const results = new Map<string, Pick<ThreadsBrowserProfilePublishedPostSnapshot, "hotScore" | "engagement" | "metrics">>();
@@ -6207,7 +6244,10 @@ async function fetchThreadsBrowserDetailMetricsBatch(sourceUrls: string[], concu
       await context.addCookies(cookies as any);
     }
     let cursor = 0;
-    const workerCount = Math.min(Math.max(1, concurrency), normalizedUrls.length);
+    const workerCount = Math.min(
+      boundedBrowserPageConcurrency(concurrency),
+      normalizedUrls.length,
+    );
     await Promise.all(Array.from({ length: workerCount }, async () => {
       while (cursor < normalizedUrls.length) {
         const sourceUrl = normalizedUrls[cursor];
@@ -6449,7 +6489,7 @@ export async function enrichThreadsCandidateDetails(
   const enriched = [...candidates];
   const browserMetricsPromise = fetchThreadsBrowserDetailMetricsBatch(
     targets.map(({ candidate }) => candidate.sourceUrl),
-    options.browserConcurrency || 3,
+    boundedBrowserPageConcurrency(options.browserConcurrency || 2),
     options.browserContext,
   );
   await Promise.all(targets.map(async ({ candidate, index }) => {

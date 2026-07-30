@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -384,6 +385,501 @@ class CommercialBillingTests(unittest.TestCase):
                 (self.user_id, request["idempotency_key"]),
             ).fetchone()
         self.assertEqual(int(order_count["c"]), 1)
+
+    def test_legacy_order_schema_migrates_to_refunded_status_without_data_loss(self):
+        legacy_path = Path(self.tmpdir.name) / "legacy-order-schema.db"
+        legacy = sqlite3.connect(legacy_path)
+        try:
+            legacy.execute(
+                """
+                CREATE TABLE billing_orders (
+                  id TEXT PRIMARY KEY,
+                  user_id INTEGER NOT NULL,
+                  kind TEXT NOT NULL CHECK(kind IN ('subscription', 'credit_pack')),
+                  sku TEXT NOT NULL,
+                  quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0),
+                  renewal_subscription_ids_json TEXT NOT NULL DEFAULT '[]',
+                  amount_ntd_cents INTEGER NOT NULL CHECK(amount_ntd_cents >= 0),
+                  catalog_version_id TEXT NOT NULL,
+                  price_snapshot_json TEXT NOT NULL,
+                  payer_name TEXT NOT NULL DEFAULT '',
+                  payment_reference TEXT NOT NULL DEFAULT '',
+                  paid_at INTEGER NOT NULL DEFAULT 0,
+                  note TEXT NOT NULL DEFAULT '',
+                  proof_path TEXT NOT NULL DEFAULT '',
+                  status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(status IN ('pending', 'approved', 'rejected', 'cancelled')),
+                  idempotency_key TEXT NOT NULL,
+                  reviewed_by INTEGER NOT NULL DEFAULT 0,
+                  reviewed_at INTEGER NOT NULL DEFAULT 0,
+                  review_note TEXT NOT NULL DEFAULT '',
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL,
+                  UNIQUE(user_id, idempotency_key)
+                )
+                """
+            )
+            legacy.execute(
+                """
+                INSERT INTO billing_orders(
+                  id, user_id, kind, sku, quantity,
+                  renewal_subscription_ids_json, amount_ntd_cents,
+                  catalog_version_id, price_snapshot_json, status,
+                  idempotency_key, created_at, updated_at
+                ) VALUES (
+                  'legacy-order', 99, 'credit_pack', 'credits_100', 1,
+                  '[]', 100000, 'catalog-v1', '{}', 'approved',
+                  'legacy-idempotency', 100, 101
+                )
+                """
+            )
+            legacy.commit()
+        finally:
+            legacy.close()
+
+        current_db_path = os.environ["APP_DB_PATH"]
+        try:
+            os.environ["APP_DB_PATH"] = str(legacy_path)
+            db_module.init_db()
+            db_module.init_db()
+            with db_module.db() as conn:
+                migrated = conn.execute(
+                    "SELECT * FROM billing_orders WHERE id = 'legacy-order'"
+                ).fetchone()
+                conn.execute(
+                    "UPDATE billing_orders SET status = 'refunded', "
+                    "refunded_by = 7, refunded_at = 200, refund_note = 'migration test' "
+                    "WHERE id = 'legacy-order'"
+                )
+                refunded = conn.execute(
+                    "SELECT status, refunded_by, refunded_at, refund_note "
+                    "FROM billing_orders WHERE id = 'legacy-order'"
+                ).fetchone()
+        finally:
+            os.environ["APP_DB_PATH"] = current_db_path
+
+        self.assertEqual(str(migrated["status"]), "approved")
+        self.assertEqual(str(refunded["status"]), "refunded")
+        self.assertEqual(int(refunded["refunded_by"]), 7)
+        self.assertEqual(int(refunded["refunded_at"]), 200)
+        self.assertEqual(str(refunded["refund_note"]), "migration test")
+
+    def test_reservation_idempotency_key_is_bound_to_immutable_request_fields(self):
+        self._approve_credit_pack(now=1_700_000_000)
+        request = {
+            "user_id": self.user_id,
+            "ref_type": "normal_task",
+            "ref_id": "immutable-reservation",
+            "sku": "basic_text_post",
+            "quantity": 1,
+            "image": False,
+            "admin_waived": False,
+            "idempotency_key": "immutable-reservation-request",
+        }
+        variants = {
+            "user_id": self.admin_id,
+            "ref_type": "social_task",
+            "ref_id": "different-reference",
+            "sku": "threads_text_publish",
+            "quantity": 2,
+            "image": True,
+            "admin_waived": True,
+        }
+
+        with db_module.db() as conn:
+            original = commercial_billing.reserve_charge(
+                conn,
+                **request,
+                now=1_700_000_010,
+            )
+            replay = commercial_billing.reserve_charge(
+                conn,
+                **request,
+                now=1_700_000_020,
+            )
+            self.assertEqual(replay, original)
+
+            for field, different_value in variants.items():
+                with self.subTest(field=field):
+                    conflicting_request = dict(request)
+                    conflicting_request[field] = different_value
+                    with self.assertRaises(commercial_billing.BillingError) as raised:
+                        commercial_billing.reserve_charge(
+                            conn,
+                            **conflicting_request,
+                            now=1_700_000_030,
+                        )
+                    self.assertEqual(
+                        raised.exception.code,
+                        "RESERVATION_IDEMPOTENCY_CONFLICT",
+                    )
+                    self.assertEqual(raised.exception.status_code, 409)
+
+            reservation_count = conn.execute(
+                "SELECT COUNT(*) AS c FROM billing_reservations WHERE idempotency_key = ?",
+                (request["idempotency_key"],),
+            ).fetchone()
+        self.assertEqual(int(reservation_count["c"]), 1)
+
+    def test_legacy_wallet_without_active_period_is_not_subscription_active(self):
+        with db_module.db() as conn:
+            conn.execute(
+                "UPDATE billing_wallets SET billing_mode = 'legacy' WHERE user_id = ?",
+                (self.user_id,),
+            )
+            summary = commercial_billing.billing_summary(
+                conn,
+                self.user_id,
+                now=1_700_000_000,
+            )
+        self.assertFalse(summary["subscription_active"])
+        self.assertEqual(summary["active_subscription_count"], 0)
+
+    def test_credit_pack_refund_is_idempotent_and_reclaims_unused_benefits(self):
+        now = 1_700_000_000
+        with db_module.db() as conn:
+            order = commercial_billing.create_order(
+                conn,
+                user_id=self.user_id,
+                sku="credits_1620",
+                quantity=1,
+                idempotency_key="refund-unused-credit-pack",
+                now=now,
+            )
+            commercial_billing.approve_order(
+                conn,
+                order["id"],
+                actor_user_id=self.admin_id,
+                now=now + 1,
+            )
+            refunded = commercial_billing.refund_approved_order(
+                conn,
+                order["id"],
+                actor_user_id=self.admin_id,
+                reason="payment reversed",
+                now=now + 2,
+            )
+            replay = commercial_billing.refund_approved_order(
+                conn,
+                order["id"],
+                actor_user_id=self.admin_id,
+                reason="duplicate callback",
+                now=now + 3,
+            )
+            summary = commercial_billing.billing_summary(
+                conn,
+                self.user_id,
+                now=now + 3,
+            )
+            refund_entries = conn.execute(
+                "SELECT event_type, COUNT(*) AS c FROM billing_ledger "
+                "WHERE order_id = ? AND event_type IN "
+                "('credit_pack_refunded', 'credit_pack_bonus_revoked') "
+                "GROUP BY event_type ORDER BY event_type",
+                (order["id"],),
+            ).fetchall()
+
+        self.assertEqual(refunded["status"], "refunded")
+        self.assertEqual(replay, refunded)
+        self.assertEqual(summary["points"], 0)
+        self.assertEqual(summary["free_images"]["permanent_remaining"], 0)
+        self.assertEqual(
+            {str(row["event_type"]): int(row["c"]) for row in refund_entries},
+            {"credit_pack_bonus_revoked": 1, "credit_pack_refunded": 1},
+        )
+
+    def test_credit_pack_refund_rejects_consumed_points_or_bonus_images(self):
+        now = 1_700_000_000
+        with db_module.db() as conn:
+            points_order = commercial_billing.create_order(
+                conn,
+                user_id=self.user_id,
+                sku="credits_100",
+                quantity=1,
+                idempotency_key="refund-consumed-points",
+                now=now,
+            )
+            commercial_billing.approve_order(
+                conn,
+                points_order["id"],
+                actor_user_id=self.admin_id,
+                now=now + 1,
+            )
+            conn.execute(
+                "UPDATE billing_wallets SET credit_units = 0 WHERE user_id = ?",
+                (self.user_id,),
+            )
+            with self.assertRaises(commercial_billing.BillingError) as points_error:
+                commercial_billing.refund_approved_order(
+                    conn,
+                    points_order["id"],
+                    actor_user_id=self.admin_id,
+                    reason="payment reversed",
+                    now=now + 2,
+                )
+
+        self.assertEqual(points_error.exception.code, "ORDER_BENEFITS_ALREADY_USED")
+
+        with db_module.db() as conn:
+            conn.execute(
+                "UPDATE billing_wallets SET credit_units = 0 WHERE user_id = ?",
+                (self.user_id,),
+            )
+            image_order = commercial_billing.create_order(
+                conn,
+                user_id=self.user_id,
+                sku="credits_1620",
+                quantity=1,
+                idempotency_key="refund-consumed-images",
+                now=now + 10,
+            )
+            commercial_billing.approve_order(
+                conn,
+                image_order["id"],
+                actor_user_id=self.admin_id,
+                now=now + 11,
+            )
+            conn.execute(
+                "UPDATE billing_image_grants SET remaining_count = remaining_count - 1 "
+                "WHERE source_type = 'credit_pack_bonus' AND source_ref = ?",
+                (image_order["id"],),
+            )
+            with self.assertRaises(commercial_billing.BillingError) as image_error:
+                commercial_billing.refund_approved_order(
+                    conn,
+                    image_order["id"],
+                    actor_user_id=self.admin_id,
+                    reason="payment reversed",
+                    now=now + 12,
+                )
+
+        self.assertEqual(image_error.exception.code, "ORDER_BENEFITS_ALREADY_USED")
+        with db_module.db() as conn:
+            statuses = conn.execute(
+                "SELECT id, status FROM billing_orders WHERE id IN (?, ?)",
+                (points_order["id"], image_order["id"]),
+            ).fetchall()
+        self.assertEqual(
+            {str(row["id"]): str(row["status"]) for row in statuses},
+            {
+                points_order["id"]: "approved",
+                image_order["id"]: "approved",
+            },
+        )
+
+    def test_subscription_refund_revokes_only_that_orders_periods_and_remaining_images(self):
+        now = 1_700_000_000
+        with db_module.db() as conn:
+            original = commercial_billing.create_order(
+                conn,
+                user_id=self.user_id,
+                sku="vanguard_monthly",
+                quantity=1,
+                idempotency_key="subscription-original",
+                now=now,
+            )
+            commercial_billing.approve_order(
+                conn,
+                original["id"],
+                actor_user_id=self.admin_id,
+                now=now,
+            )
+            subscription = conn.execute(
+                "SELECT id, current_period_end FROM billing_subscriptions "
+                "WHERE user_id = ?",
+                (self.user_id,),
+            ).fetchone()
+            original_period_end = int(subscription["current_period_end"])
+            renewal = commercial_billing.create_order(
+                conn,
+                user_id=self.user_id,
+                sku="vanguard_monthly",
+                quantity=1,
+                renewal_subscription_ids=[str(subscription["id"])],
+                idempotency_key="subscription-renewal-refund",
+                now=now + 10,
+            )
+            commercial_billing.approve_order(
+                conn,
+                renewal["id"],
+                actor_user_id=self.admin_id,
+                now=now + 10,
+            )
+            refunded = commercial_billing.refund_approved_order(
+                conn,
+                renewal["id"],
+                actor_user_id=self.admin_id,
+                reason="duplicate payment",
+                now=now + 20,
+            )
+            replay = commercial_billing.refund_approved_order(
+                conn,
+                renewal["id"],
+                actor_user_id=self.admin_id,
+                reason="duplicate payment",
+                now=now + 21,
+            )
+            summary = commercial_billing.billing_summary(
+                conn,
+                self.user_id,
+                now=now + 21,
+            )
+            periods = conn.execute(
+                "SELECT source_order_id, status FROM billing_subscription_periods "
+                "WHERE subscription_id = ? ORDER BY start_at",
+                (str(subscription["id"]),),
+            ).fetchall()
+            subscription_after = conn.execute(
+                "SELECT status, current_period_end FROM billing_subscriptions WHERE id = ?",
+                (str(subscription["id"]),),
+            ).fetchone()
+
+        self.assertEqual(refunded["status"], "refunded")
+        self.assertEqual(replay, refunded)
+        self.assertTrue(summary["subscription_active"])
+        self.assertEqual(summary["free_images"]["monthly_remaining"], 10)
+        self.assertEqual(
+            [(str(row["source_order_id"]), str(row["status"])) for row in periods],
+            [(original["id"], "active"), (renewal["id"], "cancelled")],
+        )
+        self.assertEqual(str(subscription_after["status"]), "active")
+        self.assertEqual(
+            int(subscription_after["current_period_end"]),
+            original_period_end,
+        )
+
+    def test_terminate_subscription_is_idempotent_and_revokes_remaining_access(self):
+        now = 1_700_000_000
+        self._approve_subscription(now=now)
+        with db_module.db() as conn:
+            subscription = conn.execute(
+                "SELECT id FROM billing_subscriptions WHERE user_id = ?",
+                (self.user_id,),
+            ).fetchone()
+            period = conn.execute(
+                "SELECT id FROM billing_subscription_periods WHERE subscription_id = ?",
+                (str(subscription["id"]),),
+            ).fetchone()
+            conn.execute(
+                "UPDATE billing_image_grants SET remaining_count = 7 "
+                "WHERE source_type = 'subscription_monthly' AND source_ref = ?",
+                (str(period["id"]),),
+            )
+            terminated = commercial_billing.terminate_subscription(
+                conn,
+                str(subscription["id"]),
+                actor_user_id=self.admin_id,
+                reason="manual termination",
+                now=now + 10,
+            )
+            replay = commercial_billing.terminate_subscription(
+                conn,
+                str(subscription["id"]),
+                actor_user_id=self.admin_id,
+                reason="duplicate request",
+                now=now + 11,
+            )
+            summary = commercial_billing.billing_summary(
+                conn,
+                self.user_id,
+                now=now + 11,
+            )
+            termination_events = conn.execute(
+                "SELECT COUNT(*) AS c FROM billing_ledger "
+                "WHERE ref_type = 'subscription' AND ref_id = ? "
+                "AND event_type = 'subscription_terminated'",
+                (str(subscription["id"]),),
+            ).fetchone()
+
+        self.assertEqual(terminated["status"], "cancelled")
+        self.assertEqual(replay, terminated)
+        self.assertFalse(summary["subscription_active"])
+        self.assertEqual(summary["free_images"]["monthly_remaining"], 0)
+        self.assertEqual(summary["periods"][0]["status"], "cancelled")
+        self.assertEqual(int(termination_events["c"]), 1)
+
+    def test_subscription_reversal_blocks_images_held_by_active_tasks(self):
+        now = 1_700_000_000
+        with db_module.db() as conn:
+            order = commercial_billing.create_order(
+                conn,
+                user_id=self.user_id,
+                sku="vanguard_monthly",
+                quantity=1,
+                idempotency_key="subscription-with-held-image",
+                now=now,
+            )
+            commercial_billing.approve_order(
+                conn,
+                order["id"],
+                actor_user_id=self.admin_id,
+                now=now,
+            )
+            subscription = conn.execute(
+                "SELECT id FROM billing_subscriptions WHERE user_id = ?",
+                (self.user_id,),
+            ).fetchone()
+            held = commercial_billing.reserve_charge(
+                conn,
+                user_id=self.user_id,
+                ref_type="normal_task",
+                ref_id="held-subscription-image",
+                sku="ai_image",
+                quantity=1,
+                image=True,
+                now=now + 1,
+            )
+
+            with self.assertRaises(commercial_billing.BillingError) as refund_error:
+                commercial_billing.refund_approved_order(
+                    conn,
+                    order["id"],
+                    actor_user_id=self.admin_id,
+                    reason="payment reversed",
+                    now=now + 2,
+                )
+            with self.assertRaises(commercial_billing.BillingError) as termination_error:
+                commercial_billing.terminate_subscription(
+                    conn,
+                    str(subscription["id"]),
+                    actor_user_id=self.admin_id,
+                    reason="manual termination",
+                    now=now + 2,
+                )
+
+            order_after_errors = conn.execute(
+                "SELECT status FROM billing_orders WHERE id = ?",
+                (order["id"],),
+            ).fetchone()
+            period_after_errors = conn.execute(
+                "SELECT status FROM billing_subscription_periods "
+                "WHERE subscription_id = ?",
+                (str(subscription["id"]),),
+            ).fetchone()
+            commercial_billing.release_reservation(
+                conn,
+                held["id"],
+                now=now + 3,
+            )
+            refunded = commercial_billing.refund_approved_order(
+                conn,
+                order["id"],
+                actor_user_id=self.admin_id,
+                reason="payment reversed",
+                now=now + 4,
+            )
+
+        self.assertEqual(
+            refund_error.exception.code,
+            "SUBSCRIPTION_BENEFITS_IN_USE",
+        )
+        self.assertEqual(
+            termination_error.exception.code,
+            "SUBSCRIPTION_BENEFITS_IN_USE",
+        )
+        self.assertEqual(str(order_after_errors["status"]), "approved")
+        self.assertEqual(str(period_after_errors["status"]), "active")
+        self.assertEqual(refunded["status"], "refunded")
 
     def test_list_orders_supports_stable_offset_pagination(self):
         created_ids = []

@@ -39,6 +39,8 @@ class BrowserPreferencesTests(unittest.TestCase):
         )
 
     def tearDown(self):
+        with social_automation_api._EXTERNAL_BROWSER_LEASES_LOCK:
+            social_automation_api._EXTERNAL_BROWSER_LEASES.clear()
         if self.old_db_path is None:
             os.environ.pop("APP_DB_PATH", None)
         else:
@@ -126,16 +128,281 @@ class BrowserPreferencesTests(unittest.TestCase):
         self.assertEqual(blocked["reason"], "low_memory")
         self.assertTrue(first_task["allow_launch"])
 
-    def test_standby_browsers_count_toward_worker_concurrency(self):
+    def test_cgroup_headroom_is_part_of_the_browser_admission_budget(self):
         with (
-            mock.patch.object(social_automation_api, "_active_worker_thread_count", return_value=1),
+            mock.patch.object(
+                social_automation_api,
+                "_memory_environment",
+                return_value={
+                    "memory_total_mb": 3584,
+                    "memory_available_mb": 1800,
+                    "swap_total_mb": 4096,
+                },
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_read_linux_memory_value",
+                return_value=(2 * 1024 * 1024 * 1024, True),
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_read_linux_memory_limit",
+                return_value=(3 * 1024 * 1024 * 1024, True),
+            ),
+        ):
+            snapshot = social_automation_api._browser_runtime_resource_snapshot()
+            admission = social_automation_api._browser_worker_resource_admission(
+                active_slots=1
+            )
+
+        self.assertEqual(snapshot["container_memory_headroom_mb"], 1024)
+        self.assertEqual(snapshot["memory_available_mb"], 1024)
+        self.assertFalse(admission["allow_launch"])
+
+    def test_exhausted_cgroup_limit_never_fails_open(self):
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_memory_environment",
+                return_value={
+                    "memory_total_mb": 3584,
+                    "memory_available_mb": 1800,
+                    "swap_total_mb": 4096,
+                },
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_read_linux_memory_value",
+                return_value=(3 * 1024 * 1024 * 1024, True),
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_read_linux_memory_limit",
+                return_value=(3 * 1024 * 1024 * 1024, True),
+            ),
+        ):
+            admission = social_automation_api._browser_worker_resource_admission(
+                active_slots=0
+            )
+
+        self.assertTrue(admission["memory_available_known"])
+        self.assertEqual(admission["memory_available_mb"], 0)
+        self.assertFalse(admission["allow_launch"])
+
+    def test_unlimited_cgroup_uses_host_availability(self):
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_memory_environment",
+                return_value={
+                    "memory_total_mb": 3584,
+                    "memory_available_mb": 1800,
+                    "swap_total_mb": 4096,
+                },
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_read_linux_memory_value",
+                return_value=(2 * 1024 * 1024 * 1024, True),
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_read_linux_memory_limit",
+                return_value=(0, False),
+            ),
+        ):
+            snapshot = social_automation_api._browser_runtime_resource_snapshot()
+
+        self.assertEqual(snapshot["memory_available_mb"], 1800)
+        self.assertFalse(snapshot["container_memory_limit_known"])
+
+    def test_unknown_cgroup_current_does_not_manufacture_headroom(self):
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_memory_environment",
+                return_value={
+                    "memory_total_mb": 3584,
+                    "memory_available_mb": 1800,
+                    "swap_total_mb": 4096,
+                },
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_read_linux_memory_value",
+                return_value=(0, False),
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_read_linux_memory_limit",
+                return_value=(3 * 1024 * 1024 * 1024, True),
+            ),
+        ):
+            snapshot = social_automation_api._browser_runtime_resource_snapshot()
+
+        self.assertEqual(snapshot["memory_available_mb"], 1800)
+        self.assertEqual(snapshot["container_memory_headroom_mb"], 0)
+        self.assertFalse(snapshot["container_memory_headroom_known"])
+        self.assertFalse(snapshot["container_memory_current_known"])
+
+    def test_running_task_and_its_live_session_share_one_slot(self):
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_active_worker_thread_task_ids",
+                return_value={"task-1"},
+            ),
             mock.patch.object(
                 social_automation_api,
                 "_live_browser_sessions",
-                return_value=[{"id": "browser-1"}, {"id": "browser-2"}],
+                return_value=[{"id": "browser-1", "task_id": "task-1"}],
+            ),
+        ):
+            self.assertEqual(social_automation_api._social_worker_slots_in_use(), 1)
+
+    def test_independent_standby_browser_is_added_to_running_task_slot(self):
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_active_worker_thread_task_ids",
+                return_value={"task-1"},
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_live_browser_sessions",
+                return_value=[
+                    {"id": "browser-1", "task_id": "task-1"},
+                    {"id": "browser-2", "task_id": "finished-task"},
+                ],
             ),
         ):
             self.assertEqual(social_automation_api._social_worker_slots_in_use(), 2)
+
+    def test_live_session_mapped_by_control_is_deduplicated_from_worker(self):
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_active_worker_thread_task_ids",
+                return_value={"batch-root"},
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_live_browser_sessions",
+                return_value=[{"id": "browser-1", "task_id": "batch-item-2"}],
+            ),
+        ):
+            with social_automation_api._RUNNING_TASK_CONTROLS_LOCK:
+                social_automation_api._RUNNING_TASK_CONTROLS["batch-root"] = {
+                    "live_browser_session_id": "browser-1",
+                    "current_task_id": "batch-item-2",
+                }
+            try:
+                self.assertEqual(
+                    social_automation_api._social_worker_slots_in_use(),
+                    1,
+                )
+            finally:
+                with social_automation_api._RUNNING_TASK_CONTROLS_LOCK:
+                    social_automation_api._RUNNING_TASK_CONTROLS.pop(
+                        "batch-root",
+                        None,
+                    )
+
+    def test_extra_live_session_for_same_running_task_consumes_another_slot(self):
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_active_worker_thread_task_ids",
+                return_value={"task-1"},
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_live_browser_sessions",
+                return_value=[
+                    {"id": "browser-1", "task_id": "task-1"},
+                    {"id": "browser-2", "task_id": "task-1"},
+                ],
+            ),
+        ):
+            self.assertEqual(social_automation_api._social_worker_slots_in_use(), 2)
+
+    def test_external_chromium_workflow_shares_the_two_browser_budget(self):
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_active_worker_thread_task_ids",
+                return_value={"task-1"},
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_live_browser_sessions",
+                return_value=[],
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_browser_runtime_resource_snapshot",
+                return_value={
+                    "memory_available_mb": 2200,
+                    "memory_available_known": 1,
+                    "container_memory_mb": 800,
+                    "container_memory_headroom_mb": 2200,
+                },
+            ),
+            mock.patch.object(social_automation_api, "_refresh_worker_state"),
+            mock.patch.object(social_automation_api, "wake_social_automation_worker"),
+        ):
+            first = social_automation_api.acquire_external_browser_lease(
+                "persona-refresh"
+            )
+            second = social_automation_api.acquire_external_browser_lease(
+                "persona-refresh"
+            )
+            social_automation_api.release_external_browser_lease(first)
+
+        self.assertTrue(first)
+        self.assertEqual(second, "")
+
+    def test_known_zero_available_memory_is_recorded_as_the_minimum(self):
+        samples = iter(
+            [
+                {
+                    "container_memory_mb": 900,
+                    "memory_available_mb": 700,
+                    "memory_available_known": 1,
+                },
+                {
+                    "container_memory_mb": 1100,
+                    "memory_available_mb": 0,
+                    "memory_available_known": 1,
+                },
+            ]
+        )
+        control = {
+            "resource_snapshot_provider": lambda: next(samples),
+        }
+
+        social_automation_api._sample_running_task_resources(control)
+        social_automation_api._sample_running_task_resources(control)
+
+        self.assertEqual(
+            control["_resource_metrics"]["memory_available_min_mb"],
+            0,
+        )
+
+    def test_idle_memory_release_is_single_flight(self):
+        social_automation_api._IDLE_MEMORY_RELEASE_LOCK.acquire()
+        try:
+            with mock.patch.object(
+                social_automation_api.gc,
+                "collect",
+            ) as collect:
+                result = social_automation_api._release_idle_worker_memory()
+        finally:
+            social_automation_api._IDLE_MEMORY_RELEASE_LOCK.release()
+
+        self.assertFalse(result["released"])
+        self.assertEqual(result["reason"], "release_in_progress")
+        collect.assert_not_called()
 
     def test_user_endpoint_can_save_own_preferences(self):
         app = FastAPI()

@@ -564,7 +564,7 @@ class AccountGovernanceTests(unittest.TestCase):
         self.assertEqual(dashboard.status_code, 200, dashboard.text)
         self.assertEqual(dashboard.json()["summary"]["wallet_points"], 12.5)
 
-    def test_batch_credit_adjustment_updates_only_selected_customers_and_notifies_them(self):
+    def test_batch_credit_adjustment_replaces_only_selected_customer_balances_and_notifies_them(self):
         admin, _identity = self._admin_client()
         selected_a = self._create_customer(admin, "batch-credit-a")
         selected_b = self._create_customer(admin, "batch-credit-b")
@@ -605,14 +605,71 @@ class AccountGovernanceTests(unittest.TestCase):
                 "SELECT user_id, title, body FROM user_notifications WHERE user_id IN (?, ?) AND source_key = ?",
                 (*selected_ids, f"admin-batch-credit:{applied.json()['job_id']}"),
             ).fetchall()
-        self.assertEqual(balances[selected_ids[0]], 7.5 * server.commercial_billing.POINT_SCALE)
-        self.assertEqual(balances[selected_ids[1]], 7.5 * server.commercial_billing.POINT_SCALE)
+            adjustments = conn.execute(
+                """
+                SELECT user_id, amount_units
+                FROM billing_ledger
+                WHERE user_id IN (?, ?) AND event_type = 'admin_adjustment'
+                ORDER BY user_id
+                """,
+                tuple(selected_ids),
+            ).fetchall()
+        self.assertEqual(balances[selected_ids[0]], 2.5 * server.commercial_billing.POINT_SCALE)
+        self.assertEqual(balances[selected_ids[1]], 2.5 * server.commercial_billing.POINT_SCALE)
         self.assertEqual(
             balances[int(untouched["id"])],
             5 * server.commercial_billing.POINT_SCALE,
         )
+        self.assertEqual(
+            [int(row["amount_units"]) for row in adjustments],
+            [-2.5 * server.commercial_billing.POINT_SCALE] * 2,
+        )
         self.assertEqual(len(notices), 2)
         self.assertTrue(all("2.5" in str(row["body"]) for row in notices))
+
+    def test_batch_credit_can_enable_unlimited_compute_for_selected_customers(self):
+        admin, _identity = self._admin_client()
+        selected = self._create_customer(admin, "batch-unlimited-selected")
+        untouched = self._create_customer(admin, "batch-unlimited-untouched")
+        payload = {
+            "action": "add_credit",
+            "user_ids": [int(selected["id"])],
+            "delta_points": 0,
+            "unlimited": True,
+            "reason": "",
+            "idempotency_key": "batch-unlimited-selected-v1",
+        }
+
+        preview = admin.post(
+            "/api/admin/users/batch-actions",
+            headers=self.ORIGIN_HEADERS,
+            json={**payload, "preview": True},
+        )
+        applied = admin.post(
+            "/api/admin/users/batch-actions",
+            headers=self.ORIGIN_HEADERS,
+            json=payload,
+        )
+
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertEqual(preview.json()["matched"], 1)
+        self.assertEqual(applied.status_code, 200, applied.text)
+        self.assertEqual(applied.json()["success"], 1)
+        with db_module.db() as conn:
+            wallets = {
+                int(row["user_id"]): int(row["unlimited_compute"])
+                for row in conn.execute(
+                    "SELECT user_id, unlimited_compute FROM billing_wallets WHERE user_id IN (?, ?)",
+                    (int(selected["id"]), int(untouched["id"])),
+                ).fetchall()
+            }
+            notice = conn.execute(
+                "SELECT source_key FROM user_notifications WHERE user_id = ? AND source_key = ?",
+                (int(selected["id"]), f"admin-batch-credit:{applied.json()['job_id']}"),
+            ).fetchone()
+        self.assertEqual(wallets[int(selected["id"])], 1)
+        self.assertEqual(wallets[int(untouched["id"])], 0)
+        self.assertIsNotNone(notice)
 
     def test_batch_credit_rolls_back_target_when_notification_fails(self):
         admin, _identity = self._admin_client()
@@ -679,7 +736,7 @@ class AccountGovernanceTests(unittest.TestCase):
                 "SELECT COUNT(*) AS count FROM billing_ledger WHERE user_id = ? AND event_type = 'admin_adjustment'",
                 (user_id,),
             ).fetchone()
-        self.assertEqual(int(wallet["credit_units"]), 7.5 * server.commercial_billing.POINT_SCALE)
+        self.assertEqual(int(wallet["credit_units"]), 2.5 * server.commercial_billing.POINT_SCALE)
         self.assertEqual(int(adjustments["count"]), 1)
 
         conflicting_payload = {
@@ -699,7 +756,7 @@ class AccountGovernanceTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(
             int(wallet_after_conflict["credit_units"]),
-            7.5 * server.commercial_billing.POINT_SCALE,
+            2.5 * server.commercial_billing.POINT_SCALE,
         )
 
     def test_dashboard_groups_tags_batches_audit_redaction_and_alerts(self):
@@ -1085,7 +1142,7 @@ class AccountGovernanceTests(unittest.TestCase):
         }
         self.assertTrue(importance["账号已停用"])
         self.assertTrue(importance["账号已启用"])
-        self.assertFalse(importance["管理员已添加算力点"])
+        self.assertFalse(importance["管理员已调整算力"])
 
     def test_service_account_credential_is_returned_once_and_only_digest_is_stored(self):
         admin, _ = self._admin_client()

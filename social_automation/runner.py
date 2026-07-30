@@ -6,6 +6,8 @@ import json
 import os
 import random
 import re
+import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -33,6 +35,8 @@ GENERIC_VERIFICATION_CODE_INPUT_SELECTOR = (
 )
 MAX_WARMUP_LIKES = 16
 MAX_WARMUP_COMMENTS = 6
+MAX_WARMUP_COMMENT_CHARS = 48
+DEFAULT_WARMUP_RESOURCE_COMPACTION_COOLDOWN_SECONDS = 90
 SUPPORTED_TASK_TYPES = {
     "check_login",
     "open_login",
@@ -51,6 +55,7 @@ SUPPORTED_TASK_TYPES = {
 }
 
 _CAMOUFOX_LAUNCH_LOCK = threading.Lock()
+_WARMUP_ACTION_HISTORY_LOCK = threading.Lock()
 _DEFAULT_LIVE_BROWSER_CHROME_HEIGHT = 61
 
 
@@ -459,7 +464,15 @@ def run_social_task(
             )
         if task_type == "instagram_warmup":
             _raise_if_cancelled(cancel_event)
-            return _run_instagram_warmup(page, task, payload, screenshot_dir, logger, cancel_event=cancel_event)
+            return _run_instagram_warmup(
+                page,
+                task,
+                payload,
+                screenshot_dir,
+                logger,
+                cancel_event=cancel_event,
+                context_control=context_control,
+            )
         if task_type == "instagram_auto_reply":
             _raise_if_cancelled(cancel_event)
             return _run_instagram_auto_reply(
@@ -470,6 +483,7 @@ def run_social_task(
                 logger,
                 cancel_event=cancel_event,
                 account=account,
+                context_control=context_control,
             )
         if task_type == "threads_warmup":
             _raise_if_cancelled(cancel_event)
@@ -480,6 +494,7 @@ def run_social_task(
                 screenshot_dir,
                 logger,
                 cancel_event=cancel_event,
+                context_control=context_control,
             )
         if task_type == "threads_auto_reply":
             _raise_if_cancelled(cancel_event)
@@ -491,6 +506,7 @@ def run_social_task(
                 logger,
                 cancel_event=cancel_event,
                 account=account,
+                context_control=context_control,
             )
         if task_type == "browse_profile":
             _raise_if_cancelled(cancel_event)
@@ -510,16 +526,48 @@ def run_social_task(
             )
         if task_type == "comment_post":
             _raise_if_cancelled(cancel_event)
-            return _run_comment_post(page, task, payload, screenshot_dir, logger)
+            return _run_comment_post(
+                page,
+                task,
+                payload,
+                screenshot_dir,
+                logger,
+                cancel_event=cancel_event,
+                context_control=context_control,
+            )
         if task_type == "reply_comment":
             _raise_if_cancelled(cancel_event)
-            return _run_reply_comment(page, task, payload, screenshot_dir, logger)
+            return _run_reply_comment(
+                page,
+                task,
+                payload,
+                screenshot_dir,
+                logger,
+                cancel_event=cancel_event,
+                context_control=context_control,
+            )
         if task_type == "like_post":
             _raise_if_cancelled(cancel_event)
-            return _run_like_post(page, task, payload, screenshot_dir, logger)
+            return _run_like_post(
+                page,
+                task,
+                payload,
+                screenshot_dir,
+                logger,
+                cancel_event=cancel_event,
+                context_control=context_control,
+            )
         if task_type == "share_post":
             _raise_if_cancelled(cancel_event)
-            return _run_share_post(page, task, payload, screenshot_dir, logger)
+            return _run_share_post(
+                page,
+                task,
+                payload,
+                screenshot_dir,
+                logger,
+                cancel_event=cancel_event,
+                context_control=context_control,
+            )
     raise UnsupportedActionError(f"未处理的社交自动化任务类型：{task_type}")
 
 
@@ -950,6 +998,15 @@ class _BrowserContextManager:
                         os.environ.pop("DISPLAY", None)
                     else:
                         os.environ["DISPLAY"] = old_display
+        if self.live_session is not None and self.context is not None:
+            live_display = str(self.live_session.display)
+            # DISPLAY is process-global and must be restored after launch so
+            # concurrent browser sessions cannot overwrite one another. Keep
+            # the X display on the corresponding BrowserContext instead.
+            with contextlib.suppress(Exception):
+                setattr(self.context, "_tg_live_display", live_display)
+            if self.context_control is not None:
+                self.context_control["live_browser_display"] = live_display
         if self.context_control is not None:
             self.context_control["context"] = self.context
             self.context_control["manager"] = self.cm
@@ -1066,6 +1123,19 @@ def _run_publish_submit_action(
     """Run the irreversible publish click under the server-owned cancellation guard."""
     _raise_if_cancelled(cancel_event)
     callback = context_control.get("publish_submit_callback") if isinstance(context_control, dict) else None
+    if callable(callback):
+        return callback(action)
+    return action()
+
+
+def _run_billing_commit_action(
+    context_control: dict[str, Any] | None,
+    cancel_event: Any | None,
+    action: Callable[[], Any],
+) -> Any:
+    """Run an irreversible billed interaction under the cancellation guard."""
+    _raise_if_cancelled(cancel_event)
+    callback = context_control.get("billing_submit_callback") if isinstance(context_control, dict) else None
     if callable(callback):
         return callback(action)
     return action()
@@ -1503,7 +1573,7 @@ def _should_capture_screenshot(stage: str) -> bool:
     if mode in {"debug", "all", "full"}:
         return True
     normalized_stage = str(stage or "").strip().lower()
-    if normalized_stage.startswith("instagram_warmup"):
+    if re.fullmatch(r"(?:threads|instagram)_warmup_(?:like|comment)_\d+", normalized_stage):
         return True
     return normalized_stage in {
         "login_verification_required",
@@ -1515,6 +1585,102 @@ def _should_capture_screenshot(stage: str) -> bool:
         "publish_submitted_unconfirmed",
         "failed",
     }
+
+
+def _compose_warmup_evidence_sheet(
+    evidence: Iterable[tuple[str, int, str]],
+    screenshot_dir: Path,
+    task: dict[str, Any],
+    logger: AutomationLogger,
+) -> str:
+    """Stack confirmed interaction screenshots vertically into one final image.
+
+    Source captures are removed only after the composite has been saved
+    successfully, so a failed compose never destroys the original evidence.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageOps
+
+        sources: list[tuple[str, int, Path]] = []
+        for action, index, raw_path in evidence:
+            path = Path(str(raw_path or ""))
+            if action in {"like", "comment"} and path.is_file():
+                sources.append((action, max(1, int(index)), path))
+        if not sources:
+            return ""
+
+        columns = 1
+        cell_width = 800
+        image_height = 450
+        label_height = 34
+        cell_height = label_height + image_height
+        rows = (len(sources) + columns - 1) // columns
+        sheet = Image.new("RGB", (cell_width * columns, cell_height * rows), "#111827")
+        draw = ImageDraw.Draw(sheet)
+        for offset, (action, index, path) in enumerate(sources):
+            column = offset % columns
+            row = offset // columns
+            left = column * cell_width
+            top = row * cell_height
+            label = f"{'LIKE' if action == 'like' else 'COMMENT'} #{index}"
+            draw.rectangle(
+                (left, top, left + cell_width, top + label_height),
+                fill="#0f172a",
+            )
+            draw.text((left + 14, top + 9), label, fill="#f8fafc")
+            with Image.open(path) as source:
+                frame = ImageOps.exif_transpose(source).convert("RGB")
+                contained = ImageOps.contain(
+                    frame,
+                    (cell_width, image_height),
+                    method=Image.Resampling.LANCZOS,
+                )
+                canvas = Image.new("RGB", (cell_width, image_height), "#000000")
+                canvas.paste(
+                    contained,
+                    (
+                        (cell_width - contained.width) // 2,
+                        (image_height - contained.height) // 2,
+                    ),
+                )
+                sheet.paste(canvas, (left, top + label_height))
+
+        output_path = screenshot_dir / (
+            f"{str(task.get('id') or 'task')}_warmup_interaction_evidence_{int(time.time())}.jpg"
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        sheet.save(output_path, format="JPEG", quality=88, optimize=True)
+        removed_sources = 0
+        for source_path in dict.fromkeys(path for _, _, path in sources):
+            try:
+                source_path.unlink()
+                removed_sources += 1
+            except FileNotFoundError:
+                continue
+            except Exception as exc:
+                logger.log(
+                    "warn",
+                    "warmup_interaction_evidence_cleanup",
+                    f"Could not remove a source screenshot after composing evidence: {exc}",
+                    {"path": str(source_path)},
+                )
+        logger.log(
+            "info",
+            "warmup_interaction_evidence",
+            "已将全部成功点赞和评论截图拼接为最终证据图。",
+            {
+                "count": len(sources),
+                "likes": sum(1 for action, _, _ in sources if action == "like"),
+                "comments": sum(1 for action, _, _ in sources if action == "comment"),
+                "layout": "vertical",
+                "removed_sources": removed_sources,
+            },
+            str(output_path),
+        )
+        return str(output_path)
+    except Exception as exc:
+        logger.log("warn", "warmup_interaction_evidence", f"互动证据图拼接失败：{exc}")
+        return ""
 
 
 def _goto(page, url: str, logger: AutomationLogger, stage: str, *, timeout_ms: int = 60000, networkidle_ms: int = 15000) -> None:
@@ -2547,6 +2713,61 @@ def _warmup_scroll(page, logger: AutomationLogger, times: int = 2) -> None:
         _sleep_between(4.0, 8.0)
 
 
+def _send_human_wheel(page, delta: int) -> str:
+    """Send a bounded wheel event without letting a busy page deadlock Playwright."""
+    context_display = ""
+    with contextlib.suppress(Exception):
+        candidate = getattr(page.context, "_tg_live_display", "")
+        if isinstance(candidate, str):
+            context_display = candidate.strip()
+    display = context_display or str(os.getenv("DISPLAY") or "").strip()
+    xdotool = shutil.which("xdotool")
+    if display and xdotool:
+        viewport = page.viewport_size if isinstance(getattr(page, "viewport_size", None), dict) else {}
+        width = max(320, int(viewport.get("width") or 1600))
+        height = max(240, int(viewport.get("height") or 839))
+        pointer_x = max(160, min(width - 80, width // 2))
+        pointer_y = max(180, min(height - 80, height // 2))
+        button = "5" if delta > 0 else "4"
+        repeat = max(1, min(3, round(abs(int(delta)) / 70)))
+        env = dict(os.environ)
+        env["DISPLAY"] = display
+        move = subprocess.run(
+            # KasmVNC accepts the pointer move immediately but does not always
+            # emit the position acknowledgement expected by --sync.
+            [xdotool, "mousemove", "--screen", "0", str(pointer_x), str(pointer_y)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+            env=env,
+        )
+        wheel = subprocess.run(
+            [
+                xdotool,
+                "click",
+                "--repeat",
+                str(repeat),
+                "--delay",
+                str(random.randint(35, 90)),
+                button,
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=4,
+            env=env,
+        )
+        if move.returncode != 0 or wheel.returncode != 0:
+            raise RuntimeError(
+                f"native wheel failed: move={move.returncode}, wheel={wheel.returncode}"
+            )
+        return "xdotool"
+
+    page.mouse.wheel(0, delta)
+    return "playwright"
+
+
 def _slow_human_scroll(page) -> dict[str, Any]:
     roll = random.random()
     if roll < 0.12:
@@ -2569,14 +2790,15 @@ def _slow_human_scroll(page) -> dict[str, Any]:
     remaining = total_delta
     segments = 0
     micro_reverse = 0
+    wheel_driver = ""
     while remaining > 0:
         step = min(remaining, random.randint(35, 125))
-        page.mouse.wheel(0, direction * step)
+        wheel_driver = _send_human_wheel(page, direction * step)
         remaining -= step
         segments += 1
         if direction > 0 and remaining > 0 and random.random() < 0.16:
             back_step = random.randint(25, 95)
-            page.mouse.wheel(0, -back_step)
+            wheel_driver = _send_human_wheel(page, -back_step)
             micro_reverse += back_step
             _sleep_between(0.35, 0.9)
         _sleep_between(*pause_range)
@@ -2587,6 +2809,7 @@ def _slow_human_scroll(page) -> dict[str, Any]:
         "direction": "up" if direction < 0 else "down",
         "segments": segments,
         "micro_reverse": micro_reverse,
+        "wheel_driver": wheel_driver,
     }
 
 
@@ -2920,6 +3143,7 @@ def _post_instagram_warmup_comment(
     text: str,
     *,
     target_root=None,
+    before_submit: Callable[[], Any] | None = None,
 ) -> bool:
     clean_text = str(text or "").strip()
     if not clean_text:
@@ -2939,14 +3163,40 @@ def _post_instagram_warmup_comment(
                 previous_count = _instagram_exact_text_count(page, clean_text)
                 _human_click(page, box, logger, "instagram_warmup_comment_focus")
                 _human_type(page, clean_text, min_delay=0.10, max_delay=0.22)
+                if before_submit is not None:
+                    before_submit()
+                network_confirmed = threading.Event()
+
+                def capture_submission(response) -> None:
+                    if _is_warmup_comment_submission_response(
+                        response,
+                        "instagram",
+                        clean_text,
+                    ):
+                        network_confirmed.set()
+
+                listener_attached = False
+                with contextlib.suppress(Exception):
+                    page.on("response", capture_submission)
+                    listener_attached = True
                 if not _click_text_button(page, logger, ["Post", "发布"], "instagram_warmup_comment_submit"):
+                    if listener_attached:
+                        with contextlib.suppress(Exception):
+                            page.remove_listener("response", capture_submission)
                     continue
-                if _wait_for_instagram_comment_echo(page, clean_text, previous_count):
+                echoed = _wait_for_instagram_comment_echo(page, clean_text, previous_count)
+                if listener_attached:
+                    with contextlib.suppress(Exception):
+                        page.remove_listener("response", capture_submission)
+                if echoed or network_confirmed.is_set():
                     logger.log(
                         "info",
                         "instagram_warmup_comment_confirmed",
-                        "Instagram 评论内容已在页面回显。",
-                        {"text": clean_text[:80]},
+                        "Instagram 评论提交已确认。",
+                        {
+                            "text": clean_text[:80],
+                            "confirmation": "page_echo" if echoed else "network_response",
+                        },
                     )
                     return True
                 logger.log(
@@ -3068,6 +3318,7 @@ def _run_instagram_warmup(
     logger,
     *,
     cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _run_platform_warmup(
         page,
@@ -3077,6 +3328,7 @@ def _run_instagram_warmup(
         logger,
         platform="instagram",
         cancel_event=cancel_event,
+        context_control=context_control,
     )
 
 
@@ -3255,6 +3507,7 @@ def _post_threads_warmup_comment(
     text: str,
     *,
     target_root=None,
+    before_submit: Callable[[], Any] | None = None,
 ) -> bool:
     clean_text = str(text or "").strip()
     if not clean_text:
@@ -3270,19 +3523,41 @@ def _post_threads_warmup_comment(
         return False
     _human_click(page, box, logger, "threads_warmup_reply_focus")
     _human_type(page, clean_text, min_delay=0.10, max_delay=0.22)
+    if before_submit is not None:
+        before_submit()
+    network_confirmed = threading.Event()
+
+    def capture_submission(response) -> None:
+        if _is_warmup_comment_submission_response(response, "threads", clean_text):
+            network_confirmed.set()
+
+    listener_attached = False
+    with contextlib.suppress(Exception):
+        page.on("response", capture_submission)
+        listener_attached = True
     if not _click_threads_reply_submit(
         page,
         box,
         logger,
         "threads_warmup_reply_submit",
     ):
+        if listener_attached:
+            with contextlib.suppress(Exception):
+                page.remove_listener("response", capture_submission)
         return False
-    if _wait_for_threads_reply_echo(page, clean_text, previous_count):
+    echoed = _wait_for_threads_reply_echo(page, clean_text, previous_count)
+    if listener_attached:
+        with contextlib.suppress(Exception):
+            page.remove_listener("response", capture_submission)
+    if echoed or network_confirmed.is_set():
         logger.log(
             "info",
             "threads_warmup_comment_confirmed",
-            "Threads 评论内容已在页面回显。",
-            {"text": clean_text[:80]},
+            "Threads 评论提交已确认。",
+            {
+                "text": clean_text[:80],
+                "confirmation": "page_echo" if echoed else "network_response",
+            },
         )
         return True
     logger.log(
@@ -3294,6 +3569,60 @@ def _post_threads_warmup_comment(
     return False
 
 
+def _response_value(obj: Any, name: str, default: Any = "") -> Any:
+    value = getattr(obj, name, default)
+    if callable(value):
+        with contextlib.suppress(Exception):
+            return value()
+        return default
+    return value
+
+
+def _is_warmup_comment_submission_response(
+    response: Any,
+    platform: str,
+    text: str,
+) -> bool:
+    """Recognize a successful comment mutation without relying on UI placement.
+
+    Threads and Instagram can move a newly posted reply outside the current
+    virtualized viewport.  Their mutation request still contains the exact
+    typed text, so a successful 2xx response is a stronger confirmation than a
+    missing DOM echo.
+    """
+    clean_text = str(text or "").strip()
+    if not clean_text:
+        return False
+    status = int(_response_value(response, "status", 0) or 0)
+    if status < 200 or status >= 300:
+        return False
+    request = _response_value(response, "request", None)
+    if request is None:
+        return False
+    method = str(_response_value(request, "method", "") or "").upper()
+    if method != "POST":
+        return False
+    url = str(
+        _response_value(response, "url", "")
+        or _response_value(request, "url", "")
+        or ""
+    ).lower()
+    clean_platform = str(platform or "").strip().lower()
+    if clean_platform == "threads":
+        if "threads." not in url and "instagram." not in url:
+            return False
+    elif clean_platform == "instagram":
+        if "instagram." not in url:
+            return False
+    else:
+        return False
+    if not any(marker in url for marker in ("graphql", "/api/", "/ajax/")):
+        return False
+    post_data = str(_response_value(request, "post_data", "") or "")
+    escaped_text = json.dumps(clean_text, ensure_ascii=True)[1:-1]
+    return clean_text in post_data or escaped_text in post_data
+
+
 def _warmup_interest_search_url(platform: str, topic: str) -> str:
     query = quote_plus(" ".join(str(topic or "").split()))
     if platform == "threads":
@@ -3301,6 +3630,339 @@ def _warmup_interest_search_url(platform: str, topic: str) -> str:
     if platform == "instagram":
         return f"https://www.instagram.com/explore/search/keyword/?q={query}"
     raise UnsupportedActionError(f"Unsupported warmup platform: {platform}")
+
+
+def _first_visible_locator(page, selectors: Iterable[str]):
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            if locator.count() > 0 and locator.is_visible(timeout=1000):
+                return locator
+        except Exception:
+            continue
+    return None
+
+
+def _warmup_search_entry_locator(page, platform: str):
+    if platform == "threads":
+        selectors = (
+            'a[href="/search"]',
+            'a[href^="/search?"]',
+            '[role="link"][aria-label="Search"]',
+            '[role="link"][aria-label="搜索"]',
+            '[role="link"][aria-label="搜尋"]',
+            '[aria-label="Search"]',
+            '[aria-label="搜索"]',
+            '[aria-label="搜尋"]',
+        )
+    else:
+        selectors = (
+            'a[href="/explore/"]',
+            'a[href^="/explore/search/"]',
+            '[role="link"][aria-label="Search"]',
+            '[role="link"][aria-label="搜索"]',
+            '[role="link"][aria-label="搜尋"]',
+            '[aria-label="Search"]',
+            '[aria-label="搜索"]',
+            '[aria-label="搜尋"]',
+        )
+    return _first_visible_locator(page, selectors)
+
+
+def _warmup_search_input_locator(page, platform: str):
+    if platform == "threads":
+        selectors = (
+            'input[placeholder="Search"]',
+            'input[placeholder="搜索"]',
+            'input[placeholder="搜尋"]',
+            'input[aria-label="Search"]',
+            'input[aria-label="搜索"]',
+            'input[aria-label="搜尋"]',
+            'input[type="search"]',
+        )
+    else:
+        selectors = (
+            'input[placeholder="Search"]',
+            'input[placeholder="搜索"]',
+            'input[placeholder="搜尋"]',
+            'input[aria-label="Search input"]',
+            'input[aria-label="搜索输入"]',
+            'input[type="search"]',
+        )
+    return _first_visible_locator(page, selectors)
+
+
+def _focus_warmup_search_input(
+    page,
+    search_input,
+    logger: AutomationLogger,
+    stage: str,
+) -> bool:
+    if _human_click(page, search_input, logger, stage):
+        return True
+    # Search result pages can temporarily place an animation layer over an
+    # already-visible input. Keep the operation inside the real page UI: close
+    # transient overlays, focus the same input, then verify browser focus.
+    with contextlib.suppress(Exception):
+        page.keyboard.press("Escape")
+    try:
+        search_input.focus(timeout=2500)
+        focused = bool(
+            search_input.evaluate(
+                "element => document.activeElement === element"
+            )
+        )
+    except Exception as exc:
+        logger.log(
+            "warn",
+            f"{stage}_focus_recovery_failed",
+            "搜索输入框点击受阻，焦点恢复失败。",
+            {"error": str(exc)[:500]},
+        )
+        return False
+    if focused:
+        logger.log(
+            "info",
+            f"{stage}_focus_recovered",
+            "搜索输入框点击受阻，已在当前页面恢复输入焦点。",
+            {"interaction": "ui_focus_recovery"},
+        )
+    return focused
+
+
+def _warmup_search_result_signature(page, platform: str) -> tuple[str, ...]:
+    contexts = _visible_warmup_post_contexts(page, platform, limit=6)
+    return tuple(
+        normalized
+        for context in contexts
+        if (normalized := _normalize_warmup_text(context.get("text"))[:180])
+    )
+
+
+def _wait_for_warmup_search_results(
+    page,
+    platform: str,
+    keyword: str,
+    logger: AutomationLogger,
+    *,
+    previous_signature: tuple[str, ...] = (),
+    timeout_seconds: float = 14.0,
+) -> bool:
+    """Wait for a new search result surface to settle without scrolling it."""
+    stage = f"{platform}_warmup_relevance_search_ready"
+    started_at = time.monotonic()
+    deadline = started_at + max(3.0, float(timeout_seconds))
+    last_signature: tuple[str, ...] = ()
+    stable_reads = 0
+    while time.monotonic() < deadline:
+        current_signature = _warmup_search_result_signature(page, platform)
+        elapsed = time.monotonic() - started_at
+        result_is_new = bool(current_signature) and (
+            current_signature != previous_signature or elapsed >= 3.0
+        )
+        if result_is_new:
+            if current_signature == last_signature:
+                stable_reads += 1
+            else:
+                last_signature = current_signature
+                stable_reads = 1
+            if stable_reads >= 2:
+                logger.log(
+                    "info",
+                    stage,
+                    "搜索结果已加载并稳定，开始校准人设相关内容。",
+                    {
+                        "keyword": keyword,
+                        "candidate_count": len(current_signature),
+                        "waited_seconds": round(elapsed, 1),
+                    },
+                )
+                return True
+        else:
+            last_signature = current_signature
+            stable_reads = 0
+        _sleep_between(0.6, 0.9)
+    logger.log(
+        "warn",
+        stage,
+        "搜索结果在限定时间内未稳定，已停止滚动并切换兜底加载。",
+        {"keyword": keyword, "timeout_seconds": float(timeout_seconds)},
+    )
+    return False
+
+
+def _search_warmup_interest_surface(
+    page,
+    platform: str,
+    keyword: str,
+    logger: AutomationLogger,
+) -> str:
+    """Open platform search through its visible UI, type a query, and submit it.
+
+    Direct URL navigation is deliberately only a recovery path.  The primary
+    behavior mirrors the reference TG warmup chain: click Search, focus the
+    input, clear it, type the keyword, and press Enter.
+    """
+    stage = f"{platform}_warmup_relevance_search"
+    clean_keyword = " ".join(str(keyword or "").split())
+    try:
+        search_input = _warmup_search_input_locator(page, platform)
+        if search_input is None:
+            search_entry = _warmup_search_entry_locator(page, platform)
+            if search_entry is None:
+                raise RuntimeError("search entry was not visible")
+            if not _human_click(page, search_entry, logger, f"{stage}_open"):
+                # The navigation item can be marked aria-current and reject a
+                # redundant click while its search input is already appearing.
+                # Re-probe the input before treating the UI interaction as failed.
+                search_input = _warmup_search_input_locator(page, platform)
+                if search_input is None:
+                    raise RuntimeError("search entry click was not confirmed")
+            else:
+                _sleep_between(0.8, 1.5)
+                search_input = _warmup_search_input_locator(page, platform)
+        if search_input is None:
+            raise RuntimeError("search input was not visible after opening Search")
+        if not _focus_warmup_search_input(
+            page,
+            search_input,
+            logger,
+            f"{stage}_focus",
+        ):
+            raise RuntimeError("search input focus was not confirmed")
+        page.keyboard.press("Control+A")
+        page.keyboard.press("Backspace")
+        _type_text(
+            page,
+            clean_keyword,
+            min_delay=0.06,
+            max_delay=0.14,
+            mode="type",
+            logger=logger,
+            stage=f"{stage}_type",
+        )
+        previous_signature = _warmup_search_result_signature(page, platform)
+        logger.log(
+            "info",
+            stage,
+            "已通过页面搜索入口输入人设关键词并提交。",
+            {"keyword": clean_keyword, "interaction": "click_type_enter"},
+        )
+        page.keyboard.press("Enter")
+        with contextlib.suppress(Exception):
+            page.wait_for_load_state("domcontentloaded", timeout=10000)
+        if not _wait_for_warmup_search_results(
+            page,
+            platform,
+            clean_keyword,
+            logger,
+            previous_signature=previous_signature,
+        ):
+            raise RuntimeError("search results did not stabilize after UI submission")
+        return "ui"
+    except Exception as exc:
+        logger.log(
+            "error",
+            f"{stage}_ui_failed",
+            "页面搜索交互未完成，已停止本次关键词搜索，不使用网址直跳。",
+            {"keyword": clean_keyword, "error": str(exc)[:500]},
+        )
+        raise RuntimeError("platform search UI interaction failed") from exc
+
+
+def _next_warmup_search_keywords(
+    payload: dict[str, Any],
+    keywords: Iterable[Any],
+    *,
+    limit: int = 3,
+) -> list[str]:
+    """Return the next keyword batch; each term may be searched at most twice."""
+    cleaned = _sanitize_warmup_search_keywords(keywords, limit=12)
+    if not cleaned:
+        return []
+    normalized = [_normalize_warmup_text(item).replace(" ", "") for item in cleaned]
+    cycle = payload.get("_warmup_search_keyword_cycle")
+    if (
+        not isinstance(cycle, list)
+        or len(cycle) != len(cleaned)
+        or {
+            _normalize_warmup_text(item).replace(" ", "")
+            for item in cycle
+        } != set(normalized)
+    ):
+        cycle = list(cleaned)
+        random.shuffle(cycle)
+        payload["_warmup_search_keyword_cycle"] = list(cycle)
+        payload["_warmup_search_keyword_cursor"] = 0
+
+    cursor = max(0, int(payload.get("_warmup_search_keyword_cursor") or 0))
+    active = _normalize_warmup_text(payload.get("_warmup_active_search_keyword")).replace(" ", "")
+    raw_use_counts = payload.get("_warmup_search_keyword_use_counts")
+    use_counts = raw_use_counts if isinstance(raw_use_counts, dict) else {}
+    eligible_use_counts = [
+        int(use_counts.get(keyword_key) or 0)
+        for keyword_key in normalized
+        if keyword_key and int(use_counts.get(keyword_key) or 0) < 2
+    ]
+    if not eligible_use_counts:
+        return []
+    minimum_use_count = min(eligible_use_counts)
+    selected: list[str] = []
+    attempts = 0
+    max_attempts = max(len(cycle) * 3, int(limit))
+    while len(selected) < min(max(1, int(limit)), len(cycle)) and attempts < max_attempts:
+        candidate = str(cycle[cursor % len(cycle)] or "").strip()
+        cursor += 1
+        attempts += 1
+        candidate_key = _normalize_warmup_text(candidate).replace(" ", "")
+        if not candidate_key or candidate in selected:
+            continue
+        if int(use_counts.get(candidate_key) or 0) != minimum_use_count:
+            continue
+        if active and len(cycle) > 1 and candidate_key == active:
+            continue
+        selected.append(candidate)
+    payload["_warmup_search_keyword_cursor"] = cursor % len(cycle)
+    return selected
+
+
+def _mark_warmup_search_keyword_used(payload: dict[str, Any], keyword: str) -> int:
+    """Record one real UI search attempt and return the keyword's use count."""
+    keyword_key = _normalize_warmup_text(keyword).replace(" ", "")
+    if not keyword_key:
+        return 0
+    raw_counts = payload.get("_warmup_search_keyword_use_counts")
+    counts = raw_counts if isinstance(raw_counts, dict) else {}
+    count = max(0, int(counts.get(keyword_key) or 0)) + 1
+    counts[keyword_key] = count
+    payload["_warmup_search_keyword_use_counts"] = counts
+    return count
+
+
+def _warmup_search_rotation_due(payload: dict[str, Any], *, phase: str) -> bool:
+    if phase != "browse":
+        return False
+    if not str(payload.get("_warmup_active_search_keyword") or "").strip():
+        return False
+    target = _payload_int(
+        payload,
+        ("warmup_keyword_rotation_posts",),
+        int(payload.get("_warmup_search_rotation_target") or 4),
+        2,
+        20,
+    )
+    return int(payload.get("_warmup_search_keyword_matches") or 0) >= target
+
+
+def _activate_warmup_search_keyword(payload: dict[str, Any], keyword: str) -> None:
+    payload["_warmup_active_search_keyword"] = str(keyword or "").strip()
+    payload["_warmup_search_keyword_matches"] = 0
+    _mark_warmup_search_keyword_used(payload, keyword)
+    history_value = str(payload.get("_warmup_keyword_history_path") or "").strip()
+    if history_value:
+        _record_warmup_keyword_history(Path(history_value), keyword)
+    if "warmup_keyword_rotation_posts" not in payload:
+        payload["_warmup_search_rotation_target"] = random.randint(3, 5)
 
 
 _WARMUP_RELEVANCE_IGNORED_TERMS = {
@@ -3322,52 +3984,45 @@ _WARMUP_RELEVANCE_BLOCKLIST = (
 )
 
 
-def _warmup_persona_keyword_candidates(payload: dict[str, Any], limit: int = 12) -> list[str]:
-    # Prefer the explicit role/name. Topic lists can still contain useful
-    # concrete terms (for example "男士短发"), but broad entries are removed
-    # below before we fall back to the free-form persona context.
-    sources: list[Any] = [payload.get("persona_name")]
+def _warmup_persona_core_terms(payload: dict[str, Any], limit: int = 8) -> list[str]:
+    """Return conservative terms that describe the persona's primary identity."""
+    raw_name = " ".join(str(payload.get("persona_name") or "").split())
+    candidates: list[Any] = [raw_name]
+    normalized_name = _normalize_warmup_text(raw_name).replace(" ", "")
+    for suffix in ("工程师", "修理工", "设计师", "摄影师", "咨询师", "老师", "師", "师"):
+        if normalized_name.endswith(suffix):
+            stem = normalized_name[:-len(suffix)]
+            if len(stem) >= 2:
+                candidates.append(stem)
+
+    core_seed_keys = {
+        _normalize_warmup_text(item).replace(" ", "")
+        for item in candidates
+        if len(_normalize_warmup_text(item).replace(" ", "")) >= 2
+    }
     topics = payload.get("persona_topics")
     if isinstance(topics, list):
-        sources.extend(topics)
-    sources.append(payload.get("persona_context"))
-    candidates: list[str] = []
-    seen: set[str] = set()
+        for topic in topics:
+            normalized_topic = _normalize_warmup_text(topic).replace(" ", "")
+            if not core_seed_keys or any(
+                len(seed) >= 2
+                and (seed in normalized_topic or normalized_topic in seed)
+                for seed in core_seed_keys
+            ):
+                candidates.append(topic)
 
-    def add(value: Any) -> None:
-        raw = " ".join(str(value or "").split())[:80]
-        normalized = _normalize_warmup_text(raw).replace(" ", "")
-        if (
-            len(normalized) < 2
-            or len(normalized) > 16
-            or normalized in _WARMUP_RELEVANCE_IGNORED_TERMS
-            # Do not turn an ignored broad phrase into a seemingly valid
-            # fragment such as "生活日" or "职场" during n-gram fallback.
-            or any(normalized in term for term in _WARMUP_RELEVANCE_IGNORED_TERMS if len(term) > len(normalized))
-            or _is_warmup_test_content(raw)
-            or normalized in seen
-        ):
-            return
-        seen.add(normalized)
-        candidates.append(raw)
+    if not normalized_name and not any(str(item or "").strip() for item in (topics or [])):
+        context = " ".join(str(payload.get("persona_context") or "").split())
+        for match in re.findall(r"[\u3400-\u9fff]{2,10}(?:工程师|修理工|设计师|摄影师|咨询师|老师|師|师)", context):
+            profession = re.sub(r"^(?:资深|資深|专业|專業|高级|高級|一名|一个|一位)+", "", match)
+            candidates.append(profession)
+            for suffix in ("工程师", "修理工", "设计师", "摄影师", "咨询师", "老师", "師", "师"):
+                if profession.endswith(suffix):
+                    stem = profession[:-len(suffix)]
+                    if len(stem) >= 2:
+                        candidates.append(stem)
 
-    for source in sources:
-        text = " ".join(str(source or "").split())
-        if not text:
-            continue
-        for piece in re.split(r"[，,。.!！？?、；;：:/|｜\n]+", text):
-            add(piece)
-            for marker in ("关注", "關注", "专注", "專注", "擅长", "擅長", "围绕", "圍繞"):
-                if marker in piece:
-                    add(piece.split(marker, 1)[1])
-        for match in re.findall(r"[\u3400-\u9fff]{2,12}", text):
-            add(match)
-            for size in range(2, min(4, len(match)) + 1):
-                for index in range(0, len(match) - size + 1):
-                    add(match[index:index + size])
-        if len(candidates) >= limit:
-            break
-    return candidates[:limit]
+    return _sanitize_warmup_search_keywords(candidates, limit=limit)
 
 
 def _sanitize_warmup_search_keywords(values: Iterable[Any], *, limit: int = 5) -> list[str]:
@@ -3380,6 +4035,8 @@ def _sanitize_warmup_search_keywords(values: Iterable[Any], *, limit: int = 5) -
         if (
             len(normalized) < 2
             or len(normalized) > 16
+            or not re.search(r"[\u3400-\u9fff]", raw)
+            or re.search(r"[A-Za-z]", raw)
             or normalized in _WARMUP_RELEVANCE_IGNORED_TERMS
             or any(normalized in term for term in _WARMUP_RELEVANCE_IGNORED_TERMS if len(term) > len(normalized))
             or _is_warmup_test_content(raw)
@@ -3394,50 +4051,46 @@ def _sanitize_warmup_search_keywords(values: Iterable[Any], *, limit: int = 5) -
     return cleaned
 
 
-def _warmup_relevance_keyword_set(
-    payload: dict[str, Any],
-    keywords: Iterable[Any] | None = None,
+def _warmup_keyword_similarity(left: Any, right: Any) -> float:
+    left_text = _normalize_warmup_text(left).replace(" ", "")
+    right_text = _normalize_warmup_text(right).replace(" ", "")
+    if not left_text or not right_text:
+        return 0.0
+    if left_text == right_text:
+        return 1.0
+    if min(len(left_text), len(right_text)) >= 4 and (
+        left_text in right_text or right_text in left_text
+    ):
+        return 0.9
+
+    def grams(value: str) -> set[str]:
+        if len(value) < 2:
+            return {value}
+        return {value[index:index + 2] for index in range(len(value) - 1)}
+
+    left_grams = grams(left_text)
+    right_grams = grams(right_text)
+    return len(left_grams & right_grams) / max(1, len(left_grams | right_grams))
+
+
+def _select_diverse_warmup_keywords(
+    values: Iterable[Any],
     *,
-    limit: int = 24,
+    recent: Iterable[Any] = (),
+    limit: int = 8,
 ) -> list[str]:
-    """Build the same concrete-term bank used by the TG warmup flow.
-
-    Search queries can be specific phrases, while a post often only contains
-    a stable two-to-four-character topic fragment (for example, ``理发店``
-    from ``油头复古理发店``).  Preserve those fragments for *relevance*
-    matching only; the actual search query remains the full, model-produced
-    phrase.
-    """
-    sources: list[Any] = []
-    if keywords is not None:
-        sources.extend(keywords)
-    sources.extend(_warmup_persona_keyword_candidates(payload, limit=24))
-    expanded: list[str] = []
-    seen: set[str] = set()
-
-    def add(value: Any) -> None:
-        raw = " ".join(str(value or "").split()).strip()
-        normalized = _normalize_warmup_text(raw).replace(" ", "")
-        if (
-            len(normalized) < 2
-            or len(normalized) > 16
-            or normalized in _WARMUP_RELEVANCE_IGNORED_TERMS
-            or _is_warmup_test_content(raw)
-            or normalized in seen
-        ):
-            return
-        seen.add(normalized)
-        expanded.append(raw[:32])
-
-    for source in sources:
-        raw = " ".join(str(source or "").split())
-        add(raw)
-        for token in re.findall(r"[\u3400-\u9fff]{2,16}", raw):
-            add(token)
-            for size in range(2, min(4, len(token)) + 1):
-                for index in range(0, len(token) - size + 1):
-                    add(token[index:index + size])
-    return expanded[:limit]
+    candidates = _sanitize_warmup_search_keywords(values, limit=max(24, int(limit) * 3))
+    recent_terms = _sanitize_warmup_search_keywords(recent, limit=40)
+    selected: list[str] = []
+    for candidate in candidates:
+        if any(_warmup_keyword_similarity(candidate, old) >= 0.72 for old in recent_terms):
+            continue
+        if any(_warmup_keyword_similarity(candidate, chosen) >= 0.72 for chosen in selected):
+            continue
+        selected.append(candidate)
+        if len(selected) >= max(1, int(limit)):
+            break
+    return selected
 
 
 def _warmup_ai_settings() -> tuple[str, str, list[str]]:
@@ -3476,36 +4129,72 @@ def _warmup_model_timeout_seconds(payload: dict[str, Any]) -> int:
 
 
 def _generate_warmup_search_keywords_with_ai(payload: dict[str, Any]) -> list[str]:
-    """Generate TG-style persona queries while retaining concrete local fallbacks."""
-    fallback = _warmup_persona_keyword_candidates(payload, limit=5)
+    """Generate reusable persona search queries exclusively through the model."""
+    recent_keywords = _sanitize_warmup_search_keywords(
+        payload.get("_warmup_recent_search_keywords") or [],
+        limit=30,
+    )
     cached = payload.get("_warmup_generated_search_keywords")
     if isinstance(cached, list):
         payload.setdefault("_warmup_search_keyword_source", "cache")
-        return _sanitize_warmup_search_keywords(cached, limit=5) or fallback
+        return _select_diverse_warmup_keywords(cached, limit=8)
 
     host, api_key, models = _warmup_ai_settings()
     if not host or not api_key or not models:
-        payload["_warmup_generated_search_keywords"] = list(fallback)
-        payload["_warmup_search_keyword_source"] = "fallback:model_unavailable"
-        return fallback
+        payload["_warmup_generated_search_keywords"] = []
+        payload["_warmup_search_keyword_source"] = "model_unavailable"
+        return []
 
     persona_name = str(payload.get("persona_name") or "当前人设").strip()
     persona_context = str(payload.get("persona_context") or "").strip()[:900]
+    explicit_keywords = [
+        str(item or "").strip()
+        for item in (payload.get("persona_topics") or [])
+        if str(item or "").strip()
+    ]
     persona_topics = "、".join(
-        str(item or "").strip() for item in (payload.get("persona_topics") or []) if str(item or "").strip()
+        explicit_keywords
     )[:300]
+    persona_text = "\n".join(
+        item
+        for item in (
+            f"名称：{persona_name}" if persona_name else "",
+            f"背景：{persona_context}" if persona_context else "",
+            f"关注主题：{persona_topics}" if persona_topics else "",
+        )
+        if item
+    )
     request_kwargs = {
         "user_input": (
-            f"人设名称：{persona_name}\n人设背景：{persona_context}\n关注主题：{persona_topics}\n"
-            "为社交平台养号生成 3 到 5 个可直接搜索的中文短关键词。"
-            "每个词必须包含具体职业、工具、作品或场景，不得只输出性格、情绪或泛生活词。"
-            "只输出 JSON 数组，例如 [\"男士短发\",\"发型打理\"]；不得输出解释、测试词、营销词、链接或泛词。"
+            "根据这个社交平台养号人设，生成 6-8 个最适合搜索相关内容的短关键词。\n"
+            "要求：\n"
+            "- 先在内部判断这个账号唯一的主要内容主轴，再生成关键词；优先级依次为明确身份/业务定位、长期内容领域、次要兴趣与性格描述。\n"
+            "- 每个关键词单独拿出来时，都必须能明确关联到该主要内容主轴；不要抽取年龄、语言、语气、人格描述，也不要抽取泛生活描述。\n"
+            "- 围绕同一主要内容主轴，从知识技能、具体场景、常见问题、工具对象、成果案例、行业见闻等不同子主题扩展，并覆盖不同搜索意图。\n"
+            "- 至少 70% 必须属于主要内容主轴：分别生成 6 个主要内容主轴关键词和最多 2 个明确兴趣关键词；兴趣最多占 20%-30%，不足时宁可少给，不得用泛化内容补齐。\n"
+            "- 兴趣扩展必须来自资料中明确、稳定的真实兴趣，并保持具体；不要把泛生活、泛作品或性格词当作兴趣关键词。\n"
+            "- 各关键词必须覆盖不同搜索意图，禁止同义改写、只换前后缀或共享同一核心短语。\n"
+            "- 优先可在 Threads 或 Instagram 搜索命中的自然短语。\n"
+            "- 与“近期已用关键词”保持低重复；除非完全没有替代词，否则不得再次生成其中的词或近义改写。\n"
+            "- 必须全部是中文关键词，禁止英文、拼音、数字年龄、语言风格词。\n"
+            '- 只返回 JSON：{"primary":["..."],"interests":["..."]}\n\n'
+            f"人设：{persona_text}\n"
+            f"显式关键词：{', '.join(explicit_keywords)}\n"
+            f"近期已用关键词（优先避开）：{', '.join(recent_keywords) or '无'}"
         ),
         "host": host,
         "api_key": api_key,
         "retry_count": 1,
         "request_timeout_seconds": _warmup_model_timeout_seconds(payload),
-        "system_prompt": "你只负责从给定人设提炼真实、具体、适合内容搜索的关键词。",
+        "temperature": 0.65,
+        "max_output_tokens": 240,
+        "system_prompt": (
+            "根据给定人设的完整资料识别唯一主要内容主轴，并主要围绕该主轴生成中文搜索关键词；"
+            "每个关键词脱离上下文后仍须能明确关联到主要主轴。"
+            "不要依赖固定职业表或硬编码模板。允许少量明确兴趣扩展，但主要主轴必须占至少七成，"
+            "兴趣扩展不得超过三成，泛化描述不得成为搜索方向。"
+            "各搜索意图彼此不同、低重复，避开近期已用词，并严格返回指定 JSON。"
+        ),
     }
     try:
         import get_gemini
@@ -3520,26 +4209,51 @@ def _generate_warmup_search_keywords_with_ai(payload: dict[str, Any]) -> list[st
             raw = str(result.get("raw_text") or "").strip()
             parsed: list[Any] = []
             with contextlib.suppress(Exception):
-                candidate = json.loads(raw[raw.find("["): raw.rfind("]") + 1])
+                object_start = raw.find("{")
+                object_end = raw.rfind("}")
+                candidate = (
+                    json.loads(raw[object_start:object_end + 1])
+                    if object_start >= 0 and object_end > object_start
+                    else None
+                )
+                if isinstance(candidate, dict):
+                    primary = _select_diverse_warmup_keywords(
+                        candidate.get("primary") or [],
+                        recent=recent_keywords,
+                        limit=6,
+                    )
+                    interests = _select_diverse_warmup_keywords(
+                        candidate.get("interests") or [],
+                        recent=[*recent_keywords, *primary],
+                        limit=min(2, max(0, len(primary) * 3 // 7)),
+                    )
+                    if primary:
+                        parsed = [*primary, *interests]
+                    elif isinstance(candidate.get("keywords"), list):
+                        parsed = candidate["keywords"]
+            if not parsed:
+                candidate = None
+                with contextlib.suppress(Exception):
+                    candidate = json.loads(raw[raw.find("["): raw.rfind("]") + 1])
                 if isinstance(candidate, list):
                     parsed = candidate
             if not parsed:
                 parsed = re.split(r"[\n,，、;；]+", raw)
-            generated = _sanitize_warmup_search_keywords(parsed, limit=5)
+            generated = _select_diverse_warmup_keywords(
+                parsed,
+                recent=recent_keywords,
+                limit=8,
+            )
             if generated:
-                # TG's path never lets an LLM answer erase the locally derived
-                # persona terms.  Keep model queries first for search quality,
-                # then merge the deterministic candidates for recovery.
-                merged = _sanitize_warmup_search_keywords([*generated, *fallback], limit=5)
-                payload["_warmup_generated_search_keywords"] = list(merged)
+                payload["_warmup_generated_search_keywords"] = list(generated)
                 payload["_warmup_search_keyword_source"] = f"model:{model}"
-                return merged
+                return generated
     except Exception:
         pass
 
-    payload["_warmup_generated_search_keywords"] = list(fallback)
-    payload["_warmup_search_keyword_source"] = "fallback:model_failed"
-    return fallback
+    payload["_warmup_generated_search_keywords"] = []
+    payload["_warmup_search_keyword_source"] = "model_failed"
+    return []
 
 
 def _score_warmup_post_relevance(
@@ -3549,7 +4263,39 @@ def _score_warmup_post_relevance(
     keywords: Iterable[Any] | None = None,
 ) -> dict[str, Any]:
     target = _normalize_warmup_text(target_text).replace(" ", "")
-    cleaned_keywords = _warmup_relevance_keyword_set(payload, keywords, limit=24)
+    core_terms = _warmup_persona_core_terms(payload, limit=8)
+    core_keys = {
+        _normalize_warmup_text(item).replace(" ", "")
+        for item in core_terms
+    }
+    generated_keywords = _sanitize_warmup_search_keywords(keywords or [], limit=24)
+    aligned_keywords = [
+        keyword
+        for keyword in generated_keywords
+        if any(
+            core_key
+            and (
+                core_key in _normalize_warmup_text(keyword).replace(" ", "")
+                or _normalize_warmup_text(keyword).replace(" ", "") in core_key
+            )
+            for core_key in core_keys
+        )
+    ]
+    anchored_fragments: list[str] = []
+    for keyword in aligned_keywords:
+        normalized_keyword = _normalize_warmup_text(keyword).replace(" ", "")
+        for size in range(2, min(4, len(normalized_keyword)) + 1):
+            for index in range(0, len(normalized_keyword) - size + 1):
+                fragment = normalized_keyword[index:index + size]
+                if any(
+                    core_key
+                    and (core_key in fragment or fragment in core_key)
+                    for core_key in core_keys
+                ):
+                    anchored_fragments.append(fragment)
+    cleaned_keywords = list(
+        dict.fromkeys([*core_terms, *aligned_keywords, *anchored_fragments])
+    )
     matched: list[str] = []
     score = 0
     if target and not _is_warmup_test_content(target_text):
@@ -3557,12 +4303,13 @@ def _score_warmup_post_relevance(
             normalized = _normalize_warmup_text(keyword).replace(" ", "")
             if normalized and normalized in target:
                 matched.append(keyword)
-                score += 5 if len(normalized) >= 4 else 3
+                score += 5 if len(normalized) >= 4 else 4
     return {
-        "relevant": score >= 3,
+        "relevant": score >= 4,
         "score": score,
         "matched": matched[:8],
         "keywords": cleaned_keywords,
+        "core_terms": core_terms,
     }
 
 
@@ -3604,13 +4351,20 @@ def _assess_warmup_post_relevance(
                         f"人设背景：{str(payload.get('persona_context') or '')[:700]}\n"
                         f"人设关键词：{'、'.join(str(item) for item in keywords)}\n"
                         f"帖子：{clean_target}\n"
-                        "帖子是否明确适合该人设自然浏览和互动？只输出 JSON：{\"relevant\":true} 或 {\"relevant\":false}。"
+                        "帖子是否与该人设的主要内容主轴直接相关，或与资料中明确、稳定的真实兴趣直接相关，适合自然浏览和互动？"
+                        "兴趣内容可以相关，但必须明确命中真实兴趣，不能只靠泛生活或泛作品描述。"
+                        "只输出 JSON：{\"relevant\":true} 或 {\"relevant\":false}。"
                     ),
                     host=host,
                     api_key=api_key,
                     retry_count=1,
                     request_timeout_seconds=_warmup_model_timeout_seconds(payload),
-                    system_prompt="相关性审核必须保守；模糊、无关、测试或风险内容一律 false。",
+                    system_prompt=(
+                        "相关性审核必须保守，主要内容主轴优先；资料中明确、稳定的真实兴趣也可判为相关。"
+                        "泛化的作品、工作、经验、日常、生活、顾客等词不能单独证明相关；"
+                        "误入的影视、书籍、求职或其他行业内容一律 false。"
+                        "模糊、无关、测试或风险内容也一律 false。"
+                    ),
                     model=model,
                 )
             except Exception:
@@ -3642,19 +4396,53 @@ def _ensure_warmup_relevant_surface(
     *,
     platform: str,
     phase: str = "initial",
+    excluded_target_keys: set[str] | None = None,
 ) -> dict[str, Any] | None:
     """Locate a persona-relevant post, searching the platform only after feed probes miss."""
     require_relevance = bool(payload.get("require_persona_relevance", True))
     keywords = _generate_warmup_search_keywords_with_ai(payload)
-    if not require_relevance or not keywords:
-        return _current_warmup_post_context(page, platform)
+    excluded = {
+        str(item or "").strip()
+        for item in (excluded_target_keys or set())
+        if str(item or "").strip()
+    }
+    if require_relevance and not keywords:
+        logger.log(
+            "error",
+            f"{platform}_warmup_relevance",
+            "The model did not produce persona keywords; stopping instead of browsing an unfiltered feed.",
+            {
+                "keyword_generation_source": payload.get("_warmup_search_keyword_source") or "unknown",
+            },
+        )
+        return None
+    if not require_relevance:
+        context = _decorate_warmup_post_context(
+            page,
+            _current_warmup_post_context(page, platform),
+            platform,
+        )
+        if {
+            str(context.get("target_key") or ""),
+            str(context.get("target_fingerprint") or ""),
+        } & excluded:
+            return None
+        return context
 
     stage = f"{platform}_warmup_relevance"
+    force_keyword_rotation = _warmup_search_rotation_due(payload, phase=phase)
 
     def inspect(label: str) -> dict[str, Any] | None:
         contexts = _visible_warmup_post_contexts(page, platform, limit=12)
         previews: list[str] = []
+        duplicate_count = 0
         for candidate_index, context in enumerate(contexts):
+            context = _decorate_warmup_post_context(page, context, platform)
+            target_key = str(context.get("target_key") or "")
+            target_fingerprint = str(context.get("target_fingerprint") or "")
+            if {target_key, target_fingerprint} & excluded:
+                duplicate_count += 1
+                continue
             candidate_text = str(context.get("text") or "")
             relevance = _assess_warmup_post_relevance(
                 payload,
@@ -3664,6 +4452,12 @@ def _ensure_warmup_relevant_surface(
             if relevance["relevant"]:
                 context["relevance"] = relevance
                 context["selection_reason"] = f"{label}:candidate_{candidate_index + 1}"
+                active_keyword = str(payload.get("_warmup_active_search_keyword") or "").strip()
+                current_url = str(getattr(page, "url", "") or "").lower()
+                if active_keyword and (label.startswith("search:") or "/search" in current_url):
+                    payload["_warmup_search_keyword_matches"] = (
+                        int(payload.get("_warmup_search_keyword_matches") or 0) + 1
+                    )
                 logger.log(
                     "info",
                     stage,
@@ -3673,6 +4467,8 @@ def _ensure_warmup_relevant_surface(
                         "candidate_index": candidate_index + 1,
                         "matched": relevance["matched"],
                         "score": relevance["score"],
+                        "target_key": target_key,
+                        "target_url": context.get("target_url") or "",
                     },
                 )
                 return context
@@ -3687,27 +4483,67 @@ def _ensure_warmup_relevant_surface(
                 "candidate_count": len(contexts),
                 "previews": previews[:3],
                 "keywords": keywords[:5],
+                "duplicates_skipped": duplicate_count,
             },
         )
         return None
 
     probe_limit = 3 if phase == "initial" else 2
-    for probe in range(probe_limit):
-        context = inspect(f"feed_probe_{probe + 1}")
-        if context:
-            return context
-        if probe < probe_limit - 1:
-            _slow_human_scroll(page)
-            _sleep_between(0.8, 1.6)
+    if not force_keyword_rotation:
+        for probe in range(probe_limit):
+            context = inspect(f"feed_probe_{probe + 1}")
+            if context:
+                return context
+            if probe < probe_limit - 1:
+                _slow_human_scroll(page)
+                _sleep_between(0.8, 1.6)
+    else:
+        logger.log(
+            "info",
+            stage,
+            "当前关键词已完成本轮浏览，正在周期轮换下一个人设关键词。",
+            {
+                "previous_keyword": payload.get("_warmup_active_search_keyword") or "",
+                "matched_posts": int(payload.get("_warmup_search_keyword_matches") or 0),
+            },
+        )
 
-    # Model output is ranked. Preserve its order so a useful primary term is
-    # never skipped merely because the random sample chose weaker fallbacks.
-    for keyword in keywords[:3]:
-        logger.log("info", stage, "推荐流未命中人设内容，切换到人设关键词搜索。", {"keyword": keyword})
-        _goto(page, _warmup_interest_search_url(platform, keyword), logger, f"{stage}_search")
+    search_keywords = _next_warmup_search_keywords(payload, keywords, limit=3)
+    if not search_keywords:
+        logger.log(
+            "warn",
+            stage,
+            "All persona keywords have completed their allowed two search cycles; stopping to avoid repetitive browsing.",
+            {
+                "keyword_use_counts": payload.get("_warmup_search_keyword_use_counts") or {},
+                "keywords": keywords[:8],
+            },
+        )
+        return None
+    for keyword in search_keywords:
+        logger.log(
+            "info",
+            stage,
+            "推荐流未命中或当前搜索周期已完成，切换到人设关键词搜索。",
+            {"keyword": keyword},
+        )
+        try:
+            search_driver = _search_warmup_interest_surface(page, platform, keyword, logger)
+        except Exception as exc:
+            _mark_warmup_search_keyword_used(payload, keyword)
+            logger.log(
+                "warn",
+                f"{stage}_search_retry",
+                "当前关键词的页面搜索未完成，继续尝试下一个低重复关键词。",
+                {"keyword": keyword, "error": str(exc)[:500]},
+            )
+            continue
+        _activate_warmup_search_keyword(payload, keyword)
         for scan in range(3):
             context = inspect(f"search:{keyword}:{scan + 1}")
             if context:
+                context["search_keyword"] = keyword
+                context["search_driver"] = search_driver
                 return context
             if scan < 2:
                 _slow_human_scroll(page)
@@ -3715,6 +4551,545 @@ def _ensure_warmup_relevant_surface(
 
     logger.log("warn", stage, "未找到与人设相关的内容，停止本次养号以避免无关互动。", {"keywords": keywords[:5]})
     return None
+
+
+def _warmup_action_history_path(
+    screenshot_dir: Path,
+    task: dict[str, Any],
+    platform: str,
+) -> Path | None:
+    account_id = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(task.get("account_id") or "").strip())
+    if not account_id:
+        return None
+    root = Path(screenshot_dir).parent / "warmup_action_history"
+    return root / f"{str(platform or '').strip().lower()}_{account_id}.json"
+
+
+def _warmup_keyword_history_path(action_history_path: Path | None) -> Path | None:
+    if action_history_path is None:
+        return None
+    path = Path(action_history_path)
+    return path.with_name(f"{path.stem}_keywords.json")
+
+
+def _load_warmup_keyword_history(path: Path | None, *, limit: int = 30) -> list[str]:
+    if path is None or not Path(path).is_file():
+        return []
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    rows = raw if isinstance(raw, list) else []
+    keywords: list[str] = []
+    for row in reversed(rows):
+        value = row.get("keyword") if isinstance(row, dict) else row
+        keyword = " ".join(str(value or "").split())
+        if keyword and keyword not in keywords:
+            keywords.append(keyword)
+        if len(keywords) >= max(1, int(limit)):
+            break
+    return keywords
+
+
+def _record_warmup_keyword_history(path: Path | None, keyword: str) -> None:
+    clean_keyword = " ".join(str(keyword or "").split())
+    if path is None or not clean_keyword:
+        return
+    history_path = Path(path)
+    with _WARMUP_ACTION_HISTORY_LOCK:
+        rows: list[dict[str, Any]] = []
+        if history_path.is_file():
+            with contextlib.suppress(Exception):
+                raw = json.loads(history_path.read_text(encoding="utf-8"))
+                if isinstance(raw, list):
+                    rows = [row for row in raw if isinstance(row, dict)]
+        rows.append({"keyword": clean_keyword[:80], "usedAt": int(time.time())})
+        rows = rows[-200:]
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = history_path.with_suffix(f"{history_path.suffix}.tmp")
+        temp_path.write_text(
+            json.dumps(rows, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        temp_path.replace(history_path)
+
+
+def _load_warmup_action_history(path: Path | None) -> dict[str, dict[str, Any]]:
+    empty: dict[str, dict[str, Any]] = {"browsed": {}, "liked": {}, "commented": {}}
+    if path is None or not Path(path).is_file():
+        return empty
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return empty
+    if not isinstance(raw, dict):
+        return empty
+    return {
+        action: dict(raw.get(action) or {}) if isinstance(raw.get(action), dict) else {}
+        for action in ("browsed", "liked", "commented")
+    }
+
+
+def _warmup_history_identity_keys(rows: dict[str, Any]) -> set[str]:
+    keys = {str(item or "").strip() for item in rows if str(item or "").strip()}
+    for record in rows.values():
+        if not isinstance(record, dict):
+            continue
+        fingerprint = str(record.get("targetFingerprint") or "").strip()
+        if fingerprint:
+            keys.add(fingerprint)
+    return keys
+
+
+def _record_warmup_action_history(
+    path: Path | None,
+    *,
+    action: str,
+    target: dict[str, Any],
+    text: str = "",
+    keyword: str = "",
+) -> None:
+    clean_action = str(action or "").strip().lower()
+    bucket = {
+        "browse": "browsed",
+        "browsed": "browsed",
+        "like": "liked",
+        "liked": "liked",
+        "comment": "commented",
+        "commented": "commented",
+    }.get(clean_action, "")
+    target_key = str(target.get("target_key") or "").strip()
+    if path is None or not bucket or not target_key:
+        return
+    history_path = Path(path)
+    with _WARMUP_ACTION_HISTORY_LOCK:
+        history = _load_warmup_action_history(history_path)
+        rows = history[bucket]
+        rows[target_key] = {
+            "targetKey": target_key,
+            "targetUrl": str(target.get("target_url") or ""),
+            "targetFingerprint": str(target.get("target_fingerprint") or ""),
+            "text": str(text or "")[:160],
+            "keyword": str(keyword or "")[:80],
+            "confirmedAt": int(time.time()),
+        }
+        # Keep the on-disk ledger bounded while preserving the most recent
+        # confirmed interactions across task restarts.
+        if len(rows) > 2000:
+            ordered = sorted(
+                rows.items(),
+                key=lambda item: int((item[1] or {}).get("confirmedAt") or 0),
+                reverse=True,
+            )[:2000]
+            history[bucket] = dict(ordered)
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = history_path.with_suffix(f"{history_path.suffix}.tmp")
+        temp_path.write_text(
+            json.dumps(history, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        temp_path.replace(history_path)
+
+
+_WARMUP_MEDIA_GUARD_SCRIPT = r"""
+(() => {
+    if (window.__tgWarmupMediaGuardInstalled) return;
+
+    const restoreReleasedMedia = (media) => {
+        const released = media.__tgWarmupReleasedMedia;
+        if (!released) return;
+        media.__tgWarmupReleasedMedia = null;
+        if (released.src !== null) {
+            media.setAttribute("src", released.src);
+        }
+        for (const source of released.sources || []) {
+            if (source.node && source.src !== null) {
+                source.node.setAttribute("src", source.src);
+            }
+        }
+        media.preload = "metadata";
+        try {
+            media.load();
+        } catch (_error) {}
+        if (Number.isFinite(released.currentTime) && released.currentTime > 0) {
+            const restoreTime = () => {
+                try {
+                    media.currentTime = released.currentTime;
+                } catch (_error) {}
+            };
+            if (media.readyState >= 1) restoreTime();
+            else media.addEventListener("loadedmetadata", restoreTime, { once: true });
+        }
+        if (released.wasPlaying) {
+            media.__tgWarmupResumeWhenVisible = true;
+        }
+    };
+
+    const observed = new WeakSet();
+    const observer = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+            const media = entry.target;
+            if (!entry.isIntersecting && typeof media.pause === "function") {
+                if (!media.paused) {
+                    media.__tgWarmupResumeWhenVisible = true;
+                    media.pause();
+                }
+            } else if (entry.isIntersecting) {
+                restoreReleasedMedia(media);
+                if (media.__tgWarmupResumeWhenVisible) {
+                    media.__tgWarmupResumeWhenVisible = false;
+                    if (media.preload === "none") media.preload = "metadata";
+                    const resume = media.play();
+                    if (resume && typeof resume.catch === "function") {
+                        resume.catch(() => {});
+                    }
+                }
+            }
+        }
+    }, { rootMargin: "300px 0px", threshold: 0.01 });
+
+    const tune = (root) => {
+        const videos = [];
+        if (root instanceof HTMLVideoElement) videos.push(root);
+        if (root && typeof root.querySelectorAll === "function") {
+            videos.push(...root.querySelectorAll("video"));
+        }
+        for (const video of videos) {
+            if (!video.getAttribute("preload") || video.preload === "auto") {
+                video.preload = "metadata";
+            }
+            if (!observed.has(video)) {
+                observed.add(video);
+                observer.observe(video);
+            }
+        }
+    };
+
+    tune(document);
+    const observationRoot = document.documentElement || document;
+    new MutationObserver((records) => {
+        for (const record of records) {
+            for (const node of record.addedNodes) {
+                if (node && node.nodeType === Node.ELEMENT_NODE) tune(node);
+            }
+        }
+    }).observe(observationRoot, { childList: true, subtree: true });
+    window.__tgWarmupMediaGuardInstalled = true;
+})();
+"""
+
+
+def _resource_env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(str(os.getenv(name, default)).strip())
+    except (TypeError, ValueError):
+        value = int(default)
+    return max(int(minimum), min(int(value), int(maximum)))
+
+
+def _warmup_resource_pressure(
+    context_control: dict[str, Any] | None,
+) -> dict[str, Any]:
+    normal = {
+        "level": "normal",
+        "container_memory_mb": 0,
+        "memory_available_mb": 0,
+        "should_compact": False,
+    }
+    if not isinstance(context_control, dict):
+        return normal
+    provider = context_control.get("resource_snapshot_provider")
+    if not callable(provider):
+        return normal
+    try:
+        raw = provider()
+    except Exception:
+        return normal
+    if not isinstance(raw, dict):
+        return normal
+
+    container_mb = max(0, _safe_int(raw.get("container_memory_mb"), 0))
+    available_mb = max(0, _safe_int(raw.get("memory_available_mb"), 0))
+    available_known = bool(
+        _safe_int(raw.get("memory_available_known"), 0)
+        or available_mb > 0
+    )
+    soft_container_mb = _resource_env_int(
+        "SOCIAL_AUTOMATION_BROWSER_SOFT_CONTAINER_MB",
+        1280,
+        512,
+        16384,
+    )
+    hard_container_mb = _resource_env_int(
+        "SOCIAL_AUTOMATION_BROWSER_HARD_CONTAINER_MB",
+        1536,
+        soft_container_mb,
+        32768,
+    )
+    soft_available_mb = _resource_env_int(
+        "SOCIAL_AUTOMATION_BROWSER_SOFT_AVAILABLE_MB",
+        1024,
+        256,
+        16384,
+    )
+    hard_available_mb = _resource_env_int(
+        "SOCIAL_AUTOMATION_BROWSER_HARD_AVAILABLE_MB",
+        768,
+        128,
+        soft_available_mb,
+    )
+    emergency_available_mb = _resource_env_int(
+        "SOCIAL_AUTOMATION_BROWSER_EMERGENCY_AVAILABLE_MB",
+        448,
+        128,
+        hard_available_mb,
+    )
+
+    if available_known and available_mb <= emergency_available_mb:
+        level = "emergency"
+    elif container_mb >= hard_container_mb or (
+        available_known and available_mb <= hard_available_mb
+    ):
+        level = "hard"
+    elif container_mb >= soft_container_mb or (
+        available_known and available_mb <= soft_available_mb
+    ):
+        level = "soft"
+    else:
+        level = "normal"
+
+    lock = context_control.get("resource_metrics_lock")
+    guard = lock if hasattr(lock, "__enter__") else contextlib.nullcontext()
+    with guard:
+        metrics = context_control.setdefault("_resource_metrics", {})
+        if isinstance(metrics, dict):
+            if container_mb > 0:
+                metrics.setdefault("container_memory_start_mb", container_mb)
+                metrics["container_memory_peak_mb"] = max(
+                    _safe_int(metrics.get("container_memory_peak_mb"), 0),
+                    container_mb,
+                )
+            if available_known:
+                previous_known = bool(metrics.get("memory_available_min_known"))
+                previous_min = _safe_int(metrics.get("memory_available_min_mb"), 0)
+                metrics["memory_available_min_mb"] = (
+                    available_mb
+                    if not previous_known
+                    else min(previous_min, available_mb)
+                )
+                metrics["memory_available_min_known"] = True
+            metrics["last_pressure_level"] = level
+
+    return {
+        "level": level,
+        "container_memory_mb": container_mb,
+        "memory_available_mb": available_mb,
+        "memory_available_known": available_known,
+        "should_compact": level != "normal",
+    }
+
+
+def _install_warmup_media_guard(page) -> None:
+    with contextlib.suppress(Exception):
+        page.add_init_script(_WARMUP_MEDIA_GUARD_SCRIPT)
+    with contextlib.suppress(Exception):
+        page.evaluate(_WARMUP_MEDIA_GUARD_SCRIPT)
+
+
+def _ensure_warmup_media_guard(page) -> None:
+    """Verify the init script survived navigation and repair it in-place if needed."""
+    installed = False
+    with contextlib.suppress(Exception):
+        installed = bool(
+            page.evaluate("() => Boolean(window.__tgWarmupMediaGuardInstalled)")
+        )
+    if not installed:
+        _install_warmup_media_guard(page)
+
+
+def _compact_warmup_page_in_place(
+    page,
+    *,
+    pressure_level: str = "soft",
+) -> dict[str, int]:
+    """Release off-screen media without navigating or replacing the visible tab."""
+    clean_pressure_level = str(pressure_level or "soft").strip().lower()
+    if clean_pressure_level not in {"soft", "hard", "emergency"}:
+        clean_pressure_level = "soft"
+    try:
+        result = page.evaluate(
+            """(pressureLevel) => {
+                let paused = 0;
+                let deferred = 0;
+                let released = 0;
+                const viewport = Math.max(window.innerHeight || 0, 640);
+                const upperMargin = pressureLevel === "soft"
+                    ? viewport
+                    : pressureLevel === "hard"
+                        ? viewport * 0.5
+                        : 300;
+                const lowerMargin = pressureLevel === "soft"
+                    ? viewport * 2
+                    : pressureLevel === "hard"
+                        ? viewport * 1.5
+                        : viewport + 300;
+                for (const video of document.querySelectorAll("video")) {
+                    const rect = video.getBoundingClientRect();
+                    const nearViewport = (
+                        rect.bottom >= -upperMargin
+                        && rect.top <= lowerMargin
+                    );
+                    if (!nearViewport) {
+                        if (!video.paused) {
+                            video.__tgWarmupResumeWhenVisible = true;
+                            video.pause();
+                            paused += 1;
+                        }
+                        if (video.preload !== "none") {
+                            video.preload = "none";
+                            deferred += 1;
+                        }
+                        if (
+                            !video.__tgWarmupReleasedMedia
+                            && (
+                                video.getAttribute("src") !== null
+                                || Array.from(video.querySelectorAll("source")).some(
+                                    (source) => source.getAttribute("src") !== null
+                                )
+                            )
+                        ) {
+                            video.__tgWarmupReleasedMedia = {
+                                src: video.getAttribute("src"),
+                                sources: Array.from(video.querySelectorAll("source")).map(
+                                    (source) => ({
+                                        node: source,
+                                        src: source.getAttribute("src"),
+                                    })
+                                ),
+                                currentTime: Number(video.currentTime || 0),
+                                wasPlaying: Boolean(video.__tgWarmupResumeWhenVisible),
+                            };
+                            video.removeAttribute("src");
+                            for (const source of video.querySelectorAll("source")) {
+                                source.removeAttribute("src");
+                            }
+                            try {
+                                video.load();
+                            } catch (_error) {}
+                            released += 1;
+                        }
+                    } else if (!video.getAttribute("preload") || video.preload === "auto") {
+                        video.preload = "metadata";
+                    }
+                }
+                return { paused, deferred, released };
+            }""",
+            clean_pressure_level,
+        )
+    except Exception:
+        return {"paused": 0, "deferred": 0, "released": 0}
+    return {
+        "paused": max(0, _safe_int((result or {}).get("paused"), 0)),
+        "deferred": max(0, _safe_int((result or {}).get("deferred"), 0)),
+        "released": max(0, _safe_int((result or {}).get("released"), 0)),
+    }
+
+
+def _maybe_compact_warmup_page(
+    page,
+    logger: AutomationLogger,
+    *,
+    platform: str,
+    context_control: dict[str, Any] | None,
+    last_compaction_at: float,
+) -> dict[str, Any]:
+    pressure = _warmup_resource_pressure(context_control)
+    result = {
+        "page": page,
+        "pressure": pressure,
+        "last_compaction_at": float(last_compaction_at),
+        "deadline_extension_seconds": 0.0,
+    }
+    if not pressure["should_compact"]:
+        return result
+    cooldown = _resource_env_int(
+        "SOCIAL_AUTOMATION_WARMUP_RESOURCE_COMPACTION_COOLDOWN_SECONDS",
+        DEFAULT_WARMUP_RESOURCE_COMPACTION_COOLDOWN_SECONDS,
+        30,
+        900,
+    )
+    started_at = time.monotonic()
+    if last_compaction_at > 0 and started_at - last_compaction_at < cooldown:
+        return result
+    compacted = _compact_warmup_page_in_place(
+        page,
+        pressure_level=pressure["level"],
+    )
+    lock = (
+        context_control.get("resource_metrics_lock")
+        if isinstance(context_control, dict)
+        else None
+    )
+    guard = lock if hasattr(lock, "__enter__") else contextlib.nullcontext()
+    with guard:
+        metrics = (
+            context_control.setdefault("_resource_metrics", {})
+            if isinstance(context_control, dict)
+            else {}
+        )
+        if isinstance(metrics, dict):
+            metrics["inplace_compactions"] = (
+                _safe_int(metrics.get("inplace_compactions"), 0) + 1
+            )
+            metrics["released_media_buffers"] = (
+                _safe_int(metrics.get("released_media_buffers"), 0)
+                + _safe_int(compacted.get("released"), 0)
+            )
+            metrics["last_compaction_pressure"] = pressure["level"]
+    logger.log(
+        "warn" if pressure["level"] in {"hard", "emergency"} else "info",
+        f"{platform}_warmup_resource_compaction",
+        "已在当前画面内释放不可见媒体资源，任务继续执行。",
+        {"pressure": pressure, **compacted},
+    )
+    result["last_compaction_at"] = started_at
+    return result
+
+
+def _public_warmup_resource_metrics(
+    context_control: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(context_control, dict):
+        return {}
+    lock = context_control.get("resource_metrics_lock")
+    guard = lock if hasattr(lock, "__enter__") else contextlib.nullcontext()
+    with guard:
+        metrics = context_control.get("_resource_metrics")
+        if not isinstance(metrics, dict):
+            return {}
+        return {
+            "containerMemoryStartMb": _safe_int(
+                metrics.get("container_memory_start_mb"),
+                0,
+            ),
+            "containerMemoryPeakMb": _safe_int(
+                metrics.get("container_memory_peak_mb"),
+                0,
+            ),
+            "memoryAvailableMinMb": _safe_int(
+                metrics.get("memory_available_min_mb"),
+                0,
+            ),
+            "memoryAvailableMinKnown": bool(
+                metrics.get("memory_available_min_known")
+            ),
+            "inplaceCompactions": _safe_int(metrics.get("inplace_compactions"), 0),
+            "releasedMediaBuffers": _safe_int(
+                metrics.get("released_media_buffers"),
+                0,
+            ),
+            "lastPressureLevel": str(metrics.get("last_pressure_level") or "normal"),
+        }
 
 
 def _run_platform_warmup(
@@ -3726,6 +5101,7 @@ def _run_platform_warmup(
     *,
     platform: str,
     cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     clean_platform = str(platform or "").strip().lower()
     if clean_platform not in {"threads", "instagram"}:
@@ -3733,7 +5109,9 @@ def _run_platform_warmup(
 
     stage = f"{clean_platform}_warmup"
     home_url = THREADS_HOME if clean_platform == "threads" else INSTAGRAM_HOME
+    _install_warmup_media_guard(page)
     _goto(page, home_url, logger, stage)
+    _ensure_warmup_media_guard(page)
     if clean_platform == "instagram":
         _dismiss_instagram_interstitials(page, logger)
 
@@ -3780,7 +5158,30 @@ def _run_platform_warmup(
         max_comments=max_comments,
     )
 
+    history_path = _warmup_action_history_path(
+        Path(screenshot_dir),
+        task,
+        clean_platform,
+    )
+    keyword_history_path = _warmup_keyword_history_path(history_path)
+    payload["_warmup_keyword_history_path"] = (
+        str(keyword_history_path) if keyword_history_path is not None else ""
+    )
+    payload["_warmup_recent_search_keywords"] = _load_warmup_keyword_history(
+        keyword_history_path,
+        limit=30,
+    )
     persona_keywords = _generate_warmup_search_keywords_with_ai(payload)
+    action_history = _load_warmup_action_history(history_path)
+    historical_browsed_target_keys = _warmup_history_identity_keys(action_history["browsed"])
+    liked_target_keys = _warmup_history_identity_keys(action_history["liked"])
+    commented_target_keys = _warmup_history_identity_keys(action_history["commented"])
+    historical_action_keys = liked_target_keys | commented_target_keys
+    historical_seen_target_keys = historical_browsed_target_keys | historical_action_keys
+    browsed_target_keys: set[str] = set()
+    unique_browsed_target_keys: set[str] = set()
+    opened_target_keys: set[str] = set()
+    action_records: list[dict[str, Any]] = []
 
     logger.log(
         "info",
@@ -3799,6 +5200,10 @@ def _run_platform_warmup(
             "persona_name": payload.get("persona_name") or "",
             "persona_keywords": persona_keywords[:8],
             "keyword_generation_source": payload.get("_warmup_search_keyword_source") or "unknown",
+            "recent_search_keywords_avoided": payload.get("_warmup_recent_search_keywords") or [],
+            "historical_browsed_targets": len(action_history["browsed"]),
+            "historical_liked_targets": len(action_history["liked"]),
+            "historical_commented_targets": len(action_history["commented"]),
         },
     )
 
@@ -3808,6 +5213,7 @@ def _run_platform_warmup(
         logger,
         platform=clean_platform,
         phase="initial",
+        excluded_target_keys=historical_seen_target_keys,
     )
     if bool(payload.get("require_persona_relevance", True)) and persona_keywords and not initial_surface:
         raise RuntimeError("当前推荐流与人设关键词均未找到相关内容，已停止避免无关互动。")
@@ -3818,13 +5224,28 @@ def _run_platform_warmup(
     opened_posts = 0
     like_backfills = 0
     comment_backfills = 0
+    like_screenshots: list[str] = []
     comment_screenshots: list[str] = []
+    interaction_evidence: list[tuple[str, int, str]] = []
     used_comment_texts: set[str] = set()
     deadline = time.monotonic() + session_seconds
     next_interaction_at = _next_warmup_interaction_at(0, payload)
+    last_resource_compaction_at = 0.0
 
     while time.monotonic() < deadline and browsed < browse_limit:
         _raise_if_cancelled(cancel_event)
+        resource_management = _maybe_compact_warmup_page(
+            page,
+            logger,
+            platform=clean_platform,
+            context_control=context_control,
+            last_compaction_at=last_resource_compaction_at,
+        )
+        page = resource_management["page"]
+        last_resource_compaction_at = float(
+            resource_management["last_compaction_at"]
+        )
+        deadline += float(resource_management["deadline_extension_seconds"])
         if clean_platform == "instagram":
             _dismiss_instagram_interstitials(page, logger)
         _guard_warmup_risk(page, clean_platform, payload, logger)
@@ -3837,18 +5258,75 @@ def _run_platform_warmup(
             logger,
             platform=clean_platform,
             phase="browse",
+            excluded_target_keys=browsed_target_keys | historical_seen_target_keys,
         )
         if bool(payload.get("require_persona_relevance", True)) and persona_keywords and not relevant_surface:
+            completed_interactions = liked + commented
+            requirements_met = (
+                completed_interactions > 0
+                and liked >= min_required_likes
+                and commented >= min_required_comments
+                and completed_interactions >= min_required_interactions
+            )
+            if requirements_met:
+                logger.log(
+                    "info",
+                    f"{clean_platform}_warmup_relevance",
+                    "当前任务已达到最低互动目标；相关内容已耗尽，安全结束并整理证据。",
+                    {
+                        "liked": liked,
+                        "commented": commented,
+                        "interactions": completed_interactions,
+                    },
+                )
+                break
             raise RuntimeError("当前推荐流和搜索结果均未找到与人设相关的内容，已停止避免无关浏览或互动。")
+        target = _decorate_warmup_post_context(
+            page,
+            relevant_surface or _current_warmup_post_context(page, clean_platform),
+            clean_platform,
+        )
+        target_key = str(target.get("target_key") or "")
+        target_fingerprint = str(target.get("target_fingerprint") or "")
+        target_url = str(target.get("target_url") or "")
+        browsed_target_keys.update(
+            key for key in (target_key, target_fingerprint) if key
+        )
+        if target_key:
+            unique_browsed_target_keys.add(target_key)
+            _record_warmup_action_history(
+                history_path,
+                action="browse",
+                target=target,
+                keyword=str(
+                    target.get("search_keyword")
+                    or payload.get("_warmup_active_search_keyword")
+                    or ""
+                ),
+            )
+            logger.log(
+                "info",
+                f"{clean_platform}_warmup_browse_record",
+                "已记录本次浏览帖子，后续任务将跳过同一内容。",
+                {
+                    "target_key": target_key,
+                    "target_url": target_url,
+                },
+            )
+        active_keyword = str(
+            target.get("search_keyword")
+            or payload.get("_warmup_active_search_keyword")
+            or ""
+        )
 
         elapsed_ratio = 1 - max(
             0,
             deadline - time.monotonic(),
         ) / max(1, session_seconds)
-        # ``browsed`` is the number of posts completed before the current
-        # candidate.  Schedule against the 1-based candidate position so an
-        # "every 1 post" strategy can interact with its very first post.
-        interaction_due = (browsed + 1) >= next_interaction_at
+        # ``browsed`` is the number of posts fully completed before the current
+        # candidate. Do not interact until the configured 2-3 completed-post
+        # interval has actually elapsed.
+        interaction_due = browsed >= next_interaction_at
         interacted = False
         prefer_comment = (
             interaction_due
@@ -3870,24 +5348,62 @@ def _run_platform_warmup(
             and interaction_due
             and not prefer_comment
             and should_try_like
+            and target_key not in historical_action_keys
         ):
             if clean_platform == "threads":
                 clicked_likes = _click_some_threads_likes(
                     page,
                     logger,
                     1,
-                    target_root=relevant_surface.get("root") if relevant_surface else None,
+                    target_root=target.get("root"),
                 )
             else:
                 clicked_likes = _click_some_instagram_likes(
                     page,
                     logger,
                     1,
-                    target_root=relevant_surface.get("root") if relevant_surface else None,
+                    target_root=target.get("root"),
                 )
                 _dismiss_instagram_interstitials(page, logger)
             liked += clicked_likes
             interacted = clicked_likes > 0
+            if clicked_likes:
+                if target_key:
+                    liked_target_keys.update(
+                        key for key in (target_key, target_fingerprint) if key
+                    )
+                    historical_action_keys.update(liked_target_keys)
+                action_record = {
+                    "action": "like",
+                    "targetKey": target_key,
+                    "targetFingerprint": target_fingerprint,
+                    "targetUrl": target_url,
+                    "keyword": active_keyword,
+                    "confirmedAt": int(time.time()),
+                }
+                action_records.append(action_record)
+                _record_warmup_action_history(
+                    history_path,
+                    action="like",
+                    target=target,
+                    keyword=active_keyword,
+                )
+                logger.log(
+                    "info",
+                    f"{stage}_interaction_record",
+                    "已记录确认成功的点赞目标。",
+                    action_record,
+                )
+                shot_like = _screenshot(
+                    page,
+                    screenshot_dir,
+                    task,
+                    f"{stage}_like_{liked}",
+                    logger,
+                )
+                if shot_like:
+                    like_screenshots.append(shot_like)
+                    interaction_evidence.append(("like", liked, shot_like))
             if not clicked_likes:
                 like_backfills += 1
                 logger.log(
@@ -3901,19 +5417,6 @@ def _run_platform_warmup(
                     },
                 )
 
-        should_open_post = browsed > 0 and (
-            random.random() < 0.12
-            or (opened_posts == 0 and elapsed_ratio >= 0.3)
-        )
-        if should_open_post and _open_random_platform_post(
-                page,
-                logger,
-                platform=clean_platform,
-                cancel_event=cancel_event,
-                target_root=relevant_surface.get("root") if relevant_surface else None,
-        ):
-            opened_posts += 1
-
         should_backfill_comment = (
             commented < min_required_comments
             or should_backfill_interaction
@@ -3923,13 +5426,13 @@ def _run_platform_warmup(
             and comment_chance > 0
             and interaction_due
             and not interacted
+            and target_key not in historical_action_keys
             and (
                 prefer_comment
                 or should_backfill_comment
                 or random.randint(1, 100) <= comment_chance
             )
         ):
-            target = relevant_surface or _current_warmup_post_context(page, clean_platform)
             target_text = str(target.get("text") or "")
             target_relevance = _assess_warmup_post_relevance(
                 payload,
@@ -3957,12 +5460,27 @@ def _run_platform_warmup(
                         {"preview": target_text[:80]},
                     )
                 else:
+                    shot_comment = ""
+
+                    def capture_comment_before_submit() -> str:
+                        nonlocal shot_comment
+                        if not shot_comment:
+                            shot_comment = _screenshot(
+                                page,
+                                screenshot_dir,
+                                task,
+                                f"{stage}_comment_{commented + 1}",
+                                logger,
+                            )
+                        return shot_comment
+
                     if clean_platform == "threads":
                         posted = _post_threads_warmup_comment(
                             page,
                             logger,
                             reply_text,
                             target_root=target.get("root"),
+                            before_submit=capture_comment_before_submit,
                         )
                     else:
                         posted = _post_instagram_warmup_comment(
@@ -3970,20 +5488,51 @@ def _run_platform_warmup(
                             logger,
                             reply_text,
                             target_root=target.get("root"),
+                            before_submit=capture_comment_before_submit,
                         )
                     if posted:
                         commented += 1
                         used_comment_texts.add(reply_text)
                         interacted = True
-                        shot_comment = _screenshot(
-                            page,
-                            screenshot_dir,
-                            task,
-                            f"{stage}_comment_{commented}",
-                            logger,
+                        if target_key:
+                            commented_target_keys.update(
+                                key for key in (target_key, target_fingerprint) if key
+                            )
+                            historical_action_keys.update(commented_target_keys)
+                        action_record = {
+                            "action": "comment",
+                            "targetKey": target_key,
+                            "targetFingerprint": target_fingerprint,
+                            "targetUrl": target_url,
+                            "keyword": active_keyword,
+                            "text": reply_text,
+                            "confirmedAt": int(time.time()),
+                        }
+                        action_records.append(action_record)
+                        _record_warmup_action_history(
+                            history_path,
+                            action="comment",
+                            target=target,
+                            text=reply_text,
+                            keyword=active_keyword,
                         )
+                        logger.log(
+                            "info",
+                            f"{stage}_interaction_record",
+                            "已记录确认成功的评论目标。",
+                            action_record,
+                        )
+                        if not shot_comment:
+                            shot_comment = _screenshot(
+                                page,
+                                screenshot_dir,
+                                task,
+                                f"{stage}_comment_{commented}",
+                                logger,
+                            )
                         if shot_comment:
                             comment_screenshots.append(shot_comment)
+                            interaction_evidence.append(("comment", commented, shot_comment))
                     else:
                         comment_backfills += 1
                         logger.log(
@@ -3998,8 +5547,30 @@ def _run_platform_warmup(
                             },
                         )
 
+        # Opening a detail page invalidates locators from the search/feed card.
+        # Perform any scoped like/comment first, then browse that exact target.
+        should_open_post = browsed > 0 and (
+            random.random() < 0.12
+            or (opened_posts == 0 and elapsed_ratio >= 0.3)
+        )
+        if (
+            should_open_post
+            and not interacted
+            and (not target_key or target_key not in opened_target_keys)
+            and _open_random_platform_post(
+                page,
+                logger,
+                platform=clean_platform,
+                cancel_event=cancel_event,
+                target_root=target.get("root"),
+            )
+        ):
+            opened_posts += 1
+            if target_key:
+                opened_target_keys.add(target_key)
+
         if interacted:
-            next_interaction_at = _next_warmup_interaction_at(browsed + 1, payload)
+            next_interaction_at = _next_warmup_interaction_at(browsed, payload)
         scroll = _slow_human_scroll(page)
         browsed += 1
         remaining_seconds = max(0, int(deadline - time.monotonic()))
@@ -4029,7 +5600,6 @@ def _run_platform_warmup(
     if clean_platform == "instagram":
         _dismiss_instagram_interstitials(page, logger)
     _guard_warmup_risk(page, clean_platform, payload, logger)
-    shot = _screenshot(page, screenshot_dir, task, stage, logger)
     _validate_warmup_completion(
         clean_platform,
         liked=liked,
@@ -4037,6 +5607,21 @@ def _run_platform_warmup(
         min_required_likes=min_required_likes,
         min_required_comments=min_required_comments,
         min_required_interactions=min_required_interactions,
+    )
+    evidence_sheet = _compose_warmup_evidence_sheet(
+        interaction_evidence,
+        screenshot_dir,
+        task,
+        logger,
+    )
+    final_evidence_screenshots = (
+        [evidence_sheet]
+        if evidence_sheet
+        else [
+            path
+            for _, _, path in interaction_evidence
+            if Path(path).is_file()
+        ]
     )
     logger.log(
         "info",
@@ -4052,8 +5637,11 @@ def _run_platform_warmup(
             "comment_backfills": comment_backfills,
             "strategy_id": strategy_id,
             "strategy_label": strategy_label,
+            "evidence_count": len(interaction_evidence),
+            "unique_browsed_targets": len(unique_browsed_target_keys),
+            "confirmed_action_records": len(action_records),
         },
-        shot,
+        evidence_sheet,
     )
     return {
         "ok": True,
@@ -4068,8 +5656,24 @@ def _run_platform_warmup(
         "commentBackfills": comment_backfills,
         "strategy_id": strategy_id,
         "strategy_label": strategy_label,
-        "commentScreenshots": comment_screenshots,
-        "screenshot_path": shot,
+        "likeScreenshots": [] if evidence_sheet else like_screenshots,
+        "commentScreenshots": [] if evidence_sheet else comment_screenshots,
+        "evidenceScreenshots": final_evidence_screenshots,
+        "evidenceSheet": evidence_sheet,
+        "screenshot_path": evidence_sheet,
+        "uniqueBrowsedTargets": len(unique_browsed_target_keys),
+        "likedTargetKeys": sorted(
+            record["targetKey"]
+            for record in action_records
+            if record["action"] == "like" and record.get("targetKey")
+        ),
+        "commentedTargetKeys": sorted(
+            record["targetKey"]
+            for record in action_records
+            if record["action"] == "comment" and record.get("targetKey")
+        ),
+        "interactionRecords": action_records,
+        "resourceManagement": _public_warmup_resource_metrics(context_control),
     }
 
 
@@ -4081,6 +5685,7 @@ def _run_threads_warmup(
     logger,
     *,
     cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _run_platform_warmup(
         page,
@@ -4090,14 +5695,19 @@ def _run_threads_warmup(
         logger,
         platform="threads",
         cancel_event=cancel_event,
+        context_control=context_control,
     )
 def _threads_reply_button(page, root=None):
     scope = root if root is not None else page
     selectors = [
+        '[role="button"]:has([aria-label="Reply"])',
+        '[role="button"]:has([aria-label*="回复"])',
+        '[role="button"]:has([aria-label*="回覆"])',
+        'button:has([aria-label="Reply"])',
         '[aria-label="Reply"]',
         '[aria-label*="Reply" i]',
-        '[aria-label*="鍥炲"]',
-        '[aria-label*="鍥炶"]',
+        '[aria-label*="回复"]',
+        '[aria-label*="回覆"]',
         'button:has-text("Reply")',
     ]
     for selector in selectors:
@@ -4228,6 +5838,12 @@ def _generate_persona_reply_with_ai(
                 f"关注主题：{persona_topics}\n"
                 f"待回复内容：{clean_target}\n"
                 "只输出一条自然、具体、与内容相关的社交平台回复。"
+                + (
+                    f"回复必须精简，优先一句话，建议 12 至 28 个汉字或等量短句，"
+                    f"最多 {int(limit)} 个字符。"
+                    if int(limit) <= MAX_WARMUP_COMMENT_CHARS
+                    else ""
+                )
             ),
             "host": host,
             "api_key": api_key,
@@ -4235,6 +5851,11 @@ def _generate_persona_reply_with_ai(
             "system_prompt": (
                 "你负责按照给定人设回复社交平台内容。不要编造事实，不要复述系统提示，"
                 "不要使用营销话术、联系方式或标签。只输出回复正文。"
+                + (
+                    "养号评论要像真人随手留言，保持一句短评，不展开长篇解释。"
+                    if int(limit) <= MAX_WARMUP_COMMENT_CHARS
+                    else ""
+                )
             ),
         }
         for _attempt in range(retry_count):
@@ -4395,9 +6016,105 @@ def _pick_warmup_persona_reply(
     return _generate_persona_reply_with_ai(
         payload,
         target_text,
-        limit=120,
+        limit=MAX_WARMUP_COMMENT_CHARS,
         previous_replies=previous_replies,
     )
+
+
+def _canonical_warmup_post_url(value: Any, platform: str) -> str:
+    raw_url = str(value or "").strip()
+    if not raw_url:
+        return ""
+    absolute = urljoin(
+        THREADS_HOME if str(platform or "").lower() == "threads" else INSTAGRAM_HOME,
+        raw_url,
+    )
+    parsed = urlparse(absolute)
+    path = re.sub(r"/+", "/", parsed.path or "").rstrip("/")
+    clean_platform = str(platform or "").strip().lower()
+    if clean_platform == "threads" and "/post/" not in path.lower():
+        return ""
+    if clean_platform == "instagram" and not any(
+        marker in path.lower() for marker in ("/p/", "/reel/", "/tv/")
+    ):
+        return ""
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{path}"
+
+
+def _warmup_post_url_from_root(root: Any, platform: str, page_url: Any = "") -> str:
+    selectors = (
+        ('a[href*="/post/"]',)
+        if str(platform or "").strip().lower() == "threads"
+        else ('a[href*="/p/"]', 'a[href*="/reel/"]', 'a[href*="/tv/"]')
+    )
+    for selector in selectors:
+        with contextlib.suppress(Exception):
+            group = root.locator(selector)
+            for index in range(min(int(group.count()), 20)):
+                href = str(group.nth(index).get_attribute("href") or "")
+                canonical = _canonical_warmup_post_url(href, platform)
+                if canonical:
+                    return canonical
+    return _canonical_warmup_post_url(page_url, platform)
+
+
+def _warmup_post_target(
+    context: dict[str, Any] | None,
+    platform: str,
+    *,
+    page_url: Any = "",
+) -> dict[str, str]:
+    source = context if isinstance(context, dict) else {}
+    existing_key = str(source.get("target_key") or "").strip()
+    normalized_text = " ".join(str(source.get("text") or "").lower().split())[:1600]
+    fingerprint_key = (
+        hashlib.sha256(
+            f"{str(platform or '').strip().lower()}\ntext\n{normalized_text}".encode("utf-8"),
+        ).hexdigest()
+        if normalized_text
+        else ""
+    )
+    existing_url = _canonical_warmup_post_url(
+        source.get("target_url") or "",
+        platform,
+    )
+    if existing_key:
+        return {
+            "target_key": existing_key,
+            "target_url": existing_url,
+            "target_fingerprint": str(source.get("target_fingerprint") or fingerprint_key),
+        }
+    root = source.get("root")
+    target_url = existing_url
+    if not target_url and root is not None:
+        target_url = _warmup_post_url_from_root(root, platform, page_url)
+    if target_url:
+        identity = f"{str(platform or '').strip().lower()}\n{target_url.lower()}"
+    else:
+        if not normalized_text:
+            return {"target_key": "", "target_url": "", "target_fingerprint": ""}
+        identity = f"{str(platform or '').strip().lower()}\ntext\n{normalized_text}"
+    return {
+        "target_key": hashlib.sha256(identity.encode("utf-8")).hexdigest(),
+        "target_url": target_url,
+        "target_fingerprint": fingerprint_key,
+    }
+
+
+def _decorate_warmup_post_context(
+    page: Any,
+    context: dict[str, Any] | None,
+    platform: str,
+) -> dict[str, Any]:
+    decorated = dict(context or {})
+    decorated.update(
+        _warmup_post_target(
+            decorated,
+            platform,
+            page_url=getattr(page, "url", ""),
+        ),
+    )
+    return decorated
 
 
 def _visible_warmup_post_contexts(page, platform: str, *, limit: int = 12) -> list[dict[str, Any]]:
@@ -4440,7 +6157,11 @@ def _visible_warmup_post_contexts(page, platform: str, *, limit: int = 12) -> li
     if not candidates:
         return []
     return [
-        {"text": text, "root": root, "viewport_top": top}
+        _decorate_warmup_post_context(
+            page,
+            {"text": text, "root": root, "viewport_top": top},
+            platform_name,
+        )
         for top, root, text in sorted(candidates, key=lambda item: item[0])[:max(1, int(limit))]
     ]
 
@@ -5069,6 +6790,7 @@ def _run_platform_hot_post_auto_reply(
     *,
     platform: str,
     cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _raise_if_cancelled(cancel_event)
     max_posts = max(1, min(int(payload.get("max_posts") or 5), 20))
@@ -5164,14 +6886,18 @@ def _run_platform_hot_post_auto_reply(
             logger.log("warn", f"{platform}_auto_reply_backfill", "未找到可回复目标，正在切换目标。", {"attempts": reply_backfills, "url": url})
             continue
         attempted_submissions += 1
-        posted = _submit_platform_reply(
-            page,
-            platform,
-            button,
-            reply_text,
-            logger,
-            f"{platform}_hot_post_reply",
-            comment_reply=False,
+        posted = _run_billing_commit_action(
+            context_control,
+            cancel_event,
+            lambda: _submit_platform_reply(
+                page,
+                platform,
+                button,
+                reply_text,
+                logger,
+                f"{platform}_hot_post_reply",
+                comment_reply=False,
+            ),
         )
         if posted:
             replied += 1
@@ -5253,6 +6979,7 @@ def _run_platform_auto_reply(
     platform: str,
     cancel_event: Any | None = None,
     account: dict[str, Any] | None = None,
+    context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _raise_if_cancelled(cancel_event)
     if str(payload.get("reply_scope") or "comments") == "hot_posts":
@@ -5264,6 +6991,7 @@ def _run_platform_auto_reply(
             logger,
             platform=platform,
             cancel_event=cancel_event,
+            context_control=context_control,
         )
     max_posts = max(1, min(int(payload.get("max_posts") or 5), 20))
     max_replies = max(1, min(int(payload.get("max_replies") or 3), 10))
@@ -5433,14 +7161,18 @@ def _run_platform_auto_reply(
                     completion_reason = "reply_target_missing"
                     continue
                 attempted_submissions += 1
-                posted = _submit_platform_reply(
-                    page,
-                    platform,
-                    button,
-                    reply_text,
-                    logger,
-                    f"{platform}_comment_reply",
-                    comment_reply=True,
+                posted = _run_billing_commit_action(
+                    context_control,
+                    cancel_event,
+                    lambda: _submit_platform_reply(
+                        page,
+                        platform,
+                        button,
+                        reply_text,
+                        logger,
+                        f"{platform}_comment_reply",
+                        comment_reply=True,
+                    ),
                 )
                 if not posted:
                     reply_backfills += 1
@@ -5513,6 +7245,7 @@ def _run_threads_auto_reply(
     *,
     cancel_event: Any | None = None,
     account: dict[str, Any] | None = None,
+    context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _run_platform_auto_reply(
         page,
@@ -5523,6 +7256,7 @@ def _run_threads_auto_reply(
         platform="threads",
         cancel_event=cancel_event,
         account=account,
+        context_control=context_control,
     )
 
 
@@ -5535,6 +7269,7 @@ def _run_instagram_auto_reply(
     *,
     cancel_event: Any | None = None,
     account: dict[str, Any] | None = None,
+    context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _run_platform_auto_reply(
         page,
@@ -5545,6 +7280,7 @@ def _run_instagram_auto_reply(
         platform="instagram",
         cancel_event=cancel_event,
         account=account,
+        context_control=context_control,
     )
 
 
@@ -8130,7 +9866,16 @@ def _target_url(payload: dict[str, Any]) -> str:
     return url
 
 
-def _run_comment_post(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
+def _run_comment_post(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     comment = str(payload.get("comment") or payload.get("text") or "").strip()
     if not comment:
         raise ValueError("评论任务需要填写评论内容。")
@@ -8139,14 +9884,28 @@ def _run_comment_post(page, task, payload, screenshot_dir, logger) -> dict[str, 
     box.wait_for(state="visible", timeout=30000)
     _human_click(page, box, logger, "comment_focus")
     _human_type(page, comment)
-    if not _click_text_button(page, logger, ["Post"], "comment_submit"):
+    submitted = _run_billing_commit_action(
+        context_control,
+        cancel_event,
+        lambda: _click_text_button(page, logger, ["Post"], "comment_submit"),
+    )
+    if not submitted:
         raise RuntimeError("未找到评论发布按钮。")
     _sleep_between(2.0, 4.0)
     shot = _screenshot(page, screenshot_dir, task, "comment_done", logger)
     return {"ok": True, "url": page.url, "screenshot_path": shot}
 
 
-def _run_reply_comment(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
+def _run_reply_comment(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     reply = str(payload.get("reply") or payload.get("comment") or payload.get("text") or "").strip()
     target_text = str(payload.get("target_text") or "").strip()
     if not reply:
@@ -8164,14 +9923,28 @@ def _run_reply_comment(page, task, payload, screenshot_dir, logger) -> dict[str,
     box.wait_for(state="visible", timeout=30000)
     _human_click(page, box, logger, "reply_focus")
     _human_type(page, reply)
-    if not _click_text_button(page, logger, ["Post"], "reply_submit"):
+    submitted = _run_billing_commit_action(
+        context_control,
+        cancel_event,
+        lambda: _click_text_button(page, logger, ["Post"], "reply_submit"),
+    )
+    if not submitted:
         raise RuntimeError("未找到回复发布按钮。")
     _sleep_between(2.0, 4.0)
     shot = _screenshot(page, screenshot_dir, task, "reply_done", logger)
     return {"ok": True, "url": page.url, "screenshot_path": shot}
 
 
-def _run_like_post(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
+def _run_like_post(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     _goto(page, _target_url(payload), logger, "like_open")
     unlike = page.locator('[aria-label="Unlike"]').first
     try:
@@ -8183,17 +9956,35 @@ def _run_like_post(page, task, payload, screenshot_dir, logger) -> dict[str, Any
     like = page.locator('[aria-label="Like"]').first
     if not like.count():
         raise RuntimeError("未找到点赞按钮。")
-    _human_click(page, like, logger, "like_click")
+    _run_billing_commit_action(
+        context_control,
+        cancel_event,
+        lambda: _human_click(page, like, logger, "like_click"),
+    )
     _sleep_between(1.0, 2.0)
     shot = _screenshot(page, screenshot_dir, task, "like_done", logger)
     return {"ok": True, "liked": True, "url": page.url, "screenshot_path": shot}
 
 
-def _run_share_post(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
+def _run_share_post(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     _goto(page, _target_url(payload), logger, "share_open")
-    if not _click_text_button(page, logger, ["Share", "Send"], "share_button"):
+    opened = _click_text_button(page, logger, ["Share", "Send"], "share_button")
+    if not opened:
         raise RuntimeError("未找到分享/发送按钮。")
     _sleep_between(1.0, 2.0)
-    copied = _click_text_button(page, logger, ["Copy link"], "share_copy_link")
+    copied = _run_billing_commit_action(
+        context_control,
+        cancel_event,
+        lambda: _click_text_button(page, logger, ["Copy link"], "share_copy_link"),
+    )
     shot = _screenshot(page, screenshot_dir, task, "share_done", logger)
     return {"ok": True, "copied_link": copied, "url": page.url, "screenshot_path": shot}

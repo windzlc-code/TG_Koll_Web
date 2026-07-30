@@ -1578,6 +1578,8 @@ const adminState = {
   userListRole: "customer",
   userListFilters: {},
   selectedUserIds: new Set(),
+  userBatchSelectionMeta: new Map(),
+  userBatchCreditShortcuts: [],
   userBatchAction: "",
   userBatchIdempotencyKey: "",
   userBatchInFlight: false,
@@ -3290,6 +3292,7 @@ const BILLING_STATUS_LABELS = {
   retired: "已停用",
   pending: "待审批",
   approved: "已批准",
+  refunded: "已冲销",
   rejected: "已拒绝",
   cancelled: "已取消",
   legacy: "旧额度模式",
@@ -3601,8 +3604,12 @@ function renderBillingOrders(payload, { append = false, requestOffset = 0 } = {}
         createBillingAction("拒绝", "order-reject", order.id, "danger"),
         createBillingAction("批准", "order-approve", order.id, "primary"),
       );
+    } else if (status === "approved") {
+      actions.append(
+        createBillingAction("冲销权益", "order-refund", order.id, "danger"),
+      );
     } else {
-      actions.textContent = order.review_note || "已处理";
+      actions.textContent = order.refund_note || order.review_note || "已处理";
     }
     row.appendChild(actions);
     body.appendChild(row);
@@ -3678,6 +3685,49 @@ async function reviewBillingOrder(orderId, status) {
   });
   await loadBillingOrders();
   setMsg("billingOrderMsg", `方案申请已${label}`, true);
+}
+
+async function refundBillingOrder(orderId) {
+  const decision = await requestAdminPublicAction({
+    title: "冲销已批准订单",
+    message: `确认冲销订单 ${orderId} 已发放且尚可安全回收的权益吗？此操作只处理平台内权益，支付渠道退款仍需另行完成。`,
+    confirmLabel: "确认冲销",
+    tone: "danger",
+    inputLabel: "冲销原因（必填）",
+    inputPlaceholder: "例如：重复付款、拒付或误批准",
+  });
+  if (!decision.confirmed) return;
+  const note = decision.value.trim();
+  if (!note) throw new Error("请填写冲销原因");
+  await api(`/api/admin/billing/orders/${encodeURIComponent(orderId)}/refund`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
+  });
+  await loadBillingOrders();
+  if (adminState.billingSelectedUserId) await loadUserBilling(adminState.billingSelectedUserId);
+  setMsg("billingOrderMsg", "订单权益已冲销，支付渠道退款请按实际支付方式另行处理", true);
+}
+
+async function terminateBillingSubscription(subscriptionId) {
+  const decision = await requestAdminPublicAction({
+    title: "终止客户订阅",
+    message: `确认立即终止订阅 ${subscriptionId} 吗？尚未使用的订阅图片权益会同时撤销。`,
+    confirmLabel: "确认终止",
+    tone: "danger",
+    inputLabel: "终止原因（必填）",
+    inputPlaceholder: "填写本次终止订阅的原因",
+  });
+  if (!decision.confirmed) return;
+  const note = decision.value.trim();
+  if (!note) throw new Error("请填写终止原因");
+  await api(`/api/admin/billing/subscriptions/${encodeURIComponent(subscriptionId)}/terminate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
+  });
+  await loadUserBilling(adminState.billingSelectedUserId);
+  setMsg("billingUserMsg", "订阅已终止，剩余订阅权益已撤销", true);
 }
 
 function createBillingSummaryItem(label, value, tone = "") {
@@ -3759,6 +3809,35 @@ function renderUserBilling(payload, userId) {
       row.appendChild(createBillingCell(unlimited ? "∞" : balanceAfter.toLocaleString("zh-CN", { maximumFractionDigits: 6 })));
       row.appendChild(createBillingCell(entry.order_id || entry.ref_id || entry.ref_type || "-", "admin-billing-reference"));
       body.appendChild(row);
+    });
+  }
+  const subscriptionBody = el("billingSubscriptionBody");
+  subscriptionBody?.replaceChildren();
+  if (subscriptionBody && !subscriptions.length) {
+    const row = document.createElement("tr");
+    const cell = createBillingCell("暂无订阅记录", "admin-billing-empty");
+    cell.colSpan = 5;
+    row.appendChild(cell);
+    subscriptionBody.appendChild(row);
+  } else if (subscriptionBody) {
+    subscriptions.forEach((subscription) => {
+      const row = document.createElement("tr");
+      const status = String(subscription.status || "expired").toLowerCase();
+      row.appendChild(createBillingCell(subscription.id || "-"));
+      row.appendChild(createBillingCell(subscription.plan_sku || "-"));
+      const statusCell = document.createElement("td");
+      statusCell.appendChild(createBillingStatus(status));
+      row.appendChild(statusCell);
+      row.appendChild(createBillingCell(formatBillingTime(subscription.current_period_end)));
+      const actions = document.createElement("td");
+      actions.className = "admin-billing-actions";
+      if (status === "active") {
+        actions.appendChild(createBillingAction("终止订阅", "subscription-terminate", subscription.id, "danger"));
+      } else {
+        actions.textContent = "无需操作";
+      }
+      row.appendChild(actions);
+      subscriptionBody.appendChild(row);
     });
   }
   el("billingUserPlaceholder").hidden = true;
@@ -4013,10 +4092,33 @@ function syncUserBatchSelection() {
   }
   document.querySelectorAll("[data-user-batch-action]").forEach((button) => {
     button.setAttribute("aria-pressed", "false");
-    button.disabled = adminState.selectedUserIds.size === 0
-      || adminState.userBatchInFlight
-      || adminState.userBatchSelectionInFlight;
+    button.disabled = adminState.userBatchInFlight
+      || adminState.userBatchSelectionInFlight
+      || !userBatchActionAvailable(button.dataset.userBatchAction);
   });
+}
+
+function rememberUserBatchSelectionMeta(user = {}) {
+  const id = String(user.id || "");
+  if (!id || user.is_admin) return;
+  adminState.userBatchSelectionMeta.set(id, {
+    lifecycle: String(user.lifecycle_status || (Number(user.deleted_at || 0) > 0 ? "deleted" : (user.is_disabled ? "suspended" : "active"))),
+    approval: String(user.approval_status || ""),
+  });
+}
+
+function userBatchActionAvailable(action) {
+  if (!adminState.selectedUserIds.size) return false;
+  if (action === "add_credit") return true;
+  const selected = Array.from(adminState.selectedUserIds, (id) => adminState.userBatchSelectionMeta.get(String(id)))
+    .filter(Boolean);
+  if (action === "enable") {
+    return selected.some((item) => item.approval === "approved" && item.lifecycle !== "active");
+  }
+  if (action === "suspend") {
+    return selected.some((item) => item.lifecycle === "active");
+  }
+  return false;
 }
 
 function clearUserBatchSelection() {
@@ -4038,9 +4140,9 @@ function resetUserBatchRequest() {
 const USER_BATCH_ACTION_CONFIG = Object.freeze({
   add_credit: {
     title: "调整算力",
-    subtitle: "为已选客户增加算力点",
+    subtitle: "将已选客户的算力点替换为指定数值",
     confirmLabel: "确认调整",
-    reasonPlaceholder: "选填，例如：活动赠送或人工补充算力",
+    reasonPlaceholder: "选填，例如：人工调整账号算力",
   },
   enable: {
     title: "启用账号",
@@ -4056,6 +4158,147 @@ const USER_BATCH_ACTION_CONFIG = Object.freeze({
   },
 });
 
+const ADMIN_CREDIT_SHORTCUTS_STORAGE_KEY = "wk-admin-credit-shortcuts-v1";
+const DEFAULT_ADMIN_CREDIT_SHORTCUTS = Object.freeze([
+  Object.freeze({ id: "default-small", name: "小额额度", points: 100 }),
+  Object.freeze({ id: "default-standard", name: "常规额度", points: 500 }),
+  Object.freeze({ id: "default-batch", name: "批量额度", points: 1000 }),
+]);
+
+function normalizeAdminCreditShortcut(item = {}) {
+  const points = Math.round(Number(item.points || 0) * 1_000_000) / 1_000_000;
+  const name = String(item.name || "").trim().slice(0, 16);
+  if (!name || !Number.isFinite(points) || points < 0 || points > 1_000_000) return null;
+  return {
+    id: String(item.id || createUserBatchIdempotencyKey()),
+    name,
+    points,
+  };
+}
+
+function loadAdminCreditShortcuts() {
+  try {
+    const raw = localStorage.getItem(ADMIN_CREDIT_SHORTCUTS_STORAGE_KEY);
+    if (raw === null) {
+      adminState.userBatchCreditShortcuts = DEFAULT_ADMIN_CREDIT_SHORTCUTS.map((item) => ({ ...item }));
+      return;
+    }
+    const parsed = JSON.parse(raw);
+    adminState.userBatchCreditShortcuts = Array.isArray(parsed)
+      ? parsed.map(normalizeAdminCreditShortcut).filter(Boolean).slice(0, 12)
+      : DEFAULT_ADMIN_CREDIT_SHORTCUTS.map((item) => ({ ...item }));
+  } catch {
+    adminState.userBatchCreditShortcuts = DEFAULT_ADMIN_CREDIT_SHORTCUTS.map((item) => ({ ...item }));
+  }
+}
+
+function persistAdminCreditShortcuts() {
+  try {
+    localStorage.setItem(ADMIN_CREDIT_SHORTCUTS_STORAGE_KEY, JSON.stringify(adminState.userBatchCreditShortcuts));
+  } catch {
+    // The shortcuts still work for the current page when browser storage is unavailable.
+  }
+}
+
+function renderAdminCreditShortcuts() {
+  const list = el("adminUserBatchCreditShortcutList");
+  if (!list) return;
+  list.replaceChildren();
+  adminState.userBatchCreditShortcuts.forEach((shortcut) => {
+    const item = document.createElement("div");
+    item.className = "admin-credit-shortcut";
+    item.setAttribute("role", "listitem");
+    const applyButton = document.createElement("button");
+    applyButton.type = "button";
+    applyButton.className = "admin-credit-shortcut-apply";
+    applyButton.dataset.creditShortcutApply = shortcut.id;
+    applyButton.setAttribute("aria-label", `填入 ${shortcut.name} ${shortcut.points} 点`);
+    const name = document.createElement("span");
+    name.textContent = shortcut.name;
+    const points = document.createElement("strong");
+    points.textContent = `${Number(shortcut.points).toLocaleString()} 点`;
+    applyButton.append(name, points);
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "admin-credit-shortcut-remove";
+    removeButton.dataset.creditShortcutRemove = shortcut.id;
+    removeButton.setAttribute("aria-label", `删除快捷标签 ${shortcut.name}`);
+    removeButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>';
+    item.append(applyButton, removeButton);
+    list.appendChild(markAdminDynamicUiElement(item));
+  });
+}
+
+function syncAdminCreditShortcutToggle(open) {
+  const toggle = el("btnAdminUserBatchCreditShortcutAdd");
+  if (!toggle) return;
+  const path = toggle.querySelector("svg path");
+  const label = toggle.querySelector("span");
+  if (path) path.setAttribute("d", open ? "M6 6l12 12M18 6 6 18" : "M12 5v14M5 12h14");
+  if (label) label.textContent = open ? "收起自定义" : "自定义标签";
+  toggle.setAttribute("aria-label", open ? "收起自定义标签表单" : "打开自定义标签表单");
+  toggle.setAttribute("aria-expanded", String(open));
+}
+
+function toggleAdminCreditShortcutForm(forceOpen = null) {
+  const form = el("adminUserBatchCreditShortcutForm");
+  if (!form) return;
+  const open = forceOpen === null ? form.hidden : Boolean(forceOpen);
+  form.hidden = !open;
+  syncAdminCreditShortcutToggle(open);
+  if (open) el("adminUserBatchCreditShortcutName")?.focus();
+}
+
+function applyAdminCreditShortcut(shortcutId) {
+  const shortcut = adminState.userBatchCreditShortcuts.find((item) => item.id === String(shortcutId || ""));
+  const credit = el("adminUserBatchCredit");
+  if (!shortcut || !credit) return;
+  if (el("adminUserBatchUnlimited")) el("adminUserBatchUnlimited").checked = false;
+  syncUserBatchUnlimitedMode();
+  credit.value = String(shortcut.points);
+  credit.focus();
+  setText("adminUserBatchCreditShortcutMsg", "");
+}
+
+function removeAdminCreditShortcut(shortcutId) {
+  adminState.userBatchCreditShortcuts = adminState.userBatchCreditShortcuts
+    .filter((item) => item.id !== String(shortcutId || ""));
+  persistAdminCreditShortcuts();
+  renderAdminCreditShortcuts();
+}
+
+function saveAdminCreditShortcut() {
+  const nameInput = el("adminUserBatchCreditShortcutName");
+  const pointsInput = el("adminUserBatchCreditShortcutPoints");
+  const name = String(nameInput?.value || "").trim();
+  const points = Math.round(Number(pointsInput?.value || 0) * 1_000_000) / 1_000_000;
+  if (!name || !Number.isFinite(points) || points < 0 || points > 1_000_000) {
+    setText("adminUserBatchCreditShortcutMsg", "请填写标签名和 0–1,000,000 之间的算力点。");
+    return;
+  }
+  if (adminState.userBatchCreditShortcuts.length >= 12) {
+    setText("adminUserBatchCreditShortcutMsg", "最多保存 12 个快捷标签。");
+    return;
+  }
+  if (adminState.userBatchCreditShortcuts.some((item) => item.name.toLowerCase() === name.toLowerCase())) {
+    setText("adminUserBatchCreditShortcutMsg", "标签名已存在，请换一个名称。");
+    return;
+  }
+  const shortcut = normalizeAdminCreditShortcut({
+    id: typeof window.crypto?.randomUUID === "function" ? window.crypto.randomUUID() : createUserBatchIdempotencyKey(),
+    name,
+    points,
+  });
+  if (!shortcut) return;
+  adminState.userBatchCreditShortcuts.push(shortcut);
+  persistAdminCreditShortcuts();
+  renderAdminCreditShortcuts();
+  if (nameInput) nameInput.value = "";
+  if (pointsInput) pointsInput.value = "";
+  setText("adminUserBatchCreditShortcutMsg", "");
+  toggleAdminCreditShortcutForm(false);
+}
+
 function openUserBatchModal(action) {
   const normalizedAction = String(action || "");
   const config = USER_BATCH_ACTION_CONFIG[normalizedAction];
@@ -4064,14 +4307,25 @@ function openUserBatchModal(action) {
     setMsg("userMsg", "请先勾选需要操作的客户账号。", false);
     return;
   }
+  if (!userBatchActionAvailable(normalizedAction)) {
+    setMsg("userMsg", "所选账号当前没有可执行此操作的状态。", false);
+    return;
+  }
   adminState.userBatchAction = normalizedAction;
   resetUserBatchRequest();
   setText("adminUserBatchModalTitle", config.title);
   setText("adminUserBatchModalSub", config.subtitle);
   setText("adminUserBatchModalCount", adminState.selectedUserIds.size);
   setText("btnAdminUserBatchConfirm", config.confirmLabel);
+  if (el("adminUserBatchUnlimitedField")) el("adminUserBatchUnlimitedField").hidden = normalizedAction !== "add_credit";
+  if (el("adminUserBatchUnlimited")) el("adminUserBatchUnlimited").checked = false;
   if (el("adminUserBatchCreditField")) el("adminUserBatchCreditField").hidden = normalizedAction !== "add_credit";
   if (el("adminUserBatchCredit")) el("adminUserBatchCredit").value = normalizedAction === "add_credit" ? "1000" : "";
+  if (el("adminUserBatchCreditShortcuts")) el("adminUserBatchCreditShortcuts").hidden = normalizedAction !== "add_credit";
+  loadAdminCreditShortcuts();
+  renderAdminCreditShortcuts();
+  toggleAdminCreditShortcutForm(false);
+  syncUserBatchUnlimitedMode();
   if (el("adminUserBatchReason")) {
     el("adminUserBatchReason").value = "";
     el("adminUserBatchReason").placeholder = config.reasonPlaceholder;
@@ -4097,14 +4351,27 @@ function closeUserBatchModal() {
 }
 
 function buildUserBatchPayload(preview) {
-  return {
+  const payload = {
     action: String(adminState.userBatchAction || ""),
     user_ids: Array.from(adminState.selectedUserIds, (value) => Number(value)),
     reason: String(el("adminUserBatchReason")?.value || "").trim(),
-    delta_points: Number(el("adminUserBatchCredit")?.value || 0),
+    delta_points: String(el("adminUserBatchCredit")?.value || "").trim() === ""
+      ? null
+      : Number(el("adminUserBatchCredit").value),
     idempotency_key: adminState.userBatchIdempotencyKey,
     preview: Boolean(preview),
   };
+  if (payload.action === "add_credit") payload.unlimited = Boolean(el("adminUserBatchUnlimited")?.checked);
+  return payload;
+}
+
+function syncUserBatchUnlimitedMode() {
+  const unlimited = Boolean(el("adminUserBatchUnlimited")?.checked);
+  const credit = el("adminUserBatchCredit");
+  if (!credit) return;
+  credit.disabled = unlimited;
+  credit.placeholder = unlimited ? "无限模式无需填写" : "输入新的算力点";
+  if (unlimited) credit.value = "";
 }
 
 async function previewUserBatchAction() {
@@ -4114,7 +4381,13 @@ async function previewUserBatchAction() {
   const payload = buildUserBatchPayload(true);
   if (!payload.action) throw new Error("请选择批量操作");
   if (!payload.user_ids.length) throw new Error("请先勾选客户账号");
-  if (payload.action === "add_credit" && !(payload.delta_points > 0)) throw new Error("请输入大于 0 的算力点");
+  if (
+    payload.action === "add_credit"
+    && !payload.unlimited
+    && (payload.delta_points === null || !Number.isFinite(payload.delta_points) || payload.delta_points < 0)
+  ) {
+    throw new Error("请输入 0 或更大的最终算力点，或选择无限算力");
+  }
   const result = await api("/api/admin/users/batch-actions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -4187,7 +4460,10 @@ async function selectAllFilteredUsers() {
     const payload = await api(`/api/admin/users?${params.toString()}`);
     const rows = Array.isArray(payload.items) ? payload.items : [];
     rows.forEach((user) => {
-      if (!user.is_admin) adminState.selectedUserIds.add(String(user.id));
+      if (!user.is_admin) {
+        adminState.selectedUserIds.add(String(user.id));
+        rememberUserBatchSelectionMeta(user);
+      }
     });
     if (rows.length < pageSize) break;
   }
@@ -4253,6 +4529,7 @@ async function loadUsers(page = adminState.userListPage) {
     return;
   }
   rows.forEach((u) => {
+    rememberUserBatchSelectionMeta(u);
     const tr = document.createElement("tr");
     const role = u.is_admin ? "管理员" : "客户";
     const lifecycle = String(u.lifecycle_status || (Number(u.deleted_at || 0) > 0 ? "deleted" : (u.is_disabled ? "suspended" : "active")));
@@ -8235,12 +8512,27 @@ function bindBillingActions() {
     const button = event.target.closest("button[data-billing-action]");
     if (!button) return;
     event.stopPropagation();
-    const status = button.dataset.billingAction === "order-approve" ? "approved" : "rejected";
     setMsg("billingOrderMsg", "");
     try {
-      await reviewBillingOrder(button.dataset.id, status);
+      if (button.dataset.billingAction === "order-refund") {
+        await refundBillingOrder(button.dataset.id);
+      } else {
+        const status = button.dataset.billingAction === "order-approve" ? "approved" : "rejected";
+        await reviewBillingOrder(button.dataset.id, status);
+      }
     } catch (err) {
       setMsg("billingOrderMsg", getErrorMessage(err), false);
+    }
+  });
+  el("billingSubscriptionBody")?.addEventListener("click", async (event) => {
+    const button = event.target.closest('button[data-billing-action="subscription-terminate"]');
+    if (!button) return;
+    event.stopPropagation();
+    setMsg("billingUserMsg", "");
+    try {
+      await terminateBillingSubscription(button.dataset.id);
+    } catch (err) {
+      setMsg("billingUserMsg", getErrorMessage(err), false);
     }
   });
 
@@ -8644,6 +8936,21 @@ function bindActions() {
   });
   el("btnAdminUserBatchClose")?.addEventListener("click", closeUserBatchModal);
   el("btnAdminUserBatchCancel")?.addEventListener("click", closeUserBatchModal);
+  el("adminUserBatchUnlimited")?.addEventListener("change", syncUserBatchUnlimitedMode);
+  el("btnAdminUserBatchCreditShortcutAdd")?.addEventListener("click", () => toggleAdminCreditShortcutForm());
+  el("adminUserBatchCreditShortcutForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveAdminCreditShortcut();
+  });
+  el("adminUserBatchCreditShortcutList")?.addEventListener("click", (event) => {
+    const removeButton = event.target.closest?.("[data-credit-shortcut-remove]");
+    if (removeButton) {
+      removeAdminCreditShortcut(removeButton.dataset.creditShortcutRemove);
+      return;
+    }
+    const applyButton = event.target.closest?.("[data-credit-shortcut-apply]");
+    if (applyButton) applyAdminCreditShortcut(applyButton.dataset.creditShortcutApply);
+  });
   el("btnAdminUserBatchConfirm")?.addEventListener("click", async () => {
     try {
       await submitUserBatchModal();

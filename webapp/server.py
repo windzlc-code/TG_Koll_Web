@@ -101,6 +101,7 @@ from .password_vault import (
 from .social_automation_api import (
     SocialTaskPayload,
     _live_browser_sessions,
+    acquire_external_browser_lease,
     cancel_all_social_tasks,
     clear_admin_billing_waived_payload,
     clear_trusted_batch_task,
@@ -114,11 +115,16 @@ from .social_automation_api import (
     mark_trusted_batch_task,
     require_daily_publish_capacity,
     register_social_automation_routes,
+    release_external_browser_lease,
     set_daily_publish_limit,
     stop_social_automation_worker,
     wake_social_automation_worker,
 )
-from .proxy_market import register_proxy_market_routes
+from .proxy_market import (
+    ensure_proxy_market_health_monitor_started,
+    register_proxy_market_routes,
+    stop_proxy_market_health_monitor,
+)
 from .notifications import create_notification, register_notification_routes
 
 
@@ -1391,6 +1397,11 @@ def _start_task_workers() -> None:
 
 _CLEANUP_THREAD: threading.Thread | None = None
 _CLEANUP_LOCK = threading.Lock()
+_PERSONA_AI_BILLING_REF_TYPES = (
+    "persona_ai_keywords",
+    "persona_ai_create",
+    "persona_ai_profile",
+)
 
 
 def _start_cleanup_worker() -> None:
@@ -1403,6 +1414,79 @@ def _start_cleanup_worker() -> None:
         t.start()
 
 
+def _persona_ai_archive_output_is_durable(
+    conn: sqlite3.Connection,
+    *,
+    archive_id: str,
+    user_id: int,
+) -> bool:
+    clean_archive_id = str(archive_id or "").strip()
+    if not clean_archive_id or int(user_id or 0) <= 0:
+        return False
+    owner = conn.execute(
+        "SELECT 1 FROM persona_owners WHERE archive_id = ? AND user_id = ?",
+        (clean_archive_id, int(user_id)),
+    ).fetchone()
+    if owner is None:
+        return False
+    try:
+        archives, _meta = _read_tool_r18_persona_archives()
+    except Exception:
+        return False
+    return any(
+        str(archive.get("id") or "").strip() == clean_archive_id
+        for archive in archives
+        if isinstance(archive, dict)
+    )
+
+
+def _recover_orphaned_persona_ai_reservations(
+    conn: sqlite3.Connection,
+    *,
+    cutoff_ts: int,
+) -> dict[str, int]:
+    placeholders = ",".join("?" for _ in _PERSONA_AI_BILLING_REF_TYPES)
+    rows = conn.execute(
+        f"""
+        SELECT id, user_id, ref_type, meta_json
+        FROM billing_reservations
+        WHERE status = 'held'
+          AND ref_type IN ({placeholders})
+          AND created_at < ?
+        ORDER BY created_at, id
+        """,
+        (*_PERSONA_AI_BILLING_REF_TYPES, int(cutoff_ts)),
+    ).fetchall()
+    recovered = {"settled": 0, "released": 0}
+    for row in rows:
+        meta = _json_loads(row["meta_json"], {})
+        checkpoint = meta.get("operation_checkpoint") if isinstance(meta, dict) else {}
+        checkpoint = checkpoint if isinstance(checkpoint, dict) else {}
+        can_settle_durable_output = (
+            str(row["ref_type"] or "") == "persona_ai_create"
+            and str(checkpoint.get("state") or "") == "durable_output"
+            and _persona_ai_archive_output_is_durable(
+                conn,
+                archive_id=str(checkpoint.get("archive_id") or ""),
+                user_id=int(row["user_id"] or 0),
+            )
+        )
+        if can_settle_durable_output:
+            commercial_billing.settle_reservation(
+                conn,
+                str(row["id"]),
+                success=True,
+            )
+            recovered["settled"] += 1
+        else:
+            # Volatile keyword/profile responses cannot be recovered after a
+            # process exit. Unknown or incomplete durable output also releases
+            # conservatively so a customer is never charged for unverifiable work.
+            commercial_billing.release_reservation(conn, str(row["id"]))
+            recovered["released"] += 1
+    return recovered
+
+
 def _resume_pending_tasks() -> None:
     orphan_hold_cutoff = _now_ts() - max(
         60,
@@ -1410,6 +1494,10 @@ def _resume_pending_tasks() -> None:
     )
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        _recover_orphaned_persona_ai_reservations(
+            conn,
+            cutoff_ts=orphan_hold_cutoff,
+        )
         orphan_holds = conn.execute(
             """
             SELECT reservation.id
@@ -10456,7 +10544,8 @@ class AdminUserBatchPayload(BaseModel):
     reason: str = Field(default="", max_length=1000)
     group_id: str = Field(default="", max_length=100)
     tag_ids: list[str] = Field(default_factory=list, max_length=100)
-    delta_points: float = Field(default=0, ge=0, le=1_000_000)
+    delta_points: float | None = Field(default=None, ge=0, le=1_000_000)
+    unlimited: bool | None = None
     idempotency_key: str = Field(default="", max_length=160)
     preview: bool = False
 
@@ -10596,6 +10685,7 @@ class PersonaDashboardRefreshPayload(BaseModel):
 class PersonaDashboardDraftPostPayload(BaseModel):
     title: str = ""
     content: str = ""
+    platform: str = "threads"
     media_paths: list[str] = Field(default_factory=list)
     media_ops: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -10603,6 +10693,7 @@ class PersonaDashboardDraftPostPayload(BaseModel):
 class PersonaDashboardGeneratePostsPayload(BaseModel):
     count: int = Field(default=3, ge=1, le=5)
     prompt: str = ""
+    platform: str = "threads"
     target_words: int = 120
     content_time_slot: str = ""
     selected_memory_ids: list[str] = Field(default_factory=list)
@@ -10665,6 +10756,7 @@ class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
 
 class PersonaDashboardHotCandidatesImportPayload(BaseModel):
     candidates: list[dict[str, Any]] = Field(default_factory=list)
+    platform: str = "threads"
 
 
 def _read_json_file(path: Path) -> Any:
@@ -11271,28 +11363,6 @@ def _automation_screenshot_url(path_value: Any) -> str:
     return f"/api/persona_dashboard/automation/screenshots/{Path(path_text).name}"
 
 
-def _compact_persona_archive_post(post: dict[str, Any]) -> dict[str, Any]:
-    published_meta = post.get("publishedMeta") if isinstance(post.get("publishedMeta"), dict) else {}
-    return {
-        "id": str(post.get("id") or "").strip(),
-        "title": str(post.get("title") or "")[:120],
-        "content": str(post.get("content") or "")[:5000],
-        "word_count": int(_number(post.get("wordCount"), 0)),
-        "order_index": int(_number(post.get("orderIndex"), 0)),
-        "created_at": post.get("createdAt"),
-        "updated_at": post.get("updatedAt"),
-        "published_at": post.get("publishedAt"),
-        "published_url": post.get("publishedUrl") or published_meta.get("publishedUrl") or published_meta.get("published_url") or "",
-        "screenshot_path": str(post.get("screenshotUrl") or ""),
-        "screenshot_url": _automation_screenshot_url(post.get("screenshotUrl")),
-        "platform": str(post.get("platform") or published_meta.get("platform") or "").strip(),
-        "automation_task_id": str(post.get("automationTaskId") or "").strip(),
-        "media_url": str(post.get("mediaUrl") or post.get("imageUrl") or ""),
-        "media_type": str(post.get("mediaType") or ""),
-        "media_items": _compact_dashboard_media_items(post, published_meta),
-    }
-
-
 def _compact_persona_source_meta(source_meta: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(source_meta, dict):
         return {}
@@ -11322,6 +11392,10 @@ def _compact_persona_source_meta(source_meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_persona_content_platform(value: Any) -> str:
+    return "instagram" if str(value or "").strip().lower() == "instagram" else "threads"
+
+
 def _compact_persona_archive_post(post: dict[str, Any]) -> dict[str, Any]:
     published_meta = post.get("publishedMeta") if isinstance(post.get("publishedMeta"), dict) else {}
     source_meta = post.get("sourceMeta") if isinstance(post.get("sourceMeta"), dict) else {}
@@ -11337,7 +11411,11 @@ def _compact_persona_archive_post(post: dict[str, Any]) -> dict[str, Any]:
         "published_url": post.get("publishedUrl") or published_meta.get("publishedUrl") or published_meta.get("published_url") or "",
         "screenshot_path": str(post.get("screenshotUrl") or ""),
         "screenshot_url": _automation_screenshot_url(post.get("screenshotUrl")),
-        "platform": str(post.get("platform") or published_meta.get("platform") or "").strip(),
+        "platform": _normalize_persona_content_platform(
+            post.get("platform")
+            or published_meta.get("platform")
+            or source_meta.get("platform")
+        ),
         "automation_task_id": str(post.get("automationTaskId") or "").strip(),
         "media_url": str(post.get("mediaUrl") or post.get("imageUrl") or ""),
         "media_type": str(post.get("mediaType") or ""),
@@ -12300,6 +12378,13 @@ class _PersonaHotBackgroundDeferred(RuntimeError):
     pass
 
 
+def _persona_hot_workflow_uses_browser(payload: dict[str, Any]) -> bool:
+    return str(payload.get("action") or "").strip() in {
+        "fetch-hot-candidates",
+        "refresh-hot-post",
+    }
+
+
 def _terminate_persona_hot_process(process: subprocess.Popen[str] | None) -> None:
     if process is None:
         return
@@ -12341,6 +12426,8 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
     deadline = time.monotonic() + timeout
     process: subprocess.Popen[str] | None = None
     acquired = False
+    browser_lease = ""
+    needs_browser_lease = _persona_hot_workflow_uses_browser(payload)
     if background:
         if _PERSONA_HOT_INTERACTIVE_REQUESTED.is_set() or not _PERSONA_HOT_RUN_LOCK.acquire(blocking=False):
             raise _PersonaHotBackgroundDeferred("页面热点任务优先，后台补池已延后。")
@@ -12365,6 +12452,22 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
             raise HTTPException(status_code=504, detail="热点抓取排队超过 30 秒，已取消本次任务，请稍后重试。")
         _PERSONA_HOT_INTERACTIVE_REQUESTED.clear()
     try:
+        if needs_browser_lease:
+            resource_queue_deadline = min(deadline, time.monotonic() + 30.0)
+            while time.monotonic() < resource_queue_deadline and not browser_lease:
+                browser_lease = acquire_external_browser_lease("persona-hot-workflow")
+                if browser_lease or background:
+                    break
+                time.sleep(0.25)
+            if not browser_lease:
+                if background:
+                    raise _PersonaHotBackgroundDeferred(
+                        "浏览器资源正在使用，后台热点补充已延后。"
+                    )
+                raise HTTPException(
+                    status_code=503,
+                    detail="当前浏览器任务已达到服务器资源上限，本次热点任务未启动，请稍后重试。",
+                )
         process = subprocess.Popen(
             command,
             cwd=str(ROOT_DIR / "tool_r18"),
@@ -12390,6 +12493,8 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail="未找到 Node.js 或 tsx，无法执行热点抓取。") from exc
     finally:
+        if process is not None and process.poll() is None:
+            _terminate_persona_hot_process(process)
         if background:
             with _PERSONA_HOT_PROCESS_LOCK:
                 if _PERSONA_HOT_BACKGROUND_PROCESS is process:
@@ -12401,6 +12506,8 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
                     _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID = ""
         if acquired:
             _PERSONA_HOT_RUN_LOCK.release()
+        if browser_lease:
+            release_external_browser_lease(browser_lease)
     stdout = str(stdout or "").strip()
     stderr = str(stderr or "").strip()
     data = _parse_tool_r18_json_output(stdout)
@@ -12847,6 +12954,11 @@ def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHot
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
     candidates = payload.candidates if isinstance(payload.candidates, list) else []
     cleaned_candidates = [item for item in candidates if isinstance(item, dict)]
+    existing_post_ids = {
+        str(post.get("id") or "").strip()
+        for post in _list_persona_archive_posts(clean_id)
+        if str(post.get("id") or "").strip()
+    }
     if not cleaned_candidates:
         raise HTTPException(status_code=400, detail="请先选择至少一条热点候选。")
     result = _run_persona_hot_workflow_cli(
@@ -12857,6 +12969,18 @@ def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHot
         },
         timeout_seconds=180,
     )
+    result_post_ids = {
+        str(item.get("id") or "").strip()
+        for item in (result.get("posts") if isinstance(result.get("posts"), list) else [])
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+    if not result_post_ids:
+        result_post_ids = {
+            str(post.get("id") or "").strip()
+            for post in _list_persona_archive_posts(clean_id)
+            if str(post.get("id") or "").strip() not in existing_post_ids
+        }
+    _set_persona_archive_posts_platform(clean_id, result_post_ids, payload.platform)
     posts = _list_persona_archive_posts(clean_id)
     post_by_id = {str(post.get("id") or "").strip(): post for post in posts if str(post.get("id") or "").strip()}
     imported_posts = []
@@ -12899,8 +13023,11 @@ def _build_persona_generate_instruction(payload: PersonaDashboardGeneratePostsPa
     rewrite_source_title = str(getattr(payload, "rewrite_source_title", "") or "").strip()
     rewrite_source_content = str(getattr(payload, "rewrite_source_content", "") or "").strip()
     target_words = max(10, min(int(payload.target_words or 120), 2000))
+    platform = _normalize_persona_content_platform(payload.platform)
     content_time_slot = str(payload.content_time_slot or "").strip().lower()
-    lines: list[str] = []
+    lines: list[str] = [
+        f"Target publishing platform: {platform}. Adapt the draft to this platform's native tone and interaction style."
+    ]
     if rewrite_source_post_id or rewrite_source_content:
         lines.extend([
             "Task mode: rewrite the current draft post.",
@@ -12937,6 +13064,11 @@ def _generate_persona_archive_posts(archive_id: str, payload: PersonaDashboardGe
     content_time_slot = str(payload.content_time_slot or "").strip().lower()
     if content_time_slot not in {"", "morning", "night"}:
         raise HTTPException(status_code=400, detail="不支持的文案时段。")
+    existing_post_ids = {
+        str(post.get("id") or "").strip()
+        for post in _list_persona_archive_posts(clean_id)
+        if str(post.get("id") or "").strip()
+    }
     result = _run_persona_workflow_cli({
         "action": "generate-posts",
         "archiveId": clean_id,
@@ -12951,6 +13083,13 @@ def _generate_persona_archive_posts(archive_id: str, payload: PersonaDashboardGe
         for item in (result.get("postIds") if isinstance(result.get("postIds"), list) else [])
         if str(item or "").strip()
     }
+    if not post_ids:
+        post_ids = {
+            str(post.get("id") or "").strip()
+            for post in _list_persona_archive_posts(clean_id)
+            if str(post.get("id") or "").strip() not in existing_post_ids
+        }
+    _set_persona_archive_posts_platform(clean_id, post_ids, payload.platform)
     posts = _list_persona_archive_posts(clean_id)
     generated_posts = [item for item in posts if str(item.get("id") or "").strip() in post_ids] if post_ids else posts[:count]
     return {
@@ -12977,6 +13116,27 @@ def _persona_post_source_key(source: str = "posts") -> str:
 
 def _persona_post_source_name(source: str = "posts") -> str:
     return "favorites" if _persona_post_source_key(source) == "favoritePosts" else "posts"
+
+
+@_persona_archive_write_locked
+def _set_persona_archive_posts_platform(archive_id: str, post_ids: set[str], platform: str) -> None:
+    clean_post_ids = {str(post_id or "").strip() for post_id in post_ids if str(post_id or "").strip()}
+    if not clean_post_ids:
+        return
+    path, raw, archives = _persona_archive_source_for_write(archive_id)
+    archive = _find_persona_archive(archives, archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="persona not found")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    normalized_platform = _normalize_persona_content_platform(platform)
+    changed = False
+    for post in posts:
+        if isinstance(post, dict) and str(post.get("id") or "").strip() in clean_post_ids:
+            post["platform"] = normalized_platform
+            changed = True
+    if changed:
+        archive["updatedAt"] = _persona_dashboard_iso_now()
+        _write_persona_archives_preserving_shape(path, raw, archives)
 
 
 def _persona_post_retention_timestamp(record: dict[str, Any], *, history: bool) -> float:
@@ -13563,10 +13723,16 @@ def _persona_dashboard_generate_profile_content(payload: PersonaDashboardPersona
         "userPrompt": prompt,
         "selectedKeywords": selected_keywords,
     })
+    content = str(result.get("content") or "").strip()
+    if not content:
+        raise HTTPException(
+            status_code=502,
+            detail="人设内容生成失败：模型未返回有效内容，请稍后重试。",
+        )
     return {
         "ok": True,
         "name": str(result.get("name") or name).strip(),
-        "content": str(result.get("content") or "").strip(),
+        "content": content,
         "setup": result.get("setup") if isinstance(result.get("setup"), dict) else {},
         "selected_keywords": selected_keywords,
     }
@@ -13596,6 +13762,7 @@ def _create_persona_archive_post(archive_id: str, payload: PersonaDashboardDraft
         "id": _new_persona_post_id(),
         "title": title,
         "content": content,
+        "platform": _normalize_persona_content_platform(payload.platform),
         "wordCount": len(content),
         "orderIndex": next_order,
         "createdAt": now,
@@ -13739,6 +13906,8 @@ def _update_persona_archive_post(archive_id: str, post_id: str, payload: Persona
     now = _persona_dashboard_iso_now()
     if "title" in payload.model_fields_set:
         target["title"] = title
+    if "platform" in payload.model_fields_set:
+        target["platform"] = _normalize_persona_content_platform(payload.platform)
     target["content"] = content
     target["wordCount"] = len(content)
     if payload.media_ops:
@@ -14041,32 +14210,103 @@ def _run_billable_operation(
     operation: Callable[[], dict[str, Any]],
 ) -> dict[str, Any]:
     operation_id = _new_id(ref_type)
+    user_id = _workspace_user_id(user)
+    billable_quantity = max(int(quantity or 1), 1)
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         reservation = commercial_billing.reserve_charge(
             conn,
-            user_id=_workspace_user_id(user),
+            user_id=user_id,
             ref_type=ref_type,
             ref_id=operation_id,
             sku=sku,
-            quantity=max(int(quantity or 1), 1),
+            quantity=billable_quantity,
             admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
         )
+    reservation_id = str(reservation["id"])
+    durable_checkpoint_persisted = False
     try:
         result = operation()
-    except Exception:
+        if not isinstance(result, dict) or result.get("ok") is False:
+            raise HTTPException(status_code=502, detail="AI 操作未返回有效结果，请稍后重试。")
+
+        if ref_type == "persona_ai_create":
+            archive_id = _created_persona_id(result)
+            checkpoint_written = False
+            with db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if _persona_ai_archive_output_is_durable(
+                    conn,
+                    archive_id=archive_id,
+                    user_id=user_id,
+                ):
+                    row = conn.execute(
+                        "SELECT status, meta_json FROM billing_reservations WHERE id = ?",
+                        (reservation_id,),
+                    ).fetchone()
+                    if row is not None and str(row["status"] or "") == "held":
+                        meta = _json_loads(row["meta_json"], {})
+                        meta = meta if isinstance(meta, dict) else {}
+                        meta["operation_checkpoint"] = {
+                            "state": "durable_output",
+                            "archive_id": archive_id,
+                            "recorded_at": _now_ts(),
+                        }
+                        conn.execute(
+                            """
+                            UPDATE billing_reservations
+                            SET meta_json = ?, updated_at = ?
+                            WHERE id = ? AND status = 'held'
+                            """,
+                            (
+                                json.dumps(meta, ensure_ascii=False, separators=(",", ":")),
+                                _now_ts(),
+                                reservation_id,
+                            ),
+                        )
+                        checkpoint_written = True
+            durable_checkpoint_persisted = checkpoint_written
+
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            commercial_billing.release_reservation(conn, str(reservation["id"]))
+            billing = commercial_billing.settle_reservation(
+                conn,
+                reservation_id,
+                actual_quantity=billable_quantity,
+                success=True,
+            )
+    except Exception:
+        if not durable_checkpoint_persisted:
+            try:
+                with db() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    commercial_billing.release_reservation(conn, reservation_id)
+            except Exception:
+                logger.exception(
+                    "Failed to release reservation %s after billable operation failure",
+                    reservation_id,
+                )
+        else:
+            try:
+                # A transient settlement failure does not need to wait for a
+                # process restart. The committed durable-output checkpoint
+                # makes one immediate idempotent retry safe.
+                with db() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    billing = commercial_billing.settle_reservation(
+                        conn,
+                        reservation_id,
+                        actual_quantity=billable_quantity,
+                        success=True,
+                    )
+                result["billing"] = billing
+                return result
+            except Exception:
+                logger.exception(
+                    "Durable persona output remains held for startup billing recovery: %s",
+                    reservation_id,
+                )
         raise
-    with db() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        billing = commercial_billing.settle_reservation(
-            conn,
-            str(reservation["id"]),
-            actual_quantity=max(int(quantity or 1), 1),
-            success=True,
-        )
     result["billing"] = billing
     return result
 
@@ -16441,10 +16681,12 @@ def _persona_dashboard_refresh_worker_v2(
 ) -> None:
     started = time.time()
     proc: subprocess.Popen[str] | None = None
+    browser_lease = ""
     tmpdir: tempfile.TemporaryDirectory[str] | None = None
     stdout_file: Any | None = None
     stderr_file: Any | None = None
     refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "browser").strip().lower() or "browser"
+    needs_browser_lease = refresh_source == "browser"
     scope = "单个人设" if archive_id else (
         f"当前账号的 {len(archive_ids)} 个人设"
         if archive_ids is not None
@@ -16472,6 +16714,27 @@ def _persona_dashboard_refresh_worker_v2(
     env.setdefault("TOOL_R18_RUNTIME_DIR", str(TOOL_R18_RUNTIME_DIR))
     env.setdefault("NODE_PATH", str(ROOT_DIR / "tool_r18" / "node_modules"))
     try:
+        if needs_browser_lease:
+            resource_wait_deadline = time.monotonic() + 300.0
+            while time.monotonic() < resource_wait_deadline and not browser_lease:
+                browser_lease = acquire_external_browser_lease(
+                    "persona-dashboard-refresh"
+                )
+                if browser_lease:
+                    break
+                with PERSONA_DASHBOARD_REFRESH_LOCK:
+                    PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update(
+                        {
+                            "step": "等待浏览器资源",
+                            "progress": 12,
+                            "message": "其他浏览器任务正在执行，刷新任务正在排队，不会影响当前任务。",
+                        }
+                    )
+                time.sleep(2)
+            if not browser_lease:
+                raise RuntimeError(
+                    "等待浏览器资源超过 5 分钟，本次刷新未启动，请稍后重试。"
+                )
         with PERSONA_DASHBOARD_REFRESH_LOCK:
             PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
                 "step": "启动采集脚本",
@@ -16561,6 +16824,8 @@ def _persona_dashboard_refresh_worker_v2(
         if tmpdir is not None:
             with contextlib.suppress(Exception):
                 tmpdir.cleanup()
+        if browser_lease:
+            release_external_browser_lease(browser_lease)
 
 
 def _persona_dashboard_refresh_is_running() -> bool:
@@ -17375,11 +17640,13 @@ def create_app() -> FastAPI:
     async def lifespan(_: FastAPI):
         _ensure_persona_dashboard_monitor_started()
         ensure_social_automation_worker_started()
+        ensure_proxy_market_health_monitor_started()
         _start_persona_hot_pool_worker()
         try:
             yield
         finally:
             stop_social_automation_worker()
+            stop_proxy_market_health_monitor()
             _stop_persona_hot_pool_worker()
 
     app = FastAPI(
@@ -20606,7 +20873,7 @@ def create_app() -> FastAPI:
         _user: dict[str, Any] = Depends(require_admin),
     ):
         clean_status = str(status or "").strip().lower()
-        if clean_status not in {"", "pending", "approved", "rejected", "cancelled"}:
+        if clean_status not in {"", "pending", "approved", "rejected", "cancelled", "refunded"}:
             raise HTTPException(status_code=400, detail="invalid billing order status")
         target_user_id = int(user_id) if int(user_id or 0) > 0 else None
         safe_limit = min(max(int(limit or 200), 1), 500)
@@ -20674,6 +20941,32 @@ def create_app() -> FastAPI:
             conn.execute("BEGIN IMMEDIATE")
             order = commercial_billing.review_order(conn, order_id, actor_user_id=_identity_user_id(user), status="rejected", review_note=payload.note)
         return {"ok": True, "order": order}
+
+    @app.post("/api/admin/billing/orders/{order_id}/refund")
+    def api_admin_billing_order_refund(order_id: str, payload: BillingOrderReviewPayload, user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            order = commercial_billing.refund_approved_order(
+                conn,
+                order_id,
+                actor_user_id=_identity_user_id(user),
+                reason=payload.note,
+            )
+        _invalidate_admin_dashboard_cache()
+        return {"ok": True, "order": order}
+
+    @app.post("/api/admin/billing/subscriptions/{subscription_id}/terminate")
+    def api_admin_billing_subscription_terminate(subscription_id: str, payload: BillingOrderReviewPayload, user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            subscription = commercial_billing.terminate_subscription(
+                conn,
+                subscription_id,
+                actor_user_id=_identity_user_id(user),
+                reason=payload.note,
+            )
+        _invalidate_admin_dashboard_cache()
+        return {"ok": True, "subscription": subscription}
 
     @app.get("/api/admin/users/{target_user_id}/billing")
     def api_admin_user_billing(target_user_id: int, _user: dict[str, Any] = Depends(require_admin)):
@@ -21676,8 +21969,8 @@ def create_app() -> FastAPI:
                 "suspend": "管理员批量停用账号（未填写说明）",
             }.get(action, f"管理员批量操作：{action}（未填写说明）")
         payload.reason = reason
-        if action == "add_credit" and float(payload.delta_points or 0) <= 0:
-            raise HTTPException(status_code=400, detail="delta_points must be greater than zero")
+        if action == "add_credit" and payload.delta_points is None and payload.unlimited is not True:
+            raise HTTPException(status_code=400, detail="target credit points or unlimited compute is required")
         idempotency_key = str(payload.idempotency_key or "").strip()
         if action == "add_credit" and not payload.preview and len(idempotency_key) < 8:
             raise HTTPException(status_code=400, detail="idempotency_key is required for credit adjustments")
@@ -21784,23 +22077,52 @@ def create_app() -> FastAPI:
                         message = "administrator lifecycle is not changed by customer batch actions"
                         skipped += 1
                     elif action == "add_credit":
-                        result = commercial_billing.adjust_credit(
-                            conn,
-                            user_id=target_id,
-                            delta_units=commercial_billing.units_from_points(payload.delta_points),
-                            actor_user_id=int(user.get("id") or 0),
-                            reason=payload.reason,
-                            now=started,
-                        )
-                        display_points = commercial_billing.points_from_units(
+                        result: dict[str, Any] | None = None
+                        wallet_before = commercial_billing.ensure_wallet(conn, target_id, now=started)
+                        before_units = int(wallet_before["credit_units"] or 0)
+                        if payload.unlimited is not None:
+                            result = commercial_billing.set_unlimited_compute(
+                                conn,
+                                user_id=target_id,
+                                enabled=bool(payload.unlimited),
+                                actor_user_id=int(user.get("id") or 0),
+                                reason=payload.reason,
+                                now=started,
+                            )
+                        target_units = (
                             commercial_billing.units_from_points(payload.delta_points)
+                            if payload.delta_points is not None
+                            else None
                         )
+                        display_points = (
+                            commercial_billing.points_from_units(target_units)
+                            if target_units is not None
+                            else commercial_billing.points_from_units(before_units)
+                        )
+                        if target_units is not None:
+                            result = commercial_billing.adjust_credit(
+                                conn,
+                                user_id=target_id,
+                                delta_units=target_units - before_units,
+                                actor_user_id=int(user.get("id") or 0),
+                                reason=payload.reason,
+                                now=started,
+                            )
+                            if payload.unlimited is not None:
+                                result["unlimited_compute"] = bool(payload.unlimited)
+                        if result is None:
+                            raise ValueError("credit adjustment is empty")
+                        unlimited_enabled = bool(result.get("unlimited_compute"))
                         create_notification(
                             conn,
                             user_id=target_id,
                             category="official",
-                            title="管理员已添加算力点",
-                            body=f"管理员已为你的账号添加 {display_points:g} 点算力点，当前余额为 {float(result['points']):g} 点。",
+                            title="管理员已调整算力",
+                            body=(
+                                "管理员已将你的账号设置为无限算力。"
+                                if unlimited_enabled and target_units is None
+                                else f"管理员已将你的账号算力调整为 {float(result['points']):g} 点。"
+                            ),
                             source_key=f"admin-batch-credit:{job_id}",
                             now=started,
                         )
@@ -21808,13 +22130,15 @@ def create_app() -> FastAPI:
                             conn,
                             actor_user_id=int(user.get("id") or 0),
                             target_user_id=target_id,
-                            action="user.batch_add_credit",
+                            action="user.batch_set_credit",
                             resource_type="billing_wallet",
                             resource_id=str(target_id),
                             reason=payload.reason,
                             after={
-                                "delta_points": display_points,
+                                "before_points": commercial_billing.points_from_units(before_units),
+                                "target_points": display_points,
                                 "balance_points": result["points"],
+                                "unlimited_compute": unlimited_enabled,
                             },
                             risk_level="medium",
                             **governance.request_context(request),
@@ -21878,6 +22202,11 @@ def create_app() -> FastAPI:
                         if action == "enable" and approval != "approved":
                             result_status = "skipped"
                             message = "pending or rejected accounts must use approve"
+                            skipped += 1
+                            raise StopIteration
+                        if action == "enable" and lifecycle == "active":
+                            result_status = "skipped"
+                            message = "account lifecycle is already active"
                             skipped += 1
                             raise StopIteration
                         if action in {"suspend", "lock", "archive"} and lifecycle != "active":

@@ -8624,7 +8624,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-profile-compact-meta {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, .8fr) minmax(0, 1.35fr) repeat(2, minmax(0, .72fr));
   gap: 5px 10px;
   min-width: 0;
 }
@@ -8698,7 +8698,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-profile-summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, .8fr) minmax(0, 1.35fr) repeat(2, minmax(0, .72fr));
   gap: 5px 8px;
 }
 
@@ -10767,6 +10767,11 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-status-chip.is-warning {
   background: var(--warning-soft);
   color: var(--warning-soft-ink);
+}
+
+.persona-status-chip.is-loading {
+  background: var(--soft);
+  color: var(--muted);
 }
 
 .persona-status-chip.is-ready {
@@ -16783,6 +16788,63 @@ button.proxy-market-link {
   font-size: 11px;
 }
 
+.persona-content-platform-rail {
+  min-width: 0;
+  margin: 0 0 12px;
+}
+
+.persona-content-platform-tabs {
+  position: relative;
+  display: flex;
+  grid-template-columns: none;
+  gap: 8px;
+  width: 100%;
+  padding: 1px 1px 4px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.persona-content-platform-tabs button {
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "icon label"
+    "icon count";
+  column-gap: 8px;
+  row-gap: 1px;
+  flex: 0 0 min(220px, 74vw);
+  min-width: 156px;
+  min-height: 50px;
+  padding: 7px 11px;
+  scroll-snap-align: start;
+  border-radius: 10px;
+}
+
+.persona-content-platform-tabs button > svg {
+  grid-area: icon;
+  align-self: center;
+}
+
+.persona-content-platform-tabs button > strong {
+  grid-area: label;
+  align-self: end;
+}
+
+.persona-content-platform-tabs button > small {
+  grid-area: count;
+  align-self: start;
+  color: inherit;
+  opacity: 0.7;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.persona-content-platform-tabs button:disabled {
+  cursor: not-allowed;
+}
+
 .account-pool-card {
   position: relative;
   display: grid;
@@ -18330,9 +18392,15 @@ body.live-browser-modal-open {
   min-width: 0;
 }
 
-.publish-platform-picker-tabs button > svg {
-  width: 17px;
-  height: 17px;
+#consoleModal .publish-platform-picker-tabs button {
+  min-height: 44px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+#consoleModal .publish-platform-picker-tabs button > svg {
+  width: 22px;
+  height: 22px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
@@ -18340,15 +18408,9 @@ body.live-browser-modal-open {
   stroke-linejoin: round;
 }
 
-.publish-platform-picker-tabs button > svg.platform-brand-icon {
+#consoleModal .publish-platform-picker-tabs button > svg.platform-brand-icon {
   fill: currentColor;
   stroke: none;
-}
-
-.publish-platform-picker-tabs button > small {
-  color: inherit;
-  font-size: 11px;
-  opacity: .72;
 }
 
 .publish-platform-picker-account {
@@ -21532,7 +21594,7 @@ body.console-page {
 }
 
   .persona-profile-summary-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: minmax(0, .8fr) minmax(0, 1.35fr) repeat(2, minmax(0, .72fr));
   }
 
   /* Keep one visible card per persona function instead of nested page shells. */
@@ -24676,10 +24738,6 @@ body.console-page {
 
   .console-page .persona-detail--content .persona-step-shell > .persona-step-tabs {
     margin-bottom: 0;
-  }
-
-  .console-page .persona-detail--content .persona-generate-panel {
-    gap: var(--mobile-module-gap);
   }
 
   .console-page

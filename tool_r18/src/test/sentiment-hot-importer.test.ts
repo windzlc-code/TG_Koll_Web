@@ -10,7 +10,9 @@ import {
 } from "@/lib/sentiment-candidate-store";
 import {
   analyzeThreadsProfileVisibleSignals,
+  acquireSentimentBrowserWorkSlot,
   applyPersonaGuardToSentimentHotStrategy,
+  boundedBrowserPageConcurrency,
   buildSentimentHotKeywords,
   buildJinaReaderUrl,
   buildThreadsSearchUrl,
@@ -52,6 +54,29 @@ afterEach(() => {
 });
 
 describe("sentiment hot importer", () => {
+  it("caps browser detail pages at the shared server limit of two", () => {
+    expect(boundedBrowserPageConcurrency(1)).toBe(1);
+    expect(boundedBrowserPageConcurrency(2)).toBe(2);
+    expect(boundedBrowserPageConcurrency(8)).toBe(2);
+  });
+
+  it("serializes browser processes inside one hot workflow lease", async () => {
+    const releaseFirst = await acquireSentimentBrowserWorkSlot();
+    let secondAcquired = false;
+    const second = acquireSentimentBrowserWorkSlot().then((release) => {
+      secondAcquired = true;
+      return release;
+    });
+
+    await Promise.resolve();
+    expect(secondAcquired).toBe(false);
+
+    releaseFirst();
+    const releaseSecond = await second;
+    expect(secondAcquired).toBe(true);
+    releaseSecond();
+  });
+
   it("builds a valid Jina Reader URL for HTTPS Threads pages", () => {
     expect(buildJinaReaderUrl("https://www.threads.com/search?q=tea")).toBe(
       "https://r.jina.ai/http://www.threads.com/search?q=tea",

@@ -1,5 +1,8 @@
 from pathlib import Path
+import tempfile
 from unittest import TestCase, mock
+
+from PIL import Image
 
 from social_automation import runner
 
@@ -26,6 +29,44 @@ class _Logger:
 
 
 class InstagramWarmupTests(TestCase):
+    def test_instagram_comment_screenshot_callback_runs_after_typing_before_submit(self):
+        page = mock.Mock()
+        group = mock.Mock()
+        button = mock.Mock()
+        box = mock.Mock()
+        events = []
+        group.count.return_value = 1
+        group.nth.return_value = button
+        button.is_visible.return_value = True
+
+        with (
+            mock.patch.object(runner, "_instagram_action_locators", return_value=[group]),
+            mock.patch.object(runner, "_human_click"),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_instagram_warmup_comment_box", return_value=box),
+            mock.patch.object(runner, "_instagram_exact_text_count", return_value=0),
+            mock.patch.object(
+                runner,
+                "_human_type",
+                side_effect=lambda *_args, **_kwargs: events.append("typed"),
+            ),
+            mock.patch.object(
+                runner,
+                "_click_text_button",
+                side_effect=lambda *_args, **_kwargs: events.append("submit") or True,
+            ),
+            mock.patch.object(runner, "_wait_for_instagram_comment_echo", return_value=True),
+        ):
+            posted = runner._post_instagram_warmup_comment(
+                page,
+                _Logger(),
+                "这个造型很自然",
+                before_submit=lambda: events.append("screenshot"),
+            )
+
+        self.assertTrue(posted)
+        self.assertEqual(events, ["typed", "screenshot", "submit"])
+
     def test_instagram_warmup_is_a_supported_platform_specific_task(self):
         self.assertIn("instagram_warmup", runner.SUPPORTED_TASK_TYPES)
 
@@ -38,9 +79,49 @@ class InstagramWarmupTests(TestCase):
         self.assertTrue(all("button" in selector or 'role="button"' in selector for selector in page.selectors))
         self.assertFalse(any(selector == '[aria-label="Like"]' for selector in page.selectors))
 
-    def test_instagram_warmup_checkpoints_always_capture_a_result(self):
-        self.assertTrue(runner._should_capture_screenshot("instagram_warmup"))
+    def test_warmup_captures_only_confirmed_interaction_checkpoints(self):
+        self.assertFalse(runner._should_capture_screenshot("instagram_warmup"))
+        self.assertFalse(runner._should_capture_screenshot("threads_warmup"))
+        self.assertTrue(runner._should_capture_screenshot("instagram_warmup_like_1"))
         self.assertTrue(runner._should_capture_screenshot("instagram_warmup_comment_1"))
+        self.assertTrue(runner._should_capture_screenshot("threads_warmup_like_2"))
+        self.assertTrue(runner._should_capture_screenshot("threads_warmup_comment_2"))
+
+    def test_compose_warmup_evidence_sheet_stacks_vertically_and_removes_sources(self):
+        logger = _Logger()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            like_path = root / "like.png"
+            comment_path = root / "comment.png"
+            ignored_path = root / "browse.png"
+            Image.new("RGB", (320, 180), "#ef4444").save(like_path)
+            Image.new("RGB", (180, 320), "#22c55e").save(comment_path)
+            Image.new("RGB", (320, 180), "#3b82f6").save(ignored_path)
+
+            output = runner._compose_warmup_evidence_sheet(
+                [
+                    ("like", 1, str(like_path)),
+                    ("browse", 1, str(ignored_path)),
+                    ("comment", 1, str(comment_path)),
+                ],
+                root,
+                {"id": "task-evidence"},
+                logger,
+            )
+
+            self.assertTrue(Path(output).is_file())
+            with Image.open(output) as sheet:
+                self.assertEqual(sheet.format, "JPEG")
+                self.assertEqual(sheet.size, (800, 968))
+            self.assertFalse(like_path.exists())
+            self.assertFalse(comment_path.exists())
+            self.assertTrue(ignored_path.exists())
+            evidence_logs = [
+                row for row in logger.rows if row[1] == "warmup_interaction_evidence"
+            ]
+            self.assertEqual(len(evidence_logs), 1)
+            self.assertEqual(evidence_logs[0][3]["count"], 2)
+            self.assertEqual(evidence_logs[0][4], output)
 
     def test_comment_is_confirmed_only_after_new_visible_text_echo(self):
         page = mock.Mock()
@@ -80,12 +161,26 @@ class InstagramWarmupTests(TestCase):
             mock.patch.object(
                 runner,
                 "_current_warmup_post_context",
-                return_value={"text": "理发技巧", "root": None},
+                side_effect=[
+                    {"text": "理发技巧预检", "root": None},
+                    {"text": "理发技巧第一篇", "root": None},
+                    {"text": "理发技巧第二篇", "root": None},
+                    {"text": "理发技巧第三篇", "root": None},
+                ],
             ),
             mock.patch.object(runner, "_pick_warmup_persona_reply", return_value="理发这个细节很实用。"),
             mock.patch.object(runner, "_slow_human_scroll", return_value={"delta": 320}),
             mock.patch.object(runner, "_sleep_between"),
-            mock.patch.object(runner, "_screenshot", return_value="/tmp/warmup.png"),
+            mock.patch.object(
+                runner,
+                "_screenshot",
+                side_effect=lambda _page, _dir, _task, stage, _logger: f"/tmp/{stage}.png",
+            ) as screenshot,
+            mock.patch.object(
+                runner,
+                "_compose_warmup_evidence_sheet",
+                return_value="/tmp/warmup-evidence.jpg",
+            ) as compose_evidence,
             mock.patch.object(runner.random, "random", return_value=0),
             mock.patch.object(runner.random, "randint", return_value=1),
             mock.patch.object(runner.time, "monotonic", return_value=0),
@@ -102,6 +197,15 @@ class InstagramWarmupTests(TestCase):
         self.assertEqual(result["liked"], 1)
         self.assertEqual(result["commented"], 1)
         self.assertEqual(result["scrolled"], 3)
+        stages = [call.args[3] for call in screenshot.call_args_list]
+        self.assertIn("instagram_warmup_like_1", stages)
+        self.assertIn("instagram_warmup_comment_1", stages)
+        self.assertNotIn("instagram_warmup", stages)
+        self.assertEqual(result["likeScreenshots"], [])
+        self.assertEqual(result["commentScreenshots"], [])
+        self.assertEqual(result["evidenceScreenshots"], ["/tmp/warmup-evidence.jpg"])
+        self.assertEqual(result["screenshot_path"], "/tmp/warmup-evidence.jpg")
+        compose_evidence.assert_called_once()
         self.assertTrue(any(stage == "completion_node" for _, stage, *_ in logger.rows))
 
     def test_required_like_target_prevents_false_success(self):
@@ -317,7 +421,7 @@ class InstagramWarmupTests(TestCase):
 
         self.assertIn("_click_some_instagram_likes(", runner_source)
         self.assertIn("_click_some_threads_likes(", runner_source)
-        self.assertIn("target_root=relevant_surface.get(\"root\")", runner_source)
+        self.assertIn("target_root=target.get(\"root\")", runner_source)
 
     def test_default_warmup_timeline_matches_the_legacy_tg_bot_window(self):
         with mock.patch.object(runner.random, "uniform", return_value=8.5):

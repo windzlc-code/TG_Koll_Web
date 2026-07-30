@@ -546,12 +546,10 @@
   }
 
   function accountMenuMarkup(page = "console") {
-    const workspaceActions = page === "console"
-      ? `<div class="site-account-action-row site-account-workspace-actions" aria-label="控制台快捷操作">
+    const workspaceActions = `<div class="site-account-action-row site-account-workspace-actions" aria-label="控制台快捷操作">
           <button type="button" data-site-open-console-view="tasks">任务队列</button>
           <button type="button" data-site-open-console-view="console_settings">设置</button>
-        </div>`
-      : "";
+        </div>`;
     return `<div class="site-account-menu" data-site-account-menu>
       <button class="site-user" type="button" aria-controls="siteAccountPopover" aria-haspopup="dialog" aria-expanded="false" data-site-user-title data-site-account-trigger>
         <span class="site-user-avatar" data-site-account-avatar>${accountIcon()}</span><span id="consoleMeName" data-site-account-name></span><svg class="site-user-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"></path></svg>

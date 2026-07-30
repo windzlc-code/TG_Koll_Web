@@ -350,6 +350,8 @@ def _request_openai_compatible_raw_text(
     disable_proxy: bool = True,
     model: str = "",
     request_timeout_seconds: float | None = None,
+    temperature: float | None = None,
+    max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
     url = _resolve_openai_chat_completions_url(host=host, port=port)
     user_content = _build_openai_user_content(
@@ -374,9 +376,15 @@ def _request_openai_compatible_raw_text(
     payload = {
         "model": str(model or "").strip() or "grok-4",
         "messages": messages,
-        "temperature": OPENAI_COMPATIBLE_TEMPERATURE,
+        "temperature": (
+            OPENAI_COMPATIBLE_TEMPERATURE
+            if temperature is None
+            else max(0.0, min(float(temperature), 2.0))
+        ),
         "stream": False,
     }
+    if max_output_tokens is not None:
+        payload["max_tokens"] = max(1, int(max_output_tokens))
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json",
@@ -648,6 +656,8 @@ def request_gemini3_pro_raw_text(
     logger=None,
     model: str = "",
     request_timeout_seconds: float | None = None,
+    temperature: float | None = None,
+    max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
     if _is_openai_compatible_model(model):
         return _request_openai_compatible_raw_text(
@@ -664,6 +674,8 @@ def request_gemini3_pro_raw_text(
             disable_proxy=disable_proxy,
             model=model,
             request_timeout_seconds=request_timeout_seconds,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
         )
 
     url = _resolve_gemini_request_url(host=host, port=port, model=model)
@@ -729,8 +741,17 @@ def request_gemini3_pro_raw_text(
     payload = {
         "systemInstruction": {"parts": [{"text": ""}]},
         "contents": [{"role": "user", "parts": []}],
-        "generationConfig": {"temperature": 0.2, "topP": 1},
+        "generationConfig": {
+            "temperature": (
+                0.2
+                if temperature is None
+                else max(0.0, min(float(temperature), 2.0))
+            ),
+            "topP": 1,
+        },
     }
+    if max_output_tokens is not None:
+        payload["generationConfig"]["maxOutputTokens"] = max(1, int(max_output_tokens))
     payload["contents"][0]["parts"].extend(image_parts)
     payload["contents"][0]["parts"].extend(video_parts)
     payload["contents"][0]["parts"].append({"text": f"{system_prompt}\n{composed_input}"})

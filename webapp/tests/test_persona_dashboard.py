@@ -2561,6 +2561,36 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(favorites_resp.status_code, 200)
         self.assertEqual(favorites_resp.json()["favorites"][0]["title"], "第5篇")
 
+    def test_draft_and_favorite_keep_the_selected_content_platform(self):
+        self._write_archives()
+
+        create_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={
+                "title": "Instagram draft",
+                "content": "Instagram content",
+                "platform": "instagram",
+            },
+        )
+
+        self.assertEqual(create_resp.status_code, 200)
+        created = create_resp.json()
+        self.assertEqual(created["platform"], "instagram")
+
+        favorite_resp = self.client.post(
+            f"/api/persona_dashboard/personas/persona-1/favorites/{created['id']}"
+        )
+        self.assertEqual(favorite_resp.status_code, 200)
+        self.assertEqual(favorite_resp.json()["post"]["platform"], "instagram")
+
+        posts_resp = self.client.get("/api/persona_dashboard/personas/persona-1/posts")
+        favorites_resp = self.client.get("/api/persona_dashboard/personas/persona-1/favorites")
+        self.assertEqual(
+            {item["id"]: item["platform"] for item in posts_resp.json()["posts"]},
+            {"post-1": "threads", created["id"]: "instagram"},
+        )
+        self.assertEqual(favorites_resp.json()["favorites"][0]["platform"], "instagram")
+
     def test_run_persona_hot_workflow_cli_returns_success_result(self):
         process = mock.Mock()
         process.communicate.return_value = ('{"ok": true, "candidates": []}', "")
@@ -2575,6 +2605,62 @@ class PersonaDashboardApiTests(unittest.TestCase):
         communicate_timeout = process.communicate.call_args.kwargs["timeout"]
         self.assertGreater(communicate_timeout, 44)
         self.assertLessEqual(communicate_timeout, 45)
+
+    def test_persona_hot_workflow_only_reserves_browser_for_browser_actions(self):
+        self.assertTrue(server._persona_hot_workflow_uses_browser({"action": "fetch-hot-candidates"}))
+        self.assertTrue(server._persona_hot_workflow_uses_browser({"action": "refresh-hot-post"}))
+        self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "pool-stats"}))
+        self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "import-hot-candidates"}))
+        self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "warm-hot-strategy"}))
+
+    def test_run_persona_hot_workflow_cli_does_not_lease_browser_for_import(self):
+        process = mock.Mock()
+        process.communicate.return_value = ('{"ok": true, "importedCount": 1}', "")
+        process.returncode = 0
+
+        with mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"), \
+             mock.patch.object(server, "_tool_r18_node_command", return_value=["node", "persona-hot-workflow.ts"]), \
+             mock.patch.object(server, "acquire_external_browser_lease") as acquire_lease, \
+             mock.patch.object(server, "release_external_browser_lease") as release_lease, \
+             mock.patch.object(server.subprocess, "Popen", return_value=process):
+            result = server._run_persona_hot_workflow_cli(
+                {"action": "import-hot-candidates", "archiveId": "persona-1"},
+                timeout_seconds=45,
+            )
+
+        self.assertEqual(result, {"ok": True, "importedCount": 1})
+        acquire_lease.assert_not_called()
+        release_lease.assert_not_called()
+
+    def test_run_persona_hot_workflow_cli_terminates_live_process_before_releasing_lease(self):
+        process = mock.Mock(pid=1234)
+        process.communicate.side_effect = RuntimeError("pipe read failed")
+        process.poll.return_value = None
+        events: list[str] = []
+
+        with mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"), \
+             mock.patch.object(server, "_tool_r18_node_command", return_value=["node", "persona-hot-workflow.ts"]), \
+             mock.patch.object(server, "acquire_external_browser_lease", return_value="lease-1"), \
+             mock.patch.object(
+                 server,
+                 "_terminate_persona_hot_process",
+                 side_effect=lambda candidate: events.append("terminate") if candidate is process else None,
+             ) as terminate, \
+             mock.patch.object(
+                 server,
+                 "release_external_browser_lease",
+                 side_effect=lambda _lease: events.append("release"),
+             ) as release, \
+             mock.patch.object(server.subprocess, "Popen", return_value=process):
+            with self.assertRaisesRegex(RuntimeError, "pipe read failed"):
+                server._run_persona_hot_workflow_cli(
+                    {"action": "fetch-hot-candidates", "archiveId": "persona-1"},
+                    timeout_seconds=45,
+                )
+
+        terminate.assert_any_call(process)
+        release.assert_called_once_with("lease-1")
+        self.assertEqual(events, ["terminate", "release"])
 
     def test_run_persona_hot_workflow_cli_cleans_up_after_timeout(self):
         process = mock.Mock(pid=1234)
@@ -2674,6 +2760,34 @@ class PersonaDashboardApiTests(unittest.TestCase):
         finally:
             server._PERSONA_HOT_INTERACTIVE_PROCESS = previous_process
             server._PERSONA_HOT_INTERACTIVE_ARCHIVE_ID = previous_archive_id
+
+    def test_rsshub_dashboard_refresh_does_not_reserve_browser_slot(self):
+        task_id = "pdr_rsshub_test"
+        process = mock.Mock()
+        process.poll.return_value = 0
+        process.returncode = 0
+        process.wait.return_value = 0
+        with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+            server.PERSONA_DASHBOARD_REFRESH_TASKS[task_id] = {
+                "id": task_id,
+                "status": "queued",
+            }
+        try:
+            with mock.patch.object(server, "acquire_external_browser_lease") as acquire_lease, \
+                 mock.patch.object(server, "release_external_browser_lease") as release_lease, \
+                 mock.patch.object(server.subprocess, "Popen", return_value=process) as popen:
+                server._persona_dashboard_refresh_worker_v2(
+                    task_id,
+                    source="rsshub",
+                    archive_ids=[],
+                )
+        finally:
+            with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+                server.PERSONA_DASHBOARD_REFRESH_TASKS.pop(task_id, None)
+
+        popen.assert_called_once()
+        acquire_lease.assert_not_called()
+        release_lease.assert_not_called()
 
     def test_cancel_persona_hot_candidates_endpoint(self):
         self._write_archives()
@@ -2867,6 +2981,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             resp = self.client.post(
                 "/api/persona_dashboard/personas/persona-1/hot_candidates/import",
                 json={
+                    "platform": "instagram",
                     "candidates": [
                         {
                             "id": "hot-1",
@@ -2887,6 +3002,48 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(body["posts"][0]["source_meta"]["source"], "sentiment_hot_import")
         self.assertEqual(body["posts"][0]["source_meta"]["source_url"], "https://www.threads.com/@history/post/hot-1")
         self.assertTrue(body["posts"][0]["source_meta"]["media_items"])
+        self.assertEqual(body["posts"][0]["platform"], "instagram")
+
+    def test_generate_persona_posts_archives_new_rows_under_selected_platform(self):
+        self._write_archives()
+
+        def fake_generate(payload):
+            archives_path = self.tool_runtime_dir / "persona_archives.json"
+            archives = json.loads(archives_path.read_text(encoding="utf-8"))
+            archives[0]["posts"].append({
+                "id": "post-instagram-1",
+                "title": "Generated Instagram title",
+                "content": "Generated Instagram content",
+                "wordCount": 27,
+                "orderIndex": 1,
+                "createdAt": "2026-07-04T12:00:00Z",
+                "updatedAt": "2026-07-04T12:00:00Z",
+            })
+            archives_path.write_text(json.dumps(archives), encoding="utf-8")
+            return {
+                "ok": True,
+                "postIds": ["post-instagram-1"],
+                "generatedCount": 1,
+                "selectedMemoryCount": 0,
+            }
+
+        with mock.patch.object(server, "_run_persona_workflow_cli", side_effect=fake_generate):
+            result = server._generate_persona_archive_posts(
+                "persona-1",
+                server.PersonaDashboardGeneratePostsPayload(
+                    count=1,
+                    platform="instagram",
+                ),
+            )
+
+        self.assertEqual(result["posts"][0]["platform"], "instagram")
+        stored = json.loads(
+            (self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8")
+        )
+        generated = next(
+            post for post in stored[0]["posts"] if post["id"] == "post-instagram-1"
+        )
+        self.assertEqual(generated["platform"], "instagram")
 
     def test_refresh_hot_post_returns_updated_source_metrics(self):
         self._write_archives()

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import binascii
 import base64
+import ctypes
+import gc
 import hashlib
 import hmac
 import json
@@ -212,6 +214,9 @@ _WORKER_LOCK = threading.Lock()
 _AUTOMATION_PLAN_LOCK = threading.RLock()
 _WORKER_TASK_THREADS: dict[str, threading.Thread] = {}
 _WORKER_TASK_THREADS_LOCK = threading.Lock()
+_EXTERNAL_BROWSER_LEASES: set[str] = set()
+_EXTERNAL_BROWSER_LEASES_LOCK = threading.Lock()
+_IDLE_MEMORY_RELEASE_LOCK = threading.Lock()
 _WORKER_STATE: dict[str, Any] = {
     "enabled": False,
     "running": False,
@@ -3645,6 +3650,7 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
     if task_type in {"threads_warmup", "instagram_warmup"}:
         short_strategy = {
             "browse_only": "只浏览",
+            "comment_only": "评论留言",
             "like_comment": "点赞留言",
             "warmup_custom": "自定义",
             "tg_default": "低频点赞",
@@ -3653,7 +3659,7 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
             if "只浏览" in strategy_label:
                 short_strategy = "只浏览"
             elif "留言" in strategy_label or "评论" in strategy_label:
-                short_strategy = "点赞留言"
+                short_strategy = "点赞留言" if like_limit > 0 else "评论留言"
             elif "低频点赞" in strategy_label or "随机点赞" in strategy_label:
                 short_strategy = "低频点赞"
             else:
@@ -4046,6 +4052,79 @@ def _memory_environment() -> dict[str, int]:
         "memory_total_mb": int(values.get("MemTotal") or 0),
         "memory_available_mb": int(values.get("MemAvailable") or 0),
         "swap_total_mb": int(values.get("SwapTotal") or 0),
+    }
+
+
+def _read_linux_memory_value(paths: tuple[str, ...]) -> tuple[int, bool]:
+    for raw_path in paths:
+        try:
+            raw = Path(raw_path).read_text(encoding="utf-8").strip()
+            if raw and raw.lower() != "max":
+                return max(0, int(raw)), True
+        except Exception:
+            continue
+    return 0, False
+
+
+def _read_linux_memory_limit(paths: tuple[str, ...]) -> tuple[int, bool]:
+    for raw_path in paths:
+        try:
+            raw = Path(raw_path).read_text(encoding="utf-8").strip()
+        except Exception:
+            continue
+        if not raw or raw.lower() == "max":
+            return 0, False
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        # cgroup v1 uses a page-aligned near-int64 maximum as its "unlimited"
+        # sentinel. Treating it as a real limit would manufacture huge headroom.
+        if value <= 0 or value >= (1 << 60):
+            return 0, False
+        return value, True
+    return 0, False
+
+
+def _browser_runtime_resource_snapshot() -> dict[str, int]:
+    memory = _memory_environment()
+    current_bytes, current_known = _read_linux_memory_value(
+        (
+            "/sys/fs/cgroup/memory.current",
+            "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+        )
+    )
+    limit_bytes, limit_known = _read_linux_memory_limit(
+        (
+            "/sys/fs/cgroup/memory.max",
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+        )
+    )
+    host_available_mb = int(memory.get("memory_available_mb") or 0)
+    headroom_known = bool(limit_known and current_known)
+    cgroup_headroom_mb = (
+        max(0, (limit_bytes - current_bytes) // (1024 * 1024))
+        if headroom_known
+        else 0
+    )
+    effective_available_mb = host_available_mb
+    if headroom_known:
+        effective_available_mb = (
+            min(host_available_mb, cgroup_headroom_mb)
+            if host_available_mb > 0
+            else cgroup_headroom_mb
+        )
+    return {
+        **memory,
+        "memory_available_mb": int(effective_available_mb),
+        "host_memory_available_mb": host_available_mb,
+        "container_memory_mb": current_bytes // (1024 * 1024),
+        "container_memory_limit_mb": limit_bytes // (1024 * 1024),
+        "container_memory_headroom_mb": cgroup_headroom_mb,
+        "container_memory_limit_known": int(limit_known),
+        "container_memory_current_known": int(current_known),
+        "container_memory_headroom_known": int(headroom_known),
+        "memory_available_known": int(host_available_mb > 0 or headroom_known),
     }
 
 
@@ -5485,6 +5564,57 @@ def _release_task_billing_reservation(conn: sqlite3.Connection, task: Any, *, no
     return True
 
 
+def _task_billing_committed_quantity(task: Any) -> int:
+    if task is None:
+        return 0
+    try:
+        item = dict(task)
+    except Exception:
+        return 0
+    if (
+        str(item.get("task_type") or "") == "publish_post"
+        and bool(int(item.get("daily_publish_committed") or 0))
+    ):
+        return 1
+    payload = item.get("payload")
+    if not isinstance(payload, dict):
+        payload = _loads(item.get("payload_json"), {})
+    try:
+        return max(int((payload or {}).get("_billing_committed_quantity") or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _settle_or_release_task_billing_reservation(
+    conn: sqlite3.Connection,
+    task: Any,
+    *,
+    now: int | None = None,
+) -> bool:
+    if task is None or "billing_reservation_id" not in task.keys():
+        return False
+    reservation_id = str(task["billing_reservation_id"] or "").strip()
+    if not reservation_id:
+        return False
+    if conn.execute(
+        "SELECT 1 FROM billing_reservations WHERE id = ?",
+        (reservation_id,),
+    ).fetchone() is None:
+        return False
+    committed_quantity = _task_billing_committed_quantity(task)
+    if committed_quantity > 0:
+        commercial_billing.settle_reservation(
+            conn,
+            reservation_id,
+            actual_quantity=committed_quantity,
+            success=True,
+            now=now,
+        )
+    else:
+        commercial_billing.release_reservation(conn, reservation_id, now=now)
+    return True
+
+
 def _release_terminal_task_billing_reservations(conn: sqlite3.Connection, now: int) -> None:
     stale_preparing = conn.execute(
         "SELECT * FROM social_automation_tasks WHERE status = 'preparing' AND updated_at < ?",
@@ -5504,7 +5634,7 @@ def _release_terminal_task_billing_reservations(conn: sqlite3.Connection, now: i
             _release_daily_publish_slot(conn, str(task["id"] or ""), "stale_batch_preparation", now=now)
     rows = conn.execute(
         """
-        SELECT t.billing_reservation_id
+        SELECT t.*
         FROM social_automation_tasks t
         JOIN billing_reservations r ON r.id = t.billing_reservation_id
         WHERE (
@@ -5519,7 +5649,7 @@ def _release_terminal_task_billing_reservations(conn: sqlite3.Connection, now: i
         """
     ).fetchall()
     for row in rows:
-        _release_task_billing_reservation(conn, row, now=now)
+        _settle_or_release_task_billing_reservation(conn, row, now=now)
 
 
 def delete_social_account(account_id: str) -> int:
@@ -6032,7 +6162,7 @@ def clear_social_task(task_id: str) -> int:
             tuple(task_ids),
         ).fetchall()
         for current in current_rows:
-            _release_task_billing_reservation(conn, current)
+            _settle_or_release_task_billing_reservation(conn, current)
         conn.execute(
             f"DELETE FROM social_automation_logs WHERE task_id IN ({placeholders})",
             tuple(task_ids),
@@ -6087,7 +6217,7 @@ def clear_social_tasks(*, persona_id: str = "", account_id: str = "", user_id: i
             placeholders = ",".join("?" for _ in task_ids)
             current_rows = conn.execute(f"SELECT * FROM social_automation_tasks WHERE id IN ({placeholders})", tuple(task_ids)).fetchall()
             for current in current_rows:
-                _release_task_billing_reservation(conn, current)
+                _settle_or_release_task_billing_reservation(conn, current)
             conn.execute(f"DELETE FROM social_automation_logs WHERE task_id IN ({placeholders})", tuple(task_ids))
             cleared = int(conn.execute(f"DELETE FROM social_automation_tasks WHERE id IN ({placeholders})", tuple(task_ids)).rowcount or 0)
     wake_social_automation_worker()
@@ -6180,7 +6310,7 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
             _ensure_daily_publish_slot(conn, original, now=now)
             _release_daily_publish_slot(conn, task_id, clean_reason, now=now)
         if cancelled or str(row["status"] or "") in {"failed", "cancelled"}:
-            _release_task_billing_reservation(conn, row, now=now)
+            _settle_or_release_task_billing_reservation(conn, row, now=now)
         if cancelled:
             _insert_log(conn, task_id, "warn", "cancel", "任务已取消，正在停止执行上下文", {"reason": clean_reason})
         billing_statuses = _billing_reservation_statuses(conn, [row])
@@ -6233,7 +6363,7 @@ def cancel_social_tasks_in_transaction(
                 clean_reason,
                 now=current,
             )
-        _release_task_billing_reservation(conn, task, now=current)
+        _settle_or_release_task_billing_reservation(conn, task, now=current)
         _insert_log(
             conn,
             task_id,
@@ -6448,28 +6578,151 @@ def _cleanup_worker_task_threads() -> None:
                 _WORKER_TASK_THREADS.pop(task_id, None)
 
 
-def _active_worker_thread_count() -> int:
+def _release_idle_worker_memory() -> dict[str, Any]:
+    if not _IDLE_MEMORY_RELEASE_LOCK.acquire(blocking=False):
+        return {"released": False, "reason": "release_in_progress"}
+    try:
+        # Keep admission and cleanup atomic: a new browser must not be launched
+        # after the idle checks but before malloc_trim finishes.
+        with _WORKER_LOCK:
+            with _WORKER_TASK_THREADS_LOCK:
+                active_threads = sum(
+                    1 for thread in _WORKER_TASK_THREADS.values() if thread.is_alive()
+                )
+            if active_threads:
+                return {"released": False, "reason": "active_worker"}
+            with _EXTERNAL_BROWSER_LEASES_LOCK:
+                if _EXTERNAL_BROWSER_LEASES:
+                    return {"released": False, "reason": "external_browser"}
+            try:
+                if _live_browser_sessions(user_id=None):
+                    return {"released": False, "reason": "live_browser"}
+            except Exception:
+                return {"released": False, "reason": "live_browser_unknown"}
+
+            before = _browser_runtime_resource_snapshot()
+            collected = gc.collect()
+            trimmed = False
+            if os.name != "nt":
+                try:
+                    trim = ctypes.CDLL(None).malloc_trim
+                    trim.argtypes = [ctypes.c_size_t]
+                    trim.restype = ctypes.c_int
+                    trimmed = bool(trim(0))
+                except Exception:
+                    trimmed = False
+            after = _browser_runtime_resource_snapshot()
+            result = {
+                "released": True,
+                "collected_objects": int(collected),
+                "malloc_trimmed": trimmed,
+                "container_memory_before_mb": int(before.get("container_memory_mb") or 0),
+                "container_memory_after_mb": int(after.get("container_memory_mb") or 0),
+                "at": _now(),
+            }
+            _WORKER_STATE["last_memory_release"] = result
+            return result
+    finally:
+        _IDLE_MEMORY_RELEASE_LOCK.release()
+
+
+def _active_worker_thread_task_ids() -> set[str]:
     _cleanup_worker_task_threads()
     with _WORKER_TASK_THREADS_LOCK:
-        return sum(1 for thread in _WORKER_TASK_THREADS.values() if thread.is_alive())
+        return {
+            str(task_id)
+            for task_id, thread in _WORKER_TASK_THREADS.items()
+            if str(task_id) and thread.is_alive()
+        }
+
+
+def _active_worker_thread_count() -> int:
+    return len(_active_worker_thread_task_ids())
 
 
 def _social_worker_slots_in_use() -> int:
-    running_threads = _active_worker_thread_count()
+    worker_task_ids = _active_worker_thread_task_ids()
     try:
-        live_browser_count = len(_live_browser_sessions(user_id=None))
+        live_sessions = _live_browser_sessions(user_id=None)
     except Exception:
-        live_browser_count = 0
-    # Running tasks and their live sessions normally overlap. Using the larger
-    # number counts detached review/standby browsers without double counting
-    # browsers that are still owned by a running worker thread.
-    return max(running_threads, live_browser_count)
+        live_sessions = []
+
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        worker_owner_by_session = {
+            str(control.get("live_browser_session_id") or "").strip(): str(task_id)
+            for task_id, control in _RUNNING_TASK_CONTROLS.items()
+            if str(task_id) in worker_task_ids
+            and str(control.get("live_browser_session_id") or "").strip()
+        }
+
+    standalone_session_slots: set[str] = set()
+    worker_slots_with_session: set[str] = set()
+    for index, session in enumerate(live_sessions):
+        session_id = str(
+            session.get("id") or session.get("session_id") or ""
+        ).strip()
+        session_task_id = str(session.get("task_id") or "").strip()
+        owner_task_id = worker_owner_by_session.get(session_id, "")
+        if owner_task_id and owner_task_id not in worker_slots_with_session:
+            worker_slots_with_session.add(owner_task_id)
+            continue
+        if (
+            session_task_id in worker_task_ids
+            and session_task_id not in worker_slots_with_session
+        ):
+            worker_slots_with_session.add(session_task_id)
+            continue
+        identity = (
+            f"session:{session_id}"
+            if session_id
+            else (
+                f"task:{session_task_id}"
+                if session_task_id
+                else f"anonymous:{index}"
+            )
+        )
+        standalone_session_slots.add(identity)
+
+    with _EXTERNAL_BROWSER_LEASES_LOCK:
+        external_browser_count = len(_EXTERNAL_BROWSER_LEASES)
+    return (
+        len(worker_task_ids)
+        + len(standalone_session_slots)
+        + external_browser_count
+    )
+
+
+def acquire_external_browser_lease(owner: str = "") -> str:
+    token = f"{str(owner or 'external').strip() or 'external'}:{uuid.uuid4().hex}"
+    with _WORKER_LOCK:
+        active_slots = _social_worker_slots_in_use()
+        if active_slots >= _social_worker_max_concurrency():
+            return ""
+        if not _browser_worker_resource_admission(
+            active_slots=active_slots
+        )["allow_launch"]:
+            return ""
+        with _EXTERNAL_BROWSER_LEASES_LOCK:
+            _EXTERNAL_BROWSER_LEASES.add(token)
+    _refresh_worker_state()
+    return token
+
+
+def release_external_browser_lease(token: str) -> None:
+    clean_token = str(token or "").strip()
+    if not clean_token:
+        return
+    with _EXTERNAL_BROWSER_LEASES_LOCK:
+        _EXTERNAL_BROWSER_LEASES.discard(clean_token)
+    _refresh_worker_state()
+    wake_social_automation_worker()
 
 
 def _browser_worker_resource_admission(*, active_slots: int | None = None) -> dict[str, Any]:
     slots_in_use = _social_worker_slots_in_use() if active_slots is None else max(0, int(active_slots))
-    memory = _memory_environment()
+    memory = _browser_runtime_resource_snapshot()
     available_mb = int(memory.get("memory_available_mb") or 0)
+    available_known = bool(int(memory.get("memory_available_known") or 0))
     first_task_minimum_mb = _bounded_env_int(
         "SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_FIRST_TASK",
         SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_FIRST_TASK,
@@ -6483,15 +6736,18 @@ def _browser_worker_resource_admission(*, active_slots: int | None = None) -> di
         16384,
     )
     required_mb = first_task_minimum_mb if slots_in_use <= 0 else additional_task_minimum_mb
-    # Fail open when /proc/meminfo is unavailable so non-Linux development and
-    # test environments retain their existing behavior.
-    allow_launch = available_mb <= 0 or available_mb >= required_mb
+    # Fail open only when neither host nor cgroup availability can be read.
+    # A known cgroup with zero headroom is a hard no-launch condition.
+    allow_launch = not available_known or available_mb >= required_mb
     return {
         "allow_launch": allow_launch,
         "reason": "" if allow_launch else "low_memory",
         "active_slots": slots_in_use,
         "memory_available_mb": available_mb,
         "required_available_mb": required_mb,
+        "memory_available_known": available_known,
+        "container_memory_mb": int(memory.get("container_memory_mb") or 0),
+        "container_memory_headroom_mb": int(memory.get("container_memory_headroom_mb") or 0),
     }
 
 
@@ -6508,6 +6764,8 @@ def _refresh_worker_state() -> None:
         "resource_reason": str(resource_admission["reason"]),
         "memory_available_mb": int(resource_admission["memory_available_mb"]),
         "required_available_mb": int(resource_admission["required_available_mb"]),
+        "container_memory_mb": int(resource_admission["container_memory_mb"]),
+        "container_memory_headroom_mb": int(resource_admission["container_memory_headroom_mb"]),
         "last_tick_at": _now(),
     })
 
@@ -6549,6 +6807,7 @@ def _start_claimed_task_thread(task: dict[str, Any]) -> None:
         finally:
             with _WORKER_TASK_THREADS_LOCK:
                 _WORKER_TASK_THREADS.pop(task_id, None)
+            _release_idle_worker_memory()
             _refresh_worker_state()
             wake_social_automation_worker()
 
@@ -7728,6 +7987,8 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         "completed_batch_task_ids": [],
         "live_browser_session_id": "",
         "publish_submit_lock": threading.RLock(),
+        "resource_snapshot_provider": _browser_runtime_resource_snapshot,
+        "resource_metrics_lock": threading.RLock(),
     }
     control["account_login_status_callback"] = lambda status: _persist_running_account_login_status(
         str(control.get("current_task_id") or task_id),
@@ -7739,6 +8000,7 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         confirmation,
     )
     control["publish_submit_callback"] = lambda action: _run_publish_submit_guard(control, action)
+    control["billing_submit_callback"] = lambda action: _run_billing_submit_guard(control, action)
     control["manual_takeover_callback"] = lambda: _persist_manual_takeover_ack(
         str(control.get("current_task_id") or task_id),
         str(control.get("live_browser_session_id") or ""),
@@ -8111,6 +8373,92 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
     _finish_task(task["id"], status, result, "" if status == "success" else str(result.get("error") or "执行失败"), account_status=account_status)
 
 
+def _sample_running_task_resources(control: dict[str, Any]) -> dict[str, int]:
+    provider = control.get("resource_snapshot_provider")
+    if not callable(provider):
+        return {}
+    try:
+        snapshot = provider()
+    except Exception:
+        return {}
+    if not isinstance(snapshot, dict):
+        return {}
+    clean = {
+        "container_memory_mb": max(
+            0,
+            int(snapshot.get("container_memory_mb") or 0),
+        ),
+        "memory_available_mb": max(
+            0,
+            int(snapshot.get("memory_available_mb") or 0),
+        ),
+        "memory_available_known": int(
+            bool(
+                snapshot.get("memory_available_known")
+                if "memory_available_known" in snapshot
+                else int(snapshot.get("memory_available_mb") or 0) > 0
+            )
+        ),
+    }
+    lock = control.get("resource_metrics_lock")
+    guard = lock if hasattr(lock, "__enter__") else contextlib.nullcontext()
+    with guard:
+        control["_latest_resource_snapshot"] = dict(clean)
+        metrics = control.setdefault("_resource_metrics", {})
+        if isinstance(metrics, dict):
+            container_mb = clean["container_memory_mb"]
+            available_mb = clean["memory_available_mb"]
+            available_known = bool(clean["memory_available_known"])
+            if container_mb > 0:
+                metrics.setdefault("container_memory_start_mb", container_mb)
+                metrics["container_memory_peak_mb"] = max(
+                    int(metrics.get("container_memory_peak_mb") or 0),
+                    container_mb,
+                )
+            if available_known:
+                previous_min = metrics.get("memory_available_min_mb")
+                metrics["memory_available_min_mb"] = (
+                    available_mb
+                    if previous_min is None
+                    else min(int(previous_min), available_mb)
+                )
+            metrics["sample_interval_seconds"] = 2
+    return clean
+
+
+def _attach_runtime_resource_metrics(
+    result: dict[str, Any],
+    control: dict[str, Any],
+) -> None:
+    metrics = control.get("_resource_metrics")
+    if not isinstance(metrics, dict) or not metrics:
+        return
+    public = result.get("resourceManagement")
+    public = dict(public) if isinstance(public, dict) else {}
+    public.update(
+        {
+            "containerMemoryStartMb": int(
+                metrics.get("container_memory_start_mb") or 0
+            ),
+            "containerMemoryPeakMb": int(
+                metrics.get("container_memory_peak_mb") or 0
+            ),
+            "memoryAvailableMinMb": int(
+                metrics.get("memory_available_min_mb") or 0
+            ),
+            "sampleIntervalSeconds": int(
+                metrics.get("sample_interval_seconds") or 2
+            ),
+        }
+    )
+    latest = control.get("_latest_resource_snapshot")
+    if isinstance(latest, dict):
+        public["containerMemoryAfterBrowserCloseMb"] = int(
+            latest.get("container_memory_mb") or 0
+        )
+    result["resourceManagement"] = public
+
+
 def _run_social_publish_batch_in_clean_thread(
     runner: Callable[..., list[dict[str, Any]]],
     *,
@@ -8151,9 +8499,15 @@ def _run_social_publish_batch_in_clean_thread(
     with contextlib.suppress(Exception):
         _renew_task_leases(lease_task_ids)
     last_lease_renewed_at = _now()
+    last_resource_sample_at = 0.0
+    _sample_running_task_resources(control)
     thread.start()
     while thread.is_alive():
         thread.join(timeout=0.25)
+        monotonic_now = time.monotonic()
+        if monotonic_now - last_resource_sample_at >= 2.0:
+            _sample_running_task_resources(control)
+            last_resource_sample_at = monotonic_now
         current = _now()
         if current - last_lease_renewed_at >= max(5, _task_worker_lease_seconds() // 3):
             with contextlib.suppress(Exception):
@@ -8163,6 +8517,7 @@ def _run_social_publish_batch_in_clean_thread(
             thread.join(timeout=2)
             if thread.is_alive():
                 raise RuntimeError("publish batch runner did not stop after cancellation")
+    _sample_running_task_resources(control)
     if error_box:
         raise error_box["error"]
     result = result_box.get("result")
@@ -8200,9 +8555,15 @@ def _run_social_task_in_clean_thread(
     with contextlib.suppress(Exception):
         _renew_task_leases([task_id])
     last_lease_renewed_at = _now()
+    last_resource_sample_at = 0.0
+    _sample_running_task_resources(control)
     thread.start()
     while thread.is_alive():
         thread.join(timeout=0.25)
+        monotonic_now = time.monotonic()
+        if monotonic_now - last_resource_sample_at >= 2.0:
+            _sample_running_task_resources(control)
+            last_resource_sample_at = monotonic_now
         current = _now()
         if current - last_lease_renewed_at >= max(5, _task_worker_lease_seconds() // 3):
             with contextlib.suppress(Exception):
@@ -8212,10 +8573,14 @@ def _run_social_task_in_clean_thread(
             thread.join(timeout=2)
             if thread.is_alive():
                 raise RuntimeError("task runner did not stop after cancellation")
+    _sample_running_task_resources(control)
     if error_box:
         raise error_box["error"]
     result = result_box.get("result")
-    return result if isinstance(result, dict) else {}
+    if not isinstance(result, dict):
+        return {}
+    _attach_runtime_resource_metrics(result, control)
+    return result
 
 
 def _is_task_cancelled(task_id: str) -> bool:
@@ -8239,6 +8604,76 @@ def _run_publish_submit_guard(control: dict[str, Any], action: Callable[[], Any]
         if not _arm_publish_submission(task_id):
             raise RuntimeError("发布提交状态无法持久化，已停止执行。")
         return action()
+
+
+def _persist_billing_committed_quantity(task_id: str, quantity: int = 1) -> bool:
+    clean_task_id = str(task_id or "").strip()
+    committed_quantity = max(int(quantity or 0), 0)
+    if not clean_task_id or committed_quantity <= 0:
+        return False
+    now = _now()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        task = conn.execute(
+            """
+            SELECT payload_json
+            FROM social_automation_tasks
+            WHERE id = ? AND status IN ('running', 'need_manual')
+            """,
+            (clean_task_id,),
+        ).fetchone()
+        if task is None:
+            return False
+        payload = _loads(task["payload_json"], {})
+        if not isinstance(payload, dict):
+            payload = {}
+        try:
+            existing_quantity = max(
+                int(payload.get("_billing_committed_quantity") or 0),
+                0,
+            )
+        except (TypeError, ValueError):
+            existing_quantity = 0
+        if existing_quantity >= committed_quantity:
+            return True
+        payload["_billing_committed_quantity"] = committed_quantity
+        updated = conn.execute(
+            """
+            UPDATE social_automation_tasks
+            SET payload_json = ?, updated_at = ?
+            WHERE id = ? AND status IN ('running', 'need_manual')
+            """,
+            (json.dumps(payload, ensure_ascii=False), now, clean_task_id),
+        ).rowcount
+        if updated:
+            _insert_log(
+                conn,
+                clean_task_id,
+                "info",
+                "billing_action_committed",
+                "不可逆互动动作已提交，计费状态已持久化。",
+                {"committed_quantity": committed_quantity},
+            )
+        return bool(updated)
+
+
+def _run_billing_submit_guard(control: dict[str, Any], action: Callable[[], Any]) -> Any:
+    lock = control.get("publish_submit_lock")
+    if lock is None:
+        result = action()
+        task_id = str(control.get("current_task_id") or "")
+        if result is not False and not _persist_billing_committed_quantity(task_id, 1):
+            raise RuntimeError("互动提交状态无法持久化，已停止继续执行。")
+        return result
+    with lock:
+        event = control.get("cancel_event")
+        task_id = str(control.get("current_task_id") or "")
+        if (event is not None and event.is_set()) or _is_task_cancelled(task_id):
+            raise RuntimeError("社交自动化任务已取消。")
+        result = action()
+        if result is not False and not _persist_billing_committed_quantity(task_id, 1):
+            raise RuntimeError("互动提交状态无法持久化，已停止继续执行。")
+        return result
 
 
 def _arm_publish_submission(task_id: str) -> bool:
@@ -8543,7 +8978,7 @@ def _finish_task(
         if not completed:
             current = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
             if current is not None and str(current["status"] or "") in {"failed", "cancelled"}:
-                _release_task_billing_reservation(conn, current, now=now)
+                _settle_or_release_task_billing_reservation(conn, current, now=now)
             return False
         if str(task["task_type"] or "") == "publish_post":
             _ensure_daily_publish_slot(conn, task, now=now)
@@ -8563,6 +8998,7 @@ def _finish_task(
                 _release_daily_publish_slot(conn, task_id, error or status, now=now)
             elif status == "need_manual":
                 _set_daily_publish_slot_state(conn, task_id, "reserved", now=now)
+        billing_committed_quantity = _task_billing_committed_quantity(task)
         clean_payload = _loads(task["payload_json"], {})
         original_payload = dict(clean_payload) if isinstance(clean_payload, dict) else {}
         clean_payload = dict(original_payload)
@@ -8570,6 +9006,7 @@ def _finish_task(
             clean_payload.pop("_publish_confirmation", None)
         if status != "need_manual":
             clean_payload = _clear_runtime_claims(clean_payload)
+            clean_payload.pop("_billing_committed_quantity", None)
         if clean_payload != original_payload:
             conn.execute(
                 "UPDATE social_automation_tasks SET payload_json = ? WHERE id = ?",
@@ -8579,8 +9016,14 @@ def _finish_task(
         credit_cost_units = 0
         free_image_count = 0
         if reservation_id and status != "need_manual":
-            if status == "success" or existing_committed:
-                commercial_billing.settle_reservation(conn, reservation_id, actual_quantity=1, success=True, now=now)
+            if status == "success" or existing_committed or billing_committed_quantity > 0:
+                commercial_billing.settle_reservation(
+                    conn,
+                    reservation_id,
+                    actual_quantity=max(billing_committed_quantity, 1),
+                    success=True,
+                    now=now,
+                )
             else:
                 _release_task_billing_reservation(conn, task, now=now)
             billing_row = conn.execute(
@@ -9382,7 +9825,7 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
             next_payload["scroll_times"] = 80
             next_payload["like_limit"] = 0
             next_payload["like_chance"] = 0
-            next_payload["max_comments"] = 4
+            next_payload["max_comments"] = 3
             next_payload["comment_chance"] = 100
             next_payload["require_persona_relevance"] = True
             next_payload["min_required_comments"] = 1
@@ -9392,7 +9835,7 @@ def _enrich_threads_task_payload(persona_id: str, task_type: str, payload: dict[
             next_payload["scroll_times"] = 80
             next_payload["like_limit"] = 7
             next_payload["like_chance"] = 100
-            next_payload["max_comments"] = 4
+            next_payload["max_comments"] = 3
             next_payload["comment_chance"] = 100
             next_payload["require_persona_relevance"] = True
             next_payload["min_required_likes"] = 0

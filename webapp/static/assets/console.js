@@ -436,6 +436,7 @@ const state = {
   personaImageLibraries: {},
   personaDraftPosts: {},
   personaFavoritePosts: {},
+  personaContentPlatforms: {},
   personaSelectedPostIds: {},
   personaPostSources: {},
   personaPostPages: {},
@@ -3167,14 +3168,77 @@ function selectedPersonaProfile() {
   return state.personaProfiles[String(persona.id)] || null;
 }
 
+function normalizePersonaContentPlatform(value = "") {
+  return String(value || "").trim().toLowerCase() === "instagram" ? "instagram" : "threads";
+}
+
+function personaContentPlatform(persona = selectedPersona()) {
+  const key = String(persona?.id || state.selectedPersonaId || "default");
+  const storedPlatform = state.personaContentPlatforms[key];
+  if (!storedPlatform) return "threads";
+  return normalizePersonaContentPlatform(storedPlatform);
+}
+
+function setPersonaContentPlatform(platform, persona = selectedPersona()) {
+  const key = String(persona?.id || state.selectedPersonaId || "default");
+  state.personaContentPlatforms[key] = normalizePersonaContentPlatform(platform);
+}
+
+function personaPostContentPlatform(post = {}) {
+  return normalizePersonaContentPlatform(
+    post?.platform
+    || post?.source_meta?.target_platform
+    || post?.source_meta?.platform
+    || "threads"
+  );
+}
+
+function personaPostMatchesContentPlatform(post = {}, persona = selectedPersona()) {
+  return personaPostContentPlatform(post) === personaContentPlatform(persona);
+}
+
 function personaDraftPosts(persona = selectedPersona()) {
   if (!persona) return [];
-  return visiblePersonaDraftPosts(state.personaDraftPosts[String(persona.id)] || []);
+  return visiblePersonaDraftPosts(state.personaDraftPosts[String(persona.id)] || [])
+    .filter((post) => personaPostMatchesContentPlatform(post, persona));
 }
 
 function personaFavoritePosts(persona = selectedPersona()) {
   if (!persona) return [];
-  return state.personaFavoritePosts[String(persona.id)] || [];
+  return (state.personaFavoritePosts[String(persona.id)] || [])
+    .filter((post) => personaPostMatchesContentPlatform(post, persona));
+}
+
+function renderPersonaContentPlatformRail(persona, { disabled = false } = {}) {
+  const current = personaContentPlatform(persona);
+  const personaId = String(persona?.id || "");
+  const allDrafts = visiblePersonaDraftPosts(state.personaDraftPosts[personaId] || []);
+  const allFavorites = state.personaFavoritePosts[personaId] || [];
+  return `
+    <div class="persona-content-platform-rail">
+      <div class="account-pool-platforms account-pool-platform-tabs persona-content-platform-tabs"
+           role="tablist"
+           aria-label="推文归档平台">
+        ${accountPoolPlatforms.map(([platform, label]) => {
+          const isActive = platform === current;
+          const draftCount = allDrafts.filter((post) => personaPostContentPlatform(post) === platform).length;
+          const favoriteCount = allFavorites.filter((post) => personaPostContentPlatform(post) === platform).length;
+          return `
+            <button type="button"
+                    class="${isActive ? "is-active" : ""}"
+                    data-persona-content-platform="${esc(platform)}"
+                    role="tab"
+                    aria-selected="${isActive ? "true" : "false"}"
+                    ${disabled ? "disabled" : ""}>
+              ${renderAccountPoolPlatformIcon(platform)}
+              <strong>${esc(label)}</strong>
+              <small>草稿 ${draftCount} · 收藏 ${favoriteCount}</small>
+            </button>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
 }
 
 function personaOverviewDraftCount(persona) {
@@ -3219,7 +3283,7 @@ function setSelectedPersonaPostId(postId = "", { auto = false } = {}) {
 function personaPostSelectionKey(persona = selectedPersona(), source = personaPostSource(persona)) {
   const personaId = String(persona?.id || state.selectedPersonaId || "default").trim() || "default";
   const sourceKey = source === "favorites" ? "favorites" : "posts";
-  return `${personaId}:${sourceKey}`;
+  return `${personaId}:${personaContentPlatform(persona)}:${sourceKey}`;
 }
 
 function personaSelectedPostIds(persona = selectedPersona(), source = personaPostSource(persona)) {
@@ -4648,7 +4712,6 @@ async function choosePublishPlatformAccount(persona, {
         ${options.map((option) => `<button type="button" class="${option === selectedOption ? "is-active" : ""}" data-publish-platform-tab="${esc(option.platform)}" data-publish-platform-account="${esc(option.account?.id || "")}" role="tab" aria-selected="${option === selectedOption ? "true" : "false"}">
           ${renderAccountPoolPlatformIcon(option.platform)}
           <span>${esc(platformLabel(option.platform))}</span>
-          <small>${esc(`${option.count} 个账号`)}</small>
         </button>`).join("")}
       </div>
       <div class="publish-platform-picker-account" data-publish-platform-account-label>本次使用：${esc(accountDisplayName(selectedOption.account))}</div>
@@ -4662,16 +4725,25 @@ async function choosePublishPlatformAccount(persona, {
   const accountInput = modal?.querySelector('[data-console-modal-field="accountId"]');
   const accountLabel = modal?.querySelector("[data-publish-platform-account-label]");
   modal?.querySelectorAll("[data-publish-platform-tab]").forEach((tab) => {
-    tab.addEventListener("click", () => {
+    tab.addEventListener("click", async (event) => {
       const option = options.find((item) => item.platform === String(tab.dataset.publishPlatformTab || "")) || null;
       if (!option || !accountInput) return;
-      accountInput.value = String(option.account?.id || "");
-      modal.querySelectorAll("[data-publish-platform-tab]").forEach((item) => {
-        const active = item === tab;
-        item.classList.toggle("is-active", active);
-        item.setAttribute("aria-selected", active ? "true" : "false");
+      const platform = String(option.platform || "");
+      event.__vectoSegmentSlideHandled = true;
+      await slideSegmentedButtonBackground(tab, {
+        commit: () => {
+          accountInput.value = String(option.account?.id || "");
+          modal.querySelectorAll("[data-publish-platform-tab]").forEach((item) => {
+            const active = item === tab;
+            item.classList.toggle("is-active", active);
+            item.setAttribute("aria-selected", active ? "true" : "false");
+          });
+          if (accountLabel) accountLabel.textContent = `本次使用：${accountDisplayName(option.account)}`;
+        },
+        resolveButton: () => modal?.querySelector(
+          `[data-publish-platform-tab="${CSS.escape(platform)}"]`
+        ),
       });
-      if (accountLabel) accountLabel.textContent = `本次使用：${accountDisplayName(option.account)}`;
     });
   });
   const result = await request;
@@ -5516,31 +5588,47 @@ function personaExecutionAccountLabel(persona) {
 }
 
 function renderPersonaExecutionAccountBadge(persona) {
-  const { accountLabel, hasExecutionAccount, platform } = personaExecutionAccountDetails(persona);
-  const platforms = Array.from(new Set(
-    personaAccounts(persona)
-      .filter(isPublishPlatformAccount)
-      .map((account) => String(account?.platform || "").trim().toLowerCase())
-      .filter(Boolean),
-  ));
-  if (!platforms.length && platform) platforms.push(platform);
+  const fallbackDetails = personaExecutionAccountDetails(persona);
+  const selectedPlatform = personaContentPlatform(persona);
+  const accounts = personaAccounts(persona);
+  const selectedAccount = accounts.find(
+    (account) => String(account?.platform || "").trim().toLowerCase() === selectedPlatform,
+  ) || null;
+  const hasExecutionAccount = Boolean(selectedAccount?.id || (selectedPlatform === fallbackDetails.platform && fallbackDetails.hasExecutionAccount));
+  const accountSyncPending = !state.socialDataLoadedAt && !hasExecutionAccount;
+  const accountLabel = String(selectedAccount?.username || selectedAccount?.account_username || "").trim()
+    || (accountSyncPending ? "账号同步中" : (selectedPlatform === fallbackDetails.platform ? fallbackDetails.accountLabel : "未绑定"));
+  const platforms = accountPoolPlatforms.map(([platform]) => platform);
   const platformLogos = platforms.length
     ? `<span class="persona-execution-platform-logos" aria-label="已绑定平台">${platforms.map((item) => {
       const label = platformLabel(item);
-      const isCurrent = item === platform;
-      return `<span class="persona-execution-platform-logo${isCurrent ? " is-current" : ""}" title="${esc(label)}" aria-label="${esc(label)}">${renderAccountPoolPlatformIcon(item)}</span>`;
+      const isCurrent = item === selectedPlatform;
+      return `<span class="persona-execution-platform-logo${isCurrent ? " is-current" : ""}"
+                    data-persona-content-platform="${esc(item)}"
+                    title="${esc(label)}"
+                    aria-label="${esc(label)}">${renderAccountPoolPlatformIcon(item)}</span>`;
     }).join("")}</span>`
     : "";
-  return `<span class="persona-status-chip ${hasExecutionAccount ? "is-ready" : "is-warning"}">${platformLogos}<span>账号：${esc(accountLabel)}</span></span>`;
+  const statusClass = hasExecutionAccount ? "is-ready" : (accountSyncPending ? "is-loading" : "is-warning");
+  return `<span class="persona-status-chip ${statusClass}">${platformLogos}<span>账号：${esc(accountLabel)}</span></span>`;
 }
 
 function personaSummaryCounts(persona) {
   const personaId = String(persona?.id || "");
-  const drafts = personaDraftPosts(persona);
-  const favorites = personaFavoritePosts(persona);
+  const selectedPlatform = personaContentPlatform(persona);
+  const allDrafts = visiblePersonaDraftPosts(state.personaDraftPosts[personaId] || []);
+  const allFavorites = state.personaFavoritePosts[personaId] || [];
+  const draftsLoaded = Array.isArray(state.personaDraftPosts[personaId]);
+  const favoritesLoaded = Array.isArray(state.personaFavoritePosts[personaId]);
+  const drafts = allDrafts.filter((post) => personaPostContentPlatform(post) === selectedPlatform);
+  const favorites = allFavorites.filter((post) => personaPostContentPlatform(post) === selectedPlatform);
+  const overviewDraftCount = personaOverviewDraftCount(persona);
+  const overviewFavoriteCount = personaOverviewFavoriteCount(persona);
   return {
-    draftCount: Array.isArray(state.personaDraftPosts[personaId]) ? drafts.length : personaOverviewDraftCount(persona),
-    favoriteCount: Array.isArray(state.personaFavoritePosts[personaId]) ? favorites.length : personaOverviewFavoriteCount(persona),
+    draftCount: draftsLoaded ? drafts.length : (selectedPlatform === "threads" ? overviewDraftCount : 0),
+    favoriteCount: favoritesLoaded ? favorites.length : (selectedPlatform === "threads" ? overviewFavoriteCount : 0),
+    totalDraftCount: draftsLoaded ? allDrafts.length : overviewDraftCount,
+    totalFavoriteCount: favoritesLoaded ? allFavorites.length : overviewFavoriteCount,
   };
 }
 
@@ -5621,15 +5709,15 @@ var PERSONA_THREADS_STRATEGIES = {
   threads_warmup: [
     { id: "tg_default", label: "默认养号：浏览 + 低频点赞", payload: { strategy_id: "tg_default", browse_limit: 80, scroll_times: 80, like_limit: 8, like_chance: 100, max_comments: 0, comment_chance: 0 } },
     { id: "browse_only", label: "保守养号：只浏览", payload: { strategy_id: "browse_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 0, comment_chance: 0 } },
-    { id: "comment_only", label: "评论养号：浏览 + 人设留言", payload: { strategy_id: "comment_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 4, comment_chance: 100 } },
-    { id: "like_comment", label: "互动养号：低频点赞 + 人设留言", payload: { strategy_id: "like_comment", browse_limit: 80, scroll_times: 80, like_limit: 7, like_chance: 100, max_comments: 4, comment_chance: 100 } },
+    { id: "comment_only", label: "评论养号：浏览 + 人设留言", payload: { strategy_id: "comment_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 3, comment_chance: 100 } },
+    { id: "like_comment", label: "互动养号：低频点赞 + 人设留言", payload: { strategy_id: "like_comment", browse_limit: 80, scroll_times: 80, like_limit: 7, like_chance: 100, max_comments: 3, comment_chance: 100 } },
     { id: "warmup_custom", label: "自定义养号", payload: { strategy_id: "warmup_custom", browse_limit: 80, scroll_times: 80, like_limit: 0, max_comments: 0, comment_chance: 0 } },
   ],
   instagram_warmup: [
     { id: "tg_default", label: "默认养号：浏览 + 低频点赞", payload: { strategy_id: "tg_default", browse_limit: 80, scroll_times: 80, like_limit: 8, like_chance: 100, max_comments: 0, comment_chance: 0 } },
     { id: "browse_only", label: "保守养号：只浏览", payload: { strategy_id: "browse_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 0, comment_chance: 0 } },
-    { id: "comment_only", label: "评论养号：浏览 + 人设留言", payload: { strategy_id: "comment_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 4, comment_chance: 100 } },
-    { id: "like_comment", label: "互动养号：低频点赞 + 人设留言", payload: { strategy_id: "like_comment", browse_limit: 80, scroll_times: 80, like_limit: 7, like_chance: 100, max_comments: 4, comment_chance: 100 } },
+    { id: "comment_only", label: "评论养号：浏览 + 人设留言", payload: { strategy_id: "comment_only", browse_limit: 80, scroll_times: 80, like_limit: 0, like_chance: 0, max_comments: 3, comment_chance: 100 } },
+    { id: "like_comment", label: "互动养号：低频点赞 + 人设留言", payload: { strategy_id: "like_comment", browse_limit: 80, scroll_times: 80, like_limit: 7, like_chance: 100, max_comments: 3, comment_chance: 100 } },
     { id: "warmup_custom", label: "自定义养号", payload: { strategy_id: "warmup_custom", browse_limit: 80, scroll_times: 80, like_limit: 0, max_comments: 0, comment_chance: 0 } },
   ],
 };
@@ -7703,7 +7791,7 @@ function setPersonaDraftViewMode(mode, personaId = String(selectedPersona()?.id 
 }
 
 function personaPostPageKey(persona = selectedPersona(), source = personaPostSource(persona)) {
-  return `${String(persona?.id || "default")}::${source === "favorites" ? "favorites" : "posts"}`;
+  return `${String(persona?.id || "default")}::${personaContentPlatform(persona)}::${source === "favorites" ? "favorites" : "posts"}`;
 }
 
 const MOBILE_TWEET_STREAM_QUERY = "(max-width: 760px)";
@@ -8922,7 +9010,13 @@ function renderPersonaProfileIdentity(persona, profile, {
   }
   const resolvedProfile = profile || state.personaProfiles[String(persona.id)] || fallbackPersonaProfile(persona);
   const displayAvatar = normalizePersonaAvatar(resolvedProfile?.avatar);
-  const { draftCount, favoriteCount } = personaSummaryCounts(persona);
+  const {
+    draftCount,
+    favoriteCount,
+    totalDraftCount,
+    totalFavoriteCount,
+  } = personaSummaryCounts(persona);
+  const selectedPlatformLabel = platformLabel(personaContentPlatform(persona));
   const groupNames = personaGroupsForPersona(persona?.id)
     .map((group) => String(group?.name || "").trim())
     .filter(Boolean);
@@ -8941,7 +9035,9 @@ function renderPersonaProfileIdentity(persona, profile, {
             </div>
             <div class="persona-profile-compact-meta" aria-label="当前人设信息">
               <span><small>分组</small><strong>${esc(personaGroup)}</strong></span>
-              <span><small>内容</small><strong>草稿 ${esc(numberText(draftCount))} · 收藏 ${esc(numberText(favoriteCount))}</strong></span>
+              <span data-persona-platform-summary><small>${esc(selectedPlatformLabel)}</small><strong>草稿 ${esc(numberText(draftCount))} · 收藏 ${esc(numberText(favoriteCount))}</strong></span>
+              <span data-persona-total-drafts><small>总草稿</small><strong>${esc(numberText(totalDraftCount))}</strong></span>
+              <span data-persona-total-favorites><small>总收藏</small><strong>${esc(numberText(totalFavoriteCount))}</strong></span>
             </div>
           </div>
           ${listToggle}
@@ -8971,8 +9067,9 @@ function renderPersonaProfileIdentity(persona, profile, {
           <div class="persona-profile-summary-strip" aria-label="当前人设信息">
             <div class="persona-profile-summary-grid">
               <span class="persona-profile-summary-item"><small>人设分组</small><strong>${esc(personaGroup)}</strong></span>
-              <span class="persona-profile-summary-item"><small>草稿</small><strong>${esc(`${draftCount} 条`)}</strong></span>
-              <span class="persona-profile-summary-item"><small>收藏</small><strong>${esc(`${favoriteCount} 条`)}</strong></span>
+              <span class="persona-profile-summary-item" data-persona-platform-summary><small>${esc(selectedPlatformLabel)}</small><strong>草稿 ${esc(numberText(draftCount))} · 收藏 ${esc(numberText(favoriteCount))}</strong></span>
+              <span class="persona-profile-summary-item" data-persona-total-drafts><small>总草稿</small><strong>${esc(numberText(totalDraftCount))}</strong></span>
+              <span class="persona-profile-summary-item" data-persona-total-favorites><small>总收藏</small><strong>${esc(numberText(totalFavoriteCount))}</strong></span>
             </div>
           </div>
         </div>
@@ -11217,19 +11314,30 @@ function openAutomationPlanTaskConfigurator(index, options = null) {
     content.querySelectorAll("strong, p, label, button, [title], [aria-label], [placeholder]").forEach(markConsoleUiElement);
     translateConsoleLanguage(content, currentLanguage());
   };
-  const onAutomationTaskConfigure = (event) => {
+  const onAutomationTaskConfigure = async (event) => {
     event.stopPropagation();
     const stepButton = event.target.closest("[data-automation-step]");
     if (stepButton) {
-      const nextStep = String(stepButton.dataset.automationStep || "warmup");
-      state.simpleBranches.automation = ["reply_comment", "reply_hot", "warmup"].includes(nextStep) ? nextStep : "warmup";
+      const requestedNextStep = String(stepButton.dataset.automationStep || "warmup");
+      const nextStep = ["reply_comment", "reply_hot", "warmup"].includes(requestedNextStep)
+        ? requestedNextStep
+        : "warmup";
       const nextGroup = nextStep === "reply_hot"
         ? "threads_hot_reply"
         : nextStep === "warmup"
           ? `${platform}_warmup`
           : "threads_comment_reply";
-      state.automationPlanEditorPayload = cloneAutomationPlanPayload(personaThreadsStrategy(nextGroup)?.payload || {});
-      rerender();
+      event.__vectoSegmentSlideHandled = true;
+      await slideSegmentedButtonBackground(stepButton, {
+        commit: () => {
+          state.simpleBranches.automation = nextStep;
+          state.automationPlanEditorPayload = cloneAutomationPlanPayload(personaThreadsStrategy(nextGroup)?.payload || {});
+          rerender();
+        },
+        resolveButton: () => modal?.querySelector(
+          `[data-automation-step="${CSS.escape(nextStep)}"]`
+        ),
+      });
       return;
     }
     const addButton = event.target.closest("[data-automation-plan-add-configured]");
@@ -11834,7 +11942,7 @@ function publishContentSourceLabel(source = state.publishContentSource) {
 }
 
 function publishSelectionKey(persona = selectedPersona(), source = state.publishContentSource) {
-  return `${String(persona?.id || "default")}::${normalizePublishContentSource(source)}`;
+  return `${String(persona?.id || "default")}::${personaContentPlatform(persona)}::${normalizePublishContentSource(source)}`;
 }
 
 function publishSourceRows(persona = selectedPersona(), source = state.publishContentSource) {
@@ -13084,11 +13192,19 @@ function bindSimpleFlowInputs(moduleId) {
       });
     });
     document.querySelectorAll("[data-automation-plan-mode]").forEach((node) => {
-      node.addEventListener("click", (event) => {
+      node.addEventListener("click", async (event) => {
+        const nextMode = node.dataset.automationPlanMode === "loop" ? "loop" : "list";
         event.__vectoSegmentSlideHandled = true;
-        const { draft } = currentAutomationPlanDraft();
-        draft.mode = node.dataset.automationPlanMode === "loop" ? "loop" : "list";
-        renderSimpleFlowModule("publishing");
+        await slideSegmentedButtonBackground(node, {
+          commit: () => {
+            const { draft } = currentAutomationPlanDraft();
+            draft.mode = nextMode;
+            renderSimpleFlowModule("publishing");
+          },
+          resolveButton: () => document.querySelector(
+            `[data-automation-plan-mode="${CSS.escape(nextMode)}"]`
+          ),
+        });
       });
     });
     document.querySelectorAll("[data-automation-plan-time]").forEach((node) => {
@@ -13300,12 +13416,20 @@ function bindSimpleFlowInputs(moduleId) {
     });
     document.querySelectorAll("[data-publish-preview-post]").forEach((node) => {
       node.addEventListener("click", async (event) => {
-        await waitForSegmentedBackgroundSlide(event, node);
-        state.publishPreviewPostId = String(node.dataset.publishPreviewPost || "").trim();
-        // Preview tabs only change the active post. Keep the surrounding
-        // publish workspace and its scroll containers mounted to avoid a
-        // full module repaint and the resulting scroll jump/white flash.
-        if (!syncPublishPreviewSelectionDom()) renderSimpleFlowModule("publishing");
+        const postId = String(node.dataset.publishPreviewPost || "").trim();
+        event.__vectoSegmentSlideHandled = true;
+        await slideSegmentedButtonBackground(node, {
+          commit: () => {
+            state.publishPreviewPostId = postId;
+            // Preview tabs only change the active post. Keep the surrounding
+            // publish workspace and its scroll containers mounted to avoid a
+            // full module repaint and the resulting scroll jump/white flash.
+            if (!syncPublishPreviewSelectionDom()) renderSimpleFlowModule("publishing");
+          },
+          resolveButton: () => document.querySelector(
+            `[data-publish-preview-post="${CSS.escape(postId)}"]`
+          ),
+        });
       });
     });
     document.querySelectorAll("[data-publish-history-card]").forEach((node) => {
@@ -13422,34 +13546,65 @@ function bindSimpleFlowInputs(moduleId) {
       node.addEventListener("click", async (event) => {
         const personaId = String(node.dataset.automationPersona || "").trim();
         if (!personaId) return;
-        await waitForSegmentedBackgroundSlide(event, node);
-        setSelectedPersonaId(personaId);
-        state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
-        setSelectedPersonaPostId("");
-        renderSimpleFlowModule("automation");
+        event.__vectoSegmentSlideHandled = true;
+        await slideSegmentedButtonBackground(node, {
+          commit: () => {
+            setSelectedPersonaId(personaId);
+            state.preferredAccountId = accountForPersona(selectedPersona())?.id || "";
+            setSelectedPersonaPostId("");
+            renderSimpleFlowModule("automation");
+          },
+          resolveButton: () => document.querySelector(
+            `[data-automation-persona="${CSS.escape(personaId)}"]`
+          ),
+        });
       });
     });
     document.querySelectorAll("[data-automation-platform]").forEach((node) => {
       node.addEventListener("click", async (event) => {
-        await waitForSegmentedBackgroundSlide(event, node);
-        state.personaAutomationPlatform = node.dataset.automationPlatform === "instagram" ? "instagram" : "threads";
-        state.preferredAccountId = "";
-        renderSimpleFlowModule("automation");
+        const platform = node.dataset.automationPlatform === "instagram" ? "instagram" : "threads";
+        event.__vectoSegmentSlideHandled = true;
+        await slideSegmentedButtonBackground(node, {
+          commit: () => {
+            state.personaAutomationPlatform = platform;
+            state.preferredAccountId = "";
+            renderSimpleFlowModule("automation");
+          },
+          resolveButton: () => document.querySelector(
+            `[data-automation-platform="${CSS.escape(platform)}"]`
+          ),
+        });
       });
     });
     document.querySelectorAll("[data-automation-account]").forEach((node) => {
       node.addEventListener("click", async (event) => {
-        await waitForSegmentedBackgroundSlide(event, node);
-        state.preferredAccountId = node.dataset.automationAccount || "";
-        renderSimpleFlowModule("automation");
+        const accountId = node.dataset.automationAccount || "";
+        event.__vectoSegmentSlideHandled = true;
+        await slideSegmentedButtonBackground(node, {
+          commit: () => {
+            state.preferredAccountId = accountId;
+            renderSimpleFlowModule("automation");
+          },
+          resolveButton: () => document.querySelector(
+            `[data-automation-account="${CSS.escape(accountId)}"]`
+          ),
+        });
       });
     });
     document.querySelectorAll("[data-automation-step]").forEach((node) => {
       node.addEventListener("click", async (event) => {
-        await waitForSegmentedBackgroundSlide(event, node);
         const step = String(node.dataset.automationStep || "binding");
-        state.simpleBranches.automation = ["binding", "reply_comment", "reply_hot", "warmup"].includes(step) ? step : "binding";
-        renderSimpleFlowModule("automation");
+        const nextStep = ["binding", "reply_comment", "reply_hot", "warmup"].includes(step) ? step : "binding";
+        event.__vectoSegmentSlideHandled = true;
+        await slideSegmentedButtonBackground(node, {
+          commit: () => {
+            state.simpleBranches.automation = nextStep;
+            renderSimpleFlowModule("automation");
+          },
+          resolveButton: () => document.querySelector(
+            `[data-automation-step="${CSS.escape(nextStep)}"]`
+          ),
+        });
       });
     });
   }
@@ -17672,6 +17827,7 @@ function generatePersonaPayloadFromState(persona, profile = selectedPersonaProfi
   const payload = {
     count,
     prompt: "",
+    platform: personaContentPlatform(persona),
     target_words: targetWords,
     content_time_slot: String(form.contentTimeSlot || "").trim(),
     selected_memory_ids: Array.isArray(form.selectedMemoryIds) ? form.selectedMemoryIds : [],
@@ -17985,7 +18141,13 @@ async function createPersonaDraftPost() {
     {
       method: editingPostId ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, content, media_paths: initialMediaPaths, media_ops: preparedMediaOps }),
+      body: JSON.stringify({
+        title,
+        content,
+        platform: personaContentPlatform(persona),
+        media_paths: initialMediaPaths,
+        media_ops: preparedMediaOps,
+      }),
     },
   );
   const savedPostId = result.id || editingPostId || "";
@@ -18171,6 +18333,7 @@ async function submitPersonaHotDraftImport(persona, selected, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      platform: personaContentPlatform(persona),
       candidates: selected.map((candidate) => ({
         id: candidate.id || candidate.candidate_id,
         platform: candidate.platform,
@@ -21462,6 +21625,50 @@ function transientWorkspaceFingerprint(kind, value) {
   return `${kind}:${JSON.stringify(normalize(value))}`;
 }
 
+function activePersonaDraftComposerTransientState(persona = selectedPersona()) {
+  if (!persona || !isPersonaWorkspaceModule()) return null;
+  if (state.personaGroup !== "content" || currentPersonaGroupStep("content", selectedPersonaProfile()) !== "generate") return null;
+  snapshotPersonaCurrentForm();
+  const draft = normalizePersonaDraftForm(personaFormState(persona.id).draft);
+  if (String(draft.editingPostId || "").trim()) return null;
+  const title = String(draft.title || $("personaDraftTitle")?.value || "").trim();
+  const content = String(draft.content || $("personaDraftContent")?.value || "").trim();
+  const fileCount = filesFromInput("personaPostMediaUploadFiles").length;
+  if (!title && !content && !fileCount) return null;
+  const platform = personaContentPlatform(persona);
+  return {
+    kind: "persona_draft_composer",
+    persona,
+    title,
+    content,
+    fileCount,
+    platform,
+    guardKey: transientWorkspaceFingerprint("persona_draft_composer", {
+      personaId: String(persona.id || ""),
+      platform,
+      title,
+      content,
+      fileCount,
+    }),
+  };
+}
+
+async function confirmPersonaContentPlatformSwitch(persona, nextPlatform) {
+  const currentPlatform = personaContentPlatform(persona);
+  const targetPlatform = normalizePersonaContentPlatform(nextPlatform);
+  if (currentPlatform === targetPlatform) return true;
+  const transient = activePersonaDraftComposerTransientState(persona);
+  if (!transient) return true;
+  const platformLabel = Object.fromEntries(accountPoolPlatforms);
+  return openConsoleModal({
+    title: "切换推文平台？",
+    message: `当前 ${platformLabel[currentPlatform] || currentPlatform} 输入区还有未保存内容。切换到 ${platformLabel[targetPlatform] || targetPlatform} 后将清空这些临时内容。`,
+    confirmText: "清空并切换",
+    cancelText: "继续编辑",
+    danger: true,
+  });
+}
+
 function activeHotCandidateTransientState(persona = selectedPersona()) {
   if (!persona || !isPersonaWorkspaceModule()) return null;
   const form = personaFormState(persona.id).generate;
@@ -21564,6 +21771,19 @@ function activeTransientWorkspaceState() {
       confirmText: "退出并继续",
       cancelText: "留在预览",
       clear: () => clearPersonaGenerateRunState(generatePreview.persona.id),
+    };
+  }
+  const draftComposer = activePersonaDraftComposerTransientState();
+  if (draftComposer) {
+    return {
+      kind: "persona_draft_composer",
+      title: "离开当前推文输入？",
+      message: `当前 ${draftComposer.platform === "instagram" ? "Instagram" : "Threads"} 输入区还有未保存内容。确定离开后会清空标题、正文和待上传媒体。`,
+      confirmText: "清空并离开",
+      cancelText: "继续编辑",
+      guardKey: draftComposer.guardKey,
+      danger: true,
+      clear: () => resetPersonaNewDraftComposer(draftComposer.persona.id),
     };
   }
   const mediaTaskResult = activeMediaTaskResultPreview();
@@ -21851,6 +22071,9 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             </div>
           </div>
         ` : ""}
+        ${renderPersonaContentPlatformRail(persona, {
+          disabled: isEditingDraft || generateBusy || hotImportBusy,
+        })}
         <div class="persona-compose-workspace ${hasComposeAside ? "has-media" : ""}">
           <section class="persona-compose-post-side persona-production-section ${isEditingDraft ? "is-editing-draft" : ""} ${editingDirty ? "is-dirty" : ""}">
             ${isEditingDraft ? `
@@ -22066,6 +22289,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           <strong>${postSource === "favorites" ? "收藏推文" : "草稿库"}</strong>
           <span class="persona-panel-intro">${esc(`这里集中查看并选择待执行内容。当前草稿 ${drafts.length} 条，收藏 ${favorites.length} 条。`)}</span>
         </div>
+        ${renderPersonaContentPlatformRail(persona)}
         <div class="persona-draft-toolbar persona-draft-toolbar--posts">
           ${renderPersonaPostBulkActions(persona, postSource, sourceRows)}
           <div class="row-actions persona-draft-toolbar-actions">
@@ -26939,10 +27163,10 @@ const SEGMENTED_BACKGROUND_BUTTON_SELECTOR = [
   ".persona-media-operation-toggle > button",
   ".persona-draft-view-toggle > button",
   ".persona-compose-toggle > button",
+  ".account-browser-tabs > button",
   ".mobile-task-dock > button",
 ].join(",");
 const segmentedBackgroundSlides = new WeakMap();
-const segmentedBackgroundCommits = new WeakMap();
 
 async function slideSegmentedButtonBackground(button, options = {}) {
   const commit = typeof options.commit === "function" ? options.commit : null;
@@ -27036,9 +27260,6 @@ async function slideSegmentedButtonBackground(button, options = {}) {
     });
   });
   const completion = slide.then(() => new Promise((resolve) => requestAnimationFrame(() => {
-    const onBeforeCleanup = segmentedBackgroundCommits.get(group);
-    segmentedBackgroundCommits.delete(group);
-    onBeforeCleanup?.();
     current.classList.remove("is-segment-slide-from");
     button.classList.remove("is-segment-slide-to");
     group.classList.remove("is-segment-background-sliding");
@@ -27062,23 +27283,6 @@ async function slideSegmentedButtonBackground(button, options = {}) {
     await completion;
   } finally {
     if (segmentedBackgroundSlides.get(group) === completion) segmentedBackgroundSlides.delete(group);
-  }
-}
-
-async function waitForSegmentedBackgroundSlide(event, button, options = {}) {
-  if (event?.__vectoSegmentSlideHandled) return;
-  if (event) event.__vectoSegmentSlideHandled = true;
-  const group = button?.parentElement;
-  const onBeforeCleanup = options.onBeforeCleanup;
-  if (group && typeof onBeforeCleanup === "function") {
-    segmentedBackgroundCommits.set(group, onBeforeCleanup);
-  }
-  try {
-    await slideSegmentedButtonBackground(button);
-  } finally {
-    if (group && segmentedBackgroundCommits.get(group) === onBeforeCleanup) {
-      segmentedBackgroundCommits.delete(group);
-    }
   }
 }
 
@@ -27383,8 +27587,6 @@ function bindEvents() {
       event.stopPropagation();
       return;
     }
-    const segmentedButton = event.target.closest(SEGMENTED_BACKGROUND_BUTTON_SELECTOR);
-    if (segmentedButton) await waitForSegmentedBackgroundSlide(event, segmentedButton);
     const personaMobileToggle = event.target.closest("[data-persona-mobile-list-toggle]");
     if (personaMobileToggle) {
       const sidebarId = personaMobileToggle.dataset.personaMobileListToggle || "";
@@ -27674,10 +27876,19 @@ function bindEvents() {
     if (hotSearchModeButton) {
       const persona = selectedPersona();
       if (persona) {
-        snapshotPersonaCurrentForm();
-        personaFormState(persona.id).generate.hotSearchMode = normalizePersonaHotSearchMode(hotSearchModeButton.dataset.personaHotSearchMode);
-        renderPersonaDetail();
-        renderConfirmSummary();
+        const mode = normalizePersonaHotSearchMode(hotSearchModeButton.dataset.personaHotSearchMode);
+        event.__vectoSegmentSlideHandled = true;
+        await slideSegmentedButtonBackground(hotSearchModeButton, {
+          commit: () => {
+            snapshotPersonaCurrentForm();
+            personaFormState(persona.id).generate.hotSearchMode = mode;
+            renderPersonaDetail();
+            renderConfirmSummary();
+          },
+          resolveButton: () => document.querySelector(
+            `[data-persona-hot-search-mode="${CSS.escape(mode)}"]`
+          ),
+        });
       }
       return;
     }
@@ -27685,13 +27896,22 @@ function bindEvents() {
     if (hotFreshnessModeButton) {
       const persona = selectedPersona();
       if (persona) {
-        snapshotPersonaCurrentForm();
-        const form = personaFormState(persona.id).generate;
-        form.hotFreshnessMode = hotFreshnessModeButton.dataset.personaHotFreshnessMode === "custom" ? "custom" : "default";
-        if (form.hotFreshnessMode === "default") form.hotFreshnessDays = 7;
-        else form.hotFreshnessDays = normalizePersonaHotFreshnessDays(form.hotFreshnessDays || 7);
-        renderPersonaDetail();
-        renderConfirmSummary();
+        const mode = hotFreshnessModeButton.dataset.personaHotFreshnessMode === "custom" ? "custom" : "default";
+        event.__vectoSegmentSlideHandled = true;
+        await slideSegmentedButtonBackground(hotFreshnessModeButton, {
+          commit: () => {
+            snapshotPersonaCurrentForm();
+            const form = personaFormState(persona.id).generate;
+            form.hotFreshnessMode = mode;
+            if (form.hotFreshnessMode === "default") form.hotFreshnessDays = 7;
+            else form.hotFreshnessDays = normalizePersonaHotFreshnessDays(form.hotFreshnessDays || 7);
+            renderPersonaDetail();
+            renderConfirmSummary();
+          },
+          resolveButton: () => document.querySelector(
+            `[data-persona-hot-freshness-mode="${CSS.escape(mode)}"]`
+          ),
+        });
       }
       return;
     }
@@ -27911,10 +28131,19 @@ function bindEvents() {
       const persona = selectedPersona();
       const personaId = String(persona?.id || state.renderedPersonaId || state.selectedPersonaId || "").trim();
       if (personaId) {
-        snapshotPersonaCurrentForm();
-        personaFormState(personaId).media.operationMode = mediaOperationButton.dataset.personaMediaOperation === "generate" ? "generate" : "replace";
-        renderPersonaDetail();
-        renderConfirmSummary();
+        const operationMode = mediaOperationButton.dataset.personaMediaOperation === "generate" ? "generate" : "replace";
+        event.__vectoSegmentSlideHandled = true;
+        await slideSegmentedButtonBackground(mediaOperationButton, {
+          commit: () => {
+            snapshotPersonaCurrentForm();
+            personaFormState(personaId).media.operationMode = operationMode;
+            renderPersonaDetail();
+            renderConfirmSummary();
+          },
+          resolveButton: () => document.querySelector(
+            `[data-persona-media-operation="${CSS.escape(operationMode)}"]`
+          ),
+        });
       }
       return;
     }
@@ -28130,10 +28359,38 @@ function bindEvents() {
     if (draftViewButton) {
       const persona = selectedPersona();
       if (persona) {
-        setPersonaDraftViewMode(draftViewButton.dataset.personaDraftView || "grid", persona.id);
-        renderPersonaDetail();
-        renderConfirmSummary();
+        const viewMode = draftViewButton.dataset.personaDraftView === "list" ? "list" : "grid";
+        event.__vectoSegmentSlideHandled = true;
+        await slideSegmentedButtonBackground(draftViewButton, {
+          commit: () => {
+            setPersonaDraftViewMode(viewMode, persona.id);
+            renderPersonaDetail();
+            renderConfirmSummary();
+          },
+          resolveButton: () => document.querySelector(
+            `[data-persona-draft-view="${CSS.escape(viewMode)}"]`
+          ),
+        });
       }
+      return;
+    }
+    const contentPlatformButton = event.target.closest("[data-persona-content-platform]");
+    if (contentPlatformButton) {
+      const persona = selectedPersona();
+      if (!persona) return;
+      const nextPlatform = normalizePersonaContentPlatform(contentPlatformButton.dataset.personaContentPlatform);
+      if (nextPlatform === personaContentPlatform(persona)) return;
+      const hasTransientComposer = Boolean(activePersonaDraftComposerTransientState(persona));
+      if (!(await confirmPersonaContentPlatformSwitch(persona, nextPlatform))) return;
+      if (hasTransientComposer) resetPersonaNewDraftComposer(persona.id);
+      setPersonaContentPlatform(nextPlatform, persona);
+      const source = personaPostSource(persona);
+      setPersonaPostPage(persona, source, 1);
+      const rows = personaSourcePosts(persona, source);
+      setSelectedPersonaPostId(rows[0]?.id || "", { auto: true });
+      if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
+      else renderPersonaDetail();
+      renderConfirmSummary();
       return;
     }
     const contentTabButton = event.target.closest("[data-persona-content-tab]");
@@ -28147,37 +28404,45 @@ function bindEvents() {
         if (!(await canLeavePersonaDraftEdit(persona.id, nextStep))) return;
         const currentStep = currentPersonaGroupStep("content", selectedPersonaProfile());
         if ((state.personaGroup !== "content" || currentStep !== nextStep) && !(await confirmLeaveTransientWorkspaceState())) return;
-        clearMsg("commandMsg");
-        state.personaGroup = "content";
-        if (target === "generate") {
-          resetPersonaNewDraftComposer(persona.id);
-        } else {
-          setPersonaPostSource(target, persona);
-          setPersonaPostPage(persona, target, 1);
-          if (target === "favorites") loadPersonaFavoritePosts(persona.id).catch(() => {});
-          const rows = personaSourcePosts(persona, target);
-          setSelectedPersonaPostId(rows[0]?.id || "", { auto: true });
-          resetPersonaDraftEditor(persona.id);
-        }
-        setPersonaGroupStep("content", nextStep, selectedPersonaProfile());
-        const contentShell = $("personaDetail")?.querySelector(".persona-step-shell");
-        const contentPanel = contentShell?.querySelector(":scope > .persona-inline-panel");
-        if (contentShell && contentPanel) {
-          contentShell.querySelectorAll("[data-persona-content-tab]").forEach((button) => {
-            const tab = String(button.dataset.personaContentTab || "");
-            button.classList.toggle("is-active", target === "generate" ? tab === "generate" : tab === target);
-          });
-          contentPanel.outerHTML = renderPersonaContentPanel(
-            persona,
-            accountForPersona(persona),
-            selectedPersonaProfile(),
-            nextStep,
-          );
-          window.requestAnimationFrame(resizePersonaDraftEditContent);
-        } else {
-          renderPersonaDetail();
-        }
-        renderConfirmSummary();
+        event.__vectoSegmentSlideHandled = true;
+        await slideSegmentedButtonBackground(contentTabButton, {
+          commit: () => {
+            clearMsg("commandMsg");
+            state.personaGroup = "content";
+            if (target === "generate") {
+              resetPersonaNewDraftComposer(persona.id);
+            } else {
+              setPersonaPostSource(target, persona);
+              setPersonaPostPage(persona, target, 1);
+              if (target === "favorites") loadPersonaFavoritePosts(persona.id).catch(() => {});
+              const rows = personaSourcePosts(persona, target);
+              setSelectedPersonaPostId(rows[0]?.id || "", { auto: true });
+              resetPersonaDraftEditor(persona.id);
+            }
+            setPersonaGroupStep("content", nextStep, selectedPersonaProfile());
+            const contentShell = $("personaDetail")?.querySelector(".persona-step-shell");
+            const contentPanel = contentShell?.querySelector(":scope > .persona-inline-panel");
+            if (contentShell && contentPanel) {
+              contentShell.querySelectorAll("[data-persona-content-tab]").forEach((button) => {
+                const tab = String(button.dataset.personaContentTab || "");
+                button.classList.toggle("is-active", target === "generate" ? tab === "generate" : tab === target);
+              });
+              contentPanel.outerHTML = renderPersonaContentPanel(
+                persona,
+                accountForPersona(persona),
+                selectedPersonaProfile(),
+                nextStep,
+              );
+              window.requestAnimationFrame(resizePersonaDraftEditContent);
+            } else {
+              renderPersonaDetail();
+            }
+            renderConfirmSummary();
+          },
+          resolveButton: () => document.querySelector(
+            `[data-persona-content-tab="${CSS.escape(target)}"]`
+          ),
+        });
       }
       return;
     }
@@ -28403,26 +28668,34 @@ function bindEvents() {
           showMsg("commandMsg", "当前正在编辑单条草稿，批量推文和热点抓取已锁定。请先保存或退出编辑后切换。", false);
           return;
         }
-        form.generate.composeMode = nextComposeMode;
-        form.generate.mode = nextComposeMode === "hot" ? "hot" : "ai";
-        if (editingPostId) {
-          form.draft.rewriteSourcePostId = editingPostId;
-        }
-        state.personaGroup = "content";
-        state.personaPanels.content = "generate";
-        const composePanel = $("personaDetail")?.querySelector(".persona-generate-panel");
-        if (composePanel) {
-          composePanel.outerHTML = renderPersonaContentPanel(
-            persona,
-            accountForPersona(persona),
-            selectedPersonaProfile(),
-            "generate",
-          );
-          window.requestAnimationFrame(resizePersonaDraftEditContent);
-        } else {
-          renderPersonaDetail();
-        }
-        renderConfirmSummary();
+        event.__vectoSegmentSlideHandled = true;
+        await slideSegmentedButtonBackground(composeModeButton, {
+          commit: () => {
+            form.generate.composeMode = nextComposeMode;
+            form.generate.mode = nextComposeMode === "hot" ? "hot" : "ai";
+            if (editingPostId) {
+              form.draft.rewriteSourcePostId = editingPostId;
+            }
+            state.personaGroup = "content";
+            state.personaPanels.content = "generate";
+            const composePanel = $("personaDetail")?.querySelector(".persona-generate-panel");
+            if (composePanel) {
+              composePanel.outerHTML = renderPersonaContentPanel(
+                persona,
+                accountForPersona(persona),
+                selectedPersonaProfile(),
+                "generate",
+              );
+              window.requestAnimationFrame(resizePersonaDraftEditContent);
+            } else {
+              renderPersonaDetail();
+            }
+            renderConfirmSummary();
+          },
+          resolveButton: () => document.querySelector(
+            `[data-persona-compose-mode="${CSS.escape(nextComposeMode)}"]`
+          ),
+        });
       }
       return;
     }
@@ -28866,7 +29139,7 @@ function bindEvents() {
   });
   if ($("refreshTasks")) $("refreshTasks").addEventListener("click", () => loadTasks().then(renderWorkspace));
   if ($("refreshSocialTasks")) $("refreshSocialTasks").addEventListener("click", () => loadSocial().then(renderWorkspace));
-  $("taskTable").addEventListener("click", (event) => {
+  $("taskTable").addEventListener("click", async (event) => {
     const personaMobileToggle = event.target.closest("[data-persona-mobile-list-toggle]");
     if (personaMobileToggle) {
       const sidebarId = personaMobileToggle.dataset.personaMobileListToggle || "";
@@ -28911,8 +29184,17 @@ function bindEvents() {
     }
     const taskQueuePanelButton = event.target.closest("[data-task-queue-panel]");
     if (taskQueuePanelButton) {
-      state.taskQueuePanel = taskQueuePanelButton.dataset.taskQueuePanel === "regular" ? "regular" : "persona";
-      $("taskTable").innerHTML = renderTaskQueueView();
+      const nextPanel = taskQueuePanelButton.dataset.taskQueuePanel === "regular" ? "regular" : "persona";
+      event.__vectoSegmentSlideHandled = true;
+      await slideSegmentedButtonBackground(taskQueuePanelButton, {
+        commit: () => {
+          state.taskQueuePanel = nextPanel;
+          $("taskTable").innerHTML = renderTaskQueueView();
+        },
+        resolveButton: () => document.querySelector(
+          `[data-task-queue-panel="${CSS.escape(nextPanel)}"]`
+        ),
+      });
       return;
     }
     const taskQueuePageButton = event.target.closest("[data-task-queue-page]");
@@ -29032,8 +29314,6 @@ function bindEvents() {
   if ($("socialPlatform")) $("socialPlatform").addEventListener("change", syncStandaloneSocialForm);
   if ($("runSocialOnce")) $("runSocialOnce").addEventListener("click", () => api("/api/persona_dashboard/automation/worker/run_once", { method: "POST" }).then(loadSocial).catch((error) => showMsg("socialMsg", error.detail || error.message || "执行失败", false)));
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click", async (event) => {
-    const segmentedButton = event.target.closest(SEGMENTED_BACKGROUND_BUTTON_SELECTOR);
-    if (segmentedButton) await waitForSegmentedBackgroundSlide(event, segmentedButton);
     const personaMobileToggle = event.target.closest("[data-persona-mobile-list-toggle]");
     if (personaMobileToggle) {
       const sidebarId = personaMobileToggle.dataset.personaMobileListToggle || "";
@@ -29066,7 +29346,14 @@ function bindEvents() {
     }
     const tab = event.target.closest("[data-account-browser-tab]");
     if (tab) {
-      setAccountBrowserPanel(tab.dataset.accountBrowserTab || "accounts");
+      const nextPanel = tab.dataset.accountBrowserTab || "accounts";
+      event.__vectoSegmentSlideHandled = true;
+      await slideSegmentedButtonBackground(tab, {
+        commit: () => setAccountBrowserPanel(nextPanel),
+        resolveButton: () => document.querySelector(
+          `[data-account-browser-tab="${CSS.escape(nextPanel)}"]`
+        ),
+      });
       return;
     }
     const accountPasswordToggle = event.target.closest("[data-account-password-toggle]");
@@ -29110,7 +29397,14 @@ function bindEvents() {
     }
     const liveBrowserLayout = event.target.closest("[data-live-browser-layout]");
     if (liveBrowserLayout) {
-      setLiveBrowserLayout(liveBrowserLayout.dataset.liveBrowserLayout || "grid");
+      const layout = normalizeLiveBrowserLayout(liveBrowserLayout.dataset.liveBrowserLayout || "grid");
+      event.__vectoSegmentSlideHandled = true;
+      await slideSegmentedButtonBackground(liveBrowserLayout, {
+        commit: () => setLiveBrowserLayout(layout),
+        resolveButton: () => document.querySelector(
+          `[data-live-browser-layout="${CSS.escape(layout)}"]`
+        ),
+      });
       return;
     }
     const cancelAll = event.target.closest("[data-social-cancel-all]");
@@ -29384,14 +29678,26 @@ function bindEvents() {
   $("consoleSettingsBody").addEventListener("click", async (event) => {
     const completionPolicy = event.target.closest("[data-browser-completion-policy]");
     if (completionPolicy) {
-      await waitForSegmentedBackgroundSlide(event, completionPolicy);
-      setBrowserPreferenceChoice("completion_policy", completionPolicy.dataset.browserCompletionPolicy || "immediate_close");
+      const policy = completionPolicy.dataset.browserCompletionPolicy || "immediate_close";
+      event.__vectoSegmentSlideHandled = true;
+      await slideSegmentedButtonBackground(completionPolicy, {
+        commit: () => setBrowserPreferenceChoice("completion_policy", policy),
+        resolveButton: () => document.querySelector(
+          `[data-browser-completion-policy="${CSS.escape(policy)}"]`
+        ),
+      });
       return;
     }
     const inputMode = event.target.closest("[data-browser-text-input-mode]");
     if (inputMode) {
-      await waitForSegmentedBackgroundSlide(event, inputMode);
-      setBrowserPreferenceChoice("text_input_mode", inputMode.dataset.browserTextInputMode || "paste");
+      const mode = inputMode.dataset.browserTextInputMode || "paste";
+      event.__vectoSegmentSlideHandled = true;
+      await slideSegmentedButtonBackground(inputMode, {
+        commit: () => setBrowserPreferenceChoice("text_input_mode", mode),
+        resolveButton: () => document.querySelector(
+          `[data-browser-text-input-mode="${CSS.escape(mode)}"]`
+        ),
+      });
       return;
     }
     if (event.target.closest("[data-browser-recommendation-refresh]")) {

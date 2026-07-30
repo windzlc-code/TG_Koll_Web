@@ -321,7 +321,7 @@ class WarmupPersonaPolicyTests(unittest.TestCase):
         self.assertEqual(threads["browse_limit"], 80)
         self.assertEqual(threads["like_limit"], 7)
         self.assertEqual(threads["like_chance"], 100)
-        self.assertEqual(threads["max_comments"], 4)
+        self.assertEqual(threads["max_comments"], 3)
         self.assertEqual(threads["comment_chance"], 100)
         self.assertEqual(threads["ai_retry_count"], 3)
         self.assertEqual(threads["session_minutes"], "7-10")
@@ -337,8 +337,8 @@ class WarmupPersonaPolicyTests(unittest.TestCase):
         expected = {
             "tg_default": ("默认养号：浏览 + 低频点赞", 8, 0),
             "browse_only": ("保守养号：只浏览", 0, 0),
-            "comment_only": ("评论养号：浏览 + 人设留言", 0, 4),
-            "like_comment": ("互动养号：低频点赞 + 人设留言", 7, 4),
+            "comment_only": ("评论养号：浏览 + 人设留言", 0, 3),
+            "like_comment": ("互动养号：低频点赞 + 人设留言", 7, 3),
         }
         original_loader = social_api._load_persona_archive
         social_api._load_persona_archive = lambda _persona_id: {"name": "理发师"}
@@ -419,7 +419,7 @@ class WarmupPersonaPolicyTests(unittest.TestCase):
         self.assertEqual(payload["scroll_times"], 80)
         self.assertEqual(payload["like_limit"], 7)
         self.assertEqual(payload["like_chance"], 100)
-        self.assertEqual(payload["max_comments"], 4)
+        self.assertEqual(payload["max_comments"], 3)
         self.assertEqual(payload["comment_chance"], 100)
         self.assertEqual(payload["session_minutes"], "7-10")
         self.assertNotIn("session_seconds", payload)

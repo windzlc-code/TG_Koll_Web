@@ -260,6 +260,36 @@ def _ensure_username_reservation_triggers(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
+    billing_orders_sql = """
+        CREATE TABLE IF NOT EXISTS billing_orders (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          kind TEXT NOT NULL CHECK(kind IN ('subscription', 'credit_pack')),
+          sku TEXT NOT NULL,
+          quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0),
+          renewal_subscription_ids_json TEXT NOT NULL DEFAULT '[]',
+          amount_ntd_cents INTEGER NOT NULL CHECK(amount_ntd_cents >= 0),
+          catalog_version_id TEXT NOT NULL,
+          price_snapshot_json TEXT NOT NULL,
+          payer_name TEXT NOT NULL DEFAULT '',
+          payment_reference TEXT NOT NULL DEFAULT '',
+          paid_at INTEGER NOT NULL DEFAULT 0,
+          note TEXT NOT NULL DEFAULT '',
+          proof_path TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'approved', 'rejected', 'cancelled', 'refunded')),
+          idempotency_key TEXT NOT NULL,
+          reviewed_by INTEGER NOT NULL DEFAULT 0,
+          reviewed_at INTEGER NOT NULL DEFAULT 0,
+          review_note TEXT NOT NULL DEFAULT '',
+          refunded_by INTEGER NOT NULL DEFAULT 0,
+          refunded_at INTEGER NOT NULL DEFAULT 0,
+          refund_note TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(user_id, idempotency_key)
+        )
+        """
     statements = (
         """
         CREATE TABLE IF NOT EXISTS billing_wallets (
@@ -284,32 +314,7 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
           published_at INTEGER NOT NULL DEFAULT 0
         )
         """,
-        """
-        CREATE TABLE IF NOT EXISTS billing_orders (
-          id TEXT PRIMARY KEY,
-          user_id INTEGER NOT NULL,
-          kind TEXT NOT NULL CHECK(kind IN ('subscription', 'credit_pack')),
-          sku TEXT NOT NULL,
-          quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0),
-          renewal_subscription_ids_json TEXT NOT NULL DEFAULT '[]',
-          amount_ntd_cents INTEGER NOT NULL CHECK(amount_ntd_cents >= 0),
-          catalog_version_id TEXT NOT NULL,
-          price_snapshot_json TEXT NOT NULL,
-          payer_name TEXT NOT NULL DEFAULT '',
-          payment_reference TEXT NOT NULL DEFAULT '',
-          paid_at INTEGER NOT NULL DEFAULT 0,
-          note TEXT NOT NULL DEFAULT '',
-          proof_path TEXT NOT NULL DEFAULT '',
-          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected', 'cancelled')),
-          idempotency_key TEXT NOT NULL,
-          reviewed_by INTEGER NOT NULL DEFAULT 0,
-          reviewed_at INTEGER NOT NULL DEFAULT 0,
-          review_note TEXT NOT NULL DEFAULT '',
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL,
-          UNIQUE(user_id, idempotency_key)
-        )
-        """,
+        billing_orders_sql,
         """
         CREATE TABLE IF NOT EXISTS billing_subscriptions (
           id TEXT PRIMARY KEY,
@@ -389,6 +394,57 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
     )
     for statement in statements:
         conn.execute(statement)
+    order_schema = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'billing_orders'"
+    ).fetchone()
+    order_schema_sql = str(order_schema["sql"] or "") if order_schema else ""
+    if "'refunded'" not in order_schema_sql:
+        conn.execute("ALTER TABLE billing_orders RENAME TO billing_orders_before_refunds")
+        conn.execute(billing_orders_sql)
+        legacy_order_columns = {
+            str(row["name"])
+            for row in conn.execute(
+                "PRAGMA table_info(billing_orders_before_refunds)"
+            ).fetchall()
+        }
+        refund_column_values = {
+            "refunded_by": "refunded_by" if "refunded_by" in legacy_order_columns else "0",
+            "refunded_at": "refunded_at" if "refunded_at" in legacy_order_columns else "0",
+            "refund_note": "refund_note" if "refund_note" in legacy_order_columns else "''",
+        }
+        conn.execute(
+            """
+            INSERT INTO billing_orders(
+              id, user_id, kind, sku, quantity, renewal_subscription_ids_json,
+              amount_ntd_cents, catalog_version_id, price_snapshot_json,
+              payer_name, payment_reference, paid_at, note, proof_path, status,
+              idempotency_key, reviewed_by, reviewed_at, review_note,
+              refunded_by, refunded_at, refund_note, created_at, updated_at
+            )
+            SELECT
+              id, user_id, kind, sku, quantity, renewal_subscription_ids_json,
+              amount_ntd_cents, catalog_version_id, price_snapshot_json,
+              payer_name, payment_reference, paid_at, note, proof_path, status,
+              idempotency_key, reviewed_by, reviewed_at, review_note,
+              {refunded_by}, {refunded_at}, {refund_note}, created_at, updated_at
+            FROM billing_orders_before_refunds
+            """.format(**refund_column_values)
+        )
+        conn.execute("DROP TABLE billing_orders_before_refunds")
+    else:
+        order_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(billing_orders)").fetchall()
+        }
+        for column, definition in {
+            "refunded_by": "INTEGER NOT NULL DEFAULT 0",
+            "refunded_at": "INTEGER NOT NULL DEFAULT 0",
+            "refund_note": "TEXT NOT NULL DEFAULT ''",
+        }.items():
+            if column not in order_columns:
+                conn.execute(
+                    f"ALTER TABLE billing_orders ADD COLUMN {column} {definition}"
+                )
     wallet_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(billing_wallets)").fetchall()}
     if "unlimited_compute" not in wallet_columns:
         conn.execute(
