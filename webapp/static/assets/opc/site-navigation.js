@@ -2020,6 +2020,7 @@
     if (!header || header.dataset.siteMode !== "public") return;
     header.querySelectorAll("[data-site-notification-menu]").forEach((node) => node.remove());
     installLanguageControls(header);
+    bindPreferenceControls(header);
     header.dataset.siteAuthState = "guest";
     currentSessionMode = "guest";
     setAccount(null);
@@ -2205,7 +2206,7 @@
     document.querySelectorAll("[data-site-language-toggle]").forEach((button) => {
       button.title = labels.language;
       button.setAttribute("aria-label", labels.language);
-      button.setAttribute("aria-pressed", language === "zh-Hant" ? "true" : "false");
+      button.removeAttribute("aria-pressed");
     });
     document.querySelectorAll("[data-site-language-state]").forEach((node) => node.textContent = labels.languageState);
     document.querySelectorAll("[data-site-language-option]").forEach((option) => {
