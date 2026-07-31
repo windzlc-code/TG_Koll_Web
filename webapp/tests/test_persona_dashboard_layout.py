@@ -749,6 +749,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("personaForm.media.focusPostId = finalizedPostId;", selection)
         self.assertIn("generate_posts/tasks/${encodeURIComponent(cleanTaskId)}/resolve", selection)
         self.assertNotIn("discardPersonaGeneratedCandidatePosts(", selection)
+        self.assertIn('delete state.personaGeneratedPreviews[String(persona.id || "").trim()];', selection)
         self.assertIn("const generationLocked = isActionLocked", content_panel)
         self.assertIn("const generateBusy = generationLocked && activeGenerateComposeMode === composeMode;", content_panel)
         self.assertIn("const ordinaryMediaTarget", content_panel)
@@ -768,6 +769,15 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script.index("function openPersonaDraftEditor")
         ]
         self.assertIn('form.media.focusPostId = "";', reset)
+        self.assertIn("runState.selectionRequired", self.console_script)
+        self.assertIn("post?.generation_candidate || post?.generationCandidate", self.console_script)
+        media_submit = self.console_script[
+            self.console_script.index("async function submitPersonaMediaTask"):
+            self.console_script.index("async function attachPersonaTaskMediaToPost")
+        ]
+        self.assertIn("startedAt: submittedAt", media_submit)
+        self.assertNotIn("watchTask(result.id", media_submit)
+        self.assertEqual(media_submit.count("watchPersonaMediaTask(persona.id, post.id, result.id)"), 1)
 
     def test_mobile_task_queue_persona_list_reuses_shared_drawer(self):
         selector_start = self.console_script.index("function renderTaskQueuePersonaSelector()")

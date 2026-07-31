@@ -3251,7 +3251,15 @@ class PersonaDashboardApiTests(unittest.TestCase):
             platform="threads",
             selection_required=True,
         )
-        with mock.patch.object(server, "_run_persona_workflow_cli", side_effect=fake_generate):
+        with (
+            mock.patch.object(server, "_run_persona_workflow_cli", side_effect=fake_generate),
+            mock.patch.object(server, "_cleanup_stale_persona_generation_candidates", side_effect=AssertionError("hot-path cleanup")),
+            mock.patch.object(
+                server,
+                "_write_persona_archives_preserving_shape",
+                wraps=server._write_persona_archives_preserving_shape,
+            ) as archive_write,
+        ):
             result = server._generate_persona_archive_posts(
                 "persona-1",
                 payload,
@@ -3259,6 +3267,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             )
 
         self.assertEqual(len(result["posts"]), 3)
+        self.assertEqual(archive_write.call_count, 1)
         self.assertTrue(all(post["generation_candidate"] for post in result["posts"]))
         self.assertEqual(
             [post["id"] for post in server._list_persona_archive_posts("persona-1")],

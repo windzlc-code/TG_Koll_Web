@@ -592,6 +592,35 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("hydratePersonaOverviewFromCache", init)
         self.assertNotIn("hydrateSocialAccountsFromCache", init)
 
+    def test_persona_media_task_elapsed_time_keeps_the_submitted_start(self):
+        functions = "\n".join(
+            self._function_source(name)
+            for name in (
+                "toastTimestampMs",
+                "actionLockKey",
+                "actionLockStartedAt",
+                "actionTaskStartedAt",
+                "personaMediaTaskKey",
+                "personaMediaTaskState",
+                "personaMediaTaskStartedAt",
+            )
+        )
+        self._run_node(textwrap.dedent(f"""
+            const state = {{ actionLocks: {{}}, personaMediaTasks: {{}} }};
+            {functions}
+            state.personaMediaTasks[personaMediaTaskKey("persona-1", "post-1")] = {{
+              taskType: "persona_post_image",
+              status: "queued",
+              startedAt: 1722477600000,
+              detail: {{ status: "queued", type: "persona_post_image" }},
+            }};
+            const first = personaMediaTaskStartedAt("persona-1", "post-1", "persona_post_image");
+            Date.now = () => 1722477609000;
+            const second = personaMediaTaskStartedAt("persona-1", "post-1", "persona_post_image");
+            if (first !== 1722477600000 || second !== first) {{
+              throw new Error(`unstable media timer: ${{first}} -> ${{second}}`);
+            }}
+        """))
     def test_result_links_reject_unsafe_protocols_and_preserve_admin_context(self):
         console_link_source = self._function_source("adminWorkspacePageUrl")
         dashboard_workspace_source = self._persona_dashboard_function_source("pdAdminWorkspaceUrl")
