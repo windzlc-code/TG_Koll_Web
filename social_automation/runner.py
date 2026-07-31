@@ -4381,12 +4381,11 @@ def _generate_warmup_search_keywords_with_ai(payload: dict[str, Any]) -> list[st
                 if isinstance(candidate, dict):
                     primary = _select_diverse_warmup_keywords(
                         candidate.get("primary") or [],
-                        recent=recent_keywords,
                         limit=6,
                     )
                     interests = _select_diverse_warmup_keywords(
                         candidate.get("interests") or [],
-                        recent=[*recent_keywords, *primary],
+                        recent=primary,
                         limit=min(2, max(0, len(primary) * 3 // 7)),
                     )
                     if primary:
@@ -4403,7 +4402,6 @@ def _generate_warmup_search_keywords_with_ai(payload: dict[str, Any]) -> list[st
                 parsed = re.split(r"[\n,，、;；]+", raw)
             generated = _select_diverse_warmup_keywords(
                 parsed,
-                recent=recent_keywords,
                 limit=8,
             )
             if generated:

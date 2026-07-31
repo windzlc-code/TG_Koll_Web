@@ -752,7 +752,7 @@ class WarmupChainParityTests(TestCase):
         self.assertEqual(request.call_args.kwargs["max_output_tokens"], 240)
         self.assertEqual(keywords[:2], ["男士短发", "发型打理"])
 
-    def test_model_keyword_generation_filters_recent_and_near_duplicate_queries(self):
+    def test_keyword_history_guides_the_model_without_hard_rejecting_core_terms(self):
         payload = {
             "persona_name": "理发师",
             "persona_context": "分享理发店工作和男士发型。 ",
@@ -776,9 +776,9 @@ class WarmupChainParityTests(TestCase):
         ):
             keywords = runner._generate_warmup_search_keywords_with_ai(payload)
 
-        self.assertNotIn("理发店日常", keywords)
+        self.assertIn("理发店日常", keywords)
         self.assertNotIn("理发店日常趣事", keywords)
-        self.assertNotIn("男士短发", keywords)
+        self.assertIn("男士短发", keywords)
         self.assertIn("剪发工具", keywords)
         self.assertIn("染发护理", keywords)
 
