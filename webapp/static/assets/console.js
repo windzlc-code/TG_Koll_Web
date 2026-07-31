@@ -317,6 +317,8 @@ const initialConsoleView = initialConsoleParams.get("view");
 const initialAccountBrowserPanel = initialConsoleParams.get("browser_panel");
 const state = {
   view: ["workspace", "tasks", "accounts", "billing", "console_settings", "persona_dashboard"].includes(initialConsoleView) ? initialConsoleView : "persona_dashboard",
+  personalSettingsSection: "console",
+  personalSecurity: { loaded: false, loading: false, mfa: null },
   activeModule: "personas",
   transientWorkspaceLeaveAcknowledgement: "",
   transientWorkspaceAllowNextUnload: false,
@@ -2394,7 +2396,7 @@ function renderModalCloseButton(cancelAttribute = "data-console-modal-cancel") {
   </button>`;
 }
 
-function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", fields = [], confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, showConfirm = true, extraActions = [], modalKey = "", stack = false } = {}) {
+function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", fields = [], confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, showConfirm = true, extraActions = [], modalKey = "", stack = false, dismissOnBackdrop = true } = {}) {
   if (!stack) closeConsoleModal(null);
   return new Promise((resolve) => {
     const modal = document.createElement("div");
@@ -2405,7 +2407,7 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
     modal.dataset.modalKey = String(modalKey || "");
     modal.__resolve = resolve;
     modal.innerHTML = `
-      <div class="console-modal-backdrop" data-console-modal-cancel></div>
+      <div class="console-modal-backdrop" ${dismissOnBackdrop ? "data-console-modal-cancel" : ""}></div>
       <section class="console-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="${esc(titleId)}">
         <div class="console-modal-head">
           <strong id="${esc(titleId)}">${esc(title)}</strong>
@@ -2424,7 +2426,7 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
               <label>${esc(field?.label || "")}
                 ${field?.multiline
                   ? `<textarea data-console-modal-field="${esc(field?.name || "")}" rows="3" placeholder="${esc(field?.placeholder || "")}" ${field?.required ? "required" : ""}>${esc(field?.value || "")}</textarea>`
-                  : `<input data-console-modal-field="${esc(field?.name || "")}" type="${esc(field?.type || "text")}" value="${esc(field?.value || "")}" placeholder="${esc(field?.placeholder || "")}" ${field?.required ? "required" : ""} />`}
+                  : `<input data-console-modal-field="${esc(field?.name || "")}" type="${esc(field?.type || "text")}" value="${esc(field?.value || "")}" placeholder="${esc(field?.placeholder || "")}" ${field?.inputmode ? `inputmode="${esc(field.inputmode)}"` : ""} ${field?.required ? "required" : ""} />`}
               </label>
             `).join("")}
           </div>
@@ -6450,7 +6452,7 @@ function setView(view) {
     social: "浏览器发布",
     accounts: state.accountBrowserPanel === "browsers" ? "浏览器列表" : "账号管理",
     billing: "订阅与算力",
-    console_settings: "设置",
+    console_settings: "个人设置",
     persona_dashboard: "人设看板",
   };
   $("viewTitle").textContent = titles[view] || "控制台";
@@ -6748,7 +6750,7 @@ function mobilePageToolbarDescriptor() {
     tasks: { icon: "tasks", title: "任务队列" },
     social: { icon: "social", title: "浏览器发布" },
     billing: { icon: "billing", title: "订阅与算力" },
-    console_settings: { icon: "console_settings", title: "设置" },
+    console_settings: { icon: "console_settings", title: "个人设置" },
     persona_dashboard: { icon: "persona_dashboard", title: "人设看板" },
   }[state.view] || { icon: "personas", title: "控制台" };
 }
@@ -7019,9 +7021,6 @@ function setModule(moduleId) {
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
   syncLiveBrowserAutoRefresh();
-  if (moduleId === "tweet_generation") {
-    queueMicrotask(() => restorePersonaPostGenerationTasks());
-  }
 }
 
 function selectedBranch(moduleId) {
@@ -15669,6 +15668,305 @@ function syncPublishPreviewSelectionDom() {
   return true;
 }
 
+function renderPersonalSettingsIcon(kind = "shield") {
+  const paths = {
+    email: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path>',
+    shield: '<path d="M12 3 5 6v5c0 4.4 2.8 8.4 7 10 4.2-1.6 7-5.6 7-10V6l-7-3Z"></path><path d="m9.5 12 1.7 1.7 3.6-3.8"></path>',
+    authenticator: '<rect x="5" y="2.5" width="14" height="19" rx="3"></rect><path d="M9 6h6"></path><circle cx="9" cy="11" r="1"></circle><circle cx="12" cy="11" r="1"></circle><circle cx="15" cy="11" r="1"></circle><path d="M9 16h6"></path>',
+    lock: '<rect x="4" y="10" width="16" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path><path d="M12 14v3"></path>',
+    trash: '<path d="M4 7h16"></path><path d="M9 3h6l1 4H8l1-4Z"></path><path d="m7 7 1 14h8l1-14"></path><path d="M10 11v6M14 11v6"></path>',
+  };
+  return `<svg class="personal-settings-icon" viewBox="0 0 24 24" aria-hidden="true">${paths[kind] || paths.shield}</svg>`;
+}
+
+function renderPersonalSettingsTabs() {
+  const active = ["console", "account", "security"].includes(state.personalSettingsSection)
+    ? state.personalSettingsSection
+    : "console";
+  return `<div class="automation-capsule-tabs personal-settings-tabs" role="tablist" aria-label="个人设置分类">
+    <button type="button" role="tab" aria-selected="${active === "console"}" class="${active === "console" ? "is-active" : ""}" data-personal-settings-section="console">控制台设置</button>
+    <button type="button" role="tab" aria-selected="${active === "account"}" class="${active === "account" ? "is-active" : ""}" data-personal-settings-section="account">账户设置</button>
+    <button type="button" role="tab" aria-selected="${active === "security"}" class="${active === "security" ? "is-active" : ""}" data-personal-settings-section="security">安全设置</button>
+  </div>`;
+}
+
+function renderAccountSettingsPanel() {
+  const email = String(state.currentUser?.verified_email || state.currentUser?.email || "").trim();
+  const verified = Boolean(state.currentUser?.email_verified_at || state.currentUser?.verified_email);
+  return `<section class="console-settings-group personal-settings-group">
+    <div class="console-settings-group-head">
+      <strong>账户设置</strong>
+      <span>管理用于登录验证和接收安全通知的绑定邮箱。</span>
+    </div>
+    <div class="personal-settings-list">
+      <article class="personal-settings-item">
+        <span class="personal-settings-item-icon">${renderPersonalSettingsIcon("email")}</span>
+        <div class="personal-settings-item-copy">
+          <strong>邮箱绑定</strong>
+          <span>${email ? esc(email) : "尚未绑定邮箱"}</span>
+        </div>
+        <span class="personal-settings-status ${verified ? "is-enabled" : ""}">${verified ? "已验证" : "未验证"}</span>
+        <button type="button" data-personal-settings-action="email-binding">${email ? "更换绑定" : "绑定邮箱"}</button>
+      </article>
+    </div>
+  </section>`;
+}
+
+function renderSecuritySettingsPanel() {
+  const security = state.personalSecurity || {};
+  const mfaEnabled = Boolean(security.mfa?.enabled);
+  const email2faEnabled = Boolean(state.currentUser?.email_2fa_enabled);
+  const hasEmail = Boolean(state.currentUser?.verified_email || state.currentUser?.email_verified_at);
+  const adminAccount = Boolean(state.currentUser?.is_admin);
+  return `<section class="console-settings-group personal-settings-group">
+    <div class="console-settings-group-head">
+      <strong>安全设置</strong>
+      <span>验证器 MFA 优先于邮箱 2FA；重要修改均需要再次验证身份。</span>
+    </div>
+    ${security.loading ? '<div class="personal-settings-loading" role="status">正在读取安全状态…</div>' : `
+      <div class="personal-settings-list">
+        <article class="personal-settings-item">
+          <span class="personal-settings-item-icon">${renderPersonalSettingsIcon("authenticator")}</span>
+          <div class="personal-settings-item-copy"><strong>MFA 身份验证器</strong><span>使用动态验证码或恢复码保护登录。</span></div>
+          <span class="personal-settings-status ${mfaEnabled ? "is-enabled" : ""}">${mfaEnabled ? "已开启" : "未开启"}</span>
+          <button type="button" data-personal-settings-action="${mfaEnabled ? "mfa-disable" : "mfa-enable"}">${mfaEnabled ? "关闭 MFA" : "开启 MFA"}</button>
+        </article>
+        <article class="personal-settings-item">
+          <span class="personal-settings-item-icon">${renderPersonalSettingsIcon("shield")}</span>
+          <div class="personal-settings-item-copy"><strong>邮箱 2FA</strong><span>${hasEmail ? "登录时使用绑定邮箱验证码进行二步验证。" : "请先在账户设置中绑定邮箱。"}</span></div>
+          <span class="personal-settings-status ${email2faEnabled ? "is-enabled" : ""}">${email2faEnabled ? "已开启" : "未开启"}</span>
+          <button type="button" data-personal-settings-action="email-2fa" ${hasEmail ? "" : "disabled"}>${email2faEnabled ? "关闭 2FA" : "开启 2FA"}</button>
+        </article>
+        <article class="personal-settings-item">
+          <span class="personal-settings-item-icon">${renderPersonalSettingsIcon("lock")}</span>
+          <div class="personal-settings-item-copy"><strong>修改密码</strong><span>通过绑定邮箱验证码安全设置新密码。</span></div>
+          <button type="button" data-personal-settings-action="password">修改密码</button>
+        </article>
+        <article class="personal-settings-item is-danger">
+          <span class="personal-settings-item-icon">${renderPersonalSettingsIcon("trash")}</span>
+          <div class="personal-settings-item-copy"><strong>删除账户</strong><span>${adminAccount ? "管理员账号不能使用自助删除。" : "账户将停用并退出，业务数据由管理员按策略保留。"}</span></div>
+          <button type="button" class="danger" data-personal-settings-action="delete-account" ${adminAccount ? "disabled" : ""}>删除账户</button>
+        </article>
+      </div>`}
+  </section>`;
+}
+
+async function loadPersonalSecuritySettings({ force = false } = {}) {
+  if (state.personalSecurity.loading || (state.personalSecurity.loaded && !force)) return;
+  state.personalSecurity.loading = true;
+  if (state.view === "console_settings" && state.personalSettingsSection === "security") renderConsoleSettingsPage();
+  try {
+    state.personalSecurity.mfa = await api("/api/auth/mfa");
+    state.personalSecurity.loaded = true;
+  } catch (error) {
+    showMsg("consoleSettingsMsg", error.detail || error.message || "安全状态读取失败。", false);
+  } finally {
+    state.personalSecurity.loaded = true;
+    state.personalSecurity.loading = false;
+    if (state.view === "console_settings" && state.personalSettingsSection === "security") renderConsoleSettingsPage();
+  }
+}
+
+async function changePersonalSettingsEmail() {
+  const currentEmail = String(state.currentUser?.verified_email || state.currentUser?.email || "").trim();
+  const entry = await openConsoleModal({
+    title: currentEmail ? "更换绑定邮箱" : "绑定邮箱",
+    message: "验证码将发送到新的邮箱，验证成功后才会替换当前绑定。",
+    fields: [{ name: "email", label: "新邮箱", type: "email", value: currentEmail, required: true }],
+    confirmText: "发送验证码",
+    modalKey: "personal-settings-email",
+    dismissOnBackdrop: false,
+  });
+  if (!entry) return;
+  const email = String(entry.email || "").trim();
+  try {
+    const challenge = await api("/api/auth/email-verification/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, purpose: "email_binding" }),
+    });
+    const verify = await openConsoleModal({
+      title: "验证新邮箱",
+      message: `请输入发送到 ${email} 的验证码。`,
+      fields: [{ name: "code", label: "邮箱验证码", inputmode: "numeric", required: true }],
+      confirmText: "确认换绑",
+      modalKey: "personal-settings-email-code",
+      dismissOnBackdrop: false,
+    });
+    if (!verify) return;
+    const result = await api("/api/auth/email-binding/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, challenge_id: challenge.challenge_id, verification_code: String(verify.code || "").trim() }),
+    });
+    state.currentUser = { ...state.currentUser, email, verified_email: result.verified_email || email, email_verified_at: result.email_verified_at || Date.now() / 1000 };
+    window.VectoSiteNavigation?.setAccount(state.currentUser);
+    renderConsoleSettingsPage();
+    showMsg("consoleSettingsMsg", "邮箱绑定已更新。", true);
+  } catch (error) {
+    showMsg("consoleSettingsMsg", error.detail || error.message || "邮箱绑定更新失败。", false);
+  }
+}
+
+async function enablePersonalMfa() {
+  const credentials = await openConsoleModal({
+    title: "开启 MFA",
+    message: "先输入当前密码，再把密钥添加到身份验证器。",
+    fields: [{ name: "current_password", label: "当前密码", type: "password", required: true }],
+    confirmText: "继续",
+    modalKey: "personal-settings-mfa-enable",
+    dismissOnBackdrop: false,
+  });
+  if (!credentials) return;
+  try {
+    const setup = await api("/api/auth/mfa/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password: credentials.current_password }),
+    });
+    const recoveryCodes = Array.isArray(setup.recovery_codes) ? setup.recovery_codes : [];
+    const verification = await openConsoleModal({
+      title: "验证身份验证器",
+      contentHtml: `<div class="personal-settings-mfa-setup"><p>在身份验证器中添加以下 Base32 密钥，然后输入 6 位动态验证码。</p><code>${esc(setup.secret || "")}</code><details><summary>查看恢复码</summary><pre>${esc(recoveryCodes.join("\n"))}</pre></details></div>`,
+      fields: [{ name: "code", label: "动态验证码", required: true }],
+      confirmText: "完成开启",
+      modalKey: "personal-settings-mfa-verify",
+      dismissOnBackdrop: false,
+    });
+    if (!verification) return;
+    await api("/api/auth/mfa/verify-setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: String(verification.code || "").trim() }),
+    });
+    await loadPersonalSecuritySettings({ force: true });
+    showMsg("consoleSettingsMsg", "MFA 已开启，请妥善保存恢复码。", true);
+  } catch (error) {
+    showMsg("consoleSettingsMsg", error.detail || error.message || "MFA 开启失败。", false);
+  }
+}
+
+async function disablePersonalMfa() {
+  const values = await openConsoleModal({
+    title: "关闭 MFA",
+    message: "关闭后将不再要求身份验证器动态验证码。",
+    fields: [
+      { name: "current_password", label: "当前密码", type: "password", required: true },
+      { name: "code", label: "动态验证码或恢复码", required: true },
+    ],
+    confirmText: "确认关闭",
+    danger: true,
+    modalKey: "personal-settings-mfa-disable",
+    dismissOnBackdrop: false,
+  });
+  if (!values) return;
+  try {
+    await api("/api/auth/mfa/disable", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    });
+    await loadPersonalSecuritySettings({ force: true });
+    showMsg("consoleSettingsMsg", "MFA 已关闭。", true);
+  } catch (error) {
+    showMsg("consoleSettingsMsg", error.detail || error.message || "MFA 关闭失败。", false);
+  }
+}
+
+async function togglePersonalEmailTwoFactor() {
+  const enabled = !Boolean(state.currentUser?.email_2fa_enabled);
+  const values = await openConsoleModal({
+    title: enabled ? "开启邮箱 2FA" : "关闭邮箱 2FA",
+    message: enabled ? "开启后，每次密码登录都需要绑定邮箱验证码；若已开启 MFA，将优先使用身份验证器。" : "关闭后，普通密码登录将不再固定要求邮箱验证码。",
+    fields: [{ name: "current_password", label: "当前密码", type: "password", required: true }],
+    confirmText: enabled ? "确认开启" : "确认关闭",
+    danger: !enabled,
+    modalKey: "personal-settings-email-2fa",
+    dismissOnBackdrop: false,
+  });
+  if (!values) return;
+  try {
+    const result = await api("/api/auth/email-2fa", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled, current_password: values.current_password }),
+    });
+    state.currentUser = { ...state.currentUser, email_2fa_enabled: Boolean(result.enabled) };
+    renderConsoleSettingsPage();
+    showMsg("consoleSettingsMsg", enabled ? "邮箱 2FA 已开启。" : "邮箱 2FA 已关闭。", true);
+  } catch (error) {
+    showMsg("consoleSettingsMsg", error.detail || error.message || "邮箱 2FA 设置失败。", false);
+  }
+}
+
+async function changePersonalPassword() {
+  const email = String(state.currentUser?.verified_email || "").trim();
+  if (!email) {
+    showMsg("consoleSettingsMsg", "请先在账户设置中绑定已验证邮箱。", false);
+    return;
+  }
+  try {
+    const challenge = await api("/api/auth/email-verification/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, purpose: "password_setup" }),
+    });
+    const values = await openConsoleModal({
+      title: "修改密码",
+      message: `验证码已发送到 ${email}。`,
+      fields: [
+        { name: "verification_code", label: "邮箱验证码", required: true },
+        { name: "new_password", label: "新密码", type: "password", required: true },
+        { name: "confirm_password", label: "确认新密码", type: "password", required: true },
+      ],
+      confirmText: "确认修改",
+      modalKey: "personal-settings-password",
+      dismissOnBackdrop: false,
+    });
+    if (!values) return;
+    if (values.new_password !== values.confirm_password) {
+      showMsg("consoleSettingsMsg", "两次输入的新密码不一致。", false);
+      return;
+    }
+    await api("/api/auth/password/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ challenge_id: challenge.challenge_id, verification_code: String(values.verification_code || "").trim(), new_password: values.new_password }),
+    });
+    showMsg("consoleSettingsMsg", "密码已修改。", true);
+  } catch (error) {
+    showMsg("consoleSettingsMsg", error.detail || error.message || "密码修改失败。", false);
+  }
+}
+
+async function deletePersonalAccount() {
+  const username = String(state.currentUser?.username || "").trim();
+  const values = await openConsoleModal({
+    title: "删除账户",
+    message: `这是高风险操作。请输入当前密码，并输入用户名 ${username} 确认。`,
+    fields: [
+      { name: "current_password", label: "当前密码", type: "password", required: true },
+      { name: "confirmation", label: "确认用户名", required: true },
+    ],
+    confirmText: "删除并退出",
+    danger: true,
+    modalKey: "personal-settings-delete-account",
+    dismissOnBackdrop: false,
+  });
+  if (!values) return;
+  try {
+    await api("/api/auth/account", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    });
+    await openConsoleModal({ title: "账户已删除", message: "当前账户已停用并安全退出。", showCancel: false, confirmText: "返回首页", dismissOnBackdrop: false });
+    window.location.replace("/");
+  } catch (error) {
+    showMsg("consoleSettingsMsg", error.detail || error.message || "账户删除失败。", false);
+  }
+}
+
 function renderConsoleSettingsPage() {
   const host = $("consoleSettingsBody");
   if (!host) return;
@@ -15683,12 +15981,7 @@ function renderConsoleSettingsPage() {
   const autoCloseControl = browserDurationControlState("auto_close_seconds", preferences.auto_close_seconds, autoClosePresets);
   const manualTimeoutControl = browserDurationControlState("manual_timeout_seconds", preferences.manual_timeout_seconds, manualTimeoutPresets);
   const publishLimit = Math.min(Math.max(Number(state.socialPublishPolicy?.limit || state.dailyPublishPolicy?.limit || 15), 1), 200);
-  host.innerHTML = `
-    <div class="console-settings-page">
-      <div class="console-settings-actions">
-        <span>浏览器策略按当前用户保存；分页设置仅保存在本机浏览器。</span>
-        <button type="button" class="primary" id="saveConsoleSettings">保存设置</button>
-      </div>
+  const controlSettingsHtml = `
       ${state.currentUser?.is_admin ? `
       <section class="console-settings-group">
         <div class="console-settings-group-head">
@@ -15700,7 +15993,7 @@ function renderConsoleSettingsPage() {
         </div>
         <div class="row-actions"><button type="button" id="savePublishPolicySettings" class="primary" ${state.socialPublishPolicySaving ? "disabled" : ""}>${state.socialPublishPolicySaving ? "保存中..." : "保存发布上限"}</button></div>
       </section>` : ""}
-      <section class="console-settings-group">
+      <section class="console-settings-group console-settings-pagination-group">
         <div class="console-settings-group-head">
           <strong>列表与分页</strong>
           <span>控制人设、草稿收藏和任务队列的分页展示数量。</span>
@@ -15780,10 +16073,29 @@ function renderConsoleSettingsPage() {
           ${renderBrowserRecommendationCard()}
         </div>
       </section>
+      <div class="console-settings-actions console-settings-save-actions">
+        <button type="button" class="primary" id="saveConsoleSettings">保存设置</button>
+      </div>
+  `;
+  const activeSection = ["console", "account", "security"].includes(state.personalSettingsSection)
+    ? state.personalSettingsSection
+    : "console";
+  const panelHtml = activeSection === "account"
+    ? renderAccountSettingsPanel()
+    : (activeSection === "security" ? renderSecuritySettingsPanel() : controlSettingsHtml);
+  host.innerHTML = `
+    <div class="console-settings-page">
+      ${renderPersonalSettingsTabs()}
+      <div class="personal-settings-switch" data-personal-settings-panel="${esc(activeSection)}">${panelHtml}</div>
     </div>
   `;
-  if (!state.browserPolicyLoaded && !state.browserPolicyLoading) loadBrowserPolicySettings();
-  if (state.currentUser?.is_admin && !state.socialPublishPolicyLoaded) loadAdminSocialPublishPolicy();
+  if (activeSection === "console" && !state.browserPolicyLoaded && !state.browserPolicyLoading) loadBrowserPolicySettings();
+  if (activeSection === "console" && state.currentUser?.is_admin && !state.socialPublishPolicyLoaded) {
+    loadAdminSocialPublishPolicy();
+  }
+  if (activeSection === "security" && !state.personalSecurity.loaded && !state.personalSecurity.loading) {
+    loadPersonalSecuritySettings();
+  }
 }
 
 function updateBrowserPreferencesDraft() {
@@ -18258,26 +18570,6 @@ function personaPostGenerationErrorIsTransient(error) {
   return status === 0 || status === 408 || status === 429 || status === 499 || status >= 500;
 }
 
-async function resumePersonaPostGenerationSubmission(persona, record) {
-  const personaId = String(persona?.id || record?.personaId || "").trim();
-  const operationKey = String(record?.operationKey || "").trim();
-  const payload = record?.payload && typeof record.payload === "object" ? record.payload : null;
-  if (!personaId || !operationKey || !payload) {
-    throw { detail: "缺少可恢复的推文生成请求。", status: 422 };
-  }
-  const accepted = await api(`/api/persona_dashboard/personas/${encodeURIComponent(personaId)}/generate_posts`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Idempotency-Key": operationKey },
-    body: JSON.stringify(payload),
-  });
-  const taskId = String(accepted?.task_id || accepted?.task?.id || "").trim();
-  if (!taskId) throw { detail: "生成任务已提交，但服务端未返回任务编号。", status: 502 };
-  return {
-    record: storePersonaPostGenerationTask(personaId, { ...record, taskId }),
-    task: accepted?.task || null,
-  };
-}
-
 async function generatePersonaDraftPosts() {
   const persona = selectedPersona();
   if (!persona) {
@@ -18337,9 +18629,15 @@ async function generatePersonaDraftPosts() {
     });
     let task = null;
     if (!String(taskRecord?.taskId || "").trim()) {
-      const resumed = await resumePersonaPostGenerationSubmission(persona, taskRecord);
-      task = resumed.task;
-      taskRecord = resumed.record;
+      const accepted = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/generate_posts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": operationKey },
+        body: JSON.stringify(payload),
+      });
+      const taskId = String(accepted?.task_id || accepted?.task?.id || "").trim();
+      if (!taskId) throw { detail: "生成任务已提交，但服务端未返回任务编号。", status: 502 };
+      task = accepted?.task || null;
+      taskRecord = storePersonaPostGenerationTask(persona.id, { ...taskRecord, taskId });
     }
     await watchPersonaPostGenerationTask(persona, taskRecord, task);
   } catch (error) {
@@ -18378,7 +18676,9 @@ async function completePersonaPostGenerationTask(persona, task, context = {}) {
   const composeMode = String(context.composeMode || "tweet");
   const requestedTitle = String(context.requestedTitle || "").trim();
   const isActivePersona = String(selectedPersona()?.id || "").trim() === String(persona.id || "").trim();
-  const isActiveGenerationSurface = isActivePersona && state.activeModule === "tweet_generation";
+  const isActiveGenerationSurface = isActivePersona
+    && state.activeModule === "tweet_generation"
+    && String(state.personaPanels?.content || "generate") === "generate";
   await loadPersonaDraftPosts(persona.id, { force: true });
   const latestGenerated = personaDraftPosts(persona).find((post) => generatedIds.has(String(post?.id || "")));
   if (isActivePersona) {
@@ -18407,9 +18707,6 @@ async function completePersonaPostGenerationTask(persona, task, context = {}) {
     if (requestedTitle) await loadPersonaDraftPosts(persona.id, { force: true });
   }
   if (isActivePersona) renderConfirmSummary();
-  return {
-    selectionPending: composeMode === "tweet" && generatedPosts.length > 0 && !isActiveGenerationSurface,
-  };
 }
 
 async function watchPersonaPostGenerationTask(persona, record, initialTask = null) {
@@ -18442,17 +18739,8 @@ async function watchPersonaPostGenerationTask(persona, record, initialTask = nul
       }
       const status = String(task?.status || "queued").trim();
       if (status === "success") {
-        const completion = await completePersonaPostGenerationTask(persona, task, record?.context || {});
-        if (completion?.selectionPending) {
-          storePersonaPostGenerationTask(personaId, {
-            ...record,
-            taskId,
-            selectionPending: true,
-            completedTask: task,
-          });
-        } else {
-          clearStoredPersonaPostGenerationTask(personaId, taskId);
-        }
+        await completePersonaPostGenerationTask(persona, task, record?.context || {});
+        clearStoredPersonaPostGenerationTask(personaId, taskId);
         return task;
       }
       if (status === "failed" || status === "cancelled") {
@@ -18489,13 +18777,13 @@ async function watchPersonaPostGenerationTask(persona, record, initialTask = nul
   }
 }
 
-async function restorePersonaPostGenerationTasks(personaId = "") {
+function restorePersonaPostGenerationTasks(personaId = "") {
   const cleanPersonaId = String(personaId || state.selectedPersonaId || "").trim();
   const persona = state.personas.find((item) => String(item?.id || "").trim() === cleanPersonaId);
-  let record = persona ? storedPersonaPostGenerationTask(cleanPersonaId) : null;
-  if (!persona || !record || state.personaGenerateTaskWatchers[cleanPersonaId]) return null;
+  const record = persona ? storedPersonaPostGenerationTask(cleanPersonaId) : null;
+  const taskId = String(record?.taskId || "").trim();
+  if (!persona || !taskId || state.personaGenerateTaskWatchers[cleanPersonaId]) return null;
   const lockParts = ["persona", cleanPersonaId, "generate_posts"];
-  if (isActionLocked(...lockParts)) return null;
   setActionLocked(lockParts, true);
   setPersonaGenerateRunState(cleanPersonaId, {
     kind: record?.context?.isRewriteRun ? "rewrite" : "draft",
@@ -18508,30 +18796,21 @@ async function restorePersonaPostGenerationTasks(personaId = "") {
     suppressToast: true,
   });
   if (isPersonaWorkspaceModule()) renderPersonaDetail();
-  try {
-    let initialTask = record?.completedTask && typeof record.completedTask === "object"
-      ? record.completedTask
-      : null;
-    if (!String(record?.taskId || "").trim()) {
-      const resumed = await resumePersonaPostGenerationSubmission(persona, record);
-      record = resumed.record;
-      initialTask = resumed.task;
-    }
-    return await watchPersonaPostGenerationTask(persona, record, initialTask);
-  } catch (error) {
-    if (!error?.stale) {
-      setPersonaGenerateRunState(cleanPersonaId, {
-        kind: record?.context?.isRewriteRun ? "rewrite" : "draft",
-        status: "error",
-        message: "图文草稿生成失败",
-        error: error?.detail || error?.message || "生成失败",
-      });
-    }
-    return null;
-  } finally {
-    setActionLocked(lockParts, false);
-    if (isPersonaWorkspaceModule()) renderPersonaDetail();
-  }
+  return watchPersonaPostGenerationTask(persona, record)
+    .catch((error) => {
+      if (!error?.stale) {
+        setPersonaGenerateRunState(cleanPersonaId, {
+          kind: record?.context?.isRewriteRun ? "rewrite" : "draft",
+          status: "error",
+          message: "图文草稿生成失败",
+          error: error?.detail || error?.message || "生成失败",
+        });
+      }
+    })
+    .finally(() => {
+      setActionLocked(lockParts, false);
+      if (isPersonaWorkspaceModule()) renderPersonaDetail();
+    });
 }
 
 async function createPersonaDraftPost() {
@@ -30161,6 +30440,32 @@ function bindEvents() {
     location.href = "/admin.html";
   });
   $("consoleSettingsBody").addEventListener("click", async (event) => {
+    const sectionButton = event.target.closest("[data-personal-settings-section]");
+    if (sectionButton) {
+      const section = String(sectionButton.dataset.personalSettingsSection || "console");
+      event.__vectoSegmentSlideHandled = true;
+      await slideSegmentedButtonBackground(sectionButton, {
+        commit: () => {
+          state.personalSettingsSection = section;
+          renderConsoleSettingsPage();
+        },
+        resolveButton: () => document.querySelector(
+          `[data-personal-settings-section="${CSS.escape(section)}"]`
+        ),
+      });
+      return;
+    }
+    const settingsAction = event.target.closest("[data-personal-settings-action]");
+    if (settingsAction) {
+      const action = String(settingsAction.dataset.personalSettingsAction || "");
+      if (action === "email-binding") await changePersonalSettingsEmail();
+      else if (action === "mfa-enable") await enablePersonalMfa();
+      else if (action === "mfa-disable") await disablePersonalMfa();
+      else if (action === "email-2fa") await togglePersonalEmailTwoFactor();
+      else if (action === "password") await changePersonalPassword();
+      else if (action === "delete-account") await deletePersonalAccount();
+      return;
+    }
     const completionPolicy = event.target.closest("[data-browser-completion-policy]");
     if (completionPolicy) {
       const policy = completionPolicy.dataset.browserCompletionPolicy || "immediate_close";

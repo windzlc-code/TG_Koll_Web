@@ -818,6 +818,8 @@ def init_db() -> None:
               last_login_at INTEGER NOT NULL DEFAULT 0,
               password_login_enabled INTEGER NOT NULL DEFAULT 1
                 CHECK(password_login_enabled IN (0, 1)),
+              email_2fa_enabled INTEGER NOT NULL DEFAULT 0
+                CHECK(email_2fa_enabled IN (0, 1)),
               last_login_method TEXT NOT NULL DEFAULT '',
               must_change_password INTEGER NOT NULL DEFAULT 0,
               password_expires_at INTEGER NOT NULL DEFAULT 0,
@@ -1323,6 +1325,9 @@ def init_db() -> None:
             "last_login_at": "INTEGER NOT NULL DEFAULT 0",
             "password_login_enabled": (
                 "INTEGER NOT NULL DEFAULT 1 CHECK(password_login_enabled IN (0, 1))"
+            ),
+            "email_2fa_enabled": (
+                "INTEGER NOT NULL DEFAULT 0 CHECK(email_2fa_enabled IN (0, 1))"
             ),
             "last_login_method": "TEXT NOT NULL DEFAULT ''",
             "must_change_password": "INTEGER NOT NULL DEFAULT 0",

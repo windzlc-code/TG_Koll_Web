@@ -515,6 +515,130 @@ button.primary,
   margin-top: 8px;
 }
 
+.personal-settings-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  max-width: none;
+  overflow: visible;
+}
+
+.personal-settings-tabs button {
+  min-width: 0;
+}
+
+.personal-settings-switch {
+  min-width: 0;
+  animation: vecto-console-enter 180ms cubic-bezier(.22, .9, .3, 1) both;
+}
+
+.personal-settings-group {
+  gap: 14px;
+}
+
+.personal-settings-list {
+  display: grid;
+  gap: 10px;
+}
+
+.personal-settings-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-solid);
+}
+
+.personal-settings-item-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: var(--accent);
+}
+
+.personal-settings-icon {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.personal-settings-item-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.personal-settings-item-copy strong {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.personal-settings-item-copy span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.personal-settings-status {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.personal-settings-status.is-enabled {
+  background: var(--success-soft);
+  color: var(--success-soft-ink);
+}
+
+.personal-settings-item.is-danger .personal-settings-item-icon,
+.personal-settings-item.is-danger .personal-settings-item-copy strong {
+  color: var(--danger);
+}
+
+.personal-settings-loading {
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.personal-settings-mfa-setup {
+  display: grid;
+  gap: 10px;
+}
+
+.personal-settings-mfa-setup p {
+  margin: 0;
+}
+
+.personal-settings-mfa-setup code,
+.personal-settings-mfa-setup pre {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: all;
+}
+
 .console-settings-actions {
   display: flex;
   align-items: center;
@@ -13368,6 +13492,47 @@ body.persona-media-sorting {
 }
 
 @media (max-width: 760px) {
+  .personal-settings-tabs {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    gap: 2px;
+    padding: 3px;
+  }
+
+  .personal-settings-tabs button {
+    min-height: 32px;
+    padding: 5px 7px;
+    font-size: 12px;
+  }
+
+  .personal-settings-group {
+    gap: 10px;
+  }
+
+  .personal-settings-item {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px 10px;
+    padding: 11px 10px;
+  }
+
+  .personal-settings-item > button {
+    grid-column: 2 / -1;
+    justify-self: end;
+    min-height: 32px;
+    padding: 6px 10px;
+  }
+
+  .personal-settings-item-icon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .personal-settings-icon {
+    width: 20px;
+    height: 20px;
+  }
+
   .console-settings-grid {
     grid-template-columns: 1fr;
   }
@@ -13388,6 +13553,66 @@ body.persona-media-sorting {
 
   .console-settings-actions .primary {
     width: 100%;
+  }
+
+  .browser-policy-group {
+    gap: 6px;
+    padding: 7px 8px 8px;
+  }
+
+  .browser-policy-group .console-settings-group-head {
+    gap: 1px;
+  }
+
+  .browser-policy-group .console-settings-group-head strong {
+    font-size: 17px;
+    line-height: 1.2;
+  }
+
+  .browser-policy-group .console-settings-group-head span {
+    font-size: 12px;
+    line-height: 1.3;
+  }
+
+  .browser-policy-grid {
+    gap: 6px;
+  }
+
+  .browser-policy-grid .console-setting-card {
+    gap: 4px;
+    padding: 6px 8px;
+  }
+
+  .browser-policy-grid .console-setting-card > span {
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+  .browser-policy-grid .console-setting-card em {
+    font-size: 11px;
+    line-height: 1.3;
+  }
+
+  .browser-policy-grid .console-setting-card input,
+  .browser-policy-grid .console-setting-card select,
+  .browser-policy-grid .console-input-mode-tabs button {
+    min-height: 32px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .browser-policy-grid .browser-recommendation-card {
+    gap: 6px;
+    padding: 8px 9px;
+  }
+
+  .browser-policy-grid .browser-recommendation-head strong {
+    font-size: 14px;
+  }
+
+  .browser-policy-grid .browser-recommendation-head span,
+  .browser-policy-grid .browser-recommendation-card p {
+    font-size: 11px;
   }
 
   .browser-recommendation-head {
@@ -19329,6 +19554,10 @@ body.live-browser-modal-open {
     font-size: 13px;
   }
 
+  .console-settings-save-actions .primary {
+    width: 100%;
+  }
+
   .account-browser-toolbar {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -20353,7 +20582,6 @@ body.console-page {
   .publish-post-list,
   .publish-preview-tabs,
   .publish-preview-card,
-  .browser-policy-grid,
   .task-table-inner,
   .proxy-table-wrap,
   .console-modal-content {
@@ -20365,13 +20593,6 @@ body.console-page {
   .proxy-table-wrap {
     max-height: min(62dvh, 560px);
     overflow-y: auto;
-  }
-
-  .browser-policy-grid {
-    max-height: min(62dvh, 520px);
-    overflow-x: hidden;
-    overflow-y: auto;
-    padding-right: 2px;
   }
 
   .live-browser-card.is-portrait:not(.is-live-browser-modal) .live-browser-frame {
@@ -24816,6 +25037,14 @@ body.console-page {
 /* Keep the three publishing entry buttons square on mobile after the shared
    capsule-control rule above has been applied. */
 @media (max-width: 760px) {
+  .console-page .console-settings-pagination-group {
+    display: none;
+  }
+
+  .console-page .console-settings-pagination-note {
+    display: none;
+  }
+
   .console-page .persona-detail .persona-content-tabs.persona-publish-content-tabs button[type="button"] {
     border-radius: 6px;
     background: transparent;
