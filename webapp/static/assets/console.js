@@ -18662,7 +18662,17 @@ async function generatePersonaDraftPosts() {
   });
   clearMsg("commandMsg");
   setActionLocked(lockParts, true);
-  renderPersonaDetail();
+  const generateButton = document.querySelector("[data-persona-generate-posts]");
+  if (generateButton) {
+    generateButton.disabled = true;
+    generateButton.setAttribute("aria-busy", "true");
+    generateButton.innerHTML = renderBusyButtonContent(
+      isRewriteRun ? "正在重新生成" : "正在生成草稿",
+      true,
+      actionLockStartedAt(...lockParts),
+    );
+  }
+  await new Promise((resolve) => window.requestAnimationFrame(resolve));
   try {
     let taskRecord = storePersonaPostGenerationTask(persona.id, {
       ...(storedTask || {}),
@@ -19811,6 +19821,9 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
     taskId,
     taskType: String(detail.type || "").trim(),
     status,
+    startedAt: toastTimestampMs(previousTaskState.startedAt)
+      || toastTimestampMs(detail.started_at || detail.created_at)
+      || Date.now(),
     detail,
     renderKey,
     selectedMediaIndexes: Array.isArray(previousTaskState.selectedMediaIndexes)
@@ -19927,6 +19940,7 @@ async function submitPersonaMediaTask() {
   body.append("task_type", taskType);
   body.append("params_json", JSON.stringify(params));
   files.forEach((file) => body.append("files", file, file.name));
+  const submittedAt = Date.now();
   setActionLocked(lockParts, true);
   setPersonaGenerateRunState(persona.id, {
     kind: "media",
@@ -19935,7 +19949,13 @@ async function submitPersonaMediaTask() {
     error: "",
   });
   clearMsg("commandMsg");
-  renderPersonaDetail();
+  const submitButton = document.querySelector("[data-persona-run-media-task]");
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.setAttribute("aria-busy", "true");
+    submitButton.innerHTML = renderBusyButtonContent("配图任务执行中", true, submittedAt);
+  }
+  await new Promise((resolve) => window.requestAnimationFrame(resolve));
   try {
     const result = await api("/api/tasks/submit", { method: "POST", body });
     clearUploadDropzoneState("personaMediaTaskFiles", mediaUploadState.stateKey);
@@ -19944,6 +19964,7 @@ async function submitPersonaMediaTask() {
       taskId: String(result.id || "").trim(),
       taskType,
       status: "queued",
+      startedAt: submittedAt,
       selectedMediaIndexes: null,
       detail: {
         id: String(result.id || "").trim(),
@@ -19959,14 +19980,7 @@ async function submitPersonaMediaTask() {
       taskId: result.id,
       taskPanel: "regular",
     });
-    watchTask(result.id, {
-      suppressDisconnectWarning: true,
-      taskPanel: "regular",
-      onDone: () => refreshPersonaMediaTask(persona.id, post.id, result.id).catch(() => {}),
-    });
-    refreshPersonaMediaTask(persona.id, post.id, result.id).catch(() => {});
     watchPersonaMediaTask(persona.id, post.id, result.id).catch(() => {});
-    await loadTasks().catch(() => {});
     setPersonaGenerateRunState(persona.id, {
       kind: "media",
       status: "running",
@@ -22199,7 +22213,7 @@ function renderPersonaGenerateStatusText(persona) {
 
 function renderPersonaGeneratePreviewDock(persona) {
   const runState = personaGeneratedPreviewState(persona?.id);
-  if (!persona || !runState || runState.visible === false || String(runState.status || "") !== "success") return "";
+  if (!persona || !runState || runState.selectionRequired || runState.visible === false || String(runState.status || "") !== "success") return "";
   const rows = personaGeneratedPreviewPosts(persona, runState);
   if (!rows.length) return "";
   return `
@@ -22334,7 +22348,7 @@ async function openPersonaGeneratedSelectionModal(persona, rows = []) {
 
 function activePersonaGeneratePreview(persona = selectedPersona()) {
   const runState = personaGeneratedPreviewState(persona?.id);
-  if (!persona || !runState || runState.visible === false || String(runState.status || "") !== "success") return null;
+  if (!persona || !runState || runState.selectionRequired || runState.visible === false || String(runState.status || "") !== "success") return null;
   const rows = personaGeneratedPreviewPosts(persona, runState);
   return rows.length ? { persona, runState, rows } : null;
 }
@@ -29633,6 +29647,8 @@ function bindEvents() {
           commit: () => {
             form.generate.composeMode = nextComposeMode;
             form.generate.mode = nextComposeMode === "hot" ? "hot" : "ai";
+            setSelectedPersonaPostId("");
+            form.media.focusPostId = "";
             if (editingPostId) {
               form.draft.rewriteSourcePostId = editingPostId;
             }
