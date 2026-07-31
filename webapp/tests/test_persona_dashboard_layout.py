@@ -714,8 +714,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('name="personaGeneratedSelection"', self.console_script)
         self.assertIn('{ value: "save", text: "保存草稿" }', self.console_script)
         self.assertIn('{ value: "media", text: "生成配图", primary: true }', self.console_script)
-        self.assertIn("resolvePersonaOrdinaryGeneratedCandidates(persona, generatedPosts, requestedTitle)", self.console_script)
-        self.assertIn("discardPersonaGeneratedCandidatePosts(", self.console_script)
+        self.assertIn("resolvePersonaOrdinaryGeneratedCandidates(persona, taskId, generatedPosts", self.console_script)
+        self.assertNotIn("discardPersonaGeneratedCandidatePosts(", self.console_script)
         self.assertIn('.console-modal[data-modal-key="persona-generated-selection"]', self.styles)
         self.assertIn('.persona-generated-selection-card input[type="radio"]:focus', self.styles)
         self.assertIn("box-shadow: none;", self.styles)
@@ -739,15 +739,32 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         ]
 
         self.assertIn('selection_required: String(form.composeMode || "tweet") === "tweet"', payload_builder)
-        self.assertIn('if (composeMode === "tweet" && generatedPosts.length) {', completion)
+        self.assertIn("generatedPosts.some((post) => Boolean(post?.generation_candidate))", completion)
         self.assertNotIn("&& isActiveGenerationSurface", completion)
         self.assertIn('personaForm.generate.composeMode = "tweet";', selection)
         self.assertIn('personaForm.media.operationMode = "generate";', selection)
-        self.assertIn("personaForm.media.focusPostId = selectedPostId;", selection)
+        self.assertIn("personaForm.media.focusPostId = finalizedPostId;", selection)
+        self.assertIn("generate_posts/tasks/${encodeURIComponent(cleanTaskId)}/resolve", selection)
+        self.assertNotIn("discardPersonaGeneratedCandidatePosts(", selection)
         self.assertIn("const generationLocked = isActionLocked", content_panel)
         self.assertIn("const generateBusy = generationLocked && activeGenerateComposeMode === composeMode;", content_panel)
         self.assertIn("const ordinaryMediaTarget", content_panel)
         self.assertIn("isEditingDraft || isBatchCompose || ordinaryMediaTarget", content_panel)
+
+        chooser = self.console_script[
+            self.console_script.index("async function openPersonaGeneratedSelectionModal"):
+            self.console_script.index("function activePersonaGeneratePreview")
+        ]
+        self.assertIn("stack: true", chooser)
+        self.assertIn("dismissOnBackdrop: false", chooser)
+        self.assertIn("dismissOnEscape: false", chooser)
+        self.assertIn("showClose: false", chooser)
+
+        reset = self.console_script[
+            self.console_script.index("function resetPersonaNewDraftComposer"):
+            self.console_script.index("function openPersonaDraftEditor")
+        ]
+        self.assertIn('form.media.focusPostId = "";', reset)
 
     def test_mobile_task_queue_persona_list_reuses_shared_drawer(self):
         selector_start = self.console_script.index("function renderTaskQueuePersonaSelector()")

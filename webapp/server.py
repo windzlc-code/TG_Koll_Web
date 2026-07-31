@@ -11352,6 +11352,11 @@ class PersonaDashboardGeneratePostsPayload(BaseModel):
     rewrite_source_content: str = ""
 
 
+class PersonaDashboardResolveGeneratedCandidatesPayload(BaseModel):
+    selected_post_id: str = ""
+    title: str | None = None
+
+
 class PersonaDashboardDraftPublishPayload(BaseModel):
     account_id: str = ""
     platform: str = ""
@@ -11500,6 +11505,10 @@ PERSONA_DASHBOARD_ARCHIVE_LOCK_TIMEOUT_SECONDS = 30
 PERSONA_DASHBOARD_ARCHIVE_THREAD_LOCK = threading.RLock()
 PERSONA_DASHBOARD_ARCHIVE_LOCK_STATE = threading.local()
 PERSONA_USER_POST_LIMIT = 10_000
+PERSONA_GENERATION_CANDIDATE_TTL_SECONDS = max(
+    3600,
+    int(os.getenv("PERSONA_GENERATION_CANDIDATE_TTL_SECONDS", str(24 * 60 * 60)) or 24 * 60 * 60),
+)
 PERSONA_DASHBOARD_MONITOR_LOCK = threading.Lock()
 PERSONA_DASHBOARD_MONITOR_STARTED = False
 PERSONA_DASHBOARD_MONITOR_STATE: dict[str, Any] = {
@@ -13720,6 +13729,10 @@ def _generate_persona_archive_posts(
     content_time_slot = str(payload.content_time_slot or "").strip().lower()
     if content_time_slot not in {"", "morning", "night"}:
         raise HTTPException(status_code=400, detail="不支持的文案时段。")
+    _cleanup_stale_persona_generation_candidates(
+        clean_id,
+        active_operation_ids={str(operation_id or "").strip()} if str(operation_id or "").strip() else set(),
+    )
     existing_post_ids = {
         str(post.get("id") or "").strip()
         for post in _list_persona_archive_posts(clean_id, include_generation_candidates=True)
@@ -13873,6 +13886,202 @@ def _persona_post_retention_timestamp(record: dict[str, Any], *, history: bool) 
         except (ValueError, OverflowError):
             continue
     return 0.0
+
+
+@_persona_archive_write_locked
+def _finalize_persona_generated_candidates(
+    archive_id: str,
+    *,
+    operation_id: str,
+    selected_post_id: str = "",
+    title: str | None = None,
+    expected_post_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    clean_archive_id = str(archive_id or "").strip()
+    clean_operation_id = str(operation_id or "").strip()
+    clean_selected_id = str(selected_post_id or "").strip()
+    clean_expected_ids = {
+        str(post_id or "").strip()
+        for post_id in (expected_post_ids or set())
+        if str(post_id or "").strip()
+    }
+    if not clean_archive_id or not clean_operation_id:
+        raise HTTPException(status_code=400, detail="missing archive_id or generation operation id")
+    if clean_expected_ids and clean_selected_id and clean_selected_id not in clean_expected_ids:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "CANDIDATE_SELECTION_CONFLICT", "message": "selected post does not belong to this generation task"},
+        )
+
+    path, raw, archives = _persona_archive_source_for_write(clean_archive_id)
+    archive = _find_persona_archive(archives, clean_archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="persona not found")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    operation_posts = [
+        post
+        for post in posts
+        if (
+            isinstance(post, dict)
+            and str(post.get("generationOperationId") or "").strip() == clean_operation_id
+            and (
+                not clean_expected_ids
+                or str(post.get("id") or "").strip() in clean_expected_ids
+            )
+        )
+    ]
+    operation_by_id = {
+        str(post.get("id") or "").strip(): post
+        for post in operation_posts
+        if str(post.get("id") or "").strip()
+    }
+    candidate_ids = {
+        post_id
+        for post_id, post in operation_by_id.items()
+        if bool(post.get("generationCandidate"))
+    }
+    finalized_ids = {
+        post_id
+        for post_id, post in operation_by_id.items()
+        if not bool(post.get("generationCandidate"))
+    }
+
+    selected = operation_by_id.get(clean_selected_id) if clean_selected_id else None
+    if clean_selected_id and selected is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "CANDIDATE_SELECTION_CONFLICT", "message": "selected candidate is no longer available"},
+        )
+    if clean_selected_id and finalized_ids and finalized_ids != {clean_selected_id}:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "CANDIDATE_SELECTION_CONFLICT", "message": "this generation task was finalized with another candidate"},
+        )
+    if not clean_selected_id and finalized_ids:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "CANDIDATE_SELECTION_CONFLICT", "message": "this generation task already retained a candidate"},
+        )
+
+    replayed = not candidate_ids
+    discarded_ids = candidate_ids - ({clean_selected_id} if clean_selected_id else set())
+    if selected is not None:
+        selected.pop("generationCandidate", None)
+        if title is not None:
+            selected["title"] = str(title or "").strip()[:120]
+        selected["updatedAt"] = _persona_dashboard_iso_now()
+
+    if discarded_ids:
+        archive["posts"] = [
+            post
+            for post in posts
+            if not (
+                isinstance(post, dict)
+                and str(post.get("id") or "").strip() in discarded_ids
+            )
+        ]
+        platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else {}
+        for platform, rows in platform_posts.items():
+            if isinstance(rows, list):
+                platform_posts[platform] = [
+                    row
+                    for row in rows
+                    if not (
+                        isinstance(row, dict)
+                        and str(row.get("id") or "").strip() in discarded_ids
+                    )
+                ]
+
+    changed = bool(candidate_ids or discarded_ids or (selected is not None and title is not None))
+    if changed:
+        archive["updatedAt"] = _persona_dashboard_iso_now()
+        _write_persona_archives_preserving_shape(path, raw, archives)
+
+    selected_compact = _compact_persona_archive_post(selected) if isinstance(selected, dict) else None
+    return {
+        "ok": True,
+        "archive_id": clean_archive_id,
+        "operation_id": clean_operation_id,
+        "selected_post": selected_compact,
+        "discarded_count": len(discarded_ids),
+        "replayed": replayed,
+    }
+
+
+@_persona_archive_write_locked
+def _cleanup_stale_persona_generation_candidates(
+    archive_id: str = "",
+    *,
+    max_age_seconds: int = PERSONA_GENERATION_CANDIDATE_TTL_SECONDS,
+    now_ts: float | None = None,
+    active_operation_ids: set[str] | None = None,
+) -> dict[str, int]:
+    clean_archive_id = str(archive_id or "").strip()
+    active_ids = {
+        str(operation_id or "").strip()
+        for operation_id in (active_operation_ids or set())
+        if str(operation_id or "").strip()
+    }
+    cutoff = float(now_ts if now_ts is not None else time.time()) - max(1, int(max_age_seconds))
+    primary = TOOL_R18_RUNTIME_DIR / "persona_archives.json"
+    fallback = TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json"
+    paths = []
+    if clean_archive_id:
+        paths = [_persona_archive_source_for_write(clean_archive_id)[0]]
+    else:
+        paths = [primary, fallback]
+    result = {"removed_count": 0, "updated_files": 0}
+    seen_paths: set[Path] = set()
+    for path in paths:
+        resolved_path = path.resolve()
+        if resolved_path in seen_paths or not path.is_file():
+            continue
+        seen_paths.add(resolved_path)
+        raw = _read_json_file(path)
+        archives = _extract_persona_archive_list(raw)
+        changed = False
+        for archive in archives:
+            if not isinstance(archive, dict):
+                continue
+            if clean_archive_id and str(archive.get("id") or "").strip() != clean_archive_id:
+                continue
+            posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+            removed_ids: set[str] = set()
+            next_posts = []
+            for post in posts:
+                operation_id = str((post or {}).get("generationOperationId") or "").strip() if isinstance(post, dict) else ""
+                timestamp = _persona_post_retention_timestamp(post, history=False) if isinstance(post, dict) else 0.0
+                expired = (
+                    isinstance(post, dict)
+                    and bool(post.get("generationCandidate"))
+                    and operation_id not in active_ids
+                    and timestamp > 0
+                    and timestamp <= cutoff
+                )
+                if expired:
+                    post_id = str(post.get("id") or "").strip()
+                    if post_id:
+                        removed_ids.add(post_id)
+                    result["removed_count"] += 1
+                    changed = True
+                    continue
+                next_posts.append(post)
+            if not removed_ids:
+                continue
+            archive["posts"] = next_posts
+            platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else {}
+            for platform, rows in platform_posts.items():
+                if isinstance(rows, list):
+                    platform_posts[platform] = [
+                        row
+                        for row in rows
+                        if not (isinstance(row, dict) and str(row.get("id") or "").strip() in removed_ids)
+                    ]
+            archive["updatedAt"] = _persona_dashboard_iso_now()
+        if changed:
+            _write_persona_archives_preserving_shape_unlocked(path, raw, archives)
+            result["updated_files"] += 1
+    return result
 
 
 def _persona_publish_history_source(record: dict[str, Any]) -> str:
@@ -18464,6 +18673,8 @@ def create_app() -> FastAPI:
     _ensure_admin_seed()
     _sync_password_vault_key_status()
     _resume_pending_tasks()
+    with contextlib.suppress(Exception):
+        _cleanup_stale_persona_generation_candidates()
     _start_task_workers()
     _start_cleanup_worker()
 
@@ -21828,6 +22039,44 @@ def create_app() -> FastAPI:
             "ok": True,
             "task": _build_task_detail_payload(task=task, include_logs=False, log_limit=0),
         }
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/generate_posts/tasks/{task_id}/resolve")
+    def api_persona_dashboard_resolve_generated_candidates(
+        archive_id: str,
+        task_id: str,
+        payload: PersonaDashboardResolveGeneratedCandidatesPayload,
+        user: dict[str, Any] = Depends(require_persona_owner),
+    ):
+        user_id = _workspace_user_id(user)
+        task = _persona_post_generation_task_row(task_id, user_id, archive_id)
+        task_input = _json_loads(task.get("input_json"), {})
+        task_output = _json_loads(task.get("output_json"), {})
+        if str(task.get("status") or "").strip().lower() != "success":
+            raise HTTPException(status_code=409, detail="generation task is not complete")
+        if not _to_bool((task_input or {}).get("selection_required"), False):
+            raise HTTPException(status_code=409, detail="generation task does not require candidate selection")
+        expected_post_ids = {
+            str(post_id or "").strip()
+            for post_id in ((task_output or {}).get("post_ids") if isinstance((task_output or {}).get("post_ids"), list) else [])
+            if str(post_id or "").strip()
+        }
+        if not expected_post_ids:
+            expected_post_ids = {
+                str(post.get("id") or "").strip()
+                for post in ((task_output or {}).get("posts") if isinstance((task_output or {}).get("posts"), list) else [])
+                if isinstance(post, dict) and str(post.get("id") or "").strip()
+            }
+        result = _finalize_persona_generated_candidates(
+            archive_id,
+            operation_id=task_id,
+            selected_post_id=payload.selected_post_id,
+            title=payload.title if "title" in payload.model_fields_set else None,
+            expected_post_ids=expected_post_ids,
+        )
+        retention = _enforce_persona_post_retention_for_user(user_id)
+        if retention.get("removed_history_count") or retention.get("removed_draft_count"):
+            result["retention"] = retention
+        return result
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/publish")
     def api_persona_dashboard_publish_post(

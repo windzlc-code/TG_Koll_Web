@@ -2402,7 +2402,7 @@ function renderModalCloseButton(cancelAttribute = "data-console-modal-cancel") {
   </button>`;
 }
 
-function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", fields = [], confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, showConfirm = true, extraActions = [], modalKey = "", stack = false, dismissOnBackdrop = true } = {}) {
+function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", fields = [], confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, showConfirm = true, showClose = true, extraActions = [], modalKey = "", stack = false, dismissOnBackdrop = true, dismissOnEscape = true } = {}) {
   if (!stack) closeConsoleModal(null);
   return new Promise((resolve) => {
     const modal = document.createElement("div");
@@ -2417,7 +2417,7 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
       <section class="console-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="${esc(titleId)}">
         <div class="console-modal-head">
           <strong id="${esc(titleId)}">${esc(title)}</strong>
-          ${renderModalCloseButton()}
+          ${showClose ? renderModalCloseButton() : ""}
         </div>
         ${message ? `<p>${esc(message)}</p>` : ""}
         ${contentHtml ? `<div class="console-modal-content">${contentHtml}</div>` : ""}
@@ -2489,7 +2489,7 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
       }
     });
     modal.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") requestClose(null);
+      if (event.key === "Escape" && dismissOnEscape) requestClose(null);
       if (event.key === "Enter" && input) requestClose(input.value);
     });
   });
@@ -18452,20 +18452,6 @@ function showPersonaGenerateRunToast(personaId, runState) {
   });
 }
 
-async function discardPersonaGeneratedCandidatePosts(personaId, candidateIds = [], keepPostId = "") {
-  const cleanPersonaId = String(personaId || "").trim();
-  const cleanKeepId = String(keepPostId || "").trim();
-  const discardIds = Array.from(new Set((candidateIds || [])
-    .map((postId) => String(postId || "").trim())
-    .filter((postId) => postId && postId !== cleanKeepId)));
-  for (const postId of discardIds) {
-    await api(`/api/persona_dashboard/personas/${encodeURIComponent(cleanPersonaId)}/posts/by_id/${encodeURIComponent(postId)}`, {
-      method: "DELETE",
-    });
-    deletePersonaHotImportMeta(cleanPersonaId, postId);
-  }
-}
-
 async function applyPersonaGeneratedCandidateTitle(personaId, post, requestedTitle = "") {
   const cleanPersonaId = String(personaId || "").trim();
   const cleanPostId = String(post?.id || "").trim();
@@ -18488,42 +18474,47 @@ async function applyPersonaGeneratedBatchTitles(personaId, posts = [], requested
   }
 }
 
-async function resolvePersonaOrdinaryGeneratedCandidates(persona, generatedPosts = [], requestedTitle = "") {
+async function resolvePersonaOrdinaryGeneratedCandidates(persona, taskId, generatedPosts = [], requestedTitle = "") {
   const rows = Array.isArray(generatedPosts) ? generatedPosts.filter((post) => String(post?.id || "").trim()) : [];
-  if (!persona || !rows.length) return { action: "", postId: "" };
+  const cleanTaskId = String(taskId || "").trim();
+  if (!persona || !cleanTaskId || !rows.length) return { action: "", postId: "" };
   const selection = await openPersonaGeneratedSelectionModal(persona, rows);
   const selectedPost = rows.find((post) => String(post?.id || "").trim() === String(selection.postId || "").trim()) || null;
   const selectedPostId = selection.action && selectedPost ? String(selectedPost.id || "").trim() : "";
-  await discardPersonaGeneratedCandidatePosts(
-    persona.id,
-    rows.map((post) => post.id),
-    selectedPostId,
-  );
-  if (selectedPostId) {
-    await applyPersonaGeneratedCandidateTitle(persona.id, selectedPost, requestedTitle);
+  const finalizePayload = { selected_post_id: selectedPostId };
+  if (selectedPostId && String(requestedTitle || "").trim()) {
+    finalizePayload.title = String(requestedTitle || "").trim();
   }
+  const finalized = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/generate_posts/tasks/${encodeURIComponent(cleanTaskId)}/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(finalizePayload),
+  });
   clearPersonaGenerateRunState(persona.id);
   personaFormState(persona.id).draft = defaultPersonaDraftForm();
   await loadPersonaDraftPosts(persona.id, { force: true });
   setPersonaPostSource("posts", persona);
-  setSelectedPersonaPostId(selectedPostId || personaDraftPosts(persona)[0]?.id || "");
+  const finalizedPostId = String(finalized?.selected_post?.id || selectedPostId || "").trim();
+  setSelectedPersonaPostId(finalizedPostId || personaDraftPosts(persona)[0]?.id || "");
   if (selection.action === "media" && selectedPostId) {
     const personaForm = personaFormState(persona.id);
     personaForm.generate.composeMode = "tweet";
     personaForm.media.operationMode = "generate";
     personaForm.media.contentMode = "draft";
-    personaForm.media.focusPostId = selectedPostId;
+    personaForm.media.focusPostId = finalizedPostId;
     state.personaPanels.content = "generate";
     showMsg("commandMsg", "已保留所选草稿，可以继续生成配图。", true);
   } else if (selection.action === "save" && selectedPostId) {
+    personaFormState(persona.id).media.focusPostId = "";
     state.personaPanels.content = "posts";
     showMsg("commandMsg", "已保存所选草稿，其他候选已清理。", true);
   } else {
+    personaFormState(persona.id).media.focusPostId = "";
     state.personaPanels.content = "generate";
     showMsg("commandMsg", "本次生成候选已放弃。", true);
   }
   renderConfirmSummary();
-  return { action: selection.action, postId: selectedPostId };
+  return { action: selection.action, postId: finalizedPostId };
 }
 
 function personaPostGenerationTaskStorageKey(personaId) {
@@ -18532,6 +18523,12 @@ function personaPostGenerationTaskStorageKey(personaId) {
   return workspaceUserId && cleanPersonaId
     ? `${PERSONA_POST_GENERATION_TASK_STORAGE_PREFIX}:${workspaceUserId}:${cleanPersonaId}`
     : "";
+}
+
+function storedPersonaPostGenerationComposeMode(record = {}) {
+  const explicitMode = String(record?.context?.composeMode || "").trim();
+  if (["tweet", "tweet_media"].includes(explicitMode)) return explicitMode;
+  return record?.payload?.selection_required ? "tweet" : "tweet_media";
 }
 
 function storedPersonaPostGenerationTask(personaId) {
@@ -18620,7 +18617,9 @@ async function generatePersonaDraftPosts() {
   const payload = storedTask?.payload && typeof storedTask.payload === "object"
     ? storedTask.payload
     : currentPayload;
-  const composeMode = String(storedTask?.context?.composeMode || personaFormState(persona.id).generate.composeMode || "tweet");
+  const composeMode = storedTask
+    ? storedPersonaPostGenerationComposeMode(storedTask)
+    : String(personaFormState(persona.id).generate.composeMode || "tweet");
   const requestedTitle = String(storedTask?.context?.requestedTitle || personaFormState(persona.id).draft.title || "").trim();
   const isRewriteRun = Boolean(storedTask?.context?.isRewriteRun ?? String(payload.rewrite_source_content || "").trim());
   const operationKey = String(storedTask?.operationKey || newPersonaPostGenerationOperationKey(persona.id));
@@ -18631,6 +18630,7 @@ async function generatePersonaDraftPosts() {
     count: payload.count,
     targetWords: payload.target_words,
     prompt: payload.prompt,
+    selectionRequired: Boolean(payload.selection_required),
   };
   setPersonaGenerateRunState(persona.id, {
     kind: isRewriteRun ? "rewrite" : "draft",
@@ -18700,8 +18700,10 @@ async function completePersonaPostGenerationTask(persona, task, context = {}) {
   };
   const generatedPosts = Array.isArray(result.posts) ? result.posts : [];
   const generatedIds = new Set(generatedPosts.map((post) => String(post?.id || "")).filter(Boolean));
+  const selectionRequired = Boolean(context.selectionRequired)
+    || generatedPosts.some((post) => Boolean(post?.generation_candidate));
   const isRewriteRun = Boolean(context.isRewriteRun);
-  const composeMode = String(context.composeMode || "tweet");
+  const composeMode = String(context.composeMode || (selectionRequired ? "tweet" : "tweet_media"));
   const requestedTitle = String(context.requestedTitle || "").trim();
   const isActivePersona = String(selectedPersona()?.id || "").trim() === String(persona.id || "").trim();
   setPersonaGenerateRunState(persona.id, {
@@ -18719,12 +18721,10 @@ async function completePersonaPostGenerationTask(persona, task, context = {}) {
     composeMode,
     error: "",
   });
-  if (composeMode === "tweet" && generatedPosts.length) {
-    await resolvePersonaOrdinaryGeneratedCandidates(persona, generatedPosts, requestedTitle);
+  if (selectionRequired && generatedPosts.length) {
+    await resolvePersonaOrdinaryGeneratedCandidates(persona, task?.id, generatedPosts, requestedTitle);
   } else {
-    if (composeMode !== "tweet") {
-      await applyPersonaGeneratedBatchTitles(persona.id, generatedPosts, requestedTitle);
-    }
+    await applyPersonaGeneratedBatchTitles(persona.id, generatedPosts, requestedTitle);
     personaFormState(persona.id).draft = defaultPersonaDraftForm();
     await loadPersonaDraftPosts(persona.id, { force: true });
     const latestGenerated = personaDraftPosts(persona).find((post) => generatedIds.has(String(post?.id || "")));
@@ -18786,7 +18786,7 @@ async function watchPersonaPostGenerationTask(persona, record, initialTask = nul
         count: Number(record?.context?.count || 0),
         targetWords: Number(record?.context?.targetWords || 0),
         prompt: String(record?.context?.prompt || ""),
-        composeMode: String(record?.context?.composeMode || "tweet"),
+        composeMode: storedPersonaPostGenerationComposeMode(record),
         error: "",
         suppressToast: true,
       });
@@ -18820,7 +18820,7 @@ function restorePersonaPostGenerationTasks(personaId = "") {
     count: Number(record?.context?.count || 0),
     targetWords: Number(record?.context?.targetWords || 0),
     prompt: String(record?.context?.prompt || ""),
-    composeMode: String(record?.context?.composeMode || "tweet"),
+    composeMode: storedPersonaPostGenerationComposeMode(record),
     error: "",
     suppressToast: true,
   });
@@ -19335,6 +19335,8 @@ function resetPersonaNewDraftComposer(personaId) {
   const form = personaFormState(personaId);
   form.generate.mode = "ai";
   form.draft = defaultPersonaDraftForm();
+  form.media.focusPostId = "";
+  setSelectedPersonaPostId("");
 }
 
 function openPersonaDraftEditor(postId) {
@@ -22280,17 +22282,23 @@ async function openPersonaGeneratedSelectionModal(persona, rows = []) {
       <div class="persona-generated-selection-list" role="radiogroup" aria-label="推文候选">
         ${candidates.map((post, index) => renderPersonaGeneratedSelectionCard(post, index, candidates, selectedId)).join("")}
       </div>
-      <p class="persona-generated-selection-hint">未选择的候选将在完成操作或关闭窗口后自动清理。</p>
+      <p class="persona-generated-selection-hint">未选择的候选将在完成当前操作后自动清理。</p>
     `,
-    cancelText: "放弃本次结果",
+    showCancel: false,
     showConfirm: false,
+    showClose: false,
     extraActions: [
+      { value: "discard", text: "放弃本次结果", danger: true },
       { value: "save", text: "保存草稿" },
       { value: "media", text: "生成配图", primary: true },
     ],
     modalKey: "persona-generated-selection",
+    stack: true,
+    dismissOnBackdrop: false,
+    dismissOnEscape: false,
   });
-  const modal = $("consoleModal");
+  const chooserModals = document.querySelectorAll('.console-modal[data-modal-key="persona-generated-selection"]');
+  const modal = chooserModals[chooserModals.length - 1] || null;
   const syncSelection = () => {
     selectedId = String(modal?.querySelector('input[name="personaGeneratedSelection"]:checked')?.value || "").trim();
     modal?.querySelectorAll("[data-persona-generated-selection-card]").forEach((card) => {

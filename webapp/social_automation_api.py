@@ -8344,6 +8344,12 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
                     "health_status": health_status,
                     "health_reason": str(exc),
                 })
+            account_dead = detected_status == "disabled" and health_status == "banned"
+            if account_dead:
+                manual_result.update({
+                    "account_dead": True,
+                    "retryable": False,
+                })
             if detected_status == "publish_submitted_unconfirmed":
                 manual_result.update({
                     "publish_submitted": True,
@@ -8352,7 +8358,7 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
                 })
             _finish_task(
                 task["id"],
-                "need_manual",
+                "failed" if account_dead else "need_manual",
                 manual_result,
                 str(exc),
                 account_status="ready" if detected_status == "publish_submitted_unconfirmed" else detected_status,

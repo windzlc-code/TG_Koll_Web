@@ -2972,6 +2972,37 @@ def _warmup_minimum_targets(
     return min_required_likes, min_required_comments, min_required_interactions
 
 
+def _is_numeric_image_captcha_text(visible_text: str) -> bool:
+    normalized = str(visible_text or "").strip().lower()
+    return (
+        "enter the code from the image" in normalized
+        and (
+            "confirm you're human" in normalized
+            or "confirm you are human" in normalized
+            or "get a new code" in normalized
+        )
+    )
+
+
+def _is_human_verification_text(visible_text: str) -> bool:
+    normalized = str(visible_text or "").strip().lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "confirm you're human",
+            "confirm you are human",
+            "verify you're human",
+            "verify you are human",
+            "prove you're human",
+            "prove you are human",
+            "确认你是真人",
+            "验证你是真人",
+            "请验证你是真人",
+            "真人验证",
+        )
+    )
+
+
 def _warmup_risk_state(page, platform: str) -> dict[str, str] | None:
     url = str(page.url or "")
     body_text = ""
@@ -3005,6 +3036,8 @@ def _warmup_risk_state(page, platform: str) -> dict[str, str] | None:
             for index in range(min(verification_inputs.count(), 8))
         )
     visible_text = f"{notice_text} {body_text}".strip()
+    numeric_image_captcha = _is_numeric_image_captcha_text(visible_text)
+    human_verification = _is_human_verification_text(visible_text)
     if (
         _is_verification_url(url)
         or has_verification_input
@@ -3015,6 +3048,11 @@ def _warmup_risk_state(page, platform: str) -> dict[str, str] | None:
             "health_status": "abnormal",
             "reason": f"{_platform_name(platform)} 触发了安全验证，自动操作已暂停，请人工处理当前页面。",
             "force_manual": "true",
+            "challenge_type": (
+                "numeric_image_captcha"
+                if numeric_image_captcha
+                else ("human_verification" if human_verification else "verification")
+            ),
         }
     risk_markers = (
         "we restrict certain activity to protect our community",
@@ -3049,6 +3087,60 @@ def _guard_warmup_risk(
     risk = _warmup_risk_state(page, platform)
     if risk is None:
         return
+    challenge_type = str(risk.get("challenge_type") or "")
+    if challenge_type in {"numeric_image_captcha", "human_verification"}:
+        challenge_label = "数字图片验证码" if challenge_type == "numeric_image_captcha" else "真人验证页面"
+        retry_key = f"{str(platform or '').strip().lower()}_{challenge_type}_retry_attempted"
+        retry_attempted = bool(
+            isinstance(context_control, dict) and context_control.get(retry_key)
+        )
+        if not retry_attempted:
+            if isinstance(context_control, dict):
+                context_control[retry_key] = True
+            logger.log(
+                "warn",
+                f"{platform}_{challenge_type}_retry",
+                f"检测到{challenge_label}，正在进行唯一一次低频重试。",
+                {"status": risk.get("status", "need_verification")},
+            )
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=30000)
+            except Exception as exc:
+                refreshed_risk = {
+                    "status": "need_verification",
+                    "health_status": "abnormal",
+                    "reason": f"{_platform_name(platform)} {challenge_label}重试失败，账号状态保持异常并等待人工确认。",
+                    "force_manual": "true",
+                    "challenge_type": "verification_retry_failed",
+                }
+                logger.log(
+                    "warn",
+                    f"{platform}_{challenge_type}_retry_failed",
+                    refreshed_risk["reason"],
+                    {"error": str(exc)[:500]},
+                )
+            else:
+                _wait_for_cancellation(1.5, cancel_event)
+                refreshed_risk = _warmup_risk_state(page, platform)
+            if refreshed_risk is None:
+                if isinstance(context_control, dict):
+                    context_control.pop(retry_key, None)
+                logger.log(
+                    "info",
+                    f"{platform}_{challenge_type}_cleared",
+                    f"{challenge_label}在一次重试后已解除，继续执行任务。",
+                    {},
+                )
+                return
+            risk = refreshed_risk
+        if str(risk.get("challenge_type") or "") == challenge_type:
+            risk = {
+                "status": "disabled",
+                "health_status": "banned",
+                "reason": f"{_platform_name(platform)} {challenge_label}在一次重试后仍未解除，账号已判定为封控死号并停止使用。",
+                "force_manual": "true",
+                "challenge_type": challenge_type,
+            }
     force_manual = str(risk.get("force_manual") or "").lower() == "true"
     if not force_manual and not bool(payload.get("stop_on_risk_limit", False)):
         return

@@ -448,6 +448,59 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(task_status, "success")
         self.assertEqual(account_status, "cookie_expired")
 
+    def test_dead_account_challenge_finishes_task_and_persists_disabled_banned_state(self):
+        self._insert_account(status="ready")
+        self._insert_task("dead-account-task", "running", task_type="instagram_warmup")
+        task = {
+            "id": "dead-account-task",
+            "account_id": "account-1",
+            "platform": "instagram",
+            "task_type": "instagram_warmup",
+            "payload": {},
+        }
+        control = {
+            "cancel_event": threading.Event(),
+            "task": dict(task),
+            "live_browser_session_id": "",
+        }
+
+        from social_automation.runner import NeedManualError
+
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_apply_runtime_task_preferences",
+                side_effect=lambda runtime_task, _account, _control: runtime_task,
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_run_social_task_in_clean_thread",
+                side_effect=NeedManualError(
+                    "numeric captcha remained after retry",
+                    status="disabled",
+                    health_status="banned",
+                ),
+            ),
+        ):
+            social_automation_api._execute_claimed_task_with_control(task, control)
+
+        with sqlite3.connect(self.db_path) as conn:
+            task_row = conn.execute(
+                "SELECT status, result_json FROM social_automation_tasks WHERE id = ?",
+                ("dead-account-task",),
+            ).fetchone()
+            account_row = conn.execute(
+                "SELECT status, health_status, health_detail FROM social_accounts WHERE id = ?",
+                ("account-1",),
+            ).fetchone()
+        result = json.loads(task_row[1])
+        self.assertEqual(task_row[0], "failed")
+        self.assertTrue(result["account_dead"])
+        self.assertFalse(result["retryable"])
+        self.assertEqual(account_row[0], "disabled")
+        self.assertEqual(account_row[1], "banned")
+        self.assertIn("numeric captcha", account_row[2])
+
     def test_publish_confirmation_timeout_requeues_confirmation_without_manual_state(self):
         self._insert_account(status="cookie_expired")
         self._insert_task("publish-review", "running")

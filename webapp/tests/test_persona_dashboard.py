@@ -3278,6 +3278,138 @@ class PersonaDashboardApiTests(unittest.TestCase):
         visible_ids = [post["id"] for post in server._list_persona_archive_posts("persona-1")]
         self.assertEqual(visible_ids, ["ordinary-candidate-2", "post-1"])
 
+    def test_generation_candidates_are_finalized_atomically_and_idempotently(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        for index in range(3):
+            archives[0]["posts"].append({
+                "id": f"candidate-{index + 1}",
+                "title": f"Candidate {index + 1}",
+                "content": f"Generated candidate {index + 1}",
+                "createdAt": "2026-08-01T00:00:00Z",
+                "updatedAt": "2026-08-01T00:00:00Z",
+                "generationCandidate": True,
+                "generationOperationId": "generation-op-1",
+            })
+        archives_path.write_text(json.dumps(archives), encoding="utf-8")
+
+        first = server._finalize_persona_generated_candidates(
+            "persona-1",
+            operation_id="generation-op-1",
+            selected_post_id="candidate-2",
+            title="Chosen candidate",
+        )
+        replay = server._finalize_persona_generated_candidates(
+            "persona-1",
+            operation_id="generation-op-1",
+            selected_post_id="candidate-2",
+            title="Chosen candidate",
+        )
+
+        self.assertEqual(first["selected_post"]["id"], "candidate-2")
+        self.assertEqual(replay["selected_post"]["id"], "candidate-2")
+        self.assertTrue(replay["replayed"])
+        self.assertEqual(
+            [post["id"] for post in server._list_persona_archive_posts("persona-1")],
+            ["candidate-2", "post-1"],
+        )
+        stored = json.loads(archives_path.read_text(encoding="utf-8"))
+        selected = next(post for post in stored[0]["posts"] if post["id"] == "candidate-2")
+        self.assertEqual(selected["title"], "Chosen candidate")
+        self.assertNotIn("generationCandidate", selected)
+        self.assertFalse((self.tool_runtime_dir / "persona_dashboard_deleted_posts.json").exists())
+
+    def test_stale_generation_candidates_are_cleaned_without_removing_recent_candidates(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        archives[0]["posts"].extend([
+            {
+                "id": "candidate-stale",
+                "title": "Stale",
+                "content": "Stale candidate",
+                "createdAt": "2026-07-31T00:00:00Z",
+                "updatedAt": "2026-07-31T00:00:00Z",
+                "generationCandidate": True,
+                "generationOperationId": "generation-old",
+            },
+            {
+                "id": "candidate-recent",
+                "title": "Recent",
+                "content": "Recent candidate",
+                "createdAt": "2026-08-01T00:30:00Z",
+                "updatedAt": "2026-08-01T00:30:00Z",
+                "generationCandidate": True,
+                "generationOperationId": "generation-new",
+            },
+        ])
+        archives_path.write_text(json.dumps(archives), encoding="utf-8")
+
+        result = server._cleanup_stale_persona_generation_candidates(
+            "persona-1",
+            max_age_seconds=3600,
+            now_ts=datetime(2026, 8, 1, 1, 0, tzinfo=timezone.utc).timestamp(),
+        )
+
+        self.assertEqual(result["removed_count"], 1)
+        stored = json.loads(archives_path.read_text(encoding="utf-8"))
+        stored_ids = [post["id"] for post in stored[0]["posts"]]
+        self.assertNotIn("candidate-stale", stored_ids)
+        self.assertIn("candidate-recent", stored_ids)
+
+    def test_generation_candidate_resolution_endpoint_is_replay_safe_and_enforces_retention(self):
+        self._write_archives()
+        with mock.patch.object(server._TASK_QUEUE, "put"):
+            accepted = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/generate_posts",
+                headers={"Idempotency-Key": "candidate-resolution-endpoint-1"},
+                json={"count": 3, "selection_required": True},
+            )
+        self.assertEqual(accepted.status_code, 202, accepted.text)
+        task_id = accepted.json()["task_id"]
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        for index in range(3):
+            archives[0]["posts"].append({
+                "id": f"endpoint-candidate-{index + 1}",
+                "title": f"Candidate {index + 1}",
+                "content": f"Generated candidate {index + 1}",
+                "createdAt": f"2026-08-01T00:0{index}:00Z",
+                "updatedAt": f"2026-08-01T00:0{index}:00Z",
+                "generationCandidate": True,
+                "generationOperationId": task_id,
+            })
+        archives_path.write_text(json.dumps(archives), encoding="utf-8")
+        output = {
+            "ok": True,
+            "generated_count": 3,
+            "post_ids": [f"endpoint-candidate-{index + 1}" for index in range(3)],
+        }
+        with server.db() as conn:
+            conn.execute(
+                "UPDATE tasks SET status = 'success', output_json = ? WHERE id = ?",
+                (json.dumps(output), task_id),
+            )
+
+        with mock.patch.object(server, "PERSONA_USER_POST_LIMIT", 1):
+            first = self.client.post(
+                f"/api/persona_dashboard/personas/persona-1/generate_posts/tasks/{task_id}/resolve",
+                json={"selected_post_id": "endpoint-candidate-2", "title": "Selected"},
+            )
+            replay = self.client.post(
+                f"/api/persona_dashboard/personas/persona-1/generate_posts/tasks/{task_id}/resolve",
+                json={"selected_post_id": "endpoint-candidate-2", "title": "Selected"},
+            )
+
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertTrue(replay.json()["replayed"])
+        self.assertEqual(
+            [post["id"] for post in server._list_persona_archive_posts("persona-1")],
+            ["endpoint-candidate-2"],
+        )
+
     def test_refresh_hot_post_returns_updated_source_metrics(self):
         self._write_archives()
         refreshed_post = {
