@@ -949,6 +949,36 @@ class WarmupChainParityTests(TestCase):
         self.assertEqual(keywords, [])
         self.assertEqual(payload["_warmup_search_keyword_source"], "model_failed")
 
+    def test_warmup_does_not_browse_when_required_model_keywords_are_missing(self):
+        payload = {
+            "session_seconds": 15,
+            "browse_limit": 1,
+            "like_limit": 1,
+            "require_persona_relevance": True,
+        }
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(
+                runner,
+                "_generate_warmup_search_keywords_with_ai",
+                return_value=[],
+            ),
+            mock.patch.object(
+                runner,
+                "_ensure_warmup_relevant_surface",
+            ) as ensure,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "模型未生成人设关键词"):
+                runner._run_threads_warmup(
+                    _Page(),
+                    {"id": "missing-model-keywords"},
+                    payload,
+                    Path("."),
+                    _Logger(),
+                )
+
+        ensure.assert_not_called()
+
     def test_generic_personality_words_are_not_used_as_search_queries(self):
         self.assertEqual(
             runner._sanitize_warmup_search_keywords(["搞笑", "生活日常", "理发搞笑", "男士短发"]),
@@ -1011,6 +1041,11 @@ class WarmupChainParityTests(TestCase):
                 self.subTest(platform=platform),
                 mock.patch.object(runner, "_goto"),
                 mock.patch.object(runner, "_guard_warmup_risk"),
+                mock.patch.object(
+                    runner,
+                    "_generate_warmup_search_keywords_with_ai",
+                    return_value=["鐞嗗彂"],
+                ),
                 mock.patch.object(runner, "_ensure_warmup_relevant_surface", return_value=relevant) as ensure,
                 mock.patch.object(runner, "_next_warmup_interaction_at", return_value=99),
                 mock.patch.object(runner, "_open_random_platform_post", return_value=False),
@@ -1458,6 +1493,7 @@ class WarmupChainParityTests(TestCase):
                 "browse_limit": 2,
                 "like_limit": 0,
                 "max_comments": 0,
+                "require_persona_relevance": False,
             },
         }
 

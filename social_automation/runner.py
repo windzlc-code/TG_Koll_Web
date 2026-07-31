@@ -2833,6 +2833,25 @@ def _warmup_session_seconds(payload: dict[str, Any], default_seconds: int | None
     return max(15, min(7200, int(random.uniform(7, 10) * 60)))
 
 
+def _remaining_warmup_session_seconds(
+    task: dict[str, Any],
+    session_seconds: int,
+    *,
+    now_epoch: float | None = None,
+) -> float:
+    """Deduct browser and model setup from the user-visible warmup duration."""
+    budget = max(0.0, float(session_seconds))
+    try:
+        started_at = float(task.get("started_at") or 0)
+    except (TypeError, ValueError):
+        started_at = 0.0
+    if started_at <= 0:
+        return budget
+    now = float(time.time() if now_epoch is None else now_epoch)
+    elapsed = max(0.0, now - started_at)
+    return max(0.0, budget - elapsed)
+
+
 def _payload_int(payload: dict[str, Any], keys: tuple[str, ...], default: int, min_value: int, max_value: int) -> int:
     for key in keys:
         value = payload.get(key)
@@ -5291,6 +5310,11 @@ def _run_platform_warmup(
     comment_chance = _payload_int(payload, ("comment_chance",), 0, 0, 100)
     search_chance = _payload_int(payload, ("search_chance",), 0, 0, 100)
     session_seconds = _warmup_session_seconds(payload)
+    remaining_session_seconds = _remaining_warmup_session_seconds(
+        task,
+        session_seconds,
+    )
+    deadline = time.monotonic() + remaining_session_seconds
     strategy_id = str(payload.get("strategy_id") or "tg_default")
     strategy_label = str(payload.get("strategy_label") or "default_warmup")
     (
@@ -5337,6 +5361,14 @@ def _run_platform_warmup(
             "strategy_label": strategy_label,
             "browse_limit": browse_limit,
             "session_seconds": session_seconds,
+            "setup_elapsed_seconds": max(
+                0,
+                int(session_seconds - max(0.0, deadline - time.monotonic())),
+            ),
+            "remaining_session_seconds": max(
+                0,
+                int(deadline - time.monotonic()),
+            ),
             "like_limit": like_limit,
             "like_chance": like_chance,
             "max_comments": max_comments,
@@ -5352,6 +5384,27 @@ def _run_platform_warmup(
         },
     )
 
+    require_persona_relevance = bool(
+        payload.get("require_persona_relevance", True)
+    )
+    if require_persona_relevance and not persona_keywords:
+        logger.log(
+            "error",
+            f"{clean_platform}_warmup_relevance",
+            "模型未生成人设关键词，已停止任务，避免在未筛选内容上执行养号动作。",
+            {
+                "keyword_generation_source": (
+                    payload.get("_warmup_search_keyword_source") or "unknown"
+                ),
+                "minimum_likes": min_required_likes,
+                "minimum_comments": min_required_comments,
+                "minimum_interactions": min_required_interactions,
+            },
+        )
+        raise RuntimeError(
+            "模型未生成人设关键词，已停止任务，避免在未筛选内容上执行养号动作。"
+        )
+
     initial_surface = _ensure_warmup_relevant_surface(
         page,
         payload,
@@ -5360,7 +5413,7 @@ def _run_platform_warmup(
         phase="initial",
         excluded_target_keys=historical_seen_target_keys,
     )
-    if bool(payload.get("require_persona_relevance", True)) and persona_keywords and not initial_surface:
+    if require_persona_relevance and not initial_surface:
         raise RuntimeError("当前推荐流与人设关键词均未找到相关内容，已停止避免无关互动。")
 
     liked = 0
@@ -5373,7 +5426,6 @@ def _run_platform_warmup(
     comment_screenshots: list[str] = []
     interaction_evidence: list[tuple[str, int, str]] = []
     used_comment_texts: set[str] = set()
-    deadline = time.monotonic() + session_seconds
     next_interaction_at = _next_warmup_interaction_at(0, payload)
     last_resource_compaction_at = 0.0
 
@@ -5405,7 +5457,7 @@ def _run_platform_warmup(
             phase="browse",
             excluded_target_keys=browsed_target_keys | historical_seen_target_keys,
         )
-        if bool(payload.get("require_persona_relevance", True)) and persona_keywords and not relevant_surface:
+        if require_persona_relevance and not relevant_surface:
             completed_interactions = liked + commented
             requirements_met = (
                 completed_interactions > 0
@@ -5426,6 +5478,20 @@ def _run_platform_warmup(
                 )
                 break
             raise RuntimeError("当前推荐流和搜索结果均未找到与人设相关的内容，已停止避免无关浏览或互动。")
+        if time.monotonic() >= deadline:
+            logger.log(
+                "info",
+                f"{clean_platform}_warmup_time_budget_complete",
+                "养号时间已到，不再开始新的浏览或互动动作。",
+                {
+                    "liked": liked,
+                    "commented": commented,
+                    "minimum_likes": min_required_likes,
+                    "minimum_comments": min_required_comments,
+                    "minimum_interactions": min_required_interactions,
+                },
+            )
+            break
         target = _decorate_warmup_post_context(
             page,
             relevant_surface or _current_warmup_post_context(page, clean_platform),

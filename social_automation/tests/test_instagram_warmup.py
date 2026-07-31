@@ -215,6 +215,7 @@ class InstagramWarmupTests(TestCase):
             "browse_limit": 1,
             "like_limit": 1,
             "min_required_likes": 1,
+            "require_persona_relevance": False,
         }
         with (
             mock.patch.object(runner, "_goto"),
