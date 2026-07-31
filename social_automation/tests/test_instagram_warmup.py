@@ -206,7 +206,11 @@ class InstagramWarmupTests(TestCase):
         self.assertEqual(result["evidenceScreenshots"], ["/tmp/warmup-evidence.jpg"])
         self.assertEqual(result["screenshot_path"], "/tmp/warmup-evidence.jpg")
         compose_evidence.assert_called_once()
-        self.assertTrue(any(stage == "completion_node" for _, stage, *_ in logger.rows))
+        completion_logs = [
+            row for row in logger.rows if row[1] == "completion_node"
+        ]
+        self.assertEqual(len(completion_logs), 1)
+        self.assertEqual(completion_logs[0][4], "")
 
     def test_required_like_target_prevents_false_success(self):
         logger = _Logger()

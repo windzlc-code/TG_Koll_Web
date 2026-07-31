@@ -5850,7 +5850,6 @@ def _run_platform_warmup(
             "unique_browsed_targets": len(unique_browsed_target_keys),
             "confirmed_action_records": len(action_records),
         },
-        evidence_sheet,
     )
     return {
         "ok": True,
