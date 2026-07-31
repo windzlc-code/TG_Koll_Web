@@ -4,6 +4,9 @@ from social_automation import runner
 
 
 class WarmupTimeBudgetTests(unittest.TestCase):
+    def test_model_timeout_allows_the_live_gateway_to_finish(self):
+        self.assertEqual(runner._warmup_model_timeout_seconds({}), 30)
+
     def test_setup_time_is_deducted_from_the_declared_session_budget(self):
         task = {"started_at": 1_000}
 

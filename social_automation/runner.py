@@ -4284,7 +4284,7 @@ def _warmup_model_timeout_seconds(payload: dict[str, Any]) -> int:
     return _payload_int(
         payload,
         ("warmup_model_timeout_seconds",),
-        12,
+        30,
         3,
         30,
     )
