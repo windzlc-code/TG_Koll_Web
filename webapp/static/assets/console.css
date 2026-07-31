@@ -24178,7 +24178,9 @@ body.console-page {
   height: 44px;
   min-height: 44px;
   padding: 0 18px;
-  color: #ffffff;
+  color: #eaf7f6;
+  -webkit-text-fill-color: #eaf7f6;
+  opacity: 1;
   background: #1f2429;
   border: 1px solid #1f2429;
   border-radius: 7px;
@@ -24207,6 +24209,7 @@ body.console-page {
 .console-page .live-browser-input-toggle:hover,
 .console-page .live-browser-input-toggle[aria-expanded="true"] {
   color: #ffffff;
+  -webkit-text-fill-color: #ffffff;
   background: #343a40;
   border-color: #343a40;
   box-shadow: 0 8px 18px rgb(15 23 42 / 32%);
