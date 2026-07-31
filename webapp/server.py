@@ -1216,7 +1216,7 @@ def _require_user_draft_media_paths(payload: Any, user: dict[str, Any]) -> None:
 
 
 def _persona_task_archive_id(task_type: str, payload: dict[str, Any]) -> str:
-    if str(task_type or "").strip() not in {"persona_image", "persona_post_image"}:
+    if str(task_type or "").strip() not in {"persona_image", "persona_post_image", "persona_post_generation"}:
         return ""
     return str(payload.get("related_persona_id") or payload.get("archive_id") or "").strip()
 
@@ -1511,6 +1511,75 @@ def _recover_orphaned_persona_ai_reservations(
     return recovered
 
 
+def _recover_running_persona_post_generation_task(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    user_id: int,
+    payload: dict[str, Any],
+    output: dict[str, Any],
+    reservation_id: str,
+) -> bool:
+    archive_id = str(payload.get("archive_id") or "").strip()
+    post_ids = {
+        str(post_id or "").strip()
+        for post_id in (output.get("post_ids") if isinstance(output.get("post_ids"), list) else [])
+        if str(post_id or "").strip()
+    }
+    if not archive_id or not post_ids or not reservation_id:
+        return False
+    try:
+        _path, _raw, archives = _persona_archive_source_for_write(archive_id)
+        archive = _find_persona_archive(archives, archive_id)
+    except Exception:
+        return False
+    posts = archive.get("posts") if isinstance((archive or {}).get("posts"), list) else []
+    durable_ids = {
+        str(post.get("id") or "").strip()
+        for post in posts
+        if (
+            isinstance(post, dict)
+            and str(post.get("generationOperationId") or "").strip() == str(task_id)
+            and str(post.get("id") or "").strip() in post_ids
+        )
+    }
+    if durable_ids != post_ids:
+        return False
+    billing = commercial_billing.settle_reservation(
+        conn,
+        reservation_id,
+        actual_quantity=len(durable_ids),
+        success=True,
+    )
+    recovered_output = dict(output)
+    recovered_output["billing"] = billing
+    now = _now_ts()
+    conn.execute(
+        """
+        UPDATE tasks
+        SET status = 'success', output_json = ?, error = '', credit_cost_units = ?,
+            free_image_count = ?, updated_at = ?
+        WHERE id = ? AND status = 'running'
+        """,
+        (
+            _json_dumps(_sanitize_payload(recovered_output)),
+            int(round(float(billing.get("charged_points") or 0) * commercial_billing.POINT_SCALE)),
+            int(billing.get("free_images_used") or 0),
+            now,
+            str(task_id),
+        ),
+    )
+    _insert_task_event(
+        conn,
+        task_id=str(task_id),
+        user_id=int(user_id),
+        kind="done",
+        message="服务重启后已恢复完成的推文生成任务",
+        data={"status": "success", "stage": "startup_recovery", "recovered": True},
+    )
+    return True
+
+
 def _resume_pending_tasks() -> None:
     orphan_hold_cutoff = _now_ts() - max(
         60,
@@ -1550,7 +1619,7 @@ def _resume_pending_tasks() -> None:
     with db() as conn:
         rows = conn.execute(
             """
-            SELECT id, user_id, type, status, input_json, billing_reservation_id, created_at
+            SELECT id, user_id, type, status, input_json, output_json, billing_reservation_id, created_at
             FROM tasks
             WHERE status IN ('queued', 'running')
             ORDER BY created_at ASC
@@ -1575,6 +1644,20 @@ def _resume_pending_tasks() -> None:
             payload = _apply_runtime_defaults(task_type, payload)
             if status == "running":
                 reservation_id = str(r["billing_reservation_id"] or "")
+                output = _json_loads(r["output_json"], {})
+                if (
+                    task_type == "persona_post_generation"
+                    and isinstance(output, dict)
+                    and _recover_running_persona_post_generation_task(
+                        conn,
+                        task_id=tid,
+                        user_id=user_id,
+                        payload=payload,
+                        output=output,
+                        reservation_id=reservation_id,
+                    )
+                ):
+                    continue
                 if reservation_id:
                     commercial_billing.release_reservation(conn, reservation_id)
                 restart_error = "service restarted while task was still running; please resubmit the task"
@@ -4703,6 +4786,7 @@ def _task_type_label(task_type: Any) -> str:
     mapping = {
         "get_gemini": "Gemini 分析",
         "image_generate": "图片生成",
+        "persona_post_generation": "AI 推文草稿生成",
     }
     key = str(task_type or "").strip()
     return mapping.get(key, key or "未知工作流")
@@ -9619,9 +9703,51 @@ def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, 
     }
 
 
+def _checkpoint_persona_post_generation_output(task_id: str, result: dict[str, Any]) -> None:
+    """Persist durable post ids before the worker settles billing."""
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            UPDATE tasks
+            SET output_json = ?, updated_at = ?
+            WHERE id = ? AND type = 'persona_post_generation' AND status = 'running'
+            """,
+            (_json_dumps(_sanitize_payload(result)), _now_ts(), str(task_id)),
+        )
+
+
+def _run_persona_post_generation_task(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    archive_id = str(payload.get("archive_id") or "").strip()
+    if not archive_id:
+        raise RuntimeError("人设推文生成缺少人设 ID。")
+    raw_payload = {
+        key: value
+        for key, value in payload.items()
+        if not str(key).startswith("_") and key != "archive_id"
+    }
+    try:
+        request_payload = PersonaDashboardGeneratePostsPayload(**raw_payload)
+        result = _generate_persona_archive_posts(
+            archive_id,
+            request_payload,
+            operation_id=str(task_id),
+        )
+    except HTTPException as exc:
+        raise RuntimeError(str(exc.detail or "推文草稿生成失败。")) from exc
+    if not isinstance(result, dict) or not bool(result.get("ok")):
+        raise RuntimeError(str((result or {}).get("error") or "推文草稿生成失败。"))
+    retention = _enforce_persona_post_retention_for_user(int(payload.get("_user_id") or 0))
+    if retention.get("removed_history_count") or retention.get("removed_draft_count"):
+        result["retention"] = retention
+    _checkpoint_persona_post_generation_output(task_id, result)
+    return result
+
+
 TASK_RUNNERS = {
     "persona_post_image": _run_persona_post_image_task,
     "persona_image": _run_persona_image_task,
+    "persona_post_generation": _run_persona_post_generation_task,
     "image_generate": _run_image_generate,
     "get_gemini": _run_get_gemini,
 }
@@ -9645,6 +9771,8 @@ def _billing_actual_quantity(task_type: str, task_output: dict[str, Any], payloa
         return _billing_actual_image_quantity(task_output)
     if typ == "get_gemini":
         return 1
+    if typ == "persona_post_generation":
+        return max(_to_int(task_output.get("generated_count"), 0), 0)
     return 0
 
 
@@ -10032,6 +10160,11 @@ def _cancel_task_record_for_user(
                 "status": status,
                 "message": f"任務 {tid} 目前狀態為 {status or 'unknown'}，無法再強制停止。",
             }
+        if str(task.get("type") or "").strip() == "persona_post_generation" and status == "running":
+            raise HTTPException(
+                status_code=409,
+                detail="推文生成已进入模型执行阶段，后台会继续完成；请等待任务结果。",
+            )
         now = _now_ts()
         reason = f"{actor} 已强制停止此任务"
         conn.execute(
@@ -10184,6 +10317,8 @@ def _normal_task_billing_spec(task_type: str, payload: dict[str, Any]) -> tuple[
         return "ai_image", count, True
     if typ == "get_gemini":
         return "basic_text_post", 1, False
+    if typ == "persona_post_generation":
+        return "basic_text_post", min(max(_to_int(payload.get("count"), 1), 1), 5), False
     return None
 
 
@@ -10262,6 +10397,132 @@ def _enqueue_task_for_user(
     finally:
         with _ADMIN_BILLING_WAIVED_TASK_IDS_LOCK:
             _ADMIN_BILLING_WAIVED_TASK_IDS.discard(str(task_id))
+
+
+def _persona_post_generation_task_row(task_id: str, user_id: int, archive_id: str) -> dict[str, Any]:
+    with db() as conn:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (str(task_id),)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="推文生成任务不存在。")
+    task = dict(row)
+    task_input = _json_loads(task.get("input_json"), {})
+    if (
+        int(task.get("user_id") or 0) != int(user_id)
+        or str(task.get("type") or "") != "persona_post_generation"
+        or str((task_input or {}).get("archive_id") or "").strip() != str(archive_id or "").strip()
+    ):
+        raise HTTPException(status_code=404, detail="推文生成任务不存在。")
+    return task
+
+
+def _enqueue_persona_post_generation_task(
+    *,
+    archive_id: str,
+    payload: dict[str, Any],
+    user: dict[str, Any],
+    idempotency_key: str,
+) -> tuple[str, bool]:
+    user_id = _workspace_user_id(user)
+    clean_archive_id = str(archive_id or "").strip()
+    clean_key = str(idempotency_key or "").strip() or secrets.token_urlsafe(24)
+    if len(clean_key) > 160 or not clean_key.isascii():
+        raise HTTPException(status_code=400, detail="Idempotency-Key 格式无效。")
+    canonical_request = json.dumps(
+        {"archive_id": clean_archive_id, "payload": payload},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    request_hash = hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
+    key_digest = hashlib.sha256(f"{user_id}:{clean_key}".encode("utf-8")).hexdigest()
+    task_id = f"persona_post_generation_{key_digest[:24]}"
+    effective_payload = _apply_runtime_defaults("persona_post_generation", {
+        **payload,
+        "archive_id": clean_archive_id,
+        "_request_hash": request_hash,
+        "_idempotency_key_digest": key_digest,
+    })
+    billing_reservation: dict[str, Any] | None = None
+    queued_payload: dict[str, Any] | None = None
+    replayed = False
+
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if existing is not None:
+            existing_payload = _json_loads(existing["input_json"], {})
+            if (
+                int(existing["user_id"] or 0) != user_id
+                or str(existing["type"] or "") != "persona_post_generation"
+                or str((existing_payload or {}).get("_request_hash") or "") != request_hash
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "IDEMPOTENCY_KEY_REUSED",
+                        "message": "该请求标识已用于不同的推文生成参数。",
+                    },
+                )
+            return str(existing["id"]), True
+
+        active_rows = conn.execute(
+            """
+            SELECT id, input_json
+            FROM tasks
+            WHERE user_id = ? AND type = 'persona_post_generation'
+              AND status IN ('queued', 'running')
+            ORDER BY created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+        for active in active_rows:
+            active_payload = _json_loads(active["input_json"], {})
+            if str((active_payload or {}).get("archive_id") or "").strip() == clean_archive_id:
+                if str((active_payload or {}).get("_request_hash") or "") == request_hash:
+                    return str(active["id"]), True
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "PERSONA_GENERATION_IN_PROGRESS",
+                        "message": "当前人设已有推文生成任务进行中，请等待完成后再提交新的内容。",
+                        "task_id": str(active["id"]),
+                    },
+                )
+
+        billing_reservation = commercial_billing.reserve_charge(
+            conn,
+            user_id=user_id,
+            ref_type="normal_task",
+            ref_id=task_id,
+            sku="basic_text_post",
+            quantity=min(max(_to_int(payload.get("count"), 1), 1), 5),
+            admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
+            idempotency_key=f"persona-post-generation:{user_id}:{key_digest}",
+        )
+        effective_payload["_billing_reservation_id"] = str(billing_reservation.get("id") or "")
+        _insert_task_record_in_transaction(conn, task_id, user_id, "persona_post_generation", effective_payload)
+        queued_payload = effective_payload
+
+    try:
+        _TASK_QUEUE.put((task_id, user_id, "persona_post_generation", queued_payload or effective_payload), block=False)
+    except Exception:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE tasks SET status = 'failed', error = ?, updated_at = ? WHERE id = ?",
+                ("任务队列已满，无法开始推文生成。", _now_ts(), task_id),
+            )
+            if billing_reservation and billing_reservation.get("id"):
+                commercial_billing.release_reservation(conn, str(billing_reservation["id"]))
+            _insert_task_event(
+                conn,
+                task_id=task_id,
+                user_id=user_id,
+                kind="done",
+                message="推文生成任务入队失败",
+                data={"status": "failed", "error": "任务队列已满，无法开始推文生成。"},
+            )
+    return task_id, replayed
 
 
 def _validated_local_file(value: Any, *, label: str) -> str:
@@ -13089,7 +13350,12 @@ def _build_persona_generate_instruction(payload: PersonaDashboardGeneratePostsPa
     return "\n".join(lines)
 
 
-def _generate_persona_archive_posts(archive_id: str, payload: PersonaDashboardGeneratePostsPayload) -> dict[str, Any]:
+def _generate_persona_archive_posts(
+    archive_id: str,
+    payload: PersonaDashboardGeneratePostsPayload,
+    *,
+    operation_id: str = "",
+) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
@@ -13123,6 +13389,8 @@ def _generate_persona_archive_posts(archive_id: str, payload: PersonaDashboardGe
             if str(post.get("id") or "").strip() not in existing_post_ids
         }
     _set_persona_archive_posts_platform(clean_id, post_ids, payload.platform)
+    if str(operation_id or "").strip():
+        _set_persona_archive_posts_generation_operation(clean_id, post_ids, operation_id)
     posts = _list_persona_archive_posts(clean_id)
     generated_posts = [item for item in posts if str(item.get("id") or "").strip() in post_ids] if post_ids else posts[:count]
     return {
@@ -13166,6 +13434,31 @@ def _set_persona_archive_posts_platform(archive_id: str, post_ids: set[str], pla
     for post in posts:
         if isinstance(post, dict) and str(post.get("id") or "").strip() in clean_post_ids:
             post["platform"] = normalized_platform
+            changed = True
+    if changed:
+        archive["updatedAt"] = _persona_dashboard_iso_now()
+        _write_persona_archives_preserving_shape(path, raw, archives)
+
+
+@_persona_archive_write_locked
+def _set_persona_archive_posts_generation_operation(
+    archive_id: str,
+    post_ids: set[str],
+    operation_id: str,
+) -> None:
+    clean_post_ids = {str(post_id or "").strip() for post_id in post_ids if str(post_id or "").strip()}
+    clean_operation_id = str(operation_id or "").strip()
+    if not clean_post_ids or not clean_operation_id:
+        return
+    path, raw, archives = _persona_archive_source_for_write(archive_id)
+    archive = _find_persona_archive(archives, archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="persona not found")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    changed = False
+    for post in posts:
+        if isinstance(post, dict) and str(post.get("id") or "").strip() in clean_post_ids:
+            post["generationOperationId"] = clean_operation_id
             changed = True
     if changed:
         archive["updatedAt"] = _persona_dashboard_iso_now()
@@ -20787,38 +21080,47 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_generate_posts(
         archive_id: str,
         payload: PersonaDashboardGeneratePostsPayload,
+        idempotency_key: str = Header(default="", alias="Idempotency-Key"),
         user: dict[str, Any] = Depends(require_persona_owner),
     ):
-        operation_id = _new_id("post_generation")
-        with db() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            reservation = commercial_billing.reserve_charge(
-                conn,
-                user_id=_workspace_user_id(user),
-                ref_type="persona_post_generation",
-                ref_id=operation_id,
-                sku="basic_text_post",
-                quantity=max(int(payload.count or 1), 1),
-                admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
-            )
-        try:
-            result = _generate_persona_archive_posts(archive_id, payload)
-            _apply_persona_post_retention(result, user)
-        except Exception:
-            with db() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                commercial_billing.release_reservation(conn, str(reservation["id"]))
-            raise
-        with db() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            billing = commercial_billing.settle_reservation(
-                conn,
-                str(reservation["id"]),
-                actual_quantity=max(int((result or {}).get("generated_count") or 0), 0),
-                success=True,
-            )
-        result["billing"] = billing
-        return result
+        request_payload = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload.dict()
+        task_id, replayed = _enqueue_persona_post_generation_task(
+            archive_id=archive_id,
+            payload=request_payload,
+            user=user,
+            idempotency_key=idempotency_key,
+        )
+        task = _persona_post_generation_task_row(
+            task_id,
+            _workspace_user_id(user),
+            archive_id,
+        )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "ok": True,
+                "task_id": task_id,
+                "status": str(task.get("status") or "queued"),
+                "replayed": bool(replayed),
+                "task": _build_task_detail_payload(task=task, include_logs=False, log_limit=0),
+            },
+        )
+
+    @app.get("/api/persona_dashboard/personas/{archive_id}/generate_posts/tasks/{task_id}")
+    def api_persona_dashboard_generate_posts_task(
+        archive_id: str,
+        task_id: str,
+        user: dict[str, Any] = Depends(require_persona_owner),
+    ):
+        task = _persona_post_generation_task_row(
+            task_id,
+            _workspace_user_id(user),
+            archive_id,
+        )
+        return {
+            "ok": True,
+            "task": _build_task_detail_payload(task=task, include_logs=False, log_limit=0),
+        }
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/publish")
     def api_persona_dashboard_publish_post(
@@ -21221,6 +21523,8 @@ def create_app() -> FastAPI:
         task_type = str(task.get("type") or "").strip()
         if not task_type:
             raise HTTPException(status_code=400, detail="任务类型缺失")
+        if task_type == "persona_post_generation":
+            raise HTTPException(status_code=409, detail="请返回推文生成页面重新发起生成任务。")
 
         payload = _json_loads(task.get("input_json"), {})
         if not isinstance(payload, dict):

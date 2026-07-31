@@ -3078,10 +3078,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
         payload = mocked.call_args.args[0]
         self.assertEqual(payload, {"action": "refresh-hot-post", "archiveId": "persona-1", "postId": "post-1"})
 
-    def test_generate_persona_posts_calls_persona_workflow_cli(self):
+    def test_generate_persona_posts_runs_as_recoverable_idempotent_task(self):
         self._write_archives()
 
-        def fake_generate(_archive_id, _payload):
+        def fake_generate(_archive_id, _payload, *, operation_id=""):
             archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
             archives[0]["posts"].append({
                 "id": "post-new-1",
@@ -3102,9 +3102,13 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 "posts": [{"id": "post-new-1", "title": "Generated title", "content": "Generated content"}],
             }
 
-        with mock.patch.object(server, "_generate_persona_archive_posts", side_effect=fake_generate) as mocked:
+        with (
+            mock.patch.object(server, "_generate_persona_archive_posts", side_effect=fake_generate) as mocked,
+            mock.patch.object(server._TASK_QUEUE, "put") as queued,
+        ):
             resp = self.client.post(
                 "/api/persona_dashboard/personas/persona-1/generate_posts",
+                headers={"Idempotency-Key": "persona-post-generation-test-0001"},
                 json={
                     "count": 1,
                     "prompt": "围绕历史老师的通勤日常",
@@ -3113,10 +3117,220 @@ class PersonaDashboardApiTests(unittest.TestCase):
                     "selected_memory_ids": ["mem-1"],
                 },
             )
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["generated_count"], 1)
+            self.assertEqual(resp.status_code, 202)
+            body = resp.json()
+            task_id = body["task_id"]
+            self.assertEqual(body["task"]["status"], "queued")
+            self.assertFalse(body["replayed"])
+            mocked.assert_not_called()
+            queued.assert_called_once()
+
+            queued_task_id, queued_user_id, queued_type, queued_payload = queued.call_args.args[0]
+            self.assertEqual(queued_task_id, task_id)
+            self.assertEqual(queued_user_id, self._admin_user_id())
+            self.assertEqual(queued_type, "persona_post_generation")
+            server._task_worker(task_id, queued_user_id, queued_type, queued_payload)
+
+            status_resp = self.client.get(
+                f"/api/persona_dashboard/personas/persona-1/generate_posts/tasks/{task_id}"
+            )
+            self.assertEqual(status_resp.status_code, 200)
+            task = status_resp.json()["task"]
+            self.assertEqual(task["status"], "success")
+            self.assertEqual(task["output"]["generated_count"], 1)
+            self.assertEqual(task["output"]["posts"][0]["id"], "post-new-1")
+
+            replay = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/generate_posts",
+                headers={"Idempotency-Key": "persona-post-generation-test-0001"},
+                json={
+                    "count": 1,
+                    "prompt": "围绕历史老师的通勤日常",
+                    "target_words": 80,
+                    "content_time_slot": "morning",
+                    "selected_memory_ids": ["mem-1"],
+                },
+            )
+            self.assertEqual(replay.status_code, 202)
+            self.assertEqual(replay.json()["task_id"], task_id)
+            self.assertTrue(replay.json()["replayed"])
+
+        self.assertEqual(mocked.call_count, 1)
         self.assertEqual(mocked.call_args.args[0], "persona-1")
         self.assertEqual(mocked.call_args.args[1].prompt, "围绕历史老师的通勤日常")
+        self.assertEqual(mocked.call_args.kwargs["operation_id"], task_id)
+
+        conn = sqlite3.connect(str(self.data_dir / "app.db"))
+        try:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM tasks WHERE id = ?", (task_id,)).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM billing_reservations WHERE ref_type = 'normal_task' AND ref_id = ?",
+                    (task_id,),
+                ).fetchone()[0],
+                1,
+            )
+        finally:
+            conn.close()
+
+    def test_generate_persona_posts_rejects_idempotency_key_reuse_with_changed_payload(self):
+        self._write_archives()
+        with mock.patch.object(server._TASK_QUEUE, "put"):
+            first = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/generate_posts",
+                headers={"Idempotency-Key": "persona-post-generation-test-0002"},
+                json={"count": 1, "prompt": "first", "target_words": 80},
+            )
+            second = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/generate_posts",
+                headers={"Idempotency-Key": "persona-post-generation-test-0002"},
+                json={"count": 2, "prompt": "changed", "target_words": 80},
+            )
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.json()["detail"]["code"], "IDEMPOTENCY_KEY_REUSED")
+
+    def test_generate_persona_posts_rejects_different_request_while_same_persona_is_active(self):
+        self._write_archives()
+        with mock.patch.object(server._TASK_QUEUE, "put"):
+            first = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/generate_posts",
+                headers={"Idempotency-Key": "persona-post-generation-active-0001"},
+                json={"count": 1, "prompt": "first", "target_words": 80},
+            )
+            second = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/generate_posts",
+                headers={"Idempotency-Key": "persona-post-generation-active-0002"},
+                json={"count": 2, "prompt": "different", "target_words": 100},
+            )
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.json()["detail"]["code"], "PERSONA_GENERATION_IN_PROGRESS")
+        self.assertEqual(second.json()["detail"]["task_id"], first.json()["task_id"])
+
+    def test_persona_post_generation_settles_only_actual_generated_count_once(self):
+        self._write_archives()
+        application = self.unauth_client.post("/api/auth/apply", json={
+            "username": "persona_billing_user",
+            "password": "guest123",
+            "full_name": "Persona Billing User",
+            "email": "persona-billing@example.com",
+            "phone": "0912345678",
+            "company": "Vecto Test",
+            "use_case": "Persona generation billing regression",
+        })
+        self.assertEqual(application.status_code, 200, application.text)
+        user_id = int(application.json()["id"])
+        approval = self.client.post(
+            f"/api/admin/users/{user_id}/approval",
+            json={"approval_status": "approved", "expected_approval_status": "pending"},
+        )
+        self.assertEqual(approval.status_code, 200, approval.text)
+        with server.db() as conn:
+            conn.execute("UPDATE persona_owners SET user_id = ? WHERE archive_id = 'persona-1'", (user_id,))
+            before_units = int(conn.execute(
+                "SELECT credit_units FROM billing_wallets WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()["credit_units"])
+            unit_rate = int(server.commercial_billing.action_rate_units(conn, "basic_text_post")[0])
+
+        customer = TestClient(self.app)
+        try:
+            login = customer.post(
+                "/api/auth/user-login",
+                json={"username": "persona_billing_user", "password": "guest123"},
+            )
+            self.assertEqual(login.status_code, 200, login.text)
+
+            def fake_generate(_archive_id, _payload, *, operation_id=""):
+                return {
+                    "ok": True,
+                    "persona_id": "persona-1",
+                    "generated_count": 1,
+                    "post_ids": ["post-billed-1"],
+                    "posts": [{"id": "post-billed-1", "title": "Generated", "content": "One"}],
+                }
+
+            with (
+                mock.patch.object(server, "_generate_persona_archive_posts", side_effect=fake_generate),
+                mock.patch.object(server._TASK_QUEUE, "put") as queued,
+            ):
+                accepted = customer.post(
+                    "/api/persona_dashboard/personas/persona-1/generate_posts",
+                    headers={"Idempotency-Key": "persona-post-generation-billing-0001"},
+                    json={"count": 3, "prompt": "bill actual output", "target_words": 80},
+                )
+                self.assertEqual(accepted.status_code, 202, accepted.text)
+                task_id, queued_user_id, task_type, task_payload = queued.call_args.args[0]
+                server._task_worker(task_id, queued_user_id, task_type, task_payload)
+                replay = customer.post(
+                    "/api/persona_dashboard/personas/persona-1/generate_posts",
+                    headers={"Idempotency-Key": "persona-post-generation-billing-0001"},
+                    json={"count": 3, "prompt": "bill actual output", "target_words": 80},
+                )
+                self.assertEqual(replay.status_code, 202, replay.text)
+                self.assertTrue(replay.json()["replayed"])
+
+            with server.db() as conn:
+                after_units = int(conn.execute(
+                    "SELECT credit_units FROM billing_wallets WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()["credit_units"])
+                reservation = conn.execute(
+                    "SELECT status, settled_credit_units FROM billing_reservations WHERE ref_id = ?",
+                    (task_id,),
+                ).fetchone()
+            self.assertEqual(before_units - after_units, unit_rate)
+            self.assertEqual(str(reservation["status"]), "settled")
+            self.assertEqual(int(reservation["settled_credit_units"]), unit_rate)
+        finally:
+            customer.close()
+
+    def test_restart_recovers_checkpointed_persona_post_generation_without_rerun(self):
+        self._write_archives()
+        with mock.patch.object(server._TASK_QUEUE, "put"):
+            accepted = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/generate_posts",
+                headers={"Idempotency-Key": "persona-post-generation-recovery-0001"},
+                json={"count": 1, "prompt": "recover checkpoint", "target_words": 80},
+            )
+        self.assertEqual(accepted.status_code, 202, accepted.text)
+        task_id = accepted.json()["task_id"]
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        archives[0]["posts"].append({
+            "id": "post-recovered-1",
+            "title": "Recovered",
+            "content": "Durable output",
+            "generationOperationId": task_id,
+        })
+        archives_path.write_text(json.dumps(archives), encoding="utf-8")
+        with server.db() as conn:
+            conn.execute(
+                "UPDATE tasks SET status = 'running', output_json = ? WHERE id = ?",
+                (json.dumps({
+                    "ok": True,
+                    "generated_count": 1,
+                    "post_ids": ["post-recovered-1"],
+                    "posts": [{"id": "post-recovered-1", "title": "Recovered", "content": "Durable output"}],
+                }), task_id),
+            )
+
+        with mock.patch.object(server._TASK_QUEUE, "put") as queue_mock:
+            server._resume_pending_tasks()
+
+        queue_mock.assert_not_called()
+        with server.db() as conn:
+            task = conn.execute("SELECT status, output_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        self.assertEqual(str(task["status"]), "success")
+        output = json.loads(task["output_json"])
+        self.assertEqual(output["post_ids"], ["post-recovered-1"])
+        self.assertIn("billing", output)
 
     def test_generate_persona_posts_rejects_more_than_five_candidates(self):
         self._write_archives()

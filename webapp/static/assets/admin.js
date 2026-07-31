@@ -1738,7 +1738,10 @@ const adminState = {
 const REMOTE_COMFY_TASKS = [
   ["persona_post_image", "推文生成配图"],
 ];
-const TASK_TYPE_LABELS = { persona_post_image: "推文生成配图" };
+const TASK_TYPE_LABELS = {
+  persona_post_image: "推文生成配图",
+  persona_post_generation: "AI 推文草稿生成",
+};
 const ADMIN_PAGES = new Set(["overview", "users", "taxonomy", "tasks", "audit", "security", "serviceAccounts", "proxyMarket", "pricing", "runtime", "sentimentCookies", "account"]);
 const ADMIN_PAGE_ALIASES = {
   secOverview: "overview",

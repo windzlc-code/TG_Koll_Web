@@ -431,6 +431,21 @@ function billingLedgerEntries() {{ return ledgerRows; }}
                     self.console_script[endpoint_start:endpoint_end],
                 )
 
+    def test_persona_post_generation_uses_persistent_task_polling_and_recovery(self):
+        generation = self.console_script[
+            self.console_script.index("async function generatePersonaDraftPosts")
+            : self.console_script.index("async function createPersonaDraftPost")
+        ]
+        self.assertIn('"Idempotency-Key": operationKey', generation)
+        self.assertIn("storePersonaPostGenerationTask", generation)
+        self.assertIn("watchPersonaPostGenerationTask", generation)
+        self.assertIn("clearStoredPersonaPostGenerationTask", generation)
+        self.assertIn("withBillingChargeMessage", generation)
+        self.assertIn("task.output", generation)
+        self.assertIn("isActiveGenerationSurface", generation)
+        self.assertIn("restorePersonaPostGenerationTasks", self.console_script)
+        self.assertIn("PERSONA_POST_GENERATION_TASK_STORAGE_PREFIX", self.console_script)
+
     def test_persona_ai_steps_use_independent_stable_idempotency_keys(self):
         keywords = self.console_script[
             self.console_script.index("async function suggestPersonaCreateKeywords")
