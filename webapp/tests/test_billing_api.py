@@ -265,14 +265,25 @@ class BillingApiClosedLoopTests(unittest.TestCase):
             server,
             "_run_persona_create_cli",
             return_value={"keywords": ["one", "two", "three", "four", "five"]},
-        ):
+        ) as run_cli:
+            headers = {"Idempotency-Key": "billing-persona-keywords-step-0001"}
             response = self.customer.post(
                 "/api/persona_dashboard/personas/ai_keywords",
                 json={"name": "Billing Persona", "prompt": "Create relevant keywords"},
+                headers=headers,
+            )
+            replay = self.customer.post(
+                "/api/persona_dashboard/personas/ai_keywords",
+                json={"name": "Billing Persona", "prompt": "Create relevant keywords"},
+                headers=headers,
             )
         self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertEqual(run_cli.call_count, 1)
+        self.assertEqual(replay.json()["keywords"], response.json()["keywords"])
         self.assertEqual(response.json()["billing"]["status"], "settled")
         self.assertEqual(response.json()["billing"]["charged_points"], 0.3)
+        self.assertEqual(replay.json()["billing"]["charged_points"], 0.3)
 
         after = self.customer.get("/api/billing/summary").json()
         self.assertEqual(before["points"], 1)

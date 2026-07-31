@@ -4231,20 +4231,33 @@ _WARMUP_RELEVANCE_BLOCKLIST = (
 def _warmup_persona_core_terms(payload: dict[str, Any], limit: int = 8) -> list[str]:
     """Return conservative terms that describe the persona's primary identity."""
     raw_name = " ".join(str(payload.get("persona_name") or "").split())
-    candidates: list[Any] = [raw_name]
+    candidates: list[Any] = []
+    role_candidates: list[Any] = []
     normalized_name = _normalize_warmup_text(raw_name).replace(" ", "")
     for suffix in ("工程师", "修理工", "设计师", "摄影师", "咨询师", "老师", "師", "师"):
         if normalized_name.endswith(suffix):
             stem = normalized_name[:-len(suffix)]
             if len(stem) >= 2:
-                candidates.append(stem)
+                role_candidates.extend((raw_name, stem))
 
+    topics = payload.get("persona_topics")
+    if not role_candidates and not any(str(item or "").strip() for item in (topics or [])):
+        context = " ".join(str(payload.get("persona_context") or "").split())
+        for match in re.findall(r"[\u3400-\u9fff]{2,10}(?:工程师|修理工|设计师|摄影师|咨询师|老师|師|师)", context):
+            profession = re.sub(r"^(?:资深|資深|专业|專業|高级|高級|一名|一个|一位)+", "", match)
+            role_candidates.append(profession)
+            for suffix in ("工程师", "修理工", "设计师", "摄影师", "咨询师", "老师", "師", "师"):
+                if profession.endswith(suffix):
+                    stem = profession[:-len(suffix)]
+                    if len(stem) >= 2:
+                        role_candidates.append(stem)
+
+    candidates.extend(role_candidates)
     core_seed_keys = {
         _normalize_warmup_text(item).replace(" ", "")
-        for item in candidates
+        for item in role_candidates
         if len(_normalize_warmup_text(item).replace(" ", "")) >= 2
     }
-    topics = payload.get("persona_topics")
     if isinstance(topics, list):
         for topic in topics:
             normalized_topic = _normalize_warmup_text(topic).replace(" ", "")
@@ -4255,16 +4268,12 @@ def _warmup_persona_core_terms(payload: dict[str, Any], limit: int = 8) -> list[
             ):
                 candidates.append(topic)
 
-    if not normalized_name and not any(str(item or "").strip() for item in (topics or [])):
-        context = " ".join(str(payload.get("persona_context") or "").split())
-        for match in re.findall(r"[\u3400-\u9fff]{2,10}(?:工程师|修理工|设计师|摄影师|咨询师|老师|師|师)", context):
-            profession = re.sub(r"^(?:资深|資深|专业|專業|高级|高級|一名|一个|一位)+", "", match)
-            candidates.append(profession)
-            for suffix in ("工程师", "修理工", "设计师", "摄影师", "咨询师", "老师", "師", "师"):
-                if profession.endswith(suffix):
-                    stem = profession[:-len(suffix)]
-                    if len(stem) >= 2:
-                        candidates.append(stem)
+    # A friendly display name such as "李师傅" identifies the account owner,
+    # not the content domain.  When no profession can be derived, the explicit
+    # persona topics are the safest lexical anchors; use the display name only
+    # as a last resort when no topical data exists.
+    if not candidates and raw_name:
+        candidates.append(raw_name)
 
     return _sanitize_warmup_search_keywords(candidates, limit=limit)
 
@@ -4510,6 +4519,20 @@ def _score_warmup_post_relevance(
         _normalize_warmup_text(item).replace(" ", "")
         for item in core_terms
     }
+    generic_single_chars = {
+        "人", "生", "活", "日", "常", "家", "居", "工", "作", "好", "用",
+        "方", "法", "技", "巧", "分", "享", "文", "化", "慢", "老", "退",
+    }
+    core_char_counts: dict[str, int] = {}
+    for core_key in core_keys:
+        for char in set(core_key):
+            if re.fullmatch(r"[\u3400-\u9fff]", char):
+                core_char_counts[char] = core_char_counts.get(char, 0) + 1
+    salient_core_chars = {
+        char
+        for char, count in core_char_counts.items()
+        if count >= 2 and char not in generic_single_chars
+    }
     generated_keywords = _sanitize_warmup_search_keywords(keywords or [], limit=24)
     aligned_keywords = [
         keyword
@@ -4522,6 +4545,7 @@ def _score_warmup_post_relevance(
             )
             for core_key in core_keys
         )
+        or any(char in _normalize_warmup_text(keyword).replace(" ", "") for char in salient_core_chars)
     ]
     anchored_fragments: list[str] = []
     for keyword in aligned_keywords:
@@ -4533,7 +4557,7 @@ def _score_warmup_post_relevance(
                     core_key
                     and (core_key in fragment or fragment in core_key)
                     for core_key in core_keys
-                ):
+                ) or any(char in fragment for char in salient_core_chars):
                     anchored_fragments.append(fragment)
     cleaned_keywords = list(
         dict.fromkeys([*core_terms, *aligned_keywords, *anchored_fragments])
@@ -5619,10 +5643,15 @@ def _run_platform_warmup(
         # interval has actually elapsed.
         interaction_due = browsed >= next_interaction_at
         interacted = False
+        both_minimum_actions_pending = (
+            liked < min_required_likes
+            and commented < min_required_comments
+        )
         prefer_comment = (
             interaction_due
             and like_limit > liked
             and max_comments > commented
+            and not both_minimum_actions_pending
             and random.random() < 0.5
         )
         should_backfill_interaction = (
@@ -5639,7 +5668,7 @@ def _run_platform_warmup(
             and interaction_due
             and not prefer_comment
             and should_try_like
-            and target_key not in historical_action_keys
+            and target_key not in liked_target_keys
         ):
             if clean_platform == "threads":
                 clicked_likes = _click_some_threads_likes(
@@ -5712,14 +5741,20 @@ def _run_platform_warmup(
             commented < min_required_comments
             or should_backfill_interaction
         ) and elapsed_ratio >= 0.45
+        should_chain_required_comment = (
+            interacted
+            and both_minimum_actions_pending
+            and commented < min_required_comments
+        )
         if (
             max_comments > commented
             and comment_chance > 0
             and interaction_due
-            and not interacted
-            and target_key not in historical_action_keys
+            and (not interacted or should_chain_required_comment)
+            and target_key not in commented_target_keys
             and (
                 prefer_comment
+                or should_chain_required_comment
                 or should_backfill_comment
                 or random.randint(1, 100) <= comment_chance
             )
@@ -5741,6 +5776,7 @@ def _run_platform_warmup(
                 reply_text = _pick_warmup_persona_reply(
                     payload,
                     target_text,
+                    keywords=persona_keywords,
                     previous_replies=used_comment_texts,
                 )
                 if not reply_text:
@@ -6293,13 +6329,17 @@ def _pick_warmup_persona_reply(
     payload: dict[str, Any],
     target_text: str,
     *,
+    keywords: Iterable[str] = (),
     previous_replies: Iterable[str] = (),
 ) -> str:
     if _is_warmup_test_content(target_text):
         return ""
-    topic = _matched_warmup_persona_topic(payload, target_text)
     require_relevance = bool(payload.get("require_persona_relevance", True))
-    if require_relevance and not topic:
+    if require_relevance and not _assess_warmup_post_relevance(
+        payload,
+        target_text,
+        keywords=keywords,
+    )["relevant"]:
         return ""
     if not str(target_text or "").strip():
         return ""

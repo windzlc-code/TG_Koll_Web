@@ -150,6 +150,8 @@ class InstagramWarmupTests(TestCase):
             "like_limit": 1,
             "max_comments": 1,
             "comment_chance": 100,
+            "min_required_likes": 1,
+            "min_required_comments": 1,
             "require_persona_relevance": False,
             "reply_templates": ["测试评论"],
         }
@@ -169,6 +171,7 @@ class InstagramWarmupTests(TestCase):
                 ],
             ),
             mock.patch.object(runner, "_pick_warmup_persona_reply", return_value="理发这个细节很实用。"),
+            mock.patch.object(runner, "_next_warmup_interaction_at", return_value=2),
             mock.patch.object(runner, "_slow_human_scroll", return_value={"delta": 320}),
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(

@@ -3571,17 +3571,29 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
         latest_progress = _loads(item.get("latest_progress_json"), {})
         if not isinstance(latest_progress, dict):
             latest_progress = {}
+        final_result = _loads(item.get("result_json"), {})
+        if not isinstance(final_result, dict):
+            final_result = {}
         browsed = min(
             browse_limit,
-            _live_browser_summary_int(latest_progress, "index", "scrolled", "browsed"),
+            max(
+                _live_browser_summary_int(latest_progress, "index", "scrolled", "browsed"),
+                _live_browser_summary_int(final_result, "index", "scrolled", "browsed"),
+            ),
         )
         liked = min(
             like_limit,
-            _live_browser_summary_int(latest_progress, "liked", "like_count"),
+            max(
+                _live_browser_summary_int(latest_progress, "liked", "like_count"),
+                _live_browser_summary_int(final_result, "liked", "like_count"),
+            ),
         )
         commented = min(
             max_comments,
-            _live_browser_summary_int(latest_progress, "commented", "comment_count"),
+            max(
+                _live_browser_summary_int(latest_progress, "commented", "comment_count"),
+                _live_browser_summary_int(final_result, "commented", "comment_count"),
+            ),
         )
         progress = {
             "browse": {"current": browsed, "target": browse_limit},
@@ -10902,6 +10914,7 @@ def _task_public(row: Any, *, billing_reservation_status: str = "") -> dict[str,
     reservation_id = str(item.get("billing_reservation_id") or "")
     task_result = _loads(item.get("result_json"), {})
     public_payload = _loads(item.get("payload_json"), {})
+    task_summary = _live_browser_task_summary(item)
     if isinstance(public_payload, dict):
         public_payload = dict(public_payload)
         public_payload.pop(_TASK_WORKER_LEASE_KEY, None)
@@ -10932,6 +10945,7 @@ def _task_public(row: Any, *, billing_reservation_status: str = "") -> dict[str,
         "finished_at": int(item.get("finished_at") or 0),
         "payload": _redact_sensitive(public_payload),
         "result": _redact_sensitive(task_result),
+        "task_summary": task_summary,
         "error": str(item.get("error") or ""),
         "retry_count": int(item.get("retry_count") or 0),
         "max_retries": int(item.get("max_retries") or 0),

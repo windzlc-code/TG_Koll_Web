@@ -444,6 +444,36 @@ def test_live_browser_task_summary_exposes_only_concrete_strategy_fields():
     assert publish["detail"] == "发布内容 · 第 2/3 篇 · 春日穿搭"
 
 
+def test_task_public_reuses_concrete_task_summary_for_log_details():
+    task = social_automation_api._task_public(
+        {
+            "id": "instagram-warmup-task",
+            "platform": "instagram",
+            "task_type": "instagram_warmup",
+            "status": "success",
+            "payload_json": json.dumps(
+                {
+                    "strategy_id": "like_comment",
+                    "strategy_label": "互动养号：低频点赞 + 人设留言",
+                    "browse_limit": 80,
+                    "like_limit": 7,
+                    "max_comments": 3,
+                    "comment_chance": 100,
+                },
+                ensure_ascii=False,
+            ),
+            "result_json": "{}",
+        }
+    )
+
+    assert task["task_summary"]["task_label"] == "养号"
+    assert task["task_summary"]["strategy_label"] == "互动养号：低频点赞 + 人设留言"
+    assert task["task_summary"]["detail"] == (
+        "养号 · 互动养号：低频点赞 + 人设留言 · "
+        "浏览 0/80 · 点赞 0/7 · 评论 0/3 · 评论概率 100%"
+    )
+
+
 def test_live_browser_warmup_summary_uses_latest_dynamic_progress():
     warmup = social_automation_api._live_browser_task_summary(
         {
@@ -474,6 +504,36 @@ def test_live_browser_warmup_summary_uses_latest_dynamic_progress():
     }
     assert warmup["target"] == "养号｜自定义｜浏览3/8·赞1/2·评0/1"
     assert warmup["detail"] == "养号 · 自定义养号 · 浏览 3/8 · 点赞 1/2 · 评论 0/1"
+
+
+def test_live_browser_warmup_summary_uses_terminal_result_progress():
+    warmup = social_automation_api._live_browser_task_summary(
+        {
+            "id": "completed-warmup",
+            "task_type": "instagram_warmup",
+            "payload_json": json.dumps(
+                {
+                    "strategy_id": "like_comment",
+                    "strategy_label": "互动养号：低频点赞 + 人设留言",
+                    "browse_limit": 80,
+                    "like_limit": 7,
+                    "max_comments": 3,
+                },
+                ensure_ascii=False,
+            ),
+            "result_json": json.dumps(
+                {"scrolled": 4, "liked": 1, "commented": 1},
+                ensure_ascii=False,
+            ),
+        }
+    )
+
+    assert warmup["progress"] == {
+        "browse": {"current": 4, "target": 80},
+        "like": {"current": 1, "target": 7},
+        "comment": {"current": 1, "target": 3},
+    }
+    assert warmup["detail"].endswith("浏览 4/80 · 点赞 1/7 · 评论 1/3")
 
 
 def test_live_browser_comment_only_summary_never_says_like_comment():

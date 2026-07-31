@@ -89,6 +89,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("document.createElement", ensure_theme)
         self.assertNotIn("document.createElement", ensure_language)
 
+    def test_social_task_log_summary_uses_server_strategy_detail(self):
+        self.assertIn('const taskSummaryDetail = String(task?.task_summary?.detail || "").trim();', self.source)
+        self.assertIn(
+            "taskSummaryDetail || task.workflow_name || statusLabel(task.task_type || task.type || \"\")",
+            self.source,
+        )
+
     def test_console_marks_dynamic_ui_before_translating_it(self):
         marker_source = self._function_source("markConsoleStaticUi")
         dynamic_marker_source = self._function_source("markConsoleDynamicUi")
@@ -103,6 +110,21 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             observer_source.index("markConsoleDynamicUi(node)"),
             observer_source.index("translateConsoleLanguage(node, language)"),
         )
+
+    def test_console_dynamic_translation_covers_nested_ui_without_touching_business_content(self):
+        dynamic_marker_source = self._function_source("markConsoleDynamicUi")
+        ui_guard_source = self._function_source("shouldMarkConsoleDynamicUiText")
+        self.assertIn("document.createTreeWalker", dynamic_marker_source)
+        self.assertIn("shouldMarkConsoleDynamicUiText", dynamic_marker_source)
+        self.assertIn("CONSOLE_DYNAMIC_UI_TEXT_PATTERN", ui_guard_source)
+        self.assertIn("CONSOLE_DYNAMIC_USER_CONTENT_SELECTOR", ui_guard_source)
+        for protected_selector in (
+            '".persona-draft-table-content"',
+            '".persona-draft-detail-content p"',
+            '".publish-post-card-snippet"',
+            '".task-detail-log-item > p"',
+        ):
+            self.assertIn(protected_selector, self.source)
 
     def test_cookie_status_keeps_credentials_and_login_placeholders_visible(self):
         status_source = self._javascript_function_source(

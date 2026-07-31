@@ -821,7 +821,7 @@ class RegistrationApprovalTests(unittest.TestCase):
         self.assertEqual(user_login.status_code, 200)
         self.assertFalse(user_login.json()["is_admin"])
 
-    def test_user_and_admin_sessions_can_coexist_in_one_browser(self):
+    def test_admin_login_replaces_customer_session_in_same_browser(self):
         applicant = TestClient(self.app)
         applied = applicant.post("/api/auth/apply", json=self.application_payload())
         self.assertEqual(applied.status_code, 200, applied.text)
@@ -853,12 +853,12 @@ class RegistrationApprovalTests(unittest.TestCase):
             json={"username": "admin", "password": "admin123secure"},
         )
         self.assertEqual(admin_login.status_code, 200, admin_login.text)
-        self.assertEqual(browser.cookies.get("session_token"), user_token)
+        self.assertIsNone(browser.cookies.get("session_token"))
         self.assertTrue(browser.cookies.get("admin_session_token"))
         admin_token = browser.cookies.get("admin_session_token")
         with db_module.db() as conn:
             user_session = conn.execute(
-                "SELECT revoked_at, is_admin_session FROM sessions WHERE token = ?",
+                "SELECT revoked_at, revoke_reason, is_admin_session FROM sessions WHERE token = ?",
                 (governance.token_digest(user_token),),
             ).fetchone()
             admin_session = conn.execute(
@@ -866,7 +866,8 @@ class RegistrationApprovalTests(unittest.TestCase):
                 (governance.token_digest(admin_token),),
             ).fetchone()
         self.assertIsNotNone(user_session)
-        self.assertEqual(int(user_session["revoked_at"] or 0), 0)
+        self.assertGreater(int(user_session["revoked_at"] or 0), 0)
+        self.assertEqual(str(user_session["revoke_reason"] or ""), "admin_session_boundary_login")
         self.assertEqual(int(user_session["is_admin_session"] or 0), 0)
         self.assertIsNotNone(admin_session)
         self.assertEqual(int(admin_session["revoked_at"] or 0), 0)
@@ -877,18 +878,18 @@ class RegistrationApprovalTests(unittest.TestCase):
         user_console = browser.get("/console.html", follow_redirects=False)
         admin_console = browser.get("/admin-console.html", follow_redirects=False)
 
-        self.assertEqual(user_me.status_code, 200, user_me.text)
-        self.assertEqual(user_me.json()["username"], "guest001")
-        self.assertFalse(user_me.json()["is_admin"])
+        self.assertEqual(user_me.status_code, 401, user_me.text)
         self.assertEqual(admin_me.status_code, 200, admin_me.text)
         self.assertEqual(admin_me.json()["username"], "admin")
         self.assertTrue(admin_me.json()["is_admin"])
-        self.assertEqual(user_console.status_code, 200, user_console.text)
+        self.assertEqual(user_console.status_code, 302, user_console.text)
         self.assertEqual(admin_console.status_code, 200, admin_console.text)
 
         admin_logout = browser.post("/api/auth/logout", headers={"X-Admin-Console": "1"})
         self.assertEqual(admin_logout.status_code, 200, admin_logout.text)
-        self.assertEqual(browser.get("/api/me").json()["username"], "guest001")
+        self.assertIsNone(browser.cookies.get("session_token"))
+        self.assertIsNone(browser.cookies.get("admin_session_token"))
+        self.assertEqual(browser.get("/api/me").status_code, 401)
         self.assertEqual(browser.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 401)
         explicit_admin_console = browser.get("/console.html?admin_console=1", follow_redirects=False)
         explicit_admin_profile = browser.get("/profile.html?admin_console=1", follow_redirects=False)
@@ -1050,7 +1051,7 @@ class RegistrationApprovalTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(int(session_count["count"]), 0)
 
-    def test_admin_logout_without_admin_cookie_never_revokes_customer_session(self):
+    def test_logout_clears_customer_session_even_with_stale_admin_context(self):
         applicant = TestClient(self.app)
         applied = applicant.post("/api/auth/apply", json=self.application_payload())
         self.assertEqual(applied.status_code, 200, applied.text)
@@ -1080,14 +1081,15 @@ class RegistrationApprovalTests(unittest.TestCase):
         logout = browser.post("/api/auth/logout", headers={"X-Admin-Console": "1"})
 
         self.assertEqual(logout.status_code, 200, logout.text)
-        self.assertEqual(browser.cookies.get("session_token"), customer_token)
-        self.assertEqual(browser.get("/api/me").status_code, 200)
+        self.assertIsNone(browser.cookies.get("session_token"))
+        self.assertIsNone(browser.cookies.get("admin_session_token"))
+        self.assertEqual(browser.get("/api/me").status_code, 401)
         with db_module.db() as conn:
             row = conn.execute(
                 "SELECT revoked_at FROM sessions WHERE token = ?",
                 (governance.token_digest(customer_token),),
             ).fetchone()
-        self.assertEqual(int(row["revoked_at"] or 0), 0)
+        self.assertGreater(int(row["revoked_at"] or 0), 0)
 
     def test_admin_pages_do_not_accept_ordinary_session_cookie(self):
         login_browser = TestClient(self.app)

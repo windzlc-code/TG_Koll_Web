@@ -327,6 +327,43 @@ class WarmupChainParityTests(TestCase):
         self.assertIn("短发造型", matched["matched"])
         self.assertFalse(unmatched["relevant"])
 
+    def test_warmup_relevance_uses_topics_when_persona_name_is_only_a_display_name(self):
+        payload = {
+            "persona_name": "李师傅",
+            "persona_topics": ["茶文化", "家居清洁", "品茶", "慢生活"],
+            "persona_context": "退休后的慢生活，分享茶文化、茶具和家居清洁心得。",
+        }
+
+        relevance = runner._score_warmup_post_relevance(
+            payload,
+            "中国绿茶怎么采摘？机械采茶省时又省力。",
+            keywords=["绿茶保存技巧"],
+        )
+        unrelated = runner._score_warmup_post_relevance(
+            payload,
+            "今天的半导体财报和市场量能值得继续观察。",
+            keywords=["绿茶保存技巧"],
+        )
+
+        self.assertTrue(relevance["relevant"])
+        self.assertIn("绿茶", relevance["matched"])
+        self.assertFalse(unrelated["relevant"])
+
+    def test_warmup_relevance_does_not_accept_generic_keyword_prefix_without_persona_anchor(self):
+        payload = {
+            "persona_name": "李师傅",
+            "persona_topics": ["茶文化", "家居清洁", "品茶", "慢生活"],
+            "persona_context": "退休后的慢生活，分享茶文化、茶具和家居清洁心得。",
+        }
+
+        relevance = runner._score_warmup_post_relevance(
+            payload,
+            "水光镜面发型护理，打造顺滑发丝。",
+            keywords=["镜面擦拭心得"],
+        )
+
+        self.assertFalse(relevance["relevant"])
+
     def test_search_relevance_uses_matching_visible_result_not_only_center_card(self):
         unrelated = {"text": "今天的财经市场讨论。", "root": mock.Mock()}
         matched = {"text": "理发师分享男士短发打理技巧。", "root": mock.Mock()}
@@ -1246,6 +1283,36 @@ class WarmupChainParityTests(TestCase):
 
         self.assertEqual(reply, "这个打理思路很实用。")
         self.assertEqual(generate.call_args.kwargs["limit"], runner.MAX_WARMUP_COMMENT_CHARS)
+
+    def test_warmup_comment_accepts_the_same_derived_topic_as_relevance_selection(self):
+        payload = {
+            "persona_context": "退休后喜欢研究茶文化、品茶和家居清洁。",
+            "persona_topics": ["茶文化", "品茶", "家居清洁"],
+            "require_persona_relevance": True,
+        }
+        target_text = "chineseteagirl #太平猴魁 #茶叶制作 #绿茶"
+
+        generated_keywords = ["茶叶品质判断", "茶具陈列艺术"]
+        self.assertTrue(
+            runner._assess_warmup_post_relevance(
+                payload,
+                target_text,
+                keywords=generated_keywords,
+            )["relevant"]
+        )
+        with mock.patch.object(
+            runner,
+            "_generate_persona_reply_with_ai",
+            return_value="太平猴魁香气独特，慢慢品更有味道。",
+        ) as generate:
+            reply = runner._pick_warmup_persona_reply(
+                payload,
+                target_text,
+                keywords=generated_keywords,
+            )
+
+        self.assertEqual(reply, "太平猴魁香气独特，慢慢品更有味道。")
+        generate.assert_called_once()
 
     def test_both_platform_wrappers_use_the_shared_auto_reply_executor(self):
         with mock.patch.object(

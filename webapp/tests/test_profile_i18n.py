@@ -84,8 +84,12 @@ class ProfileI18nTests(unittest.TestCase):
             "profileSaved",
             "profileSaveFailed",
             "passwordChanged",
+            "understood",
         ):
             self.assertIn(f'"{key}"', self.source)
+
+        self.assertIn('actionText: profileText("understood")', self.source)
+        self.assertIn('actionText: profileText("understood", {}, language)', self.source)
 
         self.assertNotIn("profileAvatarRemove", self.markup)
         self.assertNotIn("avatarWillBeRemoved", self.source)

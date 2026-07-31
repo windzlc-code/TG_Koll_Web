@@ -910,7 +910,64 @@ function defaultPersonaCreateState() {
     aiKeywords: [],
     aiSelectedKeywords: [],
     aiResult: null,
+    aiKeywordOperationKey: "",
+    aiCreateOperationKey: "",
   };
+}
+
+const PERSONA_STEP_OPERATION_TTL_MS = 30 * 60 * 1000;
+
+function newPersonaStepOperationKey(step) {
+  const randomId = globalThis.crypto?.randomUUID?.()
+    || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `persona-${String(step || "step")}:${randomId}`.slice(0, 160);
+}
+
+function personaStepOperationStorageKey(step) {
+  return `vecto.persona-step.${String(step || "step")}`;
+}
+
+function personaStepOperationKey(step, payload, currentKey = "") {
+  const activeKey = String(currentKey || "").trim();
+  if (activeKey) return activeKey;
+  const fingerprint = JSON.stringify(payload || {});
+  const storageKey = personaStepOperationStorageKey(step);
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(storageKey) || "null");
+    const age = Date.now() - Number(stored?.createdAt || 0);
+    if (
+      String(stored?.fingerprint || "") === fingerprint
+      && String(stored?.operationKey || "")
+      && age >= 0
+      && age <= PERSONA_STEP_OPERATION_TTL_MS
+    ) {
+      return String(stored.operationKey);
+    }
+  } catch (_) {}
+  const operationKey = newPersonaStepOperationKey(step);
+  try {
+    sessionStorage.setItem(storageKey, JSON.stringify({ operationKey, fingerprint, createdAt: Date.now() }));
+  } catch (_) {}
+  return operationKey;
+}
+
+function clearPersonaStepOperationKey(step, operationKey = "") {
+  const storageKey = personaStepOperationStorageKey(step);
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(storageKey) || "null");
+    if (!operationKey || String(stored?.operationKey || "") === String(operationKey)) {
+      sessionStorage.removeItem(storageKey);
+    }
+  } catch (_) {
+    try { sessionStorage.removeItem(storageKey); } catch (_) {}
+  }
+}
+
+function personaStepErrorKeepsOperationKey(error) {
+  if (error?.code === "BILLABLE_OPERATION_IN_PROGRESS") return true;
+  const status = Number(error?.status);
+  if (!Number.isFinite(status)) return true;
+  return status === 0 || status === 408 || status === 499 || status === 500 || status === 503 || status === 504;
 }
 
 function ensurePersonaCreateState() {
@@ -1200,6 +1257,20 @@ const CONSOLE_DYNAMIC_ATTRIBUTE_I18N_SELECTOR = [
   "[placeholder]",
   "[data-mobile-label]",
 ].join(", ");
+const CONSOLE_DYNAMIC_USER_CONTENT_SELECTOR = [
+  "input",
+  "textarea",
+  "[contenteditable='true']",
+  "pre",
+  "code",
+  ".persona-draft-table-content",
+  ".persona-draft-detail-content p",
+  ".publish-post-card-snippet",
+  ".publish-preview-card > p",
+  ".task-detail-log-item > p",
+  ".task-detail-summary-card > p",
+].join(", ");
+const CONSOLE_DYNAMIC_UI_TEXT_PATTERN = /(?:我的人设|推文生成|人设|账号|账户|任务|草稿|收藏|发布|浏览|代理|热点|热度|统计|设置|暂无|选择|当前|每页|总计|总览|状态|时间|勾选|分组|详情|刷新|保存|删除|编辑|添加|新建|创建|取消|确认|关闭|加载|执行|验证|密码|登录|绑定|队列|平台|首页|互动|评论|点赞|分享|转发|名称|简介|头像|图片|视频|媒体|文本|文件|链接|相关数据|基础统计|查看|管理|更换|操作|来源|类型|记录|历史|失败|成功|处理中|未检测|已选|\d+\s*条|\d+\s*个)/;
 
 function currentLanguage() {
   return document.documentElement.dataset.language === "zh-Hant" ? "zh-Hant" : "zh-Hans";
@@ -1236,7 +1307,7 @@ function markConsoleDynamicUi(root) {
   if (!root) return;
   if (root.nodeType === Node.TEXT_NODE) {
     const parent = root.parentElement;
-    if (root.nodeValue?.trim() && parent?.matches(CONSOLE_DYNAMIC_TEXT_I18N_SELECTOR)) {
+    if (shouldMarkConsoleDynamicUiText(root, parent)) {
       markConsoleUiElement(parent);
     }
     return;
@@ -1254,6 +1325,22 @@ function markConsoleDynamicUi(root) {
         markConsoleUiElement(node, { attributesOnly: true });
       }
     });
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      return shouldMarkConsoleDynamicUiText(node, node.parentElement)
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT;
+    },
+  });
+  while (walker.nextNode()) markConsoleUiElement(walker.currentNode.parentElement);
+}
+
+function shouldMarkConsoleDynamicUiText(node, parent = node?.parentElement) {
+  const text = String(node?.nodeValue || "").trim();
+  if (!text || !parent || parent.closest(CONSOLE_I18N_SKIP_SELECTOR)) return false;
+  if (parent.closest(CONSOLE_DYNAMIC_USER_CONTENT_SELECTOR)) return false;
+  if (parent.matches(CONSOLE_DYNAMIC_TEXT_I18N_SELECTOR)) return true;
+  return text.length <= 96 && CONSOLE_DYNAMIC_UI_TEXT_PATTERN.test(text);
 }
 
 function consoleUiElements(root) {
@@ -16774,6 +16861,7 @@ function renderTaskDetailLayout(task = {}, logs = [], {
   const presentationStatus = kind === "social" ? socialTaskPresentationStatus(task) : String(task.status || "");
   const screenshots = collectTaskScreenshots(task, logs);
   const previewCountLabel = kind === "regular" ? `${screenshots.length} 张图片` : `${screenshots.length} 张截图`;
+  const taskSummaryDetail = String(task?.task_summary?.detail || "").trim();
   const fields = kind === "social"
     ? [
       renderTaskDetailField("任务类型", statusLabel(task.task_type || task.workflow_name || task.type || title)),
@@ -16797,7 +16885,7 @@ function renderTaskDetailLayout(task = {}, logs = [], {
       <section class="task-detail-summary-card">
         <span>${esc(kind === "social" ? "自动化任务" : "任务详情")}</span>
         <strong class="task-detail-status is-${esc(statusTone(presentationStatus))}">${esc((kind === "social" ? socialTaskDisplayStatus(task) : statusLabel(task.status || "")) || title)}</strong>
-        <p>${esc(task.workflow_name || statusLabel(task.task_type || task.type || "") || task.id || "")}</p>
+        <p>${esc(taskSummaryDetail || task.workflow_name || statusLabel(task.task_type || task.type || "") || task.id || "")}</p>
       </section>
       <section class="task-detail-field-grid">
         ${fields}
@@ -17726,6 +17814,13 @@ async function suggestPersonaCreateKeywords() {
     showMsg("commandMsg", "请先填写人设提示词。", false);
     return;
   }
+  const requestPayload = { name, prompt };
+  const operationKey = personaStepOperationKey(
+    "keywords",
+    requestPayload,
+    createState.aiKeywordOperationKey,
+  );
+  createState.aiKeywordOperationKey = operationKey;
   state.personaCreateBusy.keywords = true;
   state.personaCreateBusy.keywordsStartedAt = Date.now();
   state.personaCreateKeywordController = new AbortController();
@@ -17734,17 +17829,26 @@ async function suggestPersonaCreateKeywords() {
     showMsg("commandMsg", "正在提炼人设方向关键词...", true);
     const result = await apiWithTimeout("/api/persona_dashboard/personas/ai_keywords", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, prompt }),
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": operationKey,
+      },
+      body: JSON.stringify(requestPayload),
       signal: state.personaCreateKeywordController.signal,
     }, 90000);
     createState.aiStep = "keywords";
     createState.aiKeywords = Array.isArray(result.keywords) ? result.keywords : [];
     createState.aiSelectedKeywords = [];
     createState.aiResult = null;
+    clearPersonaStepOperationKey("keywords", operationKey);
+    createState.aiKeywordOperationKey = "";
     renderPersonaCreateSurface();
     showMsg("commandMsg", withBillingChargeMessage("已提炼出人设方向关键词。", result), true);
   } catch (error) {
+    if (!personaStepErrorKeepsOperationKey(error)) {
+      clearPersonaStepOperationKey("keywords", operationKey);
+      createState.aiKeywordOperationKey = "";
+    }
     if (error?.name === "AbortError" || error?.status === 499) {
       showMsg("commandMsg", "已取消关键词提炼。", true);
     } else {
@@ -17787,6 +17891,17 @@ async function createPersonaArchiveWithAi() {
     showMsg("commandMsg", "请先填写人设提示词。", false);
     return;
   }
+  const requestPayload = {
+    name,
+    prompt,
+    selected_keywords: Array.isArray(createState.aiSelectedKeywords) ? createState.aiSelectedKeywords : [],
+  };
+  const operationKey = personaStepOperationKey(
+    "create",
+    requestPayload,
+    createState.aiCreateOperationKey,
+  );
+  createState.aiCreateOperationKey = operationKey;
   state.personaCreateBusy.aiCreate = true;
   state.personaCreateBusy.aiCreateStartedAt = Date.now();
   renderPersonaCreateSurface();
@@ -17794,12 +17909,11 @@ async function createPersonaArchiveWithAi() {
     showMsg("commandMsg", "正在根据提示词生成人设...", true);
     const result = await api("/api/persona_dashboard/personas/ai_create", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name,
-        prompt,
-        selected_keywords: Array.isArray(createState.aiSelectedKeywords) ? createState.aiSelectedKeywords : [],
-      }),
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": operationKey,
+      },
+      body: JSON.stringify(requestPayload),
     });
     const profile = result.profile || {};
     createState.aiStep = "created";
@@ -17814,8 +17928,16 @@ async function createPersonaArchiveWithAi() {
       setSelectedPersonaId(createState.aiResult.id);
       await loadPersonaProfile(createState.aiResult.id, { force: true }).catch(() => {});
     }
+    clearPersonaStepOperationKey("create", operationKey);
+    createState.aiCreateOperationKey = "";
     renderPersonaCreateSurface();
     showMsg("commandMsg", withBillingChargeMessage(`AI 人设已创建：${createState.aiResult.name || "-"}`, result), true);
+  } catch (error) {
+    if (!personaStepErrorKeepsOperationKey(error)) {
+      clearPersonaStepOperationKey("create", operationKey);
+      createState.aiCreateOperationKey = "";
+    }
+    throw error;
   } finally {
     state.personaCreateBusy.aiCreate = false;
     state.personaCreateBusy.aiCreateStartedAt = 0;
@@ -21185,7 +21307,7 @@ function openPersonaCreateModal() {
     }
     void openConsoleModal({
       title: "确认退出",
-      message: `${busyKind}正在执行。现在退出可能导致当前流程未完成。`,
+      message: `${busyKind}正在执行。退出只会关闭当前页面；已完成或服务端继续完成的计费步骤仍会按当前步骤扣费。`,
       cancelText: "继续运行",
       confirmText: "确认退出",
       danger: true,
@@ -21247,6 +21369,8 @@ function openPersonaCreateModal() {
       createState.aiKeywords = [];
       createState.aiSelectedKeywords = [];
       createState.aiResult = null;
+      createState.aiKeywordOperationKey = "";
+      createState.aiCreateOperationKey = "";
       renderPersonaCreateSurface();
       return;
     }

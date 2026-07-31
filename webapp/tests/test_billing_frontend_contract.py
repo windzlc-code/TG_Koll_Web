@@ -309,6 +309,30 @@ function billingLedgerEntries() {{ return ledgerRows; }}
                     self.console_script[endpoint_start:endpoint_end],
                 )
 
+    def test_persona_ai_steps_use_independent_stable_idempotency_keys(self):
+        keywords = self.console_script[
+            self.console_script.index("async function suggestPersonaCreateKeywords")
+            : self.console_script.index("function cancelPersonaCreateKeywords")
+        ]
+        create = self.console_script[
+            self.console_script.index("async function createPersonaArchiveWithAi")
+            : self.console_script.index("function generatePersonaPayloadFromState")
+        ]
+        self.assertIn("aiKeywordOperationKey", keywords)
+        self.assertIn('personaStepOperationKey(\n    "keywords"', keywords)
+        self.assertIn('"Idempotency-Key": operationKey', keywords)
+        self.assertIn("aiCreateOperationKey", create)
+        self.assertIn('personaStepOperationKey(\n    "create"', create)
+        self.assertIn('"Idempotency-Key": operationKey', create)
+        self.assertIn("personaStepErrorKeepsOperationKey", keywords)
+        self.assertIn("personaStepErrorKeepsOperationKey", create)
+        self.assertIn("BILLABLE_OPERATION_IN_PROGRESS", self.console_script)
+        self.assertIn("sessionStorage.setItem", self.console_script)
+        self.assertIn("PERSONA_STEP_OPERATION_TTL_MS", self.console_script)
+        self.assertIn("function personaStepErrorKeepsOperationKey", self.console_script)
+        self.assertIn("status === 408 || status === 499", self.console_script)
+        self.assertIn("已完成或服务端继续完成的计费步骤仍会按当前步骤扣费", self.console_script)
+
     def test_mobile_toasts_enter_from_top_and_busy_spinner_has_distinct_track(self):
         mobile_start = self.console_styles.index(
             "@media (max-width: 760px)",

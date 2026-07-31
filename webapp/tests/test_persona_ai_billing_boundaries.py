@@ -1,7 +1,9 @@
 import json
 import os
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
@@ -119,6 +121,238 @@ class PersonaAiBillingBoundaryTests(unittest.TestCase):
         with db_module.db() as conn:
             after = commercial_billing.billing_summary(conn, self.user_id)["credit_units"]
         self.assertEqual(after, before)
+
+    def test_persona_create_requires_durable_output_before_settlement(self):
+        with db_module.db() as conn:
+            before = commercial_billing.billing_summary(conn, self.user_id)["credit_units"]
+
+        with self.assertRaises(HTTPException) as raised:
+            server._run_billable_operation(
+                self.user,
+                ref_type="persona_ai_create",
+                sku="basic_text_post",
+                quantity=1,
+                operation=lambda: {
+                    "ok": True,
+                    "profile": {
+                        "id": "persona-ai-not-persisted",
+                        "name": "Not Persisted",
+                    },
+                },
+            )
+
+        self.assertEqual(raised.exception.status_code, 502)
+        rows = self._reservation_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(str(rows[0]["status"]), "released")
+        with db_module.db() as conn:
+            after = commercial_billing.billing_summary(conn, self.user_id)["credit_units"]
+        self.assertEqual(after, before)
+
+    def test_same_idempotency_key_replays_result_without_reexecuting_or_recharging(self):
+        calls = 0
+
+        def generate_keywords():
+            nonlocal calls
+            calls += 1
+            return {"ok": True, "keywords": ["night shift", "city driver"]}
+
+        kwargs = {
+            "ref_type": "persona_ai_keywords",
+            "sku": "basic_text_post",
+            "quantity": 1,
+            "operation": generate_keywords,
+            "idempotency_key": "persona-keywords-replay-0001",
+            "request_fingerprint": "keywords-payload-v1",
+        }
+        first = server._run_billable_operation(self.user, **kwargs)
+        second = server._run_billable_operation(self.user, **kwargs)
+
+        self.assertEqual(calls, 1)
+        self.assertEqual(first["keywords"], second["keywords"])
+        self.assertEqual(first["billing"]["status"], "settled")
+        self.assertEqual(second["billing"]["status"], "settled")
+        rows = self._reservation_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(str(rows[0]["status"]), "settled")
+        with db_module.db() as conn:
+            summary = commercial_billing.billing_summary(conn, self.user_id)
+        self.assertEqual(summary["credit_units"], 470)
+
+    def test_concurrent_same_idempotency_key_does_not_run_the_step_twice(self):
+        started = threading.Event()
+        release = threading.Event()
+        calls = 0
+
+        def slow_keywords():
+            nonlocal calls
+            calls += 1
+            started.set()
+            self.assertTrue(release.wait(timeout=5))
+            return {"ok": True, "keywords": ["night shift"]}
+
+        kwargs = {
+            "ref_type": "persona_ai_keywords",
+            "sku": "basic_text_post",
+            "quantity": 1,
+            "operation": slow_keywords,
+            "idempotency_key": "persona-keywords-concurrent-0001",
+            "request_fingerprint": "keywords-payload-concurrent",
+        }
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            first = pool.submit(server._run_billable_operation, self.user, **kwargs)
+            self.assertTrue(started.wait(timeout=5))
+            with self.assertRaises(commercial_billing.BillingError) as raised:
+                server._run_billable_operation(self.user, **kwargs)
+            self.assertEqual(raised.exception.code, "BILLABLE_OPERATION_IN_PROGRESS")
+            release.set()
+            result = first.result(timeout=5)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls, 1)
+        self.assertEqual(len(self._reservation_rows()), 1)
+
+    def test_same_create_idempotency_key_replays_the_durable_persona(self):
+        archive_id = "persona-ai-idempotent-create"
+        calls = 0
+
+        def persist_persona():
+            nonlocal calls
+            calls += 1
+            archive = {
+                "id": archive_id,
+                "name": "Idempotent Persona",
+                "content": "Persisted once",
+                "setup": {"personaName": "Idempotent Persona"},
+                "posts": [],
+            }
+            (server.TOOL_R18_RUNTIME_DIR / "persona_archives.json").write_text(
+                json.dumps([archive], ensure_ascii=False),
+                encoding="utf-8",
+            )
+            now = server._now_ts()
+            with db_module.db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO persona_owners(archive_id, user_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (archive_id, self.user_id, now, now),
+                )
+            return {"ok": True, "profile": {"id": archive_id, "name": "Idempotent Persona"}}
+
+        kwargs = {
+            "ref_type": "persona_ai_create",
+            "sku": "basic_text_post",
+            "quantity": 1,
+            "operation": persist_persona,
+            "idempotency_key": "persona-create-replay-0001",
+            "request_fingerprint": "create-payload-v1",
+        }
+        first = server._run_billable_operation(self.user, **kwargs)
+        second = server._run_billable_operation(self.user, **kwargs)
+
+        self.assertEqual(calls, 1)
+        self.assertEqual(first["profile"]["id"], archive_id)
+        self.assertEqual(second["profile"]["id"], archive_id)
+        self.assertEqual(len(self._reservation_rows()), 1)
+        with db_module.db() as conn:
+            owner_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS c FROM persona_owners WHERE archive_id = ?",
+                    (archive_id,),
+                ).fetchone()["c"]
+            )
+            summary = commercial_billing.billing_summary(conn, self.user_id)
+        self.assertEqual(owner_count, 1)
+        self.assertEqual(summary["credit_units"], 470)
+
+    def test_same_idempotency_key_rejects_a_different_payload(self):
+        server._run_billable_operation(
+            self.user,
+            ref_type="persona_ai_keywords",
+            sku="basic_text_post",
+            quantity=1,
+            operation=lambda: {"ok": True, "keywords": ["first"]},
+            idempotency_key="persona-keywords-conflict-0001",
+            request_fingerprint="keywords-payload-first",
+        )
+
+        with self.assertRaises(commercial_billing.BillingError) as raised:
+            server._run_billable_operation(
+                self.user,
+                ref_type="persona_ai_keywords",
+                sku="basic_text_post",
+                quantity=1,
+                operation=lambda: {"ok": True, "keywords": ["second"]},
+                idempotency_key="persona-keywords-conflict-0001",
+                request_fingerprint="keywords-payload-second",
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(raised.exception.code, "BILLABLE_OPERATION_IDEMPOTENCY_CONFLICT")
+
+    def test_completed_keyword_step_remains_charged_when_final_create_fails(self):
+        server._run_billable_operation(
+            self.user,
+            ref_type="persona_ai_keywords",
+            sku="basic_text_post",
+            quantity=1,
+            operation=lambda: {"ok": True, "keywords": ["night shift", "city driver"]},
+        )
+
+        with self.assertRaises(RuntimeError):
+            server._run_billable_operation(
+                self.user,
+                ref_type="persona_ai_create",
+                sku="basic_text_post",
+                quantity=1,
+                operation=lambda: (_ for _ in ()).throw(RuntimeError("create failed")),
+            )
+
+        rows = self._reservation_rows()
+        status_by_ref_type = {
+            str(row["ref_type"]): str(row["status"])
+            for row in rows
+        }
+        self.assertEqual(status_by_ref_type["persona_ai_keywords"], "settled")
+        self.assertEqual(status_by_ref_type["persona_ai_create"], "released")
+        with db_module.db() as conn:
+            summary = commercial_billing.billing_summary(conn, self.user_id)
+        self.assertEqual(summary["credit_units"], 470)
+
+    def test_startup_recovery_settles_a_completed_keyword_checkpoint(self):
+        with db_module.db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            reservation = commercial_billing.reserve_charge(
+                conn,
+                user_id=self.user_id,
+                ref_type="persona_ai_keywords",
+                ref_id="persona-ai-keywords-completed",
+                sku="basic_text_post",
+                quantity=1,
+                now=100,
+            )
+            row = conn.execute(
+                "SELECT meta_json FROM billing_reservations WHERE id = ?",
+                (str(reservation["id"]),),
+            ).fetchone()
+            meta = json.loads(str(row["meta_json"]))
+            meta["operation_checkpoint"] = {
+                "state": "completed_output",
+                "response": {"ok": True, "keywords": ["night shift"]},
+            }
+            conn.execute(
+                "UPDATE billing_reservations SET meta_json = ? WHERE id = ?",
+                (json.dumps(meta), str(reservation["id"])),
+            )
+
+        with db_module.db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            recovered = server._recover_orphaned_persona_ai_reservations(conn, cutoff_ts=1_000)
+
+        self.assertEqual(recovered, {"settled": 1, "released": 0})
+        self.assertEqual(str(self._reservation_rows()[0]["status"]), "settled")
 
     def test_durable_persona_checkpoint_is_settled_after_crash_before_billing(self):
         archive_id = "persona-ai-crash-safe"

@@ -63,6 +63,7 @@
       profileSaved: "个人资料已保存。",
       profileSaveFailed: "个人资料保存失败。",
       logoutFailed: "退出失败，请重试。",
+      understood: "知道了",
     },
     "zh-Hant": {
       pageTitle: "個人資料 - Vecto",
@@ -123,6 +124,7 @@
       profileSaved: "個人資料已儲存。",
       profileSaveFailed: "個人資料儲存失敗。",
       logoutFailed: "登出失敗，請重試。",
+      understood: "知道了",
     },
   };
   const PROFILE_I18N_ATTRIBUTES = {
@@ -515,7 +517,7 @@
         kind: "logout",
         title: "退出成功，再见",
         message: "辛苦了，期待下次见面。",
-        actionText: "知道了",
+        actionText: profileText("understood"),
       };
       await window.VectoSiteNavigation?.showAuthFeedback?.(logoutFeedback);
       window.location.replace("/");
@@ -595,7 +597,7 @@
           try {
             await api("/api/auth/password/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ challenge_id: challengeId, verification_code: String(fields.code.value || "").trim(), new_password: fields.password.value }) });
             close();
-            await showAuthFeedback({ kind: "success", title: profileText("passwordChanged", {}, language), message: "", actionText: "知道了" });
+            await showAuthFeedback({ kind: "success", title: profileText("passwordChanged", {}, language), message: "", actionText: profileText("understood", {}, language) });
           } catch (error) {
             status.textContent = error.message || profileText("profileSaveFailed", {}, language);
             status.className = "site-auth-feedback-form-status is-error";

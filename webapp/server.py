@@ -1463,16 +1463,23 @@ def _recover_orphaned_persona_ai_reservations(
         meta = _json_loads(row["meta_json"], {})
         checkpoint = meta.get("operation_checkpoint") if isinstance(meta, dict) else {}
         checkpoint = checkpoint if isinstance(checkpoint, dict) else {}
+        checkpoint_response = checkpoint.get("response")
+        can_settle_completed_output = (
+            str(row["ref_type"] or "") != "persona_ai_create"
+            and str(checkpoint.get("state") or "") == "completed_output"
+            and isinstance(checkpoint_response, dict)
+        )
         can_settle_durable_output = (
             str(row["ref_type"] or "") == "persona_ai_create"
             and str(checkpoint.get("state") or "") == "durable_output"
+            and isinstance(checkpoint_response, dict)
             and _persona_ai_archive_output_is_durable(
                 conn,
                 archive_id=str(checkpoint.get("archive_id") or ""),
                 user_id=int(row["user_id"] or 0),
             )
         )
-        if can_settle_durable_output:
+        if can_settle_completed_output or can_settle_durable_output:
             commercial_billing.settle_reservation(
                 conn,
                 str(row["id"]),
@@ -1480,9 +1487,8 @@ def _recover_orphaned_persona_ai_reservations(
             )
             recovered["settled"] += 1
         else:
-            # Volatile keyword/profile responses cannot be recovered after a
-            # process exit. Unknown or incomplete durable output also releases
-            # conservatively so a customer is never charged for unverifiable work.
+            # Unknown or incomplete output releases conservatively so a
+            # customer is never charged for work that cannot be verified.
             commercial_billing.release_reservation(conn, str(row["id"]))
             recovered["released"] += 1
     return recovered
@@ -14207,6 +14213,27 @@ def _create_social_task_with_billing(
             clear_trusted_batch_task(payload)
 
 
+def _persona_ai_request_fingerprint(payload: BaseModel) -> str:
+    raw = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload.dict()
+    normalized = {
+        "name": str(raw.get("name") or "").strip(),
+        "prompt": str(raw.get("prompt") or "").strip(),
+    }
+    if "selected_keywords" in raw:
+        normalized["selected_keywords"] = [
+            str(item or "").strip()
+            for item in (raw.get("selected_keywords") or [])
+            if str(item or "").strip()
+        ]
+    encoded = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _run_billable_operation(
     user: dict[str, Any],
     *,
@@ -14214,12 +14241,60 @@ def _run_billable_operation(
     sku: str,
     quantity: int,
     operation: Callable[[], dict[str, Any]],
+    idempotency_key: str = "",
+    request_fingerprint: str = "",
 ) -> dict[str, Any]:
-    operation_id = _new_id(ref_type)
     user_id = _workspace_user_id(user)
     billable_quantity = max(int(quantity or 1), 1)
+    client_idempotency_key = str(idempotency_key or "").strip()[:160]
+    clean_request_fingerprint = str(request_fingerprint or "").strip()[:128]
+    scoped_idempotency_key = ""
+    if client_idempotency_key:
+        key_digest = hashlib.sha256(client_idempotency_key.encode("utf-8")).hexdigest()
+        operation_id = f"{ref_type}_{user_id}_{key_digest[:20]}"
+        scoped_idempotency_key = f"billable-operation:{user_id}:{ref_type}:{key_digest}"
+    else:
+        operation_id = _new_id(ref_type)
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        if scoped_idempotency_key:
+            existing = conn.execute(
+                "SELECT * FROM billing_reservations WHERE idempotency_key = ?",
+                (scoped_idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                existing_meta = _json_loads(existing["meta_json"], {})
+                existing_meta = existing_meta if isinstance(existing_meta, dict) else {}
+                existing_fingerprint = str(existing_meta.get("request_fingerprint") or "")
+                if existing_fingerprint != clean_request_fingerprint:
+                    raise commercial_billing.BillingError(
+                        "BILLABLE_OPERATION_IDEMPOTENCY_CONFLICT",
+                        "该请求标识已绑定到不同的人设生成内容，请重新发起操作。",
+                        409,
+                    )
+                checkpoint = existing_meta.get("operation_checkpoint")
+                checkpoint = checkpoint if isinstance(checkpoint, dict) else {}
+                cached_response = checkpoint.get("response")
+                status = str(existing["status"] or "")
+                if status in {"settled", "waived"} and isinstance(cached_response, dict):
+                    replay = dict(cached_response)
+                    replay["billing"] = commercial_billing.reservation_for_reference(
+                        conn,
+                        ref_type,
+                        operation_id,
+                    ) or {}
+                    return replay
+                if status in {"held", "waived"}:
+                    raise commercial_billing.BillingError(
+                        "BILLABLE_OPERATION_IN_PROGRESS",
+                        "该人设生成步骤仍在处理中，请稍后重试。",
+                        409,
+                    )
+                raise commercial_billing.BillingError(
+                    "BILLABLE_OPERATION_ATTEMPT_FAILED",
+                    "上一次人设生成步骤未成功，请重新发起操作。",
+                    409,
+                )
         reservation = commercial_billing.reserve_charge(
             conn,
             user_id=user_id,
@@ -14228,50 +14303,77 @@ def _run_billable_operation(
             sku=sku,
             quantity=billable_quantity,
             admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
+            idempotency_key=scoped_idempotency_key,
         )
+        if scoped_idempotency_key:
+            row = conn.execute(
+                "SELECT meta_json FROM billing_reservations WHERE id = ?",
+                (str(reservation["id"]),),
+            ).fetchone()
+            meta = _json_loads(row["meta_json"], {}) if row is not None else {}
+            meta = meta if isinstance(meta, dict) else {}
+            meta["request_fingerprint"] = clean_request_fingerprint
+            meta["operation_state"] = "running"
+            conn.execute(
+                "UPDATE billing_reservations SET meta_json = ?, updated_at = ? WHERE id = ?",
+                (
+                    json.dumps(meta, ensure_ascii=False, separators=(",", ":")),
+                    _now_ts(),
+                    str(reservation["id"]),
+                ),
+            )
     reservation_id = str(reservation["id"])
-    durable_checkpoint_persisted = False
+    successful_checkpoint_persisted = False
     try:
         result = operation()
         if not isinstance(result, dict) or result.get("ok") is False:
             raise HTTPException(status_code=502, detail="AI 操作未返回有效结果，请稍后重试。")
 
+        checkpoint: dict[str, Any] = {
+            "state": "completed_output",
+            "response": dict(result),
+            "recorded_at": _now_ts(),
+        }
         if ref_type == "persona_ai_create":
             archive_id = _created_persona_id(result)
-            checkpoint_written = False
             with db() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                if _persona_ai_archive_output_is_durable(
+                if not _persona_ai_archive_output_is_durable(
                     conn,
                     archive_id=archive_id,
                     user_id=user_id,
                 ):
-                    row = conn.execute(
-                        "SELECT status, meta_json FROM billing_reservations WHERE id = ?",
-                        (reservation_id,),
-                    ).fetchone()
-                    if row is not None and str(row["status"] or "") == "held":
-                        meta = _json_loads(row["meta_json"], {})
-                        meta = meta if isinstance(meta, dict) else {}
-                        meta["operation_checkpoint"] = {
-                            "state": "durable_output",
-                            "archive_id": archive_id,
-                            "recorded_at": _now_ts(),
-                        }
-                        conn.execute(
-                            """
-                            UPDATE billing_reservations
-                            SET meta_json = ?, updated_at = ?
-                            WHERE id = ? AND status = 'held'
-                            """,
-                            (
-                                json.dumps(meta, ensure_ascii=False, separators=(",", ":")),
-                                _now_ts(),
-                                reservation_id,
-                            ),
-                        )
-                        checkpoint_written = True
-            durable_checkpoint_persisted = checkpoint_written
+                    raise HTTPException(
+                        status_code=502,
+                        detail="人设未完成持久化，当前步骤不会计费，请稍后重试。",
+                    )
+            checkpoint["state"] = "durable_output"
+            checkpoint["archive_id"] = archive_id
+
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status, meta_json FROM billing_reservations WHERE id = ?",
+                (reservation_id,),
+            ).fetchone()
+            if row is None or str(row["status"] or "") not in {"held", "waived"}:
+                raise HTTPException(status_code=409, detail="人设计费步骤状态异常，请刷新后重试。")
+            meta = _json_loads(row["meta_json"], {})
+            meta = meta if isinstance(meta, dict) else {}
+            meta["operation_state"] = "completed"
+            meta["operation_checkpoint"] = checkpoint
+            conn.execute(
+                """
+                UPDATE billing_reservations
+                SET meta_json = ?, updated_at = ?
+                WHERE id = ? AND status IN ('held', 'waived')
+                """,
+                (
+                    json.dumps(meta, ensure_ascii=False, separators=(",", ":")),
+                    _now_ts(),
+                    reservation_id,
+                ),
+            )
+        successful_checkpoint_persisted = True
 
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -14282,7 +14384,7 @@ def _run_billable_operation(
                 success=True,
             )
     except Exception:
-        if not durable_checkpoint_persisted:
+        if not successful_checkpoint_persisted:
             try:
                 with db() as conn:
                     conn.execute("BEGIN IMMEDIATE")
@@ -14295,7 +14397,7 @@ def _run_billable_operation(
         else:
             try:
                 # A transient settlement failure does not need to wait for a
-                # process restart. The committed durable-output checkpoint
+                # process restart. The committed successful-output checkpoint
                 # makes one immediate idempotent retry safe.
                 with db() as conn:
                     conn.execute("BEGIN IMMEDIATE")
@@ -14309,7 +14411,7 @@ def _run_billable_operation(
                 return result
             except Exception:
                 logger.exception(
-                    "Durable persona output remains held for startup billing recovery: %s",
+                    "Completed billable output remains held for startup billing recovery: %s",
                     reservation_id,
                 )
         raise
@@ -19210,6 +19312,8 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=403, detail=_password_change_required_detail(user))
             cookie_name = ADMIN_SESSION_COOKIE if is_admin else SESSION_COOKIE
             previous_token = str(request.cookies.get(cookie_name) or "").strip()
+            boundary_cookie_name = SESSION_COOKIE if is_admin else ADMIN_SESSION_COOKIE
+            boundary_token = str(request.cookies.get(boundary_cookie_name) or "").strip()
             session_conflict = False
             if is_admin:
                 boundary_at = _now_ts()
@@ -19272,6 +19376,12 @@ def create_app() -> FastAPI:
                         device_id=payload.device_id,
                     )
             if not session_conflict:
+                if boundary_token:
+                    delete_session(
+                        conn,
+                        boundary_token,
+                        reason="admin_session_boundary_login" if is_admin else "customer_session_boundary_login",
+                    )
                 login_at = _now_ts()
                 login_device_id = str(payload.device_id or request.headers.get("x-device-id") or "")[:128]
                 previous_device_id = str(user.get("last_device_id") or "")[:128]
@@ -19349,6 +19459,8 @@ def create_app() -> FastAPI:
             samesite="lax",
             secure=_session_cookie_secure(request),
         )
+        if boundary_token:
+            response.delete_cookie(boundary_cookie_name)
         return response
 
     @app.post("/api/auth/login")
@@ -19369,15 +19481,16 @@ def create_app() -> FastAPI:
 
     @app.post("/api/auth/logout")
     def api_logout(request: Request):
-        admin_logout = request_uses_admin_session(request)
         admin_token = str(request.cookies.get(ADMIN_SESSION_COOKIE) or "").strip()
         user_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
-        token = admin_token if admin_logout else user_token
-        if token:
+        tokens = {token for token in (admin_token, user_token) if token}
+        if tokens:
             with db() as conn:
-                delete_session(conn, token)
+                for token in tokens:
+                    delete_session(conn, token)
         response = JSONResponse(content={"ok": True})
-        response.delete_cookie(ADMIN_SESSION_COOKIE if admin_logout else SESSION_COOKIE)
+        response.delete_cookie(SESSION_COOKIE)
+        response.delete_cookie(ADMIN_SESSION_COOKIE)
         return response
 
     @app.post("/api/auth/password/setup")
@@ -19914,17 +20027,27 @@ def create_app() -> FastAPI:
         return result
 
     @app.post("/api/persona_dashboard/personas/ai_keywords")
-    def api_persona_dashboard_persona_ai_keywords(payload: PersonaDashboardPersonaAiKeywordsPayload, user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_persona_ai_keywords(
+        payload: PersonaDashboardPersonaAiKeywordsPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
         return _run_billable_operation(
             user,
             ref_type="persona_ai_keywords",
             sku="basic_text_post",
             quantity=1,
             operation=lambda: _persona_dashboard_suggest_keywords(payload),
+            idempotency_key=str(request.headers.get("idempotency-key") or ""),
+            request_fingerprint=_persona_ai_request_fingerprint(payload),
         )
 
     @app.post("/api/persona_dashboard/personas/ai_create")
-    def api_persona_dashboard_persona_ai_create(payload: PersonaDashboardPersonaAiCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_persona_ai_create(
+        payload: PersonaDashboardPersonaAiCreatePayload,
+        request: Request,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
         with TENANT_RESOURCE_LIFECYCLE_LOCK:
             _require_active_workspace_user(user)
             result = _run_billable_operation(
@@ -19936,6 +20059,8 @@ def create_app() -> FastAPI:
                     user,
                     lambda: _persona_dashboard_create_persona_with_ai(payload),
                 ),
+                idempotency_key=str(request.headers.get("idempotency-key") or ""),
+                request_fingerprint=_persona_ai_request_fingerprint(payload),
             )
         return result
 
