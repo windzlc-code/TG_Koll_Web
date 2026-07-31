@@ -118,13 +118,25 @@ class PersonaDashboardApiTests(unittest.TestCase):
         session.get.return_value = response
         with (
             mock.patch.object(server.requests, "Session", return_value=session),
-            mock.patch.object(server, "_probe_threads_live_auth_with_browser", return_value={"ok": True, "status": "verified"}),
+            mock.patch.object(
+                server,
+                "_probe_threads_live_auth_with_browser",
+                return_value={
+                    "ok": True,
+                    "status": "verified",
+                    "searchUsable": True,
+                    "searchStatus": "available",
+                    "searchReason": "Threads search GraphQL returned 200",
+                },
+            ),
         ):
             state = server._sentiment_threads_live_auth_state(profile, cookies)
 
         self.assertTrue(state["liveAuthUsable"])
         self.assertEqual(state["liveAuthStatus"], "verified")
         self.assertEqual(state["liveAuthAction"], "keep")
+        self.assertTrue(state["liveSearchUsable"])
+        self.assertEqual(state["liveSearchStatus"], "available")
 
     def test_sentiment_cookie_expiry_normalizes_milliseconds_before_live_probe(self):
         milliseconds = 1_825_453_191_068
@@ -219,6 +231,38 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(state["liveAuthStatus"], "pending_manual_check")
         self.assertIsNone(state["liveAuthUsable"])
         self.assertEqual(state["liveAuthAction"], "manual-refresh")
+        self.assertEqual(state["liveSearchStatus"], "pending_manual_check")
+        self.assertIsNone(state["liveSearchUsable"])
+
+    def test_instagram_live_auth_and_search_availability_are_reported_separately(self):
+        profile = {"key": "instagram", "platform": "instagram"}
+        cookies = [
+            {
+                "name": "sessionid",
+                "value": "instagram-session-with-blocked-search",
+                "domain": ".instagram.com",
+                "path": "/",
+                "expires": 1_893_456_000,
+            }
+        ]
+        server._SENTIMENT_INSTAGRAM_LIVE_AUTH_CACHE.clear()
+        with mock.patch.object(
+            server,
+            "_probe_instagram_live_auth_with_browser",
+            return_value={
+                "ok": True,
+                "status": "verified",
+                "searchUsable": False,
+                "searchStatus": "unavailable",
+                "searchReason": "Instagram search returned 403",
+            },
+        ):
+            state = server._sentiment_instagram_live_auth_state(profile, cookies, force=True)
+
+        self.assertTrue(state["liveAuthUsable"])
+        self.assertEqual(state["liveAuthStatus"], "verified")
+        self.assertFalse(state["liveSearchUsable"])
+        self.assertEqual(state["liveSearchStatus"], "unavailable")
 
     def test_threads_profile_keeps_saved_state_separate_from_live_usability(self):
         profile = {

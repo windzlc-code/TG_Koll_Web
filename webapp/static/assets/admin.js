@@ -2770,7 +2770,7 @@ function sentimentCookieStatusDetails(profile) {
   let loginState;
   if (reportsLiveAuth) {
     loginState = liveStatus === "verified"
-      ? { value: "实时可用", state: "ready" }
+      ? { value: "登录有效", state: "ready" }
       : liveStatus === "invalid" || liveStatus === "missing_sessionid"
         ? { value: "登录已失效", state: "missing" }
         : liveStatus === "probe_failed"
@@ -2789,6 +2789,21 @@ function sentimentCookieStatusDetails(profile) {
   } else {
     loginState = { value: "未获取", state: "inactive" };
   }
+  const liveSearchStatus = String(profile?.liveSearchStatus || "").trim();
+  let liveSearchState;
+  if (!reportsLiveAuth) {
+    liveSearchState = { value: "未检测", state: "inactive" };
+  } else if (liveSearchStatus === "available" || profile?.liveSearchUsable === true) {
+    liveSearchState = { value: "可用", state: "ready" };
+  } else if (liveSearchStatus === "unavailable" || profile?.liveSearchUsable === false) {
+    liveSearchState = { value: "不可用", state: "missing" };
+  } else if (liveSearchStatus === "limited") {
+    liveSearchState = { value: "平台限流", state: "warning" };
+  } else if (liveSearchStatus === "probe_failed") {
+    liveSearchState = { value: "检测异常", state: "warning" };
+  } else {
+    liveSearchState = { value: "待手动检测", state: "warning" };
+  }
   const items = [
     {
       label: "Cookie",
@@ -2802,6 +2817,7 @@ function sentimentCookieStatusDetails(profile) {
     },
     { label: "登录状态", ...loginState },
   ];
+  if (reportsLiveAuth) items.push({ label: "实时热点搜索", ...liveSearchState });
   return {
     items,
     hint: sentimentCookieActionLabel(
@@ -2809,7 +2825,9 @@ function sentimentCookieStatusDetails(profile) {
         ? (reportsLiveAuth ? profile?.liveAuthAction : profile?.recommendedAction)
         : "authorize-profile",
     ),
-    liveMessage: reportsLiveAuth ? String(profile?.liveAuthMessage || "").trim() : "",
+    liveMessage: reportsLiveAuth
+      ? String(profile?.liveSearchMessage || profile?.liveAuthMessage || "").trim()
+      : "",
     checkedAt,
   };
 }

@@ -78,6 +78,89 @@ function buildChromiumLaunchOptions() {
   };
 }
 
+function searchProbeResult(status, reason, httpStatus = null) {
+  const searchUsable = status === "available" ? true : status === "unavailable" ? false : null;
+  return {
+    searchUsable,
+    searchStatus: status,
+    searchReason: reason,
+    ...(Number.isFinite(httpStatus) ? { searchHttpStatus: httpStatus } : {}),
+  };
+}
+
+async function probeInstagramSearch(page) {
+  const result = await page.evaluate(async () => {
+    try {
+      const response = await fetch("/api/v1/tags/web_info/?tag_name=news", {
+        credentials: "include",
+        headers: {
+          "x-ig-app-id": "936619743392459",
+          "x-requested-with": "XMLHttpRequest",
+        },
+      });
+      return { status: response.status };
+    } catch (error) {
+      return { status: 0, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+  if (result.status >= 200 && result.status < 300) {
+    return searchProbeResult("available", `Instagram search returned ${result.status}`, result.status);
+  }
+  if (result.status === 429) {
+    return searchProbeResult("limited", "Instagram search is rate limited", result.status);
+  }
+  if (result.status === 401 || result.status === 403) {
+    return searchProbeResult("unavailable", `Instagram search returned ${result.status}`, result.status);
+  }
+  return searchProbeResult("probe_failed", result.error || `Instagram search returned ${result.status || "no response"}`, result.status);
+}
+
+async function probeThreadsSearch(page, loginWallPattern) {
+  const graphqlStatuses = [];
+  const onResponse = (response) => {
+    const responseUrl = response.url();
+    if (responseUrl.includes("/graphql/query") || responseUrl.includes("/api/graphql")) {
+      graphqlStatuses.push(response.status());
+    }
+  };
+  page.on("response", onResponse);
+  const searchUrl = `https://www.threads.com/search?q=${encodeURIComponent("news")}&filter=recent`;
+  try {
+    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => null);
+    await page.waitForTimeout(2200);
+    const bodyText = await page.locator("body").innerText({ timeout: 5000 }).catch(() => "");
+    const currentUrl = page.url();
+    if (loginWallPattern.test(`${currentUrl}\n${bodyText}`)) {
+      return searchProbeResult("unavailable", "Threads search redirected to login");
+    }
+    if (graphqlStatuses.some((status) => status === 429)) {
+      return searchProbeResult("limited", "Threads search is rate limited", 429);
+    }
+    if (graphqlStatuses.some((status) => status === 401 || status === 403)) {
+      return searchProbeResult("unavailable", "Threads search authorization was rejected");
+    }
+    const successfulGraphql = graphqlStatuses.find((status) => status >= 200 && status < 300);
+    if (successfulGraphql) {
+      return searchProbeResult("available", `Threads search GraphQL returned ${successfulGraphql}`, successfulGraphql);
+    }
+    const pageEvidence = await page.evaluate(() => {
+      const hydration = Array.from(document.scripts)
+        .map((script) => script.textContent || "")
+        .join("\n");
+      return {
+        postLinks: document.querySelectorAll('a[href*="/post/"]').length,
+        hasSearchPayload: /text_post_app_info|like_count|search_results/i.test(hydration),
+      };
+    }).catch(() => ({ postLinks: 0, hasSearchPayload: false }));
+    if (pageEvidence.postLinks > 0 || pageEvidence.hasSearchPayload) {
+      return searchProbeResult("available", "Threads search results were rendered");
+    }
+    return searchProbeResult("probe_failed", "Threads search returned no verifiable result payload");
+  } finally {
+    page.off("response", onResponse);
+  }
+}
+
 async function main() {
   const input = JSON.parse(await readStdin() || "{}");
   const platform = String(input.platform || "threads").trim().toLowerCase() === "instagram" ? "instagram" : "threads";
@@ -123,12 +206,19 @@ async function main() {
     const refreshedCookies = await context.cookies(settings.cookieUrls);
     const loginWall = settings.loginWall.test(`${title}\n${url}\n${text}`);
     const retained = hasPlatformSession(refreshedCookies, settings.domains);
+    const authenticated = !loginWall && retained;
+    const searchProbe = authenticated
+      ? platform === "instagram"
+        ? await probeInstagramSearch(page)
+        : await probeThreadsSearch(page, settings.loginWall)
+      : searchProbeResult("unavailable", "Login session is unavailable");
     await context.close().catch(() => undefined);
     console.log(JSON.stringify({
-      ok: !loginWall && retained,
-      status: !loginWall && retained ? "verified" : "invalid",
+      ok: authenticated,
+      status: authenticated ? "verified" : "invalid",
       reason: loginWall ? "login wall detected" : retained ? "session retained" : "session not retained",
       url,
+      ...searchProbe,
     }));
   } finally {
     await browser?.close?.().catch(() => undefined);

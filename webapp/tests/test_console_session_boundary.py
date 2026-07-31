@@ -159,12 +159,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               cookieNames: ["datr", "sessionid"],
               validCookieNames: ["datr", "sessionid"],
               liveAuthStatus: "verified",
+              liveSearchStatus: "available",
+              liveSearchUsable: true,
               liveAuthCheckedAt: "2026-07-31T00:00:00Z",
             }});
             assert.deepEqual(instagram.items.map((item) => [item.label, item.value, item.state]), [
               ["Cookie", "已保存 16", "ready"],
               ["sessionid", "已保存", "ready"],
-              ["登录状态", "实时可用", "ready"],
+              ["登录状态", "登录有效", "ready"],
+              ["实时热点搜索", "可用", "ready"],
             ]);
 
             const instagramPending = sentimentCookieStatusDetails({{
@@ -176,6 +179,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             }});
             assert.equal(instagramPending.items[2].value, "待实时检测");
             assert.equal(instagramPending.items[2].state, "warning");
+            assert.equal(instagramPending.items[3].value, "待手动检测");
+            assert.equal(instagramPending.items[3].state, "warning");
 
             const instagramManual = sentimentCookieStatusDetails({{
               key: "instagram",
@@ -187,6 +192,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             }});
             assert.equal(instagramManual.items[2].value, "待手动检测");
             assert.equal(instagramManual.items[2].state, "warning");
+            assert.equal(instagramManual.items[3].value, "待手动检测");
+            assert.equal(instagramManual.items[3].state, "warning");
 
             const facebook = sentimentCookieStatusDetails({{
               key: "facebooksearch",
@@ -206,11 +213,24 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
     def test_cookie_status_live_probe_only_runs_from_manual_refresh(self):
         admin_markup = (REPO_ROOT / "webapp" / "static" / "admin.html").read_text(encoding="utf-8")
         self.assertNotIn("SENTIMENT_COOKIE_POLL_INTERVAL_MS", self.admin_source)
+        self.assertNotIn("setInterval(loadSentimentCookieStatus", self.admin_source)
         self.assertIn('await loadSentimentCookieProfiles({ force: true });', self.admin_source)
         self.assertIn('? "?force=true" : ""', self.admin_source)
         self.assertNotIn("自动更新中", self.admin_source)
         self.assertNotIn("自动更新中", admin_markup)
         self.assertIn("平台状态仅在管理员点击", admin_markup)
+
+    def test_cookie_status_exposes_real_hot_search_availability(self):
+        self.assertIn('label: "实时热点搜索"', self.admin_source)
+        self.assertIn('value: "可用"', self.admin_source)
+        self.assertIn('value: "不可用"', self.admin_source)
+
+    def test_sentiment_browser_probe_checks_real_search_paths(self):
+        probe_source = (REPO_ROOT / "tool_r18" / "scripts" / "probe-threads-auth.mjs").read_text(encoding="utf-8")
+        self.assertIn("/search?q=", probe_source)
+        self.assertIn("/api/v1/tags/web_info/?tag_name=", probe_source)
+        self.assertIn("searchUsable", probe_source)
+        self.assertIn("searchStatus", probe_source)
 
     def test_personal_profile_is_a_separate_bright_page_with_svg_upload(self):
         for removed_console_profile_marker in (

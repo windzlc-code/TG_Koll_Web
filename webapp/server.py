@@ -1994,6 +1994,35 @@ def _probe_instagram_live_auth_with_browser(cookies: list[dict[str, Any]]) -> di
     return _probe_sentiment_live_auth_with_browser("instagram", cookies)
 
 
+def _sentiment_live_search_fields(
+    status: str,
+    usable: bool | None,
+    checked_at: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "liveSearchStatus": status,
+        "liveSearchUsable": usable,
+        "liveSearchCheckedAt": checked_at,
+        "liveSearchMessage": message,
+    }
+
+
+def _sentiment_live_search_fields_from_probe(
+    browser_probe: dict[str, Any],
+    checked_at: str,
+) -> dict[str, Any]:
+    status = str(browser_probe.get("searchStatus") or "probe_failed").strip()
+    usable = browser_probe.get("searchUsable")
+    if usable is True or status == "available":
+        return _sentiment_live_search_fields("available", True, checked_at, "实时热点搜索链路可用。")
+    if usable is False or status == "unavailable":
+        return _sentiment_live_search_fields("unavailable", False, checked_at, "实时热点搜索链路不可用，请重新同步授权后重试。")
+    if status == "limited":
+        return _sentiment_live_search_fields("limited", None, checked_at, "实时热点搜索当前受平台限流，请稍后手动重试。")
+    return _sentiment_live_search_fields("probe_failed", None, checked_at, "实时热点搜索检测异常，请点击刷新状态重试。")
+
+
 def _sentiment_threads_live_auth_state(
     profile: dict[str, Any],
     cookies: list[dict[str, Any]],
@@ -2010,6 +2039,7 @@ def _sentiment_threads_live_auth_state(
             "liveAuthCheckedAt": checked_at,
             "liveAuthMessage": "Threads sessionid 未授权；请登录可用账号后等待授权助手自动同步，或点击同步当前标签页。",
             "liveAuthAction": "reauthorize-profile",
+            **_sentiment_live_search_fields("unavailable", False, checked_at, "缺少有效登录凭证，实时热点搜索不可用。"),
         }
     cache_key = _sentiment_threads_live_auth_cache_key(profile, active_cookies)
     cached = _SENTIMENT_THREADS_LIVE_AUTH_CACHE.get(cache_key)
@@ -2022,6 +2052,7 @@ def _sentiment_threads_live_auth_state(
             "liveAuthCheckedAt": "",
             "liveAuthMessage": "Threads 登录凭证已保存，请点击“刷新状态”进行实时检测。",
             "liveAuthAction": "manual-refresh",
+            **_sentiment_live_search_fields("pending_manual_check", None, "", "等待管理员手动检测实时热点搜索。"),
         }
 
     try:
@@ -2050,6 +2081,7 @@ def _sentiment_threads_live_auth_state(
                 "liveAuthCheckedAt": checked_at,
                 "liveAuthMessage": "Threads sessionid 已保存，但实时检测不可用；请退出受限/失效账号，重新登录可用账号并等待授权助手自动同步。",
                 "liveAuthAction": "reauthorize-profile",
+                **_sentiment_live_search_fields("unavailable", False, checked_at, "登录状态已失效，实时热点搜索不可用。"),
             }
         else:
             browser_probe = _probe_threads_live_auth_with_browser(active_cookies)
@@ -2062,6 +2094,7 @@ def _sentiment_threads_live_auth_state(
                     "liveAuthCheckedAt": checked_at,
                     "liveAuthMessage": "Threads sessionid 已通过真实浏览器登录态检测；后台可以用该账号进行真实抓取。",
                     "liveAuthAction": "keep",
+                    **_sentiment_live_search_fields_from_probe(browser_probe, checked_at),
                 }
             elif probe_status == "invalid" or browser_probe.get("ok") is False:
                 result = {
@@ -2070,6 +2103,7 @@ def _sentiment_threads_live_auth_state(
                     "liveAuthCheckedAt": checked_at,
                     "liveAuthMessage": "sessionid 已保存，但当前登录已失效；请重新登录后同步。",
                     "liveAuthAction": "reauthorize-profile",
+                    **_sentiment_live_search_fields("unavailable", False, checked_at, "登录状态已失效，实时热点搜索不可用。"),
                 }
             else:
                 if probe_reason:
@@ -2080,6 +2114,7 @@ def _sentiment_threads_live_auth_state(
                     "liveAuthCheckedAt": checked_at,
                     "liveAuthMessage": "sessionid 已保存，实时检测未完成，请点击“刷新状态”重试。",
                     "liveAuthAction": "manual-refresh",
+                    **_sentiment_live_search_fields("probe_failed", None, checked_at, "实时热点搜索检测异常，请点击刷新状态重试。"),
                 }
     except Exception as exc:
         logger.warning("Threads browser auth check failed: %s", exc)
@@ -2089,6 +2124,7 @@ def _sentiment_threads_live_auth_state(
             "liveAuthCheckedAt": checked_at,
             "liveAuthMessage": "sessionid 已保存，实时检测未完成，请点击“刷新状态”重试。",
             "liveAuthAction": "manual-refresh",
+            **_sentiment_live_search_fields("probe_failed", None, checked_at, "实时热点搜索检测异常，请点击刷新状态重试。"),
         }
     _SENTIMENT_THREADS_LIVE_AUTH_CACHE[cache_key] = {
         "expiresAt": time.time() + _SENTIMENT_THREADS_LIVE_AUTH_CACHE_TTL_SECONDS,
@@ -2113,6 +2149,7 @@ def _sentiment_instagram_live_auth_state(
             "liveAuthCheckedAt": checked_at,
             "liveAuthMessage": "Instagram 尚未取得有效登录凭证，请重新登录后同步授权。",
             "liveAuthAction": "reauthorize-profile",
+            **_sentiment_live_search_fields("unavailable", False, checked_at, "缺少有效登录凭证，实时热点搜索不可用。"),
         }
 
     cache_key = _sentiment_threads_live_auth_cache_key(profile, active_cookies)
@@ -2126,6 +2163,7 @@ def _sentiment_instagram_live_auth_state(
             "liveAuthCheckedAt": "",
             "liveAuthMessage": "Instagram 登录凭证已保存，请点击“刷新状态”进行实时检测。",
             "liveAuthAction": "manual-refresh",
+            **_sentiment_live_search_fields("pending_manual_check", None, "", "等待管理员手动检测实时热点搜索。"),
         }
 
     browser_probe = _probe_instagram_live_auth_with_browser(active_cookies)
@@ -2138,6 +2176,7 @@ def _sentiment_instagram_live_auth_state(
             "liveAuthCheckedAt": checked_at,
             "liveAuthMessage": "Instagram 实时登录状态已验证，可用于实时搜索。",
             "liveAuthAction": "keep",
+            **_sentiment_live_search_fields_from_probe(browser_probe, checked_at),
         }
     elif probe_status == "invalid" or browser_probe.get("ok") is False:
         result = {
@@ -2146,6 +2185,7 @@ def _sentiment_instagram_live_auth_state(
             "liveAuthCheckedAt": checked_at,
             "liveAuthMessage": "Instagram Cookie 已保存，但实时登录状态已失效，请重新登录后同步。",
             "liveAuthAction": "reauthorize-profile",
+            **_sentiment_live_search_fields("unavailable", False, checked_at, "登录状态已失效，实时热点搜索不可用。"),
         }
     else:
         if probe_reason:
@@ -2156,6 +2196,7 @@ def _sentiment_instagram_live_auth_state(
             "liveAuthCheckedAt": checked_at,
             "liveAuthMessage": "Instagram 实时登录状态检测异常，当前状态尚未确认，请点击“刷新状态”重试。",
             "liveAuthAction": "manual-refresh",
+            **_sentiment_live_search_fields("probe_failed", None, checked_at, "实时热点搜索检测异常，请点击刷新状态重试。"),
         }
     _SENTIMENT_INSTAGRAM_LIVE_AUTH_CACHE[cache_key] = {
         "expiresAt": time.time() + _SENTIMENT_THREADS_LIVE_AUTH_CACHE_TTL_SECONDS,
