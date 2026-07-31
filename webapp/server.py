@@ -1521,12 +1521,12 @@ def _recover_running_persona_post_generation_task(
     reservation_id: str,
 ) -> bool:
     archive_id = str(payload.get("archive_id") or "").strip()
-    expected_post_ids = {
+    post_ids = {
         str(post_id or "").strip()
         for post_id in (output.get("post_ids") if isinstance(output.get("post_ids"), list) else [])
         if str(post_id or "").strip()
     }
-    if not archive_id or not reservation_id:
+    if not archive_id or not post_ids or not reservation_id:
         return False
     try:
         _path, _raw, archives = _persona_archive_source_for_write(archive_id)
@@ -1534,33 +1534,17 @@ def _recover_running_persona_post_generation_task(
     except Exception:
         return False
     posts = archive.get("posts") if isinstance((archive or {}).get("posts"), list) else []
-    operation_posts = [
-        post
+    durable_ids = {
+        str(post.get("id") or "").strip()
         for post in posts
         if (
             isinstance(post, dict)
             and str(post.get("generationOperationId") or "").strip() == str(task_id)
-            and str(post.get("id") or "").strip()
+            and str(post.get("id") or "").strip() in post_ids
         )
-    ]
-    operation_post_ids = {str(post.get("id") or "").strip() for post in operation_posts}
-    if not operation_post_ids or (expected_post_ids and operation_post_ids != expected_post_ids):
+    }
+    if durable_ids != post_ids:
         return False
-    durable_ids = operation_post_ids
-    platform = str(payload.get("platform") or "").strip()
-    if platform:
-        _set_persona_archive_posts_platform(archive_id, durable_ids, platform)
-        try:
-            _path, _raw, archives = _persona_archive_source_for_write(archive_id)
-            archive = _find_persona_archive(archives, archive_id)
-            posts = archive.get("posts") if isinstance((archive or {}).get("posts"), list) else []
-            operation_posts = [
-                post
-                for post in posts
-                if isinstance(post, dict) and str(post.get("id") or "").strip() in durable_ids
-            ]
-        except Exception:
-            return False
     billing = commercial_billing.settle_reservation(
         conn,
         reservation_id,
@@ -1568,13 +1552,6 @@ def _recover_running_persona_post_generation_task(
         success=True,
     )
     recovered_output = dict(output)
-    recovered_output.update({
-        "ok": True,
-        "persona_id": archive_id,
-        "generated_count": len(durable_ids),
-        "post_ids": [str(post.get("id") or "").strip() for post in operation_posts],
-        "posts": [dict(post) for post in operation_posts],
-    })
     recovered_output["billing"] = billing
     now = _now_ts()
     conn.execute(
@@ -10471,26 +10448,6 @@ def _enqueue_persona_post_generation_task(
 
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        alias = conn.execute(
-            """
-            SELECT request_hash, task_id
-            FROM task_idempotency_keys
-            WHERE user_id = ? AND task_type = 'persona_post_generation' AND key_digest = ?
-            """,
-            (user_id, key_digest),
-        ).fetchone()
-        if alias is not None:
-            if str(alias["request_hash"] or "") != request_hash:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "IDEMPOTENCY_KEY_REUSED",
-                        "message": "该请求标识已用于不同的推文生成参数。",
-                    },
-                )
-            aliased_task = conn.execute("SELECT id FROM tasks WHERE id = ?", (str(alias["task_id"]),)).fetchone()
-            if aliased_task is not None:
-                return str(aliased_task["id"]), True
         existing = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if existing is not None:
             existing_payload = _json_loads(existing["input_json"], {})
@@ -10522,14 +10479,6 @@ def _enqueue_persona_post_generation_task(
             active_payload = _json_loads(active["input_json"], {})
             if str((active_payload or {}).get("archive_id") or "").strip() == clean_archive_id:
                 if str((active_payload or {}).get("_request_hash") or "") == request_hash:
-                    conn.execute(
-                        """
-                        INSERT INTO task_idempotency_keys(
-                          user_id, task_type, key_digest, request_hash, task_id, created_at
-                        ) VALUES (?, 'persona_post_generation', ?, ?, ?, ?)
-                        """,
-                        (user_id, key_digest, request_hash, str(active["id"]), _now_ts()),
-                    )
                     return str(active["id"]), True
                 raise HTTPException(
                     status_code=409,
@@ -10552,14 +10501,6 @@ def _enqueue_persona_post_generation_task(
         )
         effective_payload["_billing_reservation_id"] = str(billing_reservation.get("id") or "")
         _insert_task_record_in_transaction(conn, task_id, user_id, "persona_post_generation", effective_payload)
-        conn.execute(
-            """
-            INSERT INTO task_idempotency_keys(
-              user_id, task_type, key_digest, request_hash, task_id, created_at
-            ) VALUES (?, 'persona_post_generation', ?, ?, ?, ?)
-            """,
-            (user_id, key_digest, request_hash, task_id, _now_ts()),
-        )
         queued_payload = effective_payload
 
     try:
@@ -10878,6 +10819,27 @@ class MfaSetupVerifyPayload(BaseModel):
 
 class MfaVerifyPayload(BaseModel):
     code: str = Field(min_length=6, max_length=32)
+
+
+class EmailBindingConfirmPayload(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    challenge_id: str = Field(min_length=8, max_length=120)
+    verification_code: str = Field(min_length=4, max_length=16)
+
+
+class EmailTwoFactorPayload(BaseModel):
+    enabled: bool
+    current_password: str = Field(min_length=1, max_length=256)
+
+
+class MfaDisablePayload(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    code: str = Field(min_length=6, max_length=32)
+
+
+class SelfDeletePayload(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    confirmation: str = Field(min_length=1, max_length=64)
 
 
 class CustomerGroupPayload(BaseModel):
@@ -13430,7 +13392,6 @@ def _generate_persona_archive_posts(
     result = _run_persona_workflow_cli({
         "action": "generate-posts",
         "archiveId": clean_id,
-        "generationOperationId": str(operation_id or "").strip(),
         "count": count,
         "customInstruction": _build_persona_generate_instruction(payload),
         "selectedMemoryEntryIds": [str(item or "").strip() for item in (payload.selected_memory_ids or []) if str(item or "").strip()],
@@ -18690,6 +18651,7 @@ def create_app() -> FastAPI:
             "registration": "registration",
             "set_password": "password_setup",
             "password_setup": "password_setup",
+            "email_binding": "email_binding",
         }
         purpose = aliases.get(clean)
         if purpose is None:
@@ -18700,6 +18662,7 @@ def create_app() -> FastAPI:
     def api_send_email_verification(payload: EmailVerificationSendPayload, request: Request):
         _require_same_origin_when_supplied(request)
         purpose = _verification_purpose(payload.purpose)
+        challenge_user_id: int | None = None
         try:
             email = normalize_email(payload.email)
         except ValueError as exc:
@@ -18725,12 +18688,39 @@ def create_app() -> FastAPI:
                             "message": "该电子邮箱已注册，请返回登录或使用其他邮箱。",
                         },
                     )
-            else:
-                token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
+            elif purpose == "email_binding":
+                token = session_token_for_request(
+                    request,
+                    request.cookies.get(SESSION_COOKIE),
+                    request.cookies.get(ADMIN_SESSION_COOKIE),
+                )
                 current_user = _get_session_user_allowing_password_change(
                     token,
-                    expected_admin_session=False,
+                    expected_admin_session=request_uses_admin_session(request),
                 )
+                challenge_user_id = int(current_user["id"])
+                existing = conn.execute(
+                    "SELECT user_id FROM user_auth_emails WHERE email_normalized = ? COLLATE NOCASE",
+                    (email,),
+                ).fetchone()
+                if existing is not None and int(existing["user_id"] or 0) != challenge_user_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"code": "email_already_registered", "message": "该电子邮箱已绑定其他账号。"},
+                    )
+                if not email_delivery_available():
+                    raise HTTPException(status_code=503, detail="email verification is not available")
+            else:
+                token = session_token_for_request(
+                    request,
+                    request.cookies.get(SESSION_COOKIE),
+                    request.cookies.get(ADMIN_SESSION_COOKIE),
+                )
+                current_user = _get_session_user_allowing_password_change(
+                    token,
+                    expected_admin_session=request_uses_admin_session(request),
+                )
+                challenge_user_id = int(current_user["id"])
                 owned = conn.execute(
                     """
                     SELECT 1 FROM user_auth_emails
@@ -18752,6 +18742,7 @@ def create_app() -> FastAPI:
                     purpose,
                     _request_client_ip(request),
                     now,
+                    user_id=challenge_user_id,
                 )
         except VerificationRateLimitError as exc:
             raise HTTPException(
@@ -18787,6 +18778,83 @@ def create_app() -> FastAPI:
             "expires_in": max(expires_at - now, 0),
             "resend_after": VERIFICATION_RESEND_SECONDS,
         }
+
+    @app.post("/api/auth/email-binding/confirm")
+    def api_confirm_email_binding(
+        payload: EmailBindingConfirmPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(_get_user_allowing_password_change),
+    ):
+        _require_same_origin(request)
+        if _is_admin_workspace(user):
+            raise HTTPException(status_code=403, detail="管理员工作区不能修改客户邮箱")
+        user_id = int(user.get("id") or 0)
+        try:
+            email = normalize_email(payload.email)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="email format is invalid") from exc
+        now = _now_ts()
+        current_token = session_token_for_request(
+            request,
+            request.cookies.get(SESSION_COOKIE),
+            request.cookies.get(ADMIN_SESSION_COOKIE),
+        )
+        with db() as conn:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                verify_and_consume_challenge(
+                    conn,
+                    payload.challenge_id,
+                    email,
+                    "email_binding",
+                    payload.verification_code,
+                    now,
+                    expected_user_id=user_id,
+                    request_ip=_request_client_ip(request),
+                )
+                existing = conn.execute(
+                    "SELECT user_id FROM user_auth_emails WHERE email_normalized = ? COLLATE NOCASE",
+                    (email,),
+                ).fetchone()
+                if existing is not None and int(existing["user_id"] or 0) != user_id:
+                    raise HTTPException(status_code=409, detail="该电子邮箱已绑定其他账号")
+                before = conn.execute(
+                    "SELECT email_normalized FROM user_auth_emails WHERE user_id = ? AND is_primary = 1 LIMIT 1",
+                    (user_id,),
+                ).fetchone()
+                conn.execute("DELETE FROM user_auth_emails WHERE user_id = ?", (user_id,))
+                conn.execute(
+                    """
+                    INSERT INTO user_auth_emails(
+                      user_id, email_normalized, email_original, verified_at,
+                      is_primary, login_enabled, source, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 1, 1, 'email_binding', ?, ?)
+                    """,
+                    (user_id, email, str(payload.email).strip(), now, now, now),
+                )
+                conn.execute("UPDATE users SET email = ?, updated_at = ? WHERE id = ?", (email, now, user_id))
+                if current_token:
+                    conn.execute(
+                        "UPDATE sessions SET revoked_at = ?, revoke_reason = 'email_binding_changed' "
+                        "WHERE user_id = ? AND token <> ? AND revoked_at = 0",
+                        (now, user_id, session_storage_token(current_token)),
+                    )
+                governance.record_audit(
+                    conn,
+                    actor_user_id=user_id,
+                    target_user_id=user_id,
+                    action="account.email_binding_changed",
+                    resource_type="user_auth_email",
+                    resource_id=str(user_id),
+                    before={"email": str(before["email_normalized"] or "") if before else ""},
+                    after={"email": email, "other_sessions_revoked": True},
+                    risk_level="high",
+                    **governance.request_context(request),
+                )
+            except VerificationChallengeError as exc:
+                conn.commit()
+                raise HTTPException(status_code=400, detail={"code": exc.code, "message": str(exc)}) from exc
+        return {"ok": True, "verified_email": email, "email_verified_at": now}
 
     def _revoke_presented_auth_sessions(
         conn: sqlite3.Connection,
@@ -19783,6 +19851,7 @@ def create_app() -> FastAPI:
                     (int(user["id"]),),
                 ).fetchone()
             mfa_enabled = bool(mfa_row and int(mfa_row["enabled_at"] or 0) > 0)
+            email_2fa_enabled = bool(int(user.get("email_2fa_enabled") or 0))
             mfa_required = bool(
                 is_admin
                 and mfa_row
@@ -19815,6 +19884,68 @@ def create_app() -> FastAPI:
             if int(user.get("must_change_password") or 0) == 1 and _password_expiry(user) <= _now_ts():
                 raise HTTPException(status_code=403, detail=_password_change_required_detail(user))
 
+            email_2fa_required = bool(email_2fa_enabled and not mfa_enabled)
+            if email_2fa_required:
+                if security_method == "email":
+                    if not primary_email:
+                        raise HTTPException(
+                            status_code=409,
+                            detail={"code": "SECURITY_EMAIL_UNAVAILABLE", "message": "当前账号没有可用的验证邮箱。"},
+                        )
+                    if not payload.security_challenge_id or not payload.security_verification_code:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={"code": "SECURITY_EMAIL_CODE_REQUIRED", "message": "请输入邮箱验证码。"},
+                        )
+                    try:
+                        verify_and_consume_challenge(
+                            conn,
+                            payload.security_challenge_id,
+                            primary_email,
+                            "login_security",
+                            payload.security_verification_code,
+                            _now_ts(),
+                            expected_user_id=int(user["id"]),
+                            request_ip=client_ip,
+                        )
+                    except VerificationChallengeError as exc:
+                        conn.commit()
+                        raise HTTPException(
+                            status_code=400,
+                            detail={"code": exc.code, "message": str(exc)},
+                        ) from exc
+                    high_risk_verified = True
+                    high_risk_verification_method = "email"
+                else:
+                    if not primary_email or not email_delivery_available():
+                        raise HTTPException(
+                            status_code=503,
+                            detail={"code": "SECURITY_EMAIL_UNAVAILABLE", "message": "邮箱二步验证暂时不可用。"},
+                        )
+                    try:
+                        verification = _issue_login_security_challenge(
+                            conn,
+                            user_id=int(user["id"]),
+                            email=primary_email,
+                            client_ip=client_ip,
+                        )
+                    except VerificationRateLimitError as exc:
+                        raise HTTPException(status_code=429, detail={"code": exc.code, "message": str(exc)}) from exc
+                    except (VerificationDeliveryError, AuthEmailConfigurationError, VerificationChallengeError, ValueError) as exc:
+                        raise HTTPException(
+                            status_code=503,
+                            detail={"code": "SECURITY_EMAIL_DELIVERY_FAILED", "message": "邮箱验证码暂时无法发送，请稍后重试。"},
+                        ) from exc
+                    verification.update({"email_2fa": True, "mfa_available": mfa_enabled})
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "SECURITY_VERIFICATION_REQUIRED",
+                            "message": "邮箱二步验证已开启，验证码已发送到账号邮箱。",
+                            "verification": verification,
+                        },
+                    )
+
             # Perform the new-device and new-network confirmation before MFA
             # verification. Otherwise the confirmation round-trip would
             # consume a valid TOTP and immediately reject it as a replay.
@@ -19833,7 +19964,7 @@ def create_app() -> FastAPI:
                 and client_ip
                 and not hmac.compare_digest(preflight_login_ip, client_ip)
             )
-            if preflight_device_changed and preflight_ip_changed:
+            if preflight_device_changed and preflight_ip_changed and not high_risk_verified:
                 active_token_rows = conn.execute(
                     "SELECT token FROM sessions WHERE user_id = ? AND revoked_at = 0 AND expires_at > ?",
                     (int(user["id"]), _now_ts()),
@@ -20174,6 +20305,7 @@ def create_app() -> FastAPI:
             "must_change_password": bool(int(user.get("must_change_password") or 0)),
             "password_expires_at": _password_expiry(user),
             "mfa_enabled": mfa_enabled,
+            "email_2fa_enabled": email_2fa_enabled,
             "mfa_required": mfa_required,
             "mfa_required_after": int(mfa_row["required_after"] or 0) if mfa_row else 0,
         }
@@ -20250,6 +20382,8 @@ def create_app() -> FastAPI:
                     "password_setup",
                     payload.verification_code,
                     now,
+                    expected_user_id=int(user["id"]),
+                    request_ip=_request_client_ip(request),
                 )
             except VerificationChallengeError as exc:
                 conn.commit()
@@ -20468,6 +20602,7 @@ def create_app() -> FastAPI:
         return {
             "verified_email": str(email_row["email_normalized"] or "") if email_row else "",
             "email_verified_at": int(email_row["verified_at"] or 0) if email_row else 0,
+            "email_2fa_enabled": bool(int(account.get("email_2fa_enabled") or 0)),
             "password_login_enabled": bool(auth_source["password_login_enabled"]),
             "auth_methods": _user_auth_methods_payload(auth_source),
         }
@@ -20633,19 +20768,151 @@ def create_app() -> FastAPI:
                 "UPDATE user_mfa SET secret_ciphertext = pending_secret_ciphertext, pending_secret_ciphertext = '', enabled_at = ?, last_verified_at = ?, updated_at = ? WHERE user_id = ?",
                 (verified_at, verified_at, verified_at, user_id),
             )
-            if _is_admin(user):
+            governance.record_audit(
+                conn,
+                actor_user_id=user_id,
+                target_user_id=user_id,
+                action="admin.mfa_enabled" if _is_admin(user) else "account.mfa_enabled",
+                resource_type="user_mfa",
+                resource_id=str(user_id),
+                risk_level="medium",
+                **governance.request_context(request),
+            )
+        _clear_auth_rate_limit("mfa_setup_verify", str(user_id))
+        return {"ok": True, "enabled_at": verified_at}
+
+    @app.post("/api/auth/mfa/disable")
+    def api_mfa_disable(
+        payload: MfaDisablePayload,
+        request: Request,
+        user: dict[str, Any] = Depends(_get_user_allowing_password_change),
+    ):
+        _require_same_origin(request)
+        if _is_admin_workspace(user):
+            raise HTTPException(status_code=403, detail="管理员工作区不能修改客户安全设置")
+        user_id = int(user.get("id") or 0)
+        with db() as conn:
+            credential = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,)).fetchone()
+            enabled = conn.execute("SELECT enabled_at FROM user_mfa WHERE user_id = ?", (user_id,)).fetchone()
+        if enabled is None or int(enabled["enabled_at"] or 0) <= 0:
+            return {"ok": True, "enabled": False}
+        if credential is None or not verify_password(payload.current_password, str(credential["password_hash"] or "")):
+            raise HTTPException(status_code=403, detail={"code": "reauthentication_failed", "message": "当前密码错误。"})
+        if not _verify_mfa_code_atomic(user_id, payload.code):
+            raise HTTPException(status_code=403, detail={"code": "mfa_code_invalid", "message": "动态验证码或恢复码错误。"})
+        now = _now_ts()
+        with db() as conn:
+            conn.execute(
+                "UPDATE user_mfa SET secret_ciphertext = '', pending_secret_ciphertext = '', recovery_codes_json = '[]', "
+                "enabled_at = 0, required_after = 0, updated_at = ? WHERE user_id = ?",
+                (now, user_id),
+            )
+            governance.record_audit(
+                conn,
+                actor_user_id=user_id,
+                target_user_id=user_id,
+                action="account.mfa_disabled",
+                resource_type="user_mfa",
+                resource_id=str(user_id),
+                risk_level="high",
+                **governance.request_context(request),
+            )
+        return {"ok": True, "enabled": False}
+
+    @app.put("/api/auth/email-2fa")
+    def api_email_two_factor(
+        payload: EmailTwoFactorPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(_get_user_allowing_password_change),
+    ):
+        _require_same_origin(request)
+        if _is_admin_workspace(user):
+            raise HTTPException(status_code=403, detail="管理员工作区不能修改客户安全设置")
+        user_id = int(user.get("id") or 0)
+        with db() as conn:
+            credential = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,)).fetchone()
+            if credential is None or not verify_password(payload.current_password, str(credential["password_hash"] or "")):
+                raise HTTPException(status_code=403, detail={"code": "reauthentication_failed", "message": "当前密码错误。"})
+            if payload.enabled:
+                email_row = conn.execute(
+                    "SELECT email_normalized FROM user_auth_emails WHERE user_id = ? AND is_primary = 1 AND login_enabled = 1",
+                    (user_id,),
+                ).fetchone()
+                if email_row is None:
+                    raise HTTPException(status_code=409, detail="请先绑定已验证的邮箱")
+                if not email_delivery_available():
+                    raise HTTPException(status_code=503, detail="邮箱验证码服务暂时不可用")
+            now = _now_ts()
+            conn.execute(
+                "UPDATE users SET email_2fa_enabled = ?, updated_at = ? WHERE id = ?",
+                (1 if payload.enabled else 0, now, user_id),
+            )
+            governance.record_audit(
+                conn,
+                actor_user_id=user_id,
+                target_user_id=user_id,
+                action="account.email_2fa_changed",
+                resource_type="user",
+                resource_id=str(user_id),
+                before={"enabled": bool(int(user.get("email_2fa_enabled") or 0))},
+                after={"enabled": bool(payload.enabled)},
+                risk_level="high",
+                **governance.request_context(request),
+            )
+        return {"ok": True, "enabled": bool(payload.enabled)}
+
+    @app.delete("/api/auth/account")
+    def api_delete_own_account(
+        payload: SelfDeletePayload,
+        request: Request,
+        user: dict[str, Any] = Depends(_get_user_allowing_password_change),
+    ):
+        _require_same_origin(request)
+        if _is_admin(user) or _is_admin_workspace(user):
+            raise HTTPException(status_code=403, detail="管理员账号不能使用自助删除")
+        user_id = int(user.get("id") or 0)
+        username = str(user.get("username") or "")
+        if not hmac.compare_digest(str(payload.confirmation or "").strip(), username):
+            raise HTTPException(status_code=400, detail="请输入当前用户名确认删除")
+        if not verify_password(payload.current_password, str(user.get("password_hash") or "")):
+            raise HTTPException(status_code=403, detail="当前密码错误")
+        now = _now_ts()
+        with TENANT_RESOURCE_LIFECYCLE_LOCK:
+            with db() as conn:
+                account_ids = [
+                    str(row["id"] or "").strip()
+                    for row in conn.execute("SELECT id FROM social_accounts WHERE user_id = ?", (user_id,)).fetchall()
+                    if str(row["id"] or "").strip()
+                ]
+                conn.execute(
+                    "UPDATE users SET is_disabled = 1, lifecycle_status = 'deleted', "
+                    "lifecycle_reason = 'self_service_delete', deleted_at = ?, deleted_by = ?, "
+                    "row_version = row_version + 1, updated_at = ? WHERE id = ?",
+                    (now, user_id, now, user_id),
+                )
+                conn.execute(
+                    "UPDATE sessions SET revoked_at = ?, revoke_reason = 'self_service_delete' "
+                    "WHERE user_id = ? AND revoked_at = 0",
+                    (now, user_id),
+                )
                 governance.record_audit(
                     conn,
                     actor_user_id=user_id,
                     target_user_id=user_id,
-                    action="admin.mfa_enabled",
-                    resource_type="user_mfa",
+                    action="user.self_delete",
+                    resource_type="user",
                     resource_id=str(user_id),
-                    risk_level="medium",
+                    reason="self service account deletion",
+                    after={"lifecycle_status": "deleted", "deleted_at": now, "business_data_preserved": True},
+                    risk_level="critical",
                     **governance.request_context(request),
                 )
-        _clear_auth_rate_limit("mfa_setup_verify", str(user_id))
-        return {"ok": True, "enabled_at": verified_at}
+            cancel_all_social_tasks("所属用户已删除账户", user_id=user_id, account_ids=account_ids)
+            _cancel_normal_tasks_for_deleted_user(user_id)
+        response = JSONResponse(content={"ok": True, "deleted": True})
+        response.delete_cookie(SESSION_COOKIE)
+        response.delete_cookie(ADMIN_SESSION_COOKIE)
+        return response
 
     @app.get("/api/account/sessions")
     def api_account_sessions(

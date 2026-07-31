@@ -818,6 +818,8 @@ def init_db() -> None:
               last_login_at INTEGER NOT NULL DEFAULT 0,
               password_login_enabled INTEGER NOT NULL DEFAULT 1
                 CHECK(password_login_enabled IN (0, 1)),
+              email_2fa_enabled INTEGER NOT NULL DEFAULT 0
+                CHECK(email_2fa_enabled IN (0, 1)),
               last_login_method TEXT NOT NULL DEFAULT '',
               must_change_password INTEGER NOT NULL DEFAULT 0,
               password_expires_at INTEGER NOT NULL DEFAULT 0,
@@ -948,24 +950,6 @@ def init_db() -> None:
               FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS task_idempotency_keys (
-              user_id INTEGER NOT NULL,
-              task_type TEXT NOT NULL,
-              key_digest TEXT NOT NULL,
-              request_hash TEXT NOT NULL,
-              task_id TEXT NOT NULL,
-              created_at INTEGER NOT NULL,
-              PRIMARY KEY(user_id, task_type, key_digest),
-              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-              FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_task_idempotency_keys_task_id ON task_idempotency_keys(task_id)"
         )
         conn.execute(
             """
@@ -1323,6 +1307,9 @@ def init_db() -> None:
             "last_login_at": "INTEGER NOT NULL DEFAULT 0",
             "password_login_enabled": (
                 "INTEGER NOT NULL DEFAULT 1 CHECK(password_login_enabled IN (0, 1))"
+            ),
+            "email_2fa_enabled": (
+                "INTEGER NOT NULL DEFAULT 0 CHECK(email_2fa_enabled IN (0, 1))"
             ),
             "last_login_method": "TEXT NOT NULL DEFAULT ''",
             "must_change_password": "INTEGER NOT NULL DEFAULT 0",
