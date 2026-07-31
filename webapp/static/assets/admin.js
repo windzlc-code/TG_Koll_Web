@@ -1627,7 +1627,6 @@ function closeModelPickersOnOutsideClick(target) {
 }
 
 const TASK_POLL_INTERVAL_MS = 10000;
-const SENTIMENT_COOKIE_POLL_INTERVAL_MS = 10000;
 const GOVERNANCE_POLL_INTERVAL_MS = 30000;
 const EMAIL_DELIVERY_MANUAL_LIMIT_MAX = 10000000;
 const EMAIL_DELIVERY_POLICY_SAVE_TIMEOUT_MS = 30000;
@@ -1683,6 +1682,7 @@ const adminState = {
   workflowChains: {},
   sentimentCookieProfiles: [],
   sentimentCookieRefreshPromise: null,
+  sentimentCookieRefreshForced: false,
   billingCatalogVersions: [],
   billingActiveCatalog: null,
   billingCatalogDraftId: null,
@@ -2724,7 +2724,8 @@ function sentimentCookieActionLabel(action) {
     "reauthorize-profile": "重新登录并同步",
     "refresh-profile-cookies": "重新同步 Cookie",
     "refresh-before-expiry": "即将过期，请重新同步",
-    "retry-later": "系统正在自动重试",
+    "retry-later": "请手动刷新重试",
+    "manual-refresh": "请点击刷新状态检测",
   };
   return map[action] || "";
 }
@@ -2762,24 +2763,27 @@ function sentimentCookieStatusDetails(profile) {
     || credential.names.some((name) => validCookieNames.has(name))
   );
   const liveStatus = String(profile?.liveAuthStatus || "").trim();
-  const checkedAt = key === "threads" && profile?.liveAuthCheckedAt
+  const reportsLiveAuth = key === "threads" || key === "instagram";
+  const checkedAt = reportsLiveAuth && profile?.liveAuthCheckedAt
     ? formatAdminDate(profile.liveAuthCheckedAt)
     : "";
   let loginState;
-  if (key === "threads") {
+  if (reportsLiveAuth) {
     loginState = liveStatus === "verified"
-      ? { value: "可用", state: "ready" }
+      ? { value: "实时可用", state: "ready" }
       : liveStatus === "invalid" || liveStatus === "missing_sessionid"
-        ? { value: "需重新登录", state: "missing" }
+        ? { value: "登录已失效", state: "missing" }
         : liveStatus === "probe_failed"
-          ? { value: "自动重试中", state: "warning" }
+          ? { value: "检测异常", state: "warning" }
+          : liveStatus === "pending_manual_check"
+            ? { value: "待手动检测", state: "warning" }
           : liveStatus
-            ? { value: "状态未知", state: "warning" }
+            ? { value: "待确认", state: "warning" }
             : credentialReady
-              ? { value: ordinaryCookieReady ? "等待检测" : "需重新登录", state: ordinaryCookieReady ? "warning" : "missing" }
+              ? { value: ordinaryCookieReady ? "待实时检测" : "登录已失效", state: ordinaryCookieReady ? "warning" : "missing" }
               : { value: "未获取", state: "inactive" };
   } else if (credentialReady && ordinaryCookieReady) {
-    loginState = { value: "可用", state: "ready" };
+    loginState = { value: "未实时检测", state: "warning" };
   } else if (ordinaryCookieSaved && !ordinaryCookieReady) {
     loginState = { value: "已过期", state: "missing" };
   } else {
@@ -2802,9 +2806,10 @@ function sentimentCookieStatusDetails(profile) {
     items,
     hint: sentimentCookieActionLabel(
       credentialReady
-        ? (key === "threads" ? profile?.liveAuthAction : profile?.recommendedAction)
+        ? (reportsLiveAuth ? profile?.liveAuthAction : profile?.recommendedAction)
         : "authorize-profile",
     ),
+    liveMessage: reportsLiveAuth ? String(profile?.liveAuthMessage || "").trim() : "",
     checkedAt,
   };
 }
@@ -2905,6 +2910,7 @@ function renderSentimentCookieProfiles(payload) {
               `).join("")}
             </div>
             ${statusDetails.hint ? `<div class="sentiment-cookie-hint">${escapeHtml(statusDetails.hint)}</div>` : ""}
+            ${statusDetails.liveMessage ? `<div class="sentiment-cookie-hint">${escapeHtml(statusDetails.liveMessage)}</div>` : ""}
             ${statusDetails.checkedAt ? `<div class="sentiment-cookie-updated">检测于 ${escapeHtml(statusDetails.checkedAt)}</div>` : ""}
           </td>
           <td>${Number(profile.validCookieCount || 0)} / ${Number(profile.expiredCookieCount || 0)}</td>
@@ -3012,26 +3018,33 @@ async function downloadSentimentCookieHelper() {
 function setSentimentCookieLiveState(text, state = "ready") {
   const node = el("sentimentCookieLiveState");
   const shell = node?.closest(".sentiment-cookie-live");
-  if (node) node.textContent = String(text || "自动更新中");
+  if (node) node.textContent = String(text || "等待手动检测");
   if (shell) shell.dataset.state = state;
 }
 
-async function loadSentimentCookieProfiles() {
-  if (adminState.sentimentCookieRefreshPromise) return adminState.sentimentCookieRefreshPromise;
+async function loadSentimentCookieProfiles({ force = false } = {}) {
+  if (adminState.sentimentCookieRefreshPromise) {
+    const pending = adminState.sentimentCookieRefreshPromise;
+    if (!force || adminState.sentimentCookieRefreshForced) return pending;
+    await pending.catch(() => null);
+    return loadSentimentCookieProfiles({ force: true });
+  }
+  adminState.sentimentCookieRefreshForced = force;
   adminState.sentimentCookieRefreshPromise = (async () => {
-    const payload = await api("/api/admin/sentiment/browser_auth/profiles");
+    const payload = await api(`/api/admin/sentiment/browser_auth/profiles${force ? "?force=true" : ""}`);
     renderSentimentCookieProfiles(payload);
     if (el("sentimentCookieMsg")?.classList.contains("err")) {
       setMsg("sentimentCookieMsg", "");
     }
     const updatedAt = new Date().toLocaleTimeString("zh-CN", { timeZone: ADMIN_TIME_ZONE, hour12: false });
-    setSentimentCookieLiveState(`已更新 ${updatedAt}`, "ready");
+    setSentimentCookieLiveState(force ? `检测完成 ${updatedAt}` : "等待手动检测", force ? "ready" : "warning");
     return payload;
   })();
   try {
     return await adminState.sentimentCookieRefreshPromise;
   } finally {
     adminState.sentimentCookieRefreshPromise = null;
+    adminState.sentimentCookieRefreshForced = false;
   }
 }
 
@@ -3040,7 +3053,7 @@ async function refreshSentimentCookieProfilesIfActive() {
   try {
     return await loadSentimentCookieProfiles();
   } catch {
-    setSentimentCookieLiveState("更新失败，自动重试中", "warning");
+    setSentimentCookieLiveState("读取失败，请手动刷新重试", "warning");
     return null;
   }
 }
@@ -9629,10 +9642,10 @@ function bindActions() {
 
   if (el("btnSentimentCookieRefresh")) {
     el("btnSentimentCookieRefresh").addEventListener("click", async () => {
-      setMsg("sentimentCookieMsg", "正在刷新舆情 Cookie 状态...");
+      setMsg("sentimentCookieMsg", "正在执行平台实时状态检测...");
       try {
-        await loadSentimentCookieProfiles();
-        setMsg("sentimentCookieMsg", "舆情 Cookie 状态已刷新。", true);
+        await loadSentimentCookieProfiles({ force: true });
+        setMsg("sentimentCookieMsg", "平台实时状态检测已完成。", true);
       } catch (err) {
         setMsg("sentimentCookieMsg", getErrorMessage(err), false);
       }
@@ -9889,7 +9902,6 @@ function bindActions() {
       if (el("adminMfaModal")?.getAttribute("aria-hidden") === "false") setMfaModalOpen(false);
       return;
     }
-    void refreshSentimentCookieProfilesIfActive();
   });
   document.addEventListener("change", (e) => {
     const target = e.target;
@@ -10194,9 +10206,6 @@ window.addEventListener("DOMContentLoaded", async () => {
       // ignore
     }
   }, TASK_POLL_INTERVAL_MS);
-  setInterval(() => {
-    void refreshSentimentCookieProfilesIfActive();
-  }, SENTIMENT_COOKIE_POLL_INTERVAL_MS);
   setInterval(() => {
     if (!document.hidden && adminState.activePage === "overview") void loadGovernanceDashboard({ force: true });
   }, GOVERNANCE_POLL_INTERVAL_MS);

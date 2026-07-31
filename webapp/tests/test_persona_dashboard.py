@@ -126,6 +126,100 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(state["liveAuthStatus"], "verified")
         self.assertEqual(state["liveAuthAction"], "keep")
 
+    def test_sentiment_cookie_expiry_normalizes_milliseconds_before_live_probe(self):
+        milliseconds = 1_825_453_191_068
+        normalized = server._normalize_sentiment_cookie_expiry(milliseconds)
+
+        self.assertAlmostEqual(normalized, milliseconds / 1000, places=3)
+        self.assertEqual(server._normalize_sentiment_cookie_expiry(1_893_456_000), 1_893_456_000)
+        self.assertEqual(server._normalize_sentiment_cookie_expiry(None), -1)
+
+    def test_instagram_profile_does_not_report_saved_cookie_as_live_usable(self):
+        profile = {
+            "key": "instagram",
+            "platform": "instagram",
+            "cookies": [
+                {
+                    "name": "sessionid",
+                    "value": "saved-instagram-session",
+                    "domain": ".instagram.com",
+                    "path": "/",
+                    "expires": 1_893_456_000,
+                }
+            ],
+        }
+
+        with mock.patch.object(
+            server,
+            "_sentiment_instagram_live_auth_state",
+            return_value={
+                "liveAuthStatus": "invalid",
+                "liveAuthUsable": False,
+                "liveAuthCheckedAt": "2026-07-31T00:00:00Z",
+                "liveAuthMessage": "Instagram real-time session is invalid.",
+                "liveAuthAction": "reauthorize-profile",
+            },
+        ):
+            state = server._sentiment_profile_for_client(profile)
+
+        self.assertTrue(state["sessionidSaved"])
+        self.assertFalse(state["liveAuthUsable"])
+        self.assertEqual(state["liveAuthStatus"], "invalid")
+        self.assertEqual(state["authHealth"], "degraded")
+        self.assertTrue(state["authorizationNeedsRefresh"])
+
+    def test_forced_instagram_live_auth_refresh_bypasses_cached_result(self):
+        profile = {"key": "instagram", "platform": "instagram"}
+        cookies = [
+            {
+                "name": "sessionid",
+                "value": "instagram-session-to-recheck",
+                "domain": ".instagram.com",
+                "path": "/",
+                "expires": 1_893_456_000,
+            }
+        ]
+        server._SENTIMENT_INSTAGRAM_LIVE_AUTH_CACHE.clear()
+        with mock.patch.object(
+            server,
+            "_probe_instagram_live_auth_with_browser",
+            side_effect=[
+                {"ok": True, "status": "verified"},
+                {"ok": False, "status": "invalid"},
+            ],
+        ) as probe:
+            first = server._sentiment_instagram_live_auth_state(profile, cookies)
+            cached = server._sentiment_instagram_live_auth_state(profile, cookies)
+            refreshed = server._sentiment_instagram_live_auth_state(profile, cookies, force=True)
+
+        self.assertTrue(first["liveAuthUsable"])
+        self.assertTrue(cached["liveAuthUsable"])
+        self.assertFalse(refreshed["liveAuthUsable"])
+        self.assertEqual(probe.call_count, 2)
+
+    def test_instagram_profile_waits_for_manual_refresh_before_uncached_probe(self):
+        profile = {
+            "key": "instagram",
+            "platform": "instagram",
+            "cookies": [
+                {
+                    "name": "sessionid",
+                    "value": "saved-for-manual-check",
+                    "domain": ".instagram.com",
+                    "path": "/",
+                    "expires": 1_893_456_000,
+                }
+            ],
+        }
+        server._SENTIMENT_INSTAGRAM_LIVE_AUTH_CACHE.clear()
+        with mock.patch.object(server, "_probe_instagram_live_auth_with_browser") as probe:
+            state = server._sentiment_profile_for_client(profile)
+
+        probe.assert_not_called()
+        self.assertEqual(state["liveAuthStatus"], "pending_manual_check")
+        self.assertIsNone(state["liveAuthUsable"])
+        self.assertEqual(state["liveAuthAction"], "manual-refresh")
+
     def test_threads_profile_keeps_saved_state_separate_from_live_usability(self):
         profile = {
             "key": "threads",
@@ -192,7 +286,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         self.assertEqual(state["liveAuthStatus"], "probe_failed")
         self.assertNotIn(technical_error, state["liveAuthMessage"])
-        self.assertEqual(state["liveAuthMessage"], "sessionid 已保存，系统正在重新检测。")
+        self.assertEqual(state["liveAuthMessage"], "sessionid 已保存，实时检测未完成，请点击“刷新状态”重试。")
 
     def test_expired_threads_sessionid_is_not_reported_as_usable(self):
         state = server._sentiment_auth_state(

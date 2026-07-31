@@ -1703,16 +1703,23 @@ function sentimentCookieStatusNeedsRefresh(status: SentimentCookieStatus): boole
   return status.recommendedAction === "refresh-profile-cookies";
 }
 
+export function normalizeSentimentBrowserCookieExpiry(value: unknown): number {
+  let expires = Number(value);
+  if (!Number.isFinite(expires) || expires <= 0) return -1;
+  while (expires > 253_402_300_799) expires /= 1000;
+  return expires;
+}
+
 function normalizeCookieForBrowserAuth(cookie: any, fallbackDomain: string) {
   if (!cookie?.name || !cookie?.value) return null;
-  const expires = Number(cookie.expires);
+  const expires = normalizeSentimentBrowserCookieExpiry(cookie.expires);
   const sameSite = ["Strict", "Lax", "None"].includes(cookie.sameSite) ? cookie.sameSite : undefined;
   return {
     name: String(cookie.name),
     value: String(cookie.value),
     domain: String(cookie.domain || fallbackDomain || ".threads.net"),
     path: String(cookie.path || "/"),
-    expires: Number.isFinite(expires) ? expires : -1,
+    expires,
     httpOnly: Boolean(cookie.httpOnly || cookie.http_only),
     secure: cookie.secure !== false,
     sameSite,
@@ -7210,7 +7217,7 @@ function readManagedThreadsAccountCookies(): any[] {
             value: String(row.value || ""),
             domain: String(row.host || ""),
             path: String(row.path || "/"),
-            expires: Number(row.expiry || -1),
+            expires: normalizeSentimentBrowserCookieExpiry(row.expiry),
             httpOnly: Boolean(row.isHttpOnly),
             secure: Boolean(row.isSecure),
             sameSite: Number(row.sameSite) === 2 ? "Strict" : Number(row.sameSite) === 1 ? "Lax" : "None",
@@ -7244,7 +7251,7 @@ function readSentimentBrowserAuthCookies(platform: SentimentHotPlatform) {
     const nowSeconds = Date.now() / 1000;
     const cookies = (Array.isArray(profile?.cookies) ? profile.cookies : [])
       .filter((cookie: any) => {
-        const expires = Number(cookie?.expires);
+        const expires = normalizeSentimentBrowserCookieExpiry(cookie?.expires);
         return cookie?.name && cookie?.value && (!Number.isFinite(expires) || expires <= 0 || expires > nowSeconds);
       })
       .map((cookie: any) => {
@@ -7254,7 +7261,7 @@ function readSentimentBrowserAuthCookies(platform: SentimentHotPlatform) {
           value: String(cookie.value),
           domain: String(cookie.domain || profile.domain || "threads.net"),
           path: String(cookie.path || "/"),
-          expires: Number.isFinite(Number(cookie.expires)) ? Number(cookie.expires) : -1,
+          expires: normalizeSentimentBrowserCookieExpiry(cookie.expires),
           httpOnly: Boolean(cookie.httpOnly || cookie.http_only),
           secure: cookie.secure !== false,
           sameSite,

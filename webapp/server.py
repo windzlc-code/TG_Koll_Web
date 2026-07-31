@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import queue
 import re
@@ -1899,7 +1900,20 @@ def _sentiment_now_seconds() -> float:
 
 
 _SENTIMENT_THREADS_LIVE_AUTH_CACHE: dict[str, dict[str, Any]] = {}
+_SENTIMENT_INSTAGRAM_LIVE_AUTH_CACHE: dict[str, dict[str, Any]] = {}
 _SENTIMENT_THREADS_LIVE_AUTH_CACHE_TTL_SECONDS = 60
+
+
+def _normalize_sentiment_cookie_expiry(value: Any) -> float:
+    try:
+        expires = float(value)
+    except Exception:
+        return -1
+    if not math.isfinite(expires) or expires <= 0:
+        return -1
+    while expires > 253_402_300_799:
+        expires /= 1000
+    return expires
 
 
 def _active_sentiment_cookies(cookies: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1945,11 +1959,11 @@ def _response_clears_threads_sessionid(response: requests.Response) -> bool:
     return bool(re.search(r"sessionid=\s*;(?:[^\n]*(?:expires=Thu,\s*01\s*Jan\s*1970|max-age=0))", text, re.I))
 
 
-def _probe_threads_live_auth_with_browser(cookies: list[dict[str, Any]]) -> dict[str, Any]:
+def _probe_sentiment_live_auth_with_browser(platform: str, cookies: list[dict[str, Any]]) -> dict[str, Any]:
     script_path = ROOT_DIR / "tool_r18" / "scripts" / "probe-threads-auth.mjs"
     if not script_path.exists():
         return {"status": "probe_failed", "ok": None, "reason": "threads auth probe script missing"}
-    payload = json.dumps({"cookies": cookies}, ensure_ascii=False)
+    payload = json.dumps({"platform": platform, "cookies": cookies}, ensure_ascii=False)
     try:
         completed = subprocess.run(
             ["node", str(script_path)],
@@ -1972,7 +1986,21 @@ def _probe_threads_live_auth_with_browser(cookies: list[dict[str, Any]]) -> dict
     return result if isinstance(result, dict) else {"status": "probe_failed", "ok": None, "reason": "invalid probe result"}
 
 
-def _sentiment_threads_live_auth_state(profile: dict[str, Any], cookies: list[dict[str, Any]]) -> dict[str, Any]:
+def _probe_threads_live_auth_with_browser(cookies: list[dict[str, Any]]) -> dict[str, Any]:
+    return _probe_sentiment_live_auth_with_browser("threads", cookies)
+
+
+def _probe_instagram_live_auth_with_browser(cookies: list[dict[str, Any]]) -> dict[str, Any]:
+    return _probe_sentiment_live_auth_with_browser("instagram", cookies)
+
+
+def _sentiment_threads_live_auth_state(
+    profile: dict[str, Any],
+    cookies: list[dict[str, Any]],
+    *,
+    force: bool = False,
+    allow_probe: bool = True,
+) -> dict[str, Any]:
     checked_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     active_cookies = _active_sentiment_cookies(cookies)
     if not _sentiment_cookies_have_threads_sessionid(active_cookies):
@@ -1985,8 +2013,16 @@ def _sentiment_threads_live_auth_state(profile: dict[str, Any], cookies: list[di
         }
     cache_key = _sentiment_threads_live_auth_cache_key(profile, active_cookies)
     cached = _SENTIMENT_THREADS_LIVE_AUTH_CACHE.get(cache_key)
-    if cached and float(cached.get("expiresAt") or 0) > time.time():
+    if not force and cached and float(cached.get("expiresAt") or 0) > time.time():
         return dict(cached.get("value") or {})
+    if not force and not allow_probe:
+        return {
+            "liveAuthStatus": "pending_manual_check",
+            "liveAuthUsable": None,
+            "liveAuthCheckedAt": "",
+            "liveAuthMessage": "Threads 登录凭证已保存，请点击“刷新状态”进行实时检测。",
+            "liveAuthAction": "manual-refresh",
+        }
 
     try:
         session = requests.Session()
@@ -2042,8 +2078,8 @@ def _sentiment_threads_live_auth_state(profile: dict[str, Any], cookies: list[di
                     "liveAuthStatus": "probe_failed",
                     "liveAuthUsable": None,
                     "liveAuthCheckedAt": checked_at,
-                    "liveAuthMessage": "sessionid 已保存，系统正在重新检测。",
-                    "liveAuthAction": "retry-later",
+                    "liveAuthMessage": "sessionid 已保存，实时检测未完成，请点击“刷新状态”重试。",
+                    "liveAuthAction": "manual-refresh",
                 }
     except Exception as exc:
         logger.warning("Threads browser auth check failed: %s", exc)
@@ -2051,10 +2087,77 @@ def _sentiment_threads_live_auth_state(profile: dict[str, Any], cookies: list[di
             "liveAuthStatus": "probe_failed",
             "liveAuthUsable": None,
             "liveAuthCheckedAt": checked_at,
-            "liveAuthMessage": "sessionid 已保存，系统正在重新检测。",
-            "liveAuthAction": "retry-later",
+            "liveAuthMessage": "sessionid 已保存，实时检测未完成，请点击“刷新状态”重试。",
+            "liveAuthAction": "manual-refresh",
         }
     _SENTIMENT_THREADS_LIVE_AUTH_CACHE[cache_key] = {
+        "expiresAt": time.time() + _SENTIMENT_THREADS_LIVE_AUTH_CACHE_TTL_SECONDS,
+        "value": result,
+    }
+    return result
+
+
+def _sentiment_instagram_live_auth_state(
+    profile: dict[str, Any],
+    cookies: list[dict[str, Any]],
+    *,
+    force: bool = False,
+    allow_probe: bool = True,
+) -> dict[str, Any]:
+    checked_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    active_cookies = _active_sentiment_cookies(cookies)
+    if not _sentiment_cookies_have_instagram_sessionid(active_cookies):
+        return {
+            "liveAuthStatus": "missing_sessionid",
+            "liveAuthUsable": False,
+            "liveAuthCheckedAt": checked_at,
+            "liveAuthMessage": "Instagram 尚未取得有效登录凭证，请重新登录后同步授权。",
+            "liveAuthAction": "reauthorize-profile",
+        }
+
+    cache_key = _sentiment_threads_live_auth_cache_key(profile, active_cookies)
+    cached = _SENTIMENT_INSTAGRAM_LIVE_AUTH_CACHE.get(cache_key)
+    if not force and cached and float(cached.get("expiresAt") or 0) > time.time():
+        return dict(cached.get("value") or {})
+    if not force and not allow_probe:
+        return {
+            "liveAuthStatus": "pending_manual_check",
+            "liveAuthUsable": None,
+            "liveAuthCheckedAt": "",
+            "liveAuthMessage": "Instagram 登录凭证已保存，请点击“刷新状态”进行实时检测。",
+            "liveAuthAction": "manual-refresh",
+        }
+
+    browser_probe = _probe_instagram_live_auth_with_browser(active_cookies)
+    probe_status = str(browser_probe.get("status") or "").strip()
+    probe_reason = str(browser_probe.get("reason") or "").strip()
+    if browser_probe.get("ok") is True:
+        result = {
+            "liveAuthStatus": "verified",
+            "liveAuthUsable": True,
+            "liveAuthCheckedAt": checked_at,
+            "liveAuthMessage": "Instagram 实时登录状态已验证，可用于实时搜索。",
+            "liveAuthAction": "keep",
+        }
+    elif probe_status == "invalid" or browser_probe.get("ok") is False:
+        result = {
+            "liveAuthStatus": "invalid",
+            "liveAuthUsable": False,
+            "liveAuthCheckedAt": checked_at,
+            "liveAuthMessage": "Instagram Cookie 已保存，但实时登录状态已失效，请重新登录后同步。",
+            "liveAuthAction": "reauthorize-profile",
+        }
+    else:
+        if probe_reason:
+            logger.warning("Instagram browser auth probe did not complete: %s", probe_reason)
+        result = {
+            "liveAuthStatus": "probe_failed",
+            "liveAuthUsable": None,
+            "liveAuthCheckedAt": checked_at,
+            "liveAuthMessage": "Instagram 实时登录状态检测异常，当前状态尚未确认，请点击“刷新状态”重试。",
+            "liveAuthAction": "manual-refresh",
+        }
+    _SENTIMENT_INSTAGRAM_LIVE_AUTH_CACHE[cache_key] = {
         "expiresAt": time.time() + _SENTIMENT_THREADS_LIVE_AUTH_CACHE_TTL_SECONDS,
         "value": result,
     }
@@ -2078,10 +2181,7 @@ def _sentiment_auth_state(cookies: list[dict[str, Any]], last_authorized_at: str
         if not name or not value:
             continue
         expires_raw = cookie.get("expires")
-        try:
-            expires = float(expires_raw)
-        except Exception:
-            expires = -1
+        expires = _normalize_sentiment_cookie_expiry(expires_raw)
         if expires <= 0:
             session += 1
             valid += 1
@@ -2197,10 +2297,7 @@ def _sentiment_cookies_have_valid_name(cookies: list[dict[str, Any]], name: str)
         cookie_value = str(cookie.get("value") or "").strip()
         if cookie_name != target or not cookie_value:
             continue
-        try:
-            expires = float(cookie.get("expires"))
-        except Exception:
-            expires = -1
+        expires = _normalize_sentiment_cookie_expiry(cookie.get("expires"))
         if expires <= 0 or expires > now:
             return True
     return False
@@ -2242,10 +2339,7 @@ def _sentiment_cookies_have_threads_sessionid(cookies: list[dict[str, Any]]) -> 
             continue
         if not _sentiment_cookie_domain_matches(cookie, ["threads.net", "threads.com"]):
             continue
-        try:
-            expires = float(cookie.get("expires"))
-        except Exception:
-            expires = -1
+        expires = _normalize_sentiment_cookie_expiry(cookie.get("expires"))
         if expires <= 0 or expires > now:
             return True
     return False
@@ -2260,10 +2354,7 @@ def _sentiment_cookies_have_instagram_sessionid(cookies: list[dict[str, Any]]) -
             continue
         if not _sentiment_cookie_domain_matches(cookie, ["instagram.com"]):
             continue
-        try:
-            expires = float(cookie.get("expires"))
-        except Exception:
-            expires = -1
+        expires = _normalize_sentiment_cookie_expiry(cookie.get("expires"))
         if expires <= 0 or expires > now:
             return True
     return False
@@ -2345,6 +2436,11 @@ def _save_sentiment_browser_auth_profile(
         profile["lastAuthorizedBy"] = authorized_by
         profile["lastAuthorizationNote"] = note[:240]
         _write_sentiment_config_file(config)
+        platform_key = str(profile.get("platform") or profile.get("key") or profile_key).strip().lower()
+        if platform_key == "threads":
+            _SENTIMENT_THREADS_LIVE_AUTH_CACHE.clear()
+        elif platform_key == "instagram":
+            _SENTIMENT_INSTAGRAM_LIVE_AUTH_CACHE.clear()
         return profile
 
 
@@ -2695,10 +2791,7 @@ def _normalize_manual_cookie(cookie: Any, fallback_domain: str) -> dict[str, Any
         domain = f".{domain.lstrip('.')}"
     path_value = str(cookie.get("path") or "/").strip() or "/"
     expires_raw = cookie.get("expires", cookie.get("expirationDate", -1))
-    try:
-        expires = float(expires_raw)
-    except Exception:
-        expires = -1
+    expires = _normalize_sentiment_cookie_expiry(expires_raw)
     return {
         "name": name[:240],
         "value": value[:5000],
@@ -2751,7 +2844,103 @@ def _parse_manual_cookie_payload(raw: str, fallback_domain: str) -> list[dict[st
     return cookies
 
 
-def _sentiment_profile_for_client(profile: dict[str, Any]) -> dict[str, Any]:
+def _merge_sentiment_runtime_cookies(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for cookie in (item for group in groups for item in group):
+        if not isinstance(cookie, dict):
+            continue
+        normalized = _normalize_manual_cookie(cookie, str(cookie.get("domain") or ""))
+        if not normalized:
+            continue
+        key = (
+            str(normalized.get("name") or "").lower(),
+            str(normalized.get("domain") or "").lower(),
+            str(normalized.get("path") or "/"),
+        )
+        if key not in merged:
+            merged[key] = normalized
+    return list(merged.values())
+
+
+def _read_managed_threads_account_cookies() -> list[dict[str, Any]]:
+    try:
+        with db() as conn:
+            accounts = conn.execute(
+                """
+                SELECT profile_dir
+                FROM social_accounts
+                WHERE lower(platform) = 'threads'
+                  AND lower(status) IN ('ready', 'active')
+                  AND trim(profile_dir) <> ''
+                ORDER BY last_login_check_at DESC, updated_at DESC
+                LIMIT 8
+                """
+            ).fetchall()
+    except Exception:
+        return []
+
+    best: list[dict[str, Any]] = []
+    best_score = -1
+    now_seconds = int(time.time())
+    for account in accounts:
+        cookie_db_path = Path(str(account["profile_dir"] or "").strip()) / "cookies.sqlite"
+        if not cookie_db_path.is_file():
+            continue
+        try:
+            uri = f"file:{cookie_db_path.resolve().as_posix()}?mode=ro"
+            with contextlib.closing(sqlite3.connect(uri, uri=True, timeout=2)) as cookie_db:
+                cookie_db.row_factory = sqlite3.Row
+                rows = cookie_db.execute(
+                    """
+                    SELECT host, name, value, path, expiry, isSecure, isHttpOnly, sameSite
+                    FROM moz_cookies
+                    WHERE lower(host) LIKE '%threads.%'
+                      AND (expiry = 0 OR expiry > ?)
+                    """,
+                    (now_seconds,),
+                ).fetchall()
+            cookies = [
+                {
+                    "name": str(row["name"] or ""),
+                    "value": str(row["value"] or ""),
+                    "domain": str(row["host"] or ""),
+                    "path": str(row["path"] or "/"),
+                    "expires": _normalize_sentiment_cookie_expiry(row["expiry"]),
+                    "secure": bool(row["isSecure"]),
+                    "httpOnly": bool(row["isHttpOnly"]),
+                    "sameSite": "Strict" if int(row["sameSite"] or 0) == 2 else "Lax" if int(row["sameSite"] or 0) == 1 else "None",
+                }
+                for row in rows
+            ]
+            if not _sentiment_cookies_have_threads_sessionid(cookies):
+                continue
+            score = len({str(cookie.get("name") or "").lower() for cookie in cookies}) * 10 + len(cookies)
+            if score > best_score:
+                best = cookies
+                best_score = score
+        except Exception:
+            continue
+    return best
+
+
+def _effective_sentiment_profile_cookies(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    platform_key = str(profile.get("platform") or profile.get("key") or "").strip().lower()
+    stored = [cookie for cookie in (profile.get("cookies") or []) if isinstance(cookie, dict)]
+    normalized_stored = _merge_sentiment_runtime_cookies(stored)
+    if platform_key != "threads":
+        return normalized_stored
+    managed = _read_managed_threads_account_cookies()
+    merged = _merge_sentiment_runtime_cookies(managed, normalized_stored)
+    mirrored = [
+        {**cookie, "domain": domain}
+        for cookie in merged
+        if _sentiment_cookie_domain_matches(cookie, ["threads.net", "threads.com"])
+        for domain in (".threads.net", ".threads.com")
+    ]
+    return _merge_sentiment_runtime_cookies(merged, mirrored)[:120]
+
+
+def _sentiment_profile_for_client(profile: dict[str, Any], *, force_live_auth: bool = False) -> dict[str, Any]:
     cookies = profile.get("cookies") if isinstance(profile.get("cookies"), list) else []
     last_authorized_at = str(profile.get("lastAuthorizedAt") or profile.get("last_authorized_at") or "").strip() or None
     platform_key = str(profile.get("platform") or profile.get("key") or "").strip().lower()
@@ -2773,9 +2962,30 @@ def _sentiment_profile_for_client(profile: dict[str, Any]) -> dict[str, Any]:
         last_authorized_at,
         platform_key,
     ))
-    if platform_key == "threads":
-        safe["sessionidSaved"] = _sentiment_cookies_have_threads_sessionid(cookies)
-        live_state = _sentiment_threads_live_auth_state(profile, [cookie for cookie in cookies if isinstance(cookie, dict)])
+    if platform_key in {"threads", "instagram"}:
+        stored_cookies = [cookie for cookie in cookies if isinstance(cookie, dict)]
+        safe["sessionidSaved"] = (
+            _sentiment_cookies_have_threads_sessionid(stored_cookies)
+            if platform_key == "threads"
+            else _sentiment_cookies_have_instagram_sessionid(stored_cookies)
+        )
+        effective_cookies = _effective_sentiment_profile_cookies(profile)
+        safe["liveAuthCookieCount"] = len(effective_cookies)
+        live_state = (
+            _sentiment_threads_live_auth_state(
+                profile,
+                effective_cookies,
+                force=force_live_auth,
+                allow_probe=force_live_auth,
+            )
+            if platform_key == "threads"
+            else _sentiment_instagram_live_auth_state(
+                profile,
+                effective_cookies,
+                force=force_live_auth,
+                allow_probe=force_live_auth,
+            )
+        )
         safe.update(live_state)
         if live_state.get("liveAuthUsable") is False:
             safe["authHealth"] = "degraded"
@@ -2792,7 +3002,7 @@ def _sentiment_profile_for_client(profile: dict[str, Any]) -> dict[str, Any]:
             safe["authHealth"] = "watch"
             safe["authStatus"] = "checking"
             safe["authorizationNeedsRefresh"] = False
-            safe["recommendedAction"] = live_state.get("liveAuthAction") or "retry-later"
+            safe["recommendedAction"] = live_state.get("liveAuthAction") or "manual-refresh"
             reasons = list(safe.get("statusReasons") or [])
             if "live-session-check-pending" not in reasons:
                 reasons.append("live-session-check-pending")
@@ -22303,8 +22513,12 @@ def create_app() -> FastAPI:
             note=f"synced by browser auth helper for {fallback_domain}",
         )
         platform_key = str(profile.get("platform") or profile.get("key") or profile_key).strip().lower()
-        if platform_key == "threads":
-            live_auth = _sentiment_threads_live_auth_state(profile, cookies)
+        if platform_key in {"threads", "instagram"}:
+            live_auth = (
+                _sentiment_threads_live_auth_state(profile, _effective_sentiment_profile_cookies(profile))
+                if platform_key == "threads"
+                else _sentiment_instagram_live_auth_state(profile, _effective_sentiment_profile_cookies(profile))
+            )
             return JSONResponse(
                 {
                     "ok": True,
@@ -22334,11 +22548,14 @@ def create_app() -> FastAPI:
         return {"ok": True, "token": token, "rotatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
     @app.get("/api/admin/sentiment/browser_auth/profiles")
-    def api_admin_sentiment_browser_auth_profiles(user: dict[str, Any] = Depends(require_admin)):
+    def api_admin_sentiment_browser_auth_profiles(
+        force: bool = False,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
         config = _read_sentiment_config_file()
         profiles = _sentiment_profiles_container(config)
         rows = [
-            _sentiment_profile_for_client(profile)
+            _sentiment_profile_for_client(profile, force_live_auth=force)
             for profile in profiles
             if str(profile.get("key") or profile.get("platform") or "").strip()
             and _sentiment_browser_auth_profile_allowed(profile)
@@ -22350,7 +22567,15 @@ def create_app() -> FastAPI:
             "profiles": rows,
             "summary": {
                 "profileCount": len(rows),
-                "authorizedProfileCount": sum(1 for row in rows if row.get("authHealth") in ("healthy", "watch")),
+                "authorizedProfileCount": sum(
+                    1
+                    for row in rows
+                    if (
+                        row.get("liveAuthUsable") is True
+                        if row.get("liveAuthStatus")
+                        else row.get("authHealth") in ("healthy", "watch")
+                    )
+                ),
                 "healthyProfileCount": sum(1 for row in rows if row.get("authHealth") == "healthy"),
                 "needsRefreshProfileCount": len(action_profiles),
                 "missingProfileCount": sum(1 for row in rows if row.get("authHealth") == "missing"),
@@ -22389,7 +22614,11 @@ def create_app() -> FastAPI:
             authorized_by=str(user.get("username") or ""),
             note=note or "saved from admin page",
         )
-        return {"ok": True, "profile": _sentiment_profile_for_client(profile), "savedCookieCount": len(cookies)}
+        return {
+            "ok": True,
+            "profile": _sentiment_profile_for_client(profile),
+            "savedCookieCount": len(cookies),
+        }
 
     @app.delete("/api/admin/sentiment/browser_auth/profiles/{profile_key}/cookies")
     def api_admin_sentiment_browser_auth_clear_cookies(profile_key: str, user: dict[str, Any] = Depends(require_admin)):
@@ -22404,6 +22633,11 @@ def create_app() -> FastAPI:
             profile["lastAuthorizedBy"] = str(user.get("username") or "")
             profile["lastAuthorizationNote"] = "cleared from admin page"
             _write_sentiment_config_file(config)
+            platform_key = str(profile.get("platform") or profile.get("key") or profile_key).strip().lower()
+            if platform_key == "threads":
+                _SENTIMENT_THREADS_LIVE_AUTH_CACHE.clear()
+            elif platform_key == "instagram":
+                _SENTIMENT_INSTAGRAM_LIVE_AUTH_CACHE.clear()
         return {"ok": True, "profile": _sentiment_profile_for_client(profile)}
 
     @app.post("/api/admin/llm_models")

@@ -1005,6 +1005,24 @@ function snapshotPersonaCreateInputs() {
   return createState;
 }
 
+function personaCreateHasPendingChanges() {
+  const createState = snapshotPersonaCreateInputs();
+  const hasTextInput = Boolean(
+    String(createState.aiName || "").trim()
+    || String(createState.aiPrompt || "").trim()
+  );
+  const hasKeywordState = Boolean(
+    (Array.isArray(createState.aiKeywords) && createState.aiKeywords.length)
+    || (Array.isArray(createState.aiSelectedKeywords) && createState.aiSelectedKeywords.length)
+  );
+  return Boolean(
+    hasTextInput
+    || hasKeywordState
+    || createState.aiResult
+    || String(createState.aiStep || "input") !== "input"
+  );
+}
+
 function currentTheme() {
   return "light";
 }
@@ -21513,7 +21531,7 @@ function renderPersonaCreateWorkbench() {
       ${createState.aiStep === "input" ? `
         <div class="row-actions">
           <button type="button" class="primary" data-persona-create-ai-keywords aria-busy="${aiKeywordsBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiKeywordsBusy ? renderBusyButtonContent("正在提炼关键词", true, createBusy.keywordsStartedAt) : (anyCreateBusy ? `${busyLabel}中` : "提炼关键词")}</button>
-          <button type="button" data-persona-create aria-busy="${Boolean(createBusy.manual) ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${createBusy.manual ? renderBusyButtonContent("正在创建人设", true, createBusy.manualStartedAt) : (anyCreateBusy ? `${busyLabel}中` : "直接创建人设")}</button>
+          ${aiKeywordsBusy ? "" : `<button type="button" data-persona-create aria-busy="${Boolean(createBusy.manual) ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${createBusy.manual ? renderBusyButtonContent("正在创建人设", true, createBusy.manualStartedAt) : (anyCreateBusy ? `${busyLabel}中` : "直接创建人设")}</button>`}
           ${aiKeywordsBusy ? `<button type="button" data-persona-create-ai-cancel-keywords>取消</button>` : ""}
         </div>
       ` : `
@@ -21583,14 +21601,18 @@ function openPersonaCreateModal() {
   dialog.classList.add("persona-create-modal");
   modal.__requestClose = () => {
     const busyKind = personaCreateBusyKind();
-    if (!busyKind) {
+    const hasPendingChanges = personaCreateHasPendingChanges();
+    if (!busyKind && !hasPendingChanges) {
       closeConsoleModal(null);
       return;
     }
+    const isBusy = Boolean(busyKind);
     void openConsoleModal({
       title: "确认退出",
-      message: `${busyKind}正在执行。退出只会关闭当前页面；已完成或服务端继续完成的计费步骤仍会按当前步骤扣费。`,
-      cancelText: "继续运行",
+      message: isBusy
+        ? `${busyKind}正在执行。退出只会关闭当前页面；已完成或服务端继续完成的计费步骤仍会按当前步骤扣费。`
+        : "当前人设创建尚未完成，退出后本次填写内容和关键词选择不会保留。",
+      cancelText: isBusy ? "继续运行" : "继续编辑",
       confirmText: "确认退出",
       danger: true,
       modalKey: "persona-create-exit-confirm",

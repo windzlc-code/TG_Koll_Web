@@ -37,6 +37,7 @@ import {
   normalizeThreadsRelativeTime,
   normalizeSentimentHotFreshnessDays,
   normalizeSentimentHotFreshnessPolicy,
+  normalizeSentimentBrowserCookieExpiry,
   orderSentimentHotCandidatesForLegacyFallback,
   isSentimentHotCandidateRepeatEligible,
   parseThreadsPostViewCountFromText,
@@ -54,6 +55,12 @@ afterEach(() => {
 });
 
 describe("sentiment hot importer", () => {
+  it("normalizes millisecond cookie expiry before Playwright uses it", () => {
+    expect(normalizeSentimentBrowserCookieExpiry(1_825_453_191_068)).toBeCloseTo(1_825_453_191.068, 3);
+    expect(normalizeSentimentBrowserCookieExpiry(1_893_456_000)).toBe(1_893_456_000);
+    expect(normalizeSentimentBrowserCookieExpiry(undefined)).toBe(-1);
+  });
+
   it("caps browser detail pages at the shared server limit of two", () => {
     expect(boundedBrowserPageConcurrency(1)).toBe(1);
     expect(boundedBrowserPageConcurrency(2)).toBe(2);

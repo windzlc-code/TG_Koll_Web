@@ -1129,10 +1129,12 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("最多选择 2 个，用于确定人设生成的重点方向", create_workbench)
         self.assertIn("const keywordLimitReached = aiSelectedKeywords.length >= 2;", create_workbench)
         self.assertIn("const disabled = aiCreateBusy || (!active && keywordLimitReached);", create_workbench)
+        self.assertIn("function personaCreateHasPendingChanges()", self.console_script)
         self.assertIn('modal.__requestClose = () => {', create_modal)
+        self.assertIn("const hasPendingChanges = personaCreateHasPendingChanges();", create_modal)
         self.assertIn('modalKey: "persona-create-exit-confirm",', create_modal)
         self.assertIn("stack: true,", create_modal)
-        self.assertIn('cancelText: "继续运行",', create_modal)
+        self.assertIn('cancelText: isBusy ? "继续运行" : "继续编辑",', create_modal)
         self.assertIn('confirmText: "确认退出",', create_modal)
         self.assertNotIn("window.confirm", create_modal)
 

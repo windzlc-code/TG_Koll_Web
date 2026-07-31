@@ -13,14 +13,21 @@ function readStdin() {
   });
 }
 
-function normalizeCookie(cookie) {
+function normalizeExpiry(value) {
+  let expires = Number(value);
+  if (!Number.isFinite(expires) || expires <= 0) return -1;
+  while (expires > 253402300799) expires /= 1000;
+  return expires;
+}
+
+function normalizeCookie(cookie, fallbackDomain) {
   if (!cookie || typeof cookie !== "object") return null;
   const name = String(cookie.name || "").trim();
   const value = String(cookie.value || "").trim();
   if (!name || !value) return null;
-  const rawDomain = String(cookie.domain || ".threads.com").trim() || ".threads.com";
+  const rawDomain = String(cookie.domain || fallbackDomain).trim() || fallbackDomain;
   const domain = rawDomain.startsWith(".") ? rawDomain : `.${rawDomain.replace(/^https?:\/\//i, "").split("/")[0]}`;
-  const expires = Number(cookie.expires);
+  const expires = normalizeExpiry(cookie.expires);
   return {
     name,
     value,
@@ -29,23 +36,18 @@ function normalizeCookie(cookie) {
     httpOnly: Boolean(cookie.httpOnly),
     secure: cookie.secure !== false,
     sameSite: cookie.sameSite === "Strict" || cookie.sameSite === "Lax" || cookie.sameSite === "None" ? cookie.sameSite : "Lax",
-    ...(Number.isFinite(expires) && expires > 0 ? { expires } : {}),
+    ...(expires > 0 ? { expires } : {}),
   };
 }
 
-function hasThreadsSession(cookies) {
+function hasPlatformSession(cookies, domains) {
   const now = Date.now() / 1000;
   return cookies.some((cookie) => {
     const domain = String(cookie.domain || "").replace(/^\./, "").toLowerCase();
     const expires = Number(cookie.expires);
     return String(cookie.name || "").toLowerCase() === "sessionid"
       && String(cookie.value || "").trim()
-      && (
-        domain === "threads.com"
-        || domain.endsWith(".threads.com")
-        || domain === "threads.net"
-        || domain.endsWith(".threads.net")
-      )
+      && domains.some((candidate) => domain === candidate || domain.endsWith(`.${candidate}`))
       && (!Number.isFinite(expires) || expires <= 0 || expires > now);
   });
 }
@@ -78,9 +80,29 @@ function buildChromiumLaunchOptions() {
 
 async function main() {
   const input = JSON.parse(await readStdin() || "{}");
-  const cookies = Array.isArray(input.cookies) ? input.cookies.map(normalizeCookie).filter(Boolean) : [];
-  if (!hasThreadsSession(cookies)) {
-    console.log(JSON.stringify({ ok: false, status: "invalid", reason: "missing Threads sessionid" }));
+  const platform = String(input.platform || "threads").trim().toLowerCase() === "instagram" ? "instagram" : "threads";
+  const settings = platform === "instagram"
+    ? {
+        label: "Instagram",
+        domains: ["instagram.com"],
+        fallbackDomain: ".instagram.com",
+        url: "https://www.instagram.com/",
+        cookieUrls: ["https://www.instagram.com/"],
+        loginWall: /accounts\/login|log in to instagram|登录 instagram|登入 instagram/i,
+      }
+    : {
+        label: "Threads",
+        domains: ["threads.com", "threads.net"],
+        fallbackDomain: ".threads.com",
+        url: "https://www.threads.com/",
+        cookieUrls: ["https://www.threads.com/", "https://www.threads.net/"],
+        loginWall: /accounts\/login|log in or sign up for threads|log in with instagram|登录或注册 threads|使用 instagram 帐号/i,
+      };
+  const cookies = Array.isArray(input.cookies)
+    ? input.cookies.map((cookie) => normalizeCookie(cookie, settings.fallbackDomain)).filter(Boolean)
+    : [];
+  if (!hasPlatformSession(cookies, settings.domains)) {
+    console.log(JSON.stringify({ ok: false, status: "invalid", reason: `missing ${settings.label} sessionid` }));
     return;
   }
 
@@ -93,14 +115,14 @@ async function main() {
     });
     await context.addCookies(cookies);
     const page = await context.newPage();
-    await page.goto("https://www.threads.com/", { waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => null);
+    await page.goto(settings.url, { waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => null);
     await page.waitForTimeout(1500);
     const text = await page.locator("body").innerText({ timeout: 5000 }).catch(() => "");
     const title = await page.title().catch(() => "");
     const url = page.url();
-    const refreshedCookies = await context.cookies(["https://www.threads.com/", "https://www.threads.net/"]);
-    const loginWall = /accounts\/login|log in|login|登入|登录|使用 Instagram|Instagram 帳號|Instagram 账号/i.test(`${title}\n${url}\n${text}`);
-    const retained = hasThreadsSession(refreshedCookies);
+    const refreshedCookies = await context.cookies(settings.cookieUrls);
+    const loginWall = settings.loginWall.test(`${title}\n${url}\n${text}`);
+    const retained = hasPlatformSession(refreshedCookies, settings.domains);
     await context.close().catch(() => undefined);
     console.log(JSON.stringify({
       ok: !loginWall && retained,

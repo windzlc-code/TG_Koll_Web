@@ -158,12 +158,35 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               validCookieCount: 16,
               cookieNames: ["datr", "sessionid"],
               validCookieNames: ["datr", "sessionid"],
+              liveAuthStatus: "verified",
+              liveAuthCheckedAt: "2026-07-31T00:00:00Z",
             }});
             assert.deepEqual(instagram.items.map((item) => [item.label, item.value, item.state]), [
               ["Cookie", "已保存 16", "ready"],
               ["sessionid", "已保存", "ready"],
-              ["登录状态", "可用", "ready"],
+              ["登录状态", "实时可用", "ready"],
             ]);
+
+            const instagramPending = sentimentCookieStatusDetails({{
+              key: "instagram",
+              cookieCount: 16,
+              validCookieCount: 16,
+              cookieNames: ["datr", "sessionid"],
+              validCookieNames: ["datr", "sessionid"],
+            }});
+            assert.equal(instagramPending.items[2].value, "待实时检测");
+            assert.equal(instagramPending.items[2].state, "warning");
+
+            const instagramManual = sentimentCookieStatusDetails({{
+              key: "instagram",
+              cookieCount: 16,
+              validCookieCount: 16,
+              cookieNames: ["datr", "sessionid"],
+              validCookieNames: ["datr", "sessionid"],
+              liveAuthStatus: "pending_manual_check",
+            }});
+            assert.equal(instagramManual.items[2].value, "待手动检测");
+            assert.equal(instagramManual.items[2].state, "warning");
 
             const facebook = sentimentCookieStatusDetails({{
               key: "facebooksearch",
@@ -179,6 +202,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             """
         )
         self._run_node(harness)
+
+    def test_cookie_status_live_probe_only_runs_from_manual_refresh(self):
+        admin_markup = (REPO_ROOT / "webapp" / "static" / "admin.html").read_text(encoding="utf-8")
+        self.assertNotIn("SENTIMENT_COOKIE_POLL_INTERVAL_MS", self.admin_source)
+        self.assertIn('await loadSentimentCookieProfiles({ force: true });', self.admin_source)
+        self.assertIn('? "?force=true" : ""', self.admin_source)
+        self.assertNotIn("自动更新中", self.admin_source)
+        self.assertNotIn("自动更新中", admin_markup)
+        self.assertIn("平台状态仅在管理员点击", admin_markup)
 
     def test_personal_profile_is_a_separate_bright_page_with_svg_upload(self):
         for removed_console_profile_marker in (

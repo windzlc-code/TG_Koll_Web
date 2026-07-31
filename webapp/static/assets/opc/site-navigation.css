@@ -408,19 +408,19 @@ html {
 
 .site-language-menu .site-language-state {
   position: absolute;
-  right: -5px;
-  bottom: -5px;
+  right: -3px;
+  bottom: -3px;
   display: inline-grid;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 3px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
   box-sizing: border-box;
   place-items: center;
   color: #eef8f6;
   background: #244657;
   border: 1px solid rgba(220, 239, 234, 0.54);
   border-radius: 999px;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 850;
   line-height: 1;
 }
@@ -461,8 +461,8 @@ html {
 .site-language-popover button:focus-visible,
 .site-language-popover button.is-active {
   color: #ffffff;
-  background: rgba(119, 216, 195, 0.16);
-  border-color: rgba(119, 216, 195, 0.38);
+  background: #244657;
+  border-color: rgba(119, 216, 195, 0.48);
 }
 
 .site-subscription-link {
@@ -683,6 +683,7 @@ body.site-mobile-menu-active {
 }
 
 .site-header .header-login {
+  min-width: 86px;
   padding: 0 14px;
   color: #ffffff;
   background: rgba(255, 255, 255, 0.08);
@@ -2227,6 +2228,7 @@ body.site-account-panel-active {
   }
 
   .site-header .header-login {
+    min-width: 76px;
     padding-inline: 8px;
   }
 
