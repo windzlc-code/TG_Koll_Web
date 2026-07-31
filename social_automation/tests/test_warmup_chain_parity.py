@@ -889,7 +889,10 @@ class WarmupChainParityTests(TestCase):
         model_reply = {"ok": True, "raw_text": '["男士短发", "发型打理", "男士短发"]'}
         with (
             mock.patch.object(runner, "_warmup_ai_settings", return_value=("https://llm.example", "key", ["model-a"])),
-            mock.patch("get_gemini.request_gemini3_pro_raw_text", return_value=model_reply),
+            mock.patch(
+                "get_gemini.request_gemini3_pro_raw_text",
+                return_value=model_reply,
+            ) as request,
         ):
             keywords = runner._generate_warmup_search_keywords_with_ai(payload)
 
@@ -897,6 +900,7 @@ class WarmupChainParityTests(TestCase):
         self.assertEqual(keywords, ["男士短发", "发型打理"])
         self.assertEqual(payload["_warmup_generated_search_keywords"], keywords)
         self.assertEqual(payload["_warmup_search_keyword_source"], "model:model-a")
+        self.assertIn("行业惯用词", request.call_args.kwargs["user_input"])
 
     def test_model_keyword_failure_stops_without_local_fallback(self):
         payload = {
@@ -930,7 +934,7 @@ class WarmupChainParityTests(TestCase):
             mock.patch(
                 "get_gemini.request_gemini3_pro_raw_text",
                 return_value={"ok": True, "raw_text": '{"relevant": true}'},
-            ),
+            ) as request,
         ):
             result = runner._assess_warmup_post_relevance(
                 payload,
@@ -940,6 +944,8 @@ class WarmupChainParityTests(TestCase):
 
         self.assertTrue(result["relevant"])
         self.assertTrue(result["model_checked"])
+        self.assertIn("判断语义而不是逐字匹配", request.call_args.kwargs["user_input"])
+        self.assertIn("行业内自然同义表达", request.call_args.kwargs["system_prompt"])
 
     def test_model_rejection_overrides_a_lexical_keyword_match(self):
         payload = {"persona_topics": ["理发"]}
