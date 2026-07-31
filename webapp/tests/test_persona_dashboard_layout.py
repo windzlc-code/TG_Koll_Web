@@ -2756,10 +2756,64 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         ):
             with self.subTest(action=action):
                 self.assertIn(action, self.console_script)
-        self.assertIn('${isMarketplace ? "释放" : "删除"}</button>', self.console_script)
+        self.assertIn('${isMarketplace ? renderProxyReleaseIcon() : renderTrashIcon()}</button>', self.console_script)
         self.assertNotIn("account-pool-delete-icon", self.console_script)
         self.assertIn(".persona-link-actions button.danger,", self.styles)
-        self.assertIn(".proxy-table-actions button.danger {", self.styles)
+        self.assertIn(".proxy-card-actions button.danger {", self.styles)
+
+    def test_proxy_pool_uses_compact_summary_cards_and_shared_detail_modal(self):
+        proxy_pool = self.console_script[
+            self.console_script.index("function renderProxyPool()"):
+            self.console_script.index("\nfunction proxyMarketCatalogRoot", self.console_script.index("function renderProxyPool()"))
+        ]
+        detail_modal = self.console_script[
+            self.console_script.index("function openProxyDetailModal("):
+            self.console_script.index("\nfunction renderProxyPool()", self.console_script.index("function openProxyDetailModal("))
+        ]
+        event_handler = self.console_script[
+            self.console_script.index('const proxyView = event.target.closest("[data-proxy-view]")'):
+            self.console_script.index('const proxyPage = event.target.closest("[data-proxy-page]")')
+        ]
+
+        self.assertIn('class="proxy-card-grid" role="list"', proxy_pool)
+        self.assertIn('class="proxy-pool-card ', proxy_pool)
+        self.assertIn('data-proxy-view="${esc(proxy.id)}"', proxy_pool)
+        self.assertIn('${renderEyeIcon()}</button>', proxy_pool)
+        self.assertIn('${renderNetworkIcon()}</button>', proxy_pool)
+        self.assertIn('${renderEditIcon()}</button>', proxy_pool)
+        self.assertIn('${isMarketplace ? renderProxyReleaseIcon() : renderTrashIcon()}</button>', proxy_pool)
+        self.assertNotIn('const columns = [', proxy_pool)
+        self.assertNotIn('proxy-table-row--head', proxy_pool)
+
+        self.assertIn('modalKey: "proxy-details"', detail_modal)
+        self.assertIn('class="console-modal-detail proxy-detail-modal"', detail_modal)
+        self.assertIn('showConfirm: false', detail_modal)
+        self.assertIn('openProxyDetailModal(proxyView.dataset.proxyView || "")', event_handler)
+        self.assertLess(
+            event_handler.index('const proxyView = event.target.closest("[data-proxy-view]")'),
+            event_handler.index('const proxyCheck = event.target.closest("[data-proxy-check]")'),
+        )
+
+        self.assertIn(".proxy-card-grid {", self.styles)
+        self.assertIn(".proxy-pool-card {", self.styles)
+        self.assertIn("max-width: 420px;", self.styles)
+        self.assertNotIn(".proxy-table-row:not(.proxy-table-row--head)", self.styles)
+
+    def test_proxy_market_modal_uses_card_skeletons_and_corrects_stale_country_titles(self):
+        modal = self.console_script[
+            self.console_script.index("function proxyMarketCatalogRoot"):
+            self.console_script.index("function proxyFormPayload")
+        ]
+
+        self.assertIn("function proxyMarketCatalogTotal(payload = {})", modal)
+        self.assertIn("function renderProxyMarketMiniSkeletonCards(count = 4)", modal)
+        self.assertIn('class="proxy-market-mini-card is-loading"', modal)
+        self.assertIn("grid.innerHTML = renderProxyMarketMiniSkeletonCards(placeholderCount);", modal)
+        self.assertIn("function proxyMarketItemTitle(item = {})", modal)
+        self.assertIn("actualCountry.key !== namedCountry.key", modal)
+        self.assertIn("const title = proxyMarketItemTitle(item);", modal)
+        self.assertIn(".proxy-market-mini-card.is-loading", self.styles)
+        self.assertIn("@keyframes proxy-market-mini-skeleton-shift", self.styles)
 
     def test_media_generation_requires_a_loadable_persona_reference_image(self):
         self.assertIn(
