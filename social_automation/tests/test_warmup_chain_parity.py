@@ -466,21 +466,15 @@ class WarmupChainParityTests(TestCase):
     def test_instagram_search_submission_clicks_suggestion_then_grid_post(self):
         page = mock.Mock()
         suggestion = mock.Mock()
-        suggestions = mock.Mock()
-        suggestions.count.return_value = 1
-        suggestions.nth.return_value = suggestion
-        suggestion.is_visible.return_value = True
-        suggestion.bounding_box.return_value = {
-            "x": 40,
-            "y": 120,
-            "width": 260,
-            "height": 44,
-        }
-        page.get_by_text.return_value = suggestions
         result_link = mock.Mock()
 
         with (
             mock.patch.object(runner, "_human_click", return_value=True) as click,
+            mock.patch.object(
+                runner,
+                "_visible_instagram_search_suggestion",
+                return_value=suggestion,
+            ),
             mock.patch.object(runner, "_warmup_search_result_signature", return_value=()),
             mock.patch.object(
                 runner,
@@ -500,6 +494,32 @@ class WarmupChainParityTests(TestCase):
         self.assertEqual(click.call_args_list[0].args[1], suggestion)
         self.assertEqual(click.call_args_list[1].args[1], result_link)
         self.assertNotIn(mock.call("Enter"), page.keyboard.press.call_args_list)
+
+    def test_instagram_search_suggestion_matches_visible_query_container(self):
+        page = mock.Mock()
+        candidate = mock.Mock()
+        candidate.is_visible.return_value = True
+        candidate.bounding_box.return_value = {
+            "x": 40,
+            "y": 120,
+            "width": 260,
+            "height": 44,
+        }
+        candidate.inner_text.return_value = "barber stories"
+        candidate.get_attribute.return_value = (
+            "/explore/search/keyword/?q=barber%20stories"
+        )
+        candidates = mock.Mock()
+        candidates.count.return_value = 1
+        candidates.nth.return_value = candidate
+        page.locator.return_value = candidates
+
+        selected = runner._visible_instagram_search_suggestion(
+            page,
+            "barber stories",
+        )
+
+        self.assertIs(selected, candidate)
 
     def test_keyword_search_opens_search_ui_only_when_input_is_not_already_visible(self):
         page = mock.Mock()

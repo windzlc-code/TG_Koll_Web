@@ -3817,6 +3817,55 @@ def _visible_instagram_search_post_link(page):
     return None
 
 
+def _visible_instagram_search_suggestion(page, keyword: str):
+    """Return the visible Instagram search suggestion matching the query."""
+    clean_keyword = _normalize_warmup_text(keyword).lower()
+    scored = []
+    for selector in (
+        'a[href*="/explore/search/keyword/"]',
+        '[role="link"]',
+        '[role="button"]',
+    ):
+        try:
+            candidates = page.locator(selector)
+            for index in range(min(int(candidates.count()), 80)):
+                candidate = candidates.nth(index)
+                if not candidate.is_visible(timeout=300):
+                    continue
+                box = candidate.bounding_box()
+                if not box:
+                    continue
+                width = float(box.get("width") or 0)
+                height = float(box.get("height") or 0)
+                y = float(box.get("y") or 0)
+                if width < 80 or height < 24 or height > 180 or y < 70:
+                    continue
+                text = ""
+                href = ""
+                with contextlib.suppress(Exception):
+                    text = _normalize_warmup_text(candidate.inner_text(timeout=500)).lower()
+                with contextlib.suppress(Exception):
+                    href = str(candidate.get_attribute("href") or "").lower()
+                query_match = bool(clean_keyword) and clean_keyword in text
+                keyword_route = "/explore/search/keyword/" in href
+                if not query_match and not keyword_route:
+                    continue
+                score = 0
+                if text == clean_keyword:
+                    score += 5
+                elif query_match:
+                    score += 3
+                if keyword_route:
+                    score += 4
+                scored.append((score, -y, candidate))
+        except Exception:
+            continue
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return scored[0][2]
+
+
 def _submit_instagram_warmup_search(
     page,
     keyword: str,
@@ -3832,20 +3881,19 @@ def _submit_instagram_warmup_search(
     """
     interaction = "click_type_suggestion"
     suggestion_clicked = False
-    try:
-        candidates = page.get_by_text(keyword, exact=True)
-        for index in range(min(int(candidates.count()), 12)):
-            candidate = candidates.nth(index)
-            if not candidate.is_visible(timeout=500):
-                continue
-            box = candidate.bounding_box()
-            if not box or float(box.get("y") or 0) < 70:
-                continue
-            if _human_click(page, candidate, logger, f"{stage}_suggestion"):
-                suggestion_clicked = True
+    suggestion_deadline = time.monotonic() + 8.0
+    while time.monotonic() < suggestion_deadline:
+        candidate = _visible_instagram_search_suggestion(page, keyword)
+        if candidate is not None:
+            suggestion_clicked = _human_click(
+                page,
+                candidate,
+                logger,
+                f"{stage}_suggestion",
+            )
+            if suggestion_clicked:
                 break
-    except Exception:
-        suggestion_clicked = False
+        _sleep_between(0.4, 0.7)
 
     if not suggestion_clicked:
         interaction = "click_type_arrow_enter"
