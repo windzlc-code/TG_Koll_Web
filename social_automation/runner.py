@@ -3934,6 +3934,12 @@ def _search_warmup_interest_surface(
     stage = f"{platform}_warmup_relevance_search"
     clean_keyword = " ".join(str(keyword or "").split())
     try:
+        if platform == "instagram":
+            # Instagram opens search-grid posts in a modal layer. Close the
+            # prior result before returning to the persistent Search entry.
+            with contextlib.suppress(Exception):
+                page.keyboard.press("Escape")
+            _sleep_between(0.4, 0.7)
         search_input = _warmup_search_input_locator(page, platform)
         if search_input is None:
             search_entry = _warmup_search_entry_locator(page, platform)

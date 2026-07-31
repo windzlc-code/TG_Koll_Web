@@ -461,6 +461,7 @@ class WarmupChainParityTests(TestCase):
             mock.ANY,
             "instagram_warmup_relevance_search",
         )
+        page.keyboard.press.assert_any_call("Escape")
         self.assertNotIn(mock.call("Enter"), page.keyboard.press.call_args_list)
 
     def test_instagram_search_submission_clicks_suggestion_then_grid_post(self):
