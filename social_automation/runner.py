@@ -5421,8 +5421,6 @@ def _run_platform_warmup(
     _install_warmup_media_guard(page)
     _goto(page, home_url, logger, stage)
     _ensure_warmup_media_guard(page)
-    if clean_platform == "instagram":
-        _dismiss_instagram_interstitials(page, logger)
     _guard_warmup_risk(
         page,
         clean_platform,
@@ -5433,6 +5431,8 @@ def _run_platform_warmup(
         cancel_event=cancel_event,
         context_control=context_control,
     )
+    if clean_platform == "instagram":
+        _dismiss_instagram_interstitials(page, logger)
 
     browse_limit = _payload_int(
         payload,
@@ -5958,6 +5958,16 @@ def _run_platform_warmup(
 
         if interacted:
             next_interaction_at = _next_warmup_interaction_at(browsed, payload)
+        _guard_warmup_risk(
+            page,
+            clean_platform,
+            payload,
+            logger,
+            task=task,
+            screenshot_dir=screenshot_dir,
+            cancel_event=cancel_event,
+            context_control=context_control,
+        )
         scroll = _slow_human_scroll(page)
         browsed += 1
         remaining_seconds = max(0, int(deadline - time.monotonic()))

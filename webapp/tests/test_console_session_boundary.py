@@ -1170,6 +1170,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             ".console-page .live-browser-card-actions > .status {",
             self.styles.find("@media (max-width: 760px)"),
         )
+        mobile_elapsed = self._css_block(
+            ".console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-mobile-summary > .live-browser-task-elapsed {",
+            portrait_start,
+        )
 
         self.assertIn("padding: 3px 6px;", expanded_head)
         self.assertIn("background: rgb(5 12 13 / 37%);", expanded_head)
@@ -1182,6 +1186,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("transform: none;", mobile_summary)
         self.assertIn("grid-template-columns: repeat(3, max-content);", mobile_summary)
         self.assertIn("justify-content: center;", mobile_summary)
+        self.assertIn("grid-column: 3;", mobile_elapsed)
+        self.assertIn("grid-row: 1;", mobile_elapsed)
+        self.assertIn("font-size: inherit;", mobile_elapsed)
         self.assertIn("align-items: center;", mobile_status)
         self.assertIn("justify-content: center;", mobile_status)
         self.assertIn("live-browser-mobile-summary > span:first-child", portrait_styles)
