@@ -6791,10 +6791,12 @@ function syncMobilePageToolbar() {
   const showPageBack = Boolean(pageBackTarget);
   const browserBackLabel = liveBrowserReturnLabel();
   if (navToggle) {
+    const navToggleLabel = showBrowserBack ? browserBackLabel : (showPageBack ? "\u8fd4\u56de\u4e0a\u4e00\u6b65" : "\u6253\u5f00\u63a7\u5236\u53f0\u5bfc\u822a");
     navToggle.hidden = !showPageBack && isMobilePersistentDockPage();
     navToggle.classList.toggle("is-page-back", showPageBack);
     navToggle.innerHTML = renderMobileNavToggleIcon(showPageBack);
-    setConsoleUiAttribute(navToggle, "aria-label", showBrowserBack ? browserBackLabel : (showPageBack ? "\u8fd4\u56de\u4e0a\u4e00\u6b65" : "\u6253\u5f00\u63a7\u5236\u53f0\u5bfc\u822a"));
+    setConsoleUiAttribute(navToggle, "aria-label", navToggleLabel);
+    setConsoleUiAttribute(navToggle, "title", navToggleLabel);
   }
   if (!title || !icon) return;
 
