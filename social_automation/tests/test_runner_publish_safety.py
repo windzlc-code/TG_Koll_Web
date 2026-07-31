@@ -2053,6 +2053,33 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         resolve_interstitial.assert_called_once_with(page, mock.ANY)
         goto.assert_called_once()
 
+    def test_instagram_onetap_saves_login_info_then_handles_optional_prompt(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/accounts/onetap/"
+        with (
+            mock.patch.object(
+                runner,
+                "_page_body_text_lower",
+                return_value="save your login info? save info not now",
+            ),
+            mock.patch.object(runner, "_click_text_button", return_value=True) as click,
+            mock.patch.object(runner, "_dismiss_instagram_interstitials", return_value=True) as dismiss,
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            resolved = runner._resolve_instagram_post_login_interstitial(page, _Logger())
+
+        self.assertTrue(resolved)
+        self.assertEqual(click.call_args.args[3], "instagram_save_login_info")
+        self.assertIn("Save info", click.call_args.args[2])
+        dismiss.assert_called_once_with(page, mock.ANY)
+        goto.assert_called_once_with(
+            page,
+            runner.INSTAGRAM_HOME,
+            mock.ANY,
+            "instagram_post_login_home",
+        )
+
     def test_auto_login_does_not_resubmit_or_self_heal_during_submit_grace(self):
         page = mock.Mock()
         page.url = "https://www.instagram.com/accounts/login/"
@@ -3580,6 +3607,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner, "_type_text"),
             mock.patch.object(runner, "_human_click"),
+            mock.patch.object(runner, "_warmup_scroll") as warmup_scroll,
             mock.patch.object(
                 runner,
                 "_run_publish_submit_action",
@@ -3608,7 +3636,6 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 {
                     "caption": "published caption",
                     "media_paths": [str(media_path)],
-                    "warmup": False,
                 },
                 Path("."),
                 _Logger(),
@@ -3623,6 +3650,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         confirm_profile.assert_called_once()
         capture_evidence.assert_called_once()
         direct_screenshot.assert_not_called()
+        warmup_scroll.assert_not_called()
 
     def test_instagram_publish_confirmation_stops_immediately_when_cancelled(self):
         page = mock.Mock()

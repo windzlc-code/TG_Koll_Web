@@ -3121,7 +3121,36 @@ def _dismiss_instagram_interstitials(page, logger: AutomationLogger) -> bool:
 
 def _resolve_instagram_post_login_interstitial(page, logger: AutomationLogger) -> bool:
     url_before = str(page.url or "")
-    if not _dismiss_instagram_interstitials(page, logger):
+    body_text = _page_body_text_lower(page)
+    save_login_prompt = (
+        "/accounts/onetap" in url_before.lower()
+        or "save your login info?" in body_text
+    )
+    if save_login_prompt:
+        if not _click_text_button(
+            page,
+            logger,
+            [
+                "Save info",
+                "Save Info",
+                "保存信息",
+                "保存登录信息",
+                "儲存登入資料",
+            ],
+            "instagram_save_login_info",
+        ):
+            return False
+        logger.log(
+            "info",
+            "instagram_save_login_info",
+            "已保存 Instagram 登录信息，后续任务将继续复用当前浏览器会话。",
+            {"url": _safe_navigation_url(page.url)},
+        )
+        _sleep_between(0.8, 1.5)
+        # Saving the browser session can be followed by a notification prompt.
+        # That second prompt is optional and should be dismissed independently.
+        _dismiss_instagram_interstitials(page, logger)
+    elif not _dismiss_instagram_interstitials(page, logger):
         return False
     if "/accounts/onetap" in url_before.lower() or "/accounts/onetap" in str(page.url or "").lower():
         _goto(page, INSTAGRAM_HOME, logger, "instagram_post_login_home")
@@ -10019,7 +10048,7 @@ def _run_publish_post(
     if baseline_used_primary_page:
         _goto(page, INSTAGRAM_HOME, logger, "publish_open")
     _dismiss_instagram_interstitials(page, logger)
-    if payload.get("warmup", True):
+    if bool(payload.get("warmup", False)):
         _warmup_scroll(page, logger, 1)
     if not _click_text_button(page, logger, ["Create", "New post", "Create new post"], "publish_create"):
         raise RuntimeError("未找到 Instagram 创建/新建帖子按钮。")
