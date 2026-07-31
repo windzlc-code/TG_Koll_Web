@@ -209,6 +209,45 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertFalse(refreshed["liveAuthUsable"])
         self.assertEqual(probe.call_count, 2)
 
+    def test_expired_live_auth_cache_keeps_last_result_for_non_probe_display(self):
+        profile = {"key": "instagram", "platform": "instagram"}
+        cookies = [
+            {
+                "name": "sessionid",
+                "value": "instagram-session-for-stable-display",
+                "domain": ".instagram.com",
+                "path": "/",
+                "expires": 1_893_456_000,
+            }
+        ]
+        server._SENTIMENT_INSTAGRAM_LIVE_AUTH_CACHE.clear()
+        with mock.patch.object(
+            server,
+            "_probe_instagram_live_auth_with_browser",
+            return_value={
+                "ok": True,
+                "status": "verified",
+                "searchUsable": True,
+                "searchStatus": "available",
+            },
+        ):
+            checked = server._sentiment_instagram_live_auth_state(profile, cookies, force=True)
+
+        for entry in server._SENTIMENT_INSTAGRAM_LIVE_AUTH_CACHE.values():
+            entry["expiresAt"] = 0
+
+        with mock.patch.object(server, "_probe_instagram_live_auth_with_browser") as probe:
+            displayed = server._sentiment_instagram_live_auth_state(
+                profile,
+                cookies,
+                allow_probe=False,
+            )
+
+        probe.assert_not_called()
+        self.assertEqual(displayed, checked)
+        self.assertEqual(displayed["liveAuthStatus"], "verified")
+        self.assertEqual(displayed["liveSearchStatus"], "available")
+
     def test_instagram_profile_waits_for_manual_refresh_before_uncached_probe(self):
         profile = {
             "key": "instagram",

@@ -559,7 +559,7 @@ function setActiveAdminPage(page, updateHash = true) {
     location.hash = targetHash;
   }
   if (nextPage === "sentimentCookies") {
-    void refreshSentimentCookieProfilesIfActive();
+    void refreshSentimentCookieProfilesIfActive({ force: true });
   }
   if (nextPage === "pricing") {
     void ensureBillingLoaded();
@@ -1628,6 +1628,7 @@ function closeModelPickersOnOutsideClick(target) {
 
 const TASK_POLL_INTERVAL_MS = 10000;
 const GOVERNANCE_POLL_INTERVAL_MS = 30000;
+const SENTIMENT_COOKIE_POLL_INTERVAL_MS = 60000;
 const EMAIL_DELIVERY_MANUAL_LIMIT_MAX = 10000000;
 const EMAIL_DELIVERY_POLICY_SAVE_TIMEOUT_MS = 30000;
 const taskState = {
@@ -3036,7 +3037,7 @@ async function downloadSentimentCookieHelper() {
 function setSentimentCookieLiveState(text, state = "ready") {
   const node = el("sentimentCookieLiveState");
   const shell = node?.closest(".sentiment-cookie-live");
-  if (node) node.textContent = String(text || "等待手动检测");
+  if (node) node.textContent = String(text || "等待自动检测");
   if (shell) shell.dataset.state = state;
 }
 
@@ -3049,13 +3050,20 @@ async function loadSentimentCookieProfiles({ force = false } = {}) {
   }
   adminState.sentimentCookieRefreshForced = force;
   adminState.sentimentCookieRefreshPromise = (async () => {
+    if (force) setSentimentCookieLiveState("自动检测中...", "checking");
     const payload = await api(`/api/admin/sentiment/browser_auth/profiles${force ? "?force=true" : ""}`);
     renderSentimentCookieProfiles(payload);
     if (el("sentimentCookieMsg")?.classList.contains("err")) {
       setMsg("sentimentCookieMsg", "");
     }
     const updatedAt = new Date().toLocaleTimeString("zh-CN", { timeZone: ADMIN_TIME_ZONE, hour12: false });
-    setSentimentCookieLiveState(force ? `检测完成 ${updatedAt}` : "等待手动检测", force ? "ready" : "warning");
+    const checked = (Array.isArray(payload?.profiles) ? payload.profiles : []).some((profile) => (
+      String(profile?.liveSearchCheckedAt || profile?.liveAuthCheckedAt || "").trim()
+    ));
+    setSentimentCookieLiveState(
+      force || checked ? `已更新 ${updatedAt}` : "等待自动检测",
+      force || checked ? "ready" : "warning",
+    );
     return payload;
   })();
   try {
@@ -3066,10 +3074,10 @@ async function loadSentimentCookieProfiles({ force = false } = {}) {
   }
 }
 
-async function refreshSentimentCookieProfilesIfActive() {
+async function refreshSentimentCookieProfilesIfActive({ force = true } = {}) {
   if (document.hidden || adminState.activePage !== "sentimentCookies") return null;
   try {
-    return await loadSentimentCookieProfiles();
+    return await loadSentimentCookieProfiles({ force });
   } catch {
     setSentimentCookieLiveState("读取失败，请手动刷新重试", "warning");
     return null;
@@ -9660,12 +9668,15 @@ function bindActions() {
 
   if (el("btnSentimentCookieRefresh")) {
     el("btnSentimentCookieRefresh").addEventListener("click", async () => {
+      setButtonLoading("btnSentimentCookieRefresh", true, "检测中");
       setMsg("sentimentCookieMsg", "正在执行平台实时状态检测...");
       try {
         await loadSentimentCookieProfiles({ force: true });
         setMsg("sentimentCookieMsg", "平台实时状态检测已完成。", true);
       } catch (err) {
         setMsg("sentimentCookieMsg", getErrorMessage(err), false);
+      } finally {
+        setButtonLoading("btnSentimentCookieRefresh", false);
       }
     });
   }
@@ -10227,6 +10238,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   setInterval(() => {
     if (!document.hidden && adminState.activePage === "overview") void loadGovernanceDashboard({ force: true });
   }, GOVERNANCE_POLL_INTERVAL_MS);
+  setInterval(() => {
+    void refreshSentimentCookieProfilesIfActive({ force: true });
+  }, SENTIMENT_COOKIE_POLL_INTERVAL_MS);
 });
 
 window.addEventListener("hashchange", () => {

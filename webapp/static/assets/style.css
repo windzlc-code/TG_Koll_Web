@@ -3543,7 +3543,8 @@ body.page-admin {
 }
 
 .page-admin .remote-comfy-toolbar button.is-loading,
-.page-admin .admin-runtime-panel-head button.is-loading {
+.page-admin .admin-runtime-panel-head button.is-loading,
+.page-admin #btnSentimentCookieRefresh.is-loading {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3552,7 +3553,8 @@ body.page-admin {
 }
 
 .page-admin .remote-comfy-toolbar button.is-loading::before,
-.page-admin .admin-runtime-panel-head button.is-loading::before {
+.page-admin .admin-runtime-panel-head button.is-loading::before,
+.page-admin #btnSentimentCookieRefresh.is-loading::before {
   content: "";
   width: 14px;
   height: 14px;

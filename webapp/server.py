@@ -2043,8 +2043,13 @@ def _sentiment_threads_live_auth_state(
         }
     cache_key = _sentiment_threads_live_auth_cache_key(profile, active_cookies)
     cached = _SENTIMENT_THREADS_LIVE_AUTH_CACHE.get(cache_key)
-    if not force and cached and float(cached.get("expiresAt") or 0) > time.time():
-        return dict(cached.get("value") or {})
+    if not force and cached:
+        cached_value = dict(cached.get("value") or {})
+        if cached_value and (
+            float(cached.get("expiresAt") or 0) > time.time()
+            or not allow_probe
+        ):
+            return cached_value
     if not force and not allow_probe:
         return {
             "liveAuthStatus": "pending_manual_check",
@@ -2154,8 +2159,13 @@ def _sentiment_instagram_live_auth_state(
 
     cache_key = _sentiment_threads_live_auth_cache_key(profile, active_cookies)
     cached = _SENTIMENT_INSTAGRAM_LIVE_AUTH_CACHE.get(cache_key)
-    if not force and cached and float(cached.get("expiresAt") or 0) > time.time():
-        return dict(cached.get("value") or {})
+    if not force and cached:
+        cached_value = dict(cached.get("value") or {})
+        if cached_value and (
+            float(cached.get("expiresAt") or 0) > time.time()
+            or not allow_probe
+        ):
+            return cached_value
     if not force and not allow_probe:
         return {
             "liveAuthStatus": "pending_manual_check",
