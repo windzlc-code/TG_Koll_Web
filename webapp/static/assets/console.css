@@ -10420,6 +10420,10 @@ body.persona-touch-dragging .persona-list-card:active {
   accent-color: var(--accent);
 }
 
+.persona-generated-selection-card input[type="radio"]:focus {
+  box-shadow: none;
+}
+
 .persona-generated-selection-index,
 .persona-generated-selection-mark {
   display: grid;
@@ -24544,7 +24548,7 @@ body.console-page {
   .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-mobile-summary {
     position: static;
     display: grid;
-    grid-template-columns: repeat(2, max-content);
+    grid-template-columns: repeat(3, max-content);
     gap: 1px 5px;
     justify-content: center;
     transform: none;
@@ -24568,6 +24572,14 @@ body.console-page {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-mobile-summary > .live-browser-task-elapsed {
+    grid-column: 3;
+    grid-row: 1;
+    align-self: center;
+    font-size: inherit;
+    line-height: inherit;
   }
 
   .console-page .live-browser-card.is-live-browser-modal.is-live-browser-controls-visible .live-browser-interaction-note,

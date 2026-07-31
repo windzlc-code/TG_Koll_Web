@@ -3222,6 +3222,62 @@ class PersonaDashboardApiTests(unittest.TestCase):
         )
         self.assertEqual(generated["platform"], "instagram")
 
+    def test_ordinary_generation_candidates_stay_out_of_draft_library_until_selected(self):
+        self._write_archives()
+
+        def fake_generate(payload):
+            archives_path = self.tool_runtime_dir / "persona_archives.json"
+            archives = json.loads(archives_path.read_text(encoding="utf-8"))
+            for index in range(3):
+                archives[0]["posts"].append({
+                    "id": f"ordinary-candidate-{index + 1}",
+                    "title": f"Candidate {index + 1}",
+                    "content": f"Generated candidate {index + 1}",
+                    "wordCount": 21,
+                    "orderIndex": index + 1,
+                    "createdAt": "2026-08-01T00:00:00Z",
+                    "updatedAt": "2026-08-01T00:00:00Z",
+                })
+            archives_path.write_text(json.dumps(archives), encoding="utf-8")
+            return {
+                "ok": True,
+                "postIds": [f"ordinary-candidate-{index + 1}" for index in range(3)],
+                "generatedCount": 3,
+                "selectedMemoryCount": 0,
+            }
+
+        payload = server.PersonaDashboardGeneratePostsPayload(
+            count=3,
+            platform="threads",
+            selection_required=True,
+        )
+        with mock.patch.object(server, "_run_persona_workflow_cli", side_effect=fake_generate):
+            result = server._generate_persona_archive_posts(
+                "persona-1",
+                payload,
+                operation_id="ordinary-operation-1",
+            )
+
+        self.assertEqual(len(result["posts"]), 3)
+        self.assertTrue(all(post["generation_candidate"] for post in result["posts"]))
+        self.assertEqual(
+            [post["id"] for post in server._list_persona_archive_posts("persona-1")],
+            ["post-1"],
+        )
+
+        selected = result["posts"][1]
+        server._update_persona_archive_post(
+            "persona-1",
+            selected["id"],
+            server.PersonaDashboardDraftPostPayload(
+                title=selected["title"],
+                content=selected["content"],
+                platform="threads",
+            ),
+        )
+        visible_ids = [post["id"] for post in server._list_persona_archive_posts("persona-1")]
+        self.assertEqual(visible_ids, ["ordinary-candidate-2", "post-1"])
+
     def test_refresh_hot_post_returns_updated_source_metrics(self):
         self._write_archives()
         refreshed_post = {

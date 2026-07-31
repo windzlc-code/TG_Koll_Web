@@ -2034,6 +2034,9 @@ def _verification_text_markers() -> list[str]:
         "authentication app",
         "6-digit code",
         "confirm it's you",
+        "confirm you're human",
+        "confirm you are human",
+        "enter the code from the image",
         "suspicious login attempt",
         "unusual login attempt",
         "security challenge",
@@ -2989,6 +2992,7 @@ def _warmup_risk_state(page, platform: str) -> dict[str, str] | None:
             "status": str(restriction.get("status") or "cookie_expired"),
             "health_status": str(restriction.get("health_status") or ""),
             "reason": str(restriction.get("reason") or "账号已被限制。"),
+            "force_manual": "true",
         }
     has_verification_input = False
     with contextlib.suppress(Exception):
@@ -3000,14 +3004,17 @@ def _warmup_risk_state(page, platform: str) -> dict[str, str] | None:
             verification_inputs.nth(index).is_visible(timeout=500)
             for index in range(min(verification_inputs.count(), 8))
         )
+    visible_text = f"{notice_text} {body_text}".strip()
     if (
         _is_verification_url(url)
         or has_verification_input
-        or any(marker in notice_text for marker in _verification_text_markers())
+        or any(marker in visible_text for marker in _verification_text_markers())
     ):
         return {
             "status": "need_verification",
-            "reason": f"{_platform_name(platform)} 触发了安全验证，养号任务已停止。",
+            "health_status": "abnormal",
+            "reason": f"{_platform_name(platform)} 触发了安全验证，自动操作已暂停，请人工处理当前页面。",
+            "force_manual": "true",
         }
     risk_markers = (
         "we restrict certain activity to protect our community",
@@ -3019,21 +3026,55 @@ def _warmup_risk_state(page, platform: str) -> dict[str, str] | None:
         "操作过于频繁",
         "暂时无法执行此操作",
     )
-    if any(marker in notice_text for marker in risk_markers):
+    if any(marker in visible_text for marker in risk_markers):
         return {
             "status": "need_verification",
+            "health_status": "abnormal",
             "reason": f"{_platform_name(platform)} 触发了频率或风控限制，养号任务已停止。",
         }
     return None
 
 
-def _guard_warmup_risk(page, platform: str, payload: dict[str, Any], logger: AutomationLogger) -> None:
-    if not bool(payload.get("stop_on_risk_limit", False)):
-        return
+def _guard_warmup_risk(
+    page,
+    platform: str,
+    payload: dict[str, Any],
+    logger: AutomationLogger,
+    *,
+    task: dict[str, Any] | None = None,
+    screenshot_dir: Path | None = None,
+    cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> None:
     risk = _warmup_risk_state(page, platform)
     if risk is None:
         return
+    force_manual = str(risk.get("force_manual") or "").lower() == "true"
+    if not force_manual and not bool(payload.get("stop_on_risk_limit", False)):
+        return
     logger.log("warn", f"{platform}_warmup_risk_limit", risk["reason"], {"status": risk["status"]})
+    _report_account_login_status(context_control, risk["status"], logger)
+    if force_manual and risk["status"] == "need_verification":
+        _request_manual_takeover(context_control)
+        if task is not None and screenshot_dir is not None:
+            shot = _screenshot(page, screenshot_dir, task, "warmup_manual_verification", logger)
+            login = _wait_for_manual_login_completion(
+                page,
+                task,
+                screenshot_dir,
+                logger,
+                platform,
+                cancel_event,
+                risk["reason"],
+                risk["status"],
+                shot,
+                risk,
+                context_control,
+            )
+            if login.get("status") == "ready":
+                _resume_after_manual_takeover(context_control)
+                _report_account_login_status(context_control, "ready", logger)
+                return
     raise NeedManualError(
         risk["reason"],
         risk["status"],
@@ -5382,6 +5423,16 @@ def _run_platform_warmup(
     _ensure_warmup_media_guard(page)
     if clean_platform == "instagram":
         _dismiss_instagram_interstitials(page, logger)
+    _guard_warmup_risk(
+        page,
+        clean_platform,
+        payload,
+        logger,
+        task=task,
+        screenshot_dir=screenshot_dir,
+        cancel_event=cancel_event,
+        context_control=context_control,
+    )
 
     browse_limit = _payload_int(
         payload,
@@ -5549,7 +5600,16 @@ def _run_platform_warmup(
         deadline += float(resource_management["deadline_extension_seconds"])
         if clean_platform == "instagram":
             _dismiss_instagram_interstitials(page, logger)
-        _guard_warmup_risk(page, clean_platform, payload, logger)
+        _guard_warmup_risk(
+            page,
+            clean_platform,
+            payload,
+            logger,
+            task=task,
+            screenshot_dir=screenshot_dir,
+            cancel_event=cancel_event,
+            context_control=context_control,
+        )
 
         # A scroll can replace the viewport entirely. Re-establish a relevant
         # post before every browse, open, like, or comment action on both platforms.
@@ -5926,7 +5986,16 @@ def _run_platform_warmup(
 
     if clean_platform == "instagram":
         _dismiss_instagram_interstitials(page, logger)
-    _guard_warmup_risk(page, clean_platform, payload, logger)
+    _guard_warmup_risk(
+        page,
+        clean_platform,
+        payload,
+        logger,
+        task=task,
+        screenshot_dir=screenshot_dir,
+        cancel_event=cancel_event,
+        context_control=context_control,
+    )
     _validate_warmup_completion(
         clean_platform,
         liked=liked,

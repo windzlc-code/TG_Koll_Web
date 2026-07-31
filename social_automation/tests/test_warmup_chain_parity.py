@@ -1404,6 +1404,58 @@ class WarmupChainParityTests(TestCase):
 
         self.assertEqual(context.exception.health_status, "banned")
 
+    def test_verification_risk_always_pauses_for_manual_takeover(self):
+        callback = mock.Mock()
+        risk = {
+            "status": "need_verification",
+            "health_status": "abnormal",
+            "reason": "Instagram requires human verification",
+            "force_manual": "true",
+        }
+        context_control = {
+            "account_login_status_callback": callback,
+        }
+        with (
+            mock.patch.object(runner, "_warmup_risk_state", return_value=risk),
+            mock.patch.object(runner, "_screenshot", return_value="verification.png"),
+            mock.patch.object(runner, "_request_manual_takeover") as request_manual,
+            mock.patch.object(runner, "_resume_after_manual_takeover") as resume_auto,
+            mock.patch.object(
+                runner,
+                "_wait_for_manual_login_completion",
+                return_value={"status": "ready"},
+            ) as wait_manual,
+        ):
+            runner._guard_warmup_risk(
+                mock.Mock(),
+                "instagram",
+                {"stop_on_risk_limit": False},
+                _Logger(),
+                task={"id": "task-1", "payload": {}},
+                screenshot_dir=Path("."),
+                context_control=context_control,
+            )
+
+        request_manual.assert_called_once_with(context_control)
+        resume_auto.assert_called_once_with(context_control)
+        callback.assert_has_calls([mock.call("need_verification"), mock.call("ready")])
+        wait_manual.assert_called_once()
+
+    def test_confirm_human_page_is_an_immediate_manual_risk(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/"
+        empty_group = mock.Mock()
+        empty_group.count.return_value = 0
+        body = mock.Mock()
+        body.inner_text.return_value = "Confirm you're human Enter the code from the image"
+        page.locator.side_effect = lambda selector: body if selector == "body" else empty_group
+
+        risk = runner._warmup_risk_state(page, "instagram")
+
+        self.assertEqual(risk["status"], "need_verification")
+        self.assertEqual(risk["health_status"], "abnormal")
+        self.assertEqual(risk["force_manual"], "true")
+
     def test_threads_post_open_does_not_swallow_cancellation(self):
         cancel_event = threading.Event()
         link = mock.Mock()

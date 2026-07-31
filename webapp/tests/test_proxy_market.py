@@ -415,7 +415,9 @@ class ProxyMarketTests(unittest.TestCase):
             headers={**self.origin, "Idempotency-Key": "limited-second"},
         )
         self.assertEqual(rejected.status_code, 409, rejected.text)
-        self.assertGreater(customer.get("/api/proxy-market/me").json()["unread_catalog_count"], 0)
+        summary = customer.get("/api/proxy-market/me").json()
+        self.assertGreater(summary["unread_catalog_count"], 0)
+        self.assertEqual(summary["available_catalog_count"], 1)
         read = customer.post(
             "/api/proxy-market/read",
             json={"scope": "catalog"},

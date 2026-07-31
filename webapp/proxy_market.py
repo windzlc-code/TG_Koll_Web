@@ -782,6 +782,19 @@ def register_proxy_market_routes(app: FastAPI) -> None:
                     (user_id,),
                 ).fetchone()[0]
             )
+            available_catalog_count = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM proxy_market_items
+                    WHERE status = 'active'
+                      AND health_status = 'healthy'
+                      AND last_check_at >= ?
+                      AND (expires_at = 0 OR expires_at > ?)
+                    """,
+                    (now - int(settings["health_max_age_seconds"]), now),
+                ).fetchone()[0]
+            )
         return {
             "ok": True,
             "user_id": user_id,
@@ -797,6 +810,7 @@ def register_proxy_market_routes(app: FastAPI) -> None:
             "remaining": max(0, _claim_limit_from_state(state, settings) - used),
             "unread_catalog_count": unread_catalog,
             "unread_proxy_count": unread_proxy,
+            "available_catalog_count": available_catalog_count,
             "server_time": now,
         }
 

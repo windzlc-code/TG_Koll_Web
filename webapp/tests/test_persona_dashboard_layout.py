@@ -678,6 +678,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         self.assertIn('aria-label="使用 AI 重新生成当前推文"', content_panel)
         self.assertIn('data-persona-draft-save-dock', content_panel)
+        self.assertIn('const generateMode = isEditingDraft\n    ? "custom"', content_panel)
 
     def test_hotspot_top_capsule_switches_the_real_generation_mode(self):
         handler_start = self.console_script.index(
@@ -690,7 +691,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         handler = self.console_script[handler_start:handler_end]
         self.assertIn('["tweet_media", "hot"].includes', handler)
         self.assertIn('form.generate.mode = nextComposeMode === "hot" ? "hot" : "ai";', handler)
-        self.assertIn('editingPostId && nextComposeMode !== "tweet"', handler)
+        self.assertIn('if (editingPostId) {', handler)
+        self.assertIn('if (nextComposeMode !== "tweet")', handler)
         self.assertIn("批量推文和热点抓取已锁定", handler)
 
         self.assertIn(
@@ -715,6 +717,37 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("resolvePersonaOrdinaryGeneratedCandidates(persona, generatedPosts, requestedTitle)", self.console_script)
         self.assertIn("discardPersonaGeneratedCandidatePosts(", self.console_script)
         self.assertIn('.console-modal[data-modal-key="persona-generated-selection"]', self.styles)
+        self.assertIn('.persona-generated-selection-card input[type="radio"]:focus', self.styles)
+        self.assertIn("box-shadow: none;", self.styles)
+
+    def test_generation_mode_loading_selection_and_media_steps_are_isolated(self):
+        payload_builder = self.console_script[
+            self.console_script.index("function generatePersonaPayloadFromState"):
+            self.console_script.index("function personaGenerateRunState")
+        ]
+        completion = self.console_script[
+            self.console_script.index("async function completePersonaPostGenerationTask"):
+            self.console_script.index("async function watchPersonaPostGenerationTask")
+        ]
+        selection = self.console_script[
+            self.console_script.index("async function resolvePersonaOrdinaryGeneratedCandidates"):
+            self.console_script.index("function personaPostGenerationTaskStorageKey")
+        ]
+        content_panel = self.console_script[
+            self.console_script.index("function renderPersonaContentPanel"):
+            self.console_script.index("function refreshLiveBrowserSessionsSoon")
+        ]
+
+        self.assertIn('selection_required: String(form.composeMode || "tweet") === "tweet"', payload_builder)
+        self.assertIn('if (composeMode === "tweet" && generatedPosts.length) {', completion)
+        self.assertNotIn("&& isActiveGenerationSurface", completion)
+        self.assertIn('personaForm.generate.composeMode = "tweet";', selection)
+        self.assertIn('personaForm.media.operationMode = "generate";', selection)
+        self.assertIn("personaForm.media.focusPostId = selectedPostId;", selection)
+        self.assertIn("const generationLocked = isActionLocked", content_panel)
+        self.assertIn("const generateBusy = generationLocked && activeGenerateComposeMode === composeMode;", content_panel)
+        self.assertIn("const ordinaryMediaTarget", content_panel)
+        self.assertIn("isEditingDraft || isBatchCompose || ordinaryMediaTarget", content_panel)
 
     def test_mobile_task_queue_persona_list_reuses_shared_drawer(self):
         selector_start = self.console_script.index("function renderTaskQueuePersonaSelector()")
@@ -1071,7 +1104,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("@keyframes account-pool-platform", mobile_account_pool_styles)
         self.assertNotIn("will-change: transform, opacity;", mobile_account_pool_styles)
 
-    def test_mobile_persistent_dock_pages_hide_the_left_toolbar_toggle_except_browser_back_navigation(self):
+    def test_mobile_persistent_dock_pages_hide_the_left_toolbar_toggle_except_page_back_navigation(self):
         helper_start = self.console_script.index("function isMobilePersistentDockPage()")
         helper_end = self.console_script.index("\nfunction syncMobilePageToolbar()", helper_start)
         helper = self.console_script[helper_start:helper_end]
@@ -1082,11 +1115,35 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('state.view === "tasks"', helper)
         self.assertIn('if (state.view === "accounts") return true;', helper)
         self.assertIn('["personas", "tweet_generation", "publishing"].includes(state.activeModule)', helper)
+        self.assertIn("function mobilePageBackTarget()", self.console_script)
+        self.assertIn('["tasks", "billing", "console_settings"].includes(state.view)', self.console_script)
         self.assertIn('const navToggle = $("mobileNavToggle");', toolbar)
         self.assertIn("const showBrowserBack", toolbar)
-        self.assertIn("navToggle.hidden = !showBrowserBack && isMobilePersistentDockPage();", toolbar)
-        self.assertIn("renderMobileNavToggleIcon(showBrowserBack)", toolbar)
+        self.assertIn("const pageBackTarget = mobilePageBackTarget();", toolbar)
+        self.assertIn('const showBrowserBack = pageBackTarget === "live-browser";', toolbar)
+        self.assertIn("const showPageBack = Boolean(pageBackTarget);", toolbar)
+        self.assertIn("navToggle.hidden = !showPageBack && isMobilePersistentDockPage();", toolbar)
+        self.assertIn("renderMobileNavToggleIcon(showPageBack)", toolbar)
         self.assertIn('.mobile-page-toolbar > .mobile-nav-toggle[hidden]', self.styles)
+
+    def test_console_settings_mobile_back_and_input_mode_avoid_full_page_rerender(self):
+        navigation_start = self.console_script.index("function bindMobileNavigation()")
+        navigation_end = self.console_script.index("\nfunction setPersonaMobileSidebarOpen", navigation_start)
+        navigation = self.console_script[navigation_start:navigation_end]
+        preference_start = self.console_script.index("function setBrowserPreferenceChoice(")
+        preference_end = self.console_script.index("\nfunction refreshConsoleSettingsDependents()", preference_start)
+        preferences = self.console_script[preference_start:preference_end]
+        click_start = self.console_script.index('const inputMode = event.target.closest("[data-browser-text-input-mode]");')
+        click_end = self.console_script.index("\n    if (event.target.closest(\"[data-browser-recommendation-refresh]\"))", click_start)
+        input_mode_click = self.console_script[click_start:click_end]
+
+        self.assertIn("const pageBackTarget = mobilePageBackTarget();", navigation)
+        self.assertIn('if (pageBackTarget === "live-browser")', navigation)
+        self.assertIn("setView(pageBackTarget);", navigation)
+        self.assertIn('{ render = true } = {}', preferences)
+        self.assertIn('if (render) renderConsoleSettingsPage();', preferences)
+        self.assertIn('commit: () => setBrowserPreferenceChoice("text_input_mode", mode, { render: false })', input_mode_click)
+        self.assertIn("syncBrowserTextInputModeTabs(mode);", input_mode_click)
 
     def test_persona_create_uses_the_shared_modal_and_merges_create_paths(self):
         create_start = self.console_script.index(
@@ -2261,7 +2318,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("renderPersonaGenerateComposeTabs(composeMode, { editingDraft: isEditingDraft })", content_panel)
         self.assertIn("persona-compose-lock-hint", content_panel)
         self.assertNotIn('data-persona-delete-post="${esc(draftForm.editingPostId)}"', content_panel)
-        self.assertIn('if (editingPostId && nextComposeMode !== "tweet")', compose_handler)
+        self.assertIn('if (editingPostId) {', compose_handler)
+        self.assertIn('form.generate.mode = "custom";', compose_handler)
+        self.assertIn('if (nextComposeMode !== "tweet")', compose_handler)
+        self.assertLess(
+            compose_handler.index('if (editingPostId) {'),
+            compose_handler.index('event.__vectoSegmentSlideHandled = true;'),
+        )
         self.assertIn(".persona-compose-toggle button:disabled", self.styles)
         self.assertIn(".persona-compose-lock-hint {", self.styles)
 
@@ -2824,8 +2887,12 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("function proxyMarketCatalogTotal(payload = {})", modal)
         self.assertIn("function renderProxyMarketMiniSkeletonCards(count = 4)", modal)
         self.assertIn('class="proxy-market-mini-card is-loading"', modal)
+        self.assertIn("proxyMarketAvailableCount: 0", self.console_script)
+        self.assertIn("state.proxyMarketAvailableCount = Math.max(0, Number(summary?.available_catalog_count || 0));", self.console_script)
+        self.assertIn("let placeholderCount = Math.max(1, Math.min(12, Number(state.proxyMarketAvailableCount || 0) || 4));", modal)
         self.assertIn("grid.innerHTML = renderProxyMarketMiniSkeletonCards(placeholderCount);", modal)
         self.assertIn("function proxyMarketItemTitle(item = {})", modal)
+        self.assertIn("/^[a-z]{2}$/i.test(alias)", modal)
         self.assertIn("actualCountry.key !== namedCountry.key", modal)
         self.assertIn("const title = proxyMarketItemTitle(item);", modal)
         self.assertIn(".proxy-market-mini-card.is-loading", self.styles)

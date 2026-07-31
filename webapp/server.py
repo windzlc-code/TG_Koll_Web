@@ -1562,6 +1562,19 @@ def _recover_running_persona_post_generation_task(
             ]
         except Exception:
             return False
+    if _to_bool(payload.get("selection_required"), False):
+        _set_persona_archive_posts_generation_candidates(archive_id, durable_ids, True)
+        try:
+            _path, _raw, archives = _persona_archive_source_for_write(archive_id)
+            archive = _find_persona_archive(archives, archive_id)
+            posts = archive.get("posts") if isinstance((archive or {}).get("posts"), list) else []
+            operation_posts = [
+                post
+                for post in posts
+                if isinstance(post, dict) and str(post.get("id") or "").strip() in durable_ids
+            ]
+        except Exception:
+            return False
     billing = commercial_billing.settle_reservation(
         conn,
         reservation_id,
@@ -1574,7 +1587,7 @@ def _recover_running_persona_post_generation_task(
         "persona_id": archive_id,
         "generated_count": len(durable_ids),
         "post_ids": [str(post.get("id") or "").strip() for post in operation_posts],
-        "posts": [dict(post) for post in operation_posts],
+        "posts": [_compact_persona_archive_post(post) for post in operation_posts],
     })
     recovered_output["billing"] = billing
     now = _now_ts()
@@ -11333,6 +11346,7 @@ class PersonaDashboardGeneratePostsPayload(BaseModel):
     content_time_slot: str = ""
     selected_memory_ids: list[str] = Field(default_factory=list)
     selected_memory_summaries: list[str] = Field(default_factory=list)
+    selection_required: bool = False
     rewrite_source_post_id: str = ""
     rewrite_source_title: str = ""
     rewrite_source_content: str = ""
@@ -12052,6 +12066,8 @@ def _compact_persona_archive_post(post: dict[str, Any]) -> dict[str, Any]:
             or source_meta.get("platform")
         ),
         "automation_task_id": str(post.get("automationTaskId") or "").strip(),
+        "generation_candidate": bool(post.get("generationCandidate")),
+        "generation_operation_id": str(post.get("generationOperationId") or "").strip(),
         "media_url": str(post.get("mediaUrl") or post.get("imageUrl") or ""),
         "media_type": str(post.get("mediaType") or ""),
         "media_items": _compact_dashboard_media_items(post, published_meta),
@@ -13706,7 +13722,7 @@ def _generate_persona_archive_posts(
         raise HTTPException(status_code=400, detail="不支持的文案时段。")
     existing_post_ids = {
         str(post.get("id") or "").strip()
-        for post in _list_persona_archive_posts(clean_id)
+        for post in _list_persona_archive_posts(clean_id, include_generation_candidates=True)
         if str(post.get("id") or "").strip()
     }
     result = _run_persona_workflow_cli({
@@ -13727,13 +13743,15 @@ def _generate_persona_archive_posts(
     if not post_ids:
         post_ids = {
             str(post.get("id") or "").strip()
-            for post in _list_persona_archive_posts(clean_id)
+            for post in _list_persona_archive_posts(clean_id, include_generation_candidates=True)
             if str(post.get("id") or "").strip() not in existing_post_ids
         }
     _set_persona_archive_posts_platform(clean_id, post_ids, payload.platform)
     if str(operation_id or "").strip():
         _set_persona_archive_posts_generation_operation(clean_id, post_ids, operation_id)
-    posts = _list_persona_archive_posts(clean_id)
+    if payload.selection_required:
+        _set_persona_archive_posts_generation_candidates(clean_id, post_ids, True)
+    posts = _list_persona_archive_posts(clean_id, include_generation_candidates=True)
     generated_posts = [item for item in posts if str(item.get("id") or "").strip() in post_ids] if post_ids else posts[:count]
     return {
         "ok": True,
@@ -13802,6 +13820,34 @@ def _set_persona_archive_posts_generation_operation(
         if isinstance(post, dict) and str(post.get("id") or "").strip() in clean_post_ids:
             post["generationOperationId"] = clean_operation_id
             changed = True
+    if changed:
+        archive["updatedAt"] = _persona_dashboard_iso_now()
+        _write_persona_archives_preserving_shape(path, raw, archives)
+
+
+@_persona_archive_write_locked
+def _set_persona_archive_posts_generation_candidates(
+    archive_id: str,
+    post_ids: set[str],
+    required: bool,
+) -> None:
+    clean_post_ids = {str(post_id or "").strip() for post_id in post_ids if str(post_id or "").strip()}
+    if not clean_post_ids:
+        return
+    path, raw, archives = _persona_archive_source_for_write(archive_id)
+    archive = _find_persona_archive(archives, archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="persona not found")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    changed = False
+    for post in posts:
+        if not isinstance(post, dict) or str(post.get("id") or "").strip() not in clean_post_ids:
+            continue
+        if required:
+            post["generationCandidate"] = True
+        else:
+            post.pop("generationCandidate", None)
+        changed = True
     if changed:
         archive["updatedAt"] = _persona_dashboard_iso_now()
         _write_persona_archives_preserving_shape(path, raw, archives)
@@ -13908,7 +13954,11 @@ def _enforce_persona_post_retention_for_user(
                 })
             posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
             for index, record in enumerate(posts):
-                if not isinstance(record, dict) or _is_published_persona_draft(record):
+                if (
+                    not isinstance(record, dict)
+                    or _is_published_persona_draft(record)
+                    or bool(record.get("generationCandidate"))
+                ):
                     continue
                 candidates.append({
                     "archive_id": archive_id,
@@ -14007,7 +14057,12 @@ def _is_published_persona_draft(post: dict[str, Any] | None) -> bool:
     return bool(str(post.get("publishedAt") or post.get("published_at") or "").strip())
 
 
-def _list_persona_archive_posts(archive_id: str, source: str = "posts") -> list[dict[str, Any]]:
+def _list_persona_archive_posts(
+    archive_id: str,
+    source: str = "posts",
+    *,
+    include_generation_candidates: bool = False,
+) -> list[dict[str, Any]]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
@@ -14022,6 +14077,8 @@ def _list_persona_archive_posts(archive_id: str, source: str = "posts") -> list[
         if not isinstance(post, dict):
             continue
         if source_key == "posts" and _is_published_persona_draft(post):
+            continue
+        if source_key == "posts" and bool(post.get("generationCandidate")) and not include_generation_candidates:
             continue
         compact = _compact_persona_archive_post(post)
         compact["source"] = _persona_post_source_name(source)
@@ -14578,6 +14635,7 @@ def _update_persona_archive_post(archive_id: str, post_id: str, payload: Persona
         target["platform"] = _normalize_persona_content_platform(payload.platform)
     target["content"] = content
     target["wordCount"] = len(content)
+    target.pop("generationCandidate", None)
     if payload.media_ops:
         media_items = _persona_post_media_items_from_paths(next_media)
         target["mediaItems"] = media_items
@@ -18325,6 +18383,7 @@ def _admin_user_content_metrics(conn: sqlite3.Connection, user_ids: Iterable[int
                 isinstance(post, dict)
                 and _persona_dashboard_post_key(archive_id, post) not in deleted_post_keys
                 and not _is_published_persona_draft(post)
+                and not bool(post.get("generationCandidate"))
             )
         )
         publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []

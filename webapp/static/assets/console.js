@@ -324,6 +324,7 @@ const state = {
   transientWorkspaceAllowNextUnload: false,
   accountBrowserPanel: ["browsers", "proxies"].includes(initialAccountBrowserPanel) ? initialAccountBrowserPanel : "accounts",
   proxyMarketUnreadCount: 0,
+  proxyMarketAvailableCount: 0,
   proxyMarketSummaryLoaded: false,
   proxyMarketReadRevision: 0,
   proxyMarketMarkReadPromise: null,
@@ -1091,8 +1092,13 @@ function bindMobileNavigation() {
   const backdrop = $("consoleNavBackdrop");
   if (!toggle || !closeButton || !sidebar || !backdrop) return;
   toggle.addEventListener("click", () => {
-    if (state.view === "accounts" && state.accountBrowserPanel === "browsers") {
+    const pageBackTarget = mobilePageBackTarget();
+    if (pageBackTarget === "live-browser") {
       returnFromLiveBrowserTaskView();
+      return;
+    }
+    if (pageBackTarget) {
+      setView(pageBackTarget);
       return;
     }
     setMobileNavOpen(toggle.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
@@ -3585,7 +3591,7 @@ function personaFormState(personaId) {
     return {
       generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", prompt: "", selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotSearchMode: "strict", hotFreshnessMode: "default", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {} },
       draft: defaultPersonaDraftForm(),
-      media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", resolution: "720p", duration: 2, replaceExisting: false },
+      media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1" },
     };
   }
@@ -3618,6 +3624,7 @@ function personaFormState(personaId) {
         taskType: "persona_post_image",
         operationMode: "replace",
         contentMode: "draft",
+        focusPostId: "",
         manualContent: "",
         prompt: "",
         imageCount: storedPersonaMediaImageCount(),
@@ -6769,17 +6776,25 @@ function renderMobileNavToggleIcon(back = false) {
   }</svg>`;
 }
 
+function mobilePageBackTarget() {
+  if (state.view === "accounts" && state.accountBrowserPanel === "browsers") return "live-browser";
+  if (["tasks", "billing", "console_settings"].includes(state.view)) return "persona_dashboard";
+  return "";
+}
+
 function syncMobilePageToolbar() {
   const navToggle = $("mobileNavToggle");
   const title = $("mobilePageToolbarTitle");
   const icon = $("mobilePageToolbarIcon");
-  const showBrowserBack = state.view === "accounts" && state.accountBrowserPanel === "browsers";
+  const pageBackTarget = mobilePageBackTarget();
+  const showBrowserBack = pageBackTarget === "live-browser";
+  const showPageBack = Boolean(pageBackTarget);
   const browserBackLabel = liveBrowserReturnLabel();
   if (navToggle) {
-    navToggle.hidden = !showBrowserBack && isMobilePersistentDockPage();
-    navToggle.classList.toggle("is-page-back", showBrowserBack);
-    navToggle.innerHTML = renderMobileNavToggleIcon(showBrowserBack);
-    setConsoleUiAttribute(navToggle, "aria-label", showBrowserBack ? browserBackLabel : "\u6253\u5f00\u63a7\u5236\u53f0\u5bfc\u822a");
+    navToggle.hidden = !showPageBack && isMobilePersistentDockPage();
+    navToggle.classList.toggle("is-page-back", showPageBack);
+    navToggle.innerHTML = renderMobileNavToggleIcon(showPageBack);
+    setConsoleUiAttribute(navToggle, "aria-label", showBrowserBack ? browserBackLabel : (showPageBack ? "\u8fd4\u56de\u4e0a\u4e00\u6b65" : "\u6253\u5f00\u63a7\u5236\u53f0\u5bfc\u822a"));
   }
   if (!title || !icon) return;
 
@@ -16112,11 +16127,17 @@ function updateBrowserPreferencesDraft() {
   return state.browserPreferences;
 }
 
-function setBrowserPreferenceChoice(field, value) {
+function setBrowserPreferenceChoice(field, value, { render = true } = {}) {
   const current = updateBrowserPreferencesDraft();
   state.browserPreferences = normalizeBrowserPreferences({ ...current, [field]: value });
   state.browserPreferencesDirty = true;
-  renderConsoleSettingsPage();
+  if (render) renderConsoleSettingsPage();
+}
+
+function syncBrowserTextInputModeTabs(mode) {
+  document.querySelectorAll("[data-browser-text-input-mode]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.browserTextInputMode === mode);
+  });
 }
 
 function refreshConsoleSettingsDependents() {
@@ -18314,6 +18335,7 @@ function generatePersonaPayloadFromState(persona, profile = selectedPersonaProfi
     target_words: targetWords,
     content_time_slot: String(form.contentTimeSlot || "").trim(),
     selected_memory_ids: Array.isArray(form.selectedMemoryIds) ? form.selectedMemoryIds : [],
+    selection_required: String(form.composeMode || "tweet") === "tweet",
   };
   const rewriteSourcePostId = String(draft.rewriteSourcePostId || draft.editingPostId || "").trim();
   const rewriteSourceContent = String(draft.content || "").trim();
@@ -18445,9 +18467,9 @@ async function discardPersonaGeneratedCandidatePosts(personaId, candidateIds = [
 async function applyPersonaGeneratedCandidateTitle(personaId, post, requestedTitle = "") {
   const cleanPersonaId = String(personaId || "").trim();
   const cleanPostId = String(post?.id || "").trim();
-  const title = String(requestedTitle || "").trim();
+  const title = String(requestedTitle || post?.title || "").trim();
   const content = String(post?.content || post?.full_content || "").trim();
-  if (!cleanPersonaId || !cleanPostId || !title || title === String(post?.title || "").trim()) return post;
+  if (!cleanPersonaId || !cleanPostId || (!content && !title)) return post;
   return api(`/api/persona_dashboard/personas/${encodeURIComponent(cleanPersonaId)}/posts/${encodeURIComponent(cleanPostId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -18484,8 +18506,11 @@ async function resolvePersonaOrdinaryGeneratedCandidates(persona, generatedPosts
   setPersonaPostSource("posts", persona);
   setSelectedPersonaPostId(selectedPostId || personaDraftPosts(persona)[0]?.id || "");
   if (selection.action === "media" && selectedPostId) {
-    personaFormState(persona.id).generate.composeMode = "tweet_media";
-    personaFormState(persona.id).media.contentMode = "draft";
+    const personaForm = personaFormState(persona.id);
+    personaForm.generate.composeMode = "tweet";
+    personaForm.media.operationMode = "generate";
+    personaForm.media.contentMode = "draft";
+    personaForm.media.focusPostId = selectedPostId;
     state.personaPanels.content = "generate";
     showMsg("commandMsg", "已保留所选草稿，可以继续生成配图。", true);
   } else if (selection.action === "save" && selectedPostId) {
@@ -18612,6 +18637,7 @@ async function generatePersonaDraftPosts() {
     count: payload.count,
     targetWords: payload.target_words,
     prompt: payload.prompt,
+    composeMode,
     posts: [],
     postIds: [],
     error: "",
@@ -18676,15 +18702,6 @@ async function completePersonaPostGenerationTask(persona, task, context = {}) {
   const composeMode = String(context.composeMode || "tweet");
   const requestedTitle = String(context.requestedTitle || "").trim();
   const isActivePersona = String(selectedPersona()?.id || "").trim() === String(persona.id || "").trim();
-  const isActiveGenerationSurface = isActivePersona
-    && state.activeModule === "tweet_generation"
-    && String(state.personaPanels?.content || "generate") === "generate";
-  await loadPersonaDraftPosts(persona.id, { force: true });
-  const latestGenerated = personaDraftPosts(persona).find((post) => generatedIds.has(String(post?.id || "")));
-  if (isActivePersona) {
-    setSelectedPersonaPostId(latestGenerated?.id || generatedPosts[0]?.id || "");
-    setPersonaPostSource("posts", persona);
-  }
   setPersonaGenerateRunState(persona.id, {
     kind: isRewriteRun ? "rewrite" : "draft",
     status: "success",
@@ -18697,14 +18714,22 @@ async function completePersonaPostGenerationTask(persona, task, context = {}) {
     generatedCount: result.generated_count || generatedPosts.length || 0,
     posts: generatedPosts,
     postIds: Array.from(generatedIds),
+    composeMode,
     error: "",
   });
-  if (composeMode === "tweet" && generatedPosts.length && isActiveGenerationSurface) {
+  if (composeMode === "tweet" && generatedPosts.length) {
     await resolvePersonaOrdinaryGeneratedCandidates(persona, generatedPosts, requestedTitle);
-  } else if (composeMode !== "tweet") {
-    await applyPersonaGeneratedBatchTitles(persona.id, generatedPosts, requestedTitle);
+  } else {
+    if (composeMode !== "tweet") {
+      await applyPersonaGeneratedBatchTitles(persona.id, generatedPosts, requestedTitle);
+    }
     personaFormState(persona.id).draft = defaultPersonaDraftForm();
-    if (requestedTitle) await loadPersonaDraftPosts(persona.id, { force: true });
+    await loadPersonaDraftPosts(persona.id, { force: true });
+    const latestGenerated = personaDraftPosts(persona).find((post) => generatedIds.has(String(post?.id || "")));
+    if (isActivePersona) {
+      setSelectedPersonaPostId(latestGenerated?.id || generatedPosts[0]?.id || "");
+      setPersonaPostSource("posts", persona);
+    }
   }
   if (isActivePersona) renderConfirmSummary();
 }
@@ -18759,6 +18784,7 @@ async function watchPersonaPostGenerationTask(persona, record, initialTask = nul
         count: Number(record?.context?.count || 0),
         targetWords: Number(record?.context?.targetWords || 0),
         prompt: String(record?.context?.prompt || ""),
+        composeMode: String(record?.context?.composeMode || "tweet"),
         error: "",
         suppressToast: true,
       });
@@ -18792,6 +18818,7 @@ function restorePersonaPostGenerationTasks(personaId = "") {
     count: Number(record?.context?.count || 0),
     targetWords: Number(record?.context?.targetWords || 0),
     prompt: String(record?.context?.prompt || ""),
+    composeMode: String(record?.context?.composeMode || "tweet"),
     error: "",
     suppressToast: true,
   });
@@ -22737,9 +22764,11 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   const composeMode = isEditingDraft
     ? "tweet"
     : (["tweet_media", "hot"].includes(composeModeValue) ? composeModeValue : "tweet");
-  const generateMode = composeMode === "hot"
-    ? "hot"
-    : (isEditingDraft && String(generateForm.mode || "").trim() === "custom" ? "custom" : "ai");
+  // A draft edit is a single, dedicated workflow. Never let a stale compose
+  // mode replace it with the new-post form while the draft remains open.
+  const generateMode = isEditingDraft
+    ? "custom"
+    : (composeMode === "hot" ? "hot" : "ai");
   const editingSource = draftForm.editingSource === "favorites" ? "favorites" : "posts";
   const editingRows = personaSourcePosts(persona, editingSource);
   const editingDraft = isEditingDraft ? editingRows.find((post) => String(post.id) === String(draftForm.editingPostId || "").trim()) || null : null;
@@ -22763,6 +22792,9 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   generateForm.targetWords = Math.min(Math.max(Number(generateForm.targetWords || generateDefaults.targetWords), 10), 2000);
   const selectedPostBase = selectedPersonaPost(persona, { requireExplicit: panel === "generate" && composeMode === "tweet_media" });
   const selectedPost = isEditingDraft ? editingDraft : selectedPostBase;
+  const ordinaryMediaTarget = composeMode === "tweet"
+    && Boolean(String(form.media?.focusPostId || "").trim())
+    && String(form.media.focusPostId || "").trim() === String(selectedPost?.id || "").trim();
   const selectedMediaSource = isEditingDraft ? editingSource : postSource;
   const selectedSourceLabel = selectedMediaSource === "favorites" ? "收藏" : "草稿";
   const selectedPostMediaItems = selectedPost ? personaDraftMediaPreviewItems(persona, selectedMediaSource, selectedPost) : [];
@@ -22771,7 +22803,9 @@ function renderPersonaContentPanel(persona, account, profile, step) {
     : (isEditingDraft
       ? "可修改正文、媒体或 AI 重写。"
       : `这里处理推文内容。已识别 ${memoryRows.length} 条可选记忆。`);
-  const generateBusy = isActionLocked("persona", persona.id, "generate_posts");
+  const generationLocked = isActionLocked("persona", persona.id, "generate_posts");
+  const activeGenerateComposeMode = String(personaGenerateRunState(persona.id)?.composeMode || composeMode);
+  const generateBusy = generationLocked && activeGenerateComposeMode === composeMode;
   const hotImportBusy = isActionLocked("persona", persona.id, "hot_import");
   const generatePreviewDock = renderPersonaGeneratePreviewDock(persona);
   const hasComposeAside = canComposeMedia || Boolean(generatePreviewDock);
@@ -22790,7 +22824,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           </div>
         ` : ""}
         ${renderPersonaContentPlatformRail(persona, {
-          disabled: isEditingDraft || generateBusy || hotImportBusy,
+          disabled: isEditingDraft || generationLocked || hotImportBusy,
         })}
         <div class="persona-compose-workspace ${hasComposeAside ? "has-media" : ""}">
           <section class="persona-compose-post-side persona-production-section ${isEditingDraft ? "is-editing-draft" : ""} ${editingDirty ? "is-dirty" : ""}">
@@ -22834,7 +22868,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           </label>
           <div class="row-actions">
             ${isEditingDraft ? `
-              <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="使用 AI 重新生成当前推文" ${preflight.ready && !generateBusy ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent("正在重新生成", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : "AI 重新生成"}</button>
+              <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="使用 AI 重新生成当前推文" ${preflight.ready && !generationLocked ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent("正在重新生成", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : "AI 重新生成"}</button>
               <button type="button" data-persona-stash-draft-edit>暂存草稿</button>
             ` : `
               <button type="button" class="primary" data-persona-create-post>保存草稿</button>
@@ -22860,7 +22894,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           <div class="row-actions persona-generate-actions">
             <button type="button" data-persona-create-post>${isEditingDraft ? "保存修改" : "保存草稿"}</button>
             <button type="button" data-persona-route-step="content:posts">查看草稿</button>
-            <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="${hasGenerateContent ? "使用 AI 润色当前内容" : "使用 AI 生成推文"}" ${preflight.ready && !generateBusy ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent(hasGenerateContent ? "正在润色推文" : "正在生成草稿", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : (hasGenerateContent ? "AI 润色" : "AI 生成")}</button>
+            <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="${hasGenerateContent ? "使用 AI 润色当前内容" : "使用 AI 生成推文"}" ${preflight.ready && !generationLocked ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent(hasGenerateContent ? "正在润色推文" : "正在生成草稿", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : (hasGenerateContent ? "AI 润色" : "AI 生成")}</button>
           </div>
         `}
           </section>
@@ -22868,7 +22902,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             <div class="persona-compose-media-stack">
               ${generatePreviewDock}
               ${renderPublishLinkSettings(persona)}
-              ${canComposeMedia ? ((isEditingDraft || composeMode === "tweet_media")
+              ${canComposeMedia ? ((isEditingDraft || isBatchCompose || ordinaryMediaTarget)
                 ? renderPersonaInlineMediaComposer(persona, profile, generateForm, form.media, selectedPost, selectedPostMediaItems, selectedSourceLabel, selectedMediaSource === "favorites")
                 : renderPersonaMediaComposerPlaceholder(persona, form.media)) : ""}
             </div>
@@ -25949,8 +25983,41 @@ function proxyMarketCatalogItems(payload = {}) {
   return Array.isArray(root.items) ? root.items : (Array.isArray(payload?.items) ? payload.items : []);
 }
 
+function proxyMarketCatalogTotal(payload = {}) {
+  const root = proxyMarketCatalogRoot(payload);
+  return Math.max(0, Number(root?.total ?? payload?.total ?? 0) || 0);
+}
+
 function proxyMarketItemId(item = {}) {
   return String(item?.id || item?.item_id || "").trim();
+}
+
+const PROXY_MARKET_COUNTRY_LABELS = [
+  { key: "TW", label: "台湾", aliases: ["tw", "taiwan", "台湾", "台灣"] },
+  { key: "JP", label: "日本", aliases: ["jp", "japan", "日本"] },
+  { key: "US", label: "美国", aliases: ["us", "usa", "united states", "美国"] },
+  { key: "ES", label: "西班牙", aliases: ["es", "spain", "西班牙"] },
+  { key: "HK", label: "香港", aliases: ["hk", "hong kong", "香港"] },
+  { key: "SG", label: "新加坡", aliases: ["sg", "singapore", "新加坡"] },
+];
+
+function proxyMarketCountryInfo(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return null;
+  return PROXY_MARKET_COUNTRY_LABELS.find((item) => item.aliases.some((alias) => (
+    /^[a-z]{2}$/i.test(alias) ? normalized === alias : normalized === alias || normalized.includes(alias)
+  ))) || null;
+}
+
+function proxyMarketItemTitle(item = {}) {
+  const displayName = String(item?.display_name || item?.sku || "").trim();
+  const actualCountry = proxyMarketCountryInfo(item?.country_code || item?.country);
+  const namedCountry = proxyMarketCountryInfo(displayName);
+  if (actualCountry && namedCountry && actualCountry.key !== namedCountry.key) {
+    const type = String(item?.ip_type || "static_residential").trim().toLowerCase();
+    return `${actualCountry.label}${type === "datacenter" ? "机房" : "静态住宅"}代理`;
+  }
+  return displayName || `${actualCountry?.label || "全球"}${String(item?.ip_type || "").trim().toLowerCase() === "datacenter" ? "机房" : "静态住宅"} IP`;
 }
 
 function proxyMarketItemLocation(item = {}) {
@@ -25975,7 +26042,7 @@ function proxyMarketItemValidity(item = {}) {
 function renderProxyMarketMiniCard(item = {}) {
   const id = proxyMarketItemId(item);
   const country = String(item?.country_code || item?.country || "GL").trim().slice(0, 3).toUpperCase() || "GL";
-  const title = String(item?.display_name || item?.sku || "静态住宅 IP").trim() || "静态住宅 IP";
+  const title = proxyMarketItemTitle(item);
   const protocol = String(item?.proxy_type || "SOCKS5").trim().toUpperCase();
   return `<article class="proxy-market-mini-card" data-proxy-market-item="${esc(id)}">
     <div class="proxy-market-mini-card-head"><span class="proxy-market-mini-country">${esc(country)}</span><span class="proxy-market-mini-stock">可领取</span></div>
@@ -25984,6 +26051,17 @@ function renderProxyMarketMiniCard(item = {}) {
     <div class="proxy-market-mini-meta"><span>${esc(proxyMarketItemValidity(item))}</span><span>${esc(protocol)}</span><strong>${esc(proxyMarketItemPrice(item))}</strong></div>
     <button type="button" class="primary" data-proxy-market-claim="${esc(id)}" ${id ? "" : "disabled"}>加入代理池</button>
   </article>`;
+}
+
+function renderProxyMarketMiniSkeletonCards(count = 4) {
+  const safeCount = Math.max(1, Math.min(12, Number(count) || 4));
+  return Array.from({ length: safeCount }, () => `<article class="proxy-market-mini-card is-loading" aria-hidden="true">
+    <div class="proxy-market-mini-card-head"><span class="proxy-market-mini-skeleton skeleton-badge"></span><span class="proxy-market-mini-skeleton skeleton-badge"></span></div>
+    <span class="proxy-market-mini-skeleton skeleton-title"></span>
+    <span class="proxy-market-mini-skeleton skeleton-location"></span>
+    <div class="proxy-market-mini-meta"><span class="proxy-market-mini-skeleton skeleton-meta"></span><span class="proxy-market-mini-skeleton skeleton-meta"></span><span class="proxy-market-mini-skeleton skeleton-price"></span></div>
+    <span class="proxy-market-mini-skeleton skeleton-button"></span>
+  </article>`).join("");
 }
 
 function openProxyMarketModal() {
@@ -26014,8 +26092,8 @@ function openProxyMarketModal() {
             <select name="sort"><option value="">推荐排序</option><option value="newest">最新上架</option><option value="price_asc">价格从低到高</option><option value="price_desc">价格从高到低</option></select>
           </label>
         </form>
-        <p class="proxy-market-mini-status" data-proxy-market-mini-status role="status" aria-live="polite">正在读取可用 IP…</p>
-        <div class="proxy-market-mini-grid" data-proxy-market-mini-grid aria-busy="true"></div>
+        <p class="proxy-market-mini-status" data-proxy-market-mini-status role="status" aria-live="polite">可领取 IP</p>
+        <div class="proxy-market-mini-grid" data-proxy-market-mini-grid aria-busy="true">${renderProxyMarketMiniSkeletonCards()}</div>
       </div>
     </section>`;
   document.body.appendChild(modal);
@@ -26023,6 +26101,7 @@ function openProxyMarketModal() {
   const grid = modal.querySelector("[data-proxy-market-mini-grid]");
   const status = modal.querySelector("[data-proxy-market-mini-status]");
   let catalogRequest = 0;
+  let placeholderCount = Math.max(1, Math.min(12, Number(state.proxyMarketAvailableCount || 0) || 4));
   const loadCatalog = async () => {
     const requestId = ++catalogRequest;
     const fields = form?.elements;
@@ -26038,12 +26117,13 @@ function openProxyMarketModal() {
     if (minPrice) params.set("min_price_cents", minPrice);
     if (maxPrice) params.set("max_price_cents", maxPrice);
     grid.setAttribute("aria-busy", "true");
-    grid.innerHTML = '<div class="proxy-market-mini-loading">正在加载 IP 选项…</div>';
-    status.textContent = "正在读取可用 IP…";
+    grid.innerHTML = renderProxyMarketMiniSkeletonCards(placeholderCount);
+    status.textContent = "可领取 IP";
     try {
       const payload = await api(`/api/proxy-market/catalog?${params.toString()}`);
       if (!modal.isConnected || requestId !== catalogRequest) return;
       const items = proxyMarketCatalogItems(payload);
+      placeholderCount = Math.max(1, Math.min(12, proxyMarketCatalogTotal(payload) || items.length || placeholderCount));
       grid.innerHTML = items.length ? items.map((item) => renderProxyMarketMiniCard(item)).join("") : '<div class="proxy-market-mini-empty">当前筛选条件下暂无可领取 IP。</div>';
       status.textContent = `已显示 ${items.length} 个可领取 IP`;
     } catch (error) {
@@ -26231,6 +26311,7 @@ async function loadProxyMarketSummary() {
     const summary = await api("/api/proxy-market/me");
     if (revision !== Number(state.proxyMarketReadRevision || 0)) return summary;
     state.proxyMarketUnreadCount = Math.max(0, Number(summary?.unread_proxy_count || 0));
+    state.proxyMarketAvailableCount = Math.max(0, Number(summary?.available_catalog_count || 0));
     state.proxyMarketSummaryLoaded = true;
     syncProxyMarketUnreadBadge();
     return summary;
@@ -29473,8 +29554,13 @@ function bindEvents() {
         const form = personaFormState(persona.id);
         form.draft = normalizePersonaDraftForm(form.draft);
         const editingPostId = String(form.draft.editingPostId || "").trim();
-        if (editingPostId && nextComposeMode !== "tweet") {
-          showMsg("commandMsg", "当前正在编辑单条草稿，批量推文和热点抓取已锁定。请先保存或退出编辑后切换。", false);
+        if (editingPostId) {
+          // The active normal-tweet tab is only an editor status indicator.
+          // Clicking it must not switch the editor back to the new-post form.
+          form.generate.mode = "custom";
+          if (nextComposeMode !== "tweet") {
+            showMsg("commandMsg", "当前正在编辑单条草稿，批量推文和热点抓取已锁定。请先保存或退出编辑后切换。", false);
+          }
           return;
         }
         event.__vectoSegmentSlideHandled = true;
@@ -30533,11 +30619,9 @@ function bindEvents() {
       const mode = inputMode.dataset.browserTextInputMode || "paste";
       event.__vectoSegmentSlideHandled = true;
       await slideSegmentedButtonBackground(inputMode, {
-        commit: () => setBrowserPreferenceChoice("text_input_mode", mode),
-        resolveButton: () => document.querySelector(
-          `[data-browser-text-input-mode="${CSS.escape(mode)}"]`
-        ),
+        commit: () => setBrowserPreferenceChoice("text_input_mode", mode, { render: false }),
       });
+      syncBrowserTextInputModeTabs(mode);
       return;
     }
     if (event.target.closest("[data-browser-recommendation-refresh]")) {
