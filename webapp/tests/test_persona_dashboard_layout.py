@@ -445,7 +445,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script.index('data-persona-view-post="${esc(post.id)}"'),
         )
 
-    def test_common_media_viewers_center_media_on_dark_stages(self):
+    def test_common_media_viewers_center_media_on_themed_stages(self):
         self.assertIn('node.className = "persona-media-lightbox";', self.console_script)
         self.assertNotIn("openMediaLightbox(groupId, 0);", self.console_script)
         self.assertIn(
@@ -461,8 +461,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             "  place-items: center;",
             self.styles,
         )
-        self.assertIn("background: #111817;", self.styles)
-        self.assertIn("background: #050b0a;", self.styles)
+        self.assertIn("background: var(--panel-solid);", self.styles)
+        self.assertIn("background: var(--panel-2);", self.styles)
+        self.assertNotIn("background: #111817;", self.styles)
+        self.assertNotIn("background: #050b0a;", self.styles)
         self.assertIn("object-fit: contain;", self.styles)
         self.assertIn("object-position: center;", self.styles)
         self.assertIn(".persona-post-gallery-card", self.dashboard_styles)
@@ -2033,9 +2035,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
     def test_console_opens_the_dashboard_by_default_and_keeps_mobile_summary_compact(self):
         self.assertIn(
-            '"persona_dashboard"].includes(initialConsoleView) ? initialConsoleView : "persona_dashboard"',
+            'view: initialConsoleViewIsSupported ? initialConsoleView : "persona_dashboard"',
             self.console_script,
         )
+        self.assertIn("function clearInitialConsoleRouteHint()", self.console_script)
+        self.assertIn('url.searchParams.delete("view");', self.console_script)
+        self.assertIn('url.searchParams.delete("browser_panel");', self.console_script)
+        self.assertIn("clearInitialConsoleRouteHint();", self.console_script)
         mobile_dashboard_styles = self.styles[
             self.styles.index("@media (max-width: 760px) {"):
             self.styles.index(".persona-dashboard-view .persona-tab-rail {", self.styles.index("@media (max-width: 760px) {"))

@@ -1659,6 +1659,35 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         stale_browser = TestClient(self.app, cookies={"session_token": stale_token})
         self.assertEqual(stale_browser.get("/api/me").status_code, 401)
 
+    def test_logout_revokes_every_active_session_for_the_current_account(self):
+        browser, user_id = self._approved_client("logout_all_account_sessions")
+        with server.db() as conn:
+            other_token = server.create_session(conn, user_id, ttl_seconds=3600)
+
+        logout = browser.post("/api/auth/logout")
+
+        self.assertEqual(logout.status_code, 200, logout.text)
+        self.assertEqual(int(logout.json()["revoked_sessions"]), 2)
+        with server.db() as conn:
+            active_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM sessions "
+                "WHERE user_id = ? AND revoked_at = 0 AND expires_at > ?",
+                (user_id, server._now_ts()),
+            ).fetchone()["count"]
+        self.assertEqual(int(active_count), 0)
+        other_browser = TestClient(self.app, cookies={"session_token": other_token})
+        self.assertEqual(other_browser.get("/api/me").status_code, 401)
+
+    def test_logout_without_an_active_cookie_cannot_revoke_another_session(self):
+        browser, _user_id = self._approved_client("logout_requires_active_cookie")
+        anonymous = TestClient(self.app)
+
+        logout = anonymous.post("/api/auth/logout")
+
+        self.assertEqual(logout.status_code, 200, logout.text)
+        self.assertEqual(int(logout.json()["revoked_sessions"]), 0)
+        self.assertEqual(browser.get("/api/me").status_code, 200)
+
     def test_force_takeover_revokes_all_customer_sessions_before_login(self):
         first_browser, user_id = self._approved_client("takeover_customer")
         first_token = first_browser.cookies.get("session_token")

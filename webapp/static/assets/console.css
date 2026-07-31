@@ -7711,8 +7711,9 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .mobile-page-toolbar > .mobile-nav-toggle.is-page-back {
-  border-color: transparent;
+  border: 0;
   background: transparent;
+  box-shadow: none;
 }
 
 @media (max-width: 980px) {
@@ -9275,17 +9276,22 @@ body.persona-touch-dragging .persona-list-card:active {
   min-height: 30px;
   padding: 0;
   place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-solid);
-  color: var(--ink);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
 }
 
 .persona-profile-editor-back:hover,
 .persona-profile-editor-back:focus-visible {
-  border-color: var(--accent);
-  background: var(--soft);
+  background: transparent;
   color: var(--accent-dark);
+}
+
+.persona-profile-editor-back:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 -2px 0 currentColor;
 }
 
 .persona-profile-editor-back svg {
@@ -13231,8 +13237,13 @@ body.persona-media-sorting {
 
 .console-page .console-modal-head .console-modal-close:hover,
 .console-page .console-modal-head .console-modal-close:focus-visible {
-  background: var(--soft);
+  background: transparent;
   color: var(--ink);
+}
+
+.console-page .console-modal-head .console-modal-close:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 -2px 0 currentColor;
 }
 
 .console-page .console-modal-head .console-modal-close svg {
@@ -13716,7 +13727,7 @@ body.persona-media-sorting {
   padding: 24px;
   overflow: auto;
   box-sizing: border-box;
-  color: #f3f8f6;
+  color: var(--ink);
 }
 
 .persona-media-lightbox[hidden] {
@@ -13726,8 +13737,8 @@ body.persona-media-sorting {
 .persona-media-lightbox-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(15, 18, 24, .72);
-  backdrop-filter: blur(4px);
+  background: rgba(24, 28, 32, .56);
+  backdrop-filter: blur(8px);
 }
 
 .persona-media-lightbox-dialog {
@@ -13736,10 +13747,10 @@ body.persona-media-sorting {
   width: min(1100px, calc(100vw - 48px));
   max-height: calc(100vh - 48px);
   margin: 0 auto;
-  border-radius: 14px;
-  background: #111817;
-  border: 1px solid #344441;
-  box-shadow: 0 24px 72px rgba(0, 0, 0, .48);
+  border-radius: 12px;
+  background: var(--panel-solid);
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 72px rgba(15, 23, 42, .24);
   display: grid;
   gap: 12px;
   padding: 14px;
@@ -13764,25 +13775,28 @@ body.persona-media-sorting {
   height: 36px;
   min-height: 36px;
   padding: 0;
-  border: 1px solid #52635f;
-  border-radius: 6px;
-  background: #1a2623;
-  color: #f3f8f6;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
   box-shadow: none;
 }
 
 .persona-media-lightbox-icon-button:hover,
 .persona-media-lightbox-icon-button:focus-visible {
-  border-color: #93d1c5;
-  background: #0f766e;
-  color: #fff;
+  background: transparent;
+  color: var(--accent-dark);
+}
+
+.persona-media-lightbox-icon-button:focus-visible {
   outline: none;
+  box-shadow: inset 0 -2px 0 currentColor;
 }
 
 .persona-media-lightbox-icon-button:disabled {
-  border-color: #344441;
-  background: #28322f;
-  color: #70807b;
+  border: 0;
+  background: transparent;
+  color: var(--line);
   cursor: not-allowed;
 }
 
@@ -13802,7 +13816,7 @@ body.persona-media-sorting {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: #f3f8f6;
+  color: var(--ink);
 }
 
 .persona-media-lightbox-body {
@@ -13814,9 +13828,9 @@ body.persona-media-sorting {
   overflow: hidden;
   touch-action: none;
   box-sizing: border-box;
-  border: 1px solid #283633;
+  border: 0;
   border-radius: 10px;
-  background: #050b0a;
+  background: var(--panel-2);
 }
 
 .persona-media-lightbox-actions {
@@ -13835,7 +13849,7 @@ body.persona-media-sorting {
   border-radius: 8px;
   object-fit: contain;
   object-position: center;
-  background: #050b0a;
+  background: transparent;
 }
 
 .persona-media-lightbox-frame.is-zoomable {
@@ -13856,11 +13870,11 @@ body.persona-media-sorting {
 }
 
 .persona-media-lightbox-empty {
-  border: 1px solid #344441;
+  border: 1px solid var(--line);
   border-radius: 8px;
   padding: 20px 24px;
-  background: #111817;
-  color: #bdcac6;
+  background: var(--panel-solid);
+  color: var(--muted);
   font-weight: 700;
 }
 

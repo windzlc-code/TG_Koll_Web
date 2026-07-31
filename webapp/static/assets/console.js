@@ -315,14 +315,25 @@ function applyPersonaOverviewPostRows(persona) {
 const initialConsoleParams = new URLSearchParams(window.location.search);
 const initialConsoleView = initialConsoleParams.get("view");
 const initialAccountBrowserPanel = initialConsoleParams.get("browser_panel");
+const initialConsoleViewIsSupported = ["workspace", "tasks", "accounts", "billing", "console_settings", "persona_dashboard"].includes(initialConsoleView);
+const initialAccountBrowserPanelIsSupported = ["browsers", "proxies"].includes(initialAccountBrowserPanel);
+
+function clearInitialConsoleRouteHint() {
+  if (!initialConsoleViewIsSupported && !initialAccountBrowserPanelIsSupported) return;
+  const url = new URL(window.location.href);
+  url.searchParams.delete("view");
+  url.searchParams.delete("browser_panel");
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
 const state = {
-  view: ["workspace", "tasks", "accounts", "billing", "console_settings", "persona_dashboard"].includes(initialConsoleView) ? initialConsoleView : "persona_dashboard",
+  view: initialConsoleViewIsSupported ? initialConsoleView : "persona_dashboard",
   personalSettingsSection: "console",
   personalSecurity: { loaded: false, loading: false, mfa: null },
   activeModule: "personas",
   transientWorkspaceLeaveAcknowledgement: "",
   transientWorkspaceAllowNextUnload: false,
-  accountBrowserPanel: ["browsers", "proxies"].includes(initialAccountBrowserPanel) ? initialAccountBrowserPanel : "accounts",
+  accountBrowserPanel: initialAccountBrowserPanelIsSupported ? initialAccountBrowserPanel : "accounts",
   proxyMarketUnreadCount: 0,
   proxyMarketAvailableCount: 0,
   proxyMarketSummaryLoaded: false,
@@ -3382,7 +3393,10 @@ function isPublishedPersonaPost(post) {
 }
 
 function visiblePersonaDraftPosts(rows = []) {
-  return (Array.isArray(rows) ? rows : []).filter((post) => !isPublishedPersonaPost(post));
+  return (Array.isArray(rows) ? rows : []).filter((post) => (
+    !isPublishedPersonaPost(post)
+    && !Boolean(post?.generation_candidate || post?.generationCandidate)
+  ));
 }
 
 function personaPostSource(persona = selectedPersona()) {
@@ -5428,7 +5442,7 @@ function personaMediaTaskIsActive(personaId, postId, taskType = "") {
 function personaMediaTaskStartedAt(personaId, postId, taskType = "") {
   const taskState = personaMediaTaskState(personaId, postId);
   const taskStartedAt = taskState && (!taskType || String(taskState.taskType || taskState.detail?.type || "").trim() === String(taskType || "").trim())
-    ? actionTaskStartedAt(taskState.detail || {}, "media_task", personaId, postId, taskType)
+    ? (toastTimestampMs(taskState.startedAt) || actionTaskStartedAt(taskState.detail || {}, "media_task", personaId, postId, taskType))
     : 0;
   return taskStartedAt || actionLockStartedAt("media_task", personaId, postId, taskType);
 }
@@ -18491,6 +18505,7 @@ async function resolvePersonaOrdinaryGeneratedCandidates(persona, taskId, genera
     body: JSON.stringify(finalizePayload),
   });
   clearPersonaGenerateRunState(persona.id);
+  delete state.personaGeneratedPreviews[String(persona.id || "").trim()];
   personaFormState(persona.id).draft = defaultPersonaDraftForm();
   await loadPersonaDraftPosts(persona.id, { force: true });
   setPersonaPostSource("posts", persona);
@@ -18719,6 +18734,7 @@ async function completePersonaPostGenerationTask(persona, task, context = {}) {
     posts: generatedPosts,
     postIds: Array.from(generatedIds),
     composeMode,
+    selectionRequired,
     error: "",
   });
   if (selectionRequired && generatedPosts.length) {
@@ -22655,6 +22671,45 @@ function selectGeneratedPreviewPost(postId) {
   setSelectedPersonaPostId(cleanPostId);
   renderPersonaDetail();
   renderConfirmSummary();
+}
+
+function refreshPersonaContentPlatformSummary(persona) {
+  if (!persona) return;
+  const { draftCount, favoriteCount } = personaSummaryCounts(persona);
+  const selectedPlatformLabel = platformLabel(personaContentPlatform(persona));
+  document.querySelectorAll("#personaDetail [data-persona-platform-summary]").forEach((node) => {
+    const label = node.querySelector("small");
+    const value = node.querySelector("strong");
+    if (label) label.textContent = selectedPlatformLabel;
+    if (value) value.textContent = `草稿 ${numberText(draftCount)} · 收藏 ${numberText(favoriteCount)}`;
+  });
+  document.querySelectorAll("#personaDetail .persona-profile-account-status").forEach((node) => {
+    node.innerHTML = renderPersonaExecutionAccountBadge(persona);
+  });
+}
+
+function refreshPersonaContentPlatformPanel(persona = selectedPersona()) {
+  if (!persona) return false;
+  const profile = selectedPersonaProfile();
+  const groupKey = normalizedPersonaGroupKey(
+    state.activeModule === "tweet_generation" ? "content" : state.personaGroup,
+  );
+  if (groupKey !== "content") return false;
+  const step = currentPersonaGroupStep(groupKey, profile);
+  const contentShell = $("personaDetail")?.querySelector(".persona-step-shell");
+  const contentPanel = contentShell?.querySelector(":scope > .persona-inline-panel");
+  if (!contentShell || !contentPanel) return false;
+  contentPanel.outerHTML = renderPersonaContentPanel(
+    persona,
+    accountForPersona(persona),
+    profile,
+    step,
+  );
+  refreshPersonaContentPlatformSummary(persona);
+  bindPersonaDraftSaveLongPress($("personaDetail"));
+  bindMobileTweetStreamObservers();
+  window.requestAnimationFrame(resizePersonaDraftEditContent);
+  return true;
 }
 
 function renderPersonaDetail() {
@@ -29289,7 +29344,7 @@ function bindEvents() {
       const rows = personaSourcePosts(persona, source);
       setSelectedPersonaPostId(rows[0]?.id || "", { auto: true });
       if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
-      else renderPersonaDetail();
+      else if (!refreshPersonaContentPlatformPanel(persona)) renderPersonaDetail();
       renderConfirmSummary();
       return;
     }
@@ -30707,6 +30762,7 @@ async function init() {
   const hasPersonaBootstrap = hydratePersonaOverviewFromBootstrap(me);
   bindEvents();
   setView(state.view);
+  clearInitialConsoleRouteHint();
   renderWorkspace();
   // The shell and any server-rendered persona bootstrap are ready now. Keep
   // slower data refreshes in the background instead of holding the page mask.

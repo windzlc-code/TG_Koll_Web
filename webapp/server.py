@@ -32,7 +32,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
-from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -1400,6 +1400,7 @@ def _cleanup_worker() -> None:
                 continue
             retention = max(_to_int(cfg2.get("cleanup_retention_days"), 7), 1)
             _cleanup_files_once(retention_days=retention)
+            _cleanup_stale_persona_generation_candidates()
         except Exception:
             time.sleep(10.0)
 
@@ -10034,9 +10035,10 @@ def _run_persona_post_generation_task(task_id: str, payload: dict[str, Any]) -> 
         raise RuntimeError(str(exc.detail or "推文草稿生成失败。")) from exc
     if not isinstance(result, dict) or not bool(result.get("ok")):
         raise RuntimeError(str((result or {}).get("error") or "推文草稿生成失败。"))
-    retention = _enforce_persona_post_retention_for_user(int(payload.get("_user_id") or 0))
-    if retention.get("removed_history_count") or retention.get("removed_draft_count"):
-        result["retention"] = retention
+    if not request_payload.selection_required:
+        retention = _enforce_persona_post_retention_for_user(int(payload.get("_user_id") or 0))
+        if retention.get("removed_history_count") or retention.get("removed_draft_count"):
+            result["retention"] = retention
     _checkpoint_persona_post_generation_output(task_id, result)
     return result
 
@@ -13729,10 +13731,6 @@ def _generate_persona_archive_posts(
     content_time_slot = str(payload.content_time_slot or "").strip().lower()
     if content_time_slot not in {"", "morning", "night"}:
         raise HTTPException(status_code=400, detail="不支持的文案时段。")
-    _cleanup_stale_persona_generation_candidates(
-        clean_id,
-        active_operation_ids={str(operation_id or "").strip()} if str(operation_id or "").strip() else set(),
-    )
     existing_post_ids = {
         str(post.get("id") or "").strip()
         for post in _list_persona_archive_posts(clean_id, include_generation_candidates=True)
@@ -13759,11 +13757,13 @@ def _generate_persona_archive_posts(
             for post in _list_persona_archive_posts(clean_id, include_generation_candidates=True)
             if str(post.get("id") or "").strip() not in existing_post_ids
         }
-    _set_persona_archive_posts_platform(clean_id, post_ids, payload.platform)
-    if str(operation_id or "").strip():
-        _set_persona_archive_posts_generation_operation(clean_id, post_ids, operation_id)
-    if payload.selection_required:
-        _set_persona_archive_posts_generation_candidates(clean_id, post_ids, True)
+    _set_persona_archive_posts_platform(
+        clean_id,
+        post_ids,
+        payload.platform,
+        operation_id=operation_id,
+        selection_required=payload.selection_required,
+    )
     posts = _list_persona_archive_posts(clean_id, include_generation_candidates=True)
     generated_posts = [item for item in posts if str(item.get("id") or "").strip() in post_ids] if post_ids else posts[:count]
     return {
@@ -13793,7 +13793,14 @@ def _persona_post_source_name(source: str = "posts") -> str:
 
 
 @_persona_archive_write_locked
-def _set_persona_archive_posts_platform(archive_id: str, post_ids: set[str], platform: str) -> None:
+def _set_persona_archive_posts_platform(
+    archive_id: str,
+    post_ids: set[str],
+    platform: str,
+    *,
+    operation_id: str = "",
+    selection_required: bool = False,
+) -> None:
     clean_post_ids = {str(post_id or "").strip() for post_id in post_ids if str(post_id or "").strip()}
     if not clean_post_ids:
         return
@@ -13803,35 +13810,15 @@ def _set_persona_archive_posts_platform(archive_id: str, post_ids: set[str], pla
         raise HTTPException(status_code=404, detail="persona not found")
     posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
     normalized_platform = _normalize_persona_content_platform(platform)
+    clean_operation_id = str(operation_id or "").strip()
     changed = False
     for post in posts:
         if isinstance(post, dict) and str(post.get("id") or "").strip() in clean_post_ids:
             post["platform"] = normalized_platform
-            changed = True
-    if changed:
-        archive["updatedAt"] = _persona_dashboard_iso_now()
-        _write_persona_archives_preserving_shape(path, raw, archives)
-
-
-@_persona_archive_write_locked
-def _set_persona_archive_posts_generation_operation(
-    archive_id: str,
-    post_ids: set[str],
-    operation_id: str,
-) -> None:
-    clean_post_ids = {str(post_id or "").strip() for post_id in post_ids if str(post_id or "").strip()}
-    clean_operation_id = str(operation_id or "").strip()
-    if not clean_post_ids or not clean_operation_id:
-        return
-    path, raw, archives = _persona_archive_source_for_write(archive_id)
-    archive = _find_persona_archive(archives, archive_id)
-    if not archive:
-        raise HTTPException(status_code=404, detail="persona not found")
-    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
-    changed = False
-    for post in posts:
-        if isinstance(post, dict) and str(post.get("id") or "").strip() in clean_post_ids:
-            post["generationOperationId"] = clean_operation_id
+            if clean_operation_id:
+                post["generationOperationId"] = clean_operation_id
+            if selection_required:
+                post["generationCandidate"] = True
             changed = True
     if changed:
         archive["updatedAt"] = _persona_dashboard_iso_now()
@@ -20931,11 +20918,33 @@ def create_app() -> FastAPI:
         admin_token = str(request.cookies.get(ADMIN_SESSION_COOKIE) or "").strip()
         user_token = str(request.cookies.get(SESSION_COOKIE) or "").strip()
         tokens = {token for token in (admin_token, user_token) if token}
+        revoked_sessions = 0
         if tokens:
             with db() as conn:
-                for token in tokens:
-                    delete_session(conn, token)
-        response = JSONResponse(content={"ok": True})
+                now_ts = _now_ts()
+                active_user_ids = {
+                    int(row["user_id"])
+                    for token in tokens
+                    if (
+                        row := conn.execute(
+                            "SELECT user_id FROM sessions "
+                            "WHERE token = ? AND revoked_at = 0 AND expires_at > ?",
+                            (session_storage_token(token), now_ts),
+                        ).fetchone()
+                    ) is not None
+                }
+                if active_user_ids:
+                    placeholders = ", ".join("?" for _ in active_user_ids)
+                    result = conn.execute(
+                        "UPDATE sessions SET revoked_at = ?, revoke_reason = 'account_logout' "
+                        f"WHERE user_id IN ({placeholders}) AND revoked_at = 0",
+                        (now_ts, *sorted(active_user_ids)),
+                    )
+                    revoked_sessions = max(0, int(result.rowcount or 0))
+                else:
+                    for token in tokens:
+                        delete_session(conn, token)
+        response = JSONResponse(content={"ok": True, "revoked_sessions": revoked_sessions})
         response.delete_cookie(SESSION_COOKIE)
         response.delete_cookie(ADMIN_SESSION_COOKIE)
         return response
@@ -22045,6 +22054,7 @@ def create_app() -> FastAPI:
         archive_id: str,
         task_id: str,
         payload: PersonaDashboardResolveGeneratedCandidatesPayload,
+        background_tasks: BackgroundTasks,
         user: dict[str, Any] = Depends(require_persona_owner),
     ):
         user_id = _workspace_user_id(user)
@@ -22073,9 +22083,7 @@ def create_app() -> FastAPI:
             title=payload.title if "title" in payload.model_fields_set else None,
             expected_post_ids=expected_post_ids,
         )
-        retention = _enforce_persona_post_retention_for_user(user_id)
-        if retention.get("removed_history_count") or retention.get("removed_draft_count"):
-            result["retention"] = retention
+        background_tasks.add_task(_enforce_persona_post_retention_for_user, user_id)
         return result
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/publish")
