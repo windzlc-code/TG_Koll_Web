@@ -4314,7 +4314,6 @@ def _generate_warmup_search_keywords_with_ai(payload: dict[str, Any]) -> list[st
             "- 先在内部判断这个账号唯一的主要内容主轴，再生成关键词；优先级依次为明确身份/业务定位、长期内容领域、次要兴趣与性格描述。\n"
             "- 每个关键词单独拿出来时，都必须能明确关联到该主要内容主轴；不要抽取年龄、语言、语气、人格描述，也不要抽取泛生活描述。\n"
             "- 围绕同一主要内容主轴，从知识技能、具体场景、常见问题、工具对象、成果案例、行业见闻等不同子主题扩展，并覆盖不同搜索意图。\n"
-            "- 主要内容关键词中至少 2 个使用该领域常见的行业惯用词、专业动作或自然同义表达，避免全部写成过窄的故事、趣闻、日常句式。\n"
             "- 至少 70% 必须属于主要内容主轴：分别生成 6 个主要内容主轴关键词和最多 2 个明确兴趣关键词；兴趣最多占 20%-30%，不足时宁可少给，不得用泛化内容补齐。\n"
             "- 兴趣扩展必须来自资料中明确、稳定的真实兴趣，并保持具体；不要把泛生活、泛作品或性格词当作兴趣关键词。\n"
             "- 各关键词必须覆盖不同搜索意图，禁止同义改写、只换前后缀或共享同一核心短语。\n"
@@ -6180,10 +6179,15 @@ def _canonical_warmup_post_url(value: Any, platform: str) -> str:
     clean_platform = str(platform or "").strip().lower()
     if clean_platform == "threads" and "/post/" not in path.lower():
         return ""
-    if clean_platform == "instagram" and not any(
-        marker in path.lower() for marker in ("/p/", "/reel/", "/tv/")
-    ):
-        return ""
+    if clean_platform == "instagram":
+        match = re.search(r"/(?:p|reel|tv)/([^/]+)", path, flags=re.IGNORECASE)
+        if not match:
+            return ""
+        # Instagram exposes the same media through several equivalent routes:
+        # /p/<shortcode>, /reel/<shortcode>, profile-prefixed reel links, and
+        # comment/deep-link suffixes.  The shortcode is the stable media
+        # identity, so normalize every variant before hashing or persistence.
+        path = f"/p/{match.group(1)}"
     return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{path}"
 
 

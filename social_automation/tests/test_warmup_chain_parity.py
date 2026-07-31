@@ -18,6 +18,39 @@ class _Logger:
 
 
 class WarmupChainParityTests(TestCase):
+    def test_instagram_post_url_normalizes_equivalent_shortcode_routes(self):
+        variants = (
+            "https://www.instagram.com/p/DY8WwK_zBDF/",
+            "https://www.instagram.com/reel/DY8WwK_zBDF/?utm_source=ig_web_copy_link",
+            "https://www.instagram.com/wyy1993031/reel/DY8WwK_zBDF",
+            "https://www.instagram.com/p/DY8WwK_zBDF/c/18119044984667239/",
+        )
+
+        canonical = {
+            runner._canonical_warmup_post_url(value, "instagram")
+            for value in variants
+        }
+
+        self.assertEqual(
+            canonical,
+            {"https://www.instagram.com/p/DY8WwK_zBDF"},
+        )
+
+    def test_instagram_post_target_uses_same_key_for_equivalent_routes(self):
+        targets = [
+            runner._warmup_post_target(
+                {"text": "same post", "target_url": value},
+                "instagram",
+            )
+            for value in (
+                "https://www.instagram.com/wyy1993031/reel/DY8WwK_zBDF",
+                "https://www.instagram.com/p/DY8WwK_zBDF/c/18119044984667239",
+            )
+        ]
+
+        self.assertEqual(targets[0]["target_url"], targets[1]["target_url"])
+        self.assertEqual(targets[0]["target_key"], targets[1]["target_key"])
+
     def test_threads_reply_targets_interactive_wrapper_before_inner_svg(self):
         scope = mock.Mock()
         wrapper = mock.Mock()
@@ -900,7 +933,6 @@ class WarmupChainParityTests(TestCase):
         self.assertEqual(keywords, ["男士短发", "发型打理"])
         self.assertEqual(payload["_warmup_generated_search_keywords"], keywords)
         self.assertEqual(payload["_warmup_search_keyword_source"], "model:model-a")
-        self.assertIn("行业惯用词", request.call_args.kwargs["user_input"])
 
     def test_model_keyword_failure_stops_without_local_fallback(self):
         payload = {
