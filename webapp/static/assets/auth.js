@@ -1,3 +1,64 @@
+const AUTH_LANGUAGE_STORAGE_KEY = "wk-console-language";
+const AUTH_COPY = {
+  "zh-Hans": {
+    pageTitle: "设置新密码 - Vecto", securityKicker: "Vecto 账号安全", stageTitle: "首次登录需要设置新密码",
+    stageCopy: "管理员生成的临时密码只用于首次验证。完成修改后，账号才会进入 Web 任务控制台。",
+    temporaryPassword: "临时密码", temporaryPasswordHint: "输入管理员提供的临时密码进行身份确认。",
+    newPassword: "新密码", newPasswordHint: "使用至少 8 位且不易猜测的新密码。", cardTitle: "设置新密码",
+    cardCopy: "完成后将直接进入 Web 任务控制台", verificationEmailPrefix: "验证码将发送到已验证邮箱：",
+    sendCode: "发送邮箱验证码", emailCode: "邮箱验证码", confirmPassword: "确认新密码",
+    saveAndContinue: "保存并进入控制台", backToLogin: "返回用户登录", retryCode: "重新发送验证码",
+    resendAfter: (seconds) => `${seconds} 秒后可重发`, googleStageTitle: "为 Google 账号设置本地密码",
+    googleStageCopy: "通过已验证邮箱确认身份，设置后即可使用邮箱或用户名加密码登录。",
+    googleCardTitle: "设置本地登录密码", invalidCodeRequest: "验证码请求无效，请重试",
+    codeSent: "验证码已发送，请在 10 分钟内完成设置。", codeSendFailed: "验证码发送失败",
+    passwordTooShort: (length) => `新密码至少 ${length} 位`, passwordMismatch: "两次输入的新密码不一致",
+    sendCodeFirst: "请先发送邮箱验证码", invalidCode: "请输入 6 位邮箱验证码",
+    accountStateFailed: "无法读取账号认证状态", genericError: "操作失败，请稍后再试",
+  },
+  "zh-Hant": {
+    pageTitle: "設定新密碼 - Vecto", securityKicker: "Vecto 帳號安全", stageTitle: "首次登入需要設定新密碼",
+    stageCopy: "管理員產生的臨時密碼只用於首次驗證。完成修改後，帳號才會進入 Web 任務控制台。",
+    temporaryPassword: "臨時密碼", temporaryPasswordHint: "輸入管理員提供的臨時密碼進行身分確認。",
+    newPassword: "新密碼", newPasswordHint: "使用至少 8 位且不易猜測的新密碼。", cardTitle: "設定新密碼",
+    cardCopy: "完成後將直接進入 Web 任務控制台", verificationEmailPrefix: "驗證碼將傳送到已驗證電子郵件：",
+    sendCode: "傳送電子郵件驗證碼", emailCode: "電子郵件驗證碼", confirmPassword: "確認新密碼",
+    saveAndContinue: "儲存並進入控制台", backToLogin: "返回使用者登入", retryCode: "重新傳送驗證碼",
+    resendAfter: (seconds) => `${seconds} 秒後可重新傳送`, googleStageTitle: "為 Google 帳號設定本機密碼",
+    googleStageCopy: "透過已驗證電子郵件確認身分，設定後即可使用電子郵件或使用者名稱加密碼登入。",
+    googleCardTitle: "設定本機登入密碼", invalidCodeRequest: "驗證碼請求無效，請重試",
+    codeSent: "驗證碼已傳送，請在 10 分鐘內完成設定。", codeSendFailed: "驗證碼傳送失敗",
+    passwordTooShort: (length) => `新密碼至少 ${length} 位`, passwordMismatch: "兩次輸入的新密碼不一致",
+    sendCodeFirst: "請先傳送電子郵件驗證碼", invalidCode: "請輸入 6 位電子郵件驗證碼",
+    accountStateFailed: "無法讀取帳號驗證狀態", genericError: "操作失敗，請稍後再試",
+  },
+};
+
+function authLanguage() {
+  try { return window.localStorage.getItem(AUTH_LANGUAGE_STORAGE_KEY) === "zh-Hant" ? "zh-Hant" : "zh-Hans"; }
+  catch { return "zh-Hans"; }
+}
+
+function authText(key, ...args) {
+  const value = AUTH_COPY[authLanguage()][key] ?? AUTH_COPY["zh-Hans"][key] ?? key;
+  return typeof value === "function" ? value(...args) : value;
+}
+
+function applyAuthLanguage() {
+  const language = authLanguage();
+  document.documentElement.lang = language;
+  document.documentElement.dataset.language = language;
+  document.title = authText("pageTitle");
+  document.querySelectorAll("[data-auth-i18n]").forEach((node) => {
+    node.textContent = authText(node.dataset.authI18n);
+  });
+  if (verifiedPasswordSetupState.enabled) {
+    document.querySelector(".auth-stage-title").textContent = authText("googleStageTitle");
+    document.querySelector(".auth-stage-copy").textContent = authText("googleStageCopy");
+    document.querySelector(".auth-title").textContent = authText("googleCardTitle");
+  }
+}
+
 async function api(path, opts = {}) {
   const headers = new Headers(opts.headers || {});
   if (adminConsolePasswordChangeActive()) headers.set("X-Admin-Console", "1");
@@ -61,7 +122,7 @@ const verifiedPasswordSetupState = {
   resendTimer: 0,
 };
 
-function authErrorMessage(error, fallback = "操作失败，请稍后再试") {
+function authErrorMessage(error, fallback = authText("genericError")) {
   const detail = error?.detail ?? error;
   if (typeof detail === "string") return detail;
   if (detail && typeof detail === "object") {
@@ -74,16 +135,16 @@ function startPasswordSetupResendCountdown(button, seconds) {
   window.clearInterval(verifiedPasswordSetupState.resendTimer);
   let remaining = Math.max(Number(seconds || 60), 1);
   button.disabled = true;
-  button.textContent = `${remaining} 秒后可重发`;
+  button.textContent = authText("resendAfter", remaining);
   verifiedPasswordSetupState.resendTimer = window.setInterval(() => {
     remaining -= 1;
     if (remaining > 0) {
-      button.textContent = `${remaining} 秒后可重发`;
+      button.textContent = authText("resendAfter", remaining);
       return;
     }
     window.clearInterval(verifiedPasswordSetupState.resendTimer);
     button.disabled = false;
-    button.textContent = "重新发送验证码";
+    button.textContent = authText("retryCode");
   }, 1000);
 }
 
@@ -105,9 +166,9 @@ async function enableVerifiedPasswordSetup(form) {
   const title = document.querySelector(".auth-stage-title");
   const copy = document.querySelector(".auth-stage-copy");
   const cardTitle = document.querySelector(".auth-title");
-  if (title) title.textContent = "为 Google 账号设置本地密码";
-  if (copy) copy.textContent = "通过已验证邮箱确认身份，设置后即可使用邮箱或用户名加密码登录。";
-  if (cardTitle) cardTitle.textContent = "设置本地登录密码";
+  if (title) title.textContent = authText("googleStageTitle");
+  if (copy) copy.textContent = authText("googleStageCopy");
+  if (cardTitle) cardTitle.textContent = authText("googleCardTitle");
 }
 
 async function sendPasswordSetupCode(button) {
@@ -124,13 +185,13 @@ async function sendPasswordSetupCode(button) {
       }),
     });
     verifiedPasswordSetupState.challengeId = String(result?.challenge_id || "");
-    if (!verifiedPasswordSetupState.challengeId) throw { detail: "验证码请求无效，请重试" };
-    setMsg("验证码已发送，请在 10 分钟内完成设置。", true);
+    if (!verifiedPasswordSetupState.challengeId) throw { detail: authText("invalidCodeRequest") };
+    setMsg(authText("codeSent"), true);
     startPasswordSetupResendCountdown(button, result?.resend_after);
     document.getElementById("passwordSetupCode")?.focus();
   } catch (error) {
     button.disabled = false;
-    setMsg(authErrorMessage(error, "验证码发送失败"), false);
+    setMsg(authErrorMessage(error, authText("codeSendFailed")), false);
   }
 }
 
@@ -140,12 +201,12 @@ async function submitForcedPasswordChange(form) {
   const confirmation = form.confirm_password.value;
   const admin = adminConsolePasswordChangeActive();
   const minimumLength = admin ? 12 : 8;
-  if (newPassword.length < minimumLength) throw { detail: `新密码至少 ${minimumLength} 位` };
-  if (newPassword !== confirmation) throw { detail: "两次输入的新密码不一致" };
+  if (newPassword.length < minimumLength) throw { detail: authText("passwordTooShort", minimumLength) };
+  if (newPassword !== confirmation) throw { detail: authText("passwordMismatch") };
   if (verifiedPasswordSetupState.enabled) {
     const verificationCode = String(form.verification_code?.value || "").trim();
-    if (!verifiedPasswordSetupState.challengeId) throw { detail: "请先发送邮箱验证码" };
-    if (!/^[0-9]{6}$/.test(verificationCode)) throw { detail: "请输入 6 位邮箱验证码" };
+    if (!verifiedPasswordSetupState.challengeId) throw { detail: authText("sendCodeFirst") };
+    if (!/^[0-9]{6}$/.test(verificationCode)) throw { detail: authText("invalidCode") };
     await api("/api/auth/password/setup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -166,6 +227,7 @@ async function submitForcedPasswordChange(form) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  applyAuthLanguage();
   const forcePasswordForm = document.getElementById("forcePasswordForm");
   if (!forcePasswordForm) return;
   if (adminConsolePasswordChangeActive()) {
@@ -174,7 +236,7 @@ document.addEventListener("DOMContentLoaded", () => {
     document.querySelector(".auth-quick-setup-link")?.setAttribute("href", "/admin");
   }
   enableVerifiedPasswordSetup(forcePasswordForm).catch((error) => {
-    setMsg(authErrorMessage(error, "无法读取账号认证状态"), false);
+    setMsg(authErrorMessage(error, authText("accountStateFailed")), false);
   });
   document.getElementById("sendPasswordSetupCode")?.addEventListener("click", (event) => {
     sendPasswordSetupCode(event.currentTarget);
@@ -193,3 +255,5 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 });
+
+window.addEventListener("vecto:language-change", applyAuthLanguage);

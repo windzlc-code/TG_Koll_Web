@@ -44,6 +44,12 @@
   }[character]));
   const money = (value) => `NT$${Number(value || 0).toLocaleString("zh-TW", { maximumFractionDigits: 2 })}`;
   const skuOf = (item) => String(item?.sku || "").trim();
+  const subscriptionPlanFamily = (sku) => {
+    const clean = String(sku || "").trim();
+    if (clean === "vanguard_monthly" || clean.startsWith("vanguard_enterprise_")) return "vanguard_enterprise";
+    if (clean.startsWith("vanguard_personal_")) return "vanguard_personal";
+    return clean;
+  };
   const newOrderKey = () => `pricing-${Date.now()}-${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`;
 
   function orderPayload(form) {
@@ -139,28 +145,39 @@
   }
 
   function renderPage(catalog) {
-    const subscription = object(catalog.subscription);
-    const features = list(subscription.features);
-    document.querySelector("#pricingFactSubscription").textContent = money(subscription.price_ntd);
-    document.querySelector("#pricingFactAccounts").textContent = `${Number(subscription.threads_accounts || 3)} 帳號`;
-    document.querySelector("#pricingFactImages").textContent = `${Number(subscription.monthly_free_images || 10)} 張`;
+    const subscriptions = list(catalog.subscriptions).length ? list(catalog.subscriptions) : [object(catalog.subscription)];
+    const monthlyPrices = subscriptions.map((item) => Number(item.monthly_price_ntd || 0)).filter((value) => value > 0);
+    const startingMonthlyPrice = monthlyPrices.length ? Math.min(...monthlyPrices) : 0;
+    document.querySelector("#pricingFactSubscription").textContent = `${money(startingMonthlyPrice)} 起 / 月`;
+    document.querySelector("#pricingFactAccounts").textContent = "1–3 帳號";
+    document.querySelector("#pricingFactImages").textContent = "每月 10 張";
     document.querySelector("#pricingFactPoint").textContent = `1 點 = ${money(catalog.point_unit_ntd || 10)}`;
 
-    document.querySelector("#pricingSubscription").innerHTML = `<article class="pricing-subscription-card">
-      <div class="pricing-subscription-main"><span class="pricing-label">Vecto Vanguard OPC</span><h3>${escapeHtml(subscription.name)}</h3>
-        <div class="pricing-subscription-price">${money(subscription.price_ntd)} <small>/ 月</small></div>
+    document.querySelector("#pricingSubscription").innerHTML = subscriptions.map((subscription) => {
+      const features = list(subscription.features);
+      const periodMonths = Number(subscription.period_months || 1);
+      const periodLabel = ({ 3: "季繳", 6: "半年繳", 12: "年繳" })[periodMonths] || `${periodMonths} 個月`;
+      return `<article class="pricing-subscription-card">
+      <div class="pricing-subscription-main"><span class="pricing-label">Vecto Vanguard OPC · ${periodLabel}</span><h3>${escapeHtml(subscription.name)}</h3>
+        <div class="pricing-subscription-price">${money(subscription.price_ntd)} <small>/ ${periodLabel}</small></div>
+        <p>${money(subscription.monthly_price_ntd)} / 月標準</p>
         <button class="button button-primary" type="button" data-purchase-sku="${escapeHtml(skuOf(subscription))}">申請開通或續費</button>
       </div>
       <div class="pricing-subscription-details"><strong>每套方案包含</strong><ul class="pricing-subscription-features">
         ${features.map((feature) => `<li>${escapeHtml(feature)}</li>`).join("")}
-        <li>每週期 ${Number(subscription.monthly_free_images || 10)} 張免費 AI 圖片</li>
+        <li>每月 ${Number(subscription.monthly_free_images || 10)} 張免費 AI 圖片</li>
         <li>${Number(subscription.threads_accounts || 3)} 個 Threads 帳號容量</li>
       </ul></div>
     </article>`;
+    }).join("");
 
-    document.querySelector("#pricingActions").innerHTML = list(catalog.actions).map((item) => `<div class="pricing-action-row">
-      <strong>${escapeHtml(item.name)}</strong><strong>${escapeHtml(item.points)} 點 / ${escapeHtml(item.unit)}</strong>
-    </div>`).join("");
+    document.querySelector("#pricingActions").innerHTML = list(catalog.actions).filter((item) => item.public !== false).map((item) => {
+      const unavailable = item.implemented === false;
+      return `<div class="pricing-action-row${unavailable ? " is-unavailable" : ""}">
+        <span class="pricing-action-name"><strong>${escapeHtml(item.name)}</strong>${unavailable ? '<small class="pricing-action-availability">暫未開放</small>' : ""}</span>
+        <strong>${escapeHtml(item.points)} 點 / ${escapeHtml(item.unit)}</strong>
+      </div>`;
+    }).join("");
 
     document.querySelector("#pricingPackages").innerHTML = list(catalog.packages).map((item, index) => {
       const bonuses = [item.bonus_points ? `加贈 ${Number(item.bonus_points).toLocaleString("zh-TW")} 點` : "", item.bonus_images ? `加贈 ${Number(item.bonus_images)} 張永久圖片` : ""].filter(Boolean);
@@ -212,8 +229,9 @@
       openLoginForProduct(sku);
       return;
     }
-    const subscription = object(state.catalog.subscription);
-    const item = skuOf(subscription) === sku ? { ...subscription, kind: "subscription" } : list(state.catalog.packages).find((candidate) => skuOf(candidate) === sku);
+    const subscriptions = list(state.catalog.subscriptions).length ? list(state.catalog.subscriptions) : [object(state.catalog.subscription)];
+    const subscription = subscriptions.find((candidate) => skuOf(candidate) === sku);
+    const item = subscription ? { ...subscription, kind: "subscription" } : list(state.catalog.packages).find((candidate) => skuOf(candidate) === sku);
     if (!item) return;
     if (state.orderAttempt && skuOf(state.selected) !== skuOf(item)) state.orderAttempt = null;
     state.selected = item;
@@ -227,12 +245,15 @@
     document.querySelector("#pricingOrderDescription").textContent = `在線申請「${item.name}」，目前單價 ${money(item.price_ntd)}。管理員將按送出時的價格快照審核。`;
     const renewalField = document.querySelector("#pricingRenewalField");
     const renewalSelect = form.elements.renewal_subscription_id;
-    const subscriptions = state.summaryStatus === "ready" ? activeSubscriptions() : [];
+    const selectedPlanFamily = subscriptionPlanFamily(skuOf(item));
+    const renewalSubscriptions = state.summaryStatus === "ready"
+      ? activeSubscriptions().filter((entry) => subscriptionPlanFamily(entry.plan_sku) === selectedPlanFamily)
+      : [];
     renewalField.hidden = item.kind !== "subscription";
     renewalSelect.disabled = item.kind === "subscription" && state.summaryStatus !== "ready";
     renewalSelect.innerHTML = renewalSelect.disabled
       ? '<option value="">訂閱資料暫時無法讀取</option>'
-      : `<option value="">開通新訂閱</option>${subscriptions.map((entry) => `<option value="${escapeHtml(entry.id)}">續費 ${escapeHtml(entry.plan_sku || entry.id)}</option>`).join("")}`;
+      : `<option value="">開通新訂閱</option>${renewalSubscriptions.map((entry) => `<option value="${escapeHtml(entry.id)}">續費 ${escapeHtml(entry.plan_sku || entry.id)}</option>`).join("")}`;
     document.querySelector("#pricingOrderStatus").textContent = blockReason;
     const modal = document.querySelector("#pricingOrderModal");
     modal.classList.add("is-open");

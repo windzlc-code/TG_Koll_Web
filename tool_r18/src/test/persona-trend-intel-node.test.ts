@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import { resolveRuntimeFile } from "@/runtime/node/data-dir";
-import { buildPersonaTrendTopics, fetchPersonaTrendIntelForNode } from "@/lib/persona-trend-intel-node";
+import { buildPersonaTrendTopics, fetchPersonaTrendIntelForNode, shanghaiDateKey } from "@/lib/persona-trend-intel-node";
 
 describe("persona-trend-intel-node", () => {
+  it("uses the Shanghai day for runtime cache keys", () => {
+    expect(shanghaiDateKey(new Date("2026-07-31T16:30:00.000Z"))).toBe("2026-08-01");
+    expect(shanghaiDateKey(new Date("2026-07-31T15:59:59.000Z"))).toBe("2026-07-31");
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     try {

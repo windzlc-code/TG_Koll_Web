@@ -4,6 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONPATH=/app \
+    TZ=Asia/Shanghai \
+    WEBAPP_TIMEZONE=Asia/Shanghai \
     PATH="/opt/venv/bin:$PATH" \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     XDG_CACHE_HOME=/data/webapp_data/cache \
@@ -26,7 +28,7 @@ RUN apt-get update \
        libgtk-3-0 libdbus-glib-1-2 libxt6 libxss1 libasound2 \
        libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
        libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 xvfb \
-       python3 python3-pip python3-venv build-essential sqlite3 xdotool imagemagick tini \
+       python3 python3-pip python3-venv build-essential sqlite3 xdotool imagemagick tini tzdata \
     && curl -fL --retry 3 -o /tmp/kasmvncserver.deb "$KASMVNC_DEB_URL" \
     && echo "$KASMVNC_DEB_SHA256  /tmp/kasmvncserver.deb" | sha256sum -c - \
     && apt-get install -y /tmp/kasmvncserver.deb \

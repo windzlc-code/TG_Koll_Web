@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 import json
+import math
 import os
 import sqlite3
 import time
@@ -14,7 +15,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 POINT_SCALE = 100
 NEW_USER_WELCOME_POINTS = 5
 LEGACY_R18_ACTION_SKUS = {
-    "oral_video_second",
     "ad_video_480p_second",
     "ad_video_720p_second",
     "ad_video_1080p_second",
@@ -22,42 +22,142 @@ LEGACY_R18_ACTION_SKUS = {
     "ad_video_4k_second",
 }
 try:
-    TAIPEI = ZoneInfo("Asia/Taipei")
+    SHANGHAI = ZoneInfo("Asia/Shanghai")
 except ZoneInfoNotFoundError:
-    TAIPEI = timezone(timedelta(hours=8), name="Asia/Taipei")
+    SHANGHAI = timezone(timedelta(hours=8), name="Asia/Shanghai")
+
+
+DEFAULT_AUTOMATION_MODULES: list[dict[str, Any]] = [
+    {
+        "key": "social_warmup",
+        "name": "养号",
+        "description": "浏览、点赞与低频互动养号；当前不扣除算力点。",
+        "task_types": ["threads_warmup", "instagram_warmup"],
+        "reply_scope": "",
+        "billing_mode": "free",
+        "action_sku": "",
+    },
+    {
+        "key": "auto_reply_comments",
+        "name": "自动回复评论",
+        "description": "自动回复账号收到的评论，按互动任务批次计费。",
+        "task_types": ["threads_auto_reply", "instagram_auto_reply"],
+        "reply_scope": "comments",
+        "billing_mode": "action",
+        "action_sku": "threads_auto_reply_batch",
+    },
+    {
+        "key": "auto_reply_hot_posts",
+        "name": "自动回复热点推文",
+        "description": "自动发现并回复热点推文，按互动任务批次计费。",
+        "task_types": ["threads_auto_reply", "instagram_auto_reply"],
+        "reply_scope": "hot_posts",
+        "billing_mode": "action",
+        "action_sku": "threads_auto_reply_batch",
+    },
+]
+
+PERSONAL_SUBSCRIPTION_FEATURES = [
+    "1 个独立 IG / Threads 综合代理账号，由 AI 自动驾驶",
+    "每月 10 张免费 AI 图片，使用免费额度不扣算力点",
+    "通用基础文案模板与日常发文话术包无限使用",
+    "Vecto OS 标准后台：单账号排程、流量数据看板与算力消耗明细",
+    "AI 热点抓取、单账号沙箱风控与内容前置审核",
+]
+
+ENTERPRISE_SUBSCRIPTION_FEATURES = [
+    "3 个独立 IG / Threads 分工代理账号，由 Vecto OS 自动管理",
+    "每月 10 张免费 AI 图片，使用免费额度不扣算力点",
+    "全行业乾货文案库、产品对比模板与评论互动话术包无限使用",
+    "Vecto OS 完整后台：三账号排程、流量向量看板与算力消耗明细",
+    "AI 热点抓取、内容前置风控与多账号分流防封机制",
+]
+
+PERSONAL_SUBSCRIPTION_PROFILE = {
+    "plan_tier": "personal",
+    "audience": "自由创作者与微型个人商家",
+    "account_positioning": "乾货输出、真实分享与轻量引流合一的综合账号",
+}
+
+ENTERPRISE_SUBSCRIPTION_PROFILE = {
+    "plan_tier": "enterprise",
+    "audience": "中小企业、品牌商家与多线运营团队",
+    "account_positioning": "乾货主账号、体验账号与投放账号分工运行",
+}
+
+OFFICIAL_BILLING_RULES = [
+    {"key": "free_image_priority", "name": "免费图片优先抵扣", "description": "订阅期间每月赠送 10 张免费 AI 图片，用完后才扣除算力点。"},
+    {"key": "shared_compute_pool", "name": "算力池共享", "description": "同一会员的个人版与多套企业版 OPC 共用同一算力池。"},
+    {"key": "permanent_compute_points", "name": "算力点永久有效", "description": "已储值算力点跨月累计，不设使用期限且不会自动清零。"},
+    {"key": "separate_payment_flows", "name": "订阅与储值独立", "description": "订阅费与算力储值分开结算，不能互相抵扣或转换。"},
+    {"key": "site_build_excluded", "name": "独立站不含在订阅内", "description": "独立站规划、设计、建置、网域、主机和维护需要另行委托报价。"},
+]
 
 
 DEFAULT_CATALOG: dict[str, Any] = {
     "currency": "TWD",
-    "timezone": "Asia/Taipei",
+    "timezone": "Asia/Shanghai",
     "point_unit_ntd": 10,
     "subscription": {
-        "sku": "vanguard_monthly",
-        "name": "Vecto Vanguard OPC",
-        "price_ntd": 6000,
-        "period_months": 1,
+        "sku": "vanguard_enterprise_quarterly",
+        "name": "Vecto Vanguard OPC 企业版（季缴）",
+        "price_ntd": 18000,
+        "monthly_price_ntd": 6000,
+        "period_months": 3,
         "threads_accounts": 3,
         "monthly_free_images": 10,
         "features": [
-            "一组 OPC 超级个体与三组 Threads 账号",
-            "Vecto OS 排程、数据看板与算力明细",
-            "热点抓取、内容风控与多账号分流",
+            "3 个独立 IG / Threads 代理账号",
+            "Vecto OS 排程、完整数据与账号分流风控",
+            "每月 10 张免费 AI 图片",
         ],
     },
+    "subscriptions": [
+        {"sku": "vanguard_personal_quarterly", "name": "Vecto Vanguard OPC 个人轻量版（季缴）", "price_ntd": 6000, "monthly_price_ntd": 2000, "period_months": 3, "threads_accounts": 1, "monthly_free_images": 10, "features": ["1 个综合 IG / Threads 代理账号", "标准排程、文案库、模板与话术包", "每月 10 张免费 AI 图片"]},
+        {"sku": "vanguard_personal_half_year", "name": "Vecto Vanguard OPC 个人轻量版（半年缴）", "price_ntd": 12000, "monthly_price_ntd": 2000, "period_months": 6, "threads_accounts": 1, "monthly_free_images": 10, "features": ["1 个综合 IG / Threads 代理账号", "标准排程、文案库、模板与话术包", "每月 10 张免费 AI 图片"]},
+        {"sku": "vanguard_personal_annual", "name": "Vecto Vanguard OPC 个人轻量版（年缴）", "price_ntd": 24000, "monthly_price_ntd": 2000, "period_months": 12, "threads_accounts": 1, "monthly_free_images": 10, "features": ["1 个综合 IG / Threads 代理账号", "标准排程、文案库、模板与话术包", "每月 10 张免费 AI 图片"]},
+        {"sku": "vanguard_enterprise_quarterly", "name": "Vecto Vanguard OPC 企业版（季缴）", "price_ntd": 18000, "monthly_price_ntd": 6000, "period_months": 3, "threads_accounts": 3, "monthly_free_images": 10, "features": ["3 个独立 IG / Threads 代理账号", "完整数据、三账号排程与分流风控", "每月 10 张免费 AI 图片"]},
+        {"sku": "vanguard_enterprise_half_year", "name": "Vecto Vanguard OPC 企业版（半年缴）", "price_ntd": 36000, "monthly_price_ntd": 6000, "period_months": 6, "threads_accounts": 3, "monthly_free_images": 10, "features": ["3 个独立 IG / Threads 代理账号", "完整数据、三账号排程与分流风控", "每月 10 张免费 AI 图片"]},
+        {"sku": "vanguard_enterprise_annual", "name": "Vecto Vanguard OPC 企业版（年缴）", "price_ntd": 72000, "monthly_price_ntd": 6000, "period_months": 12, "threads_accounts": 3, "monthly_free_images": 10, "features": ["3 个独立 IG / Threads 代理账号", "完整数据、三账号排程与分流风控", "每月 10 张免费 AI 图片"]},
+    ],
     "actions": [
-        {"sku": "threads_text_publish", "name": "Threads 文字推文发布", "points": 0.1, "unit": "次", "implemented": True},
-        {"sku": "basic_text_post", "name": "基础文字贴文", "points": 0.3, "unit": "篇", "implemented": True},
-        {"sku": "ai_image", "name": "AI 图片素材", "points": 0.6, "unit": "张", "implemented": True},
-        {"sku": "threads_auto_reply_batch", "name": "批量评论互动任务", "points": 2.0, "unit": "批", "implemented": True},
-        {"sku": "instagram_publish", "name": "Instagram 内容发布", "points": 0.1, "unit": "次", "implemented": True},
-        {"sku": "social_interaction", "name": "社交互动操作", "points": 0.1, "unit": "次", "implemented": True},
+        {"sku": "threads_text_publish", "name": "Threads 纯文字推文发布", "points": 0, "unit": "次", "implemented": True},
+        {"sku": "instagram_text_publish", "name": "Instagram 纯文字推文发布", "points": 0, "unit": "次", "implemented": True},
+        {"sku": "complete_image_post", "name": "基础完整图文贴文（文案、1 张基础 AI 图及发布）", "points": 2.5, "unit": "篇", "implemented": True},
+        {"sku": "basic_text_post", "name": "AI 文本处理步骤", "points": 0.3, "unit": "步", "implemented": True, "public": False},
+        {"sku": "ai_image", "name": "单独生成或追加 AI 图片", "points": 2, "unit": "张", "implemented": True},
+        {"sku": "oral_video_second", "name": "口播类短片", "points": 0.5, "unit": "秒", "implemented": False},
+        {"sku": "threads_auto_reply_batch", "name": "批量评论 / Quote 转发互动任务", "points": 5, "unit": "批次", "implemented": True},
+        {"sku": "seedance_fast_480p_second", "name": "SeedDance 2.0 Fast 480p", "points": 3, "unit": "秒", "implemented": False},
+        {"sku": "seedance_fast_720p_second", "name": "SeedDance 2.0 Fast 720p", "points": 6, "unit": "秒", "implemented": False},
+        {"sku": "seedance_fast_1080p_second", "name": "SeedDance 2.0 Fast 1080p", "points": 7.5, "unit": "秒", "implemented": False},
+        {"sku": "seedance_fast_2k_second", "name": "SeedDance 2.0 Fast 2K", "points": 8, "unit": "秒", "implemented": False},
+        {"sku": "seedance_fast_4k_second", "name": "SeedDance 2.0 Fast 4K", "points": 9, "unit": "秒", "implemented": False},
+        {"sku": "seedance_480p_second", "name": "SeedDance 2.0 480p", "points": 4, "unit": "秒", "implemented": False},
+        {"sku": "seedance_720p_second", "name": "SeedDance 2.0 720p", "points": 8, "unit": "秒", "implemented": False},
+        {"sku": "seedance_1080p_second", "name": "SeedDance 2.0 1080p", "points": 9, "unit": "秒", "implemented": False},
+        {"sku": "seedance_2k_second", "name": "SeedDance 2.0 2K", "points": 10, "unit": "秒", "implemented": False},
+        {"sku": "seedance_4k_second", "name": "SeedDance 2.0 4K", "points": 11, "unit": "秒", "implemented": False},
     ],
     "packages": [
-        {"sku": "credits_100", "name": "轻量储值包", "price_ntd": 1000, "paid_points": 100, "bonus_points": 0, "total_points": 100, "bonus_images": 0},
+        {"sku": "credits_200", "name": "标准储值包", "price_ntd": 2000, "paid_points": 200, "bonus_points": 0, "total_points": 200, "bonus_images": 0},
         {"sku": "credits_530", "name": "畅销储值包", "price_ntd": 5000, "paid_points": 500, "bonus_points": 30, "total_points": 530, "bonus_images": 0},
         {"sku": "credits_1620", "name": "企业长期储值包", "price_ntd": 15000, "paid_points": 1500, "bonus_points": 120, "total_points": 1620, "bonus_images": 20},
     ],
+    "automation_modules": DEFAULT_AUTOMATION_MODULES,
 }
+
+DEFAULT_CATALOG["subscription"]["features"] = list(ENTERPRISE_SUBSCRIPTION_FEATURES)
+DEFAULT_CATALOG["subscription"].update(ENTERPRISE_SUBSCRIPTION_PROFILE)
+for _default_subscription in DEFAULT_CATALOG["subscriptions"]:
+    _is_personal_plan = str(_default_subscription.get("sku") or "").startswith("vanguard_personal_")
+    _default_subscription["features"] = list(
+        PERSONAL_SUBSCRIPTION_FEATURES if _is_personal_plan else ENTERPRISE_SUBSCRIPTION_FEATURES
+    )
+    _default_subscription.update(
+        PERSONAL_SUBSCRIPTION_PROFILE if _is_personal_plan else ENTERPRISE_SUBSCRIPTION_PROFILE
+    )
+DEFAULT_CATALOG["billing_rules"] = OFFICIAL_BILLING_RULES
 
 
 class BillingError(RuntimeError):
@@ -112,12 +212,47 @@ def _env_enabled(name: str, default: str = "0") -> bool:
     }
 
 
+def _with_complete_subscription_details(catalog: dict[str, Any]) -> dict[str, Any]:
+    result = _loads(_dumps(catalog), {})
+    existing_plans = {
+        str(item.get("sku") or ""): item
+        for item in result.get("subscriptions") if isinstance(result.get("subscriptions"), list)
+        if isinstance(item, dict) and str(item.get("sku") or "")
+    }
+    merged_plans: list[dict[str, Any]] = []
+    for official in DEFAULT_CATALOG["subscriptions"]:
+        sku = str(official.get("sku") or "")
+        existing = existing_plans.get(sku, {})
+        merged = {**existing, **_loads(_dumps(official), {})}
+        existing_price = int(existing.get("price_ntd") or 0)
+        existing_monthly_price = int(existing.get("monthly_price_ntd") or 0)
+        period_months = int(official.get("period_months") or 0)
+        if (
+            existing_price > 0
+            and existing_monthly_price > 0
+            and existing_monthly_price * period_months == existing_price
+        ):
+            merged["price_ntd"] = existing_price
+            merged["monthly_price_ntd"] = existing_monthly_price
+        merged_plans.append(merged)
+    result["subscriptions"] = merged_plans
+    valid_skus = {str(item.get("sku") or "") for item in merged_plans}
+    default_sku = str((result.get("subscription") or {}).get("sku") or "")
+    if default_sku not in valid_skus:
+        default_sku = str(DEFAULT_CATALOG["subscription"]["sku"])
+    result["subscription"] = dict(
+        next(item for item in merged_plans if str(item.get("sku") or "") == default_sku)
+    )
+    result["billing_rules"] = _loads(_dumps(OFFICIAL_BILLING_RULES), [])
+    return result
+
+
 def enforcement_enabled() -> bool:
     return _env_enabled("COMMERCIAL_BILLING_ENABLED", "1")
 
 
 def add_calendar_month(start_ts: int) -> int:
-    start = datetime.fromtimestamp(int(start_ts), TAIPEI)
+    start = datetime.fromtimestamp(int(start_ts), SHANGHAI)
     year = start.year + (1 if start.month == 12 else 0)
     month = 1 if start.month == 12 else start.month + 1
     day = min(start.day, calendar.monthrange(year, month)[1])
@@ -181,7 +316,6 @@ def bootstrap_billing(conn: sqlite3.Connection, *, now: int | None = None) -> No
                 conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
             )
             active_catalog["actions"] = actions
-            validate_catalog(active_catalog)
             conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'active'")
             conn.execute(
                 """
@@ -218,7 +352,6 @@ def bootstrap_billing(conn: sqlite3.Connection, *, now: int | None = None) -> No
                 conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
             )
             active_catalog["actions"] = cleaned_actions
-            validate_catalog(active_catalog)
             conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'active'")
             conn.execute(
                 """
@@ -232,6 +365,169 @@ def bootstrap_billing(conn: sqlite3.Connection, *, now: int | None = None) -> No
         conn.execute(
             "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v3', ?, ?)",
             (_dumps({"completed_at": current, "changed": changed}), current),
+        )
+
+    official_price_migration = conn.execute(
+        "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v4'"
+    ).fetchone()
+    if official_price_migration is None:
+        active_row = conn.execute(
+            "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+        ).fetchone()
+        active_catalog = _loads(active_row["catalog_json"], {}) if active_row else {}
+        official_catalog = _loads(_dumps(DEFAULT_CATALOG), {})
+        changed = active_row is None or active_catalog != official_catalog
+        # Old drafts may still contain obsolete prices. Retire them so they cannot
+        # accidentally be published after the official PDF catalog is activated.
+        conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'draft'")
+        if changed and active_row is not None:
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            validate_catalog(official_catalog)
+            conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'active'")
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES (?, ?, 'active', ?, ?, 0, ?, ?)
+                """,
+                (_id("catalog"), next_version, _dumps(official_catalog), current, current, current),
+            )
+        conn.execute(
+            "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v4', ?, ?)",
+            (_dumps({"completed_at": current, "changed": changed, "source": "official-pricing-pdf"}), current),
+        )
+
+    shanghai_timezone_migration = conn.execute(
+        "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v5_timezone_shanghai'"
+    ).fetchone()
+    if shanghai_timezone_migration is None:
+        active_row = conn.execute(
+            "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+        ).fetchone()
+        active_catalog = _loads(active_row["catalog_json"], {}) if active_row else {}
+        changed = bool(active_row) and str(active_catalog.get("timezone") or "") != "Asia/Shanghai"
+        if changed and active_row is not None:
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            active_catalog["timezone"] = "Asia/Shanghai"
+            active_catalog.setdefault(
+                "automation_modules",
+                _loads(_dumps(DEFAULT_AUTOMATION_MODULES), []),
+            )
+            active_catalog = _with_complete_subscription_details(active_catalog)
+            validate_catalog(active_catalog)
+            conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'active'")
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES (?, ?, 'active', ?, ?, 0, ?, ?)
+                """,
+                (_id("catalog"), next_version, _dumps(active_catalog), current, current, current),
+            )
+        conn.execute(
+            "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v5_timezone_shanghai', ?, ?)",
+            (_dumps({"completed_at": current, "changed": changed}), current),
+        )
+
+    automation_modules_migration = conn.execute(
+        "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v6_automation_modules'"
+    ).fetchone()
+    if automation_modules_migration is None:
+        desired_modules = _loads(_dumps(DEFAULT_AUTOMATION_MODULES), [])
+        active_row = conn.execute(
+            "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+        ).fetchone()
+        active_catalog = _loads(active_row["catalog_json"], {}) if active_row else {}
+        changed = bool(active_row) and active_catalog.get("automation_modules") != desired_modules
+        if changed and active_row is not None:
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            active_catalog["automation_modules"] = desired_modules
+            active_catalog = _with_complete_subscription_details(active_catalog)
+            validate_catalog(active_catalog)
+            conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'active'")
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES (?, ?, 'active', ?, ?, 0, ?, ?)
+                """,
+                (_id("catalog"), next_version, _dumps(active_catalog), current, current, current),
+            )
+
+        updated_drafts = 0
+        draft_rows = conn.execute(
+            "SELECT id, catalog_json FROM billing_catalog_versions WHERE status = 'draft'"
+        ).fetchall()
+        for draft_row in draft_rows:
+            draft_catalog = _loads(draft_row["catalog_json"], {})
+            if not isinstance(draft_catalog, dict) or draft_catalog.get("automation_modules") == desired_modules:
+                continue
+            draft_catalog["automation_modules"] = _loads(_dumps(desired_modules), [])
+            draft_catalog = _with_complete_subscription_details(draft_catalog)
+            validate_catalog(draft_catalog)
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (_dumps(draft_catalog), str(draft_row["id"])),
+            )
+            updated_drafts += 1
+        conn.execute(
+            "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v6_automation_modules', ?, ?)",
+            (_dumps({"completed_at": current, "changed": changed, "updated_drafts": updated_drafts}), current),
+        )
+
+    complete_subscription_migration = conn.execute(
+        "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v7_complete_subscription_details'"
+    ).fetchone()
+    if complete_subscription_migration is None:
+        active_row = conn.execute(
+            "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+        ).fetchone()
+        active_catalog = _loads(active_row["catalog_json"], {}) if active_row else {}
+        upgraded_catalog = _with_complete_subscription_details(active_catalog) if active_row else active_catalog
+        changed = bool(active_row) and upgraded_catalog != active_catalog
+        if changed and active_row is not None:
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            validate_catalog(upgraded_catalog)
+            conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'active'")
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES (?, ?, 'active', ?, ?, 0, ?, ?)
+                """,
+                (_id("catalog"), next_version, _dumps(upgraded_catalog), current, current, current),
+            )
+
+        updated_drafts = 0
+        draft_rows = conn.execute(
+            "SELECT id, catalog_json FROM billing_catalog_versions WHERE status = 'draft'"
+        ).fetchall()
+        for draft_row in draft_rows:
+            draft_catalog = _loads(draft_row["catalog_json"], {})
+            upgraded_draft = _with_complete_subscription_details(draft_catalog)
+            if upgraded_draft == draft_catalog:
+                continue
+            validate_catalog(upgraded_draft)
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (_dumps(upgraded_draft), str(draft_row["id"])),
+            )
+            updated_drafts += 1
+        conn.execute(
+            "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v7_complete_subscription_details', ?, ?)",
+            (_dumps({"completed_at": current, "changed": changed, "updated_drafts": updated_drafts}), current),
         )
 
     enforcement_migration = conn.execute(
@@ -473,21 +769,135 @@ def publish_catalog(conn: sqlite3.Connection, catalog_id: str, *, actor_user_id:
 def validate_catalog(catalog: dict[str, Any]) -> None:
     if not isinstance(catalog, dict):
         raise BillingError("INVALID_CATALOG", "计费目录格式错误", 400)
+    if str(catalog.get("timezone") or "") != "Asia/Shanghai":
+        raise BillingError("INVALID_CATALOG", "业务时区必须为 Asia/Shanghai", 400)
     subscription = catalog.get("subscription") if isinstance(catalog.get("subscription"), dict) else {}
-    if str(subscription.get("sku") or "") != "vanguard_monthly" or int(subscription.get("price_ntd") or 0) <= 0:
+    subscriptions = catalog.get("subscriptions") if isinstance(catalog.get("subscriptions"), list) else []
+    subscription_skus = [str((item or {}).get("sku") or "") for item in subscriptions]
+    subscription_by_sku = {
+        str(item.get("sku") or ""): item
+        for item in subscriptions
+        if isinstance(item, dict) and str(item.get("sku") or "")
+    }
+    if (
+        not subscriptions
+        or len(set(subscription_skus)) != len(subscription_skus)
+        or any(
+            not isinstance(item, dict)
+            or not str(item.get("sku") or "")
+            or int(item.get("price_ntd") or 0) <= 0
+            or int(item.get("period_months") or 0) not in {3, 6, 12}
+            or int(item.get("monthly_price_ntd") or 0) <= 0
+            or int(item.get("monthly_price_ntd") or 0) * int(item.get("period_months") or 0)
+            != int(item.get("price_ntd") or 0)
+            or int(item.get("threads_accounts") or 0) not in {1, 3}
+            or int(item.get("monthly_free_images") or 0) < 0
+            or len(item.get("features") if isinstance(item.get("features"), list) else []) < 5
+            or not str(item.get("audience") or "").strip()
+            or not str(item.get("account_positioning") or "").strip()
+            for item in subscriptions
+        )
+        or str(subscription.get("sku") or "") not in set(subscription_skus)
+        or any(
+            subscription.get(field) != subscription_by_sku[str(subscription.get("sku") or "")].get(field)
+            for field in (
+                "name",
+                "price_ntd",
+                "period_months",
+                "threads_accounts",
+                "monthly_free_images",
+                "features",
+                "audience",
+                "account_positioning",
+            )
+        )
+    ):
         raise BillingError("INVALID_CATALOG", "订阅方案配置不完整", 400)
     packages = catalog.get("packages") if isinstance(catalog.get("packages"), list) else []
-    if not packages or any(int((item or {}).get("price_ntd") or 0) <= 0 or int((item or {}).get("total_points") or 0) <= 0 for item in packages):
+    package_skus = [str((item or {}).get("sku") or "") for item in packages]
+    if (
+        not packages
+        or len(set(package_skus)) != len(package_skus)
+        or any(
+            not isinstance(item, dict)
+            or not str(item.get("sku") or "")
+            or int(item.get("price_ntd") or 0) <= 0
+            or int(item.get("total_points") or 0) <= 0
+            or int(item.get("paid_points") or 0) + int(item.get("bonus_points") or 0) != int(item.get("total_points") or 0)
+            for item in packages
+        )
+    ):
         raise BillingError("INVALID_CATALOG", "算力套餐配置不完整", 400)
     actions = catalog.get("actions") if isinstance(catalog.get("actions"), list) else []
-    if any(units_from_points((item or {}).get("points")) <= 0 for item in actions):
-        raise BillingError("INVALID_CATALOG", "操作计费点数必须大于0", 400)
+    action_skus = [str((item or {}).get("sku") or "") for item in actions]
+    try:
+        invalid_action = (
+            not actions
+            or len(set(action_skus)) != len(action_skus)
+            or any(
+                not isinstance(item, dict)
+                or not str(item.get("sku") or "")
+                or not math.isfinite(float(item.get("points")))
+                or float(item.get("points")) < 0
+                for item in actions
+            )
+        )
+    except (TypeError, ValueError):
+        invalid_action = True
+    if invalid_action:
+        raise BillingError("INVALID_CATALOG", "操作计费点数必须为非负数", 400)
+
+    automation_modules = catalog.get("automation_modules") if isinstance(catalog.get("automation_modules"), list) else []
+    module_keys = [str((item or {}).get("key") or "") for item in automation_modules]
+    default_modules = {str(item["key"]): item for item in DEFAULT_AUTOMATION_MODULES}
+    invalid_automation_modules = (
+        len(automation_modules) != len(default_modules)
+        or len(set(module_keys)) != len(module_keys)
+        or set(module_keys) != set(default_modules)
+    )
+    if not invalid_automation_modules:
+        for item in automation_modules:
+            if not isinstance(item, dict):
+                invalid_automation_modules = True
+                break
+            key = str(item.get("key") or "")
+            expected = default_modules.get(key, {})
+            task_types = item.get("task_types") if isinstance(item.get("task_types"), list) else []
+            billing_mode = str(item.get("billing_mode") or "")
+            action_sku = str(item.get("action_sku") or "")
+            if (
+                not str(item.get("name") or "").strip()
+                or not str(item.get("description") or "").strip()
+                or task_types != expected.get("task_types")
+                or str(item.get("reply_scope") or "") != str(expected.get("reply_scope") or "")
+                or billing_mode != str(expected.get("billing_mode") or "")
+                or action_sku != str(expected.get("action_sku") or "")
+                or (billing_mode == "action" and action_sku not in set(action_skus))
+                or (billing_mode == "free" and bool(action_sku))
+            ):
+                invalid_automation_modules = True
+                break
+    if invalid_automation_modules:
+        raise BillingError("INVALID_CATALOG", "自动化任务计费映射配置不完整", 400)
+
+    billing_rules = catalog.get("billing_rules") if isinstance(catalog.get("billing_rules"), list) else []
+    expected_rule_keys = [str(item["key"]) for item in OFFICIAL_BILLING_RULES]
+    if (
+        [str((item or {}).get("key") or "") for item in billing_rules] != expected_rule_keys
+        or any(
+            not isinstance(item, dict)
+            or not str(item.get("name") or "").strip()
+            or not str(item.get("description") or "").strip()
+            for item in billing_rules
+        )
+    ):
+        raise BillingError("INVALID_CATALOG", "订阅与算力通用规则配置不完整", 400)
 
 
 def _catalog_item(catalog: dict[str, Any], sku: str) -> tuple[str, dict[str, Any]]:
-    subscription = catalog.get("subscription") if isinstance(catalog.get("subscription"), dict) else {}
-    if str(subscription.get("sku") or "") == str(sku):
-        return "subscription", subscription
+    for item in catalog.get("subscriptions") if isinstance(catalog.get("subscriptions"), list) else []:
+        if isinstance(item, dict) and str(item.get("sku") or "") == str(sku):
+            return "subscription", item
     for item in catalog.get("packages") if isinstance(catalog.get("packages"), list) else []:
         if isinstance(item, dict) and str(item.get("sku") or "") == str(sku):
             return "credit_pack", item
@@ -513,13 +923,55 @@ def _active_subscription_count(conn: sqlite3.Connection, user_id: int, now: int)
     )
 
 
+def _subscription_plan_family(sku: str) -> str:
+    clean = str(sku or "").strip()
+    if clean == "vanguard_monthly" or clean.startswith("vanguard_enterprise_"):
+        return "vanguard_enterprise"
+    if clean.startswith("vanguard_personal_"):
+        return "vanguard_personal"
+    return clean
+
+
 def require_write_access(conn: sqlite3.Connection, user_id: int, *, admin_waived: bool = False, now: int | None = None) -> dict[str, Any]:
     return ensure_wallet(conn, int(user_id), now=now)
 
 
 def threads_account_limit(conn: sqlite3.Connection, user_id: int, *, now: int | None = None) -> int | None:
+    current = int(now or _now())
     ensure_wallet(conn, int(user_id), now=now)
-    return None
+    rows = conn.execute(
+        """
+        SELECT DISTINCT subscription.id, subscription.plan_sku
+        FROM billing_subscriptions AS subscription
+        JOIN billing_subscription_periods AS period
+          ON period.subscription_id = subscription.id
+        WHERE subscription.user_id = ?
+          AND period.status != 'cancelled'
+          AND period.start_at <= ?
+          AND period.end_at > ?
+        """,
+        (int(user_id), current, current),
+    ).fetchall()
+    if not rows:
+        return None
+    catalog = get_active_catalog(conn)
+    plan_accounts = {
+        str(item.get("sku") or ""): int(item.get("threads_accounts") or 0)
+        for item in catalog.get("subscriptions") if isinstance(catalog.get("subscriptions"), list)
+        if isinstance(item, dict) and str(item.get("sku") or "")
+    }
+    total = 0
+    recognized = False
+    for row in rows:
+        sku = str(row["plan_sku"] or "")
+        accounts = int(plan_accounts.get(sku) or 0)
+        if accounts <= 0:
+            family = _subscription_plan_family(sku)
+            accounts = 3 if family == "vanguard_enterprise" else (1 if family == "vanguard_personal" else 0)
+        if accounts > 0:
+            recognized = True
+            total += accounts
+    return total if recognized else None
 
 
 def _insert_ledger(
@@ -1077,9 +1529,15 @@ def create_order(
         raise BillingError("INVALID_RENEWAL", "续费订阅数量必须与购买数量一致", 400)
     if renewals:
         placeholders = ",".join("?" for _ in renewals)
-        owned = int(conn.execute(f"SELECT COUNT(*) AS c FROM billing_subscriptions WHERE user_id = ? AND id IN ({placeholders})", (int(user_id), *renewals)).fetchone()["c"])
-        if owned != len(renewals):
+        owned_rows = conn.execute(
+            f"SELECT id, plan_sku FROM billing_subscriptions WHERE user_id = ? AND id IN ({placeholders})",
+            (int(user_id), *renewals),
+        ).fetchall()
+        if len(owned_rows) != len(renewals):
             raise BillingError("SUBSCRIPTION_NOT_FOUND", "续费订阅不存在", 404)
+        requested_family = _subscription_plan_family(requested_sku)
+        if any(_subscription_plan_family(str(existing["plan_sku"] or "")) != requested_family for existing in owned_rows):
+            raise BillingError("SUBSCRIPTION_PLAN_MISMATCH", "续费方案必须属于原订阅计划系列；跨系列变更请新开订阅", 409)
     amount = int(item.get("price_ntd") or 0) * 100 * qty
     order_id = _id("bill_order")
     snapshot = {"kind": kind, "item": item, "catalog_version": int(catalog["version"]), "catalog_id": str(catalog["id"])}
@@ -1199,6 +1657,7 @@ def approve_order(conn: sqlite3.Connection, order_id: str, *, actor_user_id: int
     else:
         renewals = _loads(row["renewal_subscription_ids_json"], [])
         monthly_images = int(item.get("monthly_free_images") or 10)
+        period_months = max(int(item.get("period_months") or 1), 1)
         targets: list[str] = []
         if renewals:
             clean_renewals = [str(value) for value in renewals]
@@ -1215,22 +1674,28 @@ def approve_order(conn: sqlite3.Connection, order_id: str, *, actor_user_id: int
             subscription = conn.execute("SELECT * FROM billing_subscriptions WHERE id = ? AND user_id = ?", (subscription_id, user_id)).fetchone()
             if subscription is None:
                 raise BillingError("SUBSCRIPTION_NOT_FOUND", "续费订阅不存在", 404)
-            start_at = max(current, int(subscription["current_period_end"] or 0))
-            end_at = add_calendar_month(start_at)
-            period_id = _id("subscription_period")
+            cursor = max(current, int(subscription["current_period_end"] or 0))
+            for month_index in range(period_months):
+                start_at = cursor
+                end_at = add_calendar_month(start_at)
+                period_id = _id("subscription_period")
+                conn.execute(
+                    "INSERT INTO billing_subscription_periods(id, subscription_id, user_id, source_order_id, start_at, end_at, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (period_id, subscription_id, user_id, str(row["id"]), start_at, end_at, "active" if start_at <= current < end_at else "scheduled", current),
+                )
+                conn.execute(
+                    "INSERT INTO billing_image_grants(id, user_id, source_type, source_ref, total_count, remaining_count, available_at, expires_at, created_at, updated_at) VALUES (?, ?, 'subscription_monthly', ?, ?, ?, ?, ?, ?, ?)",
+                    (_id("image_grant"), user_id, period_id, monthly_images, monthly_images, start_at, end_at, current, current),
+                )
+                _insert_ledger(
+                    conn, user_id=user_id, asset_type="subscription", event_type="subscription_period_approved", amount_units=1,
+                    balance_after_units=1, order_id=str(row["id"]), ref_type="subscription", ref_id=subscription_id,
+                    idempotency_key=f"period:{period_id}:approved", meta={"start_at": start_at, "end_at": end_at, "month_index": month_index + 1, "period_months": period_months}, now=current,
+                )
+                cursor = end_at
             conn.execute(
-                "INSERT INTO billing_subscription_periods(id, subscription_id, user_id, source_order_id, start_at, end_at, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (period_id, subscription_id, user_id, str(row["id"]), start_at, end_at, "active" if start_at <= current else "scheduled", current),
-            )
-            conn.execute("UPDATE billing_subscriptions SET status = 'active', current_period_end = ?, updated_at = ? WHERE id = ?", (end_at, current, subscription_id))
-            conn.execute(
-                "INSERT INTO billing_image_grants(id, user_id, source_type, source_ref, total_count, remaining_count, available_at, expires_at, created_at, updated_at) VALUES (?, ?, 'subscription_monthly', ?, ?, ?, ?, ?, ?, ?)",
-                (_id("image_grant"), user_id, period_id, monthly_images, monthly_images, start_at, end_at, current, current),
-            )
-            _insert_ledger(
-                conn, user_id=user_id, asset_type="subscription", event_type="subscription_period_approved", amount_units=1,
-                balance_after_units=1, order_id=str(row["id"]), ref_type="subscription", ref_id=subscription_id,
-                idempotency_key=f"period:{period_id}:approved", meta={"start_at": start_at, "end_at": end_at}, now=current,
+                "UPDATE billing_subscriptions SET status = 'active', plan_sku = ?, current_period_end = ?, updated_at = ? WHERE id = ?",
+                (str(row["sku"]), cursor, current, subscription_id),
             )
         conn.execute("UPDATE billing_wallets SET billing_mode = 'enforced', updated_at = ? WHERE user_id = ?", (current, user_id))
     conn.execute(
@@ -1847,7 +2312,7 @@ def billing_summary(conn: sqlite3.Connection, user_id: int, *, now: int | None =
         "points": points_from_units(int(wallet["credit_units"])),
         "subscription_active": active_count > 0,
         "active_subscription_count": active_count,
-        "threads_account_limit": None,
+        "threads_account_limit": threads_account_limit(conn, int(user_id), now=current),
         "free_images": {"monthly_remaining": monthly_remaining, "permanent_remaining": permanent_remaining, "total_remaining": monthly_remaining + permanent_remaining},
         "subscriptions": [
             {

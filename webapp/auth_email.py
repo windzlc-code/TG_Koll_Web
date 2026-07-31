@@ -34,7 +34,9 @@ VERIFICATION_RESEND_SECONDS = 60
 VERIFICATION_MAX_ATTEMPTS = 5
 VERIFICATION_EMAIL_HOURLY_LIMIT = 5
 VERIFICATION_IP_HOURLY_LIMIT = 20
-VERIFICATION_PURPOSES = frozenset({"registration", "password_setup", "email_binding"})
+VERIFICATION_PURPOSES = frozenset(
+    {"registration", "password_setup", "email_binding", "login_security"}
+)
 BREVO_EMAIL_API_URL = "https://api.brevo.com/v3/smtp/email"
 
 
@@ -161,6 +163,8 @@ def create_email_challenge(
     purpose: str,
     request_ip: str,
     now: int,
+    *,
+    user_id: int | None = None,
 ) -> tuple[str, str, int]:
     normalized = normalize_email(email)
     clean_purpose = str(purpose or "").strip()
@@ -236,10 +240,11 @@ def create_email_challenge(
           id, user_id, email_normalized, purpose, code_digest, send_status,
           sent_at, resend_available_at, expires_at, attempt_count, max_attempts,
           consumed_at, invalidated_at, request_ip, created_at, updated_at
-        ) VALUES (?, NULL, ?, ?, ?, 'pending', 0, ?, ?, 0, ?, 0, 0, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, 0, ?, 0, 0, ?, ?, ?)
         """,
         (
             challenge_id,
+            int(user_id) if user_id is not None else None,
             normalized,
             clean_purpose,
             digest,
@@ -330,6 +335,9 @@ def verify_and_consume_challenge(
     purpose: str,
     code: str,
     now: int,
+    *,
+    expected_user_id: int | None = None,
+    request_ip: str = "",
 ) -> bool:
     normalized = normalize_email(email)
     clean_purpose = str(purpose or "").strip()
@@ -353,6 +361,19 @@ def verify_and_consume_challenge(
         raise VerificationChallengeError(
             "challenge_mismatch",
             "verification challenge does not match the request",
+        )
+    if expected_user_id is not None and int(row["user_id"] or 0) != int(expected_user_id):
+        raise VerificationChallengeError(
+            "challenge_mismatch",
+            "verification challenge does not match the account",
+        )
+    clean_request_ip = str(request_ip or "").strip()[:64]
+    if clean_request_ip and not hmac.compare_digest(
+        str(row["request_ip"] or ""), clean_request_ip
+    ):
+        raise VerificationChallengeError(
+            "challenge_mismatch",
+            "verification challenge does not match the login context",
         )
     if str(row["send_status"]) != "sent":
         raise VerificationChallengeError(

@@ -125,6 +125,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             '".task-detail-log-item > p"',
         ):
             self.assertIn(protected_selector, self.source)
+        self.assertIn('"data-label"', self.source)
+        for runtime_label in ("序号", "系统有效性", "算力余额", "人工调整", "环境", "并发", "分页"):
+            self.assertIn(runtime_label, self.source)
+        self.assertIn('label === eventLabels[entry.event_type] ? "data-i18n-ui" : "data-i18n-skip"', self.source)
+        self.assertIn("markConsoleDynamicUi(modal)", self.source)
+        self.assertNotIn('modal.querySelectorAll("strong, p, label, button', self.source)
 
     def test_cookie_status_keeps_credentials_and_login_placeholders_visible(self):
         status_source = self._javascript_function_source(
@@ -271,11 +277,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             'data-site-account-trigger',
             'data-site-account-popover',
             'data-site-account-close',
-            'data-site-language-toggle',
             'data-site-account-logout',
         ):
             self.assertIn(marker, self.markup)
             self.assertIn(marker, self.site_nav_source)
+        self.assertIn('data-site-language-toggle', self.site_nav_source)
+        self.assertIn('function installLanguageControls(header)', self.site_nav_source)
         self.assertNotIn('data-site-theme-toggle', self.markup)
         self.assertNotIn('data-site-theme-toggle', self.site_nav_source)
         self.assertIn("function setAccount(account)", self.site_nav_source)
@@ -289,9 +296,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('await api("/api/auth/logout", { method: "POST" })', self.source)
         self.assertIn("clearTenantInMemoryState()", self.source)
         self.assertIn("purgeLegacyTenantContentCaches()", self.source)
-        self.assertIn('class="site-account-preferences"', self.markup)
-        self.assertIn('data-site-personal-controls', self.markup)
-        self.assertIn('function accountPreferencesMarkup(page = "console")', self.site_nav_source)
+        self.assertNotIn('class="site-account-preferences"', self.markup)
+        self.assertNotIn('data-site-personal-controls', self.markup)
+        self.assertNotIn('function accountPreferencesMarkup(page = "console")', self.site_nav_source)
         self.assertIn('data-site-account-billing', self.markup)
         self.assertIn('data-site-open-billing', self.markup)
         self.assertIn('data-site-open-settings', self.markup)

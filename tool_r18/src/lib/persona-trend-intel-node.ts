@@ -15,12 +15,25 @@ type LocaleInfo = {
 };
 
 const CACHE_FILE = "persona-trend-intel-cache.json";
+const SHANGHAI_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+export function shanghaiDateKey(date = new Date()): string {
+  const parts = Object.fromEntries(
+    SHANGHAI_DATE_FORMATTER.formatToParts(date).map(({ type, value }) => [type, value]),
+  );
+  const year = parts.year;
+  const month = parts.month;
+  const day = parts.day;
+  return `${year}-${month}-${day}`;
+}
 
 function todayKey(date = new Date()): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return shanghaiDateKey(date);
 }
 
 function hashShort(value: string): string {

@@ -2,6 +2,7 @@ let personaDashboardRoot = null;
 let personaDashboardBoundRoot = null;
 const PD_ADMIN_WORKSPACE_USER_ID = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
 const PD_ADMIN_CONSOLE_SESSION = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
+const PERSONA_DASHBOARD_TIME_ZONE = "Asia/Shanghai";
 
 function pdEl(id) {
   return personaDashboardRoot?.querySelector(`#${id}`) || document.getElementById(id);
@@ -190,20 +191,20 @@ function pdNumber(value) {
 function pdDate(value) {
   if (typeof value === "number" && Number.isFinite(value)) {
     const date = new Date(value);
-    if (!Number.isNaN(date.getTime())) return date.toLocaleString();
+    if (!Number.isNaN(date.getTime())) return date.toLocaleString("zh-CN", { timeZone: PERSONA_DASHBOARD_TIME_ZONE, hour12: false });
   }
   const text = String(value || "").trim();
   if (!text) return "-";
   if (/^\d{13}$/.test(text)) {
     const date = new Date(Number(text));
-    if (!Number.isNaN(date.getTime())) return date.toLocaleString();
+    if (!Number.isNaN(date.getTime())) return date.toLocaleString("zh-CN", { timeZone: PERSONA_DASHBOARD_TIME_ZONE, hour12: false });
   }
   if (/^\d{10}$/.test(text)) {
     const date = new Date(Number(text) * 1000);
-    if (!Number.isNaN(date.getTime())) return date.toLocaleString();
+    if (!Number.isNaN(date.getTime())) return date.toLocaleString("zh-CN", { timeZone: PERSONA_DASHBOARD_TIME_ZONE, hour12: false });
   }
   const date = new Date(text);
-  if (!Number.isNaN(date.getTime())) return date.toLocaleString();
+  if (!Number.isNaN(date.getTime())) return date.toLocaleString("zh-CN", { timeZone: PERSONA_DASHBOARD_TIME_ZONE, hour12: false });
   return text;
 }
 

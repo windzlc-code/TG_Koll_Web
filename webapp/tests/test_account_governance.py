@@ -30,6 +30,7 @@ class AccountGovernanceTests(unittest.TestCase):
         "PASSWORD_VAULT_KEY_VERSION",
         "PASSWORD_VAULT_KEYS_JSON",
         "PASSWORD_VAULT_LEGACY_KEY_VERSION",
+        "AUTH_VERIFICATION_SECRET",
     )
 
     def setUp(self):
@@ -53,6 +54,7 @@ class AccountGovernanceTests(unittest.TestCase):
         os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = self.ADMIN_PASSWORD
         os.environ["SESSION_COOKIE_SECURE"] = "0"
         os.environ["PASSWORD_VAULT_KEY"] = Fernet.generate_key().decode("ascii")
+        os.environ["AUTH_VERIFICATION_SECRET"] = "governance-security-verification-secret-32-bytes"
         os.environ.pop("PASSWORD_VAULT_KEY_FILE", None)
 
         server.RUNTIME_CONFIG_PATH = self.data_dir / "runtime.json"
@@ -471,6 +473,7 @@ class AccountGovernanceTests(unittest.TestCase):
                 "username": "admin",
                 "password": self.ADMIN_PASSWORD,
                 "mfa_code": governance.totp_code(secret),
+                "force_takeover": True,
             },
         )
         self.assertEqual(challenged.status_code, 200, challenged.text)
@@ -486,6 +489,7 @@ class AccountGovernanceTests(unittest.TestCase):
                 "username": "admin",
                 "password": self.ADMIN_PASSWORD,
                 "mfa_code": code,
+                "force_takeover": True,
             },
         )
         self.assertEqual(first.status_code, 200, first.text)
@@ -535,6 +539,72 @@ class AccountGovernanceTests(unittest.TestCase):
         self.assertGreaterEqual(int(mfa["failed_attempt_count"]), 5)
         self.assertGreater(int(mfa["locked_until"]), governance.now_ts())
         self.assertEqual(str(alert["severity"]), "high")
+
+    def test_new_device_and_network_confirmation_does_not_consume_mfa_before_takeover(self):
+        admin, identity = self._admin_client()
+        _secret, recovery_codes = self._enable_admin_mfa(admin)
+
+        trusted = TestClient(self.app, client=("198.51.100.10", 50000))
+        trusted_login = trusted.post(
+            "/api/auth/admin-login",
+            json={
+                "username": "admin",
+                "password": self.ADMIN_PASSWORD,
+                "mfa_code": recovery_codes[0],
+                "device_id": "trusted-admin-device",
+                "force_takeover": True,
+            },
+        )
+        self.assertEqual(trusted_login.status_code, 200, trusted_login.text)
+
+        verified_email = "admin-security@example.com"
+        now = server._now_ts()
+        with db_module.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_auth_emails(
+                  user_id, email_normalized, email_original, verified_at,
+                  is_primary, login_enabled, source, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 1, 1, 'security_test', ?, ?)
+                """,
+                (int(identity["id"]), verified_email, verified_email, now, now, now),
+            )
+
+        new_context = TestClient(self.app, client=("203.0.113.25", 50000))
+        with (
+            mock.patch.object(server, "email_delivery_available", return_value=True),
+            mock.patch.object(server, "send_verification_email") as send_email,
+        ):
+            verification = new_context.post(
+                "/api/auth/admin-login",
+                json={
+                    "username": "admin",
+                    "password": self.ADMIN_PASSWORD,
+                    "device_id": "new-admin-device",
+                },
+            )
+        self.assertEqual(verification.status_code, 409, verification.text)
+        self.assertEqual(verification.json()["detail"]["code"], "SECURITY_VERIFICATION_REQUIRED")
+        verification_detail = verification.json()["detail"]["verification"]
+        self.assertEqual(verification_detail["primary_method"], "email")
+        self.assertTrue(verification_detail["email_available"])
+        self.assertTrue(verification_detail["mfa_available"])
+        send_email.assert_called_once()
+        self.assertEqual(trusted.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 200)
+
+        confirmed = new_context.post(
+            "/api/auth/admin-login",
+            json={
+                "username": "admin",
+                "password": self.ADMIN_PASSWORD,
+                "mfa_code": recovery_codes[1],
+                "device_id": "new-admin-device",
+                "force_takeover": True,
+                "security_verification_method": "mfa",
+            },
+        )
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+        self.assertEqual(trusted.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 401)
 
     def test_dashboard_wallet_points_only_include_non_deleted_customers(self):
         admin, identity = self._admin_client()
@@ -640,6 +710,7 @@ class AccountGovernanceTests(unittest.TestCase):
                     ),
                 )
             snapshot = governance.dashboard_snapshot(conn, days=7, at=snapshot_end)
+        self.assertEqual(snapshot["timezone"], "Asia/Shanghai")
         self.assertEqual(snapshot["summary"]["consumed_points"], 2.75)
         self.assertEqual(snapshot["summary"]["lifetime_consumed_points"], 12.0)
 

@@ -152,10 +152,46 @@ class BillingApiClosedLoopTests(unittest.TestCase):
     def test_all_available_task_types_map_to_published_billing_skus(self):
         self.assertEqual(server._normal_task_billing_spec("get_gemini", {}), ("basic_text_post", 1, False))
         self.assertEqual(social_automation_api.social_task_billing_sku("threads", "publish_post"), "threads_text_publish")
-        self.assertEqual(social_automation_api.social_task_billing_sku("instagram", "publish_post"), "instagram_publish")
+        self.assertEqual(social_automation_api.social_task_billing_sku("instagram", "publish_post"), "instagram_text_publish")
+        self.assertEqual(
+            social_automation_api.social_task_billing_sku(
+                "threads",
+                "publish_post",
+                {"media_paths": ["post.png"]},
+            ),
+            "complete_image_post",
+        )
+        self.assertEqual(
+            social_automation_api.social_task_billing_sku(
+                "instagram",
+                "publish_post",
+                {"media_items": [{"type": "image", "url": "https://example.test/post.png"}]},
+            ),
+            "complete_image_post",
+        )
         self.assertEqual(social_automation_api.social_task_billing_sku("threads", "threads_auto_reply"), "threads_auto_reply_batch")
         self.assertEqual(social_automation_api.social_task_billing_sku("instagram", "instagram_auto_reply"), "threads_auto_reply_batch")
-        self.assertEqual(social_automation_api.social_task_billing_sku("instagram", "like_post"), "social_interaction")
+        for task_type in ("comment_post", "reply_comment", "share_post", "repost_post"):
+            with self.subTest(task_type=task_type):
+                self.assertEqual(
+                    social_automation_api.social_task_billing_sku("instagram", task_type),
+                    "threads_auto_reply_batch",
+                )
+        self.assertEqual(social_automation_api.social_task_billing_sku("instagram", "like_post"), "")
+
+    def test_admin_catalog_exposes_timezone_and_automation_module_coverage(self):
+        response = self.admin.get("/api/admin/billing/catalog/versions")
+        self.assertEqual(response.status_code, 200, response.text)
+        active = next(item for item in response.json()["items"] if item["status"] == "active")
+        catalog = active["catalog"]
+        self.assertEqual(catalog["timezone"], "Asia/Shanghai")
+        self.assertEqual(
+            [item["key"] for item in catalog["automation_modules"]],
+            ["social_warmup", "auto_reply_comments", "auto_reply_hot_posts"],
+        )
+        actions = {item["sku"]: item for item in catalog["actions"]}
+        self.assertEqual(actions["threads_auto_reply_batch"]["points"], 5)
+        self.assertTrue(all(item["description"] for item in catalog["automation_modules"]))
 
     def test_removed_r18_task_types_cannot_be_submitted_or_retried(self):
         removed_types = {
@@ -313,14 +349,24 @@ class BillingApiClosedLoopTests(unittest.TestCase):
     def test_online_application_stays_pending_until_admin_approval(self):
         catalog = self.customer.get("/api/billing/catalog")
         self.assertEqual(catalog.status_code, 200, catalog.text)
-        self.assertEqual(catalog.json()["subscription"]["price_ntd"], 6000)
+        self.assertEqual(catalog.json()["subscription"]["price_ntd"], 18000)
+        self.assertEqual(catalog.json()["timezone"], "Asia/Shanghai")
+        self.assertEqual(
+            [item["key"] for item in catalog.json()["automation_modules"]],
+            ["social_warmup", "auto_reply_comments", "auto_reply_hot_posts"],
+        )
+        self.assertEqual(catalog.json()["automation_modules"][0]["billing_mode"], "free")
+        self.assertEqual(
+            {item["action_sku"] for item in catalog.json()["automation_modules"][1:]},
+            {"threads_auto_reply_batch"},
+        )
 
         blocked_write = self.customer.post("/api/tasks/get_gemini", data={"user_input": "billing gate"})
         self.assertEqual(blocked_write.status_code, 402, blocked_write.text)
         self.assertEqual(blocked_write.json()["code"], "INSUFFICIENT_POINTS")
 
         body = {
-            "sku": "credits_100",
+            "sku": "credits_200",
             "quantity": 1,
             "note": "线上方案申请",
             "idempotency_key": "billing-api-order-0001",
@@ -378,9 +424,9 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         summary = self.customer.get("/api/billing/summary")
         ledger = self.customer.get("/api/billing/ledger")
         self.assertEqual(summary.status_code, 200, summary.text)
-        self.assertEqual(summary.json()["points"], 100)
+        self.assertEqual(summary.json()["points"], 200)
         self.assertTrue(summary.json()["subscription_active"])
-        self.assertIsNone(summary.json()["threads_account_limit"])
+        self.assertEqual(summary.json()["threads_account_limit"], 3)
         self.assertEqual(summary.json()["free_images"]["monthly_remaining"], 10)
         self.assertTrue(any(item["event_type"] == "credit_pack_approved" for item in ledger.json()["items"]))
 
@@ -389,7 +435,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
             json={"amount_cents": 5, "note": "billing api regression"},
         )
         self.assertEqual(recharged.status_code, 200, recharged.text)
-        self.assertEqual(recharged.json()["points"], 105)
+        self.assertEqual(recharged.json()["points"], 205)
         self.assertNotIn("balance_cents", recharged.json())
 
         archived = self.admin.delete(f"/api/admin/users/{self.user_id}")
@@ -445,7 +491,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
                 created = self.customer.post(
                     "/api/billing/orders",
                     json={
-                        "sku": "credits_100",
+                        "sku": "credits_200",
                         "quantity": 1,
                         "note": f"first user {index}",
                         "idempotency_key": f"first-user-order-{index}",
@@ -457,7 +503,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
                 created = second_customer.post(
                     "/api/billing/orders",
                     json={
-                        "sku": "credits_100",
+                        "sku": "credits_200",
                         "quantity": 1,
                         "note": f"second user {index}",
                         "idempotency_key": f"second-user-order-{index}",
@@ -530,7 +576,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         created = self.customer.post(
             "/api/billing/orders",
             json={
-                "sku": "credits_100",
+                "sku": "credits_200",
                 "quantity": 1,
                 "note": "reject this application",
                 "idempotency_key": "reject-order-permission-test",
@@ -599,7 +645,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         created = self.customer.post(
             "/api/billing/orders",
             json={
-                "sku": "credits_100",
+                "sku": "credits_200",
                 "quantity": 1,
                 "note": "refund boundary",
                 "idempotency_key": "refund-boundary-order",
@@ -612,7 +658,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
             json={"note": "approved for refund test"},
         )
         self.assertEqual(approved.status_code, 200, approved.text)
-        self.assertEqual(self.customer.get("/api/billing/summary").json()["points"], 100)
+        self.assertEqual(self.customer.get("/api/billing/summary").json()["points"], 200)
 
         customer_refund = self.customer.post(
             f"/api/admin/billing/orders/{order_id}/refund",

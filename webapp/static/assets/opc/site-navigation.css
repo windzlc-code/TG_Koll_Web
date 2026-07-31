@@ -386,9 +386,83 @@ html {
 }
 
 .site-language-button {
-  width: 46px;
-  grid-template-columns: 18px auto;
-  gap: 3px;
+  width: 40px;
+  min-width: 40px;
+  padding: 0;
+}
+
+.site-language-menu {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.site-language-menu .site-language-button {
+  overflow: visible;
+}
+
+.site-language-menu .site-language-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.site-language-menu .site-language-state {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  display: inline-grid;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  place-items: center;
+  color: #eef8f6;
+  background: #244657;
+  border: 1px solid rgba(220, 239, 234, 0.54);
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.site-language-popover {
+  position: absolute;
+  z-index: 5200;
+  top: calc(100% + 8px);
+  right: -2px;
+  display: grid;
+  min-width: 112px;
+  padding: 5px;
+  background: rgba(20, 35, 39, 0.96);
+  border: 1px solid rgba(210, 232, 227, 0.32);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+}
+
+.site-language-popover[hidden] {
+  display: none;
+}
+
+.site-language-popover button {
+  min-height: 32px;
+  padding: 0 9px;
+  color: rgba(245, 251, 250, 0.8);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  text-align: left;
+  cursor: pointer;
+}
+
+.site-language-popover button:hover,
+.site-language-popover button:focus-visible,
+.site-language-popover button.is-active {
+  color: #ffffff;
+  background: rgba(119, 216, 195, 0.16);
+  border-color: rgba(119, 216, 195, 0.38);
 }
 
 .site-subscription-link {
@@ -2133,10 +2207,6 @@ body.site-account-panel-active {
     padding-inline: 8px;
   }
 
-  .site-language-button {
-    width: 43px;
-  }
-
   .site-header .header-login,
   .site-header .header-action {
     min-height: 38px;
@@ -2221,15 +2291,6 @@ body.site-account-panel-active {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
     padding-inline: 0;
-  }
-
-  .site-header .site-global-controls .site-language-state {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
   }
 
   .site-header :is(.header-actions, .site-global-controls) {

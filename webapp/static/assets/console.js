@@ -1156,10 +1156,15 @@ const zhHantPhraseMap = [
   ["干涉", "干涉"],
   ["干预", "干預"],
   ["干扰", "干擾"],
+  ["分钟", "分鐘"],
+  ["点赞", "點讚"],
+  ["合并", "合併"],
   ["若干", "若干"],
   ["控制台", "控制台"],
   ["控制", "控制"],
+  ["有效限制", "有效限制"],
   ["运营后台", "營運後台"],
+  ["运营工作区", "營運工作區"],
   ["统一 Web 操作面板", "統一 Web 操作面板"],
   ["后台自动", "後台自動"],
   ["任务工作台", "任務工作台"],
@@ -1240,8 +1245,8 @@ let languageObserver = null;
 
 const CONSOLE_I18N_MARKER = "data-i18n-ui";
 const CONSOLE_I18N_ATTRIBUTES_ONLY_MARKER = "data-i18n-attributes-only";
-const CONSOLE_I18N_SKIP_SELECTOR = "[data-i18n-skip], [data-site-header], script, style, textarea";
-const CONSOLE_I18N_ATTRIBUTES = ["title", "aria-label", "placeholder", "data-mobile-label"];
+const CONSOLE_I18N_SKIP_SELECTOR = "[data-i18n-skip], [data-site-header], script, style";
+const CONSOLE_I18N_ATTRIBUTES = ["title", "aria-label", "placeholder", "data-mobile-label", "data-label"];
 const CONSOLE_DYNAMIC_TEXT_I18N_SELECTOR = [
   `[${CONSOLE_I18N_MARKER}]`,
   "button",
@@ -1256,6 +1261,7 @@ const CONSOLE_DYNAMIC_ATTRIBUTE_I18N_SELECTOR = [
   "[aria-label]",
   "[placeholder]",
   "[data-mobile-label]",
+  "[data-label]",
 ].join(", ");
 const CONSOLE_DYNAMIC_USER_CONTENT_SELECTOR = [
   "input",
@@ -1270,7 +1276,7 @@ const CONSOLE_DYNAMIC_USER_CONTENT_SELECTOR = [
   ".task-detail-log-item > p",
   ".task-detail-summary-card > p",
 ].join(", ");
-const CONSOLE_DYNAMIC_UI_TEXT_PATTERN = /(?:我的人设|推文生成|人设|账号|账户|任务|草稿|收藏|发布|浏览|代理|热点|热度|统计|设置|暂无|选择|当前|每页|总计|总览|状态|时间|勾选|分组|详情|刷新|保存|删除|编辑|添加|新建|创建|取消|确认|关闭|加载|执行|验证|密码|登录|绑定|队列|平台|首页|互动|评论|点赞|分享|转发|名称|简介|头像|图片|视频|媒体|文本|文件|链接|相关数据|基础统计|查看|管理|更换|操作|来源|类型|记录|历史|失败|成功|处理中|未检测|已选|\d+\s*条|\d+\s*个)/;
+const CONSOLE_DYNAMIC_UI_TEXT_PATTERN = /(?:我的人设|推文生成|人设|账号|账户|任务|草稿|收藏|发布|浏览|代理|热点|热度|统计|设置|暂无|选择|当前|每页|分页|总计|总览|状态|时间|勾选|分组|详情|刷新|保存|删除|编辑|添加|新建|创建|取消|确认|关闭|加载|执行|验证|密码|登录|绑定|队列|平台|首页|互动|评论|点赞|分享|转发|名称|简介|头像|图片|视频|媒体|文本|文件|链接|相关数据|基础统计|查看|管理|更换|操作|来源|类型|记录|历史|失败|成功|处理中|未检测|已选|序号|备注|有效性|列表|检查|超时|自定义|分钟|并发|环境|建议|资源|内存|上限|启用|算力余额|图片额度|待审批|余额变化|期间入账|期间支出|净变化|变动说明|变动后余额|人工调整|算力点|月度|长期|^总$|^设$|^点$|^变动$|\d[\d,.]*\s*(?:点|张)|\d+\s*条|\d+\s*个)/;
 
 function currentLanguage() {
   return document.documentElement.dataset.language === "zh-Hant" ? "zh-Hant" : "zh-Hans";
@@ -1299,7 +1305,7 @@ function markConsoleStaticUi(root = document.body) {
     },
   });
   while (walker.nextNode()) markConsoleUiElement(walker.currentNode.parentElement);
-  root.querySelectorAll("[title], [aria-label], [placeholder], [data-mobile-label]")
+  root.querySelectorAll("[title], [aria-label], [placeholder], [data-mobile-label], [data-label]")
     .forEach((node) => markConsoleUiElement(node));
 }
 
@@ -2407,7 +2413,7 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
       </section>
     `;
     document.body.appendChild(modal);
-    modal.querySelectorAll("strong, p, label, button, [title], [aria-label], [placeholder]").forEach(markConsoleUiElement);
+    markConsoleDynamicUi(modal);
     translateConsoleLanguage(modal, currentLanguage());
     const input = modal.querySelector("#consoleModalInput");
     const fieldInputs = [...modal.querySelectorAll("[data-console-modal-field]")];
@@ -2679,7 +2685,9 @@ function formatTime(value) {
   if (!value) return "-";
   const number = Number(value);
   const date = Number.isFinite(number) && number > 100000 ? new Date(number * 1000) : new Date(value);
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString();
+  return Number.isNaN(date.getTime())
+    ? "-"
+    : date.toLocaleString("zh-CN", { timeZone: SHANGHAI_TIME_ZONE, hour12: false });
 }
 
 function formatScheduledTime(value) {
@@ -2792,7 +2800,7 @@ function accountLastLoginCheckLabel(account) {
     || Math.max(Number(account.last_login_check_at || 0), Number(account.health_checked_at || 0));
   const checkedDate = checkedAt > 0 ? new Date(checkedAt * 1000) : null;
   const checkedTime = checkedDate && !Number.isNaN(checkedDate.getTime())
-    ? checkedDate.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
+    ? checkedDate.toLocaleString("zh-CN", { timeZone: SHANGHAI_TIME_ZONE, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
     : "未检测";
   return `${statusLabel(status)} · ${checkedTime}`;
 }
@@ -6080,7 +6088,7 @@ function billingTrendChart(points = []) {
   }).join("");
   const timeLabels = [timeMin, timeMin + timeSpan / 2, timeMax].map((time, index) => {
     const anchor = index === 0 ? "start" : index === 2 ? "end" : "middle";
-    return `<text x="${xFor(time).toFixed(2)}" y="${height - 10}" text-anchor="${anchor}">${esc(new Date(time).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }))}</text>`;
+    return `<text x="${xFor(time).toFixed(2)}" y="${height - 10}" text-anchor="${anchor}">${esc(new Date(time).toLocaleDateString("zh-CN", { timeZone: SHANGHAI_TIME_ZONE, month: "2-digit", day: "2-digit" }))}</text>`;
   }).join("");
   return `<svg class="billing-trend-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="账户算力余额变化折线图" preserveAspectRatio="xMidYMid meet">
     <g class="billing-trend-grid">${grid}</g>
@@ -6262,6 +6270,7 @@ function renderBillingLedger() {
     const unit = asset === "image" ? "张" : asset === "subscription" ? "期" : "点";
     const eventLabels = { opening_balance: "期初余额", reserve: "任务预扣", release: "预扣返还", reservation_refund: "任务退款", order_credit: "申请批准入账", credit_pack_approved: "储值申请批准入账", credit_pack_bonus: "储值赠送图片", subscription_period_approved: "订阅申请批准生效", admin_adjustment: "人工调整", image_grant: "图片额度入账", settled: "任务结算" };
     const label = entry.label || entry.description || entry.event_name || eventLabels[entry.event_type] || entry.event_type || "余额调整";
+    const labelI18nAttribute = label === eventLabels[entry.event_type] ? "data-i18n-ui" : "data-i18n-skip";
     const sign = amount > 0 ? "+" : "";
     const balanceAfter = entry.asset_type === "credit" && entry.balance_after_points != null ? entry.balance_after_points : entry.balance_after_units;
     const tone = amount > 0 ? "is-positive" : amount < 0 ? "is-negative" : "is-neutral";
@@ -6269,7 +6278,7 @@ function renderBillingLedger() {
       <time class="billing-ledger-time" role="cell" data-label="时间">${esc(formatTime(entry.created_at))}</time>
       <div class="billing-ledger-event" role="cell" data-label="变动说明">
         <span class="billing-ledger-direction ${tone}" aria-hidden="true">${amount > 0 ? "↗" : amount < 0 ? "↘" : "•"}</span>
-        <strong>${esc(label)}</strong>
+        <strong ${labelI18nAttribute}>${esc(label)}</strong>
       </div>
       <span class="billing-ledger-amount ${tone}" role="cell" data-label="变动">${esc(`${sign}${numberText(amount)} ${unit}`)}</span>
       <strong class="billing-ledger-balance" role="cell" data-label="变动后余额">${balanceAfter != null ? esc(`${numberText(balanceAfter)} ${unit}`) : "—"}</strong>
@@ -15217,6 +15226,7 @@ async function logoutConsoleSession() {
   window.VectoSiteNavigation?.setLogoutPending(true);
   try {
     await api("/api/auth/logout", { method: "POST" });
+    window.VectoSiteNavigation?.announceAuthSessionChange?.("logout");
     const logoutFeedback = window.VectoSiteNavigation?.authFeedbackCopyByTime?.("logout") || {
       kind: "logout",
       title: "退出成功，再见",
@@ -24321,6 +24331,7 @@ function accountTotpDateLabel(value) {
   const timestamp = accountTotpTimestampMs(value);
   if (!timestamp) return "尚无记录";
   return new Date(timestamp).toLocaleString("zh-CN", {
+    timeZone: SHANGHAI_TIME_ZONE,
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -29983,6 +29994,7 @@ window.addEventListener("vecto:navigation-ready", () => {
 });
 window.addEventListener("storage", (event) => {
   if (event.key === "vecto-proxy-market-read") void loadProxyMarketSummary();
+  if (event.key === "vecto-auth-session-changed") window.location.reload();
 });
 if ("BroadcastChannel" in window) {
   const proxyMarketChannel = new BroadcastChannel("vecto-proxy-market");

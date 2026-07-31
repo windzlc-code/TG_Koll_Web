@@ -1,6 +1,8 @@
 (() => {
   "use strict";
 
+  const PROXY_MARKET_TIME_ZONE = "Asia/Shanghai";
+
   const FILTER_KEYS = [
     "country",
     "ip_type",
@@ -391,7 +393,7 @@
     });
     const expiresAt = finiteNumber(firstValue(item, ["expires_at"], 0), 0);
     const expiry = expiresAt > 0
-      ? new Date(expiresAt * 1000).toLocaleDateString("zh-TW")
+      ? new Date(expiresAt * 1000).toLocaleDateString("zh-TW", { timeZone: PROXY_MARKET_TIME_ZONE })
       : "長期有效";
     const priceCents = Math.max(0, finiteNumber(firstValue(item, ["display_price_cents"], 0), 0));
     const currency = redactSensitive(firstValue(item, ["currency"], "TWD"), "TWD").toUpperCase();

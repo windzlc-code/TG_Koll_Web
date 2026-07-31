@@ -513,6 +513,7 @@
     window.VectoSiteNavigation?.setLogoutPending(true);
     try {
       await api("/api/auth/logout", { method: "POST" });
+      window.VectoSiteNavigation?.announceAuthSessionChange?.("logout");
       const logoutFeedback = window.VectoSiteNavigation?.authFeedbackCopyByTime?.("logout") || {
         kind: "logout",
         title: "退出成功，再见",

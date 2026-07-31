@@ -57,6 +57,25 @@ from .proxy_market_credentials import (
 )
 
 
+BUSINESS_TIMEZONE_NAME = "Asia/Shanghai"
+try:
+    BUSINESS_TIMEZONE = ZoneInfo(BUSINESS_TIMEZONE_NAME)
+except ZoneInfoNotFoundError:
+    BUSINESS_TIMEZONE = timezone(timedelta(hours=8), name=BUSINESS_TIMEZONE_NAME)
+
+
+def _parse_business_iso_timestamp(value: Any) -> int:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("timestamp is required")
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=BUSINESS_TIMEZONE)
+    return int(parsed.timestamp())
+
+
 SOCIAL_TASK_TYPES = {
     "check_login",
     "open_login",
@@ -127,18 +146,40 @@ def mark_trusted_batch_task(
 }
 
 
-def social_task_billing_sku(platform: str, task_type: str) -> str:
+def _publish_payload_has_image(payload: dict[str, Any] | None) -> bool:
+    data = payload if isinstance(payload, dict) else {}
+    if any(str(data.get(key) or "").strip() for key in ("image_url", "imageUrl")):
+        return True
+    for item in data.get("media_items") or data.get("mediaItems") or []:
+        if isinstance(item, dict) and str(item.get("type") or "").strip().lower() == "image":
+            return True
+    video_suffixes = {".mp4", ".mov", ".m4v", ".webm"}
+    for value in data.get("media_paths") or []:
+        clean = str(value or "").strip()
+        if clean and Path(clean).suffix.lower() not in video_suffixes:
+            return True
+    return False
+
+
+def social_task_billing_sku(platform: str, task_type: str, payload: dict[str, Any] | None = None) -> str:
     clean_platform = str(platform or "").strip().lower()
     clean_task_type = str(task_type or "").strip().lower()
     if clean_task_type == "publish_post":
+        if _publish_payload_has_image(payload):
+            return "complete_image_post"
         if clean_platform == "threads":
             return "threads_text_publish"
         if clean_platform == "instagram":
-            return "instagram_publish"
-    if clean_task_type in {"threads_auto_reply", "instagram_auto_reply"}:
+            return "instagram_text_publish"
+    if clean_task_type in {
+        "threads_auto_reply",
+        "instagram_auto_reply",
+        "comment_post",
+        "reply_comment",
+        "share_post",
+        "repost_post",
+    }:
         return "threads_auto_reply_batch"
-    if clean_task_type in {"comment_post", "reply_comment", "like_post", "share_post", "repost_post"}:
-        return "social_interaction"
     return ""
 
 
@@ -807,11 +848,7 @@ def _require_active_owner_user(conn: Any, owner_user_id: int) -> None:
 
 
 def _daily_publish_timezone():
-    timezone_name = str(os.getenv("WEBAPP_TIMEZONE") or "Asia/Shanghai").strip() or "Asia/Shanghai"
-    try:
-        return ZoneInfo(timezone_name)
-    except ZoneInfoNotFoundError:
-        return timezone(timedelta(hours=8))
+    return BUSINESS_TIMEZONE
 
 
 def _daily_publish_window(target_at: int | float | None = None) -> tuple[int, int, str]:
@@ -5922,7 +5959,7 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
             if not publish_policy["can_publish"]:
                 raise HTTPException(status_code=429, detail=publish_policy["message"] or DAILY_PUBLISH_LIMIT_MESSAGE)
         billing_reservation: dict[str, Any] | None = None
-        billing_sku = social_task_billing_sku(platform, task_type)
+        billing_sku = social_task_billing_sku(platform, task_type, task_payload)
         if billing_sku and owner_user_id > 0:
             pre_reserved_id = str(batch_context.get("reservation_id") or "")
             if pre_reserved_id:
@@ -9528,9 +9565,7 @@ def _parse_archive_time(value: Any) -> int:
         number = int(text)
         return number // 1000 if number > 10_000_000_000 else number
     try:
-        if text.endswith("Z"):
-            text = text[:-1] + "+00:00"
-        return int(datetime.fromisoformat(text).timestamp())
+        return _parse_business_iso_timestamp(text)
     except Exception:
         return 0
 
@@ -11166,17 +11201,7 @@ def _parse_schedule(value: int | str | None) -> int:
     if text.isdigit():
         return int(text)
     try:
-        if text.endswith("Z"):
-            text = text[:-1] + "+00:00"
-        parsed = datetime.fromisoformat(text)
-        if parsed.tzinfo is None:
-            timezone_name = str(os.getenv("WEBAPP_TIMEZONE") or "Asia/Shanghai").strip() or "Asia/Shanghai"
-            try:
-                schedule_timezone = ZoneInfo(timezone_name)
-            except ZoneInfoNotFoundError:
-                schedule_timezone = timezone(timedelta(hours=8))
-            parsed = parsed.replace(tzinfo=schedule_timezone)
-        return int(parsed.timestamp())
+        return _parse_business_iso_timestamp(text)
     except Exception:
         raise HTTPException(status_code=400, detail="scheduled_at 必须是 Unix 秒或 ISO 时间")
 

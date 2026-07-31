@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchTrendingTopics, getTodayTrendIntel } from "@/lib/news-fetcher";
+import { fetchTrendingTopics, getTodayTrendIntel, shanghaiDateKey } from "@/lib/news-fetcher";
 
 describe("news-fetcher daily persona cache", () => {
+  it("uses the Shanghai calendar day independently of the browser timezone", () => {
+    expect(shanghaiDateKey(new Date("2026-07-31T16:30:00.000Z"))).toBe("2026-08-01");
+    expect(shanghaiDateKey(new Date("2026-07-31T15:59:59.000Z"))).toBe("2026-07-31");
+  });
+
   beforeEach(() => {
     localStorage.clear();
     vi.restoreAllMocks();

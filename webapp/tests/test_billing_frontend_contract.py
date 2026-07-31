@@ -17,6 +17,8 @@ class BillingFrontendContractTests(unittest.TestCase):
         cls.console_script = (STATIC_ROOT / "assets" / "console.js").read_text(encoding="utf-8")
         cls.console_styles = (STATIC_ROOT / "assets" / "console.css").read_text(encoding="utf-8")
         cls.site_navigation_script = (STATIC_ROOT / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
+        cls.pricing_markup = (STATIC_ROOT / "pricing.html").read_text(encoding="utf-8")
+        cls.pricing_script = (STATIC_ROOT / "assets" / "opc" / "pricing.js").read_text(encoding="utf-8")
 
     def _run_node(self, script):
         node = shutil.which("node")
@@ -230,10 +232,7 @@ function billingLedgerEntries() {{ return ledgerRows; }}
 
     def test_admin_catalog_editor_uses_business_fields_instead_of_raw_json(self):
         for control_id in (
-            "billingSubscriptionName",
-            "billingSubscriptionPrice",
-            "billingSubscriptionAccounts",
-            "billingSubscriptionImages",
+            "billingSubscriptionEditorList",
             "billingPointUnit",
             "billingPackageEditorList",
             "billingActionEditorList",
@@ -245,6 +244,129 @@ function billingLedgerEntries() {{ return ledgerRows; }}
         self.assertNotIn('id="billingCatalogJson"', self.admin_markup)
         self.assertNotIn("目录 JSON", self.admin_markup)
         self.assertIn("billingCatalogProductName", self.admin_script)
+
+    def test_admin_catalog_editor_edits_every_subscription_and_syncs_default_alias(self):
+        form_renderer = self.admin_script[
+            self.admin_script.index("function renderBillingCatalogForm")
+            : self.admin_script.index("function billingCatalogNumber")
+        ]
+        form_reader = self.admin_script[
+            self.admin_script.index("function readBillingCatalogForm")
+            : self.admin_script.index("const BILLING_STATUS_LABELS")
+        ]
+        self.assertIn("working.subscriptions.forEach", form_renderer)
+        self.assertIn("data-billing-subscription-index", form_renderer)
+        for field in ("price_ntd", "monthly_price_ntd", "period_months", "threads_accounts", "monthly_free_images"):
+            self.assertIn(f'field: "{field}"', form_renderer)
+        self.assertIn('#billingSubscriptionEditorList [data-billing-subscription-index]', form_reader)
+        self.assertIn("catalog.subscription = { ...defaultSubscription }", form_reader)
+
+    def test_admin_catalog_layout_uses_dense_responsive_cards_without_history_overflow(self):
+        self.assertIn(
+            ".page-admin #secPricing .admin-billing-catalog-layout {\n  grid-template-columns: minmax(0, 1fr);",
+            self.admin_styles,
+        )
+        self.assertIn(
+            ".page-admin #secPricing .admin-billing-catalog-layout > .admin-billing-table-wrap .admin-billing-table",
+            self.admin_styles,
+        )
+        self.assertIn("table-layout: fixed;", self.admin_styles)
+        for editor_list in (
+            "#billingSubscriptionEditorList",
+            "#billingPackageEditorList",
+            "#billingActionEditorList",
+        ):
+            self.assertIn(f".page-admin #secPricing {editor_list}", self.admin_styles)
+        mobile_styles = self.admin_styles[self.admin_styles.index("@media (max-width: 720px)"):]
+        self.assertIn("#billingSubscriptionEditorList", mobile_styles)
+        self.assertIn("#billingActionEditorList", mobile_styles)
+
+    def test_admin_catalog_editor_uses_compact_tabs_and_exposes_automation_rules(self):
+        for tab_name in ("subscriptions", "packages", "actions", "automation"):
+            self.assertIn(f'data-billing-editor-tab="{tab_name}"', self.admin_markup)
+            self.assertIn(f'data-billing-editor-panel="{tab_name}"', self.admin_markup)
+        for summary_id in (
+            "billingCatalogTimezone",
+            "billingCatalogSubscriptionCount",
+            "billingCatalogPackageCount",
+            "billingCatalogActionCount",
+            "billingCatalogAutomationCount",
+            "billingAutomationEditorList",
+        ):
+            self.assertIn(f'id="{summary_id}"', self.admin_markup)
+        self.assertIn("function setBillingCatalogEditorTab", self.admin_script)
+        self.assertIn("working.automation_modules.forEach", self.admin_script)
+        self.assertIn('billingCatalogTimezone', self.admin_script)
+        self.assertIn(".admin-billing-editor-tabs", self.admin_styles)
+        self.assertIn(".admin-billing-automation-card", self.admin_styles)
+
+    def test_admin_catalog_editor_groups_personal_and_enterprise_plans_with_pdf_details(self):
+        self.assertIn('id="billingCatalogRuleList"', self.admin_markup)
+        renderer = self.admin_script[
+            self.admin_script.index("function renderBillingCatalogForm")
+            : self.admin_script.index("function billingCatalogNumber")
+        ]
+        self.assertIn("admin-billing-subscription-group", renderer)
+        self.assertIn('field: "audience"', renderer)
+        self.assertIn('field: "account_positioning"', renderer)
+        self.assertIn("working.billing_rules.forEach", renderer)
+        self.assertIn("个人轻量版", renderer)
+        self.assertIn("企业版", renderer)
+        self.assertIn(".admin-billing-subscription-grid", self.admin_styles)
+        self.assertIn(".admin-billing-rule-card", self.admin_styles)
+
+    def test_public_pricing_renews_within_the_same_subscription_family(self):
+        self.assertIn('clean === "vanguard_monthly"', self.pricing_script)
+        self.assertIn('clean.startsWith("vanguard_enterprise_")', self.pricing_script)
+        self.assertIn('clean.startsWith("vanguard_personal_")', self.pricing_script)
+        self.assertIn(
+            "subscriptionPlanFamily(entry.plan_sku) === selectedPlanFamily",
+            self.pricing_script,
+        )
+        self.assertNotIn(
+            'activeSubscriptions().filter((entry) => String(entry.plan_sku || "") === skuOf(item))',
+            self.pricing_script,
+        )
+
+    def test_admin_manual_subscription_selects_a_sku_and_uses_plan_quantity_language(self):
+        self.assertIn('id="billingAdjustmentSubscriptionSku"', self.admin_markup)
+        self.assertNotIn("开通月度订阅", self.admin_markup)
+        submit = self.admin_script[
+            self.admin_script.index("async function submitBillingAdjustment")
+            : self.admin_script.index("function syncBillingAdjustmentType")
+        ]
+        self.assertIn("const subscriptionSku", submit)
+        self.assertIn("JSON.stringify({ sku: subscriptionSku, quantity", submit)
+        sync = self.admin_script[
+            self.admin_script.index("function syncBillingAdjustmentType")
+            : self.admin_script.index("async function loadBillingWorkspace")
+        ]
+        self.assertIn('isSubscription ? "订阅套数"', sync)
+        self.assertNotIn("1-50 个月", sync)
+
+    def test_admin_publish_copy_uses_period_total_instead_of_monthly_fee(self):
+        publish = self.admin_script[
+            self.admin_script.index("async function publishBillingCatalog")
+            : self.admin_script.index("function billingCatalogProductName")
+        ]
+        self.assertIn("当前周期总价", publish)
+        self.assertNotIn("月费：", publish)
+
+    def test_pricing_page_renders_all_formal_subscription_cycles_and_hides_internal_actions(self):
+        self.assertIn("list(catalog.subscriptions)", self.pricing_script)
+        self.assertIn('3: "季繳", 6: "半年繳", 12: "年繳"', self.pricing_script)
+        self.assertIn("item.public !== false", self.pricing_script)
+        self.assertIn("monthly_price_ntd", self.pricing_script)
+        self.assertIn("renewalSubscriptions", self.pricing_script)
+        self.assertIn("item.implemented === false", self.pricing_script)
+        self.assertIn("暫未開放", self.pricing_script)
+
+    def test_pricing_page_has_no_enterprise_only_rights_claim_for_all_plans(self):
+        self.assertNotIn("每套有效訂閱提供 3 個 Threads 帳號容量", self.pricing_markup)
+        self.assertNotIn("三帳號 AI 駕駛艙", self.pricing_markup)
+        self.assertNotIn("每個訂閱週期優先抵扣免費圖片額度", self.pricing_markup)
+        self.assertIn("個人版 1 個、企業版 3 個", self.pricing_markup)
+        self.assertIn("每月 10 張免費 AI 圖片", self.pricing_markup)
 
     def test_charge_button_markup_has_no_price_text(self):
         for button_marker in (

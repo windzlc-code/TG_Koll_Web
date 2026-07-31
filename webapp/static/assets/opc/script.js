@@ -2,6 +2,22 @@ const header = document.querySelector("[data-header]");
 const loginModal = document.querySelector("#loginModal");
 const authDialog = loginModal?.querySelector(".auth-dialog");
 const GOOGLE_AUTH_FEEDBACK_STORAGE_KEY = "vecto-google-auth-feedback-pending";
+const LOGIN_DEVICE_STORAGE_KEY = "vecto-login-device-id";
+
+function loginDeviceId() {
+  try {
+    let value = String(localStorage.getItem(LOGIN_DEVICE_STORAGE_KEY) || "").trim();
+    if (!value) {
+      value = typeof globalThis.crypto?.randomUUID === "function"
+        ? globalThis.crypto.randomUUID()
+        : `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+      localStorage.setItem(LOGIN_DEVICE_STORAGE_KEY, value);
+    }
+    return value.slice(0, 128);
+  } catch {
+    return `web-session-${Date.now().toString(36)}`;
+  }
+}
 
 function registrationPanelMarkup() {
   return `
@@ -496,6 +512,9 @@ function apiErrorDetail(error) {
     return {
       code: String(detail.code || "").trim(),
       message: String(detail.message || detail.detail || "").trim(),
+      verification: detail.verification && typeof detail.verification === "object"
+        ? detail.verification
+        : null,
     };
   }
   return { code: "", message: "" };
@@ -1083,6 +1102,7 @@ applicationForm?.addEventListener("submit", async (event) => {
         consent: applicationForm.elements.consent.checked,
       }),
     });
+    window.VectoSiteNavigation?.announceAuthSessionChange?.("registration");
     await window.VectoSiteNavigation?.refreshPublicSession?.();
     applicationForm.reset();
     resetRegistrationChallenge({ keepEmail: false });
@@ -1131,6 +1151,7 @@ googleSetupForm?.addEventListener("submit", async (event) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: usernameInput.value.trim() }),
     });
+    window.VectoSiteNavigation?.announceAuthSessionChange?.("google-login");
     await window.VectoSiteNavigation?.refreshPublicSession?.();
     const returnUrl = safeLoginReturnUrl(document.body.dataset.googleReturnUrl, "/");
     googleSetupForm.reset();
@@ -1156,7 +1177,83 @@ googleSetupForm?.addEventListener("submit", async (event) => {
   }
 });
 
-async function submitUserLogin(forceTakeover = false) {
+async function showLoginSecurityVerification(verification = {}, statusMessage = "", initialMethod = "") {
+  const emailAvailable = verification?.email_available === true;
+  const mfaAvailable = verification?.mfa_available === true || verification?.mfa_enabled === true;
+  let method = initialMethod || (emailAvailable ? "email" : "mfa");
+  if (method === "email" && !emailAvailable) method = "mfa";
+  if (method === "mfa" && !mfaAvailable && emailAvailable) method = "email";
+  return window.VectoSiteNavigation?.showAuthFeedback?.({
+    kind: "success",
+    title: "完成安全验证",
+    message: emailAvailable
+      ? "检测到新设备和新网络登录，请先验证账号邮箱。"
+      : "邮箱验证暂不可用，请使用 MFA 完成验证。",
+    actionText: false,
+    dialogClass: "is-form",
+    contentHtml: `<form class="site-auth-feedback-form" data-login-security-form>
+      <div class="site-auth-feedback-email" data-login-security-email><span>验证码已发送至</span><strong></strong></div>
+      <label><span data-login-security-label>邮箱验证码</span><input name="security_code" inputmode="numeric" autocomplete="one-time-code" maxlength="32" required></label>
+      <p class="site-auth-feedback-form-status" data-login-security-status aria-live="polite"></p>
+      <div class="site-auth-feedback-actions">
+        <button type="button" class="site-auth-feedback-cancel" data-login-security-branch></button>
+        <button type="submit" class="site-auth-feedback-confirm">验证并登录</button>
+      </div>
+    </form>`,
+    onOpen(modal, close) {
+      const form = modal.querySelector("[data-login-security-form]");
+      const emailBlock = modal.querySelector("[data-login-security-email]");
+      const emailValue = emailBlock?.querySelector("strong");
+      const label = modal.querySelector("[data-login-security-label]");
+      const input = form?.elements?.security_code;
+      const status = modal.querySelector("[data-login-security-status]");
+      const branch = modal.querySelector("[data-login-security-branch]");
+      const renderMethod = () => {
+        const usingEmail = method === "email";
+        if (emailBlock) emailBlock.hidden = !usingEmail;
+        if (emailValue) emailValue.textContent = String(verification?.masked_email || "账号邮箱");
+        if (label) label.textContent = usingEmail ? "邮箱验证码" : "MFA 动态验证码或恢复码";
+        if (input) {
+          input.value = "";
+          input.maxLength = usingEmail ? 6 : 32;
+          input.inputMode = usingEmail ? "numeric" : "text";
+          input.placeholder = usingEmail ? "请输入 6 位验证码" : "请输入 MFA 验证码";
+        }
+        if (branch) {
+          branch.hidden = !(emailAvailable && mfaAvailable);
+          branch.textContent = usingEmail ? "改用 MFA" : "返回邮箱验证";
+        }
+        if (status) {
+          status.textContent = String(statusMessage || "");
+          status.classList.toggle("is-error", Boolean(statusMessage));
+        }
+        input?.focus({ preventScroll: true });
+      };
+      branch?.addEventListener("click", () => {
+        method = method === "email" ? "mfa" : "email";
+        statusMessage = "";
+        renderMethod();
+      });
+      form?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const code = String(input?.value || "").trim();
+        if (!code) {
+          if (status) {
+            status.textContent = method === "email" ? "请输入邮箱验证码。" : "请输入 MFA 验证码。";
+            status.classList.add("is-error");
+          }
+          input?.focus();
+          return;
+        }
+        close();
+        await submitUserLogin(true, { method, code, context: verification });
+      });
+      renderMethod();
+    },
+  });
+}
+
+async function submitUserLogin(forceTakeover = false, securityVerification = {}) {
   if (!loginForm || !loginStatus) return;
   loginStatus.textContent = "";
   const submit = loginForm.querySelector("button[type='submit']");
@@ -1171,7 +1268,15 @@ async function submitUserLogin(forceTakeover = false) {
         password: loginForm.password.value,
         remember_me: Boolean(loginForm.remember_me?.checked),
         force_takeover: Boolean(forceTakeover),
-        mfa_code: String(loginForm.mfa_code?.value || "").trim(),
+        mfa_code: securityVerification.method === "mfa"
+          ? String(securityVerification.code || "").trim()
+          : String(loginForm.mfa_code?.value || "").trim(),
+        device_id: loginDeviceId(),
+        security_verification_method: String(securityVerification.method || ""),
+        security_challenge_id: String(securityVerification.context?.challenge_id || ""),
+        security_verification_code: securityVerification.method === "email"
+          ? String(securityVerification.code || "")
+          : "",
       }),
     });
     const isAdmin = result?.is_admin === true;
@@ -1181,6 +1286,7 @@ async function submitUserLogin(forceTakeover = false) {
         sessionStorage.removeItem("vecto-admin-workspace-user-id");
       } catch {}
     }
+    window.VectoSiteNavigation?.announceAuthSessionChange?.("login");
     const currentUrl = new URL(window.location.href);
     currentUrl.searchParams.delete("login");
     currentUrl.searchParams.delete("return_url");
@@ -1217,11 +1323,37 @@ async function submitUserLogin(forceTakeover = false) {
   } catch (error) {
     const detail = apiErrorDetail(error);
     loginStatus.textContent = detail.message || "登入失敗，請檢查帳號與密碼。";
-    if (loginMfaField && detail.code === "mfa_code_invalid") {
+    if (detail.code === "SECURITY_VERIFICATION_REQUIRED") {
+      submit.disabled = false;
+      if (loginTakeover) {
+        loginTakeover.hidden = true;
+        loginTakeover.disabled = false;
+      }
+      await showLoginSecurityVerification(detail.verification || {});
+      return false;
+    }
+    if (securityVerification.context) {
+      submit.disabled = false;
+      if (loginTakeover) loginTakeover.disabled = false;
+      await showLoginSecurityVerification(
+        securityVerification.context,
+        detail.message || "验证码无效，请重新输入。",
+        securityVerification.method,
+      );
+      return false;
+    }
+    if (
+      loginMfaField
+      && detail.code === "mfa_code_invalid"
+    ) {
       loginMfaField.hidden = false;
       loginForm.mfa_code?.focus();
     }
-    if (loginTakeover) loginTakeover.hidden = detail.code !== "SESSION_CONFLICT";
+    const confirmationRequired = detail.code === "SESSION_CONFLICT";
+    if (loginTakeover) {
+      loginTakeover.hidden = !confirmationRequired;
+      loginTakeover.textContent = "退出原设备并登录";
+    }
     submit.disabled = false;
     if (loginTakeover) loginTakeover.disabled = false;
     await window.VectoSiteNavigation?.showAuthFeedback?.({
@@ -1230,7 +1362,9 @@ async function submitUserLogin(forceTakeover = false) {
       message: detail.message || "请检查账号和密码后重试。",
       actionText: "返回继续填写",
     });
+    return false;
   }
+  return true;
 }
 
 loginForm?.addEventListener("submit", async (event) => {

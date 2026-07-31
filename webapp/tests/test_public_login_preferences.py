@@ -48,15 +48,26 @@ class PublicLoginPreferenceTests(unittest.TestCase):
                 os.environ[name] = value
         self._tmpdir.cleanup()
 
-    def _admin_login(self, client: TestClient, *, remember_me: bool = False):
+    def _admin_login(
+        self,
+        client: TestClient,
+        *,
+        remember_me: bool = False,
+        force_takeover: bool = False,
+    ):
         return client.post(
             "/api/auth/admin-login",
             json={
                 "username": "admin",
                 "password": "admin123secure",
                 "remember_me": remember_me,
+                "force_takeover": force_takeover,
             },
         )
+
+    @staticmethod
+    def _admin_cookie_header(response) -> str:
+        return response.headers.get("set-cookie", "").split(", session_token=", 1)[0]
 
     def _latest_session_ttl(self) -> int:
         with db_module.db() as conn:
@@ -86,7 +97,7 @@ class PublicLoginPreferenceTests(unittest.TestCase):
 
         response = self._admin_login(client, remember_me=False)
         self.assertEqual(response.status_code, 200, response.text)
-        cookie = response.headers.get("set-cookie", "")
+        cookie = self._admin_cookie_header(response)
         self.assertIn("admin_session_token=", cookie)
         self.assertNotIn("Max-Age=", cookie)
         self.assertAlmostEqual(self._latest_session_ttl(), 12 * 3600, delta=2)
@@ -128,15 +139,15 @@ class PublicLoginPreferenceTests(unittest.TestCase):
         )
 
         remembered = TestClient(self.app)
-        response = self._admin_login(remembered, remember_me=True)
+        response = self._admin_login(remembered, remember_me=True, force_takeover=True)
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertIn("Max-Age=604800", response.headers.get("set-cookie", ""))
+        self.assertIn("Max-Age=604800", self._admin_cookie_header(response))
         self.assertAlmostEqual(self._latest_session_ttl(), 7 * 24 * 3600, delta=2)
 
         temporary = TestClient(self.app)
-        response = self._admin_login(temporary, remember_me=False)
+        response = self._admin_login(temporary, remember_me=False, force_takeover=True)
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertNotIn("Max-Age=", response.headers.get("set-cookie", ""))
+        self.assertNotIn("Max-Age=", self._admin_cookie_header(response))
         self.assertAlmostEqual(self._latest_session_ttl(), 2 * 3600, delta=2)
 
     def test_disabled_remember_policy_ignores_client_request(self):
@@ -154,9 +165,9 @@ class PublicLoginPreferenceTests(unittest.TestCase):
         self.assertEqual(updated.status_code, 200, updated.text)
 
         client = TestClient(self.app)
-        response = self._admin_login(client, remember_me=True)
+        response = self._admin_login(client, remember_me=True, force_takeover=True)
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertNotIn("Max-Age=", response.headers.get("set-cookie", ""))
+        self.assertNotIn("Max-Age=", self._admin_cookie_header(response))
         self.assertAlmostEqual(self._latest_session_ttl(), 3 * 3600, delta=2)
 
     def test_customer_login_return_url_cannot_select_admin_surfaces(self):
@@ -291,7 +302,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('authFeedbackCopyByTime?.("logout")', (self.static_dir / "assets" / "profile.js").read_text(encoding="utf-8"))
         self.assertIn('title: "登录失败"', self.script)
         self.assertIn('authFeedbackCopyByTime("logout")', self.site_nav_script)
-        self.assertIn('title: "退出未完成"', self.site_nav_script)
+        self.assertIn("title: copy[currentLanguage()].logoutIncomplete", self.site_nav_script)
 
     def test_google_oauth_login_and_logout_reuse_shared_feedback(self):
         self.assertIn(
@@ -451,7 +462,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn("window.location.replace(publicLogoutLocation())", self.site_nav_script)
 
     def test_shared_navigation_keeps_language_and_uses_fixed_light_theme(self):
-        for expected in ('id="languageToggle"', "site-language-icon"):
+        for expected in ('id="languageToggle"', "site-language-icon", "site-language-popover", "data-site-language-option"):
             self.assertIn(expected, self.site_nav_script)
         self.assertNotIn('id="themeToggle"', self.site_nav_script)
         self.assertNotIn("site-theme-icon", self.site_nav_script)
@@ -464,10 +475,11 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('installUnifiedAccountMenu(header, header.dataset.sitePage || "home")', self.site_nav_script)
         public_controls = self.site_nav_script.split("function renderActions", 1)[1].split("function fallbackMarkup", 1)[0]
         self.assertNotIn("data-site-theme-toggle", public_controls.split("const controls", 1)[1].split("const mobileMenu", 1)[0])
-        self.assertIn("data-site-language-toggle", public_controls)
-        self.assertIn('function accountPreferencesMarkup(page = "console")', self.site_nav_script)
-        self.assertIn('class="site-account-preferences"', self.site_nav_script)
-        self.assertIn('actions.querySelectorAll(":scope > .site-global-controls")', self.site_nav_script)
+        self.assertIn("const controls = languageControlsMarkup();", public_controls)
+        self.assertIn("function installLanguageControls(header)", self.site_nav_script)
+        self.assertIn("installLanguageControls(header);", self.site_nav_script)
+        self.assertNotIn('function accountPreferencesMarkup(page = "console")', self.site_nav_script)
+        self.assertNotIn('actions.querySelectorAll(":scope > .site-global-controls")', self.site_nav_script)
         self.assertIn('const LANGUAGE_STORAGE_KEY = "wk-console-language"', self.site_nav_script)
         self.assertIn('window.addEventListener("storage"', self.site_nav_script)
         self.assertIn('const nextTheme = "light"', self.site_nav_script)
@@ -614,6 +626,18 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         ):
             self.assertIn(selector, self.pricing_styles)
 
+    def test_pricing_first_viewport_uses_compact_four_column_summary_and_horizontal_title(self):
+        hero_rule = self.pricing_styles.split(".pricing-page-hero {", 1)[1].split("}", 1)[0]
+        title_rule = self.pricing_styles.split(".pricing-page-hero-copy h1 {", 1)[1].split("}", 1)[0]
+        facts_rule = self.pricing_styles.split(".pricing-facts {", 1)[1].split("}", 1)[0]
+        nav_link_rule = self.pricing_styles.split(".pricing-section-nav a {", 1)[1].split("}", 1)[0]
+
+        self.assertIn("min-height: min(40vh, 372px);", hero_rule)
+        self.assertIn("max-width: 1080px;", title_rule)
+        self.assertIn("font-size: clamp(36px, 3.9vw, 52px);", title_rule)
+        self.assertIn("grid-template-columns: repeat(4, minmax(0, 1fr));", facts_rule)
+        self.assertIn("min-height: 36px;", nav_link_rule)
+
     def test_public_login_has_svg_password_toggle_and_remember_option(self):
         for page_name in ("index.html", "pricing.html"):
             page = (self.static_dir / page_name).read_text(encoding="utf-8")
@@ -622,7 +646,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             self.assertIn('name="remember_me"', page)
         self.assertIn("remember_me: Boolean(loginForm.remember_me?.checked)", self.script)
         self.assertIn("loginPassword.type = revealed ? \"text\" : \"password\"", self.script)
-        self.assertNotIn("localStorage.setItem", self.script)
+        self.assertNotIn('localStorage.setItem("remember_me"', self.script)
         self.assertNotIn("PasswordCredential", self.script)
 
 
@@ -687,12 +711,13 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             self.assertIn('data-login-takeover', page)
 
         self.assertIn('force_takeover: Boolean(forceTakeover)', self.script)
-        self.assertIn('detail.code !== "SESSION_CONFLICT"', self.script)
-        self.assertIn('loginTakeover.hidden = detail.code !== "SESSION_CONFLICT"', self.script)
+        self.assertIn('const confirmationRequired = detail.code === "SESSION_CONFLICT"', self.script)
+        self.assertIn("loginTakeover.hidden = !confirmationRequired", self.script)
         self.assertIn('apiErrorDetail(error)', self.script)
         self.assertNotIn('loginStatus.textContent = error.detail ||', self.script)
 
-        self.assertIn('mfa_code: String(loginForm.mfa_code?.value || "").trim()', self.script)
+        self.assertIn('mfa_code: securityVerification.method === "mfa"', self.script)
+        self.assertIn(': String(loginForm.mfa_code?.value || "").trim()', self.script)
         self.assertIn('detail.code === "mfa_code_invalid"', self.script)
 
     def test_public_pages_use_runtime_asset_versions_and_disable_html_cache(self):

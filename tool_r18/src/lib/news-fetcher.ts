@@ -9,6 +9,13 @@ const newsAPI = () => (window as any).electronAPI?.news;
 
 const CACHE_PREFIX = "news_cache_v2_";
 const LATEST_INTEL_PREFIX = "news_latest_intel_v1_";
+const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
+const SHANGHAI_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: SHANGHAI_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
 type TrendIntelMode = "all" | "news" | "social" | "slang";
 type FetchTrendingOptions = {
   bypassCache?: boolean;
@@ -16,10 +23,13 @@ type FetchTrendingOptions = {
   maxConcurrency?: number;
 };
 
-function localDateKey(date = new Date()): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+export function shanghaiDateKey(date = new Date()): string {
+  const parts = Object.fromEntries(
+    SHANGHAI_DATE_FORMATTER.formatToParts(date).map(({ type, value }) => [type, value]),
+  );
+  const year = parts.year;
+  const month = parts.month;
+  const day = parts.day;
   return `${year}-${month}-${day}`;
 }
 
@@ -27,7 +37,7 @@ function isToday(value?: string): boolean {
   if (!value) return false;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return false;
-  return localDateKey(date) === localDateKey();
+  return shanghaiDateKey(date) === shanghaiDateKey();
 }
 
 function normalizeTrendSeed(seed: string): string {
@@ -38,7 +48,7 @@ function normalizeTrendSeed(seed: string): string {
 }
 
 function todayKey(personaId: string, genre: string): string {
-  const date = localDateKey();
+  const date = shanghaiDateKey();
   return `${CACHE_PREFIX}${personaId}_${genre}_${date}`;
 }
 
@@ -53,7 +63,7 @@ function setCache(personaId: string, genre: string, text: string): void {
   try {
     localStorage.setItem(todayKey(personaId, genre), JSON.stringify(text));
     // Clean up old cache entries (keep only today's)
-    const today = localDateKey();
+    const today = shanghaiDateKey();
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const key = localStorage.key(i);
       if (key?.startsWith(CACHE_PREFIX) && !key.includes(today)) {
@@ -161,7 +171,7 @@ export async function fetchTrendingTopics(
     }
   }
 
-  const year = new Date().getFullYear();
+  const year = Number(shanghaiDateKey().slice(0, 4));
   const normalizedGenres = genres.map(normalizeTrendSeed).filter(Boolean);
   const suffix: Record<string, string> = {
     cn: ` 熱門話題 最新 ${year}`,

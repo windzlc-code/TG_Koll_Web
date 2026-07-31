@@ -453,7 +453,7 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('event.key === "Escape"', self.script)
         self.assertIn('toggle.focus({ preventScroll: true })', self.script)
         self.assertIn('markAdminStaticUi()', self.script)
-        self.assertIn('markAdminStaticUi(node);', self.script)
+        self.assertIn('markAdminDynamicUi(node);', self.script)
         self.assertIn('data-admin-i18n-ui="true" data-act="detail"', self.script)
         self.assertIn('<span data-admin-i18n-ui="true">流程：</span>', self.script)
         for excluded_data_surface in (
@@ -466,6 +466,18 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         ):
             self.assertIn(f'"{excluded_data_surface}"', self.script)
         self.assertIn('window.addEventListener("vecto:language-change"', self.script)
+
+    def test_admin_dynamic_lists_translate_system_copy_without_translating_business_values(self):
+        self.assertIn("function markAdminDynamicUi", self.script)
+        self.assertIn("function shouldMarkAdminDynamicUiText", self.script)
+        self.assertIn("ADMIN_DYNAMIC_UI_TEXT_PATTERN", self.script)
+        for protected_selector in (
+            '".admin-user-account-cell > strong"',
+            '".admin-user-company-cell"',
+            '".admin-task-error"',
+            '".admin-user-detail-item > strong"',
+        ):
+            self.assertIn(protected_selector, self.script)
 
     def test_dynamic_governance_ui_is_marked_without_translating_business_data(self):
         self.assertIn("function markAdminDynamicUiElement", self.script)
@@ -486,6 +498,7 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn("markAdminDynamicUiElement(emptyCell)", user_rows)
         self.assertIn("markAdminDynamicUiElement(button)", user_rows)
         self.assertIn('button.setAttribute("aria-labelledby"', user_rows)
+        self.assertIn("markAdminDynamicUiElement(checkbox)", user_rows)
         self.assertNotIn("markAdminDynamicUiElement(accountName)", user_rows)
         self.assertNotIn("markAdminDynamicUiElement(companyCell)", user_rows)
 
@@ -511,6 +524,7 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         ]
         self.assertIn('createAdminDynamicUiText("最近：")', security)
         self.assertIn("markAdminDynamicUiElement(option)", security)
+        self.assertIn("markAdminDynamicUiElement(status)", security)
         self.assertIn("markAdminDynamicUiElement(note)", security)
         self.assertNotIn("markAdminDynamicUiElement(title)", security)
         self.assertNotIn("markAdminDynamicUiElement(summary)", security)

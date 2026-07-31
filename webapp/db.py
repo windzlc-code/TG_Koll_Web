@@ -509,7 +509,7 @@ def _ensure_auth_identity_schema(conn: sqlite3.Connection) -> None:
           user_id INTEGER,
           email_normalized TEXT NOT NULL COLLATE NOCASE,
           purpose TEXT NOT NULL CHECK(
-            purpose IN ('registration', 'password_setup', 'email_binding')
+            purpose IN ('registration', 'password_setup', 'email_binding', 'login_security')
           ),
           code_digest TEXT NOT NULL,
           send_status TEXT NOT NULL DEFAULT 'pending' CHECK(
@@ -568,6 +568,62 @@ def _ensure_auth_identity_schema(conn: sqlite3.Connection) -> None:
     )
     for statement in statements:
         conn.execute(statement)
+
+    challenge_table = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'email_verification_challenges'"
+    ).fetchone()
+    challenge_sql = str(challenge_table["sql"] or "") if challenge_table else ""
+    if challenge_sql and "login_security" not in challenge_sql:
+        # SQLite cannot alter a CHECK constraint in place. Preserve every
+        # challenge while widening only the purpose allow-list.
+        conn.execute(
+            "ALTER TABLE email_verification_challenges "
+            "RENAME TO email_verification_challenges_legacy"
+        )
+        conn.execute(
+            """
+            CREATE TABLE email_verification_challenges (
+              id TEXT PRIMARY KEY,
+              user_id INTEGER,
+              email_normalized TEXT NOT NULL COLLATE NOCASE,
+              purpose TEXT NOT NULL CHECK(
+                purpose IN ('registration', 'password_setup', 'email_binding', 'login_security')
+              ),
+              code_digest TEXT NOT NULL,
+              send_status TEXT NOT NULL DEFAULT 'pending' CHECK(
+                send_status IN ('pending', 'sent', 'failed')
+              ),
+              sent_at INTEGER NOT NULL DEFAULT 0,
+              resend_available_at INTEGER NOT NULL,
+              expires_at INTEGER NOT NULL,
+              attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+              max_attempts INTEGER NOT NULL DEFAULT 5 CHECK(max_attempts > 0),
+              consumed_at INTEGER NOT NULL DEFAULT 0,
+              invalidated_at INTEGER NOT NULL DEFAULT 0,
+              request_ip TEXT NOT NULL DEFAULT '',
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO email_verification_challenges(
+              id, user_id, email_normalized, purpose, code_digest, send_status,
+              sent_at, resend_available_at, expires_at, attempt_count,
+              max_attempts, consumed_at, invalidated_at, request_ip,
+              created_at, updated_at
+            )
+            SELECT id, user_id, email_normalized, purpose, code_digest, send_status,
+                   sent_at, resend_available_at, expires_at, attempt_count,
+                   max_attempts, consumed_at, invalidated_at, request_ip,
+                   created_at, updated_at
+            FROM email_verification_challenges_legacy
+            """
+        )
+        conn.execute("DROP TABLE email_verification_challenges_legacy")
 
     oauth_flow_columns = {
         str(row["name"])

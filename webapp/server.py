@@ -24,10 +24,11 @@ import uuid
 import zipfile
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
@@ -141,6 +142,23 @@ RUNTIME_CONFIG_PATH = Path(os.getenv("APP_RUNTIME_CONFIG_PATH", str(DATA_DIR / "
 TOOL_R18_RUNTIME_DIR = Path(os.getenv("TOOL_R18_RUNTIME_DIR", str(ROOT_DIR / "tool_r18" / ".runtime" / "automatic-script"))).resolve()
 GOOGLE_OAUTH_FLOW_COOKIE = "google_oauth_flow"
 GOOGLE_OAUTH_ONBOARDING_COOKIE = "google_oauth_onboarding"
+BUSINESS_TIMEZONE_NAME = "Asia/Shanghai"
+try:
+    BUSINESS_TIMEZONE = ZoneInfo(BUSINESS_TIMEZONE_NAME)
+except ZoneInfoNotFoundError:
+    BUSINESS_TIMEZONE = timezone(timedelta(hours=8), name=BUSINESS_TIMEZONE_NAME)
+
+
+def _parse_business_iso_timestamp(value: Any) -> float:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("timestamp is required")
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=BUSINESS_TIMEZONE)
+    return parsed.timestamp()
 
 
 def _resolve_sentiment_config_path() -> Path:
@@ -221,6 +239,7 @@ class BillingAdjustmentPayload(BaseModel):
 
 
 class BillingManualSubscriptionPayload(BaseModel):
+    sku: str = Field(default="vanguard_enterprise_quarterly", max_length=120)
     quantity: int = Field(default=1, ge=1, le=50)
     renewal_subscription_ids: list[str] = Field(default_factory=list)
     note: str = Field(default="管理员人工开通", max_length=1000)
@@ -635,13 +654,11 @@ def _parse_hhmm(text: str, default_h: int = 3, default_m: int = 30) -> tuple[int
 
 def _seconds_until_next_local_time(hour: int, minute: int) -> float:
     now = time.time()
-    lt = time.localtime(now)
-    target = time.struct_time((lt.tm_year, lt.tm_mon, lt.tm_mday, int(hour), int(minute), 0, lt.tm_wday, lt.tm_yday, lt.tm_isdst))
-    target_ts = time.mktime(target)
+    local_now = datetime.fromtimestamp(now, BUSINESS_TIMEZONE)
+    target = local_now.replace(hour=int(hour), minute=int(minute), second=0, microsecond=0)
+    target_ts = target.timestamp()
     if target_ts <= now + 1:
-        tomorrow = time.localtime(now + 86400)
-        target = time.struct_time((tomorrow.tm_year, tomorrow.tm_mon, tomorrow.tm_mday, int(hour), int(minute), 0, tomorrow.tm_wday, tomorrow.tm_yday, tomorrow.tm_isdst))
-        target_ts = time.mktime(target)
+        target_ts = (target + timedelta(days=1)).timestamp()
     return max(float(target_ts - now), 1.0)
 
 
@@ -1714,10 +1731,11 @@ def _date_key(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    if re.match(r"^\d{4}-\d{2}-\d{2}", text):
-        return text[:10]
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return text
     try:
-        return time.strftime("%Y-%m-%d", time.localtime(float(text)))
+        timestamp = float(text) if re.fullmatch(r"\d+(?:\.\d+)?", text) else _parse_business_iso_timestamp(text)
+        return datetime.fromtimestamp(timestamp, BUSINESS_TIMEZONE).date().isoformat()
     except Exception:
         return ""
 
@@ -2012,7 +2030,7 @@ def _sentiment_auth_state(cookies: list[dict[str, Any]], last_authorized_at: str
     last_authorized_age_days = None
     if last_authorized_at:
         with contextlib.suppress(Exception):
-            parsed = time.mktime(time.strptime(last_authorized_at.replace("Z", "")[:19], "%Y-%m-%dT%H:%M:%S"))
+            parsed = _parse_business_iso_timestamp(last_authorized_at)
             last_authorized_age_days = round(max(0, (time.time() - parsed) / 86400), 1)
     return {
         "cookieCount": len(cookies),
@@ -10373,6 +10391,9 @@ class LoginPayload(BaseModel):
     force_takeover: bool = False
     mfa_code: str = Field(default="", max_length=32)
     device_id: str = Field(default="", max_length=128)
+    security_verification_method: str = Field(default="", max_length=16)
+    security_challenge_id: str = Field(default="", max_length=120)
+    security_verification_code: str = Field(default="", max_length=16)
 
 
 class ChangePasswordPayload(BaseModel):
@@ -13167,7 +13188,7 @@ def _persona_post_retention_timestamp(record: dict[str, Any], *, history: bool) 
         if text.replace(".", "", 1).isdigit():
             return float(text)
         try:
-            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+            return _parse_business_iso_timestamp(text)
         except (ValueError, OverflowError):
             continue
     return 0.0
@@ -14705,12 +14726,23 @@ def _publish_persona_matrix(
                 wallet = commercial_billing.ensure_wallet(conn, int(owner_user_id))
                 if str(wallet.get("billing_mode") or "") == "enforced":
                     for item in pending:
+                        task_payload = item.get("task_payload")
+                        task_payload_data = (
+                            task_payload.payload
+                            if isinstance(task_payload, SocialTaskPayload)
+                            else {}
+                        )
+                        billing_sku = social_task_billing_sku(
+                            platform,
+                            "publish_post",
+                            task_payload_data,
+                        )
                         reservation = commercial_billing.reserve_charge(
                             conn,
                             user_id=int(owner_user_id),
                             ref_type="social_task",
                             ref_id=str(item["trusted_task_id"]),
-                            sku="threads_text_publish",
+                            sku=billing_sku,
                             quantity=1,
                         )
                         item["reservation_id"] = str(reservation.get("id") or "")
@@ -16963,10 +16995,7 @@ def _persona_dashboard_refresh_timestamp(value: Any) -> float:
     if not text:
         return 0.0
     try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.timestamp()
+        return _parse_business_iso_timestamp(text)
     except Exception:
         return 0.0
 
@@ -18406,6 +18435,41 @@ def create_app() -> FastAPI:
             "resend_after": VERIFICATION_RESEND_SECONDS,
         }
 
+    def _revoke_presented_auth_sessions(
+        conn: sqlite3.Connection,
+        request: Request,
+        *,
+        reason: str,
+    ) -> None:
+        seen: set[str] = set()
+        for cookie_name in (SESSION_COOKIE, ADMIN_SESSION_COOKIE):
+            token = str(request.cookies.get(cookie_name) or "").strip()
+            if token and token not in seen:
+                delete_session(conn, token, reason=reason)
+                seen.add(token)
+
+    def _set_single_auth_cookie(
+        response: Response,
+        request: Request,
+        *,
+        token: str,
+        is_admin: bool,
+        max_age: int | None = None,
+    ) -> None:
+        cookie_name = ADMIN_SESSION_COOKIE if is_admin else SESSION_COOKIE
+        other_cookie_name = SESSION_COOKIE if is_admin else ADMIN_SESSION_COOKIE
+        response.set_cookie(
+            key=cookie_name,
+            value=token,
+            httponly=True,
+            max_age=max_age,
+            samesite="lax",
+            secure=_session_cookie_secure(request),
+        )
+        # Always expire the opposite role cookie, including legacy browsers
+        # that still carry both cookies from the former dual-session design.
+        response.delete_cookie(other_cookie_name)
+
     @app.post("/api/auth/register")
     def api_register(payload: RegisterPayload, request: Request):
         _require_same_origin_when_supplied(request)
@@ -18512,6 +18576,11 @@ def create_app() -> FastAPI:
                     now=now,
                 )
                 session_hours = int(_auth_login_policy(runtime)["session_hours"])
+                _revoke_presented_auth_sessions(
+                    conn,
+                    request,
+                    reason="email_registration_replaced_browser_identity",
+                )
                 token = create_session(
                     conn,
                     user_id,
@@ -18575,12 +18644,11 @@ def create_app() -> FastAPI:
                 "message": "registration completed",
             }
         )
-        response.set_cookie(
-            key=SESSION_COOKIE,
-            value=token,
-            httponly=True,
-            samesite="lax",
-            secure=_session_cookie_secure(request),
+        _set_single_auth_cookie(
+            response,
+            request,
+            token=token,
+            is_admin=False,
         )
         return response
 
@@ -18625,6 +18693,11 @@ def create_app() -> FastAPI:
         if int(user.get("is_disabled") or 0) == 1 or int(user.get("deleted_at") or 0) > 0:
             raise HTTPException(status_code=403, detail="account is disabled")
         now = _now_ts()
+        _revoke_presented_auth_sessions(
+            conn,
+            request,
+            reason="google_login_replaced_browser_identity",
+        )
         conn.execute(
             """
             UPDATE sessions
@@ -18679,12 +18752,11 @@ def create_app() -> FastAPI:
             url=_safe_local_return_url(return_path, "/"),
             status_code=302,
         )
-        response.set_cookie(
-            key=SESSION_COOKIE,
-            value=token,
-            httponly=True,
-            samesite="lax",
-            secure=_session_cookie_secure(request),
+        _set_single_auth_cookie(
+            response,
+            request,
+            token=token,
+            is_admin=False,
         )
         response.delete_cookie(GOOGLE_OAUTH_FLOW_COOKIE, path="/")
         response.delete_cookie(GOOGLE_OAUTH_ONBOARDING_COOKIE, path="/")
@@ -19077,6 +19149,11 @@ def create_app() -> FastAPI:
                 if completed.rowcount != 1:
                     raise HTTPException(status_code=409, detail="Google onboarding was already completed")
                 ttl_seconds = int(_auth_login_policy(runtime)["session_hours"]) * 3600
+                _revoke_presented_auth_sessions(
+                    conn,
+                    request,
+                    reason="google_registration_replaced_browser_identity",
+                )
                 token = create_session(
                     conn,
                     user_id,
@@ -19121,21 +19198,87 @@ def create_app() -> FastAPI:
                 "password_login_enabled": False,
             }
         )
-        response.set_cookie(
-            key=SESSION_COOKIE,
-            value=token,
-            httponly=True,
-            samesite="lax",
-            secure=_session_cookie_secure(request),
+        _set_single_auth_cookie(
+            response,
+            request,
+            token=token,
+            is_admin=False,
         )
         response.delete_cookie(GOOGLE_OAUTH_ONBOARDING_COOKIE, path="/")
         return response
+
+    def _issue_login_security_challenge(
+        conn: sqlite3.Connection,
+        *,
+        user_id: int,
+        email: str,
+        client_ip: str,
+    ) -> dict[str, Any]:
+        challenge_id = ""
+        now = _now_ts()
+        try:
+            challenge_id, code, expires_at = create_email_challenge(
+                conn,
+                email,
+                "login_security",
+                client_ip,
+                now,
+                user_id=user_id,
+            )
+            # The delivery-governance path uses its own database connection.
+            # Release this write transaction before contacting the provider.
+            conn.commit()
+            send_verification_email(
+                email,
+                code,
+                VERIFICATION_TTL_SECONDS,
+                idempotency_key=challenge_id,
+            )
+            if not mark_challenge_sent(conn, challenge_id, _now_ts()):
+                raise VerificationChallengeError(
+                    "challenge_invalidated",
+                    "verification challenge is no longer valid",
+                )
+            conn.commit()
+        except VerificationRateLimitError:
+            conn.commit()
+            raise
+        except (
+            VerificationDeliveryError,
+            AuthEmailConfigurationError,
+            VerificationChallengeError,
+            ValueError,
+        ):
+            if challenge_id:
+                mark_challenge_failed(conn, challenge_id, _now_ts())
+                conn.commit()
+            raise
+        local, _, domain = email.partition("@")
+        masked_local = (
+            f"{local[:2]}{'*' * max(2, min(len(local) - 2, 6))}"
+            if len(local) > 2
+            else f"{local[:1]}**"
+        )
+        return {
+            "primary_method": "email",
+            "email_available": True,
+            "masked_email": f"{masked_local}@{domain}",
+            "challenge_id": challenge_id,
+            "expires_in": max(expires_at - now, 0),
+            "resend_after": VERIFICATION_RESEND_SECONDS,
+        }
 
     def _login_response(payload: LoginPayload, request: Request, *, expected_admin: bool | None = None) -> JSONResponse:
         username = str(payload.username or "").strip()
         password = str(payload.password or "")
         client_ip = _request_client_ip(request)
+        login_device_id = str(
+            payload.device_id or request.headers.get("x-device-id") or ""
+        )[:128]
         username_key = username.casefold()[:64] or "empty"
+        security_method = str(payload.security_verification_method or "").strip().lower()
+        if security_method not in {"", "email", "mfa"}:
+            raise HTTPException(status_code=400, detail="unsupported security verification method")
         _check_auth_rate_limit("login_ip", client_ip, limit=30, window_seconds=300)
         _check_auth_rate_limit("login_user", username_key, limit=8, window_seconds=900)
 
@@ -19146,6 +19289,11 @@ def create_app() -> FastAPI:
             record_invalid_credentials()
             raise HTTPException(status_code=401, detail="用户名或密码错误")
         session_conflict_details: dict[str, Any] = {}
+        security_verification_details: dict[str, Any] = {}
+        security_verification_required = False
+        high_risk_login = False
+        high_risk_verified = False
+        high_risk_verification_method = ""
         remember_login = False
         session_ttl_seconds = 12 * 3600
         with db() as conn:
@@ -19188,13 +19336,6 @@ def create_app() -> FastAPI:
                 record_invalid_credentials()
                 raise HTTPException(status_code=401, detail="用户名或密码错误")
             user = dict(row)
-            if not bool(int(user.get("is_admin") or 0)):
-                conn.execute("BEGIN IMMEDIATE")
-                locked_row = conn.execute("SELECT * FROM users WHERE id = ?", (int(user["id"]),)).fetchone()
-                if locked_row is None:
-                    record_invalid_credentials()
-                    raise HTTPException(status_code=401, detail="用户名或密码错误")
-                user = dict(locked_row)
             if int(user.get("password_login_enabled", 1) or 0) != 1:
                 record_invalid_credentials()
                 raise HTTPException(status_code=401, detail="用户名或密码错误")
@@ -19295,9 +19436,19 @@ def create_app() -> FastAPI:
                 and int(mfa_row["required_after"] or 0) > 0
                 and int(mfa_row["required_after"] or 0) <= _now_ts()
             )
-            if mfa_enabled:
-                if not _verify_mfa_code_atomic(int(user["id"]), payload.mfa_code):
-                    raise HTTPException(status_code=401, detail={"code": "mfa_code_invalid", "message": "动态验证码或恢复码错误。"})
+            primary_email_row = conn.execute(
+                """
+                SELECT email_normalized
+                FROM user_auth_emails
+                WHERE user_id = ? AND is_primary = 1 AND login_enabled = 1
+                """,
+                (int(user["id"]),),
+            ).fetchone()
+            primary_email = (
+                str(primary_email_row["email_normalized"] or "").strip()
+                if primary_email_row is not None
+                else ""
+            )
             if expected_admin is True and not is_admin:
                 raise HTTPException(status_code=403, detail="此入口仅供管理员登录")
             if expected_admin is False and is_admin:
@@ -19310,81 +19461,276 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=403, detail="账号已禁用")
             if int(user.get("must_change_password") or 0) == 1 and _password_expiry(user) <= _now_ts():
                 raise HTTPException(status_code=403, detail=_password_change_required_detail(user))
+
+            # Perform the new-device and new-network confirmation before MFA
+            # verification. Otherwise the confirmation round-trip would
+            # consume a valid TOTP and immediately reject it as a replay.
+            preflight_login_at = int(user.get("last_login_at") or 0)
+            preflight_device_id = str(user.get("last_device_id") or "")[:128]
+            preflight_login_ip = str(user.get("last_login_ip") or "")[:64]
+            preflight_device_changed = bool(
+                preflight_login_at
+                and preflight_device_id
+                and login_device_id
+                and not hmac.compare_digest(preflight_device_id, login_device_id)
+            )
+            preflight_ip_changed = bool(
+                preflight_login_at
+                and preflight_login_ip
+                and client_ip
+                and not hmac.compare_digest(preflight_login_ip, client_ip)
+            )
+            if preflight_device_changed and preflight_ip_changed:
+                active_token_rows = conn.execute(
+                    "SELECT token FROM sessions WHERE user_id = ? AND revoked_at = 0 AND expires_at > ?",
+                    (int(user["id"]), _now_ts()),
+                ).fetchall()
+                active_token_digests = {str(item["token"]) for item in active_token_rows}
+                presented_tokens = (
+                    str(request.cookies.get(SESSION_COOKIE) or "").strip(),
+                    str(request.cookies.get(ADMIN_SESSION_COOKIE) or "").strip(),
+                )
+                same_browser_session = any(
+                    raw_token and session_storage_token(raw_token) in active_token_digests
+                    for raw_token in presented_tokens
+                )
+                if not same_browser_session:
+                    email_available = bool(primary_email and email_delivery_available())
+                    if security_method == "email":
+                        # Delivery availability matters when issuing a new code,
+                        # not when consuming a code that was already delivered.
+                        if not primary_email:
+                            raise HTTPException(
+                                status_code=409,
+                                detail={
+                                    "code": "SECURITY_EMAIL_UNAVAILABLE",
+                                    "message": "当前账号无法使用邮箱验证，请改用 MFA 或联系管理员。",
+                                    "verification": {"mfa_available": mfa_enabled},
+                                },
+                            )
+                        if not payload.security_challenge_id or not payload.security_verification_code:
+                            raise HTTPException(
+                                status_code=400,
+                                detail={
+                                    "code": "SECURITY_EMAIL_CODE_REQUIRED",
+                                    "message": "请输入邮箱验证码。",
+                                },
+                            )
+                        try:
+                            verify_and_consume_challenge(
+                                conn,
+                                payload.security_challenge_id,
+                                primary_email,
+                                "login_security",
+                                payload.security_verification_code,
+                                _now_ts(),
+                                expected_user_id=int(user["id"]),
+                                request_ip=client_ip,
+                            )
+                        except VerificationChallengeError as exc:
+                            conn.commit()
+                            raise HTTPException(
+                                status_code=400,
+                                detail={"code": exc.code, "message": str(exc)},
+                            ) from exc
+                        high_risk_verified = True
+                        high_risk_verification_method = "email"
+                    elif security_method == "mfa":
+                        if not mfa_enabled:
+                            raise HTTPException(
+                                status_code=400,
+                                detail={
+                                    "code": "mfa_not_available",
+                                    "message": "当前账号未启用 MFA，请使用邮箱验证码。",
+                                },
+                            )
+                    else:
+                        verification = {
+                            "new_device": True,
+                            "new_network": True,
+                            "mfa_available": mfa_enabled,
+                            "mfa_enabled": mfa_enabled,
+                            "last_login_at": preflight_login_at,
+                        }
+                        if email_available:
+                            try:
+                                verification.update(
+                                    _issue_login_security_challenge(
+                                        conn,
+                                        user_id=int(user["id"]),
+                                        email=primary_email,
+                                        client_ip=client_ip,
+                                    )
+                                )
+                            except VerificationRateLimitError as exc:
+                                raise HTTPException(
+                                    status_code=429,
+                                    detail={"code": exc.code, "message": str(exc)},
+                                ) from exc
+                            except (
+                                VerificationDeliveryError,
+                                AuthEmailConfigurationError,
+                                VerificationChallengeError,
+                                ValueError,
+                            ) as exc:
+                                if not mfa_enabled:
+                                    raise HTTPException(
+                                        status_code=503,
+                                        detail={
+                                            "code": "SECURITY_EMAIL_DELIVERY_FAILED",
+                                            "message": "邮箱验证码暂时无法发送，请稍后重试。",
+                                        },
+                                    ) from exc
+                                verification.update(
+                                    {"primary_method": "mfa", "email_available": False}
+                                )
+                        elif mfa_enabled:
+                            verification.update(
+                                {"primary_method": "mfa", "email_available": False}
+                            )
+                        else:
+                            raise HTTPException(
+                                status_code=403,
+                                detail={
+                                    "code": "SECURITY_VERIFICATION_UNAVAILABLE",
+                                    "message": "当前账号没有可用的安全验证方式，请联系管理员。",
+                                },
+                            )
+                        raise HTTPException(
+                            status_code=409,
+                            detail={
+                                "code": "SECURITY_VERIFICATION_REQUIRED",
+                                "message": (
+                                    "检测到新设备和新网络登录，验证码已发送到账号邮箱。"
+                                    if verification.get("email_available")
+                                    else "检测到新设备和新网络登录，请使用 MFA 完成安全验证。"
+                                ),
+                                "verification": verification,
+                            },
+                        )
+
+            if mfa_enabled and not (
+                high_risk_verified and high_risk_verification_method == "email"
+            ):
+                if not _verify_mfa_code_atomic(int(user["id"]), payload.mfa_code):
+                    raise HTTPException(status_code=401, detail={"code": "mfa_code_invalid", "message": "动态验证码或恢复码错误。"})
+                if preflight_device_changed and preflight_ip_changed and security_method == "mfa":
+                    high_risk_verified = True
+                    high_risk_verification_method = "mfa"
+
+            # MFA verification writes through its own short transaction.  Take
+            # the session-replacement lock only after MFA has completed so the
+            # second connection cannot deadlock against this login request.
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            locked_row = conn.execute(
+                "SELECT * FROM users WHERE id = ?",
+                (int(user["id"]),),
+            ).fetchone()
+            if locked_row is None or not verify_password(password, str(locked_row["password_hash"] or "")):
+                record_invalid_credentials()
+                raise HTTPException(status_code=401, detail="用户名或密码错误")
+            user = dict(locked_row)
+            locked_is_admin = bool(int(user.get("is_admin") or 0))
+            if locked_is_admin != is_admin or int(user.get("is_disabled") or 0) == 1:
+                raise HTTPException(status_code=403, detail="账号状态已变更，请重新登录")
             cookie_name = ADMIN_SESSION_COOKIE if is_admin else SESSION_COOKIE
             previous_token = str(request.cookies.get(cookie_name) or "").strip()
-            boundary_cookie_name = SESSION_COOKIE if is_admin else ADMIN_SESSION_COOKIE
-            boundary_token = str(request.cookies.get(boundary_cookie_name) or "").strip()
+            boundary_token = str(
+                request.cookies.get(SESSION_COOKIE if is_admin else ADMIN_SESSION_COOKIE) or ""
+            ).strip()
             session_conflict = False
+            now_ts = _now_ts()
+            conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now_ts,))
             if is_admin:
-                boundary_at = _now_ts()
+                # Old releases could leave a customer-kind session attached to
+                # an administrator.  It must not block the valid admin session
+                # or survive the move to one-session-per-account semantics.
                 conn.execute(
-                    """
-                    UPDATE sessions
-                    SET revoked_at = ?, revoke_reason = 'admin_session_boundary_login'
-                    WHERE user_id = ?
-                      AND revoked_at = 0
-                      AND is_admin_session = 0
-                    """,
-                    (boundary_at, int(user["id"])),
+                    "UPDATE sessions SET revoked_at = ?, revoke_reason = 'admin_session_boundary_login' "
+                    "WHERE user_id = ? AND revoked_at = 0 AND is_admin_session = 0",
+                    (now_ts, int(user["id"])),
                 )
-                if previous_token:
-                    delete_session(conn, previous_token)
+            active_sessions = conn.execute(
+                "SELECT token, device_id, ip_address, user_agent, created_at, last_seen_at, expires_at "
+                "FROM sessions WHERE user_id = ? AND revoked_at = 0 AND expires_at > ? "
+                "ORDER BY last_seen_at DESC, created_at DESC",
+                (int(user["id"]), now_ts),
+            ).fetchall()
+            active_tokens = {str(session["token"]) for session in active_sessions}
+            matching_presented_token = next(
+                (
+                    raw_token
+                    for raw_token in (previous_token, boundary_token)
+                    if raw_token and session_storage_token(raw_token) in active_tokens
+                ),
+                "",
+            )
+            previous_device_id = str(user.get("last_device_id") or "")[:128]
+            previous_login_ip = str(user.get("last_login_ip") or "")[:64]
+            previous_login_at = int(user.get("last_login_at") or 0)
+            device_changed = bool(
+                previous_login_at
+                and previous_device_id
+                and login_device_id
+                and not hmac.compare_digest(previous_device_id, login_device_id)
+            )
+            ip_changed = bool(
+                previous_login_at
+                and previous_login_ip
+                and client_ip
+                and not hmac.compare_digest(previous_login_ip, client_ip)
+            )
+            high_risk_login = bool(device_changed and ip_changed and not matching_presented_token)
+            if high_risk_login and not high_risk_verified:
+                security_verification_required = True
+                security_verification_details = {
+                    "new_device": True,
+                    "new_network": True,
+                    "email_available": bool(primary_email and email_delivery_available()),
+                    "mfa_available": mfa_enabled,
+                    "mfa_enabled": mfa_enabled,
+                    "last_login_at": previous_login_at,
+                }
+            elif (high_risk_login and high_risk_verified) or payload.force_takeover:
+                conn.execute(
+                    "UPDATE sessions SET revoked_at = ?, revoke_reason = ? "
+                    "WHERE user_id = ? AND revoked_at = 0",
+                    (
+                        now_ts,
+                        "admin_force_takeover" if is_admin else "customer_force_takeover",
+                        int(user["id"]),
+                    ),
+                )
+            elif len(active_tokens) == 1 and matching_presented_token:
+                delete_session(conn, matching_presented_token, reason="session_rotation")
+            elif active_tokens:
+                session_conflict = True
+                current_session = active_sessions[0]
+                session_conflict_details = {
+                    "device_id": str(current_session["device_id"] or ""),
+                    "ip_address": str(current_session["ip_address"] or ""),
+                    "user_agent": str(current_session["user_agent"] or ""),
+                    "created_at": int(current_session["created_at"] or 0),
+                    "last_seen_at": int(current_session["last_seen_at"] or 0),
+                    "expires_at": int(current_session["expires_at"] or 0),
+                }
+            if not session_conflict and not security_verification_required:
+                _revoke_presented_auth_sessions(
+                    conn,
+                    request,
+                    reason="admin_session_boundary_login" if is_admin else "customer_session_boundary_login",
+                )
                 token = create_session(
                     conn,
                     int(user["id"]),
                     ttl_seconds=session_ttl_seconds,
                     request=request,
-                    is_admin_session=True,
+                    is_admin_session=is_admin,
                     device_id=payload.device_id,
                 )
-            else:
-                now_ts = _now_ts()
-                conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (now_ts,))
-                active_sessions = conn.execute(
-                    "SELECT token, device_id, ip_address, user_agent, created_at, last_seen_at, expires_at "
-                    "FROM sessions WHERE user_id = ? AND revoked_at = 0 AND expires_at > ? "
-                    "ORDER BY last_seen_at DESC, created_at DESC",
-                    (int(user["id"]), now_ts),
-                ).fetchall()
-                active_tokens = {str(session["token"]) for session in active_sessions}
-                if payload.force_takeover:
-                    conn.execute(
-                        "UPDATE sessions SET revoked_at = ?, revoke_reason = 'customer_force_takeover' "
-                        "WHERE user_id = ? AND revoked_at = 0",
-                        (now_ts, int(user["id"])),
-                    )
-                elif previous_token and session_storage_token(previous_token) in active_tokens and len(active_tokens) == 1:
-                    delete_session(conn, previous_token)
-                elif active_tokens:
-                    session_conflict = True
-                    current_session = active_sessions[0]
-                    session_conflict_details = {
-                        "device_id": str(current_session["device_id"] or ""),
-                        "ip_address": str(current_session["ip_address"] or ""),
-                        "user_agent": str(current_session["user_agent"] or ""),
-                        "created_at": int(current_session["created_at"] or 0),
-                        "last_seen_at": int(current_session["last_seen_at"] or 0),
-                        "expires_at": int(current_session["expires_at"] or 0),
-                    }
-                if not session_conflict:
-                    token = create_session(
-                        conn,
-                        int(user["id"]),
-                        ttl_seconds=session_ttl_seconds,
-                        request=request,
-                        is_admin_session=False,
-                        device_id=payload.device_id,
-                    )
-            if not session_conflict:
-                if boundary_token:
-                    delete_session(
-                        conn,
-                        boundary_token,
-                        reason="admin_session_boundary_login" if is_admin else "customer_session_boundary_login",
-                    )
+            if not session_conflict and not security_verification_required:
                 login_at = _now_ts()
-                login_device_id = str(payload.device_id or request.headers.get("x-device-id") or "")[:128]
-                previous_device_id = str(user.get("last_device_id") or "")[:128]
                 conn.execute(
                     "UPDATE users SET last_login_at = ?, last_login_ip = ?, last_login_user_agent = ?, "
                     "last_device_id = ?, failed_login_count = 0, failed_login_window_at = 0, "
@@ -19411,11 +19757,30 @@ def create_app() -> FastAPI:
                         "is_admin": is_admin,
                         "device_id": login_device_id,
                         "remember_login": remember_login,
-                        "method": "password",
+                        "method": (
+                            f"password+{high_risk_verification_method}"
+                            if high_risk_verification_method
+                            else "password"
+                        ),
                     },
-                    risk_level="low",
+                    risk_level="high" if high_risk_login else "low",
                     **governance.request_context(request),
                 )
+                if high_risk_login:
+                    governance.upsert_alert(
+                        conn,
+                        alert_type="new_device_and_network_login",
+                        severity="high",
+                        title="账号从新设备和新网络登录",
+                        summary=f"账号 {username} 已完成安全确认，并接管原有登录会话。",
+                        target_user_id=int(user["id"]),
+                        fingerprint=(
+                            f"new-context:{int(user['id'])}:"
+                            f"{governance.token_digest(login_device_id)[:12]}:"
+                            f"{governance.token_digest(client_ip)[:12]}"
+                        ),
+                        created_at=login_at,
+                    )
                 if login_device_id and login_device_id != previous_device_id:
                     governance.upsert_alert(
                         conn,
@@ -19427,6 +19792,15 @@ def create_app() -> FastAPI:
                         fingerprint=f"new-device:{int(user['id'])}:{governance.token_digest(login_device_id)[:16]}",
                         created_at=login_at,
                     )
+        if security_verification_required:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "SECURITY_VERIFICATION_REQUIRED",
+                    "message": "检测到账号正在新设备和新网络登录。请确认由你本人操作后再安全登录。",
+                    "verification": security_verification_details,
+                },
+            )
         if session_conflict:
             raise HTTPException(
                 status_code=409,
@@ -19451,16 +19825,13 @@ def create_app() -> FastAPI:
             "mfa_required_after": int(mfa_row["required_after"] or 0) if mfa_row else 0,
         }
         response = JSONResponse(content=resp)
-        response.set_cookie(
-            key=ADMIN_SESSION_COOKIE if is_admin else SESSION_COOKIE,
-            value=token,
-            httponly=True,
+        _set_single_auth_cookie(
+            response,
+            request,
+            token=token,
+            is_admin=is_admin,
             max_age=session_ttl_seconds if remember_login else None,
-            samesite="lax",
-            secure=_session_cookie_secure(request),
         )
-        if boundary_token:
-            response.delete_cookie(boundary_cookie_name)
         return response
 
     @app.post("/api/auth/login")
@@ -21158,7 +21529,7 @@ def create_app() -> FastAPI:
             order = commercial_billing.create_order(
                 conn,
                 user_id=int(target_user_id),
-                sku="vanguard_monthly",
+                sku=payload.sku,
                 quantity=payload.quantity,
                 renewal_subscription_ids=payload.renewal_subscription_ids,
                 idempotency_key=f"admin-manual:{actor_id}:{target_user_id}:{uuid.uuid4().hex}",
@@ -22721,7 +23092,7 @@ def create_app() -> FastAPI:
                 risk_level="high",
                 **governance.request_context(request),
             )
-        filename = f"vecto-audit-{datetime.now(governance.TAIPEI).strftime('%Y%m%d-%H%M%S')}.csv"
+        filename = f"vecto-audit-{datetime.now(governance.SHANGHAI).strftime('%Y%m%d-%H%M%S')}.csv"
         return Response(
             content=governance.audit_rows_to_csv(rows),
             media_type="text/csv; charset=utf-8",

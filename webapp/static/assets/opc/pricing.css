@@ -39,7 +39,7 @@
 
 .pricing-page-hero {
   position: relative;
-  min-height: min(46vh, 440px);
+  min-height: min(40vh, 372px);
   display: grid;
   align-items: end;
   overflow: hidden;
@@ -71,14 +71,14 @@
   z-index: 1;
   width: min(1120px, calc(100% - 40px));
   margin: 0 auto;
-  padding: clamp(96px, 13vh, 132px) 0 clamp(34px, 5vw, 54px);
+  padding: clamp(76px, 10vh, 104px) 0 clamp(24px, 3vw, 36px);
 }
 
 .pricing-page-hero-copy h1 {
-  max-width: 760px;
-  margin: 6px 0 12px;
-  font-size: clamp(42px, 5.8vw, 72px);
-  line-height: 0.98;
+  max-width: 1080px;
+  margin: 5px 0 10px;
+  font-size: clamp(36px, 3.9vw, 52px);
+  line-height: 1.04;
   letter-spacing: 0;
 }
 
@@ -112,8 +112,8 @@
   z-index: 2;
   width: min(1180px, calc(100% - 40px));
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  margin: -20px auto 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: -14px auto 0;
   border: 1px solid var(--line);
   background: #ffffff;
   box-shadow: 0 18px 50px rgba(7, 17, 18, 0.12);
@@ -121,7 +121,7 @@
 
 .pricing-facts div {
   min-width: 0;
-  padding: 13px 16px;
+  padding: 9px 14px;
   border-right: 1px solid var(--line);
 }
 
@@ -142,8 +142,8 @@
 }
 
 .pricing-facts strong {
-  margin-top: 3px;
-  font-size: clamp(16px, 2vw, 22px);
+  margin-top: 2px;
+  font-size: clamp(15px, 1.7vw, 20px);
 }
 
 .pricing-public-section {
@@ -159,7 +159,7 @@
   width: min(1120px, calc(100% - 40px));
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  margin: 12px auto 0;
+  margin: 8px auto 0;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 10px 32px rgba(7, 17, 18, 0.08);
@@ -170,12 +170,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 9px;
-  min-height: 44px;
-  padding: 8px 12px;
+  gap: 7px;
+  min-height: 36px;
+  padding: 6px 10px;
   border-right: 1px solid var(--line);
   color: var(--ink-soft);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 850;
   transition: color 160ms ease, background 160ms ease;
 }
@@ -230,6 +230,8 @@
 }
 
 .pricing-subscription-shell {
+  display: grid;
+  gap: 14px;
   min-height: 250px;
 }
 
@@ -578,6 +580,27 @@
 .pricing-action-row strong:nth-child(2) {
   text-align: right;
   font-size: 14px;
+}
+
+.pricing-action-name {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pricing-action-availability {
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--paper);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.pricing-action-row.is-unavailable > strong:last-child {
+  color: var(--muted);
 }
 
 .pricing-package-grid,

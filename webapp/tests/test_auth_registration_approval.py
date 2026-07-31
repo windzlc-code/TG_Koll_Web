@@ -850,7 +850,7 @@ class RegistrationApprovalTests(unittest.TestCase):
 
         admin_login = browser.post(
             "/api/auth/admin-login",
-            json={"username": "admin", "password": "admin123secure"},
+            json={"username": "admin", "password": "admin123secure", "force_takeover": True},
         )
         self.assertEqual(admin_login.status_code, 200, admin_login.text)
         self.assertIsNone(browser.cookies.get("session_token"))
@@ -1164,7 +1164,7 @@ class RegistrationApprovalTests(unittest.TestCase):
 
         switched_login = user.post(
             "/api/auth/admin-login",
-            json={"username": "admin", "password": "admin123secure"},
+            json={"username": "admin", "password": "admin123secure", "force_takeover": True},
         )
         self.assertEqual(switched_login.status_code, 200)
         self.assertTrue(switched_login.json()["is_admin"])
@@ -1176,7 +1176,7 @@ class RegistrationApprovalTests(unittest.TestCase):
         admin = TestClient(self.app)
         login = admin.post(
             "/api/auth/admin-login",
-            json={"username": "admin", "password": "admin123secure"},
+            json={"username": "admin", "password": "admin123secure", "force_takeover": True},
         )
         self.assertEqual(login.status_code, 200)
         entry = admin.get("/admin", follow_redirects=False)

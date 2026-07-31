@@ -8,6 +8,7 @@ import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 
@@ -75,14 +76,11 @@ def _now(value: int | None = None) -> int:
     return int(time.time() if value is None else value)
 
 
-def _quota_timezone() -> timezone:
-    offset = _bounded_env_int(
-        "EMAIL_QUOTA_TIMEZONE_OFFSET_MINUTES",
-        8 * 60,
-        -12 * 60,
-        14 * 60,
-    )
-    return timezone(timedelta(minutes=offset))
+def _quota_timezone():
+    try:
+        return ZoneInfo("Asia/Shanghai")
+    except ZoneInfoNotFoundError:
+        return timezone(timedelta(hours=8), name="Asia/Shanghai")
 
 
 def _quota_day(now: int) -> str:

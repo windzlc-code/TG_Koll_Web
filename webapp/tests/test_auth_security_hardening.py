@@ -28,6 +28,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         "ALLOW_PUBLIC_REGISTER",
         "PASSWORD_VAULT_KEY",
         "PASSWORD_VAULT_KEY_FILE",
+        "AUTH_VERIFICATION_SECRET",
     )
     ADMIN_PASSWORD = "bootstrap-secret"
 
@@ -47,6 +48,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         os.environ["SESSION_COOKIE_SECURE"] = "0"
         os.environ["ALLOW_PUBLIC_REGISTER"] = "1"
         os.environ["PASSWORD_VAULT_KEY"] = Fernet.generate_key().decode("ascii")
+        os.environ["AUTH_VERIFICATION_SECRET"] = "security-test-verification-secret-32-bytes"
         os.environ.pop("PASSWORD_VAULT_KEY_FILE", None)
         server.SENTIMENT_CONFIG_PATH = self.data_dir / "sentiment-config.json"
         server.SENTIMENT_CONFIG_PATH.write_text(json.dumps({}), encoding="utf-8")
@@ -105,7 +107,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         client = TestClient(self.app)
         response = client.post(
             "/api/auth/admin-login",
-            json={"username": "admin", "password": self.ADMIN_PASSWORD},
+            json={"username": "admin", "password": self.ADMIN_PASSWORD, "force_takeover": True},
         )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertTrue(response.json()["is_admin"])
@@ -177,6 +179,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertNotIn("authToken", extension_config.json())
 
         customer, _user_id = self._approved_client("extension-customer")
+        admin, _identity = self._admin_client()
         customer.cookies.set("admin_session_token", admin.cookies.get("admin_session_token"))
         unmarked_dual_cookie = customer.get("/browser-auth-extension/config.json")
         self.assertEqual(unmarked_dual_cookie.status_code, 403, unmarked_dual_cookie.text)
@@ -1482,8 +1485,16 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         current_client = TestClient(self.app)
         other_client = TestClient(self.app)
         credentials = {"username": "admin", "password": self.ADMIN_PASSWORD}
-        self.assertEqual(current_client.post("/api/auth/admin-login", json=credentials).status_code, 200)
-        self.assertEqual(other_client.post("/api/auth/admin-login", json=credentials).status_code, 200)
+        current_login = current_client.post("/api/auth/admin-login", json=credentials)
+        self.assertEqual(current_login.status_code, 200)
+        with server.db() as conn:
+            other_token = server.create_session(
+                conn,
+                int(current_login.json()["id"]),
+                is_admin_session=True,
+                device_id="legacy-second-session",
+            )
+        other_client.cookies.set("admin_session_token", other_token)
 
         changed = current_client.post(
             "/api/auth/change_password",
@@ -1494,6 +1505,129 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(changed.status_code, 200, changed.text)
         self.assertEqual(current_client.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 200)
         self.assertEqual(other_client.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 401)
+
+    def test_same_browser_switching_customer_identity_revokes_previous_identity(self):
+        first_browser, _first_user_id = self._approved_client("browser_identity_a")
+        first_token = first_browser.cookies.get("session_token")
+        second_browser, _second_user_id = self._approved_client("browser_identity_b")
+        self.assertEqual(second_browser.post("/api/auth/logout").status_code, 200)
+
+        switched = first_browser.post(
+            "/api/auth/user-login",
+            json={"username": "browser_identity_b", "password": "guest123"},
+        )
+
+        self.assertEqual(switched.status_code, 200, switched.text)
+        self.assertNotEqual(first_browser.cookies.get("session_token"), first_token)
+        stale_first_identity = TestClient(self.app, cookies={"session_token": first_token})
+        self.assertEqual(stale_first_identity.get("/api/me").status_code, 401)
+        self.assertEqual(first_browser.get("/api/me").json()["username"], "browser_identity_b")
+
+    def test_new_device_and_new_ip_require_confirmation_before_session_takeover(self):
+        initial_browser, user_id = self._approved_client("security_context_customer")
+        seeded_browser = TestClient(
+            self.app,
+            client=("198.51.100.10", 50000),
+            cookies={"session_token": initial_browser.cookies.get("session_token")},
+        )
+        seeded = seeded_browser.post(
+            "/api/auth/user-login",
+            json={
+                "username": "security_context_customer",
+                "password": "guest123",
+                "device_id": "trusted-device-a",
+            },
+        )
+        self.assertEqual(seeded.status_code, 200, seeded.text)
+
+        verified_email = "security_context_customer@example.com"
+        now = server._now_ts()
+        with server.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_auth_emails(
+                  user_id, email_normalized, email_original, verified_at,
+                  is_primary, login_enabled, source, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 1, 1, 'security_test', ?, ?)
+                """,
+                (user_id, verified_email, verified_email, now, now, now),
+            )
+
+        new_context = TestClient(self.app, client=("203.0.113.25", 50000))
+        delivered: dict[str, str] = {}
+
+        def capture_email(email: str, code: str, *_args, **_kwargs) -> None:
+            delivered.update({"email": email, "code": code})
+
+        with (
+            patch.object(server, "email_delivery_available", return_value=True),
+            patch.object(server, "send_verification_email", side_effect=capture_email),
+        ):
+            verification = new_context.post(
+                "/api/auth/user-login",
+                json={
+                    "username": "security_context_customer",
+                    "password": "guest123",
+                    "device_id": "new-device-b",
+                },
+            )
+        self.assertEqual(verification.status_code, 409, verification.text)
+        self.assertEqual(verification.json()["detail"]["code"], "SECURITY_VERIFICATION_REQUIRED")
+        verification_detail = verification.json()["detail"]["verification"]
+        self.assertTrue(verification_detail["new_device"])
+        self.assertTrue(verification_detail["new_network"])
+        self.assertEqual(verification_detail["primary_method"], "email")
+        self.assertTrue(verification_detail["email_available"])
+        self.assertNotIn(verified_email, verification.text)
+        self.assertEqual(delivered["email"], verified_email)
+        self.assertEqual(seeded_browser.get("/api/me").status_code, 200)
+
+        with patch.object(server, "email_delivery_available", return_value=False):
+            unverified_takeover = new_context.post(
+                "/api/auth/user-login",
+                json={
+                    "username": "security_context_customer",
+                    "password": "guest123",
+                    "device_id": "new-device-b",
+                    "force_takeover": True,
+                },
+            )
+        self.assertEqual(unverified_takeover.status_code, 403, unverified_takeover.text)
+        self.assertEqual(
+            unverified_takeover.json()["detail"]["code"],
+            "SECURITY_VERIFICATION_UNAVAILABLE",
+        )
+        self.assertEqual(seeded_browser.get("/api/me").status_code, 200)
+
+        # A code already delivered remains verifiable if the mail provider
+        # becomes temporarily unavailable before submission.
+        with patch.object(server, "email_delivery_available", return_value=False):
+            confirmed = new_context.post(
+                "/api/auth/user-login",
+                json={
+                    "username": "security_context_customer",
+                    "password": "guest123",
+                    "device_id": "new-device-b",
+                    "force_takeover": True,
+                    "security_verification_method": "email",
+                    "security_challenge_id": verification_detail["challenge_id"],
+                    "security_verification_code": delivered["code"],
+                },
+            )
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+        self.assertEqual(seeded_browser.get("/api/me").status_code, 401)
+        with server.db() as conn:
+            active_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM sessions WHERE user_id = ? AND revoked_at = 0",
+                (user_id,),
+            ).fetchone()["count"]
+            alert = conn.execute(
+                "SELECT severity FROM security_alerts "
+                "WHERE target_user_id = ? AND alert_type = 'new_device_and_network_login'",
+                (user_id,),
+            ).fetchone()
+        self.assertEqual(int(active_count), 1)
+        self.assertEqual(str(alert["severity"]), "high")
 
     def test_second_browser_login_for_customer_returns_session_conflict(self):
         first_browser, _user_id = self._approved_client("single_session_customer")
@@ -1590,7 +1724,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
             ).fetchone()["count"]
         self.assertEqual(int(session_count), 1)
 
-    def test_admin_login_keeps_existing_multi_session_behavior(self):
+    def test_second_browser_login_for_admin_returns_session_conflict(self):
         first_browser = TestClient(self.app)
         second_browser = TestClient(self.app)
         credentials = {"username": "admin", "password": self.ADMIN_PASSWORD}
@@ -1599,8 +1733,24 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         second = second_browser.post("/api/auth/admin-login", json=credentials)
 
         self.assertEqual(first.status_code, 200, first.text)
-        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(second.status_code, 409, second.text)
+        self.assertEqual(second.json()["detail"]["code"], "SESSION_CONFLICT")
         self.assertEqual(first_browser.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 200)
+        self.assertEqual(second_browser.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 401)
+
+    def test_admin_force_takeover_revokes_existing_browser_session(self):
+        first_browser = TestClient(self.app)
+        second_browser = TestClient(self.app)
+        credentials = {"username": "admin", "password": self.ADMIN_PASSWORD}
+        self.assertEqual(first_browser.post("/api/auth/admin-login", json=credentials).status_code, 200)
+
+        takeover = second_browser.post(
+            "/api/auth/admin-login",
+            json={**credentials, "force_takeover": True},
+        )
+
+        self.assertEqual(takeover.status_code, 200, takeover.text)
+        self.assertEqual(first_browser.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 401)
         self.assertEqual(second_browser.get("/api/me", headers={"X-Admin-Console": "1"}).status_code, 200)
 
     def test_repeated_login_attempts_are_rate_limited(self):

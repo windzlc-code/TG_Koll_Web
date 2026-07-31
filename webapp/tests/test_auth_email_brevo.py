@@ -245,6 +245,58 @@ class BrevoEmailDeliveryTests(unittest.TestCase):
         self.assertEqual(exc.exception.code, "email_rate_limited")
         conn.close()
 
+    def test_login_security_challenge_is_bound_to_user_and_request_ip(self):
+        conn = self._challenge_db()
+        challenge_id, code, _ = auth_email.create_email_challenge(
+            conn,
+            "recipient@gmail.com",
+            "login_security",
+            "203.0.113.10",
+            1000,
+            user_id=42,
+        )
+        self.assertTrue(auth_email.mark_challenge_sent(conn, challenge_id, 1001))
+
+        with self.assertRaises(auth_email.VerificationChallengeError) as wrong_user:
+            auth_email.verify_and_consume_challenge(
+                conn,
+                challenge_id,
+                "recipient@gmail.com",
+                "login_security",
+                code,
+                1002,
+                expected_user_id=43,
+                request_ip="203.0.113.10",
+            )
+        self.assertEqual(wrong_user.exception.code, "challenge_mismatch")
+
+        with self.assertRaises(auth_email.VerificationChallengeError) as wrong_ip:
+            auth_email.verify_and_consume_challenge(
+                conn,
+                challenge_id,
+                "recipient@gmail.com",
+                "login_security",
+                code,
+                1003,
+                expected_user_id=42,
+                request_ip="203.0.113.11",
+            )
+        self.assertEqual(wrong_ip.exception.code, "challenge_mismatch")
+
+        self.assertTrue(
+            auth_email.verify_and_consume_challenge(
+                conn,
+                challenge_id,
+                "recipient@gmail.com",
+                "login_security",
+                code,
+                1004,
+                expected_user_id=42,
+                request_ip="203.0.113.10",
+            )
+        )
+        conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

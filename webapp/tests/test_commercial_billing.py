@@ -65,7 +65,7 @@ class CommercialBillingTests(unittest.TestCase):
             order = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="vanguard_monthly",
+                sku="vanguard_enterprise_quarterly",
                 quantity=1,
                 idempotency_key=f"subscription-{now}",
                 now=now,
@@ -77,7 +77,7 @@ class CommercialBillingTests(unittest.TestCase):
                 now=now,
             )
 
-    def _approve_credit_pack(self, sku="credits_100", *, now=1_700_000_001):
+    def _approve_credit_pack(self, sku="credits_200", *, now=1_700_000_001):
         with db_module.db() as conn:
             order = commercial_billing.create_order(
                 conn,
@@ -151,54 +151,235 @@ class CommercialBillingTests(unittest.TestCase):
         with db_module.db() as conn:
             catalog = commercial_billing.get_active_catalog(conn)
             versions = commercial_billing.list_catalog_versions(conn)
-        self.assertEqual(catalog["subscription"]["price_ntd"], 6000)
-        self.assertEqual([item["total_points"] for item in catalog["packages"]], [100, 530, 1620])
-        self.assertEqual(len(catalog["actions"]), 6)
+        subscriptions = {item["sku"]: item for item in catalog["subscriptions"]}
+        self.assertEqual(
+            {
+                sku: (item["price_ntd"], item["period_months"], item["threads_accounts"])
+                for sku, item in subscriptions.items()
+            },
+            {
+                "vanguard_personal_quarterly": (6000, 3, 1),
+                "vanguard_personal_half_year": (12000, 6, 1),
+                "vanguard_personal_annual": (24000, 12, 1),
+                "vanguard_enterprise_quarterly": (18000, 3, 3),
+                "vanguard_enterprise_half_year": (36000, 6, 3),
+                "vanguard_enterprise_annual": (72000, 12, 3),
+            },
+        )
+        self.assertTrue(all(item["monthly_free_images"] == 10 for item in subscriptions.values()))
+        self.assertEqual([item["total_points"] for item in catalog["packages"]], [200, 530, 1620])
+        self.assertEqual([item["price_ntd"] for item in catalog["packages"]], [2000, 5000, 15000])
         actions = {item["sku"]: item for item in catalog["actions"]}
-        self.assertTrue(LEGACY_R18_ACTION_SKUS.isdisjoint(actions))
-        self.assertEqual(actions["instagram_publish"]["points"], 0.1)
-        self.assertEqual(actions["social_interaction"]["points"], 0.1)
+        self.assertEqual(actions["threads_text_publish"]["points"], 0)
+        self.assertEqual(actions["instagram_text_publish"]["points"], 0)
+        self.assertEqual(actions["complete_image_post"]["points"], 2.5)
+        self.assertEqual(actions["ai_image"]["points"], 2)
+        self.assertEqual(actions["oral_video_second"]["points"], 0.5)
+        self.assertEqual(actions["threads_auto_reply_batch"]["points"], 5)
+        self.assertEqual(actions["seedance_fast_1080p_second"]["points"], 7.5)
+        self.assertEqual(actions["seedance_4k_second"]["points"], 11)
+        automation_modules = catalog["automation_modules"]
+        self.assertEqual(
+            [item["key"] for item in automation_modules],
+            ["social_warmup", "auto_reply_comments", "auto_reply_hot_posts"],
+        )
+        self.assertEqual(automation_modules[0]["billing_mode"], "free")
+        self.assertEqual(automation_modules[0]["action_sku"], "")
+        self.assertEqual(automation_modules[1]["reply_scope"], "comments")
+        self.assertEqual(automation_modules[2]["reply_scope"], "hot_posts")
+        self.assertEqual(
+            {item["action_sku"] for item in automation_modules[1:]},
+            {"threads_auto_reply_batch"},
+        )
         self.assertEqual(len([item for item in versions if item["status"] == "active"]), 1)
 
-    def test_existing_active_catalog_adds_current_actions_and_removes_legacy_r18_actions(self):
+    def test_subscription_entitlements_match_the_complete_pdf_catalog(self):
+        plans = {item["sku"]: item for item in commercial_billing.DEFAULT_CATALOG["subscriptions"]}
+        personal = plans["vanguard_personal_quarterly"]
+        enterprise = plans["vanguard_enterprise_quarterly"]
+        self.assertEqual(len(personal["features"]), 5)
+        self.assertEqual(len(enterprise["features"]), 5)
+        self.assertTrue(any("1 个" in item and "IG / Threads" in item for item in personal["features"]))
+        self.assertTrue(any("3 个" in item and "IG / Threads" in item for item in enterprise["features"]))
+        self.assertTrue(any("每月 10 张" in item for item in personal["features"]))
+        self.assertTrue(any("每月 10 张" in item for item in enterprise["features"]))
+        self.assertTrue(any("单账号排程" in item for item in personal["features"]))
+        self.assertTrue(any("三账号排程" in item for item in enterprise["features"]))
+        self.assertTrue(any("单账号沙箱风控" in item for item in personal["features"]))
+        self.assertTrue(any("多账号分流防封" in item for item in enterprise["features"]))
+        self.assertIn("自由创作者", personal["audience"])
+        self.assertIn("中小企业", enterprise["audience"])
+        self.assertIn("乾货", personal["account_positioning"])
+        self.assertIn("投放账号", enterprise["account_positioning"])
+        self.assertEqual(
+            [item["key"] for item in commercial_billing.DEFAULT_CATALOG["billing_rules"]],
+            [
+                "free_image_priority",
+                "shared_compute_pool",
+                "permanent_compute_points",
+                "separate_payment_flows",
+                "site_build_excluded",
+            ],
+        )
+
+    def test_pdf_price_catalog_accepts_free_actions_and_rejects_negative_points(self):
+        catalog = json.loads(json.dumps(commercial_billing.DEFAULT_CATALOG))
+        commercial_billing.validate_catalog(catalog)
+        catalog["actions"][0]["points"] = -0.01
+        with self.assertRaises(commercial_billing.BillingError) as raised:
+            commercial_billing.validate_catalog(catalog)
+        self.assertEqual(raised.exception.code, "INVALID_CATALOG")
+
+    def test_catalog_rejects_monthly_price_that_does_not_match_term_total(self):
+        catalog = json.loads(json.dumps(commercial_billing.DEFAULT_CATALOG))
+        catalog["subscriptions"][0]["monthly_price_ntd"] = 1999
+        with self.assertRaises(commercial_billing.BillingError) as raised:
+            commercial_billing.validate_catalog(catalog)
+        self.assertEqual(raised.exception.code, "INVALID_CATALOG")
+
+    def test_catalog_rejects_non_shanghai_business_timezone(self):
+        catalog = json.loads(json.dumps(commercial_billing.DEFAULT_CATALOG))
+        catalog["timezone"] = "Asia/Taipei"
+        with self.assertRaises(commercial_billing.BillingError) as raised:
+            commercial_billing.validate_catalog(catalog)
+        self.assertEqual(raised.exception.code, "INVALID_CATALOG")
+
+    def test_catalog_rejects_incomplete_automation_module_mapping(self):
+        catalog = json.loads(json.dumps(commercial_billing.DEFAULT_CATALOG))
+        catalog["automation_modules"][1]["action_sku"] = "missing_action_sku"
+        with self.assertRaises(commercial_billing.BillingError) as raised:
+            commercial_billing.validate_catalog(catalog)
+        self.assertEqual(raised.exception.code, "INVALID_CATALOG")
+
+        catalog = json.loads(json.dumps(commercial_billing.DEFAULT_CATALOG))
+        catalog["automation_modules"] = catalog["automation_modules"][:2]
+        with self.assertRaises(commercial_billing.BillingError) as raised:
+            commercial_billing.validate_catalog(catalog)
+        self.assertEqual(raised.exception.code, "INVALID_CATALOG")
+
+    def test_quarterly_subscription_approval_creates_three_monthly_image_grants(self):
+        now = 1_700_000_000
+        self._approve_subscription(now=now)
+        with db_module.db() as conn:
+            periods = conn.execute(
+                "SELECT start_at, end_at FROM billing_subscription_periods WHERE user_id = ?",
+                (self.user_id,),
+            ).fetchall()
+            grants = conn.execute(
+                "SELECT available_at, expires_at, total_count FROM billing_image_grants "
+                "WHERE user_id = ? AND source_type = 'subscription_monthly' ORDER BY available_at",
+                (self.user_id,),
+            ).fetchall()
+        self.assertEqual(len(periods), 3)
+        self.assertEqual(len(grants), 3)
+        self.assertEqual([int(row["total_count"]) for row in grants], [10, 10, 10])
+        expected_end = now
+        for _ in range(3):
+            expected_end = commercial_billing.add_calendar_month(expected_end)
+        self.assertEqual(int(periods[-1]["end_at"]), expected_end)
+
+    def test_existing_active_catalog_is_replaced_by_official_pdf_catalog_v4(self):
         with db_module.db() as conn:
             active = conn.execute(
                 "SELECT id, version_number, catalog_json FROM billing_catalog_versions WHERE status = 'active'"
             ).fetchone()
             catalog = json.loads(str(active["catalog_json"]))
-            catalog["actions"] = [
-                item
-                for item in catalog["actions"]
-                if item["sku"] not in {"instagram_publish", "social_interaction"}
-            ]
-            catalog["actions"].extend(
-                [
-                    {
-                        "sku": sku,
-                        "name": f"legacy {sku}",
-                        "points": 1,
-                        "unit": "次",
-                        "implemented": True,
-                    }
-                    for sku in sorted(LEGACY_R18_ACTION_SKUS)
-                ]
-            )
+            catalog.pop("subscriptions", None)
+            catalog["subscription"] = {**catalog["subscription"], "sku": "vanguard_monthly", "price_ntd": 6000, "period_months": 1}
+            catalog["packages"][0] = {"sku": "credits_100", "name": "旧储值包", "price_ntd": 1000, "paid_points": 100, "bonus_points": 0, "total_points": 100, "bonus_images": 0}
+            catalog["actions"] = [{"sku": "threads_text_publish", "name": "旧发布价格", "points": 0.1, "unit": "次", "implemented": True}]
             conn.execute(
                 "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
                 (json.dumps(catalog, ensure_ascii=False), str(active["id"])),
             )
-            conn.execute("DELETE FROM admin_config WHERE key = 'commercial_billing_catalog_v2'")
-            conn.execute("DELETE FROM admin_config WHERE key = 'commercial_billing_catalog_v3'")
+            conn.execute("DELETE FROM admin_config WHERE key IN ('commercial_billing_catalog_v2', 'commercial_billing_catalog_v3', 'commercial_billing_catalog_v4')")
             commercial_billing.bootstrap_billing(conn, now=1_700_000_000)
             upgraded = commercial_billing.get_active_catalog(conn)
             versions = commercial_billing.list_catalog_versions(conn)
 
         actions = {item["sku"]: item for item in upgraded["actions"]}
         self.assertGreater(int(upgraded["version"]), int(active["version_number"]))
-        self.assertTrue(LEGACY_R18_ACTION_SKUS.isdisjoint(actions))
-        self.assertIn("instagram_publish", actions)
-        self.assertIn("social_interaction", actions)
+        self.assertEqual(actions["threads_text_publish"]["points"], 0)
+        self.assertEqual(upgraded["packages"][0]["sku"], "credits_200")
+        self.assertEqual(len(upgraded["subscriptions"]), 6)
         self.assertEqual(len([item for item in versions if item["status"] == "active"]), 1)
+
+    def test_catalog_timezone_migrates_to_shanghai_without_resetting_prices(self):
+        with db_module.db() as conn:
+            active = conn.execute(
+                "SELECT id, version_number, catalog_json FROM billing_catalog_versions WHERE status = 'active'"
+            ).fetchone()
+            catalog = json.loads(str(active["catalog_json"]))
+            catalog["timezone"] = "Asia/Taipei"
+            catalog["packages"][0]["name"] = "管理员自定义标准储值包"
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (json.dumps(catalog, ensure_ascii=False), str(active["id"])),
+            )
+            conn.execute(
+                "DELETE FROM admin_config WHERE key = 'commercial_billing_catalog_v5_timezone_shanghai'"
+            )
+            commercial_billing.bootstrap_billing(conn, now=1_700_000_100)
+            upgraded = commercial_billing.get_active_catalog(conn)
+
+        self.assertEqual(commercial_billing.DEFAULT_CATALOG["timezone"], "Asia/Shanghai")
+        self.assertEqual(upgraded["timezone"], "Asia/Shanghai")
+        self.assertEqual(upgraded["packages"][0]["name"], "管理员自定义标准储值包")
+        self.assertGreater(int(upgraded["version"]), int(active["version_number"]))
+
+    def test_catalog_automation_modules_migrate_without_resetting_admin_prices(self):
+        with db_module.db() as conn:
+            active = conn.execute(
+                "SELECT id, version_number, catalog_json FROM billing_catalog_versions WHERE status = 'active'"
+            ).fetchone()
+            catalog = json.loads(str(active["catalog_json"]))
+            catalog.pop("automation_modules", None)
+            catalog["packages"][0]["price_ntd"] = 2100
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (json.dumps(catalog, ensure_ascii=False), str(active["id"])),
+            )
+            conn.execute(
+                "DELETE FROM admin_config WHERE key = 'commercial_billing_catalog_v6_automation_modules'"
+            )
+            commercial_billing.bootstrap_billing(conn, now=1_700_000_200)
+            upgraded = commercial_billing.get_active_catalog(conn)
+
+        self.assertEqual(upgraded["packages"][0]["price_ntd"], 2100)
+        self.assertEqual(
+            [item["key"] for item in upgraded["automation_modules"]],
+            ["social_warmup", "auto_reply_comments", "auto_reply_hot_posts"],
+        )
+        self.assertGreater(int(upgraded["version"]), int(active["version_number"]))
+
+    def test_complete_subscription_details_migrate_without_resetting_admin_prices(self):
+        with db_module.db() as conn:
+            active = conn.execute(
+                "SELECT id, version_number, catalog_json FROM billing_catalog_versions WHERE status = 'active'"
+            ).fetchone()
+            catalog = json.loads(str(active["catalog_json"]))
+            catalog["subscriptions"][0]["price_ntd"] = 6300
+            catalog["subscriptions"][0]["monthly_price_ntd"] = 2100
+            catalog["subscriptions"][0]["features"] = ["旧版简略权益"]
+            if str(catalog["subscription"].get("sku") or "") == str(catalog["subscriptions"][0].get("sku") or ""):
+                catalog["subscription"] = dict(catalog["subscriptions"][0])
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (json.dumps(catalog, ensure_ascii=False), str(active["id"])),
+            )
+            conn.execute(
+                "DELETE FROM admin_config WHERE key = 'commercial_billing_catalog_v7_complete_subscription_details'"
+            )
+            commercial_billing.bootstrap_billing(conn, now=1_700_000_300)
+            upgraded = commercial_billing.get_active_catalog(conn)
+
+        upgraded_plan = next(
+            item for item in upgraded["subscriptions"] if item["sku"] == "vanguard_personal_quarterly"
+        )
+        self.assertEqual(upgraded_plan["price_ntd"], 6300)
+        self.assertEqual(upgraded_plan["monthly_price_ntd"], 2100)
+        self.assertEqual(len(upgraded_plan["features"]), 5)
+        self.assertGreater(int(upgraded["version"]), int(active["version_number"]))
 
     def test_unlimited_compute_never_requires_subscription_or_deducts_points(self):
         now = 1_700_000_000
@@ -255,6 +436,31 @@ class CommercialBillingTests(unittest.TestCase):
     def test_free_accounts_have_no_subscription_based_threads_account_limit(self):
         with db_module.db() as conn:
             self.assertIsNone(commercial_billing.threads_account_limit(conn, self.user_id))
+
+    def test_active_personal_and_enterprise_subscription_account_limits_are_summed(self):
+        now = 1_700_000_000
+        with db_module.db() as conn:
+            for sku in ("vanguard_personal_quarterly", "vanguard_enterprise_quarterly"):
+                order = commercial_billing.create_order(
+                    conn,
+                    user_id=self.user_id,
+                    sku=sku,
+                    quantity=1,
+                    idempotency_key=f"account-limit-{sku}",
+                    now=now,
+                )
+                commercial_billing.approve_order(
+                    conn,
+                    order["id"],
+                    actor_user_id=self.admin_id,
+                    now=now,
+                )
+            self.assertEqual(
+                commercial_billing.threads_account_limit(conn, self.user_id, now=now),
+                4,
+            )
+            summary = commercial_billing.billing_summary(conn, self.user_id, now=now)
+        self.assertEqual(summary["threads_account_limit"], 4)
 
     def test_disabling_unlimited_compute_restores_normal_balance_checks(self):
         now = 1_700_000_000
@@ -317,7 +523,7 @@ class CommercialBillingTests(unittest.TestCase):
         self.assertEqual(summary["billing_mode"], "enforced")
         self.assertTrue(summary["subscription_active"])
         self.assertEqual(summary["points"], 12)
-        self.assertIsNone(summary["threads_account_limit"])
+        self.assertEqual(summary["threads_account_limit"], 3)
         self.assertIsNotNone(marker)
 
     def test_subscription_approval_enables_enforcement_and_monthly_images(self):
@@ -327,8 +533,86 @@ class CommercialBillingTests(unittest.TestCase):
             summary = commercial_billing.billing_summary(conn, self.user_id, now=now)
         self.assertEqual(summary["billing_mode"], "enforced")
         self.assertTrue(summary["subscription_active"])
-        self.assertIsNone(summary["threads_account_limit"])
+        self.assertEqual(summary["threads_account_limit"], 3)
         self.assertEqual(summary["free_images"]["monthly_remaining"], 10)
+
+    def test_legacy_enterprise_subscription_can_renew_into_official_term(self):
+        now = 1_700_000_000
+        with db_module.db() as conn:
+            subscription_id = "legacy-enterprise-subscription"
+            conn.execute(
+                "INSERT INTO billing_subscriptions(id, user_id, plan_sku, status, current_period_end, created_at, updated_at) "
+                "VALUES (?, ?, 'vanguard_monthly', 'active', ?, ?, ?)",
+                (subscription_id, self.user_id, commercial_billing.add_calendar_month(now), now, now),
+            )
+            conn.execute(
+                "INSERT INTO billing_subscription_periods(id, subscription_id, user_id, source_order_id, start_at, end_at, status, created_at) "
+                "VALUES ('legacy-enterprise-period', ?, ?, 'legacy-order', ?, ?, 'active', ?)",
+                (subscription_id, self.user_id, now, commercial_billing.add_calendar_month(now), now),
+            )
+            order = commercial_billing.create_order(
+                conn,
+                user_id=self.user_id,
+                sku="vanguard_enterprise_annual",
+                quantity=1,
+                renewal_subscription_ids=[subscription_id],
+                idempotency_key="legacy-enterprise-renewal",
+                now=now,
+            )
+            commercial_billing.approve_order(
+                conn,
+                order["id"],
+                actor_user_id=self.admin_id,
+                now=now,
+            )
+            updated = conn.execute(
+                "SELECT plan_sku FROM billing_subscriptions WHERE id = ?",
+                (subscription_id,),
+            ).fetchone()
+        self.assertEqual(str(updated["plan_sku"]), "vanguard_enterprise_annual")
+
+    def test_subscription_can_switch_term_within_family_but_not_between_families(self):
+        now = 1_700_000_000
+        with db_module.db() as conn:
+            original = commercial_billing.create_order(
+                conn,
+                user_id=self.user_id,
+                sku="vanguard_personal_quarterly",
+                quantity=1,
+                idempotency_key="personal-quarterly-original",
+                now=now,
+            )
+            commercial_billing.approve_order(
+                conn,
+                original["id"],
+                actor_user_id=self.admin_id,
+                now=now,
+            )
+            subscription = conn.execute(
+                "SELECT id FROM billing_subscriptions WHERE user_id = ?",
+                (self.user_id,),
+            ).fetchone()
+            switched = commercial_billing.create_order(
+                conn,
+                user_id=self.user_id,
+                sku="vanguard_personal_annual",
+                quantity=1,
+                renewal_subscription_ids=[str(subscription["id"])],
+                idempotency_key="personal-annual-switch",
+                now=now + 1,
+            )
+            self.assertEqual(switched["sku"], "vanguard_personal_annual")
+            with self.assertRaises(commercial_billing.BillingError) as raised:
+                commercial_billing.create_order(
+                    conn,
+                    user_id=self.user_id,
+                    sku="vanguard_enterprise_quarterly",
+                    quantity=1,
+                    renewal_subscription_ids=[str(subscription["id"])],
+                    idempotency_key="personal-to-enterprise-switch",
+                    now=now + 2,
+                )
+        self.assertEqual(raised.exception.code, "SUBSCRIPTION_PLAN_MISMATCH")
 
     def test_credit_pack_approval_is_idempotent(self):
         self._approve_credit_pack("credits_530")
@@ -341,7 +625,7 @@ class CommercialBillingTests(unittest.TestCase):
     def test_order_idempotency_key_is_bound_to_immutable_request_fields(self):
         request = {
             "user_id": self.user_id,
-            "sku": "credits_100",
+            "sku": "credits_200",
             "quantity": 1,
             "idempotency_key": "immutable-order-request",
             "renewal_subscription_ids": [],
@@ -594,7 +878,7 @@ class CommercialBillingTests(unittest.TestCase):
             points_order = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="credits_100",
+                sku="credits_200",
                 quantity=1,
                 idempotency_key="refund-consumed-points",
                 now=now,
@@ -673,7 +957,7 @@ class CommercialBillingTests(unittest.TestCase):
             original = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="vanguard_monthly",
+                sku="vanguard_enterprise_quarterly",
                 quantity=1,
                 idempotency_key="subscription-original",
                 now=now,
@@ -693,7 +977,7 @@ class CommercialBillingTests(unittest.TestCase):
             renewal = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="vanguard_monthly",
+                sku="vanguard_enterprise_quarterly",
                 quantity=1,
                 renewal_subscription_ids=[str(subscription["id"])],
                 idempotency_key="subscription-renewal-refund",
@@ -740,7 +1024,14 @@ class CommercialBillingTests(unittest.TestCase):
         self.assertEqual(summary["free_images"]["monthly_remaining"], 10)
         self.assertEqual(
             [(str(row["source_order_id"]), str(row["status"])) for row in periods],
-            [(original["id"], "active"), (renewal["id"], "cancelled")],
+            [
+                (original["id"], "active"),
+                (original["id"], "scheduled"),
+                (original["id"], "scheduled"),
+                (renewal["id"], "cancelled"),
+                (renewal["id"], "cancelled"),
+                (renewal["id"], "cancelled"),
+            ],
         )
         self.assertEqual(str(subscription_after["status"]), "active")
         self.assertEqual(
@@ -804,7 +1095,7 @@ class CommercialBillingTests(unittest.TestCase):
             order = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="vanguard_monthly",
+                sku="vanguard_enterprise_quarterly",
                 quantity=1,
                 idempotency_key="subscription-with-held-image",
                 now=now,
@@ -888,7 +1179,7 @@ class CommercialBillingTests(unittest.TestCase):
                 order = commercial_billing.create_order(
                     conn,
                     user_id=self.user_id,
-                    sku="credits_100",
+                    sku="credits_200",
                     quantity=1,
                     idempotency_key=f"pagination-order-{index}",
                     now=1_700_000_100 + index,
@@ -1012,7 +1303,7 @@ class CommercialBillingTests(unittest.TestCase):
             summary = commercial_billing.billing_summary(conn, self.user_id, now=now + 7)
         self.assertEqual(released, released_again)
         self.assertEqual(released["status"], "released")
-        self.assertEqual(summary["points"], 99.4)
+        self.assertEqual(summary["points"], 199.4)
 
     def test_image_reservation_consumes_expiring_grant_then_points(self):
         now = 1_700_000_000
@@ -1030,12 +1321,12 @@ class CommercialBillingTests(unittest.TestCase):
                 now=now + 2,
             )
             self.assertEqual(held["reserved_images"], 10)
-            self.assertEqual(held["reserved_points"], 1.2)
+            self.assertEqual(held["reserved_points"], 4)
             settled = commercial_billing.settle_reservation(conn, held["id"], actual_quantity=11, now=now + 3)
             summary = commercial_billing.billing_summary(conn, self.user_id, now=now + 3)
         self.assertEqual(settled["free_images_used"], 10)
-        self.assertEqual(settled["charged_points"], 0.6)
-        self.assertEqual(summary["points"], 99.4)
+        self.assertEqual(settled["charged_points"], 2)
+        self.assertEqual(summary["points"], 198)
         self.assertEqual(summary["free_images"]["monthly_remaining"], 0)
 
     def test_insufficient_points_rolls_back_free_image_holds(self):
@@ -1092,10 +1383,10 @@ class CommercialBillingTests(unittest.TestCase):
                 sku="threads_text_publish",
             )
         self.assertEqual(claimed["status"], "held")
-        self.assertEqual(claimed["reserved_points"], 0.1)
+        self.assertEqual(claimed["reserved_points"], 0)
         self.assertEqual(len({item["id"] for item in reservations}), 3)
 
-    def test_early_renewal_quantity_extends_one_subscription_month_by_month(self):
+    def test_early_renewal_quantity_extends_one_subscription_quarter_by_quarter(self):
         now = 1_700_000_000
         self._approve_subscription(now=now)
         with db_module.db() as conn:
@@ -1107,7 +1398,7 @@ class CommercialBillingTests(unittest.TestCase):
             order = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="vanguard_monthly",
+                sku="vanguard_enterprise_quarterly",
                 quantity=2,
                 renewal_subscription_ids=[str(subscription["id"])],
                 idempotency_key="renew-one-subscription-two-months",
@@ -1127,10 +1418,11 @@ class CommercialBillingTests(unittest.TestCase):
                 "SELECT start_at, end_at FROM billing_subscription_periods WHERE subscription_id = ? ORDER BY start_at",
                 (str(subscription["id"]),),
             ).fetchall()
-        self.assertEqual(len(periods), 3)
-        self.assertEqual(int(periods[1]["start_at"]), first_end)
-        self.assertEqual(int(periods[2]["start_at"]), int(periods[1]["end_at"]))
-        self.assertEqual(int(renewed["current_period_end"]), int(periods[2]["end_at"]))
+        self.assertEqual(len(periods), 9)
+        self.assertEqual(int(periods[3]["start_at"]), first_end)
+        for index in range(4, len(periods)):
+            self.assertEqual(int(periods[index]["start_at"]), int(periods[index - 1]["end_at"]))
+        self.assertEqual(int(renewed["current_period_end"]), int(periods[-1]["end_at"]))
 
     def test_concurrent_release_refunds_only_once(self):
         now = 1_700_000_000
@@ -1169,7 +1461,7 @@ class CommercialBillingTests(unittest.TestCase):
                 "SELECT COUNT(*) AS c FROM billing_ledger WHERE reservation_id = ? AND event_type = 'release'",
                 (held["id"],),
             ).fetchone()
-        self.assertEqual(summary["points"], 100)
+        self.assertEqual(summary["points"], 200)
         self.assertEqual(int(release_entries["c"]), 1)
 
     def test_legacy_balance_migration_reports_negative_accounts_for_review(self):
@@ -1198,7 +1490,7 @@ class CommercialBillingTests(unittest.TestCase):
             order = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="credits_100",
+                sku="credits_200",
                 quantity=1,
                 idempotency_key="catalog-snapshot-order",
                 now=300,
@@ -1210,7 +1502,7 @@ class CommercialBillingTests(unittest.TestCase):
             )
             catalog = dict(draft["catalog"])
             catalog["packages"] = [dict(item) for item in catalog["packages"]]
-            catalog["packages"][0]["price_ntd"] = 1200
+            catalog["packages"][0]["price_ntd"] = 2500
             commercial_billing.update_catalog_draft(
                 conn,
                 draft["id"],
@@ -1224,8 +1516,8 @@ class CommercialBillingTests(unittest.TestCase):
                 actor_user_id=self.admin_id,
                 now=303,
             )
-        self.assertEqual(approved["amount_ntd_cents"], 100000)
-        self.assertEqual(approved["price_snapshot"]["item"]["price_ntd"], 1000)
+        self.assertEqual(approved["amount_ntd_cents"], 200000)
+        self.assertEqual(approved["price_snapshot"]["item"]["price_ntd"], 2000)
 
 
 if __name__ == "__main__":

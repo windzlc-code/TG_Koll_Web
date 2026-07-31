@@ -10,6 +10,7 @@
   const NOTIFICATION_STORAGE_KEY = "vecto-notifications-updated";
   const NOTIFICATION_POLL_MS = 15000;
   const GOOGLE_AUTH_FEEDBACK_STORAGE_KEY = "vecto-google-auth-feedback-pending";
+  const AUTH_SESSION_STORAGE_KEY = "vecto-auth-session-changed";
   const ADMIN_WORKSPACE_STORAGE_KEY = "vecto-admin-workspace-user-id";
   const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context";
   const DEFAULT_LANGUAGE = document.documentElement.lang === "zh-Hant" ? "zh-Hant" : "zh-Hans";
@@ -51,6 +52,7 @@
       brandLocal: "维拓 / 维图",
       homeLabel: "Vecto 首页",
       navigationLabel: "站内导航",
+      closeNavigation: "关闭导航",
       menu: "导航",
       skip: "跳至主要内容",
       solution: "解决方案",
@@ -91,6 +93,10 @@
       billingView: "查看详情",
       accountSettings: "账户设置",
       personalProfile: "个人信息",
+      taskQueue: "任务队列",
+      settings: "设置",
+      workspaceActions: "控制台快捷操作",
+      close: "关闭",
       billingPoints: "算力余额",
       billingSubscription: "当前订阅",
       billingImages: "图片额度",
@@ -123,16 +129,29 @@
       notificationEmpty: "暂无消息",
       notificationLoading: "正在读取消息…",
       notificationUnread: "新消息",
+      notificationItemUnit: "条",
       notificationMarkAllRead: "全部已读",
       notificationBroadcast: "重要通知",
       notificationDetail: "消息详情",
       notificationAction: "查看详情",
       notificationConfirm: "确定",
+      notificationWelcomeTitle: "欢迎使用 Vecto 控制台",
+      notificationWelcomeBody: "任务状态、账号安全和系统维护提醒会集中显示在这里。",
+      authNightGreeting: "夜深了", authNightLogin: "忙完也别忘了好好休息。", authNightLogout: "夜深了，早点休息，明天见。",
+      authEarlyGreeting: "早上好", authEarlyLogin: "新的一天开始了，愿你今天的内容运营一切顺利。", authEarlyLogout: "祝你今天一切顺利，稍后见。",
+      authMorningGreeting: "上午好", authMorningLogin: "节奏正好，愿今天的每一步都稳稳推进。", authMorningLogout: "祝你接下来的安排顺利，稍后见。",
+      authNoonGreeting: "中午好", authNoonLogin: "忙碌之余也记得补充能量，再继续向前。", authNoonLogout: "好好休息一下，稍后见。",
+      authAfternoonGreeting: "下午好", authAfternoonLogin: "下午的节奏正好，继续把想法落到实处。", authAfternoonLogout: "愿你接下来的时间从容顺利，稍后见。",
+      authEveningGreeting: "晚上好", authEveningLogin: "辛苦了，愿今晚的努力都有收获。", authEveningLogout: "辛苦了，今晚也请好好放松。",
+      loginSuccess: "登录成功", logoutSuccess: "退出成功", operationComplete: "操作完成", know: "知道了", startUsing: "开始使用",
+      googleAuthComplete: "Google 授权验证已完成。", logoutConfirmTitle: "确认退出登录", logoutConfirmMessage: "退出后需要重新登录才能继续使用。",
+      logoutCancel: "暂不退出", logoutIncomplete: "退出未完成",
     },
     "zh-Hant": {
       brandLocal: "維拓 / 維圖",
       homeLabel: "Vecto 首頁",
       navigationLabel: "站內導覽",
+      closeNavigation: "關閉導覽",
       menu: "導覽",
       skip: "跳至主要內容",
       solution: "解決方案",
@@ -173,6 +192,10 @@
       billingView: "查看詳情",
       accountSettings: "帳戶設定",
       personalProfile: "個人資訊",
+      taskQueue: "任務佇列",
+      settings: "設定",
+      workspaceActions: "控制台快速操作",
+      close: "關閉",
       billingPoints: "算力餘額",
       billingSubscription: "目前訂閱",
       billingImages: "圖片額度",
@@ -205,11 +228,23 @@
       notificationEmpty: "暫無消息",
       notificationLoading: "正在讀取消息…",
       notificationUnread: "新消息",
+      notificationItemUnit: "條",
       notificationMarkAllRead: "全部已讀",
       notificationBroadcast: "重要通知",
       notificationDetail: "消息詳情",
       notificationAction: "查看詳情",
       notificationConfirm: "確定",
+      notificationWelcomeTitle: "歡迎使用 Vecto 控制台",
+      notificationWelcomeBody: "任務狀態、帳號安全和系統維護提醒會集中顯示在這裡。",
+      authNightGreeting: "夜深了", authNightLogin: "忙完也別忘了好好休息。", authNightLogout: "夜深了，早點休息，明天見。",
+      authEarlyGreeting: "早安", authEarlyLogin: "新的一天開始了，願你今天的內容營運一切順利。", authEarlyLogout: "祝你今天一切順利，稍後見。",
+      authMorningGreeting: "上午好", authMorningLogin: "節奏正好，願今天的每一步都穩穩推進。", authMorningLogout: "祝你接下來的安排順利，稍後見。",
+      authNoonGreeting: "中午好", authNoonLogin: "忙碌之餘也記得補充能量，再繼續向前。", authNoonLogout: "好好休息一下，稍後見。",
+      authAfternoonGreeting: "下午好", authAfternoonLogin: "下午的節奏正好，繼續把想法落到實處。", authAfternoonLogout: "願你接下來的時間從容順利，稍後見。",
+      authEveningGreeting: "晚上好", authEveningLogin: "辛苦了，願今晚的努力都有收穫。", authEveningLogout: "辛苦了，今晚也請好好放鬆。",
+      loginSuccess: "登入成功", logoutSuccess: "退出成功", operationComplete: "操作完成", know: "知道了", startUsing: "開始使用",
+      googleAuthComplete: "Google 授權驗證已完成。", logoutConfirmTitle: "確認退出登入", logoutConfirmMessage: "退出後需要重新登入才能繼續使用。",
+      logoutCancel: "暫不退出", logoutIncomplete: "退出未完成",
     },
   };
 
@@ -456,6 +491,20 @@
     return `<svg class="site-language-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9S14.4 18.5 12 21M12 3C9.6 5.5 8.4 8.5 8.4 12s1.2 6.5 3.6 9"></path></svg><span class="site-language-state" data-site-language-state></span>`;
   }
 
+  function languageMenuMarkup() {
+    return `<div class="site-language-menu" data-site-language-menu>
+      <button id="languageToggle" class="site-icon-button site-language-button" type="button" aria-controls="siteLanguagePopover" aria-haspopup="menu" aria-expanded="false" data-site-language-toggle>${languageIcon()}</button>
+      <div id="siteLanguagePopover" class="site-language-popover" data-site-language-popover hidden role="menu">
+        <button type="button" role="menuitemradio" data-site-language-option="zh-Hans"><span data-site-language-option-label="zh-Hans"></span></button>
+        <button type="button" role="menuitemradio" data-site-language-option="zh-Hant"><span data-site-language-option-label="zh-Hant"></span></button>
+      </div>
+    </div>`;
+  }
+
+  function languageControlsMarkup() {
+    return `<div class="site-global-controls" data-site-global-controls>${languageMenuMarkup()}</div>`;
+  }
+
   function subscriptionIcon() {
     return `<svg class="site-subscription-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z"></path><path d="M4 9h16M8 14h3"></path><path d="m17.5 12.5.7 1.4 1.6.2-1.2 1.1.3 1.6-1.4-.8-1.4.8.3-1.6-1.2-1.1 1.6-.2z"></path></svg>`;
   }
@@ -538,19 +587,10 @@
     node.innerHTML = accountIcon(className);
   }
 
-  function accountPreferencesMarkup(page = "console") {
-    return `<div class="site-account-preferences" data-site-personal-controls>
-      <span class="site-account-section-label" data-site-copy="personalSettings"></span>
-      <button id="languageToggle" class="site-account-preference" type="button" data-site-language-toggle>
-        <span class="site-account-preference-icon" aria-hidden="true">${languageIcon()}</span>
-      </button>
-    </div>`;
-  }
-
   function accountMenuMarkup(page = "console") {
-    const workspaceActions = `<div class="site-account-action-row site-account-workspace-actions" aria-label="控制台快捷操作">
-          <button type="button" data-site-open-console-view="tasks">任务队列</button>
-          <button type="button" data-site-open-console-view="console_settings">设置</button>
+    const workspaceActions = `<div class="site-account-action-row site-account-workspace-actions" aria-label="控制台快捷操作" data-site-workspace-actions>
+          <button type="button" data-site-open-console-view="tasks" data-site-copy="taskQueue">任务队列</button>
+          <button type="button" data-site-open-console-view="console_settings" data-site-copy="personalSettings">个人设置</button>
         </div>`;
     return `<div class="site-account-menu" data-site-account-menu>
       <button class="site-user" type="button" aria-controls="siteAccountPopover" aria-haspopup="dialog" aria-expanded="false" data-site-user-title data-site-account-trigger>
@@ -602,7 +642,6 @@
           </div>
         </section>
         ${workspaceActions}
-        ${accountPreferencesMarkup(page)}
         <div class="site-account-footer">
           <button class="site-account-logout" type="button" data-site-account-logout><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 8l4 4-4 4M18 12H9"></path></svg><span data-site-copy="logout"></span></button>
           <span class="site-account-message" role="status" aria-live="polite" data-site-account-message></span>
@@ -660,9 +699,9 @@
   }
 
   function renderActions(mode, page, current) {
-    const controls = `<div class="site-global-controls" data-site-global-controls><button id="languageToggle" class="site-icon-button site-language-button" type="button" data-site-language-toggle>${languageIcon()}</button></div>`;
+    const controls = languageControlsMarkup();
     if (mode === "authenticated") {
-      return `${subscriptionControl(page)}${notificationMenuMarkup()}${accountMenuMarkup(page)}`;
+      return `${subscriptionControl(page)}${controls}${notificationMenuMarkup()}${accountMenuMarkup(page)}`;
     }
     return `${subscriptionControl(page)}${controls}<button class="header-login" type="button" data-open-login><span data-site-copy="login"></span></button>`;
   }
@@ -688,6 +727,23 @@
     if (existingMenu) existingMenu.replaceWith(nextMenu);
     else actions.appendChild(nextMenu);
     return nextMenu;
+  }
+
+  function installLanguageControls(header) {
+    const actions = header?.querySelector(".header-actions");
+    if (!actions) return null;
+    const template = document.createElement("template");
+    template.innerHTML = languageControlsMarkup().trim();
+    const nextControls = template.content.firstElementChild;
+    if (!nextControls) return null;
+    const existingControls = actions.querySelector(":scope > [data-site-global-controls]");
+    if (existingControls) existingControls.replaceWith(nextControls);
+    else {
+      const insertBefore = actions.querySelector("[data-site-notification-menu], [data-site-account-menu], [data-open-login]");
+      if (insertBefore) insertBefore.before(nextControls);
+      else actions.appendChild(nextControls);
+    }
+    return nextControls;
   }
 
   function mountAccountMenu(host, { page = "home" } = {}) {
@@ -956,6 +1012,24 @@
     if (shouldRestoreFocus) trigger.focus({ preventScroll: true });
   }
 
+  function setLanguageMenuOpen(menu, open, { restoreFocus = false } = {}) {
+    if (!menu) return;
+    const trigger = menu.querySelector("[data-site-language-toggle]");
+    const popover = menu.querySelector("[data-site-language-popover]");
+    if (!trigger || !popover) return;
+    const nextOpen = Boolean(open);
+    const shouldRestoreFocus = !nextOpen && restoreFocus && popover.contains(document.activeElement);
+    trigger.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+    popover.hidden = !nextOpen;
+    menu.classList.toggle("is-open", nextOpen);
+    if (nextOpen) {
+      document.querySelectorAll("[data-site-mobile-menu].is-open").forEach((mobileMenu) => setMobileMenuOpen(mobileMenu, false));
+      document.querySelectorAll("[data-site-account-menu].is-open").forEach((accountMenu) => setAccountMenuOpen(accountMenu, false));
+      document.querySelectorAll("[data-site-notification-menu].is-open").forEach((notificationMenu) => setNotificationMenuOpen(notificationMenu, false));
+    }
+    if (shouldRestoreFocus) trigger.focus({ preventScroll: true });
+  }
+
   function accountRoleLabel(account, labels) {
     if (account?.acting_admin) return labels.accountManagedRole;
     return account?.is_admin ? labels.accountAdminRole : labels.accountRole;
@@ -1150,6 +1224,17 @@
     }[category] || labels.notificationSystem;
   }
 
+  function localizedNotificationText(item, field, labels) {
+    const value = String(item?.[field] || "");
+    if (field === "title" && value === copy["zh-Hans"].notificationWelcomeTitle) {
+      return labels.notificationWelcomeTitle;
+    }
+    if (field === "body" && value === copy["zh-Hans"].notificationWelcomeBody) {
+      return labels.notificationWelcomeBody;
+    }
+    return value;
+  }
+
   function notificationAnnounceKey(item) {
     return `vecto-notification-announced:${notificationState.identityKey || "user"}:${notificationNumber(item?.id)}`;
   }
@@ -1163,7 +1248,9 @@
     card.tabIndex = 0;
     card.setAttribute("role", "button");
     card.setAttribute("aria-haspopup", "dialog");
-    card.setAttribute("aria-label", `${labels.notificationAction}：${String(item.title || labels.notificationCenter)}`);
+    const localizedTitle = localizedNotificationText(item, "title", labels) || labels.notificationCenter;
+    const localizedBody = localizedNotificationText(item, "body", labels);
+    card.setAttribute("aria-label", `${labels.notificationAction}：${localizedTitle}`);
 
     const meta = document.createElement("div");
     meta.className = "site-notification-item-meta";
@@ -1175,10 +1262,10 @@
 
     const title = document.createElement("strong");
     title.className = "site-notification-item-title";
-    title.textContent = String(item.title || labels.notificationCenter);
+    title.textContent = localizedTitle;
     const body = document.createElement("p");
     body.className = "site-notification-item-body";
-    body.textContent = String(item.body || "");
+    body.textContent = localizedBody;
     card.append(meta, title);
     if (body.textContent) card.append(body);
 
@@ -1212,7 +1299,7 @@
     document.querySelectorAll("[data-site-notification-trigger]").forEach((button) => {
       button.title = labels.notificationCenter;
       button.setAttribute("aria-label", totalUnread
-        ? `${labels.notificationCenter}，${totalUnread} 条${labels.notificationUnread}`
+        ? `${labels.notificationCenter}，${totalUnread} ${labels.notificationItemUnit}${labels.notificationUnread}`
         : labels.notificationCenter);
     });
     document.querySelectorAll("[data-site-notification-badge]").forEach((badge) => {
@@ -1275,52 +1362,54 @@
   }
 
   function authFeedbackCopyByTime(kind = "login", now = new Date()) {
+    const labels = copy[currentLanguage()];
     const hour = Number(now?.getHours?.());
     const currentHour = Number.isFinite(hour) ? hour : new Date().getHours();
-    let greeting = "夜深了";
-    let loginMessage = "忙完也别忘了好好休息。";
-    let logoutMessage = "夜深了，早点休息，明天见。";
+    let greeting = labels.authNightGreeting;
+    let loginMessage = labels.authNightLogin;
+    let logoutMessage = labels.authNightLogout;
 
     if (currentHour >= 5 && currentHour < 10) {
-      greeting = "早上好";
-      loginMessage = "新的一天开始了，愿你今天的内容运营一切顺利。";
-      logoutMessage = "祝你今天一切顺利，稍后见。";
+      greeting = labels.authEarlyGreeting;
+      loginMessage = labels.authEarlyLogin;
+      logoutMessage = labels.authEarlyLogout;
     } else if (currentHour >= 10 && currentHour < 12) {
-      greeting = "上午好";
-      loginMessage = "节奏正好，愿今天的每一步都稳稳推进。";
-      logoutMessage = "祝你接下来的安排顺利，稍后见。";
+      greeting = labels.authMorningGreeting;
+      loginMessage = labels.authMorningLogin;
+      logoutMessage = labels.authMorningLogout;
     } else if (currentHour >= 12 && currentHour < 14) {
-      greeting = "中午好";
-      loginMessage = "忙碌之余也记得补充能量，再继续向前。";
-      logoutMessage = "好好休息一下，稍后见。";
+      greeting = labels.authNoonGreeting;
+      loginMessage = labels.authNoonLogin;
+      logoutMessage = labels.authNoonLogout;
     } else if (currentHour >= 14 && currentHour < 18) {
-      greeting = "下午好";
-      loginMessage = "下午的节奏正好，继续把想法落到实处。";
-      logoutMessage = "愿你接下来的时间从容顺利，稍后见。";
+      greeting = labels.authAfternoonGreeting;
+      loginMessage = labels.authAfternoonLogin;
+      logoutMessage = labels.authAfternoonLogout;
     } else if (currentHour >= 18 && currentHour < 23) {
-      greeting = "晚上好";
-      loginMessage = "辛苦了，愿今晚的努力都有收获。";
-      logoutMessage = "辛苦了，今晚也请好好放松。";
+      greeting = labels.authEveningGreeting;
+      loginMessage = labels.authEveningLogin;
+      logoutMessage = labels.authEveningLogout;
     }
 
     const isLogout = kind === "logout";
     return {
       kind: isLogout ? "logout" : "success",
-      title: `${isLogout ? "退出成功" : "登录成功"}，${greeting}`,
+      title: `${isLogout ? labels.logoutSuccess : labels.loginSuccess}，${greeting}`,
       message: isLogout ? logoutMessage : loginMessage,
-      actionText: isLogout ? "知道了" : "开始使用",
+      actionText: isLogout ? labels.know : labels.startUsing,
     };
   }
 
   function showAuthFeedback({
     kind = "success",
-    title = "操作完成",
+    title = "",
     message = "",
-    actionText = "知道了",
+    actionText = undefined,
     contentHtml = "",
     dialogClass = "",
     onOpen = null,
   } = {}) {
+    const labels = copy[currentLanguage()];
     document.querySelectorAll("[data-site-auth-feedback]").forEach((node) => {
       node.dispatchEvent(new CustomEvent("site-auth-feedback-dismiss"));
     });
@@ -1331,14 +1420,14 @@
       modal.innerHTML = `<section class="site-auth-feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="siteAuthFeedbackTitle">
         <div class="site-auth-feedback-icon">${authFeedbackIcon(kind)}</div>
         <div class="site-auth-feedback-copy"><strong id="siteAuthFeedbackTitle"></strong><p></p></div>
-        <button type="button" class="site-auth-feedback-close" aria-label="关闭">${closeIcon()}</button>
+        <button type="button" class="site-auth-feedback-close" aria-label="${labels.close}">${closeIcon()}</button>
         ${contentHtml ? `<div class="site-auth-feedback-content">${contentHtml}</div>` : ""}
         ${actionText === false ? "" : '<button type="button" class="site-auth-feedback-confirm"></button>'}
       </section>`;
-      modal.querySelector("strong").textContent = String(title || "操作完成");
+      modal.querySelector("strong").textContent = String(title || labels.operationComplete);
       modal.querySelector("p").textContent = String(message || "");
       const confirm = modal.querySelector(".site-auth-feedback-confirm");
-      if (confirm) confirm.textContent = String(actionText || "知道了");
+      if (confirm) confirm.textContent = String(actionText || labels.know);
       let settled = false;
       const close = (immediate = false) => {
         if (settled) return;
@@ -1370,18 +1459,20 @@
     if (googleAuthFeedbackShowing || !currentAccount || currentSessionMode === "guest") return null;
     if (sessionValue(GOOGLE_AUTH_FEEDBACK_STORAGE_KEY) !== "1") return null;
     removeSessionValue(GOOGLE_AUTH_FEEDBACK_STORAGE_KEY);
+    announceAuthSessionChange("google-login");
     googleAuthFeedbackShowing = true;
     const feedback = authFeedbackCopyByTime("login");
     return showAuthFeedback({
       ...feedback,
       title: `Google ${feedback.title}`,
-      message: `Google 授权验证已完成。${feedback.message}`,
+      message: `${copy[currentLanguage()].googleAuthComplete}${feedback.message}`,
     }).finally(() => {
       googleAuthFeedbackShowing = false;
     });
   }
 
   function confirmLogout() {
+    const labels = copy[currentLanguage()];
     document.querySelectorAll("[data-site-auth-feedback]").forEach((node) => {
       node.dispatchEvent(new CustomEvent("site-auth-feedback-dismiss"));
     });
@@ -1391,11 +1482,11 @@
       modal.dataset.siteAuthFeedback = "true";
       modal.innerHTML = `<section class="site-auth-feedback-dialog" role="alertdialog" aria-modal="true" aria-labelledby="siteLogoutConfirmTitle" aria-describedby="siteLogoutConfirmMessage">
         <div class="site-auth-feedback-icon">${authFeedbackIcon("logout")}</div>
-        <div class="site-auth-feedback-copy"><strong id="siteLogoutConfirmTitle">确认退出登录</strong><p id="siteLogoutConfirmMessage">退出后需要重新登录才能继续使用。</p></div>
-        <button type="button" class="site-auth-feedback-close" aria-label="关闭">${closeIcon()}</button>
+        <div class="site-auth-feedback-copy"><strong id="siteLogoutConfirmTitle">${labels.logoutConfirmTitle}</strong><p id="siteLogoutConfirmMessage">${labels.logoutConfirmMessage}</p></div>
+        <button type="button" class="site-auth-feedback-close" aria-label="${labels.close}">${closeIcon()}</button>
         <div class="site-auth-feedback-actions">
-          <button type="button" class="site-auth-feedback-cancel">暂不退出</button>
-          <button type="button" class="site-auth-feedback-confirm is-danger">退出登录</button>
+          <button type="button" class="site-auth-feedback-cancel">${labels.logoutCancel}</button>
+          <button type="button" class="site-auth-feedback-confirm is-danger">${labels.logout}</button>
         </div>
       </section>`;
       let settled = false;
@@ -1445,8 +1536,8 @@
     overlay.querySelector(".site-notification-broadcast-head strong").textContent = announcement
       ? labels.notificationBroadcast
       : labels.notificationDetail;
-    overlay.querySelector("h2").textContent = String(item.title || labels.notificationCenter);
-    overlay.querySelector("p").textContent = String(item.body || "");
+    overlay.querySelector("h2").textContent = localizedNotificationText(item, "title", labels) || labels.notificationCenter;
+    overlay.querySelector("p").textContent = localizedNotificationText(item, "body", labels);
     const actions = overlay.querySelector(".site-notification-broadcast-actions");
     const actionUrl = safeNotificationActionUrl(item.action?.url);
     if (actionUrl) {
@@ -1714,6 +1805,7 @@
         throw new Error(data?.detail || copy[currentLanguage()].logoutFailed);
       }
       await showAuthFeedback(authFeedbackCopyByTime("logout"));
+      announceAuthSessionChange("logout");
       setAccount(null);
       if (currentSessionMode === "admin") clearAdminConsoleContext();
       currentSessionMode = "guest";
@@ -1721,15 +1813,35 @@
     } catch (error) {
       const message = error?.message || copy[currentLanguage()].logoutFailed;
       setLogoutPending(false, message);
-      await showAuthFeedback({ kind: "error", title: "退出未完成", message });
+      await showAuthFeedback({ kind: "error", title: copy[currentLanguage()].logoutIncomplete, message });
     }
   }
 
+  function announceAuthSessionChange(action = "updated") {
+    try {
+      localStorage.setItem(
+        AUTH_SESSION_STORAGE_KEY,
+        JSON.stringify({ action: String(action || "updated"), at: Date.now() }),
+      );
+    } catch {}
+  }
+
   function bindPreferenceControls(root) {
-    root.querySelectorAll("[data-site-language-toggle]").forEach((button) => {
-      if (button.dataset.sitePreferenceReady === "true") return;
-      button.dataset.sitePreferenceReady = "true";
-      button.addEventListener("click", () => setLanguage(currentLanguage() === "zh-Hant" ? "zh-Hans" : "zh-Hant"));
+    root.querySelectorAll("[data-site-language-menu]").forEach((menu) => {
+      if (menu.dataset.sitePreferenceReady === "true") return;
+      menu.dataset.sitePreferenceReady = "true";
+      const trigger = menu.querySelector("[data-site-language-toggle]");
+      trigger?.addEventListener("click", () => {
+        setLanguageMenuOpen(menu, trigger.getAttribute("aria-expanded") !== "true", { restoreFocus: true });
+      });
+      menu.querySelectorAll("[data-site-language-option]").forEach((option) => {
+        option.addEventListener("click", () => {
+          const language = String(option.dataset.siteLanguageOption || "");
+          if (!copy[language]) return;
+          setLanguage(language);
+          setLanguageMenuOpen(menu, false, { restoreFocus: true });
+        });
+      });
     });
   }
 
@@ -1892,7 +2004,7 @@
     const actions = header.querySelector(".header-actions");
     if (!actions) return;
     actions.querySelectorAll("[data-open-login]").forEach((node) => node.remove());
-    actions.querySelectorAll(":scope > .site-global-controls").forEach((node) => node.remove());
+    installLanguageControls(header);
     installUnifiedAccountMenu(header, header.dataset.sitePage || "home");
     installUnifiedNotificationMenu(header);
     header.dataset.siteAuthState = "authenticated";
@@ -1907,6 +2019,7 @@
   function showGuestAccount(header) {
     if (!header || header.dataset.siteMode !== "public") return;
     header.querySelectorAll("[data-site-notification-menu]").forEach((node) => node.remove());
+    installLanguageControls(header);
     header.dataset.siteAuthState = "guest";
     currentSessionMode = "guest";
     setAccount(null);
@@ -2039,6 +2152,7 @@
       header.innerHTML = fallbackMarkup(page, resolvedMode, current);
     }
     installMobileMenu(header, page, current);
+    installLanguageControls(header);
     if (mode === "authenticated") {
       installUnifiedAccountMenu(header, page);
       installUnifiedNotificationMenu(header);
@@ -2066,7 +2180,9 @@
     });
     document.querySelectorAll("[data-site-home-label]").forEach((node) => node.setAttribute("aria-label", labels.homeLabel));
     document.querySelectorAll("[data-site-navigation]").forEach((node) => node.setAttribute("aria-label", labels.navigationLabel));
-    document.querySelectorAll("[data-site-global-controls]").forEach((node) => node.setAttribute("aria-label", labels.globalSettings));
+    document.querySelectorAll("[data-site-workspace-actions]").forEach((node) => node.setAttribute("aria-label", labels.workspaceActions));
+    document.querySelectorAll("[data-site-mobile-menu-close]").forEach((node) => node.setAttribute("aria-label", labels.closeNavigation));
+    document.querySelectorAll("[data-site-global-controls]").forEach((node) => node.setAttribute("aria-label", labels.languageSetting));
     document.querySelectorAll("[data-site-subscription-entry]").forEach((node) => {
       node.title = labels.pricing;
       node.setAttribute("aria-label", labels.pricing);
@@ -2092,6 +2208,18 @@
       button.setAttribute("aria-pressed", language === "zh-Hant" ? "true" : "false");
     });
     document.querySelectorAll("[data-site-language-state]").forEach((node) => node.textContent = labels.languageState);
+    document.querySelectorAll("[data-site-language-option]").forEach((option) => {
+      const optionLanguage = String(option.dataset.siteLanguageOption || "");
+      const active = optionLanguage === language;
+      option.classList.toggle("is-active", active);
+      option.setAttribute("aria-checked", active ? "true" : "false");
+    });
+    document.querySelectorAll('[data-site-language-option-label="zh-Hans"]').forEach((node) => {
+      node.textContent = labels.languageSimplifiedState;
+    });
+    document.querySelectorAll('[data-site-language-option-label="zh-Hant"]').forEach((node) => {
+      node.textContent = labels.languageTraditionalState;
+    });
     document.querySelectorAll("[data-site-theme-state]").forEach((node) => {
       node.textContent = currentTheme() === "dark" ? labels.themeDarkState : labels.themeLightState;
     });
@@ -2137,6 +2265,9 @@
   }
 
   document.addEventListener("click", (event) => {
+    document.querySelectorAll("[data-site-language-menu].is-open").forEach((menu) => {
+      if (!menu.contains(event.target)) setLanguageMenuOpen(menu, false);
+    });
     document.querySelectorAll("[data-site-account-menu].is-open").forEach((menu) => {
       if (!menu.contains(event.target)) setAccountMenuOpen(menu, false);
     });
@@ -2147,6 +2278,7 @@
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     document.querySelectorAll("[data-site-mobile-menu].is-open").forEach((menu) => setMobileMenuOpen(menu, false, { restoreFocus: true }));
+    document.querySelectorAll("[data-site-language-menu].is-open").forEach((menu) => setLanguageMenuOpen(menu, false, { restoreFocus: true }));
     document.querySelectorAll("[data-site-account-menu].is-open").forEach((menu) => setAccountMenuOpen(menu, false, { restoreFocus: true }));
     document.querySelectorAll("[data-site-notification-menu].is-open").forEach((menu) => setNotificationMenuOpen(menu, false, { restoreFocus: true }));
   });
@@ -2160,6 +2292,7 @@
     }
     if (event.key === "vecto-proxy-market-read") void syncProxyMarketBadge();
     if (event.key === NOTIFICATION_STORAGE_KEY) void loadNotifications({ force: true, announce: false });
+    if (event.key === AUTH_SESSION_STORAGE_KEY) void refreshPublicSession();
   });
   window.addEventListener("vecto:proxy-market-read", () => void syncProxyMarketBadge());
   window.addEventListener(EVENT_ACCOUNT_MENU_OPEN, () => {
@@ -2194,6 +2327,7 @@
     confirmLogout,
     showAuthFeedback,
     refreshPublicSession,
+    announceAuthSessionChange,
     syncProxyMarketBadge,
     refreshNotifications: () => loadNotifications({ force: true }),
   };

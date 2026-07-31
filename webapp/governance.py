@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 LIFECYCLE_STATUSES = {
@@ -40,7 +41,10 @@ SENSITIVE_KEYS = {
     "ciphertext",
     "recovery_codes",
 }
-TAIPEI = timezone(timedelta(hours=8))
+try:
+    SHANGHAI = ZoneInfo("Asia/Shanghai")
+except ZoneInfoNotFoundError:
+    SHANGHAI = timezone(timedelta(hours=8), name="Asia/Shanghai")
 
 
 def now_ts() -> int:
@@ -730,14 +734,14 @@ def request_context(request: Any) -> dict[str, str]:
 
 
 def _bucket_start(ts: int, days: int) -> int:
-    local = datetime.fromtimestamp(int(ts), TAIPEI)
-    start = datetime(local.year, local.month, local.day, tzinfo=TAIPEI) - timedelta(days=max(int(days), 1) - 1)
+    local = datetime.fromtimestamp(int(ts), SHANGHAI)
+    start = datetime(local.year, local.month, local.day, tzinfo=SHANGHAI) - timedelta(days=max(int(days), 1) - 1)
     return int(start.timestamp())
 
 
 def _daily_rows(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...], *, start: int, days: int) -> list[dict[str, Any]]:
     by_day = {str(row["day"]): dict(row) for row in conn.execute(sql, params).fetchall()}
-    start_dt = datetime.fromtimestamp(start, TAIPEI)
+    start_dt = datetime.fromtimestamp(start, SHANGHAI)
     output: list[dict[str, Any]] = []
     for offset in range(days):
         day = (start_dt + timedelta(days=offset)).strftime("%Y-%m-%d")
@@ -1011,7 +1015,7 @@ def dashboard_snapshot(conn: sqlite3.Connection, *, days: int = 30, at: int | No
     ).fetchall()
     return {
         "generated_at": current,
-        "timezone": "Asia/Taipei",
+        "timezone": "Asia/Shanghai",
         "range_days": safe_days,
         "summary": {
             "customers": int(users["customers"] or 0),

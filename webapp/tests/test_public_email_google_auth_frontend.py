@@ -227,6 +227,21 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
                 self.assertIn("電子信箱或使用者名稱", markup)
                 self.assertIn("name@example.com 或使用者名稱", markup)
 
+    def test_high_risk_login_uses_shared_email_first_modal_with_mfa_as_branch(self):
+        security_dialog = self.script[
+            self.script.index("async function showLoginSecurityVerification"):
+            self.script.index("async function submitUserLogin")
+        ]
+        self.assertIn("VectoSiteNavigation?.showAuthFeedback", security_dialog)
+        self.assertIn('dialogClass: "is-form"', security_dialog)
+        self.assertIn('initialMethod || (emailAvailable ? "email" : "mfa")', security_dialog)
+        self.assertIn('usingEmail ? "改用 MFA" : "返回邮箱验证"', security_dialog)
+        self.assertIn("emailValue.textContent", security_dialog)
+        self.assertNotIn("emailValue.innerHTML", security_dialog)
+        self.assertIn('security_verification_method: String(securityVerification.method || "")', self.script)
+        self.assertIn('security_challenge_id: String(securityVerification.context?.challenge_id || "")', self.script)
+        self.assertIn('detail.code === "SECURITY_VERIFICATION_REQUIRED"', self.script)
+
     def test_errors_are_rendered_as_text_and_linked_to_fields(self):
         registration_slice = self.script[
             self.script.index("function registrationErrorField"):

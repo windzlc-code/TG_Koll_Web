@@ -8,13 +8,42 @@ function setText(id, value) {
   node.textContent = String(value == null ? "" : value);
 }
 
+const ADMIN_TIME_ZONE = "Asia/Shanghai";
+
+function shanghaiDateTimeParts(value, includeTime = false) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const options = {
+    timeZone: ADMIN_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  };
+  if (includeTime) Object.assign(options, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  return Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", options)
+      .formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+}
+
+function formatShanghaiDateInputValue(value) {
+  const parts = shanghaiDateTimeParts(value);
+  return parts ? `${parts.year}-${parts.month}-${parts.day}` : "";
+}
+
+function formatShanghaiDateTimeInputValue(value) {
+  const parts = shanghaiDateTimeParts(value, true);
+  return parts ? `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}` : "";
+}
+
 const ADMIN_I18N_MARKER = "data-admin-i18n-ui";
 const ADMIN_I18N_ATTRIBUTES = ["title", "aria-label", "placeholder"];
 const ADMIN_I18N_SKIP_SELECTOR = [
   "[data-admin-i18n-skip]",
   "script",
   "style",
-  "textarea",
   "pre",
   "code",
   "tbody",
@@ -31,6 +60,19 @@ const ADMIN_I18N_SKIP_SELECTOR = [
   "#userDetailBody",
   "#userDetailSub",
 ].join(", ");
+const ADMIN_DYNAMIC_USER_CONTENT_SELECTOR = [
+  "input",
+  "textarea",
+  "pre",
+  "code",
+  ".admin-user-account-cell > strong",
+  ".admin-user-company-cell",
+  ".admin-task-error",
+  ".admin-user-detail-item > strong",
+  "#taskInspectSub",
+  "#userDetailSub",
+].join(", ");
+const ADMIN_DYNAMIC_UI_TEXT_PATTERN = /(?:账号|账户|用户|客户|管理员|验证|邮箱|密码|最近|绑定|记录|任务|推文|配图|图片|单任务|请求|赠送|登录|设备|异常|失败|代理|静态|住宅|机房|编辑|设置|当前|申请|关注|状态|检测|同步|打开|手动|授权|浏览|获取|处理|保存|删除|详情|查看|启用|停用|算力|配置|创建|更新|刷新|操作|流程|原因|成功|加载|消息|通知|方案|库存|发布|归档|恢复|选择|筛选|暂无|尚无|未绑|未获取|已配置|需处理)/;
 const ADMIN_ZH_HANT_PHRASES = [
   ["连接与查询", "連線與查詢"],
   ["加密密钥检查", "加密金鑰檢查"],
@@ -135,6 +177,32 @@ function markAdminStaticUi(root = document.body) {
   root.querySelectorAll("[title], [aria-label], [placeholder]").forEach(markAdminUiElement);
 }
 
+function shouldMarkAdminDynamicUiText(node, parent = node?.parentElement) {
+  const text = String(node?.nodeValue || "").trim();
+  if (!text || !parent || parent.closest(ADMIN_DYNAMIC_USER_CONTENT_SELECTOR)) return false;
+  return text.length <= 120 && ADMIN_DYNAMIC_UI_TEXT_PATTERN.test(text);
+}
+
+function markAdminDynamicUi(root) {
+  if (!root) return;
+  markAdminStaticUi(root);
+  if (root.nodeType === Node.TEXT_NODE) {
+    if (shouldMarkAdminDynamicUiText(root, root.parentElement)) {
+      markAdminDynamicUiElement(root.parentElement);
+    }
+    return;
+  }
+  if (root.nodeType !== Node.ELEMENT_NODE && root.nodeType !== Node.DOCUMENT_NODE) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      return shouldMarkAdminDynamicUiText(node, node.parentElement)
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT;
+    },
+  });
+  while (walker.nextNode()) markAdminDynamicUiElement(walker.currentNode.parentElement);
+}
+
 function translateAdminTextNode(node, language) {
   if (!node?.nodeValue?.trim() || !node.parentElement?.matches(`[${ADMIN_I18N_MARKER}]`)) return;
   if (!adminI18nTextOriginals.has(node)) adminI18nTextOriginals.set(node, node.nodeValue);
@@ -221,7 +289,7 @@ function startAdminLanguageObserver() {
         refreshAdminUiTextSource(mutation.target, language);
       } else {
         mutation.addedNodes.forEach((node) => {
-          markAdminStaticUi(node);
+          markAdminDynamicUi(node);
           translateAdminLanguage(node, language);
         });
       }
@@ -1620,6 +1688,7 @@ const adminState = {
   billingCatalogDraftId: null,
   billingCatalogWorking: null,
   billingCatalogWorkingVersion: null,
+  billingCatalogEditorTab: "subscriptions",
   billingCatalogSaving: false,
   billingCatalogPublishing: false,
   billingOrderRows: [],
@@ -1821,7 +1890,7 @@ function safeJson(value) {
 
 function formatTime(ts) {
   if (!ts) return "-";
-  return new Date(Number(ts) * 1000).toLocaleString();
+  return new Date(Number(ts) * 1000).toLocaleString("zh-CN", { timeZone: ADMIN_TIME_ZONE, hour12: false });
 }
 
 function statusPill(status) {
@@ -2742,7 +2811,7 @@ function formatAdminDate(value) {
   if (!text) return "-";
   const date = new Date(text);
   if (Number.isNaN(date.getTime())) return text;
-  return date.toLocaleString("zh-CN", { hour12: false });
+  return date.toLocaleString("zh-CN", { timeZone: ADMIN_TIME_ZONE, hour12: false });
 }
 
 const SENTIMENT_COOKIE_PROFILE_PRIORITY = ["threads", "instagram", "xiaohongshusearch", "facebooksearch", "xsearch"];
@@ -2952,7 +3021,7 @@ async function loadSentimentCookieProfiles() {
     if (el("sentimentCookieMsg")?.classList.contains("err")) {
       setMsg("sentimentCookieMsg", "");
     }
-    const updatedAt = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    const updatedAt = new Date().toLocaleTimeString("zh-CN", { timeZone: ADMIN_TIME_ZONE, hour12: false });
     setSentimentCookieLiveState(`已更新 ${updatedAt}`, "ready");
     return payload;
   })();
@@ -3057,7 +3126,7 @@ function formatBillingTime(value) {
   const date = Number.isFinite(numeric)
     ? new Date(numeric > 100000000000 ? numeric : numeric * 1000)
     : new Date(String(value));
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("zh-CN", { hour12: false });
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("zh-CN", { timeZone: ADMIN_TIME_ZONE, hour12: false });
 }
 
 function formatBillingUnits(value) {
@@ -3098,15 +3167,37 @@ function billingCatalogRecordLabel(version) {
 }
 
 function billingCatalogPlanSummary(catalog) {
+  const subscriptions = Array.isArray(catalog?.subscriptions) ? catalog.subscriptions : [];
   const subscription = catalog?.subscription && typeof catalog.subscription === "object"
     ? catalog.subscription
-    : {};
+    : (subscriptions[0] || {});
   return {
     name: String(subscription.name || "未命名套餐"),
     price: Number(subscription.price_ntd || 0),
+    periodMonths: Number(subscription.period_months || 0),
     accounts: Number(subscription.threads_accounts || 0),
     images: Number(subscription.monthly_free_images || 0),
+    planCount: subscriptions.length,
   };
+}
+
+const BILLING_CATALOG_EDITOR_TABS = new Set(["subscriptions", "packages", "actions", "automation"]);
+
+function setBillingCatalogEditorTab(tabName, { focus = false } = {}) {
+  const nextTab = BILLING_CATALOG_EDITOR_TABS.has(String(tabName || ""))
+    ? String(tabName)
+    : "subscriptions";
+  adminState.billingCatalogEditorTab = nextTab;
+  document.querySelectorAll("[data-billing-editor-tab]").forEach((button) => {
+    const selected = button.dataset.billingEditorTab === nextTab;
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-selected", selected ? "true" : "false");
+    button.tabIndex = selected ? 0 : -1;
+    if (selected && focus) button.focus();
+  });
+  document.querySelectorAll("[data-billing-editor-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.billingEditorPanel !== nextTab;
+  });
 }
 
 function setBillingCatalogInput(id, value) {
@@ -3141,26 +3232,55 @@ function createBillingCatalogField(labelText, value, {
   return label;
 }
 
+function createBillingCatalogTextarea(labelText, value, { field, itemType, itemIndex } = {}) {
+  const label = document.createElement("label");
+  label.className = "admin-billing-field admin-billing-field-wide";
+  const caption = document.createElement("span");
+  caption.textContent = labelText;
+  const textarea = document.createElement("textarea");
+  textarea.rows = 4;
+  textarea.value = value === null || value === undefined ? "" : String(value);
+  textarea.dataset.billingField = field;
+  textarea.dataset.billingItemType = itemType;
+  textarea.dataset.billingItemIndex = String(itemIndex);
+  label.append(caption, textarea);
+  return label;
+}
+
 function renderBillingCatalogForm(catalog, version) {
   const working = cloneBillingCatalog(catalog);
-  const subscription = working.subscription && typeof working.subscription === "object"
+  const fallbackSubscription = working.subscription && typeof working.subscription === "object"
     ? working.subscription
     : {};
-  working.subscription = subscription;
+  working.subscriptions = Array.isArray(working.subscriptions) && working.subscriptions.length
+    ? working.subscriptions
+    : [fallbackSubscription];
+  const defaultSku = String(fallbackSubscription.sku || working.subscriptions[0]?.sku || "");
+  const defaultSubscription = working.subscriptions.find((item) => String(item?.sku || "") === defaultSku)
+    || working.subscriptions[0]
+    || {};
+  working.subscription = { ...defaultSubscription };
   working.packages = Array.isArray(working.packages) ? working.packages : [];
   working.actions = Array.isArray(working.actions) ? working.actions : [];
+  working.automation_modules = Array.isArray(working.automation_modules) ? working.automation_modules : [];
+  working.billing_rules = Array.isArray(working.billing_rules) ? working.billing_rules : [];
   adminState.billingCatalogWorking = working;
   adminState.billingCatalogWorkingVersion = version || null;
 
-  setBillingCatalogInput("billingSubscriptionName", subscription.name || "");
-  setBillingCatalogInput("billingSubscriptionPrice", subscription.price_ntd ?? 0);
-  setBillingCatalogInput("billingSubscriptionAccounts", subscription.threads_accounts ?? 0);
-  setBillingCatalogInput("billingSubscriptionImages", subscription.monthly_free_images ?? 0);
   setBillingCatalogInput("billingPointUnit", working.point_unit_ntd ?? 0);
-  setBillingCatalogInput(
-    "billingSubscriptionFeatures",
-    Array.isArray(subscription.features) ? subscription.features.join("\n") : "",
-  );
+
+  const catalogTimezone = el("billingCatalogTimezone");
+  if (catalogTimezone) catalogTimezone.textContent = String(working.timezone || "Asia/Shanghai");
+  const subscriptionCount = el("billingCatalogSubscriptionCount");
+  if (subscriptionCount) {
+    const personalCount = working.subscriptions.filter((item) => String(item?.sku || "").startsWith("vanguard_personal_")).length;
+    const enterpriseCount = working.subscriptions.filter((item) => String(item?.sku || "").startsWith("vanguard_enterprise_")).length;
+    subscriptionCount.textContent = `个人 ${personalCount} · 企业 ${enterpriseCount}`;
+  }
+  const packageCount = el("billingCatalogPackageCount");
+  if (packageCount) packageCount.textContent = `${working.packages.length} 个`;
+  const actionCount = el("billingCatalogActionCount");
+  if (actionCount) actionCount.textContent = `${working.actions.length} 项`;
 
   const status = el("billingCatalogEditorStatus");
   if (status) {
@@ -3168,6 +3288,74 @@ function renderBillingCatalogForm(catalog, version) {
       ? "正在修改已保存的套餐"
       : "正在设置新套餐";
   }
+
+  const subscriptionList = el("billingSubscriptionEditorList");
+  subscriptionList?.replaceChildren();
+  const subscriptionGroups = new Map();
+  [
+    ["personal", "个人轻量版", "1 个综合账号 · 月标准价 NT$2,000"],
+    ["enterprise", "企业版", "3 个分工账号 · 月标准价 NT$6,000"],
+  ].forEach(([key, label, description]) => {
+    const group = document.createElement("section");
+    group.className = "admin-billing-subscription-group";
+    const heading = document.createElement("div");
+    heading.className = "admin-billing-subscription-group-head";
+    const copy = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = label;
+    const detail = document.createElement("span");
+    detail.textContent = description;
+    copy.append(title, detail);
+    const count = document.createElement("span");
+    count.textContent = `${working.subscriptions.filter((item) => String(item?.sku || "").startsWith(`vanguard_${key}_`)).length} 个周期`;
+    heading.append(copy, count);
+    const grid = document.createElement("div");
+    grid.className = "admin-billing-subscription-grid";
+    group.append(heading, grid);
+    subscriptionGroups.set(key, grid);
+    subscriptionList?.appendChild(group);
+  });
+  working.subscriptions.forEach((item, index) => {
+    const card = document.createElement("article");
+    card.className = "admin-billing-package-card admin-billing-subscription-card";
+    card.setAttribute("data-billing-subscription-index", String(index));
+    const title = document.createElement("div");
+    title.className = "admin-billing-item-title";
+    const titleStrong = document.createElement("strong");
+    titleStrong.textContent = String(item.name || `订阅方案 ${index + 1}`);
+    const sku = document.createElement("span");
+    sku.textContent = `${String(item.sku || "未设置 SKU")}${String(item.sku || "") === defaultSku ? " · 默认方案" : ""}`;
+    title.append(titleStrong, sku);
+    const fields = document.createElement("div");
+    fields.className = "admin-billing-field-grid admin-billing-item-fields";
+    fields.append(
+      createBillingCatalogField("套餐名称", item.name || "", { type: "text", field: "name", itemType: "subscription", itemIndex: index, className: "admin-billing-field-wide" }),
+      createBillingCatalogField("当前周期总价（NT$）", item.price_ntd ?? 0, { field: "price_ntd", itemType: "subscription", itemIndex: index }),
+      createBillingCatalogField("月标准价（NT$）", item.monthly_price_ntd ?? 0, { field: "monthly_price_ntd", itemType: "subscription", itemIndex: index }),
+      createBillingCatalogField("周期（月）", item.period_months ?? 0, { field: "period_months", itemType: "subscription", itemIndex: index }),
+      createBillingCatalogField("可绑定账号", item.threads_accounts ?? 0, { field: "threads_accounts", itemType: "subscription", itemIndex: index }),
+      createBillingCatalogField("每月免费图片", item.monthly_free_images ?? 0, { field: "monthly_free_images", itemType: "subscription", itemIndex: index }),
+      createBillingCatalogField("适合对象", item.audience || "", { type: "text", field: "audience", itemType: "subscription", itemIndex: index, className: "admin-billing-field-wide" }),
+      createBillingCatalogField("账号定位", item.account_positioning || "", { type: "text", field: "account_positioning", itemType: "subscription", itemIndex: index, className: "admin-billing-field-wide" }),
+      createBillingCatalogTextarea("套餐包含内容（每行一项）", Array.isArray(item.features) ? item.features.join("\n") : "", { field: "features", itemType: "subscription", itemIndex: index }),
+    );
+    card.append(title, fields);
+    const groupKey = String(item?.sku || "").startsWith("vanguard_personal_") ? "personal" : "enterprise";
+    (subscriptionGroups.get(groupKey) || subscriptionList)?.appendChild(card);
+  });
+
+  const ruleList = el("billingCatalogRuleList");
+  ruleList?.replaceChildren();
+  working.billing_rules.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "admin-billing-rule-card";
+    const title = document.createElement("strong");
+    title.textContent = String(item?.name || "通用规则");
+    const description = document.createElement("span");
+    description.textContent = String(item?.description || "");
+    card.append(title, description);
+    ruleList?.appendChild(card);
+  });
 
   const packageList = el("billingPackageEditorList");
   packageList?.replaceChildren();
@@ -3233,6 +3421,47 @@ function renderBillingCatalogForm(catalog, version) {
   } else {
     actionList?.classList.remove("is-empty");
   }
+
+  const automationList = el("billingAutomationEditorList");
+  automationList?.replaceChildren();
+  const actionBySku = new Map(working.actions.map((item) => [String(item?.sku || ""), item]));
+  working.automation_modules.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "admin-billing-automation-card";
+    const copy = document.createElement("div");
+    copy.className = "admin-billing-automation-copy";
+    const title = document.createElement("strong");
+    title.textContent = String(item?.name || item?.key || "自动化任务");
+    const description = document.createElement("span");
+    description.textContent = String(item?.description || "由自动化任务运行时按此规则结算");
+    copy.append(title, description);
+
+    const billing = document.createElement("div");
+    billing.className = "admin-billing-automation-charge";
+    const mode = String(item?.billing_mode || item?.mode || "").toLowerCase();
+    const actionSku = String(item?.action_sku || item?.sku || "");
+    const action = actionBySku.get(actionSku);
+    if (mode === "free" || !actionSku) {
+      billing.textContent = "免费开放";
+      billing.classList.add("is-free");
+    } else if (action) {
+      billing.textContent = `${formatBillingPoints(action.points)} 点 / ${String(action.unit || "次")}`;
+    } else {
+      billing.textContent = "待配置计费项";
+      billing.classList.add("is-warning");
+    }
+    card.append(copy, billing);
+    automationList?.appendChild(card);
+  });
+  if (automationList && !working.automation_modules.length) {
+    automationList.textContent = "当前目录尚未配置自动化任务映射。";
+    automationList.classList.add("is-empty");
+  } else {
+    automationList?.classList.remove("is-empty");
+  }
+  const automationCount = el("billingCatalogAutomationCount");
+  if (automationCount) automationCount.textContent = `${working.automation_modules.length} 项`;
+  setBillingCatalogEditorTab(adminState.billingCatalogEditorTab);
 }
 
 function billingCatalogNumber(id, label, { integer = false } = {}) {
@@ -3247,26 +3476,38 @@ function billingCatalogNumber(id, label, { integer = false } = {}) {
 
 function readBillingCatalogForm() {
   const catalog = cloneBillingCatalog(adminState.billingCatalogWorking);
-  const name = String(el("billingSubscriptionName")?.value || "").trim();
-  if (!name) throw new Error("请填写“套餐名称”");
   catalog.point_unit_ntd = billingCatalogNumber("billingPointUnit", "1 点算力参考价");
-  catalog.subscription = {
-    ...(catalog.subscription || {}),
-    name,
-    price_ntd: billingCatalogNumber("billingSubscriptionPrice", "每月价格"),
-    threads_accounts: billingCatalogNumber("billingSubscriptionAccounts", "可绑定 Threads 账号", { integer: true }),
-    monthly_free_images: billingCatalogNumber("billingSubscriptionImages", "每月免费图片", { integer: true }),
-    features: String(el("billingSubscriptionFeatures")?.value || "")
-      .split(/\r?\n/)
-      .map((item) => item.trim())
-      .filter(Boolean),
-  };
 
   const readDynamicNumber = (input, label) => {
     const value = Number(String(input.value || "").trim());
     if (!Number.isFinite(value) || value < 0) throw new Error(`请正确填写“${label}”`);
     return value;
   };
+  document.querySelectorAll("#billingSubscriptionEditorList [data-billing-subscription-index]").forEach((card) => {
+    const index = Number(card.dataset.billingSubscriptionIndex);
+    const item = { ...(catalog.subscriptions?.[index] || {}) };
+    card.querySelectorAll("[data-billing-field]").forEach((input) => {
+      const field = input.dataset.billingField;
+      if (field === "features") {
+        item.features = String(input.value || "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+      } else if (input.type === "number") {
+        item[field] = readDynamicNumber(input, `订阅方案 ${index + 1}`);
+      } else {
+        item[field] = String(input.value || "").trim();
+      }
+    });
+    if (!item.name) throw new Error(`请填写“订阅方案 ${index + 1} 名称”`);
+    if (![3, 6, 12].includes(Number(item.period_months))) throw new Error(`订阅方案 ${index + 1} 的周期必须为 3、6 或 12 个月`);
+    const expectedTotal = Number(item.monthly_price_ntd) * Number(item.period_months);
+    if (Math.abs(Number(item.price_ntd) - expectedTotal) > 0.000001) {
+      throw new Error(`订阅方案 ${index + 1} 的周期总价必须等于月标准价 × 周期月数`);
+    }
+    catalog.subscriptions[index] = item;
+  });
+  const defaultSku = String(catalog.subscription?.sku || catalog.subscriptions?.[0]?.sku || "");
+  const defaultSubscription = catalog.subscriptions.find((item) => String(item?.sku || "") === defaultSku);
+  if (!defaultSubscription) throw new Error("默认订阅方案不存在");
+  catalog.subscription = { ...defaultSubscription };
   document.querySelectorAll("#billingPackageEditorList [data-billing-package-index]").forEach((card) => {
     const index = Number(card.dataset.billingPackageIndex);
     const item = { ...(catalog.packages?.[index] || {}) };
@@ -3314,6 +3555,22 @@ function createBillingStatus(status) {
   return badge;
 }
 
+function renderBillingAdjustmentSubscriptionOptions(catalog) {
+  const select = el("billingAdjustmentSubscriptionSku");
+  if (!select) return;
+  const currentSku = String(select.value || "");
+  const subscriptions = Array.isArray(catalog?.subscriptions) ? catalog.subscriptions : [];
+  select.replaceChildren();
+  subscriptions.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = String(item?.sku || "");
+    option.textContent = `${String(item?.name || item?.sku || "订阅方案")} · ${Number(item?.period_months || 0)} 个月 / ${formatBillingCatalogNtd(item?.price_ntd)}`;
+    select.appendChild(option);
+  });
+  if (subscriptions.some((item) => String(item?.sku || "") === currentSku)) select.value = currentSku;
+  else if (catalog?.subscription?.sku) select.value = String(catalog.subscription.sku);
+}
+
 function createBillingCell(value, className = "") {
   const cell = document.createElement("td");
   if (className) cell.className = className;
@@ -3348,12 +3605,15 @@ function renderBillingCatalog(payload) {
       const title = document.createElement("strong");
       const catalog = billingCatalogOf(active);
       const summary = billingCatalogPlanSummary(catalog);
-      title.textContent = `当前客户套餐 · ${summary.name}`;
+      title.textContent = `当前客户套餐 · 共 ${summary.planCount} 个方案`;
       const meta = document.createElement("span");
-      meta.textContent = `${formatBillingCatalogNtd(summary.price)} / 月 · ${summary.accounts} 个 Threads 账号 · ${summary.images} 张免费图片`;
+      const automationCount = Array.isArray(catalog?.automation_modules) ? catalog.automation_modules.length : 0;
+      meta.textContent = `默认：${summary.name} · 当前周期总价 ${formatBillingCatalogNtd(summary.price)} / ${summary.periodMonths} 个月 · ${summary.accounts} 个账号 · 每月 ${summary.images} 张免费图片 · ${automationCount} 项自动化规则 · ${String(catalog?.timezone || "Asia/Shanghai")}`;
       activeSummary.append(title, createBillingStatus("active"), meta);
+      renderBillingAdjustmentSubscriptionOptions(catalog);
     } else {
       activeSummary.textContent = "当前没有已发布方案";
+      renderBillingAdjustmentSubscriptionOptions(null);
     }
   }
 
@@ -3468,7 +3728,7 @@ async function publishBillingCatalog(versionId) {
   if (!versionId) return;
   const decision = await requestAdminPublicAction({
     title: "发布订阅方案",
-    message: `确认将“${summary.name}”发布给客户吗？\n\n月费：${formatBillingCatalogNtd(summary.price)}\nThreads 账号：${summary.accounts} 个\n免费图片：${summary.images} 张`,
+    message: `确认将共 ${summary.planCount} 个订阅方案发布给客户吗？\n\n默认方案：${summary.name}\n当前周期总价：${formatBillingCatalogNtd(summary.price)} / ${summary.periodMonths} 个月\n账号容量：${summary.accounts} 个\n每月免费图片：${summary.images} 张`,
     confirmLabel: "确认发布",
   });
   if (!decision.confirmed) return;
@@ -3499,6 +3759,9 @@ function billingCatalogProductName(sku, order = {}) {
     ...adminState.billingCatalogVersions.map((item) => billingCatalogOf(item)),
   ].filter(Boolean);
   for (const catalog of catalogs) {
+    const subscriptionItem = (Array.isArray(catalog.subscriptions) ? catalog.subscriptions : [])
+      .find((item) => String(item?.sku || "") === String(sku || ""));
+    if (subscriptionItem) return String(subscriptionItem.name || "订阅套餐");
     if (String(catalog.subscription?.sku || "") === String(sku || "")) {
       return String(catalog.subscription?.name || "月度套餐");
     }
@@ -3878,17 +4141,20 @@ async function submitBillingAdjustment() {
   if (!note) throw new Error("请填写调整原因");
   if (adjustmentType === "subscription") {
     const quantity = Math.floor(amount);
+    const subscriptionSku = String(el("billingAdjustmentSubscriptionSku")?.value || "").trim();
     if (!Number.isInteger(amount) || quantity < 1 || quantity > 50) throw new Error("订阅套数必须是 1-50 的整数");
+    if (!subscriptionSku) throw new Error("请选择订阅方案");
+    const subscriptionName = String(el("billingAdjustmentSubscriptionSku")?.selectedOptions?.[0]?.textContent || subscriptionSku);
     const decision = await requestAdminPublicAction({
-      title: "开通月度订阅",
-      message: `确认给客户 ID ${userId} 人工开通 ${quantity} 套月度订阅吗？`,
+      title: "开通订阅方案",
+      message: `确认给客户 ID ${userId} 人工开通 ${quantity} 套“${subscriptionName}”吗？每套按所选方案周期生效。`,
       confirmLabel: "确认开通",
     });
     if (!decision.confirmed) return;
     await api(`/api/admin/users/${userId}/billing/subscriptions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ quantity, renewal_subscription_ids: [], note }),
+      body: JSON.stringify({ sku: subscriptionSku, quantity, renewal_subscription_ids: [], note }),
     });
   } else {
     const deltaPoints = unlimited ? 0 : amount;
@@ -3928,6 +4194,13 @@ function syncBillingAdjustmentType() {
   const unlimitedInput = el("billingAdjustmentUnlimited");
   if (isSubscription && unlimitedInput) unlimitedInput.checked = false;
   if (unlimitedInput) unlimitedInput.disabled = isSubscription;
+  const subscriptionSku = el("billingAdjustmentSubscriptionSku");
+  const subscriptionSkuLabel = el("billingAdjustmentSubscriptionSkuLabel");
+  if (subscriptionSku) {
+    subscriptionSku.hidden = !isSubscription;
+    subscriptionSku.disabled = !isSubscription;
+  }
+  if (subscriptionSkuLabel) subscriptionSkuLabel.hidden = !isSubscription;
   const unlimited = !isSubscription && Boolean(unlimitedInput?.checked);
   const amount = el("billingAdjustmentAmount");
   const wasUnlimited = adminState.billingUnlimitedUsers.get(String(adminState.billingSelectedUserId || "")) === true;
@@ -3939,7 +4212,7 @@ function syncBillingAdjustmentType() {
     amount.min = isSubscription ? "1" : "";
     amount.max = isSubscription ? "50" : "";
     amount.placeholder = isSubscription
-      ? "1-50 个月"
+      ? "1-50 套（每套按所选周期开通）"
       : (unlimited ? "无限模式无需填写" : (wasUnlimited ? "填 0 仅关闭无限，正负数同时调整" : "正数增加，负数扣减"));
   }
 }
@@ -4549,6 +4822,7 @@ async function loadUsers(page = adminState.userListPage) {
       checkbox.type = "checkbox";
       checkbox.dataset.userSelect = String(u.id);
       checkbox.setAttribute("aria-label", `选择客户 ${u.username}`);
+      markAdminDynamicUiElement(checkbox);
       checkbox.checked = adminState.selectedUserIds.has(String(u.id));
       selectCell.appendChild(checkbox);
     }
@@ -5657,7 +5931,7 @@ async function loadTasks() {
   );
   renderTasks();
   const lastUpdated = el("taskLastUpdated");
-  if (lastUpdated) lastUpdated.textContent = `最近刷新：${new Date().toLocaleTimeString()}`;
+  if (lastUpdated) lastUpdated.textContent = `最近刷新：${new Date().toLocaleTimeString("zh-CN", { timeZone: ADMIN_TIME_ZONE, hour12: false })}`;
 }
 
 function governanceTone(value) {
@@ -5931,7 +6205,7 @@ function renderGovernanceDashboard(payload = {}) {
   renderGovernanceQueue("governanceBatchQueue", payload.queues?.batch_jobs, "暂无批量作业", (item) =>
     governanceQueueItem(item.action, `成功 ${item.success_count || 0} · 失败 ${item.failed_count || 0} · 跳过 ${item.skipped_count || 0}`, item.status));
   const generatedAt = Number(payload.generated_at || 0);
-  setText("governanceUpdatedAt", generatedAt ? `数据时间：${formatTime(generatedAt)}` : `刷新于 ${new Date().toLocaleTimeString()}`);
+  setText("governanceUpdatedAt", generatedAt ? `数据时间：${formatTime(generatedAt)}` : `刷新于 ${new Date().toLocaleTimeString("zh-CN", { timeZone: ADMIN_TIME_ZONE, hour12: false })}`);
 }
 
 function syncEmailDeliveryPolicyFields() {
@@ -6142,11 +6416,10 @@ async function saveEmailDeliveryPolicy() {
 
 function syncGovernanceRangeControls() {
   const custom = String(el("governanceRange")?.value || "30") === "custom";
-  const localDateValue = (date) => new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   const endInput = el("governanceEndDate");
   const startInput = el("governanceStartDate");
-  if (startInput && !startInput.value) startInput.value = localDateValue(new Date(Date.now() - 29 * 86400000));
-  if (endInput && !endInput.value) endInput.value = localDateValue(new Date());
+  if (startInput && !startInput.value) startInput.value = formatShanghaiDateInputValue(new Date(Date.now() - 29 * 86400000));
+  if (endInput && !endInput.value) endInput.value = formatShanghaiDateInputValue(new Date());
   if (startInput) startInput.hidden = !custom;
   if (endInput) endInput.hidden = !custom;
   syncGovernanceChartRangeLabels();
@@ -6384,6 +6657,7 @@ function renderSecurityAlerts(payload = {}) {
     actions.className = "admin-security-alert-actions";
     const status = document.createElement("select");
     status.setAttribute("aria-label", `${title.textContent} 状态`);
+    markAdminDynamicUiElement(status);
     ["open", "acknowledged", "investigating", "resolved", "ignored"].forEach((value) => {
       const option = document.createElement("option");
       option.value = value;
@@ -6455,23 +6729,21 @@ function parseScopeInput(value) {
 }
 
 function timestampFromLocalInput(value) {
-  const date = value ? new Date(value) : null;
+  const date = value ? new Date(`${value}:00+08:00`) : null;
   return date && Number.isFinite(date.getTime()) ? Math.floor(date.getTime() / 1000) : 0;
 }
 
 function localInputFromTimestamp(value) {
   const date = new Date(Number(value || 0) * 1000);
   if (!Number(value) || !Number.isFinite(date.getTime())) return "";
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
+  return formatShanghaiDateTimeInputValue(date);
 }
 
 function setDefaultServiceAccountExpiry() {
   const input = el("serviceAccountExpiresAt");
   if (!input || input.value) return;
   const expires = new Date(Date.now() + 30 * 86400000);
-  expires.setMinutes(expires.getMinutes() - expires.getTimezoneOffset());
-  input.value = expires.toISOString().slice(0, 16);
+  input.value = formatShanghaiDateTimeInputValue(expires);
 }
 
 function renderServiceAccounts(payload = {}) {
@@ -8680,6 +8952,24 @@ async function submitRecharge() {
 }
 
 function bindBillingActions() {
+  el("billingCatalogEditorTabs")?.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-billing-editor-tab]");
+    if (!button) return;
+    setBillingCatalogEditorTab(button.dataset.billingEditorTab, { focus: true });
+  });
+  el("billingCatalogEditorTabs")?.addEventListener("keydown", (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const tabs = [...document.querySelectorAll("#billingCatalogEditorTabs button[data-billing-editor-tab]")];
+    const currentIndex = tabs.indexOf(event.target.closest("button[data-billing-editor-tab]"));
+    if (currentIndex < 0 || !tabs.length) return;
+    event.preventDefault();
+    const nextIndex = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? tabs.length - 1
+        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    setBillingCatalogEditorTab(tabs[nextIndex].dataset.billingEditorTab, { focus: true });
+  });
   el("btnRefreshBilling")?.addEventListener("click", async () => {
     setMsg("billingWorkspaceMsg", "");
     await ensureBillingLoaded(true);
@@ -9911,4 +10201,8 @@ window.addEventListener("DOMContentLoaded", async () => {
 
 window.addEventListener("hashchange", () => {
   setActiveAdminPage(readAdminPageFromHash(), false);
+});
+
+window.addEventListener("storage", (event) => {
+  if (event.key === "vecto-auth-session-changed") window.location.reload();
 });

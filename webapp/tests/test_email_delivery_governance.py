@@ -28,6 +28,8 @@ class EmailDeliveryGovernanceTests(unittest.TestCase):
         "EMAIL_DELIVERY_PROVIDER",
         "BREVO_API_KEY",
         "BREVO_FROM_ADDRESS",
+        "WEBAPP_TIMEZONE",
+        "EMAIL_QUOTA_TIMEZONE_OFFSET_MINUTES",
         "BREVO_TIMEOUT_SECONDS",
         "EMAIL_QUOTA_GOVERNANCE_ENABLED",
         "BREVO_QUOTA_SYNC_TTL_SECONDS",
@@ -76,6 +78,15 @@ class EmailDeliveryGovernanceTests(unittest.TestCase):
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=3000")
         return conn
+
+    def test_email_quota_is_fixed_to_shanghai_timezone(self):
+        os.environ["WEBAPP_TIMEZONE"] = "UTC"
+        os.environ["EMAIL_QUOTA_TIMEZONE_OFFSET_MINUTES"] = "-420"
+        quota_timezone = governance._quota_timezone()
+        self.assertEqual(
+            getattr(quota_timezone, "key", "") or quota_timezone.tzname(None),
+            "Asia/Shanghai",
+        )
 
     @staticmethod
     def sync_responses(*, credits=250, requests_count=50):
