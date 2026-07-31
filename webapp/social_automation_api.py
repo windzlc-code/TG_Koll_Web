@@ -3742,6 +3742,8 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
                   task.task_type,
                   task.payload_json,
                   task.error,
+                  task.created_at,
+                  task.started_at,
                   task.finished_at,
                   task.automation_plan_id,
                   task.automation_plan_cycle,
@@ -3794,7 +3796,9 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
             session["takeover_waiting_for"] = _running_task_takeover_waiting_for(str(row["id"] or ""))
         if str(row["error"] or "").strip():
             session["task_error"] = str(row["error"] or "")
-        session["task_finished_at"] = int(row["finished_at"] or 0)
+        row_values = dict(row)
+        session["task_started_at"] = int(row_values.get("started_at") or row_values.get("created_at") or 0)
+        session["task_finished_at"] = int(row_values.get("finished_at") or 0)
     return visible_sessions
 
 
@@ -8929,6 +8933,15 @@ def _persist_publish_confirmation_context(task_id: str, confirmation: dict[str, 
     return bool(updated)
 
 
+def _task_elapsed_text(seconds: int | float) -> str:
+    total_seconds = max(0, int(seconds or 0))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
 def _finish_task(
     task_id: str,
     status: str,
@@ -9037,7 +9050,11 @@ def _finish_task(
                 "UPDATE social_automation_tasks SET credit_cost_units = ?, free_image_count = ? WHERE id = ?",
                 (credit_cost_units, free_image_count, task_id),
             )
-        _insert_log(conn, task_id, "info" if status == "success" else "error", status, "任务执行完成" if status == "success" else error, result)
+        started_at = int(task["started_at"] or task["created_at"] or 0)
+        terminal_message = "任务执行完成" if status == "success" else str(error or "任务执行结束")
+        if status != "need_manual" and started_at > 0:
+            terminal_message = f"{terminal_message}，总耗时 {_task_elapsed_text(now - started_at)}"
+        _insert_log(conn, task_id, "info" if status == "success" else "error", status, terminal_message, result)
         if status in {"failed", "cancelled"}:
             _terminate_publish_batch_tail_in_transaction(
                 conn,

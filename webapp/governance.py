@@ -862,8 +862,26 @@ def dashboard_snapshot(conn: sqlite3.Connection, *, days: int = 30, at: int | No
         """
     ).fetchone()
     consumption = conn.execute(
-        "SELECT COALESCE(SUM(CASE WHEN amount_units < 0 THEN -amount_units ELSE 0 END), 0) AS units FROM billing_ledger WHERE asset_type = 'credit' AND created_at >= ?",
-        (start,),
+        """
+        SELECT COALESCE(SUM(reservation.settled_credit_units), 0) AS units
+        FROM billing_reservations AS reservation
+        JOIN users ON users.id = reservation.user_id
+        WHERE reservation.status = 'settled'
+          AND reservation.updated_at >= ?
+          AND reservation.updated_at <= ?
+          AND users.is_admin = 0
+          AND users.lifecycle_status != 'deleted'
+        """,
+        (start, current),
+    ).fetchone()
+    lifetime_consumption = conn.execute(
+        """
+        SELECT COALESCE(SUM(reservation.settled_credit_units), 0) AS units
+        FROM billing_reservations AS reservation
+        JOIN users ON users.id = reservation.user_id
+        WHERE reservation.status = 'settled'
+          AND users.is_admin = 0
+        """
     ).fetchone()
     alerts = conn.execute(
         "SELECT COUNT(*) AS count FROM security_alerts WHERE status IN ('open','acknowledged','investigating')"
@@ -1008,6 +1026,10 @@ def dashboard_snapshot(conn: sqlite3.Connection, *, days: int = 30, at: int | No
             "active_subscriptions": int(subscriptions["count"] or 0),
             "wallet_points": round(int(wallet["units"] or 0) / 100, 2),
             "consumed_points": round(int(consumption["units"] or 0) / 100, 2),
+            "lifetime_consumed_points": round(
+                int(lifetime_consumption["units"] or 0) / 100,
+                2,
+            ),
             "open_alerts": int(alerts["count"] or 0),
             "service_health": "healthy",
         },

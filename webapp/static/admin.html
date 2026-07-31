@@ -577,6 +577,14 @@
           <article class="admin-governance-kpi is-danger"><span>开放告警</span><strong id="govKpiAlerts">0</strong><small>未解决安全事件</small></article>
           <article class="admin-governance-kpi is-success"><span>有效订阅</span><strong id="govKpiSubscriptions">0</strong><small>当前有效客户</small></article>
           <article class="admin-governance-kpi is-neutral"><span>客户算力余额总计</span><strong id="govKpiWallet">0</strong><small id="govKpiWalletMeta">当期消耗 0 点</small></article>
+          <article class="admin-governance-kpi is-neutral"><span>用户总消耗额度</span><strong id="govKpiConsumedTotal">0</strong><small>累计已结算算力点</small></article>
+          <article class="admin-governance-kpi is-info"><span>邮件发送汇总</span><strong id="govKpiEmailSummary">0</strong><small id="govKpiEmailSummaryMeta">今日投递 0 · 失败 0</small></article>
+          <article class="admin-governance-kpi is-warning admin-governance-kpi-configurable">
+            <span>每日邮件上限预览</span>
+            <strong id="govKpiEmailLimit">-</strong>
+            <small id="govKpiEmailLimitMeta">正在同步 Brevo</small>
+            <button id="btnEmailDeliveryPolicy" type="button" class="admin-kpi-action" aria-label="设置每日邮件发送上限">设置</button>
+          </article>
           <article class="admin-governance-kpi is-health"><span>服务健康</span><strong id="govKpiHealth">-</strong><small id="govKpiHealthMeta">正在检查</small></article>
         </div>
 
@@ -1755,6 +1763,43 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <div id="emailDeliveryPolicyModal" class="modal-overlay" style="display:none" aria-hidden="true">
+    <div id="emailDeliveryPolicyDialog" class="modal-card modal-card-narrow" role="dialog" aria-modal="true" aria-labelledby="emailDeliveryPolicyTitle" aria-describedby="emailDeliveryPolicyDescription emailDeliveryPolicyMsg" tabindex="-1">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="emailDeliveryPolicyTitle">每日邮件发送上限</div>
+          <div class="small" id="emailDeliveryPolicyDescription">默认跟随 Brevo 可用额度；自定义上限只能进一步收紧。</div>
+        </div>
+        <button id="btnEmailDeliveryPolicyClose" type="button" class="modal-close-icon" aria-label="关闭邮件额度设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+        </button>
+      </div>
+      <div class="modal-body admin-email-policy-body">
+        <label for="emailDeliveryLimitMode">
+          <span>额度模式</span>
+          <select id="emailDeliveryLimitMode">
+            <option value="auto">自动同步 Brevo（推荐）</option>
+            <option value="manual">自定义安全上限</option>
+          </select>
+        </label>
+        <label id="emailDeliveryManualLimitField" for="emailDeliveryManualLimit" hidden>
+          <span>自定义每日上限</span>
+          <input id="emailDeliveryManualLimit" type="number" min="1" max="10000000" step="1" inputmode="numeric" placeholder="请输入每天最多发送数量">
+        </label>
+        <div class="admin-email-policy-preview" aria-live="polite">
+          <span>Brevo 当前数据</span>
+          <strong id="emailDeliveryPolicyPreview">尚未同步</strong>
+          <small id="emailDeliveryPolicySyncMeta">保存后仍以服务商实际可用额度为最高边界。</small>
+        </div>
+        <div id="emailDeliveryPolicyMsg" class="msg" role="status" aria-live="polite" aria-atomic="true"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="btnEmailDeliveryPolicyCancel" type="button" class="ghost">取消</button>
+        <button id="btnEmailDeliveryPolicySave" type="button" class="primary">保存设置</button>
+      </div>
+    </div>
   </div>
 
   <div id="adminUserBatchModal" class="modal-overlay" style="display:none" aria-hidden="true">

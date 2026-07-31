@@ -355,6 +355,8 @@ def test_live_browser_sessions_follow_current_publish_batch_task():
         "task_type": "publish_post",
         "payload_json": '{"publish_sequence_index": 2, "publish_sequence_total": 2}',
         "error": "",
+        "started_at": 100,
+        "created_at": 90,
         "finished_at": 0,
     }
     connection = mock.Mock()
@@ -379,6 +381,13 @@ def test_live_browser_sessions_follow_current_publish_batch_task():
 
     assert result[0]["task_id"] == "publish-task-2"
     assert result[0]["task_status"] == "running"
+    assert result[0]["task_started_at"] == 100
+    assert result[0]["task_finished_at"] == 0
+
+
+def test_task_elapsed_text_formats_terminal_log_duration():
+    assert social_automation_api._task_elapsed_text(65) == "01:05"
+    assert social_automation_api._task_elapsed_text(3661) == "01:01:01"
 
 
 def test_live_browser_task_summary_exposes_only_concrete_strategy_fields():
@@ -508,6 +517,8 @@ def test_live_browser_sessions_count_only_the_current_plan_cycle_and_refresh_cur
           task_type TEXT NOT NULL,
           payload_json TEXT NOT NULL,
           error TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL DEFAULT 0,
+          started_at INTEGER NOT NULL DEFAULT 0,
           finished_at INTEGER NOT NULL DEFAULT 0,
           automation_plan_id TEXT NOT NULL DEFAULT '',
           automation_plan_cycle INTEGER NOT NULL DEFAULT 0
@@ -515,15 +526,15 @@ def test_live_browser_sessions_count_only_the_current_plan_cycle_and_refresh_cur
         """
     )
     rows = [
-        ("done", 7, "persona-1", "account-1", "threads", "success", "publish_post", '{"publish_sequence_index":1,"publish_sequence_total":1}', "", 1, "plan-1", 2),
-        ("current", 7, "persona-1", "account-1", "threads", "running", "threads_warmup", '{"strategy_id":"browse_only","strategy_label":"保守养号：只浏览","browse_limit":30,"like_limit":0,"max_comments":0}', "", 0, "plan-1", 2),
-        ("next", 7, "persona-1", "account-1", "threads", "queued", "threads_auto_reply", '{"strategy_id":"hot_posts","strategy_label":"自动回复热点推文","reply_scope":"hot_posts","max_posts":5,"max_replies":3,"max_age_days":30}', "", 0, "plan-1", 2),
-        ("other-cycle", 7, "persona-1", "account-1", "threads", "queued", "threads_warmup", "{}", "", 0, "plan-1", 1),
-        ("other-plan", 7, "persona-1", "account-1", "threads", "queued", "threads_warmup", "{}", "", 0, "plan-2", 2),
-        ("other-user", 8, "persona-1", "account-1", "threads", "queued", "threads_warmup", "{}", "", 0, "plan-1", 2),
+        ("done", 7, "persona-1", "account-1", "threads", "success", "publish_post", '{"publish_sequence_index":1,"publish_sequence_total":1}', "", 1, 1, 1, "plan-1", 2),
+        ("current", 7, "persona-1", "account-1", "threads", "running", "threads_warmup", '{"strategy_id":"browse_only","strategy_label":"保守养号：只浏览","browse_limit":30,"like_limit":0,"max_comments":0}', "", 1, 2, 0, "plan-1", 2),
+        ("next", 7, "persona-1", "account-1", "threads", "queued", "threads_auto_reply", '{"strategy_id":"hot_posts","strategy_label":"自动回复热点推文","reply_scope":"hot_posts","max_posts":5,"max_replies":3,"max_age_days":30}', "", 1, 0, 0, "plan-1", 2),
+        ("other-cycle", 7, "persona-1", "account-1", "threads", "queued", "threads_warmup", "{}", "", 1, 0, 0, "plan-1", 1),
+        ("other-plan", 7, "persona-1", "account-1", "threads", "queued", "threads_warmup", "{}", "", 1, 0, 0, "plan-2", 2),
+        ("other-user", 8, "persona-1", "account-1", "threads", "queued", "threads_warmup", "{}", "", 1, 0, 0, "plan-1", 2),
     ]
     connection.executemany(
-        "INSERT INTO social_automation_tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO social_automation_tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     connection.execute(

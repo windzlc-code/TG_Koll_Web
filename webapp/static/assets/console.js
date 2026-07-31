@@ -4816,7 +4816,17 @@ function syncActionElapsedTimers() {
     node.textContent = elapsed;
     node.setAttribute("aria-label", `已用时 ${elapsed}`);
   });
-  const hasActiveTimer = Boolean(document.querySelector("[data-action-elapsed]"));
+  document.querySelectorAll("[data-live-browser-task-elapsed]").forEach((node) => {
+    const startedAt = toastTimestampMs(node.dataset.liveBrowserTaskElapsed);
+    if (!startedAt) return;
+    const finishedAt = toastTimestampMs(node.dataset.liveBrowserTaskFinishedAt);
+    const elapsed = formatElapsed(Math.max(0, (finishedAt || Date.now()) - startedAt));
+    node.textContent = `耗时 ${elapsed}`;
+    node.setAttribute("aria-label", `任务耗时 ${elapsed}`);
+  });
+  const hasActiveTimer = Boolean(document.querySelector(
+    "[data-action-elapsed], [data-live-browser-task-elapsed][data-live-browser-task-running='true']"
+  ));
   if (!hasActiveTimer && actionElapsedTimer) {
     window.clearInterval(actionElapsedTimer);
     actionElapsedTimer = 0;
@@ -11450,23 +11460,31 @@ function renderAutomationPlanStrategyFields(item = {}) {
   const params = item?.params && typeof item.params === "object"
     ? item.params
     : (item?.payload && typeof item.payload === "object" ? item.payload : {});
-  const hiddenKeys = new Set([
-    "content", "caption", "text", "archive_post_title", "target_title", "strategy_label", "comment_chance",
-    "publish_batch_id", "publish_sequence_index", "publish_sequence_total", "publish_sequence_targets",
-  ]);
-  const fields = Object.entries(params).filter(([key, value]) => (
-    !hiddenKeys.has(key)
-    && !String(key).startsWith("_")
-    && !/(password|token|secret|cookie|api[_-]?key)/i.test(String(key))
-    && value !== undefined
-    && value !== null
-    && value !== ""
-  ));
-  return fields.map(([key, value]) => {
-    const fieldValue = automationPlanStrategyFieldValue(key, value);
-    const wide = ["target_urls", "reply_templates"].includes(key) || fieldValue.length > 72;
-    return `<div class="automation-plan-detail-strategy${wide ? " automation-plan-detail-preview-wide" : ""}"><dt>${esc(automationPlanStrategyFieldLabel(key))}</dt><dd>${esc(fieldValue)}</dd></div>`;
-  }).join("");
+  const taskType = String(item?.taskType || item?.task_type || "").trim();
+  const summary = automationPlanStrategySummary(item);
+  const previewKeys = ["threads_warmup", "instagram_warmup"].includes(taskType)
+    ? ["browse_limit", "scroll_times", "like_limit", "max_comments"]
+    : [];
+  const previewFields = previewKeys
+    .filter((key) => Object.prototype.hasOwnProperty.call(params, key))
+    .map((key) => `<div class="automation-plan-detail-strategy"><dt>${esc(automationPlanStrategyFieldLabel(key))}</dt><dd>${esc(automationPlanStrategyFieldValue(key, params[key]))}</dd></div>`)
+    .join("");
+  return `<div class="automation-plan-detail-strategy"><dt>策略</dt><dd>${esc(summary)}</dd></div>${previewFields}`;
+}
+
+function automationPlanStrategySummary(item = {}) {
+  const params = item?.params && typeof item.params === "object"
+    ? item.params
+    : (item?.payload && typeof item.payload === "object" ? item.payload : {});
+  const directLabel = String(params.strategy_label || "").trim();
+  if (directLabel) return directLabel;
+  const strategyId = String(params.strategy_id || "").trim();
+  if (strategyId) return automationPlanStrategyFieldValue("strategy_id", strategyId);
+  const taskType = String(item?.taskType || item?.task_type || "").trim();
+  if (["normal_publish", "publish_post"].includes(taskType)) {
+    return `按草稿创建时间顺序发布 ${automationPlanNormalPublishCount({ params })} 篇`;
+  }
+  return automationPlanConfiguredSummary({ ...item, params, configured: true });
 }
 
 function renderAutomationPlanDetailFormRows(rows = [], { runtime = false } = {}) {
@@ -11477,19 +11495,12 @@ function renderAutomationPlanDetailFormRows(rows = [], { runtime = false } = {})
     const detailItem = task
       ? { ...item, taskType, params: { ...(item?.params || item?.payload || {}), ...(task?.payload || {}) }, configured: true }
       : item;
-    const scheduledAt = Number(task?.scheduled_at || 0);
-    const taskContent = runtime ? automationPlanTaskContent(task) : "";
-    const timing = runtime && scheduledAt
-      ? formatScheduledTime(scheduledAt)
-      : automationReservationLabel(item?.reservationMinutes ?? item?.reservation_minutes);
     return `<li>
       <span>${index + 1}</span>
       <div class="automation-plan-detail-preview-card">
         <strong>${esc(automationPlanTaskLabel(taskType || "未添加"))}</strong>
         <dl>
-          <div><dt>${runtime ? "执行时间" : "预约时间"}</dt><dd>${esc(timing)}</dd></div>
           ${renderAutomationPlanStrategyFields(detailItem)}
-          ${taskContent ? `<div class="automation-plan-detail-preview-wide"><dt>任务内容</dt><dd>${esc(taskContent)}</dd></div>` : ""}
         </dl>
       </div>
     </li>`;
@@ -25733,6 +25744,22 @@ function updateLiveBrowserSessionCard(card, session) {
       targetContainer.setAttribute("aria-label", `任务目标：${taskSummary.detail}`);
     }
   });
+  const taskTiming = liveBrowserTaskTiming(session);
+  card.querySelectorAll("[data-live-browser-task-elapsed]").forEach((node) => {
+    node.dataset.liveBrowserTaskElapsed = String(taskTiming.startedAt || "");
+    node.dataset.liveBrowserTaskFinishedAt = String(taskTiming.finishedAt || "");
+    node.dataset.liveBrowserTaskRunning = taskTiming.running ? "true" : "false";
+    node.hidden = !taskTiming.startedAt;
+    if (taskTiming.startedAt) {
+      const elapsed = formatElapsed(Math.max(
+        0,
+        (taskTiming.finishedAt || Date.now()) - taskTiming.startedAt,
+      ));
+      node.textContent = `耗时 ${elapsed}`;
+      node.setAttribute("aria-label", `任务耗时 ${elapsed}`);
+    }
+  });
+  scheduleActionElapsedSync();
   const iframe = card.querySelector("iframe");
   if (iframe) iframe.title = title;
   const statusNode = card.querySelector("[data-live-browser-status]");
@@ -25991,6 +26018,33 @@ function liveBrowserTaskSummary(session) {
   return { count, target, detail: target };
 }
 
+function liveBrowserTaskTiming(session = {}) {
+  const taskId = String(session?.task_id || "").trim();
+  const task = (state.socialTasks || []).find((item) => String(item?.id || "").trim() === taskId) || {};
+  const startedAt = toastTimestampMs(
+    session?.task_started_at
+    || task?.started_at
+    || task?.created_at
+  );
+  const finishedAt = toastTimestampMs(
+    session?.task_finished_at
+    || task?.finished_at
+  );
+  return {
+    startedAt,
+    finishedAt,
+    running: Boolean(startedAt && !finishedAt),
+  };
+}
+
+function renderLiveBrowserTaskElapsed(session = {}) {
+  const timing = liveBrowserTaskTiming(session);
+  const elapsed = timing.startedAt
+    ? formatElapsed(Math.max(0, (timing.finishedAt || Date.now()) - timing.startedAt))
+    : "00:00";
+  return `<time class="live-browser-task-elapsed" data-live-browser-task-elapsed="${esc(timing.startedAt || "")}" data-live-browser-task-finished-at="${esc(timing.finishedAt || "")}" data-live-browser-task-running="${timing.running ? "true" : "false"}" aria-label="任务耗时 ${esc(elapsed)}" ${timing.startedAt ? "" : "hidden"}>耗时 ${esc(elapsed)}</time>`;
+}
+
 function renderLiveBrowserActionMenu(session, { canStopTask = false, canCloseWindow = false } = {}) {
   const sessionId = liveBrowserSessionId(session);
   return `
@@ -26135,12 +26189,14 @@ function renderLiveBrowserSession(session) {
         <div class="live-browser-task-summary" aria-label="任务信息">
           <span>任务数：<b data-live-browser-task-count>${esc(taskSummary.count)}</b></span>
           <span title="${esc(taskSummary.detail)}" aria-label="${esc(`任务目标：${taskSummary.detail}`)}">任务目标：<b data-live-browser-task-target>${esc(taskSummary.target)}</b></span>
+          ${renderLiveBrowserTaskElapsed(session)}
         </div>
         <div class="live-browser-card-actions">
           <div class="live-browser-mobile-summary" aria-label="任务信息">
             <span data-live-browser-mobile-meta>${esc(`平台：${identity.platform} · 人设：${identity.persona}`)}</span>
             <span>任务数：<b data-live-browser-mobile-task-count>${esc(taskSummary.count)}</b></span>
             <span title="${esc(taskSummary.detail)}" aria-label="${esc(`任务目标：${taskSummary.detail}`)}">目标：<b data-live-browser-mobile-task-target>${esc(taskSummary.target)}</b></span>
+            ${renderLiveBrowserTaskElapsed(session)}
           </div>
           <button type="button" class="live-browser-expand-button" data-live-browser-fullscreen="${esc(sessionId)}" title="放大窗口" aria-label="放大窗口" aria-pressed="false">${renderExpandIcon()}</button>
           ${renderLiveBrowserActionMenu(session, { canStopTask, canCloseWindow })}

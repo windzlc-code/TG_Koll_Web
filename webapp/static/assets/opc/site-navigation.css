@@ -1136,13 +1136,19 @@ body.site-mobile-menu-active {
   display: none;
 }
 
-.site-notification-broadcast-actions a {
+.site-notification-broadcast-actions a,
+.site-notification-broadcast-confirm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 9px 15px;
   color: #ffffff;
   font-weight: 700;
   text-decoration: none;
   background: #22384b;
+  border: 1px solid #22384b;
   border-radius: 6px;
+  cursor: pointer;
 }
 
 .site-auth-feedback {

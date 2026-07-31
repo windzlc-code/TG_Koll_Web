@@ -119,6 +119,32 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(self._status("cancelled-task"), "cancelled")
         archive.assert_not_called()
 
+    def test_finish_log_records_total_elapsed_time(self):
+        self._insert_task("timed-task", "running", task_type="threads_warmup")
+
+        with mock.patch.object(social_automation_api, "_now", return_value=66):
+            completed = social_automation_api._finish_task(
+                "timed-task",
+                "success",
+                {"ok": True},
+                "",
+            )
+
+        with sqlite3.connect(self.db_path) as conn:
+            message = conn.execute(
+                """
+                SELECT message
+                FROM social_automation_logs
+                WHERE task_id = ? AND stage = 'success'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                ("timed-task",),
+            ).fetchone()[0]
+        self.assertTrue(completed)
+        self.assertIn("任务执行完成", message)
+        self.assertIn("总耗时 01:05", message)
+
     def test_need_manual_after_logger_stays_open_and_updates_account(self):
         self._insert_account()
         self._insert_task("manual-task", "running", task_type="open_login")

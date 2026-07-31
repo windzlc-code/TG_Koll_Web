@@ -127,6 +127,7 @@
       notificationBroadcast: "重要通知",
       notificationDetail: "消息详情",
       notificationAction: "查看详情",
+      notificationConfirm: "确定",
     },
     "zh-Hant": {
       brandLocal: "維拓 / 維圖",
@@ -208,6 +209,7 @@
       notificationBroadcast: "重要通知",
       notificationDetail: "消息詳情",
       notificationAction: "查看詳情",
+      notificationConfirm: "確定",
     },
   };
 
@@ -1461,8 +1463,18 @@
       if (markReadOnClose && !item.read) void markNotificationsRead({ ids: [item.id] });
       overlay.remove();
     };
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.className = "site-notification-broadcast-confirm";
+    confirm.textContent = labels.notificationConfirm;
+    confirm.addEventListener("click", close);
+    actions.append(confirm);
     overlay.querySelector("button").setAttribute("aria-label", labels.notificationClose);
     overlay.querySelector("button").addEventListener("click", close);
+    overlay.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (event.target === overlay) close();
+    });
     overlay.addEventListener("keydown", (event) => {
       if (event.key === "Escape") close();
     });

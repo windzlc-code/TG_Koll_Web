@@ -1,4 +1,6 @@
 import unittest
+import json
+import subprocess
 from pathlib import Path
 
 
@@ -11,6 +13,43 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         cls.html = (ROOT / "static" / "admin.html").read_text(encoding="utf-8")
         cls.script = (ROOT / "static" / "assets" / "admin.js").read_text(encoding="utf-8")
         cls.styles = (ROOT / "static" / "assets" / "style.css").read_text(encoding="utf-8")
+
+    @classmethod
+    def _extract_js_function(cls, name):
+        marker = f"function {name}("
+        start = cls.script.index(marker)
+        brace = cls.script.index("{", start)
+        depth = 0
+        for index in range(brace, len(cls.script)):
+            character = cls.script[index]
+            if character == "{":
+                depth += 1
+            elif character == "}":
+                depth -= 1
+                if depth == 0:
+                    return cls.script[start : index + 1]
+        raise AssertionError(f"JavaScript function {name} is not closed")
+
+    @classmethod
+    def _run_email_policy_helpers(cls, expression):
+        constant = "const EMAIL_DELIVERY_MANUAL_LIMIT_MAX = 10000000;"
+        source = "\n".join(
+            (
+                constant,
+                cls._extract_js_function("validateEmailDeliveryManualLimit"),
+                cls._extract_js_function("formatEmailDeliveryPolicyError"),
+                f"console.log(JSON.stringify({expression}));",
+            )
+        )
+        result = subprocess.run(
+            ["node", "-e", source],
+            cwd=ROOT.parent,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        return json.loads(result.stdout)
 
     def test_dashboard_uses_local_chartjs_and_stable_refresh(self):
         self.assertIn('/assets/vendor/chart.js/chart.umd.js', self.html)
@@ -28,6 +67,78 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn("syncGovernanceChartRangeLabels", self.script)
         for label_id in ("governanceUsersRangeLabel", "governanceTasksRangeLabel"):
             self.assertIn(f'id="{label_id}"', self.html)
+
+    def test_governance_kpis_are_shorter_without_shrinking_content(self):
+        for element_id in (
+            "govKpiConsumedTotal",
+            "govKpiEmailSummary",
+            "govKpiEmailSummaryMeta",
+            "govKpiEmailLimit",
+            "govKpiEmailLimitMeta",
+            "btnEmailDeliveryPolicy",
+            "emailDeliveryPolicyModal",
+            "emailDeliveryLimitMode",
+            "emailDeliveryManualLimit",
+        ):
+            self.assertIn(f'id="{element_id}"', self.html)
+        self.assertIn("repeat(auto-fit, minmax(174px, 1fr))", self.styles)
+        self.assertIn("min-height: 82px;", self.styles)
+        self.assertIn("padding: 10px;", self.styles)
+        self.assertIn("font-size: 22px;", self.styles)
+        self.assertIn('api("/api/admin/email-delivery-policy"', self.script)
+        self.assertIn("payload.email_delivery || {}", self.script)
+        self.assertIn("summary.lifetime_consumed_points", self.script)
+
+    def test_email_delivery_policy_helpers_enforce_limit_and_translate_422_details(self):
+        result = self._run_email_policy_helpers(
+            """({
+              empty: validateEmailDeliveryManualLimit(""),
+              decimal: validateEmailDeliveryManualLimit("1.5"),
+              tooLarge: validateEmailDeliveryManualLimit("10000001"),
+              valid: validateEmailDeliveryManualLimit("10000000"),
+              validationDetail: formatEmailDeliveryPolicyError({
+                detail: [{
+                  loc: ["body", "manual_daily_limit"],
+                  type: "less_than_equal",
+                  msg: "Input should be less than or equal to 10000000",
+                  ctx: { le: 10000000 }
+                }]
+              })
+            })"""
+        )
+        self.assertEqual(result["empty"], "请输入自定义每日上限。")
+        self.assertIn("整数", result["decimal"])
+        self.assertIn("10,000,000", result["tooLarge"])
+        self.assertEqual(result["valid"], "")
+        self.assertEqual(result["validationDetail"], "自定义每日上限不能超过 10,000,000 封。")
+
+    def test_email_delivery_policy_modal_has_abortable_save_and_focus_trap_contract(self):
+        save = self.script[
+            self.script.index("async function saveEmailDeliveryPolicy")
+            : self.script.index("function syncGovernanceRangeControls")
+        ]
+        close = self.script[
+            self.script.index("function closeEmailDeliveryPolicyModal")
+            : self.script.index("async function saveEmailDeliveryPolicy")
+        ]
+        trap = self.script[
+            self.script.index("function handleEmailDeliveryPolicyModalKeydown")
+            : self.script.index("function openEmailDeliveryPolicyModal")
+        ]
+        self.assertIn("new AbortController()", save)
+        self.assertIn("EMAIL_DELIVERY_POLICY_SAVE_TIMEOUT_MS", save)
+        self.assertIn("signal: controller.signal", save)
+        self.assertIn(".abort()", close)
+        self.assertNotIn("emailDeliveryPolicySaving) return", close)
+        self.assertIn('event.key !== "Tab"', trap)
+        self.assertIn('event.key === "Escape"', trap)
+        self.assertIn("emailDeliveryPolicyReturnFocus", close)
+        self.assertIn('aria-modal="true"', self.html)
+        opened = self.script[
+            self.script.index("function openEmailDeliveryPolicyModal")
+            : self.script.index("function closeEmailDeliveryPolicyModal")
+        ]
+        self.assertIn("!overview.sync_error", opened)
 
     def test_sensitive_one_time_values_are_cleared_on_all_boundaries(self):
         self.assertIn("scheduleUserPasswordResetClear", self.script)

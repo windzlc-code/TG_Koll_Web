@@ -623,6 +623,116 @@ def _ensure_auth_identity_schema(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_email_delivery_governance_schema(conn: sqlite3.Connection) -> None:
+    """Create the durable Brevo quota snapshot, policy and attempt stores."""
+
+    statements = (
+        """
+        CREATE TABLE IF NOT EXISTS email_delivery_policy (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          mode TEXT NOT NULL DEFAULT 'auto'
+            CHECK(mode IN ('auto', 'manual')),
+          manual_daily_limit INTEGER
+            CHECK(manual_daily_limit IS NULL OR manual_daily_limit > 0),
+          updated_by INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS email_delivery_provider_snapshot (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          provider TEXT NOT NULL DEFAULT 'brevo',
+          report_day TEXT NOT NULL DEFAULT '',
+          provider_daily_limit INTEGER NOT NULL DEFAULT 0,
+          provider_remaining_credits INTEGER NOT NULL DEFAULT 0,
+          requests_today INTEGER NOT NULL DEFAULT 0,
+          delivered_today INTEGER NOT NULL DEFAULT 0,
+          failed_today INTEGER NOT NULL DEFAULT 0,
+          account_json TEXT NOT NULL DEFAULT '{}',
+          report_json TEXT NOT NULL DEFAULT '{}',
+          synced_at INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL DEFAULT 0
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS email_delivery_sync_state (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          lease_token TEXT NOT NULL DEFAULT '',
+          lease_expires_at INTEGER NOT NULL DEFAULT 0,
+          last_attempt_at INTEGER NOT NULL DEFAULT 0,
+          last_success_at INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT NOT NULL DEFAULT '',
+          updated_at INTEGER NOT NULL DEFAULT 0
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS email_delivery_attempts (
+          id TEXT PRIMARY KEY,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          user_id INTEGER NOT NULL DEFAULT 0,
+          purpose TEXT NOT NULL DEFAULT '',
+          recipient_hash TEXT NOT NULL DEFAULT '',
+          units INTEGER NOT NULL DEFAULT 1 CHECK(units > 0),
+          status TEXT NOT NULL
+            CHECK(status IN ('reserved', 'accepted', 'failed', 'unknown')),
+          provider_message_id TEXT NOT NULL DEFAULT '',
+          error_code TEXT NOT NULL DEFAULT '',
+          quota_day TEXT NOT NULL,
+          reserved_at INTEGER NOT NULL,
+          delivery_owner_token TEXT NOT NULL DEFAULT '',
+          delivery_lease_expires_at INTEGER NOT NULL DEFAULT 0,
+          accepted_at INTEGER NOT NULL DEFAULT 0,
+          finished_at INTEGER NOT NULL DEFAULT 0,
+          reconciled_at INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+        """,
+    )
+    for statement in statements:
+        conn.execute(statement)
+    attempt_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(email_delivery_attempts)").fetchall()
+    }
+    if "delivery_owner_token" not in attempt_columns:
+        conn.execute(
+            "ALTER TABLE email_delivery_attempts "
+            "ADD COLUMN delivery_owner_token TEXT NOT NULL DEFAULT ''"
+        )
+    if "delivery_lease_expires_at" not in attempt_columns:
+        conn.execute(
+            "ALTER TABLE email_delivery_attempts "
+            "ADD COLUMN delivery_lease_expires_at INTEGER NOT NULL DEFAULT 0"
+        )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO email_delivery_policy(
+          id, mode, manual_daily_limit, updated_by, created_at, updated_at
+        ) VALUES (1, 'auto', NULL, 0, 0, 0)
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO email_delivery_provider_snapshot(
+          id, provider, report_day
+        ) VALUES (1, 'brevo', '')
+        """
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO email_delivery_sync_state(id) VALUES (1)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_email_delivery_attempts_quota "
+        "ON email_delivery_attempts(quota_day, status, reconciled_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_email_delivery_attempts_user "
+        "ON email_delivery_attempts(user_id, created_at DESC)"
+    )
+
+
 def init_db() -> None:
     os.makedirs(os.path.dirname(get_db_path()), exist_ok=True)
     with db() as conn:
@@ -1362,6 +1472,7 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_owners_user ON persona_owners(user_id, archive_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_group_owners_user ON persona_group_owners(user_id, group_id)")
         _ensure_commercial_billing_schema(conn)
+        _ensure_email_delivery_governance_schema(conn)
         conn.execute(
             """
             UPDATE social_automation_tasks

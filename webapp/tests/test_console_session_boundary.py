@@ -968,7 +968,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn(".is-live-browser-controls-visible .live-browser-card-actions > .status", self.styles)
         self.assertIn("vecto-live-browser-modal-enter", self.styles)
         self.assertNotIn("vecto-live-browser-modal-exit", self.styles)
-        self.assertIn(".is-live-browser-controls-visible .live-browser-task-summary span:last-child", landscape_media)
+        self.assertIn(".is-live-browser-controls-visible .live-browser-task-summary span:nth-child(2)", landscape_media)
         self.assertIn(".live-browser-card-identity", self.styles)
         self.assertIn(".live-browser-interaction-note", self.styles)
 
@@ -1191,6 +1191,17 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("position: absolute;", mobile_launcher)
         self.assertIn("background: rgb(5 12 13 / 58%);", mobile_launcher)
         self.assertIn("display: none;", compact_identity)
+
+    def test_live_browser_task_target_shows_a_real_elapsed_timer(self):
+        session_markup = self._function_source("renderLiveBrowserSession")
+        session_update = self._function_source("updateLiveBrowserSessionCard")
+        elapsed_sync = self._function_source("syncActionElapsedTimers")
+        self.assertIn("renderLiveBrowserTaskElapsed(session)", session_markup)
+        self.assertIn("data-live-browser-task-elapsed", self.source)
+        self.assertIn("liveBrowserTaskTiming(session)", self.source)
+        self.assertIn("liveBrowserTaskTiming(session)", session_update)
+        self.assertIn("[data-live-browser-task-elapsed]", elapsed_sync)
+        self.assertIn("data-live-browser-task-finished-at", self.source)
 
     def test_live_browser_fallback_url_uses_same_low_latency_decoder_settings(self):
         fallback_url = self._function_source("liveBrowserSessionUrl")

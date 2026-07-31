@@ -14,6 +14,7 @@ class BrevoEmailDeliveryTests(unittest.TestCase):
         "BREVO_API_KEY",
         "BREVO_FROM_ADDRESS",
         "BREVO_TIMEOUT_SECONDS",
+        "EMAIL_QUOTA_GOVERNANCE_ENABLED",
     )
 
     def setUp(self):
@@ -27,6 +28,7 @@ class BrevoEmailDeliveryTests(unittest.TestCase):
                 "BREVO_API_KEY": "xkeysib-test-key-with-sufficient-length",
                 "BREVO_FROM_ADDRESS": "Vecto OS <noreply@mail.vecto-ai.cn>",
                 "BREVO_TIMEOUT_SECONDS": "7",
+                "EMAIL_QUOTA_GOVERNANCE_ENABLED": "0",
             }
         )
 

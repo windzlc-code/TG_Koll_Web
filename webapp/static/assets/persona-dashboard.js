@@ -297,7 +297,8 @@ function pdRenderDashboardPlatformTabs(data) {
       ` : ""}
     </div>
   `;
-  pdEl("personaDashboardPlatformPickerTrigger")?.addEventListener("click", () => {
+  pdEl("personaDashboardPlatformPickerTrigger")?.addEventListener("click", (event) => {
+    event.stopPropagation();
     personaDashboardPlatformPickerOpen = !personaDashboardPlatformPickerOpen;
     pdRenderDashboard();
   });
@@ -508,7 +509,10 @@ function pdRenderChartPlaceholder(kind = "bars", message = "暂无可展示数�
 function pdRenderBarChart(hostId, rows) {
   const host = pdEl(hostId);
   if (!host) return;
-  const items = (rows || []).filter((row) => Number(row.value || 0) > 0).slice(0, 12);
+  const items = (rows || [])
+    .filter((row) => Number(row.value || 0) > 0)
+    .sort((left, right) => Number(right.value || 0) - Number(left.value || 0))
+    .slice(0, 12);
   if (!items.length) {
     host.innerHTML = pdRenderChartPlaceholder("bars", "暂无热度数据");
     return;

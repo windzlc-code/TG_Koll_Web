@@ -53,7 +53,6 @@ class PublicAccountDrawerTests(unittest.TestCase):
         self.assertIn("function showNotificationDialog(", self.navigation)
 
     def test_shared_dialogs_require_an_explicit_close_and_prioritize_important_messages(self):
-        self.assertNotIn("if (event.target === overlay) close();", self.navigation)
         self.assertNotIn("if (event.target === modal) close();", self.navigation)
         notification_load = self.navigation[
             self.navigation.index("async function loadNotifications")
@@ -61,6 +60,16 @@ class PublicAccountDrawerTests(unittest.TestCase):
         ]
         self.assertIn("item.important", notification_load)
         self.assertIn("importantUnread || latestUnread", notification_load)
+
+    def test_notification_detail_owns_backdrop_clicks_and_has_confirm_action(self):
+        dialog = self.navigation[
+            self.navigation.index("function showNotificationDialog(")
+            : self.navigation.index("function showNotificationDetail(")
+        ]
+        self.assertIn("labels.notificationConfirm", dialog)
+        self.assertIn("event.stopPropagation();", dialog)
+        self.assertIn("if (event.target === overlay) close();", dialog)
+        self.assertIn("confirm.addEventListener(\"click\", close);", dialog)
 
     def test_opening_notification_drawer_does_not_mark_every_message_read(self):
         drawer_open = self.navigation[

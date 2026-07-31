@@ -86,6 +86,7 @@ from .google_oauth import (
     oauth_token_digest,
 )
 from . import commercial_billing
+from . import email_delivery_governance
 from . import governance
 from .password_vault import (
     PasswordVaultDecryptError,
@@ -10391,6 +10392,11 @@ class SocialPublishPolicyPayload(BaseModel):
     limit: int = Field(default=15, ge=1, le=200)
 
 
+class EmailDeliveryPolicyPayload(BaseModel):
+    mode: str = Field(default="auto", max_length=16)
+    manual_daily_limit: int | None = Field(default=None, ge=1, le=10_000_000)
+
+
 class PricingPayload(BaseModel):
     rh_coins_per_10rmb: int = 2500
     usd_to_rmb: float = 7.2
@@ -18277,6 +18283,13 @@ def create_app() -> FastAPI:
                 VERIFICATION_TTL_SECONDS,
                 idempotency_key=challenge_id,
             )
+        except VerificationRateLimitError as exc:
+            with db() as conn:
+                mark_challenge_failed(conn, challenge_id, _now_ts())
+            raise HTTPException(
+                status_code=429,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
         except (VerificationDeliveryError, AuthEmailConfigurationError, ValueError) as exc:
             with db() as conn:
                 mark_challenge_failed(conn, challenge_id, _now_ts())
@@ -21719,6 +21732,70 @@ def create_app() -> FastAPI:
             )
         return {"ok": True, "policy": policy}
 
+    @app.get("/api/admin/email-delivery-policy")
+    def api_admin_get_email_delivery_policy(
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        del user
+        with db() as conn:
+            try:
+                email_delivery_governance.sync_brevo_usage(conn, force=False)
+            except email_delivery_governance.EmailDeliveryGovernanceError:
+                pass
+            overview = email_delivery_governance.get_email_delivery_overview(conn)
+        return {"ok": True, "email_delivery": overview}
+
+    @app.put("/api/admin/email-delivery-policy")
+    def api_admin_set_email_delivery_policy(
+        payload: EmailDeliveryPolicyPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        mode = str(payload.mode or "").strip().lower()
+        if mode not in {"auto", "manual"}:
+            raise HTTPException(status_code=400, detail="email delivery limit mode must be auto or manual")
+        with db() as conn:
+            before = email_delivery_governance.get_email_delivery_policy(conn)
+            try:
+                email_delivery_governance.set_email_delivery_policy(
+                    conn,
+                    mode,
+                    payload.manual_daily_limit,
+                    _now_ts(),
+                    updated_by=int(user.get("id") or 0),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except email_delivery_governance.EmailDeliveryQuotaUnavailable as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "code": "email_delivery_quota_unavailable",
+                        "message": str(exc),
+                    },
+                ) from exc
+            after = email_delivery_governance.get_email_delivery_policy(conn)
+            governance.record_audit(
+                conn,
+                actor_user_id=int(user.get("id") or 0),
+                action="email_delivery_policy.update",
+                resource_type="admin_config",
+                resource_id="email_delivery_policy",
+                before=before,
+                after=after,
+                risk_level="medium",
+                **governance.request_context(request),
+            )
+        with db() as conn:
+            try:
+                email_delivery_governance.sync_brevo_usage(conn, force=False)
+            except email_delivery_governance.EmailDeliveryGovernanceError:
+                pass
+            overview = email_delivery_governance.get_email_delivery_overview(conn)
+        _invalidate_admin_dashboard_cache()
+        return {"ok": True, "email_delivery": overview}
+
     @app.get("/api/admin/dashboard")
     def api_admin_dashboard(
         days: int = 30,
@@ -21739,8 +21816,17 @@ def create_app() -> FastAPI:
             cached = _ADMIN_DASHBOARD_CACHE.get(cache_key)
             if cached and monotonic_now - cached[0] < 15:
                 return cached[1]
+        with db() as email_conn:
+            try:
+                email_delivery_governance.sync_brevo_usage(email_conn, force=False)
+            except email_delivery_governance.EmailDeliveryGovernanceError:
+                pass
+            email_delivery_overview = (
+                email_delivery_governance.get_email_delivery_overview(email_conn)
+            )
         with db() as conn:
             payload = governance.dashboard_snapshot(conn, days=safe_days, at=snapshot_at)
+            payload["email_delivery"] = email_delivery_overview
             vault_health = _sync_password_vault_key_status(conn)
             payload["health"] = {
                 "database": "healthy",
@@ -22117,11 +22203,11 @@ def create_app() -> FastAPI:
                             conn,
                             user_id=target_id,
                             category="official",
-                            title="管理员已调整算力",
+                            title="Vecto 算力已更新",
                             body=(
-                                "管理员已将你的账号设置为无限算力。"
+                                "Vecto 已为你的账户启用无限算力服务。"
                                 if unlimited_enabled and target_units is None
-                                else f"管理员已将你的账号算力调整为 {float(result['points']):g} 点。"
+                                else f"Vecto 已将你的可用算力更新为 {float(result['points']):g} 点。"
                             ),
                             source_key=f"admin-batch-credit:{job_id}",
                             now=started,

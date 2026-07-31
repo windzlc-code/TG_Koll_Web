@@ -1561,6 +1561,8 @@ function closeModelPickersOnOutsideClick(target) {
 const TASK_POLL_INTERVAL_MS = 10000;
 const SENTIMENT_COOKIE_POLL_INTERVAL_MS = 10000;
 const GOVERNANCE_POLL_INTERVAL_MS = 30000;
+const EMAIL_DELIVERY_MANUAL_LIMIT_MAX = 10000000;
+const EMAIL_DELIVERY_POLICY_SAVE_TIMEOUT_MS = 30000;
 const taskState = {
   rows: [],
   inspectText: "",
@@ -1635,6 +1637,11 @@ const adminState = {
   governanceRequestId: 0,
   governanceLastPayload: null,
   governanceCharts: new Map(),
+  emailDeliveryOverview: null,
+  emailDeliveryPolicySaving: false,
+  emailDeliveryPolicySaveController: null,
+  emailDeliveryPolicyAbortReason: "",
+  emailDeliveryPolicyReturnFocus: null,
   auditRows: [],
   auditListPage: 1,
   auditListPageSize: 20,
@@ -5843,6 +5850,8 @@ function governanceQueueItem(title, detail, badgeValue, badgeTone) {
 function renderGovernanceDashboard(payload = {}) {
   const summary = payload.summary || {};
   const health = payload.health || {};
+  const emailDelivery = payload.email_delivery || {};
+  adminState.emailDeliveryOverview = emailDelivery;
   setText("govKpiCustomers", Number(summary.customers || 0));
   setText("govKpiCustomersMeta", `${Number(summary.active || 0)} 个活跃 · ${Number(summary.disabled || 0)} 个停用`);
   setText("govKpiActive", Number(summary.active || 0));
@@ -5856,6 +5865,28 @@ function renderGovernanceDashboard(payload = {}) {
   setText("govKpiSubscriptions", Number(summary.active_subscriptions || 0));
   setText("govKpiWallet", Number(summary.wallet_points || 0));
   setText("govKpiWalletMeta", `当期消耗 ${Number(summary.consumed_points || 0)} 点`);
+  setText("govKpiConsumedTotal", Number(summary.lifetime_consumed_points || 0));
+  const emailRequests = Math.max(0, Number(emailDelivery.requests_today || 0));
+  const emailLocalGuard = Math.max(0, Number(emailDelivery.local_guard_units || 0));
+  const emailAccountedRequests = emailRequests + emailLocalGuard;
+  const emailDelivered = Math.max(0, Number(emailDelivery.delivered_today || 0));
+  const emailFailed = Math.max(0, Number(emailDelivery.failed_today || 0));
+  setText("govKpiEmailSummary", emailAccountedRequests);
+  setText(
+    "govKpiEmailSummaryMeta",
+    `今日投递 ${emailDelivered} · 失败 ${emailFailed}${emailLocalGuard ? ` · 待同步 ${emailLocalGuard}` : ""}`,
+  );
+  const effectiveEmailLimit = Number(emailDelivery.effective_daily_limit);
+  const hasEmailLimit = Number.isFinite(effectiveEmailLimit) && effectiveEmailLimit > 0;
+  setText("govKpiEmailLimit", hasEmailLimit ? effectiveEmailLimit : "不可用");
+  const emailLimitParts = [];
+  if (hasEmailLimit) {
+    emailLimitParts.push(`已用 ${emailAccountedRequests}`);
+    emailLimitParts.push(`剩余 ${Math.max(0, Number(emailDelivery.remaining_today || 0))}`);
+  }
+  emailLimitParts.push(emailDelivery.mode === "manual" ? "自定义" : "自动同步");
+  if (emailDelivery.stale) emailLimitParts.push("数据延迟");
+  setText("govKpiEmailLimitMeta", emailLimitParts.join(" · "));
   setText("adminAlertCount", Number(summary.open_alerts || 0));
   const healthLabel = governanceLabel(summary.service_health || "unknown");
   setText("govKpiHealth", healthLabel);
@@ -5901,6 +5932,212 @@ function renderGovernanceDashboard(payload = {}) {
     governanceQueueItem(item.action, `成功 ${item.success_count || 0} · 失败 ${item.failed_count || 0} · 跳过 ${item.skipped_count || 0}`, item.status));
   const generatedAt = Number(payload.generated_at || 0);
   setText("governanceUpdatedAt", generatedAt ? `数据时间：${formatTime(generatedAt)}` : `刷新于 ${new Date().toLocaleTimeString()}`);
+}
+
+function syncEmailDeliveryPolicyFields() {
+  const mode = String(el("emailDeliveryLimitMode")?.value || "auto");
+  const manualField = el("emailDeliveryManualLimitField");
+  if (manualField) manualField.hidden = mode !== "manual";
+  const manualInput = el("emailDeliveryManualLimit");
+  if (manualInput) manualInput.setCustomValidity("");
+}
+
+function emailDeliveryPolicyPreviewText(overview = {}) {
+  const requests = Math.max(0, Number(overview.requests_today || 0))
+    + Math.max(0, Number(overview.local_guard_units || 0));
+  const remaining = Number(overview.provider_remaining_credits);
+  const remainingText = Number.isFinite(remaining) && remaining >= 0 ? String(remaining) : "未知";
+  return `今日请求 ${requests} · Brevo 可用额度 ${remainingText}`;
+}
+
+function validateEmailDeliveryManualLimit(value) {
+  const normalized = String(value == null ? "" : value).trim();
+  if (!normalized) return "请输入自定义每日上限。";
+  const parsed = Number(normalized);
+  if (!Number.isInteger(parsed) || parsed < 1) return "自定义每日上限必须是大于 0 的整数。";
+  if (parsed > EMAIL_DELIVERY_MANUAL_LIMIT_MAX) {
+    return "自定义每日上限不能超过 10,000,000 封。";
+  }
+  return "";
+}
+
+function formatEmailDeliveryPolicyError(error) {
+  const details = Array.isArray(error?.detail) ? error.detail : null;
+  if (details?.length) {
+    const manualIssue = details.find((issue) => {
+      const location = Array.isArray(issue?.loc) ? issue.loc : [];
+      return location.includes("manual_daily_limit");
+    });
+    if (manualIssue) {
+      const type = String(manualIssue.type || "");
+      const maximum = Number(manualIssue.ctx?.le);
+      if (type.includes("less_than_equal") || maximum === EMAIL_DELIVERY_MANUAL_LIMIT_MAX) {
+        return "自定义每日上限不能超过 10,000,000 封。";
+      }
+      if (type.includes("missing")) return "请输入自定义每日上限。";
+      return "自定义每日上限必须是 1 至 10,000,000 之间的整数。";
+    }
+    const modeIssue = details.find((issue) => {
+      const location = Array.isArray(issue?.loc) ? issue.loc : [];
+      return location.includes("mode");
+    });
+    if (modeIssue) return "请选择有效的邮件额度模式。";
+    return "提交的额度设置不符合要求，请检查后重试。";
+  }
+  if (typeof error?.detail?.message === "string" && error.detail.message.trim()) {
+    return error.detail.message.trim();
+  }
+  if (typeof error?.detail === "string" && error.detail.trim()) return error.detail.trim();
+  if (typeof error?.message === "string" && error.message.trim()) return error.message.trim();
+  return "邮件额度策略保存失败，请稍后重试。";
+}
+
+function emailDeliveryPolicyFocusableElements() {
+  const dialog = el("emailDeliveryPolicyDialog");
+  if (!dialog) return [];
+  return Array.from(dialog.querySelectorAll(
+    'button:not([disabled]), select:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+  )).filter((node) => (
+    !node.hidden
+    && node.getAttribute("aria-hidden") !== "true"
+    && node.getClientRects().length > 0
+  ));
+}
+
+function handleEmailDeliveryPolicyModalKeydown(event) {
+  const modal = el("emailDeliveryPolicyModal");
+  if (!modal || modal.getAttribute("aria-hidden") === "true") return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeEmailDeliveryPolicyModal();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = emailDeliveryPolicyFocusableElements();
+  if (!focusable.length) {
+    event.preventDefault();
+    el("emailDeliveryPolicyDialog")?.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && (document.activeElement === first || !focusable.includes(document.activeElement))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function openEmailDeliveryPolicyModal() {
+  const modal = el("emailDeliveryPolicyModal");
+  if (!modal) return;
+  adminState.emailDeliveryPolicyReturnFocus = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : el("btnEmailDeliveryPolicy");
+  const overview = adminState.emailDeliveryOverview || {};
+  const mode = overview.mode === "manual" ? "manual" : "auto";
+  if (el("emailDeliveryLimitMode")) el("emailDeliveryLimitMode").value = mode;
+  if (el("emailDeliveryManualLimit")) {
+    el("emailDeliveryManualLimit").value = Number(overview.manual_daily_limit) > 0
+      ? String(Math.trunc(Number(overview.manual_daily_limit)))
+      : "";
+  }
+  setText("emailDeliveryPolicyPreview", emailDeliveryPolicyPreviewText(overview));
+  setText(
+    "emailDeliveryPolicySyncMeta",
+    overview.synced_at
+      ? `${overview.stale ? "最近一次有效同步" : "最近同步"}：${formatTime(overview.synced_at)}`
+      : "尚未取得 Brevo 配额，请检查服务端配置。",
+  );
+  setMsg(
+    "emailDeliveryPolicyMsg",
+    overview.sync_error ? `同步失败：${overview.sync_error}` : "",
+    !overview.sync_error,
+  );
+  syncEmailDeliveryPolicyFields();
+  modal.style.display = "grid";
+  modal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => el("emailDeliveryLimitMode")?.focus(), 0);
+}
+
+function closeEmailDeliveryPolicyModal() {
+  const modal = el("emailDeliveryPolicyModal");
+  if (!modal) return;
+  const controller = adminState.emailDeliveryPolicySaveController;
+  if (modal.getAttribute("aria-hidden") === "true" && !controller) return;
+  if (controller && !controller.signal.aborted) {
+    adminState.emailDeliveryPolicyAbortReason = "cancelled";
+    controller.abort();
+  }
+  modal.style.display = "none";
+  modal.setAttribute("aria-hidden", "true");
+  const returnFocus = adminState.emailDeliveryPolicyReturnFocus;
+  adminState.emailDeliveryPolicyReturnFocus = null;
+  window.setTimeout(() => {
+    if (returnFocus instanceof HTMLElement && returnFocus.isConnected) returnFocus.focus();
+    else el("btnEmailDeliveryPolicy")?.focus();
+  }, 0);
+}
+
+async function saveEmailDeliveryPolicy() {
+  if (adminState.emailDeliveryPolicySaving) return;
+  const mode = String(el("emailDeliveryLimitMode")?.value || "auto");
+  const manualInput = el("emailDeliveryManualLimit");
+  const manualValidation = mode === "manual"
+    ? validateEmailDeliveryManualLimit(manualInput?.value)
+    : "";
+  if (manualInput) manualInput.setCustomValidity(manualValidation);
+  if (manualValidation) {
+    setMsg("emailDeliveryPolicyMsg", manualValidation, false);
+    manualInput?.reportValidity();
+    manualInput?.focus();
+    return;
+  }
+  const manualValue = Number(manualInput?.value || 0);
+  adminState.emailDeliveryPolicySaving = true;
+  adminState.emailDeliveryPolicyAbortReason = "";
+  const controller = new AbortController();
+  adminState.emailDeliveryPolicySaveController = controller;
+  const timeoutId = window.setTimeout(() => {
+    if (controller.signal.aborted) return;
+    adminState.emailDeliveryPolicyAbortReason = "timeout";
+    controller.abort();
+  }, EMAIL_DELIVERY_POLICY_SAVE_TIMEOUT_MS);
+  const saveButton = el("btnEmailDeliveryPolicySave");
+  if (saveButton) saveButton.disabled = true;
+  setMsg("emailDeliveryPolicyMsg", "正在保存并同步 Brevo 额度…");
+  try {
+    const result = await api("/api/admin/email-delivery-policy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode,
+        manual_daily_limit: mode === "manual" ? manualValue : null,
+      }),
+      signal: controller.signal,
+    });
+    adminState.emailDeliveryOverview = result?.email_delivery || adminState.emailDeliveryOverview;
+    setMsg("emailDeliveryPolicyMsg", "邮件额度策略已更新。", true);
+    void loadGovernanceDashboard({ force: true }).catch(() => {});
+    window.setTimeout(() => closeEmailDeliveryPolicyModal(), 250);
+  } catch (error) {
+    const abortReason = adminState.emailDeliveryPolicyAbortReason;
+    if (abortReason === "timeout") {
+      setMsg("emailDeliveryPolicyMsg", "保存等待超过 30 秒，请确认网络或 Brevo 服务状态后重试。", false);
+    } else if (abortReason !== "cancelled") {
+      setMsg("emailDeliveryPolicyMsg", `保存失败：${formatEmailDeliveryPolicyError(error)}`, false);
+    }
+  } finally {
+    window.clearTimeout(timeoutId);
+    if (adminState.emailDeliveryPolicySaveController === controller) {
+      adminState.emailDeliveryPolicySaveController = null;
+      adminState.emailDeliveryPolicyAbortReason = "";
+    }
+    adminState.emailDeliveryPolicySaving = false;
+    if (saveButton) saveButton.disabled = false;
+  }
 }
 
 function syncGovernanceRangeControls() {
@@ -8567,6 +8804,12 @@ function bindActions() {
   el("governanceRange")?.addEventListener("change", () => { syncGovernanceRangeControls(); void loadGovernanceDashboard({ force: true }); });
   el("governanceStartDate")?.addEventListener("change", () => void loadGovernanceDashboard({ force: true }));
   el("governanceEndDate")?.addEventListener("change", () => void loadGovernanceDashboard({ force: true }));
+  el("btnEmailDeliveryPolicy")?.addEventListener("click", openEmailDeliveryPolicyModal);
+  el("btnEmailDeliveryPolicyClose")?.addEventListener("click", closeEmailDeliveryPolicyModal);
+  el("btnEmailDeliveryPolicyCancel")?.addEventListener("click", closeEmailDeliveryPolicyModal);
+  el("btnEmailDeliveryPolicySave")?.addEventListener("click", () => void saveEmailDeliveryPolicy());
+  el("emailDeliveryLimitMode")?.addEventListener("change", syncEmailDeliveryPolicyFields);
+  el("emailDeliveryPolicyModal")?.addEventListener("keydown", handleEmailDeliveryPolicyModalKeydown);
   syncGovernanceRangeControls();
   el("btnRefreshAudit")?.addEventListener("click", () => {
     adminState.auditListPage = 1;
@@ -9339,6 +9582,7 @@ function bindActions() {
       closeTaskInspectModal();
       closeRechargeModal();
       closeUserDetailModal();
+      closeEmailDeliveryPolicyModal();
       setMfaModalOpen(false);
     }
   });

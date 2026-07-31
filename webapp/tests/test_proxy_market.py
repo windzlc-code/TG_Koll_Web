@@ -175,6 +175,22 @@ class ProxyMarketTests(unittest.TestCase):
         self.assertNotIn("username", item)
         self.assertNotIn("password", item)
 
+    def test_public_catalog_filters_supported_ip_types(self):
+        residential = self._market_item("TW-RESIDENTIAL")
+        datacenter = self._market_item("JP-DATACENTER")
+        with db() as conn:
+            conn.execute(
+                "UPDATE proxy_market_items SET ip_type = 'datacenter' WHERE id = ?",
+                (datacenter["id"],),
+            )
+
+        response = TestClient(self.app).get("/api/proxy-market/catalog?ip_type=datacenter")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["total"], 1)
+        self.assertEqual(response.json()["items"][0]["id"], datacenter["id"])
+        self.assertNotEqual(response.json()["items"][0]["id"], residential["id"])
+
     def test_public_catalog_supports_extended_sorting(self):
         earlier = self._market_item("TW-TPE-EARLIER")
         later = self._market_item("TW-TPE-LATER")

@@ -7,6 +7,7 @@ import secrets
 import smtplib
 import sqlite3
 import ssl
+import time
 import uuid
 from dataclasses import dataclass
 from email.message import EmailMessage
@@ -15,6 +16,16 @@ from typing import Any
 
 import requests
 from email_validator import EmailNotValidError, validate_email
+
+from .db import db
+from .email_delivery_governance import (
+    EmailDeliveryGovernanceError,
+    EmailDeliveryQuotaExceeded,
+    mark_email_delivery_attempt,
+    reserve_email_delivery_attempt,
+    sync_brevo_usage,
+    wait_for_email_delivery_attempt,
+)
 
 
 VERIFICATION_CODE_DIGITS = 6
@@ -492,6 +503,12 @@ def email_delivery_available() -> bool:
     return True
 
 
+def email_quota_governance_enabled() -> bool:
+    """Brevo quota protection is enabled by default and may be disabled in tests."""
+
+    return _truthy(os.getenv("EMAIL_QUOTA_GOVERNANCE_ENABLED", "1"))
+
+
 def smtp_available() -> bool:
     """Backward-compatible availability name used by the public policy API."""
 
@@ -505,6 +522,101 @@ def _send_verification_email_brevo(
     minutes: int,
     idempotency_key: str,
 ) -> None:
+    governance_attempt_id = str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"vecto-brevo-delivery/{idempotency_key}",
+        )
+    )
+    governance_owner_token = secrets.token_urlsafe(24)
+    governance_recovered = False
+    governance_enabled = email_quota_governance_enabled()
+    if governance_enabled:
+        try:
+            with db() as conn:
+                sync_brevo_usage(conn)
+                attempt = reserve_email_delivery_attempt(
+                    conn,
+                    attempt_id=governance_attempt_id,
+                    idempotency_key=idempotency_key,
+                    recipient=recipient,
+                    purpose="verification",
+                    owner_token=governance_owner_token,
+                )
+                if str(attempt.get("status") or "") == "accepted":
+                    return
+                if (
+                    str(attempt.get("status") or "") == "reserved"
+                    and not bool(attempt.get("delivery_owned"))
+                ):
+                    # Follow the active sender through its full bounded network
+                    # lease. Returning an error after an arbitrary short wait
+                    # would let the HTTP layer invalidate the same challenge
+                    # while the owner is still delivering it.
+                    wait_seconds = max(
+                        0.1,
+                        min(
+                            300.0,
+                            float(
+                                int(attempt.get("delivery_lease_expires_at") or 0)
+                            )
+                            - time.time()
+                            + 0.25,
+                        ),
+                    )
+                    attempt = wait_for_email_delivery_attempt(
+                        conn,
+                        governance_attempt_id,
+                        timeout_seconds=wait_seconds,
+                    )
+                    if str(attempt.get("status") or "") == "accepted":
+                        return
+                    if str(attempt.get("status") or "") == "reserved":
+                        attempt = reserve_email_delivery_attempt(
+                            conn,
+                            attempt_id=governance_attempt_id,
+                            idempotency_key=idempotency_key,
+                            recipient=recipient,
+                            purpose="verification",
+                            owner_token=governance_owner_token,
+                        )
+                if str(attempt.get("status") or "") != "reserved":
+                    raise VerificationDeliveryError(
+                        "verification email delivery failed"
+                    )
+                if not bool(attempt.get("delivery_owned")):
+                    raise VerificationDeliveryError(
+                        "verification email delivery is already in progress"
+                    )
+                governance_recovered = bool(attempt.get("delivery_recovered"))
+        except EmailDeliveryQuotaExceeded as exc:
+            raise VerificationRateLimitError(
+                "daily_email_limit_reached",
+                "daily email delivery limit reached",
+            ) from exc
+        except EmailDeliveryGovernanceError as exc:
+            raise VerificationDeliveryError(
+                "verification email delivery failed"
+            ) from exc
+
+    def finish_attempt(
+        status: str,
+        *,
+        message_id: str = "",
+        error_code: str = "",
+    ) -> None:
+        if not governance_enabled:
+            return
+        with db() as conn:
+            mark_email_delivery_attempt(
+                conn,
+                governance_attempt_id,
+                status,
+                message_id=message_id,
+                error_code=error_code,
+                owner_token=governance_owner_token,
+            )
+
     sender = {"email": config.sender_email}
     if config.sender_name:
         sender["name"] = config.sender_name
@@ -543,8 +655,26 @@ def _send_verification_email_brevo(
             allow_redirects=False,
         )
     except requests.RequestException as exc:
+        # A transport failure can happen after Brevo accepted the request.
+        # Keep the unit occupied until reconciliation instead of risking a
+        # quota overshoot through a blind retry.
+        try:
+            finish_attempt("unknown", error_code="transport_error")
+        except (EmailDeliveryGovernanceError, sqlite3.OperationalError):
+            pass
         raise VerificationDeliveryError("verification email delivery failed") from exc
     if response.status_code != 201:
+        try:
+            finish_attempt(
+                (
+                    "unknown"
+                    if response.status_code >= 500 or governance_recovered
+                    else "failed"
+                ),
+                error_code=f"http_{response.status_code}",
+            )
+        except (EmailDeliveryGovernanceError, sqlite3.OperationalError):
+            pass
         # Provider responses may include recipient data or account details.
         raise VerificationDeliveryError("verification email delivery failed")
     try:
@@ -552,7 +682,18 @@ def _send_verification_email_brevo(
     except (TypeError, ValueError):
         message_id = ""
     if not message_id:
+        try:
+            finish_attempt("unknown", error_code="missing_message_id")
+        except (EmailDeliveryGovernanceError, sqlite3.OperationalError):
+            pass
         raise VerificationDeliveryError("verification email delivery failed")
+    try:
+        finish_attempt("accepted", message_id=message_id)
+    except (EmailDeliveryGovernanceError, sqlite3.OperationalError):
+        # Brevo has already accepted the email. The original reservation stays
+        # occupied, which is fail-closed, while the verification code remains
+        # usable instead of reporting a false delivery failure.
+        pass
 
 
 def send_verification_email(

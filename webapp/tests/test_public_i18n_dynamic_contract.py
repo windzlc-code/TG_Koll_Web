@@ -111,6 +111,10 @@ class PublicI18nDynamicContractTests(unittest.TestCase):
         self.assertIn("遊客", self.proxy_market)
         self.assertIn('"遊客瀏覽"', self.proxy_market_script)
 
+    def test_proxy_market_exposes_all_supported_public_ip_type_filters(self):
+        self.assertIn('<option value="static_residential">靜態住宅</option>', self.proxy_market)
+        self.assertIn('<option value="datacenter">機房 IP</option>', self.proxy_market)
+
     @staticmethod
     def navigation_slice(source, start, end):
         start_index = source.index(start)

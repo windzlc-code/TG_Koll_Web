@@ -10,7 +10,7 @@ from unittest import mock
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from webapp import governance, password_vault
+from webapp import email_delivery_governance, governance, password_vault
 from webapp import social_automation_api
 from webapp import db as db_module
 import webapp.server as server
@@ -564,6 +564,183 @@ class AccountGovernanceTests(unittest.TestCase):
         self.assertEqual(dashboard.status_code, 200, dashboard.text)
         self.assertEqual(dashboard.json()["summary"]["wallet_points"], 12.5)
 
+    def test_dashboard_consumption_only_counts_settled_customer_usage(self):
+        admin, identity = self._admin_client()
+        active_customer = self._create_customer(admin, "consumption-active-customer")
+        deleted_customer = self._create_customer(admin, "consumption-deleted-customer")
+        now = server._now_ts()
+        with db_module.db() as conn:
+            conn.execute(
+                "UPDATE users SET lifecycle_status = 'deleted', deleted_at = ? WHERE id = ?",
+                (now, int(deleted_customer["id"])),
+            )
+            rows = (
+                ("settled-current", int(active_customer["id"]), "settled", 250, now - 60),
+                ("settled-old", int(active_customer["id"]), "settled", 350, now - 40 * 86400),
+                ("released-current", int(active_customer["id"]), "released", 700, now - 30),
+                ("settled-admin", int(identity["id"]), "settled", 900, now - 20),
+                ("settled-deleted", int(deleted_customer["id"]), "settled", 800, now - 10),
+            )
+            for suffix, user_id, status, settled_units, updated_at in rows:
+                conn.execute(
+                    """
+                    INSERT INTO billing_reservations(
+                      id, user_id, ref_type, ref_id, sku, status,
+                      reserved_credit_units, settled_credit_units,
+                      idempotency_key, created_at, updated_at
+                    ) VALUES (?, ?, 'test', ?, 'test_sku', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"bill-{suffix}",
+                        user_id,
+                        suffix,
+                        status,
+                        settled_units,
+                        settled_units,
+                        f"idem-{suffix}",
+                        updated_at,
+                        updated_at,
+                    ),
+                )
+        server._invalidate_admin_dashboard_cache()
+        dashboard = admin.get("/api/admin/dashboard?days=7")
+        self.assertEqual(dashboard.status_code, 200, dashboard.text)
+        summary = dashboard.json()["summary"]
+        self.assertEqual(summary["consumed_points"], 2.5)
+        self.assertEqual(summary["lifetime_consumed_points"], 14.0)
+
+    def test_dashboard_consumption_respects_snapshot_end_boundary(self):
+        admin, _identity = self._admin_client()
+        customer = self._create_customer(admin, "consumption-range-customer")
+        now = server._now_ts()
+        snapshot_end = now - 3600
+        with db_module.db() as conn:
+            rows = (
+                ("settled-in-range", 275, snapshot_end - 60),
+                ("settled-after-range", 925, snapshot_end + 60),
+            )
+            for suffix, settled_units, updated_at in rows:
+                conn.execute(
+                    """
+                    INSERT INTO billing_reservations(
+                      id, user_id, ref_type, ref_id, sku, status,
+                      reserved_credit_units, settled_credit_units,
+                      idempotency_key, created_at, updated_at
+                    ) VALUES (?, ?, 'test', ?, 'test_sku', 'settled', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"bill-{suffix}",
+                        int(customer["id"]),
+                        suffix,
+                        settled_units,
+                        settled_units,
+                        f"idem-{suffix}",
+                        updated_at,
+                        updated_at,
+                    ),
+                )
+            snapshot = governance.dashboard_snapshot(conn, days=7, at=snapshot_end)
+        self.assertEqual(snapshot["summary"]["consumed_points"], 2.75)
+        self.assertEqual(snapshot["summary"]["lifetime_consumed_points"], 12.0)
+
+    def test_admin_can_switch_email_delivery_limit_between_auto_and_manual(self):
+        admin, identity = self._admin_client()
+        now = server._now_ts()
+        with db_module.db() as conn:
+            conn.execute(
+                """
+                UPDATE email_delivery_provider_snapshot
+                SET report_day = ?, provider_daily_limit = 300,
+                    provider_remaining_credits = 280, requests_today = 20,
+                    delivered_today = 19, failed_today = 1,
+                    synced_at = ?, updated_at = ?
+                WHERE id = 1
+                """,
+                (email_delivery_governance._quota_day(now), now, now),
+            )
+        with mock.patch.object(
+            email_delivery_governance,
+            "sync_brevo_usage",
+            side_effect=lambda conn, force=False: email_delivery_governance.get_email_delivery_overview(conn),
+        ):
+            current = admin.get("/api/admin/email-delivery-policy")
+            self.assertEqual(current.status_code, 200, current.text)
+            self.assertEqual(current.json()["email_delivery"]["mode"], "auto")
+            self.assertEqual(
+                current.json()["email_delivery"]["effective_daily_limit"],
+                300,
+            )
+
+            manual = admin.put(
+                "/api/admin/email-delivery-policy",
+                headers=self.ORIGIN_HEADERS,
+                json={"mode": "manual", "manual_daily_limit": 120},
+            )
+            self.assertEqual(manual.status_code, 200, manual.text)
+            self.assertEqual(manual.json()["email_delivery"]["mode"], "manual")
+            self.assertEqual(
+                manual.json()["email_delivery"]["effective_daily_limit"],
+                120,
+            )
+
+            too_high = admin.put(
+                "/api/admin/email-delivery-policy",
+                headers=self.ORIGIN_HEADERS,
+                json={"mode": "manual", "manual_daily_limit": 301},
+            )
+            self.assertEqual(too_high.status_code, 400, too_high.text)
+
+            automatic = admin.put(
+                "/api/admin/email-delivery-policy",
+                headers=self.ORIGIN_HEADERS,
+                json={"mode": "auto", "manual_daily_limit": None},
+            )
+            self.assertEqual(automatic.status_code, 200, automatic.text)
+            self.assertEqual(automatic.json()["email_delivery"]["mode"], "auto")
+
+        with db_module.db() as conn:
+            audit_count = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM audit_events
+                    WHERE actor_user_id = ? AND action = 'email_delivery_policy.update'
+                    """,
+                    (int(identity["id"]),),
+                ).fetchone()["count"]
+            )
+        self.assertEqual(audit_count, 2)
+
+    def test_manual_email_delivery_limit_returns_stable_unavailable_response(self):
+        admin, _identity = self._admin_client()
+        with mock.patch.object(
+            email_delivery_governance,
+            "set_email_delivery_policy",
+            side_effect=email_delivery_governance.EmailDeliveryQuotaUnavailable(
+                "Brevo daily limit is not available"
+            ),
+        ):
+            response = admin.put(
+                "/api/admin/email-delivery-policy",
+                headers=self.ORIGIN_HEADERS,
+                json={"mode": "manual", "manual_daily_limit": 120},
+            )
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(
+            response.json()["detail"],
+            {
+                "code": "email_delivery_quota_unavailable",
+                "message": "Brevo daily limit is not available",
+            },
+        )
+
+    def test_image_aspect_ratio_validation_does_not_catch_email_quota_errors(self):
+        source = Path(server.__file__).read_text(encoding="utf-8")
+        start = source.index('payload.pop("aspect_ratio_resolved", None)')
+        end = source.index('if not payload["related_persona_id"]', start)
+        validation_block = source[start:end]
+        self.assertNotIn("EmailDeliveryQuotaUnavailable", validation_block)
+
     def test_batch_credit_adjustment_replaces_only_selected_customer_balances_and_notifies_them(self):
         admin, _identity = self._admin_client()
         selected_a = self._create_customer(admin, "batch-credit-a")
@@ -625,7 +802,9 @@ class AccountGovernanceTests(unittest.TestCase):
             [-2.5 * server.commercial_billing.POINT_SCALE] * 2,
         )
         self.assertEqual(len(notices), 2)
+        self.assertTrue(all(str(row["title"]) == "Vecto 算力已更新" for row in notices))
         self.assertTrue(all("2.5" in str(row["body"]) for row in notices))
+        self.assertTrue(all("管理员" not in f"{row['title']} {row['body']}" for row in notices))
 
     def test_batch_credit_can_enable_unlimited_compute_for_selected_customers(self):
         admin, _identity = self._admin_client()
@@ -664,12 +843,15 @@ class AccountGovernanceTests(unittest.TestCase):
                 ).fetchall()
             }
             notice = conn.execute(
-                "SELECT source_key FROM user_notifications WHERE user_id = ? AND source_key = ?",
+                "SELECT source_key, title, body FROM user_notifications WHERE user_id = ? AND source_key = ?",
                 (int(selected["id"]), f"admin-batch-credit:{applied.json()['job_id']}"),
             ).fetchone()
         self.assertEqual(wallets[int(selected["id"])], 1)
         self.assertEqual(wallets[int(untouched["id"])], 0)
         self.assertIsNotNone(notice)
+        self.assertEqual(str(notice["title"]), "Vecto 算力已更新")
+        self.assertIn("Vecto", str(notice["body"]))
+        self.assertNotIn("管理员", str(notice["body"]))
 
     def test_batch_credit_rolls_back_target_when_notification_fails(self):
         admin, _identity = self._admin_client()
@@ -1142,7 +1324,7 @@ class AccountGovernanceTests(unittest.TestCase):
         }
         self.assertTrue(importance["账号已停用"])
         self.assertTrue(importance["账号已启用"])
-        self.assertFalse(importance["管理员已调整算力"])
+        self.assertFalse(importance["Vecto 算力已更新"])
 
     def test_service_account_credential_is_returned_once_and_only_digest_is_stored(self):
         admin, _ = self._admin_client()

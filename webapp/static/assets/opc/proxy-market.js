@@ -363,7 +363,7 @@
       static_residential: "靜態住宅",
       residential: "住宅",
       mobile: "行動網路",
-      datacenter: "資料中心",
+      datacenter: "機房 IP",
     });
     headingCopy.append(
       textElement("span", "proxy-card-kicker", ipType),

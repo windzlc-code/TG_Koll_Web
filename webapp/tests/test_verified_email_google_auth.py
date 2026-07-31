@@ -211,6 +211,38 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
         )
         self.assertIn("请返回登录", duplicate.json()["detail"]["message"])
 
+    def test_daily_email_quota_exhaustion_returns_429_and_invalidates_challenge(self):
+        client = TestClient(self.app)
+        quota_error = server.VerificationRateLimitError(
+            "daily_email_limit_reached",
+            "daily email delivery limit reached",
+        )
+        with mock.patch.object(
+            server,
+            "send_verification_email",
+            side_effect=quota_error,
+        ):
+            response = client.post(
+                "/api/auth/email-verification/send",
+                headers={"Origin": "http://testserver"},
+                json={"email": "daily-limit@gmail.com", "purpose": "register"},
+            )
+        self.assertEqual(response.status_code, 429, response.text)
+        self.assertEqual(
+            response.json()["detail"]["code"],
+            "daily_email_limit_reached",
+        )
+        with db_module.db() as conn:
+            challenge = conn.execute(
+                """
+                SELECT send_status, invalidated_at
+                FROM email_verification_challenges
+                WHERE email_normalized = 'daily-limit@gmail.com'
+                """
+            ).fetchone()
+        self.assertEqual(str(challenge["send_status"]), "failed")
+        self.assertGreater(int(challenge["invalidated_at"]), 0)
+
     def test_verification_failures_persist_and_invalidate_the_challenge(self):
         client = TestClient(self.app)
         with mock.patch.object(server, "send_verification_email"):

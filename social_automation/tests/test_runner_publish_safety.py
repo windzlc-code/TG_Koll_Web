@@ -623,6 +623,100 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         resolved.assert_called_once_with()
         self.assertIsNone(manager.__exit__.call_args.args[0])
 
+    def test_warmup_cookie_expiry_auto_logs_in_then_continues_original_task(self):
+        page = mock.Mock()
+        context = mock.Mock()
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = context
+        expired = {"status": "cookie_expired", "reason": "login page"}
+
+        with (
+            mock.patch.object(runner, "_open_camoufox_context", return_value=manager),
+            mock.patch.object(runner, "_import_initial_cookies"),
+            mock.patch.object(runner, "_first_page", return_value=page),
+            mock.patch.object(runner, "_sync_live_browser_viewport"),
+            mock.patch.object(runner, "_check_platform_login", return_value=expired),
+            mock.patch.object(runner, "_self_heal_login_page"),
+            mock.patch.object(runner, "_detect_platform_login_state", return_value=expired),
+            mock.patch.object(
+                runner,
+                "_run_open_login",
+                return_value={"ok": True, "status": "ready"},
+            ) as auto_login,
+            mock.patch.object(
+                runner,
+                "_run_instagram_warmup",
+                return_value={"ok": True, "status": "success"},
+            ) as warmup,
+        ):
+            result = runner.run_social_task(
+                task={
+                    "id": "warmup-login-recovery",
+                    "task_type": "instagram_warmup",
+                    "platform": "instagram",
+                    "payload": {"publish_login_repair_attempts": 1},
+                },
+                account={
+                    "platform": "instagram",
+                    "login_username": "saved-user",
+                    "login_password": "saved-password",
+                },
+                proxy=None,
+                data_dir=Path("."),
+                logger=_Logger(),
+            )
+
+        self.assertTrue(result["ok"])
+        auto_login.assert_called_once()
+        warmup.assert_called_once()
+        self.assertIsNone(manager.__exit__.call_args.args[0])
+
+    def test_warmup_verification_auto_submits_totp_then_continues_original_task(self):
+        page = mock.Mock()
+        context = mock.Mock()
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = context
+        verification = {"status": "need_verification", "reason": "2FA challenge"}
+
+        with (
+            mock.patch.object(runner, "_open_camoufox_context", return_value=manager),
+            mock.patch.object(runner, "_import_initial_cookies"),
+            mock.patch.object(runner, "_first_page", return_value=page),
+            mock.patch.object(runner, "_sync_live_browser_viewport"),
+            mock.patch.object(runner, "_check_platform_login", return_value=verification),
+            mock.patch.object(
+                runner,
+                "_try_auto_totp_challenge",
+                return_value={"status": "ready"},
+            ) as auto_totp,
+            mock.patch.object(
+                runner,
+                "_run_instagram_warmup",
+                return_value={"ok": True, "status": "success"},
+            ) as warmup,
+        ):
+            result = runner.run_social_task(
+                task={
+                    "id": "warmup-totp-recovery",
+                    "task_type": "instagram_warmup",
+                    "platform": "instagram",
+                    "payload": {},
+                },
+                account={
+                    "platform": "instagram",
+                    "login_username": "saved-user",
+                    "login_password": "saved-password",
+                },
+                proxy=None,
+                data_dir=Path("."),
+                logger=_Logger(),
+            )
+
+        self.assertTrue(result["ok"])
+        auto_totp.assert_called_once()
+        warmup.assert_called_once()
+        self.assertIsNone(manager.__exit__.call_args.args[0])
+
     def test_threads_error_page_is_not_treated_as_ready(self):
         status = runner._detect_threads_login_state(_ThreadsErrorPage())
 
@@ -693,6 +787,21 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             status = runner._detect_instagram_login_state(page)
 
         self.assertEqual(status["status"], "cookie_expired")
+
+    def test_instagram_onetap_prompt_is_not_ready_even_with_visible_sidebar(self):
+        page = _ThreadsShellPage(
+            [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}],
+            body_text=(
+                "Save your login info? We can save your login info on this browser "
+                "so you don't need to enter it again. Save info Not now"
+            ),
+        )
+        page.url = "https://www.instagram.com/accounts/onetap/"
+
+        status = runner._detect_instagram_login_state(page)
+
+        self.assertEqual(status["status"], "post_login_interstitial")
+        self.assertIn("onetap", status["url"])
 
     def test_instagram_login_page_reports_invalid_credentials_before_login_form(self):
         page = _ThreadsShellPage([], body_text="Your password was incorrect. Please try again.")
@@ -1899,6 +2008,51 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         outcome.assert_called_with("verified")
         self_heal.assert_not_called()
 
+    def test_open_login_dismisses_instagram_onetap_before_declaring_ready(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/accounts/onetap/"
+        interstitial = {
+            "status": "post_login_interstitial",
+            "reason": "Save your login info prompt is blocking the page.",
+            "url": page.url,
+        }
+        with (
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(
+                runner,
+                "_detect_platform_login_state",
+                side_effect=[interstitial, {"status": "ready"}],
+            ),
+            mock.patch.object(
+                runner,
+                "_resolve_instagram_post_login_interstitial",
+                return_value=True,
+            ) as resolve_interstitial,
+            mock.patch.object(
+                runner,
+                "_confirm_platform_ready",
+                return_value={"status": "ready"},
+            ),
+            mock.patch.object(runner, "_screenshot", return_value="login-complete.png"),
+            mock.patch.object(runner.time, "time", return_value=0),
+        ):
+            result = runner._run_open_login(
+                page,
+                {"id": "instagram-onetap"},
+                {},
+                {
+                    "login_wait_seconds": 30,
+                    "auto_submit": False,
+                },
+                Path("."),
+                _Logger(),
+                "instagram",
+            )
+
+        self.assertEqual(result["status"], "ready")
+        resolve_interstitial.assert_called_once_with(page, mock.ANY)
+        goto.assert_called_once()
+
     def test_auto_login_does_not_resubmit_or_self_heal_during_submit_grace(self):
         page = mock.Mock()
         page.url = "https://www.instagram.com/accounts/login/"
@@ -2086,6 +2240,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
     def test_instagram_remembered_profile_continues_without_retyping_credentials(self):
         page = _Page(url="https://www.instagram.com/accounts/login/")
+        payload = {"login_username": "windzlc123", "login_password": "saved-password"}
         with (
             mock.patch.object(
                 runner,
@@ -2100,7 +2255,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             submitted = runner._auto_submit_login_form(
                 page,
                 "instagram",
-                {"login_username": "windzlc123", "login_password": "saved-password"},
+                payload,
                 _Logger(),
                 {"id": "remembered-profile-login"},
                 Path("."),
@@ -2116,6 +2271,51 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         )
         visible_first.assert_not_called()
         self.assertEqual(page.keyboard.typed, [])
+        self.assertTrue(payload["_instagram_remembered_profile_continue_attempted"])
+
+    def test_instagram_remembered_profile_falls_back_to_password_after_continue_stalls(self):
+        page = _Page(url="https://www.instagram.com/accounts/login/")
+        username_input = _Locator()
+        password_input = _Locator()
+        payload = {
+            "login_username": "windzlc123",
+            "login_password": "saved-password",
+            "_instagram_remembered_profile_continue_attempted": True,
+        }
+        with (
+            mock.patch.object(
+                runner,
+                "_page_body_text_lower",
+                return_value="windzlc123 continue use another profile create new account",
+            ),
+            mock.patch.object(runner, "_click_text_button", return_value=True) as click,
+            mock.patch.object(
+                runner,
+                "_visible_first",
+                side_effect=[username_input, password_input],
+            ),
+            mock.patch.object(runner, "_clear_and_type") as type_text,
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_screenshot", return_value="remembered.png"),
+        ):
+            submitted = runner._auto_submit_login_form(
+                page,
+                "instagram",
+                payload,
+                _Logger(),
+                {"id": "remembered-profile-password-fallback"},
+                Path("."),
+            )
+
+        self.assertTrue(submitted)
+        self.assertEqual(
+            [call.args[3] for call in click.call_args_list],
+            ["instagram_remembered_profile_switch", "auto_login_submit"],
+        )
+        self.assertEqual(
+            [call.args[2] for call in type_text.call_args_list],
+            ["windzlc123", "saved-password"],
+        )
 
     def test_system_manual_takeover_notifies_persistence_callback(self):
         event = threading.Event()

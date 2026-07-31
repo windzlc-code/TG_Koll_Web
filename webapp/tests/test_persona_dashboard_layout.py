@@ -239,6 +239,30 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("border: 0;", delete_styles)
         self.assertNotIn("border: 1px solid #ef4444;", delete_styles)
 
+    def test_platform_picker_trigger_does_not_reclose_from_the_same_click(self):
+        picker_start = self.dashboard_script.index("function pdRenderDashboardPlatformTabs(data)")
+        picker_end = self.dashboard_script.index(
+            "\nfunction pdCloseDashboardPlatformPicker",
+            picker_start,
+        )
+        picker = self.dashboard_script[picker_start:picker_end]
+
+        self.assertIn(
+            'pdEl("personaDashboardPlatformPickerTrigger")?.addEventListener("click", (event) => {',
+            picker,
+        )
+        self.assertIn("event.stopPropagation();", picker)
+
+    def test_persona_heat_ranking_is_sorted_from_high_to_low(self):
+        chart_start = self.dashboard_script.index("function pdRenderBarChart(hostId, rows)")
+        chart_end = self.dashboard_script.index("\nfunction pdRenderDonutChart", chart_start)
+        chart = self.dashboard_script[chart_start:chart_end]
+
+        self.assertIn(
+            ".sort((left, right) => Number(right.value || 0) - Number(left.value || 0))",
+            chart,
+        )
+
     def test_post_detail_prefers_backend_preview_urls_and_does_not_render_schema_field_names(self):
         media_start = self.dashboard_script.index("function pdPostMediaItems(row)")
         media_end = self.dashboard_script.index("\nfunction pdPostComposition", media_start)

@@ -239,8 +239,6 @@ def _attempt_publish_login_repair(
     initial_status: dict[str, Any],
     context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if str(task.get("task_type") or "") != "publish_post":
-        return initial_status
     initial_code = str(initial_status.get("status") or "")
     if initial_code == "invalid_credentials":
         return initial_status
@@ -269,7 +267,7 @@ def _attempt_publish_login_repair(
     logger.log(
         "warn",
         "publish_login_repair",
-        f"{_platform_name(platform)} login check failed before publishing; trying automatic recovery before manual handoff.",
+        f"{_platform_name(platform)} login check failed before task execution; trying automatic recovery before manual handoff.",
         {"status": initial_status, "attempts": max_repair_attempts},
     )
     for attempt in range(1, max_repair_attempts + 1):
@@ -279,7 +277,7 @@ def _attempt_publish_login_repair(
             logger,
             task,
             screenshot_dir,
-            str(initial_status.get("reason") or "publish_login_not_ready"),
+            str(initial_status.get("reason") or "task_login_not_ready"),
             attempt,
             cancel_event,
             context_control,
@@ -398,7 +396,7 @@ def run_social_task(
                 login,
                 context_control,
             )
-        if task_type == "publish_post" and login.get("status") in {
+        if login.get("status") in {
             "totp_submitted",
             "account_confirmation_required",
         }:
@@ -413,7 +411,7 @@ def run_social_task(
                 login,
                 context_control,
             )
-        if task_type == "publish_post" and login.get("status") in {"need_verification", "invalid_credentials"}:
+        if login.get("status") in {"need_verification", "invalid_credentials"}:
             detected_status = str(login.get("status") or "need_verification")
             account_status = "need_verification" if detected_status == "need_verification" else "cookie_expired"
             _report_account_login_status(context_control, account_status, logger)
@@ -421,8 +419,8 @@ def run_social_task(
             shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
             logger.log(
                 "warn",
-                "publish_login_manual_takeover",
-                str(login.get("reason") or f"{_platform_name(platform)} 发布前需要人工完成登录验证。"),
+                "task_login_manual_takeover",
+                str(login.get("reason") or f"{_platform_name(platform)} 任务执行前需要人工完成登录验证。"),
                 {"details": login, "screenshot_path": shot},
                 shot,
             )
@@ -433,7 +431,7 @@ def run_social_task(
                 logger,
                 platform,
                 cancel_event,
-                f"{_platform_name(platform)} 发布前需要人工验证，完成后系统会继续发布。",
+                f"{_platform_name(platform)} 任务执行前需要人工验证，完成后系统会继续原任务。",
                 detected_status,
                 shot,
                 login,
@@ -1787,6 +1785,7 @@ def _account_health_from_login_state(status: dict[str, Any]) -> tuple[str, str]:
 
 def _detect_instagram_login_state(page) -> dict[str, Any]:
     url = str(page.url or "")
+    normalized_url = url.lower()
     body_text = ""
     try:
         body_text = str(page.locator("body").inner_text(timeout=5000) or "").lower()
@@ -1809,6 +1808,20 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
     challenge_markers = _verification_text_markers()
     if any(marker in body_text for marker in challenge_markers):
         return {"status": "need_verification", "reason": "检测到验证或安全挑战文案。"}
+    post_login_interstitial = (
+        "/accounts/onetap" in normalized_url
+        or "save your login info?" in body_text
+        or (
+            "turn on notifications" in body_text
+            and "not now" in body_text
+        )
+    )
+    if post_login_interstitial:
+        return {
+            "status": "post_login_interstitial",
+            "reason": "Instagram 登录后的确认窗口仍在显示，尚未进入可操作页面。",
+            "url": url,
+        }
     if "/accounts/login" in url:
         return {"status": "cookie_expired", "reason": "检测到 Instagram 登录页面。", "url": url}
     login_inputs = page.locator(
@@ -2316,6 +2329,21 @@ def _run_open_login(
             last_status = _detect_platform_login_state(page, platform)
             if platform == "threads":
                 last_status = _restore_threads_after_instagram_login(page, last_status, logger)
+            if (
+                platform == "instagram"
+                and str(last_status.get("status") or "") == "post_login_interstitial"
+            ):
+                if _resolve_instagram_post_login_interstitial(page, logger):
+                    last_submit_monotonic = None
+                    continue
+                logger.log(
+                    "warn",
+                    "instagram_post_login_interstitial",
+                    "Instagram 登录后的确认窗口仍未关闭，继续等待公共登录链路处理。",
+                    {"url": _safe_navigation_url(page.url), "details": last_status},
+                )
+                time.sleep(2)
+                continue
             if last_status.get("status") == "ready":
                 stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
                 if stable_status.get("status") == "ready":
@@ -2622,6 +2650,9 @@ def _wait_for_manual_login_completion(
         if time.monotonic() >= deadline:
             raise_manual_login_timeout()
         current_code = str(current_status.get("status") or "").strip()
+        if current_code == "post_login_interstitial" and platform == "instagram":
+            if _resolve_instagram_post_login_interstitial(page, logger):
+                continue
         if current_code == "ready":
             stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
             if time.monotonic() >= deadline:
@@ -2666,6 +2697,13 @@ def _confirm_platform_ready(page, platform: str, logger: AutomationLogger, cance
         _raise_if_cancelled(cancel_event)
         _sleep_between(0.8, 1.4)
         last_status = _detect_platform_login_state(page, platform)
+        if (
+            platform == "instagram"
+            and str(last_status.get("status") or "") == "post_login_interstitial"
+        ):
+            ready_hits = 0
+            _resolve_instagram_post_login_interstitial(page, logger)
+            continue
         if last_status.get("status") == "ready":
             ready_hits += 1
             if ready_hits >= 2:
@@ -3072,13 +3110,28 @@ def _dismiss_instagram_interstitials(page, logger: AutomationLogger) -> bool:
             page,
             logger,
             ["Not Now", "稍后", "以后再说", "暂不", "現在不要"],
-            "instagram_warmup_dismiss",
+            "instagram_interstitial_dismiss",
         ):
             break
         dismissed = True
-        logger.log("info", "instagram_warmup_dismiss", "已关闭 Instagram 平台提示弹窗。")
+        logger.log("info", "instagram_interstitial_dismiss", "已关闭 Instagram 平台提示弹窗。")
         _sleep_between(0.5, 1.0)
     return dismissed
+
+
+def _resolve_instagram_post_login_interstitial(page, logger: AutomationLogger) -> bool:
+    url_before = str(page.url or "")
+    if not _dismiss_instagram_interstitials(page, logger):
+        return False
+    if "/accounts/onetap" in url_before.lower() or "/accounts/onetap" in str(page.url or "").lower():
+        _goto(page, INSTAGRAM_HOME, logger, "instagram_post_login_home")
+    logger.log(
+        "info",
+        "instagram_post_login_interstitial",
+        "Instagram 登录后的确认窗口已关闭，正在确认首页可操作状态。",
+        {"url": _safe_navigation_url(page.url)},
+    )
+    return True
 
 
 def _click_some_instagram_likes(
@@ -8256,22 +8309,43 @@ def _auto_submit_login_form(
             )
         )
         if remembered_profile:
+            continue_attempted = bool(
+                payload.get("_instagram_remembered_profile_continue_attempted")
+            )
+            if not continue_attempted:
+                logger.log(
+                    "info",
+                    "instagram_remembered_profile",
+                    "检测到 Instagram 已记住当前账号，正在继续使用该账号登录。",
+                    {"username": username, "url": _safe_navigation_url(page.url)},
+                )
+                payload["_instagram_remembered_profile_continue_attempted"] = True
+                clicked = _click_text_button(
+                    page,
+                    logger,
+                    ["Continue", "继续"],
+                    "instagram_remembered_profile_continue",
+                    abort_if=takeover_requested,
+                )
+                if clicked:
+                    _sleep_between(2.0, 4.0)
+                    return True
             logger.log(
-                "info",
-                "instagram_remembered_profile",
-                "检测到 Instagram 已记住当前账号，正在继续使用该账号登录。",
+                "warn",
+                "instagram_remembered_profile_fallback",
+                "Instagram 已记住账号的继续登录未生效，正在切换到账号密码登录。",
                 {"username": username, "url": _safe_navigation_url(page.url)},
             )
-            clicked = _click_text_button(
+            switched = _click_text_button(
                 page,
                 logger,
-                ["Continue", "继续"],
-                "instagram_remembered_profile_continue",
+                ["Use another profile", "Switch accounts", "使用其他个人资料", "使用其他帐号", "使用其他账号"],
+                "instagram_remembered_profile_switch",
                 abort_if=takeover_requested,
             )
-            if clicked:
-                _sleep_between(2.0, 4.0)
-                return True
+            if not switched:
+                return False
+            _sleep_between(1.5, 3.0)
 
     continue_clicked = False
     if platform == "threads":

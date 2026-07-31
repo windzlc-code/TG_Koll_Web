@@ -8718,7 +8718,7 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 
 .page-admin .admin-governance-kpis {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(174px, 1fr));
   gap: 8px;
   margin-top: 10px;
 }
@@ -8744,7 +8744,56 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 .page-admin .admin-governance-kpi > strong {
   color: var(--admin-ink);
   font-size: 22px;
+}
+
+.page-admin .admin-governance-kpi-configurable {
+  position: relative;
+  padding-right: 46px;
+}
+
+.page-admin .admin-kpi-action {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-height: 24px;
+  padding: 2px 7px;
+  border: 1px solid var(--admin-line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--admin-ink-soft);
+  font-size: 11px;
+  font-weight: 700;
   line-height: 1;
+}
+
+.page-admin .admin-kpi-action:hover {
+  border-color: var(--gov-blue);
+  color: var(--admin-ink);
+}
+
+.page-admin .admin-email-policy-body {
+  display: grid;
+  gap: 12px;
+}
+
+.page-admin .admin-email-policy-preview {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--admin-line);
+  border-radius: 6px;
+  background: #f7f9fa;
+}
+
+.page-admin .admin-email-policy-preview > span,
+.page-admin .admin-email-policy-preview > small {
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.page-admin .admin-email-policy-preview > strong {
+  color: var(--admin-ink);
+  font-size: 15px;
 }
 
 .page-admin .admin-governance-kpi.is-info {
@@ -9322,7 +9371,10 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 }
 
 @media (max-width: 1120px) {
-  .page-admin .admin-governance-kpis,
+  .page-admin .admin-governance-kpis {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
   .page-admin .admin-governance-lower-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
