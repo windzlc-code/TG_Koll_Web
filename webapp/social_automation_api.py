@@ -10933,6 +10933,11 @@ def _task_public(row: Any, *, billing_reservation_status: str = "") -> dict[str,
 def _log_public(row: Any) -> dict[str, Any]:
     item = dict(row)
     screenshot = str(item.get("screenshot_path") or "")
+    if screenshot:
+        parsed = urlparse(screenshot)
+        is_remote_media = parsed.scheme.lower() in {"http", "https", "data"}
+        if not is_remote_media and not Path(screenshot).is_file():
+            screenshot = ""
     return {
         "id": int(item.get("id") or 0),
         "task_id": str(item.get("task_id") or ""),
