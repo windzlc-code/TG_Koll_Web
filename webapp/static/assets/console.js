@@ -11592,7 +11592,7 @@ function renderAutomationPlanStrategyFields(item = {}) {
     .filter((key) => Object.prototype.hasOwnProperty.call(params, key))
     .map((key) => `<div class="automation-plan-detail-strategy"><dt>${esc(automationPlanStrategyFieldLabel(key))}</dt><dd>${esc(automationPlanStrategyFieldValue(key, params[key]))}</dd></div>`)
     .join("");
-  return `<div class="automation-plan-detail-strategy"><dt>策略</dt><dd>${esc(summary)}</dd></div>${previewFields}`;
+  return `<div class="automation-plan-detail-strategy automation-plan-detail-strategy--summary"><dt>策略</dt><dd>${esc(summary)}</dd></div>${previewFields}`;
 }
 
 function automationPlanStrategySummary(item = {}) {

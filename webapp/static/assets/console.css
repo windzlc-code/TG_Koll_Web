@@ -3631,6 +3631,15 @@ textarea:focus {
   gap: 3px;
 }
 
+.automation-plan-detail-strategy--summary {
+  grid-column: 1 / -1;
+}
+
+.automation-plan-detail-strategy--summary dd {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
 .automation-plan-detail-preview-card .automation-plan-detail-preview-wide {
   grid-column: 1 / -1;
 }

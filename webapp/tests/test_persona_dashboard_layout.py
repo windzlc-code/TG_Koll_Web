@@ -2799,6 +2799,22 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("max-width: 420px;", self.styles)
         self.assertNotIn(".proxy-table-row:not(.proxy-table-row--head)", self.styles)
 
+    def test_automation_plan_strategy_summary_stays_on_one_full_width_line(self):
+        renderer = self.console_script[
+            self.console_script.index("function renderAutomationPlanStrategyFields"):
+            self.console_script.index("\nfunction automationPlanStrategySummary")
+        ]
+
+        self.assertIn(
+            'class="automation-plan-detail-strategy automation-plan-detail-strategy--summary"',
+            renderer,
+        )
+        self.assertIn(".automation-plan-detail-strategy--summary {", self.styles)
+        self.assertIn("grid-column: 1 / -1;", self.styles)
+        self.assertIn(".automation-plan-detail-strategy--summary dd {", self.styles)
+        self.assertIn("white-space: nowrap;", self.styles)
+        self.assertIn("overflow-wrap: normal;", self.styles)
+
     def test_proxy_market_modal_uses_card_skeletons_and_corrects_stale_country_titles(self):
         modal = self.console_script[
             self.console_script.index("function proxyMarketCatalogRoot"):
