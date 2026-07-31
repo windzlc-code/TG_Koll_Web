@@ -12,15 +12,18 @@ class ModalIconStyleContractTests(unittest.TestCase):
         end = self.styles.index(next_selector, start)
         return self.styles[start:end]
 
-    def test_persona_image_viewer_uses_console_theme_without_framed_icons(self):
+    def test_persona_image_viewer_uses_project_dark_theme_without_framed_icons(self):
         viewer = self._rule(".persona-media-lightbox {", ".notice {")
         icon_rule = self._rule(
             ".persona-media-lightbox-icon-button {",
             ".persona-media-lightbox-icon-button:hover,",
         )
 
-        self.assertIn("background: var(--panel-solid);", viewer)
-        self.assertIn("background: var(--panel-2);", viewer)
+        self.assertIn("--viewer-bg: #080a0b;", viewer)
+        self.assertIn("--viewer-surface: #111416;", viewer)
+        self.assertIn("--viewer-focus: #62d5b2;", viewer)
+        self.assertIn("background: var(--viewer-surface);", viewer)
+        self.assertIn("background: var(--viewer-bg);", viewer)
         self.assertNotIn("#111817", viewer)
         self.assertNotIn("#0f766e", viewer)
         self.assertIn("border: 0;", icon_rule)

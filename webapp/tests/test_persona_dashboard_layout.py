@@ -445,24 +445,20 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script.index('data-persona-view-post="${esc(post.id)}"'),
         )
 
-    def test_common_media_viewers_center_media_on_themed_stages(self):
+    def test_common_media_viewers_center_media_on_dark_stages(self):
         self.assertIn('node.className = "persona-media-lightbox";', self.console_script)
         self.assertNotIn("openMediaLightbox(groupId, 0);", self.console_script)
         self.assertIn(
             'Number(previewButton.dataset.mediaPreviewIndex || 0),',
             self.console_script,
         )
-        self.assertIn(
-            ".persona-media-lightbox {\n"
-            "  position: fixed;\n"
-            "  inset: 0;\n"
-            "  z-index: 7000;\n"
-            "  display: grid;\n"
-            "  place-items: center;",
-            self.styles,
-        )
-        self.assertIn("background: var(--panel-solid);", self.styles)
-        self.assertIn("background: var(--panel-2);", self.styles)
+        self.assertIn(".persona-media-lightbox {", self.styles)
+        self.assertIn("position: fixed;", self.styles)
+        self.assertIn("place-items: center;", self.styles)
+        self.assertIn("--viewer-bg: #080a0b;", self.styles)
+        self.assertIn("--viewer-surface: #111416;", self.styles)
+        self.assertIn("background: var(--viewer-surface);", self.styles)
+        self.assertIn("background: var(--viewer-bg);", self.styles)
         self.assertNotIn("background: #111817;", self.styles)
         self.assertNotIn("background: #050b0a;", self.styles)
         self.assertIn("object-fit: contain;", self.styles)
@@ -2346,10 +2342,18 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script.index('const composeModeButton = event.target.closest("[data-persona-compose-mode]");'):
             self.console_script.index("const openImageSettingsButton", self.console_script.index('const composeModeButton = event.target.closest("[data-persona-compose-mode]");'))
         ]
-        self.assertIn("function renderPersonaGenerateComposeTabs(mode, { editingDraft = false } = {})", compose_tabs)
-        self.assertIn("const locked = editingDraft && value !== \"tweet\";", compose_tabs)
+        self.assertIn(
+            "function renderPersonaGenerateComposeTabs(mode, { editingDraft = false, disabled = false } = {})",
+            compose_tabs,
+        )
+        self.assertIn(
+            'const locked = disabled || (editingDraft && value !== "tweet");',
+            compose_tabs,
+        )
         self.assertIn('disabled title="${esc(lockReason)}"', compose_tabs)
-        self.assertIn("renderPersonaGenerateComposeTabs(composeMode, { editingDraft: isEditingDraft })", content_panel)
+        self.assertIn("renderPersonaGenerateComposeTabs(composeMode, {", content_panel)
+        self.assertIn("editingDraft: isEditingDraft,", content_panel)
+        self.assertIn("disabled: generationLocked,", content_panel)
         self.assertIn("persona-compose-lock-hint", content_panel)
         self.assertNotIn('data-persona-delete-post="${esc(draftForm.editingPostId)}"', content_panel)
         self.assertIn('if (editingPostId) {', compose_handler)

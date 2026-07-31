@@ -21,7 +21,7 @@ const ARCHIVES_KEY = "persona_archives_v2";
 const LEGACY_PRESETS_KEY = "persona_presets";
 const LEGACY_PROJECTS_KEY = "storyforge_drama_projects";
 const buildArchiveMemoryOutline = buildMemoryOutline;
-const PUBLISH_PLATFORMS = ["threads", "telegram"] as const;
+const PUBLISH_PLATFORMS = ["threads", "instagram", "telegram"] as const;
 type PublishPlatformQueue = typeof PUBLISH_PLATFORMS[number];
 
 type EpisodeScript = import("@/types/drama").EpisodeScript;
@@ -228,6 +228,8 @@ function normalizePost(raw: any, fallbackIndex: number): PersonaArchivePost {
     generationOperationId: typeof raw?.generationOperationId === "string" && raw.generationOperationId.trim()
       ? raw.generationOperationId.trim()
       : undefined,
+    generationCandidate: raw?.generationCandidate === true ? true : undefined,
+    platform: typeof raw?.platform === "string" && raw.platform.trim() ? raw.platform.trim().toLowerCase() : undefined,
     publishedMemory,
     memorySummary: rawMemorySummary || publishedMemory,
     imageUrl: typeof raw?.imageUrl === "string" ? raw.imageUrl : undefined,
@@ -830,6 +832,8 @@ function buildArchivePostFromEpisode(ep: EpisodeScript, index: number): PersonaA
       updatedAt: now,
       publishedAt: ep.publishedAt,
       generationOperationId: ep.generationOperationId,
+      generationCandidate: ep.generationCandidate,
+      platform: ep.platform,
       memorySummary: ep.memorySummary,
       imageUrl: ep.imageUrl,
       imageHistory: ep.imageHistory,
@@ -851,6 +855,8 @@ export function archivePostsToEpisodes(posts: PersonaArchivePost[]): EpisodeScri
     updatedAt: post.updatedAt,
     publishedAt: post.publishedAt,
     generationOperationId: post.generationOperationId,
+    generationCandidate: post.generationCandidate,
+    platform: post.platform,
     memorySummary: post.memorySummary,
     imageUrl: post.imageUrl,
     imageHistory: post.imageHistory,

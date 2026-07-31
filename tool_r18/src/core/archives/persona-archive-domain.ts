@@ -84,6 +84,8 @@ export interface PersonaArchivePost {
   updatedAt: string;
   publishedAt?: string;
   generationOperationId?: string;
+  generationCandidate?: boolean;
+  platform?: string;
   publishedMemory?: string;
   memorySummary?: string;
   imageUrl?: string;
@@ -233,6 +235,8 @@ export function buildArchivePostFromEpisode(ep: EpisodeScript, index: number): P
     updatedAt,
     publishedAt: ep.publishedAt,
     generationOperationId: ep.generationOperationId,
+    generationCandidate: ep.generationCandidate,
+    platform: ep.platform,
     publishedMemory: ep.publishedAt ? ep.content || "" : undefined,
     memorySummary: ep.memorySummary,
     imageUrl: ep.imageUrl,
@@ -254,6 +258,8 @@ export function archivePostsToEpisodes(posts: PersonaArchivePost[]): EpisodeScri
     updatedAt: post.updatedAt,
     publishedAt: post.publishedAt,
     generationOperationId: post.generationOperationId,
+    generationCandidate: post.generationCandidate,
+    platform: post.platform,
     memorySummary: post.memorySummary,
     imageUrl: post.imageUrl,
     imageHistory: post.imageHistory,

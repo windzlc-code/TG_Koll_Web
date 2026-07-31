@@ -2407,11 +2407,149 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertTrue(saved_path.is_file())
         self.assertEqual(saved_path.read_bytes(), self.draft_media_path.read_bytes())
 
+    def test_persona_post_image_runner_generates_requested_images_concurrently(self):
+        self._write_archives()
+        task_id = "task-persona-post-image-concurrent"
+        payload = {
+            "related_persona_id": "persona-1",
+            "related_post_id": "post-1",
+            "generation_content": "concurrent image generation",
+            "image_count": 4,
+        }
+        server._create_task_record(task_id, self._admin_user_id(), "persona_post_image", payload)
+        with server.db() as conn:
+            conn.execute("UPDATE tasks SET status = 'running' WHERE id = ?", (task_id,))
+
+        completed = mock.Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "ok": True,
+                "imageResult": {"url": "data:image/png;base64,AA=="},
+                "timings": {"provider": "test-provider"},
+            }),
+            stderr="",
+        )
+        all_workers_started = threading.Barrier(4, timeout=2)
+
+        def concurrent_run(*_args, **_kwargs):
+            all_workers_started.wait()
+            return completed
+
+        def fake_persist(_task_id, _image_url, index):
+            return str(self.data_dir / f"generated-{index}.png")
+
+        with (
+            mock.patch.object(server, "_resolve_persona_post_image_aspect_ratio", return_value=("1:1", {"mode": "fixed"})),
+            mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"),
+            mock.patch.object(server.subprocess, "run", side_effect=concurrent_run) as run_mock,
+            mock.patch.object(server, "_persist_generated_image_for_task", side_effect=fake_persist),
+        ):
+            result = server._run_persona_post_image_task(task_id, payload)
+
+        self.assertEqual(run_mock.call_count, 4)
+        self.assertEqual(result["image_count"], 4)
+        self.assertEqual(
+            result["image_paths"],
+            [str(self.data_dir / f"generated-{index}.png") for index in range(1, 5)],
+        )
+        self.assertEqual(
+            [item["index"] for item in result["timings"]["stage_items"]],
+            [1, 2, 3, 4],
+        )
+
+    def test_persona_post_image_runner_honors_shared_provider_limit(self):
+        self._write_archives()
+        task_id = "task-persona-post-image-limited"
+        payload = {
+            "related_persona_id": "persona-1",
+            "related_post_id": "post-1",
+            "generation_content": "limited concurrent image generation",
+            "image_count": 4,
+        }
+        server._create_task_record(task_id, self._admin_user_id(), "persona_post_image", payload)
+        with server.db() as conn:
+            conn.execute("UPDATE tasks SET status = 'running' WHERE id = ?", (task_id,))
+
+        completed = mock.Mock(
+            returncode=0,
+            stdout=json.dumps({"ok": True, "imageResult": {"url": "data:image/png;base64,AA=="}}),
+            stderr="",
+        )
+        active = 0
+        maximum_active = 0
+        active_lock = threading.Lock()
+
+        def limited_run(*_args, **_kwargs):
+            nonlocal active, maximum_active
+            with active_lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            time.sleep(0.05)
+            with active_lock:
+                active -= 1
+            return completed
+
+        with (
+            mock.patch.object(server, "_resolve_persona_post_image_aspect_ratio", return_value=("1:1", {"mode": "fixed"})),
+            mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"),
+            mock.patch.object(server, "_PERSONA_POST_IMAGE_SEMAPHORE", threading.BoundedSemaphore(2), create=True),
+            mock.patch.object(server.subprocess, "run", side_effect=limited_run),
+            mock.patch.object(server, "_persist_generated_image_for_task", side_effect=lambda task, url, index: f"{task}-{index}.png"),
+        ):
+            server._run_persona_post_image_task(task_id, payload)
+
+        self.assertEqual(maximum_active, 2)
+
+    def test_persona_post_image_runner_removes_partial_files_after_failure(self):
+        self._write_archives()
+        task_id = "task-persona-post-image-partial-failure"
+        payload = {
+            "related_persona_id": "persona-1",
+            "related_post_id": "post-1",
+            "generation_content": "partial failure image generation",
+            "image_count": 2,
+        }
+        server._create_task_record(task_id, self._admin_user_id(), "persona_post_image", payload)
+        with server.db() as conn:
+            conn.execute("UPDATE tasks SET status = 'running' WHERE id = ?", (task_id,))
+
+        successful = mock.Mock(
+            returncode=0,
+            stdout=json.dumps({"ok": True, "imageResult": {"url": "data:image/png;base64,AA=="}}),
+            stderr="",
+        )
+        failed = mock.Mock(returncode=1, stdout=json.dumps({"error": "provider failed"}), stderr="")
+        call_count = 0
+        call_lock = threading.Lock()
+        both_started = threading.Barrier(2, timeout=2)
+
+        def partially_failed_run(*_args, **_kwargs):
+            nonlocal call_count
+            with call_lock:
+                call_count += 1
+                current = call_count
+            both_started.wait()
+            return successful if current == 1 else failed
+
+        media_root = self.data_dir / "persona_media_failure"
+        with (
+            mock.patch.object(server, "_resolve_persona_post_image_aspect_ratio", return_value=("1:1", {"mode": "fixed"})),
+            mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"),
+            mock.patch.object(server, "_persona_media_root", return_value=media_root),
+            mock.patch.object(server.subprocess, "run", side_effect=partially_failed_run),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "provider failed"):
+                server._run_persona_post_image_task(task_id, payload)
+
+        self.assertFalse((media_root / task_id).exists())
+
     def test_attach_persona_post_image_task_output_writes_back_to_post(self):
         self._write_archives()
-        generated_path = self.tool_runtime_dir / "generated-preview.png"
-        generated_path.write_bytes(self.draft_media_path.read_bytes())
         task_id = "task-persona-post-image-attach"
+        durable_root = self.data_dir / "persona_media"
+        generated_path = durable_root / task_id / "generated-preview.png"
+        generated_path.parent.mkdir(parents=True, exist_ok=True)
+        generated_path.write_bytes(self.draft_media_path.read_bytes())
         server._create_task_record(
             task_id,
             self._admin_user_id(),
@@ -2426,22 +2564,39 @@ class PersonaDashboardApiTests(unittest.TestCase):
         conn.commit()
         conn.close()
 
-        resp = self.client.post(
-            "/api/persona_dashboard/personas/persona-1/posts/post-1/media/from_task",
-            json={"task_id": task_id, "replace_existing": True},
-        )
+        with (
+            mock.patch.object(server, "DATA_DIR", self.data_dir),
+            mock.patch.object(server, "_persona_media_root", return_value=durable_root),
+        ):
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/posts/post-1/media/from_task",
+                json={"task_id": task_id, "replace_existing": True},
+            )
         self.assertEqual(resp.status_code, 200)
         archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
         post = next(item for item in archives[0]["posts"] if item["id"] == "post-1")
-        self.assertEqual(post["mediaItems"][0]["url"], str(generated_path))
+        archived_path = Path(post["mediaItems"][0]["url"])
+        self.assertTrue(archived_path.resolve().is_relative_to(durable_root.resolve()))
+        self.assertTrue(archived_path.is_file())
+        self.assertEqual(archived_path.read_bytes(), generated_path.read_bytes())
+
+        with mock.patch.object(server, "DATA_DIR", self.data_dir):
+            server._delete_task_artifacts(task_id)
+            self.assertTrue(archived_path.is_file())
+            media_resp = self.client.get("/api/persona_dashboard/personas/persona-1/posts/post-1/media/0")
+        self.assertEqual(media_resp.status_code, 200)
+        self.assertEqual(media_resp.content, self.draft_media_path.read_bytes())
 
     def test_attach_persona_post_image_task_only_writes_selected_outputs(self):
         self._write_archives()
-        first_path = self.tool_runtime_dir / "generated-first.png"
-        second_path = self.tool_runtime_dir / "generated-second.png"
+        task_id = "task-persona-post-image-selected-attach"
+        durable_root = self.data_dir / "persona_media"
+        task_media_dir = durable_root / task_id
+        task_media_dir.mkdir(parents=True, exist_ok=True)
+        first_path = task_media_dir / "generated-first.png"
+        second_path = task_media_dir / "generated-second.png"
         first_path.write_bytes(self.draft_media_path.read_bytes())
         second_path.write_bytes(self.draft_media_path.read_bytes())
-        task_id = "task-persona-post-image-selected-attach"
         server._create_task_record(
             task_id,
             self._admin_user_id(),
@@ -2461,14 +2616,24 @@ class PersonaDashboardApiTests(unittest.TestCase):
         conn.commit()
         conn.close()
 
-        resp = self.client.post(
-            "/api/persona_dashboard/personas/persona-1/posts/post-1/media/from_task",
-            json={"task_id": task_id, "replace_existing": True, "media_indexes": [1]},
-        )
+        with (
+            mock.patch.object(server, "DATA_DIR", self.data_dir),
+            mock.patch.object(server, "_persona_media_root", return_value=durable_root),
+        ):
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/posts/post-1/media/from_task",
+                json={"task_id": task_id, "replace_existing": True, "media_indexes": [1]},
+            )
         self.assertEqual(resp.status_code, 200)
         archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
         post = next(item for item in archives[0]["posts"] if item["id"] == "post-1")
-        self.assertEqual([item["url"] for item in post["mediaItems"]], [str(second_path)])
+        archived_paths = [Path(item["url"]) for item in post["mediaItems"]]
+        self.assertEqual(len(archived_paths), 1)
+        self.assertEqual(archived_paths[0].resolve(), second_path.resolve())
+        self.assertNotEqual(archived_paths[0].resolve(), first_path.resolve())
+        self.assertTrue(archived_paths[0].resolve().is_relative_to(durable_root.resolve()))
+        self.assertTrue(archived_paths[0].is_file())
+        self.assertEqual(archived_paths[0].read_bytes(), second_path.read_bytes())
 
     def test_persona_publish_history_lists_visible_records(self):
         self._write_archives()
@@ -3185,12 +3350,14 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self._write_archives()
 
         def fake_generate(payload):
+            self.assertEqual(payload["platform"], "instagram")
             archives_path = self.tool_runtime_dir / "persona_archives.json"
             archives = json.loads(archives_path.read_text(encoding="utf-8"))
             archives[0]["posts"].append({
                 "id": "post-instagram-1",
                 "title": "Generated Instagram title",
                 "content": "Generated Instagram content",
+                "platform": payload["platform"],
                 "wordCount": 27,
                 "orderIndex": 1,
                 "createdAt": "2026-07-04T12:00:00Z",
@@ -3226,6 +3393,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self._write_archives()
 
         def fake_generate(payload):
+            self.assertEqual(payload["generationOperationId"], "ordinary-operation-1")
+            self.assertTrue(payload["selectionRequired"])
             archives_path = self.tool_runtime_dir / "persona_archives.json"
             archives = json.loads(archives_path.read_text(encoding="utf-8"))
             for index in range(3):
@@ -3237,6 +3406,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
                     "orderIndex": index + 1,
                     "createdAt": "2026-08-01T00:00:00Z",
                     "updatedAt": "2026-08-01T00:00:00Z",
+                    "platform": "threads",
+                    "generationOperationId": "ordinary-operation-1",
+                    "generationCandidate": True,
                 })
             archives_path.write_text(json.dumps(archives), encoding="utf-8")
             return {
@@ -3267,7 +3439,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             )
 
         self.assertEqual(len(result["posts"]), 3)
-        self.assertEqual(archive_write.call_count, 1)
+        self.assertEqual(archive_write.call_count, 0)
         self.assertTrue(all(post["generation_candidate"] for post in result["posts"]))
         self.assertEqual(
             [post["id"] for post in server._list_persona_archive_posts("persona-1")],
@@ -3287,12 +3459,101 @@ class PersonaDashboardApiTests(unittest.TestCase):
         visible_ids = [post["id"] for post in server._list_persona_archive_posts("persona-1")]
         self.assertEqual(visible_ids, ["ordinary-candidate-2", "post-1"])
 
+    def test_generation_candidate_tagging_failure_does_not_leak_unresolved_posts(self):
+        self._write_archives()
+        generated_ids = {f"leaked-candidate-{index + 1}" for index in range(3)}
+
+        def fake_generate(payload):
+            archives_path = self.tool_runtime_dir / "persona_archives.json"
+            archives = json.loads(archives_path.read_text(encoding="utf-8"))
+            marked_in_initial_write = bool(payload.get("selectionRequired"))
+            rows = []
+            for post_id in sorted(generated_ids):
+                row = {
+                    "id": post_id,
+                    "title": post_id,
+                    "content": "generated",
+                    "createdAt": "2026-08-01T00:00:00Z",
+                    "updatedAt": "2026-08-01T00:00:00Z",
+                }
+                if marked_in_initial_write:
+                    row["platform"] = "threads"
+                    row["generationOperationId"] = "failed-operation-1"
+                    row["generationCandidate"] = True
+                rows.append(row)
+            archives[0]["posts"].extend(rows)
+            archives_path.write_text(json.dumps(archives), encoding="utf-8")
+            return {"ok": True, "postIds": sorted(generated_ids), "generatedCount": 3}
+
+        with (
+            mock.patch.object(server, "_run_persona_workflow_cli", side_effect=fake_generate),
+            mock.patch.object(server, "_set_persona_archive_posts_platform", side_effect=RuntimeError("tag write failed")),
+        ):
+            try:
+                server._generate_persona_archive_posts(
+                    "persona-1",
+                    server.PersonaDashboardGeneratePostsPayload(
+                        count=3,
+                        platform="threads",
+                        selection_required=True,
+                    ),
+                    operation_id="failed-operation-1",
+                )
+            except RuntimeError as error:
+                self.assertEqual(str(error), "tag write failed")
+
+        visible_ids = {
+            str(post.get("id") or "")
+            for post in server._list_persona_archive_posts("persona-1")
+        }
+        self.assertTrue(generated_ids.isdisjoint(visible_ids))
+
+    def test_batch_generation_keeps_all_posts_without_candidate_markers(self):
+        self._write_archives()
+
+        def fake_generate(payload):
+            self.assertFalse(payload.get("selectionRequired", False))
+            archives_path = self.tool_runtime_dir / "persona_archives.json"
+            archives = json.loads(archives_path.read_text(encoding="utf-8"))
+            for index in range(3):
+                archives[0]["posts"].append({
+                    "id": f"batch-post-{index + 1}",
+                    "title": f"Batch {index + 1}",
+                    "content": f"Generated batch post {index + 1}",
+                    "createdAt": "2026-08-01T00:00:00Z",
+                    "updatedAt": "2026-08-01T00:00:00Z",
+                    "platform": "threads",
+                    "generationOperationId": "batch-operation-1",
+                })
+            archives_path.write_text(json.dumps(archives), encoding="utf-8")
+            return {
+                "ok": True,
+                "postIds": [f"batch-post-{index + 1}" for index in range(3)],
+                "generatedCount": 3,
+            }
+
+        with mock.patch.object(server, "_run_persona_workflow_cli", side_effect=fake_generate):
+            result = server._generate_persona_archive_posts(
+                "persona-1",
+                server.PersonaDashboardGeneratePostsPayload(
+                    count=3,
+                    platform="threads",
+                    selection_required=False,
+                ),
+                operation_id="batch-operation-1",
+            )
+
+        self.assertEqual(len(result["posts"]), 3)
+        self.assertTrue(all(not post["generation_candidate"] for post in result["posts"]))
+        visible_ids = [post["id"] for post in server._list_persona_archive_posts("persona-1")]
+        self.assertTrue({"batch-post-1", "batch-post-2", "batch-post-3"}.issubset(visible_ids))
+
     def test_generation_candidates_are_finalized_atomically_and_idempotently(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"
         archives = json.loads(archives_path.read_text(encoding="utf-8"))
         for index in range(3):
-            archives[0]["posts"].append({
+            candidate = {
                 "id": f"candidate-{index + 1}",
                 "title": f"Candidate {index + 1}",
                 "content": f"Generated candidate {index + 1}",
@@ -3300,7 +3561,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 "updatedAt": "2026-08-01T00:00:00Z",
                 "generationCandidate": True,
                 "generationOperationId": "generation-op-1",
-            })
+            }
+            archives[0]["posts"].append(candidate)
+            archives[0]["platformPosts"]["threads"].append(dict(candidate))
         archives_path.write_text(json.dumps(archives), encoding="utf-8")
 
         first = server._finalize_persona_generated_candidates(
@@ -3327,6 +3590,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
         selected = next(post for post in stored[0]["posts"] if post["id"] == "candidate-2")
         self.assertEqual(selected["title"], "Chosen candidate")
         self.assertNotIn("generationCandidate", selected)
+        platform_ids = [post["id"] for post in stored[0]["platformPosts"]["threads"]]
+        self.assertNotIn("candidate-1", platform_ids)
+        self.assertIn("candidate-2", platform_ids)
+        self.assertNotIn("candidate-3", platform_ids)
         self.assertFalse((self.tool_runtime_dir / "persona_dashboard_deleted_posts.json").exists())
 
     def test_stale_generation_candidates_are_cleaned_without_removing_recent_candidates(self):

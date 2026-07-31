@@ -621,6 +621,200 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               throw new Error(`unstable media timer: ${{first}} -> ${{second}}`);
             }}
         """))
+
+    def test_persona_generation_request_does_not_depend_on_animation_frame(self):
+        generation = self._function_source("generatePersonaDraftPosts")
+
+        self.assertNotIn("requestAnimationFrame", generation)
+        self.assertLess(generation.index("setActionLocked(lockParts, true)"), generation.index("await api("))
+
+    def test_persona_candidate_conflict_discards_stale_task_and_refreshes_drafts(self):
+        resolver = f"async {self._function_source('resolvePersonaOrdinaryGeneratedCandidates')}"
+        self._run_node(textwrap.dedent(f"""
+            const assert = require("node:assert/strict");
+            const state = {{ personaGeneratedPreviews: {{ "persona-1": {{ visible: true }} }}, personaPanels: {{ content: "generate" }} }};
+            const form = {{ draft: {{ content: "stale" }}, media: {{ focusPostId: "candidate-1" }} }};
+            const calls = {{ cleared: [], refreshed: [], source: [], selected: [], messages: [], summary: 0 }};
+            let apiError = {{ status: 409, detail: "candidate conflict" }};
+            async function openPersonaGeneratedSelectionModal() {{ return {{ action: "save", postId: "candidate-1" }}; }}
+            async function api() {{ throw apiError; }}
+            function clearStoredPersonaPostGenerationTask(personaId, taskId) {{ calls.cleared.push([personaId, taskId]); }}
+            function clearPersonaGenerateRunState() {{}}
+            function personaFormState() {{ return form; }}
+            function defaultPersonaDraftForm() {{ return {{}}; }}
+            async function loadPersonaDraftPosts(personaId, options) {{ calls.refreshed.push([personaId, options]); }}
+            function setPersonaPostSource(source, persona) {{ calls.source.push([source, persona.id]); }}
+            function personaDraftPosts() {{ return [{{ id: "safe-draft" }}]; }}
+            function setSelectedPersonaPostId(postId) {{ calls.selected.push(postId); }}
+            function showMsg(key, message, success) {{ calls.messages.push([key, message, success]); }}
+            function renderConfirmSummary() {{ calls.summary += 1; }}
+            {resolver}
+
+            (async () => {{
+              const persona = {{ id: "persona-1" }};
+              const result = await resolvePersonaOrdinaryGeneratedCandidates(
+                persona,
+                "task-1",
+                [{{ id: "candidate-1" }}],
+              );
+              assert.deepEqual(result, {{ action: "conflict", postId: "" }});
+              assert.deepEqual(calls.cleared, [["persona-1", "task-1"]]);
+              assert.deepEqual(calls.refreshed, [["persona-1", {{ force: true }}]]);
+              assert.deepEqual(calls.source, [["posts", "persona-1"]]);
+              assert.deepEqual(calls.selected, ["safe-draft"]);
+              assert.equal(state.personaPanels.content, "posts");
+              assert.equal(state.personaGeneratedPreviews["persona-1"], undefined);
+              assert.equal(form.media.focusPostId, "");
+              assert.match(calls.messages[0][1], /已刷新草稿库/);
+              assert.equal(calls.messages[0][2], false);
+              assert.equal(calls.summary, 1);
+
+              apiError = {{ status: 503, detail: "temporary outage" }};
+              await assert.rejects(
+                resolvePersonaOrdinaryGeneratedCandidates(persona, "task-2", [{{ id: "candidate-1" }}]),
+                (error) => error.status === 503 && error.personaCandidateResolutionPending === true,
+              );
+              assert.deepEqual(calls.cleared, [["persona-1", "task-1"]]);
+            }})().catch((error) => {{ console.error(error); process.exitCode = 1; }});
+        """))
+
+    def test_generation_busy_indicator_is_scoped_to_the_mode_that_started_it(self):
+        panel = self._section(
+            "function renderPersonaContentPanel",
+            "\nasync function loadTasks",
+        )
+
+        self.assertIn(
+            'const activeGenerateComposeMode = String(personaGenerateRunState(persona.id)?.composeMode || composeMode);',
+            panel,
+        )
+        self.assertIn(
+            "const generateBusy = generationLocked && activeGenerateComposeMode === composeMode;",
+            panel,
+        )
+
+    def test_generated_media_requires_an_explicit_selected_output_attach(self):
+        submit = self._function_source("submitPersonaMediaTask")
+        refresh = self._function_source("refreshPersonaMediaTask")
+        attach = self._function_source("attachPersonaTaskMediaToPost")
+
+        self.assertNotIn("attachPersonaTaskMediaToPost", submit)
+        self.assertNotIn("attachPersonaTaskMediaToPost", refresh)
+        self.assertIn("selectedPersonaTaskMediaIndexes", attach)
+        self.assertIn('media_indexes: selectedMediaIndexes', attach)
+        self.assertIn('/media/from_task', attach)
+
+    def test_persona_media_submit_enters_busy_state_before_first_async_wait(self):
+        submission = self._function_source("submitPersonaMediaTask")
+        first_await = submission.index("await ")
+
+        self.assertLess(submission.index("setActionLocked(lockParts, true"), first_await)
+        self.assertLess(submission.index('submitButton.setAttribute("aria-busy", "true")'), first_await)
+        self.assertLess(submission.index("renderBusyButtonContent("), first_await)
+
+    def test_persona_platform_switch_is_blocked_while_generation_runs(self):
+        source = self._function_source("confirmPersonaContentPlatformSwitch")
+        self._run_node(textwrap.dedent(f"""
+            const assert = require("node:assert/strict");
+            let modalCalls = 0;
+            function personaContentPlatform() {{ return "threads"; }}
+            function normalizePersonaContentPlatform() {{ return "instagram"; }}
+            function isActionLocked(...parts) {{
+              return parts.join(":") === "persona:persona-1:generate_posts";
+            }}
+            function activePersonaDraftComposerTransientState() {{ return null; }}
+            async function openConsoleModal() {{ modalCalls += 1; return true; }}
+            const accountPoolPlatforms = [["threads", "Threads"], ["instagram", "Instagram"]];
+            {source}
+
+            (async () => {{
+              const allowed = await confirmPersonaContentPlatformSwitch({{ id: "persona-1" }}, "instagram");
+              assert.equal(allowed, false);
+              assert.equal(modalCalls, 0);
+            }})().catch((error) => {{ console.error(error); process.exitCode = 1; }});
+        """))
+
+    def test_persona_generation_lock_covers_conflicting_navigation_and_task_actions(self):
+        selector = self._function_source("personaPostGenerationConflictSelector")
+        sync = self._function_source("syncPersonaPostGenerationInteractionLock")
+        panel = self._section(
+            "function renderPersonaContentPanel",
+            "\nasync function loadTasks",
+        )
+
+        for token in (
+            "[data-persona-compose-mode]",
+            "[data-persona-content-tab]",
+            "[data-persona-route-step]",
+            "[data-persona-create-post]",
+            "[data-persona-open-publishing]",
+            "[data-persona-run-automation]",
+            "[data-persona-run-media-task]",
+        ):
+            self.assertIn(token, selector)
+        self.assertIn("data-persona-generation-locked", sync)
+        self.assertIn("button.disabled = true", sync)
+        self.assertIn("renderPersonaGenerateComposeTabs(composeMode, {", panel)
+        self.assertIn("disabled: generationLocked", panel)
+
+    def test_persona_generation_lock_has_event_guards_before_navigation_mutation(self):
+        navigation = self._section(
+            "const handleWorkspaceModuleNavigation = async (event) => {",
+            '\n  $("moduleMenu").addEventListener',
+        )
+        module_clicks = self._section(
+            '$("moduleBody").addEventListener("click", async (event) => {',
+            '\n  $("moduleBody").addEventListener("change"',
+        )
+
+        self.assertIn("guardPersonaPostGenerationInteraction(event.target)", navigation)
+        self.assertLess(
+            navigation.index("guardPersonaPostGenerationInteraction(event.target)"),
+            navigation.index("setView(nextView)"),
+        )
+        self.assertIn("guardPersonaPostGenerationInteraction(event.target)", module_clicks)
+        self.assertLess(
+            module_clicks.index("guardPersonaPostGenerationInteraction(event.target)"),
+            module_clicks.index("form.generate.composeMode = nextComposeMode"),
+        )
+
+    def test_persona_media_polling_has_no_hard_timeout_and_reaches_server_terminal_state(self):
+        source = self._section(
+            "async function watchPersonaMediaTask",
+            "\nasync function submitPersonaMediaTask",
+        )
+        self._run_node(textwrap.dedent(f"""
+            const assert = require("node:assert/strict");
+            let tenantStateGeneration = 1;
+            let refreshCount = 0;
+            let loadTaskCalls = 0;
+            const state = {{
+              personaMediaTaskWatchers: {{}},
+              personaMediaTasks: {{
+                "persona-1:post-1": {{
+                  taskId: "task-1",
+                  taskType: "persona_post_image",
+                  status: "queued",
+                  detail: {{ status: "queued" }},
+                }},
+              }},
+            }};
+            function personaMediaTaskKey() {{ return "persona-1:post-1"; }}
+            async function refreshPersonaMediaTask() {{
+              refreshCount += 1;
+              return {{ status: refreshCount > 500 ? "success" : "queued" }};
+            }}
+            async function loadTasks() {{ loadTaskCalls += 1; }}
+            async function sleep() {{}}
+            {source}
+
+            (async () => {{
+              await watchPersonaMediaTask("persona-1", "post-1", "task-1");
+              assert.equal(refreshCount, 501);
+              assert.equal(loadTaskCalls, 1);
+            }})().catch((error) => {{ console.error(error); process.exitCode = 1; }});
+        """))
+
     def test_result_links_reject_unsafe_protocols_and_preserve_admin_context(self):
         console_link_source = self._function_source("adminWorkspacePageUrl")
         dashboard_workspace_source = self._persona_dashboard_function_source("pdAdminWorkspaceUrl")

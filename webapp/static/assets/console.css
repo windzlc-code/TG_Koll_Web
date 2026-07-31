@@ -13719,6 +13719,13 @@ body.persona-media-sorting {
 }
 
 .persona-media-lightbox {
+  --viewer-bg: #080a0b;
+  --viewer-surface: #111416;
+  --viewer-raised: #181c1f;
+  --viewer-line: #343a3f;
+  --viewer-ink: #f1f3f4;
+  --viewer-muted: #929aa1;
+  --viewer-focus: #62d5b2;
   position: fixed;
   inset: 0;
   z-index: 7000;
@@ -13727,7 +13734,7 @@ body.persona-media-sorting {
   padding: 24px;
   overflow: auto;
   box-sizing: border-box;
-  color: var(--ink);
+  color: var(--viewer-ink);
 }
 
 .persona-media-lightbox[hidden] {
@@ -13737,7 +13744,7 @@ body.persona-media-sorting {
 .persona-media-lightbox-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(24, 28, 32, .56);
+  background: rgba(8, 10, 11, .8);
   backdrop-filter: blur(8px);
 }
 
@@ -13748,9 +13755,9 @@ body.persona-media-sorting {
   max-height: calc(100vh - 48px);
   margin: 0 auto;
   border-radius: 12px;
-  background: var(--panel-solid);
-  border: 1px solid var(--line);
-  box-shadow: 0 24px 72px rgba(15, 23, 42, .24);
+  background: var(--viewer-surface);
+  border: 1px solid var(--viewer-line);
+  box-shadow: 0 24px 72px rgba(0, 0, 0, .52);
   display: grid;
   gap: 12px;
   padding: 14px;
@@ -13778,25 +13785,25 @@ body.persona-media-sorting {
   border: 0;
   border-radius: 0;
   background: transparent;
-  color: var(--muted);
+  color: var(--viewer-muted);
   box-shadow: none;
 }
 
 .persona-media-lightbox-icon-button:hover,
 .persona-media-lightbox-icon-button:focus-visible {
   background: transparent;
-  color: var(--accent-dark);
+  color: var(--viewer-ink);
 }
 
 .persona-media-lightbox-icon-button:focus-visible {
   outline: none;
-  box-shadow: inset 0 -2px 0 currentColor;
+  box-shadow: inset 0 -2px 0 var(--viewer-focus);
 }
 
 .persona-media-lightbox-icon-button:disabled {
   border: 0;
   background: transparent;
-  color: var(--line);
+  color: var(--viewer-line);
   cursor: not-allowed;
 }
 
@@ -13816,7 +13823,7 @@ body.persona-media-sorting {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: var(--ink);
+  color: var(--viewer-ink);
 }
 
 .persona-media-lightbox-body {
@@ -13830,7 +13837,7 @@ body.persona-media-sorting {
   box-sizing: border-box;
   border: 0;
   border-radius: 10px;
-  background: var(--panel-2);
+  background: var(--viewer-bg);
 }
 
 .persona-media-lightbox-actions {
@@ -13870,11 +13877,11 @@ body.persona-media-sorting {
 }
 
 .persona-media-lightbox-empty {
-  border: 1px solid var(--line);
+  border: 1px solid var(--viewer-line);
   border-radius: 8px;
   padding: 20px 24px;
-  background: var(--panel-solid);
-  color: var(--muted);
+  background: var(--viewer-raised);
+  color: var(--viewer-muted);
   font-weight: 700;
 }
 

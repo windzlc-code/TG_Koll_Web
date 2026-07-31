@@ -235,7 +235,7 @@ describe("persona generation memory", () => {
     expect(planPersonaPostGenerationBatches(10, 500)).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
   });
 
-  it("persists the generation operation id with the generated post", async () => {
+  it("persists the generation operation and candidate markers in the same archive write", async () => {
     const created = await runPersonaWorkflow({
       action: "create",
       name: "operation marker persona",
@@ -256,10 +256,12 @@ describe("persona generation memory", () => {
       archiveId: created.archiveId,
       count: 1,
       generationOperationId: "persona-post-task-atomic-marker",
-    });
+      selectionRequired: true,
+    } as any);
     const archive = await loadPersonaArchive(created.archiveId);
 
     expect(result.generatedCount).toBe(1);
     expect(archive?.posts.at(-1)?.generationOperationId).toBe("persona-post-task-atomic-marker");
+    expect(archive?.posts.at(-1)?.generationCandidate).toBe(true);
   });
 });

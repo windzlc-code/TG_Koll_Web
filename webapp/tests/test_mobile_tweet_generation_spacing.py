@@ -9,12 +9,13 @@ CONSOLE_JS = ROOT / "webapp" / "static" / "assets" / "console.js"
 def test_mobile_tweet_generation_uses_one_vertical_spacing_rhythm():
     css = CONSOLE_CSS.read_text(encoding="utf-8")
 
-    assert ".persona-detail.persona-detail--content {\n    gap: var(--mobile-module-gap);" in css
-    assert ".persona-detail--content > .persona-step-shell {\n    gap: var(--mobile-module-gap);" in css
-    assert ".persona-detail--content .persona-generate-panel {\n    gap: var(--mobile-module-gap);" in css
-    assert ".persona-detail--content .persona-panel-intro {\n    min-height: 1.45em;" in css
+    assert ".console-page .persona-detail.persona-detail--content {\n    gap: var(--mobile-module-gap);" in css
+    assert ".console-page .persona-detail--content > .persona-step-shell {\n    gap: var(--mobile-module-gap);" in css
+    assert ".console-page .persona-detail--content .persona-panel-intro {\n    min-height: 1.45em;" in css
     assert (
-        ".persona-compose-post-side.persona-production-section {\n"
+        ".console-page\n"
+        "    .persona-detail--content\n"
+        "    .persona-compose-post-side.persona-production-section {\n"
         "    gap: var(--mobile-module-gap);\n"
         "    padding: var(--mobile-functional-card-padding);"
     ) in css

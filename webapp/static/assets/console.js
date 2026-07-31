@@ -474,6 +474,8 @@ const state = {
   proxyPoolPage: 1,
   proxyPoolPageSize: 10,
   personaMediaTasks: {},
+  personaMediaTaskWatchers: {},
+  personaMediaRuns: {},
   personaMediaPointerDrag: {
     active: false,
     pending: false,
@@ -757,6 +759,8 @@ function clearTenantInMemoryState() {
   state.accountPoolCreateDraft = {};
   state.accountClipboardText = "";
   state.personaMediaTasks = {};
+  state.personaMediaTaskWatchers = {};
+  state.personaMediaRuns = {};
   state.personaGenerateRuns = {};
   state.personaGenerateTaskWatchers = {};
   state.personaGeneratedPreviews = {};
@@ -4995,11 +4999,12 @@ function renderBusyButtonContent(label, busy, startedAt = 0) {
   return `<span class="task-button-busy"><svg class="task-button-spinner" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5"></path></svg><span>${esc(label)}</span><time data-action-elapsed="${esc(resolvedStartedAt)}" aria-label="已用时 ${esc(elapsed)}">${esc(elapsed)}</time></span>`;
 }
 
-function setActionLocked(parts, locked = true) {
+function setActionLocked(parts, locked = true, startedAt = 0) {
   const key = Array.isArray(parts) ? actionLockKey(...parts) : String(parts || "");
   if (!key) return;
-  if (locked) state.actionLocks[key] = { startedAt: Date.now() };
+  if (locked) state.actionLocks[key] = { startedAt: toastTimestampMs(startedAt) || Date.now() };
   else delete state.actionLocks[key];
+  if (key.endsWith(":generate_posts")) syncPersonaPostGenerationInteractionLock();
   scheduleActionElapsedSync();
 }
 
@@ -6997,6 +7002,7 @@ function renderModuleMenu() {
     `;
   }).join("")}</div>`;
   renderMobileTaskDock();
+  syncPersonaPostGenerationInteractionLock();
 }
 
 function syncModuleMenuState() {
@@ -7023,6 +7029,7 @@ function syncModuleMenuState() {
     }
   });
   syncMobileTaskDockState();
+  syncPersonaPostGenerationInteractionLock();
 }
 
 function setMenuClickHighlight(button, leaveScope = button) {
@@ -18367,6 +18374,81 @@ function personaGenerateRunState(personaId) {
   return state.personaGenerateRuns[String(personaId || "").trim()] || null;
 }
 
+function personaPostGenerationInteractionLocked() {
+  return Object.keys(state.actionLocks || {}).some((key) => key.endsWith(":generate_posts"));
+}
+
+function personaPostGenerationConflictSelector() {
+  return [
+    "[data-view]",
+    "[data-module]",
+    "[data-workspace-view]",
+    "[data-persona-select]",
+    "[data-persona-group]",
+    "[data-persona-step]",
+    "[data-persona-content-tab]",
+    "[data-persona-content-platform]",
+    "[data-persona-compose-mode]",
+    "[data-persona-generate-mode]",
+    "[data-persona-route-step]",
+    "[data-persona-create-post]",
+    "[data-persona-open-publishing]",
+    '[data-persona-post-bulk="execute"]',
+    "[data-persona-run-automation]",
+    "[data-persona-run-media-task]",
+    "[data-persona-fetch-hot]",
+    "[data-persona-fetch-hot-refresh]",
+    "[data-persona-import-hot-drafts]",
+  ].join(",");
+}
+
+function syncPersonaPostGenerationInteractionLock() {
+  const locked = personaPostGenerationInteractionLocked();
+  document.querySelectorAll(personaPostGenerationConflictSelector()).forEach((button) => {
+    if (!(button instanceof HTMLButtonElement)) return;
+    if (locked) {
+      if (button.getAttribute("data-persona-generation-locked") !== "true") {
+        button.setAttribute("data-persona-generation-locked", "true");
+        button.dataset.personaGenerationPreviousDisabled = button.disabled ? "true" : "false";
+        button.dataset.personaGenerationPreviousTitle = button.getAttribute("title") || "";
+        button.dataset.personaGenerationHadTitle = button.hasAttribute("title") ? "true" : "false";
+        button.dataset.personaGenerationPreviousAriaDisabled = button.getAttribute("aria-disabled") || "";
+        button.dataset.personaGenerationHadAriaDisabled = button.hasAttribute("aria-disabled") ? "true" : "false";
+      }
+      button.disabled = true;
+      button.setAttribute("aria-disabled", "true");
+      button.setAttribute("title", "AI 正在生成推文，完成后可继续操作");
+      return;
+    }
+    if (button.getAttribute("data-persona-generation-locked") !== "true") return;
+    button.disabled = button.dataset.personaGenerationPreviousDisabled === "true";
+    if (button.dataset.personaGenerationHadAriaDisabled === "true") {
+      button.setAttribute("aria-disabled", button.dataset.personaGenerationPreviousAriaDisabled || "false");
+    } else {
+      button.removeAttribute("aria-disabled");
+    }
+    if (button.dataset.personaGenerationHadTitle === "true") {
+      button.setAttribute("title", button.dataset.personaGenerationPreviousTitle || "");
+    } else {
+      button.removeAttribute("title");
+    }
+    button.removeAttribute("data-persona-generation-locked");
+    delete button.dataset.personaGenerationPreviousDisabled;
+    delete button.dataset.personaGenerationPreviousTitle;
+    delete button.dataset.personaGenerationHadTitle;
+    delete button.dataset.personaGenerationPreviousAriaDisabled;
+    delete button.dataset.personaGenerationHadAriaDisabled;
+  });
+}
+
+function guardPersonaPostGenerationInteraction(target) {
+  if (!personaPostGenerationInteractionLocked()) return false;
+  const conflict = target?.closest?.(personaPostGenerationConflictSelector());
+  if (!conflict) return false;
+  showMsg("commandMsg", "AI 正在生成推文，请等待当前任务完成后再切换页面或执行其他任务。", false);
+  return true;
+}
+
 function personaGeneratedPreviewState(personaId) {
   return state.personaGeneratedPreviews[String(personaId || "").trim()] || null;
 }
@@ -18374,7 +18456,9 @@ function personaGeneratedPreviewState(personaId) {
 function setPersonaGenerateRunState(personaId, patch = {}) {
   const key = String(personaId || "").trim();
   if (!key) return null;
-  const current = personaGenerateRunState(key) || {};
+  const isMediaRun = String(patch.kind || "").trim() === "media";
+  const runStates = isMediaRun ? state.personaMediaRuns : state.personaGenerateRuns;
+  const current = runStates[key] || {};
   const suppressToast = Boolean(patch.suppressToast || patch.silent);
   const nextPatch = { ...patch };
   delete nextPatch.suppressToast;
@@ -18386,12 +18470,12 @@ function setPersonaGenerateRunState(personaId, patch = {}) {
   ) {
     nextPatch.startedAt = new Date().toISOString();
   }
-  state.personaGenerateRuns[key] = {
+  runStates[key] = {
     ...current,
     ...nextPatch,
     updatedAt: new Date().toISOString(),
   };
-  const nextState = state.personaGenerateRuns[key];
+  const nextState = runStates[key];
   if (String(nextState.kind || "") === "draft") {
     if (String(nextState.status || "") === "running") {
       delete state.personaGeneratedPreviews[key];
@@ -18402,8 +18486,8 @@ function setPersonaGenerateRunState(personaId, patch = {}) {
       };
     }
   }
-  if (!suppressToast) showPersonaGenerateRunToast(key, state.personaGenerateRuns[key]);
-  return state.personaGenerateRuns[key];
+  if (!suppressToast) showPersonaGenerateRunToast(key, nextState);
+  return nextState;
 }
 
 function clearPersonaGenerateRunState(personaId) {
@@ -18499,11 +18583,34 @@ async function resolvePersonaOrdinaryGeneratedCandidates(persona, taskId, genera
   if (selectedPostId && String(requestedTitle || "").trim()) {
     finalizePayload.title = String(requestedTitle || "").trim();
   }
-  const finalized = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/generate_posts/tasks/${encodeURIComponent(cleanTaskId)}/resolve`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(finalizePayload),
-  });
+  let finalized;
+  try {
+    finalized = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/generate_posts/tasks/${encodeURIComponent(cleanTaskId)}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(finalizePayload),
+    });
+  } catch (error) {
+    if (Number(error?.status) === 409) {
+      clearStoredPersonaPostGenerationTask(persona.id, cleanTaskId);
+      clearPersonaGenerateRunState(persona.id);
+      delete state.personaGeneratedPreviews[String(persona.id || "").trim()];
+      personaFormState(persona.id).draft = defaultPersonaDraftForm();
+      personaFormState(persona.id).media.focusPostId = "";
+      await loadPersonaDraftPosts(persona.id, { force: true }).catch(() => {});
+      setPersonaPostSource("posts", persona);
+      setSelectedPersonaPostId(personaDraftPosts(persona)[0]?.id || "");
+      state.personaPanels.content = "posts";
+      showMsg("commandMsg", "候选状态已失效，已刷新草稿库，请重新生成后再选择。", false);
+      renderConfirmSummary();
+      return { action: "conflict", postId: "" };
+    }
+    if (error && typeof error === "object") {
+      error.personaCandidateResolutionPending = true;
+      throw error;
+    }
+    throw { detail: String(error || "候选结果保存失败"), personaCandidateResolutionPending: true };
+  }
   clearPersonaGenerateRunState(persona.id);
   delete state.personaGeneratedPreviews[String(persona.id || "").trim()];
   personaFormState(persona.id).draft = defaultPersonaDraftForm();
@@ -18662,18 +18769,17 @@ async function generatePersonaDraftPosts() {
   });
   clearMsg("commandMsg");
   setActionLocked(lockParts, true);
-  const generateButton = document.querySelector("[data-persona-generate-posts]");
-  if (generateButton) {
-    generateButton.disabled = true;
-    generateButton.setAttribute("aria-busy", "true");
-    generateButton.innerHTML = renderBusyButtonContent(
-      isRewriteRun ? "正在重新生成" : "正在生成草稿",
-      true,
-      actionLockStartedAt(...lockParts),
-    );
-  }
-  await new Promise((resolve) => window.requestAnimationFrame(resolve));
   try {
+    const generateButton = document.querySelector("[data-persona-generate-posts]");
+    if (generateButton) {
+      generateButton.disabled = true;
+      generateButton.setAttribute("aria-busy", "true");
+      generateButton.innerHTML = renderBusyButtonContent(
+        isRewriteRun ? "正在重新生成" : "正在生成草稿",
+        true,
+        actionLockStartedAt(...lockParts),
+      );
+    }
     let taskRecord = storePersonaPostGenerationTask(persona.id, {
       ...(storedTask || {}),
       operationKey,
@@ -18695,6 +18801,15 @@ async function generatePersonaDraftPosts() {
     await watchPersonaPostGenerationTask(persona, taskRecord, task);
   } catch (error) {
     if (error?.stale) return;
+    if (error?.personaCandidateResolutionPending) {
+      setPersonaGenerateRunState(persona.id, {
+        kind: isRewriteRun ? "rewrite" : "draft",
+        status: "error",
+        message: "候选结果尚未保存，点击生成按钮可重新选择",
+        error: error.detail || error.message || "候选结果保存失败",
+      });
+      return;
+    }
     if (personaPostGenerationErrorIsTransient(error)) {
       setPersonaGenerateRunState(persona.id, {
         kind: isRewriteRun ? "rewrite" : "draft",
@@ -18838,7 +18953,7 @@ function restorePersonaPostGenerationTasks(personaId = "") {
   const taskId = String(record?.taskId || "").trim();
   if (!persona || !taskId || state.personaGenerateTaskWatchers[cleanPersonaId]) return null;
   const lockParts = ["persona", cleanPersonaId, "generate_posts"];
-  setActionLocked(lockParts, true);
+  setActionLocked(lockParts, true, record?.createdAt);
   setPersonaGenerateRunState(cleanPersonaId, {
     kind: record?.context?.isRewriteRun ? "rewrite" : "draft",
     status: "running",
@@ -19817,9 +19932,10 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
   const terminalStatuses = ["success", "failed", "cancelled"];
   const becameTerminal = terminalStatuses.includes(status) && !terminalStatuses.includes(previousStatus);
   const taskTitle = taskMeta[String(detail.type || state.personaMediaTasks[key]?.taskType || "persona_post_image")]?.title || statusLabel(detail.type || "") || "生成任务";
+  const taskType = String(detail.type || previousTaskState.taskType || "persona_post_image").trim();
   state.personaMediaTasks[key] = {
     taskId,
-    taskType: String(detail.type || "").trim(),
+    taskType,
     status,
     startedAt: toastTimestampMs(previousTaskState.startedAt)
       || toastTimestampMs(detail.started_at || detail.created_at)
@@ -19830,6 +19946,11 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
       ? previousTaskState.selectedMediaIndexes
       : null,
   };
+  if (terminalStatuses.includes(status)) {
+    setActionLocked(["media_task", personaId, postId, taskType], false);
+    dismissToastByKey(`persona-generate:${personaId}:media`);
+    delete state.personaMediaRuns[String(personaId || "").trim()];
+  }
   if (becameTerminal) {
     const ok = status === "success";
     appendEvent(ok ? "success" : (status === "failed" ? "failed" : "cancelled"), `${taskTitle}：${statusLabel(status)}`, {
@@ -19846,7 +19967,6 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
       error: ok ? "" : (errorText || statusLabel(status)),
       suppressToast: true,
     });
-    dismissToastByKey(`persona-generate:${personaId}:media`);
   }
   if (errorText && ["failed", "cancelled"].includes(status)) {
     showToast(errorText, false, {
@@ -19867,17 +19987,85 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
 
 async function watchPersonaMediaTask(personaId, postId, taskId) {
   const key = personaMediaTaskKey(personaId, postId);
-  for (let attempt = 0; attempt < 180; attempt += 1) {
-    const current = state.personaMediaTasks[key];
-    if (!current || String(current.taskId || "") !== String(taskId || "")) return;
-    const detail = await refreshPersonaMediaTask(personaId, postId, taskId).catch(() => null);
-    const status = String(detail?.status || "").trim();
-    if (["success", "failed", "cancelled"].includes(status)) {
-      await loadTasks().catch(() => {});
-      return;
+  const cleanTaskId = String(taskId || "").trim();
+  const existing = state.personaMediaTaskWatchers[key];
+  if (existing?.taskId === cleanTaskId) return existing.promise;
+  const requestGeneration = tenantStateGeneration;
+  const watcher = (async () => {
+    let retryDelay = 2000;
+    while (requestGeneration === tenantStateGeneration) {
+      const current = state.personaMediaTasks[key];
+      if (!current || String(current.taskId || "") !== cleanTaskId) return;
+      let detail;
+      try {
+        detail = await refreshPersonaMediaTask(personaId, postId, cleanTaskId);
+        retryDelay = 2000;
+      } catch {
+        await sleep(retryDelay);
+        retryDelay = Math.min(retryDelay + 2000, 10000);
+        continue;
+      }
+      const status = String(detail?.status || "").trim();
+      if (["success", "failed", "cancelled"].includes(status)) {
+        await loadTasks().catch(() => {});
+        return;
+      }
+      await sleep(2000);
     }
-    await sleep(2000);
+  })();
+  state.personaMediaTaskWatchers[key] = { taskId: cleanTaskId, promise: watcher };
+  try {
+    return await watcher;
+  } finally {
+    if (state.personaMediaTaskWatchers[key]?.promise === watcher) {
+      delete state.personaMediaTaskWatchers[key];
+    }
   }
+}
+
+async function restorePersonaMediaTasksFromTaskList(tasks = state.tasks) {
+  const activeMediaTasks = (Array.isArray(tasks) ? tasks : []).filter((task) => (
+    String(task?.type || "").trim() === "persona_post_image"
+    && activeTaskStatus(task?.status)
+  ));
+  if (!activeMediaTasks.length) return;
+  const details = await Promise.all(activeMediaTasks.map((task) => (
+    api(`/api/tasks/${encodeURIComponent(task.id)}`).catch(() => null)
+  )));
+  details.forEach((detail) => {
+    if (!detail || !activeTaskStatus(detail.status)) return;
+    const input = detail.input && typeof detail.input === "object" ? detail.input : {};
+    const personaId = String(input.related_persona_id || "").trim();
+    const postId = String(input.related_post_id || "").trim();
+    const taskId = String(detail.id || "").trim();
+    if (!personaId || !postId || !taskId) return;
+    const key = personaMediaTaskKey(personaId, postId);
+    const current = state.personaMediaTasks[key];
+    const startedAt = toastTimestampMs(detail.started_at || detail.created_at) || Date.now();
+    if (current && toastTimestampMs(current.startedAt) > startedAt) return;
+    const taskType = String(detail.type || "persona_post_image").trim();
+    state.personaMediaTasks[key] = {
+      taskId,
+      taskType,
+      status: String(detail.status || "queued").trim(),
+      startedAt,
+      detail,
+      selectedMediaIndexes: Array.isArray(current?.selectedMediaIndexes)
+        ? current.selectedMediaIndexes
+        : null,
+    };
+    setActionLocked(["media_task", personaId, postId, taskType], true, startedAt);
+    setPersonaGenerateRunState(personaId, {
+      kind: "media",
+      status: "running",
+      message: "推文配图任务执行中",
+      taskId,
+      startedAt,
+      error: "",
+      suppressToast: true,
+    });
+    watchPersonaMediaTask(personaId, postId, taskId).catch(() => {});
+  });
 }
 
 async function submitPersonaMediaTask() {
@@ -19888,8 +20076,6 @@ async function submitPersonaMediaTask() {
     showMsg("commandMsg", "请先选中一条草稿。", false);
     return;
   }
-  if (!(await ensurePersonaReferenceImageForMediaTask(persona))) return;
-  snapshotPersonaCurrentForm();
   const form = personaFormState(persona.id).media;
   const allowedTaskTypes = personaMediaTaskOptions(profile, personaFormState(persona.id).generate).map(([value]) => value);
   const taskType = allowedTaskTypes.includes(String(form.taskType || ""))
@@ -19901,53 +20087,9 @@ async function submitPersonaMediaTask() {
     showMsg("commandMsg", "当前草稿已有同类型配图任务在队列或执行中，请等待完成后再提交。", false);
     return;
   }
-  const mediaUploadState = captureUploadDropzoneState("personaMediaTaskFiles");
-  const files = mediaUploadState.files;
-  const imageCount = files.filter((file) => fileKind(file) === "image").length;
-  const minImages = Number(taskMeta[taskType]?.minImages || 0);
-  if (imageCount < minImages) {
-    showMsg("commandMsg", `当前任务至少需要 ${minImages} 张图片素材。`, false);
-    return;
-  }
-  const draftSourceText = personaDraftReferenceContent(persona, post, source).trim();
-  normalizePersonaMediaGenerationForm(form);
-  const generationContent = draftSourceText;
-  const prompt = String(form.prompt || "").trim();
-  const desiredImageCount = Math.min(Math.max(Number(form.imageCount || state.personaMediaImageCountDefault || storedPersonaMediaImageCount() || 1), 1), 4);
-  form.imageCount = desiredImageCount;
-  if (taskType === "persona_post_image" && !generationContent && !prompt) {
-    showMsg("commandMsg", "当前草稿没有正文，请补充提示词后再生成。", false);
-    return;
-  }
-  const params = compactPayload({
-    prompt,
-    prompt_text: prompt,
-    message: prompt,
-    custom_prompt: prompt,
-    generation_content: generationContent,
-    content_source_mode: "draft",
-    image_count: desiredImageCount,
-    persona_enabled: true,
-    persona_label: String(persona.name || profile.name || "").trim(),
-    tg_generation_context: String(profile.content || persona.content || "").trim(),
-    tg_use_llm_prompt: true,
-    related_persona_id: String(persona.id || "").trim(),
-    related_post_id: String(post.id || "").trim(),
-    draft_source_text: draftSourceText,
-    aspect_ratio: taskType === "persona_post_image" ? String(form.aspectRatio || "auto") : undefined,
-  });
-  const body = new FormData();
-  body.append("task_type", taskType);
-  body.append("params_json", JSON.stringify(params));
-  files.forEach((file) => body.append("files", file, file.name));
   const submittedAt = Date.now();
-  setActionLocked(lockParts, true);
-  setPersonaGenerateRunState(persona.id, {
-    kind: "media",
-    status: "running",
-    message: "推文配图任务提交中",
-    error: "",
-  });
+  let taskAccepted = false;
+  setActionLocked(lockParts, true, submittedAt);
   clearMsg("commandMsg");
   const submitButton = document.querySelector("[data-persona-run-media-task]");
   if (submitButton) {
@@ -19955,8 +20097,54 @@ async function submitPersonaMediaTask() {
     submitButton.setAttribute("aria-busy", "true");
     submitButton.innerHTML = renderBusyButtonContent("配图任务执行中", true, submittedAt);
   }
-  await new Promise((resolve) => window.requestAnimationFrame(resolve));
   try {
+    if (!(await ensurePersonaReferenceImageForMediaTask(persona))) return;
+    snapshotPersonaCurrentForm();
+    const mediaUploadState = captureUploadDropzoneState("personaMediaTaskFiles");
+    const files = mediaUploadState.files;
+    const imageCount = files.filter((file) => fileKind(file) === "image").length;
+    const minImages = Number(taskMeta[taskType]?.minImages || 0);
+    if (imageCount < minImages) {
+      showMsg("commandMsg", `当前任务至少需要 ${minImages} 张图片素材。`, false);
+      return;
+    }
+    const draftSourceText = personaDraftReferenceContent(persona, post, source).trim();
+    normalizePersonaMediaGenerationForm(form);
+    const generationContent = draftSourceText;
+    const prompt = String(form.prompt || "").trim();
+    const desiredImageCount = Math.min(Math.max(Number(form.imageCount || state.personaMediaImageCountDefault || storedPersonaMediaImageCount() || 1), 1), 4);
+    form.imageCount = desiredImageCount;
+    if (taskType === "persona_post_image" && !generationContent && !prompt) {
+      showMsg("commandMsg", "当前草稿没有正文，请补充提示词后再生成。", false);
+      return;
+    }
+    const params = compactPayload({
+      prompt,
+      prompt_text: prompt,
+      message: prompt,
+      custom_prompt: prompt,
+      generation_content: generationContent,
+      content_source_mode: "draft",
+      image_count: desiredImageCount,
+      persona_enabled: true,
+      persona_label: String(persona.name || profile.name || "").trim(),
+      tg_generation_context: String(profile.content || persona.content || "").trim(),
+      tg_use_llm_prompt: true,
+      related_persona_id: String(persona.id || "").trim(),
+      related_post_id: String(post.id || "").trim(),
+      draft_source_text: draftSourceText,
+      aspect_ratio: taskType === "persona_post_image" ? String(form.aspectRatio || "auto") : undefined,
+    });
+    const body = new FormData();
+    body.append("task_type", taskType);
+    body.append("params_json", JSON.stringify(params));
+    files.forEach((file) => body.append("files", file, file.name));
+    setPersonaGenerateRunState(persona.id, {
+      kind: "media",
+      status: "running",
+      message: "推文配图任务提交中",
+      error: "",
+    });
     const result = await api("/api/tasks/submit", { method: "POST", body });
     clearUploadDropzoneState("personaMediaTaskFiles", mediaUploadState.stateKey);
     const key = personaMediaTaskKey(persona.id, post.id);
@@ -19980,6 +20168,7 @@ async function submitPersonaMediaTask() {
       taskId: result.id,
       taskPanel: "regular",
     });
+    taskAccepted = true;
     watchPersonaMediaTask(persona.id, post.id, result.id).catch(() => {});
     setPersonaGenerateRunState(persona.id, {
       kind: "media",
@@ -19997,7 +20186,7 @@ async function submitPersonaMediaTask() {
     });
     throw error;
   } finally {
-    setActionLocked(lockParts, false);
+    if (!taskAccepted) setActionLocked(lockParts, false);
     if (isPersonaWorkspaceModule()) renderPersonaDetail();
   }
 }
@@ -21136,6 +21325,7 @@ function renderPersonaStepTabs(groupKey, profile) {
   const step = currentPersonaGroupStep(groupKey, profile);
   if (groupKey === "content") {
     const persona = selectedPersona();
+    const generationLocked = Boolean(persona && isActionLocked("persona", persona.id, "generate_posts"));
     const postSource = persona ? personaPostSource(persona) : "posts";
     const tabs = [
       ["generate", "新建推文"],
@@ -21147,6 +21337,7 @@ function renderPersonaStepTabs(groupKey, profile) {
         type="button"
         class="${(value === "generate" ? step === "generate" : step === "posts" && postSource === value) ? "is-active" : ""}"
         data-persona-content-tab="${esc(value)}"
+        ${generationLocked ? 'disabled aria-disabled="true" title="AI 正在生成推文，完成后可切换"' : ""}
     >${esc(label)}</button>
   `).join("")}</div>`;
   }
@@ -21338,16 +21529,18 @@ function renderPersonaMediaTaskTabs(profile, generateForm, taskType) {
   `).join("")}</div>`;
 }
 
-function renderPersonaGenerateComposeTabs(mode, { editingDraft = false } = {}) {
+function renderPersonaGenerateComposeTabs(mode, { editingDraft = false, disabled = false } = {}) {
   const activeMode = ["tweet_media", "hot"].includes(mode) ? mode : "tweet";
-  const lockReason = "正在编辑单条草稿，请先保存或退出编辑后切换。";
+  const lockReason = disabled
+    ? "AI 正在生成推文，完成后可切换。"
+    : "正在编辑单条草稿，请先保存或退出编辑后切换。";
   const tabs = [
     ["tweet", "普通推文"],
     ["tweet_media", "批量推文"],
     ["hot", "热点抓取"],
   ];
   return `<div class="persona-compose-toggle" aria-label="新建推文档位">${tabs.map(([value, label]) => {
-    const locked = editingDraft && value !== "tweet";
+    const locked = disabled || (editingDraft && value !== "tweet");
     return `
     <button
       type="button"
@@ -22442,6 +22635,7 @@ async function confirmPersonaContentPlatformSwitch(persona, nextPlatform) {
   const currentPlatform = personaContentPlatform(persona);
   const targetPlatform = normalizePersonaContentPlatform(nextPlatform);
   if (currentPlatform === targetPlatform) return true;
+  if (isActionLocked("persona", persona?.id, "generate_posts")) return false;
   const transient = activePersonaDraftComposerTransientState(persona);
   if (!transient) return true;
   const platformLabel = Object.fromEntries(accountPoolPlatforms);
@@ -22818,6 +23012,7 @@ function renderPersonaDetail() {
   bindPersonaAccountPlatformSwipe($("personaDetail"));
   bindPersonaDraftSaveLongPress($("personaDetail"));
   bindMobileTweetStreamObservers();
+  syncPersonaPostGenerationInteractionLock();
   window.requestAnimationFrame(resizePersonaDraftEditContent);
   } finally {
     restoreConsoleScrollState(scrollSnapshot);
@@ -22920,7 +23115,10 @@ function renderPersonaContentPanel(persona, account, profile, step) {
               </div>
             ` : ""}
             <div class="persona-compose-mode-slot">
-              ${renderPersonaGenerateComposeTabs(composeMode, { editingDraft: isEditingDraft })}
+              ${renderPersonaGenerateComposeTabs(composeMode, {
+                editingDraft: isEditingDraft,
+                disabled: generationLocked,
+              })}
             </div>
             ${isEditingDraft ? `<p class="persona-compose-lock-hint" role="status">正在编辑单条草稿，批量推文和热点抓取不可用；请先保存或退出编辑后切换。</p>` : ""}
             ${isBatchCompose && generateMode === "ai" ? `
@@ -23208,6 +23406,7 @@ async function loadTasks() {
     loadAutomationTasksShared(),
   ]);
   state.tasks = Array.isArray(data.items) ? data.items : (Array.isArray(data.tasks) ? data.tasks : []);
+  await restorePersonaMediaTasksFromTaskList(state.tasks);
   state.socialTasks = Array.isArray(socialTasksData.tasks) ? socialTasksData.tasks : (Array.isArray(state.socialTasks) ? state.socialTasks : []);
   const reopenTaskQueuePersonaSidebar = Boolean(
     document.getElementById("taskQueuePersonaSidebar")?.classList.contains("is-mobile-open")
@@ -28311,7 +28510,8 @@ function bindEvents() {
     syncAccountStatusAutoRefresh();
     syncLiveBrowserAutoRefresh();
   });
-  document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", async () => {
+  document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", async (event) => {
+    if (guardPersonaPostGenerationInteraction(event.target)) return;
     const nextView = button.dataset.view;
     if (nextView === "workspace" && state.view === "workspace") {
       setMenuClickHighlight(button, button);
@@ -28350,6 +28550,10 @@ function bindEvents() {
     if (button) cancelBillingOrder(button.dataset.billingCancelOrder || "");
   });
   const handleWorkspaceModuleNavigation = async (event) => {
+    if (guardPersonaPostGenerationInteraction(event.target)) {
+      event.preventDefault();
+      return;
+    }
     const dockButton = event.target.closest(".mobile-task-dock-button");
     if (isCurrentMobileTaskDockTarget(dockButton)) {
       event.preventDefault();
@@ -28550,6 +28754,10 @@ function bindEvents() {
     event.returnValue = "";
   });
   $("moduleBody").addEventListener("click", async (event) => {
+    if (guardPersonaPostGenerationInteraction(event.target)) {
+      event.preventDefault();
+      return;
+    }
     if (handleUploadDropzoneAction(event)) return;
     if (Date.now() < Number(state.personaSuppressClickUntil || 0)) {
       event.preventDefault();
@@ -29347,6 +29555,10 @@ function bindEvents() {
     if (contentPlatformButton) {
       const persona = selectedPersona();
       if (!persona) return;
+      if (isActionLocked("persona", persona.id, "generate_posts")) {
+        showMsg("commandMsg", "当前推文生成任务尚未完成，完成后再切换平台。", false);
+        return;
+      }
       const nextPlatform = normalizePersonaContentPlatform(contentPlatformButton.dataset.personaContentPlatform);
       if (nextPlatform === personaContentPlatform(persona)) return;
       const hasTransientComposer = Boolean(activePersonaDraftComposerTransientState(persona));
@@ -29709,11 +29921,15 @@ function bindEvents() {
           const key = personaMediaTaskKey(persona.id, post.id);
           const current = state.personaMediaTasks[key];
           if (String(current?.taskId || "") === taskId) {
+            const taskType = String(current?.taskType || current?.detail?.type || "persona_post_image").trim();
             state.personaMediaTasks[key] = {
               ...current,
               status: "cancelled",
               detail: { ...(current.detail || {}), id: taskId, status: "cancelled" },
             };
+            setActionLocked(["media_task", persona.id, post.id, taskType], false);
+            delete state.personaMediaRuns[String(persona.id || "").trim()];
+            dismissToastByKey(`persona-generate:${persona.id}:media`);
           }
         }
         renderPersonaDetail();

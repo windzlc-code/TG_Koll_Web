@@ -320,6 +320,8 @@ export interface EpisodeScript {
   updatedAt?: string;
   publishedAt?: string;
   generationOperationId?: string;
+  generationCandidate?: boolean;
+  platform?: string;
   imageUrl?: string;       // auto-collected cover image URL
   imageHistory?: EpisodeImageHistoryEntry[];
   history?: EpisodeVersion[];

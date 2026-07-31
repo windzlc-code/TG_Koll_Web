@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 import shutil
@@ -382,9 +383,13 @@ function billingLedgerEntries() {{ return ledgerRows; }}
             'id="executeSimpleFlow"',
         ):
             with self.subTest(button=button_marker):
-                button_start = self.console_script.index(button_marker)
-                button_end = self.console_script.index("</button>", button_start)
-                button_markup = self.console_script[button_start:button_end]
+                button_match = re.search(
+                    rf"<button\b[^>]*{re.escape(button_marker)}[^>]*>.*?</button>",
+                    self.console_script,
+                    re.DOTALL,
+                )
+                self.assertIsNotNone(button_match)
+                button_markup = button_match.group(0)
                 self.assertNotIn(" 点", button_markup)
                 self.assertNotIn("预计", button_markup)
 
@@ -446,12 +451,13 @@ function billingLedgerEntries() {{ return ledgerRows; }}
         self.assertIn("clearStoredPersonaPostGenerationTask", generation)
         self.assertIn("withBillingChargeMessage", generation)
         self.assertIn("task.output", generation)
-        self.assertIn("isActiveGenerationSurface", generation)
+        self.assertNotIn("isActiveGenerationSurface", generation)
         self.assertIn("restorePersonaPostGenerationTasks", self.console_script)
         self.assertIn("PERSONA_POST_GENERATION_TASK_STORAGE_PREFIX", self.console_script)
-        self.assertIn("resumePersonaPostGenerationSubmission", generation)
-        self.assertIn("selectionPending", generation)
-        self.assertIn("completedTask", generation)
+        self.assertIn("watchPersonaPostGenerationTask", generation)
+        self.assertIn("selectionRequired", generation)
+        self.assertIn("resolvePersonaOrdinaryGeneratedCandidates", generation)
+        self.assertIn("applyPersonaGeneratedBatchTitles", generation)
 
     def test_persona_ai_steps_use_independent_stable_idempotency_keys(self):
         keywords = self.console_script[

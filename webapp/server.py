@@ -144,6 +144,27 @@ TOOL_R18_RUNTIME_DIR = Path(os.getenv("TOOL_R18_RUNTIME_DIR", str(ROOT_DIR / "to
 GOOGLE_OAUTH_FLOW_COOKIE = "google_oauth_flow"
 GOOGLE_OAUTH_ONBOARDING_COOKIE = "google_oauth_onboarding"
 BUSINESS_TIMEZONE_NAME = "Asia/Shanghai"
+
+
+def _persona_media_root() -> Path:
+    """Durable generated media, intentionally outside task-output retention cleanup."""
+    return (DATA_DIR / "persona_media").resolve()
+
+
+def _persona_task_media_dir(task_id: str) -> Path:
+    safe_task_id = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(task_id or "")).strip("._-")
+    if not safe_task_id:
+        raise ValueError("invalid task id")
+    return (_persona_media_root() / safe_task_id).resolve()
+
+
+def _delete_persona_task_media(task_id: str) -> None:
+    try:
+        shutil.rmtree(_persona_task_media_dir(task_id), ignore_errors=True)
+    except (OSError, ValueError):
+        pass
+
+
 try:
     BUSINESS_TIMEZONE = ZoneInfo(BUSINESS_TIMEZONE_NAME)
 except ZoneInfoNotFoundError:
@@ -326,6 +347,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 RH_MAX_CONCURRENCY = max(_env_int("RH_MAX_CONCURRENCY", 20), 1)
 TASK_QUEUE_MAXSIZE = max(_env_int("TASK_QUEUE_MAXSIZE", 0), 0)
+PERSONA_POST_IMAGE_MAX_CONCURRENCY = max(_env_int("PERSONA_POST_IMAGE_MAX_CONCURRENCY", 4), 1)
 COMFY_GPU_MAX_CONCURRENCY = max(_env_int("COMFY_GPU_MAX_CONCURRENCY", 4), 1)
 COMFY_GPU_CONFIG_MAX_CONCURRENCY = max(_env_int("COMFY_GPU_CONFIG_MAX_CONCURRENCY", 4), 1)
 COMFY_GPU_LOCAL_SEMAPHORE_LIMIT = max(_env_int("COMFY_GPU_LOCAL_SEMAPHORE_LIMIT", 4), COMFY_GPU_CONFIG_MAX_CONCURRENCY)
@@ -343,6 +365,7 @@ _NORMAL_TASK_CONTROLS_LOCK = threading.Lock()
 _ADMIN_BILLING_WAIVED_TASK_IDS: set[str] = set()
 _ADMIN_BILLING_WAIVED_TASK_IDS_LOCK = threading.Lock()
 _RUNTIME_CONFIG_LOCK = threading.RLock()
+_PERSONA_POST_IMAGE_SEMAPHORE = threading.BoundedSemaphore(int(PERSONA_POST_IMAGE_MAX_CONCURRENCY))
 _COMFY_GPU_SEMAPHORE = threading.BoundedSemaphore(int(COMFY_GPU_LOCAL_SEMAPHORE_LIMIT))
 _COMFY_GPU_LOCK = threading.Lock()
 _COMFY_GPU_WAITING = 0
@@ -1400,9 +1423,17 @@ def _cleanup_worker() -> None:
                 continue
             retention = max(_to_int(cfg2.get("cleanup_retention_days"), 7), 1)
             _cleanup_files_once(retention_days=retention)
-            _cleanup_stale_persona_generation_candidates()
         except Exception:
             time.sleep(10.0)
+
+
+def _candidate_cleanup_worker() -> None:
+    while True:
+        try:
+            _cleanup_stale_persona_generation_candidates()
+        except Exception:
+            logger.exception("persona generation candidate cleanup failed")
+        time.sleep(300.0)
 
 
 def _start_task_workers() -> None:
@@ -1416,6 +1447,7 @@ def _start_task_workers() -> None:
 
 
 _CLEANUP_THREAD: threading.Thread | None = None
+_CANDIDATE_CLEANUP_THREAD: threading.Thread | None = None
 _CLEANUP_LOCK = threading.Lock()
 _PERSONA_AI_BILLING_REF_TYPES = (
     "persona_ai_keywords",
@@ -1425,13 +1457,16 @@ _PERSONA_AI_BILLING_REF_TYPES = (
 
 
 def _start_cleanup_worker() -> None:
-    global _CLEANUP_THREAD
+    global _CLEANUP_THREAD, _CANDIDATE_CLEANUP_THREAD
     with _CLEANUP_LOCK:
-        if _CLEANUP_THREAD is not None:
-            return
-        t = threading.Thread(target=_cleanup_worker, args=(), daemon=True)
-        _CLEANUP_THREAD = t
-        t.start()
+        if _CLEANUP_THREAD is None:
+            t = threading.Thread(target=_cleanup_worker, args=(), daemon=True)
+            _CLEANUP_THREAD = t
+            t.start()
+        if _CANDIDATE_CLEANUP_THREAD is None:
+            candidate_thread = threading.Thread(target=_candidate_cleanup_worker, args=(), daemon=True)
+            _CANDIDATE_CLEANUP_THREAD = candidate_thread
+            candidate_thread.start()
 
 
 def _persona_ai_archive_output_is_durable(
@@ -1549,33 +1584,13 @@ def _recover_running_persona_post_generation_task(
     if not operation_post_ids or (expected_post_ids and operation_post_ids != expected_post_ids):
         return False
     durable_ids = operation_post_ids
-    platform = str(payload.get("platform") or "").strip()
-    if platform:
-        _set_persona_archive_posts_platform(archive_id, durable_ids, platform)
-        try:
-            _path, _raw, archives = _persona_archive_source_for_write(archive_id)
-            archive = _find_persona_archive(archives, archive_id)
-            posts = archive.get("posts") if isinstance((archive or {}).get("posts"), list) else []
-            operation_posts = [
-                post
-                for post in posts
-                if isinstance(post, dict) and str(post.get("id") or "").strip() in durable_ids
-            ]
-        except Exception:
-            return False
-    if _to_bool(payload.get("selection_required"), False):
-        _set_persona_archive_posts_generation_candidates(archive_id, durable_ids, True)
-        try:
-            _path, _raw, archives = _persona_archive_source_for_write(archive_id)
-            archive = _find_persona_archive(archives, archive_id)
-            posts = archive.get("posts") if isinstance((archive or {}).get("posts"), list) else []
-            operation_posts = [
-                post
-                for post in posts
-                if isinstance(post, dict) and str(post.get("id") or "").strip() in durable_ids
-            ]
-        except Exception:
-            return False
+    expected_platform = _normalize_persona_content_platform(payload.get("platform") or "threads")
+    if any(_normalize_persona_content_platform(post.get("platform")) != expected_platform for post in operation_posts):
+        return False
+    if _to_bool(payload.get("selection_required"), False) and any(
+        not bool(post.get("generationCandidate")) for post in operation_posts
+    ):
+        return False
     billing = commercial_billing.settle_reservation(
         conn,
         reservation_id,
@@ -1735,6 +1750,7 @@ def _ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    _persona_media_root().mkdir(parents=True, exist_ok=True)
     TOOL_R18_UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
     RUNTIME_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -9698,7 +9714,8 @@ def _persist_generated_image_for_task(task_id: str, image_url: str, index: int =
     text = str(image_url or "").strip()
     if not text:
         raise RuntimeError("未返回可保存的图片结果。")
-    workdir = _build_task_workdir(task_id)
+    workdir = _persona_task_media_dir(task_id)
+    workdir.mkdir(parents=True, exist_ok=True)
     stem = "persona_post_preview" if index <= 1 else f"persona_post_preview_{index}"
     if text.startswith("data:image/"):
         header, _, base64_data = text.partition(",")
@@ -9857,6 +9874,7 @@ def _persist_persona_post_image_aspect_ratio(task_id: str, aspect_ratio: str) ->
 
 
 def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    started_at = time.perf_counter()
     archive_id = str(payload.get("related_persona_id") or "").strip()
     post_id = str(payload.get("related_post_id") or "").strip()
     prompt = str(payload.get("custom_prompt") or payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
@@ -9879,6 +9897,8 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     source_content = generation_content or str(post.get("content") or "").strip()
     if not source_content and not prompt:
         raise RuntimeError("推文配图缺少用于生成的正文或提示词。")
+    archive_load_ms = round((time.perf_counter() - started_at) * 1000, 1)
+    aspect_started_at = time.perf_counter()
     try:
         aspect_ratio, aspect_ratio_selection = _resolve_persona_post_image_aspect_ratio(
             payload,
@@ -9888,6 +9908,7 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
     _persist_persona_post_image_aspect_ratio(task_id, aspect_ratio)
+    aspect_ratio_ms = round((time.perf_counter() - aspect_started_at) * 1000, 1)
     cli_payload = {
         "setup": archive.get("setup") if isinstance(archive.get("setup"), dict) else {},
         "content": source_content or prompt,
@@ -9898,49 +9919,25 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         "generateReferenceSheet": False,
         "dryRun": False,
     }
+    config_started_at = time.perf_counter()
     _sync_tool_r18_api_config_for_persona_workflow()
+    config_sync_ms = round((time.perf_counter() - config_started_at) * 1000, 1)
     command = ["node", "--import", "tsx", "scripts/skills/generate-persona-images.ts", json.dumps(cli_payload, ensure_ascii=False)]
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=str(ROOT_DIR / "tool_r18"),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=300,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"推文配图超时：{exc.timeout} 秒。") from exc
-    except FileNotFoundError as exc:
-        raise RuntimeError("未找到 Node.js 或 tsx，无法执行推文配图。") from exc
-    stdout = str(completed.stdout or "").strip()
-    stderr = str(completed.stderr or "").strip()
-    data = _parse_tool_r18_json_output(stdout)
-    if completed.returncode != 0:
-        raise RuntimeError(str((data or {}).get("error") or stderr or stdout or "推文配图失败。").strip())
-    if not isinstance(data, dict):
-        raise RuntimeError("推文配图返回格式无效。")
-    image_result = data.get("imageResult") if isinstance(data.get("imageResult"), dict) else {}
-    image_url = str(image_result.get("url") or "").strip()
-    if not image_url:
-        raise RuntimeError(str(image_result.get("error") or data.get("error") or "推文配图失败。").strip())
-    saved_path = _persist_generated_image_for_task(task_id, image_url, 1)
-    image_paths = [saved_path]
-    image_urls = [image_url]
-    timings = [data.get("timings")] if isinstance(data.get("timings"), dict) else []
-    for index in range(2, image_count + 1):
-        command = ["node", "--import", "tsx", "scripts/skills/generate-persona-images.ts", json.dumps(cli_payload, ensure_ascii=False)]
+    media_base_url = f"/api/tasks/{quote(str(task_id).strip(), safe='')}/media"
+
+    def generate_image(index: int) -> tuple[int, str, str, dict[str, Any]]:
+        provider_started_at = time.perf_counter()
         try:
-            completed = subprocess.run(
-                command,
-                cwd=str(ROOT_DIR / "tool_r18"),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=300,
-                check=False,
-            )
+            with _PERSONA_POST_IMAGE_SEMAPHORE:
+                completed = subprocess.run(
+                    command,
+                    cwd=str(ROOT_DIR / "tool_r18"),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=300,
+                    check=False,
+                )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"推文配图超时：{exc.timeout} 秒。") from exc
         except FileNotFoundError as exc:
@@ -9956,10 +9953,57 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         image_url = str(image_result.get("url") or "").strip()
         if not image_url:
             raise RuntimeError(str(image_result.get("error") or data.get("error") or "推文配图失败。").strip())
-        image_urls.append(image_url)
-        image_paths.append(_persist_generated_image_for_task(task_id, image_url, index))
-        if isinstance(data.get("timings"), dict):
-            timings.append(data.get("timings"))
+        provider_ms = round((time.perf_counter() - provider_started_at) * 1000, 1)
+        persist_started_at = time.perf_counter()
+        saved_path = _persist_generated_image_for_task(task_id, image_url, index)
+        persist_ms = round((time.perf_counter() - persist_started_at) * 1000, 1)
+        timing_item = {
+            "index": index,
+            "provider_ms": provider_ms,
+            "persist_ms": persist_ms,
+            "provider": data.get("timings") if isinstance(data.get("timings"), dict) else {},
+        }
+        return index, saved_path, f"{media_base_url}/{index - 1}", timing_item
+
+    provider_wall_started_at = time.perf_counter()
+    try:
+        with ThreadPoolExecutor(max_workers=image_count, thread_name_prefix="persona-post-image") as executor:
+            generated_images = list(executor.map(generate_image, range(1, image_count + 1)))
+    except Exception:
+        _delete_persona_task_media(task_id)
+        raise
+    provider_wall_ms = round((time.perf_counter() - provider_wall_started_at) * 1000, 1)
+    image_paths = [item[1] for item in generated_images]
+    image_urls = [item[2] for item in generated_images]
+    timing_items = [item[3] for item in generated_images]
+    total_ms = round((time.perf_counter() - started_at) * 1000, 1)
+    logger.info(
+        "persona post image timing task=%s total_ms=%.1f provider_wall_ms=%.1f provider_sum_ms=%.1f persist_ms=%.1f image_count=%s",
+        task_id,
+        total_ms,
+        provider_wall_ms,
+        sum(float(item["provider_ms"]) for item in timing_items),
+        sum(float(item["persist_ms"]) for item in timing_items),
+        len(image_paths),
+    )
+    phase_timings = {
+        "total_ms": total_ms,
+        "archive_load_ms": archive_load_ms,
+        "aspect_ratio_ms": aspect_ratio_ms,
+        "config_sync_ms": config_sync_ms,
+        "provider_wall_ms": provider_wall_ms,
+        "provider_ms": round(sum(float(item["provider_ms"]) for item in timing_items), 1),
+        "persist_ms": round(sum(float(item["persist_ms"]) for item in timing_items), 1),
+    }
+    if len(timing_items) == 1:
+        compatible_timings = dict(timing_items[0]["provider"])
+        compatible_timings.update({"phases": phase_timings, "stage_items": timing_items})
+    else:
+        compatible_timings = {
+            "items": [item["provider"] for item in timing_items],
+            "phases": phase_timings,
+            "stage_items": timing_items,
+        }
     return {
         "ok": True,
         "message": "推文配图生成完成",
@@ -9970,7 +10014,7 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         "image_count": len(image_paths),
         "aspect_ratio": aspect_ratio,
         "aspect_ratio_selection": aspect_ratio_selection,
-        "timings": timings[0] if len(timings) == 1 else {"items": timings},
+        "timings": compatible_timings,
     }
 
 
@@ -10301,6 +10345,8 @@ def _task_worker_with_control(
             )
     if discard_output:
         _delete_task_artifacts(task_id)
+        if task_type == "persona_post_image":
+            _delete_persona_task_media(task_id)
         return
 
 
@@ -13740,6 +13786,8 @@ def _generate_persona_archive_posts(
         "action": "generate-posts",
         "archiveId": clean_id,
         "generationOperationId": str(operation_id or "").strip(),
+        "selectionRequired": bool(payload.selection_required),
+        "platform": _normalize_persona_content_platform(payload.platform),
         "count": count,
         "customInstruction": _build_persona_generate_instruction(payload),
         "selectedMemoryEntryIds": [str(item or "").strip() for item in (payload.selected_memory_ids or []) if str(item or "").strip()],
@@ -13757,15 +13805,17 @@ def _generate_persona_archive_posts(
             for post in _list_persona_archive_posts(clean_id, include_generation_candidates=True)
             if str(post.get("id") or "").strip() not in existing_post_ids
         }
-    _set_persona_archive_posts_platform(
-        clean_id,
-        post_ids,
-        payload.platform,
-        operation_id=operation_id,
-        selection_required=payload.selection_required,
-    )
     posts = _list_persona_archive_posts(clean_id, include_generation_candidates=True)
     generated_posts = [item for item in posts if str(item.get("id") or "").strip() in post_ids] if post_ids else posts[:count]
+    expected_platform = _normalize_persona_content_platform(payload.platform)
+    clean_operation_id = str(operation_id or "").strip()
+    for post in generated_posts:
+        if clean_operation_id and str(post.get("platform") or "").strip() != expected_platform:
+            raise RuntimeError("generated post platform metadata was not persisted atomically")
+        if clean_operation_id and str(post.get("generation_operation_id") or "").strip() != clean_operation_id:
+            raise RuntimeError("generated post operation metadata was not persisted atomically")
+        if clean_operation_id and bool(payload.selection_required) and not bool(post.get("generation_candidate")):
+            raise RuntimeError("generated candidate metadata was not persisted atomically")
     return {
         "ok": True,
         "persona_id": clean_id,
@@ -13792,6 +13842,42 @@ def _persona_post_source_name(source: str = "posts") -> str:
     return "favorites" if _persona_post_source_key(source) == "favoritePosts" else "posts"
 
 
+def _persona_archive_posts_with_ids(archive: dict[str, Any], post_ids: set[str]) -> list[dict[str, Any]]:
+    """Return root posts and all platform mirrors for the requested IDs once each."""
+    rows: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    collections: list[Any] = [archive.get("posts")]
+    platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else {}
+    collections.extend(platform_posts.values())
+    for collection in collections:
+        if not isinstance(collection, list):
+            continue
+        for post in collection:
+            if not isinstance(post, dict) or str(post.get("id") or "").strip() not in post_ids:
+                continue
+            identity = id(post)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            rows.append(post)
+    return rows
+
+
+def _sync_persona_post_media_mirrors(archive: dict[str, Any], source_post: dict[str, Any]) -> None:
+    post_id = str(source_post.get("id") or "").strip()
+    if not post_id:
+        return
+    media_keys = ("mediaItems", "mediaUrl", "mediaType", "imageUrl", "updatedAt")
+    for mirrored_post in _persona_archive_posts_with_ids(archive, {post_id}):
+        if mirrored_post is source_post:
+            continue
+        for key in media_keys:
+            if key in source_post:
+                mirrored_post[key] = copy.deepcopy(source_post[key])
+            else:
+                mirrored_post.pop(key, None)
+
+
 @_persona_archive_write_locked
 def _set_persona_archive_posts_platform(
     archive_id: str,
@@ -13808,18 +13894,16 @@ def _set_persona_archive_posts_platform(
     archive = _find_persona_archive(archives, archive_id)
     if not archive:
         raise HTTPException(status_code=404, detail="persona not found")
-    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
     normalized_platform = _normalize_persona_content_platform(platform)
     clean_operation_id = str(operation_id or "").strip()
     changed = False
-    for post in posts:
-        if isinstance(post, dict) and str(post.get("id") or "").strip() in clean_post_ids:
-            post["platform"] = normalized_platform
-            if clean_operation_id:
-                post["generationOperationId"] = clean_operation_id
-            if selection_required:
-                post["generationCandidate"] = True
-            changed = True
+    for post in _persona_archive_posts_with_ids(archive, clean_post_ids):
+        post["platform"] = normalized_platform
+        if clean_operation_id:
+            post["generationOperationId"] = clean_operation_id
+        if selection_required:
+            post["generationCandidate"] = True
+        changed = True
     if changed:
         archive["updatedAt"] = _persona_dashboard_iso_now()
         _write_persona_archives_preserving_shape(path, raw, archives)
@@ -13838,11 +13922,8 @@ def _set_persona_archive_posts_generation_candidates(
     archive = _find_persona_archive(archives, archive_id)
     if not archive:
         raise HTTPException(status_code=404, detail="persona not found")
-    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
     changed = False
-    for post in posts:
-        if not isinstance(post, dict) or str(post.get("id") or "").strip() not in clean_post_ids:
-            continue
+    for post in _persona_archive_posts_with_ids(archive, clean_post_ids):
         if required:
             post["generationCandidate"] = True
         else:
@@ -13953,10 +14034,12 @@ def _finalize_persona_generated_candidates(
     replayed = not candidate_ids
     discarded_ids = candidate_ids - ({clean_selected_id} if clean_selected_id else set())
     if selected is not None:
-        selected.pop("generationCandidate", None)
-        if title is not None:
-            selected["title"] = str(title or "").strip()[:120]
-        selected["updatedAt"] = _persona_dashboard_iso_now()
+        selected_updated_at = _persona_dashboard_iso_now()
+        for mirrored_post in _persona_archive_posts_with_ids(archive, {clean_selected_id}):
+            mirrored_post.pop("generationCandidate", None)
+            if title is not None:
+                mirrored_post["title"] = str(title or "").strip()[:120]
+            mirrored_post["updatedAt"] = selected_updated_at
 
     if discarded_ids:
         archive["posts"] = [
@@ -14847,6 +14930,8 @@ def _update_persona_archive_post(archive_id: str, post_id: str, payload: Persona
             target.pop("mediaType", None)
             target.pop("imageUrl", None)
     target["updatedAt"] = now
+    if source_key == "posts" and payload.media_ops:
+        _sync_persona_post_media_mirrors(archive, target)
     archive["updatedAt"] = now
     _write_persona_archives_preserving_shape(path, raw, archives)
     compact = _compact_persona_archive_post(target)
@@ -14919,6 +15004,8 @@ def _update_persona_archive_post_media(archive_id: str, post_id: str, *, media_p
     else:
         target.pop("imageUrl", None)
     target["updatedAt"] = _persona_dashboard_iso_now()
+    if source_key == "posts":
+        _sync_persona_post_media_mirrors(archive, target)
     archive["updatedAt"] = target["updatedAt"]
     _write_persona_archives_preserving_shape(path, raw, archives)
     compact = _compact_persona_archive_post(target)
@@ -14964,6 +15051,8 @@ def _delete_persona_archive_post_media_item(archive_id: str, post_id: str, index
     else:
         target.pop("imageUrl", None)
     target["updatedAt"] = _persona_dashboard_iso_now()
+    if source_key == "posts":
+        _sync_persona_post_media_mirrors(archive, target)
     archive["updatedAt"] = target["updatedAt"]
     _write_persona_archives_preserving_shape(path, raw, archives)
     compact = _compact_persona_archive_post(target)
@@ -25875,6 +25964,7 @@ def create_app() -> FastAPI:
                 (DATA_DIR / "social_automation" / "uploads").resolve(),
                 UPLOAD_ROOT.resolve(),
                 OUTPUT_ROOT.resolve(),
+                _persona_media_root(),
             ]
             cleanup_dirs = [
                 *[Path(value).expanduser().resolve() for value in profile_dirs],
@@ -25904,6 +25994,9 @@ def create_app() -> FastAPI:
                         staged_paths.append(path)
                     else:
                         cleanup_failures.append(str(path))
+                persistent_media_dir = _persona_task_media_dir(tid)
+                if _persona_media_root() in persistent_media_dir.parents:
+                    staged_paths.append(persistent_media_dir)
             if cleanup_failures:
                 return {
                     "ok": False,
