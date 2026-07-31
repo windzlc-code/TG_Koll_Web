@@ -741,6 +741,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('selection_required: String(form.composeMode || "tweet") === "tweet"', payload_builder)
         self.assertIn("generatedPosts.some((post) => Boolean(post?.generation_candidate))", completion)
         self.assertNotIn("&& isActiveGenerationSurface", completion)
+        self.assertIn('return record?.payload?.selection_required ? "tweet" : "tweet_media";', self.console_script)
         self.assertIn('personaForm.generate.composeMode = "tweet";', selection)
         self.assertIn('personaForm.media.operationMode = "generate";', selection)
         self.assertIn("personaForm.media.focusPostId = finalizedPostId;", selection)
