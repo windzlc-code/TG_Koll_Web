@@ -9,6 +9,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONSOLE_JS = REPO_ROOT / "webapp" / "static" / "assets" / "console.js"
 ADMIN_JS = REPO_ROOT / "webapp" / "static" / "assets" / "admin.js"
+ADMIN_CSS = REPO_ROOT / "webapp" / "static" / "assets" / "style.css"
 PERSONA_DASHBOARD_JS = REPO_ROOT / "webapp" / "static" / "assets" / "persona-dashboard.js"
 CONSOLE_CSS = REPO_ROOT / "webapp" / "static" / "assets" / "console.css"
 CONSOLE_HTML = REPO_ROOT / "webapp" / "static" / "console.html"
@@ -25,6 +26,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
     def setUpClass(cls):
         cls.source = CONSOLE_JS.read_text(encoding="utf-8")
         cls.admin_source = ADMIN_JS.read_text(encoding="utf-8")
+        cls.admin_styles = ADMIN_CSS.read_text(encoding="utf-8")
         cls.persona_dashboard_source = PERSONA_DASHBOARD_JS.read_text(encoding="utf-8")
         cls.styles = CONSOLE_CSS.read_text(encoding="utf-8")
         cls.markup = CONSOLE_HTML.read_text(encoding="utf-8")
@@ -210,15 +212,20 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
-    def test_cookie_status_live_probe_only_runs_from_manual_refresh(self):
+    def test_cookie_status_live_probe_runs_on_page_open_and_every_five_minutes(self):
         admin_markup = (REPO_ROOT / "webapp" / "static" / "admin.html").read_text(encoding="utf-8")
-        self.assertNotIn("SENTIMENT_COOKIE_POLL_INTERVAL_MS", self.admin_source)
-        self.assertNotIn("setInterval(loadSentimentCookieStatus", self.admin_source)
+        self.assertIn("const SENTIMENT_COOKIE_POLL_INTERVAL_MS = 300000;", self.admin_source)
+        self.assertIn("void refreshSentimentCookieProfilesIfActive({ force: true });", self.admin_source)
+        self.assertIn("}, SENTIMENT_COOKIE_POLL_INTERVAL_MS);", self.admin_source)
         self.assertIn('await loadSentimentCookieProfiles({ force: true });', self.admin_source)
+        self.assertIn('setButtonLoading("btnSentimentCookieRefresh", true, "检测中");', self.admin_source)
+        self.assertIn('setButtonLoading("btnSentimentCookieRefresh", false);', self.admin_source)
+        self.assertIn(".page-admin #btnSentimentCookieRefresh.is-loading", self.admin_styles)
+        self.assertIn(".page-admin #btnSentimentCookieRefresh.is-loading::before", self.admin_styles)
         self.assertIn('? "?force=true" : ""', self.admin_source)
-        self.assertNotIn("自动更新中", self.admin_source)
-        self.assertNotIn("自动更新中", admin_markup)
-        self.assertIn("平台状态仅在管理员点击", admin_markup)
+        self.assertIn('setSentimentCookieLiveState("自动检测中...", "checking")', self.admin_source)
+        self.assertIn("当前页面每 5 分钟自动检测一次", admin_markup)
+        self.assertIn("等待自动检测", admin_markup)
 
     def test_cookie_status_exposes_real_hot_search_availability(self):
         self.assertIn('label: "实时热点搜索"', self.admin_source)
