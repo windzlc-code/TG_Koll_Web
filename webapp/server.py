@@ -1521,12 +1521,12 @@ def _recover_running_persona_post_generation_task(
     reservation_id: str,
 ) -> bool:
     archive_id = str(payload.get("archive_id") or "").strip()
-    post_ids = {
+    expected_post_ids = {
         str(post_id or "").strip()
         for post_id in (output.get("post_ids") if isinstance(output.get("post_ids"), list) else [])
         if str(post_id or "").strip()
     }
-    if not archive_id or not post_ids or not reservation_id:
+    if not archive_id or not reservation_id:
         return False
     try:
         _path, _raw, archives = _persona_archive_source_for_write(archive_id)
@@ -1534,17 +1534,33 @@ def _recover_running_persona_post_generation_task(
     except Exception:
         return False
     posts = archive.get("posts") if isinstance((archive or {}).get("posts"), list) else []
-    durable_ids = {
-        str(post.get("id") or "").strip()
+    operation_posts = [
+        post
         for post in posts
         if (
             isinstance(post, dict)
             and str(post.get("generationOperationId") or "").strip() == str(task_id)
-            and str(post.get("id") or "").strip() in post_ids
+            and str(post.get("id") or "").strip()
         )
-    }
-    if durable_ids != post_ids:
+    ]
+    operation_post_ids = {str(post.get("id") or "").strip() for post in operation_posts}
+    if not operation_post_ids or (expected_post_ids and operation_post_ids != expected_post_ids):
         return False
+    durable_ids = operation_post_ids
+    platform = str(payload.get("platform") or "").strip()
+    if platform:
+        _set_persona_archive_posts_platform(archive_id, durable_ids, platform)
+        try:
+            _path, _raw, archives = _persona_archive_source_for_write(archive_id)
+            archive = _find_persona_archive(archives, archive_id)
+            posts = archive.get("posts") if isinstance((archive or {}).get("posts"), list) else []
+            operation_posts = [
+                post
+                for post in posts
+                if isinstance(post, dict) and str(post.get("id") or "").strip() in durable_ids
+            ]
+        except Exception:
+            return False
     billing = commercial_billing.settle_reservation(
         conn,
         reservation_id,
@@ -1552,6 +1568,13 @@ def _recover_running_persona_post_generation_task(
         success=True,
     )
     recovered_output = dict(output)
+    recovered_output.update({
+        "ok": True,
+        "persona_id": archive_id,
+        "generated_count": len(durable_ids),
+        "post_ids": [str(post.get("id") or "").strip() for post in operation_posts],
+        "posts": [dict(post) for post in operation_posts],
+    })
     recovered_output["billing"] = billing
     now = _now_ts()
     conn.execute(
@@ -10448,6 +10471,26 @@ def _enqueue_persona_post_generation_task(
 
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        alias = conn.execute(
+            """
+            SELECT request_hash, task_id
+            FROM task_idempotency_keys
+            WHERE user_id = ? AND task_type = 'persona_post_generation' AND key_digest = ?
+            """,
+            (user_id, key_digest),
+        ).fetchone()
+        if alias is not None:
+            if str(alias["request_hash"] or "") != request_hash:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "IDEMPOTENCY_KEY_REUSED",
+                        "message": "该请求标识已用于不同的推文生成参数。",
+                    },
+                )
+            aliased_task = conn.execute("SELECT id FROM tasks WHERE id = ?", (str(alias["task_id"]),)).fetchone()
+            if aliased_task is not None:
+                return str(aliased_task["id"]), True
         existing = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if existing is not None:
             existing_payload = _json_loads(existing["input_json"], {})
@@ -10479,6 +10522,14 @@ def _enqueue_persona_post_generation_task(
             active_payload = _json_loads(active["input_json"], {})
             if str((active_payload or {}).get("archive_id") or "").strip() == clean_archive_id:
                 if str((active_payload or {}).get("_request_hash") or "") == request_hash:
+                    conn.execute(
+                        """
+                        INSERT INTO task_idempotency_keys(
+                          user_id, task_type, key_digest, request_hash, task_id, created_at
+                        ) VALUES (?, 'persona_post_generation', ?, ?, ?, ?)
+                        """,
+                        (user_id, key_digest, request_hash, str(active["id"]), _now_ts()),
+                    )
                     return str(active["id"]), True
                 raise HTTPException(
                     status_code=409,
@@ -10501,6 +10552,14 @@ def _enqueue_persona_post_generation_task(
         )
         effective_payload["_billing_reservation_id"] = str(billing_reservation.get("id") or "")
         _insert_task_record_in_transaction(conn, task_id, user_id, "persona_post_generation", effective_payload)
+        conn.execute(
+            """
+            INSERT INTO task_idempotency_keys(
+              user_id, task_type, key_digest, request_hash, task_id, created_at
+            ) VALUES (?, 'persona_post_generation', ?, ?, ?, ?)
+            """,
+            (user_id, key_digest, request_hash, task_id, _now_ts()),
+        )
         queued_payload = effective_payload
 
     try:
@@ -13371,6 +13430,7 @@ def _generate_persona_archive_posts(
     result = _run_persona_workflow_cli({
         "action": "generate-posts",
         "archiveId": clean_id,
+        "generationOperationId": str(operation_id or "").strip(),
         "count": count,
         "customInstruction": _build_persona_generate_instruction(payload),
         "selectedMemoryEntryIds": [str(item or "").strip() for item in (payload.selected_memory_ids or []) if str(item or "").strip()],

@@ -951,6 +951,24 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS task_idempotency_keys (
+              user_id INTEGER NOT NULL,
+              task_type TEXT NOT NULL,
+              key_digest TEXT NOT NULL,
+              request_hash TEXT NOT NULL,
+              task_id TEXT NOT NULL,
+              created_at INTEGER NOT NULL,
+              PRIMARY KEY(user_id, task_type, key_digest),
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+              FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_task_idempotency_keys_task_id ON task_idempotency_keys(task_id)"
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS social_proxies (
               id TEXT PRIMARY KEY,
               user_id INTEGER NOT NULL DEFAULT 0,

@@ -234,4 +234,32 @@ describe("persona generation memory", () => {
     expect(planPersonaPostGenerationBatches(10, 250)).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
     expect(planPersonaPostGenerationBatches(10, 500)).toEqual([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
   });
+
+  it("persists the generation operation id with the generated post", async () => {
+    const created = await runPersonaWorkflow({
+      action: "create",
+      name: "operation marker persona",
+      content: "operation marker regression fixture",
+      setup: {
+        genres: ["daily"],
+        personaPersonality: "calm",
+        personaGender: "female",
+        personaStyle: "short posts",
+        totalEpisodes: 50,
+        targetMarket: "cn",
+        chineseScript: "traditional",
+      },
+    } as any);
+
+    const result = await runPersonaWorkflow({
+      action: "generate-posts",
+      archiveId: created.archiveId,
+      count: 1,
+      generationOperationId: "persona-post-task-atomic-marker",
+    });
+    const archive = await loadPersonaArchive(created.archiveId);
+
+    expect(result.generatedCount).toBe(1);
+    expect(archive?.posts.at(-1)?.generationOperationId).toBe("persona-post-task-atomic-marker");
+  });
 });

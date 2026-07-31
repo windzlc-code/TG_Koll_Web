@@ -365,7 +365,7 @@ export type PersonaWorkflowInput =
   | { action: "get"; archiveId: string }
   | { action: "update"; archiveId: string; name?: string; content?: string; setup?: Partial<DramaSetup> }
   | { action: "delete"; archiveId: string }
-  | { action: "generate-posts"; archiveId: string; count?: number; customInstruction?: string; selectedMemoryEntryIds?: string[]; selectedMemorySummaries?: string[]; textModelBranch?: "free" }
+  | { action: "generate-posts"; archiveId: string; count?: number; customInstruction?: string; selectedMemoryEntryIds?: string[]; selectedMemorySummaries?: string[]; textModelBranch?: "free"; generationOperationId?: string }
   | { action: "enqueue-posts"; archiveId: string; postIds?: string[]; padCode?: string; platform?: string; telegramChatId?: string }
   | { action: "finalize-published"; archiveId: string; postIds: string[]; publishedContentById?: Record<string, string>; publishedMetaById?: Record<string, any> };
 
@@ -518,6 +518,10 @@ export async function runPersonaWorkflow(input: PersonaWorkflowInput) {
       }
 
       posts = await attachMemorySummariesToPosts(posts, archive, memoryContext.existingCount);
+      const generationOperationId = String(input.generationOperationId || "").trim();
+      if (generationOperationId) {
+        posts = posts.map((post) => ({ ...post, generationOperationId }));
+      }
       const saved = await appendEpisodesToArchive(archive.id, posts);
 
       return {

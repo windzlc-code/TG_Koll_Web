@@ -425,7 +425,11 @@ function billingLedgerEntries() {{ return ledgerRows; }}
         ):
             with self.subTest(endpoint=endpoint):
                 endpoint_start = self.console_script.index(endpoint)
-                endpoint_end = min(len(self.console_script), endpoint_start + 2400)
+                endpoint_end = (
+                    self.console_script.index("async function createPersonaDraftPost", endpoint_start)
+                    if endpoint == "/generate_posts"
+                    else min(len(self.console_script), endpoint_start + 2400)
+                )
                 self.assertIn(
                     "withBillingChargeMessage",
                     self.console_script[endpoint_start:endpoint_end],
@@ -436,7 +440,7 @@ function billingLedgerEntries() {{ return ledgerRows; }}
             self.console_script.index("async function generatePersonaDraftPosts")
             : self.console_script.index("async function createPersonaDraftPost")
         ]
-        self.assertIn('"Idempotency-Key": operationKey', generation)
+        self.assertIn('"Idempotency-Key": operationKey', self.console_script)
         self.assertIn("storePersonaPostGenerationTask", generation)
         self.assertIn("watchPersonaPostGenerationTask", generation)
         self.assertIn("clearStoredPersonaPostGenerationTask", generation)
@@ -445,6 +449,9 @@ function billingLedgerEntries() {{ return ledgerRows; }}
         self.assertIn("isActiveGenerationSurface", generation)
         self.assertIn("restorePersonaPostGenerationTasks", self.console_script)
         self.assertIn("PERSONA_POST_GENERATION_TASK_STORAGE_PREFIX", self.console_script)
+        self.assertIn("resumePersonaPostGenerationSubmission", generation)
+        self.assertIn("selectionPending", generation)
+        self.assertIn("completedTask", generation)
 
     def test_persona_ai_steps_use_independent_stable_idempotency_keys(self):
         keywords = self.console_script[

@@ -7001,6 +7001,9 @@ function setModule(moduleId) {
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
   syncLiveBrowserAutoRefresh();
+  if (moduleId === "tweet_generation") {
+    queueMicrotask(() => restorePersonaPostGenerationTasks());
+  }
 }
 
 function selectedBranch(moduleId) {
@@ -18237,6 +18240,26 @@ function personaPostGenerationErrorIsTransient(error) {
   return status === 0 || status === 408 || status === 429 || status === 499 || status >= 500;
 }
 
+async function resumePersonaPostGenerationSubmission(persona, record) {
+  const personaId = String(persona?.id || record?.personaId || "").trim();
+  const operationKey = String(record?.operationKey || "").trim();
+  const payload = record?.payload && typeof record.payload === "object" ? record.payload : null;
+  if (!personaId || !operationKey || !payload) {
+    throw { detail: "缺少可恢复的推文生成请求。", status: 422 };
+  }
+  const accepted = await api(`/api/persona_dashboard/personas/${encodeURIComponent(personaId)}/generate_posts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": operationKey },
+    body: JSON.stringify(payload),
+  });
+  const taskId = String(accepted?.task_id || accepted?.task?.id || "").trim();
+  if (!taskId) throw { detail: "生成任务已提交，但服务端未返回任务编号。", status: 502 };
+  return {
+    record: storePersonaPostGenerationTask(personaId, { ...record, taskId }),
+    task: accepted?.task || null,
+  };
+}
+
 async function generatePersonaDraftPosts() {
   const persona = selectedPersona();
   if (!persona) {
@@ -18296,15 +18319,9 @@ async function generatePersonaDraftPosts() {
     });
     let task = null;
     if (!String(taskRecord?.taskId || "").trim()) {
-      const accepted = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/generate_posts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Idempotency-Key": operationKey },
-        body: JSON.stringify(payload),
-      });
-      const taskId = String(accepted?.task_id || accepted?.task?.id || "").trim();
-      if (!taskId) throw { detail: "生成任务已提交，但服务端未返回任务编号。", status: 502 };
-      task = accepted?.task || null;
-      taskRecord = storePersonaPostGenerationTask(persona.id, { ...taskRecord, taskId });
+      const resumed = await resumePersonaPostGenerationSubmission(persona, taskRecord);
+      task = resumed.task;
+      taskRecord = resumed.record;
     }
     await watchPersonaPostGenerationTask(persona, taskRecord, task);
   } catch (error) {
@@ -18343,9 +18360,7 @@ async function completePersonaPostGenerationTask(persona, task, context = {}) {
   const composeMode = String(context.composeMode || "tweet");
   const requestedTitle = String(context.requestedTitle || "").trim();
   const isActivePersona = String(selectedPersona()?.id || "").trim() === String(persona.id || "").trim();
-  const isActiveGenerationSurface = isActivePersona
-    && state.activeModule === "tweet_generation"
-    && String(state.personaPanels?.content || "generate") === "generate";
+  const isActiveGenerationSurface = isActivePersona && state.activeModule === "tweet_generation";
   await loadPersonaDraftPosts(persona.id, { force: true });
   const latestGenerated = personaDraftPosts(persona).find((post) => generatedIds.has(String(post?.id || "")));
   if (isActivePersona) {
@@ -18374,6 +18389,9 @@ async function completePersonaPostGenerationTask(persona, task, context = {}) {
     if (requestedTitle) await loadPersonaDraftPosts(persona.id, { force: true });
   }
   if (isActivePersona) renderConfirmSummary();
+  return {
+    selectionPending: composeMode === "tweet" && generatedPosts.length > 0 && !isActiveGenerationSurface,
+  };
 }
 
 async function watchPersonaPostGenerationTask(persona, record, initialTask = null) {
@@ -18406,8 +18424,17 @@ async function watchPersonaPostGenerationTask(persona, record, initialTask = nul
       }
       const status = String(task?.status || "queued").trim();
       if (status === "success") {
-        await completePersonaPostGenerationTask(persona, task, record?.context || {});
-        clearStoredPersonaPostGenerationTask(personaId, taskId);
+        const completion = await completePersonaPostGenerationTask(persona, task, record?.context || {});
+        if (completion?.selectionPending) {
+          storePersonaPostGenerationTask(personaId, {
+            ...record,
+            taskId,
+            selectionPending: true,
+            completedTask: task,
+          });
+        } else {
+          clearStoredPersonaPostGenerationTask(personaId, taskId);
+        }
         return task;
       }
       if (status === "failed" || status === "cancelled") {
@@ -18444,13 +18471,13 @@ async function watchPersonaPostGenerationTask(persona, record, initialTask = nul
   }
 }
 
-function restorePersonaPostGenerationTasks(personaId = "") {
+async function restorePersonaPostGenerationTasks(personaId = "") {
   const cleanPersonaId = String(personaId || state.selectedPersonaId || "").trim();
   const persona = state.personas.find((item) => String(item?.id || "").trim() === cleanPersonaId);
-  const record = persona ? storedPersonaPostGenerationTask(cleanPersonaId) : null;
-  const taskId = String(record?.taskId || "").trim();
-  if (!persona || !taskId || state.personaGenerateTaskWatchers[cleanPersonaId]) return null;
+  let record = persona ? storedPersonaPostGenerationTask(cleanPersonaId) : null;
+  if (!persona || !record || state.personaGenerateTaskWatchers[cleanPersonaId]) return null;
   const lockParts = ["persona", cleanPersonaId, "generate_posts"];
+  if (isActionLocked(...lockParts)) return null;
   setActionLocked(lockParts, true);
   setPersonaGenerateRunState(cleanPersonaId, {
     kind: record?.context?.isRewriteRun ? "rewrite" : "draft",
@@ -18463,21 +18490,30 @@ function restorePersonaPostGenerationTasks(personaId = "") {
     suppressToast: true,
   });
   if (isPersonaWorkspaceModule()) renderPersonaDetail();
-  return watchPersonaPostGenerationTask(persona, record)
-    .catch((error) => {
-      if (!error?.stale) {
-        setPersonaGenerateRunState(cleanPersonaId, {
-          kind: record?.context?.isRewriteRun ? "rewrite" : "draft",
-          status: "error",
-          message: "图文草稿生成失败",
-          error: error?.detail || error?.message || "生成失败",
-        });
-      }
-    })
-    .finally(() => {
-      setActionLocked(lockParts, false);
-      if (isPersonaWorkspaceModule()) renderPersonaDetail();
-    });
+  try {
+    let initialTask = record?.completedTask && typeof record.completedTask === "object"
+      ? record.completedTask
+      : null;
+    if (!String(record?.taskId || "").trim()) {
+      const resumed = await resumePersonaPostGenerationSubmission(persona, record);
+      record = resumed.record;
+      initialTask = resumed.task;
+    }
+    return await watchPersonaPostGenerationTask(persona, record, initialTask);
+  } catch (error) {
+    if (!error?.stale) {
+      setPersonaGenerateRunState(cleanPersonaId, {
+        kind: record?.context?.isRewriteRun ? "rewrite" : "draft",
+        status: "error",
+        message: "图文草稿生成失败",
+        error: error?.detail || error?.message || "生成失败",
+      });
+    }
+    return null;
+  } finally {
+    setActionLocked(lockParts, false);
+    if (isPersonaWorkspaceModule()) renderPersonaDetail();
+  }
 }
 
 async function createPersonaDraftPost() {

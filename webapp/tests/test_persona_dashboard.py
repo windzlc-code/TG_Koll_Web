@@ -3213,6 +3213,42 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(second.json()["detail"]["code"], "PERSONA_GENERATION_IN_PROGRESS")
         self.assertEqual(second.json()["detail"]["task_id"], first.json()["task_id"])
 
+    def test_generate_persona_posts_persists_alias_for_same_active_request(self):
+        self._write_archives()
+        payload = {"count": 1, "prompt": "same request", "target_words": 80}
+        with mock.patch.object(server._TASK_QUEUE, "put"):
+            first = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/generate_posts",
+                headers={"Idempotency-Key": "persona-post-generation-primary-key"},
+                json=payload,
+            )
+            alias = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/generate_posts",
+                headers={"Idempotency-Key": "persona-post-generation-alias-key"},
+                json=payload,
+            )
+
+            self.assertEqual(first.status_code, 202, first.text)
+            self.assertEqual(alias.status_code, 202, alias.text)
+            self.assertEqual(alias.json()["task_id"], first.json()["task_id"])
+            self.assertTrue(alias.json()["replayed"])
+
+            with server.db() as conn:
+                conn.execute(
+                    "UPDATE tasks SET status = 'success', output_json = ? WHERE id = ?",
+                    (json.dumps({"ok": True, "generated_count": 1}), first.json()["task_id"]),
+                )
+
+            replay_after_completion = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/generate_posts",
+                headers={"Idempotency-Key": "persona-post-generation-alias-key"},
+                json=payload,
+            )
+
+        self.assertEqual(replay_after_completion.status_code, 202, replay_after_completion.text)
+        self.assertEqual(replay_after_completion.json()["task_id"], first.json()["task_id"])
+        self.assertTrue(replay_after_completion.json()["replayed"])
+
     def test_persona_post_generation_settles_only_actual_generated_count_once(self):
         self._write_archives()
         application = self.unauth_client.post("/api/auth/apply", json={
@@ -3331,6 +3367,49 @@ class PersonaDashboardApiTests(unittest.TestCase):
         output = json.loads(task["output_json"])
         self.assertEqual(output["post_ids"], ["post-recovered-1"])
         self.assertIn("billing", output)
+
+    def test_restart_recovers_operation_tagged_posts_without_task_checkpoint(self):
+        self._write_archives()
+        with mock.patch.object(server._TASK_QUEUE, "put"):
+            accepted = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/generate_posts",
+                headers={"Idempotency-Key": "persona-post-generation-operation-recovery"},
+                json={"count": 1, "prompt": "recover durable operation", "target_words": 80},
+            )
+        self.assertEqual(accepted.status_code, 202, accepted.text)
+        task_id = accepted.json()["task_id"]
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        archives[0]["posts"].append({
+            "id": "post-operation-recovered-1",
+            "title": "Recovered from operation marker",
+            "content": "Durable output without task checkpoint",
+            "generationOperationId": task_id,
+            "platform": "threads",
+        })
+        archives_path.write_text(json.dumps(archives), encoding="utf-8")
+        with server.db() as conn:
+            conn.execute(
+                "UPDATE tasks SET status = 'running', output_json = '{}' WHERE id = ?",
+                (task_id,),
+            )
+
+        with mock.patch.object(server._TASK_QUEUE, "put") as queue_mock:
+            server._resume_pending_tasks()
+
+        queue_mock.assert_not_called()
+        with server.db() as conn:
+            task = conn.execute("SELECT status, output_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            reservation = conn.execute(
+                "SELECT status FROM billing_reservations WHERE ref_id = ?",
+                (task_id,),
+            ).fetchone()
+        self.assertEqual(str(task["status"]), "success")
+        output = json.loads(task["output_json"])
+        self.assertEqual(output["generated_count"], 1)
+        self.assertEqual(output["post_ids"], ["post-operation-recovered-1"])
+        self.assertEqual(output["posts"][0]["id"], "post-operation-recovered-1")
+        self.assertIn(str(reservation["status"]), {"settled", "waived"})
 
     def test_generate_persona_posts_rejects_more_than_five_candidates(self):
         self._write_archives()

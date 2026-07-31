@@ -225,6 +225,9 @@ function normalizePost(raw: any, fallbackIndex: number): PersonaArchivePost {
     createdAt,
     updatedAt,
     publishedAt,
+    generationOperationId: typeof raw?.generationOperationId === "string" && raw.generationOperationId.trim()
+      ? raw.generationOperationId.trim()
+      : undefined,
     publishedMemory,
     memorySummary: rawMemorySummary || publishedMemory,
     imageUrl: typeof raw?.imageUrl === "string" ? raw.imageUrl : undefined,
@@ -826,6 +829,7 @@ function buildArchivePostFromEpisode(ep: EpisodeScript, index: number): PersonaA
       createdAt: ep.createdAt || now,
       updatedAt: now,
       publishedAt: ep.publishedAt,
+      generationOperationId: ep.generationOperationId,
       memorySummary: ep.memorySummary,
       imageUrl: ep.imageUrl,
       imageHistory: ep.imageHistory,
@@ -846,6 +850,7 @@ export function archivePostsToEpisodes(posts: PersonaArchivePost[]): EpisodeScri
     createdAt: post.createdAt,
     updatedAt: post.updatedAt,
     publishedAt: post.publishedAt,
+    generationOperationId: post.generationOperationId,
     memorySummary: post.memorySummary,
     imageUrl: post.imageUrl,
     imageHistory: post.imageHistory,
