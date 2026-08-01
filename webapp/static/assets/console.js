@@ -26191,6 +26191,19 @@ function renderProxyPool() {
   const page = state.proxyPoolPage;
   const offset = (page - 1) * pageSize;
   const pageRows = rows.slice(offset, offset + pageSize);
+  const columns = ["序号", "分组", "IP 类型", "来源", "购买状态", "代理名称", "代理资讯", "备注", "代理状态", "代理归属", "出口 IP", "已绑账号", "代理协议", "系统有效性", "操作"];
+  const renderProxyMobileActions = (proxy) => {
+    const isMarketplace = String(proxy.source || "").trim().toLowerCase() === "marketplace";
+    const boundCount = proxyBoundAccountCount(proxy);
+    const deleteTitle = boundCount ? "代理已绑定账号，不能释放" : (isMarketplace ? "释放并退回商城" : "删除代理");
+    const deleteLabel = isMarketplace ? "释放代理" : "删除代理";
+    const editAction = isMarketplace ? "" : `<button type="button" data-proxy-edit="${esc(proxy.id)}" title="编辑代理" aria-label="编辑代理">${renderEditIcon()}</button>`;
+    return `
+      <button type="button" data-proxy-view="${esc(proxy.id)}" title="查看详情" aria-label="查看代理详情">${renderEyeIcon()}</button>
+      <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderNetworkIcon()}</button>
+      ${editAction}
+      <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${deleteTitle}" aria-label="${deleteLabel}" ${boundCount ? "disabled" : ""}>${isMarketplace ? renderProxyReleaseIcon() : renderTrashIcon()}</button>`;
+  };
   root.innerHTML = `
     <section class="proxy-pool-panel">
       <div class="proxy-pool-head">
@@ -26200,7 +26213,41 @@ function renderProxyPool() {
           <button type="button" class="primary proxy-pool-add" data-proxy-add>${renderCustomProxyIcon()}<span>自定义代理</span></button>
         </div>
       </div>
-      <div class="proxy-card-grid" role="list" aria-label="代理 IP 列表">
+      <div class="proxy-table-wrap" data-proxy-desktop-list>
+        <div class="proxy-table" role="table" aria-label="代理 IP 列表">
+          <div class="proxy-table-row proxy-table-row--head" role="row">${columns.map((column) => `<span role="columnheader">${column}</span>`).join("")}</div>
+          ${pageRows.length ? pageRows.map((proxy, index) => {
+            const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
+            const country = String(proxy.country || "").trim() || "待识别";
+            const authLabel = proxy.username_configured || proxy.password_configured ? "需认证" : "无认证";
+            const isMarketplace = String(proxy.source || "").trim().toLowerCase() === "marketplace";
+            const isNew = Boolean(proxy.marketplace?.is_new);
+            const sourceClass = isMarketplace ? "marketplace" : "custom";
+            return `<div class="proxy-table-row ${isMarketplace ? "is-marketplace" : "is-custom"}" role="row">
+              <span role="cell" class="proxy-detail-cell proxy-numeric" data-mobile-label="序号">${offset + index + 1}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="分组">未分组</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="IP 类型">${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="来源"><span class="proxy-source-badge is-${sourceClass}">${esc(proxySourceLabel(proxy.source))}</span>${isNew ? '<span class="proxy-new-badge">新</span>' : ""}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="购买状态">${esc(proxyPurchaseStatusLabel(proxy.purchase_status))}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="代理名称"><strong>${esc(proxy.name || endpoint)}</strong></span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="代理资讯"><strong>${esc(endpoint)}</strong><small>${esc(authLabel)}</small></span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="备注">${esc(proxy.note || "-")}</span>
+              <span role="cell" class="proxy-detail-cell proxy-status-stack" data-mobile-label="代理状态"><span class="status ${esc(proxy.status || "")}">${esc(proxyStatusLabel(proxy.status))}</span><small>${proxy.last_check_at ? esc(formatTime(proxy.last_check_at)) : "未检测"}</small></span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="代理归属">${esc(country)}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="出口 IP">${esc(proxyExitIp(proxy))}</span>
+              <span role="cell" class="proxy-detail-cell proxy-numeric" data-mobile-label="已绑账号">${proxyBoundAccountCount(proxy)}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="代理协议">${esc(proxyProtocol(proxy))}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="系统有效性">${esc(proxyAutomaticValidityLabel(proxy))}</span>
+              <span role="cell" class="proxy-table-actions" data-mobile-label="操作">
+                <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderRefreshIcon()}</button>
+                <button type="button" data-proxy-edit="${esc(proxy.id)}" title="${isMarketplace ? "商城代理由管理员统一维护" : "编辑代理"}" aria-label="${isMarketplace ? "商城代理不可编辑" : "编辑代理"}" ${isMarketplace ? "disabled" : ""}>${renderEditIcon()}</button>
+                <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${proxyBoundAccountCount(proxy) ? "代理已绑定账号，不能释放" : (isMarketplace ? "释放并退回商城" : "删除代理")}" ${proxyBoundAccountCount(proxy) ? "disabled" : ""}>${isMarketplace ? "释放" : "删除"}</button>
+              </span>
+            </div>`;
+          }).join("") : `<div class="empty-state proxy-pool-empty">暂无代理 IP，点击新增代理开始配置。</div>`}
+        </div>
+      </div>
+      <div class="proxy-card-grid" data-proxy-mobile-cards role="list" aria-label="代理 IP 列表">
           ${pageRows.length ? pageRows.map((proxy, index) => {
             const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
             const country = String(proxy.country || "").trim() || "待识别";
@@ -26228,12 +26275,7 @@ function renderProxyPool() {
               </div>
               <div class="proxy-pool-card-footer">
                 <small>${esc(proxyAutomaticValidityLabel(proxy))}</small>
-                <div class="proxy-card-actions" role="group" aria-label="代理操作">
-                  <button type="button" data-proxy-view="${esc(proxy.id)}" title="查看详情" aria-label="查看代理详情">${renderEyeIcon()}</button>
-                  <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderNetworkIcon()}</button>
-                  ${isMarketplace ? "" : `<button type="button" data-proxy-edit="${esc(proxy.id)}" title="编辑代理" aria-label="编辑代理">${renderEditIcon()}</button>`}
-                  <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${boundCount ? "代理已绑定账号，不能释放" : (isMarketplace ? "释放并退回商城" : "删除代理")}" aria-label="${isMarketplace ? "释放代理" : "删除代理"}" ${boundCount ? "disabled" : ""}>${isMarketplace ? renderProxyReleaseIcon() : renderTrashIcon()}</button>
-                </div>
+                <div class="proxy-card-actions" role="group" aria-label="代理操作">${renderProxyMobileActions(proxy)}</div>
               </div>
             </article>`;
           }).join("") : `<div class="empty-state proxy-pool-empty">暂无代理 IP，点击新增代理开始配置。</div>`}

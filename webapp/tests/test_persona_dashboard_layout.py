@@ -2862,7 +2862,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-link-actions button.danger,", self.styles)
         self.assertIn(".proxy-card-actions button.danger {", self.styles)
 
-    def test_proxy_pool_uses_compact_summary_cards_and_shared_detail_modal(self):
+    def test_proxy_pool_uses_desktop_field_list_and_mobile_summary_cards(self):
         proxy_pool = self.console_script[
             self.console_script.index("function renderProxyPool()"):
             self.console_script.index("\nfunction proxyMarketCatalogRoot", self.console_script.index("function renderProxyPool()"))
@@ -2876,15 +2876,34 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script.index('const proxyPage = event.target.closest("[data-proxy-page]")')
         ]
 
-        self.assertIn('class="proxy-card-grid" role="list"', proxy_pool)
+        self.assertIn('class="proxy-card-grid" data-proxy-mobile-cards role="list"', proxy_pool)
         self.assertIn('class="proxy-pool-card ', proxy_pool)
-        self.assertIn('data-proxy-view="${esc(proxy.id)}"', proxy_pool)
-        self.assertIn('${renderEyeIcon()}</button>', proxy_pool)
-        self.assertIn('${renderNetworkIcon()}</button>', proxy_pool)
-        self.assertIn('${renderEditIcon()}</button>', proxy_pool)
-        self.assertIn('${isMarketplace ? renderProxyReleaseIcon() : renderTrashIcon()}</button>', proxy_pool)
-        self.assertNotIn('const columns = [', proxy_pool)
-        self.assertNotIn('proxy-table-row--head', proxy_pool)
+        self.assertIn('class="proxy-table-wrap" data-proxy-desktop-list', proxy_pool)
+        self.assertIn('class="proxy-table" role="table"', proxy_pool)
+        self.assertIn(
+            'const columns = ["序号", "分组", "IP 类型", "来源", "购买状态", "代理名称", "代理资讯", "备注", "代理状态", "代理归属", "出口 IP", "已绑账号", "代理协议", "系统有效性", "操作"];',
+            proxy_pool,
+        )
+        self.assertIn('class="proxy-table-row proxy-table-row--head"', proxy_pool)
+        desktop_list = proxy_pool[
+            proxy_pool.index('class="proxy-table-wrap" data-proxy-desktop-list'):
+            proxy_pool.index('class="proxy-card-grid" data-proxy-mobile-cards')
+        ]
+        mobile_actions = proxy_pool[
+            proxy_pool.index("const renderProxyMobileActions"):
+            proxy_pool.index("root.innerHTML = `")
+        ]
+        mobile_cards = proxy_pool[proxy_pool.index('class="proxy-card-grid" data-proxy-mobile-cards'):]
+        self.assertNotIn('data-proxy-view=', desktop_list)
+        self.assertIn('${renderRefreshIcon()}</button>', desktop_list)
+        self.assertIn('商城代理不可编辑', desktop_list)
+        self.assertIn('${isMarketplace ? "释放" : "删除"}', desktop_list)
+        self.assertIn('data-proxy-view="${esc(proxy.id)}"', mobile_actions)
+        self.assertIn('${renderEyeIcon()}</button>', mobile_actions)
+        self.assertIn('${renderNetworkIcon()}</button>', mobile_actions)
+        self.assertIn('${renderEditIcon()}</button>', mobile_actions)
+        self.assertIn('${isMarketplace ? renderProxyReleaseIcon() : renderTrashIcon()}</button>', mobile_actions)
+        self.assertIn('${renderProxyMobileActions(proxy)}', mobile_cards)
 
         self.assertIn('modalKey: "proxy-details"', detail_modal)
         self.assertIn('class="console-modal-detail proxy-detail-modal"', detail_modal)
@@ -2898,7 +2917,12 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".proxy-card-grid {", self.styles)
         self.assertIn(".proxy-pool-card {", self.styles)
         self.assertIn("max-width: 420px;", self.styles)
-        self.assertNotIn(".proxy-table-row:not(.proxy-table-row--head)", self.styles)
+        self.assertIn(".proxy-table-wrap {", self.styles)
+        self.assertIn(".proxy-table-row {", self.styles)
+        self.assertIn("108px 84px;", self.styles)
+        self.assertIn(".proxy-table-actions button.danger {", self.styles)
+        self.assertIn(".proxy-card-grid {\n    display: grid;", self.styles)
+        self.assertIn(".proxy-table-wrap {\n    display: none;", self.styles)
 
     def test_automation_plan_strategy_summary_stays_on_one_full_width_line(self):
         renderer = self.console_script[
