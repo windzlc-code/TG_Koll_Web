@@ -430,6 +430,37 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self_heal.assert_not_called()
         open_login.assert_not_called()
 
+    def test_publish_login_repair_uses_shared_open_login_defaults(self):
+        initial_status = {"status": "cookie_expired", "reason": "login page"}
+
+        with mock.patch.object(runner, "_run_open_login", return_value={"ok": True, "status": "ready"}) as open_login:
+            result = runner._attempt_publish_login_repair(
+                mock.Mock(),
+                {"id": "publish-login", "task_type": "publish_post"},
+                {
+                    "platform": "threads",
+                    "login_username": "saved-user",
+                    "login_password": "saved-password",
+                },
+                {},
+                Path("."),
+                _Logger(),
+                "threads",
+                None,
+                initial_status,
+                {},
+            )
+
+        self.assertEqual(result["status"], "ready")
+        repair_payload = open_login.call_args.args[3]
+        self.assertEqual(repair_payload["login_username"], "saved-user")
+        self.assertEqual(repair_payload["login_password"], "saved-password")
+        self.assertIs(repair_payload["auto_submit"], True)
+        self.assertIs(repair_payload["wait_for_manual"], True)
+        self.assertEqual(repair_payload["login_wait_seconds"], 3600)
+        self.assertNotIn("max_login_attempts", repair_payload)
+        self.assertNotIn("max_self_heal_attempts", repair_payload)
+
     def test_publish_reports_ready_login_before_running_action(self):
         page = mock.Mock()
         context = mock.Mock()

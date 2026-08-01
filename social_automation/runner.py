@@ -232,6 +232,27 @@ def _wait_for_publish_login_transition(
     }
 
 
+def _shared_auto_login_payload(
+    payload: dict[str, Any],
+    account: dict[str, Any],
+) -> dict[str, Any]:
+    repair_payload = dict(payload or {})
+    repair_payload["auto_submit"] = True
+    repair_payload.setdefault(
+        "login_username",
+        str(account.get("login_username") or account.get("username") or "").strip(),
+    )
+    saved_password = str(account.get("login_password") or "")
+    if saved_password:
+        repair_payload.setdefault("login_password", saved_password)
+    repair_payload.setdefault(
+        "login_wait_seconds",
+        _int_payload_or_env({}, "login_wait_seconds", "SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", 3600, 30, 3600),
+    )
+    repair_payload.setdefault("wait_for_manual", True)
+    return repair_payload
+
+
 def _attempt_publish_login_repair(
     page,
     task: dict[str, Any],
@@ -271,14 +292,7 @@ def _attempt_publish_login_repair(
     max_repair_attempts = _int_payload_or_env(payload, "publish_login_repair_attempts", "SOCIAL_AUTOMATION_PUBLISH_LOGIN_REPAIR_ATTEMPTS", 3, 0, 8)
     saved_password = str(account.get("login_password") or "")
     if saved_password:
-        repair_payload = dict(payload or {})
-        repair_payload.setdefault("auto_submit", True)
-        repair_payload.setdefault("login_username", str(account.get("login_username") or account.get("username") or "").strip())
-        repair_payload.setdefault("login_password", saved_password)
-        repair_payload.setdefault("login_wait_seconds", 120)
-        repair_payload.setdefault("wait_for_manual", False)
-        repair_payload.setdefault("max_self_heal_attempts", max_repair_attempts)
-        repair_payload.setdefault("max_login_attempts", 2)
+        repair_payload = _shared_auto_login_payload(payload, account)
         try:
             return _run_open_login(
                 page,
@@ -2584,22 +2598,30 @@ def _run_open_login(
                     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
                 last_status = stable_status
             if platform == "threads" and last_status.get("status") == "account_confirmation_required":
-                continued = _click_text_button(
-                    page,
-                    logger,
-                    ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
-                    "threads_account_confirmation",
-                    abort_if=lambda: _manual_takeover_requested(context_control),
-                )
-                logger.log(
-                    "info" if continued else "warn",
-                    "threads_account_confirmation",
-                    "Threads 关联账号确认流程已处理。" if continued else "Threads 关联账号确认按钮尚不可用，页面保持原状。",
-                    {"clicked": continued, "url": _safe_navigation_url(page.url)},
-                )
-                if continued:
-                    _sleep_between(1.5, 3.0)
-                    continue
+                if auto_submit and has_credentials:
+                    logger.log(
+                        "info",
+                        "threads_account_confirmation",
+                        "Threads account confirmation detected; using the saved username/password login path instead of the SSO continue button.",
+                        {"url": _safe_navigation_url(page.url)},
+                    )
+                else:
+                    continued = _click_text_button(
+                        page,
+                        logger,
+                        ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
+                        "threads_account_confirmation",
+                        abort_if=lambda: _manual_takeover_requested(context_control),
+                    )
+                    logger.log(
+                        "info" if continued else "warn",
+                        "threads_account_confirmation",
+                        "Threads 关联账号确认流程已处理。" if continued else "Threads 关联账号确认按钮尚不可用，页面保持原状。",
+                        {"clicked": continued, "url": _safe_navigation_url(page.url)},
+                    )
+                    if continued:
+                        _sleep_between(1.5, 3.0)
+                        continue
             if _verification_visible(page):
                 totp_result = _try_auto_totp_challenge(
                     page,
@@ -8991,6 +9013,35 @@ def _auto_submit_login_form(
     start_shot = _screenshot(page, screenshot_dir, task, "auto_login_start", logger)
     logger.log("info", "auto_login_start", f"开始自动填写 {_platform_name(platform)} 登录凭据。", {"username": username, "url": _safe_navigation_url(page.url)}, start_shot)
 
+    if platform == "threads" and "/threads/sso/" in str(page.url or "").lower() and not payload.get("_threads_sso_blank_reload_attempted"):
+        payload["_threads_sso_blank_reload_attempted"] = True
+        logger.log(
+            "warn",
+            "threads_sso_blank_reload",
+            "Threads Instagram SSO handoff landed on the SSO bridge page; refreshing once before resolving login inputs.",
+            {"url": _safe_navigation_url(page.url)},
+        )
+        with contextlib.suppress(Exception):
+            page.reload(wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_load_state("networkidle", timeout=8000)
+        _sleep_between(1.0, 2.0)
+    if platform == "threads" and "/threads/sso/" in str(page.url or "").lower() and not payload.get("_threads_sso_login_fallback_attempted"):
+        payload["_threads_sso_login_fallback_attempted"] = True
+        logger.log(
+            "warn",
+            "threads_sso_login_fallback",
+            "Threads Instagram SSO bridge still has no login form; opening the standard Instagram login page.",
+            {"url": _safe_navigation_url(page.url)},
+        )
+        with contextlib.suppress(Exception):
+            page.evaluate("(url) => window.location.replace(url)", INSTAGRAM_LOGIN)
+            page.wait_for_load_state("domcontentloaded", timeout=30000)
+            page.wait_for_load_state("networkidle", timeout=8000)
+        if "/threads/sso/" in str(page.url or "").lower():
+            with contextlib.suppress(Exception):
+                _goto(page, INSTAGRAM_LOGIN, logger, "threads_sso_login_fallback")
+        _sleep_between(1.0, 2.0)
+
     if platform == "instagram":
         body_text = _page_body_text_lower(page, timeout_ms=1200)
         normalized_username = username.lower().lstrip("@")
@@ -9098,17 +9149,14 @@ def _auto_submit_login_form(
                     {"url": _safe_navigation_url(page.url)},
                 )
                 return False
-            logger.log("info", "auto_login_continue", "正在查找 Threads 的 Instagram 登录按钮。", {"url": _safe_navigation_url(page.url)})
-            continue_clicked = _click_threads_instagram_login_entry(
-                page,
-                logger,
-                abort_if=takeover_requested,
+            logger.log(
+                "info",
+                "threads_login_target_account",
+                "Opening the standard Instagram username/password login page for Threads auto login.",
+                {"url": _safe_navigation_url(page.url)},
             )
-            logger.log("info" if continue_clicked else "warn", "auto_login_continue", "Threads 的 Instagram 登录按钮已处理。", {"clicked": continue_clicked, "url": _safe_navigation_url(page.url)})
-            if continue_clicked:
-                _sleep_between(2.0, 4.0)
-            else:
-                _goto(page, INSTAGRAM_LOGIN, logger, "threads_login_instagram_fallback")
+            _goto(page, INSTAGRAM_LOGIN, logger, "threads_login_target_account")
+            continue_clicked = True
             instagram_hostname = str(urlparse(str(page.url or "")).hostname or "").lower()
             if instagram_hostname == "instagram.com" or instagram_hostname.endswith(".instagram.com"):
                 has_login_form = bool(
