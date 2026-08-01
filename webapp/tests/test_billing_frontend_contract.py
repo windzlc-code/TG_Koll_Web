@@ -362,6 +362,20 @@ function billingLedgerEntries() {{ return ledgerRows; }}
         self.assertIn("item.implemented === false", self.pricing_script)
         self.assertIn("暫未開放", self.pricing_script)
 
+    def test_pricing_subscription_carousel_keeps_personal_and_enterprise_plans_separate(self):
+        self.assertIn("const subscriptionPlanTier = (item) =>", self.pricing_script)
+        self.assertIn('item?.plan_tier || ""', self.pricing_script)
+        self.assertIn('return subscriptionPlanFamily(skuOf(item)) === "vanguard_personal" ? "personal" : "enterprise"', self.pricing_script)
+        self.assertIn("const subscriptionsForPlanTier = (subscriptions, tier)", self.pricing_script)
+        self.assertIn("function renderSubscriptionPlans(subscriptions)", self.pricing_script)
+        self.assertIn("subscriptionsForPlanTier(subscriptions, tier)", self.pricing_script)
+        self.assertIn('data-purchase-sku="${escapeHtml(skuOf(subscription))}"', self.pricing_script)
+        self.assertIn("function moveSubscriptionPlanPage(direction)", self.pricing_script)
+        self.assertIn("cards[1].offsetLeft - cards[0].offsetLeft", self.pricing_script)
+        self.assertIn('host.scrollBy({ left: direction * pageStep, behavior: "smooth" })', self.pricing_script)
+        self.assertIn('event.key === "ArrowRight"', self.pricing_script)
+        self.assertIn('event.key === "ArrowLeft"', self.pricing_script)
+
     def test_pricing_page_has_no_enterprise_only_rights_claim_for_all_plans(self):
         self.assertNotIn("每套有效訂閱提供 3 個 Threads 帳號容量", self.pricing_markup)
         self.assertNotIn("三帳號 AI 駕駛艙", self.pricing_markup)

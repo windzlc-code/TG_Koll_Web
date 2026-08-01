@@ -1831,6 +1831,7 @@ const toastSwitchTimers = new WeakMap();
 const toastSwitchCleanupTimers = new WeakMap();
 const toastRemovalTimers = new WeakMap();
 const deliveredToastStateKeys = new Set();
+const socialTaskCancelPendingIds = new Set();
 const uploadPreviewUrls = new WeakMap();
 const uploadPreviewGroupIds = new WeakMap();
 const uploadSelectedIndexes = new WeakMap();
@@ -5461,10 +5462,42 @@ async function cancelRegularTask(taskId, messageId = "commandMsg") {
   return result;
 }
 
+function setSocialTaskCancelPending(taskId, pending) {
+  const cleanTaskId = String(taskId || "").trim();
+  if (!cleanTaskId) return;
+  if (pending) socialTaskCancelPendingIds.add(cleanTaskId);
+  else socialTaskCancelPendingIds.delete(cleanTaskId);
+  document.querySelectorAll("[data-social-cancel]").forEach((button) => {
+    if (String(button.dataset.socialCancel || "").trim() !== cleanTaskId) return;
+    if (pending) {
+      if (!button.dataset.originalText) button.dataset.originalText = button.textContent || "";
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      button.textContent = "停止中...";
+    } else {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+      if (button.dataset.originalText) button.textContent = button.dataset.originalText;
+      delete button.dataset.originalText;
+    }
+  });
+}
+
 async function cancelSocialAutomationTask(taskId, messageId = "commandMsg") {
   const cleanTaskId = String(taskId || "").trim();
   if (!cleanTaskId) return null;
+  if (socialTaskCancelPendingIds.has(cleanTaskId)) return null;
   const toastKey = socialTaskToastKey(cleanTaskId);
+  closeConsoleDropdowns();
+  setSocialTaskCancelPending(cleanTaskId, true);
+  showMsg(messageId, "正在停止自动化任务...", true, {
+    key: toastKey,
+    kind: "progress",
+    taskId: cleanTaskId,
+    taskPanel: "persona",
+  });
+  let cancelSubmitted = false;
+  try {
   const result = await api(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(cleanTaskId)}/cancel`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -5477,14 +5510,27 @@ async function cancelSocialAutomationTask(taskId, messageId = "commandMsg") {
     taskPanel: "persona",
   });
   window.setTimeout(() => dismissToastByKey(toastKey), 4200);
-  await loadSocial().catch(() => {});
+  cancelSubmitted = true;
   return result;
+  } finally {
+    if (cancelSubmitted) {
+      socialTaskCancelPendingIds.delete(cleanTaskId);
+    } else {
+      setSocialTaskCancelPending(cleanTaskId, false);
+    }
+    loadSocial({ force: true }).catch(() => {});
+  }
 }
 
 async function cancelAllSocialAutomationTasks(messageId = "socialMsg") {
   if (state.socialCancelAllPending) return null;
   state.socialCancelAllPending = true;
   syncSocialCancelAllButtons();
+  showMsg(messageId, "正在停止全部自动化任务...", true, {
+    key: "social-task:cancel-all",
+    kind: "progress",
+    taskPanel: "persona",
+  });
   try {
     const result = await api("/api/persona_dashboard/automation/tasks/cancel_all", {
       method: "POST",
@@ -5498,14 +5544,14 @@ async function cancelAllSocialAutomationTasks(messageId = "socialMsg") {
       taskPanel: "persona",
     });
     window.setTimeout(() => dismissToastByKey("social-task:cancel-all"), 4200);
-    await Promise.all([
-      loadSocial({ force: true }).catch(() => {}),
-      loadTasks().catch(() => {}),
-    ]);
     return result;
   } finally {
     state.socialCancelAllPending = false;
     syncSocialCancelAllButtons();
+    Promise.all([
+      loadSocial({ force: true }).catch(() => {}),
+      loadTasks().catch(() => {}),
+    ]).catch(() => {});
   }
 }
 

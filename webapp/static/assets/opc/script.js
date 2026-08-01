@@ -33,7 +33,7 @@ function registrationPanelMarkup() {
           <section class="auth-registration-page" data-register-page="details">
             <div class="application-grid auth-registration-profile">
               <label class="field auth-placeholder-field" for="registerFullName"><span class="field-label">姓名</span><input id="registerFullName" name="full_name" autocomplete="name" minlength="2" maxlength="80" placeholder="請輸入姓名" aria-describedby="registerFullNameError" required /><small class="field-error" id="registerFullNameError"></small></label>
-              <label class="field auth-placeholder-field" for="registerUsername"><span class="field-label">用戶名</span><input id="registerUsername" name="username" autocomplete="username" maxlength="32" placeholder="3-32 位英文、數字或 ._-" aria-describedby="registerUsernameError" required /><small class="field-error" id="registerUsernameError"></small></label>
+              <label class="field auth-placeholder-field" for="registerUsername"><span class="field-label">用户名</span><input id="registerUsername" name="username" autocomplete="username" maxlength="32" placeholder="3-32 位英文、數字或 ._-" aria-describedby="registerUsernameError" required /><small class="field-error" id="registerUsernameError"></small></label>
               <label class="field auth-placeholder-field" for="registerPassword"><span class="field-label">登入密碼</span><span class="auth-password-field"><input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="至少 8 位" aria-describedby="registerPasswordError" required /><button class="auth-password-toggle" type="button" data-register-password-toggle data-target="registerPassword" aria-label="顯示登入密碼" title="顯示登入密碼" aria-controls="registerPassword" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span><small class="field-error" id="registerPasswordError"></small></label>
               <label class="field auth-placeholder-field" for="registerPasswordConfirmation"><span class="field-label">再次確認密碼</span><span class="auth-password-field"><input id="registerPasswordConfirmation" name="password_confirmation" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="請再次輸入密碼" aria-describedby="registerPasswordConfirmationError" required /><button class="auth-password-toggle" type="button" data-register-password-toggle data-target="registerPasswordConfirmation" aria-label="顯示確認密碼" title="顯示確認密碼" aria-controls="registerPasswordConfirmation" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span><small class="field-error" id="registerPasswordConfirmationError"></small></label>
               <label class="field auth-placeholder-field" for="registerCompany"><span class="field-label">公司 / 團隊（選填）</span><input id="registerCompany" name="company" autocomplete="organization" maxlength="120" placeholder="請輸入公司或團隊名稱" aria-describedby="registerCompanyError" /><small class="field-error" id="registerCompanyError"></small></label>
@@ -62,10 +62,10 @@ function googleSetupPanelMarkup() {
   return `
     <section class="auth-google-setup-view" data-auth-view="google-setup" hidden>
       <p class="form-kicker">Google 帳號設定</p>
-      <h2 id="googleSetupTitle">建立唯一使用者名稱</h2>
-      <p class="auth-copy">Google 信箱已完成驗證。設定一個不重複的使用者名稱，即可完成登入。</p>
+      <h2 id="googleSetupTitle">建立唯一用户名</h2>
+      <p class="auth-copy">Google 信箱已完成驗證。設定一個不重複的用户名，即可完成登入。</p>
       <form class="lead-form auth-google-setup-form" id="googleSetupForm" novalidate>
-        <label class="field" for="googleSetupUsername"><span>使用者名稱</span><input id="googleSetupUsername" name="username" autocomplete="username" placeholder="3-32 位英文、數字或 ._-" aria-describedby="googleSetupUsernameError" required /><small class="field-error" id="googleSetupUsernameError"></small></label>
+        <label class="field" for="googleSetupUsername"><span>用户名</span><input id="googleSetupUsername" name="username" autocomplete="username" placeholder="3-32 位英文、數字或 ._-" aria-describedby="googleSetupUsernameError" required /><small class="field-error" id="googleSetupUsernameError"></small></label>
         <button class="submit-button" type="submit"><span>完成帳號設定</span><span aria-hidden="true">→</span></button>
         <p class="form-status auth-form-status" id="googleSetupStatus" role="status" aria-live="polite"></p>
       </form>
@@ -114,9 +114,9 @@ function ensureLoginAuthEnhancements() {
   if (!loginForm) return;
   const identifierInput = loginForm.elements?.username;
   const identifierLabel = identifierInput?.closest(".field")?.querySelector(":scope > span");
-  if (identifierLabel) identifierLabel.textContent = "電子信箱或使用者名稱";
+  if (identifierLabel) identifierLabel.textContent = "電子信箱或用户名";
   if (identifierInput) {
-    identifierInput.placeholder = "name@example.com 或使用者名稱";
+    identifierInput.placeholder = "name@example.com 或用户名";
   }
   if (loginForm.querySelector("[data-google-login]")) {
     googleLoginButton = loginForm.querySelector("[data-google-login]");
@@ -558,7 +558,7 @@ function validateRegistrationProfile({ focusInvalid = true } = {}) {
   const passwordConfirmation = applicationForm.elements.password_confirmation.value;
   const checks = [
     [applicationForm.elements.full_name, fullName.length >= 2 && fullName.length <= 80, "姓名需要 2-80 個字元。"],
-    [applicationForm.elements.username, validRegistrationUsername(applicationForm.elements.username.value), "用戶名需要 3-32 位英文、數字或 ._-。"],
+    [applicationForm.elements.username, validRegistrationUsername(applicationForm.elements.username.value), "用户名需要 3-32 位英文、數字或 ._-。"],
     [applicationForm.elements.password, password.length >= 8 && password.length <= 256, "密碼需要 8-256 位。"],
     [applicationForm.elements.password_confirmation, password === passwordConfirmation && Boolean(passwordConfirmation), "兩次輸入的密碼不一致。"],
     [applicationForm.elements.company, company.length <= 120, "公司或團隊名稱不能超過 120 個字元。"],
@@ -1139,7 +1139,7 @@ googleSetupForm?.addEventListener("submit", async (event) => {
   setAuthStatus(googleSetupStatus);
   const usernameInput = googleSetupForm.elements.username;
   if (!validRegistrationUsername(usernameInput.value)) {
-    setFieldError(usernameInput, "使用者名稱需為 3-32 位英文、數字或 ._-。");
+    setFieldError(usernameInput, "用户名需為 3-32 位英文、數字或 ._-。");
     usernameInput.focus();
     return;
   }
@@ -1159,7 +1159,7 @@ googleSetupForm?.addEventListener("submit", async (event) => {
     await window.VectoSiteNavigation?.showAuthFeedback?.({
       kind: "success",
       title: "Google 登入成功",
-      message: "使用者名稱已建立，歡迎回到 Vecto。",
+      message: "用户名已建立，歡迎回到 Vecto。",
       actionText: "開始使用",
     });
     const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;

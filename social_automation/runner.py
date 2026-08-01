@@ -788,10 +788,24 @@ class _BrowserContextManager:
         self.context = None
         self.live_session = None
 
+    def _cancel_event(self) -> Any | None:
+        if self.context_control is None:
+            return None
+        return self.context_control.get("cancel_event")
+
+    def _cancel_requested(self) -> bool:
+        cancel_event = self._cancel_event()
+        return bool(cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)())
+
+    def _raise_if_cancelled_before_launch(self) -> None:
+        _raise_if_cancelled(self._cancel_event())
+
     def __enter__(self):
         from .browser_runtime import verify_pinned_browser_runtime
 
+        self._raise_if_cancelled_before_launch()
         runtime_versions = verify_pinned_browser_runtime()
+        self._raise_if_cancelled_before_launch()
         try:
             from camoufox.sync_api import Camoufox
         except Exception as exc:
@@ -804,6 +818,11 @@ class _BrowserContextManager:
         _cleanup_stale_profile_locks(profile_dir, self.logger)
         proxy_config = _proxy_config(self.proxy)
         self.live_session = self._start_live_browser_session()
+        try:
+            self._raise_if_cancelled_before_launch()
+        except Exception:
+            self._stop_live_browser_session()
+            raise
         headless: bool | str = False
         if self.live_session is None and os.name != "nt" and str(os.getenv("SOCIAL_AUTOMATION_HEADLESS") or "").strip().lower() == "virtual":
             headless = "virtual"
@@ -837,6 +856,11 @@ class _BrowserContextManager:
         if proxy_config:
             kwargs["proxy"] = proxy_config
             kwargs["geoip"] = True
+        try:
+            self._raise_if_cancelled_before_launch()
+        except Exception:
+            self._stop_live_browser_session()
+            raise
         self.logger.log(
             "info",
             "browser_launch",
@@ -854,6 +878,9 @@ class _BrowserContextManager:
             with contextlib.suppress(Exception):
                 if self.cm:
                     self.cm.__exit__(type(exc), exc, getattr(exc, "__traceback__", None))
+            if self._cancel_requested():
+                self._stop_live_browser_session()
+                self._raise_if_cancelled_before_launch()
             if _should_rebuild_profile_after_launch_error(exc):
                 backup_dir = _quarantine_profile_dir(profile_dir, self.logger)
                 if backup_dir:
@@ -1007,16 +1034,26 @@ class _BrowserContextManager:
         try:
             from social_automation.live_browser import start_live_browser_session
 
+            self._raise_if_cancelled_before_launch()
             task = {}
             if self.context_control is not None and isinstance(self.context_control.get("task"), dict):
                 task = dict(self.context_control.get("task") or {})
             session = start_live_browser_session(task=task, account=self.account, logger=self.logger)
+            if self._cancel_requested():
+                if session is not None:
+                    with contextlib.suppress(Exception):
+                        from social_automation.live_browser import stop_live_browser_session
+
+                        stop_live_browser_session(str(session.id), session=session)
+                self._raise_if_cancelled_before_launch()
             if session is not None and self.context_control is not None:
                 self.context_control["live_browser_session_id"] = str(session.id)
                 self.context_control["live_browser_width"] = int(getattr(session, "width", 0) or 0)
                 self.context_control["live_browser_height"] = int(getattr(session, "height", 0) or 0)
             return session
         except Exception as exc:
+            if self._cancel_requested():
+                raise
             self.logger.log("warn", "live_browser_error", "实时浏览器监控初始化失败，将在无监控窗口模式下继续执行。", {"error": str(exc)})
             return None
 

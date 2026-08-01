@@ -44,7 +44,7 @@
   align-items: end;
   overflow: hidden;
   color: #ffffff;
-  background: #071112;
+  background: #101820;
 }
 
 .pricing-page-hero-media,
@@ -62,8 +62,8 @@
 
 .pricing-page-hero-shade {
   background:
-    linear-gradient(90deg, rgba(4, 13, 14, 0.97) 0%, rgba(4, 13, 14, 0.78) 52%, rgba(4, 13, 14, 0.34) 100%),
-    linear-gradient(180deg, rgba(4, 13, 14, 0.18), rgba(4, 13, 14, 0.88));
+    linear-gradient(90deg, rgba(16, 24, 32, 0.97) 0%, rgba(16, 24, 32, 0.78) 52%, rgba(16, 24, 32, 0.34) 100%),
+    linear-gradient(180deg, rgba(16, 24, 32, 0.18), rgba(16, 24, 32, 0.88));
 }
 
 .pricing-page-hero-copy {
@@ -229,64 +229,237 @@
   color: var(--muted);
 }
 
-.pricing-subscription-shell {
+.pricing-plan-browser {
+  min-width: 0;
+  padding: clamp(12px, 1.6vw, 16px);
+  border: 1px solid var(--line);
+  background: #ffffff;
+  box-shadow: 0 14px 34px rgba(37, 55, 70, 0.06);
+}
+
+.pricing-plan-browser-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pricing-plan-family-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid #b9c5cf;
+  border-radius: 999px;
+  background: #edf1f4;
+}
+
+.pricing-plan-family-tabs button {
+  min-width: 72px;
+  min-height: 28px;
+  padding: 3px 12px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.25;
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.pricing-plan-family-tabs button[aria-selected="true"] {
+  color: #ffffff;
+  background: var(--teal-dark);
+  box-shadow: 0 3px 10px rgba(37, 55, 70, 0.2);
+}
+
+.pricing-plan-family-tabs button:focus-visible,
+.pricing-plan-page-button:focus-visible {
+  outline: 3px solid rgba(75, 100, 120, 0.36);
+  outline-offset: 2px;
+}
+
+.pricing-plan-slider {
   display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+}
+
+.pricing-plan-page-button {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #aebdca;
+  border-radius: 50%;
+  color: var(--teal-dark);
+  background: #ffffff;
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease, border-color 160ms ease;
+}
+
+.pricing-plan-page-button:hover:not(:disabled) {
+  color: #ffffff;
+  border-color: var(--teal-dark);
+  background: var(--teal-dark);
+}
+
+.pricing-plan-page-button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.pricing-plan-page-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.pricing-plan-page-status {
+  display: block;
+  min-height: 18px;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.pricing-plan-audience {
+  min-height: 18px;
+  margin: 7px 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.pricing-subscription-shell {
+  display: flex;
   gap: 14px;
-  min-height: 250px;
+  min-height: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scroll-behavior: smooth;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+
+.pricing-subscription-shell::-webkit-scrollbar {
+  display: none;
 }
 
 .pricing-subscription-card {
   display: grid;
-  grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1fr);
-  border: 1px solid #163b3d;
-  color: #ffffff;
-  background: #0d2426;
+  flex: 0 0 clamp(300px, 34vw, 370px);
+  grid-template-columns: 1fr;
+  grid-template-rows: auto 1fr auto;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #aebdca;
+  color: var(--ink);
+  background: #f8fafb;
+  box-shadow: 0 12px 28px rgba(37, 55, 70, 0.08);
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
 }
 
 .pricing-subscription-main,
 .pricing-subscription-details {
-  padding: clamp(18px, 2.5vw, 28px);
+  padding: 15px 16px;
 }
 
 .pricing-subscription-main {
-  border-right: 1px solid rgba(255, 255, 255, 0.14);
+  border-bottom: 1px solid var(--line);
+  background: #dfe7ed;
+}
+
+.pricing-subscription-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pricing-subscription-cycle {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid #aebdca;
+  border-radius: 999px;
+  color: var(--teal-dark);
+  background: rgba(255, 255, 255, 0.64);
+  font-size: 11px;
+  font-weight: 850;
 }
 
 .pricing-subscription-main h3 {
-  margin: 6px 0;
-  font-size: clamp(24px, 3vw, 36px);
+  margin: 8px 0 0;
+  font-size: clamp(20px, 2.2vw, 26px);
+  line-height: 1.18;
+  overflow-wrap: anywhere;
 }
 
 .pricing-subscription-price {
-  margin: 12px 0;
-  font-size: clamp(38px, 5vw, 58px);
+  margin: 10px 0 3px;
+  font-size: clamp(30px, 3.5vw, 42px);
   font-weight: 900;
   line-height: 1;
+  white-space: nowrap;
 }
 
 .pricing-subscription-price small {
-  color: rgba(255, 255, 255, 0.62);
-  font-size: 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pricing-subscription-monthly {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
 }
 
 .pricing-subscription-details {
   display: grid;
-  align-content: center;
-  gap: 10px;
+  align-content: start;
+  gap: 6px;
+  background: #f8fafb;
+}
+
+.pricing-subscription-details > strong {
+  font-size: 13px;
 }
 
 .pricing-subscription-features {
   display: grid;
-  gap: 8px;
+  gap: 0;
   padding: 0;
   margin: 0;
   list-style: none;
 }
 
 .pricing-subscription-features li {
-  padding-bottom: 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-  color: rgba(255, 255, 255, 0.78);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.pricing-subscription-features li:last-child {
+  border-bottom: 0;
+}
+
+.pricing-subscription-cta {
+  width: calc(100% - 32px);
+  min-height: 40px;
+  justify-content: center;
+  margin: 0 16px 15px;
 }
 
 .pricing-rights-band,
@@ -312,8 +485,8 @@
   overflow: hidden;
   color: #ffffff;
   background:
-    radial-gradient(circle at 85% 2%, rgba(12, 154, 154, 0.2), transparent 30%),
-    linear-gradient(145deg, #071112 0%, #0b1719 48%, #071112 100%);
+    radial-gradient(circle at 85% 2%, rgba(75, 100, 120, 0.22), transparent 30%),
+    linear-gradient(145deg, #101820 0%, #182129 48%, #101820 100%);
 }
 
 .pricing-comparison-shell {
@@ -328,7 +501,7 @@
 }
 
 .pricing-comparison-heading .eyebrow {
-  color: #58d4c8;
+  color: #8ea4b4;
 }
 
 .pricing-comparison-heading > p {
@@ -365,7 +538,7 @@
 
 .pricing-tier-index {
   display: block;
-  color: #58d4c8;
+  color: #8ea4b4;
   font-family: "Bahnschrift", "DIN Alternate", sans-serif;
   font-size: 11px;
   font-weight: 800;
@@ -409,12 +582,12 @@
   margin: 0 auto;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
-  scrollbar-color: #2c7774 #111d1f;
+  scrollbar-color: #4b6478 #101820;
   scrollbar-width: thin;
 }
 
 .pricing-comparison-scroll:focus-visible {
-  outline: 2px solid #58d4c8;
+  outline: 2px solid #8ea4b4;
   outline-offset: 4px;
 }
 
@@ -425,7 +598,7 @@
   border-spacing: 0;
   table-layout: fixed;
   color: rgba(255, 255, 255, 0.8);
-  background: #0b1517;
+  background: #101820;
   border: 1px solid rgba(255, 255, 255, 0.14);
 }
 
@@ -450,7 +623,7 @@
 .pricing-comparison-table thead th {
   height: 60px;
   color: #ffffff;
-  background: #172226;
+  background: #253746;
   font-size: 14px;
 }
 
@@ -477,7 +650,7 @@
 
 .pricing-comparison-table tbody th[scope="rowgroup"] {
   color: #ffffff;
-  background: #111d20;
+  background: #182129;
   font-size: 13px;
   text-align: left;
   vertical-align: middle;
@@ -485,13 +658,13 @@
 
 .pricing-comparison-table tbody th[scope="row"] {
   color: rgba(255, 255, 255, 0.82);
-  background: #0d181a;
+  background: #151f27;
   font-size: 13px;
   text-align: left;
 }
 
 .pricing-comparison-table tbody tr:hover > * {
-  background-color: rgba(88, 212, 200, 0.08);
+  background-color: rgba(75, 100, 120, 0.16);
 }
 
 .pricing-comparison-table td strong {
@@ -513,8 +686,8 @@
 }
 
 .tier-yes {
-  color: #051413;
-  background: #58d4c8;
+  color: #ffffff;
+  background: #4b6478;
   border-radius: 50%;
 }
 
@@ -689,7 +862,8 @@
   place-items: center;
   padding: 20px;
   overflow: auto;
-  background: rgba(3, 11, 12, 0.72);
+  /* Keep the pricing page visually unchanged while the application dialog is open. */
+  background: transparent;
 }
 
 .pricing-order-overlay.is-open {
@@ -778,7 +952,7 @@
   .pricing-facts div:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
   .pricing-public-heading,
   .pricing-subscription-card { grid-template-columns: 1fr; }
-  .pricing-subscription-main { border-right: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.14); }
+  .pricing-subscription-card { flex-basis: min(84vw, 350px); }
   .pricing-rights-list { grid-template-columns: 1fr 1fr; }
   .pricing-rights-list li { border-bottom: 1px solid var(--line); }
   .pricing-package-grid { grid-template-columns: 1fr; }
@@ -802,6 +976,12 @@
   .pricing-account-strip,
   .pricing-public-section,
   .pricing-section-nav { width: min(100% - 28px, 1120px); }
+  .pricing-plan-browser { padding: 12px; }
+  .pricing-plan-browser-toolbar { align-items: center; }
+  .pricing-plan-family-tabs { width: min(190px, 100%); }
+  .pricing-plan-slider { grid-template-columns: 30px minmax(0, 1fr) 30px; gap: 5px; }
+  .pricing-plan-page-button { width: 30px; height: 30px; }
+  .pricing-subscription-card { flex-basis: 100%; }
   .pricing-account-strip { align-items: stretch; flex-direction: column; }
   .pricing-account-strip .button { width: 100%; justify-content: center; }
   .pricing-rights-list,
@@ -822,7 +1002,7 @@
     width: 100%;
     margin-bottom: 10px;
     border: 1px solid rgba(255, 255, 255, 0.16);
-    background: #050b0c;
+    background: #101820;
   }
 
   .pricing-mobile-tier-switch button {
@@ -841,8 +1021,8 @@
   }
 
   .pricing-mobile-tier-switch button[aria-pressed="true"] {
-    color: #061314;
-    background: #58d4c8;
+    color: #ffffff;
+    background: #4b6478;
   }
 
   .pricing-comparison-scroll {

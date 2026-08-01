@@ -208,14 +208,23 @@ def stop_live_browser_session(
         _remove_session_registry(clean_id)
         return
     active_processes = [process for process in reversed(target.processes) if process.poll() is None]
-    for action in ("terminate", "wait", "kill", "wait"):
-        for process in active_processes:
-            if process.poll() is None:
-                with contextlib.suppress(Exception):
-                    if action == "wait":
-                        process.wait(timeout=max(0.0, deadline - time.monotonic()))
-                    else:
-                        getattr(process, action)()
+    for process in active_processes:
+        if process.poll() is None:
+            with contextlib.suppress(Exception):
+                process.terminate()
+    terminate_deadline = min(deadline, time.monotonic() + 0.05)
+    for process in active_processes:
+        if process.poll() is None:
+            with contextlib.suppress(Exception):
+                process.wait(timeout=max(0.0, terminate_deadline - time.monotonic()))
+    for process in active_processes:
+        if process.poll() is None:
+            with contextlib.suppress(Exception):
+                process.kill()
+    for process in active_processes:
+        if process.poll() is None:
+            with contextlib.suppress(Exception):
+                process.wait(timeout=max(0.0, deadline - time.monotonic()))
     _terminate_display_processes(target)
     if not target.processes:
         _terminate_registry_session_processes(target)

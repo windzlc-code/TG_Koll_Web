@@ -194,6 +194,102 @@ class RunnerProxyRedactionTests(unittest.TestCase):
 
         stop.assert_called_once_with()
 
+    def test_cancelled_context_does_not_start_browser(self):
+        cancel_event = threading.Event()
+        cancel_event.set()
+        manager = runner._BrowserContextManager(
+            {"id": "account-1"},
+            None,
+            _RecordingLogger(),
+            {"cancel_event": cancel_event},
+        )
+
+        with (
+            mock.patch("social_automation.browser_runtime.verify_pinned_browser_runtime") as verify_runtime,
+            mock.patch.object(manager, "_start_live_browser_session") as start_live_browser,
+            mock.patch.object(manager, "_enter_camoufox") as enter_camoufox,
+            self.assertRaisesRegex(RuntimeError, "任务已取消"),
+        ):
+            manager.__enter__()
+
+        verify_runtime.assert_not_called()
+        start_live_browser.assert_not_called()
+        enter_camoufox.assert_not_called()
+
+    def test_cancel_after_live_browser_start_stops_before_camoufox(self):
+        cancel_event = threading.Event()
+        logger = _RecordingLogger()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = runner._BrowserContextManager(
+                {"id": "account-1", "profile_dir": str(Path(temp_dir) / "profile")},
+                None,
+                logger,
+                {"cancel_event": cancel_event},
+            )
+
+            def start_live_browser():
+                cancel_event.set()
+                return SimpleNamespace(id="live-1", display=":90", width=1600, height=900)
+
+            with (
+                mock.patch(
+                    "social_automation.browser_runtime.verify_pinned_browser_runtime",
+                    return_value={"camoufox": "0.4.11"},
+                ),
+                mock.patch.dict(
+                    "sys.modules",
+                    {
+                        "camoufox": mock.MagicMock(),
+                        "camoufox.sync_api": SimpleNamespace(Camoufox=object),
+                    },
+                ),
+                mock.patch.object(manager, "_start_live_browser_session", side_effect=start_live_browser),
+                mock.patch.object(manager, "_stop_live_browser_session") as stop_live_browser,
+                mock.patch.object(manager, "_enter_camoufox") as enter_camoufox,
+                self.assertRaisesRegex(RuntimeError, "任务已取消"),
+            ):
+                manager.__enter__()
+
+        stop_live_browser.assert_called_once_with()
+        enter_camoufox.assert_not_called()
+
+    def test_cancel_during_camoufox_launch_is_not_reported_as_launch_failure(self):
+        cancel_event = threading.Event()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = runner._BrowserContextManager(
+                {"id": "account-1", "profile_dir": str(Path(temp_dir) / "profile")},
+                None,
+                _RecordingLogger(),
+                {"cancel_event": cancel_event},
+            )
+
+            def enter_camoufox(_camoufox, _kwargs):
+                cancel_event.set()
+                raise RuntimeError("launch raced with cancel")
+
+            with (
+                mock.patch(
+                    "social_automation.browser_runtime.verify_pinned_browser_runtime",
+                    return_value={"camoufox": "0.4.11"},
+                ),
+                mock.patch.dict(
+                    "sys.modules",
+                    {
+                        "camoufox": mock.MagicMock(),
+                        "camoufox.sync_api": SimpleNamespace(Camoufox=object),
+                    },
+                ),
+                mock.patch.object(manager, "_start_live_browser_session", return_value=SimpleNamespace(id="live-1", display=":90")),
+                mock.patch.object(manager, "_stop_live_browser_session") as stop_live_browser,
+                mock.patch.object(manager, "_enter_camoufox", side_effect=enter_camoufox),
+                self.assertRaisesRegex(RuntimeError, "任务已取消"),
+            ):
+                manager.__enter__()
+
+        stop_live_browser.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()

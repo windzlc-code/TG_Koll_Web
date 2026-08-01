@@ -103,8 +103,26 @@
           </div>
           <p>帳號容量依方案區分：個人版 1 個、企業版 3 個；每套方案均包含每月 10 張免費 AI 圖片，需要更多容量時可增加套數，算力仍統一管理。</p>
         </div>
-        <div id="pricingSubscription" class="pricing-subscription-shell" aria-live="polite">
-          <div class="pricing-public-loading">正在讀取目前方案</div>
+        <div class="pricing-plan-browser" data-pricing-plan-browser>
+          <div class="pricing-plan-browser-toolbar">
+            <div class="pricing-plan-family-tabs" role="tablist" aria-label="訂閱方案類型">
+              <button id="pricingPlanPersonalTab" type="button" role="tab" aria-selected="true" aria-controls="pricingSubscription" data-pricing-plan-family="personal">個人版</button>
+              <button id="pricingPlanEnterpriseTab" type="button" role="tab" aria-selected="false" aria-controls="pricingSubscription" data-pricing-plan-family="enterprise" tabindex="-1">企業版</button>
+            </div>
+          </div>
+          <p id="pricingPlanAudience" class="pricing-plan-audience">適合自由創作者與微型個人商家。</p>
+          <div class="pricing-plan-slider" aria-label="方案翻頁控制">
+            <button class="pricing-plan-page-button pricing-plan-page-previous" type="button" data-pricing-plan-page="prev" aria-label="查看上一頁方案" disabled aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7"></path></svg>
+            </button>
+            <div id="pricingSubscription" class="pricing-subscription-shell" role="region" aria-label="個人版訂閱方案" aria-live="polite" tabindex="0">
+              <div class="pricing-public-loading">正在讀取目前方案</div>
+            </div>
+            <button class="pricing-plan-page-button pricing-plan-page-next" type="button" data-pricing-plan-page="next" aria-label="查看下一頁方案" disabled aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 5 7 7-7 7"></path></svg>
+            </button>
+          </div>
+          <span id="pricingPlanPageStatus" class="pricing-plan-page-status" aria-live="polite">載入方案中</span>
         </div>
       </section>
 
@@ -252,7 +270,7 @@
         <h2 id="loginTitle">帳號登入</h2>
         <p class="auth-copy">登入後留在方案頁提交線上申請；申請送出後先等待管理員批准，不會立即開通或增加算力。</p>
         <form id="homeLoginForm" novalidate>
-          <label class="field" for="loginUsername"><span>電子信箱或使用者名稱</span><input id="loginUsername" name="username" autocomplete="username" placeholder="name@example.com 或使用者名稱" required /></label>
+          <label class="field" for="loginUsername"><span>電子信箱或用户名</span><input id="loginUsername" name="username" autocomplete="username" placeholder="name@example.com 或用户名" required /></label>
           <label class="field" for="loginPassword">
             <span>密碼</span>
             <span class="auth-password-field">

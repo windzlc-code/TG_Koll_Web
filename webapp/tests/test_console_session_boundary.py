@@ -2415,6 +2415,28 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('tools.toggleAttribute("inert", !opening);', self.source)
         self.assertNotIn("tools.hidden = !opening;", self.source)
 
+    def test_social_cancel_buttons_show_immediate_feedback_before_request_finishes(self):
+        cancel_source = self._function_source("cancelSocialAutomationTask")
+        pending_source = self._function_source("setSocialTaskCancelPending")
+        cancel_all_source = self._function_source("cancelAllSocialAutomationTasks")
+
+        self.assertIn("socialTaskCancelPendingIds.has(cleanTaskId)", cancel_source)
+        self.assertLess(
+            cancel_source.index("showMsg(messageId, \"正在停止自动化任务...\""),
+            cancel_source.index("await api("),
+        )
+        self.assertIn("closeConsoleDropdowns();", cancel_source)
+        self.assertIn('button.setAttribute("aria-busy", "true");', pending_source)
+        self.assertIn('button.textContent = "停止中...";', pending_source)
+        self.assertIn("loadSocial({ force: true }).catch(() => {});", cancel_source)
+        self.assertNotIn("await loadSocial", cancel_source)
+        self.assertLess(
+            cancel_all_source.index("showMsg(messageId, \"正在停止全部自动化任务...\""),
+            cancel_all_source.index("await api("),
+        )
+        self.assertIn("Promise.all([", cancel_all_source)
+        self.assertNotIn("await Promise.all", cancel_all_source)
+
     def test_multi_publish_submission_sends_one_batch_and_sequence_metadata(self):
         submit_publish = f"async {self._function_source('submitPublishContentTasks')}"
         harness = textwrap.dedent(

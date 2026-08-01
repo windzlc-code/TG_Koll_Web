@@ -25,7 +25,7 @@ const AUTH_COPY = {
     sendCode: "傳送電子郵件驗證碼", emailCode: "電子郵件驗證碼", confirmPassword: "確認新密碼",
     saveAndContinue: "儲存並進入控制台", backToLogin: "返回使用者登入", retryCode: "重新傳送驗證碼",
     resendAfter: (seconds) => `${seconds} 秒後可重新傳送`, googleStageTitle: "為 Google 帳號設定本機密碼",
-    googleStageCopy: "透過已驗證電子郵件確認身分，設定後即可使用電子郵件或使用者名稱加密碼登入。",
+    googleStageCopy: "透過已驗證電子郵件確認身分，設定後即可使用電子郵件或用户名加密碼登入。",
     googleCardTitle: "設定本機登入密碼", invalidCodeRequest: "驗證碼請求無效，請重試",
     codeSent: "驗證碼已傳送，請在 10 分鐘內完成設定。", codeSendFailed: "驗證碼傳送失敗",
     passwordTooShort: (length) => `新密碼至少 ${length} 位`, passwordMismatch: "兩次輸入的新密碼不一致",

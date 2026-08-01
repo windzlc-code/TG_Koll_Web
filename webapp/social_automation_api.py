@@ -8890,16 +8890,22 @@ def _force_stop_running_task(
         control = _RUNNING_TASK_CONTROLS.get(str(task_id))
         cancel_event = control.get("cancel_event") if control else None
         context = control.get("context") if control else None
+        manager = control.get("manager") if control else None
     if cancel_event is not None:
         with contextlib.suppress(Exception):
             cancel_event.set()
     if context is not None:
         with contextlib.suppress(Exception):
             context.close()
+    if manager is not None:
+        with contextlib.suppress(Exception):
+            manager.__exit__(None, None, None)
     with contextlib.suppress(Exception):
         from social_automation.live_browser import stop_live_browser_sessions_for_task
 
         remaining = max(0.1, deadline - time.monotonic()) if deadline is not None else 3.0
+        force_stop_timeout = float(os.getenv("SOCIAL_AUTOMATION_FORCE_STOP_BROWSER_TIMEOUT_SECONDS", "0.25") or 0.25)
+        remaining = min(remaining, max(0.1, force_stop_timeout))
         stop_live_browser_sessions_for_task(task_id, timeout_seconds=remaining)
     with contextlib.suppress(Exception):
         with db() as conn:

@@ -6,7 +6,9 @@ class OnlineApplicationFrontendContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         static_dir = Path(__file__).resolve().parents[1] / "static"
+        cls.pricing_markup = (static_dir / "pricing.html").read_text(encoding="utf-8")
         cls.pricing_script = (static_dir / "assets" / "opc" / "pricing.js").read_text(encoding="utf-8")
+        cls.pricing_styles = (static_dir / "assets" / "opc" / "pricing.css").read_text(encoding="utf-8")
         cls.console_script = (static_dir / "assets" / "console.js").read_text(encoding="utf-8")
 
     def test_pending_application_is_not_described_as_payment_review(self):
@@ -51,12 +53,75 @@ class OnlineApplicationFrontendContractTests(unittest.TestCase):
         self.assertIn("min-height: 36px;", pricing_styles)
 
     def test_mobile_pricing_hides_section_rail_and_compacts_package_cards(self):
-        static_dir = Path(__file__).resolve().parents[1] / "static"
-        pricing_styles = (static_dir / "assets" / "opc" / "pricing.css").read_text(encoding="utf-8")
+        self.assertIn(".pricing-section-nav {\n    display: none;\n  }", self.pricing_styles)
+        self.assertIn(".pricing-package-card { min-height: 0; gap: 3px; padding: 8px; }", self.pricing_styles)
+        self.assertIn(".pricing-public-section { padding-top: 18px; padding-bottom: 18px; }", self.pricing_styles)
 
-        self.assertIn(".pricing-section-nav {\n    display: none;\n  }", pricing_styles)
-        self.assertIn(".pricing-package-card { min-height: 0; gap: 3px; padding: 8px; }", pricing_styles)
-        self.assertIn(".pricing-public-section { padding-top: 18px; padding-bottom: 18px; }", pricing_styles)
+    def test_pricing_application_preserves_the_existing_page_canvas(self):
+        for legacy_green in (
+            "#071112",
+            "#0d2426",
+            "#163b3d",
+            "#0b1719",
+            "#58d4c8",
+            "rgba(12, 154, 154, 0.2)",
+        ):
+            with self.subTest(legacy_green=legacy_green):
+                self.assertNotIn(legacy_green, self.pricing_styles)
+
+        overlay_rule = self.pricing_styles.split(".pricing-order-overlay {", 1)[1].split("}", 1)[0]
+        card_rule = self.pricing_styles.split(".pricing-subscription-card {", 1)[1].split("}", 1)[0]
+        main_rule = self.pricing_styles.split(".pricing-subscription-main {", 1)[1].split("}", 1)[0]
+
+        self.assertIn("background: transparent;", overlay_rule)
+        self.assertIn("background: #f8fafb;", card_rule)
+        self.assertIn("color: var(--ink);", card_rule)
+        self.assertIn("background: #dfe7ed;", main_rule)
+
+    def test_opening_an_order_does_not_mutate_the_page_theme(self):
+        open_order = self.pricing_script.split("function openOrder(sku) {", 1)[1].split(
+            "async function loadAccount", 1
+        )[0]
+
+        self.assertIn('modal.classList.add("is-open")', open_order)
+        self.assertIn('document.body.classList.add("modal-open")', open_order)
+        self.assertNotIn("data-theme", open_order)
+        self.assertNotIn("setTheme", open_order)
+
+    def test_subscription_plans_use_accessible_pills_and_a_horizontal_snap_carousel(self):
+        self.assertIn('role="tablist" aria-label="訂閱方案類型"', self.pricing_markup)
+        self.assertIn('data-pricing-plan-family="personal"', self.pricing_markup)
+        self.assertIn('data-pricing-plan-family="enterprise"', self.pricing_markup)
+        self.assertIn('data-pricing-plan-page="prev"', self.pricing_markup)
+        self.assertIn('data-pricing-plan-page="next"', self.pricing_markup)
+        self.assertIn('role="region" aria-label="個人版訂閱方案"', self.pricing_markup)
+        self.assertIn(".pricing-plan-slider {", self.pricing_styles)
+        self.assertIn("grid-template-columns: 34px minmax(0, 1fr) 34px;", self.pricing_styles)
+        self.assertIn("justify-content: center;", self.pricing_styles)
+        shell_rule = self.pricing_styles.split(".pricing-subscription-shell {", 1)[1].split("}", 1)[0]
+        card_rule = self.pricing_styles.split(".pricing-subscription-card {", 1)[1].split("}", 1)[0]
+
+        self.assertIn("display: flex;", shell_rule)
+        self.assertIn("overflow-x: auto;", shell_rule)
+        self.assertIn("scroll-snap-type: x mandatory;", shell_rule)
+        self.assertIn("overscroll-behavior-inline: contain;", shell_rule)
+        self.assertIn("scroll-snap-align: start;", card_rule)
+        self.assertIn("flex: 0 0 clamp(300px, 34vw, 370px);", card_rule)
+        self.assertIn('button[aria-selected="true"]', self.pricing_styles)
+        self.assertIn(".pricing-plan-page-button:focus-visible", self.pricing_styles)
+
+    def test_subscription_cards_use_compact_copy_without_duplicate_entitlements(self):
+        renderer = self.pricing_script.split("function renderSubscriptionPlans(subscriptions) {", 1)[1].split(
+            "function updateSubscriptionPlanPagination", 1
+        )[0]
+
+        self.assertIn('const planTitle = subscriptionPlanTier(subscription) === "enterprise"', renderer)
+        self.assertIn('class="pricing-subscription-cycle"', renderer)
+        self.assertIn('class="pricing-subscription-monthly"', renderer)
+        self.assertIn('class="button button-primary pricing-subscription-cta"', renderer)
+        self.assertIn("const displayFeatures = features.length ? features :", renderer)
+        self.assertEqual(renderer.count("monthly_free_images"), 1)
+        self.assertEqual(renderer.count("threads_accounts"), 1)
 
 
 if __name__ == "__main__":

@@ -77,12 +77,13 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertNotIn('name="phone"', registration_markup)
         self.assertNotIn("field-requirement", registration_markup)
         self.assertNotIn("使用者名稱", registration_markup)
-        self.assertIn("用戶名", registration_markup)
+        self.assertNotIn("用戶名", registration_markup)
+        self.assertIn("用户名", registration_markup)
         for label in (
             "電子信箱",
             "信箱驗證碼",
             "姓名",
-            "用戶名",
+            "用户名",
             "登入密碼",
             "再次確認密碼",
             "公司 / 團隊（選填）",
@@ -224,8 +225,8 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         ):
             with self.subTest(page=page_name):
                 markup = (STATIC_DIR / page_name).read_text(encoding="utf-8")
-                self.assertIn("電子信箱或使用者名稱", markup)
-                self.assertIn("name@example.com 或使用者名稱", markup)
+                self.assertIn("電子信箱或用户名", markup)
+                self.assertIn("name@example.com 或用户名", markup)
 
     def test_high_risk_login_uses_shared_email_first_modal_with_mfa_as_branch(self):
         security_dialog = self.script[
