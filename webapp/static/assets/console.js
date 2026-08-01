@@ -26191,7 +26191,7 @@ function renderProxyPool() {
   const page = state.proxyPoolPage;
   const offset = (page - 1) * pageSize;
   const pageRows = rows.slice(offset, offset + pageSize);
-  const columns = ["序号", "分组", "IP 类型", "来源", "购买状态", "代理名称", "代理资讯", "备注", "代理状态", "代理归属", "出口 IP", "已绑账号", "代理协议", "系统有效性", "操作"];
+  const columns = ["序号", "分组", "IP 类型", "来源", "购买状态", "节点名称", "代理资讯", "备注", "代理状态", "出口归属", "出口 IP", "已绑账号", "代理协议", "系统有效性", "操作"];
   const renderProxyMobileActions = (proxy) => {
     const isMarketplace = String(proxy.source || "").trim().toLowerCase() === "marketplace";
     const boundCount = proxyBoundAccountCount(proxy);
@@ -26229,19 +26229,19 @@ function renderProxyPool() {
               <span role="cell" class="proxy-detail-cell" data-mobile-label="IP 类型">${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="来源"><span class="proxy-source-badge is-${sourceClass}">${esc(proxySourceLabel(proxy.source))}</span>${isNew ? '<span class="proxy-new-badge">新</span>' : ""}</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="购买状态">${esc(proxyPurchaseStatusLabel(proxy.purchase_status))}</span>
-              <span role="cell" class="proxy-detail-cell" data-mobile-label="代理名称"><strong>${esc(proxy.name || endpoint)}</strong></span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="节点名称"><strong>${esc(proxy.name || endpoint)}</strong></span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="代理资讯"><strong>${esc(endpoint)}</strong><small>${esc(authLabel)}</small></span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="备注">${esc(proxy.note || "-")}</span>
               <span role="cell" class="proxy-detail-cell proxy-status-stack" data-mobile-label="代理状态"><span class="status ${esc(proxy.status || "")}">${esc(proxyStatusLabel(proxy.status))}</span><small>${proxy.last_check_at ? esc(formatTime(proxy.last_check_at)) : "未检测"}</small></span>
-              <span role="cell" class="proxy-detail-cell" data-mobile-label="代理归属">${esc(country)}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="出口归属">${esc(country)}</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="出口 IP">${esc(proxyExitIp(proxy))}</span>
               <span role="cell" class="proxy-detail-cell proxy-numeric" data-mobile-label="已绑账号">${proxyBoundAccountCount(proxy)}</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="代理协议">${esc(proxyProtocol(proxy))}</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="系统有效性">${esc(proxyAutomaticValidityLabel(proxy))}</span>
               <span role="cell" class="proxy-table-actions" data-mobile-label="操作">
-                <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderRefreshIcon()}</button>
+                <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderNetworkIcon()}</button>
                 <button type="button" data-proxy-edit="${esc(proxy.id)}" title="${isMarketplace ? "商城代理由管理员统一维护" : "编辑代理"}" aria-label="${isMarketplace ? "商城代理不可编辑" : "编辑代理"}" ${isMarketplace ? "disabled" : ""}>${renderEditIcon()}</button>
-                <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${proxyBoundAccountCount(proxy) ? "代理已绑定账号，不能释放" : (isMarketplace ? "释放并退回商城" : "删除代理")}" ${proxyBoundAccountCount(proxy) ? "disabled" : ""}>${isMarketplace ? "释放" : "删除"}</button>
+                <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${proxyBoundAccountCount(proxy) ? "代理已绑定账号，不能释放" : (isMarketplace ? "释放并退回商城" : "删除代理")}" aria-label="${isMarketplace ? "释放代理" : "删除代理"}" ${proxyBoundAccountCount(proxy) ? "disabled" : ""}>${isMarketplace ? renderProxyReleaseIcon() : renderTrashIcon()}</button>
               </span>
             </div>`;
           }).join("") : `<div class="empty-state proxy-pool-empty">暂无代理 IP，点击新增代理开始配置。</div>`}

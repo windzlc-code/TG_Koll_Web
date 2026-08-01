@@ -16505,12 +16505,12 @@ button.proxy-market-link {
 .proxy-table {
   display: grid;
   gap: 6px;
-  min-width: 1400px;
+  min-width: 1420px;
 }
 
 .proxy-table-row {
   display: grid;
-  grid-template-columns: 36px 68px 74px 84px 76px 100px 140px 120px 76px 72px 88px 64px 70px 108px 84px;
+  grid-template-columns: 36px 68px 74px 84px 76px 100px 140px 120px 76px 72px 88px 64px 70px 108px 104px;
   align-items: start;
   gap: 8px;
   min-width: 0;
@@ -16615,7 +16615,7 @@ button.proxy-market-link {
 
 .proxy-table-actions {
   display: flex;
-  gap: 3px;
+  gap: 5px;
   align-self: center;
   overflow: visible !important;
 }
@@ -16623,21 +16623,45 @@ button.proxy-market-link {
 .proxy-table-actions button {
   display: inline-grid;
   place-items: center;
-  width: 28px;
-  min-width: 28px;
-  min-height: 28px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
   padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-solid);
+  color: var(--ink);
+  line-height: 0;
 }
 
 .proxy-table-actions button.danger {
-  width: auto;
-  min-width: 40px;
-  padding: 0 6px;
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
-.proxy-table-actions svg {
-  width: 16px;
-  height: 16px;
+.proxy-table-actions button:hover:not(:disabled),
+.proxy-table-actions button:focus-visible:not(:disabled) {
+  border-color: var(--ink);
+  background: var(--soft);
+  box-shadow: none;
+}
+
+.proxy-table-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.proxy-table-actions :is(.ui-action-icon, .ui-trash-icon) {
+  display: block;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .proxy-pool-card {

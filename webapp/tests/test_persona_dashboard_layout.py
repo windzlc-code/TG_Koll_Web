@@ -2881,7 +2881,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('class="proxy-table-wrap" data-proxy-desktop-list', proxy_pool)
         self.assertIn('class="proxy-table" role="table"', proxy_pool)
         self.assertIn(
-            'const columns = ["序号", "分组", "IP 类型", "来源", "购买状态", "代理名称", "代理资讯", "备注", "代理状态", "代理归属", "出口 IP", "已绑账号", "代理协议", "系统有效性", "操作"];',
+            'const columns = ["序号", "分组", "IP 类型", "来源", "购买状态", "节点名称", "代理资讯", "备注", "代理状态", "出口归属", "出口 IP", "已绑账号", "代理协议", "系统有效性", "操作"];',
             proxy_pool,
         )
         self.assertIn('class="proxy-table-row proxy-table-row--head"', proxy_pool)
@@ -2895,9 +2895,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         ]
         mobile_cards = proxy_pool[proxy_pool.index('class="proxy-card-grid" data-proxy-mobile-cards'):]
         self.assertNotIn('data-proxy-view=', desktop_list)
-        self.assertIn('${renderRefreshIcon()}</button>', desktop_list)
+        self.assertIn('${renderNetworkIcon()}</button>', desktop_list)
         self.assertIn('商城代理不可编辑', desktop_list)
-        self.assertIn('${isMarketplace ? "释放" : "删除"}', desktop_list)
+        self.assertIn('${isMarketplace ? renderProxyReleaseIcon() : renderTrashIcon()}</button>', desktop_list)
+        self.assertNotIn('${renderRefreshIcon()}</button>', desktop_list)
+        self.assertNotIn('${isMarketplace ? "释放" : "删除"}', desktop_list)
         self.assertIn('data-proxy-view="${esc(proxy.id)}"', mobile_actions)
         self.assertIn('${renderEyeIcon()}</button>', mobile_actions)
         self.assertIn('${renderNetworkIcon()}</button>', mobile_actions)
@@ -2919,8 +2921,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("max-width: 420px;", self.styles)
         self.assertIn(".proxy-table-wrap {", self.styles)
         self.assertIn(".proxy-table-row {", self.styles)
-        self.assertIn("108px 84px;", self.styles)
-        self.assertIn(".proxy-table-actions button.danger {", self.styles)
+        self.assertIn("108px 104px;", self.styles)
+        self.assertIn(".proxy-table-actions :is(.ui-action-icon, .ui-trash-icon) {", self.styles)
         self.assertIn(".proxy-card-grid {\n    display: grid;", self.styles)
         self.assertIn(".proxy-table-wrap {\n    display: none;", self.styles)
 
