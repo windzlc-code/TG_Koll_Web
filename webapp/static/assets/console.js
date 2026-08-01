@@ -14082,7 +14082,7 @@ async function submitPersonaPublishTask() {
         platform,
         media_paths: mediaPaths,
         priority: 50,
-        max_retries: 2,
+        max_retries: 0,
       }),
     });
     const task = result.task || {};
@@ -14173,19 +14173,20 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
       }
     }
     const postSourcePath = source === "favorites" ? "favorites" : "posts";
-    const publishBatchId = `publish_batch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    const isBatchPublish = posts.length > 1;
+    const publishBatchId = isBatchPublish ? `publish_batch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}` : "";
     const publishSequenceTargets = posts.map((_, index) => `发布第${index + 1}篇`);
     showMsg(messageId, `正在提交 ${posts.length} 条${publishContentSourceLabel(source)}任务...`, true, {
       key: batchToastKey,
       kind: "queued",
     });
     const submissions = posts.map((post, index) => {
-      const sequenceMetadata = {
+      const sequenceMetadata = isBatchPublish ? {
         publish_batch_id: publishBatchId,
         publish_sequence_index: index + 1,
         publish_sequence_total: posts.length,
         publish_sequence_targets: publishSequenceTargets,
-      };
+      } : {};
       const publishPath = `/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/${postSourcePath}/${encodeURIComponent(post.id)}/publish`;
       const publishOptions = {
         method: "POST",
@@ -14196,7 +14197,7 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
           content_override: publishContentForPost(post, persona),
           media_paths: mediaPaths,
           priority: 50,
-          max_retries: 2,
+          max_retries: isBatchPublish ? 2 : 0,
           ...sequenceMetadata,
         }),
       };
@@ -28217,7 +28218,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
           platform,
           task_type: taskType,
           priority: 0,
-          max_retries: 2,
+          max_retries: taskType === "publish_post" ? 0 : 2,
           payload,
         }),
       });

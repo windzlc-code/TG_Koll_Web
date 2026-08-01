@@ -4174,6 +4174,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload_obj.payload["archive_post_id"], post["id"])
         self.assertEqual(payload_obj.payload["caption"], "Threads publish content")
         self.assertEqual(payload_obj.payload["media_paths"], [])
+        self.assertEqual(payload_obj.max_retries, 0)
+        self.assertNotIn("publish_batch_id", payload_obj.payload)
+        self.assertNotIn("publish_sequence_total", payload_obj.payload)
 
     def test_publish_persona_post_respects_zero_retries(self):
         self._write_archives()

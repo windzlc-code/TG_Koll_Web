@@ -9693,9 +9693,18 @@ def _threads_active_dialog_text(page) -> str:
 
 def _click_threads_active_dialog_post(page, logger: AutomationLogger, before_click: Callable[[], None] | None = None) -> bool:
     try:
+        submit_labels = [
+            "Post",
+            "发布",
+            "發佈",
+            "发帖",
+            "發文",
+            "分享",
+        ]
         marked = page.evaluate(
-            r"""() => {
+            r"""labels => {
                 document.querySelectorAll('[data-vecto-publish-target]').forEach(node => node.removeAttribute('data-vecto-publish-target'));
+                const normalizedLabels = new Set((labels || []).map(label => String(label || '').replace(/\s+/g, ' ').trim()).filter(Boolean));
                 const visible = Array.from(document.querySelectorAll('[role="dialog"]')).filter((node) => {
                     const rect = node.getBoundingClientRect();
                     const style = window.getComputedStyle(node);
@@ -9710,19 +9719,54 @@ def _click_threads_active_dialog_post(page, logger: AutomationLogger, before_cli
                     return ac - bc;
                 });
                 const dialog = visible[0];
+                const dialogRect = dialog.getBoundingClientRect();
                 const controls = Array.from(dialog.querySelectorAll('button, [role="button"], div, span')).reverse();
+                let geometricFallback = null;
                 for (const node of controls) {
                     const text = String(node.innerText || node.textContent || node.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
-                    if (text !== 'Post') continue;
                     const clickable = node.closest('button, [role="button"]') || node;
                     const style = window.getComputedStyle(clickable);
                     if (clickable.disabled || clickable.getAttribute('aria-disabled') === 'true' || style.pointerEvents === 'none') continue;
+                    const rect = clickable.getBoundingClientRect();
+                    if (rect.width <= 0 || rect.height <= 0) continue;
+                    if (normalizedLabels.has(text)) {
+                        clickable.scrollIntoView({block: 'center', inline: 'center'});
+                        clickable.setAttribute('data-vecto-publish-target', '1');
+                        return true;
+                    }
+                    const lowerHalf = rect.top >= dialogRect.top + dialogRect.height * 0.45;
+                    const rightSide = rect.left >= dialogRect.left + dialogRect.width * 0.45;
+                    const hasActionSize = rect.width >= 44 && rect.height >= 28;
+                    const looksLikeSubmit = lowerHalf && rightSide && hasActionSize && text && !/[×x]|close|cancel|取消/i.test(text);
+                    if (!geometricFallback && looksLikeSubmit) {
+                        geometricFallback = clickable;
+                    }
+                }
+                if (geometricFallback) {
+                    geometricFallback.scrollIntoView({block: 'center', inline: 'center'});
+                    geometricFallback.setAttribute('data-vecto-publish-target', '1');
+                    geometricFallback.setAttribute('data-vecto-publish-target-source', 'geometry');
+                    return true;
+                }
+                for (const node of controls) {
+                    const text = String(node.innerText || node.textContent || node.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+                    const clickable = node.closest('button, [role="button"]') || node;
+                    const style = window.getComputedStyle(clickable);
+                    if (clickable.disabled || clickable.getAttribute('aria-disabled') === 'true' || style.pointerEvents === 'none') continue;
+                    const rect = clickable.getBoundingClientRect();
+                    if (rect.width <= 0 || rect.height <= 0) continue;
+                    const lowerHalf = rect.top >= dialogRect.top + dialogRect.height * 0.45;
+                    const rightSide = rect.left >= dialogRect.left + dialogRect.width * 0.45;
+                    const iconSubmit = lowerHalf && rightSide && rect.width >= 28 && rect.height >= 28 && !text;
+                    if (!iconSubmit) continue;
                     clickable.scrollIntoView({block: 'center', inline: 'center'});
                     clickable.setAttribute('data-vecto-publish-target', '1');
+                    clickable.setAttribute('data-vecto-publish-target-source', 'icon-geometry');
                     return true;
                 }
                 return false;
-            }"""
+            }""",
+            submit_labels,
         )
     except Exception as exc:
         logger.log("warn", "threads_publish_submit_dom_failed", "无法定位当前弹窗的发布按钮，尚未执行点击。", {"error": str(exc)[:500]})

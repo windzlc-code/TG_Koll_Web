@@ -11411,7 +11411,7 @@ class PersonaDashboardDraftPublishPayload(BaseModel):
     content_override: str | None = None
     scheduled_at: int | str | None = 0
     priority: int = 50
-    max_retries: int = 2
+    max_retries: int = 0
     media_paths: list[str] = Field(default_factory=list)
     publish_batch_id: str = ""
     publish_sequence_index: int = 1
@@ -15473,6 +15473,31 @@ def _publish_persona_archive_post(
             "task": get_social_task(str(active_task.get("id") or "")),
             "reused": True,
         }
+    publish_batch_id = str(payload.publish_batch_id or "").strip()
+    publish_sequence_total = max(1, int(payload.publish_sequence_total or 1))
+    publish_sequence_index = max(1, int(payload.publish_sequence_index or 1))
+    publish_sequence_targets = [
+        str(item or "").strip()
+        for item in (payload.publish_sequence_targets or [])
+        if str(item or "").strip()
+    ]
+    task_payload = {
+        "caption": content,
+        "content": content,
+        "text": content,
+        "platform": platform,
+        "media_paths": media_paths,
+        "archive_post_id": clean_post_id,
+        "archive_post_title": str(post.get("title") or ""),
+        "archive_post_source": source_name,
+    }
+    if publish_batch_id and publish_sequence_total > 1:
+        task_payload.update({
+            "publish_batch_id": publish_batch_id,
+            "publish_sequence_index": publish_sequence_index,
+            "publish_sequence_total": publish_sequence_total,
+            "publish_sequence_targets": publish_sequence_targets,
+        })
     task = _create_social_task_with_billing(
         SocialTaskPayload(
             persona_id=clean_archive_id,
@@ -15481,24 +15506,7 @@ def _publish_persona_archive_post(
             task_type="publish_post",
             priority=max(1, min(int(payload.priority or 50), 100)),
             scheduled_at=payload.scheduled_at or 0,
-            payload={
-                "caption": content,
-                "content": content,
-                "text": content,
-                "platform": platform,
-                "media_paths": media_paths,
-                "archive_post_id": clean_post_id,
-                "archive_post_title": str(post.get("title") or ""),
-                "archive_post_source": source_name,
-                "publish_batch_id": str(payload.publish_batch_id or "").strip(),
-                "publish_sequence_index": max(1, int(payload.publish_sequence_index or 1)),
-                "publish_sequence_total": max(1, int(payload.publish_sequence_total or 1)),
-                "publish_sequence_targets": [
-                    str(item or "").strip()
-                    for item in (payload.publish_sequence_targets or [])
-                    if str(item or "").strip()
-                ],
-            },
+            payload=task_payload,
             max_retries=max(0, min(int(payload.max_retries), 5)),
         ),
         billing_admin_waived=bool(billing_admin_waived),

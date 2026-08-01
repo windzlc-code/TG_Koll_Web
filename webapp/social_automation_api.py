@@ -6074,7 +6074,7 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
                 initial_status,
                 scheduled_at,
                 json.dumps(task_payload, ensure_ascii=False),
-                0 if task_type == "open_login" else max(0, min(int(payload.max_retries or 0), 5)),
+                0 if task_type in {"open_login", "publish_post"} else max(0, min(int(payload.max_retries or 0), 5)),
                 str((billing_reservation or {}).get("id") or ""),
                 1 if daily_publish_waived else 0,
                 str(batch_context.get("automation_plan_id") or ""),
@@ -7609,7 +7609,7 @@ def _mark_publish_batch_item_running(task: dict[str, Any], index: int, total: in
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT status, payload_json FROM social_automation_tasks WHERE id = ?",
+            "SELECT status, payload_json, started_at FROM social_automation_tasks WHERE id = ?",
             (task_id,),
         ).fetchone()
         if row is None:

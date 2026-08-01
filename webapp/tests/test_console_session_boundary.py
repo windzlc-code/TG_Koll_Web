@@ -2512,6 +2512,79 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
+    def test_single_publish_submission_uses_minimal_non_batch_payload(self):
+        submit_publish = f"async {self._function_source('submitPublishContentTasks')}"
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const requests = [];
+            const state = {{
+              socialTaskToastLabels: {{}},
+              socialTaskToastBatches: {{}},
+              socialTaskToastKeys: {{}},
+            }};
+            function selectedPersona() {{ return {{ id: "persona-1" }}; }}
+            function normalizePublishContentSource() {{ return "posts"; }}
+            function publishAccountForPersona() {{
+              return {{ id: "account-1", platform: "threads", username: "publisher" }};
+            }}
+            async function promptPersonaAccountBinding() {{}}
+            function canSubmitPublishWithAccount() {{ return true; }}
+            function publishAccountBlockMessage() {{ return ""; }}
+            function publishSourceRows() {{ return [{{ id: "post-1", content: "one" }}]; }}
+            function syncPublishSelectedPostIds() {{ return ["post-1"]; }}
+            function publishContentSourceLabel() {{ return "draft"; }}
+            function normalizeScheduleValueForApi() {{ return ""; }}
+            function $() {{ return null; }}
+            async function ensureDailyPublishCapacity() {{ return true; }}
+            function socialTaskToastLaneKey() {{ return "publish-toast"; }}
+            function isActionLocked() {{ return false; }}
+            function activeSocialTaskFor() {{ return null; }}
+            function setActionLocked() {{}}
+            async function uploadAutomationMedia() {{ return []; }}
+            function filesFromInput() {{ return []; }}
+            function showMsg() {{}}
+            function publishContentForPost(post) {{ return post.content; }}
+            async function api(url, options) {{
+              const body = JSON.parse(options.body);
+              requests.push({{ url, body }});
+              return {{
+                task: {{
+                  id: "task-1",
+                  task_type: "publish_post",
+                  payload: {{ archive_post_id: "post-1" }},
+                }},
+              }};
+            }}
+            function socialTaskPayload(task) {{ return task?.payload || {{}}; }}
+            function mergeSocialTaskState() {{}}
+            function registerSocialTaskToastBatch() {{}}
+            function syncSocialTaskToast() {{}}
+            function isFutureScheduledSocialTask() {{ return false; }}
+            function refreshLiveBrowserSessionsSoon() {{}}
+            async function watchPersonaPublishTaskSequence() {{}}
+            async function loadSocial() {{}}
+            async function loadPersonaDraftPosts() {{}}
+            async function loadPersonaFavoritePosts() {{}}
+            function clearUploadDropzoneState() {{}}
+            {submit_publish}
+
+            (async () => {{
+              const results = await submitPublishContentTasks("account-1", {{ id: "persona-1" }});
+              assert.equal(results.length, 1);
+              assert.equal(requests.length, 1);
+              assert.equal(requests[0].body.max_retries, 0);
+              assert.equal(Object.hasOwn(requests[0].body, "publish_batch_id"), false);
+              assert.equal(Object.hasOwn(requests[0].body, "publish_sequence_index"), false);
+              assert.equal(Object.hasOwn(requests[0].body, "publish_sequence_total"), false);
+            }})().catch((error) => {{
+              console.error(error);
+              process.exitCode = 1;
+            }});
+            """
+        )
+        self._run_node(harness)
+
     def test_instagram_publish_without_media_opens_resolution_modal_before_submit(self):
         submit_publish = f"async {self._function_source('submitPublishContentTasks')}"
         modal_source = self._function_source("requestInstagramPublishMediaResolution")
