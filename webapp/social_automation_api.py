@@ -3456,6 +3456,13 @@ def stop_social_automation_worker(*, timeout_seconds: float = 5.0) -> None:
 
 
 def wake_social_automation_worker() -> None:
+    worker = _WORKER_THREAD
+    if (
+        bool(_WORKER_STATE.get("enabled"))
+        and (worker is None or not worker.is_alive())
+        and not _WORKER_STOP.is_set()
+    ):
+        ensure_social_automation_worker_started()
     _WORKER_WAKE.set()
 
 
@@ -7334,6 +7341,7 @@ def _claim_next_task() -> dict[str, Any] | None:
         if not row:
             return None
         task_id = str(row["id"])
+        task_started_at = int(row["started_at"] or 0) or now
         claimed_payload = _set_runtime_claim(
             _loads(row["payload_json"], {}),
             _TASK_WORKER_LEASE_KEY,
@@ -7346,7 +7354,7 @@ def _claim_next_task() -> dict[str, Any] | None:
             SET status = 'running', started_at = ?, payload_json = ?, updated_at = ?
             WHERE id = ? AND status = 'queued'
             """,
-            (now, json.dumps(claimed_payload, ensure_ascii=False), now, task_id),
+            (task_started_at, json.dumps(claimed_payload, ensure_ascii=False), now, task_id),
         ).rowcount
         if not claimed:
             return None
@@ -7651,6 +7659,7 @@ def _mark_publish_batch_item_running(task: dict[str, Any], index: int, total: in
                 owner=expected_owner,
                 now=now,
             )
+            task_started_at = int(row["started_at"] or 0) or now
             changed = conn.execute(
                 """
                 UPDATE social_automation_tasks
@@ -7658,7 +7667,7 @@ def _mark_publish_batch_item_running(task: dict[str, Any], index: int, total: in
                 WHERE id = ? AND status = 'queued'
                 """,
                 (
-                    now,
+                    task_started_at,
                     json.dumps(running_payload, ensure_ascii=False),
                     now,
                     task_id,

@@ -922,6 +922,30 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertIsNotNone(claimed)
         self.assertEqual(claimed["id"], "next-task")
 
+    def test_retry_claim_preserves_original_started_at_for_elapsed_timer(self):
+        self._insert_task("retry-keeps-started-at", "queued", task_type="browse_feed")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE social_automation_tasks
+                SET started_at = 123, retry_count = 1, updated_at = 150
+                WHERE id = 'retry-keeps-started-at'
+                """
+            )
+
+        with mock.patch.object(social_automation_api, "_now", return_value=200):
+            claimed = social_automation_api._claim_next_task()
+
+        self.assertIsNotNone(claimed)
+        self.assertEqual(claimed["id"], "retry-keeps-started-at")
+        self.assertEqual(claimed["started_at"], 123)
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT started_at, updated_at FROM social_automation_tasks WHERE id = 'retry-keeps-started-at'"
+            ).fetchone()
+        self.assertEqual(int(row[0]), 123)
+        self.assertEqual(int(row[1]), 200)
+
     def test_expired_manual_lease_recovers_without_waiting_for_legacy_window(self):
         self._insert_task(
             "orphaned-manual-lease",

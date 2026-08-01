@@ -204,6 +204,11 @@ def _wait_for_publish_login_transition(
         current = _detect_platform_login_state(page, platform)
         if platform == "threads":
             current = _restore_threads_after_instagram_login(page, current, logger)
+        if str(current.get("status") or "") == "post_login_interstitial":
+            if _resolve_instagram_post_login_interstitial(page, logger):
+                if platform == "threads":
+                    _goto(page, THREADS_HOME, logger, "threads_post_login_notice_return")
+                current = _detect_platform_login_state(page, platform)
         if str(current.get("status") or "") == "ready":
             stable = _confirm_platform_ready(page, platform, logger, cancel_event)
             if str(stable.get("status") or "") == "ready":
@@ -261,7 +266,33 @@ def _attempt_publish_login_repair(
             "totp_submitted",
         }:
             return totp_result
+    if initial_code == "post_login_interstitial":
+        _resolve_instagram_post_login_interstitial(page, logger)
     max_repair_attempts = _int_payload_or_env(payload, "publish_login_repair_attempts", "SOCIAL_AUTOMATION_PUBLISH_LOGIN_REPAIR_ATTEMPTS", 3, 0, 8)
+    saved_password = str(account.get("login_password") or "")
+    if saved_password:
+        repair_payload = dict(payload or {})
+        repair_payload.setdefault("auto_submit", True)
+        repair_payload.setdefault("login_username", str(account.get("login_username") or account.get("username") or "").strip())
+        repair_payload.setdefault("login_password", saved_password)
+        repair_payload.setdefault("login_wait_seconds", 120)
+        repair_payload.setdefault("wait_for_manual", False)
+        repair_payload.setdefault("max_self_heal_attempts", max_repair_attempts)
+        repair_payload.setdefault("max_login_attempts", 2)
+        try:
+            return _run_open_login(
+                page,
+                task,
+                account,
+                repair_payload,
+                screenshot_dir,
+                logger,
+                platform,
+                cancel_event,
+                context_control,
+            )
+        except NeedManualError as exc:
+            return {"status": str(exc.status or "need_verification"), "reason": str(exc), "screenshot_path": str(exc.screenshot_path or "")}
     if max_repair_attempts <= 0:
         return initial_status
     logger.log(
@@ -290,33 +321,6 @@ def _attempt_publish_login_repair(
             if stable.get("status") == "ready":
                 return stable
         initial_status = current
-    saved_password = str(account.get("login_password") or "")
-    if not saved_password:
-        return initial_status
-    repair_payload = dict(payload or {})
-    repair_payload.setdefault("auto_submit", True)
-    repair_payload.setdefault("login_username", str(account.get("login_username") or account.get("username") or "").strip())
-    repair_payload.setdefault("login_password", saved_password)
-    repair_payload.setdefault("login_wait_seconds", 120)
-    repair_payload.setdefault("wait_for_manual", False)
-    repair_payload.setdefault("max_self_heal_attempts", max_repair_attempts)
-    repair_payload.setdefault("max_login_attempts", 2)
-    try:
-        result = _run_open_login(
-            page,
-            task,
-            account,
-            repair_payload,
-            screenshot_dir,
-            logger,
-            platform,
-            cancel_event,
-            context_control,
-        )
-    except NeedManualError as exc:
-        return {"status": str(exc.status or "need_verification"), "reason": str(exc), "screenshot_path": str(exc.screenshot_path or "")}
-    if result.get("status") == "ready":
-        return result
     return initial_status
 
 
@@ -376,13 +380,7 @@ def run_social_task(
             )
 
         _raise_if_cancelled(cancel_event)
-        if task_type == "publish_post":
-            login = _check_platform_login_without_disrupting(page, platform, logger)
-            if login.get("status") != "ready":
-                # Recovery and manual takeover must remain visible on the primary page.
-                login = _check_platform_login(page, platform, logger)
-        else:
-            login = _check_platform_login(page, platform, logger)
+        login = _check_platform_login(page, platform, logger)
         if login.get("status") != "ready":
             login = _attempt_publish_login_repair(
                 page,
@@ -509,19 +507,6 @@ def run_social_task(
         if task_type == "browse_profile":
             _raise_if_cancelled(cancel_event)
             return _run_browse_profile(page, task, payload, screenshot_dir, logger)
-        if task_type == "publish_post":
-            _raise_if_cancelled(cancel_event)
-            return _run_publish_post(
-                page,
-                task,
-                payload,
-                screenshot_dir,
-                logger,
-                platform,
-                account=account,
-                cancel_event=cancel_event,
-                context_control=context_control,
-            )
         if task_type == "comment_post":
             _raise_if_cancelled(cancel_event)
             return _run_comment_post(
@@ -683,9 +668,7 @@ def _run_publish_task_in_context(
     verify_login: bool,
 ) -> dict[str, Any]:
     if verify_login:
-        login = _check_platform_login_without_disrupting(page, platform, logger)
-        if login.get("status") != "ready":
-            login = _check_platform_login(page, platform, logger)
+        login = _check_platform_login(page, platform, logger)
         if login.get("status") != "ready":
             login = _attempt_publish_login_repair(
                 page,
@@ -1236,9 +1219,14 @@ def _proxy_config(proxy: dict[str, Any] | None) -> dict[str, str] | None:
     proxy_type = str(proxy.get("proxy_type") or "http").strip().lower()
     if proxy_type not in {"http", "https", "socks5"}:
         proxy_type = "http"
-    config = {"server": f"{proxy_type}://{host}:{port}"}
     username = str(proxy.get("username") or "").strip()
     password = str(proxy.get("password") or "").strip()
+    is_marketplace_proxy = bool(
+        str(proxy.get("source") or "").strip().lower() == "marketplace"
+        or str(proxy.get("market_item_id") or "").strip()
+    )
+    browser_proxy_type = "http" if proxy_type == "socks5" and username and is_marketplace_proxy else proxy_type
+    config = {"server": f"{browser_proxy_type}://{host}:{port}"}
     if username:
         config["username"] = username
         config["password"] = password
@@ -1683,11 +1671,100 @@ def _compose_warmup_evidence_sheet(
 
 def _goto(page, url: str, logger: AutomationLogger, stage: str, *, timeout_ms: int = 60000, networkidle_ms: int = 15000) -> None:
     logger.log("info", stage, f"正在打开页面：{url}")
-    page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+    candidates = [url]
+    if url == THREADS_HOME:
+        candidates.extend(["https://www.threads.com/", "https://www.threads.com/login"])
+    for index, candidate in enumerate(candidates):
+        try:
+            page.goto(candidate, wait_until="domcontentloaded", timeout=timeout_ms)
+            break
+        except Exception as exc:
+            message = str(exc)
+            current_url = str(getattr(page, "url", "") or "").strip()
+            is_recoverable_navigation = any(
+                marker in message
+                for marker in (
+                    "NS_ERROR_REDIRECT_LOOP",
+                    "ERR_TOO_MANY_REDIRECTS",
+                    "interrupted by another navigation",
+                )
+            )
+            if not is_recoverable_navigation:
+                raise
+            if current_url and current_url != "about:blank":
+                logger.log(
+                    "warn",
+                    stage,
+                    "Navigation reported a transient redirect error; continuing from the loaded page.",
+                    {"error": message.splitlines()[0], "url": current_url},
+                )
+                break
+            if index + 1 < len(candidates):
+                next_url = candidates[index + 1]
+                logger.log(
+                    "warn",
+                    f"{stage}_redirect_recovery",
+                    "Threads navigation redirected in a loop; trying the canonical host.",
+                    {"from": candidate, "to": next_url},
+                )
+                continue
+            logger.log(
+                "warn",
+                f"{stage}_state_recovery",
+                "Threads navigation is still redirecting; keeping the browser open for login recovery.",
+                {"url": candidate},
+            )
     try:
         page.wait_for_load_state("networkidle", timeout=networkidle_ms)
     except Exception:
         pass
+
+
+def _threads_home_is_current(page) -> bool:
+    try:
+        parsed = urlparse(str(getattr(page, "url", "") or ""))
+    except Exception:
+        return False
+    host = str(parsed.hostname or "").lower()
+    if host not in {"threads.net", "www.threads.net", "threads.com", "www.threads.com"}:
+        return False
+    return str(parsed.path or "/").rstrip("/") in {"", "/"}
+
+
+def _ensure_threads_home_for_publish(page, logger: AutomationLogger) -> None:
+    if _threads_home_is_current(page):
+        logger.log(
+            "debug",
+            "threads_publish_open",
+            "Threads home is already open; skipped duplicate navigation.",
+            {"url": _safe_navigation_url(getattr(page, "url", ""))},
+        )
+        return
+    _goto(page, THREADS_HOME, logger, "threads_publish_open")
+
+
+def _is_transient_navigation_exception(message: str) -> bool:
+    normalized = str(message or "").lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "ns_error_net_empty_response",
+            "ns_error_proxy_connection_refused",
+            "err_proxy_connection_failed",
+            "err_tunnel_connection_failed",
+            "err_connection_reset",
+            "err_connection_closed",
+            "err_connection_timed_out",
+            "err_timed_out",
+            "timeout",
+            "net::",
+            "proxy",
+            "tunnel",
+            "connection reset",
+            "connection refused",
+            "temporarily unavailable",
+        )
+    )
 
 
 def _check_instagram_login(page, logger: AutomationLogger) -> dict[str, Any]:
@@ -1730,11 +1807,6 @@ def _temporary_background_page(page, logger: AutomationLogger, stage: str):
                 background.close()
             with contextlib.suppress(Exception):
                 page.bring_to_front()
-
-
-def _check_platform_login_without_disrupting(page, platform: str, logger: AutomationLogger) -> dict[str, Any]:
-    with _temporary_background_page(page, logger, "publish_login_probe") as probe:
-        return _check_platform_login(probe, platform, logger)
 
 
 def _detect_platform_account_restriction(url: str, body_text: str, platform: str) -> dict[str, Any] | None:
@@ -1794,6 +1866,12 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
     restriction = _detect_platform_account_restriction(url, body_text, "instagram")
     if restriction is not None:
         return restriction
+    if "/accounts/scraping_warning" in normalized_url:
+        return {
+            "status": "post_login_interstitial",
+            "reason": "Instagram is showing a post-login account notice.",
+            "url": url,
+        }
     if _is_verification_url(url):
         return {"status": "need_verification", "reason": "Instagram 需要输入验证码。", "url": url}
     invalid_markers = [
@@ -1857,8 +1935,27 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
     return {"status": "cookie_expired", "reason": "尚未检测到有效的 Instagram 登录会话。", "url": url}
 
 
+def _browser_navigation_error_visible(page) -> bool:
+    """Recognize the browser's stable network-error artwork/structure across locales."""
+    for selector in (
+        "body.neterror",
+        "#errorPageContainer",
+        "#netErrorButtonContainer",
+        "#netErrorButton",
+    ):
+        try:
+            locator = page.locator(selector).first
+            if locator.count() and locator.is_visible(timeout=500):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _detect_threads_login_state(page) -> dict[str, Any]:
     url = str(page.url or "")
+    normalized_url = url.lower()
+    hostname = str(urlparse(url).hostname or "").lower()
     body_text = ""
     try:
         body_text = str(page.locator("body").inner_text(timeout=5000) or "").lower()
@@ -1869,6 +1966,19 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
         return restriction
     if _is_verification_url(url):
         return {"status": "need_verification", "reason": "Threads/Instagram 需要输入验证码。", "url": url}
+    if "/accounts/scraping_warning" in normalized_url:
+        return {
+            "status": "post_login_interstitial",
+            "reason": "Threads is showing a post-login account notice.",
+            "url": url,
+        }
+    if _browser_navigation_error_visible(page):
+        return {
+            "status": "transient_error",
+            "reason": "Threads browser navigation error page is visible.",
+            "url": url,
+            "evidence": "visual_structure",
+        }
     transient_error_markers = [
         "something went wrong",
         "please try again later",
@@ -1884,6 +1994,16 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
         }
     if any(marker in body_text for marker in _verification_text_markers()):
         return {"status": "need_verification", "reason": "检测到验证码或安全挑战文案。", "url": url}
+
+    is_threads_host = hostname in {"threads.net", "threads.com"} or hostname.endswith(
+        (".threads.net", ".threads.com")
+    )
+    if not is_threads_host:
+        return {
+            "status": "cookie_expired",
+            "reason": "Threads login cannot be confirmed outside the Threads domain.",
+            "url": url,
+        }
     if any(marker in body_text for marker in ("say more with threads", "continue with instagram")):
         return {
             "status": "account_confirmation_required",
@@ -1964,6 +2084,10 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
         '[aria-label*="Create" i]',
         '[aria-label*="Profile" i]',
         '[aria-label*="Activity" i]',
+        'a[href="/search"]',
+        'a[href="/activity"]',
+        'a[href="/direct/inbox/"]',
+        'a[href^="/@"]',
         'textarea',
         '[contenteditable="true"]',
         '[role="textbox"]',
@@ -2058,7 +2182,14 @@ def _verification_text_markers() -> list[str]:
 def _detect_platform_login_state(page, platform: str) -> dict[str, Any]:
     if platform == "threads":
         if "instagram.com" in str(page.url or "").lower():
-            return _detect_instagram_login_state(page)
+            instagram_status = _detect_instagram_login_state(page)
+            if str(instagram_status.get("status") or "") == "ready":
+                return {
+                    **instagram_status,
+                    "status": "threads_restore_required",
+                    "reason": "Instagram login is ready; Threads still requires final confirmation on the Threads domain.",
+                }
+            return instagram_status
         return _detect_threads_login_state(page)
     return _detect_instagram_login_state(page)
 
@@ -2096,6 +2227,41 @@ def _self_heal_login_page(
         {"attempt": attempt, "reason": reason, "url": _safe_navigation_url(page.url)},
         shot,
     )
+    if platform == "threads" and "/accounts/scraping_warning" in str(page.url or "").lower():
+        auth_submission_started = bool(
+            isinstance(context_control, dict)
+            and (
+                context_control.get("login_submission_started")
+                or context_control.get("_totp_verification_pending")
+            )
+        )
+        if auth_submission_started:
+            logger.log(
+                "warn",
+                "login_self_heal_threads_notice_preserved",
+                "Threads is showing a post-login notice; preserving the authenticated session for final confirmation.",
+                {"url": _safe_navigation_url(page.url)},
+            )
+            return
+        logger.log(
+            "warn",
+            "login_self_heal_threads_session_reset",
+            "Threads 会话卡在重定向警告页，正在重置 Threads 会话并恢复登录入口。",
+            {"url": _safe_navigation_url(page.url)},
+        )
+        page.context.clear_cookies(domain=re.compile(r"(^|\.)threads\.(?:com|net)$"))
+        with contextlib.suppress(Exception):
+            page.goto("about:blank", wait_until="domcontentloaded", timeout=5000)
+        _goto(
+            page,
+            "https://www.threads.com/login",
+            logger,
+            "login_self_heal_threads_direct",
+            timeout_ms=30000,
+            networkidle_ms=8000,
+        )
+        _sleep_between(1.5, 3.0)
+        return
     retry_clicked = _click_text_button(
         page,
         logger,
@@ -2109,11 +2275,14 @@ def _self_heal_login_page(
         _sleep_between(1.5, 3.0)
         return
     if platform == "threads" and reason == "auto_login_form_not_ready":
-        if attempt % 2:
-            with contextlib.suppress(Exception):
-                page.reload(wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_load_state("networkidle", timeout=8000)
-        else:
+        # Cross-domain handoff is owned by _run_open_login/_auto_submit_login_form.
+        # If the handoff already landed on Instagram, stay there.  Going back
+        # to Threads creates a second Threads -> Instagram -> Threads loop.
+        try:
+            current_host = str(urlparse(str(page.url or "")).hostname or "").lower()
+        except Exception:
+            current_host = ""
+        if current_host == "instagram.com" or current_host.endswith(".instagram.com"):
             _goto(
                 page,
                 INSTAGRAM_LOGIN,
@@ -2122,6 +2291,15 @@ def _self_heal_login_page(
                 timeout_ms=30000,
                 networkidle_ms=8000,
             )
+            _sleep_between(1.5, 3.0)
+            return
+        # Otherwise stay on Threads.  Do not bounce between domains.
+        if attempt % 2:
+            with contextlib.suppress(Exception):
+                page.reload(wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_load_state("networkidle", timeout=8000)
+        else:
+            _goto(page, THREADS_HOME, logger, "login_self_heal_threads_home")
         _sleep_between(1.5, 3.0)
         return
     with contextlib.suppress(Exception):
@@ -2140,14 +2318,7 @@ def _self_heal_login_page(
     elif action == 2:
         _goto(page, _platform_home(platform), logger, "login_self_heal_home")
     elif platform == "threads":
-        clicked = _click_text_button(
-            page,
-            logger,
-            ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
-            "login_self_heal_continue",
-        )
-        if not clicked:
-            _goto(page, THREADS_HOME, logger, "login_self_heal_threads")
+        _goto(page, THREADS_HOME, logger, "login_self_heal_threads")
     else:
         _goto(page, "https://www.instagram.com/accounts/login/", logger, "login_self_heal_instagram_login")
     _sleep_between(1.5, 3.0)
@@ -2202,7 +2373,10 @@ def _prepare_manual_threads_login_page(page, logger: AutomationLogger) -> None:
 
 
 def _restore_threads_after_instagram_login(page, status: dict[str, Any], logger: AutomationLogger) -> dict[str, Any]:
-    if status.get("status") != "ready" or "instagram.com" not in str(page.url or "").lower():
+    if (
+        str(status.get("status") or "") not in {"ready", "threads_restore_required"}
+        or "instagram.com" not in str(page.url or "").lower()
+    ):
         return status
     logger.log(
         "info",
@@ -2300,6 +2474,7 @@ def _run_open_login(
     verification_hits = 0
     verification_logged = False
     last_submit_monotonic: float | None = None
+    threads_restore_attempted = False
     while time.time() < deadline:
         _raise_if_cancelled(cancel_event)
         if auto_submit and _manual_takeover_requested(context_control):
@@ -2330,13 +2505,22 @@ def _run_open_login(
         post_submit_grace_expired = bool(last_submit_monotonic is not None and not post_submit_waiting)
         try:
             last_status = _detect_platform_login_state(page, platform)
-            if platform == "threads":
+            if platform == "threads" and str(last_status.get("status") or "") == "threads_restore_required":
+                if threads_restore_attempted:
+                    last_status = {
+                        "status": "cookie_expired",
+                        "reason": "Instagram handoff already returned to Threads, but the Threads session is still not ready.",
+                        "url": str(page.url or ""),
+                    }
+                else:
+                    threads_restore_attempted = True
+                    last_status = _restore_threads_after_instagram_login(page, last_status, logger)
+            elif platform == "threads":
                 last_status = _restore_threads_after_instagram_login(page, last_status, logger)
-            if (
-                platform == "instagram"
-                and str(last_status.get("status") or "") == "post_login_interstitial"
-            ):
+            if str(last_status.get("status") or "") == "post_login_interstitial":
                 if _resolve_instagram_post_login_interstitial(page, logger):
+                    if platform == "threads":
+                        _goto(page, THREADS_HOME, logger, "threads_post_login_notice_return")
                     last_submit_monotonic = None
                     continue
                 logger.log(
@@ -2351,6 +2535,7 @@ def _run_open_login(
                 stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
                 if stable_status.get("status") == "ready":
                     _complete_pending_totp_verification(context_control)
+                    _report_account_login_status(context_control, "ready", logger)
                     shot = _screenshot(page, screenshot_dir, task, "login_complete", logger)
                     logger.log(
                         "info",
@@ -2525,7 +2710,20 @@ def _run_open_login(
             message = str(exc)
             if "Target page, context or browser has been closed" in message or "has been closed" in message:
                 raise NeedManualError(f"{_platform_name(platform)} 登录确认前浏览器窗口已关闭，请重新打开登录窗口并保持到账号就绪。", "cookie_expired") from exc
-            logger.log("warn", "open_login_poll", f"登录窗口状态检查失败：{exc}")
+            if _is_transient_navigation_exception(message):
+                last_status = {
+                    "status": "transient_error",
+                    "reason": f"{_platform_name(platform)} navigation failed temporarily: {message.splitlines()[0][:240]}",
+                    "url": str(getattr(page, "url", "") or ""),
+                }
+                logger.log(
+                    "warn",
+                    "open_login_transient_navigation",
+                    "Login navigation failed temporarily; keeping the failure classified as transient instead of manual takeover.",
+                    {"details": _safe_login_status(last_status)},
+                )
+            else:
+                logger.log("warn", "open_login_poll", f"登录窗口状态检查失败：{exc}")
         # A manual login session belongs to the user.  Do not press Escape,
         # reload, or navigate away from the page they are actively handling.
         if auto_submit and post_submit_waiting:
@@ -2538,6 +2736,33 @@ def _run_open_login(
                 self_heal_attempts += 1
                 _self_heal_login_page(page, platform, logger, task, screenshot_dir, "login_state_not_ready", self_heal_attempts, cancel_event, context_control)
                 continue
+            if str(last_status.get("status") or "") == "transient_error":
+                shot = _screenshot(page, screenshot_dir, task, "login_recovery_transient_failed", logger)
+                reason = str(
+                    last_status.get("reason")
+                    or f"{_platform_name(platform)} login could not continue because the platform page is temporarily unreachable."
+                )
+                logger.log(
+                    "warn",
+                    "login_recovery_transient_failed",
+                    reason,
+                    {"status": "transient_error", "details": _safe_login_status(last_status)},
+                    shot,
+                )
+                _request_manual_takeover(context_control)
+                return _wait_for_manual_login_completion(
+                    page,
+                    task,
+                    screenshot_dir,
+                    logger,
+                    platform,
+                    cancel_event,
+                    reason,
+                    "transient_error",
+                    shot,
+                    last_status,
+                    context_control,
+                )
             _request_manual_takeover(context_control)
             shot = _screenshot(page, screenshot_dir, task, "login_recovery_exhausted", logger)
             reason = f"{_platform_name(platform)} 自动恢复已达到上限，请在已打开的浏览器中人工继续。"
@@ -2650,11 +2875,15 @@ def _wait_for_manual_login_completion(
         if time.monotonic() >= deadline:
             raise_manual_login_timeout()
         current_status = _detect_platform_login_state(page, platform)
+        if platform == "threads":
+            current_status = _restore_threads_after_instagram_login(page, current_status, logger)
         if time.monotonic() >= deadline:
             raise_manual_login_timeout()
         current_code = str(current_status.get("status") or "").strip()
-        if current_code == "post_login_interstitial" and platform == "instagram":
+        if current_code == "post_login_interstitial":
             if _resolve_instagram_post_login_interstitial(page, logger):
+                if platform == "threads":
+                    _goto(page, THREADS_HOME, logger, "threads_post_login_notice_return")
                 continue
         if current_code == "ready":
             stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
@@ -2662,6 +2891,7 @@ def _wait_for_manual_login_completion(
                 raise_manual_login_timeout()
             if stable_status.get("status") == "ready":
                 _complete_pending_totp_verification(context_control)
+                _report_account_login_status(context_control, "ready", logger)
                 shot = _screenshot(page, screenshot_dir, task, "login_complete", logger)
                 logger.log(
                     "info",
@@ -3252,9 +3482,58 @@ def _dismiss_instagram_interstitials(page, logger: AutomationLogger) -> bool:
     return dismissed
 
 
+def _dismiss_instagram_scraping_warning_by_structure(page, logger: AutomationLogger) -> bool:
+    """Dismiss the single prominent action on Instagram's localized warning page."""
+    try:
+        candidates = page.locator('button, [role="button"]')
+        best = None
+        best_area = 0.0
+        for index in range(min(int(candidates.count()), 40)):
+            candidate = candidates.nth(index)
+            if not candidate.is_visible(timeout=300):
+                continue
+            box = candidate.bounding_box()
+            if not isinstance(box, dict):
+                continue
+            width = float(box.get("width") or 0)
+            height = float(box.get("height") or 0)
+            if width < 240 or height < 36 or height > 100:
+                continue
+            area = width * height
+            if area > best_area:
+                best = candidate
+                best_area = area
+        if best is not None and _human_click(
+            page,
+            best,
+            logger,
+            "instagram_scraping_warning_dismiss_structure",
+        ):
+            logger.log(
+                "info",
+                "instagram_scraping_warning_dismiss_structure",
+                "Instagram account notice was dismissed using its prominent visual action.",
+                {"evidence": "visual_structure", "url": _safe_navigation_url(page.url)},
+            )
+            return True
+    except Exception:
+        pass
+    return _click_text_button(
+        page,
+        logger,
+        ["Close", "閉じる", "关闭", "關閉"],
+        "instagram_scraping_warning_dismiss_text",
+    )
+
+
 def _resolve_instagram_post_login_interstitial(page, logger: AutomationLogger) -> bool:
     url_before = str(page.url or "")
     body_text = _page_body_text_lower(page)
+    if "/accounts/scraping_warning" in url_before.lower():
+        if not _dismiss_instagram_scraping_warning_by_structure(page, logger):
+            return False
+        _sleep_between(0.8, 1.5)
+        return True
     save_login_prompt = (
         "/accounts/onetap" in url_before.lower()
         or "save your login info?" in body_text
@@ -7874,6 +8153,90 @@ def _visible_first(page, selectors: list[str], timeout_ms: int = 1200):
     return None
 
 
+def _click_threads_instagram_entry_by_structure(
+    page,
+    logger: AutomationLogger,
+    *,
+    abort_if: Callable[[], bool] | None = None,
+) -> bool:
+    """Fallback for localized Threads login cards: wide control with an image/SVG."""
+    try:
+        candidates = page.locator('button:has(svg), a:has(svg), [role="button"]:has(svg), button:has(img), a:has(img), [role="button"]:has(img)')
+        best = None
+        best_score = -1.0
+        for index in range(min(int(candidates.count()), 120)):
+            if abort_if is not None and abort_if():
+                return False
+            candidate = candidates.nth(index)
+            if not candidate.is_visible(timeout=300):
+                continue
+            box = candidate.bounding_box()
+            if not isinstance(box, dict):
+                continue
+            width = float(box.get("width") or 0)
+            height = float(box.get("height") or 0)
+            if width < 160 or height < 40 or height > 140:
+                continue
+            if not str(candidate.inner_text(timeout=300) or "").strip():
+                continue
+            branded = candidate.locator(
+                '[aria-label*="instagram" i], [title*="instagram" i], img[alt*="instagram" i], img[src*="instagram" i]'
+            ).count() > 0
+            if not branded:
+                continue
+            score = width
+            if score > best_score:
+                best = candidate
+                best_score = score
+        if best is not None and _human_click(
+            page,
+            best,
+            logger,
+            "threads_continue_instagram_structure",
+            abort_if=abort_if,
+        ):
+            logger.log(
+                "info",
+                "threads_continue_instagram_structure",
+                "Threads Instagram 登录入口已通过页面结构和图标特征识别。",
+                {"evidence": "visual_structure", "url": _safe_navigation_url(page.url)},
+            )
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _click_threads_instagram_login_entry(
+    page,
+    logger: AutomationLogger,
+    *,
+    abort_if: Callable[[], bool] | None = None,
+) -> bool:
+    if _click_threads_instagram_entry_by_structure(page, logger, abort_if=abort_if):
+        return True
+    if _click_text_button(
+        page,
+        logger,
+        [
+            "Continue with Instagram",
+            "Log in with Instagram",
+            "Instagramでログイン",
+            "Instagram にログイン",
+            "使用 Instagram 登录",
+            "通过 Instagram 登录",
+            "继续使用 Instagram",
+            "使用 Instagram 登入",
+            "透過 Instagram 登入",
+            "繼續使用 Instagram",
+        ],
+        "threads_continue_instagram",
+        abort_if=abort_if,
+    ):
+        return True
+    return False
+
+
 def _visible_last(page, selectors: list[str], timeout_ms: int = 1200):
     for selector in selectors:
         try:
@@ -7926,6 +8289,11 @@ def _verification_code_input(page):
             'input[name*="code" i]',
             'input[aria-label*="code" i]',
             'input[placeholder*="code" i]',
+            'input[aria-label*="验证码"]',
+            'input[placeholder*="验证码"]',
+            'input[aria-label*="驗證碼"]',
+            'input[placeholder*="驗證碼"]',
+            'input[maxlength="6"]',
             'input[inputmode="numeric"]',
             'input[type="tel"]',
             GENERIC_VERIFICATION_CODE_INPUT_SELECTOR,
@@ -7934,11 +8302,34 @@ def _verification_code_input(page):
     )
 
 
+def _has_large_verification_illustration(page) -> bool:
+    """Detect stable verification artwork without depending on page language."""
+    try:
+        images = page.locator('img, [role="img"]')
+        count = min(int(images.count()), 12)
+    except Exception:
+        return False
+    for index in range(count):
+        try:
+            image = images.nth(index)
+            if not image.is_visible():
+                continue
+            box = image.bounding_box()
+            if not isinstance(box, dict):
+                continue
+            if float(box.get("width") or 0) >= 240 and float(box.get("height") or 0) >= 120:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _classify_verification_challenge(page) -> dict[str, Any]:
     url = str(page.url or "")
     text = _page_body_text_lower(page)
     code_input = _verification_code_input(page)
     has_code_input = code_input is not None
+    has_visual_illustration = _has_large_verification_illustration(page)
 
     authenticator_markers = (
         "go to your authentication app",
@@ -7946,6 +8337,19 @@ def _classify_verification_challenge(page) -> dict[str, Any]:
         "authenticator app",
         "authenticator code",
         "code generator",
+        "認証アプリ",
+        "認証コード",
+        "6桁のコード",
+        "二段階認証",
+        "二要素認証",
+        "驗證應用程式",
+        "驗證器應用程式",
+        "前往你的驗證應用程式",
+        "身份验证应用",
+        "身份验证器",
+        "验证应用",
+        "验证器应用",
+        "前往你的身份验证",
         "验证器应用",
         "身份验证器",
         "认证应用",
@@ -7955,6 +8359,11 @@ def _classify_verification_challenge(page) -> dict[str, Any]:
         "via sms",
         "sent a code to your phone",
         "code to your phone",
+        "短信",
+        "简讯",
+        "簡訊",
+        "手机",
+        "手機",
         "手机短信",
         "短信验证码",
     )
@@ -7963,6 +8372,10 @@ def _classify_verification_challenge(page) -> dict[str, Any]:
         "code to your email",
         "check your email",
         "email address",
+        "邮箱",
+        "電子郵件",
+        "电子邮件",
+        "信箱",
         "邮箱验证码",
         "电子邮件验证码",
         "检查你的邮箱",
@@ -7990,10 +8403,14 @@ def _classify_verification_challenge(page) -> dict[str, Any]:
     generic_markers = tuple(_verification_text_markers()) + (
         "enter your login code",
         "enter a 6-digit code",
+        "コードを入力",
+        "ログインコード",
+        "セキュリティコード",
         "请输入验证码",
     )
 
     challenge_type = "none"
+    evidence = ""
     if any(marker in text for marker in identity_markers):
         challenge_type = "identity_challenge"
     elif any(marker in text for marker in method_markers) and not has_code_input:
@@ -8002,6 +8419,9 @@ def _classify_verification_challenge(page) -> dict[str, Any]:
         challenge_type = "sms_code"
     elif has_code_input and any(marker in text for marker in email_markers):
         challenge_type = "email_code"
+    elif has_code_input and has_visual_illustration and _is_verification_url(url):
+        challenge_type = "authenticator_totp"
+        evidence = "visual_structure"
     elif has_code_input and any(marker in text for marker in authenticator_markers):
         challenge_type = "authenticator_totp"
     elif has_code_input and (
@@ -8016,6 +8436,7 @@ def _classify_verification_challenge(page) -> dict[str, Any]:
         "url": _safe_navigation_url(url),
         "has_code_input": has_code_input,
         "code_input": code_input,
+        "evidence": evidence or "text_or_url",
     }
 
 
@@ -8084,7 +8505,10 @@ def _mark_totp_verification_pending(context_control: dict[str, Any] | None) -> N
 
 
 def _complete_pending_totp_verification(context_control: dict[str, Any] | None) -> None:
-    if isinstance(context_control, dict) and context_control.get("_totp_verification_pending"):
+    if not isinstance(context_control, dict):
+        return
+    context_control.pop("login_submission_started", None)
+    if context_control.get("_totp_verification_pending"):
         _report_totp_outcome(context_control, "verified")
 
 
@@ -8588,7 +9012,11 @@ def _auto_submit_login_form(
             _sleep_between(1.5, 3.0)
 
     continue_clicked = False
-    if platform == "threads":
+    current_hostname = str(urlparse(str(page.url or "")).hostname or "").lower()
+    on_threads_host = current_hostname in {"threads.net", "threads.com"} or current_hostname.endswith(
+        (".threads.net", ".threads.com")
+    )
+    if platform == "threads" and on_threads_host:
         username_entry_clicked = False
         for username_entry_attempt in range(1, 4):
             if _manual_takeover_requested(context_control):
@@ -8600,7 +9028,17 @@ def _auto_submit_login_form(
             if not _click_text_button(
                 page,
                 logger,
-                ["Log in with username instead", "Log in with username", "Use username instead"],
+                [
+                    "Log in with username instead",
+                    "Log in with username",
+                    "Use username instead",
+                    "代わりにユーザーネームでログイン",
+                    "ユーザーネームでログイン",
+                    "改用用户名登录",
+                    "使用用户名登录",
+                    "改用用戶名稱登入",
+                    "使用用戶名稱登入",
+                ],
                 "threads_login_username_instead",
                 abort_if=takeover_requested,
             ):
@@ -8615,17 +9053,39 @@ def _auto_submit_login_form(
         if not continue_clicked:
             if _manual_takeover_requested(context_control):
                 return False
+            if payload.get("_threads_instagram_handoff_attempted"):
+                logger.log(
+                    "warn",
+                    "auto_login_handoff_bounded",
+                    "Threads to Instagram login handoff was already attempted; keeping recovery on Threads.",
+                    {"url": _safe_navigation_url(page.url)},
+                )
+                return False
             logger.log("info", "auto_login_continue", "正在查找 Threads 的 Instagram 登录按钮。", {"url": _safe_navigation_url(page.url)})
-            continue_clicked = _click_text_button(
+            continue_clicked = _click_threads_instagram_login_entry(
                 page,
                 logger,
-                ["Continue with Instagram", "Log in with Instagram", "缁х画浣跨敤 Instagram", "浣跨敤 Instagram 缁х画"],
-                "threads_continue_instagram",
                 abort_if=takeover_requested,
             )
             logger.log("info" if continue_clicked else "warn", "auto_login_continue", "Threads 的 Instagram 登录按钮已处理。", {"clicked": continue_clicked, "url": _safe_navigation_url(page.url)})
             if continue_clicked:
                 _sleep_between(2.0, 4.0)
+            else:
+                _goto(page, INSTAGRAM_LOGIN, logger, "threads_login_instagram_fallback")
+            instagram_hostname = str(urlparse(str(page.url or "")).hostname or "").lower()
+            if instagram_hostname == "instagram.com" or instagram_hostname.endswith(".instagram.com"):
+                has_login_form = bool(
+                    _visible_first(page, ['input[name="username"]', 'input[autocomplete="username"]'], 700)
+                    and _visible_first(page, ['input[type="password"]', 'input[autocomplete="current-password"]'], 700)
+                )
+                if not has_login_form:
+                    # Only reset a remembered Instagram session after the
+                    # Instagram page itself is reachable. A transient proxy
+                    # failure must not destroy the current Threads session.
+                    with contextlib.suppress(Exception):
+                        page.context.clear_cookies(domain=re.compile(r"(^|\.)instagram\.com$"))
+                    _goto(page, INSTAGRAM_LOGIN, logger, "threads_login_target_account")
+            payload["_threads_instagram_handoff_attempted"] = True
 
     logger.log("info", "auto_login_find_inputs", "正在查找用户名和密码输入框。", {"url": _safe_navigation_url(page.url)})
     username_selectors = [
@@ -8700,7 +9160,7 @@ def _auto_submit_login_form(
     clicked = _click_text_button(
         page,
         logger,
-        ["Log in", "Log In", "Login", "Continue", "\u767b\u5f55", "\u767b\u5165", "\u7ee7\u7eed"],
+        ["Log in", "Log In", "Login", "Continue", "ログイン", "\u767b\u5f55", "\u767b\u5165", "\u7ee7\u7eed"],
         "auto_login_submit",
         abort_if=takeover_requested,
     )
@@ -8708,6 +9168,8 @@ def _auto_submit_login_form(
         if takeover_requested():
             return False
         page.keyboard.press("Enter")
+    if isinstance(context_control, dict):
+        context_control["login_submission_started"] = True
     submit_shot = _screenshot(page, screenshot_dir, task, "auto_login_submitted", logger)
     logger.log("info", "auto_login_submit", "登录表单已提交，正在等待账号就绪或验证提示。", {"clicked_submit_button": clicked, "url": _safe_navigation_url(page.url)}, submit_shot)
     _sleep_between(4.0, 7.0)
@@ -8737,12 +9199,39 @@ def _threads_inline_compose_box(page):
     ], timeout_ms=1800)
 
 
+def _threads_inline_compose_opener(page):
+    return _visible_first(page, [
+        '[contenteditable="true"][aria-placeholder*="What" i]',
+        '[contenteditable="true"][aria-label*="What" i]',
+        '[role="textbox"][aria-placeholder*="What" i]',
+        '[role="textbox"][aria-label*="What" i]',
+        '[contenteditable="true"][aria-placeholder*="新鮮事" i]',
+        '[contenteditable="true"][aria-label*="新鮮事" i]',
+        '[role="textbox"][aria-placeholder*="新鮮事" i]',
+        '[role="textbox"][aria-label*="新鮮事" i]',
+        '[contenteditable="true"][aria-label*="撰寫" i]',
+        '[role="textbox"][aria-label*="撰寫" i]',
+        '[contenteditable="true"][aria-label*="新貼文" i]',
+        '[role="textbox"][aria-label*="新貼文" i]',
+        '[contenteditable="true"][aria-label*="新帖子" i]',
+        '[role="textbox"][aria-label*="新帖子" i]',
+    ], timeout_ms=900)
+
+
 def _threads_post_button(page):
     selectors = [
         '[role="dialog"] button:has-text("Post")',
         '[role="dialog"] [role="button"]:has-text("Post")',
+        '[role="dialog"] button:has-text("发布")',
+        '[role="dialog"] [role="button"]:has-text("发布")',
+        '[role="dialog"] button:has-text("發佈")',
+        '[role="dialog"] [role="button"]:has-text("發佈")',
         'button:has-text("Post")',
         '[role="button"]:has-text("Post")',
+        'button:has-text("发布")',
+        '[role="button"]:has-text("发布")',
+        'button:has-text("發佈")',
+        '[role="button"]:has-text("發佈")',
     ]
     return _visible_first(page, selectors, timeout_ms=1800)
 
@@ -8759,7 +9248,28 @@ def _threads_dialog_post_button(page):
     return _visible_last(page, [
         '[role="dialog"] button:has-text("Post")',
         '[role="dialog"] [role="button"]:has-text("Post")',
+        '[role="dialog"] button:has-text("发布")',
+        '[role="dialog"] [role="button"]:has-text("发布")',
+        '[role="dialog"] button:has-text("發佈")',
+        '[role="dialog"] [role="button"]:has-text("發佈")',
     ], timeout_ms=800)
+
+
+def _click_threads_compose_opener(page, locator, logger: AutomationLogger) -> bool:
+    if _human_click(page, locator, logger, "threads_publish_open"):
+        return True
+    with contextlib.suppress(Exception):
+        clicked = locator.evaluate(
+            """node => {
+                const target = node.closest('a, button, [role="button"]') || node;
+                target.click();
+                return true;
+            }"""
+        )
+        if clicked:
+            logger.log("debug", "threads_publish_open", "Threads compose opener clicked with DOM fallback.", {})
+            return True
+    return False
 
 
 def _threads_media_input(page):
@@ -8955,9 +9465,16 @@ def _ensure_threads_compose_ready(page, logger: AutomationLogger):
     if compose is not None:
         return compose
     openers = [
+        'a[href="/new"]',
+        'a[href*="/new"]',
         '[aria-label*="New thread" i]',
-        '[aria-label*="Create" i]',
-        '[aria-label*="Compose" i]',
+        '[role="button"][aria-label*="发帖" i]',
+        '[role="button"][aria-label*="發文" i]',
+        '[role="button"][aria-label*="新贴文" i]',
+        '[role="button"][aria-label*="新貼文" i]',
+        '[role="button"][aria-label*="新串文" i]',
+        '[role="button"][aria-label*="撰写新" i]',
+        '[role="button"][aria-label*="撰寫新" i]',
         'button:has-text("Start a thread")',
         '[role="button"]:has-text("Start a thread")',
         'text="Start a thread"',
@@ -8967,13 +9484,20 @@ def _ensure_threads_compose_ready(page, logger: AutomationLogger):
         try:
             loc = page.locator(selector).first
             if loc.count() and loc.is_visible(timeout=2000):
-                _human_click(page, loc, logger, "threads_publish_open")
+                _click_threads_compose_opener(page, loc, logger)
                 _sleep_between(0.8, 1.6)
                 compose = _threads_dialog_compose_box(page)
                 if compose is not None:
                     return compose
         except Exception:
             continue
+    inline_compose = _threads_inline_compose_opener(page)
+    if inline_compose is not None:
+        if _click_threads_compose_opener(page, inline_compose, logger):
+            _sleep_between(0.8, 1.6)
+            compose = _threads_dialog_compose_box(page)
+            if compose is not None:
+                return compose
     inline_compose = _threads_inline_compose_box(page)
     if inline_compose is not None:
         _human_click(page, inline_compose, logger, "threads_publish_open")
@@ -9478,7 +10002,11 @@ def _threads_profile_is_stably_empty(page, profile_url: str) -> bool:
         "還沒有任何串文",
         "尚未發佈任何內容",
     )
-    return any(marker in body_text for marker in empty_markers)
+    if any(marker in body_text for marker in empty_markers):
+        return True
+    profile_match = re.match(r"^/@([^/]+)$", str(urlparse(expected).path or ""), flags=re.IGNORECASE)
+    expected_handle = str(profile_match.group(1) if profile_match else "").strip().lower()
+    return bool(expected_handle and expected_handle in body_text)
 
 
 def _wait_for_manual_threads_publish_completion(
@@ -9695,7 +10223,7 @@ def _run_threads_publish_post(
     if missing:
         raise FileNotFoundError(f"媒体文件不存在：{missing[0]}")
     _dismiss_threads_compose_dialogs(page, logger)
-    _goto(page, THREADS_HOME, logger, "threads_publish_open")
+    _ensure_threads_home_for_publish(page, logger)
     _dismiss_threads_compose_dialogs(page, logger)
     profile_url = _resolve_threads_profile_url(page, account)
     with _temporary_background_page(page, logger, "threads_publish_baseline_background") as verification_page:
@@ -9704,7 +10232,7 @@ def _run_threads_publish_post(
     if previous_permalinks is None:
         raise RuntimeError("发布前无法读取 Threads 账号主页基线，已停止任务且未点击发布按钮。")
     if baseline_used_primary_page:
-        _goto(page, THREADS_HOME, logger, "threads_publish_open")
+        _ensure_threads_home_for_publish(page, logger)
     _dismiss_threads_compose_dialogs(page, logger)
     manual_result = _pause_for_requested_threads_publish_takeover(
         page, task, payload, screenshot_dir, logger, account, profile_url,

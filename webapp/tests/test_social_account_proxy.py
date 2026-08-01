@@ -443,6 +443,31 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         self._mark_proxy_verified(ready["proxy_id"])
         self.assertEqual(self._task(ready["id"])["account_id"], ready["id"])
 
+    def test_wake_starts_missing_social_worker(self):
+        old_enabled = os.environ.get("SOCIAL_AUTOMATION_WORKER_ENABLED")
+        os.environ["SOCIAL_AUTOMATION_WORKER_ENABLED"] = "1"
+        fake_worker = mock.Mock()
+        fake_worker.is_alive.return_value = True
+        try:
+            social_api._WORKER_THREAD = None
+            social_api._WORKER_STATE["enabled"] = True
+            social_api._WORKER_STOP.clear()
+            social_api._WORKER_WAKE.clear()
+            with mock.patch.object(social_api.threading, "Thread", return_value=fake_worker):
+                social_api.wake_social_automation_worker()
+
+            self.assertIs(social_api._WORKER_THREAD, fake_worker)
+            fake_worker.start.assert_called_once()
+            self.assertTrue(social_api._WORKER_WAKE.is_set())
+        finally:
+            social_api._WORKER_THREAD = None
+            social_api._WORKER_STATE["enabled"] = False
+            social_api._WORKER_WAKE.clear()
+            if old_enabled is None:
+                os.environ.pop("SOCIAL_AUTOMATION_WORKER_ENABLED", None)
+            else:
+                os.environ["SOCIAL_AUTOMATION_WORKER_ENABLED"] = old_enabled
+
     def test_task_creation_and_worker_reject_expired_proxy(self):
         account = self._account(
             "expired",

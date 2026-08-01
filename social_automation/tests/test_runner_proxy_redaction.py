@@ -47,6 +47,19 @@ class RunnerProxyRedactionTests(unittest.TestCase):
             },
         )
 
+    def test_marketplace_authenticated_socks5_uses_same_node_http_entry(self):
+        proxy = {
+            **self.proxy,
+            "source": "marketplace",
+            "market_item_id": "proxy-market-1",
+        }
+
+        config = runner._proxy_config(proxy)
+
+        self.assertEqual(config["server"], "http://proxy.example.test:1080")
+        self.assertEqual(config["username"], self.proxy["username"])
+        self.assertEqual(config["password"], self.proxy["password"])
+
     def test_masked_proxy_hides_username_and_password(self):
         masked = runner._masked_proxy(runner._proxy_config(self.proxy))
 

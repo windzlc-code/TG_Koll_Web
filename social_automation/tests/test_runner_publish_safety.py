@@ -1,4 +1,4 @@
-import unittest
+﻿import unittest
 import threading
 from pathlib import Path
 from unittest import mock
@@ -63,6 +63,24 @@ class _Page:
         return None
 
 
+class _RedirectedPage(_Page):
+    def __init__(self):
+        super().__init__("about:blank")
+        self.goto_calls = []
+        self.waited_states = []
+
+    def goto(self, url, **_kwargs):
+        self.goto_calls.append(url)
+        self.url = "https://www.threads.com/@alice"
+        raise RuntimeError(
+            'Page.goto: Navigation to "https://www.threads.net/@alice" is '
+            'interrupted by another navigation to "https://www.threads.com/@alice"'
+        )
+
+    def wait_for_load_state(self, state, **_kwargs):
+        self.waited_states.append(state)
+
+
 class _PageWithBackground(_Page):
     def __init__(self, url="https://www.threads.net/"):
         super().__init__(url)
@@ -74,6 +92,16 @@ class _PageWithBackground(_Page):
 
 
 class _Locator:
+    @property
+    def first(self):
+        return self
+
+    def count(self):
+        return 1
+
+    def is_visible(self, **_kwargs):
+        return True
+
     def wait_for(self, **_kwargs):
         return None
 
@@ -455,7 +483,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             mock.patch.object(runner, "_import_initial_cookies"),
             mock.patch.object(runner, "_first_page", return_value=page),
             mock.patch.object(runner, "_sync_live_browser_viewport"),
-            mock.patch.object(runner, "_check_platform_login_without_disrupting", return_value={"status": "ready"}) as login,
+            mock.patch.object(runner, "_check_platform_login", return_value={"status": "ready"}) as login,
             mock.patch.object(
                 runner,
                 "_run_publish_post",
@@ -525,7 +553,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             mock.patch.object(runner, "_import_initial_cookies"),
             mock.patch.object(runner, "_first_page", return_value=page),
             mock.patch.object(runner, "_sync_live_browser_viewport"),
-            mock.patch.object(runner, "_check_platform_login_without_disrupting", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_check_platform_login", return_value={"status": "ready"}),
             mock.patch.object(runner, "_run_publish_post", side_effect=publish),
         ):
             runner.run_social_publish_batch(
@@ -561,7 +589,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             mock.patch.object(runner, "_import_initial_cookies"),
             mock.patch.object(runner, "_first_page", return_value=page),
             mock.patch.object(runner, "_sync_live_browser_viewport"),
-            mock.patch.object(runner, "_check_platform_login_without_disrupting", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_check_platform_login", return_value={"status": "ready"}),
             mock.patch.object(runner, "_run_publish_post", return_value={"ok": True}) as publish,
         ):
             with self.assertRaisesRegex(RuntimeError, "could not be persisted"):
@@ -622,6 +650,30 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertTrue(takeover.called)
         resolved.assert_called_once_with()
         self.assertIsNone(manager.__exit__.call_args.args[0])
+
+    def test_publish_login_check_uses_shared_primary_page_flow(self):
+        page = mock.Mock()
+        with (
+            mock.patch.object(runner, "_check_platform_login", return_value={"status": "ready"}) as check_login,
+            mock.patch.object(runner, "_report_account_login_status"),
+            mock.patch.object(runner, "_run_publish_post", return_value={"ok": True}) as publish,
+        ):
+            result = runner._run_publish_task_in_context(
+                page,
+                {"id": "publish-shared-login", "task_type": "publish_post", "payload": {}},
+                {"platform": "threads"},
+                {},
+                Path("."),
+                _Logger(),
+                "threads",
+                None,
+                {},
+                verify_login=True,
+            )
+
+        self.assertEqual(result, {"ok": True})
+        check_login.assert_called_once_with(page, "threads", mock.ANY)
+        publish.assert_called_once()
 
     def test_warmup_cookie_expiry_auto_logs_in_then_continues_original_task(self):
         page = mock.Mock()
@@ -811,15 +863,16 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(status["status"], "invalid_credentials")
 
-    def test_publish_login_probe_uses_background_page_without_navigating_main_page(self):
+    def test_temporary_background_page_keeps_primary_page_available(self):
         page = _PageWithBackground()
-        with mock.patch.object(runner, "_check_platform_login", return_value={"status": "ready"}) as check:
-            status = runner._check_platform_login_without_disrupting(page, "threads", _Logger())
+        logger = _Logger()
 
-        self.assertEqual(status["status"], "ready")
+        with runner._temporary_background_page(page, logger, "baseline_probe") as probe:
+            self.assertIsNot(probe, page)
+            self.assertEqual(len(page.context.pages), 1)
+
         self.assertEqual(len(page.context.pages), 1)
         probe = page.context.pages[0]
-        check.assert_called_once_with(probe, "threads", mock.ANY)
         self.assertTrue(probe.closed)
         self.assertGreaterEqual(page.brought_to_front, 1)
 
@@ -3215,6 +3268,91 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         page.body.text = "No threads yet"
         self.assertTrue(runner._threads_profile_is_stably_empty(page, "https://www.threads.net/@alice"))
+
+    def test_threads_profile_empty_baseline_accepts_loaded_handle_without_empty_copy(self):
+        page = _ThreadsShellPage(
+            [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}],
+            "Alice @alice Followers Following",
+        )
+        page.url = "https://www.threads.com/@alice"
+
+        self.assertTrue(runner._threads_profile_is_stably_empty(page, "https://www.threads.net/@alice"))
+
+    def test_threads_compose_ready_prefers_direct_new_opener_once(self):
+        opener = _Locator()
+        compose = _Locator()
+        page = mock.Mock()
+        page.locator.return_value = opener
+        with (
+            mock.patch.object(runner, "_threads_dialog_compose_box", side_effect=[None, compose]),
+            mock.patch.object(runner, "_threads_inline_compose_opener") as inline_lookup,
+            mock.patch.object(runner, "_click_threads_compose_opener", return_value=True) as click_opener,
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            result = runner._ensure_threads_compose_ready(page, _Logger())
+
+        self.assertIs(result, compose)
+        click_opener.assert_called_once()
+        inline_lookup.assert_not_called()
+
+    def test_threads_publish_skips_duplicate_home_navigation_when_already_on_threads_home(self):
+        permalink = "https://www.threads.net/@alice/post/NEW"
+        page = _PageWithBackground("https://www.threads.net/")
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_ensure_threads_compose_ready", return_value=_Locator()),
+            mock.patch.object(runner, "_human_click"),
+            mock.patch.object(runner, "_clear_and_type"),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_threads_active_dialog_text", return_value="hello threads"),
+            mock.patch.object(runner, "_click_threads_active_dialog_post", return_value=True),
+            mock.patch.object(
+                runner,
+                "_wait_for_threads_publish_success",
+                return_value={"confirmed": True, "submitted": True, "url": "https://www.threads.net/"},
+            ),
+            mock.patch.object(
+                runner,
+                "_wait_for_threads_own_post",
+                return_value={"confirmed": True, "url": permalink},
+            ),
+            mock.patch.object(runner, "_capture_threads_profile_baseline", return_value=set()),
+            mock.patch.object(runner, "_resolve_threads_profile_url", return_value="https://www.threads.net/@alice"),
+            mock.patch.object(runner, "_capture_threads_publish_evidence", return_value="done.png"),
+        ):
+            result = runner._run_threads_publish_post(
+                page,
+                {"id": "publish-task"},
+                {"caption": "hello threads"},
+                Path("."),
+                _Logger(),
+                {"username": "alice"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(
+            any(
+                call.args[1] == runner.THREADS_HOME and call.args[3] == "threads_publish_open"
+                for call in goto.call_args_list
+            )
+        )
+
+    def test_threads_profile_redirect_interrupt_continues_from_loaded_page(self):
+        page = _RedirectedPage()
+
+        runner._goto(
+            page,
+            "https://www.threads.net/@alice",
+            _Logger(),
+            "threads_publish_baseline",
+            timeout_ms=5000,
+            networkidle_ms=1500,
+        )
+
+        self.assertEqual(page.goto_calls, ["https://www.threads.net/@alice"])
+        self.assertEqual(page.url, "https://www.threads.com/@alice")
+        self.assertEqual(page.waited_states, ["networkidle"])
 
     def test_threads_profile_unconfirmed_never_returns_ok(self):
         page = _Page("https://www.threads.net/@alice")

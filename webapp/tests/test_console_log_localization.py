@@ -10,7 +10,6 @@ class ConsoleLogLocalizationTests(unittest.TestCase):
         for stage, label in {
             "force_stop": "强制停止",
             "cancel": "任务取消",
-            "publish_login_probe": "发布前登录检测",
             "publish_batch_item_started": "批次发布进度",
         }.items():
             self.assertIn(f'{stage}: "{label}"', CONSOLE_JS)
