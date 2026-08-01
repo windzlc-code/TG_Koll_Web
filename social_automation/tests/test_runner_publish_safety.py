@@ -3611,10 +3611,10 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(result["url"], permalink)
         self.assertEqual(result["published"]["url"], permalink)
         self.assertTrue(any(call.args[1] == resolved_profile and call.args[3] == "threads_publish_baseline" for call in goto.call_args_list))
-        self.assertEqual(len(page.context.pages), 3)
-        self.assertIs(confirm_profile.call_args.args[0], page.context.pages[1])
+        self.assertEqual(len(page.context.pages), 1)
+        self.assertIs(confirm_profile.call_args.args[0], page)
         self.assertEqual(confirm_profile.call_args.kwargs["profile_url"], resolved_profile)
-        screenshot.assert_called_once_with(page.context.pages[2], permalink, "hello threads", Path("."), {"id": "publish-task"}, mock.ANY)
+        screenshot.assert_called_once_with(page, permalink, "hello threads", Path("."), {"id": "publish-task"}, mock.ANY)
         self.assertTrue(all(background.closed for background in page.context.pages))
 
     def test_instagram_home_is_not_publish_confirmation(self):

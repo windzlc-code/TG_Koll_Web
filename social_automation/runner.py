@@ -10222,20 +10222,19 @@ def _run_threads_publish_post(
             for value in raw_baseline
             if (permalink := _normalize_threads_post_permalink(value))
         }
-        with _temporary_background_page(page, logger, "threads_publish_confirmation_background") as verification_page:
-            profile_confirmation = _wait_for_threads_own_post(
-                verification_page,
-                caption,
-                logger,
-                account,
-                payload,
-                profile_url=profile_url,
-                previous_permalinks=previous_permalinks,
-                cancel_event=cancel_event,
-                context_control=context_control,
-            )
-            permalink = _normalize_threads_post_permalink(profile_confirmation.get("url")) if profile_confirmation.get("confirmed") else ""
-            shot = _capture_threads_publish_evidence(verification_page, permalink, caption, screenshot_dir, task, logger) if permalink else ""
+        profile_confirmation = _wait_for_threads_own_post(
+            page,
+            caption,
+            logger,
+            account,
+            payload,
+            profile_url=profile_url,
+            previous_permalinks=previous_permalinks,
+            cancel_event=cancel_event,
+            context_control=context_control,
+        )
+        permalink = _normalize_threads_post_permalink(profile_confirmation.get("url")) if profile_confirmation.get("confirmed") else ""
+        shot = _capture_threads_publish_evidence(page, permalink, caption, screenshot_dir, task, logger) if permalink else ""
         if not permalink:
             reason = str(profile_confirmation.get("reason") or "Threads publish is still awaiting permalink confirmation.")
             shot = ""
@@ -10420,28 +10419,26 @@ def _run_threads_publish_post(
     permalink = _normalize_threads_post_permalink(success.get("url")) if success.get("confirmed") else ""
     profile_confirmation: dict[str, Any] = {}
     if not permalink:
-        with _temporary_background_page(page, logger, "threads_publish_confirmation_background") as verification_page:
-            profile_confirmation = _wait_for_threads_own_post(
-                verification_page,
-                caption,
-                logger,
-                account,
-                payload,
-                profile_url=profile_url,
-                previous_permalinks=previous_permalinks,
-                cancel_event=cancel_event,
-                context_control=context_control,
-            )
-            if profile_confirmation.get("confirmed"):
-                permalink = _normalize_threads_post_permalink(profile_confirmation.get("url"))
+        profile_confirmation = _wait_for_threads_own_post(
+            page,
+            caption,
+            logger,
+            account,
+            payload,
+            profile_url=profile_url,
+            previous_permalinks=previous_permalinks,
+            cancel_event=cancel_event,
+            context_control=context_control,
+        )
+        if profile_confirmation.get("confirmed"):
+            permalink = _normalize_threads_post_permalink(profile_confirmation.get("url"))
     if not permalink:
         reason = str(profile_confirmation.get("reason") or success.get("reason") or "Threads 已提交，但尚未确认发布结果。")
         message = f"{reason} 自动确认窗口已结束；为避免重复发布，任务不会自动重发。"
         shot = _screenshot(page, screenshot_dir, task, "publish_submitted_unconfirmed", logger)
         logger.log("warn", "threads_publish_confirmation_pending", message, {"submit": success, "profile": profile_confirmation}, shot)
         raise PublishConfirmationPendingError(message, shot, confirmation_state)
-    with _temporary_background_page(page, logger, "threads_publish_evidence_background") as verification_page:
-        shot = _capture_threads_publish_evidence(verification_page, permalink, caption, screenshot_dir, task, logger)
+    shot = _capture_threads_publish_evidence(page, permalink, caption, screenshot_dir, task, logger)
     published = {
         **success,
         **profile_confirmation,

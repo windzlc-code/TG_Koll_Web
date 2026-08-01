@@ -6115,6 +6115,8 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
             _force_stop_running_task(superseded_task_id)
     if not bool(batch_context.get("suppress_wake")):
         wake_social_automation_worker()
+        with contextlib.suppress(Exception):
+            run_social_automation_once()
     return _task_public(
         row,
         billing_reservation_status=row_billing_statuses.get(str(row["billing_reservation_id"] or ""), ""),
