@@ -1727,12 +1727,47 @@
           <div class="admin-config-card admin-runtime-panel admin-runtime-card-compact">
             <div class="admin-config-card-title">磁盘自动清理</div>
             <div class="small">定时清理过期的生成产物（图片、视频、音频），防止磁盘被历史任务撑满。</div>
-            <label>自动清理</label>
-            <label class="switch"><input id="rtCleanupEnabled" type="checkbox"> 启用</label>
-            <label>每天清理时间</label>
-            <input id="rtCleanupTime" type="time" value="03:30">
-            <label>保留最近几天的文件</label>
-            <input id="rtCleanupRetentionDays" type="number" min="1" value="7">
+            <div class="admin-cleanup-section">
+              <div class="admin-cleanup-section-head">
+                <div>
+                  <strong>生成产物</strong>
+                  <span>按保留天数清理过期媒体文件</span>
+                </div>
+                <label class="switch"><input id="rtCleanupEnabled" type="checkbox"> 启用</label>
+              </div>
+              <div class="admin-cleanup-fields">
+                <label>每天清理时间
+                  <input id="rtCleanupTime" type="time" value="03:30">
+                </label>
+                <label>保留最近几天
+                  <input id="rtCleanupRetentionDays" type="number" min="1" value="7">
+                </label>
+              </div>
+            </div>
+
+            <div class="admin-cleanup-section admin-browser-cache-cleanup">
+              <div class="admin-cleanup-section-head">
+                <div>
+                  <strong>浏览器可重建缓存</strong>
+                  <span>仅在浏览器任务全部空闲时清理 cache2，不触碰 Cookie、站点存储与登录状态</span>
+                </div>
+                <label class="switch"><input id="rtBrowserCacheCleanupEnabled" type="checkbox" checked> 启用</label>
+              </div>
+              <label>自动清理周期（天）
+                <input id="rtBrowserCacheCleanupIntervalDays" type="number" min="1" max="365" value="15" inputmode="numeric">
+              </label>
+              <dl class="admin-browser-cache-status" aria-label="浏览器缓存清理状态">
+                <div><dt>运行状态</dt><dd id="browserCacheCleanupStatus">等待状态同步</dd></div>
+                <div><dt>最近清理</dt><dd id="browserCacheCleanupLastRun">-</dd></div>
+                <div><dt>下次清理</dt><dd id="browserCacheCleanupNextRun">-</dd></div>
+                <div><dt>最近回收</dt><dd id="browserCacheCleanupReclaimed">-</dd></div>
+              </dl>
+              <div class="admin-cleanup-actions">
+                <button id="btnRunBrowserCacheCleanup" class="admin-browser-cache-run" type="button">立即安全清理</button>
+                <span>检测到任何浏览器任务时本轮整体延后，不中断当前任务。</span>
+              </div>
+              <div id="browserCacheCleanupMsg" class="msg" role="status" aria-live="polite"></div>
+            </div>
           </div>
         </div>
         <div class="row" style="margin-top:12px">

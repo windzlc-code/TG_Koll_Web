@@ -105,6 +105,7 @@ from .social_automation_api import (
     SocialTaskPayload,
     _live_browser_sessions,
     acquire_external_browser_lease,
+    acquire_exclusive_browser_maintenance_lease,
     cancel_all_social_tasks,
     clear_admin_billing_waived_payload,
     clear_trusted_batch_task,
@@ -119,6 +120,7 @@ from .social_automation_api import (
     require_daily_publish_capacity,
     register_social_automation_routes,
     release_external_browser_lease,
+    release_exclusive_browser_maintenance_lease,
     set_daily_publish_limit,
     stop_social_automation_worker,
     wake_social_automation_worker,
@@ -296,6 +298,15 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "cleanup_enabled": True,
     "cleanup_time": "03:30",
     "cleanup_retention_days": 7,
+    "browser_cache_cleanup_enabled": True,
+    "browser_cache_cleanup_interval_days": 15,
+    "browser_cache_cleanup_last_attempt_at": 0,
+    "browser_cache_cleanup_last_run_at": 0,
+    "browser_cache_cleanup_next_run_at": 0,
+    "browser_cache_cleanup_last_reclaimed_bytes": 0,
+    "browser_cache_cleanup_last_deleted_count": 0,
+    "browser_cache_cleanup_last_status": "never",
+    "browser_cache_cleanup_last_message": "",
     "auth_email_registration_enabled": False,
     "auth_google_login_enabled": False,
     "auth_remember_login_enabled": True,
@@ -1427,6 +1438,320 @@ def _cleanup_worker() -> None:
             time.sleep(10.0)
 
 
+def _browser_runtime_processes() -> list[str]:
+    """Return browser process descriptions without relying on optional packages."""
+    markers = ("camoufox", "firefox", "xvnc")
+    found: list[str] = []
+    proc_root = Path("/proc")
+    if proc_root.is_dir():
+        try:
+            process_dirs = [item for item in proc_root.iterdir() if item.name.isdigit()]
+        except OSError:
+            return ["process inspection unavailable"]
+        for process_dir in process_dirs:
+            try:
+                command = (process_dir / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "ignore").strip()
+                comm = (process_dir / "comm").read_text(encoding="utf-8", errors="ignore").strip()
+            except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+                continue
+            description = " ".join(part for part in (comm, command) if part).strip()
+            lowered = description.lower()
+            if any(marker in lowered for marker in markers):
+                found.append(f"{process_dir.name}:{description[:240]}")
+        return found
+    try:
+        completed = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        return ["process inspection unavailable"]
+    if completed.returncode != 0:
+        return ["process inspection unavailable"]
+    for line in str(completed.stdout or "").splitlines():
+        lowered = line.lower()
+        if any(marker in lowered for marker in markers):
+            found.append(line[:240])
+    return found
+
+
+def _browser_cache_cleanup_busy_reason() -> str:
+    try:
+        with db() as conn:
+            task_count = int(
+                conn.execute("SELECT COUNT(*) FROM tasks WHERE status IN ('queued', 'running')").fetchone()[0]
+            )
+            social_task_count = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM social_automation_tasks
+                    WHERE status IN ('preparing', 'queued', 'running', 'need_manual')
+                    """
+                ).fetchone()[0]
+            )
+    except Exception as exc:
+        return f"task state unavailable: {exc}"
+    if task_count or social_task_count:
+        return f"active tasks: general={task_count}, browser={social_task_count}"
+    try:
+        live_sessions = _live_browser_sessions(user_id=None, raise_on_error=True)
+    except Exception as exc:
+        return f"live browser state unavailable: {exc}"
+    if live_sessions:
+        return f"active live browser sessions: {len(live_sessions)}"
+    processes = _browser_runtime_processes()
+    if processes:
+        return f"active browser processes: {len(processes)}"
+    return ""
+
+
+def _browser_cache_dir_size(path: Path) -> int:
+    total = 0
+    for root, dirs, files in os.walk(path, topdown=True, followlinks=False):
+        dirs[:] = [name for name in dirs if not (Path(root) / name).is_symlink()]
+        for name in files:
+            item = Path(root) / name
+            try:
+                if not item.is_symlink():
+                    total += int(item.stat().st_size)
+            except (FileNotFoundError, PermissionError, OSError):
+                continue
+    return total
+
+
+def _browser_cache_profile_dirs() -> list[Path]:
+    profile_root = (DATA_DIR / "social_automation" / "profiles").resolve()
+
+    def allowed_profile(value: Path) -> Path | None:
+        try:
+            profile = value.expanduser().resolve()
+        except (OSError, RuntimeError):
+            return None
+        if profile == profile_root or profile_root not in profile.parents:
+            return None
+        return profile
+
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT profile_dir FROM social_accounts WHERE trim(profile_dir) <> ''"
+        ).fetchall()
+    profiles: list[Path] = []
+    seen: set[str] = set()
+    for row in rows:
+        profile = allowed_profile(Path(str(row["profile_dir"] or "")))
+        if profile is None:
+            continue
+        key = os.path.normcase(str(profile))
+        if key in seen:
+            continue
+        seen.add(key)
+        profiles.append(profile)
+
+    # Default profiles are stored as <root>/<platform>/<account>. Include
+    # unreferenced account directories left after interrupted account cleanup,
+    # while keeping the scan fixed-depth so nested directories named cache2 are
+    # never mistaken for a profile.
+    if profile_root.is_dir() and not profile_root.is_symlink():
+        try:
+            platform_dirs = list(profile_root.iterdir())
+        except OSError:
+            platform_dirs = []
+        for platform_dir in platform_dirs:
+            if not platform_dir.is_dir() or platform_dir.is_symlink():
+                continue
+            try:
+                account_dirs = list(platform_dir.iterdir())
+            except OSError:
+                continue
+            for account_dir in account_dirs:
+                if not account_dir.is_dir() or account_dir.is_symlink():
+                    continue
+                profile = allowed_profile(account_dir)
+                if profile is None:
+                    continue
+                key = os.path.normcase(str(profile))
+                if key in seen:
+                    continue
+                seen.add(key)
+                profiles.append(profile)
+    return profiles
+
+
+def _update_browser_cache_cleanup_state(**updates: Any) -> dict[str, Any]:
+    with _RUNTIME_CONFIG_LOCK:
+        with db() as conn:
+            runtime = _get_runtime_config(conn)
+        runtime.update(updates)
+        normalized = _normalize_runtime_config(runtime)
+        _write_runtime_config_file(normalized)
+        return normalized
+
+
+_BROWSER_CACHE_CLEANUP_RUN_LOCK = threading.Lock()
+
+
+def _run_browser_cache_cleanup_once(*, manual: bool = False) -> dict[str, Any]:
+    attempt_at = _now_ts()
+    run_lock = _BROWSER_CACHE_CLEANUP_RUN_LOCK
+    if not run_lock.acquire(blocking=False):
+        message = "Skipped: browser cache cleanup is already running"
+        _update_browser_cache_cleanup_state(
+            browser_cache_cleanup_last_attempt_at=attempt_at,
+            browser_cache_cleanup_last_status="skipped_busy",
+            browser_cache_cleanup_last_message=message,
+        )
+        return {"ok": False, "status": "skipped_busy", "message": message}
+
+    maintenance_leases: tuple[str, ...] = ()
+    try:
+        with db() as conn:
+            runtime = _get_runtime_config(conn)
+        if not manual and not _to_bool(runtime.get("browser_cache_cleanup_enabled"), True):
+            return {"ok": False, "status": "disabled", "message": "Browser cache cleanup is disabled"}
+
+        busy_reason = _browser_cache_cleanup_busy_reason()
+        if busy_reason:
+            message = f"Skipped: {busy_reason}"
+            _update_browser_cache_cleanup_state(
+                browser_cache_cleanup_last_attempt_at=attempt_at,
+                browser_cache_cleanup_last_status="skipped_busy",
+                browser_cache_cleanup_last_message=message,
+            )
+            return {"ok": False, "status": "skipped_busy", "message": message}
+
+        maintenance_leases = acquire_exclusive_browser_maintenance_lease("browser-cache-cleanup")
+        if not maintenance_leases:
+            message = "Skipped: browser worker is busy or resource admission is unavailable"
+            _update_browser_cache_cleanup_state(
+                browser_cache_cleanup_last_attempt_at=attempt_at,
+                browser_cache_cleanup_last_status="skipped_busy",
+                browser_cache_cleanup_last_message=message,
+            )
+            return {"ok": False, "status": "skipped_busy", "message": message}
+
+        # The lease blocks new browser work. Recheck after admission to close the race
+        # with a task that was claimed immediately before the lease was acquired.
+        busy_reason = _browser_cache_cleanup_busy_reason()
+        if busy_reason:
+            message = f"Skipped: {busy_reason}"
+            _update_browser_cache_cleanup_state(
+                browser_cache_cleanup_last_attempt_at=attempt_at,
+                browser_cache_cleanup_last_status="skipped_busy",
+                browser_cache_cleanup_last_message=message,
+            )
+            return {"ok": False, "status": "skipped_busy", "message": message}
+
+        reclaimed_bytes = 0
+        deleted_count = 0
+        scanned_profiles = 0
+        errors: list[str] = []
+        for profile in _browser_cache_profile_dirs():
+            scanned_profiles += 1
+            cache_dir = profile / "cache2"
+            try:
+                resolved_cache = cache_dir.resolve(strict=False)
+            except (OSError, RuntimeError) as exc:
+                errors.append(f"{cache_dir}: {exc}")
+                continue
+            # Only a direct, real directory named exactly cache2 may be removed.
+            if resolved_cache.name != "cache2" or resolved_cache.parent != profile:
+                errors.append(f"{cache_dir}: invalid cache path")
+                continue
+            if not cache_dir.exists():
+                continue
+            if cache_dir.is_symlink() or not cache_dir.is_dir():
+                errors.append(f"{cache_dir}: cache2 is not a real directory")
+                continue
+            try:
+                cache_bytes = _browser_cache_dir_size(cache_dir)
+                shutil.rmtree(cache_dir)
+                if cache_dir.exists():
+                    raise OSError("cache2 still exists after removal")
+                reclaimed_bytes += cache_bytes
+                deleted_count += 1
+            except (OSError, PermissionError) as exc:
+                errors.append(f"{cache_dir}: {exc}")
+
+        if errors:
+            message = f"Partial cleanup: removed {deleted_count} cache2 directories; " + "; ".join(errors[:5])
+            _update_browser_cache_cleanup_state(
+                browser_cache_cleanup_last_attempt_at=attempt_at,
+                browser_cache_cleanup_last_reclaimed_bytes=reclaimed_bytes,
+                browser_cache_cleanup_last_deleted_count=deleted_count,
+                browser_cache_cleanup_last_status="error",
+                browser_cache_cleanup_last_message=message[:2000],
+            )
+            return {
+                "ok": False,
+                "status": "error",
+                "message": message,
+                "scanned_profiles": scanned_profiles,
+                "deleted_count": deleted_count,
+                "reclaimed_bytes": reclaimed_bytes,
+                "errors": errors[:20],
+            }
+
+        completed_at = _now_ts()
+        interval_days = min(max(_to_int(runtime.get("browser_cache_cleanup_interval_days"), 15), 1), 365)
+        next_run_at = completed_at + interval_days * 86400
+        message = f"Removed {deleted_count} cache2 directories and reclaimed {reclaimed_bytes} bytes"
+        _update_browser_cache_cleanup_state(
+            browser_cache_cleanup_last_attempt_at=attempt_at,
+            browser_cache_cleanup_last_run_at=completed_at,
+            browser_cache_cleanup_next_run_at=next_run_at,
+            browser_cache_cleanup_last_reclaimed_bytes=reclaimed_bytes,
+            browser_cache_cleanup_last_deleted_count=deleted_count,
+            browser_cache_cleanup_last_status="success",
+            browser_cache_cleanup_last_message=message,
+        )
+        return {
+            "ok": True,
+            "status": "success",
+            "message": message,
+            "scanned_profiles": scanned_profiles,
+            "deleted_count": deleted_count,
+            "reclaimed_bytes": reclaimed_bytes,
+            "completed_at": completed_at,
+            "next_run_at": next_run_at,
+        }
+    except Exception as exc:
+        message = f"Browser cache cleanup failed: {exc}"
+        logger.exception("browser cache cleanup failed")
+        _update_browser_cache_cleanup_state(
+            browser_cache_cleanup_last_attempt_at=attempt_at,
+            browser_cache_cleanup_last_status="error",
+            browser_cache_cleanup_last_message=message[:2000],
+        )
+        return {"ok": False, "status": "error", "message": message}
+    finally:
+        if maintenance_leases:
+            release_exclusive_browser_maintenance_lease(maintenance_leases)
+        run_lock.release()
+
+
+def _browser_cache_cleanup_worker() -> None:
+    poll_seconds = max(_to_int(os.getenv("BROWSER_CACHE_CLEANUP_POLL_SECONDS"), 60), 10)
+    while True:
+        try:
+            with db() as conn:
+                runtime = _get_runtime_config(conn)
+            if _to_bool(runtime.get("browser_cache_cleanup_enabled"), True):
+                now = _now_ts()
+                last_run_at = max(_to_int(runtime.get("browser_cache_cleanup_last_run_at"), 0), 0)
+                interval_days = min(max(_to_int(runtime.get("browser_cache_cleanup_interval_days"), 15), 1), 365)
+                configured_next = max(_to_int(runtime.get("browser_cache_cleanup_next_run_at"), 0), 0)
+                next_run_at = configured_next or (last_run_at + interval_days * 86400 if last_run_at else now)
+                if now >= next_run_at:
+                    _run_browser_cache_cleanup_once()
+        except Exception:
+            logger.exception("browser cache cleanup worker failed")
+        time.sleep(float(poll_seconds))
+
+
 def _candidate_cleanup_worker() -> None:
     while True:
         try:
@@ -1448,6 +1773,7 @@ def _start_task_workers() -> None:
 
 _CLEANUP_THREAD: threading.Thread | None = None
 _CANDIDATE_CLEANUP_THREAD: threading.Thread | None = None
+_BROWSER_CACHE_CLEANUP_THREAD: threading.Thread | None = None
 _CLEANUP_LOCK = threading.Lock()
 _PERSONA_AI_BILLING_REF_TYPES = (
     "persona_ai_keywords",
@@ -1457,7 +1783,7 @@ _PERSONA_AI_BILLING_REF_TYPES = (
 
 
 def _start_cleanup_worker() -> None:
-    global _CLEANUP_THREAD, _CANDIDATE_CLEANUP_THREAD
+    global _CLEANUP_THREAD, _CANDIDATE_CLEANUP_THREAD, _BROWSER_CACHE_CLEANUP_THREAD
     with _CLEANUP_LOCK:
         if _CLEANUP_THREAD is None:
             t = threading.Thread(target=_cleanup_worker, args=(), daemon=True)
@@ -1467,6 +1793,10 @@ def _start_cleanup_worker() -> None:
             candidate_thread = threading.Thread(target=_candidate_cleanup_worker, args=(), daemon=True)
             _CANDIDATE_CLEANUP_THREAD = candidate_thread
             candidate_thread.start()
+        if _BROWSER_CACHE_CLEANUP_THREAD is None:
+            browser_cache_thread = threading.Thread(target=_browser_cache_cleanup_worker, args=(), daemon=True)
+            _BROWSER_CACHE_CLEANUP_THREAD = browser_cache_thread
+            browser_cache_thread.start()
 
 
 def _persona_ai_archive_output_is_durable(
@@ -4655,6 +4985,25 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     merged["cleanup_enabled"] = _to_bool(merged.get("cleanup_enabled"), True)
     merged["cleanup_time"] = str(merged.get("cleanup_time") or "03:30").strip() or "03:30"
     merged["cleanup_retention_days"] = max(_to_int(merged.get("cleanup_retention_days"), 7), 1)
+    merged["browser_cache_cleanup_enabled"] = _to_bool(merged.get("browser_cache_cleanup_enabled"), True)
+    merged["browser_cache_cleanup_interval_days"] = min(
+        max(_to_int(merged.get("browser_cache_cleanup_interval_days"), 15), 1),
+        365,
+    )
+    for key in (
+        "browser_cache_cleanup_last_attempt_at",
+        "browser_cache_cleanup_last_run_at",
+        "browser_cache_cleanup_next_run_at",
+        "browser_cache_cleanup_last_reclaimed_bytes",
+        "browser_cache_cleanup_last_deleted_count",
+    ):
+        merged[key] = max(_to_int(merged.get(key), 0), 0)
+    merged["browser_cache_cleanup_last_status"] = str(
+        merged.get("browser_cache_cleanup_last_status") or "never"
+    ).strip()[:40] or "never"
+    merged["browser_cache_cleanup_last_message"] = str(
+        merged.get("browser_cache_cleanup_last_message") or ""
+    ).strip()[:2000]
     merged["auth_email_registration_enabled"] = _to_bool(
         merged.get("auth_email_registration_enabled"),
         False,
@@ -11103,6 +11452,15 @@ class RuntimeConfigPayload(BaseModel):
     cleanup_enabled: bool = True
     cleanup_time: str = "03:30"
     cleanup_retention_days: int = 7
+    browser_cache_cleanup_enabled: bool = True
+    browser_cache_cleanup_interval_days: int = Field(default=15, ge=1, le=365)
+    browser_cache_cleanup_last_attempt_at: int = Field(default=0, ge=0)
+    browser_cache_cleanup_last_run_at: int = Field(default=0, ge=0)
+    browser_cache_cleanup_next_run_at: int = Field(default=0, ge=0)
+    browser_cache_cleanup_last_reclaimed_bytes: int = Field(default=0, ge=0)
+    browser_cache_cleanup_last_deleted_count: int = Field(default=0, ge=0)
+    browser_cache_cleanup_last_status: str = Field(default="never", max_length=40)
+    browser_cache_cleanup_last_message: str = Field(default="", max_length=2000)
     auth_email_registration_enabled: bool = False
     auth_google_login_enabled: bool = False
     auth_remember_login_enabled: bool = True
@@ -23171,6 +23529,17 @@ def create_app() -> FastAPI:
         except RuntimeConfigFileError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         explicit_data = payload.model_dump(exclude_unset=True)
+        read_only_cleanup_keys = {
+            "browser_cache_cleanup_last_attempt_at",
+            "browser_cache_cleanup_last_run_at",
+            "browser_cache_cleanup_next_run_at",
+            "browser_cache_cleanup_last_reclaimed_bytes",
+            "browser_cache_cleanup_last_deleted_count",
+            "browser_cache_cleanup_last_status",
+            "browser_cache_cleanup_last_message",
+        }
+        for key in read_only_cleanup_keys:
+            explicit_data.pop(key, None)
         secret_preserve_keys = {
             "upload_file_api_key",
             "llm_api_key",
@@ -23193,6 +23562,21 @@ def create_app() -> FastAPI:
             saved_value = current_runtime.get(key) if isinstance(current_runtime, dict) else None
             if (key not in explicit_data or not str(current_value or "").strip()) and saved_value:
                 merged[key] = saved_value
+        if "browser_cache_cleanup_enabled" in explicit_data:
+            if _to_bool(merged.get("browser_cache_cleanup_enabled"), True):
+                last_run_at = max(_to_int(merged.get("browser_cache_cleanup_last_run_at"), 0), 0)
+                interval_days = min(max(_to_int(merged.get("browser_cache_cleanup_interval_days"), 15), 1), 365)
+                merged["browser_cache_cleanup_next_run_at"] = (
+                    last_run_at + interval_days * 86400 if last_run_at else _now_ts()
+                )
+            else:
+                merged["browser_cache_cleanup_next_run_at"] = 0
+        elif "browser_cache_cleanup_interval_days" in explicit_data:
+            last_run_at = max(_to_int(merged.get("browser_cache_cleanup_last_run_at"), 0), 0)
+            interval_days = min(max(_to_int(merged.get("browser_cache_cleanup_interval_days"), 15), 1), 365)
+            merged["browser_cache_cleanup_next_run_at"] = (
+                last_run_at + interval_days * 86400 if last_run_at else _now_ts()
+            )
         try:
             merged = _normalize_runtime_config(merged)
             with _RUNTIME_CONFIG_LOCK:
@@ -23201,6 +23585,14 @@ def create_app() -> FastAPI:
         except RuntimeConfigFileError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"ok": True, "runtime_config": _redact_runtime_config(merged)}
+
+    @app.post("/api/admin/browser-cache-cleanup/run")
+    def api_admin_run_browser_cache_cleanup(
+        request: Request,
+        _user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin(request)
+        return _run_browser_cache_cleanup_once(manual=True)
 
     @app.get("/browser-auth-extension/download")
     def browser_auth_extension_download(request: Request):

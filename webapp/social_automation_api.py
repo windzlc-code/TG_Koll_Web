@@ -6770,6 +6770,33 @@ def acquire_external_browser_lease(owner: str = "") -> str:
     return token
 
 
+def acquire_exclusive_browser_maintenance_lease(owner: str = "maintenance") -> tuple[str, ...]:
+    """Atomically reserve every browser slot, but only when the runtime is idle."""
+    clean_owner = str(owner or "maintenance").strip() or "maintenance"
+    with _WORKER_LOCK:
+        if _social_worker_slots_in_use() != 0:
+            return ()
+        slot_count = _social_worker_max_concurrency()
+        tokens = tuple(
+            f"{clean_owner}:exclusive:{uuid.uuid4().hex}:{index + 1}"
+            for index in range(slot_count)
+        )
+        with _EXTERNAL_BROWSER_LEASES_LOCK:
+            _EXTERNAL_BROWSER_LEASES.update(tokens)
+    _refresh_worker_state()
+    return tokens
+
+
+def release_exclusive_browser_maintenance_lease(tokens: Iterable[str]) -> None:
+    clean_tokens = {str(token or "").strip() for token in tokens if str(token or "").strip()}
+    if not clean_tokens:
+        return
+    with _EXTERNAL_BROWSER_LEASES_LOCK:
+        _EXTERNAL_BROWSER_LEASES.difference_update(clean_tokens)
+    _refresh_worker_state()
+    wake_social_automation_worker()
+
+
 def release_external_browser_lease(token: str) -> None:
     clean_token = str(token or "").strip()
     if not clean_token:

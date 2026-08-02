@@ -6613,6 +6613,130 @@ body.page-admin {
   background: #fffaf0;
 }
 
+.page-admin .admin-cleanup-section {
+  display: grid;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid var(--admin-line);
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.page-admin .admin-cleanup-section + .admin-cleanup-section {
+  margin-top: 2px;
+}
+
+.page-admin .admin-cleanup-section-head,
+.page-admin .admin-cleanup-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.page-admin .admin-cleanup-section-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.page-admin .admin-cleanup-section-head strong {
+  color: #172536;
+  font-size: 14px;
+}
+
+.page-admin .admin-cleanup-section-head span,
+.page-admin .admin-cleanup-actions span {
+  color: var(--admin-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.page-admin .admin-cleanup-section-head .switch {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.page-admin .admin-cleanup-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.page-admin .admin-cleanup-section label {
+  margin: 0;
+}
+
+.page-admin .admin-cleanup-section label > input:not([type="checkbox"]) {
+  margin-top: 4px;
+}
+
+.page-admin .admin-browser-cache-status {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid #d8e0e8;
+  border-radius: 7px;
+  background: #d8e0e8;
+}
+
+.page-admin .admin-browser-cache-status > div {
+  min-width: 0;
+  padding: 8px 9px;
+  background: #f7f9fb;
+}
+
+.page-admin .admin-browser-cache-status dt {
+  color: #667383;
+  font-size: 11px;
+}
+
+.page-admin .admin-browser-cache-status dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  color: #172536;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.page-admin .admin-browser-cache-run {
+  flex: 0 0 auto;
+  min-height: 36px;
+  color: #ffffff;
+  border-color: #263b4d;
+  background: #263b4d;
+}
+
+.page-admin .admin-browser-cache-run:hover:not(:disabled) {
+  border-color: #172b3c;
+  background: #172b3c;
+}
+
+.page-admin .admin-browser-cache-run:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+
+.page-admin #browserCacheCleanupMsg {
+  min-height: 0;
+  margin: 0;
+}
+
+@media (max-width: 700px) {
+  .page-admin .admin-cleanup-section-head,
+  .page-admin .admin-cleanup-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .page-admin .admin-cleanup-fields,
+  .page-admin .admin-browser-cache-status {
+    grid-template-columns: 1fr;
+  }
+}
+
 .page-admin .admin-user-password-section[hidden] {
   display: none;
 }

@@ -2601,6 +2601,8 @@ function runtimeFormToPayload() {
     cleanup_enabled: !!el("rtCleanupEnabled").checked,
     cleanup_time: el("rtCleanupTime").value || "03:30",
     cleanup_retention_days: Number(el("rtCleanupRetentionDays").value || 7),
+    browser_cache_cleanup_enabled: !!el("rtBrowserCacheCleanupEnabled")?.checked,
+    browser_cache_cleanup_interval_days: Math.min(365, Math.max(1, Number(el("rtBrowserCacheCleanupIntervalDays")?.value || 15))),
     auth_remember_login_enabled: !!el("rtRememberLoginEnabled").checked,
     auth_remember_login_default: !!el("rtRememberLoginDefault").checked,
     auth_remember_login_days: Number(el("rtRememberLoginDays").value || 30),
@@ -2671,6 +2673,13 @@ function fillRuntimeForm(data) {
   el("rtCleanupEnabled").checked = v.cleanup_enabled !== false;
   el("rtCleanupTime").value = v.cleanup_time || "03:30";
   el("rtCleanupRetentionDays").value = String(v.cleanup_retention_days || 7);
+  if (el("rtBrowserCacheCleanupEnabled")) {
+    el("rtBrowserCacheCleanupEnabled").checked = v.browser_cache_cleanup_enabled !== false;
+  }
+  if (el("rtBrowserCacheCleanupIntervalDays")) {
+    el("rtBrowserCacheCleanupIntervalDays").value = String(v.browser_cache_cleanup_interval_days || 15);
+  }
+  renderBrowserCacheCleanupStatus(v);
   el("rtRememberLoginEnabled").checked = v.auth_remember_login_enabled !== false;
   el("rtRememberLoginDefault").checked = v.auth_remember_login_default === true;
   el("rtRememberLoginDays").value = String(v.auth_remember_login_days || 30);
@@ -2685,6 +2694,129 @@ function fillRuntimeForm(data) {
     el("rtGoogleLoginEnabled").checked = v.auth_google_login_enabled === true;
   }
   syncRuntimeAuthProviderAvailability();
+}
+
+function browserCacheCleanupObject(source) {
+  if (!source || typeof source !== "object") return {};
+  const nested = source.browser_cache_cleanup_status || source.browser_cache_cleanup || source.result;
+  return nested && typeof nested === "object" ? { ...source, ...nested } : source;
+}
+
+function browserCacheCleanupCount(value) {
+  if (Array.isArray(value)) return value.length;
+  return Math.max(0, Number(value) || 0);
+}
+
+function browserCacheCleanupDate(value) {
+  if (value == null || value === "") return "-";
+  const numeric = Number(value);
+  const date = Number.isFinite(numeric)
+    ? new Date(numeric < 100000000000 ? numeric * 1000 : numeric)
+    : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", { timeZone: ADMIN_TIME_ZONE, hour12: false });
+}
+
+function browserCacheCleanupBytes(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let amount = bytes;
+  let unit = "B";
+  for (const candidate of units) {
+    amount /= 1024;
+    unit = candidate;
+    if (amount < 1024) break;
+  }
+  return `${amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${unit}`;
+}
+
+function browserCacheCleanupStatusLabel(value, enabled = true) {
+  if (!enabled) return "已停用";
+  const status = String(value || "idle").trim().toLowerCase();
+  const labels = {
+    never: "等待首次计划执行",
+    idle: "等待计划执行",
+    pending: "等待计划执行",
+    running: "正在安全清理",
+    success: "最近清理成功",
+    completed: "最近清理成功",
+    partial: "本轮安全清理未完整完成",
+    skipped: "本轮已安全延后",
+    deferred: "检测到浏览器任务，本轮已延后",
+    skipped_busy: "本轮已安全延后",
+    disabled: "已停用",
+    failed: "最近清理失败",
+    error: "最近清理失败",
+  };
+  return labels[status] || "等待状态更新";
+}
+
+function renderBrowserCacheCleanupStatus(source) {
+  if (!el("browserCacheCleanupStatus")) return;
+  const data = browserCacheCleanupObject(source);
+  const enabled = data.browser_cache_cleanup_enabled !== false;
+  const intervalDays = Math.min(365, Math.max(1, Number(data.browser_cache_cleanup_interval_days || 15)));
+  const lastRun = data.browser_cache_cleanup_last_run_at ?? data.last_run_at ?? data.finished_at ?? data.completed_at;
+  let nextRun = data.browser_cache_cleanup_next_run_at ?? data.next_run_at;
+  if (!nextRun && enabled && lastRun) {
+    const numeric = Number(lastRun);
+    const lastDate = Number.isFinite(numeric)
+      ? new Date(numeric < 100000000000 ? numeric * 1000 : numeric)
+      : new Date(lastRun);
+    if (!Number.isNaN(lastDate.getTime())) nextRun = new Date(lastDate.getTime() + intervalDays * 86400000);
+  }
+  const reclaimed = data.browser_cache_cleanup_last_reclaimed_bytes
+    ?? data.reclaimed_bytes
+    ?? data.freed_bytes
+    ?? 0;
+  const rawStatus = data.browser_cache_cleanup_last_status ?? data.status;
+  setText("browserCacheCleanupStatus", browserCacheCleanupStatusLabel(rawStatus, enabled));
+  setText("browserCacheCleanupLastRun", lastRun ? browserCacheCleanupDate(lastRun) : "尚未执行");
+  setText("browserCacheCleanupNextRun", enabled ? (nextRun ? browserCacheCleanupDate(nextRun) : "等待首次计划") : "已停用");
+  setText("browserCacheCleanupReclaimed", browserCacheCleanupBytes(reclaimed));
+}
+
+async function runBrowserCacheCleanupNow() {
+  const button = el("btnRunBrowserCacheCleanup");
+  if (!button || button.disabled) return;
+  const decision = await requestAdminPublicAction({
+    title: "立即清理浏览器缓存",
+    message: "只会清理可重建的 cache2。检测到任何浏览器任务时本轮会整体延后，Cookie、登录状态和站点存储不会被删除。",
+    confirmLabel: "开始安全清理",
+  });
+  if (!decision.confirmed) return;
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.textContent = "正在检查并清理…";
+  setMsg("browserCacheCleanupMsg", "正在检查浏览器任务；如有任务运行，本轮清理将整体延后。", true);
+  try {
+    const result = await api("/api/admin/browser-cache-cleanup/run", { method: "POST" });
+    renderBrowserCacheCleanupStatus(result);
+    const data = browserCacheCleanupObject(result);
+    const status = String(data.status || "").toLowerCase();
+    const deferred = data.deferred === true || ["deferred", "skipped", "skipped_busy"].includes(status);
+    const reclaimed = data.reclaimed_bytes ?? data.freed_bytes ?? data.browser_cache_cleanup_last_reclaimed_bytes ?? 0;
+    const cleaned = browserCacheCleanupCount(data.deleted_count ?? data.cleaned_profile_count ?? data.cleaned_profiles ?? data.cleaned_count);
+    if (deferred) {
+      setMsg("browserCacheCleanupMsg", "检测到正在执行的浏览器任务，本轮缓存清理已整体延后，不影响当前任务。", true);
+    } else if (data.ok === false) {
+      setMsg("browserCacheCleanupMsg", `浏览器缓存清理未完成：${String(data.message || "请稍后重试")}`, false);
+    } else {
+      setMsg("browserCacheCleanupMsg", `安全清理完成：删除 ${cleaned} 个 cache2 目录，回收 ${browserCacheCleanupBytes(reclaimed)}。`, true);
+    }
+    try {
+      const refreshed = runtimeConfigResponseToConfig(await api("/api/admin/runtime_config"));
+      renderBrowserCacheCleanupStatus(refreshed || result);
+    } catch (_) {}
+  } catch (error) {
+    setMsg("browserCacheCleanupMsg", `浏览器缓存清理失败：${getErrorMessage(error)}`, false);
+  } finally {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+    button.textContent = originalText;
+  }
 }
 
 async function loadRuntime() {
@@ -9369,6 +9501,7 @@ function bindActions() {
     }
   });
   el("rtGoogleLoginEnabled")?.addEventListener("change", syncRuntimeAuthProviderAvailability);
+  el("btnRunBrowserCacheCleanup")?.addEventListener("click", () => void runBrowserCacheCleanupNow());
 
   [
     ["btnAddLlmGptModel", "rtLlmGptModelInput", "llmGptModels"],
