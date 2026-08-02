@@ -2437,6 +2437,107 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("Promise.all([", cancel_all_source)
         self.assertNotIn("await Promise.all", cancel_all_source)
 
+    def test_persona_normal_and_batch_compose_inputs_are_isolated_and_clear_without_resurrection(self):
+        functions = "\n".join(
+            self._function_source(name)
+            for name in (
+                "normalizePersonaDraftForm",
+                "personaComposeDraftInputKey",
+                "ensurePersonaComposeDraftInputs",
+                "storePersonaComposeDraftInput",
+                "restorePersonaComposeDraftInput",
+                "clearPersonaDraftComposerInputs",
+                "personaComposePendingMediaStateKey",
+                "snapshotPersonaCurrentForm",
+            )
+        )
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const titleInput = {{ value: "" }};
+            const contentInput = {{ value: "" }};
+            const state = {{ renderedPersonaId: "persona-1" }};
+            const document = {{ querySelector() {{ return null; }}, querySelectorAll() {{ return []; }} }};
+            const PERSONA_GENERATE_DEFAULT_COUNT = 5;
+            const PERSONA_GENERATE_MAX_COUNT = 10;
+            const PERSONA_GENERATE_DEFAULT_TARGET_WORDS = 100;
+            const uploadFiles = new Map();
+            const form = {{
+              generate: {{ composeMode: "tweet", prompt: "旧版残留正文" }},
+              draft: {{ title: "", content: "" }},
+              media: {{}},
+            }};
+            function personaFormState() {{ return form; }}
+            function $(id) {{
+              if (id === "personaDraftTitle") return titleInput;
+              if (id === "personaDraftContent") return contentInput;
+              return null;
+            }}
+            function syncPersonaGenerateActionState() {{}}
+            function syncPersonaDraftDirty() {{ return false; }}
+            function normalizePersonaMediaGenerationForm() {{}}
+            function clearUploadDropzoneState(inputId, stateKey) {{
+              assert.equal(inputId, "personaPostMediaUploadFiles");
+              uploadFiles.set(stateKey, []);
+            }}
+            function defaultPersonaDraftForm(overrides = {{}}) {{
+              return {{
+                title: "", content: "", editingPostId: "", editingSource: "posts",
+                originalTitle: "", originalContent: "", stagedReferenceContent: null,
+                originalMediaSignature: "", mediaItems: [], mediaOps: [], dirty: false,
+                rewriteSourcePostId: "", ...overrides,
+              }};
+            }}
+            function defaultPersonaComposeDraftInput(overrides = {{}}) {{
+              return {{ title: "", content: "", ...overrides }};
+            }}
+            {functions}
+
+            form.draft = defaultPersonaDraftForm({{ title: "普通标题", content: "普通正文" }});
+            storePersonaComposeDraftInput(form);
+            form.generate.composeMode = "tweet_media";
+            restorePersonaComposeDraftInput(form, "tweet_media");
+            assert.equal(form.draft.title, "");
+            assert.equal(form.draft.content, "");
+
+            form.draft.title = "批量标题";
+            form.draft.content = "批量正文";
+            storePersonaComposeDraftInput(form);
+            form.generate.composeMode = "tweet";
+            restorePersonaComposeDraftInput(form, "tweet");
+            assert.equal(form.draft.title, "普通标题");
+            assert.equal(form.draft.content, "普通正文");
+
+            titleInput.value = form.draft.title;
+            contentInput.value = form.draft.content;
+            const normalMediaKey = personaComposePendingMediaStateKey({{ id: "persona-1" }}, "tweet");
+            const batchMediaKey = personaComposePendingMediaStateKey({{ id: "persona-1" }}, "tweet_media");
+            assert.notEqual(normalMediaKey, batchMediaKey);
+            uploadFiles.set(normalMediaKey, ["normal-image.png"]);
+            uploadFiles.set(batchMediaKey, ["batch-image.png"]);
+            clearPersonaDraftComposerInputs("persona-1", "tweet");
+            assert.equal(titleInput.value, "");
+            assert.equal(contentInput.value, "");
+            assert.equal(form.generate.prompt, "");
+            assert.deepEqual(uploadFiles.get(normalMediaKey), []);
+            assert.deepEqual(uploadFiles.get(batchMediaKey), ["batch-image.png"]);
+            if (!String(form.draft.content || "").trim() && String(form.generate.prompt || "").trim()) {{
+              form.draft.content = String(form.generate.prompt || "");
+              form.generate.prompt = "";
+            }}
+            assert.equal(form.draft.content, "");
+            snapshotPersonaCurrentForm();
+            assert.equal(form.generate.composeDraftInputs.tweet.title, "");
+            assert.equal(form.generate.composeDraftInputs.tweet.content, "");
+
+            form.generate.composeMode = "tweet_media";
+            restorePersonaComposeDraftInput(form, "tweet_media");
+            assert.equal(form.draft.title, "批量标题");
+            assert.equal(form.draft.content, "批量正文");
+            """
+        )
+        self._run_node(harness)
+
     def test_multi_publish_submission_sends_one_batch_and_sequence_metadata(self):
         submit_publish = f"async {self._function_source('submitPublishContentTasks')}"
         harness = textwrap.dedent(

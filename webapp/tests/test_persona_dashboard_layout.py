@@ -678,6 +678,74 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('data-persona-draft-save-dock', content_panel)
         self.assertIn('const generateMode = isEditingDraft\n    ? "custom"', content_panel)
 
+    def test_persona_generation_success_clears_only_the_active_compose_input(self):
+        completion = self.console_script[
+            self.console_script.index("async function completePersonaPostGenerationTask"):
+            self.console_script.index("async function watchPersonaPostGenerationTask")
+        ]
+        request = self.console_script[
+            self.console_script.index("async function generatePersonaDraftPosts"):
+            self.console_script.index("async function completePersonaPostGenerationTask")
+        ]
+        clear_call = "clearPersonaDraftComposerInputs(persona.id, composeMode);"
+        branch = "if (selectionRequired && generatedPosts.length)"
+
+        self.assertEqual(completion.count(clear_call), 1)
+        self.assertIn(f"if (generatedPosts.length) {clear_call}", completion)
+        self.assertLess(completion.index(clear_call), completion.index(branch))
+        self.assertNotIn(clear_call, request)
+        self.assertNotIn("personaFormState(persona.id).draft = defaultPersonaDraftForm();", completion)
+
+        clear_start = self.console_script.index("function clearPersonaDraftComposerInputs")
+        clear_end = self.console_script.index("function syncPersonaDraftDirty", clear_start)
+        clear_source = self.console_script[clear_start:clear_end]
+        self.assertIn('form.generate.prompt = "";', clear_source)
+        self.assertIn("clearUploadDropzoneState(", clear_source)
+        self.assertIn('"personaPostMediaUploadFiles",', clear_source)
+        self.assertIn("personaComposePendingMediaStateKey({ id: personaId }, composeMode)", clear_source)
+
+    def test_normal_and_batch_tweet_inputs_keep_independent_state(self):
+        snapshot = self.console_script[
+            self.console_script.index("function snapshotPersonaCurrentForm()"):
+            self.console_script.index("function personaImageLibraryState")
+        ]
+        handler_start = self.console_script.index(
+            'const composeModeButton = event.target.closest("[data-persona-compose-mode]")'
+        )
+        handler_end = self.console_script.index(
+            'const openImageSettingsButton = event.target.closest("[data-persona-open-image-settings]")',
+            handler_start,
+        )
+        handler = self.console_script[handler_start:handler_end]
+        reset_start = self.console_script.index("function resetPersonaNewDraftComposer(personaId)")
+        reset_end = self.console_script.index("function openPersonaDraftEditor", reset_start)
+        reset = self.console_script[reset_start:reset_end]
+
+        self.assertIn("function storePersonaComposeDraftInput(form", self.console_script)
+        self.assertIn("function restorePersonaComposeDraftInput(form", self.console_script)
+        self.assertIn("function clearPersonaDraftComposerInputs(personaId, composeMode", self.console_script)
+        self.assertIn("storePersonaComposeDraftInput(form);", snapshot)
+        self.assertIn("restorePersonaComposeDraftInput(form, nextComposeMode);", handler)
+        self.assertIn("const composeDraftInputs = ensurePersonaComposeDraftInputs(form);", reset)
+        self.assertIn("composeDraftInputs.tweet = defaultPersonaComposeDraftInput();", reset)
+        self.assertIn("composeDraftInputs.tweet_media = defaultPersonaComposeDraftInput();", reset)
+        self.assertIn('if ($("personaDraftTitle")) $("personaDraftTitle").value = "";', reset)
+        self.assertIn('if ($("personaDraftContent")) $("personaDraftContent").value = "";', reset)
+        transient = self.console_script[
+            self.console_script.index("function activePersonaDraftComposerTransientState"):
+            self.console_script.index("async function confirmPersonaContentPlatformSwitch")
+        ]
+        self.assertIn("const composeDraftInputs = ensurePersonaComposeDraftInputs(form);", transient)
+        self.assertIn("Object.values(composeDraftInputs).some", transient)
+        self.assertIn("composeDraftInputs,", transient)
+
+        media_key_start = self.console_script.index("function personaComposePendingMediaStateKey")
+        media_key_end = self.console_script.index("function renderPersonaCompactMediaUpload", media_key_start)
+        media_key_source = self.console_script[media_key_start:media_key_end]
+        self.assertIn("personaComposeDraftInputKey(", media_key_source)
+        self.assertIn("composeMode ||", media_key_source)
+        self.assertIn("${modeKey}", media_key_source)
+
     def test_hotspot_top_capsule_switches_the_real_generation_mode(self):
         handler_start = self.console_script.index(
             'const composeModeButton = event.target.closest("[data-persona-compose-mode]")'

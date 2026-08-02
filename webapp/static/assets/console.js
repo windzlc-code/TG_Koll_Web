@@ -3608,7 +3608,7 @@ function personaFormState(personaId) {
   const key = String(personaId || "").trim();
   if (!key) {
     return {
-      generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", prompt: "", selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotSearchMode: "strict", hotFreshnessMode: "default", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {} },
+      generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotSearchMode: "strict", hotFreshnessMode: "default", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {} },
       draft: defaultPersonaDraftForm(),
       media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1" },
@@ -3623,6 +3623,10 @@ function personaFormState(personaId) {
         targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS,
         contentTimeSlot: "",
         prompt: "",
+        composeDraftInputs: {
+          tweet: { title: "", content: "" },
+          tweet_media: { title: "", content: "" },
+        },
         selectedMemoryIds: [],
         hotSelectedIds: [],
         hotPreviewId: "",
@@ -3695,6 +3699,84 @@ function defaultPersonaDraftForm(overrides = {}) {
 function normalizePersonaDraftForm(form) {
   if (!form || typeof form !== "object") return defaultPersonaDraftForm();
   return defaultPersonaDraftForm(form);
+}
+
+function personaComposeDraftInputKey(mode) {
+  const cleanMode = String(mode || "").trim();
+  if (cleanMode === "tweet") return "tweet";
+  if (cleanMode === "tweet_media") return "tweet_media";
+  return "";
+}
+
+function defaultPersonaComposeDraftInput(overrides = {}) {
+  return {
+    title: "",
+    content: "",
+    ...overrides,
+  };
+}
+
+function ensurePersonaComposeDraftInputs(form) {
+  if (!form || typeof form !== "object") return { tweet: defaultPersonaComposeDraftInput(), tweet_media: defaultPersonaComposeDraftInput() };
+  if (!form.generate || typeof form.generate !== "object") form.generate = {};
+  if (!form.generate.composeDraftInputs || typeof form.generate.composeDraftInputs !== "object") {
+    form.generate.composeDraftInputs = {
+      tweet: defaultPersonaComposeDraftInput(),
+      tweet_media: defaultPersonaComposeDraftInput(),
+    };
+  }
+  for (const key of ["tweet", "tweet_media"]) {
+    const value = form.generate.composeDraftInputs[key];
+    if (!value || typeof value !== "object") {
+      form.generate.composeDraftInputs[key] = defaultPersonaComposeDraftInput();
+      continue;
+    }
+    value.title = String(value.title || "");
+    value.content = String(value.content || "");
+  }
+  return form.generate.composeDraftInputs;
+}
+
+function storePersonaComposeDraftInput(form, composeMode = form?.generate?.composeMode) {
+  const key = personaComposeDraftInputKey(composeMode);
+  if (!key || !form || String(form.draft?.editingPostId || "").trim()) return;
+  const inputs = ensurePersonaComposeDraftInputs(form);
+  const draft = normalizePersonaDraftForm(form.draft);
+  inputs[key] = defaultPersonaComposeDraftInput({
+    title: String(draft.title || ""),
+    content: String(draft.content || ""),
+  });
+}
+
+function restorePersonaComposeDraftInput(form, composeMode = form?.generate?.composeMode) {
+  const key = personaComposeDraftInputKey(composeMode);
+  if (!key || !form || String(form.draft?.editingPostId || "").trim()) return;
+  const input = ensurePersonaComposeDraftInputs(form)[key];
+  form.draft = defaultPersonaDraftForm({
+    title: String(input?.title || ""),
+    content: String(input?.content || ""),
+  });
+}
+
+function clearPersonaDraftComposerInputs(personaId, composeMode = personaFormState(personaId).generate.composeMode) {
+  const form = personaFormState(personaId);
+  const key = personaComposeDraftInputKey(composeMode);
+  if (key) ensurePersonaComposeDraftInputs(form)[key] = defaultPersonaComposeDraftInput();
+  form.generate.prompt = "";
+  clearUploadDropzoneState(
+    "personaPostMediaUploadFiles",
+    personaComposePendingMediaStateKey({ id: personaId }, composeMode),
+  );
+  const activeKey = personaComposeDraftInputKey(form.generate.composeMode);
+  const editing = Boolean(String(form.draft?.editingPostId || "").trim());
+  if (editing || activeKey === key) {
+    form.draft = defaultPersonaDraftForm();
+    if (String(state.renderedPersonaId || "") === String(personaId || "")) {
+      if ($("personaDraftTitle")) $("personaDraftTitle").value = "";
+      if ($("personaDraftContent")) $("personaDraftContent").value = "";
+      syncPersonaGenerateActionState();
+    }
+  }
 }
 
 function syncPersonaDraftDirty(draft) {
@@ -4701,6 +4783,7 @@ function snapshotPersonaCurrentForm() {
   if ($("personaDraftTitle")) form.draft.title = String($("personaDraftTitle")?.value || "");
   if ($("personaDraftContent")) form.draft.content = String($("personaDraftContent")?.value || "");
   syncPersonaDraftDirty(form.draft);
+  storePersonaComposeDraftInput(form);
   if ($("personaMediaTaskPrompt")) form.media.prompt = String($("personaMediaTaskPrompt")?.value || "");
   if ($("personaMediaAspectRatio")) form.media.aspectRatio = String($("personaMediaAspectRatio")?.value || "auto");
   if ($("personaMediaImageCount")) form.media.imageCount = Math.min(Math.max(Number.parseInt(String($("personaMediaImageCount")?.value || ""), 10) || storedPersonaMediaImageCount(), 1), 4);
@@ -18642,7 +18725,6 @@ async function resolvePersonaOrdinaryGeneratedCandidates(persona, taskId, genera
       clearStoredPersonaPostGenerationTask(persona.id, cleanTaskId);
       clearPersonaGenerateRunState(persona.id);
       delete state.personaGeneratedPreviews[String(persona.id || "").trim()];
-      personaFormState(persona.id).draft = defaultPersonaDraftForm();
       personaFormState(persona.id).media.focusPostId = "";
       await loadPersonaDraftPosts(persona.id, { force: true }).catch(() => {});
       setPersonaPostSource("posts", persona);
@@ -18660,7 +18742,6 @@ async function resolvePersonaOrdinaryGeneratedCandidates(persona, taskId, genera
   }
   clearPersonaGenerateRunState(persona.id);
   delete state.personaGeneratedPreviews[String(persona.id || "").trim()];
-  personaFormState(persona.id).draft = defaultPersonaDraftForm();
   await loadPersonaDraftPosts(persona.id, { force: true });
   setPersonaPostSource("posts", persona);
   const finalizedPostId = String(finalized?.selected_post?.id || selectedPostId || "").trim();
@@ -18909,11 +18990,11 @@ async function completePersonaPostGenerationTask(persona, task, context = {}) {
     selectionRequired,
     error: "",
   });
+  if (generatedPosts.length) clearPersonaDraftComposerInputs(persona.id, composeMode);
   if (selectionRequired && generatedPosts.length) {
     await resolvePersonaOrdinaryGeneratedCandidates(persona, task?.id, generatedPosts, requestedTitle);
   } else {
     await applyPersonaGeneratedBatchTitles(persona.id, generatedPosts, requestedTitle);
-    personaFormState(persona.id).draft = defaultPersonaDraftForm();
     await loadPersonaDraftPosts(persona.id, { force: true });
     const latestGenerated = personaDraftPosts(persona).find((post) => generatedIds.has(String(post?.id || "")));
     if (isActivePersona) {
@@ -19084,9 +19165,7 @@ async function createPersonaDraftPost() {
   setSelectedPersonaPostId(savedPostId);
   setPersonaPostSource(editingPostId ? editingSource : "posts", persona);
   state.personaPanels.content = "posts";
-  personaFormState(persona.id).draft = defaultPersonaDraftForm();
-  if ($("personaDraftTitle")) $("personaDraftTitle").value = "";
-  if ($("personaDraftContent")) $("personaDraftContent").value = "";
+  clearPersonaDraftComposerInputs(persona.id, personaFormState(persona.id).generate.composeMode);
   await Promise.all([
     loadPersonaDraftPosts(persona.id, { force: true }),
     loadPersonaFavoritePosts(persona.id, { force: true }).catch(() => []),
@@ -19522,9 +19601,24 @@ async function exitPersonaDraftEdit(personaId) {
 function resetPersonaNewDraftComposer(personaId) {
   const form = personaFormState(personaId);
   form.generate.mode = "ai";
+  const composeDraftInputs = ensurePersonaComposeDraftInputs(form);
+  composeDraftInputs.tweet = defaultPersonaComposeDraftInput();
+  composeDraftInputs.tweet_media = defaultPersonaComposeDraftInput();
+  form.generate.prompt = "";
+  ["tweet", "tweet_media"].forEach((composeMode) => {
+    clearUploadDropzoneState(
+      "personaPostMediaUploadFiles",
+      personaComposePendingMediaStateKey({ id: personaId }, composeMode),
+    );
+  });
   form.draft = defaultPersonaDraftForm();
   form.media.focusPostId = "";
   setSelectedPersonaPostId("");
+  if (String(state.renderedPersonaId || "") === String(personaId || "")) {
+    if ($("personaDraftTitle")) $("personaDraftTitle").value = "";
+    if ($("personaDraftContent")) $("personaDraftContent").value = "";
+    syncPersonaGenerateActionState();
+  }
 }
 
 function openPersonaDraftEditor(postId) {
@@ -21613,9 +21707,12 @@ function renderPersonaMediaOperationTabs(mode) {
   `).join("")}</div>`;
 }
 
-function personaComposePendingMediaStateKey(persona) {
+function personaComposePendingMediaStateKey(persona, composeMode) {
   const personaId = String(persona?.id || state.selectedPersonaId || "none").trim() || "none";
-  return `personaPostMediaUploadFiles:${personaId}:posts:new`;
+  const modeKey = personaComposeDraftInputKey(
+    composeMode || personaFormState(personaId).generate.composeMode,
+  ) || "tweet";
+  return `personaPostMediaUploadFiles:${personaId}:posts:new:${modeKey}`;
 }
 
 function renderPersonaCompactMediaUpload(persona, post = null) {
@@ -22654,12 +22751,19 @@ function activePersonaDraftComposerTransientState(persona = selectedPersona()) {
   if (!persona || !isPersonaWorkspaceModule()) return null;
   if (state.personaGroup !== "content" || currentPersonaGroupStep("content", selectedPersonaProfile()) !== "generate") return null;
   snapshotPersonaCurrentForm();
-  const draft = normalizePersonaDraftForm(personaFormState(persona.id).draft);
+  const form = personaFormState(persona.id);
+  const draft = normalizePersonaDraftForm(form.draft);
   if (String(draft.editingPostId || "").trim()) return null;
-  const title = String(draft.title || $("personaDraftTitle")?.value || "").trim();
-  const content = String(draft.content || $("personaDraftContent")?.value || "").trim();
+  const composeDraftInputs = ensurePersonaComposeDraftInputs(form);
+  const activeKey = personaComposeDraftInputKey(form.generate.composeMode);
+  const activeInput = activeKey ? composeDraftInputs[activeKey] : null;
+  const title = String(activeInput?.title || draft.title || $("personaDraftTitle")?.value || "").trim();
+  const content = String(activeInput?.content || draft.content || $("personaDraftContent")?.value || "").trim();
+  const hasComposeText = Object.values(composeDraftInputs).some((input) => (
+    Boolean(String(input?.title || "").trim()) || Boolean(String(input?.content || "").trim())
+  ));
   const fileCount = filesFromInput("personaPostMediaUploadFiles").length;
-  if (!title && !content && !fileCount) return null;
+  if (!hasComposeText && !fileCount) return null;
   const platform = personaContentPlatform(persona);
   return {
     kind: "persona_draft_composer",
@@ -22671,8 +22775,7 @@ function activePersonaDraftComposerTransientState(persona = selectedPersona()) {
     guardKey: transientWorkspaceFingerprint("persona_draft_composer", {
       personaId: String(persona.id || ""),
       platform,
-      title,
-      content,
+      composeDraftInputs,
       fileCount,
     }),
   };
@@ -29948,6 +30051,7 @@ function bindEvents() {
           commit: () => {
             form.generate.composeMode = nextComposeMode;
             form.generate.mode = nextComposeMode === "hot" ? "hot" : "ai";
+            restorePersonaComposeDraftInput(form, nextComposeMode);
             setSelectedPersonaPostId("");
             form.media.focusPostId = "";
             if (editingPostId) {
