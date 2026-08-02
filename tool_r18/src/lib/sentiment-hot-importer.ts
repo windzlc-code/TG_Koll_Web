@@ -1079,6 +1079,19 @@ export function candidateMatchesSentimentHotStrategyAnchors(candidate: Sentiment
   };
   const rejectTerms = strategy.rejectTerms.map(cleanText).filter((term) => term.length >= 2);
   if (rejectTerms.some((term) => countMatchedNeedles(candidate, [term]) > 0)) return false;
+  if ((candidate.metrics as any)?.globalPersonaBackfill === true) {
+    const sourceQuery = cleanText((candidate.metrics as any)?.query);
+    const currentQueries = sentimentHotStrategyTermsForMode(strategy, mode)
+      .flatMap((term) => [term, ...expandSentimentSearchKeywordVariants(term)])
+      .map(cleanText)
+      .filter((term) => term.length >= 2);
+    const belongsToCurrentStrategy = sourceQuery.length >= 2 && currentQueries.some((term) => (
+      sourceQuery === term
+      || (sourceQuery.length >= 3 && term.includes(sourceQuery))
+      || (term.length >= 3 && sourceQuery.includes(term))
+    ));
+    if (!belongsToCurrentStrategy) return false;
+  }
   const requiredAnchors = strategy.requiredAnchorTerms.filter((term) => term.length >= 2);
   const normalAnchors = strategy.normalAnchorTerms.filter((term) => term.length >= 2);
   const sourceQuery = cleanText((candidate.metrics as any)?.query);

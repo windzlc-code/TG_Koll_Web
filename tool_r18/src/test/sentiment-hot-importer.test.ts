@@ -968,6 +968,36 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(false);
   });
 
+  it("rejects a shared candidate collected by another persona query", () => {
+    const strategy = {
+      primaryQueries: ["台湾美食", "夜市小吃"],
+      broadQueries: ["餐厅活动"],
+      ecosystemQueries: ["美食趋势"],
+      requiredAnchorTerms: ["台湾美食", "夜市小吃", "台北餐厅"],
+      normalAnchorTerms: ["美食", "小吃", "餐厅"],
+      rejectTerms: [],
+      strictAcceptTerms: ["台湾美食", "夜市小吃", "台北餐厅"],
+      normalAcceptTerms: ["美食", "小吃", "餐厅"],
+      domainSummary: "台湾餐饮热点",
+    } as any;
+    const candidate = {
+      id: "foreign-persona-backfill",
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@demo/post/foreign-persona-backfill",
+      author: "demo",
+      content: "这是一篇政治活动记录，正文只在最后顺带提到夜市小吃是否安全，核心内容与餐饮热点无关。",
+      media: [],
+      hotScore: 5000,
+      metrics: { globalPersonaBackfill: true, query: "基层活动" },
+    } as any;
+
+    expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(false);
+    expect(candidateMatchesSentimentHotStrategyAnchors({
+      ...candidate,
+      metrics: { globalPersonaBackfill: true, query: "台湾美食推荐" },
+    }, strategy, "strict")).toBe(true);
+  });
+
   it("requires a specific topic phrase instead of a shared short action word in strict mode", () => {
     const keywords = [
       "\u8001\u94a2\u7b14\u4fee\u590d",
