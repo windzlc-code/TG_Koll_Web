@@ -1275,6 +1275,28 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(archives[0]["boundPadCode"], "PAD-99")
         self.assertEqual(archives[0]["boundPadName"], "OP-TEST99")
 
+    def test_hot_warning_reports_keyword_timeout_without_generic_fallback(self):
+        messages = server._persona_hot_user_warnings(
+            ["热点关键词生成超时，本次未执行抓取；请稍后重试。"],
+            0,
+            10,
+            [],
+        )
+
+        self.assertEqual(messages, ["热点关键词生成超时，本次未执行抓取，请稍后重试。"])
+        self.assertNotIn("暂未找到", " ".join(messages))
+
+    def test_hot_warning_reports_source_timeout_without_generic_fallback(self):
+        messages = server._persona_hot_user_warnings(
+            ["热点抓取已超时，已停止后续耗时步骤。"],
+            0,
+            10,
+            [],
+        )
+
+        self.assertEqual(messages, ["热点来源抓取超时，本次未获得候选，请稍后重试。"])
+        self.assertNotIn("暂未找到", " ".join(messages))
+
     def test_public_persona_profile_persists_avatar_crop_without_replacing_reference(self):
         self._write_archives()
         resp = self.client.patch(

@@ -13,7 +13,6 @@ import {
   acquireSentimentBrowserWorkSlot,
   applyPersonaGuardToSentimentHotStrategy,
   boundedBrowserPageConcurrency,
-  buildSentimentHotKeywords,
   buildJinaReaderUrl,
   buildThreadsSearchUrl,
   candidateMatchesRequestedFreshness,
@@ -46,6 +45,7 @@ import {
   parseThreadsDetailMediaMarkdown,
   parseThreadsSearchTextCandidates,
   refreshSentimentSourceMetrics,
+  resolveSentimentHotModelStrategyKeywords,
   resolveSentimentHotStrategyTimeoutMs,
   shouldTreatThreadsProfileAsLoginWall,
 } from "@/lib/sentiment-hot-importer";
@@ -166,10 +166,25 @@ describe("sentiment hot importer", () => {
     })).toEqual([]);
   });
 
-  it("keeps a live refresh from consuming the browser stage with model strategy time", () => {
-    expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(3_000);
+  it("gives a live refresh enough time to obtain a model search strategy", () => {
+    expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(15_000);
     expect(resolveSentimentHotStrategyTimeoutMs(false, 50_000)).toBe(30_000);
-    expect(resolveSentimentHotStrategyTimeoutMs(true, 5_000)).toBe(3_000);
+    expect(resolveSentimentHotStrategyTimeoutMs(true, 5_000)).toBe(5_000);
+  });
+
+  it("never manufactures fallback keywords when the model strategy is unavailable", () => {
+    expect(resolveSentimentHotModelStrategyKeywords(null, "strict")).toEqual([]);
+    expect(resolveSentimentHotModelStrategyKeywords({
+      primaryQueries: [],
+      broadQueries: [],
+      ecosystemQueries: [],
+      requiredAnchorTerms: [],
+      normalAnchorTerms: [],
+      rejectTerms: [],
+      strictAcceptTerms: [],
+      normalAcceptTerms: [],
+      domainSummary: "",
+    } as any, "strict")).toEqual([]);
   });
 
   it("does not change the source pipeline when custom freshness is disabled", () => {
@@ -196,112 +211,6 @@ describe("sentiment hot importer", () => {
       ...candidate,
       metrics: { archiveScopedFallback: true },
     } as any, 7)).toBe(false);
-  });
-
-  it("builds persona-specific search keywords", () => {
-    const beautyKeywords = buildSentimentHotKeywords({
-      archive: {
-        id: "beauty",
-        name: "Beauty Persona",
-        content: "分享护肤 穿搭 生活日常。",
-        setup: { genres: ["护肤", "穿搭"], contentTheme: "生活" },
-        posts: [],
-      } as any,
-    });
-    const techKeywords = buildSentimentHotKeywords({
-      archive: {
-        id: "tech",
-        name: "Tech Persona",
-        content: "分享AI工具和自动化流程。",
-        setup: { genres: ["AI", "自动化"], contentTheme: "效率" },
-        posts: [],
-      } as any,
-    });
-
-    expect(beautyKeywords).toContain("护肤");
-    expect(techKeywords).toContain("自动化");
-    expect(beautyKeywords.join("|")).not.toBe(techKeywords.join("|"));
-  });
-
-  it("turns fictional persona descriptions into searchable Chinese topic keywords", () => {
-    const keywords = buildSentimentHotKeywords({
-      archive: {
-        id: "liwu",
-        name: "李无",
-        content: "李无是一位邪恶医生，黑暗医疗视频倾向，内容领域聚焦医疗阴谋、邪恶实验与黑色幽默故事。",
-        setup: { genres: ["医疗黑暗", "邪恶医生故事"], contentTheme: "医院反派故事" },
-        posts: [],
-      } as any,
-    });
-
-    expect(keywords).not.toContain("李无");
-    expect(keywords).toEqual(expect.arrayContaining(["医疗黑暗", "邪恶医生故事", "邪恶实验"]));
-    expect(keywords).not.toContain("医生");
-  });
-
-  it("does not promote visual field labels or negated topics into hot search keywords", () => {
-    const keywords = buildSentimentHotKeywords({
-      archive: {
-        id: "ken",
-        name: "Ken 海外工薪金融干货",
-        content: "面向海外工薪族，分享海外金融、工薪信貸、理財規劃、信用卡和贷款。不做美食娛樂。",
-        setup: {
-          genres: ["AI", "人工智慧", "自動化", "職場", "海外金融", "工薪信貸", "理財規劃"],
-          contentTheme: "內容主題和圖片視覺傾向",
-          personality: "理性務實",
-        },
-        posts: [],
-      } as any,
-    });
-
-    expect(keywords).toEqual(expect.arrayContaining(["海外金融", "工薪信貸", "理財規劃"]));
-    expect(keywords).not.toContain("內容主題");
-    expect(keywords).not.toContain("圖片視覺傾向");
-    expect(keywords).not.toContain("視覺傾向");
-    expect(keywords).not.toContain("理性務實");
-    expect(keywords).not.toContain("美食");
-  });
-
-  it("does not directly use interest tags as fallback hot search keywords", () => {
-    const keywords = buildSentimentHotKeywords({
-      archive: {
-        id: "interest-drift",
-        name: "海外工薪理財號",
-        content: "面向海外工薪族，專注工薪信貸、信用卡、貸款和理財規劃。",
-        setup: {
-          interests: ["美食", "旅行"],
-          genres: ["海外金融"],
-          personaType: "海外工薪金融干貨",
-        },
-        posts: [],
-      } as any,
-    });
-
-    expect(keywords).toEqual(expect.arrayContaining(["工薪信貸", "信用卡", "貸款", "理財規劃"]));
-    expect(keywords).not.toContain("美食");
-    expect(keywords).not.toContain("旅行");
-  });
-
-  it("does not leak Traditional Chinese persona wrapper phrases into fallback hot keywords", () => {
-    const keywords = buildSentimentHotKeywords({
-      archive: {
-        id: "ken-real",
-        name: "Ken 海外工薪金融干货",
-        content: "Ken 是一名海外工薪金融干货人设，說話直白犀利，深耕海外華人工薪信貸與理財規劃。",
-        setup: {
-          genres: ["海外金融", "工薪信貸", "理財規劃"],
-          personality: "說話直白犀利",
-          personaType: "海外工薪金融干货",
-        },
-        posts: [],
-      } as any,
-    });
-
-    expect(keywords).toEqual(expect.arrayContaining(["海外金融", "工薪信貸", "理財規劃"]));
-    expect(keywords).not.toContain("是一名");
-    expect(keywords).not.toContain("他自詡為");
-    expect(keywords).not.toContain("說話直白犀利");
-    expect(keywords).not.toContain("深耕海外華人工薪信貸");
   });
 
   it("rejects hot candidates that conflict with the persona topic", () => {
@@ -863,7 +772,7 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(false);
   });
 
-  it("preserves explicit source phrases for an unknown composite niche persona", () => {
+  it("does not inject mechanically extracted persona phrases into a model strategy", () => {
     const strategy = {
       primaryQueries: ["\u52a8\u6f2b\u65b0\u756a"],
       broadQueries: ["\u5b85\u6587\u5316"],
@@ -878,23 +787,12 @@ describe("sentiment hot importer", () => {
 
     applyPersonaGuardToSentimentHotStrategy({
       strategy,
-      archiveName: "\u89d2\u8272\u626e\u6f14\u4eba\u8bbe",
-      personaSeedKeywords: ["\u89d2\u8272\u626e\u6f14", "\u523a\u9752", "\u7535\u7ade", "\u8db3\u7403", "\u6295\u8d44\u7406\u8d22"],
-      sourceText: "\u559c\u6b22 Cosplay \u548c\u523a\u9752\uff0c\u5173\u6ce8\u7535\u7ade\u6e38\u620f\u3001\u8db3\u7403\u8d5b\u4e8b\u4e0e\u6295\u8d44\u7406\u8d22\u3002",
     });
 
-    expect(strategy.requiredAnchorTerms).toEqual(expect.arrayContaining([
-      "\u523a\u9752",
-      "\u7535\u7ade",
-      "\u8db3\u7403\u8d5b\u4e8b",
-      "\u6295\u8d44\u7406\u8d22",
-    ]));
-    expect(strategy.primaryQueries).toEqual(expect.arrayContaining([
-      "\u523a\u9752",
-      "\u7535\u7ade",
-      "\u8db3\u7403\u8d5b\u4e8b",
-      "\u6295\u8d44\u7406\u8d22",
-    ]));
+    expect(strategy.requiredAnchorTerms).toEqual(["\u52a8\u6f2b", "\u4e8c\u6b21\u5143"]);
+    expect(strategy.primaryQueries).toEqual(["\u52a8\u6f2b\u65b0\u756a"]);
+    expect(strategy.primaryQueries).not.toContain("\u523a\u9752");
+    expect(strategy.primaryQueries).not.toContain("\u6295\u8d44\u7406\u8d22");
   });
 
   it("removes generic persona roles from model search and acceptance terms", () => {
@@ -912,9 +810,6 @@ describe("sentiment hot importer", () => {
 
     applyPersonaGuardToSentimentHotStrategy({
       strategy,
-      archiveName: "\u8336\u6587\u5316\u5e2b\u5085",
-      personaSeedKeywords: ["\u5e2b\u5085", "\u8336\u6587\u5316", "\u54c1\u8336", "\u8336\u5177\u4f7f\u7528"],
-      sourceText: "\u5c08\u6ce8\u8336\u6587\u5316\u3001\u54c1\u8336\u3001\u8336\u5177\u4f7f\u7528\u8207\u8336\u8449\u4fdd\u5b58\u3002",
     });
 
     for (const terms of [

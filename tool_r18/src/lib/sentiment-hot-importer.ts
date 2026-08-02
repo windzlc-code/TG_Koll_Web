@@ -70,11 +70,11 @@ const INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE = 4;
 const DEFAULT_REFRESH_FRESHNESS_DAYS = 7;
 const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 42_000;
 const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 58_000;
-const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 3_000;
+const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 15_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
-const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 21;
+const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 22;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 48;
@@ -856,82 +856,6 @@ function normalizeSentimentSearchKeyword(value: unknown, options?: { archiveName
   return text;
 }
 
-function extractDynamicPersonaKeywords(args: { archiveName: string; pieces: string[] }): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  const add = (value: string, options?: { maxLength?: number }) => {
-    const text = normalizeSentimentSearchKeyword(value, { archiveName: args.archiveName, sourceText: args.pieces.join(" ") });
-    const key = text.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(text);
-  };
-
-  for (const piece of args.pieces) {
-    const cleaned = cleanText(piece)
-      .replace(/https?:\/\/\S+/g, " ")
-      .replace(/[「」『』“”"'()[\]{}]/g, " ");
-    for (const segment of cleaned.split(/[,，、。.!！?？；;：:\n\r]+/g)) {
-      const text = normalizeDynamicKeyword(segment, args.archiveName);
-      if (!text) continue;
-      for (const token of text.split(/\s+|和|與|与|及|以及|跟/g)) add(token);
-      if (!/\s/.test(text) && text.length <= 8) add(text);
-    }
-  }
-  return out.slice(0, 8);
-}
-
-function extractSegmentedPersonaKeywords(args: { archiveName: string; pieces: string[] }): string[] {
-  const Segmenter = (Intl as any).Segmenter;
-  if (typeof Segmenter !== "function") return [];
-  const out: string[] = [];
-  const seen = new Set<string>();
-  const sourceText = args.pieces.join(" ");
-  const add = (value: string) => {
-    const keyword = normalizeSentimentSearchKeyword(value, {
-      archiveName: args.archiveName,
-      sourceText,
-    });
-    const key = keyword.toLowerCase();
-    if (!keyword || seen.has(key) || isGenericPersonaRoleTerm(keyword) || !isConcreteSearchKeyword(keyword)) return;
-    seen.add(key);
-    out.push(keyword);
-  };
-  const segmenter = new Segmenter("zh", { granularity: "word" });
-  for (const piece of args.pieces) {
-    const words = [...segmenter.segment(piece)]
-      .filter((item: any) => item?.isWordLike)
-      .map((item: any) => cleanText(item.segment))
-      .filter((item: string) => item.length >= 2 && item.length <= 8);
-    for (let index = 0; index < words.length; index += 1) {
-      add(words[index]);
-      const phrase = `${words[index]}${words[index + 1] || ""}`;
-      if (phrase.length <= 8) add(phrase);
-    }
-  }
-  return out.slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
-}
-
-function buildSearchKeywordCandidates(args: {
-  archiveName: string;
-  pieces: string[];
-}): string[] {
-  const joined = args.pieces.join(" ");
-  const out: string[] = [];
-  out.push(...extractDynamicPersonaKeywords(args));
-  out.push(...extractSegmentedPersonaKeywords(args));
-  for (const item of splitKeywords(joined)) {
-    const keyword = normalizeSentimentSearchKeyword(item, { archiveName: args.archiveName, sourceText: joined });
-    if (keyword) out.push(keyword);
-  }
-  for (const item of [...out]) {
-    out.push(...expandSentimentSearchKeywordVariants(item));
-  }
-  return rankSearchKeywords(filterConflictingSearchKeywords([...new Set(out)])
-    .filter((item) => isConcreteSearchKeyword(item) && !isGenericPersonaRoleTerm(item))
-  ).slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
-}
-
 function filterConflictingSearchKeywords(keywords: string[]): string[] {
   return keywords;
 }
@@ -986,66 +910,11 @@ function sentimentHotKeywordTargetForMode(mode: SentimentHotSearchMode): number 
   return mode === "normal" ? SENTIMENT_HOT_NORMAL_KEYWORD_TARGET : SENTIMENT_HOT_STRICT_KEYWORD_TARGET;
 }
 
-function buildPersonaContentKeywords(sourceText: string): string[] {
-  const text = cleanText(sourceText);
-  if (!text) return [];
-  return buildSearchKeywordCandidates({
-    archiveName: "",
-    pieces: [text],
-  }).slice(0, SENTIMENT_HOT_STRICT_KEYWORD_TARGET);
-}
-
-function prepareSentimentHotKeywordsForMode(keywords: string[], mode: SentimentHotSearchMode, options?: { sourceText?: string; useContentFallback?: boolean }): string[] {
+function prepareSentimentHotKeywordsForMode(keywords: string[], mode: SentimentHotSearchMode): string[] {
   const normalized = filterConflictingSearchKeywords([...new Set(
     keywords.map(cleanText).filter((item) => isConcreteSearchKeyword(item)),
   )]);
-  if (mode === "normal") {
-    const expanded: string[] = [...normalized];
-    for (const keyword of normalized) {
-      if (options?.useContentFallback) expanded.push(...expandSentimentSearchKeywordVariants(keyword));
-    }
-    return [...new Set(expanded.filter((item) => isConcreteSearchKeyword(item)))].slice(0, sentimentHotKeywordTargetForMode(mode));
-  }
-  const contentKeywords = buildPersonaContentKeywords(options?.sourceText || "");
-  const merged = [...contentKeywords, ...normalized];
-  return [...new Set(merged.filter((item) => isConcreteSearchKeyword(item)))].slice(0, sentimentHotKeywordTargetForMode(mode));
-}
-
-function extractDirectHanKeywords(args: { archiveName: string; text: string }): string[] {
-  const out: string[] = [];
-  const add = (value: string, options?: { maxLength?: number }) => {
-    const text = normalizeSentimentSearchKeyword(value, { archiveName: args.archiveName, sourceText: args.text });
-    if (!text) return;
-    out.push(text);
-  };
-  for (const match of args.text.matchAll(/[\u3400-\u9fff]{2,12}/gu)) add(match[0]);
-  return [...new Set(out)].slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
-}
-
-export function buildSentimentHotKeywords(args: {
-  archive?: Partial<Pick<PersonaArchive, "name" | "content" | "setup">>;
-  prompt?: string;
-  memorySummaries?: string[];
-}): string[] {
-  const archive = args.archive || {};
-  const setup = archive.setup || {};
-  const pieces = [
-    archive.name,
-    Array.isArray((setup as any).genres) ? (setup as any).genres.join(" ") : "",
-    (setup as any).personaType,
-    archive.content,
-    ...(args.memorySummaries || []),
-    args.prompt,
-  ].map(cleanText).filter(Boolean);
-  const joined = pieces.join(" ");
-  const personaName = cleanText(archive.name);
-  const extracted = [
-    ...buildSearchKeywordCandidates({ archiveName: personaName, pieces }),
-    ...extractDirectHanKeywords({ archiveName: personaName, text: joined }),
-  ];
-  return rankSearchKeywords(
-    [...new Set(extracted.filter((item) => Boolean(item) && !isGenericPersonaRoleTerm(item)))],
-  ).slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
+  return normalized.slice(0, sentimentHotKeywordTargetForMode(mode));
 }
 
 function parseModelKeywordList(text: string): string[] {
@@ -1168,56 +1037,34 @@ function sentimentHotStrategyTermsForMode(strategy: SentimentHotSearchStrategy, 
   return [...new Set(terms)];
 }
 
-function buildSegmentedSentimentHotQueryTerms(strategy: SentimentHotSearchStrategy, mode: SentimentHotSearchMode): string[] {
-  const identityAnchor = cleanText(strategy.personaGuardTerms?.[0] || strategy.normalAnchorTerms[0]);
-  const out: string[] = [];
-  for (const term of sentimentHotStrategyTermsForMode(strategy, mode)) {
-    for (const segment of segmentPersonaWords(term)) {
-      const query = identityAnchor && segment !== identityAnchor ? `${identityAnchor} ${segment}` : segment;
-      if (query && !out.includes(query)) out.push(query);
-    }
-  }
-  return out;
+export function resolveSentimentHotModelStrategyKeywords(
+  strategy: SentimentHotSearchStrategy | null | undefined,
+  mode: SentimentHotSearchMode,
+): string[] {
+  if (!strategy || !sentimentHotStrategyHasModelTerms(strategy)) return [];
+  return prepareSentimentHotKeywordsForMode(sentimentHotStrategyTermsForMode(strategy, mode), mode);
 }
 
 export function applyPersonaGuardToSentimentHotStrategy(args: {
   strategy: SentimentHotSearchStrategy;
-  archiveName?: string;
-  personaSeedKeywords: string[];
-  sourceText: string;
 }) {
-  const personaGuardTerms = prepareSentimentHotKeywordsForMode(args.personaSeedKeywords, "strict", {
-    sourceText: args.sourceText,
-    useContentFallback: true,
-  }).filter((term) => !isGenericPersonaRoleTerm(term)).slice(0, 10);
-  const explicitPersonaAnchors = args.personaSeedKeywords
-    .map((term) => normalizeSentimentSearchKeyword(term, { sourceText: args.sourceText }))
-    .filter((term) => isConcreteSearchKeyword(term) && !isGenericPersonaRoleTerm(term));
-  const contentAnchors = buildPersonaContentKeywords(args.sourceText);
-  const removeGenericRoles = (terms: string[]) => terms.filter((term) => !isGenericPersonaRoleTerm(term));
-  args.strategy.primaryQueries = removeGenericRoles(args.strategy.primaryQueries);
-  args.strategy.broadQueries = removeGenericRoles(args.strategy.broadQueries);
-  args.strategy.ecosystemQueries = removeGenericRoles(args.strategy.ecosystemQueries);
-  args.strategy.requiredAnchorTerms = removeGenericRoles(args.strategy.requiredAnchorTerms);
-  args.strategy.normalAnchorTerms = removeGenericRoles(args.strategy.normalAnchorTerms);
-  args.strategy.strictAcceptTerms = removeGenericRoles(args.strategy.strictAcceptTerms);
-  args.strategy.normalAcceptTerms = removeGenericRoles(args.strategy.normalAcceptTerms);
-  const personaIdentityAnchor = segmentPersonaWords(cleanText(args.archiveName))
-    .find((term) => !isGenericPersonaRoleTerm(term))
-    || personaGuardTerms[0]
-    || args.strategy.normalAnchorTerms.flatMap((term) => segmentPersonaWords(term)).find((term) => !isGenericPersonaRoleTerm(term));
+  const cleanModelTerms = (terms: string[]) => [...new Set(
+    terms
+      .map((term) => normalizeSentimentSearchKeyword(term))
+      .filter((term) => isConcreteSearchKeyword(term) && !isGenericPersonaRoleTerm(term)),
+  )];
+  args.strategy.primaryQueries = cleanModelTerms(args.strategy.primaryQueries);
+  args.strategy.broadQueries = cleanModelTerms(args.strategy.broadQueries);
+  args.strategy.ecosystemQueries = cleanModelTerms(args.strategy.ecosystemQueries);
+  args.strategy.requiredAnchorTerms = cleanModelTerms(args.strategy.requiredAnchorTerms);
+  args.strategy.normalAnchorTerms = cleanModelTerms(args.strategy.normalAnchorTerms);
+  args.strategy.strictAcceptTerms = cleanModelTerms(args.strategy.strictAcceptTerms);
+  args.strategy.normalAcceptTerms = cleanModelTerms(args.strategy.normalAcceptTerms);
+  args.strategy.rejectTerms = cleanModelTerms(args.strategy.rejectTerms);
   args.strategy.personaGuardTerms = [...new Set([
-    ...(personaIdentityAnchor ? [personaIdentityAnchor] : []),
-    ...personaGuardTerms,
+    ...args.strategy.normalAnchorTerms,
+    ...args.strategy.requiredAnchorTerms,
   ])].slice(0, 6);
-  args.strategy.primaryQueries = [...new Set([...explicitPersonaAnchors, ...personaGuardTerms, ...contentAnchors, ...args.strategy.primaryQueries])];
-  args.strategy.requiredAnchorTerms = [...new Set([...explicitPersonaAnchors, ...contentAnchors, ...args.strategy.requiredAnchorTerms])];
-  args.strategy.strictAcceptTerms = [...new Set([...personaGuardTerms, ...args.strategy.strictAcceptTerms])];
-  args.strategy.normalAcceptTerms = [...new Set([...personaGuardTerms, ...args.strategy.normalAcceptTerms])];
-  if (personaIdentityAnchor) {
-    args.strategy.primaryQueries = [...new Set([personaIdentityAnchor, ...args.strategy.primaryQueries])];
-    args.strategy.normalAnchorTerms = [...new Set([personaIdentityAnchor, ...args.strategy.normalAnchorTerms])];
-  }
 }
 
 export function candidateMatchesSentimentHotStrategyAnchors(candidate: SentimentHotCandidate, strategy: SentimentHotSearchStrategy, mode: SentimentHotSearchMode): boolean {
@@ -1418,12 +1265,23 @@ function buildSentimentHotSearchStrategyCacheKey(args: {
   personaText: string;
 }): string {
   const archive = args.archive || {};
+  const setup = archive.setup || {};
   const payload = {
     version: SENTIMENT_HOT_SEARCH_STRATEGY_VERSION,
     id: cleanText((archive as any).id),
     name: cleanText(archive.name),
     content: cleanText(archive.content),
-    setup: archive.setup || {},
+    setup: {
+      genres: Array.isArray((setup as any).genres) ? (setup as any).genres.map(cleanText).filter(Boolean) : [],
+      interests: Array.isArray((setup as any).interests) ? (setup as any).interests.map(cleanText).filter(Boolean) : [],
+      personaType: cleanText((setup as any).personaType),
+      personality: cleanText((setup as any).personality || (setup as any).personaPersonality),
+      personaStyle: cleanText((setup as any).personaStyle),
+      contentTheme: cleanText((setup as any).contentTheme),
+      customTopic: cleanText((setup as any).customTopic),
+      tweetStyleProfile: cleanText((setup as any).tweetStyleProfile),
+      tweetStyleSample: cleanText((setup as any).tweetStyleSample),
+    },
     prompt: cleanText(args.prompt),
     memorySummaries: (args.memorySummaries || []).map(cleanText).filter(Boolean),
   };
@@ -1494,7 +1352,10 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
     Array.isArray((setup as any).genres) && (setup as any).genres.length ? `内容领域：${(setup as any).genres.join("、")}` : "",
     Array.isArray((setup as any).interests) && (setup as any).interests.length ? `兴趣参考：${(setup as any).interests.join("、")}` : "",
     (setup as any).personaType ? `身份类型：${(setup as any).personaType}` : "",
-    (setup as any).personality ? `性格与边界：${(setup as any).personality}` : "",
+    (setup as any).contentTheme ? `内容主题：${(setup as any).contentTheme}` : "",
+    (setup as any).customTopic ? `补充主题：${(setup as any).customTopic}` : "",
+    ((setup as any).personality || (setup as any).personaPersonality) ? `性格与边界：${(setup as any).personality || (setup as any).personaPersonality}` : "",
+    (setup as any).personaStyle ? `表达风格：${(setup as any).personaStyle}` : "",
     setup.tweetStyleProfile ? `推文风格：${setup.tweetStyleProfile}` : "",
     setup.tweetStyleSample ? `推文样例：${setup.tweetStyleSample}` : "",
     args.memorySummaries?.length ? `近期记忆：${args.memorySummaries.join("；")}` : "",
@@ -1569,9 +1430,14 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
       if (args.useCache !== false) writeCachedSentimentHotSearchStrategy(cacheKey, strategy);
       return strategy;
     }
-    args.warnings.push("模型未返回可用热点搜索策略，已改用当前人设核心领域词继续抓取。");
+    args.warnings.push("模型未返回符合规范的热点关键词，本次未执行抓取；请稍后重试。");
   } catch (error) {
-    args.warnings.push("模型生成热点搜索策略失败，已改用当前人设核心领域词继续抓取：" + (error instanceof Error ? error.message : String(error)));
+    const detail = error instanceof Error ? error.message : String(error);
+    args.warnings.push(
+      /timeout|timed\s*out|abort|超时|超時/i.test(detail)
+        ? "热点关键词生成超时，本次未执行抓取；请稍后重试。"
+        : `热点关键词生成失败，本次未执行抓取：${detail}`,
+    );
   }
   return emptySentimentHotSearchStrategy();
 }
@@ -1928,14 +1794,6 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   // when the live source is rate-limited without admitting stale history.
   const strictFreshOnly = strictFreshness && freshnessDays > 0;
   const limit = args.limit || 10;
-  const personaSeedKeywords = buildSentimentHotKeywords({
-    archive,
-    prompt: args.prompt,
-    memorySummaries: args.memorySummaries,
-  });
-  const sourceText = [archive?.name, archive?.content, args.prompt, ...(args.memorySummaries || [])].map(cleanText).filter(Boolean).join(" ");
-  const personaGuardSeedKeywords = personaSeedKeywords;
-  const personaGuardSourceText = sourceText;
   const runtimePromise = ensureSentimentRuntime().catch((error: any) => ({
     ok: false,
     url: resolveSentimentBackendUrl(),
@@ -1948,25 +1806,11 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     personaText: "",
   }));
   if (prefetchedStrategy) {
-    applyPersonaGuardToSentimentHotStrategy({
-      strategy: prefetchedStrategy,
-      archiveName: archive?.name,
-      personaSeedKeywords: personaGuardSeedKeywords,
-      sourceText: personaGuardSourceText,
-    });
+    applyPersonaGuardToSentimentHotStrategy({ strategy: prefetchedStrategy });
   }
-  const provisionalKeywordSource = prefetchedStrategy
-    ? sentimentHotStrategyTermsForMode(prefetchedStrategy, searchMode)
-    : personaSeedKeywords;
-  const provisionalKeywords = prepareSentimentHotKeywordsForMode(provisionalKeywordSource, searchMode, {
-    sourceText,
-    useContentFallback: !prefetchedStrategy,
-  });
+  const provisionalKeywords = resolveSentimentHotModelStrategyKeywords(prefetchedStrategy, searchMode);
   const provisionalQueryKeywords = prefetchedStrategy
-    ? prepareSentimentHotKeywordsForMode([
-        ...sentimentHotStrategyTermsForMode(prefetchedStrategy, searchMode),
-        ...buildSegmentedSentimentHotQueryTerms(prefetchedStrategy, searchMode),
-      ], searchMode, { sourceText })
+    ? resolveSentimentHotModelStrategyKeywords(prefetchedStrategy, searchMode)
     : provisionalKeywords;
   const provisionalKeywordBatches = [provisionalQueryKeywords];
   const provisionalCacheStartedAt = Date.now();
@@ -2033,55 +1877,14 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     ),
   );
   if (strategyResult) {
-    applyPersonaGuardToSentimentHotStrategy({
-      strategy: strategyResult,
-      archiveName: archive?.name,
-      personaSeedKeywords: personaGuardSeedKeywords,
-      sourceText: personaGuardSourceText,
-    });
+    applyPersonaGuardToSentimentHotStrategy({ strategy: strategyResult });
   }
   const hasModelStrategy = Boolean(strategyResult && sentimentHotStrategyHasModelTerms(strategyResult));
-  let keywords = strategyResult ? sentimentHotStrategyTermsForMode(strategyResult, searchMode) : [];
-  if (!hasModelStrategy) warnings.push("模型热点搜索策略暂不可用，已使用当前人设资料解析出的核心词继续抓取。");
-  if (keywords.length === 0 && personaSeedKeywords.length > 0) {
-    keywords = [...personaSeedKeywords];
+  const keywords = resolveSentimentHotModelStrategyKeywords(strategyResult, searchMode);
+  if (!hasModelStrategy && !warnings.some((warning) => /关键词生成|搜索策略/.test(warning))) {
+    warnings.push("热点关键词不可用，本次未执行抓取；请稍后重试。");
   }
-  if (keywords.length === 0 && !liveOnlyRefresh) {
-    const cachedKeywords = readArchiveScopedThreadsSearchKeywords(archiveId, SENTIMENT_MODEL_KEYWORD_TARGET, searchMode);
-    if (cachedKeywords.length > 0) {
-      keywords = cachedKeywords;
-      warnings.push("模型关键词不可用，已改用同一人设历史真实抓取关键词继续刷新。");
-    }
-  }
-  if (!hasModelStrategy && personaSeedKeywords.length > 0 && keywords.length < SENTIMENT_MODEL_KEYWORD_TARGET) {
-    keywords = [...keywords, ...personaSeedKeywords];
-  }
-  keywords = prepareSentimentHotKeywordsForMode([...new Set(
-    keywords
-      .map((item) => normalizeSentimentSearchKeyword(item, { archiveName: archive?.name, sourceText }))
-      .filter((item) => isConcreteSearchKeyword(item)),
-  )], searchMode, { sourceText, useContentFallback: !hasModelStrategy });
-  const identityQueryTerms = segmentPersonaWords(cleanText(archive?.name))
-    .map((term) => term.replace(/[者師师員员]$/u, ""))
-    .filter((term) => (
-      term.length >= 2
-      && term.length <= 8
-      && isSearchableRelevanceTerm(term)
-      && !isGenericPersonaRoleTerm(term)
-      && !isWeakRelevanceKeyword(term)
-    ))
-    .slice(0, 3);
-  const preparedQueryKeywords = hasModelStrategy && strategyResult
-    ? (() => {
-        const strategyTerms = sentimentHotStrategyTermsForMode(strategyResult, searchMode);
-        const segmentedTerms = buildSegmentedSentimentHotQueryTerms(strategyResult, searchMode);
-        return prepareSentimentHotKeywordsForMode([...strategyTerms, ...segmentedTerms], searchMode, { sourceText });
-      })()
-    : keywords;
-  const queryKeywords = [...new Set([
-    ...identityQueryTerms,
-    ...preparedQueryKeywords,
-  ])];
+  const queryKeywords = keywords;
   warnings.push(searchMode === "normal" ? "热点抓取模式：普通（泛垂直）。" : "热点抓取模式：严格（垂直收口）。");
   if (liveOnlyRefresh) warnings.push("测试模式：仅统计本轮实时来源，不读取或写入缓存、数据库、共享候选和展示历史。");
   if (strictFreshness) {
@@ -6974,42 +6777,6 @@ function isHistoricalSupplementCandidate(candidate: SentimentHotCandidate): bool
   return Boolean(metrics.archiveScopedFallback || metrics.globalPersonaBackfill || metrics.sourceTier === "fallback_history");
 }
 
-function readArchiveScopedThreadsSearchKeywords(archiveId: string, limit: number, searchMode: SentimentHotSearchMode): string[] {
-  const state = readThreadsSearchCacheState(false, archiveId, searchMode);
-  const scopedPrefix = `${cleanText(archiveId) || "default"}::${normalizeSentimentHotSearchMode(searchMode)}::`;
-  const maxAgeMs = SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS;
-  const keywords: string[] = [];
-  const seen = new Set<string>();
-  const archiveKeys = threadsSearchArchiveCacheKeys(state, archiveId, searchMode)
-    .sort((a, b) => new Date(state[b]?.at || 0).getTime() - new Date(state[a]?.at || 0).getTime());
-  for (const key of archiveKeys) {
-    const row = state[key];
-    if (!isCompatibleThreadsSearchCacheRow(row, maxAgeMs)) continue;
-    const keyword = threadsSearchStoredKeyword(key, archiveId);
-    if (!keyword || seen.has(keyword)) continue;
-    const hasUsefulCandidate = (row.candidates || []).some((candidate) => {
-      const content = cleanThreadsReaderContent(candidate?.content || "");
-      return Boolean(
-        candidate?.id
-        && content
-        && candidateMeetsDisplayQuality({
-          ...candidate,
-          content,
-          metrics: {
-            ...(candidate.metrics || {}),
-            archiveScopedFallback: true,
-          },
-        }, [keyword], searchMode),
-      );
-    });
-    if (!hasUsefulCandidate) continue;
-    seen.add(keyword);
-    keywords.push(keyword);
-    if (keywords.length >= limit) break;
-  }
-  return keywords;
-}
-
 function readArchiveScopedThreadsCandidateBackfill(archiveId: string, keywords: string[], limit: number, excludeShown = false, searchMode: SentimentHotSearchMode = "strict"): SentimentHotCandidate[] {
   const state = readThreadsSearchCacheState(false, archiveId, searchMode);
   const excluded = excludeShown ? getSentimentHotRefreshExcludedIds(archiveId) : getSentimentHotExcludedIds(archiveId);
@@ -7109,27 +6876,16 @@ export function listSentimentHotCandidatePoolStats(archives: PersonaArchive[] = 
   const stats: SentimentHotCandidatePoolStat[] = [];
   for (const archiveId of archiveIds) {
     const archive = archiveById.get(archiveId);
-    const seedKeywords = archive ? buildSentimentHotKeywords({ archive }) : [];
-    const sourceText = archive ? [archive.name, archive.content].map(cleanText).filter(Boolean).join(" ") : "";
     const strategy = archive ? readCachedSentimentHotSearchStrategy(buildSentimentHotSearchStrategyCacheKey({
       archive,
       personaText: "",
     })) : null;
     if (strategy && archive) {
-      applyPersonaGuardToSentimentHotStrategy({
-        strategy,
-        archiveName: archive.name,
-        personaSeedKeywords: buildSentimentHotKeywords({ archive: { name: archive.name } }),
-        sourceText: cleanText(archive.name),
-      });
+      applyPersonaGuardToSentimentHotStrategy({ strategy });
     }
     for (const searchMode of ["normal", "strict"] as const) {
       const state = readThreadsSearchCacheState(false, archiveId, searchMode);
-      const strategySource = strategy ? sentimentHotStrategyTermsForMode(strategy, searchMode) : seedKeywords;
-      const keywords = prepareSentimentHotKeywordsForMode(strategySource, searchMode, {
-        sourceText,
-        useContentFallback: !strategy,
-      });
+      const keywords = resolveSentimentHotModelStrategyKeywords(strategy, searchMode);
       const cachedCandidates = keywords.length > 0
         ? readThreadsSearchCandidateCache(
             archiveId,

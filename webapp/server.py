@@ -13972,17 +13972,29 @@ def _persona_hot_raw_candidate_count(result: dict[str, Any]) -> int:
 def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: int, cookie_rows: Any = None) -> list[str]:
     count = max(0, int(candidate_count or 0))
     target = max(1, int(limit or 10))
-    messages = [
-        "暂未找到符合条件的热点，请稍后刷新候选。"
-        if count <= 0
-        else (f"已找到 {count} 条符合条件的热点，暂不足 {target} 条。" if count < target else f"已获取 {count} 条热点候选。")
-    ]
     normalized = [
         _normalize_hot_workflow_text(item)
         for item in (raw_warnings if isinstance(raw_warnings, list) else [])
         if _normalize_hot_workflow_text(item)
     ]
     warning_text = " ".join(normalized).lower()
+    keyword_failure = "热点关键词" in warning_text or "热点搜索策略" in warning_text
+    keyword_timed_out = keyword_failure and any(token in warning_text for token in ("超时", "timeout", "timed out"))
+    keyword_invalid = keyword_failure and any(token in warning_text for token in (
+        "未返回符合规范", "未返回可用", "策略不可用", "关键词不可用",
+    ))
+    keyword_rate_limited = keyword_failure and any(token in warning_text for token in (
+        "限流", "rate limit", "too many requests",
+    ))
+    if count <= 0 and keyword_timed_out:
+        return ["热点关键词生成超时，本次未执行抓取，请稍后重试。"]
+    if count <= 0 and keyword_rate_limited:
+        return ["热点关键词生成请求受限，本次未执行抓取，请稍后重试。"]
+    if count <= 0 and keyword_invalid:
+        return ["模型未返回符合规范的热点关键词，本次未执行抓取，请稍后重试。"]
+    if count <= 0 and keyword_failure:
+        return ["热点关键词生成失败，本次未执行抓取，请稍后重试。"]
+
     threads_status = next((
         item for item in (cookie_rows if isinstance(cookie_rows, list) else [])
         if isinstance(item, dict) and str(item.get("platform") or "").strip().lower() == "threads"
@@ -13996,20 +14008,27 @@ def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: i
     ))
     timed_out = "超时" in warning_text or "timeout" in warning_text or "timed out" in warning_text
     rate_limited = "限流" in warning_text or "rate limit" in warning_text or "too many requests" in warning_text
+    specific_message = ""
     if cookie_health == "missing":
-        messages.append("Threads 账号尚未授权登录，请先到账号管理完成登录。")
+        specific_message = "Threads 账号尚未授权登录，请先到账号管理完成登录。"
     elif cookie_health == "expired" or (valid_cookie_count <= 0 and expired_cookie_count > 0):
-        messages.append("Threads 登录 Cookie 已过期，请重新登录并同步 Cookie。")
+        specific_message = "Threads 登录 Cookie 已过期，请重新登录并同步 Cookie。"
     elif cookie_health == "degraded" and has_session is False:
-        messages.append("Threads 账号未保持登录或缺少 sessionid，请重新登录并同步 Cookie。")
+        specific_message = "Threads 账号未保持登录或缺少 sessionid，请重新登录并同步 Cookie。"
     elif cookie_health == "degraded":
-        messages.append("Threads Cookie 部分失效，请刷新账号授权后重试。")
+        specific_message = "Threads Cookie 部分失效，请刷新账号授权后重试。"
     elif rate_limited:
-        messages.append("Threads 当前请求受限，请稍后重试。")
+        specific_message = "热点来源当前请求受限，请稍后重试。"
     elif model_unavailable:
-        messages.append("模型暂不可用，请稍后重试。")
+        specific_message = "模型暂不可用，本次未执行抓取，请稍后重试。"
     elif timed_out:
-        messages.append("本次抓取超时，结果可能不完整。")
+        specific_message = "热点来源抓取超时，本次未获得候选，请稍后重试。" if count <= 0 else "热点来源抓取超时，当前结果可能不完整。"
+
+    if count <= 0:
+        return [specific_message or "暂未找到符合条件的热点，请稍后刷新候选。"]
+    messages = [f"已找到 {count} 条符合条件的热点，暂不足 {target} 条。" if count < target else f"已获取 {count} 条热点候选。"]
+    if specific_message:
+        messages.append(specific_message)
     return messages[:2]
 
 
