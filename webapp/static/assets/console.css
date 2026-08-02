@@ -12355,7 +12355,7 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-memory-card:hover {
-  border-color: var(--ink-soft);
+  border-color: var(--hover-border);
 }
 
 .persona-memory-card.is-selected {
@@ -12442,6 +12442,7 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-memory-card-actions > button {
+  appearance: none;
   display: inline-grid;
   place-items: center;
   width: auto;
@@ -12451,7 +12452,35 @@ body.persona-touch-dragging .persona-list-card:active {
   padding: 4px 8px;
   align-self: center;
   justify-self: end;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  box-shadow: none;
+  color: var(--ink);
+  cursor: pointer;
   line-height: 1;
+  transition: border-color var(--motion-fast), color var(--motion-fast), background-color var(--motion-fast);
+}
+
+.persona-memory-card-actions > button:not(.danger):hover,
+.persona-memory-card-actions > button:not(.danger):focus-visible {
+  border-color: var(--hover-border);
+  background: var(--panel-solid);
+  box-shadow: none;
+  color: var(--ink);
+  outline: none;
+  transform: none;
+}
+
+.persona-memory-card-actions > button.danger:hover,
+.persona-memory-card-actions > button.danger:focus-visible,
+.persona-memory-card-actions > button.danger:active {
+  border-color: var(--danger);
+  background: var(--panel-solid);
+  box-shadow: none;
+  color: var(--danger);
+  outline: none;
+  transform: none;
 }
 
 .persona-media-workspace {

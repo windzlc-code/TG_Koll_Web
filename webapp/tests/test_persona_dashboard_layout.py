@@ -428,6 +428,18 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("if (memoryBulkButton.disabled || memoryBulkButton.getAttribute(\"aria-disabled\") === \"true\") return;", bulk_handler)
         self.assertIn("align-items: center;", self.styles[self.styles.index(".persona-memory-actions {"):self.styles.index(".persona-memory-actions button {")])
 
+    def test_persona_memory_actions_use_stable_single_color_borders(self):
+        start = self.styles.index(".persona-memory-card:hover {")
+        end = self.styles.index(".persona-media-workspace {")
+        memory_styles = self.styles[start:end]
+
+        self.assertIn("border-color: var(--hover-border);", memory_styles)
+        self.assertIn("appearance: none;", memory_styles)
+        self.assertIn("border: 1px solid var(--line);", memory_styles)
+        self.assertIn(".persona-memory-card-actions > button:not(.danger):hover", memory_styles)
+        self.assertIn(".persona-memory-card-actions > button.danger:active", memory_styles)
+        self.assertIn("background: var(--panel-solid);", memory_styles)
+
     def test_mobile_draft_list_is_compact_and_grid_refresh_moves_beside_view(self):
         marker = "/* Responsive draft list density: keep rows as compact records instead of labeled field stacks. */"
         self.assertIn(marker, self.styles)
