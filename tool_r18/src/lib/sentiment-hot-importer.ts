@@ -65,7 +65,7 @@ const THREADS_READER_INITIAL_QUERY_LIMIT = 24;
 const THREADS_READER_TOTAL_QUERY_LIMIT = 48;
 const THREADS_READER_QUERY_BATCH_SIZE = 8;
 const INSTAGRAM_READER_QUERY_LIMIT = 48;
-const INSTAGRAM_AUTHENTICATED_QUERY_LIMIT = 10;
+const INSTAGRAM_AUTHENTICATED_QUERY_LIMIT = 20;
 const INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE = 4;
 const DEFAULT_REFRESH_FRESHNESS_DAYS = 7;
 const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 42_000;
@@ -1322,7 +1322,7 @@ function writeCachedSentimentHotSearchStrategy(cacheKey: string, strategy: Senti
 
 export function resolveSentimentHotTextModelPreference(): string {
   const config = readRuntimeApiConfig() as Record<string, unknown>;
-  return [
+  const configured = [
     config.llmFreeModelPriorityOrder,
     config.llm_free_model_priority_order,
     config.llmModelPriorityOrder,
@@ -1333,7 +1333,11 @@ export function resolveSentimentHotTextModelPreference(): string {
     config.llm_default_model,
   ]
     .map((value) => String(value || "").trim())
-    .find(Boolean) || SENTIMENT_HOT_KEYWORD_MODEL;
+    .find(Boolean) || "";
+  return [...new Set([
+    SENTIMENT_HOT_KEYWORD_MODEL,
+    ...configured.split(/[,\n]/).map((model) => model.trim()).filter(Boolean),
+  ])].join(",");
 }
 
 async function buildSentimentHotSearchStrategyWithModel(args: {

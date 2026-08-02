@@ -47,6 +47,7 @@ import {
   refreshSentimentSourceMetrics,
   resolveSentimentHotModelStrategyKeywords,
   resolveSentimentHotStrategyTimeoutMs,
+  resolveSentimentHotTextModelPreference,
   shouldTreatThreadsProfileAsLoginWall,
 } from "@/lib/sentiment-hot-importer";
 
@@ -170,6 +171,10 @@ describe("sentiment hot importer", () => {
     expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(20_000);
     expect(resolveSentimentHotStrategyTimeoutMs(false, 50_000)).toBe(30_000);
     expect(resolveSentimentHotStrategyTimeoutMs(true, 5_000)).toBe(5_000);
+  });
+
+  it("prioritizes the responsive hot-topic keyword model", () => {
+    expect(resolveSentimentHotTextModelPreference().split(",")[0]).toBe("xai/grok-4.3");
   });
 
   it("never manufactures fallback keywords when the model strategy is unavailable", () => {
