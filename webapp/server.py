@@ -300,6 +300,14 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "cleanup_retention_days": 7,
     "browser_cache_cleanup_enabled": True,
     "browser_cache_cleanup_interval_days": 15,
+    "browser_cache_cleanup_size_trigger_enabled": True,
+    "browser_cache_cleanup_size_threshold_mb": 2048,
+    "browser_cache_cleanup_min_disk_free_mb": 5120,
+    "browser_cache_cleanup_check_interval_minutes": 15,
+    "browser_cache_cleanup_last_check_at": 0,
+    "browser_cache_cleanup_last_total_bytes": 0,
+    "browser_cache_cleanup_last_disk_free_bytes": 0,
+    "browser_cache_cleanup_last_trigger_reason": "",
     "browser_cache_cleanup_last_attempt_at": 0,
     "browser_cache_cleanup_last_run_at": 0,
     "browser_cache_cleanup_next_run_at": 0,
@@ -1523,6 +1531,14 @@ def _browser_cache_dir_size(path: Path) -> int:
     return total
 
 
+def _browser_cache_disk_free_bytes() -> int:
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        return max(int(shutil.disk_usage(DATA_DIR).free), 0)
+    except (OSError, PermissionError):
+        return -1
+
+
 def _browser_cache_profile_dirs() -> list[Path]:
     profile_root = (DATA_DIR / "social_automation" / "profiles").resolve()
 
@@ -1594,44 +1610,157 @@ def _update_browser_cache_cleanup_state(**updates: Any) -> dict[str, Any]:
 _BROWSER_CACHE_CLEANUP_RUN_LOCK = threading.Lock()
 
 
-def _run_browser_cache_cleanup_once(*, manual: bool = False) -> dict[str, Any]:
+def _browser_cache_reclaimable_snapshot() -> dict[str, Any]:
+    total_bytes = 0
+    cache_count = 0
+    scanned_profiles = 0
+    for profile in _browser_cache_profile_dirs():
+        scanned_profiles += 1
+        cache_dir = profile / "cache2"
+        try:
+            resolved_cache = cache_dir.resolve(strict=False)
+        except (OSError, RuntimeError):
+            continue
+        if resolved_cache.name != "cache2" or resolved_cache.parent != profile:
+            continue
+        if not cache_dir.exists() or cache_dir.is_symlink() or not cache_dir.is_dir():
+            continue
+        total_bytes += _browser_cache_dir_size(cache_dir)
+        cache_count += 1
+    return {
+        "total_bytes": max(int(total_bytes), 0),
+        "cache_count": max(int(cache_count), 0),
+        "scanned_profiles": max(int(scanned_profiles), 0),
+        "disk_free_bytes": _browser_cache_disk_free_bytes(),
+    }
+
+
+def _browser_cache_cleanup_capacity_trigger(runtime: dict[str, Any], *, now: int | None = None) -> str:
+    checked_at = max(int(now if now is not None else _now_ts()), 0)
+    check_interval_minutes = min(
+        max(_to_int(runtime.get("browser_cache_cleanup_check_interval_minutes"), 15), 1),
+        1440,
+    )
+    last_check_at = max(_to_int(runtime.get("browser_cache_cleanup_last_check_at"), 0), 0)
+    if last_check_at and checked_at < last_check_at + check_interval_minutes * 60:
+        return ""
+
+    # Do not recursively walk profiles while a browser can still be writing
+    # cache files. A skipped check keeps last_check_at unchanged so the next
+    # lightweight worker poll can retry as soon as the system becomes idle.
+    if _browser_cache_cleanup_busy_reason():
+        return ""
+
+    snapshot = _browser_cache_reclaimable_snapshot()
+    total_bytes = max(_to_int(snapshot.get("total_bytes"), 0), 0)
+    disk_free_bytes = _to_int(snapshot.get("disk_free_bytes"), -1)
+    _update_browser_cache_cleanup_state(
+        browser_cache_cleanup_last_check_at=checked_at,
+        browser_cache_cleanup_last_total_bytes=total_bytes,
+        browser_cache_cleanup_last_disk_free_bytes=max(disk_free_bytes, 0),
+    )
+
+    size_trigger_enabled = _to_bool(runtime.get("browser_cache_cleanup_size_trigger_enabled"), True)
+    size_threshold_bytes = max(
+        _to_int(runtime.get("browser_cache_cleanup_size_threshold_mb"), 2048),
+        1,
+    ) * 1024 * 1024
+    min_disk_free_bytes = max(
+        _to_int(runtime.get("browser_cache_cleanup_min_disk_free_mb"), 5120),
+        0,
+    ) * 1024 * 1024
+    minimum_low_disk_reclaim_bytes = 256 * 1024 * 1024
+    reasons: list[str] = []
+    if size_trigger_enabled and total_bytes >= size_threshold_bytes:
+        reasons.append("capacity_threshold")
+    # A low-disk signal alone must never start repeated zero/low-yield cleanups.
+    if (
+        total_bytes >= minimum_low_disk_reclaim_bytes
+        and min_disk_free_bytes > 0
+        and 0 <= disk_free_bytes < min_disk_free_bytes
+    ):
+        reasons.append("low_disk")
+    return "+".join(reasons)
+
+
+def _browser_cache_cleanup_pending_capacity_retry(runtime: dict[str, Any]) -> str:
+    if str(runtime.get("browser_cache_cleanup_last_status") or "").strip() != "skipped_busy":
+        return ""
+    reason = str(runtime.get("browser_cache_cleanup_last_trigger_reason") or "").strip()
+    tokens = {token for token in reason.split("+") if token}
+    if not _to_bool(runtime.get("browser_cache_cleanup_size_trigger_enabled"), True):
+        tokens.discard("capacity_threshold")
+    if _to_int(runtime.get("browser_cache_cleanup_min_disk_free_mb"), 5120) <= 0:
+        tokens.discard("low_disk")
+    return "+".join(
+        token
+        for token in ("capacity_threshold", "low_disk")
+        if token in tokens
+    )
+
+
+def _run_browser_cache_cleanup_once(*, manual: bool = False, trigger_reason: str = "") -> dict[str, Any]:
     attempt_at = _now_ts()
+    clean_trigger_reason = str(trigger_reason or ("manual" if manual else "scheduled_interval")).strip()[:80]
     run_lock = _BROWSER_CACHE_CLEANUP_RUN_LOCK
     if not run_lock.acquire(blocking=False):
         message = "Skipped: browser cache cleanup is already running"
         _update_browser_cache_cleanup_state(
             browser_cache_cleanup_last_attempt_at=attempt_at,
+            browser_cache_cleanup_last_trigger_reason=clean_trigger_reason,
             browser_cache_cleanup_last_status="skipped_busy",
             browser_cache_cleanup_last_message=message,
         )
-        return {"ok": False, "status": "skipped_busy", "message": message}
+        return {
+            "ok": False,
+            "status": "skipped_busy",
+            "message": message,
+            "trigger_reason": clean_trigger_reason,
+        }
 
     maintenance_leases: tuple[str, ...] = ()
     try:
         with db() as conn:
             runtime = _get_runtime_config(conn)
         if not manual and not _to_bool(runtime.get("browser_cache_cleanup_enabled"), True):
-            return {"ok": False, "status": "disabled", "message": "Browser cache cleanup is disabled"}
+            return {
+                "ok": False,
+                "status": "disabled",
+                "message": "Browser cache cleanup is disabled",
+                "trigger_reason": clean_trigger_reason,
+            }
 
         busy_reason = _browser_cache_cleanup_busy_reason()
         if busy_reason:
             message = f"Skipped: {busy_reason}"
             _update_browser_cache_cleanup_state(
                 browser_cache_cleanup_last_attempt_at=attempt_at,
+                browser_cache_cleanup_last_trigger_reason=clean_trigger_reason,
                 browser_cache_cleanup_last_status="skipped_busy",
                 browser_cache_cleanup_last_message=message,
             )
-            return {"ok": False, "status": "skipped_busy", "message": message}
+            return {
+                "ok": False,
+                "status": "skipped_busy",
+                "message": message,
+                "trigger_reason": clean_trigger_reason,
+            }
 
         maintenance_leases = acquire_exclusive_browser_maintenance_lease("browser-cache-cleanup")
         if not maintenance_leases:
             message = "Skipped: browser worker is busy or resource admission is unavailable"
             _update_browser_cache_cleanup_state(
                 browser_cache_cleanup_last_attempt_at=attempt_at,
+                browser_cache_cleanup_last_trigger_reason=clean_trigger_reason,
                 browser_cache_cleanup_last_status="skipped_busy",
                 browser_cache_cleanup_last_message=message,
             )
-            return {"ok": False, "status": "skipped_busy", "message": message}
+            return {
+                "ok": False,
+                "status": "skipped_busy",
+                "message": message,
+                "trigger_reason": clean_trigger_reason,
+            }
 
         # The lease blocks new browser work. Recheck after admission to close the race
         # with a task that was claimed immediately before the lease was acquired.
@@ -1640,15 +1769,22 @@ def _run_browser_cache_cleanup_once(*, manual: bool = False) -> dict[str, Any]:
             message = f"Skipped: {busy_reason}"
             _update_browser_cache_cleanup_state(
                 browser_cache_cleanup_last_attempt_at=attempt_at,
+                browser_cache_cleanup_last_trigger_reason=clean_trigger_reason,
                 browser_cache_cleanup_last_status="skipped_busy",
                 browser_cache_cleanup_last_message=message,
             )
-            return {"ok": False, "status": "skipped_busy", "message": message}
+            return {
+                "ok": False,
+                "status": "skipped_busy",
+                "message": message,
+                "trigger_reason": clean_trigger_reason,
+            }
 
         reclaimed_bytes = 0
         deleted_count = 0
         scanned_profiles = 0
         errors: list[str] = []
+        total_cache_bytes_before = 0
         for profile in _browser_cache_profile_dirs():
             scanned_profiles += 1
             cache_dir = profile / "cache2"
@@ -1668,6 +1804,7 @@ def _run_browser_cache_cleanup_once(*, manual: bool = False) -> dict[str, Any]:
                 continue
             try:
                 cache_bytes = _browser_cache_dir_size(cache_dir)
+                total_cache_bytes_before += cache_bytes
                 shutil.rmtree(cache_dir)
                 if cache_dir.exists():
                     raise OSError("cache2 still exists after removal")
@@ -1680,6 +1817,10 @@ def _run_browser_cache_cleanup_once(*, manual: bool = False) -> dict[str, Any]:
             message = f"Partial cleanup: removed {deleted_count} cache2 directories; " + "; ".join(errors[:5])
             _update_browser_cache_cleanup_state(
                 browser_cache_cleanup_last_attempt_at=attempt_at,
+                browser_cache_cleanup_last_check_at=attempt_at,
+                browser_cache_cleanup_last_total_bytes=max(total_cache_bytes_before - reclaimed_bytes, 0),
+                browser_cache_cleanup_last_disk_free_bytes=max(_browser_cache_disk_free_bytes(), 0),
+                browser_cache_cleanup_last_trigger_reason=clean_trigger_reason,
                 browser_cache_cleanup_last_reclaimed_bytes=reclaimed_bytes,
                 browser_cache_cleanup_last_deleted_count=deleted_count,
                 browser_cache_cleanup_last_status="error",
@@ -1692,6 +1833,7 @@ def _run_browser_cache_cleanup_once(*, manual: bool = False) -> dict[str, Any]:
                 "scanned_profiles": scanned_profiles,
                 "deleted_count": deleted_count,
                 "reclaimed_bytes": reclaimed_bytes,
+                "trigger_reason": clean_trigger_reason,
                 "errors": errors[:20],
             }
 
@@ -1701,6 +1843,10 @@ def _run_browser_cache_cleanup_once(*, manual: bool = False) -> dict[str, Any]:
         message = f"Removed {deleted_count} cache2 directories and reclaimed {reclaimed_bytes} bytes"
         _update_browser_cache_cleanup_state(
             browser_cache_cleanup_last_attempt_at=attempt_at,
+            browser_cache_cleanup_last_check_at=completed_at,
+            browser_cache_cleanup_last_total_bytes=max(total_cache_bytes_before - reclaimed_bytes, 0),
+            browser_cache_cleanup_last_disk_free_bytes=max(_browser_cache_disk_free_bytes(), 0),
+            browser_cache_cleanup_last_trigger_reason=clean_trigger_reason,
             browser_cache_cleanup_last_run_at=completed_at,
             browser_cache_cleanup_next_run_at=next_run_at,
             browser_cache_cleanup_last_reclaimed_bytes=reclaimed_bytes,
@@ -1715,6 +1861,7 @@ def _run_browser_cache_cleanup_once(*, manual: bool = False) -> dict[str, Any]:
             "scanned_profiles": scanned_profiles,
             "deleted_count": deleted_count,
             "reclaimed_bytes": reclaimed_bytes,
+            "trigger_reason": clean_trigger_reason,
             "completed_at": completed_at,
             "next_run_at": next_run_at,
         }
@@ -1723,10 +1870,16 @@ def _run_browser_cache_cleanup_once(*, manual: bool = False) -> dict[str, Any]:
         logger.exception("browser cache cleanup failed")
         _update_browser_cache_cleanup_state(
             browser_cache_cleanup_last_attempt_at=attempt_at,
+            browser_cache_cleanup_last_trigger_reason=clean_trigger_reason,
             browser_cache_cleanup_last_status="error",
             browser_cache_cleanup_last_message=message[:2000],
         )
-        return {"ok": False, "status": "error", "message": message}
+        return {
+            "ok": False,
+            "status": "error",
+            "message": message,
+            "trigger_reason": clean_trigger_reason,
+        }
     finally:
         if maintenance_leases:
             release_exclusive_browser_maintenance_lease(maintenance_leases)
@@ -1741,12 +1894,19 @@ def _browser_cache_cleanup_worker() -> None:
                 runtime = _get_runtime_config(conn)
             if _to_bool(runtime.get("browser_cache_cleanup_enabled"), True):
                 now = _now_ts()
+                pending_capacity_retry = _browser_cache_cleanup_pending_capacity_retry(runtime)
                 last_run_at = max(_to_int(runtime.get("browser_cache_cleanup_last_run_at"), 0), 0)
                 interval_days = min(max(_to_int(runtime.get("browser_cache_cleanup_interval_days"), 15), 1), 365)
                 configured_next = max(_to_int(runtime.get("browser_cache_cleanup_next_run_at"), 0), 0)
                 next_run_at = configured_next or (last_run_at + interval_days * 86400 if last_run_at else now)
-                if now >= next_run_at:
-                    _run_browser_cache_cleanup_once()
+                if pending_capacity_retry:
+                    _run_browser_cache_cleanup_once(trigger_reason=pending_capacity_retry)
+                elif now >= next_run_at:
+                    _run_browser_cache_cleanup_once(trigger_reason="scheduled_interval")
+                else:
+                    trigger_reason = _browser_cache_cleanup_capacity_trigger(runtime, now=now)
+                    if trigger_reason:
+                        _run_browser_cache_cleanup_once(trigger_reason=trigger_reason)
         except Exception:
             logger.exception("browser cache cleanup worker failed")
         time.sleep(float(poll_seconds))
@@ -4990,7 +5150,26 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
         max(_to_int(merged.get("browser_cache_cleanup_interval_days"), 15), 1),
         365,
     )
+    merged["browser_cache_cleanup_size_trigger_enabled"] = _to_bool(
+        merged.get("browser_cache_cleanup_size_trigger_enabled"),
+        True,
+    )
+    merged["browser_cache_cleanup_size_threshold_mb"] = min(
+        max(_to_int(merged.get("browser_cache_cleanup_size_threshold_mb"), 2048), 1),
+        1024 * 1024,
+    )
+    merged["browser_cache_cleanup_min_disk_free_mb"] = max(
+        _to_int(merged.get("browser_cache_cleanup_min_disk_free_mb"), 5120),
+        0,
+    )
+    merged["browser_cache_cleanup_check_interval_minutes"] = min(
+        max(_to_int(merged.get("browser_cache_cleanup_check_interval_minutes"), 15), 1),
+        1440,
+    )
     for key in (
+        "browser_cache_cleanup_last_check_at",
+        "browser_cache_cleanup_last_total_bytes",
+        "browser_cache_cleanup_last_disk_free_bytes",
         "browser_cache_cleanup_last_attempt_at",
         "browser_cache_cleanup_last_run_at",
         "browser_cache_cleanup_next_run_at",
@@ -5001,6 +5180,9 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     merged["browser_cache_cleanup_last_status"] = str(
         merged.get("browser_cache_cleanup_last_status") or "never"
     ).strip()[:40] or "never"
+    merged["browser_cache_cleanup_last_trigger_reason"] = str(
+        merged.get("browser_cache_cleanup_last_trigger_reason") or ""
+    ).strip()[:80]
     merged["browser_cache_cleanup_last_message"] = str(
         merged.get("browser_cache_cleanup_last_message") or ""
     ).strip()[:2000]
@@ -11454,6 +11636,14 @@ class RuntimeConfigPayload(BaseModel):
     cleanup_retention_days: int = 7
     browser_cache_cleanup_enabled: bool = True
     browser_cache_cleanup_interval_days: int = Field(default=15, ge=1, le=365)
+    browser_cache_cleanup_size_trigger_enabled: bool = True
+    browser_cache_cleanup_size_threshold_mb: int = Field(default=2048, ge=1, le=1024 * 1024)
+    browser_cache_cleanup_min_disk_free_mb: int = Field(default=5120, ge=0)
+    browser_cache_cleanup_check_interval_minutes: int = Field(default=15, ge=1, le=1440)
+    browser_cache_cleanup_last_check_at: int = Field(default=0, ge=0)
+    browser_cache_cleanup_last_total_bytes: int = Field(default=0, ge=0)
+    browser_cache_cleanup_last_disk_free_bytes: int = Field(default=0, ge=0)
+    browser_cache_cleanup_last_trigger_reason: str = Field(default="", max_length=80)
     browser_cache_cleanup_last_attempt_at: int = Field(default=0, ge=0)
     browser_cache_cleanup_last_run_at: int = Field(default=0, ge=0)
     browser_cache_cleanup_next_run_at: int = Field(default=0, ge=0)
@@ -23530,6 +23720,10 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         explicit_data = payload.model_dump(exclude_unset=True)
         read_only_cleanup_keys = {
+            "browser_cache_cleanup_last_check_at",
+            "browser_cache_cleanup_last_total_bytes",
+            "browser_cache_cleanup_last_disk_free_bytes",
+            "browser_cache_cleanup_last_trigger_reason",
             "browser_cache_cleanup_last_attempt_at",
             "browser_cache_cleanup_last_run_at",
             "browser_cache_cleanup_next_run_at",
@@ -23557,6 +23751,15 @@ def create_app() -> FastAPI:
         if isinstance(current_runtime, dict):
             merged.update(current_runtime)
         merged.update({k: str(v).strip() if isinstance(v, str) else v for k, v in explicit_data.items()})
+        if {
+            "browser_cache_cleanup_size_trigger_enabled",
+            "browser_cache_cleanup_size_threshold_mb",
+            "browser_cache_cleanup_min_disk_free_mb",
+            "browser_cache_cleanup_check_interval_minutes",
+        }.intersection(explicit_data):
+            # Re-evaluate a changed capacity policy on the next lightweight
+            # worker poll instead of waiting for the previous check window.
+            merged["browser_cache_cleanup_last_check_at"] = 0
         for key in secret_preserve_keys:
             current_value = explicit_data.get(key)
             saved_value = current_runtime.get(key) if isinstance(current_runtime, dict) else None

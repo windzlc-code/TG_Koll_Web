@@ -37,6 +37,9 @@ MAX_WARMUP_LIKES = 16
 MAX_WARMUP_COMMENTS = 6
 MAX_WARMUP_COMMENT_CHARS = 48
 DEFAULT_WARMUP_RESOURCE_COMPACTION_COOLDOWN_SECONDS = 90
+DEFAULT_BROWSER_DISK_CACHE_CAPACITY_MB = 128
+MIN_BROWSER_DISK_CACHE_CAPACITY_MB = 64
+MAX_BROWSER_DISK_CACHE_CAPACITY_MB = 1024
 SUPPORTED_TASK_TYPES = {
     "check_login",
     "open_login",
@@ -57,6 +60,30 @@ SUPPORTED_TASK_TYPES = {
 _CAMOUFOX_LAUNCH_LOCK = threading.Lock()
 _WARMUP_ACTION_HISTORY_LOCK = threading.Lock()
 _DEFAULT_LIVE_BROWSER_CHROME_HEIGHT = 61
+
+
+def _browser_disk_cache_preferences() -> dict[str, Any]:
+    try:
+        capacity_mb = int(
+            str(
+                os.getenv(
+                    "SOCIAL_AUTOMATION_DISK_CACHE_CAPACITY_MB",
+                    DEFAULT_BROWSER_DISK_CACHE_CAPACITY_MB,
+                )
+            ).strip()
+        )
+    except (TypeError, ValueError):
+        capacity_mb = DEFAULT_BROWSER_DISK_CACHE_CAPACITY_MB
+    capacity_mb = max(
+        MIN_BROWSER_DISK_CACHE_CAPACITY_MB,
+        min(capacity_mb, MAX_BROWSER_DISK_CACHE_CAPACITY_MB),
+    )
+    return {
+        "browser.cache.disk.enable": True,
+        "browser.cache.disk.smart_size.enabled": False,
+        # Firefox expresses browser.cache.disk.capacity in KiB.
+        "browser.cache.disk.capacity": capacity_mb * 1024,
+    }
 
 
 class AutomationLogger(Protocol):
@@ -845,6 +872,7 @@ class _BrowserContextManager:
             "user_data_dir": str(profile_dir),
             "headless": headless,
             "humanize": float(os.getenv("SOCIAL_AUTOMATION_HUMANIZE_MAX_SECONDS", "0.5")),
+            "firefox_user_prefs": _browser_disk_cache_preferences(),
         }
         if self.live_session is not None:
             geometry_config = _live_browser_geometry_config(self.live_session)

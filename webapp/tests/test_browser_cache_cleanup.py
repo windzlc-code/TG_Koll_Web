@@ -104,6 +104,7 @@ class BrowserCacheCleanupTests(unittest.TestCase):
             runtime["browser_cache_cleanup_next_run_at"] - runtime["browser_cache_cleanup_last_run_at"],
             15 * 86400,
         )
+        self.assertEqual(runtime["browser_cache_cleanup_last_trigger_reason"], "manual")
 
     def test_busy_cleanup_skips_without_advancing_success_schedule(self):
         profile = self._add_profile()
@@ -203,7 +204,146 @@ class BrowserCacheCleanupTests(unittest.TestCase):
         runtime = self._runtime()
         self.assertTrue(runtime["browser_cache_cleanup_enabled"])
         self.assertEqual(runtime["browser_cache_cleanup_interval_days"], 15)
+        self.assertTrue(runtime["browser_cache_cleanup_size_trigger_enabled"])
+        self.assertEqual(runtime["browser_cache_cleanup_size_threshold_mb"], 2048)
+        self.assertEqual(runtime["browser_cache_cleanup_min_disk_free_mb"], 5120)
+        self.assertEqual(runtime["browser_cache_cleanup_check_interval_minutes"], 15)
         self.assertEqual(runtime["browser_cache_cleanup_last_status"], "never")
+
+    def test_capacity_check_runs_at_configured_frequency_and_records_snapshot(self):
+        runtime = self._runtime()
+        snapshot = {
+            "total_bytes": 2048 * 1024 * 1024,
+            "cache_count": 2,
+            "scanned_profiles": 2,
+            "disk_free_bytes": 20 * 1024 * 1024 * 1024,
+        }
+        with mock.patch.object(server, "_browser_cache_cleanup_busy_reason", return_value=""), mock.patch.object(
+            server, "_browser_cache_reclaimable_snapshot", return_value=snapshot
+        ) as inspect:
+            reason = server._browser_cache_cleanup_capacity_trigger(runtime, now=1000)
+
+        self.assertEqual(reason, "capacity_threshold")
+        inspect.assert_called_once_with()
+        updated = self._runtime()
+        self.assertEqual(updated["browser_cache_cleanup_last_check_at"], 1000)
+        self.assertEqual(updated["browser_cache_cleanup_last_total_bytes"], snapshot["total_bytes"])
+        self.assertEqual(updated["browser_cache_cleanup_last_disk_free_bytes"], snapshot["disk_free_bytes"])
+
+        with mock.patch.object(server, "_browser_cache_cleanup_busy_reason", return_value=""), mock.patch.object(
+            server, "_browser_cache_reclaimable_snapshot"
+        ) as inspect_again:
+            reason = server._browser_cache_cleanup_capacity_trigger(updated, now=1899)
+        self.assertEqual(reason, "")
+        inspect_again.assert_not_called()
+
+    def test_size_trigger_can_be_disabled_without_disabling_low_disk_trigger(self):
+        runtime = self._runtime()
+        runtime.update(
+            browser_cache_cleanup_size_trigger_enabled=False,
+            browser_cache_cleanup_min_disk_free_mb=5120,
+        )
+        snapshot = {
+            "total_bytes": 3 * 1024 * 1024 * 1024,
+            "cache_count": 1,
+            "scanned_profiles": 1,
+            "disk_free_bytes": 10 * 1024 * 1024 * 1024,
+        }
+        with mock.patch.object(server, "_browser_cache_cleanup_busy_reason", return_value=""), mock.patch.object(
+            server, "_browser_cache_reclaimable_snapshot", return_value=snapshot
+        ):
+            self.assertEqual(server._browser_cache_cleanup_capacity_trigger(runtime, now=2000), "")
+
+        runtime = self._runtime()
+        runtime.update(
+            browser_cache_cleanup_size_trigger_enabled=False,
+            browser_cache_cleanup_min_disk_free_mb=5120,
+        )
+        snapshot["disk_free_bytes"] = 1024 * 1024 * 1024
+        with mock.patch.object(server, "_browser_cache_cleanup_busy_reason", return_value=""), mock.patch.object(
+            server, "_browser_cache_reclaimable_snapshot", return_value=snapshot
+        ):
+            self.assertEqual(server._browser_cache_cleanup_capacity_trigger(runtime, now=3000), "low_disk")
+
+    def test_low_disk_trigger_requires_at_least_256_mb_reclaimable_cache(self):
+        low_free = 1024 * 1024 * 1024
+        cases = (
+            (0, 4000, ""),
+            (255 * 1024 * 1024, 5000, ""),
+            (256 * 1024 * 1024, 6000, "low_disk"),
+        )
+        for total_bytes, checked_at, expected in cases:
+            runtime = self._runtime()
+            runtime.update(
+                browser_cache_cleanup_size_trigger_enabled=False,
+                browser_cache_cleanup_min_disk_free_mb=5120,
+            )
+            with mock.patch.object(server, "_browser_cache_cleanup_busy_reason", return_value=""), mock.patch.object(
+                server,
+                "_browser_cache_reclaimable_snapshot",
+                return_value={
+                    "total_bytes": total_bytes,
+                    "cache_count": int(total_bytes > 0),
+                    "scanned_profiles": 1,
+                    "disk_free_bytes": low_free,
+                },
+            ):
+                self.assertEqual(
+                    server._browser_cache_cleanup_capacity_trigger(runtime, now=checked_at),
+                    expected,
+                )
+
+    def test_combined_capacity_and_low_disk_reason_is_exposed(self):
+        runtime = self._runtime()
+        with mock.patch.object(server, "_browser_cache_cleanup_busy_reason", return_value=""), mock.patch.object(
+            server,
+            "_browser_cache_reclaimable_snapshot",
+            return_value={
+                "total_bytes": 3 * 1024 * 1024 * 1024,
+                "cache_count": 3,
+                "scanned_profiles": 3,
+                "disk_free_bytes": 1024 * 1024 * 1024,
+            },
+        ):
+            reason = server._browser_cache_cleanup_capacity_trigger(runtime, now=7000)
+        self.assertEqual(reason, "capacity_threshold+low_disk")
+
+    def test_capacity_check_does_not_walk_profiles_while_browser_is_busy(self):
+        runtime = self._runtime()
+        with mock.patch.object(
+            server,
+            "_browser_cache_cleanup_busy_reason",
+            return_value="active tasks: general=0, browser=1",
+        ), mock.patch.object(server, "_browser_cache_reclaimable_snapshot") as inspect:
+            reason = server._browser_cache_cleanup_capacity_trigger(runtime, now=8000)
+
+        self.assertEqual(reason, "")
+        inspect.assert_not_called()
+        self.assertEqual(self._runtime()["browser_cache_cleanup_last_check_at"], 0)
+
+    def test_busy_capacity_trigger_remains_pending_for_lightweight_retry(self):
+        runtime = self._runtime()
+        runtime.update(
+            browser_cache_cleanup_last_status="skipped_busy",
+            browser_cache_cleanup_last_trigger_reason="capacity_threshold+low_disk",
+            browser_cache_cleanup_last_check_at=8000,
+        )
+        self.assertEqual(
+            server._browser_cache_cleanup_pending_capacity_retry(runtime),
+            "capacity_threshold+low_disk",
+        )
+        runtime["browser_cache_cleanup_last_trigger_reason"] = "scheduled_interval"
+        self.assertEqual(server._browser_cache_cleanup_pending_capacity_retry(runtime), "")
+        runtime["browser_cache_cleanup_last_trigger_reason"] = "manual"
+        self.assertEqual(server._browser_cache_cleanup_pending_capacity_retry(runtime), "")
+
+        runtime.update(
+            browser_cache_cleanup_last_trigger_reason="capacity_threshold+low_disk",
+            browser_cache_cleanup_size_trigger_enabled=False,
+        )
+        self.assertEqual(server._browser_cache_cleanup_pending_capacity_retry(runtime), "low_disk")
+        runtime["browser_cache_cleanup_min_disk_free_mb"] = 0
+        self.assertEqual(server._browser_cache_cleanup_pending_capacity_retry(runtime), "")
 
     def test_exclusive_maintenance_lease_blocks_all_regular_browser_slots_and_releases(self):
         with social_api._EXTERNAL_BROWSER_LEASES_LOCK:

@@ -2603,6 +2603,9 @@ function runtimeFormToPayload() {
     cleanup_retention_days: Number(el("rtCleanupRetentionDays").value || 7),
     browser_cache_cleanup_enabled: !!el("rtBrowserCacheCleanupEnabled")?.checked,
     browser_cache_cleanup_interval_days: Math.min(365, Math.max(1, Number(el("rtBrowserCacheCleanupIntervalDays")?.value || 15))),
+    browser_cache_cleanup_size_trigger_enabled: !!el("rtBrowserCacheCleanupSizeTriggerEnabled")?.checked,
+    browser_cache_cleanup_size_threshold_mb: Math.min(102400, Math.max(256, Math.round(Number(el("rtBrowserCacheCleanupSizeThresholdGb")?.value || 2) * 1024))),
+    browser_cache_cleanup_min_disk_free_mb: Math.min(102400, Math.max(512, Math.round(Number(el("rtBrowserCacheCleanupMinDiskFreeGb")?.value || 5) * 1024))),
     auth_remember_login_enabled: !!el("rtRememberLoginEnabled").checked,
     auth_remember_login_default: !!el("rtRememberLoginDefault").checked,
     auth_remember_login_days: Number(el("rtRememberLoginDays").value || 30),
@@ -2679,6 +2682,17 @@ function fillRuntimeForm(data) {
   if (el("rtBrowserCacheCleanupIntervalDays")) {
     el("rtBrowserCacheCleanupIntervalDays").value = String(v.browser_cache_cleanup_interval_days || 15);
   }
+  if (el("rtBrowserCacheCleanupSizeTriggerEnabled")) {
+    el("rtBrowserCacheCleanupSizeTriggerEnabled").checked = v.browser_cache_cleanup_size_trigger_enabled !== false;
+  }
+  if (el("rtBrowserCacheCleanupSizeThresholdGb")) {
+    const thresholdMb = Math.min(102400, Math.max(256, Number(v.browser_cache_cleanup_size_threshold_mb || 2048)));
+    el("rtBrowserCacheCleanupSizeThresholdGb").value = String(Number((thresholdMb / 1024).toFixed(2)));
+  }
+  if (el("rtBrowserCacheCleanupMinDiskFreeGb")) {
+    const minDiskFreeMb = Math.min(102400, Math.max(512, Number(v.browser_cache_cleanup_min_disk_free_mb || 5120)));
+    el("rtBrowserCacheCleanupMinDiskFreeGb").value = String(Number((minDiskFreeMb / 1024).toFixed(2)));
+  }
   renderBrowserCacheCleanupStatus(v);
   el("rtRememberLoginEnabled").checked = v.auth_remember_login_enabled !== false;
   el("rtRememberLoginDefault").checked = v.auth_remember_login_default === true;
@@ -2752,6 +2766,26 @@ function browserCacheCleanupStatusLabel(value, enabled = true) {
   return labels[status] || "等待状态更新";
 }
 
+function browserCacheCleanupTriggerLabel(value) {
+  const reason = String(value || "").trim().toLowerCase();
+  const labels = {
+    manual: "管理员手动执行",
+    interval: "计划周期到期",
+    schedule: "计划周期到期",
+    scheduled: "计划周期到期",
+    scheduled_interval: "计划周期到期",
+    size_threshold: "缓存达到容量阈值",
+    cache_size: "缓存达到容量阈值",
+    capacity_threshold: "缓存达到容量阈值",
+    low_disk_free: "可用磁盘低于安全线",
+    disk_free: "可用磁盘低于安全线",
+    low_disk: "可用磁盘低于安全线",
+    "capacity_threshold+low_disk": "缓存达阈值且磁盘空间偏低",
+    startup: "首次计划执行",
+  };
+  return labels[reason] || (reason ? "系统容量策略触发" : "-");
+}
+
 function renderBrowserCacheCleanupStatus(source) {
   if (!el("browserCacheCleanupStatus")) return;
   const data = browserCacheCleanupObject(source);
@@ -2771,10 +2805,21 @@ function renderBrowserCacheCleanupStatus(source) {
     ?? data.freed_bytes
     ?? 0;
   const rawStatus = data.browser_cache_cleanup_last_status ?? data.status;
+  const totalBytes = data.browser_cache_cleanup_last_total_bytes ?? data.last_total_bytes ?? data.total_bytes;
+  const diskFreeBytes = data.browser_cache_cleanup_last_disk_free_bytes ?? data.last_disk_free_bytes ?? data.disk_free_bytes;
+  const lastCheckAt = data.browser_cache_cleanup_last_check_at ?? data.last_check_at;
+  const triggerReason = data.browser_cache_cleanup_last_trigger_reason ?? data.last_trigger_reason ?? data.trigger_reason;
   setText("browserCacheCleanupStatus", browserCacheCleanupStatusLabel(rawStatus, enabled));
   setText("browserCacheCleanupLastRun", lastRun ? browserCacheCleanupDate(lastRun) : "尚未执行");
   setText("browserCacheCleanupNextRun", enabled ? (nextRun ? browserCacheCleanupDate(nextRun) : "等待首次计划") : "已停用");
   setText("browserCacheCleanupReclaimed", browserCacheCleanupBytes(reclaimed));
+  setText(
+    "browserCacheCleanupCapacity",
+    !lastCheckAt && !(Number(totalBytes) > 0) && !(Number(diskFreeBytes) > 0)
+      ? "尚未检测"
+      : `缓存 ${totalBytes == null ? "-" : browserCacheCleanupBytes(totalBytes)} · 可用 ${diskFreeBytes == null ? "-" : browserCacheCleanupBytes(diskFreeBytes)}`,
+  );
+  setText("browserCacheCleanupTriggerReason", browserCacheCleanupTriggerLabel(triggerReason));
 }
 
 async function runBrowserCacheCleanupNow() {

@@ -111,6 +111,45 @@ class RunnerProxyRedactionTests(unittest.TestCase):
         self.assertIn("socks5://***:***@proxy.example.test:1080", str(raised.exception))
         self.assertTrue(raised.exception.__suppress_context__)
 
+    def test_camoufox_profile_uses_bounded_http_disk_cache(self):
+        captured = {}
+        logger = _RecordingLogger()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = runner._BrowserContextManager(
+                {"id": "account-1", "profile_dir": str(Path(temp_dir) / "profile")},
+                None,
+                logger,
+            )
+
+            def record_launch(_camoufox, kwargs):
+                captured.update(kwargs)
+
+            with (
+                mock.patch(
+                    "social_automation.browser_runtime.verify_pinned_browser_runtime",
+                    return_value={
+                        "camoufox": "0.4.11",
+                        "browserforge": "1.2.4",
+                        "browser_version": "152.0.4",
+                        "browser_release": "beta.28",
+                    },
+                ),
+                mock.patch.object(manager, "_start_live_browser_session", return_value=None),
+                mock.patch.object(manager, "_enter_camoufox", side_effect=record_launch),
+                mock.patch.dict(os.environ, {"SOCIAL_AUTOMATION_DISK_CACHE_CAPACITY_MB": "128"}),
+            ):
+                manager.__enter__()
+
+        self.assertEqual(
+            captured["firefox_user_prefs"],
+            {
+                "browser.cache.disk.enable": True,
+                "browser.cache.disk.smart_size.enabled": False,
+                "browser.cache.disk.capacity": 128 * 1024,
+            },
+        )
+
     def test_concurrent_camoufox_launches_use_their_own_display(self):
         observed = []
         rendezvous = threading.Barrier(2)
