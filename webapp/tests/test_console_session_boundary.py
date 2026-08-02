@@ -632,14 +632,18 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         resolver = f"async {self._function_source('resolvePersonaOrdinaryGeneratedCandidates')}"
         self._run_node(textwrap.dedent(f"""
             const assert = require("node:assert/strict");
-            const state = {{ personaGeneratedPreviews: {{ "persona-1": {{ visible: true }} }}, personaPanels: {{ content: "generate" }} }};
+            const state = {{ personaGeneratedPreviews: {{ "persona-1:tweet": {{ visible: true }} }}, personaPanels: {{ content: "generate" }} }};
             const form = {{ draft: {{ content: "stale" }}, media: {{ focusPostId: "candidate-1" }} }};
-            const calls = {{ cleared: [], refreshed: [], source: [], selected: [], messages: [], summary: 0 }};
+            const calls = {{ cleared: [], deletedPreviews: [], refreshed: [], source: [], selected: [], messages: [], summary: 0 }};
             let apiError = {{ status: 409, detail: "candidate conflict" }};
             async function openPersonaGeneratedSelectionModal() {{ return {{ action: "save", postId: "candidate-1" }}; }}
             async function api() {{ throw apiError; }}
             function clearStoredPersonaPostGenerationTask(personaId, taskId) {{ calls.cleared.push([personaId, taskId]); }}
             function clearPersonaGenerateRunState() {{}}
+            function deletePersonaGeneratedPreview(personaId, composeMode) {{
+              calls.deletedPreviews.push([personaId, composeMode]);
+              delete state.personaGeneratedPreviews[`${{personaId}}:${{composeMode}}`];
+            }}
             function personaFormState() {{ return form; }}
             function defaultPersonaDraftForm() {{ return {{}}; }}
             async function loadPersonaDraftPosts(personaId, options) {{ calls.refreshed.push([personaId, options]); }}
@@ -663,7 +667,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               assert.deepEqual(calls.source, [["posts", "persona-1"]]);
               assert.deepEqual(calls.selected, ["safe-draft"]);
               assert.equal(state.personaPanels.content, "posts");
-              assert.equal(state.personaGeneratedPreviews["persona-1"], undefined);
+              assert.deepEqual(calls.deletedPreviews, [["persona-1", "tweet"]]);
+              assert.equal(state.personaGeneratedPreviews["persona-1:tweet"], undefined);
               assert.equal(form.media.focusPostId, "");
               assert.match(calls.messages[0][1], /已刷新草稿库/);
               assert.equal(calls.messages[0][2], false);

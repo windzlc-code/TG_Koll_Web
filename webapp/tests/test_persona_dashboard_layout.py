@@ -813,7 +813,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("personaForm.media.focusPostId = finalizedPostId;", selection)
         self.assertIn("generate_posts/tasks/${encodeURIComponent(cleanTaskId)}/resolve", selection)
         self.assertNotIn("discardPersonaGeneratedCandidatePosts(", selection)
-        self.assertIn('delete state.personaGeneratedPreviews[String(persona.id || "").trim()];', selection)
+        self.assertIn('deletePersonaGeneratedPreview(persona.id, "tweet");', selection)
         self.assertIn("const generationLocked = isActionLocked", content_panel)
         self.assertIn("const generateBusy = generationLocked && activeGenerateComposeMode === composeMode;", content_panel)
         self.assertIn("const ordinaryMediaTarget", content_panel)
@@ -842,6 +842,36 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("startedAt: submittedAt", media_submit)
         self.assertNotIn("watchTask(result.id", media_submit)
         self.assertEqual(media_submit.count("watchPersonaMediaTask(persona.id, post.id, result.id)"), 1)
+
+    def test_generated_previews_are_isolated_by_compose_mode_and_hidden_from_hot_capture(self):
+        preview_state = self.console_script[
+            self.console_script.index("function normalizePersonaGeneratedPreviewComposeMode"):
+            self.console_script.index("function personaGenerateRunDisplay")
+        ]
+        content_panel = self.console_script[
+            self.console_script.index("function renderPersonaContentPanel"):
+            self.console_script.index("function refreshLiveBrowserSessionsSoon")
+        ]
+
+        self.assertIn('return mode === "tweet_media" ? "tweet_media" : (mode === "tweet" ? "tweet" : "");', preview_state)
+        self.assertIn("function personaGeneratedPreviewKey(personaId, composeMode)", preview_state)
+        self.assertIn("const previewKey = personaGeneratedPreviewKey(key, previewComposeMode);", preview_state)
+        self.assertIn("state.personaGeneratedPreviews[previewKey]", preview_state)
+        self.assertIn("renderPersonaGeneratePreviewDock(persona, composeMode)", content_panel)
+        self.assertIn('if (composeMode === "hot") return "";', self.console_script)
+
+    def test_successful_persona_image_generation_clears_only_the_saved_prompt(self):
+        media_refresh = self.console_script[
+            self.console_script.index("async function refreshPersonaMediaTask"):
+            self.console_script.index("async function watchPersonaMediaTask")
+        ]
+
+        self.assertIn('if (ok && taskType === "persona_post_image")', media_refresh)
+        self.assertIn("personaFormState(personaId).media.prompt = \"\";", media_refresh)
+        self.assertNotIn("media.prompt = \"\"", self.console_script[
+            self.console_script.index("async function submitPersonaMediaTask"):
+            self.console_script.index("async function attachPersonaTaskMediaToPost")
+        ])
 
     def test_mobile_task_queue_persona_list_reuses_shared_drawer(self):
         selector_start = self.console_script.index("function renderTaskQueuePersonaSelector()")

@@ -18579,8 +18579,40 @@ function guardPersonaPostGenerationInteraction(target) {
   return true;
 }
 
-function personaGeneratedPreviewState(personaId) {
-  return state.personaGeneratedPreviews[String(personaId || "").trim()] || null;
+function normalizePersonaGeneratedPreviewComposeMode(composeMode) {
+  const mode = String(composeMode || "").trim();
+  return mode === "tweet_media" ? "tweet_media" : (mode === "tweet" ? "tweet" : "");
+}
+
+function personaGeneratedPreviewKey(personaId, composeMode) {
+  const cleanPersonaId = String(personaId || "").trim();
+  const cleanComposeMode = normalizePersonaGeneratedPreviewComposeMode(composeMode);
+  return cleanPersonaId && cleanComposeMode ? `${cleanPersonaId}:${cleanComposeMode}` : "";
+}
+
+function resolvedPersonaGeneratedPreviewComposeMode(personaId, composeMode = "") {
+  const requestedMode = normalizePersonaGeneratedPreviewComposeMode(composeMode);
+  if (requestedMode) return requestedMode;
+  const formMode = normalizePersonaGeneratedPreviewComposeMode(
+    personaFormState(personaId)?.generate?.composeMode,
+  );
+  return formMode || "tweet";
+}
+
+function personaGeneratedPreviewState(personaId, composeMode = "") {
+  const previewKey = personaGeneratedPreviewKey(
+    personaId,
+    resolvedPersonaGeneratedPreviewComposeMode(personaId, composeMode),
+  );
+  return previewKey ? (state.personaGeneratedPreviews[previewKey] || null) : null;
+}
+
+function deletePersonaGeneratedPreview(personaId, composeMode = "") {
+  const previewKey = personaGeneratedPreviewKey(
+    personaId,
+    resolvedPersonaGeneratedPreviewComposeMode(personaId, composeMode),
+  );
+  if (previewKey) delete state.personaGeneratedPreviews[previewKey];
 }
 
 function setPersonaGenerateRunState(personaId, patch = {}) {
@@ -18607,11 +18639,17 @@ function setPersonaGenerateRunState(personaId, patch = {}) {
   };
   const nextState = runStates[key];
   if (String(nextState.kind || "") === "draft") {
-    if (String(nextState.status || "") === "running") {
-      delete state.personaGeneratedPreviews[key];
-    } else if (String(nextState.status || "") === "success") {
-      state.personaGeneratedPreviews[key] = {
+    const previewComposeMode = resolvedPersonaGeneratedPreviewComposeMode(
+      key,
+      nextState.composeMode || current.composeMode,
+    );
+    const previewKey = personaGeneratedPreviewKey(key, previewComposeMode);
+    if (previewKey && String(nextState.status || "") === "running") {
+      delete state.personaGeneratedPreviews[previewKey];
+    } else if (previewKey && String(nextState.status || "") === "success") {
+      state.personaGeneratedPreviews[previewKey] = {
         ...nextState,
+        composeMode: previewComposeMode,
         visible: true,
       };
     }
@@ -18620,14 +18658,19 @@ function setPersonaGenerateRunState(personaId, patch = {}) {
   return nextState;
 }
 
-function clearPersonaGenerateRunState(personaId) {
+function clearPersonaGenerateRunState(personaId, composeMode = "") {
   const key = String(personaId || "").trim();
   if (!key) return;
+  const runState = state.personaGenerateRuns[key] || null;
+  const previewKey = personaGeneratedPreviewKey(
+    key,
+    resolvedPersonaGeneratedPreviewComposeMode(key, composeMode || runState?.composeMode),
+  );
   if (String(state.personaGenerateRuns[key]?.kind || "") === "draft") {
     delete state.personaGenerateRuns[key];
   }
-  if (state.personaGeneratedPreviews[key]) {
-    state.personaGeneratedPreviews[key].visible = false;
+  if (previewKey && state.personaGeneratedPreviews[previewKey]) {
+    state.personaGeneratedPreviews[previewKey].visible = false;
   }
 }
 
@@ -18724,7 +18767,7 @@ async function resolvePersonaOrdinaryGeneratedCandidates(persona, taskId, genera
     if (Number(error?.status) === 409) {
       clearStoredPersonaPostGenerationTask(persona.id, cleanTaskId);
       clearPersonaGenerateRunState(persona.id);
-      delete state.personaGeneratedPreviews[String(persona.id || "").trim()];
+      deletePersonaGeneratedPreview(persona.id, "tweet");
       personaFormState(persona.id).media.focusPostId = "";
       await loadPersonaDraftPosts(persona.id, { force: true }).catch(() => {});
       setPersonaPostSource("posts", persona);
@@ -18741,7 +18784,7 @@ async function resolvePersonaOrdinaryGeneratedCandidates(persona, taskId, genera
     throw { detail: String(error || "候选结果保存失败"), personaCandidateResolutionPending: true };
   }
   clearPersonaGenerateRunState(persona.id);
-  delete state.personaGeneratedPreviews[String(persona.id || "").trim()];
+  deletePersonaGeneratedPreview(persona.id, "tweet");
   await loadPersonaDraftPosts(persona.id, { force: true });
   setPersonaPostSource("posts", persona);
   const finalizedPostId = String(finalized?.selected_post?.id || selectedPostId || "").trim();
@@ -20094,6 +20137,9 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
   }
   if (becameTerminal) {
     const ok = status === "success";
+    if (ok && taskType === "persona_post_image") {
+      personaFormState(personaId).media.prompt = "";
+    }
     appendEvent(ok ? "success" : (status === "failed" ? "failed" : "cancelled"), `${taskTitle}：${statusLabel(status)}`, {
       key: `task:${taskId}`,
       taskId,
@@ -22498,7 +22544,8 @@ function personaGeneratedPreviewPosts(persona, runState) {
 function consumePersonaGeneratedPreviewPost(persona, postId) {
   const personaId = String(persona?.id || "").trim();
   const cleanPostId = String(postId || "").trim();
-  const previewState = personaGeneratedPreviewState(personaId);
+  const composeMode = resolvedPersonaGeneratedPreviewComposeMode(personaId);
+  const previewState = personaGeneratedPreviewState(personaId, composeMode);
   if (!personaId || !cleanPostId || !previewState) return "";
   const currentRows = personaGeneratedPreviewPosts(persona, previewState);
   const currentIndex = currentRows.findIndex((post) => String(post?.id || "").trim() === cleanPostId);
@@ -22508,7 +22555,7 @@ function consumePersonaGeneratedPreviewPost(persona, postId) {
     .filter((post) => String(post?.id || "").trim() !== cleanPostId);
   const remainingRows = personaGeneratedPreviewPosts(persona, previewState);
   if (!remainingRows.length) {
-    delete state.personaGeneratedPreviews[personaId];
+    deletePersonaGeneratedPreview(personaId, composeMode);
     return "";
   }
   previewState.generatedCount = remainingRows.length;
@@ -22548,8 +22595,9 @@ function renderPersonaGenerateStatusText(persona) {
   `;
 }
 
-function renderPersonaGeneratePreviewDock(persona) {
-  const runState = personaGeneratedPreviewState(persona?.id);
+function renderPersonaGeneratePreviewDock(persona, composeMode = "") {
+  if (composeMode === "hot") return "";
+  const runState = personaGeneratedPreviewState(persona?.id, composeMode);
   if (!persona || !runState || runState.selectionRequired || runState.visible === false || String(runState.status || "") !== "success") return "";
   const rows = personaGeneratedPreviewPosts(persona, runState);
   if (!rows.length) return "";
@@ -22683,9 +22731,12 @@ async function openPersonaGeneratedSelectionModal(persona, rows = []) {
   };
 }
 
-function activePersonaGeneratePreview(persona = selectedPersona()) {
-  const runState = personaGeneratedPreviewState(persona?.id);
-  if (!persona || !runState || runState.selectionRequired || runState.visible === false || String(runState.status || "") !== "success") return null;
+function activePersonaGeneratePreview(persona = selectedPersona(), composeMode = "") {
+  if (!persona) return null;
+  const resolvedComposeMode = composeMode || personaFormState(persona?.id)?.generate?.composeMode || "tweet";
+  if (resolvedComposeMode === "hot") return null;
+  const runState = personaGeneratedPreviewState(persona?.id, resolvedComposeMode);
+  if (!runState || runState.selectionRequired || runState.visible === false || String(runState.status || "") !== "success") return null;
   const rows = personaGeneratedPreviewPosts(persona, runState);
   return rows.length ? { persona, runState, rows } : null;
 }
@@ -23231,7 +23282,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   const activeGenerateComposeMode = String(personaGenerateRunState(persona.id)?.composeMode || composeMode);
   const generateBusy = generationLocked && activeGenerateComposeMode === composeMode;
   const hotImportBusy = isActionLocked("persona", persona.id, "hot_import");
-  const generatePreviewDock = renderPersonaGeneratePreviewDock(persona);
+  const generatePreviewDock = renderPersonaGeneratePreviewDock(persona, composeMode);
   const hasComposeAside = canComposeMedia || Boolean(generatePreviewDock);
 
   if (panel === "generate") {
