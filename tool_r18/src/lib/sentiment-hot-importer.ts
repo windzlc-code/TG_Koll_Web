@@ -70,7 +70,7 @@ const INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE = 4;
 const DEFAULT_REFRESH_FRESHNESS_DAYS = 7;
 const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 42_000;
 const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 58_000;
-const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 15_000;
+const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 20_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
@@ -1375,7 +1375,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
     const modelPreference = resolveSentimentHotTextModelPreference();
     const totalTimeoutMs = Math.max(8_000, args.timeoutMs || 38_000);
     const configuredModelCount = Math.max(1, getTextUnderstandingModelFallbacks(modelPreference).length);
-    const attemptTimeoutMs = ({ index }: { index: number }) => configuredModelCount <= 1 ? totalTimeoutMs - 1_000 : (index === 0 ? 9_000 : 19_000);
+    const attemptTimeoutMs = ({ index }: { index: number }) => configuredModelCount <= 1 ? totalTimeoutMs - 1_000 : (index === 0 ? 6_000 : 19_000);
     const result = await callTextUnderstandingModelWithFallback(
       modelPreference,
       [{

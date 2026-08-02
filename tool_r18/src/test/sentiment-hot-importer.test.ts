@@ -167,7 +167,7 @@ describe("sentiment hot importer", () => {
   });
 
   it("gives a live refresh enough time to obtain a model search strategy", () => {
-    expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(15_000);
+    expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(20_000);
     expect(resolveSentimentHotStrategyTimeoutMs(false, 50_000)).toBe(30_000);
     expect(resolveSentimentHotStrategyTimeoutMs(true, 5_000)).toBe(5_000);
   });
