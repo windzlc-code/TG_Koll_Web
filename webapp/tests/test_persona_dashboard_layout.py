@@ -485,8 +485,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('hasGenerateContent ? "AI 润色" : "AI 生成"', self.console_script)
         self.assertNotIn(">开始生成</button>", self.console_script)
         self.assertNotIn('"自动生成草稿"', self.console_script)
-        self.assertIn('const generateLabel = prompt ? "AI 润色预览" : "生成预览"', self.console_script)
-        self.assertIn('taskState?.taskId ? "重新生成" : generateLabel', self.console_script)
+        self.assertNotIn('"AI 润色预览"', self.console_script)
+        self.assertIn('taskState?.taskId ? "重新生成" : "生成预览"', self.console_script)
         self.assertIn(">添加至草稿</button>", self.console_script)
         self.assertIn(">替换</button>", self.console_script)
         self.assertNotIn(">覆盖全部媒体</button>", self.console_script)
@@ -872,18 +872,24 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("renderPersonaGeneratePreviewDock(persona, composeMode)", content_panel)
         self.assertIn('if (composeMode === "hot") return "";', self.console_script)
 
-    def test_successful_persona_image_generation_clears_only_the_saved_prompt(self):
+    def test_successful_persona_image_generation_and_attach_clear_prompt_without_changing_copy(self):
         media_refresh = self.console_script[
             self.console_script.index("async function refreshPersonaMediaTask"):
             self.console_script.index("async function watchPersonaMediaTask")
         ]
+        media_attach = self.console_script[
+            self.console_script.index("async function attachPersonaTaskMediaToPost"):
+            self.console_script.index("async function savePersonaPostMediaFiles")
+        ]
 
         self.assertIn('if (ok && taskType === "persona_post_image")', media_refresh)
-        self.assertIn("personaFormState(personaId).media.prompt = \"\";", media_refresh)
-        self.assertNotIn("media.prompt = \"\"", self.console_script[
-            self.console_script.index("async function submitPersonaMediaTask"):
-            self.console_script.index("async function attachPersonaTaskMediaToPost")
-        ])
+        self.assertIn("clearPersonaMediaPrompt(personaId);", media_refresh)
+        self.assertIn("clearPersonaMediaPrompt(persona.id);", media_attach)
+        self.assertIn('$("personaMediaTaskPrompt").value = "";', self.console_script)
+        self.assertIn("/media/from_task", media_attach)
+        self.assertNotIn("draft.content =", media_attach)
+        self.assertNotIn("form.draft.content =", media_attach)
+        self.assertIn("作为配图补充要求", self.console_script)
 
     def test_mobile_task_queue_persona_list_reuses_shared_drawer(self):
         selector_start = self.console_script.index("function renderTaskQueuePersonaSelector()")
@@ -3098,7 +3104,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("function normalizePersonaMediaGenerationForm", self.console_script)
         self.assertIn("<select id=\"personaMediaImageCount\">", self.console_script)
         self.assertIn("[1, 2, 3, 4]", self.console_script)
-        self.assertIn("prompt ? \"AI ", self.console_script)
+        self.assertNotIn('"AI 润色预览"', self.console_script)
+        self.assertIn('taskState?.taskId ? "重新生成" : "生成预览"', self.console_script)
         self.assertIn("content_source_mode: \"draft\"", self.console_script)
         self.assertNotIn("contentMode === \"manual\"", self.console_script)
         self.assertNotIn("manual_content:", self.console_script)

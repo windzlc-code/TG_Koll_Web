@@ -4793,6 +4793,15 @@ function snapshotPersonaCurrentForm() {
   normalizePersonaMediaGenerationForm(form.media);
 }
 
+function clearPersonaMediaPrompt(personaId) {
+  const cleanPersonaId = String(personaId || "").trim();
+  if (!cleanPersonaId) return;
+  personaFormState(cleanPersonaId).media.prompt = "";
+  if (String(state.renderedPersonaId || "").trim() === cleanPersonaId && $("personaMediaTaskPrompt")) {
+    $("personaMediaTaskPrompt").value = "";
+  }
+}
+
 function personaImageLibraryState(personaId) {
   return state.personaImageLibraries[String(personaId || "").trim()] || null;
 }
@@ -20138,7 +20147,7 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
   if (becameTerminal) {
     const ok = status === "success";
     if (ok && taskType === "persona_post_image") {
-      personaFormState(personaId).media.prompt = "";
+      clearPersonaMediaPrompt(personaId);
     }
     appendEvent(ok ? "success" : (status === "failed" ? "failed" : "cancelled"), `${taskTitle}：${statusLabel(status)}`, {
       key: `task:${taskId}`,
@@ -20407,6 +20416,7 @@ async function attachPersonaTaskMediaToPost() {
       media_indexes: selectedMediaIndexes,
     }),
   });
+  clearPersonaMediaPrompt(persona.id);
   await loadPersonaDraftPosts(persona.id, { force: true });
   delete state.personaMediaTasks[personaMediaTaskKey(persona.id, post.id)];
   const nextPostId = consumePersonaGeneratedPreviewPost(persona, post.id);
@@ -21894,7 +21904,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
               </label>` : ""}
             </div>
             <label>补充提示词（可选）
-              <textarea id="personaMediaTaskPrompt" rows="5" placeholder="留空按当前推文生成；填写后按提示词润色生成。">${esc(mediaForm.prompt || "")}</textarea>
+              <textarea id="personaMediaTaskPrompt" rows="5" placeholder="留空按当前推文生成；填写内容仅作为配图补充要求。">${esc(mediaForm.prompt || "")}</textarea>
             </label>
             ${showSourceUpload ? renderUploadDropzone("personaMediaTaskFiles", {
               label: "上传素材",
@@ -22151,10 +22161,8 @@ function renderPersonaImageLibraryGrid(library) {
 
 function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, mediaBusyStartedAt = 0 } = {}) {
   const taskState = personaMediaTaskState(personaId, postId);
-  const prompt = String(personaFormState(personaId).media?.prompt || "").trim();
-  const generateLabel = prompt ? "AI 润色预览" : "生成预览";
   const actionKind = taskState?.taskId ? "regenerate" : "generate";
-  const runButton = `<button type="button" class="primary" data-persona-run-media-task data-persona-media-action="${actionKind}" aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (taskState?.taskId ? "重新生成" : generateLabel)}</button>`;
+  const runButton = `<button type="button" class="primary" data-persona-run-media-task data-persona-media-action="${actionKind}" aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (taskState?.taskId ? "重新生成" : "生成预览")}</button>`;
   if (!taskState?.taskId) return `
     <div class="empty-state">提交生成任务后，这里会显示结果预览，并可直接添加至草稿。</div>
     <div class="row-actions persona-media-task-actions">
@@ -30536,10 +30544,6 @@ function bindEvents() {
     }
     if (event.target?.id === "personaMediaTaskPrompt") {
       snapshotPersonaCurrentForm();
-      const button = document.querySelector('[data-persona-run-media-task][data-persona-media-action="generate"]');
-      if (button && !button.disabled) {
-        button.textContent = String(event.target.value || "").trim() ? "AI 润色预览" : "生成预览";
-      }
       renderConfirmSummary();
       return;
     }

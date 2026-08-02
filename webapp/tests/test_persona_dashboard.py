@@ -2545,6 +2545,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_attach_persona_post_image_task_output_writes_back_to_post(self):
         self._write_archives()
+        original_archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        original_post = next(item for item in original_archives[0]["posts"] if item["id"] == "post-1")
+        original_title = original_post.get("title")
+        original_content = original_post.get("content")
         task_id = "task-persona-post-image-attach"
         durable_root = self.data_dir / "persona_media"
         generated_path = durable_root / task_id / "generated-preview.png"
@@ -2575,6 +2579,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
         post = next(item for item in archives[0]["posts"] if item["id"] == "post-1")
+        self.assertEqual(post.get("title"), original_title)
+        self.assertEqual(post.get("content"), original_content)
         archived_path = Path(post["mediaItems"][0]["url"])
         self.assertTrue(archived_path.resolve().is_relative_to(durable_root.resolve()))
         self.assertTrue(archived_path.is_file())

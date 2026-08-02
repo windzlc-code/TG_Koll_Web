@@ -783,6 +783,27 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             module_clicks.index("form.generate.composeMode = nextComposeMode"),
         )
 
+    def test_persona_media_prompt_clear_updates_saved_state_and_visible_input(self):
+        clear_prompt = self._function_source("clearPersonaMediaPrompt")
+        self._run_node(textwrap.dedent(f"""
+            const assert = require("node:assert/strict");
+            const promptInput = {{ value: "旧配图提示词" }};
+            const form = {{ media: {{ prompt: "旧配图提示词" }} }};
+            const state = {{ renderedPersonaId: "persona-1" }};
+            function personaFormState(personaId) {{
+              assert.equal(personaId, "persona-1");
+              return form;
+            }}
+            function $(id) {{
+              return id === "personaMediaTaskPrompt" ? promptInput : null;
+            }}
+            {clear_prompt}
+
+            clearPersonaMediaPrompt("persona-1");
+            assert.equal(form.media.prompt, "");
+            assert.equal(promptInput.value, "");
+        """))
+
     def test_persona_media_polling_has_no_hard_timeout_and_reaches_server_terminal_state(self):
         source = self._section(
             "async function watchPersonaMediaTask",
