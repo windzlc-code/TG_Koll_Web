@@ -2298,7 +2298,10 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     // browser results down to 3). Keep anchor narrowing for strict mode only.
     candidates = searchMode === "strict"
       ? strategyCandidatePool.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode))
-      : strategyCandidatePool;
+      : strategyCandidatePool.filter((candidate) => (
+        (candidate.metrics as any)?.globalPersonaBackfill !== true
+        || candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode)
+      ));
   }
   const displayCandidatePool = strictFreshOnly
     ? candidates.filter((candidate) => (
