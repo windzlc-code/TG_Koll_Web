@@ -1978,7 +1978,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   if (hasSearchKeywords && args.refresh === true && candidates.length >= limit && cachedReadyCount < semanticSourceTarget) {
     warnings.push(`當前相關候選不足，已繼續補充實時來源。`);
   }
-  let instagramAuthenticatedCandidatesTask: (() => Promise<SentimentHotCandidate[]>) | null = null;
+  let instagramAuthenticatedCandidatesPromise: Promise<SentimentHotCandidate[]> | null = null;
   let instagramReaderCandidatesPromise: Promise<SentimentHotCandidate[]> | null = null;
   if (shouldFetchLiveCandidates) {
     const instagramTimeoutMs = Math.min(SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS, remainingSentimentHotTotalBudgetMs(startedAt, 18_000));
@@ -1987,7 +1987,10 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       args.refresh ? Date.now() + candidates.length : candidates.length,
       args.refresh === true,
     );
-    instagramAuthenticatedCandidatesTask = () => withSentimentTimeout(
+    // Start this source with Reader and Threads. Deferring it until after the
+    // Threads pass made the browser sources run serially and could exceed the
+    // workflow's 58 second budget even when both sources were healthy.
+    instagramAuthenticatedCandidatesPromise = withSentimentTimeout(
         fetchInstagramAuthenticatedSearchCandidates({
           archiveId,
           keywords,
@@ -2143,13 +2146,13 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   }
 
   const hasFastReturnCandidates = cachedReadyCount >= semanticSourceTarget;
-  if (shouldFetchLiveCandidates && (instagramAuthenticatedCandidatesTask || instagramReaderCandidatesPromise)) {
+  if (shouldFetchLiveCandidates && (instagramAuthenticatedCandidatesPromise || instagramReaderCandidatesPromise)) {
     const beforeInstagramCount = candidates.length;
     const [authenticatedCandidates, readerCandidates] = await measureSentimentStage(
       warnings,
       "instagram-parallel-search",
       () => Promise.all([
-        instagramAuthenticatedCandidatesTask?.() || Promise.resolve([]),
+        instagramAuthenticatedCandidatesPromise || Promise.resolve([]),
         instagramReaderCandidatesPromise || Promise.resolve([]),
       ]),
     );
