@@ -1231,7 +1231,7 @@
 
 :root[data-theme="light"] .auth-dialog :is(.auth-password-toggle:hover, .auth-password-toggle:focus-visible) {
   color: var(--public-cool-dark);
-  background: #e8f0f7;
+  background: transparent;
 }
 
 :root[data-theme="light"] .auth-dialog .auth-password-toggle:focus-visible {

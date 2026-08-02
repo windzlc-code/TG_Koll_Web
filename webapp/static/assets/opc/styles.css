@@ -468,7 +468,7 @@ select:focus {
 .auth-password-toggle:hover,
 .auth-password-toggle:focus-visible {
   color: var(--teal-dark);
-  background: #edf2f6;
+  background: transparent;
 }
 
 .auth-password-toggle:focus-visible {
@@ -642,7 +642,7 @@ select:focus {
 
 .auth-registration-form .auth-password-toggle:hover,
 .auth-registration-form .auth-password-toggle:focus-visible {
-  background: #f1f3f5;
+  background: transparent;
 }
 
 .auth-verification-button {

@@ -255,6 +255,23 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn("-webkit-backdrop-filter: blur(4px);", overlay)
         self.assertNotIn("blur(12px)", overlay)
 
+    def test_password_visibility_toggle_stays_unfilled_when_activated(self):
+        toggle_rule_start = self.styles.index(".auth-password-toggle:hover,")
+        toggle_rule_end = self.styles.index("\n}", toggle_rule_start)
+        toggle_rule = self.styles[toggle_rule_start:toggle_rule_end]
+        registration_rule_start = self.styles.index(".auth-registration-form .auth-password-toggle:hover,")
+        registration_rule_end = self.styles.index("\n}", registration_rule_start)
+        registration_rule = self.styles[registration_rule_start:registration_rule_end]
+        light_rule_start = self.fixed_light_styles.index(
+            ':root[data-theme="light"] .auth-dialog :is(.auth-password-toggle:hover, .auth-password-toggle:focus-visible)'
+        )
+        light_rule_end = self.fixed_light_styles.index("\n}", light_rule_start)
+        light_rule = self.fixed_light_styles[light_rule_start:light_rule_end]
+
+        self.assertIn("background: transparent;", toggle_rule)
+        self.assertIn("background: transparent;", registration_rule)
+        self.assertIn("background: transparent;", light_rule)
+
     def test_admin_login_page_is_removed_and_shared_login_handles_admins(self):
         self.assertFalse((self.static_dir / "admin-login.html").exists())
         self.assertNotIn("_admin_login_page", self.server_source)
