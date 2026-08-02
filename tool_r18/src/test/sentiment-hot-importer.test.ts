@@ -13,6 +13,8 @@ import {
   acquireSentimentBrowserWorkSlot,
   applyPersonaGuardToSentimentHotStrategy,
   boundedBrowserPageConcurrency,
+  buildModelOrderedThreadsSearchQueries,
+  buildSentimentHotSearchStrategyCacheKey,
   buildJinaReaderUrl,
   buildThreadsSearchUrl,
   candidateMatchesRequestedFreshness,
@@ -45,7 +47,9 @@ import {
   parseThreadsDetailMediaMarkdown,
   parseThreadsSearchTextCandidates,
   refreshSentimentSourceMetrics,
+  replaceThreadsSearchVariables,
   resolveSentimentHotModelStrategyKeywords,
+  resolveSentimentHotModelQueryKeywords,
   resolveSentimentHotStrategyTimeoutMs,
   resolveSentimentHotTextModelPreference,
   shouldTreatThreadsProfileAsLoginWall,
@@ -96,6 +100,71 @@ describe("sentiment hot importer", () => {
     expect(buildThreadsSearchUrl("茶文化", true)).toBe(
       "https://www.threads.com/search?q=%E8%8C%B6%E6%96%87%E5%8C%96&filter=recent",
     );
+  });
+
+  it("forces a persisted Threads GraphQL template into recent mode for freshness-scoped searches", () => {
+    expect(replaceThreadsSearchVariables({
+      query: "旧词",
+      after: "cursor",
+      first: 10,
+      recent: 0,
+      nested: { searchQuery: "旧词" },
+    }, "理发师", null, true, 25)).toEqual({
+      query: "理发师",
+      after: null,
+      first: 25,
+      recent: 1,
+      nested: { searchQuery: "理发师" },
+    });
+  });
+
+  it("reuses a persona search strategy when only volatile memory summaries change", () => {
+    const base = {
+      archive: {
+        id: "hairdresser",
+        name: "理发师",
+        content: "分享理发行业见闻",
+        setup: { genres: ["美发"] },
+      } as any,
+      personaText: "人设名称：理发师",
+    };
+    expect(buildSentimentHotSearchStrategyCacheKey({
+      ...base,
+      memorySummaries: ["今天聊短发"],
+    })).toBe(buildSentimentHotSearchStrategyCacheKey({
+      ...base,
+      memorySummaries: ["昨天聊染发", "新的临时记忆"],
+    }));
+  });
+
+  it("keeps model search phrases intact instead of spending queries on generic fragments", () => {
+    const queries = buildModelOrderedThreadsSearchQueries([
+      "理发师 手工 改造",
+      "美发沙龙 职场 趣事",
+    ]);
+    expect(queries).toContain("理发师 手工 改造");
+    expect(queries).toContain("美发沙龙 职场 趣事");
+    expect(queries).not.toContain("手工");
+    expect(queries).not.toContain("改造");
+    expect(queries).not.toContain("职场");
+    expect(queries).not.toContain("趣事");
+  });
+
+  it("uses broad vertical model terms for strict discovery without widening strict acceptance", () => {
+    const strategy = {
+      primaryQueries: ["理发师 顾客 吐槽", "理发店 奇葩客人", "剪头发 翻车", "男士理发 油头", "美发沙龙 职场"],
+      ecosystemQueries: [],
+      broadQueries: ["染发烫发价格踩雷"],
+      requiredAnchorTerms: ["理发师", "美发师", "发型师"],
+      normalAnchorTerms: ["美发造型", "美发沙龙", "发型设计"],
+      strictAcceptTerms: ["发型师", "理发店", "剪头发", "美发师", "理发师"],
+      normalAcceptTerms: ["护发", "染发", "烫发", "发型设计", "美发造型"],
+      rejectTerms: [],
+      personaGuardTerms: [],
+      domainSummary: "理发与美发行业",
+    } as any;
+    expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict")).not.toContain("染发烫发价格踩雷");
+    expect(resolveSentimentHotModelQueryKeywords(strategy, "strict")).toContain("染发烫发价格踩雷");
   });
 
   it("clamps custom freshness to fifteen days", () => {
@@ -1071,7 +1140,7 @@ describe("sentiment hot importer", () => {
     expect(candidates).toEqual([]);
   });
 
-  it("does not allow fresh relevant fallbacks below the heat gate", () => {
+  it("allows only marked, recent Threads fallbacks with verified real interaction below the heat gate", () => {
     const content = "茶文化活動分享茶葉保存、茶具選擇、茶席布置、沖泡水溫與品茶禮儀，也整理在家練習茶道時容易忽略的細節和實際經驗，並說明不同季節如何調整水溫、浸泡時間與茶葉用量。";
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
@@ -1083,7 +1152,13 @@ describe("sentiment hot importer", () => {
         media: [],
         hotScore: 80,
         publishedAt: new Date().toISOString(),
-        metrics: { freshRelevantFallback: true, viewCount: 80 },
+        metrics: {
+          source: "threads-account-search",
+          freshRelevantFallback: true,
+          recentSearch: true,
+          like_count: 80,
+        },
+        engagement: { likeCount: 80 },
       },
       {
         id: "qualified-hot",
@@ -1102,7 +1177,7 @@ describe("sentiment hot importer", () => {
       freshnessDays: 15,
     });
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["qualified-hot"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["qualified-hot", "fresh-fallback"]);
   });
 
   it("still rejects unmarked low-heat candidates", () => {

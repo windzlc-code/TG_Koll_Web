@@ -13842,8 +13842,8 @@ def _persona_hot_pool_worker_loop() -> None:
     global _PERSONA_HOT_POOL_CURSOR
     low_watermark = max(10, _to_int(os.getenv("PERSONA_HOT_POOL_LOW_WATERMARK"), 60))
     target_count = max(low_watermark, _to_int(os.getenv("PERSONA_HOT_POOL_TARGET_COUNT"), 100))
-    stats_batch_size = max(1, min(10, _to_int(os.getenv("PERSONA_HOT_POOL_STATS_BATCH_SIZE"), 1)))
-    interval_seconds = max(60, _to_int(os.getenv("PERSONA_HOT_POOL_INTERVAL_SECONDS"), 180))
+    stats_batch_size = max(1, min(10, _to_int(os.getenv("PERSONA_HOT_POOL_STATS_BATCH_SIZE"), 10)))
+    interval_seconds = max(60, _to_int(os.getenv("PERSONA_HOT_POOL_INTERVAL_SECONDS"), 60))
     idle_seconds = max(30, _to_int(os.getenv("PERSONA_HOT_POOL_IDLE_SECONDS"), 120))
     cooldown_seconds = max(300, _to_int(os.getenv("PERSONA_HOT_POOL_COOLDOWN_SECONDS"), 900))
     warm_cooldown_seconds = max(900, _to_int(os.getenv("PERSONA_HOT_WARM_COOLDOWN_SECONDS"), 3600))
@@ -13961,6 +13961,7 @@ def _start_persona_hot_pool_worker() -> None:
         thread = threading.Thread(target=_persona_hot_pool_worker_loop, name="persona-hot-pool-worker", daemon=True)
         _PERSONA_HOT_POOL_WORKER_THREAD = thread
         thread.start()
+        _PERSONA_HOT_POOL_WAKE.set()
 
 
 def _stop_persona_hot_pool_worker() -> None:
@@ -15176,6 +15177,7 @@ def _create_persona_archive(payload: PersonaDashboardPersonaCreatePayload) -> di
     }
     archives.append(archive)
     _write_persona_archives_preserving_shape(path, raw, archives)
+    _warm_persona_hot_strategy_async(str(archive.get("id") or ""))
     return _build_persona_dashboard_profile(archive)
 
 
