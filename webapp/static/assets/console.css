@@ -7393,7 +7393,8 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 8px;
 }
 
-.persona-hot-card-actions button {
+.persona-hot-card-actions button,
+.persona-hot-card-actions a {
   min-height: 30px;
   padding: 4px 12px;
 }
@@ -7414,19 +7415,6 @@ body.persona-touch-dragging .persona-list-card:active {
   }
 }
 
-.console-modal[data-modal-key="persona-hot-candidate-detail"] .console-modal-dialog {
-  width: min(780px, calc(100vw - 32px));
-}
-
-.console-modal[data-modal-key="persona-hot-candidate-detail"] [data-console-modal-field="content"] {
-  min-height: 180px;
-  line-height: 1.6;
-}
-
-.persona-hot-candidate-detail-media {
-  min-width: 0;
-}
-
 @media (max-width: 980px) {
   .persona-hot-layout {
     grid-template-columns: 1fr;
@@ -7440,16 +7428,6 @@ body.persona-touch-dragging .persona-list-card:active {
 
   .persona-hot-preview {
     display: none;
-  }
-}
-
-@media (max-width: 760px) {
-  .console-modal[data-modal-key="persona-hot-candidate-detail"] .console-modal-dialog {
-    width: 100%;
-  }
-
-  .console-modal[data-modal-key="persona-hot-candidate-detail"] [data-console-modal-field="content"] {
-    min-height: 150px;
   }
 }
 

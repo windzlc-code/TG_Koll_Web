@@ -4541,64 +4541,6 @@ async function openPersonaHotCandidateInDraftEditor(persona, candidateId) {
   showMsg("commandMsg", "已进入标准草稿编辑器，可直接编辑正文和媒体。", true);
 }
 
-async function openPersonaHotCandidateDetail(persona, candidateId) {
-  const cleanCandidateId = String(candidateId || "").trim();
-  const candidate = personaHotCandidates(persona).find((item) => personaHotCandidateKey(item) === cleanCandidateId);
-  if (!persona || !candidate) return;
-  const mediaItems = personaHotCandidateMediaItems(candidate);
-  const detailRequest = openConsoleModal({
-    title: "热点推文详情",
-    contentHtml: `
-      <div class="console-modal-detail persona-hot-candidate-detail">
-        <div>
-          <span>平台与时间</span>
-          <strong>${esc((candidate.platform || "threads").toUpperCase())} · ${esc(formatTime(candidate.captured_at || candidate.published_at || ""))}</strong>
-        </div>
-        <div>
-          <span>热点数据</span>
-          <strong>${esc(personaHotMetricSummary(candidate))}</strong>
-        </div>
-        ${candidate.source_url ? `<div><span>来源</span><a href="${esc(candidate.source_url)}" target="_blank" rel="noopener">打开原帖</a></div>` : ""}
-        <div class="persona-hot-candidate-detail-media">
-          <span>媒体 ${mediaItems.length ? `${mediaItems.length} 个` : ""}</span>
-          ${renderPersonaHotMediaPreview(persona, candidate)}
-        </div>
-      </div>
-    `,
-    fields: [{
-      name: "content",
-      label: "推文正文",
-      multiline: true,
-      value: personaHotEditedContent(persona.id, candidate),
-      placeholder: "填写热点推文正文",
-      required: true,
-    }],
-    confirmText: "编辑后使用",
-    cancelText: "关闭",
-    modalKey: "persona-hot-candidate-detail",
-  });
-  window.requestAnimationFrame(() => {
-    const contentField = document.querySelector(
-      '.console-modal[data-modal-key="persona-hot-candidate-detail"] [data-console-modal-field="content"]',
-    );
-    if (!(contentField instanceof HTMLTextAreaElement)) return;
-    contentField.setSelectionRange(0, 0);
-    contentField.scrollTop = 0;
-    contentField.blur();
-  });
-  const result = await detailRequest;
-  if (!result || typeof result !== "object") return;
-  const editedContent = String(result.content || "").trim();
-  if (!editedContent) return;
-  const form = personaFormState(persona.id).generate;
-  if (!form.hotEditedContentByCandidate || typeof form.hotEditedContentByCandidate !== "object") {
-    form.hotEditedContentByCandidate = {};
-  }
-  form.hotEditedContentByCandidate[cleanCandidateId] = editedContent;
-  state.transientWorkspaceLeaveAcknowledgement = "";
-  await openPersonaHotCandidateInDraftEditor(persona, cleanCandidateId);
-}
-
 function renderPersonaHotMediaPreview(persona, candidate, { editing = false } = {}) {
   const mediaItems = personaHotCandidateMediaItems(candidate);
   if (!mediaItems.length) return `<div class="empty-state">当前热点候选没有媒体。</div>`;
@@ -4643,13 +4585,13 @@ function renderPersonaHotMediaPreview(persona, candidate, { editing = false } = 
                   </div>
                   <span>${esc(mediaKindLabel(item.type))}</span>
                 </div>`
-              : renderMediaPreviewButton(item, "", index, {
+              : renderMediaPreviewButton(item, previewGroupId, previewIndex, {
                   className: "persona-media-card",
                   frameClass: "persona-media-frame",
                   caption: `${mediaKindLabel(item.type)} ${index + 1}`,
-                  interactive: false,
+                  interactive: !editing && !isDeleted && Boolean(previewGroupId) && Number.isInteger(previewIndex),
                 })}
-            <div class="persona-hot-media-actions">
+            ${editing ? `<div class="persona-hot-media-actions">
               ${!isDeleted && previewGroupId && Number.isInteger(previewIndex) ? `<button
                 type="button"
                 class="persona-hot-media-action is-view"
@@ -4658,7 +4600,7 @@ function renderPersonaHotMediaPreview(persona, candidate, { editing = false } = 
                 title="查看媒体"
                 aria-label="查看第 ${index + 1} 个媒体"
               >${renderMediaCardViewIcon()}</button>` : ""}
-              ${editing && !isDeleted ? `<button
+              ${!isDeleted ? `<button
                 type="button"
                 class="persona-hot-media-action is-replace"
                 data-persona-hot-media-replace="${esc(candidateId)}"
@@ -4666,15 +4608,15 @@ function renderPersonaHotMediaPreview(persona, candidate, { editing = false } = 
                 title="替换媒体"
                 aria-label="替换第 ${index + 1} 个媒体"
               >${renderReplaceIcon()}</button>` : ""}
-              ${editing ? `<button
+              <button
                 type="button"
                 class="persona-hot-media-action ${isDeleted ? "is-restore" : "is-remove"}"
                 data-persona-hot-media-toggle="${esc(candidateId)}"
                 data-persona-hot-media-index="${esc(index)}"
                 title="${isDeleted ? "恢复媒体" : "删除媒体"}"
                 aria-label="${isDeleted ? `恢复第 ${index + 1} 个媒体` : `删除第 ${index + 1} 个媒体`}"
-              >${isDeleted ? renderUndoIcon() : renderTrashIcon()}</button>` : ""}
-            </div>
+              >${isDeleted ? renderUndoIcon() : renderTrashIcon()}</button>
+            </div>` : ""}
           </div>
         `;
       }).join("")}
@@ -21613,11 +21555,11 @@ function renderPersonaHotCandidatePreview(candidate) {
       </label>
       <div class="persona-hot-preview-meta">
         <small>${esc(personaHotMetricSummary(candidate))}</small>
-        ${candidate.source_url ? `<a href="${esc(candidate.source_url)}" target="_blank" rel="noopener">打开原帖</a>` : ""}
       </div>
       ${renderPersonaHotMediaPreview(persona, candidate)}
     </div>
     <div class="row-actions persona-hot-preview-actions">
+      ${candidate.source_url ? `<a href="${esc(candidate.source_url)}" target="_blank" rel="noopener">打开帖子</a>` : ""}
       <button type="button" class="primary" data-persona-start-hot-edit="${esc(candidateId)}">编辑后使用</button>
     </div>
   `;
@@ -21720,8 +21662,8 @@ function renderPersonaHotCandidatePicker(persona, form) {
                   <span class="persona-hot-card-metrics">${esc(personaHotMetricSummary(candidate))}</span>
                 </button>
                 ${mediaItems.length ? renderPersonaHotMediaPreview(persona, candidate) : ""}
-                <div class="persona-hot-card-actions">
-                  <button type="button" data-persona-view-hot-candidate="${esc(candidate.candidate_id)}">查看</button>
+                <div class="row-actions persona-hot-card-actions">
+                  ${candidate.source_url ? `<a href="${esc(candidate.source_url)}" target="_blank" rel="noopener">打开帖子</a>` : ""}
                   <button type="button" class="primary" data-persona-start-hot-edit="${esc(candidate.candidate_id)}">编辑</button>
                 </div>
               </article>
@@ -29492,17 +29434,6 @@ function bindEvents() {
       if (!form.hotPreviewId) form.hotPreviewId = form.hotSelectedIds[0] || "";
       renderPersonaDetail();
       renderConfirmSummary();
-      return;
-    }
-    const viewHotCandidateButton = event.target.closest("[data-persona-view-hot-candidate]");
-    if (viewHotCandidateButton) {
-      const persona = selectedPersona();
-      const candidateId = String(viewHotCandidateButton.dataset.personaViewHotCandidate || "").trim();
-      if (persona && candidateId) {
-        openPersonaHotCandidateDetail(persona, candidateId).catch((error) => {
-          showMsg("commandMsg", error.detail || error.message || "查看热点推文失败。", false);
-        });
-      }
       return;
     }
     const hotPreviewButton = event.target.closest("[data-persona-hot-preview]");

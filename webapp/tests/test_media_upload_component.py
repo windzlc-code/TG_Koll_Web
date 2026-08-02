@@ -140,21 +140,17 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertNotIn(">确认导入</button>", self.script)
         self.assertNotIn('id="personaHotReplacementFiles"', self.script)
 
-    def test_hotspot_cards_open_one_editable_public_detail_window(self):
-        self.assertIn("async function openPersonaHotCandidateDetail", self.script)
-        self.assertIn('data-persona-view-hot-candidate="${esc(candidate.candidate_id)}"', self.script)
-        self.assertIn('class="persona-hot-card-actions"', self.script)
-        self.assertIn(">查看</button>", self.script)
+    def test_hotspot_cards_open_media_and_source_without_detail_modal(self):
+        self.assertIn('class="row-actions persona-hot-card-actions"', self.script)
+        self.assertIn('target="_blank" rel="noopener">打开帖子</a>', self.script)
         self.assertIn('data-persona-start-hot-edit="${esc(candidate.candidate_id)}"', self.script)
         self.assertIn(">编辑</button>", self.script)
-        self.assertIn('modalKey: "persona-hot-candidate-detail"', self.script)
-        self.assertIn('title: "热点推文详情"', self.script)
-        self.assertIn('name: "content"', self.script)
-        self.assertIn('label: "推文正文"', self.script)
-        self.assertIn('confirmText: "编辑后使用"', self.script)
-        self.assertIn("form.hotEditedContentByCandidate[cleanCandidateId] = editedContent;", self.script)
-        self.assertIn("await openPersonaHotCandidateInDraftEditor(persona, cleanCandidateId);", self.script)
-        self.assertIn('event.target.closest("[data-persona-view-hot-candidate]")', self.script)
+        self.assertNotIn("async function openPersonaHotCandidateDetail", self.script)
+        self.assertNotIn('data-persona-view-hot-candidate=', self.script)
+        self.assertNotIn('modalKey: "persona-hot-candidate-detail"', self.script)
+        self.assertIn('renderMediaPreviewButton(item, previewGroupId, previewIndex, {', self.script)
+        self.assertIn('interactive: !editing && !isDeleted && Boolean(previewGroupId) && Number.isInteger(previewIndex),', self.script)
+        self.assertIn('${editing ? `<div class="persona-hot-media-actions">', self.script)
 
     def test_hotspot_cards_show_source_identity_all_media_and_merged_heat_views(self):
         picker = self.script[
