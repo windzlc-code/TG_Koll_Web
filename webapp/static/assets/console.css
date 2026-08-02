@@ -7090,6 +7090,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-hot-card-main {
   display: grid;
+  grid-column: 2;
   gap: 4px;
   width: 100%;
   min-width: 0;
@@ -7099,6 +7100,76 @@ body.persona-touch-dragging .persona-list-card:active {
   color: inherit;
   text-align: left;
   box-shadow: none;
+}
+
+.persona-hot-source-identity {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.persona-hot-card > .persona-hot-source-identity {
+  grid-column: 2;
+}
+
+.persona-hot-source-avatar {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--soft);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.persona-hot-source-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.persona-hot-source-copy,
+.persona-hot-source-meta {
+  display: flex;
+  min-width: 0;
+}
+
+.persona-hot-source-copy {
+  flex-direction: column;
+  gap: 1px;
+}
+
+.persona-hot-source-copy small,
+.persona-hot-source-meta small,
+.persona-hot-source-meta > span:first-child {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.persona-hot-source-copy strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.persona-hot-source-meta {
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.persona-hot-card > .persona-hot-media-grid {
+  grid-column: 2;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
 }
 
 .persona-hot-card-head,
@@ -7319,11 +7390,28 @@ body.persona-touch-dragging .persona-list-card:active {
   grid-column: 2;
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
 }
 
 .persona-hot-card-actions button {
   min-height: 30px;
   padding: 4px 12px;
+}
+
+@media (max-width: 620px) {
+  .persona-hot-source-identity {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .persona-hot-source-avatar {
+    width: 32px;
+    height: 32px;
+  }
+
+  .persona-hot-source-meta {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
 }
 
 .console-modal[data-modal-key="persona-hot-candidate-detail"] .console-modal-dialog {

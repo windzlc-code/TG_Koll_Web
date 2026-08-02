@@ -122,9 +122,12 @@ class MediaUploadComponentContractTests(unittest.TestCase):
     def test_hotspot_edit_opens_the_standard_draft_editor(self):
         self.assertIn("async function openPersonaHotCandidateInDraftEditor", self.script)
         self.assertIn(
-            'importPersonaHotDrafts([cleanCandidateId], { showCompletionModal: false, applyStoredEdits: true })',
+            "const result = await importPersonaHotDrafts([cleanCandidateId], {",
             self.script,
         )
+        self.assertIn("showCompletionModal: false,", self.script)
+        self.assertIn("applyStoredEdits: true,", self.script)
+        self.assertIn("choosePlatform: true,", self.script)
         self.assertIn('form.generate.composeMode = "tweet_media";', self.script)
         self.assertIn('form.media.operationMode = "replace";', self.script)
         self.assertIn('setPersonaPostSource("posts", persona);', self.script)
@@ -142,6 +145,8 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('data-persona-view-hot-candidate="${esc(candidate.candidate_id)}"', self.script)
         self.assertIn('class="persona-hot-card-actions"', self.script)
         self.assertIn(">查看</button>", self.script)
+        self.assertIn('data-persona-start-hot-edit="${esc(candidate.candidate_id)}"', self.script)
+        self.assertIn(">编辑</button>", self.script)
         self.assertIn('modalKey: "persona-hot-candidate-detail"', self.script)
         self.assertIn('title: "热点推文详情"', self.script)
         self.assertIn('name: "content"', self.script)
@@ -150,6 +155,43 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("form.hotEditedContentByCandidate[cleanCandidateId] = editedContent;", self.script)
         self.assertIn("await openPersonaHotCandidateInDraftEditor(persona, cleanCandidateId);", self.script)
         self.assertIn('event.target.closest("[data-persona-view-hot-candidate]")', self.script)
+
+    def test_hotspot_cards_show_source_identity_all_media_and_merged_heat_views(self):
+        picker = self.script[
+            self.script.index("function renderPersonaHotCandidatePicker"):
+            self.script.index("\nfunction personaMediaTaskOptions")
+        ]
+        metrics = self.script[
+            self.script.index("function personaHotMetricSummary"):
+            self.script.index("\nfunction normalizePersonaHotSearchMode")
+        ]
+
+        self.assertIn("renderPersonaHotSourceIdentity(candidate)", picker)
+        self.assertIn("renderPersonaHotMediaPreview(persona, candidate)", picker)
+        self.assertIn('["热度/浏览", personaHotCombinedViewMetric(candidate)]', metrics)
+        self.assertNotIn('["热度",', metrics)
+        self.assertNotIn('["浏览",', metrics)
+
+    def test_hotspot_import_uses_public_platform_picker_before_writing_drafts(self):
+        importer = self.script[
+            self.script.index("async function importPersonaHotDrafts"):
+            self.script.index("\nfunction resetPersonaDraftEditor", self.script.index("async function importPersonaHotDrafts"))
+        ]
+        submitter = self.script[
+            self.script.index("async function submitPersonaHotDraftImport"):
+            self.script.index("\nasync function importPersonaHotDrafts")
+        ]
+        handler = self.script[
+            self.script.index('if (event.target.closest("[data-persona-import-hot-drafts]"))'):
+            self.script.index('const hotMediaReplace = event.target.closest', self.script.index('if (event.target.closest("[data-persona-import-hot-drafts]"))'))
+        ]
+
+        self.assertIn("await choosePublishPlatformAccount(persona, {", importer)
+        self.assertIn('title: "选择导入平台"', importer)
+        self.assertIn('confirmText: "导入草稿"', importer)
+        self.assertIn("targetPlatform", submitter)
+        self.assertIn("platform: resolvedTargetPlatform", submitter)
+        self.assertIn("choosePlatform: true", handler)
 
     def test_mobile_hotspot_cards_expand_without_inline_single_preview(self):
         mobile_hotspot = self.styles.split("@media (max-width: 980px) {\n  .persona-hot-layout {", 1)[1].split("\n}", 1)[0]

@@ -3998,27 +3998,6 @@ function personaHotImportMeta(personaId, postId) {
   return personaHotImportStore(personaId)[postKey] || null;
 }
 
-function personaHotMetricNumber(...values) {
-  for (const value of values) {
-    if (value === null || value === undefined || value === "") continue;
-    const number = Number(value);
-    if (Number.isFinite(number) && number >= 0) return number;
-  }
-  return null;
-}
-
-function personaHotMetricSummary(candidate) {
-  const fields = [
-    ["热度", personaHotMetricNumber(candidate?.hot_score, candidate?.hotScore, candidate?.score)],
-    ["浏览", personaHotMetricNumber(candidate?.view_count, candidate?.engagement?.viewCount, candidate?.metrics?.view_count, candidate?.metrics?.viewCount, candidate?.metrics?.views)],
-    ["点赞", personaHotMetricNumber(candidate?.like_count, candidate?.engagement?.likeCount, candidate?.metrics?.like_count, candidate?.metrics?.likeCount, candidate?.metrics?.likes)],
-    ["评论", personaHotMetricNumber(candidate?.comment_count, candidate?.engagement?.commentCount, candidate?.metrics?.comment_count, candidate?.metrics?.commentCount, candidate?.metrics?.comments)],
-    ["转发", personaHotMetricNumber(candidate?.repost_count, candidate?.engagement?.repostCount, candidate?.metrics?.repost_count, candidate?.metrics?.repostCount, candidate?.metrics?.reposts)],
-    ["分享", personaHotMetricNumber(candidate?.metrics?.send_count, candidate?.engagement?.sendCount, candidate?.share_count, candidate?.metrics?.share_count, candidate?.metrics?.shareCount, candidate?.metrics?.shares, candidate?.engagement?.shareCount)],
-  ];
-  return fields.map(([label, value]) => `${label} ${numberText(value ?? 0)}`).join(" · ");
-}
-
 function setPersonaHotImportMeta(personaId, postId, meta) {
   const key = String(postId || "").trim();
   if (!key) return;
@@ -4108,16 +4087,49 @@ function personaHotViewMetric(candidate) {
   );
 }
 
+function personaHotCombinedViewMetric(candidate) {
+  return personaHotViewMetric(candidate)
+    ?? personaHotMetricNumber(candidate?.hot_score, candidate?.hotScore, candidate?.score);
+}
+
 function personaHotMetricSummary(candidate) {
   const fields = [
-    ["热度", personaHotMetricNumber(candidate?.hot_score, candidate?.hotScore, candidate?.score)],
-    ["浏览", personaHotViewMetric(candidate)],
+    ["热度/浏览", personaHotCombinedViewMetric(candidate)],
     ["点赞", personaHotMetricNumber(candidate?.like_count, candidate?.engagement?.likeCount, candidate?.metrics?.like_count, candidate?.metrics?.likeCount, candidate?.metrics?.likes)],
     ["评论", personaHotMetricNumber(candidate?.comment_count, candidate?.engagement?.commentCount, candidate?.metrics?.comment_count, candidate?.metrics?.commentCount, candidate?.metrics?.comments)],
     ["转发", personaHotMetricNumber(candidate?.repost_count, candidate?.engagement?.repostCount, candidate?.metrics?.repost_count, candidate?.metrics?.repostCount, candidate?.metrics?.reposts)],
     ["分享", personaHotMetricNumber(candidate?.metrics?.send_count, candidate?.engagement?.sendCount, candidate?.metrics?.reshare_count, candidate?.send_count, candidate?.share_count, candidate?.metrics?.share_count, candidate?.metrics?.shareCount, candidate?.metrics?.shares, candidate?.engagement?.shareCount)],
   ];
   return fields.map(([label, value]) => `${label} ${value === null ? "未获取" : numberText(value)}`).join(" · ");
+}
+
+function renderPersonaHotSourceIdentity(candidate) {
+  const author = String(
+    candidate?.author
+    || candidate?.author_name
+    || candidate?.username
+    || candidate?.account_name
+    || "",
+  ).trim();
+  const displayAuthor = author || "来源账号未获取";
+  const avatarUrl = String(candidate?.author_avatar || candidate?.authorAvatar || candidate?.avatar_url || "").trim();
+  const mediaItems = personaHotCandidateMediaItems(candidate);
+  return `
+    <div class="persona-hot-source-identity">
+      <span class="persona-hot-source-avatar" aria-hidden="true">
+        ${avatarUrl ? `<img src="${esc(avatarUrl)}" alt="" loading="lazy" />` : esc(displayAuthor.slice(0, 1).toUpperCase())}
+      </span>
+      <span class="persona-hot-source-copy">
+        <small>来源人设</small>
+        <strong>${esc(author ? `@${author.replace(/^@/, "")}` : displayAuthor)}</strong>
+      </span>
+      <span class="persona-hot-source-meta">
+        <span>${esc((candidate?.platform || "threads").toUpperCase())}</span>
+        ${renderMediaTypeBadge(mediaItems)}
+        <small>${esc(formatTime(candidate?.captured_at || candidate?.published_at || ""))}</small>
+      </span>
+    </div>
+  `;
 }
 
 function normalizePersonaHotSearchMode(value) {
@@ -4510,7 +4522,12 @@ async function openPersonaHotCandidateInDraftEditor(persona, candidateId) {
     showMsg("commandMsg", "当前已有草稿正在编辑，请先保存或放弃修改。", false);
     return;
   }
-  const result = await importPersonaHotDrafts([cleanCandidateId], { showCompletionModal: false, applyStoredEdits: true });
+  const result = await importPersonaHotDrafts([cleanCandidateId], {
+    showCompletionModal: false,
+    applyStoredEdits: true,
+    choosePlatform: true,
+  });
+  if (!result) return;
   const postId = String(result?.createdIds?.[0] || "").trim();
   if (!postId) {
     showMsg("commandMsg", "热点草稿已生成，但没有找到可编辑的草稿记录。", false);
@@ -4690,8 +4707,7 @@ function renderPersonaHotOrigin(meta, { compact = false, showMetricSummary = tru
 function renderPersonaHotMetricStrip(meta, postId = "") {
   if (!meta) return "";
   const metrics = [
-    ["热度", meta.hot_score],
-    ["浏览", meta.view_count],
+    ["热度/浏览", personaHotCombinedViewMetric(meta)],
     ["点赞", meta.like_count],
     ["评论", meta.comment_count],
     ["转发", meta.repost_count],
@@ -19388,12 +19404,14 @@ async function cancelPersonaHotCandidates() {
 async function submitPersonaHotDraftImport(persona, selected, {
   replacementOpsByCandidate = {},
   showCompletionModal = true,
+  targetPlatform = personaContentPlatform(persona),
 } = {}) {
+  const resolvedTargetPlatform = normalizePersonaContentPlatform(targetPlatform);
   const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates/import`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      platform: personaContentPlatform(persona),
+      platform: resolvedTargetPlatform,
       candidates: selected.map((candidate) => ({
         id: candidate.id || candidate.candidate_id,
         platform: candidate.platform,
@@ -19475,6 +19493,7 @@ async function submitPersonaHotDraftImport(persona, selected, {
   });
   state.transientWorkspaceLeaveAcknowledgement = "";
   await loadPersonaDraftPosts(persona.id, { force: true });
+  setPersonaContentPlatform(resolvedTargetPlatform, persona);
   const importedCount = result.imported_count || createdIds.length || 0;
   setPersonaGenerateRunState(persona.id, {
     kind: "hot_import",
@@ -19497,7 +19516,12 @@ async function submitPersonaHotDraftImport(persona, selected, {
   return { ...result, createdIds, replacementCount };
 }
 
-async function importPersonaHotDrafts(candidateIds = null, { showCompletionModal = true, applyStoredEdits = false } = {}) {
+async function importPersonaHotDrafts(candidateIds = null, {
+  showCompletionModal = true,
+  applyStoredEdits = false,
+  choosePlatform = false,
+  targetPlatform = "",
+} = {}) {
   const persona = selectedPersona();
   if (!persona) {
     showMsg("commandMsg", "请先选择一个人设。", false);
@@ -19518,6 +19542,18 @@ async function importPersonaHotDrafts(candidateIds = null, { showCompletionModal
   if (!selected.length) {
     showMsg("commandMsg", "请先勾选至少一条带正文的热点候选。", false);
     return;
+  }
+  let resolvedTargetPlatform = normalizePersonaContentPlatform(targetPlatform || personaContentPlatform(persona));
+  if (choosePlatform) {
+    const account = await choosePublishPlatformAccount(persona, {
+      title: "选择导入平台",
+      message: "选择热点草稿要归档到的平台，确认后才会开始导入。",
+      confirmText: "导入草稿",
+      modalKey: "persona-hot-import-platform-picker",
+      persistSelection: false,
+    });
+    if (!account) return null;
+    resolvedTargetPlatform = normalizePersonaContentPlatform(account.platform);
   }
   const applyCurrentEdits = requestedIds.length === 0 || applyStoredEdits;
   if (requestedIds.length === 0) snapshotPersonaHotPreviewContent();
@@ -19563,6 +19599,7 @@ async function importPersonaHotDrafts(candidateIds = null, { showCompletionModal
     return await submitPersonaHotDraftImport(persona, prepared, {
       replacementOpsByCandidate,
       showCompletionModal,
+      targetPlatform: resolvedTargetPlatform,
     });
   } catch (error) {
     setPersonaGenerateRunState(persona.id, {
@@ -21568,14 +21605,9 @@ function renderPersonaHotCandidatePreview(candidate) {
   if (!candidate) return `<div class="empty-state">从左侧热点候选里选一条，这里会显示正文预览和来源。</div>`;
   const persona = selectedPersona();
   const candidateId = personaHotCandidateKey(candidate);
-  const mediaItems = personaHotCandidateMediaItems(candidate);
   return `
     <div class="persona-hot-preview-card" data-persona-hot-preview-key="${esc(`${persona?.id || ""}:${candidateId}`)}">
-      <div class="persona-hot-preview-head">
-        <strong>${esc((candidate.platform || "threads").toUpperCase())}</strong>
-        ${renderMediaTypeBadge(mediaItems)}
-        <small>${esc(formatTime(candidate.captured_at || candidate.published_at || ""))}</small>
-      </div>
+      ${renderPersonaHotSourceIdentity(candidate)}
       <label>导入正文
         <textarea id="personaHotPreviewContent" rows="7" readonly>${esc(personaHotEditedContent(persona?.id, candidate))}</textarea>
       </label>
@@ -21682,17 +21714,15 @@ function renderPersonaHotCandidatePicker(persona, form) {
                   data-persona-hot-candidate-id="${esc(candidate.candidate_id)}"
                   ${checked ? "checked" : ""}
                 />
+                ${renderPersonaHotSourceIdentity(candidate)}
                 <button type="button" class="persona-hot-card-main" data-persona-hot-preview="${esc(candidate.candidate_id)}">
-                  <span class="persona-hot-card-head">
-                    <strong>${esc((candidate.platform || "threads").toUpperCase())}</strong>
-                    ${renderMediaTypeBadge(mediaItems)}
-                    <small>${esc(formatTime(candidate.captured_at || candidate.published_at || ""))}</small>
-                  </span>
                   <span class="persona-hot-card-copy">${esc(candidate.full_content || candidate.summary)}</span>
                   <span class="persona-hot-card-metrics">${esc(personaHotMetricSummary(candidate))}</span>
                 </button>
+                ${mediaItems.length ? renderPersonaHotMediaPreview(persona, candidate) : ""}
                 <div class="persona-hot-card-actions">
                   <button type="button" data-persona-view-hot-candidate="${esc(candidate.candidate_id)}">查看</button>
+                  <button type="button" class="primary" data-persona-start-hot-edit="${esc(candidate.candidate_id)}">编辑</button>
                 </div>
               </article>
             `;
@@ -29369,7 +29399,7 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-import-hot-drafts]")) {
-      importPersonaHotDrafts().catch(() => {});
+      importPersonaHotDrafts(null, { choosePlatform: true }).catch(() => {});
       return;
     }
     const hotMediaReplace = event.target.closest("[data-persona-hot-media-replace]");

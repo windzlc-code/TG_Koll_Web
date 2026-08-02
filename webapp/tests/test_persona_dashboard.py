@@ -3277,6 +3277,29 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertNotIn("forceLive", payload)
         self.assertNotIn("deferBackgroundRefresh", payload)
 
+    def test_hot_candidate_normalization_keeps_every_media_item(self):
+        media = [
+            {"url": f"https://example.com/hot-{index}.png", "type": "image"}
+            for index in range(1, 16)
+        ]
+
+        candidate = server._normalize_persona_hot_candidate({
+            "id": "hot-many-media",
+            "platform": "threads",
+            "author": "history",
+            "authorAvatar": "https://example.com/history-avatar.png",
+            "content": "带完整媒体组的热点",
+            "media": media,
+        })
+
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate["author"], "history")
+        self.assertEqual(candidate["author_avatar"], "https://example.com/history-avatar.png")
+        self.assertEqual(
+            [item["url"] for item in candidate["media_items"]],
+            [item["url"] for item in media],
+        )
+
     def test_fetch_persona_hot_candidates_uses_default_memories_without_web_params(self):
         self._write_archives()
         (self.tool_runtime_dir / "persona_memory.json").write_text(json.dumps({

@@ -13369,6 +13369,13 @@ def _normalize_persona_hot_candidate(candidate: Any) -> dict[str, Any] | None:
         "id": candidate_id,
         "platform": str(candidate.get("platform") or "threads").strip() or "threads",
         "author": str(candidate.get("author") or "").strip(),
+        "author_avatar": str(
+            candidate.get("authorAvatar")
+            or candidate.get("author_avatar")
+            or candidate.get("avatarUrl")
+            or candidate.get("avatar_url")
+            or ""
+        ).strip(),
         "summary": _normalize_persona_memory_summary(content or source_url),
         "content": content[:280],
         "full_content": content[:5000],
@@ -13384,7 +13391,7 @@ def _normalize_persona_hot_candidate(candidate: Any) -> dict[str, Any] | None:
             for item in (candidate.get("warnings") if isinstance(candidate.get("warnings"), list) else [])
             if str(item or "").strip()
         ],
-        "media_items": _compact_dashboard_media_items(candidate),
+        "media_items": _compact_dashboard_media_items(candidate, limit=None),
     }
 
 
@@ -17828,7 +17835,7 @@ def _guess_media_type(value: Any, fallback: Any = "") -> str:
     return "unknown"
 
 
-def _compact_dashboard_media_items(*sources: Any) -> list[dict[str, str]]:
+def _compact_dashboard_media_items(*sources: Any, limit: int | None = 12) -> list[dict[str, str]]:
     media: list[dict[str, str]] = []
     seen: set[str] = set()
 
@@ -17879,14 +17886,15 @@ def _compact_dashboard_media_items(*sources: Any) -> list[dict[str, str]]:
                 if nested is not None:
                     walk(nested, key)
         elif isinstance(value, list):
-            for item in value[:20]:
+            items = value if limit is None else value[:20]
+            for item in items:
                 walk(item, label)
         elif _looks_like_media_url(value):
             add(value, "", label)
 
     for source in sources:
         walk(source)
-    return media[:12]
+    return media if limit is None else media[:max(0, int(limit))]
 
 
 def _is_direct_preview_media_url(value: Any) -> bool:
