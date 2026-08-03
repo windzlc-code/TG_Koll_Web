@@ -228,6 +228,9 @@ async function callOpenAiChat(
   if (generationConfig?.temperature !== undefined) body.temperature = generationConfig.temperature;
   if (generationConfig?.topP !== undefined) body.top_p = generationConfig.topP;
   if (generationConfig?.maxOutputTokens !== undefined) body.max_tokens = generationConfig.maxOutputTokens;
+  if (generationConfig?.responseMimeType === "application/json") {
+    body.response_format = { type: "json_object" };
+  }
 
   try {
     const response = await proxiedFetch(

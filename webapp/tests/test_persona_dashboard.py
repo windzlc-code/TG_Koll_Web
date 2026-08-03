@@ -3273,7 +3273,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["searchMode"], "strict")
         self.assertEqual(payload["freshnessDays"], 15)
         self.assertEqual(payload["memorySummaries"], ["记忆一"])
-        self.assertNotIn("recordShown", payload)
+        self.assertIs(payload["recordShown"], False)
         self.assertNotIn("forceLive", payload)
         self.assertNotIn("deferBackgroundRefresh", payload)
 

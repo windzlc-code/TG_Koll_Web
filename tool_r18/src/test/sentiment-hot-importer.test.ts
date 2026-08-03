@@ -26,6 +26,7 @@ import {
   finalizeSentimentHotCandidatesForDisplay,
   isObviouslyLowQualitySentimentHotCandidate,
   isChineseSentimentCandidate,
+  isUsableThreadsSearchGraphqlTemplate,
   parseInstagramAuthenticatedSearchPayload,
   parseInstagramReaderSearchMarkdownCandidates,
   matchThreadsBrowserProfilePublishedPost,
@@ -72,7 +73,28 @@ describe("sentiment hot importer", () => {
     expect(boundedBrowserPageConcurrency(8)).toBe(2);
   });
 
-  it("serializes browser processes inside one hot workflow lease", async () => {
+  it("caps browser processes inside one hot workflow lease at two slots", async () => {
+    const releaseFirst = await acquireSentimentBrowserWorkSlot();
+    const releaseSecond = await acquireSentimentBrowserWorkSlot();
+    let thirdAcquired = false;
+    const third = acquireSentimentBrowserWorkSlot().then((release) => {
+      thirdAcquired = true;
+      return release;
+    });
+
+    await Promise.resolve();
+    expect(thirdAcquired).toBe(false);
+
+    releaseFirst();
+    const releaseThird = await third;
+    expect(thirdAcquired).toBe(true);
+    releaseSecond();
+    releaseThird();
+  });
+
+  it("queues browser processes when server limit is configured as one", async () => {
+    const previous = process.env.SENTIMENT_BROWSER_PAGE_CONCURRENCY;
+    process.env.SENTIMENT_BROWSER_PAGE_CONCURRENCY = "1";
     const releaseFirst = await acquireSentimentBrowserWorkSlot();
     let secondAcquired = false;
     const second = acquireSentimentBrowserWorkSlot().then((release) => {
@@ -87,6 +109,8 @@ describe("sentiment hot importer", () => {
     const releaseSecond = await second;
     expect(secondAcquired).toBe(true);
     releaseSecond();
+    if (previous === undefined) delete process.env.SENTIMENT_BROWSER_PAGE_CONCURRENCY;
+    else process.env.SENTIMENT_BROWSER_PAGE_CONCURRENCY = previous;
   });
 
   it("builds a valid Jina Reader URL for HTTPS Threads pages", () => {
@@ -116,6 +140,25 @@ describe("sentiment hot importer", () => {
       recent: 1,
       nested: { searchQuery: "理发师" },
     });
+  });
+
+  it("rejects non-search Threads GraphQL templates even when they contain the searched tag", () => {
+    expect(isUsableThreadsSearchGraphqlTemplate({
+      endpoint: "/graphql/query",
+      method: "POST",
+      params: { fb_api_req_friendly_name: "BarcelonaCommunityEntityCardsPanelQuery" },
+      variables: { tag_name: "理发" },
+      headers: {},
+      sourceTerms: ["理发"],
+    })).toBe(false);
+
+    expect(isUsableThreadsSearchGraphqlTemplate({
+      endpoint: "/graphql/query",
+      method: "POST",
+      params: { fb_api_req_friendly_name: "BarcelonaSearchResultsQuery" },
+      variables: { query: "理发" },
+      headers: {},
+    })).toBe(true);
   });
 
   it("reuses a persona search strategy when only volatile memory summaries change", () => {
@@ -237,13 +280,15 @@ describe("sentiment hot importer", () => {
   });
 
   it("gives a live refresh enough time to obtain a model search strategy", () => {
-    expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(20_000);
+    expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(32_000);
     expect(resolveSentimentHotStrategyTimeoutMs(false, 50_000)).toBe(30_000);
     expect(resolveSentimentHotStrategyTimeoutMs(true, 5_000)).toBe(5_000);
   });
 
-  it("prioritizes the responsive hot-topic keyword model", () => {
-    expect(resolveSentimentHotTextModelPreference().split(",")[0]).toBe("xai/grok-4.3");
+  it("uses the configured hot-topic text models before the keyword fallback model", () => {
+    const models = resolveSentimentHotTextModelPreference().split(",");
+    expect(models[0]).toBe("google/gemini-3.1-pro-preview");
+    expect(models).toContain("xai/grok-4.3");
   });
 
   it("never manufactures fallback keywords when the model strategy is unavailable", () => {
@@ -1140,7 +1185,7 @@ describe("sentiment hot importer", () => {
     expect(candidates).toEqual([]);
   });
 
-  it("allows only marked, recent Threads fallbacks with verified real interaction below the heat gate", () => {
+  it("rejects marked recent fallbacks when they are still below the heat gate", () => {
     const content = "茶文化活動分享茶葉保存、茶具選擇、茶席布置、沖泡水溫與品茶禮儀，也整理在家練習茶道時容易忽略的細節和實際經驗，並說明不同季節如何調整水溫、浸泡時間與茶葉用量。";
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
@@ -1177,7 +1222,7 @@ describe("sentiment hot importer", () => {
       freshnessDays: 15,
     });
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["qualified-hot", "fresh-fallback"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["qualified-hot"]);
   });
 
   it("still rejects unmarked low-heat candidates", () => {
@@ -1432,7 +1477,7 @@ tea\u8336\u6587\u5316\u65e5\u5e38\u5206\u4eab\u8207\u6162\u751f\u6d3b\u9ad4\u9a5
       sourceUrl: "https://www.threads.com/@demo_doctor/post/DZ1ABCxyz",
       author: "demo_doctor",
       content: "急診醫生分享醫療現場，今天醫院候診區真的塞滿人，病人等待和醫療流程都被拿出來討論。",
-      hotScore: 1172,
+      hotScore: 4321,
       metrics: {
         source: "threads-account-search",
         like_count: 954,
@@ -1441,7 +1486,7 @@ tea\u8336\u6587\u5316\u65e5\u5e38\u5206\u4eab\u8207\u6162\u751f\u6d3b\u9ad4\u9a5
         reshare_count: 58,
         share_count: 58,
         view_count: 4321,
-        realEngagementTotal: 1172,
+        realEngagementTotal: 4321,
       },
       engagement: {
         likeCount: 954,
@@ -1487,11 +1532,11 @@ tea\u8336\u6587\u5316\u65e5\u5e38\u5206\u4eab\u8207\u6162\u751f\u6d3b\u9ad4\u9a5
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({
       sourceUrl: "https://www.threads.com/@storage_demo/post/HYDRATION123",
-      hotScore: 1015,
+      hotScore: 12000,
       metrics: {
         source: "threads-account-search",
         view_count: 12000,
-        realEngagementTotal: 1015,
+        realEngagementTotal: 12000,
       },
     });
   });
