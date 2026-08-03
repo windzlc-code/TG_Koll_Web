@@ -922,6 +922,16 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             'setPersonaMobileSidebarOpen(reopenTaskQueuePersonaSidebar, "taskQueuePersonaSidebar");',
             self.console_script,
         )
+        load_tasks_start = self.console_script.index("async function loadTasks()")
+        load_tasks_end = self.console_script.index("\nasync function showTaskDetail", load_tasks_start)
+        load_tasks = self.console_script[load_tasks_start:load_tasks_end]
+        self.assertIn('if (state.view === "tasks") {', load_tasks)
+        self.assertLess(
+            load_tasks.index('if (state.view === "tasks") {'),
+            load_tasks.index(
+                'setPersonaMobileSidebarOpen(reopenTaskQueuePersonaSidebar, "taskQueuePersonaSidebar");'
+            ),
+        )
 
     def test_mobile_draft_hot_metrics_stay_in_one_horizontal_row(self):
         mobile_rule = self.styles.index(

@@ -23877,7 +23877,9 @@ async function loadTasks() {
   );
   const host = $("taskTable");
   host.innerHTML = renderTaskQueueView();
-  setPersonaMobileSidebarOpen(reopenTaskQueuePersonaSidebar, "taskQueuePersonaSidebar");
+  if (state.view === "tasks") {
+    setPersonaMobileSidebarOpen(reopenTaskQueuePersonaSidebar, "taskQueuePersonaSidebar");
+  }
   syncMobilePageToolbar();
 }
 
