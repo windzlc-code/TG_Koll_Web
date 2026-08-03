@@ -10629,16 +10629,44 @@ def _instagram_profile_page_ready(page, profile_url: str) -> bool:
     current_url = _normalize_instagram_profile_url(getattr(page, "url", ""))
     if not expected_url or current_url != expected_url:
         return False
-    body_text = _page_body_text_lower(page, timeout_ms=3500)
+    state = _detect_instagram_login_state(page)
+    if str(state.get("status") or "") != "ready":
+        return False
+    if _browser_navigation_error_visible(page):
+        return False
+    body_text = " ".join(_page_body_text_lower(page, timeout_ms=5000).split())
     if not body_text:
         return False
     blocked_markers = (
+        "something went wrong",
+        "please try again later",
+        "try again",
+        "unable to load",
+        "couldn't refresh",
         "log in to instagram",
+        "log into instagram",
+        "forgot password",
+        "create new account",
         "sign up to see photos",
+        "challenge",
+        "verification",
         "sorry, this page isn't available",
         "page isn't available",
     )
-    return not any(marker in body_text for marker in blocked_markers)
+    if any(marker in body_text for marker in blocked_markers):
+        return False
+    empty_markers = (
+        "no posts yet",
+        "hasn't posted yet",
+        "has not posted yet",
+        "尚未发布",
+        "尚未發佈",
+        "尚未發表",
+    )
+    if any(marker in body_text for marker in empty_markers):
+        return True
+    profile_path = str(urlparse(expected_url).path or "").strip("/")
+    return bool(profile_path and profile_path.lower() in body_text)
 
 
 def _capture_instagram_profile_baseline(
@@ -10649,7 +10677,8 @@ def _capture_instagram_profile_baseline(
     if not profile_url:
         return None
     last_error = ""
-    for attempt in range(2):
+    empty_ready_observations = 0
+    for attempt in range(4):
         try:
             _goto(
                 page,
@@ -10663,11 +10692,17 @@ def _capture_instagram_profile_baseline(
             if permalinks:
                 return set(permalinks)
             if permalinks == [] and _instagram_profile_page_ready(page, profile_url):
-                return set()
-            last_error = "Instagram profile did not expose a stable post grid."
+                empty_ready_observations += 1
+                if empty_ready_observations >= 2:
+                    return set()
+                last_error = "Instagram profile is reachable but has no stable post links yet."
+            else:
+                empty_ready_observations = 0
+                last_error = "Instagram profile did not expose a stable post grid."
         except Exception as exc:
+            empty_ready_observations = 0
             last_error = str(exc)
-        if attempt == 0:
+        if attempt + 1 < 4:
             _sleep_between(0.8, 1.2)
     logger.log(
         "warn",

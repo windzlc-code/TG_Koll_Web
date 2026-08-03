@@ -3821,6 +3821,55 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         direct_screenshot.assert_not_called()
         warmup_scroll.assert_not_called()
 
+    def test_instagram_profile_baseline_accepts_empty_profile_after_login_stabilizes(self):
+        page = mock.Mock()
+        profile_url = "https://www.instagram.com/publisher/"
+
+        with (
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_find_instagram_post_permalinks", return_value=[]),
+            mock.patch.object(runner, "_instagram_profile_page_ready", side_effect=[False, True, True]),
+            mock.patch.object(runner, "_sleep_between") as sleep_between,
+        ):
+            result = runner._capture_instagram_profile_baseline(
+                page,
+                profile_url,
+                _Logger(),
+            )
+
+        self.assertEqual(result, set())
+        self.assertEqual(goto.call_count, 3)
+        self.assertEqual(sleep_between.call_count, 2)
+
+    def test_instagram_profile_ready_rejects_unready_or_error_shell(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/publisher/"
+
+        with (
+            mock.patch.object(runner, "_detect_instagram_login_state", return_value={"status": "cookie_expired"}),
+            mock.patch.object(runner, "_browser_navigation_error_visible", return_value=False),
+            mock.patch.object(runner, "_page_body_text_lower", return_value="publisher no posts yet"),
+        ):
+            self.assertFalse(runner._instagram_profile_page_ready(page, "https://www.instagram.com/publisher/"))
+
+        with (
+            mock.patch.object(runner, "_detect_instagram_login_state", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_browser_navigation_error_visible", return_value=False),
+            mock.patch.object(runner, "_page_body_text_lower", return_value="Something went wrong. Please try again later."),
+        ):
+            self.assertFalse(runner._instagram_profile_page_ready(page, "https://www.instagram.com/publisher/"))
+
+    def test_instagram_profile_ready_accepts_loaded_empty_profile(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/publisher/"
+
+        with (
+            mock.patch.object(runner, "_detect_instagram_login_state", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_browser_navigation_error_visible", return_value=False),
+            mock.patch.object(runner, "_page_body_text_lower", return_value="Publisher publisher No posts yet"),
+        ):
+            self.assertTrue(runner._instagram_profile_page_ready(page, "https://www.instagram.com/publisher/"))
+
     def test_instagram_publish_confirmation_stops_immediately_when_cancelled(self):
         page = mock.Mock()
         page.url = runner.INSTAGRAM_HOME
