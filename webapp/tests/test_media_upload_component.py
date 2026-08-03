@@ -119,38 +119,44 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("if (uploadSyntheticChangeInputs.has(input)) return;", self.script)
         self.assertIn("function currentUploadDropzoneFiles(input)", self.script)
 
-    def test_hotspot_edit_opens_the_standard_draft_editor(self):
-        self.assertIn("async function openPersonaHotCandidateInDraftEditor", self.script)
-        self.assertIn(
-            "const result = await importPersonaHotDrafts([cleanCandidateId], {",
-            self.script,
-        )
-        self.assertIn("showCompletionModal: false,", self.script)
-        self.assertIn("applyStoredEdits: true,", self.script)
-        self.assertIn("choosePlatform: true,", self.script)
-        self.assertIn('form.generate.composeMode = "tweet_media";', self.script)
-        self.assertIn('form.media.operationMode = "replace";', self.script)
-        self.assertIn('setPersonaPostSource("posts", persona);', self.script)
-        self.assertIn("openPersonaDraftEditor(postId);", self.script)
-        self.assertIn("已进入标准草稿编辑器，可直接编辑正文和媒体。", self.script)
-        self.assertIn('data-persona-start-hot-edit="${esc(candidateId)}">编辑后使用</button>', self.script)
-        self.assertNotIn("data-persona-import-hot-one", self.script)
-        self.assertNotIn("data-persona-confirm-hot-import", self.script)
-        self.assertNotIn(">直接导入</button>", self.script)
-        self.assertNotIn(">确认导入</button>", self.script)
-        self.assertNotIn('id="personaHotReplacementFiles"', self.script)
+    def test_hotspot_edit_waits_until_confirmation_before_platform_import(self):
+        starter = self.script[
+            self.script.index("function startPersonaHotCandidateEdit"):
+            self.script.index("\nfunction cancelPersonaHotCandidateEdit")
+        ]
+        handler = self.script[
+            self.script.index('const startHotEditButton = event.target.closest("[data-persona-start-hot-edit]")'):
+            self.script.index('const hotBulkButton = event.target.closest', self.script.index('const startHotEditButton = event.target.closest("[data-persona-start-hot-edit]")'))
+        ]
+
+        self.assertIn("form.hotEditingCandidateId = cleanCandidateId;", starter)
+        self.assertIn("form.hotPreviewId = cleanCandidateId;", starter)
+        self.assertNotIn("importPersonaHotDrafts", starter)
+        self.assertNotIn("choosePublishPlatformAccount", starter)
+        self.assertIn("data-persona-hot-content-editor", self.script)
+        self.assertIn("data-persona-cancel-hot-edit", self.script)
+        self.assertIn("data-persona-confirm-hot-edit", self.script)
+        self.assertIn("snapshotPersonaHotPreviewContent();", handler)
+        self.assertIn("importPersonaHotDrafts([candidateId], {", handler)
+        self.assertIn("applyStoredEdits: true,", handler)
+        self.assertIn("choosePlatform: true,", handler)
+        self.assertNotIn("openPersonaHotCandidateInDraftEditor", self.script)
 
     def test_hotspot_cards_open_media_and_source_without_detail_modal(self):
         self.assertIn('class="row-actions persona-hot-card-actions"', self.script)
         self.assertIn('target="_blank" rel="noopener">打开帖子</a>', self.script)
-        self.assertIn('data-persona-start-hot-edit="${esc(candidate.candidate_id)}"', self.script)
+        self.assertIn('data-persona-start-hot-edit="${esc(candidateId)}"', self.script)
         self.assertIn(">编辑</button>", self.script)
         self.assertNotIn("async function openPersonaHotCandidateDetail", self.script)
         self.assertNotIn('data-persona-view-hot-candidate=', self.script)
         self.assertNotIn('modalKey: "persona-hot-candidate-detail"', self.script)
         self.assertIn('renderMediaPreviewButton(item, previewGroupId, previewIndex, {', self.script)
+        self.assertIn('showCaption: editing,', self.script)
+        self.assertIn('class="persona-hot-media-index-badge"', self.script)
         self.assertIn('interactive: !editing && !isDeleted && Boolean(previewGroupId) && Number.isInteger(previewIndex),', self.script)
         self.assertIn('${editing ? `<div class="persona-hot-media-actions">', self.script)
+        self.assertIn(".persona-hot-card-actions a {", self.styles)
+        self.assertIn("justify-content: center;", self.styles)
 
     def test_hotspot_cards_show_source_identity_all_media_and_merged_heat_views(self):
         picker = self.script[
@@ -163,7 +169,15 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         ]
 
         self.assertIn("renderPersonaHotSourceIdentity(candidate)", picker)
-        self.assertIn("renderPersonaHotMediaPreview(persona, candidate)", picker)
+        self.assertIn("renderPersonaHotMediaPreview(persona, candidate, { editing })", picker)
+        source_identity = self.script[
+            self.script.index("function renderPersonaHotSourceIdentity"):
+            self.script.index("\nfunction normalizePersonaHotSearchMode")
+        ]
+        self.assertNotIn("来源人设", source_identity)
+        self.assertNotIn("persona-hot-source-avatar", source_identity)
+        self.assertIn("persona-hot-source-byline", source_identity)
+        self.assertIn("persona-hot-source-context", source_identity)
         self.assertIn('["热度/浏览", personaHotCombinedViewMetric(candidate)]', metrics)
         self.assertNotIn('["热度",', metrics)
         self.assertNotIn('["浏览",', metrics)

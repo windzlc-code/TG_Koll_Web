@@ -4112,21 +4112,18 @@ function renderPersonaHotSourceIdentity(candidate) {
     || "",
   ).trim();
   const displayAuthor = author || "来源账号未获取";
-  const avatarUrl = String(candidate?.author_avatar || candidate?.authorAvatar || candidate?.avatar_url || "").trim();
   const mediaItems = personaHotCandidateMediaItems(candidate);
   return `
     <div class="persona-hot-source-identity">
-      <span class="persona-hot-source-avatar" aria-hidden="true">
-        ${avatarUrl ? `<img src="${esc(avatarUrl)}" alt="" loading="lazy" />` : esc(displayAuthor.slice(0, 1).toUpperCase())}
-      </span>
-      <span class="persona-hot-source-copy">
-        <small>来源人设</small>
-        <strong>${esc(author ? `@${author.replace(/^@/, "")}` : displayAuthor)}</strong>
-      </span>
       <span class="persona-hot-source-meta">
-        <span>${esc((candidate?.platform || "threads").toUpperCase())}</span>
-        ${renderMediaTypeBadge(mediaItems)}
-        <small>${esc(formatTime(candidate?.captured_at || candidate?.published_at || ""))}</small>
+        <span class="persona-hot-source-context">
+          <span>${esc((candidate?.platform || "threads").toUpperCase())}</span>
+          ${renderMediaTypeBadge(mediaItems)}
+        </span>
+        <span class="persona-hot-source-byline">
+          <small>${esc(formatTime(candidate?.captured_at || candidate?.published_at || ""))}</small>
+          <strong>${esc(author ? `@${author.replace(/^@/, "")}` : displayAuthor)}</strong>
+        </span>
       </span>
     </div>
   `;
@@ -4496,13 +4493,12 @@ function personaHotEditedContent(personaId, candidate) {
 
 function snapshotPersonaHotPreviewContent() {
   const persona = selectedPersona();
-  const textarea = document.querySelector("#personaHotPreviewContent");
-  if (!persona || !textarea) return;
-  const candidate = personaHotPreviewCandidate(persona);
-  const key = personaHotCandidateKey(candidate);
-  if (!key) return;
+  if (!persona) return;
   const form = personaFormState(persona.id).generate;
-  if (String(form.hotEditingCandidateId || "").trim() !== key) return;
+  const key = String(form.hotEditingCandidateId || "").trim();
+  if (!key) return;
+  const textarea = document.querySelector(`[data-persona-hot-content-editor="${CSS.escape(key)}"]`);
+  if (!textarea) return;
   if (!form.hotEditedContentByCandidate || typeof form.hotEditedContentByCandidate !== "object") {
     form.hotEditedContentByCandidate = {};
   }
@@ -4513,32 +4509,63 @@ function snapshotPersonaHotPreviewContent() {
   form.hotEditedContentByCandidate[key] = content;
 }
 
-async function openPersonaHotCandidateInDraftEditor(persona, candidateId) {
+function startPersonaHotCandidateEdit(persona, candidateId) {
   const cleanCandidateId = String(candidateId || "").trim();
   const candidate = personaHotCandidates(persona).find((item) => personaHotCandidateKey(item) === cleanCandidateId);
   if (!persona || !candidate) return;
-  const draftState = personaDraftEditState(persona.id);
-  if (draftState.editing || draftState.rewritePending) {
-    showMsg("commandMsg", "当前已有草稿正在编辑，请先保存或放弃修改。", false);
-    return;
+  snapshotPersonaHotPreviewContent();
+  const form = personaFormState(persona.id).generate;
+  form.hotPreviewId = cleanCandidateId;
+  form.hotEditingCandidateId = cleanCandidateId;
+  if (!form.hotEditedContentByCandidate || typeof form.hotEditedContentByCandidate !== "object") {
+    form.hotEditedContentByCandidate = {};
   }
-  const result = await importPersonaHotDrafts([cleanCandidateId], {
-    showCompletionModal: false,
-    applyStoredEdits: true,
-    choosePlatform: true,
+  if (!Object.prototype.hasOwnProperty.call(form.hotEditedContentByCandidate, cleanCandidateId)) {
+    form.hotEditedContentByCandidate[cleanCandidateId] = String(candidate.full_content || candidate.content || "");
+  }
+  state.transientWorkspaceLeaveAcknowledgement = "";
+  renderPersonaDetail();
+  renderConfirmSummary();
+  queueMicrotask(() => {
+    const editor = document.querySelector(`[data-persona-hot-content-editor="${CSS.escape(cleanCandidateId)}"]`);
+    editor?.focus?.({ preventScroll: true });
   });
-  if (!result) return;
-  const postId = String(result?.createdIds?.[0] || "").trim();
-  if (!postId) {
-    showMsg("commandMsg", "热点草稿已生成，但没有找到可编辑的草稿记录。", false);
-    return;
-  }
-  const form = personaFormState(persona.id);
-  form.generate.composeMode = "tweet_media";
-  form.media.operationMode = "replace";
-  setPersonaPostSource("posts", persona);
-  openPersonaDraftEditor(postId);
-  showMsg("commandMsg", "已进入标准草稿编辑器，可直接编辑正文和媒体。", true);
+}
+
+function cancelPersonaHotCandidateEdit(persona, candidateId) {
+  if (!persona) return;
+  const cleanCandidateId = String(candidateId || "").trim();
+  const form = personaFormState(persona.id).generate;
+  if (String(form.hotEditingCandidateId || "").trim() !== cleanCandidateId) return;
+  delete form.hotEditedContentByCandidate?.[cleanCandidateId];
+  delete form.hotDeletedMediaByCandidate?.[cleanCandidateId];
+  delete form.hotSelectedMediaIndexByCandidate?.[cleanCandidateId];
+  clearPersonaHotReplacementFiles(persona.id, cleanCandidateId);
+  clearPersonaHotReplacementPool(persona.id, cleanCandidateId);
+  form.hotEditingCandidateId = "";
+  state.transientWorkspaceLeaveAcknowledgement = "";
+  renderPersonaDetail();
+  renderConfirmSummary();
+}
+
+function choosePersonaHotReplacementFile(persona, candidateId, index) {
+  if (!persona || !candidateId || !Number.isInteger(index) || index < 0) return;
+  const picker = document.createElement("input");
+  picker.type = "file";
+  picker.accept = "image/*,video/*";
+  picker.multiple = false;
+  picker.addEventListener("change", () => {
+    const replacement = picker.files?.[0];
+    if (!replacement) return;
+    setPersonaHotSelectedMediaIndex(persona.id, candidateId, index);
+    setPersonaHotReplacementFile(persona.id, candidateId, index, replacement);
+    const deleted = personaHotDeletedMediaSet(persona.id, candidateId);
+    if (deleted.delete(index)) setPersonaHotDeletedMediaSet(persona.id, candidateId, deleted);
+    state.transientWorkspaceLeaveAcknowledgement = "";
+    renderPersonaDetail();
+    renderConfirmSummary();
+  }, { once: true });
+  picker.click();
 }
 
 function renderPersonaHotMediaPreview(persona, candidate, { editing = false } = {}) {
@@ -4565,7 +4592,7 @@ function renderPersonaHotMediaPreview(persona, candidate, { editing = false } = 
   const previewIndexBySource = new Map(previewRows.map(({ sourceIndex }, previewIndex) => [sourceIndex, previewIndex]));
   const selectedIndex = personaHotSelectedMediaIndex(persona?.id, candidateId, mediaItems.length);
   return `
-    <div class="persona-media-grid persona-hot-media-grid" aria-label="热点媒体编辑">
+    <div class="persona-media-grid persona-hot-media-grid ${editing ? "is-editing" : "is-previewing"}" aria-label="热点媒体${editing ? "编辑" : "预览"}">
       ${displayItems.map((item, index) => {
         const isDeleted = deleted.has(index);
         const isSelected = editing && index === selectedIndex;
@@ -4579,18 +4606,20 @@ function renderPersonaHotMediaPreview(persona, candidate, { editing = false } = 
           >
             ${item.unavailable || !item.previewUrl
               ? `<div class="persona-media-card is-static is-unavailable">
-                  <div class="persona-media-frame persona-media-frame--empty">
-                    <strong>媒体不可预览</strong>
-                    <small>${esc(item.reason || "原始文件已失效")}</small>
-                  </div>
-                  <span>${esc(mediaKindLabel(item.type))}</span>
-                </div>`
-              : renderMediaPreviewButton(item, previewGroupId, previewIndex, {
-                  className: "persona-media-card",
-                  frameClass: "persona-media-frame",
-                  caption: `${mediaKindLabel(item.type)} ${index + 1}`,
-                  interactive: !editing && !isDeleted && Boolean(previewGroupId) && Number.isInteger(previewIndex),
-                })}
+                   <div class="persona-media-frame persona-media-frame--empty">
+                     <strong>媒体不可预览</strong>
+                     <small>${esc(item.reason || "原始文件已失效")}</small>
+                   </div>
+                   ${editing ? `<span>${esc(mediaKindLabel(item.type))}</span>` : ""}
+                 </div>`
+               : renderMediaPreviewButton(item, previewGroupId, previewIndex, {
+                   className: "persona-media-card",
+                   frameClass: "persona-media-frame",
+                   caption: `${mediaKindLabel(item.type)} ${index + 1}`,
+                   showCaption: editing,
+                   interactive: !editing && !isDeleted && Boolean(previewGroupId) && Number.isInteger(previewIndex),
+                 })}
+            ${!editing && !isDeleted ? `<span class="persona-hot-media-index-badge" aria-hidden="true">${index + 1}</span>` : ""}
             ${editing ? `<div class="persona-hot-media-actions">
               ${!isDeleted && previewGroupId && Number.isInteger(previewIndex) ? `<button
                 type="button"
@@ -7410,6 +7439,7 @@ function renderMediaPreviewButton(item, groupId, index, {
   className = "persona-media-card",
   frameClass = "persona-media-frame",
   caption = "",
+  showCaption = true,
   interactive = true,
   lowPriority = false,
   deferLoad = false,
@@ -7437,7 +7467,7 @@ function renderMediaPreviewButton(item, groupId, index, {
           ? `<div class="${esc(frameClass)} ${esc(frameClass)}--audio"><strong>音频</strong><small>点击站内预览</small></div>`
           : `<img class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" decoding="async" draggable="false"${lowPriority ? ' fetchpriority="low"' : ""} onerror="handlePersonaMediaFrameError(this)" />`}
       ${canShowZoomHint ? `<span class="persona-image-library-zoom-hint" aria-hidden="true">${renderZoomInIcon()}</span>` : ""}
-      <span>${esc(text)}</span>
+      ${showCaption ? `<span>${esc(text)}</span>` : ""}
     </${rootTag}>
   `;
 }
@@ -21560,7 +21590,7 @@ function renderPersonaHotCandidatePreview(candidate) {
     </div>
     <div class="row-actions persona-hot-preview-actions">
       ${candidate.source_url ? `<a href="${esc(candidate.source_url)}" target="_blank" rel="noopener">打开帖子</a>` : ""}
-      <button type="button" class="primary" data-persona-start-hot-edit="${esc(candidateId)}">编辑后使用</button>
+      <button type="button" class="primary" data-persona-start-hot-edit="${esc(candidateId)}">编辑</button>
     </div>
   `;
 }
@@ -21645,26 +21675,39 @@ function renderPersonaHotCandidatePicker(persona, form) {
         </div>
         <div class="persona-hot-grid">
           ${candidates.map((candidate) => {
-            const checked = selectedIds.has(candidate.candidate_id);
-            const previewing = String(preview?.candidate_id || "") === String(candidate.candidate_id);
+            const candidateId = personaHotCandidateKey(candidate);
+            const checked = selectedIds.has(candidateId);
+            const previewing = personaHotCandidateKey(preview) === candidateId;
+            const editing = String(form.hotEditingCandidateId || "").trim() === candidateId;
             const mediaItems = personaHotCandidateMediaItems(candidate);
             return `
-              <article class="persona-hot-card ${checked ? "is-selected" : ""} ${previewing ? "is-preview" : ""}">
+              <article class="persona-hot-card ${checked ? "is-selected" : ""} ${previewing ? "is-preview" : ""} ${editing ? "is-editing-draft" : ""}">
                 <input
                   type="checkbox"
                   class="persona-hot-card-check"
-                  data-persona-hot-candidate-id="${esc(candidate.candidate_id)}"
+                  data-persona-hot-candidate-id="${esc(candidateId)}"
                   ${checked ? "checked" : ""}
                 />
                 ${renderPersonaHotSourceIdentity(candidate)}
-                <button type="button" class="persona-hot-card-main" data-persona-hot-preview="${esc(candidate.candidate_id)}">
-                  <span class="persona-hot-card-copy">${esc(candidate.full_content || candidate.summary)}</span>
-                  <span class="persona-hot-card-metrics">${esc(personaHotMetricSummary(candidate))}</span>
-                </button>
-                ${mediaItems.length ? renderPersonaHotMediaPreview(persona, candidate) : ""}
+                ${editing ? `
+                  <label class="persona-hot-card-editor">
+                    <span>编辑正文</span>
+                    <textarea rows="8" data-persona-hot-content-editor="${esc(candidateId)}">${esc(personaHotEditedContent(persona.id, candidate))}</textarea>
+                    <small>${esc(personaHotMetricSummary(candidate))}</small>
+                  </label>
+                ` : `
+                  <button type="button" class="persona-hot-card-main" data-persona-hot-preview="${esc(candidateId)}">
+                    <span class="persona-hot-card-copy">${esc(candidate.full_content || candidate.summary)}</span>
+                    <span class="persona-hot-card-metrics">${esc(personaHotMetricSummary(candidate))}</span>
+                  </button>
+                `}
+                ${mediaItems.length ? renderPersonaHotMediaPreview(persona, candidate, { editing }) : ""}
                 <div class="row-actions persona-hot-card-actions">
                   ${candidate.source_url ? `<a href="${esc(candidate.source_url)}" target="_blank" rel="noopener">打开帖子</a>` : ""}
-                  <button type="button" class="primary" data-persona-start-hot-edit="${esc(candidate.candidate_id)}">编辑</button>
+                  ${editing ? `
+                    <button type="button" data-persona-cancel-hot-edit="${esc(candidateId)}">取消</button>
+                    <button type="button" class="primary" data-persona-confirm-hot-edit="${esc(candidateId)}">完成编辑</button>
+                  ` : `<button type="button" class="primary" data-persona-start-hot-edit="${esc(candidateId)}">编辑</button>`}
                 </div>
               </article>
             `;
@@ -29352,18 +29395,7 @@ function bindEvents() {
       const candidateId = String(hotMediaReplace.dataset.personaHotMediaReplace || "").trim();
       const index = Number(hotMediaReplace.dataset.personaHotMediaIndex);
       if (!candidateId || !Number.isInteger(index) || index < 0) return;
-      setPersonaHotSelectedMediaIndex(persona.id, candidateId, index);
-      const selectedPoolEntry = personaHotSelectedReplacementPoolEntry(persona.id, candidateId);
-      if (!selectedPoolEntry?.file) {
-        showMsg("commandMsg", "请先添加并选择一个待替换媒体，再点击原媒体上的替换图标。", false);
-        renderPersonaDetail();
-        return;
-      }
-      setPersonaHotReplacementFile(persona.id, candidateId, index, selectedPoolEntry.file);
-      const deleted = personaHotDeletedMediaSet(persona.id, candidateId);
-      if (deleted.delete(index)) setPersonaHotDeletedMediaSet(persona.id, candidateId, deleted);
-      renderPersonaDetail();
-      renderConfirmSummary();
+      choosePersonaHotReplacementFile(persona, candidateId, index);
       return;
     }
     const hotMediaToggle = event.target.closest("[data-persona-hot-media-toggle]");
@@ -29415,9 +29447,32 @@ function bindEvents() {
     if (startHotEditButton) {
       const persona = selectedPersona();
       const candidateId = String(startHotEditButton.dataset.personaStartHotEdit || "").trim();
+      if (persona && candidateId) startPersonaHotCandidateEdit(persona, candidateId);
+      return;
+    }
+    const cancelHotEditButton = event.target.closest("[data-persona-cancel-hot-edit]");
+    if (cancelHotEditButton) {
+      const persona = selectedPersona();
+      const candidateId = String(cancelHotEditButton.dataset.personaCancelHotEdit || "").trim();
+      if (persona && candidateId) cancelPersonaHotCandidateEdit(persona, candidateId);
+      return;
+    }
+    const confirmHotEditButton = event.target.closest("[data-persona-confirm-hot-edit]");
+    if (confirmHotEditButton) {
+      const persona = selectedPersona();
+      const candidateId = String(confirmHotEditButton.dataset.personaConfirmHotEdit || "").trim();
       if (persona && candidateId) {
-        openPersonaHotCandidateInDraftEditor(persona, candidateId).catch((error) => {
-          showMsg("commandMsg", error.detail || error.message || "打开热点草稿编辑器失败。", false);
+        snapshotPersonaHotPreviewContent();
+        const candidate = personaHotCandidates(persona).find((item) => personaHotCandidateKey(item) === candidateId);
+        if (!personaHotEditedContent(persona.id, candidate).trim()) {
+          showMsg("commandMsg", "热点正文不能为空。", false);
+          return;
+        }
+        importPersonaHotDrafts([candidateId], {
+          applyStoredEdits: true,
+          choosePlatform: true,
+        }).catch((error) => {
+          showMsg("commandMsg", error.detail || error.message || "导入热点草稿失败。", false);
         });
       }
       return;
@@ -30508,7 +30563,7 @@ function bindEvents() {
       renderConfirmSummary();
       return;
     }
-    if (event.target?.id === "personaHotPreviewContent") {
+    if (event.target?.matches?.("[data-persona-hot-content-editor]")) {
       snapshotPersonaHotPreviewContent();
       renderConfirmSummary();
       return;
