@@ -2219,8 +2219,7 @@ async function openToastTarget(rawTarget) {
       const page = taskQueuePageForTarget(state.taskQueuePanel, target.taskId);
       if (state.taskQueuePanel === "regular") state.taskQueueRegularPage = page;
       else state.taskQueuePersonaPage = page;
-      const host = $("taskTable");
-      if (host) host.innerHTML = renderTaskQueueView();
+      renderTaskQueueSurface();
       focusTaskQueueTarget(target.taskId, state.taskQueuePanel);
     }
     if (target.taskId && (target.openDetail || target.taskPanel === "regular")) {
@@ -8478,6 +8477,7 @@ function advanceMobileTweetStream(node) {
     state.mobileTweetStreamLimits[key] = Math.min(totalItems, current + batchSize);
     if (target === "persona-detail") renderPersonaDetail();
     else if (target === "publishing") renderSimpleFlowModule("publishing");
+    else if (target === "task-queue") renderTaskQueueSurface();
   }, () => {
     mobileTweetStreamPending = false;
     bindMobileTweetStreamObservers();
@@ -10385,19 +10385,17 @@ function renderTaskQueueView() {
   const persona = selectedPersona();
   const personaPageSize = Math.min(Math.max(Number(state.taskQueuePersonaPageSize || 12), 1), 100);
   const regularPageSize = Math.min(Math.max(Number(state.taskQueueRegularPageSize || 20), 1), 100);
-  const personaPageInfo = paginateTaskQueueRows(
-    persona ? personaAutomationTasksFor(persona.id) : [],
-    state.taskQueuePersonaPage,
-    personaPageSize,
-  );
-  state.taskQueuePersonaPage = personaPageInfo.page;
+  const personaRows = persona ? personaAutomationTasksFor(persona.id) : [];
+  const regularRows = Array.isArray(state.tasks) ? state.tasks : [];
+  const personaPageInfo = isMobileTweetStreamMode()
+    ? mobileTweetStreamInfo(personaRows, `task-queue:persona:${String(persona?.id || "none")}`, personaPageSize)
+    : paginateTaskQueueRows(personaRows, state.taskQueuePersonaPage, personaPageSize);
+  if (!personaPageInfo.mobile) state.taskQueuePersonaPage = personaPageInfo.page;
   const personaTasks = personaPageInfo.items;
-  const regularPageInfo = paginateTaskQueueRows(
-    state.tasks,
-    state.taskQueueRegularPage,
-    regularPageSize,
-  );
-  state.taskQueueRegularPage = regularPageInfo.page;
+  const regularPageInfo = isMobileTweetStreamMode()
+    ? mobileTweetStreamInfo(regularRows, "task-queue:regular", regularPageSize)
+    : paginateTaskQueueRows(regularRows, state.taskQueueRegularPage, regularPageSize);
+  if (!regularPageInfo.mobile) state.taskQueueRegularPage = regularPageInfo.page;
   const regularTasksHtml = regularPageInfo.totalItems ? regularPageInfo.items.map((task) => `
     <article class="compact-row task-row" data-task-queue-row-id="${esc(task.id)}" tabindex="-1">
       <label class="task-queue-check-label task-queue-row-check">
@@ -10427,7 +10425,9 @@ function renderTaskQueueView() {
         <div class="task-table-head"><span>勾选</span><span>任务</span><span>创建时间</span><span>状态</span><span>操作</span></div>
         ${regularTasksHtml}
       </div>`,
-      pager: renderTaskQueuePager("regular", regularPageInfo),
+      pager: regularPageInfo.mobile
+        ? renderMobileTweetStreamFooter(regularPageInfo, "task-queue")
+        : renderTaskQueuePager("regular", regularPageInfo),
     }
     : {
       title: "当前人设自动化队列",
@@ -10453,7 +10453,9 @@ function renderTaskQueueView() {
             : `<div class="empty-state">当前人设暂无自动化任务。</div>`
         )
         : `<div class="empty-state">当前还没有选中的人设。</div>`,
-      pager: renderTaskQueuePager("persona", personaPageInfo),
+      pager: personaPageInfo.mobile
+        ? renderMobileTweetStreamFooter(personaPageInfo, "task-queue")
+        : renderTaskQueuePager("persona", personaPageInfo),
     };
   return `
     <div class="task-queue-layout">
@@ -10474,6 +10476,19 @@ function renderTaskQueueView() {
       </div>
       ${renderTaskQueuePersonaSelector()}
     </div>`;
+}
+
+function renderTaskQueueSurface() {
+  const host = $("taskTable");
+  if (!host) return;
+  const reopenPersonaSidebar = Boolean(
+    document.getElementById("taskQueuePersonaSidebar")?.classList.contains("is-mobile-open")
+  );
+  host.innerHTML = renderTaskQueueView();
+  if (state.view === "tasks") {
+    setPersonaMobileSidebarOpen(reopenPersonaSidebar, "taskQueuePersonaSidebar");
+  }
+  bindMobileTweetStreamObservers();
 }
 
 function currentBranch(moduleId) {
@@ -16492,7 +16507,7 @@ function refreshConsoleSettingsDependents() {
     renderActivePersonaListSurface();
   }
   if (state.view === "tasks" && $("taskTable")) {
-    $("taskTable").innerHTML = renderTaskQueueView();
+    renderTaskQueueSurface();
   }
   if (state.view === "workspace" && state.activeModule === "queue" && $("moduleBody")) {
     renderWorkspace(false);
@@ -23880,6 +23895,7 @@ async function loadTasks() {
   if (state.view === "tasks") {
     setPersonaMobileSidebarOpen(reopenTaskQueuePersonaSidebar, "taskQueuePersonaSidebar");
   }
+  bindMobileTweetStreamObservers();
   syncMobilePageToolbar();
 }
 
@@ -30828,7 +30844,7 @@ function bindEvents() {
       const set = taskQueueSet(kind);
       if (selectionInput.checked) set.add(String(id || ""));
       else set.delete(String(id || ""));
-      $("taskTable").innerHTML = renderTaskQueueView();
+      renderTaskQueueSurface();
       return;
     }
     const selectAllInput = event.target.closest("[data-task-queue-select-all]");
@@ -30839,7 +30855,7 @@ function bindEvents() {
       const summary = taskQueueSelectionSummary(kind);
       if (!summary.allSelected) rows.forEach((task) => task.id && set.add(String(task.id)));
       else rows.forEach((task) => task.id && set.delete(String(task.id)));
-      $("taskTable").innerHTML = renderTaskQueueView();
+      renderTaskQueueSurface();
       return;
     }
     const deleteSelected = event.target.closest("[data-task-queue-delete-selected]");
@@ -30860,7 +30876,7 @@ function bindEvents() {
       await slideSegmentedButtonBackground(taskQueuePanelButton, {
         commit: () => {
           state.taskQueuePanel = nextPanel;
-          $("taskTable").innerHTML = renderTaskQueueView();
+          renderTaskQueueSurface();
         },
         resolveButton: () => document.querySelector(
           `[data-task-queue-panel="${CSS.escape(nextPanel)}"]`
@@ -30883,7 +30899,7 @@ function bindEvents() {
         if (action === "prev") state.taskQueueRegularPage = Math.max(1, Number(state.taskQueueRegularPage || 1) - 1);
         if (action === "next") state.taskQueueRegularPage = Math.min(totalPages, Number(state.taskQueueRegularPage || 1) + 1);
       }
-      $("taskTable").innerHTML = renderTaskQueueView();
+      renderTaskQueueSurface();
       return;
     }
     const taskPersonaSelect = event.target.closest("[data-task-persona-select]");
@@ -30894,7 +30910,7 @@ function bindEvents() {
       setSelectedPersonaId(taskPersonaSelect.dataset.taskPersonaSelect || "");
       setSelectedPersonaPostId("");
       state.taskQueuePersonaPage = 1;
-      $("taskTable").innerHTML = renderTaskQueueView();
+      renderTaskQueueSurface();
       setPersonaMobileSidebarOpen(reopenTaskQueuePersonaSidebar, "taskQueuePersonaSidebar");
       return;
     }

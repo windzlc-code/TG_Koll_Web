@@ -25571,6 +25571,10 @@ body.console-page {
     text-align: center;
   }
 
+  .task-panel-section-foot > .mobile-tweet-stream-footer {
+    width: 100%;
+  }
+
   .mobile-tweet-stream-sentinel {
     min-width: 92px;
   }

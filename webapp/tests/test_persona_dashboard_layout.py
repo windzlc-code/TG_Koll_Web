@@ -3331,6 +3331,24 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('else if (target === "publishing") renderSimpleFlowModule("publishing");', self.console_script)
         self.assertIn(".mobile-tweet-stream-footer", self.styles)
 
+    def test_mobile_task_queues_use_bottom_loading_while_desktop_keeps_pagination(self):
+        queue_start = self.console_script.index("function renderTaskQueueView()")
+        queue_end = self.console_script.index("\nfunction currentBranch(", queue_start)
+        queue_renderer = self.console_script[queue_start:queue_end]
+
+        self.assertIn('mobileTweetStreamInfo(personaRows, `task-queue:persona:', queue_renderer)
+        self.assertIn('mobileTweetStreamInfo(regularRows, "task-queue:regular"', queue_renderer)
+        self.assertIn('renderMobileTweetStreamFooter(regularPageInfo, "task-queue")', queue_renderer)
+        self.assertIn('renderMobileTweetStreamFooter(personaPageInfo, "task-queue")', queue_renderer)
+        self.assertIn('renderTaskQueuePager("regular", regularPageInfo)', queue_renderer)
+        self.assertIn('renderTaskQueuePager("persona", personaPageInfo)', queue_renderer)
+        self.assertIn('else if (target === "task-queue") renderTaskQueueSurface();', self.console_script)
+        self.assertIn("function renderTaskQueueSurface()", self.console_script)
+        self.assertIn("bindMobileTweetStreamObservers();", self.console_script[
+            self.console_script.index("function renderTaskQueueSurface()"):
+            self.console_script.index("\nfunction currentBranch(", self.console_script.index("function renderTaskQueueSurface()"))
+        ])
+
     def test_mobile_draft_batches_keep_selection_against_the_full_source(self):
         draft_rows_start = self.console_script.index("function renderPersonaDraftRows(")
         draft_rows_end = self.console_script.index("\nfunction personaDraftViewMode(", draft_rows_start)
