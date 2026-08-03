@@ -27163,7 +27163,7 @@ function renderSocialAccounts() {
   bindAccountPoolPlatformSwipe(grid);
   if (reopenAccountPoolPersonaSidebar) {
     setPersonaMobileSidebarOpen(true, "accountPoolPersonaSidebar");
-  } else {
+  } else if (state.view === "accounts") {
     setPersonaMobileSidebarOpen(false, "accountPoolPersonaSidebar");
   }
   syncMobilePageToolbar();

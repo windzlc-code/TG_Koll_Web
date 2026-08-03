@@ -2011,6 +2011,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             'setPersonaMobileSidebarOpen(true, "accountPoolPersonaSidebar")',
             social_render,
         )
+        self.assertIn(
+            '} else if (state.view === "accounts") {',
+            social_render,
+        )
 
         self.assertIn(".account-pool-card > .persona-profile-list-toggle {", self.styles)
         self.assertIn(

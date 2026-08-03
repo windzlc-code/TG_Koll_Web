@@ -5757,7 +5757,7 @@ body.upload-media-sorting {
 }
 
 .persona-list-actions--bulk button > span {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   line-height: 1;
 }
@@ -22027,7 +22027,7 @@ body.console-page {
 }
 
 .persona-workspace-mobile-drawer .persona-list-actions:not(.persona-list-actions--bulk) button {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
 }
 
