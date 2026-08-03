@@ -131,15 +131,15 @@ class MediaUploadComponentContractTests(unittest.TestCase):
 
         self.assertIn("form.hotEditingCandidateId = cleanCandidateId;", starter)
         self.assertIn("form.hotPreviewId = cleanCandidateId;", starter)
-        self.assertNotIn("importPersonaHotDrafts", starter)
+        self.assertIn('modalKey: "persona-hot-editor"', starter)
+        self.assertIn("modal.__requestClose = async (result) =>", starter)
+        self.assertLess(starter.index('modalKey: "persona-hot-editor"'), starter.index("importPersonaHotDrafts"))
+        self.assertIn("applyStoredEdits: true, choosePlatform: true", starter)
         self.assertNotIn("choosePublishPlatformAccount", starter)
         self.assertIn("data-persona-hot-content-editor", self.script)
-        self.assertIn("data-persona-cancel-hot-edit", self.script)
-        self.assertIn("data-persona-confirm-hot-edit", self.script)
-        self.assertIn("snapshotPersonaHotPreviewContent();", handler)
-        self.assertIn("importPersonaHotDrafts([candidateId], {", handler)
-        self.assertIn("applyStoredEdits: true,", handler)
-        self.assertIn("choosePlatform: true,", handler)
+        self.assertIn("renderPersonaHotCandidateEditorModal", self.script)
+        self.assertIn("startPersonaHotCandidateEdit(persona, candidateId);", handler)
+        self.assertNotIn("importPersonaHotDrafts", handler)
         self.assertNotIn("openPersonaHotCandidateInDraftEditor", self.script)
 
     def test_hotspot_cards_open_media_and_source_without_detail_modal(self):
@@ -150,13 +150,35 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertNotIn("async function openPersonaHotCandidateDetail", self.script)
         self.assertNotIn('data-persona-view-hot-candidate=', self.script)
         self.assertNotIn('modalKey: "persona-hot-candidate-detail"', self.script)
-        self.assertIn('renderMediaPreviewButton(item, previewGroupId, previewIndex, {', self.script)
-        self.assertIn('showCaption: editing,', self.script)
-        self.assertIn('class="persona-hot-media-index-badge"', self.script)
-        self.assertIn('interactive: !editing && !isDeleted && Boolean(previewGroupId) && Number.isInteger(previewIndex),', self.script)
-        self.assertIn('${editing ? `<div class="persona-hot-media-actions">', self.script)
+        self.assertIn('class="persona-edit-media-grid persona-hot-media-grid is-previewing"', self.script)
+        self.assertIn('class="persona-edit-media-card persona-hot-media-item"', self.script)
+        self.assertIn('className: "persona-edit-media-preview"', self.script)
+        self.assertIn('class="persona-edit-media-order persona-hot-media-index-badge"', self.script)
+        self.assertIn('interactive: Boolean(previewGroupId) && itemPreviewIndex >= 0,', self.script)
         self.assertIn(".persona-hot-card-actions a {", self.styles)
         self.assertIn("justify-content: center;", self.styles)
+
+    def test_hotspot_editor_reuses_public_modal_and_complete_media_editor(self):
+        modal_renderer = self.script[
+            self.script.index("function renderPersonaHotCandidateEditorModal"):
+            self.script.index("\nfunction choosePersonaHotEditorFiles")
+        ]
+        editor_renderer = self.script[
+            self.script.index("function renderPersonaEditableMediaGrid"):
+            self.script.index("\nfunction renderPersonaImageUploadPlaceholderCard")
+        ]
+
+        self.assertIn("renderPersonaEditableMediaGrid(mediaItems, {", modal_renderer)
+        self.assertIn('mode: "hot"', modal_renderer)
+        self.assertIn("data-persona-hot-content-editor", modal_renderer)
+        self.assertIn("data-persona-hot-editor-media-input", editor_renderer)
+        self.assertIn("data-persona-hot-editor-media-replace", editor_renderer)
+        self.assertIn("data-persona-hot-editor-media-delete", editor_renderer)
+        self.assertIn("data-persona-hot-media-delete-selected", editor_renderer)
+        self.assertIn("data-persona-media-drag-handle", self.script)
+        self.assertIn("preparePersonaDraftMediaOps(operations)", self.script)
+        self.assertIn("preparedMediaOpsByCandidate", self.script)
+        self.assertIn('.persona-hot-editor-modal {', self.styles)
 
     def test_hotspot_cards_show_source_identity_all_media_and_merged_heat_views(self):
         picker = self.script[
@@ -169,7 +191,7 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         ]
 
         self.assertIn("renderPersonaHotSourceIdentity(candidate)", picker)
-        self.assertIn("renderPersonaHotMediaPreview(persona, candidate, { editing })", picker)
+        self.assertIn("renderPersonaHotMediaPreview(persona, candidate)", picker)
         source_identity = self.script[
             self.script.index("function renderPersonaHotSourceIdentity"):
             self.script.index("\nfunction normalizePersonaHotSearchMode")
@@ -297,7 +319,8 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('toolbar.classList.toggle("is-all-selected", allSelected);', self.script)
         self.assertIn("function togglePersonaMediaBulkSelection", self.script)
         self.assertIn("function deleteSelectedPersonaPostMedia", self.script)
-        self.assertIn('data-persona-media-delete-selected title="删除所选" aria-label="删除所选" ${selectedIndexes.size ? "" : "disabled"}', self.script)
+        self.assertIn('data-persona-hot-media-delete-selected', self.script)
+        self.assertIn('data-persona-media-delete-selected', self.script)
         self.assertIn("deleteSelected.disabled = selected.size === 0;", self.script)
         self.assertIn(
             ".persona-media-selection-toolbar {\n  position: relative;\n  display: flex;\n  justify-content: flex-end;",

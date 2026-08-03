@@ -5733,7 +5733,8 @@ body.upload-media-sorting {
 }
 
 .persona-list-actions button .ui-action-icon,
-.persona-list-actions button .ui-trash-icon {
+.persona-list-actions button .ui-trash-icon,
+.persona-list-actions button .ui-lightbox-icon {
   width: 20px;
   height: 20px;
   flex: 0 0 20px;
@@ -7179,7 +7180,9 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-hot-card > .persona-hot-media-grid {
   grid-column: 2;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  width: 100%;
 }
 
 .persona-hot-card-head,
@@ -7556,10 +7559,20 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-hot-media-item {
   position: relative;
   min-width: 0;
-  padding: 2px;
-  border: 2px solid transparent;
-  border-radius: var(--radius);
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
   transition: border-color var(--motion-fast), background var(--motion-fast);
+}
+
+.persona-hot-media-grid.is-previewing .persona-edit-media-preview,
+.persona-hot-media-grid.is-previewing .persona-media-frame {
+  width: 100%;
+}
+
+.persona-hot-media-grid.is-previewing .persona-media-frame {
+  aspect-ratio: 1;
 }
 
 .persona-hot-media-index-badge {
@@ -7581,6 +7594,60 @@ body.persona-touch-dragging .persona-list-card:active {
   line-height: 1;
   pointer-events: none;
   box-shadow: 0 2px 8px rgba(15, 23, 42, .12);
+}
+
+.persona-hot-editor-modal {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.persona-hot-editor-modal-content {
+  display: grid;
+  gap: 14px;
+  min-height: 0;
+}
+
+.persona-hot-editor-copy,
+.persona-hot-editor-media {
+  display: grid;
+  gap: 8px;
+}
+
+.persona-hot-editor-copy textarea {
+  min-height: 190px;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.persona-hot-editor-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.persona-hot-editor-section-head small {
+  color: var(--muted);
+}
+
+.persona-hot-unified-media-editor {
+  margin-top: 0;
+}
+
+@media (max-width: 620px) {
+  .console-modal[data-modal-key="persona-hot-editor"] {
+    padding: 12px;
+  }
+
+  .persona-hot-editor-modal {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    padding: 14px;
+  }
+
+  .persona-hot-editor-copy textarea {
+    min-height: 150px;
+  }
 }
 
 .persona-hot-media-item.is-selected {
