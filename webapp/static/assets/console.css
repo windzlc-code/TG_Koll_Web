@@ -5756,6 +5756,12 @@ body.upload-media-sorting {
   white-space: nowrap;
 }
 
+.persona-list-actions--bulk button > span {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .persona-list-actions button.danger {
   border-color: color-mix(in srgb, var(--danger) 65%, var(--line));
   color: var(--danger);
@@ -22018,6 +22024,11 @@ body.console-page {
   .persona-mobile-drawer .persona-list-toolbar button {
     font-size: 10px;
   }
+}
+
+.persona-workspace-mobile-drawer .persona-list-actions:not(.persona-list-actions--bulk) button {
+  font-size: 14px;
+  font-weight: 700;
 }
 
 /* Final narrow-layout guard: keep single-column workspaces inside the viewport. */
