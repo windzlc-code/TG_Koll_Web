@@ -315,14 +315,28 @@ function applyPersonaOverviewPostRows(persona) {
 const initialConsoleParams = new URLSearchParams(window.location.search);
 const initialConsoleView = initialConsoleParams.get("view");
 const initialAccountBrowserPanel = initialConsoleParams.get("browser_panel");
-const initialConsoleViewIsSupported = ["workspace", "tasks", "accounts", "billing", "console_settings", "persona_dashboard"].includes(initialConsoleView);
+const VIDEO_WORKSPACE_MODULES = [
+  { id: "digital_human_video", label: "数字人口播视频" },
+  { id: "ecommerce_short_video", label: "广告 / 种草视频" },
+  { id: "video_language_replace", label: "视频语种更换" },
+  { id: "video_subject_replace", label: "视频模特 / 商品替换" },
+  { id: "ecommerce_image", label: "电商广告图" },
+  { id: "subject_replace", label: "人物 / 商品替换" },
+  { id: "poster_translate", label: "电商图语种切换" },
+  { id: "subject_generate", label: "主体生成" },
+];
+const initialVideoModule = initialConsoleParams.get("video_module");
+const initialVideoModuleIsSupported = VIDEO_WORKSPACE_MODULES.some((item) => item.id === initialVideoModule);
+const initialConsoleViewIsSupported = ["workspace", "video_workspace", "tasks", "accounts", "billing", "console_settings", "persona_dashboard"].includes(initialConsoleView);
 const initialAccountBrowserPanelIsSupported = ["browsers", "proxies"].includes(initialAccountBrowserPanel);
 
 function clearInitialConsoleRouteHint() {
+  if (initialConsoleView === "video_workspace" && initialVideoModuleIsSupported) return;
   if (!initialConsoleViewIsSupported && !initialAccountBrowserPanelIsSupported) return;
   const url = new URL(window.location.href);
   url.searchParams.delete("view");
   url.searchParams.delete("browser_panel");
+  url.searchParams.delete("video_module");
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
@@ -334,6 +348,7 @@ const state = {
   transientWorkspaceLeaveAcknowledgement: "",
   transientWorkspaceAllowNextUnload: false,
   accountBrowserPanel: initialAccountBrowserPanelIsSupported ? initialAccountBrowserPanel : "accounts",
+  activeVideoModule: initialVideoModuleIsSupported ? initialVideoModule : VIDEO_WORKSPACE_MODULES[0].id,
   proxyMarketUnreadCount: 0,
   proxyMarketAvailableCount: 0,
   proxyMarketSummaryLoaded: false,
@@ -342,6 +357,7 @@ const state = {
   liveBrowserExpandedSessionId: "",
   liveBrowserReturnTarget: null,
   workspaceMenuOpen: true,
+  videoWorkspaceMenuOpen: initialConsoleView === "video_workspace",
   currentUser: null,
   socialPublishPolicy: { limit: 15 },
   socialPublishPolicyLoaded: false,
@@ -1584,6 +1600,12 @@ const modules = [
 ];
 
 const taskMeta = {
+  create_video: { title: "数字人口播视频", minImages: 0, files: "人物素材、音频与生成结果均按任务隔离保存。", callback: "统一任务队列" },
+  ecommerce_short_video: { title: "广告 / 种草视频", minImages: 0, files: "商品、模特与分镜素材按任务隔离保存。", callback: "统一任务队列" },
+  video_language_replace: { title: "视频语种更换", minImages: 0, files: "原视频、目标音频与字幕按任务隔离保存。", callback: "统一任务队列" },
+  replace_model: { title: "视频模特替换", minImages: 0, files: "替换素材按任务隔离保存。", callback: "统一任务队列" },
+  replace_product: { title: "视频商品替换", minImages: 0, files: "替换素材按任务隔离保存。", callback: "统一任务队列" },
+  image_generate: { title: "图片素材生成", minImages: 0, files: "参考图与生成图按任务隔离保存。", callback: "统一任务队列" },
   persona_post_image: { title: "推文配图", minImages: 0, files: "基于当前草稿正文和人设参考图生成预览图片。", callback: "后台自动提交" },
   persona_post_generation: { title: "AI 推文草稿生成", minImages: 0, files: "后台持续生成，切换页面或短暂断线不会中止任务。", callback: "完成后自动恢复" },
 };
@@ -6771,6 +6793,7 @@ function syncPersonaDashboardStyles(view) {
 
 function setView(view) {
   if (view === "settings") view = "workspace";
+  const previousView = state.view;
   cancelMobileTaskDockCommit();
   cancelMobileTweetStreamLoading();
   const scrollSnapshot = snapshotConsoleScrollState();
@@ -6785,6 +6808,8 @@ function setView(view) {
   syncAccountStatusAutoRefresh();
   syncLiveBrowserAutoRefresh();
   if (!["workspace", "accounts"].includes(view)) state.workspaceMenuOpen = false;
+  if (view !== "video_workspace") state.videoWorkspaceMenuOpen = false;
+  else state.videoWorkspaceMenuOpen = true;
   document.querySelectorAll("[data-view]").forEach((button) => {
     const isActive = button.dataset.view === view;
     button.classList.toggle("is-active", isActive);
@@ -6794,6 +6819,7 @@ function setView(view) {
   });
   document.querySelectorAll("[data-panel]").forEach((panel) => panel.classList.toggle("is-active", panel.dataset.panel === view));
   const titles = {
+    video_workspace: "\u89c6\u9891\u5de5\u4f5c\u53f0",
     workspace: "任务工作台",
     tasks: "任务队列",
     social: "浏览器发布",
@@ -6807,6 +6833,7 @@ function setView(view) {
   const personaTopbarActions = $("personaDashboardTopbarActions");
   if (personaTopbarActions) personaTopbarActions.hidden = view !== "persona_dashboard";
   updateWorkspaceFlow();
+  updateVideoWorkspaceFlow();
   if ($("moduleMenu")) syncModuleMenuState();
   if (view === "console_settings") renderConsoleSettingsPage();
   if (view === "persona_dashboard") window.PersonaDashboard?.mount?.($("personaDashboardApp"));
@@ -6815,6 +6842,14 @@ function setView(view) {
   if (view === "billing") loadBilling().catch(() => {});
   if (view === "social" || view === "accounts") scheduleSocialViewRefresh(view);
   else cancelScheduledSocialViewRefresh();
+  if (view === "video_workspace") {
+    syncVideoWorkspaceRoute();
+    syncVideoModuleMenuState();
+    window.VideoWorkbench?.activate?.({ moduleId: state.activeVideoModule });
+  } else if (previousView === "video_workspace") {
+    clearVideoWorkspaceRoute();
+    window.VideoWorkbench?.deactivate?.();
+  }
   syncTaskQueueAutoRefresh();
   syncAccountStatusAutoRefresh();
   setMobileNavOpen(false);
@@ -7057,6 +7092,60 @@ function updateWorkspaceFlow() {
   button.setAttribute("aria-expanded", open ? "true" : "false");
 }
 
+function updateVideoWorkspaceFlow() {
+  const flow = $("videoWorkspaceFlow");
+  const button = document.querySelector('[data-view="video_workspace"]');
+  if (!flow || !button) return;
+  const open = state.videoWorkspaceMenuOpen && state.view === "video_workspace";
+  flow.classList.toggle("is-open", open);
+  button.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function syncVideoWorkspaceRoute() {
+  const url = new URL(window.location.href);
+  url.searchParams.set("view", "video_workspace");
+  url.searchParams.set("video_module", state.activeVideoModule);
+  url.searchParams.delete("browser_panel");
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function clearVideoWorkspaceRoute() {
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("view") !== "video_workspace" && !url.searchParams.has("video_module")) return;
+  url.searchParams.delete("view");
+  url.searchParams.delete("video_module");
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function renderVideoModuleMenu() {
+  const host = $("videoModuleMenu");
+  if (!host) return;
+  const groups = [
+    { label: "视频生成", items: VIDEO_WORKSPACE_MODULES.slice(0, 4) },
+    { label: "图片素材", items: VIDEO_WORKSPACE_MODULES.slice(4) },
+  ];
+  host.innerHTML = groups.map((group) => `<div class="module-accordion video-module-group">
+    <div class="video-module-group-label">${esc(group.label)}</div>
+    ${group.items.map((item) => `
+      <div class="module-accordion-item">
+        <button type="button" class="module-trigger" data-video-module="${esc(item.id)}">
+          <span class="module-trigger-text"><span>${esc(item.label)}</span></span>
+        </button>
+      </div>`).join("")}
+  </div>`).join("");
+  syncVideoModuleMenuState();
+}
+
+function syncVideoModuleMenuState() {
+  updateVideoWorkspaceFlow();
+  document.querySelectorAll("[data-video-module]").forEach((button) => {
+    const isActive = state.view === "video_workspace" && button.dataset.videoModule === state.activeVideoModule;
+    button.classList.toggle("is-active", isActive);
+    if (isActive) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+}
+
 function moduleNavigationAttributes(item) {
   const itemPanel = String(item.panel || "");
   if (!item.view) return `data-module="${esc(item.id)}"`;
@@ -7065,6 +7154,7 @@ function moduleNavigationAttributes(item) {
 
 function renderMobileTaskIcon(moduleId) {
   const paths = {
+    video_workspace: '<path d="M4 5h11a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path><path d="m17 10 5-3v10l-5-3z"></path><path d="M6 9h5M6 13h4"></path>',
     personas: '<circle cx="9" cy="8" r="3"></circle><path d="M3.5 19v-1.5A4.5 4.5 0 0 1 8 13h2a4.5 4.5 0 0 1 4.5 4.5V19"></path><path d="M15 6.5a3 3 0 0 1 0 5.5M16.5 13.5a4.5 4.5 0 0 1 4 4.5v1"></path>',
     tweet_generation: '<path d="M12 5v14M5 12h14"></path>',
     publishing: '<path d="m21 3-7.5 18-4.2-7.8L2 9z"></path><path d="M9.3 13.2 21 3"></path>',
@@ -7081,6 +7171,10 @@ function renderMobileTaskIcon(moduleId) {
 }
 
 function mobilePageToolbarDescriptor() {
+  if (state.view === "video_workspace") {
+    const module = VIDEO_WORKSPACE_MODULES.find((item) => item.id === state.activeVideoModule) || VIDEO_WORKSPACE_MODULES[0];
+    return { icon: "video_workspace", title: module.label };
+  }
   if (state.view === "workspace") {
     const module = currentModule();
     return { icon: module.id, title: module.label };
@@ -7150,6 +7244,7 @@ function renderMobileTaskDock() {
   if (!dock) return;
   const mobileDockItems = [
     { id: "persona_dashboard", label: "首页", view: "persona_dashboard" },
+    { id: "video_workspace", label: "视频", view: "video_workspace" },
     ...modules.filter((item) => item.id !== "browser_list"),
   ];
   if (!dock.querySelector(".mobile-task-dock-button")) {
@@ -24205,9 +24300,19 @@ function openLiveBrowserTaskView(taskId = "") {
   refreshLiveBrowserSessionsSoon(cleanTaskId);
 }
 
+function openVideoWorkspace(moduleId = "") {
+  const nextModule = VIDEO_WORKSPACE_MODULES.some((item) => item.id === moduleId)
+    ? moduleId
+    : VIDEO_WORKSPACE_MODULES[0].id;
+  state.activeVideoModule = nextModule;
+  state.videoWorkspaceMenuOpen = true;
+  setView("video_workspace");
+}
+
 window.VectoConsoleNavigation = {
   ...(window.VectoConsoleNavigation || {}),
   openLiveBrowserTaskView,
+  openVideoWorkspace,
 };
 
 function updateAccountStatusViews() {
@@ -28838,8 +28943,14 @@ async function openScheduledSocialTaskEditor(task = {}) {
   setWorkspaceModule("automation");
 }
 
+async function canLeaveVideoWorkspace() {
+  if (!window.VideoWorkbench?.confirmLeave) return true;
+  return Boolean(await window.VideoWorkbench.confirmLeave());
+}
+
 async function openPersonalConsoleView(view) {
   if (!view || view === state.view) return;
+  if (state.view === "video_workspace" && !(await canLeaveVideoWorkspace())) return;
   if (state.view === "workspace" && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
   if (state.view === "workspace" && !(await confirmLeaveTransientWorkspaceState())) return;
   setView(view);
@@ -28979,6 +29090,7 @@ async function slideSegmentedButtonBackground(button, options = {}) {
 }
 
 function bindEvents() {
+  renderVideoModuleMenu();
   document.addEventListener("click", handleDailyPublishActionGate, true);
   ensureThemeToggle();
   ensureLanguageToggle();
@@ -29037,6 +29149,13 @@ function bindEvents() {
   document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", async (event) => {
     if (guardPersonaPostGenerationInteraction(event.target)) return;
     const nextView = button.dataset.view;
+    if (nextView === "video_workspace" && state.view === "video_workspace") {
+      setMenuClickHighlight(button, button);
+      state.videoWorkspaceMenuOpen = !state.videoWorkspaceMenuOpen;
+      updateVideoWorkspaceFlow();
+      return;
+    }
+    if (state.view === "video_workspace" && nextView !== "video_workspace" && !(await canLeaveVideoWorkspace())) return;
     if (nextView === "workspace" && state.view === "workspace") {
       setMenuClickHighlight(button, button);
       state.workspaceMenuOpen = !state.workspaceMenuOpen;
@@ -29047,6 +29166,7 @@ function bindEvents() {
     if (state.view === "workspace" && nextView !== "workspace" && !(await confirmLeaveTransientWorkspaceState())) return;
     setMenuClickHighlight(button, button);
     if (nextView === "workspace") state.workspaceMenuOpen = true;
+    if (nextView === "video_workspace") state.videoWorkspaceMenuOpen = true;
     setView(nextView);
   }));
   $("refreshBilling")?.addEventListener("click", () => loadBilling({ force: true }).catch((error) => {
@@ -29087,6 +29207,7 @@ function bindEvents() {
     const viewButton = event.target.closest("[data-workspace-view]");
     if (viewButton) {
       const nextView = viewButton.dataset.workspaceView || "workspace";
+      if (state.view === "video_workspace" && !(await canLeaveVideoWorkspace())) return;
       const viewChanged = nextView !== state.view;
       if (
         viewChanged
@@ -29116,6 +29237,7 @@ function bindEvents() {
     }
     const button = event.target.closest("[data-module]");
     if (button) {
+      if (state.view === "video_workspace" && !(await canLeaveVideoWorkspace())) return;
       const moduleChanged = button.dataset.module !== state.activeModule;
       if (
         moduleChanged
@@ -29148,6 +29270,16 @@ function bindEvents() {
     }
   };
   $("moduleMenu").addEventListener("click", handleWorkspaceModuleNavigation);
+  $("videoModuleMenu")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-video-module]");
+    if (!button) return;
+    if (state.view === "workspace" && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
+    if (state.view === "workspace" && !(await confirmLeaveTransientWorkspaceState())) return;
+    setMenuClickHighlight(button, button.closest(".module-accordion-item") || button);
+    state.activeVideoModule = button.dataset.videoModule || VIDEO_WORKSPACE_MODULES[0].id;
+    state.videoWorkspaceMenuOpen = true;
+    setView("video_workspace");
+  });
   $("mobileTaskDock")?.addEventListener("click", handleWorkspaceModuleNavigation);
   document.addEventListener("click", (event) => {
     if (

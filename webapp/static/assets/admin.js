@@ -456,12 +456,16 @@ function bindAdminMobileNavigation() {
 const SENSITIVE_RUNTIME_INPUT_IDS = [
   "rtLlmApiKeyGpt",
   "rtImageGeminiApiKey",
+  "rtVideoRunningHubApiKey",
+  "rtVideoTtsApiKey",
 ];
 
 const RUNTIME_SECRET_API_NAMES = {
   rtLlmApiKeyGpt: "llm_api_key_gpt",
   rtImageGeminiApiKey: "image_model_provider_api_key_gemini",
   rtNewPersonaRunningHubApiKey: "new_persona_runninghub_api_key",
+  rtVideoRunningHubApiKey: "video_runninghub_api_key",
+  rtVideoTtsApiKey: "video_tts_api_key",
 };
 const SENSITIVE_EYE_ICON_SVG = `
   <svg class="sensitive-eye-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -1740,6 +1744,12 @@ const REMOTE_COMFY_TASKS = [
   ["persona_post_image", "推文生成配图"],
 ];
 const TASK_TYPE_LABELS = {
+  create_video: "数字人口播视频",
+  ecommerce_short_video: "广告 / 种草视频",
+  video_language_replace: "视频语种更换",
+  replace_model: "视频模特替换",
+  replace_product: "视频商品替换",
+  image_generate: "图片素材生成",
   persona_post_image: "推文生成配图",
   persona_post_generation: "AI 推文草稿生成",
 };
@@ -2597,7 +2607,23 @@ function runtimeFormToPayload() {
     new_persona_runninghub_persona_t2i_endpoint: el("rtNewPersonaPersonaT2iEndpoint") ? el("rtNewPersonaPersonaT2iEndpoint").value.trim() : "",
     new_persona_runninghub_tweet_i2i_detail_url: el("rtNewPersonaTweetI2iDetailUrl") ? el("rtNewPersonaTweetI2iDetailUrl").value.trim() : "",
     new_persona_runninghub_tweet_i2i_endpoint: el("rtNewPersonaTweetI2iEndpoint") ? el("rtNewPersonaTweetI2iEndpoint").value.trim() : "",
-    video_app_id: "",
+    video_runninghub_base_url: el("rtVideoRunningHubBaseUrl")?.value.trim() || "",
+    video_runninghub_api_key: runtimeSecretInputValue("rtVideoRunningHubApiKey"),
+    video_create_audio_app_id: el("rtVideoCreateAudioAppId")?.value.trim() || "",
+    video_create_video_app_id: el("rtVideoCreateVideoAppId")?.value.trim() || "",
+    video_replace_model_app_id: el("rtVideoReplaceModelAppId")?.value.trim() || "",
+    video_replace_product_app_id: el("rtVideoReplaceProductAppId")?.value.trim() || "",
+    video_ecommerce_app_id: el("rtVideoEcommerceAppId")?.value.trim() || "",
+    video_ecommerce_fast_app_id: el("rtVideoEcommerceFastAppId")?.value.trim() || "",
+    video_tts_provider: el("rtVideoTtsProvider")?.value.trim() || "",
+    video_tts_base_url: el("rtVideoTtsBaseUrl")?.value.trim() || "",
+    video_tts_api_key: runtimeSecretInputValue("rtVideoTtsApiKey"),
+    video_tts_model: el("rtVideoTtsModel")?.value.trim() || "",
+    video_default_voice_id: el("rtVideoDefaultVoiceId")?.value.trim() || "",
+    video_default_duration_seconds: Number(el("rtVideoDefaultDurationSeconds")?.value || 10),
+    video_default_ratio: el("rtVideoDefaultRatio")?.value || "9:16",
+    video_default_resolution: el("rtVideoDefaultResolution")?.value || "720p",
+    video_local_max_concurrency: Number(el("rtVideoLocalMaxConcurrency")?.value || 2),
     cleanup_enabled: !!el("rtCleanupEnabled").checked,
     cleanup_time: el("rtCleanupTime").value || "03:30",
     cleanup_retention_days: Number(el("rtCleanupRetentionDays").value || 7),
@@ -2658,6 +2684,23 @@ function fillRuntimeForm(data) {
   if (el("rtNewPersonaPersonaT2iEndpoint")) el("rtNewPersonaPersonaT2iEndpoint").value = v.new_persona_runninghub_persona_t2i_endpoint || "/rhart-image-g-2/text-to-image";
   if (el("rtNewPersonaTweetI2iDetailUrl")) el("rtNewPersonaTweetI2iDetailUrl").value = v.new_persona_runninghub_tweet_i2i_detail_url || "https://www.runninghub.cn/call-api/api-detail/2046503667076751361";
   if (el("rtNewPersonaTweetI2iEndpoint")) el("rtNewPersonaTweetI2iEndpoint").value = v.new_persona_runninghub_tweet_i2i_endpoint || "/rhart-image-g-2/image-to-image";
+  if (el("rtVideoRunningHubBaseUrl")) el("rtVideoRunningHubBaseUrl").value = v.video_runninghub_base_url || "https://www.runninghub.ai";
+  setRuntimeSecretInputState("rtVideoRunningHubApiKey", v.video_runninghub_api_key_configured, v.video_runninghub_api_key_masked);
+  if (el("rtVideoCreateAudioAppId")) el("rtVideoCreateAudioAppId").value = v.video_create_audio_app_id || "";
+  if (el("rtVideoCreateVideoAppId")) el("rtVideoCreateVideoAppId").value = v.video_create_video_app_id || "";
+  if (el("rtVideoReplaceModelAppId")) el("rtVideoReplaceModelAppId").value = v.video_replace_model_app_id || "";
+  if (el("rtVideoReplaceProductAppId")) el("rtVideoReplaceProductAppId").value = v.video_replace_product_app_id || "";
+  if (el("rtVideoEcommerceAppId")) el("rtVideoEcommerceAppId").value = v.video_ecommerce_app_id || "";
+  if (el("rtVideoEcommerceFastAppId")) el("rtVideoEcommerceFastAppId").value = v.video_ecommerce_fast_app_id || "";
+  if (el("rtVideoTtsProvider")) el("rtVideoTtsProvider").value = v.video_tts_provider || "";
+  if (el("rtVideoTtsBaseUrl")) el("rtVideoTtsBaseUrl").value = v.video_tts_base_url || "";
+  setRuntimeSecretInputState("rtVideoTtsApiKey", v.video_tts_api_key_configured, v.video_tts_api_key_masked);
+  if (el("rtVideoTtsModel")) el("rtVideoTtsModel").value = v.video_tts_model || "";
+  if (el("rtVideoDefaultVoiceId")) el("rtVideoDefaultVoiceId").value = v.video_default_voice_id || "";
+  if (el("rtVideoDefaultDurationSeconds")) el("rtVideoDefaultDurationSeconds").value = String(v.video_default_duration_seconds || 10);
+  if (el("rtVideoDefaultRatio")) el("rtVideoDefaultRatio").value = v.video_default_ratio || "9:16";
+  if (el("rtVideoDefaultResolution")) el("rtVideoDefaultResolution").value = v.video_default_resolution || "720p";
+  if (el("rtVideoLocalMaxConcurrency")) el("rtVideoLocalMaxConcurrency").value = String(v.video_local_max_concurrency || 2);
   renderRunningHubPresetSelect("persona");
   renderRunningHubPresetSelect("tweet");
   adminState.imageGeminiModels = imageModelItems([

@@ -10,6 +10,7 @@
   <link id="personaDashboardStyles" rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__" media="not all" />
   <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=__SITE_NAVIGATION_CSS_VERSION__" />
   <link rel="stylesheet" href="/assets/console.css?v=__CONSOLE_CSS_VERSION__" />
+  <link rel="stylesheet" href="/assets/video-workbench.css?v=__VIDEO_WORKBENCH_CSS_VERSION__" />
     <script defer src="/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__"></script>
 </head>
   <body class="console-page">
@@ -120,6 +121,15 @@
           <div class="sidebar-flow-divider" aria-hidden="true"></div>
           <div class="module-menu" id="moduleMenu"></div>
         </div>
+
+        <button type="button" class="nav-parent-toggle video-workbench-nav-toggle" data-view="video_workspace" aria-expanded="false">
+          <span>视频工作台</span>
+          <span class="nav-toggle-arrow" aria-hidden="true"></span>
+        </button>
+        <div class="sidebar-flow video-workspace-flow" id="videoWorkspaceFlow">
+          <div class="sidebar-flow-divider" aria-hidden="true"></div>
+          <div class="module-menu video-module-menu" id="videoModuleMenu" aria-label="视频工作台模块"></div>
+        </div>
       </nav>
 
       <div class="sidebar-bottom-actions">
@@ -192,6 +202,16 @@
       <section class="view" data-panel="tasks">
         <div class="task-table" id="taskTable"></div>
         <div id="taskQueueMsg" class="notice" role="status"></div>
+      </section>
+
+      <section class="view video-workbench-view" data-panel="video_workspace" aria-labelledby="viewTitle">
+        <div id="videoWorkbenchRoot" class="video-workbench-root" aria-live="polite">
+          <div class="video-workbench-state video-workbench-state--loading" role="status">
+            <span class="video-workbench-loader" aria-hidden="true"></span>
+            <strong>正在准备视频工作台</strong>
+            <span>读取可用模块与任务规划...</span>
+          </div>
+        </div>
       </section>
 
       <section class="view" data-panel="accounts">
@@ -361,6 +381,7 @@
     window.__PERSONA_DASHBOARD_BOOTSTRAP__ = window.__CONSOLE_BOOTSTRAP__;
   </script>
   <script src="/assets/vendor/opencc-js/st-characters.js?v=1.4.1"></script>
+  <script src="/assets/video-workbench.js?v=__VIDEO_WORKBENCH_JS_VERSION__"></script>
   <script src="/assets/console.js?v=__CONSOLE_JS_VERSION__"></script>
   <script src="/assets/persona-dashboard.js?v=__PERSONA_DASHBOARD_JS_VERSION__"></script>
 </body>

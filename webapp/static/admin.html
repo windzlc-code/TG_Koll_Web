@@ -1584,6 +1584,7 @@
               <button class="admin-model-tab is-active" type="button" data-model-tab="text">文字模型</button>
               <button class="admin-model-tab" type="button" data-model-tab="image">图片模型</button>
               <button class="admin-model-tab" type="button" data-model-tab="runninghub">RunningHub 链路</button>
+              <button class="admin-model-tab" type="button" data-model-tab="video">视频工作台</button>
             </div>
             <div class="admin-model-tab-panels">
                 <div class="admin-runtime-block admin-model-tab-panel is-active" data-model-panel="text">
@@ -1702,6 +1703,102 @@
                   <input id="rtNewPersonaPersonaT2iEndpoint" type="hidden">
                   <input id="rtNewPersonaTweetI2iDetailUrl" type="hidden">
                   <input id="rtNewPersonaTweetI2iEndpoint" type="hidden">
+                </div>
+                <div class="admin-runtime-block admin-model-tab-panel" data-model-panel="video">
+                  <div class="admin-config-card-title">视频工作台</div>
+                  <div class="small">统一管理数字人口播、广告视频、语种替换、主体替换及图片素材任务所需的工作流与语音服务。密钥留空时保留当前配置。</div>
+
+                  <label>RunningHub API 基础地址</label>
+                  <input id="rtVideoRunningHubBaseUrl" type="url" placeholder="https://www.runninghub.ai">
+                  <label>RunningHub API 密钥</label>
+                  <input id="rtVideoRunningHubApiKey" type="password" placeholder="留空则保留当前密钥">
+
+                  <div class="grid-2">
+                    <div>
+                      <label>语音生成工作流 App ID</label>
+                      <input id="rtVideoCreateAudioAppId" type="text" placeholder="RunningHub App ID">
+                    </div>
+                    <div>
+                      <label>数字人口播工作流 App ID</label>
+                      <input id="rtVideoCreateVideoAppId" type="text" placeholder="RunningHub App ID">
+                    </div>
+                  </div>
+                  <div class="grid-2">
+                    <div>
+                      <label>视频模特替换工作流 App ID</label>
+                      <input id="rtVideoReplaceModelAppId" type="text" placeholder="RunningHub App ID">
+                    </div>
+                    <div>
+                      <label>视频商品替换工作流 App ID</label>
+                      <input id="rtVideoReplaceProductAppId" type="text" placeholder="RunningHub App ID">
+                    </div>
+                  </div>
+                  <div class="grid-2">
+                    <div>
+                      <label>广告视频工作流 App ID</label>
+                      <input id="rtVideoEcommerceAppId" type="text" placeholder="RunningHub App ID">
+                    </div>
+                    <div>
+                      <label>广告视频快速工作流 App ID</label>
+                      <input id="rtVideoEcommerceFastAppId" type="text" placeholder="RunningHub App ID">
+                    </div>
+                  </div>
+
+                  <div class="admin-config-card-title">语音服务</div>
+                  <div class="grid-2">
+                    <div>
+                      <label>TTS 服务商</label>
+                      <input id="rtVideoTtsProvider" type="text" placeholder="例如 minimax">
+                    </div>
+                    <div>
+                      <label>TTS API 基础地址</label>
+                      <input id="rtVideoTtsBaseUrl" type="url" placeholder="服务商 API Base URL">
+                    </div>
+                  </div>
+                  <label>TTS API 密钥</label>
+                  <input id="rtVideoTtsApiKey" type="password" placeholder="留空则保留当前密钥">
+                  <div class="grid-2">
+                    <div>
+                      <label>TTS 模型</label>
+                      <input id="rtVideoTtsModel" type="text" placeholder="服务商模型名称">
+                    </div>
+                    <div>
+                      <label>默认音色 ID</label>
+                      <input id="rtVideoDefaultVoiceId" type="text" placeholder="默认音色或 Voice ID">
+                    </div>
+                  </div>
+
+                  <div class="admin-config-card-title">生成默认参数</div>
+                  <div class="grid-2">
+                    <div>
+                      <label>默认时长（秒）</label>
+                      <input id="rtVideoDefaultDurationSeconds" type="number" min="1" max="3600" step="1" value="10">
+                    </div>
+                    <div>
+                      <label>本地合成最大并发</label>
+                      <input id="rtVideoLocalMaxConcurrency" type="number" min="1" max="16" step="1" value="2">
+                    </div>
+                  </div>
+                  <div class="grid-2">
+                    <div>
+                      <label>默认画面比例</label>
+                      <select id="rtVideoDefaultRatio">
+                        <option value="9:16">9:16 竖屏</option>
+                        <option value="16:9">16:9 横屏</option>
+                        <option value="1:1">1:1 方形</option>
+                        <option value="4:3">4:3 横屏</option>
+                        <option value="3:4">3:4 竖屏</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label>默认分辨率</label>
+                      <select id="rtVideoDefaultResolution">
+                        <option value="720p">720p</option>
+                        <option value="1080p">1080p</option>
+                        <option value="480p">480p</option>
+                      </select>
+                    </div>
+                  </div>
                 </div>
             </div>
           </div>

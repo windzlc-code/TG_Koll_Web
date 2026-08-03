@@ -18,6 +18,7 @@ import signal
 import sqlite3
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -131,6 +132,7 @@ from .proxy_market import (
     stop_proxy_market_health_monitor,
 )
 from .notifications import create_notification, register_notification_routes
+from .video_workbench import inject_video_workbench, register_video_routes, server_video_route_dependencies
 
 
 logger = logging.getLogger(__name__)
@@ -285,6 +287,23 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "new_persona_runninghub_persona_t2i_endpoint": "/rhart-image-g-2/text-to-image",
     "new_persona_runninghub_tweet_i2i_detail_url": "https://www.runninghub.cn/call-api/api-detail/2046503667076751361",
     "new_persona_runninghub_tweet_i2i_endpoint": "/rhart-image-g-2/image-to-image",
+    "video_runninghub_base_url": "https://www.runninghub.ai",
+    "video_runninghub_api_key": "",
+    "video_create_audio_app_id": "",
+    "video_create_video_app_id": "",
+    "video_replace_model_app_id": "",
+    "video_replace_product_app_id": "",
+    "video_ecommerce_app_id": "",
+    "video_ecommerce_fast_app_id": "",
+    "video_tts_provider": "minimax",
+    "video_tts_base_url": "https://api.minimaxi.com",
+    "video_tts_api_key": "",
+    "video_tts_model": "speech-02-hd",
+    "video_default_voice_id": "",
+    "video_default_duration_seconds": 10,
+    "video_default_ratio": "9:16",
+    "video_default_resolution": "720p",
+    "video_local_max_concurrency": 2,
     "llm_base_url": "http://202.90.21.53:3008",
     "llm_api_key": "",
     "llm_api_key_gemini": "",
@@ -2188,6 +2207,49 @@ def _resume_pending_tasks() -> None:
             if status == "running":
                 reservation_id = str(r["billing_reservation_id"] or "")
                 output = _json_loads(r["output_json"], {})
+                video_task_types = set(
+                    (globals().get("VIDEO_WORKBENCH_INTEGRATION") or {}).get("task_types") or []
+                )
+                checkpoint = output.get("video_checkpoint") if isinstance(output, dict) else None
+                provider_task_id = str(
+                    (checkpoint or {}).get("runninghub_task_id")
+                    if isinstance(checkpoint, dict)
+                    else ""
+                ).strip()
+                if task_type in video_task_types and provider_task_id:
+                    payload.update({
+                        "resume": True,
+                        "resume_after_restart": True,
+                        "resume_runninghub_task_id": provider_task_id,
+                    })
+                    conn.execute(
+                        "UPDATE tasks SET status = ?, input_json = ?, error = '', updated_at = ? WHERE id = ?",
+                        ("queued", _json_dumps(_sanitize_payload(payload)), _now_ts(), tid),
+                    )
+                    _insert_task_event(
+                        conn,
+                        task_id=tid,
+                        user_id=user_id,
+                        kind="queued",
+                        message="服务重启后继续轮询已有视频供应商任务",
+                        data={
+                            "status": "queued",
+                            "stage": "startup_recovery",
+                            "resume": True,
+                            "provider_task_id": provider_task_id,
+                        },
+                    )
+                    try:
+                        _TASK_QUEUE.put((tid, user_id, task_type, payload), block=False)
+                    except Exception:
+                        if reservation_id:
+                            commercial_billing.release_reservation(conn, reservation_id)
+                        restart_error = "video task recovery queue is full; please resume the task manually"
+                        conn.execute(
+                            "UPDATE tasks SET status = ?, error = ?, updated_at = ? WHERE id = ?",
+                            ("failed", restart_error, _now_ts(), tid),
+                        )
+                    continue
                 if (
                     task_type == "persona_post_generation"
                     and isinstance(output, dict)
@@ -5142,6 +5204,35 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     image_chain = [value for value in image_chain if not _workflow_stage_runninghub_id(value)]
     merged["image_generate_workflow_ids"] = image_chain
 
+    merged["video_runninghub_base_url"] = str(
+        merged.get("video_runninghub_base_url") or merged.get("new_persona_runninghub_base_url") or "https://www.runninghub.ai"
+    ).strip()
+    merged["video_runninghub_api_key"] = str(merged.get("video_runninghub_api_key") or "").strip()
+    for key in (
+        "video_create_audio_app_id",
+        "video_create_video_app_id",
+        "video_replace_model_app_id",
+        "video_replace_product_app_id",
+        "video_ecommerce_app_id",
+        "video_ecommerce_fast_app_id",
+        "video_tts_provider",
+        "video_tts_base_url",
+        "video_tts_api_key",
+        "video_tts_model",
+        "video_default_voice_id",
+        "video_default_ratio",
+        "video_default_resolution",
+    ):
+        merged[key] = str(merged.get(key) or DEFAULT_RUNTIME_CONFIG.get(key) or "").strip()
+    merged["video_default_duration_seconds"] = min(
+        max(_to_int(merged.get("video_default_duration_seconds"), 10), 1),
+        3600,
+    )
+    merged["video_local_max_concurrency"] = min(
+        max(_to_int(merged.get("video_local_max_concurrency"), 2), 1),
+        16,
+    )
+
     merged["cleanup_enabled"] = _to_bool(merged.get("cleanup_enabled"), True)
     merged["cleanup_time"] = str(merged.get("cleanup_time") or "03:30").strip() or "03:30"
     merged["cleanup_retention_days"] = max(_to_int(merged.get("cleanup_retention_days"), 7), 1)
@@ -5629,6 +5720,11 @@ def _ensure_user_can_access_task(user: dict[str, Any], task_row: dict[str, Any])
 
 def _task_type_label(task_type: Any) -> str:
     mapping = {
+        "create_video": "数字人口播视频",
+        "ecommerce_short_video": "广告 / 种草视频",
+        "video_language_replace": "视频语种更换",
+        "replace_model": "视频模特替换",
+        "replace_product": "视频商品替换",
         "get_gemini": "Gemini 分析",
         "image_generate": "图片生成",
         "persona_post_generation": "AI 推文草稿生成",
@@ -6000,6 +6096,8 @@ def _apply_runtime_defaults(task_type: str, payload: dict[str, Any]) -> dict[str
         "llm_api_key",
         "llm_api_key_gemini",
         "llm_api_key_gpt",
+        "video_runninghub_api_key",
+        "video_tts_api_key",
     }
     runtime_fill_keys = [
         "upload_server_ip",
@@ -6021,6 +6119,23 @@ def _apply_runtime_defaults(task_type: str, payload: dict[str, Any]) -> dict[str
         "llm_default_model_gpt",
         "llm_model_priority_order",
         "persona_body_profiles",
+        "video_runninghub_base_url",
+        "video_runninghub_api_key",
+        "video_create_audio_app_id",
+        "video_create_video_app_id",
+        "video_replace_model_app_id",
+        "video_replace_product_app_id",
+        "video_ecommerce_app_id",
+        "video_ecommerce_fast_app_id",
+        "video_tts_provider",
+        "video_tts_base_url",
+        "video_tts_api_key",
+        "video_tts_model",
+        "video_default_voice_id",
+        "video_default_duration_seconds",
+        "video_default_ratio",
+        "video_default_resolution",
+        "video_local_max_concurrency",
     ]
     for key in runtime_fill_keys:
         current_raw = merged.get(key) if key in merged else None
@@ -10778,7 +10893,10 @@ def _task_worker_with_control(
     discard_output = False
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        current_row = conn.execute("SELECT status, billing_reservation_id FROM tasks WHERE id = ?", (str(task_id),)).fetchone()
+        current_row = conn.execute(
+            "SELECT status, billing_reservation_id, output_json FROM tasks WHERE id = ?",
+            (str(task_id),),
+        ).fetchone()
         reservation_id = str(current_row["billing_reservation_id"] or "") if current_row is not None else str(effective_payload.get("_billing_reservation_id") or "")
         if current_row is None:
             discard_output = True
@@ -10801,6 +10919,14 @@ def _task_worker_with_control(
             cost_cents = 0
 
             output_to_store = dict(task_output)
+            existing_output = _json_loads(current_row["output_json"], {}) if current_row is not None else {}
+            if status != "success" and isinstance(existing_output, dict):
+                existing_checkpoint = existing_output.get("video_checkpoint")
+                if isinstance(existing_checkpoint, dict):
+                    output_to_store.setdefault("video_checkpoint", existing_checkpoint)
+                    completed_segments = existing_checkpoint.get("completed_segments")
+                    if isinstance(completed_segments, list):
+                        output_to_store.setdefault("completed_segments", completed_segments)
             billing_payload: dict[str, Any] | None = None
             credit_cost_units = 0
             free_image_count = 0
@@ -11622,6 +11748,23 @@ class RuntimeConfigPayload(BaseModel):
     new_persona_runninghub_persona_t2i_endpoint: str = "/rhart-image-g-2/text-to-image"
     new_persona_runninghub_tweet_i2i_detail_url: str = "https://www.runninghub.cn/call-api/api-detail/2046503667076751361"
     new_persona_runninghub_tweet_i2i_endpoint: str = "/rhart-image-g-2/image-to-image"
+    video_runninghub_base_url: str = "https://www.runninghub.ai"
+    video_runninghub_api_key: str = ""
+    video_create_audio_app_id: str = ""
+    video_create_video_app_id: str = ""
+    video_replace_model_app_id: str = ""
+    video_replace_product_app_id: str = ""
+    video_ecommerce_app_id: str = ""
+    video_ecommerce_fast_app_id: str = ""
+    video_tts_provider: str = "minimax"
+    video_tts_base_url: str = "https://api.minimaxi.com"
+    video_tts_api_key: str = ""
+    video_tts_model: str = "speech-02-hd"
+    video_default_voice_id: str = ""
+    video_default_duration_seconds: int = Field(default=10, ge=1, le=3600)
+    video_default_ratio: str = Field(default="9:16", max_length=20)
+    video_default_resolution: str = Field(default="720p", max_length=20)
+    video_local_max_concurrency: int = Field(default=2, ge=1, le=16)
     llm_base_url: str = "http://202.90.21.53:3008"
     llm_api_key: str = ""
     llm_api_key_gemini: str = ""
@@ -19326,6 +19469,9 @@ def _create_persona_group_with_owner(user: dict[str, Any], operation: Any) -> di
     return result
 
 
+VIDEO_WORKBENCH_INTEGRATION = inject_video_workbench(sys.modules[__name__])
+
+
 def create_app() -> FastAPI:
     _ensure_dirs()
     init_db()
@@ -19738,6 +19884,8 @@ def create_app() -> FastAPI:
                 "__STYLE_VERSION__": _asset_version("assets", "style.css"),
                 "__CONSOLE_CSS_VERSION__": _asset_version("assets", "console.css"),
                 "__CONSOLE_JS_VERSION__": _asset_version("assets", "console.js"),
+                "__VIDEO_WORKBENCH_CSS_VERSION__": _asset_version("assets", "video-workbench.css"),
+                "__VIDEO_WORKBENCH_JS_VERSION__": _asset_version("assets", "video-workbench.js"),
                 "__PERSONA_DASHBOARD_JS_VERSION__": _asset_version("assets", "persona-dashboard.js"),
                 "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
                 "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
@@ -19827,6 +19975,7 @@ def create_app() -> FastAPI:
     register_social_automation_routes(app)
     register_proxy_market_routes(app)
     register_notification_routes(app)
+    register_video_routes(app, server_video_route_dependencies(sys.modules[__name__]))
 
     @app.post("/api/auth/apply")
     def api_apply(payload: RegisterPayload, request: Request):
@@ -23721,6 +23870,8 @@ def create_app() -> FastAPI:
             "llm_api_key_gpt": ("llm_api_key_gpt", "llm_api_key"),
             "image_model_provider_api_key_gemini": ("image_model_provider_api_key_gemini",),
             "new_persona_runninghub_api_key": ("new_persona_runninghub_api_key",),
+            "video_runninghub_api_key": ("video_runninghub_api_key", "new_persona_runninghub_api_key"),
+            "video_tts_api_key": ("video_tts_api_key",),
         }.get(str(secret_name or "").strip())
         if not source_keys:
             raise HTTPException(status_code=404, detail="API Key 不允许查看")
@@ -23772,6 +23923,8 @@ def create_app() -> FastAPI:
             "image_model_provider_api_key_gemini",
             "image_model_provider_api_key_gpt",
             "new_persona_runninghub_api_key",
+            "video_runninghub_api_key",
+            "video_tts_api_key",
         }
         for key in secret_preserve_keys:
             value = str(explicit_data.get(key) or "").strip()

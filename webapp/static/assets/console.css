@@ -23399,7 +23399,7 @@ body.console-page {
     bottom: 0;
     left: 0;
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 3px;
     height: var(--mobile-task-dock-height);
     min-height: var(--mobile-task-dock-height);

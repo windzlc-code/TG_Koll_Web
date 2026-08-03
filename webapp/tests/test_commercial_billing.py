@@ -381,6 +381,38 @@ class CommercialBillingTests(unittest.TestCase):
         self.assertEqual(len(upgraded_plan["features"]), 5)
         self.assertGreater(int(upgraded["version"]), int(active["version_number"]))
 
+    def test_video_workbench_actions_migrate_without_resetting_admin_prices(self):
+        with db_module.db() as conn:
+            active = conn.execute(
+                "SELECT id, version_number, catalog_json FROM billing_catalog_versions WHERE status = 'active'"
+            ).fetchone()
+            catalog = json.loads(str(active["catalog_json"]))
+            actions = [
+                item
+                for item in catalog["actions"]
+                if item.get("sku") not in commercial_billing.VIDEO_ACTION_SKUS
+            ]
+            oral_video = next(
+                item for item in commercial_billing.DEFAULT_CATALOG["actions"] if item.get("sku") == "oral_video_second"
+            )
+            actions.append({**oral_video, "points": 0.77, "implemented": False})
+            catalog["actions"] = actions
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (json.dumps(catalog, ensure_ascii=False), str(active["id"])),
+            )
+            conn.execute(
+                "DELETE FROM admin_config WHERE key = 'commercial_billing_catalog_v8_video_workbench'"
+            )
+            commercial_billing.bootstrap_billing(conn, now=1_700_000_400)
+            upgraded = commercial_billing.get_active_catalog(conn)
+
+        upgraded_actions = {item["sku"]: item for item in upgraded["actions"]}
+        self.assertTrue(commercial_billing.VIDEO_ACTION_SKUS.issubset(upgraded_actions))
+        self.assertEqual(upgraded_actions["oral_video_second"]["points"], 0.77)
+        self.assertTrue(upgraded_actions["oral_video_second"]["implemented"])
+        self.assertGreater(int(upgraded["version"]), int(active["version_number"]))
+
     def test_unlimited_compute_never_requires_subscription_or_deducts_points(self):
         now = 1_700_000_000
         with db_module.db() as conn:

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 360" role="img" aria-labelledby="title desc">
+  <title id="title">双语字幕模板</title>
+  <desc id="desc">顶部深色信息框中展示英文与中文双语字幕</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1a2a46"/><stop offset=".56" stop-color="#5c738b"/><stop offset="1" stop-color="#b38d67"/></linearGradient>
+    <linearGradient id="shade" x1="0" y1="0" x2="0" y2="1"><stop offset=".52" stop-color="#07111d" stop-opacity="0"/><stop offset="1" stop-color="#07111d" stop-opacity=".86"/></linearGradient>
+  </defs>
+  <rect width="240" height="360" fill="url(#bg)"/>
+  <path d="M14 44h128M14 58h92" stroke="#f6e7c8" stroke-width="3" stroke-linecap="round" opacity=".45"/>
+  <circle cx="181" cy="88" r="37" fill="#f2d7b1" opacity=".25"/>
+  <rect x="18" y="26" width="204" height="145" rx="8" fill="#222a37" opacity=".5"/>
+  <text x="120" y="69" text-anchor="middle" fill="#f8fbff" font-family="Arial, sans-serif" font-size="11" font-weight="800">ONE SMALL STEP</text>
+  <text x="120" y="115" text-anchor="middle" fill="#6adeff" stroke="#214766" stroke-width="1" paint-order="stroke" font-family="Noto Sans CJK SC, sans-serif" font-size="21" font-weight="900">每天一粒</text>
+  <text x="120" y="146" text-anchor="middle" fill="#f8fbff" font-family="Noto Sans CJK SC, sans-serif" font-size="16" font-weight="800">轻松坚持</text>
+  <rect x="30" y="161" width="180" height="2" fill="#6adeff" opacity=".8"/>
+  <rect width="240" height="360" fill="url(#shade)"/>
+  <text x="120" y="314" text-anchor="middle" fill="#fff" stroke="#07111d" stroke-width="1.4" paint-order="stroke" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="900">每天坚持一点点</text>
+</svg>

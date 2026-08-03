@@ -126,18 +126,25 @@ DEFAULT_CATALOG: dict[str, Any] = {
         {"sku": "complete_image_post", "name": "基础完整图文贴文（文案、1 张基础 AI 图及发布）", "points": 2.5, "unit": "篇", "implemented": True},
         {"sku": "basic_text_post", "name": "AI 文本处理步骤", "points": 0.3, "unit": "步", "implemented": True, "public": False},
         {"sku": "ai_image", "name": "单独生成或追加 AI 图片", "points": 2, "unit": "张", "implemented": True},
-        {"sku": "oral_video_second", "name": "口播类短片", "points": 0.5, "unit": "秒", "implemented": False},
+        {"sku": "oral_video_second", "name": "数字人口播视频", "points": 0.5, "unit": "秒", "implemented": True},
         {"sku": "threads_auto_reply_batch", "name": "批量评论 / Quote 转发互动任务", "points": 5, "unit": "批次", "implemented": True},
-        {"sku": "seedance_fast_480p_second", "name": "SeedDance 2.0 Fast 480p", "points": 3, "unit": "秒", "implemented": False},
-        {"sku": "seedance_fast_720p_second", "name": "SeedDance 2.0 Fast 720p", "points": 6, "unit": "秒", "implemented": False},
-        {"sku": "seedance_fast_1080p_second", "name": "SeedDance 2.0 Fast 1080p", "points": 7.5, "unit": "秒", "implemented": False},
-        {"sku": "seedance_fast_2k_second", "name": "SeedDance 2.0 Fast 2K", "points": 8, "unit": "秒", "implemented": False},
-        {"sku": "seedance_fast_4k_second", "name": "SeedDance 2.0 Fast 4K", "points": 9, "unit": "秒", "implemented": False},
-        {"sku": "seedance_480p_second", "name": "SeedDance 2.0 480p", "points": 4, "unit": "秒", "implemented": False},
-        {"sku": "seedance_720p_second", "name": "SeedDance 2.0 720p", "points": 8, "unit": "秒", "implemented": False},
-        {"sku": "seedance_1080p_second", "name": "SeedDance 2.0 1080p", "points": 9, "unit": "秒", "implemented": False},
-        {"sku": "seedance_2k_second", "name": "SeedDance 2.0 2K", "points": 10, "unit": "秒", "implemented": False},
-        {"sku": "seedance_4k_second", "name": "SeedDance 2.0 4K", "points": 11, "unit": "秒", "implemented": False},
+        {"sku": "seedance_fast_480p_second", "name": "SeedDance 2.0 Fast 480p", "points": 3, "unit": "秒", "implemented": True},
+        {"sku": "seedance_fast_720p_second", "name": "SeedDance 2.0 Fast 720p", "points": 6, "unit": "秒", "implemented": True},
+        {"sku": "seedance_fast_1080p_second", "name": "SeedDance 2.0 Fast 1080p", "points": 7.5, "unit": "秒", "implemented": True},
+        {"sku": "seedance_fast_2k_second", "name": "SeedDance 2.0 Fast 2K", "points": 8, "unit": "秒", "implemented": True},
+        {"sku": "seedance_fast_4k_second", "name": "SeedDance 2.0 Fast 4K", "points": 9, "unit": "秒", "implemented": True},
+        {"sku": "seedance_480p_second", "name": "SeedDance 2.0 480p", "points": 4, "unit": "秒", "implemented": True},
+        {"sku": "seedance_720p_second", "name": "SeedDance 2.0 720p", "points": 8, "unit": "秒", "implemented": True},
+        {"sku": "seedance_1080p_second", "name": "SeedDance 2.0 1080p", "points": 9, "unit": "秒", "implemented": True},
+        {"sku": "seedance_2k_second", "name": "SeedDance 2.0 2K", "points": 10, "unit": "秒", "implemented": True},
+        {"sku": "seedance_4k_second", "name": "SeedDance 2.0 4K", "points": 11, "unit": "秒", "implemented": True},
+        {"sku": "video_language_replace_second", "name": "视频语种更换", "points": 0.5, "unit": "秒", "implemented": True},
+        {"sku": "video_model_replace_second", "name": "视频模特替换", "points": 0.5, "unit": "秒", "implemented": True},
+        {"sku": "video_product_replace_second", "name": "视频商品替换", "points": 0.5, "unit": "秒", "implemented": True},
+        {"sku": "ecommerce_image", "name": "电商广告图", "points": 2, "unit": "张", "implemented": True},
+        {"sku": "subject_replace_image", "name": "人物 / 商品图片替换", "points": 2, "unit": "张", "implemented": True},
+        {"sku": "poster_translate_image", "name": "电商图语种切换", "points": 2, "unit": "张", "implemented": True},
+        {"sku": "subject_generate_image", "name": "数字人 / 产品主体图", "points": 2, "unit": "张", "implemented": True},
     ],
     "packages": [
         {"sku": "credits_200", "name": "标准储值包", "price_ntd": 2000, "paid_points": 200, "bonus_points": 0, "total_points": 200, "bonus_images": 0},
@@ -158,6 +165,54 @@ for _default_subscription in DEFAULT_CATALOG["subscriptions"]:
         PERSONAL_SUBSCRIPTION_PROFILE if _is_personal_plan else ENTERPRISE_SUBSCRIPTION_PROFILE
     )
 DEFAULT_CATALOG["billing_rules"] = OFFICIAL_BILLING_RULES
+
+VIDEO_ACTION_SKUS = {
+    "oral_video_second",
+    "seedance_fast_480p_second",
+    "seedance_fast_720p_second",
+    "seedance_fast_1080p_second",
+    "seedance_fast_2k_second",
+    "seedance_fast_4k_second",
+    "seedance_480p_second",
+    "seedance_720p_second",
+    "seedance_1080p_second",
+    "seedance_2k_second",
+    "seedance_4k_second",
+    "video_language_replace_second",
+    "video_model_replace_second",
+    "video_product_replace_second",
+    "ecommerce_image",
+    "subject_replace_image",
+    "poster_translate_image",
+    "subject_generate_image",
+}
+
+
+def _with_video_action_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
+    """Add video-workbench SKUs without overwriting administrator prices."""
+    result = _loads(_dumps(catalog), {})
+    actions = list(result.get("actions") or []) if isinstance(result, dict) else []
+    action_by_sku = {
+        str(item.get("sku") or ""): item
+        for item in actions
+        if isinstance(item, dict) and str(item.get("sku") or "")
+    }
+    defaults = {
+        str(item.get("sku") or ""): item
+        for item in DEFAULT_CATALOG["actions"]
+        if isinstance(item, dict) and str(item.get("sku") or "") in VIDEO_ACTION_SKUS
+    }
+    for sku, desired in defaults.items():
+        current = action_by_sku.get(sku)
+        if current is None:
+            actions.append(dict(desired))
+            continue
+        preserved_points = current.get("points", desired.get("points", 0))
+        current.update(desired)
+        current["points"] = preserved_points
+        current["implemented"] = True
+    result["actions"] = actions
+    return result
 
 
 class BillingError(RuntimeError):
@@ -527,6 +582,52 @@ def bootstrap_billing(conn: sqlite3.Connection, *, now: int | None = None) -> No
             updated_drafts += 1
         conn.execute(
             "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v7_complete_subscription_details', ?, ?)",
+            (_dumps({"completed_at": current, "changed": changed, "updated_drafts": updated_drafts}), current),
+        )
+
+    video_catalog_migration = conn.execute(
+        "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v8_video_workbench'"
+    ).fetchone()
+    if video_catalog_migration is None:
+        active_row = conn.execute(
+            "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+        ).fetchone()
+        active_catalog = _loads(active_row["catalog_json"], {}) if active_row else {}
+        upgraded_catalog = _with_video_action_catalog(active_catalog) if active_row else active_catalog
+        changed = bool(active_row) and upgraded_catalog != active_catalog
+        if changed and active_row is not None:
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            validate_catalog(upgraded_catalog)
+            conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'active'")
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES (?, ?, 'active', ?, ?, 0, ?, ?)
+                """,
+                (_id("catalog"), next_version, _dumps(upgraded_catalog), current, current, current),
+            )
+
+        updated_drafts = 0
+        draft_rows = conn.execute(
+            "SELECT id, catalog_json FROM billing_catalog_versions WHERE status = 'draft'"
+        ).fetchall()
+        for draft_row in draft_rows:
+            draft_catalog = _loads(draft_row["catalog_json"], {})
+            upgraded_draft = _with_video_action_catalog(draft_catalog)
+            if upgraded_draft == draft_catalog:
+                continue
+            validate_catalog(upgraded_draft)
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (_dumps(upgraded_draft), str(draft_row["id"])),
+            )
+            updated_drafts += 1
+        conn.execute(
+            "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v8_video_workbench', ?, ?)",
             (_dumps({"completed_at": current, "changed": changed, "updated_drafts": updated_drafts}), current),
         )
 

@@ -77,3 +77,7 @@ toast-*.png
 *.mp3
 *.wav
 *.flac
+
+# Fixed application previews used by the video workbench (not generated data).
+!webapp/static/assets/voice_presets/audio/*.mp3
+!webapp/static/assets/voice_presets/audio/*.wav

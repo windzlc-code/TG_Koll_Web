@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 360" role="img" aria-labelledby="title desc">
+  <title id="title">强钩子分屏字幕模板</title>
+  <desc id="desc">顶部斜切色块与分屏钩子文字，底部白色字幕</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#d8c7b5"/><stop offset=".48" stop-color="#8c7869"/><stop offset="1" stop-color="#27333a"/>
+    </linearGradient>
+    <linearGradient id="bottom" x1="0" y1="0" x2="0" y2="1"><stop offset=".55" stop-color="#07111b" stop-opacity="0"/><stop offset="1" stop-color="#07111b" stop-opacity=".9"/></linearGradient>
+  </defs>
+  <rect width="240" height="360" fill="url(#bg)"/>
+  <path d="M12 18h122l-15 46H12Z" fill="#fff8f1" opacity=".86"/>
+  <path d="M37 36h144l-19 82H27Z" fill="#761b2d" opacity=".9"/>
+  <path d="M70 68h158v120H55Z" fill="#641323" opacity=".3" stroke="#fff6f0" stroke-opacity=".76"/>
+  <rect width="240" height="360" fill="url(#bottom)"/>
+  <text x="30" y="104" fill="#fff7fa" font-family="Noto Sans CJK SC, sans-serif" font-size="19" font-weight="900">每天一粒</text>
+  <text x="30" y="143" fill="#fff7fa" font-family="Noto Sans CJK SC, sans-serif" font-size="19" font-weight="900">轻松补进</text>
+  <text x="30" y="174" fill="#fff7fa" font-family="Noto Sans CJK SC, sans-serif" font-size="19" font-weight="900">好状态</text>
+  <rect x="30" y="183" width="76" height="4" rx="2" fill="#b42336"/>
+  <rect x="16" y="278" width="208" height="52" rx="10" fill="#05090d" opacity=".34"/>
+  <text x="120" y="311" text-anchor="middle" fill="#fff" stroke="#0a0a0a" stroke-width="1.4" paint-order="stroke" font-family="Noto Sans CJK SC, sans-serif" font-size="15" font-weight="900">顺滑好吞</text>
+</svg>
