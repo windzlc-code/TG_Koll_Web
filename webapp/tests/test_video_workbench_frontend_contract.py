@@ -6,6 +6,7 @@ from pathlib import Path
 STATIC_ROOT = Path(__file__).resolve().parents[1] / "static"
 CONSOLE_HTML = STATIC_ROOT / "console.html"
 CONSOLE_JS = STATIC_ROOT / "assets" / "console.js"
+CONSOLE_CSS = STATIC_ROOT / "assets" / "console.css"
 WORKBENCH_JS = STATIC_ROOT / "assets" / "video-workbench.js"
 WORKBENCH_CSS = STATIC_ROOT / "assets" / "video-workbench.css"
 
@@ -26,13 +27,16 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.html = CONSOLE_HTML.read_text(encoding="utf-8")
         cls.console_js = CONSOLE_JS.read_text(encoding="utf-8")
+        cls.console_css = CONSOLE_CSS.read_text(encoding="utf-8")
         cls.workbench_js = WORKBENCH_JS.read_text(encoding="utf-8")
         cls.workbench_css = WORKBENCH_CSS.read_text(encoding="utf-8")
 
     def test_console_loads_native_video_workspace_assets_and_panel(self):
         self.assertIn('/assets/video-workbench.css?v=__VIDEO_WORKBENCH_CSS_VERSION__', self.html)
         self.assertIn('/assets/video-workbench.js?v=__VIDEO_WORKBENCH_JS_VERSION__', self.html)
-        self.assertIn('data-view="video_workspace"', self.html)
+        self.assertIn('data-view="video_workspace" aria-expanded="false" hidden', self.html)
+        self.assertIn('id="videoWorkspaceFlow" hidden', self.html)
+        self.assertIn('.video-workbench-nav-toggle[hidden]', self.console_css)
         self.assertIn('data-panel="video_workspace"', self.html)
         self.assertIn('id="videoWorkspaceFlow"', self.html)
         self.assertIn('id="videoModuleMenu"', self.html)
@@ -48,6 +52,9 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertEqual(order_match.group(1).count('"'), len(VIDEO_MODULES) * 2)
 
     def test_deep_link_and_navigation_contract_is_present(self):
+        self.assertIn('const VIDEO_WORKBENCH_ENABLED = ADMIN_CONSOLE_SESSION', self.console_js)
+        self.assertIn('entry.hidden = !VIDEO_WORKBENCH_ENABLED', self.console_js)
+        self.assertIn('...(VIDEO_WORKBENCH_ENABLED ? [{ id: "video_workspace"', self.console_js)
         self.assertIn('initialConsoleParams.get("video_module")', self.console_js)
         self.assertIn('url.searchParams.set("view", "video_workspace")', self.console_js)
         self.assertIn('url.searchParams.set("video_module", state.activeVideoModule)', self.console_js)

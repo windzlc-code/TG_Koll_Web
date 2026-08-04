@@ -315,6 +315,7 @@ function applyPersonaOverviewPostRows(persona) {
 const initialConsoleParams = new URLSearchParams(window.location.search);
 const initialConsoleView = initialConsoleParams.get("view");
 const initialAccountBrowserPanel = initialConsoleParams.get("browser_panel");
+const VIDEO_WORKBENCH_ENABLED = ADMIN_CONSOLE_SESSION;
 const VIDEO_WORKSPACE_MODULES = [
   { id: "digital_human_video", label: "数字人口播视频" },
   { id: "ecommerce_short_video", label: "广告 / 种草视频" },
@@ -7120,6 +7121,10 @@ function clearVideoWorkspaceRoute() {
 function renderVideoModuleMenu() {
   const host = $("videoModuleMenu");
   if (!host) return;
+  const entry = document.querySelector('[data-view="video_workspace"]');
+  const flow = $("videoWorkspaceFlow");
+  if (entry) entry.hidden = !VIDEO_WORKBENCH_ENABLED;
+  if (flow) flow.hidden = !VIDEO_WORKBENCH_ENABLED;
   const groups = [
     { label: "视频生成", items: VIDEO_WORKSPACE_MODULES.slice(0, 4) },
     { label: "图片素材", items: VIDEO_WORKSPACE_MODULES.slice(4) },
@@ -7244,7 +7249,7 @@ function renderMobileTaskDock() {
   if (!dock) return;
   const mobileDockItems = [
     { id: "persona_dashboard", label: "首页", view: "persona_dashboard" },
-    { id: "video_workspace", label: "视频", view: "video_workspace" },
+    ...(VIDEO_WORKBENCH_ENABLED ? [{ id: "video_workspace", label: "视频", view: "video_workspace" }] : []),
     ...modules.filter((item) => item.id !== "browser_list"),
   ];
   if (!dock.querySelector(".mobile-task-dock-button")) {

@@ -327,6 +327,11 @@ button, a, input, select, textarea { border-radius: var(--radius); }
   margin-bottom: 7px;
 }
 
+.video-workbench-nav-toggle[hidden],
+.video-workspace-flow[hidden] {
+  display: none !important;
+}
+
 .nav-toggle-arrow {
   width: 0;
   height: 0;
