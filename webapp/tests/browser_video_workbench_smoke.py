@@ -67,6 +67,7 @@ def main() -> None:
         announcement = page.locator("[data-site-notification-broadcast]")
         if announcement.count() and announcement.first.is_visible():
             announcement.locator(".site-notification-broadcast-confirm").click()
+        assert page.locator('#videoWorkbenchRoot input[type="file"][required]').count() == 0
         if screenshot_dir:
             page.screenshot(path=str(screenshot_dir / "video-workbench-desktop.png"), full_page=True)
 
@@ -81,6 +82,38 @@ def main() -> None:
         assert max(abs(box["x"] - sidebar_boxes[0]["x"]) for box in sidebar_boxes) < 2, sidebar_boxes
         assert min(box["width"] for box in sidebar_boxes) > 140, sidebar_boxes
         assert all(sidebar_boxes[index]["y"] < sidebar_boxes[index + 1]["y"] for index in range(7)), sidebar_boxes
+
+        whole_card_choosers = []
+        page.on("filechooser", lambda chooser: whole_card_choosers.append(chooser))
+        page.locator('[data-video-file-field="product"] .video-file-field-copy').click()
+        page.wait_for_timeout(150)
+        assert not whole_card_choosers, "clicking the upload card body opened the file picker"
+
+        product_slots = page.locator('[data-video-file-field="product"] [data-video-file-slot]')
+        assert product_slots.count() == 3
+        with page.expect_file_chooser() as chooser_info:
+            product_slots.nth(1).click()
+        chooser_info.value.set_files({"name": "slot-2.png", "mimeType": "image/png", "buffer": b"slot-2"})
+        product_slots = page.locator('[data-video-file-field="product"] [data-video-file-slot]')
+        assert product_slots.nth(0).get_attribute("data-video-file-filled") == "false"
+        assert product_slots.nth(1).get_attribute("data-video-file-filled") == "true"
+        assert "slot-2.png" in product_slots.nth(1).inner_text()
+
+        with page.expect_file_chooser() as chooser_info:
+            product_slots.nth(0).click()
+        chooser_info.value.set_files({"name": "slot-1.png", "mimeType": "image/png", "buffer": b"slot-1"})
+        product_slots = page.locator('[data-video-file-field="product"] [data-video-file-slot]')
+        assert "slot-1.png" in product_slots.nth(0).inner_text()
+        assert "slot-2.png" in product_slots.nth(1).inner_text()
+
+        with page.expect_file_chooser() as chooser_info:
+            product_slots.nth(1).click()
+        chooser_info.value.set_files({"name": "slot-2-replaced.png", "mimeType": "image/png", "buffer": b"slot-2-new"})
+        product_slots = page.locator('[data-video-file-field="product"] [data-video-file-slot]')
+        assert "slot-1.png" in product_slots.nth(0).inner_text()
+        assert "slot-2-replaced.png" in product_slots.nth(1).inner_text()
+        if screenshot_dir:
+            page.screenshot(path=str(screenshot_dir / "video-workbench-independent-slots.png"), full_page=False)
 
         shell_handle = page.locator("#videoWorkbenchRoot .video-workbench-shell").element_handle()
         form_panel_handle = page.locator("#videoWorkbenchRoot .video-form-panel").element_handle()
@@ -161,7 +194,7 @@ def main() -> None:
         )
         desktop_ratio = desktop_tracks[0] / sum(desktop_tracks)
         assert 0.44 <= desktop_ratio <= 0.46, desktop_tracks
-        upload_slot = page.locator(".video-upload-panel .video-upload-slots i").first.bounding_box()
+        upload_slot = page.locator(".video-upload-panel .video-upload-slots [data-video-file-slot]").first.bounding_box()
         assert upload_slot, "missing upload preview slot"
         assert round(upload_slot["width"]) == 132, upload_slot
         assert round(upload_slot["height"]) == 132, upload_slot
@@ -190,6 +223,10 @@ def main() -> None:
         page.locator('#videoModuleMenu [data-video-module="ecommerce_short_video"]').evaluate("node => node.click()")
         page.locator('form[data-video-module-form="ecommerce_short_video"]').wait_for(state="visible")
         page.wait_for_function("!document.body.classList.contains('mobile-nav-open')")
+        mobile_audio_picker = page.locator('[data-video-file-field="audio"] [data-video-file-pick]')
+        assert mobile_audio_picker.is_visible(), "mobile audio upload lost its only file picker"
+        with page.expect_file_chooser():
+            mobile_audio_picker.click()
         assert page.evaluate(
             "shell => shell === document.querySelector('#videoWorkbenchRoot .video-workbench-shell')",
             mobile_shell_handle,

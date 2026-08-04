@@ -636,8 +636,12 @@
     render();
   }
 
-  function selectedFiles(moduleId, fieldKey) {
+  function selectedFileSlots(moduleId, fieldKey) {
     return state.files[moduleId]?.[fieldKey] || [];
+  }
+
+  function selectedFiles(moduleId, fieldKey) {
+    return selectedFileSlots(moduleId, fieldKey).filter(Boolean);
   }
 
   function moduleIcon(moduleId) {
@@ -663,21 +667,27 @@
   }
 
   function renderFileField(field) {
+    const fileSlots = selectedFileSlots(state.moduleId, field.key);
     const files = selectedFiles(state.moduleId, field.key);
     const fileRows = files.map((item) => `<li><span>${escapeHtml(item.name)}</span><small>${formatBytes(item.size)}</small></li>`).join("");
-    const previewSlots = Math.max(0, Number(field.previewSlots) || 0);
+    const explicitPreviewSlots = field.previewSlots == null ? null : Math.max(0, Number(field.previewSlots) || 0);
+    const previewSlots = explicitPreviewSlots == null && !String(field.accept || "").includes("audio") ? 1 : (explicitPreviewSlots || 0);
     const previewLabels = Array.isArray(field.previewLabels) ? field.previewLabels : [];
-    return `<label class="video-file-field ${files.length ? "has-files" : ""}" data-video-file-field="${escapeHtml(field.key)}">
-      <input type="file" data-video-field="${escapeHtml(field.key)}" ${field.accept ? `accept="${escapeHtml(field.accept)}"` : ""} ${field.multiple ? "multiple" : ""} ${field.required ? "required" : ""} />
+    return `<div class="video-file-field ${files.length ? "has-files" : ""}" data-video-file-field="${escapeHtml(field.key)}" data-video-file-required="${field.required ? "true" : "false"}">
+      <input type="file" data-video-field="${escapeHtml(field.key)}" ${field.accept ? `accept="${escapeHtml(field.accept)}"` : ""} ${field.multiple ? "multiple" : ""} />
       <span class="video-file-field-icon">${moduleIcon(state.moduleId)}</span>
       <span class="video-file-field-copy">
         <strong>${escapeHtml(field.label)}${field.required ? '<em aria-hidden="true">*</em>' : ""}</strong>
-        <span>${files.length ? `已选择 ${files.length} 个文件` : (field.help || "点击选择或将文件拖到这里")}</span>
+        <span>${files.length ? `已选择 ${files.length} 个文件` : (field.help || (previewSlots ? "点击对应素材位选择文件" : "点击选择文件"))}</span>
       </span>
-      <span class="video-file-field-action">${files.length ? "重新选择" : "选择文件"}</span>
-      ${previewSlots ? `<span class="video-upload-slots" aria-hidden="true">${Array.from({ length: previewSlots }, (_, index) => `<i class="${files[index] ? "is-filled" : ""}">${escapeHtml(files[index]?.name || previewLabels[index] || `素材 ${index + 1}`)}</i>`).join("")}</span>` : ""}
+      <button type="button" class="video-file-field-action" data-video-file-pick="${escapeHtml(field.key)}">${files.length ? "重新选择" : "选择文件"}</button>
+      ${previewSlots ? `<span class="video-upload-slots">${Array.from({ length: previewSlots }, (_, index) => {
+        const fileItem = fileSlots[index] || null;
+        const label = fileItem?.name || previewLabels[index] || `素材 ${index + 1}`;
+        return `<button type="button" class="${fileItem ? "is-filled" : ""}" data-video-file-slot="${index}" data-video-file-filled="${fileItem ? "true" : "false"}" aria-label="${escapeHtml(fileItem ? `替换 ${label}` : `上传 ${label}`)}" title="${escapeHtml(fileItem ? `点击替换：${label}` : `点击上传：${label}`)}"><span>${escapeHtml(label)}</span></button>`;
+      }).join("")}</span>` : ""}
       ${fileRows ? `<ul class="video-selected-files">${fileRows}</ul>` : ""}
-    </label>`;
+    </div>`;
   }
 
   function renderInputField(field, value) {
@@ -1138,6 +1148,26 @@
     return input.value;
   }
 
+  function openFilePicker(fieldKey, slotIndex = null) {
+    const module = currentModule();
+    const draft = loadDraft(module);
+    const field = resolvedFields(module, draft.values).find((item) => item.type === "file" && item.key === fieldKey);
+    if (!field) return;
+    const host = Array.from(document.querySelectorAll("#videoWorkbenchRoot [data-video-file-field]"))
+      .find((item) => item.dataset.videoFileField === field.key);
+    const input = host?.querySelector('input[type="file"][data-video-field]');
+    if (!input) return;
+    input.value = "";
+    if (Number.isInteger(slotIndex) && slotIndex >= 0) {
+      input.dataset.videoFileSlotTarget = String(slotIndex);
+      input.multiple = false;
+    } else {
+      delete input.dataset.videoFileSlotTarget;
+      input.multiple = Boolean(field.multiple);
+    }
+    input.click();
+  }
+
   function handleFieldChange(input) {
     const module = currentModule();
     const draft = loadDraft(module);
@@ -1146,7 +1176,19 @@
     if (field.type === "file") {
       state.files[module.id] ||= {};
       const selected = Array.from(input.files || []);
-      state.files[module.id][field.key] = field.maxFiles ? selected.slice(0, Number(field.maxFiles)) : selected;
+      if (!selected.length) return;
+      const targetSlot = Number.parseInt(input.dataset.videoFileSlotTarget || "", 10);
+      delete input.dataset.videoFileSlotTarget;
+      if (Number.isInteger(targetSlot) && targetSlot >= 0) {
+        const slotLimit = Math.max(1, Number(field.previewSlots || field.maxFiles || 1));
+        if (targetSlot >= slotLimit) return;
+        const next = selectedFileSlots(module.id, field.key).slice(0, slotLimit);
+        next[targetSlot] = selected[0];
+        state.files[module.id][field.key] = next;
+      } else {
+        const limit = field.maxFiles ? Number(field.maxFiles) : (field.multiple ? selected.length : 1);
+        state.files[module.id][field.key] = selected.slice(0, Math.max(1, limit));
+      }
       render();
       return;
     }
@@ -1542,6 +1584,19 @@
       if (event.target.id === "videoWorkbenchForm") submit(event);
     });
     document.addEventListener("click", (event) => {
+      const fileSlot = event.target.closest?.("#videoWorkbenchRoot [data-video-file-slot]");
+      if (fileSlot) {
+        event.preventDefault();
+        const host = fileSlot.closest("[data-video-file-field]");
+        openFilePicker(host?.dataset.videoFileField || "", Number.parseInt(fileSlot.dataset.videoFileSlot || "", 10));
+        return;
+      }
+      const filePicker = event.target.closest?.("#videoWorkbenchRoot [data-video-file-pick]");
+      if (filePicker) {
+        event.preventDefault();
+        openFilePicker(filePicker.dataset.videoFilePick || "");
+        return;
+      }
       const choiceButton = event.target.closest?.("#videoWorkbenchRoot [data-video-choice-field]");
       if (choiceButton) {
         const select = document.getElementById(`videoField-${choiceButton.dataset.videoChoiceField}`);

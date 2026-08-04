@@ -250,7 +250,7 @@
   background: var(--video-soft);
   border: 1px dashed var(--upload-dash);
   border-radius: 10px;
-  cursor: pointer;
+  cursor: default;
   transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
 }
 
@@ -276,7 +276,7 @@
   font-weight: 850;
 }
 
-.video-upload-panel .video-file-field:has(> input[required])::before {
+.video-upload-panel .video-file-field[data-video-file-required="true"]::before {
   color: #b45119;
   background: color-mix(in srgb, #f59e0b 12%, var(--panel-solid));
   content: "必填";
@@ -329,7 +329,7 @@
   overflow-x: auto;
 }
 
-.video-upload-panel .video-upload-slots i {
+.video-upload-panel .video-upload-slots [data-video-file-slot] {
   width: 132px;
   height: 132px;
   min-height: 132px;
@@ -401,6 +401,7 @@
 
 .video-file-field-action {
   align-self: start;
+  appearance: none;
   padding: 5px 8px;
   color: var(--video-ink);
   background: var(--video-panel);
@@ -408,6 +409,7 @@
   border-radius: 999px;
   font-size: 10px;
   font-weight: 700;
+  cursor: pointer;
 }
 
 .video-selected-files {
@@ -426,7 +428,8 @@
   gap: 7px;
 }
 
-.video-upload-slots i {
+.video-upload-slots [data-video-file-slot] {
+  appearance: none;
   display: grid;
   min-width: 0;
   min-height: 54px;
@@ -441,9 +444,27 @@
   font-style: normal;
   text-align: center;
   text-overflow: ellipsis;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
-.video-upload-slots i.is-filled {
+.video-upload-slots [data-video-file-slot]:hover,
+.video-upload-slots [data-video-file-slot]:focus-visible {
+  color: var(--video-ink);
+  background: var(--video-panel);
+  border-color: var(--video-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--video-accent) 18%, transparent);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.video-upload-slots [data-video-file-slot] > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.video-upload-slots [data-video-file-slot].is-filled {
   color: var(--video-ink);
   background: color-mix(in srgb, var(--accent) 8%, var(--panel-solid));
   border-style: solid;
@@ -1136,8 +1157,9 @@
     justify-self: start;
     width: 100%;
   }
-  .video-upload-panel .video-upload-slots i {
+  .video-upload-panel .video-upload-slots [data-video-file-slot] {
     width: 112px;
+    height: 112px;
     min-height: 112px;
   }
   .video-form-footer {
@@ -1171,7 +1193,7 @@
   .video-choice-pills { width: 100%; border-radius: 12px; }
   .video-choice-pill { flex: 1 1 calc(50% - 4px); }
   .video-file-field { grid-template-columns: auto minmax(0, 1fr); }
-  .video-file-field-action { display: none; }
+  .video-file-field:has(.video-upload-slots) .video-file-field-action { display: none; }
   .video-selected-files { grid-column: 1 / -1; }
   .video-section-heading small { line-height: 1.35; }
   .video-advanced-card { padding: 13px; }

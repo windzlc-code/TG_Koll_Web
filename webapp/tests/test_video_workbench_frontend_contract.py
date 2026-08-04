@@ -120,6 +120,20 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertIn('role="radio"', self.workbench_js)
         self.assertIn(".video-choice-pill.is-active", self.workbench_css)
 
+    def test_upload_preview_slots_are_independent_file_picker_buttons(self):
+        file_renderer = self.workbench_js.split("function renderFileField(field)", 1)[1].split("function renderInputField", 1)[0]
+        self.assertIn('data-video-file-slot="${index}"', self.workbench_js)
+        self.assertIn('data-video-file-filled="${fileItem ? "true" : "false"}"', self.workbench_js)
+        self.assertIn('data-video-file-pick="${escapeHtml(field.key)}"', self.workbench_js)
+        self.assertIn('data-video-file-required="${field.required ? "true" : "false"}"', self.workbench_js)
+        self.assertIn("function openFilePicker(fieldKey, slotIndex = null)", self.workbench_js)
+        self.assertIn("input.dataset.videoFileSlotTarget = String(slotIndex)", self.workbench_js)
+        self.assertIn("next[targetSlot] = selected[0]", self.workbench_js)
+        self.assertIn("return selectedFileSlots(moduleId, fieldKey).filter(Boolean)", self.workbench_js)
+        self.assertNotIn('<label class="video-file-field', self.workbench_js)
+        self.assertNotIn('${field.required ? "required" : ""}', file_renderer)
+        self.assertIn(".video-upload-slots [data-video-file-slot]", self.workbench_css)
+
     def test_sidebar_keeps_original_full_width_console_navigation(self):
         self.assertNotIn(".video-module-menu .video-module-group", self.workbench_css)
         self.assertNotIn("grid-template-columns: repeat(2, minmax(0, 1fr))", self.workbench_css.split(".video-workbench-shell", 1)[0])
