@@ -140,9 +140,9 @@
 
 .video-workbench-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(292px, 330px);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  gap: 14px;
+  gap: 18px;
 }
 
 .video-form-panel,
@@ -154,15 +154,17 @@
   box-shadow: var(--panel-shadow);
 }
 
+.video-task-panel { display: none; }
+
 .video-workbench-form { display: grid; }
 
 .video-original-layout {
   display: grid;
-  grid-template-columns: minmax(300px, .92fr) minmax(360px, 1.35fr);
+  grid-template-columns: minmax(420px, .9fr) minmax(520px, 1.1fr);
   align-items: start;
-  gap: 14px;
-  padding: 14px;
-  background: var(--video-soft);
+  gap: 18px;
+  padding: 18px;
+  background: var(--video-panel);
 }
 
 .video-original-layout > .video-form-section {
@@ -171,7 +173,7 @@
   padding: 18px;
   background: var(--video-panel);
   border: 1px solid var(--video-line);
-  border-radius: 11px;
+  border-radius: 22px;
   box-shadow: none;
 }
 
@@ -253,7 +255,94 @@
 }
 
 .video-upload-panel .video-file-field {
-  min-height: 112px;
+  grid-template-columns: minmax(180px, 1fr) max-content;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  align-items: start;
+  min-height: 166px;
+  padding: 16px;
+  border-radius: 18px;
+}
+
+.video-upload-panel .video-file-field::before {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: start;
+  padding: 4px 8px;
+  color: #18804f;
+  background: color-mix(in srgb, #20b46c 12%, var(--panel-solid));
+  border-radius: 999px;
+  content: "选填";
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.video-upload-panel .video-file-field:has(> input[required])::before {
+  color: #b45119;
+  background: color-mix(in srgb, #f59e0b 12%, var(--panel-solid));
+  content: "必填";
+}
+
+.video-upload-panel .video-file-field-icon { display: none; }
+
+.video-upload-panel .video-file-field-copy {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: start;
+  gap: 6px;
+}
+
+.video-upload-panel .video-file-field-copy strong {
+  font-size: 18px;
+  letter-spacing: -.02em;
+}
+
+.video-upload-panel .video-file-field-copy > span {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.video-upload-panel .video-file-field-action {
+  grid-column: 1;
+  grid-row: 3;
+  justify-self: start;
+  align-self: start;
+  min-height: 32px;
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
+.video-upload-panel .video-selected-files {
+  grid-column: 1;
+  grid-row: 4;
+}
+
+.video-upload-panel .video-upload-slots {
+  grid-column: 2;
+  grid-row: 1 / span 4;
+  grid-template-columns: none;
+  grid-auto-columns: 132px;
+  grid-auto-flow: column;
+  align-self: start;
+  justify-self: end;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.video-upload-panel .video-upload-slots i {
+  width: 132px;
+  height: 132px;
+  min-height: 132px;
+  border-radius: 14px;
+}
+
+.video-upload-panel .video-voice-studio {
+  min-height: 132px;
+  padding: 16px;
+  background: color-mix(in srgb, #ecfdf5 68%, var(--panel-solid));
+  border-style: dashed;
+  border-color: color-mix(in srgb, #10b981 38%, var(--video-line));
+  border-radius: 18px;
 }
 
 .video-file-field:hover {
@@ -379,6 +468,17 @@
   gap: 15px;
 }
 
+.video-settings-panel .video-form-grid { gap: 12px; }
+
+.video-settings-panel .video-form-field {
+  gap: 8px;
+  padding: 12px;
+  background: var(--video-panel);
+  border: 1px solid var(--video-line);
+  border-radius: 16px;
+  box-shadow: 0 4px 14px rgba(31, 39, 33, .04);
+}
+
 .video-form-field {
   display: grid;
   align-content: start;
@@ -434,18 +534,20 @@
 
 .video-choice-pills {
   display: flex;
+  width: fit-content;
+  max-width: 100%;
   flex-wrap: wrap;
-  gap: 7px;
-  padding: 4px;
+  gap: 2px;
+  padding: 3px;
   background: var(--video-soft);
   border: 1px solid var(--video-line);
   border-radius: 999px;
 }
 
 .video-choice-pill {
-  flex: 1 1 118px;
+  flex: 0 0 auto;
   min-height: 36px;
-  padding: 7px 13px;
+  padding: 8px 16px;
   color: var(--video-muted);
   background: transparent;
   border: 1px solid transparent;
@@ -973,8 +1075,14 @@
 .video-task-segments > span { width: 100%; color: #8a504a; font-size: 9px; font-weight: 800; }
 .video-task-segments button { max-width: 100%; padding: 5px 7px; overflow: hidden; color: #8a3c35; text-overflow: ellipsis; white-space: nowrap; }
 
+/* The unified console keeps a persistent sidebar, so its viewport reaches the
+   old platform's 1180px content breakpoint at roughly 1500px. */
+@media (max-width: 1500px) {
+  .video-original-layout { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 1180px) {
-  .video-workbench-grid { grid-template-columns: minmax(0, 1fr) 310px; }
+  .video-workbench-grid { grid-template-columns: minmax(0, 1fr); }
   .video-original-layout { grid-template-columns: 1fr; }
   .video-file-grid { grid-template-columns: 1fr; }
   .video-voice-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1009,6 +1117,29 @@
   .video-form-field--wide { grid-column: auto; }
   .video-file-grid { grid-template-columns: 1fr; }
   .video-file-field { min-height: 102px; padding: 13px; }
+  .video-upload-panel .video-file-field {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    min-height: 0;
+    padding: 14px;
+  }
+  .video-upload-panel .video-file-field::before,
+  .video-upload-panel .video-file-field-copy,
+  .video-upload-panel .video-file-field-action,
+  .video-upload-panel .video-selected-files,
+  .video-upload-panel .video-upload-slots {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .video-upload-panel .video-upload-slots {
+    grid-auto-columns: 112px;
+    justify-self: start;
+    width: 100%;
+  }
+  .video-upload-panel .video-upload-slots i {
+    width: 112px;
+    min-height: 112px;
+  }
   .video-form-footer {
     position: sticky;
     z-index: 5;
@@ -1037,8 +1168,8 @@
   .video-workbench-hero-copy > span { margin-bottom: 4px; font-size: 9px; }
   .video-workbench-hero-copy h3 { font-size: 20px; }
   .video-workbench-hero-copy p { margin-top: 4px; }
-  .video-choice-pills { border-radius: 12px; }
-  .video-choice-pill { flex-basis: calc(50% - 4px); }
+  .video-choice-pills { width: 100%; border-radius: 12px; }
+  .video-choice-pill { flex: 1 1 calc(50% - 4px); }
   .video-file-field { grid-template-columns: auto minmax(0, 1fr); }
   .video-file-field-action { display: none; }
   .video-selected-files { grid-column: 1 / -1; }

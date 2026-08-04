@@ -151,8 +151,26 @@ def main() -> None:
         assert page.locator('[data-video-field="oral_target_duration_seconds"]').count() == 1
         assert page.locator('[data-video-field="digital_human_short_mode"]').count() == 0
         assert "场景图" in page.locator('[data-video-file-field="product"]').inner_text()
-        layout_columns = page.locator(".video-original-layout").evaluate("node => getComputedStyle(node).gridTemplateColumns.split(' ').length")
-        assert layout_columns == 2, layout_columns
+        page.set_viewport_size({"width": 1920, "height": 1080})
+        desktop_columns = page.locator(".video-original-layout").evaluate(
+            "node => getComputedStyle(node).gridTemplateColumns.split(' ').length"
+        )
+        assert desktop_columns == 2, desktop_columns
+        desktop_tracks = page.locator(".video-original-layout").evaluate(
+            "node => getComputedStyle(node).gridTemplateColumns.split(' ').map(parseFloat)"
+        )
+        desktop_ratio = desktop_tracks[0] / sum(desktop_tracks)
+        assert 0.44 <= desktop_ratio <= 0.46, desktop_tracks
+        upload_slot = page.locator(".video-upload-panel .video-upload-slots i").first.bounding_box()
+        assert upload_slot, "missing upload preview slot"
+        assert round(upload_slot["width"]) == 132, upload_slot
+        assert round(upload_slot["height"]) == 132, upload_slot
+
+        page.set_viewport_size({"width": 1440, "height": 1000})
+        compact_columns = page.locator(".video-original-layout").evaluate(
+            "node => getComputedStyle(node).gridTemplateColumns.split(' ').length"
+        )
+        assert compact_columns == 1, compact_columns
 
         page.set_viewport_size({"width": 390, "height": 844})
         page.goto(
