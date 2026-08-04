@@ -1142,7 +1142,7 @@ function bindMobileNavigation() {
     const target = event.target.closest("button, a");
     if (!target) return;
     if (target.matches(".nav-parent-toggle") && state.view === "workspace") return;
-    if (target.matches("[data-module], [data-workspace-view]")) {
+    if (target.matches("[data-module], [data-workspace-view], [data-video-module]")) {
       window.requestAnimationFrame(() => setMobileNavOpen(false));
     }
   });
@@ -24311,6 +24311,12 @@ function openVideoWorkspace(moduleId = "") {
     : VIDEO_WORKSPACE_MODULES[0].id;
   state.activeVideoModule = nextModule;
   state.videoWorkspaceMenuOpen = true;
+  if (state.view === "video_workspace") {
+    syncVideoWorkspaceRoute();
+    syncVideoModuleMenuState();
+    window.VideoWorkbench?.selectModule?.(nextModule);
+    return;
+  }
   setView("video_workspace");
 }
 
@@ -29281,9 +29287,7 @@ function bindEvents() {
     if (state.view === "workspace" && isPersonaWorkspaceModule() && !(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
     if (state.view === "workspace" && !(await confirmLeaveTransientWorkspaceState())) return;
     setMenuClickHighlight(button, button.closest(".module-accordion-item") || button);
-    state.activeVideoModule = button.dataset.videoModule || VIDEO_WORKSPACE_MODULES[0].id;
-    state.videoWorkspaceMenuOpen = true;
-    setView("video_workspace");
+    openVideoWorkspace(button.dataset.videoModule || VIDEO_WORKSPACE_MODULES[0].id);
   });
   $("mobileTaskDock")?.addEventListener("click", handleWorkspaceModuleNavigation);
   document.addEventListener("click", (event) => {

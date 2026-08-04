@@ -82,6 +82,33 @@ def main() -> None:
         assert min(box["width"] for box in sidebar_boxes) > 140, sidebar_boxes
         assert all(sidebar_boxes[index]["y"] < sidebar_boxes[index + 1]["y"] for index in range(7)), sidebar_boxes
 
+        shell_handle = page.locator("#videoWorkbenchRoot .video-workbench-shell").element_handle()
+        form_panel_handle = page.locator("#videoWorkbenchRoot .video-form-panel").element_handle()
+        task_panel_handle = page.locator("#videoWorkbenchRoot .video-task-panel").element_handle()
+        switch_task_requests: list[str] = []
+        page.on(
+            "request",
+            lambda request: switch_task_requests.append(urlparse(request.url).path)
+            if urlparse(request.url).path in {"/api/video/tasks", "/api/tasks"}
+            else None,
+        )
+        page.locator('#videoModuleMenu [data-video-module="ecommerce_short_video"]').click(force=True)
+        page.locator('form[data-video-module-form="ecommerce_short_video"]').wait_for(state="visible")
+        assert page.evaluate(
+            "shell => shell === document.querySelector('#videoWorkbenchRoot .video-workbench-shell')",
+            shell_handle,
+        ), "sidebar module navigation replaced the whole workbench and causes visible flicker"
+        assert page.evaluate(
+            "panel => panel === document.querySelector('#videoWorkbenchRoot .video-form-panel')",
+            form_panel_handle,
+        ), "sidebar module navigation replaced the form panel container"
+        assert page.evaluate(
+            "panel => panel === document.querySelector('#videoWorkbenchRoot .video-task-panel')",
+            task_panel_handle,
+        ), "sidebar module navigation replaced the task panel instead of only the active operation"
+        assert not switch_task_requests, f"module switch unexpectedly reloaded tasks: {switch_task_requests}"
+        assert page.locator("#videoWorkbenchRoot .video-module-switcher").count() == 0
+
         for module_id in MODULES:
             page.locator(f'[data-video-module="{module_id}"]').first.click(force=True)
             page.locator(f'form[data-video-module-form="{module_id}"]').wait_for(state="visible")
@@ -139,6 +166,16 @@ def main() -> None:
         assert page.locator('[data-panel="video_workspace"]').is_visible()
         assert page.locator('#mobileTaskDock [data-workspace-view="video_workspace"]').count() == 1
         assert page.locator("#videoModuleMenu [data-video-module]").count() == 8
+        mobile_shell_handle = page.locator("#videoWorkbenchRoot .video-workbench-shell").element_handle()
+        page.locator("#mobileNavToggle").click()
+        assert page.locator("body").evaluate("node => node.classList.contains('mobile-nav-open')")
+        page.locator('#videoModuleMenu [data-video-module="ecommerce_short_video"]').evaluate("node => node.click()")
+        page.locator('form[data-video-module-form="ecommerce_short_video"]').wait_for(state="visible")
+        page.wait_for_function("!document.body.classList.contains('mobile-nav-open')")
+        assert page.evaluate(
+            "shell => shell === document.querySelector('#videoWorkbenchRoot .video-workbench-shell')",
+            mobile_shell_handle,
+        ), "mobile sidebar module navigation replaced the whole workbench"
         mobile_columns = page.locator(".video-original-layout").evaluate("node => getComputedStyle(node).gridTemplateColumns.split(' ').length")
         assert mobile_columns == 1, mobile_columns
         if screenshot_dir:

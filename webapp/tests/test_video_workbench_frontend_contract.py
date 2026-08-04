@@ -98,21 +98,19 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertIn("position: sticky", self.workbench_css)
         self.assertIn("env(safe-area-inset-bottom", self.workbench_css)
 
-    def test_module_navigation_uses_grouped_capsule_switcher(self):
-        for marker in (
-            'class="video-module-switcher"',
-            'class="video-module-group-row"',
-            'class="video-module-pills"',
-            'class="video-module-tab',
-        ):
-            self.assertIn(marker, self.workbench_js)
-        self.assertIn('role="tab"', self.workbench_js)
-        self.assertIn('aria-selected=', self.workbench_js)
-        self.assertIn("border-radius: 999px", self.workbench_css)
-        self.assertNotIn(".video-module-strip", self.workbench_css)
-        mobile_css = self.workbench_css.split("@media (max-width: 820px)", 1)[1]
-        self.assertIn("scroll-snap-type: x proximity", mobile_css)
-        self.assertIn("min-width: max-content", mobile_css)
+    def test_sidebar_is_the_only_module_navigation_and_switches_content_in_place(self):
+        self.assertNotIn("function renderModuleStrip()", self.workbench_js)
+        self.assertNotIn('class="video-module-switcher"', self.workbench_js)
+        self.assertNotIn(".video-module-switcher", self.workbench_css)
+        self.assertIn("function renderActiveModuleOnly()", self.workbench_js)
+        self.assertIn("currentHero.replaceWith(nextHero)", self.workbench_js)
+        self.assertIn("formPanel.innerHTML = renderForm(module)", self.workbench_js)
+        self.assertIn("selectModule, refresh: loadTasks", self.workbench_js)
+        self.assertIn('if (state.view === "video_workspace") {', self.console_js)
+        self.assertIn("window.VideoWorkbench?.selectModule?.(nextModule)", self.console_js)
+        self.assertIn("openVideoWorkspace(button.dataset.videoModule", self.console_js)
+        self.assertIn('[data-workspace-view], [data-video-module]', self.console_js)
+        self.assertNotIn("animation: video-workbench-enter", self.workbench_css)
 
     def test_primary_mode_switches_use_capsule_controls(self):
         self.assertIn('const PILL_SELECT_KEYS = new Set(["digital_human_content_mode", "ecommerce_video_mode", "replace_mode", "subject_generate_mode"])', self.workbench_js)

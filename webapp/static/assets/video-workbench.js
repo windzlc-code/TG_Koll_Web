@@ -654,32 +654,6 @@
     return `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[moduleId] || icons.digital_human_video}</svg>`;
   }
 
-  function renderModuleStrip() {
-    const groups = [
-      { label: "视频生成", hint: "口播、广告与视频编辑", ids: MODULE_ORDER.slice(0, 4) },
-      { label: "图片素材", hint: "广告图、替换与主体生成", ids: MODULE_ORDER.slice(4) },
-    ];
-    return `<nav class="video-module-switcher" aria-label="视频工作台模块切换">
-      <div class="video-module-switcher-intro">
-        <div><span>WORKFLOW</span><strong>选择创作模块</strong></div>
-        <small>沿用原数字人工作台步骤，模块切换后草稿会自动保留</small>
-      </div>
-      <div class="video-module-groups" role="tablist" aria-label="视频工作台模块">
-        ${groups.map((group) => {
-          const modules = group.ids.map((id) => state.modules.find((module) => module.id === id)).filter(Boolean);
-          return `<div class="video-module-group-row" role="group" aria-label="${escapeHtml(group.label)}">
-            <span class="video-module-group-copy"><strong>${escapeHtml(group.label)}</strong><small>${escapeHtml(group.hint)}</small></span>
-            <div class="video-module-pills">${modules.map((module) => `
-              <button type="button" role="tab" data-video-workbench-module="${escapeHtml(module.id)}" class="video-module-tab ${module.id === state.moduleId ? "is-active" : ""}" aria-selected="${module.id === state.moduleId ? "true" : "false"}" title="${escapeHtml(module.label)}">
-                <span class="video-module-tab-icon">${moduleIcon(module.id)}</span>
-                <span>${escapeHtml(module.shortLabel || module.label)}</span>
-              </button>`).join("")}</div>
-          </div>`;
-        }).join("")}
-      </div>
-    </nav>`;
-  }
-
   function optionMarkup(field, value) {
     return field.options.map((option) => `<option value="${escapeHtml(option.value)}" ${String(option.value) === String(value) ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
   }
@@ -1088,6 +1062,36 @@
     if (nextList) nextList.scrollTop = scrollTop;
   }
 
+  function renderWorkbenchHero(module) {
+    const moduleGroup = MODULE_ORDER.indexOf(module.id) < 4 ? "视频生成" : "图片素材";
+    return `<header class="video-workbench-hero">
+      <div class="video-workbench-hero-mark">${moduleIcon(module.id)}</div>
+      <div class="video-workbench-hero-copy">
+        <span>${escapeHtml(module.kicker)}</span>
+        <h3>${escapeHtml(module.label)}</h3>
+        <p>${escapeHtml(module.description)}</p>
+      </div>
+      <div class="video-workbench-hero-meta"><span><i></i>${escapeHtml(moduleGroup)}</span><small>草稿自动保存 · 任务统一管理</small></div>
+    </header>`;
+  }
+
+  function renderActiveModuleOnly() {
+    const root = document.getElementById("videoWorkbenchRoot");
+    const currentHero = root?.querySelector(".video-workbench-hero");
+    const formPanel = root?.querySelector(".video-form-panel");
+    if (!root || !currentHero || !formPanel) {
+      render();
+      return;
+    }
+    const module = currentModule();
+    loadDraft(module);
+    const template = document.createElement("template");
+    template.innerHTML = renderWorkbenchHero(module).trim();
+    const nextHero = template.content.firstElementChild;
+    if (nextHero) currentHero.replaceWith(nextHero);
+    formPanel.innerHTML = renderForm(module);
+  }
+
   function render() {
     const root = document.getElementById("videoWorkbenchRoot");
     if (!root) return;
@@ -1096,19 +1100,9 @@
       return;
     }
     const module = currentModule();
-    const moduleGroup = MODULE_ORDER.indexOf(module.id) < 4 ? "视频生成" : "图片素材";
     loadDraft(module);
     root.innerHTML = `<div class="video-workbench-shell">
-      <header class="video-workbench-hero">
-        <div class="video-workbench-hero-mark">${moduleIcon(module.id)}</div>
-        <div class="video-workbench-hero-copy">
-          <span>${escapeHtml(module.kicker)}</span>
-          <h3>${escapeHtml(module.label)}</h3>
-          <p>${escapeHtml(module.description)}</p>
-        </div>
-        <div class="video-workbench-hero-meta"><span><i></i>${escapeHtml(moduleGroup)}</span><small>草稿自动保存 · 任务统一管理</small></div>
-      </header>
-      ${renderModuleStrip()}
+      ${renderWorkbenchHero(module)}
       ${state.moduleError ? `<div class="video-catalog-notice is-fallback"><strong>已启用本地模块配置</strong><span>在线模块目录暂不可用，当前功能与字段仍可正常使用。</span><button type="button" data-video-retry-modules>重新连接</button></div>` : ""}
       ${state.moduleEmpty ? `<div class="video-catalog-notice"><strong>模块接口返回空列表</strong><span>已显示内置的 8 个模块合同。</span></div>` : ""}
       <div class="video-workbench-grid">
@@ -1522,8 +1516,7 @@
     if (!MODULE_ORDER.includes(moduleId) || moduleId === state.moduleId) return;
     state.moduleId = moduleId;
     state.submitError = "";
-    window.VectoConsoleNavigation?.openVideoWorkspace?.(moduleId);
-    render();
+    renderActiveModuleOnly();
     if (VOICE_MODULES.has(moduleId)) loadVoicePresets().catch(() => {});
   }
 
@@ -1557,8 +1550,6 @@
           handleFieldChange(select);
         }
       }
-      const moduleButton = event.target.closest?.("[data-video-workbench-module]");
-      if (moduleButton) selectModule(moduleButton.dataset.videoWorkbenchModule);
       if (event.target.closest?.("[data-video-clear-draft]")) clearDraft(state.moduleId);
       if (event.target.closest?.("[data-video-clear-files]")) clearSelectedFiles(state.moduleId);
       if (event.target.closest?.("[data-video-refresh]")) loadTasks().catch(() => {});
@@ -1620,5 +1611,5 @@
     syncPolling();
   }
 
-  window.VideoWorkbench = { activate, deactivate, refresh: loadTasks, confirmLeave, hasTransientState };
+  window.VideoWorkbench = { activate, deactivate, selectModule, refresh: loadTasks, confirmLeave, hasTransientState };
 }());
