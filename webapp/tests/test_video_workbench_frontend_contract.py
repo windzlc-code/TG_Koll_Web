@@ -107,7 +107,7 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertIn("min-width: max-content", mobile_css)
 
     def test_primary_mode_switches_use_capsule_controls(self):
-        self.assertIn('const PILL_SELECT_KEYS = new Set(["content_mode", "subject_kind", "mode", "duration_mode"])', self.workbench_js)
+        self.assertIn('const PILL_SELECT_KEYS = new Set(["digital_human_content_mode", "ecommerce_video_mode", "replace_mode", "subject_generate_mode"])', self.workbench_js)
         self.assertIn('class="video-choice-pills"', self.workbench_js)
         self.assertIn('data-video-choice-field=', self.workbench_js)
         self.assertIn('role="radiogroup"', self.workbench_js)
@@ -120,24 +120,54 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertNotIn(".video-module-menu .module-trigger {\n  min-height: 34px", self.workbench_css)
         self.assertIn('class="module-trigger" data-video-module=', self.console_js)
 
-    def test_legacy_visible_form_fields_remain_available(self):
+    def test_visible_fields_follow_original_frontend_allowlist(self):
         for field_name in (
+            "digital_human_content_mode",
             "product_name",
-            "style_hint",
+            "product_details",
+            "oral_target_duration_seconds",
+            "target_language",
+            "minimax_tts_model",
             "speech_text",
-            "prompt_text",
-            "nano_prompt",
-            "language",
-            "speaker",
-            "emotion",
+            "ratio",
+            "image_resolution",
+            "digital_human_short_mode",
+            "ecommerce_video_mode",
+            "ecommerce_seeding_template",
+            "duration",
+            "resolution",
+            "ecommerce_short_video_model",
+            "ecommerce_ad_style",
+            "copy_text",
+            "script_text",
+            "opening_insert_text",
+            "ending_insert_text",
+            "output_size",
+            "nano_images",
+            "replace_mode",
+            "subject_generate_mode",
+        ):
+            self.assertIn(f'"{field_name}"', self.workbench_js)
+
+    def test_invented_or_internal_generation_controls_are_not_exposed(self):
+        fallback_contract = self.workbench_js.split("const FALLBACK_MODULES = {", 1)[1].split("\n  };", 1)[0]
+        for field_name in (
+            "source_language",
+            "translation_notes",
+            "preserve_layout",
+            "negative_prompt",
             "duration_mode",
-            "duration_seconds",
-            "mode",
+            "model_choice",
+            "camera_video",
+            "nano_prompt",
+            "subtitles_enabled",
+            "subtitle_template",
+            "start_seconds",
             "width",
             "height",
             "frame",
         ):
-            self.assertIn(f'"{field_name}"', self.workbench_js)
+            self.assertNotIn(f'("{field_name}"', fallback_contract)
 
     def test_voice_catalog_loads_with_local_fallback_and_inline_audio(self):
         self.assertIn('const VOICE_PRESETS_ENDPOINT = "/api/video/voice-presets"', self.workbench_js)
@@ -150,51 +180,47 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertIn(".video-voice-list", self.workbench_css)
         self.assertIn(".video-voice-audio", self.workbench_css)
 
-    def test_planting_storyboard_supports_preview_edit_confirm_and_regenerate(self):
-        self.assertIn('select("content_mode", "内容模式"', self.workbench_js)
-        self.assertIn("function buildStoryboard", self.workbench_js)
-        self.assertIn("function regenerateStoryboard", self.workbench_js)
-        self.assertIn("function confirmStoryboard", self.workbench_js)
-        self.assertIn('data-video-storyboard-field=', self.workbench_js)
-        self.assertIn("data-video-storyboard-confirm", self.workbench_js)
-        self.assertIn("data-video-storyboard-generate", self.workbench_js)
-        self.assertIn("storyboard_confirmed", self.workbench_js)
-        self.assertIn("请先预览并确认种草故事板", self.workbench_js)
-        self.assertIn(".video-storyboard-track", self.workbench_css)
+    def test_seeding_mode_keeps_original_modes_and_templates_without_fake_storyboard(self):
+        self.assertIn('select("ecommerce_video_mode", "视频模式"', self.workbench_js)
+        self.assertIn('{ value: "ad_video", label: "广告视频模式" }', self.workbench_js)
+        self.assertIn('{ value: "seeding_video", label: "种草视频模式" }', self.workbench_js)
+        for template in ("template_b", "template_d", "template_f"):
+            self.assertIn(f'value: "{template}"', self.workbench_js)
+        self.assertIn('values.content_mode = seeding ? "planting" : "advertising"', self.workbench_js)
+        self.assertNotIn("function buildStoryboard", self.workbench_js)
+        self.assertNotIn("storyboard_confirmed", self.workbench_js)
 
     def test_language_script_parser_and_timestamp_editor_are_wired(self):
         self.assertIn("function parseTimedScript", self.workbench_js)
         self.assertIn('request("/api/video/language-script/parse"', self.workbench_js)
         self.assertIn("srtPattern", self.workbench_js)
-        self.assertIn('textarea("target_script", "目标语言脚本"', self.workbench_js)
-        self.assertIn("留空时自动识别并翻译原视频语音", self.workbench_js)
-        self.assertNotIn("当前不会自动识别翻译", self.workbench_js)
+        self.assertIn('textarea("script_text", "原文台词"', self.workbench_js)
+        self.assertIn("第一步会自动解析原视频台词和时间戳", self.workbench_js)
         self.assertIn("subtitle_segments", self.workbench_js)
         self.assertIn("script_segments", self.workbench_js)
+        self.assertIn("submitValues.source_segments =", self.workbench_js)
+        self.assertIn("values.video_tts_model = values.minimax_tts_model", self.workbench_js)
         self.assertIn("data-video-parse-script", self.workbench_js)
         self.assertIn("data-video-timeline-field", self.workbench_js)
         self.assertIn("data-video-add-timeline", self.workbench_js)
         self.assertIn(".video-timeline-row", self.workbench_css)
 
-    def test_subtitle_enable_and_template_are_submitted_with_timeline_cues(self):
-        self.assertIn("SUBTITLE_TEMPLATE_OPTIONS", self.workbench_js)
-        for template in ("keyword_focus", "bilingual_dual", "handwritten_quote", "split_hook"):
-            self.assertIn(f'value: "{template}"', self.workbench_js)
-        self.assertIn('checkbox("subtitles_enabled", "生成并烧录字幕"', self.workbench_js)
-        self.assertIn('select("subtitle_template", "字幕样式"', self.workbench_js)
-        self.assertIn("submitValues.subtitles = {", self.workbench_js)
-        self.assertIn("enabled: draft.values.subtitles_enabled !== false", self.workbench_js)
+    def test_subtitle_controls_are_not_exposed_in_initial_generation_form(self):
+        fallback_contract = self.workbench_js.split("const FALLBACK_MODULES = {", 1)[1].split("\n  };", 1)[0]
+        self.assertNotIn('checkbox("subtitles_enabled"', fallback_contract)
+        self.assertNotIn('select("subtitle_template"', fallback_contract)
+        self.assertIn("values.add_subtitles = true", self.workbench_js)
+        self.assertIn("values.subtitle_enabled = true", self.workbench_js)
 
     def test_video_subject_replace_selects_and_submits_subject_kind(self):
-        self.assertIn('select("subject_kind", "替换主体"', self.workbench_js)
-        self.assertIn('{ value: "model", label: "人物 / 模特" }', self.workbench_js)
-        self.assertIn('{ value: "product", label: "商品" }', self.workbench_js)
-        self.assertIn('submitValues.subject_kind = draft.values.subject_kind === "product" ? "product" : "model"', self.workbench_js)
+        self.assertIn('select("replace_mode", "替换模式"', self.workbench_js)
+        self.assertIn('{ value: "model", label: "模特替换" }', self.workbench_js)
+        self.assertIn('{ value: "product", label: "商品替换" }', self.workbench_js)
+        self.assertIn('values.subject_kind = values.replace_mode === "product" ? "product" : "model"', self.workbench_js)
         self.assertIn('body.append("params_json", JSON.stringify({ ...submitValues', self.workbench_js)
 
     def test_language_replace_exposes_automatic_transcription_and_translation(self):
-        self.assertIn("留空时自动识别并翻译原视频语音", self.workbench_js)
-        self.assertIn("多模态模型自动转写并翻译", self.workbench_js)
+        self.assertIn("第一步会自动解析原视频台词和时间戳", self.workbench_js)
         self.assertNotIn("当前不会从原视频自动识别或翻译台词", self.workbench_js)
         self.assertNotIn("请上传替换音频或填写目标语言脚本（当前不会自动识别翻译）", self.workbench_js)
 
@@ -214,10 +240,10 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
 
     def test_subject_generate_exposes_digital_human_and_three_view_modes(self):
         subject_generate = self.workbench_js.split("subject_generate: {", 1)[1].split("  };", 1)[0]
-        self.assertIn('select("mode", "生成模式"', subject_generate)
-        self.assertIn('{ value: "digital_human_character", label: "数字人角色" }', subject_generate)
-        self.assertIn('{ value: "three_view", label: "角色三视图" }', subject_generate)
-        self.assertIn('default: "digital_human_character"', subject_generate)
+        self.assertIn('select("subject_generate_mode", "生成模式"', subject_generate)
+        self.assertIn('{ value: "character", label: "数字人生成" }', subject_generate)
+        self.assertIn('{ value: "product", label: "产品图生成" }', subject_generate)
+        self.assertIn('default: "character"', subject_generate)
 
     def test_segment_regeneration_and_failed_task_resume_contract(self):
         self.assertIn("endpointIndex: index + 1", self.workbench_js)

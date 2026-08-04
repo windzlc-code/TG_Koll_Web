@@ -371,13 +371,21 @@ class VideoWorkbenchTests(unittest.TestCase):
             _request_llm_json_with_fallback=llm_json_request,
         )
         video_workbench.inject_video_workbench(server, backend=backend)
-        result = server.TASK_RUNNERS["video_language_replace"]("task-language-auto", {})
+        result = server.TASK_RUNNERS["video_language_replace"]("task-language-auto", {
+            "script_text": "你好",
+            "opening_insert_text": "欢迎",
+            "ending_insert_text": "再见",
+            "source_segments": [{"start_seconds": 0, "end_seconds": 1.2, "source_text": "你好"}],
+        })
         self.assertTrue(result["ok"])
         self.assertEqual(result["raw_result"]["target_script"], "Hello")
         self.assertEqual(result["raw_result"]["segments"][0]["source_text"], "你好")
         self.assertNotIn("api_key", result["raw_result"]["transcription"]["selected"])
         self.assertEqual(calls[0]["video_paths"], [str(Path("C:/uploads/source.mp4").resolve())])
         self.assertEqual(calls[0]["retry_count"], 2)
+        self.assertIn("Use this supplied source transcript exactly", calls[0]["user_input"])
+        self.assertIn("Translate and insert this opening line", calls[0]["user_input"])
+        self.assertIn("Translate and append this ending line", calls[0]["user_input"])
 
     def test_submit_payload_maps_uploads_and_rejects_local_path_injection(self):
         payload = video_workbench.build_video_submit_payload(
@@ -396,6 +404,49 @@ class VideoWorkbenchTests(unittest.TestCase):
                 {"video_local_path": "C:/Windows/win.ini"},
                 [],
             )
+
+    def test_original_frontend_upload_roles_map_without_exposing_path_fields(self):
+        digital_human = video_workbench.build_video_submit_payload(
+            "create_video",
+            {"speech_text": "hello", "file_roles": ["model", "product", "audio"]},
+            [
+                {"name": "person.png", "path": "C:/uploads/person.png", "kind": "image"},
+                {"name": "product.png", "path": "C:/uploads/product.png", "kind": "image"},
+                {"name": "voice.wav", "path": "C:/uploads/voice.wav", "kind": "audio"},
+            ],
+        )
+        self.assertEqual(digital_human["model_image_local_path"], "C:/uploads/person.png")
+        self.assertEqual(digital_human["product_image_local_path"], "C:/uploads/product.png")
+        self.assertEqual(digital_human["audio_local_path"], "C:/uploads/voice.wav")
+
+        subject_replace = video_workbench.build_video_submit_payload(
+            "image_generate",
+            {
+                "video_image_mode": "subject_replace",
+                "file_roles": ["original", "replacement_product"],
+            },
+            [
+                {"name": "original.png", "path": "C:/uploads/original.png", "kind": "image"},
+                {"name": "product.png", "path": "C:/uploads/product.png", "kind": "image"},
+            ],
+        )
+        self.assertEqual(subject_replace["source_image_local_path"], "C:/uploads/original.png")
+        self.assertEqual(subject_replace["subject_image_local_path"], "C:/uploads/product.png")
+
+        subject_replace_both = video_workbench.build_video_submit_payload(
+            "image_generate",
+            {
+                "video_image_mode": "subject_replace",
+                "file_roles": ["original", "replacement_product", "replacement_model"],
+            },
+            [
+                {"name": "original.png", "path": "C:/uploads/original.png", "kind": "image"},
+                {"name": "product.png", "path": "C:/uploads/product.png", "kind": "image"},
+                {"name": "model.png", "path": "C:/uploads/model.png", "kind": "image"},
+            ],
+        )
+        self.assertEqual(subject_replace_both["replacement_product_image_local_path"], "C:/uploads/product.png")
+        self.assertEqual(subject_replace_both["replacement_model_image_local_path"], "C:/uploads/model.png")
 
     def test_language_replace_can_auto_transcribe_when_target_script_is_blank(self):
         payload = video_workbench.build_video_submit_payload(

@@ -26,20 +26,73 @@
   const VOICE_PRESETS_ENDPOINT = "/api/video/voice-presets";
   const VOICE_PRESETS_MANIFEST_URL = "/assets/voice_presets_manifest.json";
   const VOICE_MODULES = new Set(["digital_human_video", "ecommerce_short_video", "video_language_replace"]);
-  const TIMELINE_MODULES = new Set(["digital_human_video", "ecommerce_short_video", "video_language_replace"]);
-  const PILL_SELECT_KEYS = new Set(["content_mode", "subject_kind", "mode", "duration_mode"]);
+  const TIMELINE_MODULES = new Set(["video_language_replace"]);
+  const PILL_SELECT_KEYS = new Set(["digital_human_content_mode", "ecommerce_video_mode", "replace_mode", "subject_generate_mode"]);
+  const DYNAMIC_SELECT_KEYS = new Set(["character_gender", "character_age"]);
   const ADMIN_WORKSPACE_USER_ID = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
   const ADMIN_CONSOLE_SESSION = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
 
-  const LANGUAGE_OPTIONS = ["Auto", "Chinese", "English", "Japanese", "Korean", "French", "German", "Spanish", "Portuguese", "Russian", "Italian"];
-  const SPEAKER_OPTIONS = ["Aiden", "Dylan", "Eric", "Ono_anna", "Ryan", "Serena", "Sohee", "Uncle_fu", "Vivian", "zhenzhen"];
-  const SUBTITLE_TEMPLATE_OPTIONS = [
-    { value: "keyword_focus", label: "关键词强调" },
-    { value: "bilingual_dual", label: "双语双行" },
-    { value: "handwritten_quote", label: "手写引语" },
-    { value: "split_hook", label: "分屏钩子" },
+  const LANGUAGE_OPTIONS = [
+    { value: "Chinese", label: "中文" },
+    { value: "English", label: "英文" },
+    { value: "Japanese", label: "日语" },
+    { value: "Spanish", label: "西班牙语" },
+    { value: "Thai", label: "泰语" },
+    { value: "Malay", label: "马来西亚" },
   ];
+  const MINIMAX_TTS_MODEL_OPTIONS = [
+    { value: "speech-2.8-hd", label: "speech-2.8-hd（高清，推荐）" },
+    { value: "speech-2.8-turbo", label: "speech-2.8-turbo（快速）" },
+    { value: "speech-2.6-hd", label: "speech-2.6-hd" },
+    { value: "speech-2.6-turbo", label: "speech-2.6-turbo" },
+    { value: "speech-02-hd", label: "speech-02-hd" },
+    { value: "speech-02-turbo", label: "speech-02-turbo" },
+    { value: "speech-01-hd", label: "speech-01-hd" },
+    { value: "speech-01-turbo", label: "speech-01-turbo" },
+  ];
+  const VIDEO_RATIO_OPTIONS = ["16:9", "4:3", "1:1", "3:4", "9:16"];
+  const VIDEO_RESOLUTION_OPTIONS = ["480p", "720p", "1080p", { value: "2k", label: "2K" }, { value: "4k", label: "4K" }];
+  const IMAGE_RESOLUTION_OPTIONS = ["1K", "2K", "4K"];
+  const VIDEO_STYLE_OPTIONS = [
+    { value: "standard_ecommerce", label: "标准电商广告" },
+    { value: "story", label: "剧情式广告" },
+    { value: "documentary", label: "纪录片广告" },
+    { value: "animation", label: "动画广告" },
+  ];
+  const AUTOMATIC_OPTION = { value: "", label: "自动" };
+  const CHARACTER_HAIRSTYLES = {
+    default: [AUTOMATIC_OPTION, { value: "short_clean", label: "利落短发" }, { value: "shoulder_length", label: "中长发" }, { value: "long_straight", label: "长直发" }],
+    female: [AUTOMATIC_OPTION, { value: "bob", label: "波波头" }, { value: "shoulder_length", label: "中长发" }, { value: "long_straight", label: "长直发" }, { value: "soft_wave", label: "微卷发" }, { value: "ponytail", label: "马尾" }, { value: "bun", label: "盘发" }, { value: "air_bangs_long", label: "刘海长发" }],
+    male: [AUTOMATIC_OPTION, { value: "short_clean", label: "利落短发" }, { value: "side_part", label: "偏分短发" }, { value: "crew_cut", label: "寸头" }, { value: "textured_short", label: "纹理短发" }, { value: "slick_back", label: "背头" }, { value: "medium_layered", label: "中短层次发" }],
+  };
+  const CHARACTER_TEMPERAMENTS = {
+    default: [AUTOMATIC_OPTION, { value: "gentle", label: "亲和自然" }, { value: "business", label: "商务干练" }, { value: "elegant", label: "优雅知性" }, { value: "lively", label: "活力外向" }],
+    female: [AUTOMATIC_OPTION, { value: "elegant", label: "优雅知性" }, { value: "gentle", label: "亲和自然" }, { value: "sweet", label: "清新亲切" }, { value: "cool", label: "高级冷感" }, { value: "business", label: "干练专业" }],
+    female_young: [AUTOMATIC_OPTION, { value: "sweet", label: "清新甜美" }, { value: "lively", label: "活力外向" }, { value: "gentle", label: "亲和自然" }, { value: "cool", label: "高级冷感" }, { value: "elegant", label: "优雅知性" }],
+    female_mature: [AUTOMATIC_OPTION, { value: "elegant", label: "优雅知性" }, { value: "business", label: "商务干练" }, { value: "gentle", label: "亲和自然" }, { value: "cool", label: "高级冷感" }, { value: "calm", label: "沉稳大气" }],
+    male: [AUTOMATIC_OPTION, { value: "business", label: "干练专业" }, { value: "calm", label: "沉稳大气" }, { value: "sunny", label: "阳光亲和" }, { value: "elite", label: "精英专业" }, { value: "elegant", label: "儒雅稳重" }],
+    male_young: [AUTOMATIC_OPTION, { value: "lively", label: "活力外向" }, { value: "business", label: "商务干练" }, { value: "sunny", label: "阳光亲和" }, { value: "cool", label: "高级冷感" }, { value: "street", label: "潮流自信" }],
+    male_mature: [AUTOMATIC_OPTION, { value: "business", label: "商务干练" }, { value: "calm", label: "沉稳大气" }, { value: "gentle", label: "亲和自然" }, { value: "elite", label: "精英专业" }, { value: "elegant", label: "儒雅稳重" }],
+  };
+  const CHARACTER_CLOTHING = {
+    default: [AUTOMATIC_OPTION, { value: "formal_suit", label: "正式西装套装" }, { value: "smart_casual_set", label: "通勤休闲套装" }, { value: "soft_knit_set", label: "针织舒适套装" }, { value: "casual_jacket_set", label: "休闲夹克套装" }, { value: "sporty", label: "运动套装" }],
+    female: [AUTOMATIC_OPTION, { value: "tailored_suit_female", label: "女士西装套装" }, { value: "business_dress_female", label: "轻商务裙装套装" }, { value: "elegant_commute_female", label: "优雅通勤套装" }, { value: "soft_knit_set_female", label: "温柔针织套装" }, { value: "sporty_female", label: "运动休闲套装" }],
+    female_young: [AUTOMATIC_OPTION, { value: "blazer_dress_female", label: "轻商务连衣裙套装" }, { value: "shirt_skirt_female", label: "学院感半裙套装" }, { value: "knit_jeans_female", label: "针织休闲套装" }, { value: "sweet_female", label: "清新甜美裙装套装" }, { value: "sporty_female", label: "运动休闲套装" }],
+    female_mature: [AUTOMATIC_OPTION, { value: "tailored_suit_female", label: "修身西装套装" }, { value: "silk_blouse_trousers_female", label: "高级通勤套装" }, { value: "elegant_female", label: "优雅知性裙装套装" }, { value: "knit_cardigan_female", label: "温柔针织裙装套装" }, { value: "daily_female", label: "简洁日常套装" }],
+    male: [AUTOMATIC_OPTION, { value: "dark_suit_male", label: "男士西装套装" }, { value: "smart_commute_male", label: "商务通勤套装" }, { value: "polo_casual_male", label: "商务休闲套装" }, { value: "casual_jacket_male", label: "成熟休闲套装" }, { value: "sporty_male", label: "运动休闲套装" }],
+    male_young: [AUTOMATIC_OPTION, { value: "shirt_chinos_male", label: "清爽通勤套装" }, { value: "polo_chinos_male", label: "轻商务休闲套装" }, { value: "street_male", label: "潮流街头套装" }, { value: "knit_male", label: "简约针织套装" }, { value: "sporty_male", label: "运动休闲套装" }],
+    male_mature: [AUTOMATIC_OPTION, { value: "dark_suit_male", label: "深色商务西装" }, { value: "shirt_trousers_male", label: "稳重通勤套装" }, { value: "polo_casual_male", label: "商务休闲套装" }, { value: "casual_jacket_male", label: "成熟休闲套装" }, { value: "knit_cardigan_male", label: "温和针织套装" }],
+  };
 
+  function characterProfile(values = {}) {
+    const gender = values.character_gender === "female" || values.character_gender === "male" ? values.character_gender : "";
+    const age = String(values.character_age || "");
+    if (!gender) return "default";
+    if (["18_22", "23_27", "28_32"].includes(age)) return `${gender}_young`;
+    if (age) return `${gender}_mature`;
+    return gender;
+  }
+  const SPEAKER_OPTIONS = ["Aiden", "Dylan", "Eric", "Ono_anna", "Ryan", "Serena", "Sohee", "Uncle_fu", "Vivian", "zhenzhen"];
   const text = (key, label, extra = {}) => ({ key, label, type: "text", ...extra });
   const textarea = (key, label, extra = {}) => ({ key, label, type: "textarea", ...extra });
   const number = (key, label, extra = {}) => ({ key, label, type: "number", ...extra });
@@ -63,50 +116,59 @@
       label: "数字人口播视频",
       shortLabel: "数字人",
       kicker: "DIGITAL HUMAN",
-      description: "用人物素材与口播内容生成可直接交付的数字人视频。",
-      fields: [
-        file("model_image", "人物参考图", "image/*", { required: true, help: "建议使用正面、主体清晰的竖版人物图。" }),
-        file("audio_file", "口播音频", "audio/*", { help: "可选；未上传时将根据口播文案生成音频。" }),
-        file("camera_video", "运镜视频", "video/*", { help: "可选；用于控制镜头与动作节奏。" }),
-        textarea("speech_text", "口播文案", { placeholder: "输入数字人的口播内容", required: true, wide: true }),
-        textarea("prompt_text", "视频提示词", { placeholder: "补充动作、场景与镜头要求", wide: true }),
-        select("language", "语言", LANGUAGE_OPTIONS, { default: "Chinese" }),
-        select("speaker", "音色", SPEAKER_OPTIONS, { default: "Ryan" }),
-        text("emotion", "情绪", { default: "happy", placeholder: "例如：happy" }),
-        select("model_choice", "TTS 模型", ["0.6B", "1.7B"], { default: "1.7B" }),
-        select("duration_mode", "时长模式", [{ value: "manual", label: "手动" }, { value: "audio", label: "跟随音频" }], { default: "manual" }),
-        number("duration_seconds", "视频时长（秒）", { default: 15, min: 1, max: 300 }),
-        checkbox("subtitles_enabled", "生成并烧录字幕", { default: true, wide: true }),
-        select("subtitle_template", "字幕样式", SUBTITLE_TEMPLATE_OPTIONS, { default: "keyword_focus" }),
-        checkbox("use_ai_copy", "使用 AI 生成口播 / 提示词", { default: true, wide: true }),
-      ],
+      description: "上传人物/模特图和产品图，生成数字人口播视频。",
+      fields(values = {}) {
+        const oral = values.digital_human_content_mode === "oral_broadcast";
+        return [
+          select("digital_human_content_mode", "内容模式", [{ value: "product_intro", label: "商品介绍模式" }, { value: "oral_broadcast", label: "口播模式" }], { default: "product_intro", placement: "uploadTop" }),
+          file("model", "人物/模特图", "image/*", { required: true, multiple: true, minFiles: 1, maxFiles: 2, previewSlots: 2, help: "可上传 1-2 张；上传 2 张会启用双人对讲，上传 1 张按单人生成" }),
+          file("product", oral ? "场景图" : "产品图", "image/*", { required: true, multiple: !oral, maxFiles: oral ? 1 : 3, previewSlots: oral ? 1 : 3, help: oral ? "上传 1 张口播背景/场景图；口播模式固定单镜头，不生成分镜图" : "点击素材位逐个上传；最多保留 3 个素材位" }),
+          file("audio", "参考音频/干音", "audio/*", { required: true }),
+          text("product_name", oral ? "口播主题" : "产品/项目名称", { placeholder: oral ? "例如：东京租房避坑 / AI 工具干货 / 职场沟通技巧" : "例如：海景公寓 / 鱼油 / 汽车" }),
+          textarea("product_details", oral ? "文案需求" : "产品相关简介", { placeholder: oral ? "可选：说明口播主题、受众、核心观点、段落方向、语气风格；AI 会据此生成口播文案" : "可选：补充产品卖点、适用人群、使用场景、价格/参数等详情；只用于 AI 生成文案或提示词", wide: true }),
+          ...(oral ? [number("oral_target_duration_seconds", "目标口播时长（秒）", { default: 30, min: 5, max: 180, step: 1 })] : []),
+          select("target_language", "口播语言", LANGUAGE_OPTIONS, { default: "Chinese" }),
+          select("minimax_tts_model", "MiniMax 音频模型", MINIMAX_TTS_MODEL_OPTIONS, { default: "speech-2.8-hd" }),
+          textarea("speech_text", "口播文案", { placeholder: oral ? "可手动输入成稿，也可留空让 AI 根据文案需求和场景图生成" : "可手动输入，也可留空让 AI 根据图片生成", wide: true }),
+          select("ratio", "画面比例", VIDEO_RATIO_OPTIONS, { default: "9:16" }),
+          select("image_resolution", "图片分辨率", IMAGE_RESOLUTION_OPTIONS, { default: "2K" }),
+          ...(!oral ? [select("digital_human_short_mode", "分镜模式", [{ value: "storyboard", label: "多分镜" }, { value: "single", label: "单镜头" }], { default: "storyboard" })] : []),
+        ];
+      },
     },
     ecommerce_short_video: {
       id: "ecommerce_short_video",
       label: "广告 / 种草视频",
       shortLabel: "短视频",
       kicker: "COMMERCE VIDEO",
-      description: "组合模特、商品与文案，生成适合投放和社媒发布的带货短视频。",
-      fields: [
-        select("content_mode", "内容模式", [{ value: "planting", label: "种草模式" }, { value: "advertising", label: "广告模式" }], { default: "planting" }),
-        file("model_image", "模特图", "image/*", { required: true, help: "真人或模特展示图，建议竖图、主体清晰。" }),
-        file("product_image", "商品图", "image/*", { required: true, help: "白底图、场景图或商品实拍均可。" }),
-        file("camera_video", "运镜视频", "video/*"),
-        file("audio_file", "口播音频", "audio/*"),
-        text("product_name", "商品名称", { default: "商品", required: true, placeholder: "例如：夏季防晒衣" }),
-        text("style_hint", "画面风格", { default: "自然口播，真实电商场景", placeholder: "例如：自然口播，真实电商场景" }),
-        textarea("speech_text", "口播文案", { placeholder: "可留空，由 AI 生成", wide: true }),
-        textarea("prompt_text", "视频提示词", { placeholder: "描述动作、镜头与氛围", wide: true }),
-        textarea("nano_prompt", "场景图提示词", { placeholder: "用于控制电商场景图", wide: true }),
-        select("language", "语言", LANGUAGE_OPTIONS, { default: "Chinese" }),
-        select("speaker", "音色", SPEAKER_OPTIONS, { default: "Ryan" }),
-        text("emotion", "情绪", { default: "happy" }),
-        select("duration_mode", "时长模式", [{ value: "manual", label: "手动" }, { value: "audio", label: "跟随音频" }], { default: "manual" }),
-        number("duration_seconds", "视频时长（秒）", { default: 15, min: 1, max: 300 }),
-        checkbox("subtitles_enabled", "生成并烧录字幕", { default: true, wide: true }),
-        select("subtitle_template", "字幕样式", SUBTITLE_TEMPLATE_OPTIONS, { default: "keyword_focus" }),
-        checkbox("use_ai_copy", "使用 AI 生成口播 / 提示词", { default: true, wide: true }),
-      ],
+      description: "上传商品素材，按广告视频或种草视频原流程生成短视频。",
+      fields(values = {}) {
+        const seeding = values.ecommerce_video_mode === "seeding_video";
+        return [
+          select("ecommerce_video_mode", "视频模式", [{ value: "ad_video", label: "广告视频模式" }, { value: "seeding_video", label: "种草视频模式" }], { default: "ad_video", placement: "uploadTop" }),
+          ...(seeding ? [select("ecommerce_seeding_template", "种草分镜模板", [
+            { value: "", label: "请选择种草分镜模板" },
+            { value: "template_b", label: "模板 B · 中心图窗 + 右侧讲述栏" },
+            { value: "template_d", label: "模板 D · 左侧文案 + 右侧主视觉" },
+            { value: "template_f", label: "模板 F · 近景主图 + 左侧信息栏" },
+          ], { required: true, placement: "uploadTop" })] : []),
+          file("product", seeding ? "商品主体图" : "产品图", "image/*", { required: true, multiple: true, maxFiles: 3, previewSlots: 3, help: seeding ? "上传 1-3 张商品主体、包装、细节或生活场景参考图" : "点击素材位逐个上传；最多保留 3 个素材位" }),
+          file("model", "人物参考图", "image/*", { help: seeding ? "可选：上传 1 张人物参考图，用于约束人设、穿搭和镜头角色" : "可选：上传 1 张人物参考图" }),
+          ...(seeding ? [file("video", "节奏参考视频", "video/*", { help: "可选：仅用于分析镜头节奏、构图和风格，不会直接作为最终画面" })] : []),
+          file("audio", seeding ? "分享口播/参考人声" : "旁白/干音", "audio/*", { help: seeding ? "可选：选择预设声音试听，或上传自己的干音" : "可选：选择预设干音并试听，或上传自己的干音" }),
+          text("product_name", seeding ? "产品/分享主题" : "产品名称", { placeholder: seeding ? "例如：东京租房 / 深海鱼油 / 夏日通勤穿搭" : "例如：EX31A 热水器" }),
+          textarea("product_details", seeding ? "分享角度补充" : "产品相关简介", { placeholder: seeding ? "可选：补充真实体验、使用场景、目标人群、核心感受或分享角度" : "可选：补充产品卖点、适用人群、使用场景、价格/参数等详情", wide: true }),
+          select("target_language", seeding ? "分享口播语言" : "台词/字幕语言", LANGUAGE_OPTIONS, { default: "Chinese" }),
+          number("duration", seeding ? "成片时长（秒，4~120）" : "视频时长（秒，4~120）", { default: 15, min: 4, max: 120, step: 1 }),
+          select("ratio", seeding ? "成片比例" : "画面比例", VIDEO_RATIO_OPTIONS, { default: "9:16" }),
+          select("resolution", seeding ? "输出分辨率" : "视频分辨率", VIDEO_RESOLUTION_OPTIONS, { default: "720p" }),
+          ...(!seeding ? [
+            select("ecommerce_short_video_model", "视频模型", [{ value: "seedance2.0", label: "Seedance2.0 标准版" }, { value: "seedance2.0fast", label: "Seedance2.0 Fast" }], { default: "seedance2.0" }),
+            select("ecommerce_ad_style", "风格方向", VIDEO_STYLE_OPTIONS, { default: "standard_ecommerce" }),
+          ] : []),
+          textarea(seeding ? "copy_text" : "prompt_text", seeding ? "视频口播文案" : "视频提示词", { placeholder: seeding ? "生成后仅显示视频口播文案；完整分镜脚本由系统在后台用于生图和合成" : "请先点击生成提示词，确认后再生成视频", wide: true }),
+        ];
+      },
     },
     video_language_replace: {
       id: "video_language_replace",
@@ -115,19 +177,13 @@
       kicker: "VIDEO LOCALIZATION",
       description: "保留原视频节奏与画面，将口播替换为目标语言。",
       fields: [
-        file("video_file", "原视频", "video/*", { required: true }),
-        file("audio_file", "替换音频", "audio/*", { help: "可选；未上传时使用翻译文本合成。" }),
-        select("source_language", "原始语言", LANGUAGE_OPTIONS, { default: "Auto" }),
-        select("target_language", "目标语言", LANGUAGE_OPTIONS.filter((item) => item !== "Auto"), { default: "English", required: true }),
-        select("speaker", "音色", SPEAKER_OPTIONS, { default: "Ryan" }),
-        textarea("target_script", "目标语言脚本", {
-          placeholder: "可选：粘贴 SRT、带时间码台词或纯文本；留空时自动识别并翻译原视频语音",
-          help: "留空时使用已配置的文字/多模态模型自动转写并翻译；也可填写目标语言脚本或直接上传替换音频。",
-          wide: true,
-        }),
-        checkbox("preserve_background_audio", "保留背景音乐与环境声", { default: true, wide: true }),
-        checkbox("subtitles_enabled", "生成并烧录字幕", { default: true, wide: true }),
-        select("subtitle_template", "字幕样式", SUBTITLE_TEMPLATE_OPTIONS, { default: "bilingual_dual" }),
+        file("video", "原视频", "video/*", { required: true }),
+        file("audio", "参考音频/干音", "audio/*", { help: "可选；用于目标语言配音" }),
+        select("target_language", "目标语言", LANGUAGE_OPTIONS, { default: "English" }),
+        select("minimax_tts_model", "MiniMax 音频模型", MINIMAX_TTS_MODEL_OPTIONS, { default: "speech-2.8-hd" }),
+        textarea("script_text", "原文台词", { placeholder: "第一步会自动解析原视频台词和时间戳；如已手动填写且自带时间戳，会直接跳过这一步", wide: true }),
+        textarea("opening_insert_text", "开场插入台词", { placeholder: "可选：在原视频第一句开始前额外插入一句台词", wide: true }),
+        textarea("ending_insert_text", "结尾插入台词", { placeholder: "可选：在原视频最后一句之后额外插入一句台词", wide: true }),
       ],
     },
     video_subject_replace: {
@@ -137,24 +193,9 @@
       kicker: "VIDEO SUBJECT",
       description: "保留原视频动作和镜头，替换人物或商品主体。",
       fields: [
-        file("video_file", "原视频", "video/*", { required: true }),
-        file("subject_image", "新主体图片", "image/*", { required: true }),
-        select("subject_kind", "替换主体", [
-          { value: "model", label: "人物 / 模特" },
-          { value: "product", label: "商品" },
-        ], { default: "model", required: true, help: "选择后会分别提交为视频模特替换或视频商品替换任务。" }),
-        select("mode", "替换模式", [
-          { value: "original", label: "基础模式" },
-          { value: "primary", label: "快速模式" },
-          { value: "slice", label: "片段替换" },
-          { value: "motion_transfer", label: "动作迁移" },
-        ], { default: "original" }),
-        textarea("prompt", "动作 / 场景提示词", { placeholder: "描述替换后的动作与场景", wide: true }),
-        number("start_seconds", "起始秒数", { default: 0, min: 0 }),
-        number("duration_seconds", "时长（秒）", { default: 10, min: 1, max: 300 }),
-        number("width", "输出宽度", { default: 576, min: 1 }),
-        number("height", "输出高度", { default: 1024, min: 1 }),
-        number("frame", "帧率", { default: 30, min: 1, max: 120 }),
+        select("replace_mode", "替换模式", [{ value: "model", label: "模特替换" }, { value: "product", label: "商品替换" }], { default: "model", placement: "uploadFooter" }),
+        file("video", "原视频", "video/*", { required: true }),
+        file("image", "目标人物/模特图", "image/*", { required: true, dynamicLabel: true }),
       ],
     },
     ecommerce_image: {
@@ -164,12 +205,12 @@
       kicker: "COMMERCE IMAGE",
       description: "从商品或模特参考图生成干净、统一的电商展示图。",
       fields: [
-        select("mode", "图片模式", [{ value: "product_only", label: "仅商品图" }, { value: "model_product", label: "模特图 + 商品图" }], { default: "product_only" }),
-        file("product_image", "商品图", "image/*", { required: true }),
-        file("model_image", "模特图", "image/*", { help: "“模特图 + 商品图”模式需要上传。" }),
-        text("product_name", "商品名称", { default: "商品", placeholder: "例如：轻薄防晒衣" }),
-        text("style_hint", "画面风格", { placeholder: "例如：极简棚拍、柔和补光" }),
-        textarea("prompt", "图片提示词", { default: "生成电商商品展示图，画面干净自然，无文字。", required: true, wide: true }),
+        file("product", "产品/详情图", "image/*", { required: true, multiple: true, maxFiles: 3, previewSlots: 3, help: "可上传产品主图、细节图、包装图或参数/卖点详情图" }),
+        file("model", "模特图", "image/*", { help: "可选；上传后自动按模特图 + 商品图模式生成" }),
+        text("product_name", "产品名称", { placeholder: "例如：公寓 / 鱼油 / 沙发 / 汽车" }),
+        textarea("product_details", "产品相关简介", { placeholder: "可选：补充产品卖点、适用人群、使用场景、价格/参数等详情；不填则由 AI 根据图片判断", wide: true }),
+        select("output_size", "输出规格", ["2K", "1K", "4K"], { default: "2K" }),
+        select("nano_images", "生成张数", ["1", "2", "3", "4"], { default: "4" }),
       ],
     },
     subject_replace: {
@@ -179,11 +220,10 @@
       kicker: "IMAGE SUBJECT",
       description: "替换图片中的人物或商品，同时保留原构图与光影关系。",
       fields: [
-        file("source_image", "原图片", "image/*", { required: true }),
-        file("subject_image", "新主体图片", "image/*", { required: true }),
-        textarea("prompt", "替换要求", { placeholder: "描述需要保留和改变的内容", wide: true }),
-        number("width", "输出宽度", { default: 1024, min: 1 }),
-        number("height", "输出高度", { default: 1024, min: 1 }),
+        file("original", "原始图片", "image/*", { required: true }),
+        file("replacement_product", "商品图", "image/*"),
+        file("replacement_model", "模特图", "image/*"),
+        textarea("prompt", "替换要求", { default: "请根据原始图片和目标商品/人物图精准判断替换区域；只替换原图中对应的人物或商品主体，原图中的建筑、背景、光影、构图、招牌、Logo、包装文字、门头文字、海报文字和其他可读文字必须完整保留。", wide: true }),
       ],
     },
     poster_translate: {
@@ -193,11 +233,8 @@
       kicker: "POSTER TRANSLATE",
       description: "识别海报文字并翻译，尽量保持原版式、字体层级与视觉节奏。",
       fields: [
-        file("poster_image", "海报图片", "image/*", { required: true }),
-        select("source_language", "原始语言", LANGUAGE_OPTIONS, { default: "Auto" }),
-        select("target_language", "目标语言", LANGUAGE_OPTIONS.filter((item) => item !== "Auto"), { default: "Chinese", required: true }),
-        textarea("translation_notes", "翻译说明", { placeholder: "品牌名、专有名词或语气要求", wide: true }),
-        checkbox("preserve_layout", "保持原海报版式", { default: true, wide: true }),
+        file("poster", "原始电商海报图", "image/*", { required: true }),
+        select("target_language", "目标市场语言", LANGUAGE_OPTIONS, { default: "English" }),
       ],
     },
     subject_generate: {
@@ -206,18 +243,25 @@
       shortLabel: "主体生成",
       kicker: "SUBJECT GENERATE",
       description: "根据参考图与描述生成可用于后续图片或视频制作的新主体。",
-      fields: [
-        file("reference_image", "参考图", "image/*", { help: "可选；上传后用于保持主体特征。" }),
-        select("mode", "生成模式", [
-          { value: "digital_human_character", label: "数字人角色" },
-          { value: "three_view", label: "角色三视图" },
-        ], { default: "digital_human_character", required: true, help: "三视图模式会生成便于后续角色建模与一致性制作的多视角参考。" }),
-        textarea("prompt", "主体描述", { placeholder: "描述外观、材质、姿态与使用场景", required: true, wide: true }),
-        textarea("negative_prompt", "排除内容", { placeholder: "不希望出现在画面中的元素", wide: true }),
-        number("width", "输出宽度", { default: 1024, min: 1 }),
-        number("height", "输出高度", { default: 1024, min: 1 }),
-        number("count", "生成数量", { default: 1, min: 1, max: 8 }),
-      ],
+      fields(values = {}) {
+        const product = values.subject_generate_mode === "product";
+        return [
+          select("subject_generate_mode", "生成模式", [{ value: "character", label: "数字人生成" }, { value: "product", label: "产品图生成" }], { default: "character", placement: "uploadFooter" }),
+          ...(product ? [
+            file("product", "产品角度图（最多3张）", "image/*", { required: true, multiple: true, minFiles: 1, maxFiles: 3, previewSlots: 3, previewLabels: ["角度一", "角度二（选填）", "角度三（选填）"] }),
+            textarea("prompt", "补充要求", { placeholder: "可留空，例如：综合多个角度还原产品形态，保持包装细节，白底三视图", wide: true }),
+          ] : [
+            file("reference", "人设参考图（最多3张）", "image/*", { multiple: true, maxFiles: 3, previewSlots: 3, previewLabels: ["参考图/正面", "侧面（选填）", "背面（选填）"], help: "可上传 1 张人物参考图或 3 张人设三视图；上传后性别、年龄段、气质风格由参考图判断" }),
+            select("digital_human_character_region", "地区特征", [{ value: "china", label: "中国" }, { value: "europe_america", label: "欧美" }, { value: "indonesia", label: "印尼" }, { value: "thailand", label: "泰国" }, { value: "japan", label: "日本" }, { value: "malaysia", label: "马来西亚" }], { default: "china" }),
+            select("character_gender", "性别", [{ value: "", label: "自动" }, { value: "female", label: "女性" }, { value: "male", label: "男性" }], { default: "" }),
+            select("character_age", "年龄段", [{ value: "", label: "自动" }, { value: "18_22", label: "18-22岁" }, { value: "23_27", label: "23-27岁" }, { value: "28_32", label: "28-32岁" }, { value: "33_38", label: "33-38岁" }, { value: "39_45", label: "39-45岁" }, { value: "46_55", label: "46-55岁" }, { value: "56_plus", label: "56岁以上" }], { default: "" }),
+            select("character_hairstyle", "发型", CHARACTER_HAIRSTYLES[values.character_gender] || CHARACTER_HAIRSTYLES.default, { default: "" }),
+            select("character_temperament", "气质风格", CHARACTER_TEMPERAMENTS[characterProfile(values)] || CHARACTER_TEMPERAMENTS.default, { default: "" }),
+            select("character_clothing", "服装风格", CHARACTER_CLOTHING[characterProfile(values)] || CHARACTER_CLOTHING.default, { default: "" }),
+            textarea("prompt", "补充特征", { placeholder: "可留空，例如：亲和笑容、商务穿搭、五官立体", wide: true }),
+          ]),
+        ];
+      },
     },
   };
 
@@ -372,37 +416,6 @@
     };
   }
 
-  function normalizeFields(rawModule, fallbackModule) {
-    const rawFields = rawModule?.fields || rawModule?.inputs || rawModule?.form_fields || rawModule?.form_schema?.fields || rawModule?.schema?.fields;
-    let fields = [];
-    if (Array.isArray(rawFields)) {
-      fields = rawFields.map((fieldItem) => normalizeField(fieldItem)).filter(Boolean);
-    } else if (rawFields && typeof rawFields === "object") {
-      fields = Object.entries(rawFields).map(([key, fieldItem]) => normalizeField(fieldItem, key)).filter(Boolean);
-    }
-    return fields.length ? fields : fallbackModule.fields;
-  }
-
-  function applyFrontendFieldContracts(moduleId, fields, fallbackModule) {
-    const fallbackByKey = new Map(fallbackModule.fields.map((field) => [field.key, field]));
-    const requiredKeys = {
-      video_subject_replace: ["subject_kind"],
-      subject_generate: ["mode"],
-    }[moduleId] || [];
-    const normalized = fields.map((field) => {
-      if (moduleId === "video_language_replace" && field.key === "target_script") {
-        return { ...field, ...fallbackByKey.get("target_script") };
-      }
-      return field;
-    });
-    for (const key of requiredKeys) {
-      if (!normalized.some((field) => field.key === key) && fallbackByKey.has(key)) {
-        normalized.unshift(fallbackByKey.get(key));
-      }
-    }
-    return normalized;
-  }
-
   function normalizeModules(payload) {
     const rows = moduleRowsFromPayload(payload);
     const byId = new Map(rows.map((row) => [String(row?.id || row?.key || row?.module || row?.module_id || ""), row]));
@@ -420,13 +433,26 @@
         shortLabel: String(raw.short_label || raw.shortLabel || raw.label || fallbackModule.shortLabel),
         kicker: String(raw.kicker || raw.category || fallbackModule.kicker),
         description: String(raw.description || raw.help || fallbackModule.description),
-        fields: applyFrontendFieldContracts(id, normalizeFields(raw, fallbackModule), fallbackModule),
+        // The backend directory supplies availability and task metadata only.
+        // Visible fields are an explicit allowlist copied from the original UI;
+        // provider/workflow parameters must never leak into this form.
+        fields: fallbackModule.fields,
       };
     });
   }
 
   function currentModule() {
     return state.modules.find((module) => module.id === state.moduleId) || state.modules[0] || FALLBACK_MODULES[MODULE_ORDER[0]];
+  }
+
+  function resolvedFields(module, values = {}) {
+    const source = typeof module.fields === "function" ? module.fields(values) : module.fields;
+    return (Array.isArray(source) ? source : []).map((fieldItem) => {
+      if (module.id === "video_subject_replace" && fieldItem.key === "image") {
+        return { ...fieldItem, label: values.replace_mode === "product" ? "目标商品图" : "目标人物/模特图" };
+      }
+      return fieldItem;
+    });
   }
 
   function draftScope() {
@@ -439,10 +465,19 @@
   }
 
   function defaultValues(module) {
-    return Object.fromEntries(module.fields.filter((field) => field.type !== "file").map((field) => [
+    return Object.fromEntries(resolvedFields(module).filter((field) => field.type !== "file").map((field) => [
       field.key,
       field.default ?? (field.type === "checkbox" ? false : ""),
     ]));
+  }
+
+  function hydrateDynamicDefaults(module, draft) {
+    for (const field of resolvedFields(module, draft.values)) {
+      if (field.type !== "file" && draft.values[field.key] === undefined) {
+        draft.values[field.key] = field.default ?? (field.type === "checkbox" ? false : "");
+      }
+    }
+    return draft;
   }
 
   function loadDraft(module) {
@@ -455,7 +490,7 @@
       values: { ...defaultValues(module), ...(stored?.values && typeof stored.values === "object" ? stored.values : {}) },
       savedAt: String(stored?.savedAt || ""),
     };
-    return state.drafts[module.id];
+    return hydrateDynamicDefaults(module, state.drafts[module.id]);
   }
 
   function saveDraft(moduleId) {
@@ -542,34 +577,11 @@
   }
 
   function scriptSource(module, values) {
-    if (module.id === "video_language_replace") return values.target_script || values.translated_script || values.script || values.speech_text || "";
+    if (module.id === "video_language_replace") return values.script_text || "";
     return values.speech_text || values.script || values.copy_text || "";
   }
 
-  function buildStoryboard(module, values, revision = 0) {
-    const duration = Math.max(6, Number(values.duration_seconds) || 15);
-    const sourceLines = scriptSource(module, values).split(/[\n。！？!?]+/).map((line) => line.trim()).filter(Boolean);
-    const count = Math.max(3, Math.min(6, sourceLines.length || Math.round(duration / 4)));
-    const sceneDuration = Number((duration / count).toFixed(1));
-    const product = String(values.product_name || "商品");
-    const style = String(values.style_hint || "自然真实的电商场景");
-    return Array.from({ length: count }, (_, index) => ({
-      id: advancedId("shot"),
-      index,
-      start: Number((index * sceneDuration).toFixed(1)),
-      end: index === count - 1 ? duration : Number(((index + 1) * sceneDuration).toFixed(1)),
-      shot: ["建立场景", "痛点引入", "细节展示", "使用演示", "效果强化", "行动引导"][index] || `镜头 ${index + 1}`,
-      dialogue: sourceLines[index % Math.max(1, sourceLines.length)] || `${product}卖点展示 ${index + 1}`,
-      visual_prompt: `${style}，${product}，镜头 ${index + 1}${revision ? `，变化版本 ${revision}` : ""}`,
-    }));
-  }
-
   function ensureAdvancedValues(module, draft) {
-    if (module.id === "ecommerce_short_video" && (!Array.isArray(draft.values.storyboard) || !draft.values.storyboard.length)) {
-      draft.values.storyboard = buildStoryboard(module, draft.values);
-      draft.values.storyboard_confirmed = false;
-      draft.values.storyboard_revision = 0;
-    }
     if (TIMELINE_MODULES.has(module.id)) {
       const existing = draft.values.subtitle_segments || draft.values.script_segments;
       draft.values.subtitle_segments = normalizeTimelineRows(existing);
@@ -679,6 +691,8 @@
   function renderFileField(field) {
     const files = selectedFiles(state.moduleId, field.key);
     const fileRows = files.map((item) => `<li><span>${escapeHtml(item.name)}</span><small>${formatBytes(item.size)}</small></li>`).join("");
+    const previewSlots = Math.max(0, Number(field.previewSlots) || 0);
+    const previewLabels = Array.isArray(field.previewLabels) ? field.previewLabels : [];
     return `<label class="video-file-field ${files.length ? "has-files" : ""}" data-video-file-field="${escapeHtml(field.key)}">
       <input type="file" data-video-field="${escapeHtml(field.key)}" ${field.accept ? `accept="${escapeHtml(field.accept)}"` : ""} ${field.multiple ? "multiple" : ""} ${field.required ? "required" : ""} />
       <span class="video-file-field-icon">${moduleIcon(state.moduleId)}</span>
@@ -687,6 +701,7 @@
         <span>${files.length ? `已选择 ${files.length} 个文件` : (field.help || "点击选择或将文件拖到这里")}</span>
       </span>
       <span class="video-file-field-action">${files.length ? "重新选择" : "选择文件"}</span>
+      ${previewSlots ? `<span class="video-upload-slots" aria-hidden="true">${Array.from({ length: previewSlots }, (_, index) => `<i class="${files[index] ? "is-filled" : ""}">${escapeHtml(files[index]?.name || previewLabels[index] || `素材 ${index + 1}`)}</i>`).join("")}</span>` : ""}
       ${fileRows ? `<ul class="video-selected-files">${fileRows}</ul>` : ""}
     </label>`;
   }
@@ -738,48 +753,29 @@
     const languages = [...new Set(state.voicePresets.map((voice) => voice.language).filter(Boolean))].sort();
     return `<section class="video-advanced-card video-voice-studio" data-video-voice-studio>
       <div class="video-advanced-head">
-        <div><span>VOICE CAST</span><strong>音色与试听</strong><small>从服务端音色目录选择；试听不会提交任务。</small></div>
-        <button type="button" class="video-mini-button" data-video-reload-voices ${state.voiceLoading ? "disabled" : ""}>${state.voiceLoading ? "加载中…" : "刷新音色"}</button>
+        <div><span>VOICE CAST</span><strong>参考声音</strong><small>${escapeHtml(selected?.label || "可上传干音，或选择预设声音试听")}</small></div>
       </div>
       ${state.voiceError ? `<div class="video-advanced-notice">${escapeHtml(state.voiceError)}</div>` : ""}
-      <div class="video-voice-toolbar">
-        <label><span>筛选语言</span><select data-video-voice-filter><option value="">全部语言</option>${languages.map((item) => `<option value="${escapeHtml(item)}" ${item === state.voiceFilter ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label>
-        <div class="video-selected-voice"><span>当前音色</span><strong>${escapeHtml(selected?.label || selectedId || "未选择")}</strong></div>
-      </div>
-      ${state.voiceLoading && !voices.length ? `<div class="video-advanced-loading"><span class="video-workbench-loader"></span>正在加载音色列表</div>` : `
-        <div class="video-voice-list" role="radiogroup" aria-label="可用音色">${voices.map((voice) => {
-          const active = voice.voiceId === selectedId || voice.id === selectedId;
-          return `<article class="video-voice-item ${active ? "is-selected" : ""}">
-            <button type="button" class="video-voice-select" role="radio" aria-checked="${active ? "true" : "false"}" data-video-voice-select="${escapeHtml(voice.id)}">
-              <strong>${escapeHtml(voice.label)}</strong><small>${escapeHtml([voice.language, voice.gender].filter(Boolean).join(" · "))}</small>
-            </button>
-            ${voice.previewUrl ? `<button type="button" class="video-voice-play" data-video-voice-preview="${escapeHtml(voice.id)}" aria-label="试听 ${escapeHtml(voice.label)}">▶</button>` : `<span class="video-voice-no-preview">无试听</span>`}
-          </article>`;
-        }).join("")}</div>`}
-      <audio id="videoVoicePreview" class="video-voice-audio" controls preload="metadata" ${selected?.previewUrl ? `src="${escapeHtml(selected.previewUrl)}"` : ""}>当前浏览器不支持 audio 试听。</audio>
-    </section>`;
-  }
-
-  function renderStoryboard(module, draft) {
-    if (module.id !== "ecommerce_short_video" || draft.values.content_mode === "advertising") return "";
-    const storyboard = Array.isArray(draft.values.storyboard) ? draft.values.storyboard : [];
-    const confirmed = Boolean(draft.values.storyboard_confirmed);
-    return `<section class="video-advanced-card video-storyboard" data-video-storyboard>
-      <div class="video-advanced-head">
-        <div><span>PLANTING STORYBOARD</span><strong>种草故事板</strong><small>先预览和编辑镜头，再确认进入生成队列。</small></div>
-        <span class="video-confirm-chip ${confirmed ? "is-confirmed" : ""}">${confirmed ? "已确认" : "待确认"}</span>
-      </div>
-      <div class="video-storyboard-actions">
-        <button type="button" class="video-mini-button" data-video-storyboard-generate>${storyboard.length ? "按当前文案重生成" : "生成预览"}</button>
-        <button type="button" class="video-mini-button video-mini-button--accent" data-video-storyboard-confirm ${!storyboard.length ? "disabled" : ""}>确认故事板</button>
-      </div>
-      <div class="video-storyboard-track">${storyboard.map((shot, index) => `<article class="video-storyboard-shot" data-video-storyboard-id="${escapeHtml(shot.id)}">
-        <header><span>${String(index + 1).padStart(2, "0")}</span><strong>${escapeHtml(formatTimecode(shot.start))}–${escapeHtml(formatTimecode(shot.end))}</strong><button type="button" data-video-remove-segment="storyboard" data-video-segment-id="${escapeHtml(shot.id)}" aria-label="删除镜头">×</button></header>
-        <label><span>镜头</span><input data-video-storyboard-field="shot" data-video-segment-id="${escapeHtml(shot.id)}" value="${escapeHtml(shot.shot)}"></label>
-        <label><span>台词</span><textarea rows="2" data-video-storyboard-field="dialogue" data-video-segment-id="${escapeHtml(shot.id)}">${escapeHtml(shot.dialogue)}</textarea></label>
-        <label><span>画面提示词</span><textarea rows="3" data-video-storyboard-field="visual_prompt" data-video-segment-id="${escapeHtml(shot.id)}">${escapeHtml(shot.visual_prompt)}</textarea></label>
-        <button type="button" class="video-segment-regenerate" data-video-regenerate-segment="storyboard" data-video-segment-id="${escapeHtml(shot.id)}">重生成此段</button>
-      </article>`).join("")}</div>
+      <details class="video-voice-picker">
+        <summary>${selected ? "更换 / 试听预设声音" : "选择 / 试听预设声音"}</summary>
+        <div class="video-voice-picker-body">
+          <div class="video-voice-toolbar">
+            <label><span>筛选语言</span><select data-video-voice-filter><option value="">全部语言</option>${languages.map((item) => `<option value="${escapeHtml(item)}" ${item === state.voiceFilter ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label>
+            <button type="button" class="video-mini-button" data-video-reload-voices ${state.voiceLoading ? "disabled" : ""}>${state.voiceLoading ? "加载中…" : "刷新音色"}</button>
+          </div>
+          ${state.voiceLoading && !voices.length ? `<div class="video-advanced-loading"><span class="video-workbench-loader"></span>正在加载音色列表</div>` : `
+            <div class="video-voice-list" role="radiogroup" aria-label="可用音色">${voices.map((voice) => {
+              const active = voice.voiceId === selectedId || voice.id === selectedId;
+              return `<article class="video-voice-item ${active ? "is-selected" : ""}">
+                <button type="button" class="video-voice-select" role="radio" aria-checked="${active ? "true" : "false"}" data-video-voice-select="${escapeHtml(voice.id)}">
+                  <strong>${escapeHtml(voice.label)}</strong><small>${escapeHtml([voice.language, voice.gender].filter(Boolean).join(" · "))}</small>
+                </button>
+                ${voice.previewUrl ? `<button type="button" class="video-voice-play" data-video-voice-preview="${escapeHtml(voice.id)}" aria-label="试听 ${escapeHtml(voice.label)}">▶</button>` : `<span class="video-voice-no-preview">无试听</span>`}
+              </article>`;
+            }).join("")}</div>`}
+          <audio id="videoVoicePreview" class="video-voice-audio" controls preload="metadata" ${selected?.previewUrl ? `src="${escapeHtml(selected.previewUrl)}"` : ""}>当前浏览器不支持 audio 试听。</audio>
+        </div>
+      </details>
     </section>`;
   }
 
@@ -803,7 +799,7 @@
   }
 
   function renderAdvancedSections(module, draft) {
-    const sections = [renderVoiceStudio(module, draft), renderStoryboard(module, draft), renderTimelineEditor(module, draft)].filter(Boolean);
+    const sections = [renderTimelineEditor(module, draft)].filter(Boolean);
     if (!sections.length) return "";
     return `<section class="video-form-section video-form-section--advanced">
       <div class="video-section-heading"><span>03</span><div><strong>高级编排</strong><small>试听、故事板和时间轴内容都会随草稿保存。</small></div></div>
@@ -814,17 +810,25 @@
   function renderForm(module) {
     const draft = loadDraft(module);
     ensureAdvancedValues(module, draft);
-    const fileFields = module.fields.filter((field) => field.type === "file");
-    const inputFields = module.fields.filter((field) => field.type !== "file" && !(VOICE_MODULES.has(module.id) && ["speaker", "voice_id"].includes(field.key)));
+    const fields = resolvedFields(module, draft.values);
+    const fileFields = fields.filter((field) => field.type === "file");
+    const uploadTopFields = fields.filter((field) => field.type !== "file" && field.placement === "uploadTop");
+    const uploadFooterFields = fields.filter((field) => field.type !== "file" && field.placement === "uploadFooter");
+    const inputFields = fields.filter((field) => field.type !== "file" && !field.placement && !(VOICE_MODULES.has(module.id) && ["speaker", "voice_id"].includes(field.key)));
     return `<form id="videoWorkbenchForm" class="video-workbench-form" data-video-module-form="${escapeHtml(module.id)}">
-      ${fileFields.length ? `<section class="video-form-section">
-        <div class="video-section-heading"><span>01</span><div><strong>输入素材</strong><small>文件仅在当前页面保留，草稿会保存其他参数。</small></div></div>
-        <div class="video-file-grid">${fileFields.map(renderFileField).join("")}</div>
-      </section>` : ""}
-      ${inputFields.length ? `<section class="video-form-section">
-        <div class="video-section-heading"><span>${fileFields.length ? "02" : "01"}</span><div><strong>生成设置</strong><small>字段沿用原工作台可见参数，可随时暂存。</small></div></div>
-        <div class="video-form-grid">${inputFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>
-      </section>` : `<div class="video-workbench-state video-workbench-state--empty"><strong>当前模块没有可填写字段</strong><span>模块接口返回了空字段合同，请刷新后重试。</span></div>`}
+      <div class="video-original-layout">
+        <section class="video-form-section video-upload-panel">
+          <div class="video-original-panel-head"><div><strong>素材上传</strong><small>请按原工作台顺序上传素材。</small></div><button type="button" class="video-button video-button--ghost" data-video-clear-files>清空</button></div>
+          ${uploadTopFields.length ? `<div class="video-upload-mode-fields">${uploadTopFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : ""}
+          ${fileFields.length ? `<div class="video-file-grid">${fileFields.map(renderFileField).join("")}</div>` : `<div class="video-workbench-state video-workbench-state--empty"><span>当前模块无需上传素材。</span></div>`}
+          ${renderVoiceStudio(module, draft)}
+          ${uploadFooterFields.length ? `<div class="video-upload-mode-fields video-upload-mode-fields--footer">${uploadFooterFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : ""}
+        </section>
+        <section class="video-form-section video-settings-panel">
+          <div class="video-original-panel-head"><div><strong>生成内容</strong><small>仅显示原数字人项目对用户开放的参数。</small></div></div>
+          ${inputFields.length ? `<div class="video-form-grid">${inputFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : `<div class="video-workbench-state video-workbench-state--empty"><span>此模块没有额外生成参数。</span></div>`}
+        </section>
+      </div>
       ${renderAdvancedSections(module, draft)}
       <div class="video-form-footer">
         <div class="video-draft-status" data-video-draft-status>${draft.savedAt ? `草稿已保存 · ${escapeHtml(formatTime(draft.savedAt))}` : "输入内容将自动保存为草稿"}</div>
@@ -1108,21 +1112,32 @@
 
   function handleFieldChange(input) {
     const module = currentModule();
-    const field = module.fields.find((item) => item.key === input.dataset.videoField);
+    const draft = loadDraft(module);
+    const field = resolvedFields(module, draft.values).find((item) => item.key === input.dataset.videoField);
     if (!field) return;
     if (field.type === "file") {
       state.files[module.id] ||= {};
-      state.files[module.id][field.key] = Array.from(input.files || []);
+      const selected = Array.from(input.files || []);
+      state.files[module.id][field.key] = field.maxFiles ? selected.slice(0, Number(field.maxFiles)) : selected;
       render();
       return;
     }
-    const draft = loadDraft(module);
     draft.values[field.key] = readFieldValue(field, input);
-    if (module.id === "ecommerce_short_video" && ["speech_text", "prompt_text", "product_name", "style_hint"].includes(field.key)) {
-      draft.values.storyboard_confirmed = false;
+    if (field.key === "character_gender") {
+      draft.values.character_hairstyle = "";
+      draft.values.character_temperament = "";
+      draft.values.character_clothing = "";
+    } else if (field.key === "character_age") {
+      draft.values.character_temperament = "";
+      draft.values.character_clothing = "";
     }
     saveDraft(module.id);
-    if (isPillSelectField(field)) render();
+    if (isPillSelectField(field) || DYNAMIC_SELECT_KEYS.has(field.key)) render();
+  }
+
+  function clearSelectedFiles(moduleId) {
+    state.files[moduleId] = {};
+    render();
   }
 
   function advancedDraft() {
@@ -1150,37 +1165,6 @@
     if (audio.src !== new URL(voice.previewUrl, window.location.href).href) audio.src = voice.previewUrl;
     state.playingVoiceId = voice.id;
     audio.play().catch(() => {});
-  }
-
-  function regenerateStoryboard() {
-    const { module, draft } = advancedDraft();
-    const revision = Number(draft.values.storyboard_revision || 0) + 1;
-    draft.values.storyboard = buildStoryboard(module, draft.values, revision);
-    draft.values.storyboard_revision = revision;
-    draft.values.storyboard_confirmed = false;
-    saveDraft(module.id);
-    render();
-  }
-
-  function confirmStoryboard() {
-    const { module, draft } = advancedDraft();
-    if (!Array.isArray(draft.values.storyboard) || !draft.values.storyboard.length) return;
-    draft.values.storyboard_confirmed = true;
-    draft.values.storyboard_confirmed_at = new Date().toISOString();
-    saveDraft(module.id);
-    render();
-  }
-
-  function updateStoryboardField(input) {
-    const { module, draft } = advancedDraft();
-    const shot = draft.values.storyboard.find((item) => String(item.id) === String(input.dataset.videoSegmentId));
-    if (!shot) return;
-    shot[input.dataset.videoStoryboardField] = input.value;
-    draft.values.storyboard_confirmed = false;
-    saveDraft(module.id);
-    document.querySelector(".video-confirm-chip")?.classList.remove("is-confirmed");
-    const chip = document.querySelector(".video-confirm-chip");
-    if (chip) chip.textContent = "待确认";
   }
 
   function setTimelineRows(module, draft, rows) {
@@ -1237,35 +1221,18 @@
 
   function removeAdvancedSegment(kind, segmentId) {
     const { module, draft } = advancedDraft();
-    if (kind === "storyboard") {
-      draft.values.storyboard = (draft.values.storyboard || []).filter((item) => String(item.id) !== String(segmentId));
-      draft.values.storyboard_confirmed = false;
-      saveDraft(module.id);
-    } else {
-      setTimelineRows(module, draft, (draft.values.subtitle_segments || []).filter((item) => String(item.id) !== String(segmentId)));
-    }
+    setTimelineRows(module, draft, (draft.values.subtitle_segments || []).filter((item) => String(item.id) !== String(segmentId)));
     render();
   }
 
   function regenerateDraftSegment(kind, segmentId) {
     const { module, draft } = advancedDraft();
-    if (kind === "storyboard") {
-      const shot = (draft.values.storyboard || []).find((item) => String(item.id) === String(segmentId));
-      if (shot) {
-        const revision = Number(shot.revision || 0) + 1;
-        shot.revision = revision;
-        shot.visual_prompt = `${String(draft.values.style_hint || "自然真实的电商场景")}，${String(draft.values.product_name || "商品")}，${shot.shot}，变化镜头 ${revision}`;
-        draft.values.storyboard_confirmed = false;
-        saveDraft(module.id);
-      }
-    } else {
-      const rows = normalizeTimelineRows(draft.values.subtitle_segments);
-      const row = rows.find((item) => String(item.id) === String(segmentId));
-      if (row) {
-        row.regenerate = true;
-        row.regenerate_revision = Number(row.regenerate_revision || 0) + 1;
-        setTimelineRows(module, draft, rows);
-      }
+    const rows = normalizeTimelineRows(draft.values.subtitle_segments);
+    const row = rows.find((item) => String(item.id) === String(segmentId));
+    if (row) {
+      row.regenerate = true;
+      row.regenerate_revision = Number(row.regenerate_revision || 0) + 1;
+      setTimelineRows(module, draft, rows);
     }
     render();
   }
@@ -1286,18 +1253,94 @@
 
   function validate(module) {
     const draft = loadDraft(module);
-    for (const field of module.fields) {
+    const fields = resolvedFields(module, draft.values);
+    for (const field of fields) {
       if (!field.required) continue;
-      if (field.type === "file" && !selectedFiles(module.id, field.key).length) return `请上传${field.label}`;
+      if (field.type === "file" && !selectedFiles(module.id, field.key).length) {
+        if (field.key === "audio" && draft.values.voice_id) continue;
+        return `请上传${field.label}`;
+      }
       if (field.type !== "file" && String(draft.values[field.key] ?? "").trim() === "") return `请填写${field.label}`;
     }
-    if (module.id === "ecommerce_image" && draft.values.mode === "model_product" && !selectedFiles(module.id, "model_image").length) {
-      return "“模特图 + 商品图”模式需要上传模特图";
+    for (const field of fields.filter((item) => item.type === "file")) {
+      const count = selectedFiles(module.id, field.key).length;
+      if (field.minFiles && count < Number(field.minFiles)) return `${field.label}至少需要 ${field.minFiles} 个文件`;
+      if (field.maxFiles && count > Number(field.maxFiles)) return `${field.label}最多允许 ${field.maxFiles} 个文件`;
     }
-    if (module.id === "ecommerce_short_video" && draft.values.content_mode !== "advertising" && !draft.values.storyboard_confirmed) {
-      return "请先预览并确认种草故事板";
+    if (module.id === "subject_replace" && !selectedFiles(module.id, "replacement_product").length && !selectedFiles(module.id, "replacement_model").length) {
+      return "请至少上传商品图或模特图中的一项";
     }
     return "";
+  }
+
+  function publicSubmitValues(module, draft) {
+    const values = Object.fromEntries(resolvedFields(module, draft.values)
+      .filter((field) => field.type !== "file")
+      .map((field) => [field.key, draft.values[field.key]]));
+    if (draft.values.voice_id) {
+      values.voice_id = draft.values.voice_id;
+      values.speaker = draft.values.voice_id;
+      values.voice_label = draft.values.voice_label || "";
+    }
+    if (module.id === "digital_human_video") {
+      const oral = values.digital_human_content_mode === "oral_broadcast";
+      Object.assign(values, {
+        language: values.target_language,
+        style_hint: "生成大片质感商业广告视频提示词。直入核心卖点，产品主画面、功能过程、使用结果和购买理由清晰，高效、有转化感。",
+        ecommerce_ad_style: "standard_ecommerce",
+        use_ai_copy: !String(values.speech_text || "").trim(),
+        digital_human_short_mode: oral ? "single" : (values.digital_human_short_mode || "storyboard"),
+        product_image_role: oral ? "scene" : "product",
+        dual_model_dialogue: selectedFiles(module.id, "model").length >= 2,
+        add_subtitles: false,
+        subtitle_enabled: false,
+      });
+    } else if (module.id === "ecommerce_short_video") {
+      const seeding = values.ecommerce_video_mode === "seeding_video";
+      values.language = values.target_language;
+      values.content_mode = seeding ? "planting" : "advertising";
+      values.tg_use_llm_prompt = seeding || !String(values.prompt_text || "").trim();
+      if (seeding) {
+        values.add_subtitles = true;
+        values.subtitle_enabled = true;
+      } else {
+        values.prompt = values.prompt_text || "";
+        values.ecommerce_model = values.ecommerce_short_video_model;
+        values.seedance_model = values.ecommerce_short_video_model;
+      }
+    } else if (module.id === "video_language_replace") {
+      values.language = values.target_language;
+      values.video_tts_model = values.minimax_tts_model;
+    } else if (module.id === "video_subject_replace") {
+      values.subject_kind = values.replace_mode === "product" ? "product" : "model";
+      if (values.subject_kind === "model") {
+        values.mode = "original";
+        values.use_custom_duration = false;
+      } else {
+        values.prompt_text = "替换视频中所有同类商品，保持人物、背景、光影和原视频节奏不变。";
+      }
+    } else if (module.id === "ecommerce_image") {
+      values.mode = selectedFiles(module.id, "model").length ? "model_product" : "product_only";
+      values.image_size = values.output_size || "2K";
+      values.size = values.output_size || "2K";
+      values.count = Number(values.nano_images || 4);
+      values.prompt = [values.product_name, values.product_details, "生成电商广告图，保持商品形态与包装文字准确"].filter(Boolean).join("；");
+      values.tg_use_llm_prompt = true;
+    } else if (module.id === "subject_replace") {
+      values.mode = "subject_replace";
+    } else if (module.id === "poster_translate") {
+      values.mode = "poster_translate";
+      values.language = values.target_language;
+    } else if (module.id === "subject_generate") {
+      const product = values.subject_generate_mode === "product";
+      values.mode = product ? "three_view" : "digital_human_character";
+      if (!String(values.prompt || "").trim()) {
+        values.prompt = product
+          ? "综合多个角度还原产品形态，保持包装细节，生成白底三视图"
+          : [values.digital_human_character_region, values.character_gender, values.character_age, values.character_hairstyle, values.character_temperament, values.character_clothing].filter(Boolean).join("，") || "生成自然真实的数字人人设三视图";
+      }
+    }
+    return values;
   }
 
   async function submit(event) {
@@ -1323,24 +1366,15 @@
         if (parsed.length) {
           draft.values.subtitle_segments = parsed;
           draft.values.script_segments = parsed;
-          draft.values.target_script = parsed.map((row) => row.text).filter(Boolean).join("\n");
         }
       }
-      const submitValues = { ...draft.values };
-      if (TIMELINE_MODULES.has(module.id)) {
-        const subtitleItems = normalizeTimelineRows(draft.values.subtitle_segments).map((row) => ({
+      const submitValues = publicSubmitValues(module, draft);
+      if (module.id === "video_language_replace" && normalizeTimelineRows(draft.values.script_segments).length) {
+        submitValues.source_segments = normalizeTimelineRows(draft.values.script_segments).map((row) => ({
           start_seconds: Number(row.start),
           end_seconds: Number(row.end),
-          text: String(row.text || "").trim(),
-        })).filter((row) => row.text && row.end_seconds > row.start_seconds);
-        submitValues.subtitles = {
-          enabled: draft.values.subtitles_enabled !== false,
-          template: String(draft.values.subtitle_template || "keyword_focus"),
-          items: subtitleItems,
-        };
-      }
-      if (module.id === "video_subject_replace") {
-        submitValues.subject_kind = draft.values.subject_kind === "product" ? "product" : "model";
+          source_text: String(row.text || "").trim(),
+        })).filter((row) => row.source_text && row.end_seconds > row.start_seconds);
       }
       if (!(await confirmPromptPreview(module, submitValues))) return;
       const fileManifest = [];
@@ -1349,7 +1383,7 @@
       body.append("module_id", module.id);
       body.append("video_module", module.id);
       body.append("task_type", module.task_type || BACKEND_TASK_TYPES[module.id] || module.id);
-      module.fields.filter((field) => field.type === "file").forEach((field) => {
+      resolvedFields(module, draft.values).filter((field) => field.type === "file").forEach((field) => {
         selectedFiles(module.id, field.key).forEach((selectedFile) => {
           body.append(field.upload_name || "files", selectedFile);
           fileManifest.push({ field: field.key, name: selectedFile.name, size: selectedFile.size, type: selectedFile.type });
@@ -1464,8 +1498,6 @@
     document.addEventListener("input", (event) => {
       const input = event.target.closest?.("#videoWorkbenchRoot [data-video-field]");
       if (input && input.type !== "file") handleFieldChange(input);
-      const storyboardInput = event.target.closest?.("#videoWorkbenchRoot [data-video-storyboard-field]");
-      if (storyboardInput) updateStoryboardField(storyboardInput);
       const timelineInput = event.target.closest?.("#videoWorkbenchRoot [data-video-timeline-field]");
       if (timelineInput) updateTimelineField(timelineInput);
     });
@@ -1493,6 +1525,7 @@
       const moduleButton = event.target.closest?.("[data-video-workbench-module]");
       if (moduleButton) selectModule(moduleButton.dataset.videoWorkbenchModule);
       if (event.target.closest?.("[data-video-clear-draft]")) clearDraft(state.moduleId);
+      if (event.target.closest?.("[data-video-clear-files]")) clearSelectedFiles(state.moduleId);
       if (event.target.closest?.("[data-video-refresh]")) loadTasks().catch(() => {});
       if (event.target.closest?.("[data-video-retry-modules]")) loadModules().catch(() => {});
       if (event.target.closest?.("[data-video-reload-voices]")) loadVoicePresets({ force: true }).catch(() => {});
@@ -1500,8 +1533,6 @@
       if (voiceSelect) selectVoice(voiceSelect.dataset.videoVoiceSelect);
       const voicePreview = event.target.closest?.("[data-video-voice-preview]");
       if (voicePreview) previewVoice(voicePreview.dataset.videoVoicePreview);
-      if (event.target.closest?.("[data-video-storyboard-generate]")) regenerateStoryboard();
-      if (event.target.closest?.("[data-video-storyboard-confirm]")) confirmStoryboard();
       if (event.target.closest?.("[data-video-parse-script]")) void parseCurrentScript();
       if (event.target.closest?.("[data-video-add-timeline]")) addTimelineRow();
       const removeSegment = event.target.closest?.("[data-video-remove-segment]");

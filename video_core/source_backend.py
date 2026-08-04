@@ -1458,6 +1458,30 @@ class ArchivedSourceBackend:
                 image_urls.append(_text(value))
         if not image_urls:
             raise RuntimeError("电商短视频至少需要一张产品图片")
+        video_urls: list[str] = []
+        reference_video_local = _text(payload.get("reference_video_local_path"))
+        reference_video_remote = _text(payload.get("reference_video_url"))
+        if reference_video_local or reference_video_remote:
+            video_urls.append(self._resolve_media(
+                task_id=task_id,
+                payload=payload,
+                context=context,
+                media_kind="ecommerce_reference_video",
+                local_values=(reference_video_local,),
+                remote_values=(reference_video_remote,),
+            ))
+        audio_urls: list[str] = []
+        reference_audio_local = _text(payload.get("audio_local_path"))
+        reference_audio_remote = _text(payload.get("audio_url"))
+        if reference_audio_local or reference_audio_remote:
+            audio_urls.append(self._resolve_media(
+                task_id=task_id,
+                payload=payload,
+                context=context,
+                media_kind="ecommerce_reference_audio",
+                local_values=(reference_audio_local,),
+                remote_values=(reference_audio_remote,),
+            ))
         model = _text(payload.get("ecommerce_model") or payload.get("ecommerce_short_video_model") or payload.get("seedance_model") or "seedance2.0").lower()
         fast = "fast" in model
         model_slug = "sparkvideo-2.0-fast" if fast else "sparkvideo-2.0"
@@ -1558,8 +1582,8 @@ class ArchivedSourceBackend:
                 "resolution": resolution,
                 "duration": self._ecommerce_duration_text(float(segment["duration_seconds"])),
                 "imageUrls": image_urls[:9],
-                "videoUrls": [],
-                "audioUrls": [],
+                "videoUrls": video_urls,
+                "audioUrls": audio_urls,
                 "generateAudio": True,
                 "ratio": ratio,
                 "realPersonMode": _text(payload.get("real_person_mode") or "allow"),
@@ -2039,7 +2063,7 @@ class ArchivedSourceBackend:
         common_secondary = payload.get("secondary_image_local_path")
         if mode == "product_only":
             candidates = [payload.get("product_image_local_path"), payload.get("image_local_path"), common_primary, *listed]
-            minimum, maximum = 1, 1
+            minimum, maximum = 1, 3
         elif mode == "model_product":
             candidates = [
                 payload.get("product_image_local_path"),
@@ -2048,17 +2072,19 @@ class ArchivedSourceBackend:
                 common_secondary,
                 *listed,
             ]
-            minimum, maximum = 2, 2
+            minimum, maximum = 2, 4
         elif mode == "subject_replace":
             candidates = [
                 payload.get("source_image_local_path"),
                 common_primary,
                 payload.get("image_local_path"),
                 payload.get("subject_image_local_path"),
+                payload.get("replacement_product_image_local_path"),
+                payload.get("replacement_model_image_local_path"),
                 common_secondary,
                 *listed,
             ]
-            minimum, maximum = 2, 2
+            minimum, maximum = 2, 3
         elif mode == "poster_translate":
             candidates = [
                 payload.get("poster_image_local_path"),
@@ -2068,6 +2094,15 @@ class ArchivedSourceBackend:
                 *listed,
             ]
             minimum, maximum = 1, 1
+        elif mode == "digital_human_character":
+            candidates = [
+                payload.get("reference_image_local_path"),
+                common_primary,
+                payload.get("image_local_path"),
+                payload.get("product_image_local_path"),
+                *listed,
+            ]
+            minimum, maximum = 0, 3
         else:
             candidates = [
                 payload.get("reference_image_local_path"),
@@ -2076,14 +2111,14 @@ class ArchivedSourceBackend:
                 payload.get("product_image_local_path"),
                 *listed,
             ]
-            minimum, maximum = 0, 1
+            minimum, maximum = 1, 3
         paths = _unique_text_values(candidates)
         if len(paths) < minimum or len(paths) > maximum:
-            if minimum == maximum == 2:
-                raise ValueError(f"{mode} requires exactly two local input images")
             if minimum == maximum == 1:
                 raise ValueError(f"{mode} requires exactly one local input image")
-            raise ValueError(f"{mode} accepts at most one local input image")
+            if minimum == maximum:
+                raise ValueError(f"{mode} requires exactly {minimum} local input images")
+            raise ValueError(f"{mode} requires {minimum}-{maximum} local input images")
         for path_text in paths:
             path = Path(path_text)
             if not path.exists() or not path.is_file():

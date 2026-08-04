@@ -154,7 +154,7 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
             context = self._context("image_generate")
             invalid_payloads = (
                 ({"video_image_mode": "unknown", "prompt": "x"}, "video_image_mode"),
-                ({"video_image_mode": "model_product", "prompt": "x", "product_image_local_path": first}, "two"),
+                ({"video_image_mode": "model_product", "prompt": "x", "product_image_local_path": first}, "2-4"),
                 ({"video_image_mode": "poster_translate", "prompt": "x", "poster_image_local_path": first}, "target_language"),
                 ({"video_image_mode": "product_only", "prompt": "x", "product_image_local_path": first, "count": 0}, "count"),
                 ({"video_image_mode": "product_only", "prompt": "x", "product_image_url": "https://example.invalid/a.png"}, "local"),
@@ -163,6 +163,29 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
                 with self.subTest(payload=payload):
                     with self.assertRaisesRegex(ValueError, marker):
                         backend.image_generate(task_id="task-invalid", payload={"output_dir": tmpdir, **payload}, context=context)
+
+    def test_original_multi_reference_slots_are_accepted(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = [self._write_image(tmpdir, f"reference-{index}.png") for index in range(1, 4)]
+            calls: list[dict] = []
+
+            def fake_generate_image(**kwargs):
+                calls.append(kwargs)
+                Path(kwargs["output_image_path"]).write_bytes(b"generated")
+                return {"image_path": kwargs["output_image_path"], "selected_model": "fake"}
+
+            with patch("video_core.source_backend.image_model_api.generate_image", side_effect=fake_generate_image):
+                ArchivedSourceBackend().image_generate(
+                    task_id="task-multi-reference",
+                    payload={
+                        "output_dir": str(Path(tmpdir) / "output"),
+                        "video_image_mode": "three_view",
+                        "product_image_local_paths": paths,
+                        "prompt": "preserve all product angles",
+                    },
+                    context=self._context("image_generate"),
+                )
+            self.assertEqual(calls[0]["input_image_paths"], paths)
 
     def test_ecommerce_storyboard_is_aggregated_into_one_paid_submission_and_preserved(self):
         backend = _FakeEcommerceBackend()
@@ -177,6 +200,8 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
                 payload={
                     "output_dir": tmpdir,
                     "product_image_local_path": str(Path(tmpdir) / "product.png"),
+                    "reference_video_local_path": str(Path(tmpdir) / "reference.mp4"),
+                    "audio_local_path": str(Path(tmpdir) / "reference.wav"),
                     "prompt": "base campaign",
                     "storyboard": storyboard,
                     "prompt_segments": prompt_segments,
@@ -193,6 +218,8 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
         self.assertEqual(result["raw_result"]["prompt_segments"], prompt_segments)
         self.assertEqual(result["raw_result"]["aggregated_prompt"], aggregate)
         self.assertEqual(result["raw_result"]["segment_count"], 4)
+        self.assertEqual(backend.submissions[0]["submit_payload"]["videoUrls"], ["https://media.invalid/ecommerce_reference_video"])
+        self.assertEqual(backend.submissions[0]["submit_payload"]["audioUrls"], ["https://media.invalid/ecommerce_reference_audio"])
 
     def test_ecommerce_rejects_malformed_segment_parameters_before_submission(self):
         backend = _FakeEcommerceBackend()

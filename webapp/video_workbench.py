@@ -451,12 +451,27 @@ def _server_payload_enricher(server_module: Any) -> Callable[[str, str, dict[str
                     "You transcribe and translate spoken video content. Return JSON only with keys "
                     "source_language, source_script, target_script, and segments. Each segments item must "
                     "contain start_seconds, end_seconds, source_text, and text, where text is the translation. "
-                    "Preserve meaning, brand names, numbers, and natural speaking style. Do not add commentary."
+                    "Preserve meaning, brand names, numbers, and natural speaking style. When a supplied source "
+                    "script or source segments are present, keep that wording and only align timestamps before "
+                    "translation. Include supplied opening and ending lines in natural positions. Do not add commentary."
                 )
-                user_input = (
+                user_parts = [
                     f"Transcribe the attached video's spoken audio (source language: {source}) and translate it "
                     f"to {target}. Keep timestamps aligned to the speech timeline."
-                )
+                ]
+                provided_script = str(request_source.get("script_text") or "").strip()
+                provided_segments = request_source.get("source_segments")
+                opening_text = str(request_source.get("opening_insert_text") or "").strip()
+                ending_text = str(request_source.get("ending_insert_text") or "").strip()
+                if provided_script:
+                    user_parts.append(f"Use this supplied source transcript exactly:\n{provided_script}")
+                if isinstance(provided_segments, list) and provided_segments:
+                    user_parts.append("Use these supplied source time segments:\n" + json.dumps(provided_segments, ensure_ascii=False))
+                if opening_text:
+                    user_parts.append(f"Translate and insert this opening line before the original first line: {opening_text}")
+                if ending_text:
+                    user_parts.append(f"Translate and append this ending line after the original last line: {ending_text}")
+                user_input = "\n\n".join(user_parts)
                 result, selected, attempts = llm_json_request(
                     source=request_source,
                     user_input=user_input,
@@ -820,10 +835,14 @@ def build_video_submit_payload(
 
     if typ == "create_video":
         image = next((item for item in images if item.get("role") in {"model", "avatar", "person"}), images[0] if images else None)
+        products = [item for item in images if item is not image and item.get("role") in {"product", "scene", "goods"}]
         audio = next((item for item in audios if item.get("role") in {"audio", "voice", "speech"}), audios[0] if audios else None)
         if image:
             payload["model_image_local_path"] = path(image)
             payload.setdefault("image_local_path", path(image))
+        if products:
+            payload["product_image_local_path"] = path(products[0])
+            payload["product_image_local_paths"] = [path(item) for item in products]
         if audio:
             payload["audio_local_path"] = path(audio)
         if videos:
@@ -887,6 +906,10 @@ def build_video_submit_payload(
             role_set = {str(item).strip().lower() for item in roles}
             return next((item for item in images if str(item.get("role") or "").strip().lower() in role_set), None)
 
+        def images_for_role(*roles: str) -> list[dict[str, Any]]:
+            role_set = {str(item).strip().lower() for item in roles}
+            return [item for item in images if str(item.get("role") or "").strip().lower() in role_set]
+
         if images:
             payload["product_image_local_paths"] = [path(item) for item in images]
             payload["primary_image_local_path"] = path(images[0])
@@ -894,27 +917,45 @@ def build_video_submit_payload(
                 payload["secondary_image_local_path"] = path(images[1])
 
         if mode == "product_only":
-            product = image_for_role("product_image", "product", "goods") or (images[0] if images else None)
+            products = images_for_role("product_image", "product", "goods") or images[:3]
+            product = products[0] if products else None
             if not product:
                 raise ValueError("product_only requires a product image")
             payload["product_image_local_path"] = path(product)
+            payload["product_image_local_paths"] = [path(item) for item in products]
             payload["primary_image_local_path"] = path(product)
         elif mode == "model_product":
-            product = image_for_role("product_image", "product", "goods")
+            products = images_for_role("product_image", "product", "goods")
+            product = products[0] if products else None
             model = image_for_role("model_image", "model", "person", "avatar")
             if not product or not model:
                 raise ValueError("model_product requires both product and model images")
             payload["product_image_local_path"] = path(product)
+            payload["product_image_local_paths"] = [path(item) for item in products]
             payload["model_image_local_path"] = path(model)
             payload["primary_image_local_path"] = path(product)
             payload["secondary_image_local_path"] = path(model)
         elif mode == "subject_replace":
             source = image_for_role("source_image", "source", "original", "background")
-            subject = image_for_role("subject_image", "subject", "replacement", "model", "product")
+            subject = image_for_role(
+                "subject_image",
+                "subject",
+                "replacement",
+                "replacement_product",
+                "replacement_model",
+                "model",
+                "product",
+            )
             if not source or not subject:
                 raise ValueError("subject_replace requires both source and replacement images")
             payload["source_image_local_path"] = path(source)
             payload["subject_image_local_path"] = path(subject)
+            replacement_product = image_for_role("replacement_product", "product")
+            replacement_model = image_for_role("replacement_model", "model")
+            if replacement_product:
+                payload["replacement_product_image_local_path"] = path(replacement_product)
+            if replacement_model:
+                payload["replacement_model_image_local_path"] = path(replacement_model)
             payload["primary_image_local_path"] = path(source)
             payload["secondary_image_local_path"] = path(subject)
             payload.setdefault(
