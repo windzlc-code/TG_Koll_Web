@@ -127,7 +127,7 @@
           text("product_name", oral ? "口播主题" : "产品/项目名称", { placeholder: oral ? "例如：东京租房避坑 / AI 工具干货 / 职场沟通技巧" : "例如：海景公寓 / 鱼油 / 汽车" }),
           textarea("product_details", oral ? "文案需求" : "产品相关简介", { placeholder: oral ? "可选：说明口播主题、受众、核心观点、段落方向、语气风格；AI 会据此生成口播文案" : "可选：补充产品卖点、适用人群、使用场景、价格/参数等详情；只用于 AI 生成文案或提示词", wide: true }),
           ...(oral ? [number("oral_target_duration_seconds", "目标口播时长（秒）", { default: 30, min: 5, max: 180, step: 1 })] : []),
-          select("target_language", "口播语言", LANGUAGE_OPTIONS, { default: "Chinese" }),
+          select("target_language", "口播语言", LANGUAGE_OPTIONS, { default: "Chinese", placement: "voice" }),
           select("minimax_tts_model", "MiniMax 音频模型", MINIMAX_TTS_MODEL_OPTIONS, { default: "speech-2.8-hd" }),
           textarea("speech_text", "口播文案", { placeholder: oral ? "可手动输入成稿，也可留空让 AI 根据文案需求和场景图生成" : "可手动输入，也可留空让 AI 根据图片生成", wide: true }),
           select("ratio", "画面比例", VIDEO_RATIO_OPTIONS, { default: "9:16" }),
@@ -158,7 +158,7 @@
           file("audio", seeding ? "分享口播/参考人声" : "旁白/干音", "audio/*", { help: seeding ? "可选：选择预设声音试听，或上传自己的干音" : "可选：选择预设干音并试听，或上传自己的干音" }),
           text("product_name", seeding ? "产品/分享主题" : "产品名称", { placeholder: seeding ? "例如：东京租房 / 深海鱼油 / 夏日通勤穿搭" : "例如：EX31A 热水器" }),
           textarea("product_details", seeding ? "分享角度补充" : "产品相关简介", { placeholder: seeding ? "可选：补充真实体验、使用场景、目标人群、核心感受或分享角度" : "可选：补充产品卖点、适用人群、使用场景、价格/参数等详情", wide: true }),
-          select("target_language", seeding ? "分享口播语言" : "台词/字幕语言", LANGUAGE_OPTIONS, { default: "Chinese" }),
+          select("target_language", seeding ? "分享口播语言" : "台词/字幕语言", LANGUAGE_OPTIONS, { default: "Chinese", placement: "voice" }),
           number("duration", seeding ? "成片时长（秒，4~120）" : "视频时长（秒，4~120）", { default: 15, min: 4, max: 120, step: 1 }),
           select("ratio", seeding ? "成片比例" : "画面比例", VIDEO_RATIO_OPTIONS, { default: "9:16" }),
           select("resolution", seeding ? "输出分辨率" : "视频分辨率", VIDEO_RESOLUTION_OPTIONS, { default: "720p" }),
@@ -179,7 +179,7 @@
       fields: [
         file("video", "原视频", "video/*", { required: true }),
         file("audio", "参考音频/干音", "audio/*", { help: "可选；用于目标语言配音" }),
-        select("target_language", "目标语言", LANGUAGE_OPTIONS, { default: "English" }),
+        select("target_language", "目标语言", LANGUAGE_OPTIONS, { default: "English", placement: "voice" }),
         select("minimax_tts_model", "MiniMax 音频模型", MINIMAX_TTS_MODEL_OPTIONS, { default: "speech-2.8-hd" }),
         textarea("script_text", "原文台词", { placeholder: "第一步会自动解析原视频台词和时间戳；如已手动填写且自带时间戳，会直接跳过这一步", wide: true }),
         textarea("opening_insert_text", "开场插入台词", { placeholder: "可选：在原视频第一句开始前额外插入一句台词", wide: true }),
@@ -743,7 +743,7 @@
     </label>`;
   }
 
-  function renderVoiceStudio(module, draft) {
+  function renderVoiceStudio(module, draft, voiceFields = []) {
     if (!VOICE_MODULES.has(module.id)) return "";
     const language = String(state.voiceFilter || draft.values.target_language || draft.values.language || "").toLowerCase();
     const filtered = state.voicePresets.filter((voice) => !language || language === "auto" || voice.language.toLowerCase().includes(language));
@@ -756,6 +756,7 @@
         <div><span>VOICE CAST</span><strong>参考声音</strong><small>${escapeHtml(selected?.label || "可上传干音，或选择预设声音试听")}</small></div>
       </div>
       ${state.voiceError ? `<div class="video-advanced-notice">${escapeHtml(state.voiceError)}</div>` : ""}
+      ${voiceFields.length ? `<div class="video-voice-inline-fields">${voiceFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : ""}
       <details class="video-voice-picker">
         <summary>${selected ? "更换 / 试听预设声音" : "选择 / 试听预设声音"}</summary>
         <div class="video-voice-picker-body">
@@ -807,6 +808,21 @@
     </section>`;
   }
 
+  function submitButtonLabel(module, values = {}) {
+    if (module.id === "digital_human_video") return "生成数字人口播视频";
+    if (module.id === "ecommerce_short_video") {
+      return values.ecommerce_video_mode === "seeding_video" ? "生成种草视频" : "生成广告短视频";
+    }
+    return {
+      video_language_replace: "生成音频并替换音轨",
+      video_subject_replace: "提交视频替换",
+      ecommerce_image: "生成电商广告图",
+      subject_replace: "提交主体替换",
+      poster_translate: "切换海报语言",
+      subject_generate: values.subject_generate_mode === "product" ? "生成产品三视图" : "生成数字人人设三视图",
+    }[module.id] || "提交生成任务";
+  }
+
   function renderForm(module) {
     const draft = loadDraft(module);
     ensureAdvancedValues(module, draft);
@@ -814,6 +830,7 @@
     const fileFields = fields.filter((field) => field.type === "file");
     const uploadTopFields = fields.filter((field) => field.type !== "file" && field.placement === "uploadTop");
     const uploadFooterFields = fields.filter((field) => field.type !== "file" && field.placement === "uploadFooter");
+    const voiceFields = fields.filter((field) => field.type !== "file" && field.placement === "voice");
     const inputFields = fields.filter((field) => field.type !== "file" && !field.placement && !(VOICE_MODULES.has(module.id) && ["speaker", "voice_id"].includes(field.key)));
     return `<form id="videoWorkbenchForm" class="video-workbench-form" data-video-module-form="${escapeHtml(module.id)}">
       <div class="video-original-layout">
@@ -821,7 +838,7 @@
           <div class="video-original-panel-head"><div><strong>素材上传</strong><small>请按原工作台顺序上传素材。</small></div><button type="button" class="video-button video-button--ghost" data-video-clear-files>清空</button></div>
           ${uploadTopFields.length ? `<div class="video-upload-mode-fields">${uploadTopFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : ""}
           ${fileFields.length ? `<div class="video-file-grid">${fileFields.map(renderFileField).join("")}</div>` : `<div class="video-workbench-state video-workbench-state--empty"><span>当前模块无需上传素材。</span></div>`}
-          ${renderVoiceStudio(module, draft)}
+          ${renderVoiceStudio(module, draft, voiceFields)}
           ${uploadFooterFields.length ? `<div class="video-upload-mode-fields video-upload-mode-fields--footer">${uploadFooterFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : ""}
         </section>
         <section class="video-form-section video-settings-panel">
@@ -835,7 +852,7 @@
         <div class="video-form-actions">
           <button type="button" class="video-button video-button--ghost" data-video-clear-draft>清空草稿</button>
           <button type="submit" class="video-button video-button--primary" ${state.submitting ? "disabled" : ""}>
-            ${state.submitting ? '<span class="video-button-spinner" aria-hidden="true"></span>正在提交' : "提交生成任务"}
+            ${state.submitting ? '<span class="video-button-spinner" aria-hidden="true"></span>正在提交' : escapeHtml(submitButtonLabel(module, draft.values))}
           </button>
         </div>
       </div>
@@ -1052,6 +1069,23 @@
       ${state.taskWarning ? `<div class="video-task-warning">${escapeHtml(state.taskWarning)}</div>` : ""}
       ${renderTaskList()}
     </aside>`;
+  }
+
+  function renderTaskPanelOnly() {
+    const current = document.querySelector("#videoWorkbenchRoot .video-task-panel");
+    if (!current) {
+      render();
+      return;
+    }
+    const currentList = current.querySelector(".video-task-list");
+    const scrollTop = currentList?.scrollTop || 0;
+    const template = document.createElement("template");
+    template.innerHTML = renderTaskPanel().trim();
+    const next = template.content.firstElementChild;
+    if (!next) return;
+    current.replaceWith(next);
+    const nextList = next.querySelector(".video-task-list");
+    if (nextList) nextList.scrollTop = scrollTop;
   }
 
   function render() {
@@ -1428,7 +1462,7 @@
     if (!quiet) state.taskLoading = true;
     state.taskError = "";
     state.taskWarning = "";
-    render();
+    if (!quiet) render();
     const results = await Promise.allSettled([
       request("/api/video/tasks"),
       request("/api/tasks"),
@@ -1454,7 +1488,8 @@
       state.taskWarning = "部分任务来源暂时不可用，已显示可读取的任务。";
     }
     state.taskLoading = false;
-    render();
+    if (quiet) renderTaskPanelOnly();
+    else render();
     syncPolling();
   }
 

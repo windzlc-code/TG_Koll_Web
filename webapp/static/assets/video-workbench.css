@@ -968,6 +968,13 @@
   background: var(--video-soft);
 }
 
+.video-voice-inline-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  margin: -2px 0 10px;
+}
+
 .video-voice-picker > summary {
   padding: 10px 12px;
   color: var(--video-ink);

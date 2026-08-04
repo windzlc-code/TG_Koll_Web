@@ -58,6 +58,12 @@ def main() -> None:
         )
         page.locator("#videoWorkbenchRoot .video-workbench-shell").wait_for(state="visible")
         assert page.locator('[data-view="video_workspace"]').count() == 1
+        form_handle = page.locator("#videoWorkbenchForm").element_handle()
+        page.wait_for_timeout(5_500)
+        assert page.evaluate(
+            "form => form === document.querySelector('#videoWorkbenchForm')",
+            form_handle,
+        ), "quiet task polling replaced the entire video form and causes visible flicker"
         announcement = page.locator("[data-site-notification-broadcast]")
         if announcement.count() and announcement.first.is_visible():
             announcement.locator(".site-notification-broadcast-confirm").click()
@@ -104,6 +110,7 @@ def main() -> None:
         assert page.locator('[data-video-field="ecommerce_seeding_template"]').count() == 1
         assert page.locator('[data-video-file-field="video"]').count() == 1
         assert page.locator('[data-video-field="ecommerce_ad_style"]').count() == 0
+        assert page.locator('button[type="submit"]').inner_text() == "生成种草视频"
 
         for module_id in ("digital_human_video", "ecommerce_short_video", "video_language_replace"):
             page.locator(f'[data-video-module="{module_id}"]').first.click(force=True)
@@ -111,6 +118,8 @@ def main() -> None:
             assert page.locator('[data-video-field="subtitle_template"]').count() == 0
 
         page.locator('[data-video-module="digital_human_video"]').first.click(force=True)
+        assert page.locator('.video-voice-studio [data-video-field="target_language"]').count() == 1
+        assert page.locator('.video-settings-panel [data-video-field="target_language"]').count() == 0
         page.locator('[data-video-choice-field="digital_human_content_mode"][data-video-choice-value="oral_broadcast"]').click()
         assert page.locator('[data-video-field="oral_target_duration_seconds"]').count() == 1
         assert page.locator('[data-video-field="digital_human_short_mode"]').count() == 0

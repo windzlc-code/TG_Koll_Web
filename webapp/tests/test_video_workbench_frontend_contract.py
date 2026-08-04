@@ -77,6 +77,14 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertIn('window.addEventListener("beforeunload"', self.workbench_js)
         self.assertIn("canLeaveVideoWorkspace", self.console_js)
 
+    def test_quiet_task_polling_updates_only_task_panel_without_replacing_form(self):
+        self.assertIn("function renderTaskPanelOnly()", self.workbench_js)
+        self.assertIn("current.replaceWith(next)", self.workbench_js)
+        self.assertIn("if (!quiet) render();", self.workbench_js)
+        self.assertIn("if (quiet) renderTaskPanelOnly();", self.workbench_js)
+        polling = self.workbench_js.split("async function loadTasks({ quiet = false } = {})", 1)[1].split("function syncPolling()", 1)[0]
+        self.assertNotIn('state.taskWarning = "";\n    render();', polling)
+
     def test_loading_empty_error_and_mobile_states_are_styled(self):
         for marker in (
             "video-workbench-state--loading",
@@ -179,6 +187,8 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertIn('<audio id="videoVoicePreview"', self.workbench_js)
         self.assertIn(".video-voice-list", self.workbench_css)
         self.assertIn(".video-voice-audio", self.workbench_css)
+        self.assertIn('placement: "voice"', self.workbench_js)
+        self.assertIn(".video-voice-inline-fields", self.workbench_css)
 
     def test_seeding_mode_keeps_original_modes_and_templates_without_fake_storyboard(self):
         self.assertIn('select("ecommerce_video_mode", "视频模式"', self.workbench_js)
