@@ -24124,6 +24124,7 @@ body.console-page {
   /* Let regular queue rows use the page scroll on mobile instead of a nested list scroll. */
   .console-page .task-table-inner {
     max-height: none;
+    overflow-x: clip;
     overflow-y: visible;
     scrollbar-gutter: auto;
   }
