@@ -3043,6 +3043,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('${renderEditIcon()}</button>', mobile_actions)
         self.assertIn('${isMarketplace ? renderProxyReleaseIcon() : renderTrashIcon()}</button>', mobile_actions)
         self.assertIn('${renderProxyMobileActions(proxy)}', mobile_cards)
+        self.assertIn('const mobileStream = mobileTweetStreamInfo(rows, "proxy-pool", pageSize);', proxy_pool)
+        self.assertIn('const visibleRows = mobileStream.mobile ? mobileStream.items : pageRows;', proxy_pool)
+        self.assertIn('${mobileStream.mobile ? renderMobileTweetStreamFooter(mobileStream, "proxy-pool") : `<div class="proxy-pager">', proxy_pool)
+        self.assertIn('else if (target === "proxy-pool") renderProxyPool();', self.console_script)
+        self.assertIn('bindMobileTweetStreamObservers();', proxy_pool)
 
         self.assertIn('modalKey: "proxy-details"', detail_modal)
         self.assertIn('class="console-modal-detail proxy-detail-modal"', detail_modal)

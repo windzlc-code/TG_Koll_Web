@@ -16385,6 +16385,53 @@ body.persona-media-sorting {
   margin: 0;
 }
 
+.account-proxy-picker-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+.account-proxy-market-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  line-height: 1;
+}
+
+.account-proxy-market-add .ui-action-icon,
+.account-proxy-market-add svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (max-width: 480px) {
+  .account-proxy-picker-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .account-proxy-picker-toolbar-actions {
+    width: 100%;
+  }
+
+  .account-proxy-picker-toolbar-actions > button {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+}
+
 .account-proxy-custom-add {
   display: inline-flex;
   align-items: center;

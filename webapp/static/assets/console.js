@@ -8514,6 +8514,7 @@ function advanceMobileTweetStream(node) {
     if (target === "persona-detail") renderPersonaDetail();
     else if (target === "publishing") renderSimpleFlowModule("publishing");
     else if (target === "task-queue") renderTaskQueueSurface();
+    else if (target === "proxy-pool") renderProxyPool();
   }, () => {
     mobileTweetStreamPending = false;
     bindMobileTweetStreamObservers();
@@ -25389,6 +25390,12 @@ function accountProxyCustomAddButtonHtml(scope = "modal") {
   </button>`;
 }
 
+function accountProxyMarketButtonHtml() {
+  return `<button type="button" class="account-proxy-market-add" data-account-proxy-market-open>
+    ${renderProxyMarketIcon()}<span>代理商城</span>
+  </button>`;
+}
+
 function accountProxyInlineCustomFormHtml(scope = "edit") {
   return `<section class="account-proxy-inline-custom" data-account-proxy-inline-custom data-account-proxy-choice-scope="${esc(scope)}" hidden>
     <div class="account-proxy-inline-custom-head">
@@ -25576,19 +25583,23 @@ async function saveAccountInlineCustomProxy(container, button, scope = "edit") {
   }
 }
 
-function openAccountProxyPickerModal(accountId = "") {
+function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
   const account = accountById(accountId);
   if (!account) {
     showMsg("socialMsg", "账号不存在，请刷新后重试。", false);
     return;
   }
   closeConsoleModal(null);
+  const originalProxyId = String(account.proxy_id || "").trim();
+  const selectedProxyId = initialProxyId === null || initialProxyId === undefined
+    ? originalProxyId
+    : String(initialProxyId || "").trim();
   const modal = document.createElement("div");
   modal.id = "consoleModal";
   modal.className = "console-modal";
-  modal.dataset.selectedProxyId = String(account.proxy_id || "").trim();
-  modal.dataset.originalProxyId = String(account.proxy_id || "").trim();
-  modal.dataset.accountProxyDirty = "false";
+  modal.dataset.selectedProxyId = selectedProxyId;
+  modal.dataset.originalProxyId = originalProxyId;
+  modal.dataset.accountProxyDirty = selectedProxyId !== originalProxyId ? "true" : "false";
   modal.innerHTML = `
     <div class="console-modal-backdrop" data-account-proxy-picker-cancel></div>
     <section class="console-modal-dialog account-proxy-picker-modal" role="dialog" aria-modal="true" aria-labelledby="accountProxyPickerTitle">
@@ -25599,10 +25610,13 @@ function openAccountProxyPickerModal(accountId = "") {
       <div class="console-modal-content">
         <div class="account-proxy-picker-toolbar">
           <p data-account-proxy-selection-summary>${account.proxy_id ? `当前绑定：${esc(accountResidentialProxyLabel(account))}` : "当前未使用代理 IP"}</p>
-          ${accountProxyCustomAddButtonHtml("modal")}
+          <div class="account-proxy-picker-toolbar-actions">
+            ${accountProxyMarketButtonHtml()}
+            ${accountProxyCustomAddButtonHtml("modal")}
+          </div>
         </div>
         <div data-account-proxy-inline-options>
-          ${accountProxyOptionCardsHtml(account.proxy_id || "", { scope: "modal" })}
+          ${accountProxyOptionCardsHtml(selectedProxyId, { scope: "modal" })}
         </div>
         ${accountProxyInlineCustomFormHtml("modal")}
       </div>
@@ -25612,6 +25626,7 @@ function openAccountProxyPickerModal(accountId = "") {
       </div>
     </section>`;
   document.body.appendChild(modal);
+  if (selectedProxyId !== originalProxyId) updateAccountProxyChoice(modal, selectedProxyId);
   const close = () => {
     if (accountProxyCustomIsBusy(modal)) {
       accountProxyCustomBusyMessage();
@@ -25621,6 +25636,15 @@ function openAccountProxyPickerModal(accountId = "") {
     return true;
   };
   modal.addEventListener("click", (event) => {
+    const marketOpen = event.target.closest("[data-account-proxy-market-open]");
+    if (marketOpen) {
+      if (accountProxyCustomIsBusy(modal)) {
+        accountProxyCustomBusyMessage();
+        return;
+      }
+      openProxyMarketModal({ accountId: account.id, selectedProxyId: modal.dataset.selectedProxyId || "" });
+      return;
+    }
     const customAdd = event.target.closest("[data-account-proxy-custom-add]");
     if (customAdd) {
       if (accountProxyCustomIsBusy(modal)) {
@@ -26723,8 +26747,10 @@ function renderProxyPool() {
   const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
   state.proxyPoolPage = Math.min(Math.max(Number(state.proxyPoolPage || 1), 1), totalPages);
   const page = state.proxyPoolPage;
-  const offset = (page - 1) * pageSize;
+  const mobileStream = mobileTweetStreamInfo(rows, "proxy-pool", pageSize);
+  const offset = mobileStream.mobile ? 0 : (page - 1) * pageSize;
   const pageRows = rows.slice(offset, offset + pageSize);
+  const visibleRows = mobileStream.mobile ? mobileStream.items : pageRows;
   const columns = ["序号", "分组", "IP 类型", "来源", "购买状态", "节点名称", "代理资讯", "备注", "代理状态", "出口归属", "出口 IP", "已绑账号", "代理协议", "系统有效性", "操作"];
   const renderProxyMobileActions = (proxy) => {
     const isMarketplace = String(proxy.source || "").trim().toLowerCase() === "marketplace";
@@ -26750,7 +26776,7 @@ function renderProxyPool() {
       <div class="proxy-table-wrap" data-proxy-desktop-list>
         <div class="proxy-table" role="table" aria-label="代理 IP 列表">
           <div class="proxy-table-row proxy-table-row--head" role="row">${columns.map((column) => `<span role="columnheader">${column}</span>`).join("")}</div>
-          ${pageRows.length ? pageRows.map((proxy, index) => {
+          ${visibleRows.length ? visibleRows.map((proxy, index) => {
             const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
             const country = String(proxy.country || "").trim() || "待识别";
             const authLabel = proxy.username_configured || proxy.password_configured ? "需认证" : "无认证";
@@ -26782,7 +26808,7 @@ function renderProxyPool() {
         </div>
       </div>
       <div class="proxy-card-grid" data-proxy-mobile-cards role="list" aria-label="代理 IP 列表">
-          ${pageRows.length ? pageRows.map((proxy, index) => {
+          ${visibleRows.length ? visibleRows.map((proxy, index) => {
             const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
             const country = String(proxy.country || "").trim() || "待识别";
             const authLabel = proxy.username_configured || proxy.password_configured ? "需认证" : "无认证";
@@ -26814,7 +26840,7 @@ function renderProxyPool() {
             </article>`;
           }).join("") : `<div class="empty-state proxy-pool-empty">暂无代理 IP，点击新增代理开始配置。</div>`}
       </div>
-      <div class="proxy-pager">
+      ${mobileStream.mobile ? renderMobileTweetStreamFooter(mobileStream, "proxy-pool") : `<div class="proxy-pager">
         <label>每页
           <select data-proxy-page-size>${[10, 20, 50].map((size) => `<option value="${size}" ${pageSize === size ? "selected" : ""}>${size}</option>`).join("")}</select>
         </label>
@@ -26823,8 +26849,9 @@ function renderProxyPool() {
           <button type="button" data-proxy-page="prev" title="上一页" aria-label="上一页" ${page <= 1 ? "disabled" : ""}><span class="ui-arrow-icon ui-arrow-icon--left" aria-hidden="true"></span></button>
           <button type="button" data-proxy-page="next" title="下一页" aria-label="下一页" ${page >= totalPages ? "disabled" : ""}><span class="ui-arrow-icon ui-arrow-icon--right" aria-hidden="true"></span></button>
         </div>
-      </div>
+      </div>`}
     </section>`;
+  if (mobileStream.mobile) bindMobileTweetStreamObservers();
 }
 
 function proxyMarketCatalogRoot(payload = {}) {
@@ -26918,7 +26945,9 @@ function renderProxyMarketMiniSkeletonCards(count = 4) {
   </article>`).join("");
 }
 
-function openProxyMarketModal() {
+function openProxyMarketModal({ accountId = "", selectedProxyId = "" } = {}) {
+  const returnAccountId = String(accountId || "").trim();
+  const returnSelectedProxyId = String(selectedProxyId || "").trim();
   closeConsoleModal(null);
   const modal = document.createElement("div");
   modal.id = "consoleModal";
@@ -26988,7 +27017,10 @@ function openProxyMarketModal() {
       if (modal.isConnected && requestId === catalogRequest) grid.setAttribute("aria-busy", "false");
     }
   };
-  const close = () => modal.remove();
+  const close = (returnToAccountPicker = true) => {
+    modal.remove();
+    if (returnToAccountPicker && returnAccountId) openAccountProxyPickerModal(returnAccountId, returnSelectedProxyId);
+  };
   modal.addEventListener("click", (event) => {
     if (event.target.closest("[data-proxy-market-modal-cancel]")) { close(); return; }
     const claim = event.target.closest("[data-proxy-market-claim]");
@@ -27002,8 +27034,18 @@ function openProxyMarketModal() {
       method: "POST",
       headers: { "Content-Type": "application/json", "Idempotency-Key": key },
       body: JSON.stringify({ idempotency_key: key }),
-    }).then(async () => {
+    }).then(async (result) => {
       await refreshProxyPool();
+      const claimedProxyId = String(
+        result?.allocation?.social_proxy_id
+          || state.socialProxies?.find((proxy) => String(proxy.market_item_id || "") === itemId)?.id
+          || "",
+      ).trim();
+      if (returnAccountId && claimedProxyId) {
+        close(false);
+        openAccountProxyPickerModal(returnAccountId, claimedProxyId);
+        return;
+      }
       status.textContent = "IP 已加入代理池。";
       await loadCatalog();
     }).catch((error) => {
