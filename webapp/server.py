@@ -5459,6 +5459,8 @@ def _sync_tool_r18_api_config_from_runtime(runtime: dict[str, Any], explicit: di
             "image_model_priority_order",
             "new_persona_runninghub_base_url",
             "new_persona_runninghub_api_key",
+            "runninghub_personal_api_key",
+            "runninghub_enterprise_api_key",
             "new_persona_runninghub_persona_t2i_detail_url",
             "new_persona_runninghub_persona_t2i_endpoint",
             "new_persona_runninghub_tweet_i2i_detail_url",
