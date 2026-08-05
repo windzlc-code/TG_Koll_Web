@@ -1893,6 +1893,40 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         ):
             self.assertIn(declaration, functional_shell)
 
+    def test_live_browser_manual_handoff_uses_center_overlay_and_failure_reason(self):
+        renderer = self.console_script[
+            self.console_script.index("function renderLiveBrowserSession("):
+            self.console_script.index("\nfunction liveBrowserDialogTitleId", self.console_script.index("function renderLiveBrowserSession("))
+        ]
+        updater = self.console_script[
+            self.console_script.index("function updateLiveBrowserSessionCard("):
+            self.console_script.index("\nfunction renderLiveBrowserLayoutToggle", self.console_script.index("function updateLiveBrowserSessionCard("))
+        ]
+        handler = self.console_script[
+            self.console_script.index('const manualAccept = event.target.closest("[data-live-browser-manual-accept]");'):
+            self.console_script.index('const liveBrowserMode = event.target.closest("[data-live-browser-mode]");')
+        ]
+        failure = self.console_script[
+            self.console_script.index("function socialTaskFailureReason("):
+            self.console_script.index("\nfunction socialTaskToastMessage", self.console_script.index("function socialTaskFailureReason("))
+        ]
+        toast = self.console_script[
+            self.console_script.index("function socialTaskToastMessage("):
+            self.console_script.index("\nfunction syncSocialTaskToast", self.console_script.index("function socialTaskToastMessage("))
+        ]
+
+        self.assertIn("${renderLiveBrowserManualHandoff(session)}", renderer)
+        self.assertIn("renderLiveBrowserManualHandoff(session)", updater)
+        self.assertIn("state.liveBrowserManualHandoffDismissed.add(key);", handler)
+        self.assertIn("data-live-browser-manual-accept", handler)
+        self.assertIn("task?.result?.error", failure)
+        self.assertIn("task?.result?.detail", failure)
+        self.assertIn('if (status === "need_manual")', toast)
+        self.assertIn('if (status === "running")', toast)
+        self.assertIn("socialTaskFailureReason(task)", toast)
+        self.assertIn(".console-page .live-browser-manual-handoff {", self.styles)
+        self.assertIn("place-items: center;", self.styles)
+
     def test_mobile_pages_share_the_persona_reference_content_gutter(self):
         marker = "/* Shared mobile page spacing: one canvas gutter, then functional-card padding. */"
         self.assertIn(marker, self.styles)

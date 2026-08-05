@@ -6000,23 +6000,6 @@ def _run_platform_warmup(
     require_persona_relevance = bool(
         payload.get("require_persona_relevance", True)
     )
-    if require_persona_relevance and not persona_keywords:
-        logger.log(
-            "error",
-            f"{clean_platform}_warmup_relevance",
-            "模型未生成人设关键词，已停止任务，避免在未筛选内容上执行养号动作。",
-            {
-                "keyword_generation_source": (
-                    payload.get("_warmup_search_keyword_source") or "unknown"
-                ),
-                "minimum_likes": min_required_likes,
-                "minimum_comments": min_required_comments,
-                "minimum_interactions": min_required_interactions,
-            },
-        )
-        raise RuntimeError(
-            "模型未生成人设关键词，已停止任务，避免在未筛选内容上执行养号动作。"
-        )
 
     initial_surface = _ensure_warmup_relevant_surface(
         page,
@@ -6026,7 +6009,7 @@ def _run_platform_warmup(
         phase="initial",
         excluded_target_keys=historical_seen_target_keys,
     )
-    if require_persona_relevance and not initial_surface:
+    if require_persona_relevance and persona_keywords and not initial_surface:
         raise RuntimeError("当前推荐流与人设关键词均未找到相关内容，已停止避免无关互动。")
 
     liked = 0
@@ -6079,7 +6062,7 @@ def _run_platform_warmup(
             phase="browse",
             excluded_target_keys=browsed_target_keys | historical_seen_target_keys,
         )
-        if require_persona_relevance and not relevant_surface:
+        if require_persona_relevance and persona_keywords and not relevant_surface:
             completed_interactions = liked + commented
             requirements_met = (
                 completed_interactions > 0

@@ -295,6 +295,7 @@
     timer: 0,
     requestToken: 0,
   };
+  const localFilePreviewUrls = new Map();
 
   function escapeHtml(value) {
     return String(value == null ? "" : value).replace(/[&<>"']/g, (character) => ({
@@ -507,6 +508,7 @@
   function clearDraft(moduleId) {
     const module = state.modules.find((item) => item.id === moduleId) || FALLBACK_MODULES[moduleId];
     state.drafts[moduleId] = { values: defaultValues(module), savedAt: "" };
+    releaseModuleFilePreviews(moduleId);
     state.files[moduleId] = {};
     try {
       window.localStorage.removeItem(draftStorageKey(moduleId));
@@ -645,6 +647,44 @@
     return selectedFileSlots(moduleId, fieldKey).filter(Boolean);
   }
 
+  function isPreviewableImageFile(file) {
+    if (!file) return false;
+    const mime = String(file.type || "").toLowerCase();
+    const name = String(file.name || "").toLowerCase();
+    return mime.startsWith("image/") || /\.(?:avif|bmp|gif|jpe?g|png|webp)$/i.test(name);
+  }
+
+  function localFilePreviewUrl(file) {
+    if (!isPreviewableImageFile(file) || typeof URL?.createObjectURL !== "function") return "";
+    if (!localFilePreviewUrls.has(file)) localFilePreviewUrls.set(file, URL.createObjectURL(file));
+    return localFilePreviewUrls.get(file) || "";
+  }
+
+  function releaseFilePreview(file) {
+    const previewUrl = localFilePreviewUrls.get(file);
+    if (!previewUrl) return;
+    URL.revokeObjectURL(previewUrl);
+    localFilePreviewUrls.delete(file);
+  }
+
+  function replaceFileSlots(moduleId, fieldKey, nextSlots = []) {
+    const previous = selectedFileSlots(moduleId, fieldKey);
+    const retained = new Set(nextSlots.filter(Boolean));
+    previous.filter(Boolean).forEach((file) => {
+      if (!retained.has(file)) releaseFilePreview(file);
+    });
+    state.files[moduleId] ||= {};
+    state.files[moduleId][fieldKey] = nextSlots;
+  }
+
+  function releaseModuleFilePreviews(moduleId) {
+    Object.values(state.files[moduleId] || {}).flat().filter(Boolean).forEach(releaseFilePreview);
+  }
+
+  function releaseAllFilePreviews() {
+    Array.from(localFilePreviewUrls.keys()).forEach(releaseFilePreview);
+  }
+
   function moduleIcon(moduleId) {
     const icons = {
       digital_human_video: '<circle cx="12" cy="8" r="3"></circle><path d="M6 20c.8-4.2 2.8-6.3 6-6.3s5.2 2.1 6 6.3"></path><path d="m18 8 4-2v8l-4-2z"></path>',
@@ -657,6 +697,18 @@
       subject_generate: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4"></path><circle cx="12" cy="12" r="4"></circle><path d="m5.6 5.6 2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"></path>',
     };
     return `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[moduleId] || icons.digital_human_video}</svg>`;
+  }
+
+  function workbenchIcon(name) {
+    const icons = {
+      upload: '<path d="M12 16V5"></path><path d="m8 9 4-4 4 4"></path><path d="M5 15v4h14v-4"></path>',
+      replace: '<path d="M4 8a7 7 0 0 1 12-3l2 2"></path><path d="M18 3v4h-4"></path><path d="M20 16a7 7 0 0 1-12 3l-2-2"></path><path d="M6 21v-4h4"></path>',
+      refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 5v6h-6"></path>',
+      play: '<path d="m9 7 8 5-8 5z"></path>',
+      add: '<path d="M12 5v14M5 12h14"></path>',
+      alert: '<path d="M10.3 4.3 2.8 17.2A2 2 0 0 0 4.5 20h15a2 2 0 0 0 1.7-2.8L13.7 4.3a2 2 0 0 0-3.4 0Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path>',
+    };
+    return `<svg class="video-ui-icon" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.add}</svg>`;
   }
 
   function optionMarkup(field, value) {
@@ -701,7 +753,11 @@
       ${previewSlots ? `<span class="video-upload-slots">${Array.from({ length: previewSlots }, (_, index) => {
         const fileItem = fileSlots[index] || null;
         const label = fileItem?.name || previewLabels[index] || `素材 ${index + 1}`;
-        return `<button type="button" class="${fileItem ? "is-filled" : ""}" data-video-file-slot="${index}" data-video-file-filled="${fileItem ? "true" : "false"}" aria-label="${escapeHtml(fileItem ? `替换 ${label}` : `上传 ${label}`)}" title="${escapeHtml(fileItem ? `点击替换：${label}` : `点击上传：${label}`)}"><span>${escapeHtml(label)}</span></button>`;
+        const previewUrl = localFilePreviewUrl(fileItem);
+        return `<button type="button" class="${fileItem ? "is-filled" : ""} ${previewUrl ? "has-preview" : ""}" data-video-file-slot="${index}" data-video-file-filled="${fileItem ? "true" : "false"}" aria-label="${escapeHtml(fileItem ? `替换 ${label}` : `上传 ${label}`)}" title="${escapeHtml(fileItem ? `点击替换：${label}` : `点击上传：${label}`)}">
+          ${previewUrl ? `<img class="video-upload-slot-preview" data-video-file-preview src="${escapeHtml(previewUrl)}" alt="" decoding="async"><span class="video-upload-slot-shade" aria-hidden="true"></span><span class="video-upload-slot-action" aria-hidden="true">${workbenchIcon("replace")}</span>` : `<span class="video-upload-slot-empty-icon" aria-hidden="true">${workbenchIcon("upload")}</span>`}
+          <span class="video-upload-slot-label">${escapeHtml(label)}</span>
+        </button>`;
       }).join("")}</span>` : ""}
       ${fileRows ? `<ul class="video-selected-files">${fileRows}</ul>` : ""}
     </div>`;
@@ -778,7 +834,7 @@
                 <button type="button" class="video-voice-select" role="radio" aria-checked="${active ? "true" : "false"}" data-video-voice-select="${escapeHtml(voice.id)}">
                   <strong>${escapeHtml(voice.label)}</strong><small>${escapeHtml([voice.language, voice.gender].filter(Boolean).join(" · "))}</small>
                 </button>
-                ${voice.previewUrl ? `<button type="button" class="video-voice-play" data-video-voice-preview="${escapeHtml(voice.id)}" aria-label="试听 ${escapeHtml(voice.label)}">▶</button>` : `<span class="video-voice-no-preview">无试听</span>`}
+                ${voice.previewUrl ? `<button type="button" class="video-voice-play" data-video-voice-preview="${escapeHtml(voice.id)}" aria-label="试听 ${escapeHtml(voice.label)}">${workbenchIcon("play")}</button>` : `<span class="video-voice-no-preview">无试听</span>`}
               </article>`;
             }).join("")}</div>`}
           <audio id="videoVoicePreview" class="video-voice-audio" controls preload="metadata" ${selected?.previewUrl ? `src="${escapeHtml(selected.previewUrl)}"` : ""}>当前浏览器不支持 audio 试听。</audio>
@@ -803,7 +859,7 @@
         <label class="video-timeline-copy"><span>字幕 / 台词</span><textarea rows="2" data-video-timeline-field="text" data-video-segment-id="${escapeHtml(row.id)}">${escapeHtml(row.text)}</textarea></label>
         <div class="video-timeline-actions"><button type="button" data-video-regenerate-segment="timeline" data-video-segment-id="${escapeHtml(row.id)}">重生成</button><button type="button" data-video-remove-segment="timeline" data-video-segment-id="${escapeHtml(row.id)}">删除</button></div>
       </div>`).join("") : `<div class="video-advanced-empty">暂无时间轴片段。填写脚本后点击“解析脚本”，或手动添加台词。</div>`}</div>
-      <button type="button" class="video-add-segment" data-video-add-timeline>＋ 添加时间轴片段</button>
+      <button type="button" class="video-add-segment" data-video-add-timeline>${workbenchIcon("add")}<span>添加时间轴片段</span></button>
     </section>`;
   }
 
@@ -1033,11 +1089,11 @@
       return `<div class="video-workbench-state video-workbench-state--loading"><span class="video-workbench-loader" aria-hidden="true"></span><strong>正在读取任务</strong><span>同步规划与执行状态...</span></div>`;
     }
     if (state.taskError && !state.tasks.length) {
-      return `<div class="video-workbench-state video-workbench-state--error"><span class="video-state-symbol" aria-hidden="true">!</span><strong>任务加载失败</strong><span>${escapeHtml(state.taskError)}</span><button type="button" class="video-button video-button--ghost" data-video-refresh>重新加载</button></div>`;
+      return `<div class="video-workbench-state video-workbench-state--error"><span class="video-state-symbol" aria-hidden="true">${workbenchIcon("alert")}</span><strong>任务加载失败</strong><span>${escapeHtml(state.taskError)}</span><button type="button" class="video-button video-button--ghost" data-video-refresh>重新加载</button></div>`;
     }
     const visibleTasks = state.tasks.filter((task) => !task.moduleId || task.moduleId === state.moduleId || relevantRegularTask(task)).slice(0, 12);
     if (!visibleTasks.length) {
-      return `<div class="video-workbench-state video-workbench-state--empty"><span class="video-state-symbol" aria-hidden="true">＋</span><strong>暂无任务</strong><span>提交后，规划与执行进度会显示在这里。</span></div>`;
+      return `<div class="video-workbench-state video-workbench-state--empty"><span class="video-state-symbol" aria-hidden="true">${workbenchIcon("add")}</span><strong>暂无任务</strong><span>提交后，规划与执行进度会显示在这里。</span></div>`;
     }
     return `<div class="video-task-list">${visibleTasks.map((task) => {
       const status = task.status;
@@ -1070,7 +1126,7 @@
     return `<aside class="video-task-panel">
       <div class="video-task-panel-head">
         <div><span>LIVE QUEUE</span><strong>任务动态</strong></div>
-        <button type="button" class="video-icon-button" data-video-refresh aria-label="刷新任务" title="刷新任务">↻</button>
+        <button type="button" class="video-icon-button" data-video-refresh aria-label="刷新任务" title="刷新任务">${workbenchIcon("refresh")}</button>
       </div>
       ${state.taskWarning ? `<div class="video-task-warning">${escapeHtml(state.taskWarning)}</div>` : ""}
       ${renderTaskList()}
@@ -1208,10 +1264,10 @@
         if (targetSlot >= slotLimit) return;
         const next = selectedFileSlots(module.id, field.key).slice(0, slotLimit);
         next[targetSlot] = selected[0];
-        state.files[module.id][field.key] = next;
+        replaceFileSlots(module.id, field.key, next);
       } else {
         const limit = field.maxFiles ? Number(field.maxFiles) : (field.multiple ? selected.length : 1);
-        state.files[module.id][field.key] = selected.slice(0, Math.max(1, limit));
+        replaceFileSlots(module.id, field.key, selected.slice(0, Math.max(1, limit)));
       }
       render();
       return;
@@ -1230,6 +1286,7 @@
   }
 
   function clearSelectedFiles(moduleId) {
+    releaseModuleFilePreviews(moduleId);
     state.files[moduleId] = {};
     render();
   }
@@ -1500,6 +1557,7 @@
       const result = await request("/api/video/tasks", { method: "POST", body });
       const createdTask = normalizeTask(result?.task || result, "video");
       if (createdTask.id || createdTask.moduleId) state.tasks.unshift(createdTask);
+      releaseModuleFilePreviews(module.id);
       state.files[module.id] = {};
       saveDraft(module.id);
       await loadTasks({ quiet: true });
@@ -1689,6 +1747,9 @@
       if (event.key === "Escape" && state.voiceModalOpen) closeVoiceStudio();
     });
     document.addEventListener("visibilitychange", syncPolling);
+    window.addEventListener("pagehide", (event) => {
+      if (!event.persisted) releaseAllFilePreviews();
+    });
     window.addEventListener("beforeunload", (event) => {
       if (!hasTransientState()) return;
       event.preventDefault();

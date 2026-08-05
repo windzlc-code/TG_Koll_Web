@@ -1706,9 +1706,14 @@ class ArchivedSourceBackend:
         api_key = _text(payload.get("video_tts_api_key") or payload.get("minimax_api_key"))
         if not api_key:
             raise VideoDependencyError("缺少 video_tts_api_key，且未上传音频")
-        base_url = _text(payload.get("video_tts_base_url") or "https://api.minimaxi.com").rstrip("/")
-        model = _text(payload.get("video_tts_model") or "speech-02-hd")
-        voice_id = _text(payload.get("voice_id") or payload.get("video_default_voice_id") or "male-qn-qingse")
+        base_url = _text(payload.get("video_tts_base_url") or payload.get("minimax_base_url") or "https://api.minimaxi.com").rstrip("/")
+        model = _text(payload.get("video_tts_model") or payload.get("minimax_tts_model") or "speech-2.8-hd")
+        voice_id = _text(
+            payload.get("voice_id")
+            or payload.get("video_default_voice_id")
+            or payload.get("minimax_tts_voice_id")
+            or "male-qn-qingse"
+        )
         body = {
             "model": model,
             "text": text,

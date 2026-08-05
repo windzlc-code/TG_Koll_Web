@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import os
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -18,6 +19,10 @@ MODULES = [
     "poster_translate",
     "subject_generate",
 ]
+
+PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 def main() -> None:
@@ -57,6 +62,8 @@ def main() -> None:
             wait_until="networkidle",
         )
         page.locator("#videoWorkbenchRoot .video-workbench-shell").wait_for(state="visible")
+        hero_box = page.locator(".video-workbench-hero").bounding_box()
+        assert hero_box and 50 <= hero_box["height"] <= 56, hero_box
         assert page.locator('[data-view="video_workspace"]').count() == 1
         form_handle = page.locator("#videoWorkbenchForm").element_handle()
         page.wait_for_timeout(5_500)
@@ -98,28 +105,39 @@ def main() -> None:
         hovered_style = product_slots.nth(0).evaluate(
             "node => { const style = getComputedStyle(node); return { color: style.color, background: style.backgroundColor, border: style.borderColor, shadow: style.boxShadow, transform: style.transform }; }"
         )
-        assert hovered_style == resting_style, f"empty upload slot gained a false selected highlight: {resting_style} -> {hovered_style}"
+        assert hovered_style["transform"] != resting_style["transform"], (resting_style, hovered_style)
+        assert hovered_style["shadow"] != resting_style["shadow"], (resting_style, hovered_style)
+        assert product_slots.nth(0).get_attribute("data-video-file-filled") == "false"
         with page.expect_file_chooser() as chooser_info:
             product_slots.nth(1).click()
-        chooser_info.value.set_files({"name": "slot-2.png", "mimeType": "image/png", "buffer": b"slot-2"})
+        chooser_info.value.set_files({"name": "slot-2.png", "mimeType": "image/png", "buffer": PNG_1X1})
         product_slots = page.locator('[data-video-file-field="product"] [data-video-file-slot]')
         assert product_slots.nth(0).get_attribute("data-video-file-filled") == "false"
         assert product_slots.nth(1).get_attribute("data-video-file-filled") == "true"
         assert "slot-2.png" in product_slots.nth(1).inner_text()
+        slot_2_preview = product_slots.nth(1).locator("[data-video-file-preview]")
+        assert slot_2_preview.count() == 1
+        assert slot_2_preview.get_attribute("src").startswith("blob:")
+        page.wait_for_function("img => img.complete && img.naturalWidth > 0", arg=slot_2_preview.element_handle())
 
         with page.expect_file_chooser() as chooser_info:
             product_slots.nth(0).click()
-        chooser_info.value.set_files({"name": "slot-1.png", "mimeType": "image/png", "buffer": b"slot-1"})
+        chooser_info.value.set_files({"name": "slot-1.png", "mimeType": "image/png", "buffer": PNG_1X1})
         product_slots = page.locator('[data-video-file-field="product"] [data-video-file-slot]')
         assert "slot-1.png" in product_slots.nth(0).inner_text()
         assert "slot-2.png" in product_slots.nth(1).inner_text()
 
         with page.expect_file_chooser() as chooser_info:
             product_slots.nth(1).click()
-        chooser_info.value.set_files({"name": "slot-2-replaced.png", "mimeType": "image/png", "buffer": b"slot-2-new"})
+        replaced_preview_url = slot_2_preview.get_attribute("src")
+        chooser_info.value.set_files({"name": "slot-2-replaced.png", "mimeType": "image/png", "buffer": PNG_1X1})
         product_slots = page.locator('[data-video-file-field="product"] [data-video-file-slot]')
         assert "slot-1.png" in product_slots.nth(0).inner_text()
         assert "slot-2-replaced.png" in product_slots.nth(1).inner_text()
+        replacement_preview = product_slots.nth(1).locator("[data-video-file-preview]")
+        assert replacement_preview.count() == 1
+        assert replacement_preview.get_attribute("src").startswith("blob:")
+        assert replacement_preview.get_attribute("src") != replaced_preview_url
         if screenshot_dir:
             page.screenshot(path=str(screenshot_dir / "video-workbench-independent-slots.png"), full_page=False)
 
@@ -153,6 +171,10 @@ def main() -> None:
         for module_id in MODULES:
             page.locator(f'[data-video-module="{module_id}"]').first.click(force=True)
             page.locator(f'form[data-video-module-form="{module_id}"]').wait_for(state="visible")
+            hero_metrics = page.locator(".video-workbench-hero").evaluate(
+                "node => ({ clientHeight: node.clientHeight, scrollHeight: node.scrollHeight })"
+            )
+            assert hero_metrics["scrollHeight"] <= hero_metrics["clientHeight"], (module_id, hero_metrics)
             query = parse_qs(urlparse(page.url).query)
             assert query.get("view") == ["video_workspace"]
             assert query.get("video_module") == [module_id]
@@ -231,6 +253,8 @@ def main() -> None:
             wait_until="networkidle",
         )
         page.locator("#videoWorkbenchRoot .video-workbench-shell").wait_for(state="visible")
+        mobile_hero_box = page.locator(".video-workbench-hero").bounding_box()
+        assert mobile_hero_box and 44 <= mobile_hero_box["height"] <= 50, mobile_hero_box
         announcement = page.locator("[data-site-notification-broadcast]")
         if announcement.count() and announcement.first.is_visible():
             announcement.locator(".site-notification-broadcast-confirm").click()

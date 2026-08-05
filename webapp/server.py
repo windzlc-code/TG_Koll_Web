@@ -289,6 +289,9 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "new_persona_runninghub_tweet_i2i_endpoint": "/rhart-image-g-2/image-to-image",
     "video_runninghub_base_url": "https://www.runninghub.ai",
     "video_runninghub_api_key": "",
+    "runninghub_api_key": "",
+    "runninghub_personal_api_key": "",
+    "runninghub_enterprise_api_key": "",
     "video_create_audio_app_id": "",
     "video_create_video_app_id": "",
     "video_replace_model_app_id": "",
@@ -298,8 +301,12 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "video_tts_provider": "minimax",
     "video_tts_base_url": "https://api.minimaxi.com",
     "video_tts_api_key": "",
-    "video_tts_model": "speech-02-hd",
-    "video_default_voice_id": "",
+    "video_tts_model": "speech-2.8-hd",
+    "video_default_voice_id": "male-qn-qingse",
+    "minimax_api_key": "",
+    "minimax_base_url": "https://api.minimaxi.com",
+    "minimax_tts_model": "speech-2.8-hd",
+    "minimax_tts_voice_id": "male-qn-qingse",
     "video_default_duration_seconds": 10,
     "video_default_ratio": "9:16",
     "video_default_resolution": "720p",
@@ -5207,7 +5214,40 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     merged["video_runninghub_base_url"] = str(
         merged.get("video_runninghub_base_url") or merged.get("new_persona_runninghub_base_url") or "https://www.runninghub.ai"
     ).strip()
-    merged["video_runninghub_api_key"] = str(merged.get("video_runninghub_api_key") or "").strip()
+    personal_runninghub_key = str(current.get("runninghub_personal_api_key") or "").strip()
+    enterprise_runninghub_key = str(current.get("runninghub_enterprise_api_key") or "").strip()
+    legacy_new_persona_key = str(current.get("new_persona_runninghub_api_key") or "").strip()
+    legacy_runninghub_key = str(
+        current.get("video_runninghub_api_key") or current.get("runninghub_api_key") or ""
+    ).strip()
+    if not enterprise_runninghub_key and legacy_new_persona_key:
+        enterprise_runninghub_key = legacy_new_persona_key
+    if not personal_runninghub_key and legacy_runninghub_key and legacy_runninghub_key != enterprise_runninghub_key:
+        personal_runninghub_key = legacy_runninghub_key
+    merged["runninghub_personal_api_key"] = personal_runninghub_key
+    merged["runninghub_enterprise_api_key"] = enterprise_runninghub_key
+    merged["runninghub_api_key"] = personal_runninghub_key or enterprise_runninghub_key
+    merged["video_runninghub_api_key"] = merged["runninghub_api_key"]
+    merged["new_persona_runninghub_api_key"] = enterprise_runninghub_key or personal_runninghub_key
+    merged["video_runninghub_base_url"] = str(
+        merged.get("new_persona_runninghub_base_url") or merged.get("video_runninghub_base_url") or "https://www.runninghub.ai"
+    ).strip()
+
+    minimax_api_key = str(current.get("minimax_api_key") or current.get("video_tts_api_key") or "").strip()
+    minimax_model = str(
+        current.get("minimax_tts_model") or current.get("video_tts_model") or "speech-2.8-hd"
+    ).strip() or "speech-2.8-hd"
+    minimax_voice_id = str(
+        current.get("minimax_tts_voice_id") or current.get("video_default_voice_id") or "male-qn-qingse"
+    ).strip() or "male-qn-qingse"
+    merged["minimax_api_key"] = minimax_api_key
+    merged["minimax_base_url"] = "https://api.minimaxi.com"
+    merged["minimax_tts_model"] = minimax_model
+    merged["minimax_tts_voice_id"] = minimax_voice_id
+    merged["video_tts_api_key"] = minimax_api_key
+    merged["video_tts_base_url"] = merged["minimax_base_url"]
+    merged["video_tts_model"] = minimax_model
+    merged["video_default_voice_id"] = minimax_voice_id
     for key in (
         "video_create_audio_app_id",
         "video_create_video_app_id",
@@ -11750,6 +11790,9 @@ class RuntimeConfigPayload(BaseModel):
     new_persona_runninghub_tweet_i2i_endpoint: str = "/rhart-image-g-2/image-to-image"
     video_runninghub_base_url: str = "https://www.runninghub.ai"
     video_runninghub_api_key: str = ""
+    runninghub_api_key: str = ""
+    runninghub_personal_api_key: str = ""
+    runninghub_enterprise_api_key: str = ""
     video_create_audio_app_id: str = ""
     video_create_video_app_id: str = ""
     video_replace_model_app_id: str = ""
@@ -11759,8 +11802,12 @@ class RuntimeConfigPayload(BaseModel):
     video_tts_provider: str = "minimax"
     video_tts_base_url: str = "https://api.minimaxi.com"
     video_tts_api_key: str = ""
-    video_tts_model: str = "speech-02-hd"
-    video_default_voice_id: str = ""
+    video_tts_model: str = "speech-2.8-hd"
+    video_default_voice_id: str = "male-qn-qingse"
+    minimax_api_key: str = ""
+    minimax_base_url: str = "https://api.minimaxi.com"
+    minimax_tts_model: str = "speech-2.8-hd"
+    minimax_tts_voice_id: str = "male-qn-qingse"
     video_default_duration_seconds: int = Field(default=10, ge=1, le=3600)
     video_default_ratio: str = Field(default="9:16", max_length=20)
     video_default_resolution: str = Field(default="720p", max_length=20)
@@ -23869,9 +23916,12 @@ def create_app() -> FastAPI:
         source_keys = {
             "llm_api_key_gpt": ("llm_api_key_gpt", "llm_api_key"),
             "image_model_provider_api_key_gemini": ("image_model_provider_api_key_gemini",),
-            "new_persona_runninghub_api_key": ("new_persona_runninghub_api_key",),
+            "new_persona_runninghub_api_key": ("new_persona_runninghub_api_key", "runninghub_enterprise_api_key", "runninghub_personal_api_key"),
             "video_runninghub_api_key": ("video_runninghub_api_key", "new_persona_runninghub_api_key"),
             "video_tts_api_key": ("video_tts_api_key",),
+            "runninghub_personal_api_key": ("runninghub_personal_api_key", "runninghub_api_key", "video_runninghub_api_key"),
+            "runninghub_enterprise_api_key": ("runninghub_enterprise_api_key", "new_persona_runninghub_api_key"),
+            "minimax_api_key": ("minimax_api_key", "video_tts_api_key"),
         }.get(str(secret_name or "").strip())
         if not source_keys:
             raise HTTPException(status_code=404, detail="API Key 不允许查看")
@@ -23925,6 +23975,10 @@ def create_app() -> FastAPI:
             "new_persona_runninghub_api_key",
             "video_runninghub_api_key",
             "video_tts_api_key",
+            "runninghub_api_key",
+            "runninghub_personal_api_key",
+            "runninghub_enterprise_api_key",
+            "minimax_api_key",
         }
         for key in secret_preserve_keys:
             value = str(explicit_data.get(key) or "").strip()
@@ -24340,7 +24394,12 @@ def create_app() -> FastAPI:
         if not api_key:
             with db() as conn:
                 runtime = _get_runtime_config(conn)
-            api_key = str(runtime.get("new_persona_runninghub_api_key") or "").strip()
+            api_key = str(
+                runtime.get("runninghub_enterprise_api_key")
+                or runtime.get("runninghub_personal_api_key")
+                or runtime.get("new_persona_runninghub_api_key")
+                or ""
+            ).strip()
         if not api_key:
             raise HTTPException(status_code=400, detail="请先配置 RunningHub API Key。")
 

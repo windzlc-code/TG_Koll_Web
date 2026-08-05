@@ -7,6 +7,7 @@ STATIC_ROOT = Path(__file__).resolve().parents[1] / "static"
 CONSOLE_HTML = STATIC_ROOT / "console.html"
 CONSOLE_JS = STATIC_ROOT / "assets" / "console.js"
 CONSOLE_CSS = STATIC_ROOT / "assets" / "console.css"
+PROFILE_HTML = STATIC_ROOT / "profile.html"
 WORKBENCH_JS = STATIC_ROOT / "assets" / "video-workbench.js"
 WORKBENCH_CSS = STATIC_ROOT / "assets" / "video-workbench.css"
 
@@ -28,6 +29,7 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         cls.html = CONSOLE_HTML.read_text(encoding="utf-8")
         cls.console_js = CONSOLE_JS.read_text(encoding="utf-8")
         cls.console_css = CONSOLE_CSS.read_text(encoding="utf-8")
+        cls.profile_html = PROFILE_HTML.read_text(encoding="utf-8")
         cls.workbench_js = WORKBENCH_JS.read_text(encoding="utf-8")
         cls.workbench_css = WORKBENCH_CSS.read_text(encoding="utf-8")
 
@@ -130,20 +132,52 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertIn("input.dataset.videoFileSlotTarget = String(slotIndex)", self.workbench_js)
         self.assertIn("next[targetSlot] = selected[0]", self.workbench_js)
         self.assertIn("return selectedFileSlots(moduleId, fieldKey).filter(Boolean)", self.workbench_js)
+        self.assertIn("function localFilePreviewUrl(file)", self.workbench_js)
+        self.assertIn("URL.createObjectURL(file)", self.workbench_js)
+        self.assertIn("URL.revokeObjectURL(previewUrl)", self.workbench_js)
+        self.assertIn('class="video-upload-slot-preview" data-video-file-preview', self.workbench_js)
+        self.assertIn("replaceFileSlots(module.id, field.key, next)", self.workbench_js)
+        self.assertIn('window.addEventListener("pagehide", (event) => {', self.workbench_js)
+        self.assertIn('if (!event.persisted) releaseAllFilePreviews();', self.workbench_js)
+        self.assertIn('releaseModuleFilePreviews(module.id);\n      state.files[module.id] = {};', self.workbench_js)
         self.assertNotIn('<label class="video-file-field', self.workbench_js)
         self.assertNotIn('${field.required ? "required" : ""}', file_renderer)
         self.assertIn(".video-upload-slots [data-video-file-slot]", self.workbench_css)
 
-    def test_upload_placeholders_do_not_look_selected_on_pointer_hover(self):
+    def test_upload_placeholders_respond_to_pointer_hover_without_selecting(self):
         self.assertNotIn(".video-file-field:hover", self.workbench_css)
-        self.assertNotIn(
-            ".video-upload-slots [data-video-file-slot]:hover,",
-            self.workbench_css,
-        )
+        self.assertIn(".video-upload-slots [data-video-file-slot]:hover {", self.workbench_css)
+        self.assertIn("transform: translateY(-3px) scale(1.015);", self.workbench_css)
+        self.assertIn(".video-upload-slot-preview", self.workbench_css)
+        self.assertIn("object-fit: cover", self.workbench_css)
         self.assertIn(
             ".video-upload-slots [data-video-file-slot]:focus-visible",
             self.workbench_css,
         )
+
+    def test_editor_header_and_icons_follow_compact_vecto_visual_system(self):
+        hero = self.workbench_css.split(".video-workbench-hero {", 1)[1].split("}", 1)[0]
+        mark = self.workbench_css.split(".video-workbench-hero-mark {", 1)[1].split("}", 1)[0]
+        self.assertIn("min-height: 52px", hero)
+        self.assertIn("padding: 4px 10px", hero)
+        self.assertIn("var(--vecto-action-static-gradient", mark)
+        self.assertIn("function workbenchIcon(name)", self.workbench_js)
+        self.assertIn('workbenchIcon("refresh")', self.workbench_js)
+        self.assertIn('workbenchIcon("play")', self.workbench_js)
+        self.assertIn('workbenchIcon("alert")', self.workbench_js)
+        self.assertNotIn(">↻</button>", self.workbench_js)
+        self.assertNotIn(">▶</button>", self.workbench_js)
+
+    def test_all_replace_icons_use_the_video_slot_svg_path(self):
+        replace_path = "M4 8a7 7 0 0 1 12-3l2 2"
+        self.assertIn(replace_path, self.workbench_js)
+        self.assertIn(replace_path, self.console_js)
+        self.assertIn(replace_path, self.profile_html)
+        self.assertIn('return renderReplaceIcon("ui-action-icon persona-account-binding-icon")', self.console_js)
+        self.assertIn('return renderReplaceIcon("ui-media-card-edit-icon")', self.console_js)
+        self.assertNotIn("M20 7h-8a5 5 0 0 0-5 5", self.console_js)
+        self.assertNotIn("M19.5 7.5A8 8", self.console_js)
+        self.assertNotIn("M14.5 4.5 19.5 9.5", self.profile_html)
 
     def test_sidebar_keeps_original_full_width_console_navigation(self):
         self.assertNotIn(".video-module-menu .video-module-group", self.workbench_css)

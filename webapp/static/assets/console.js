@@ -598,6 +598,7 @@ const state = {
   socialTaskToastBatches: {},
   socialTaskToastTransitions: {},
   suppressedSocialTaskPromptIds: new Set(),
+  liveBrowserManualHandoffDismissed: new Set(),
   socialTaskPersonaRefreshSignatures: {},
   socialBrowserSessions: [],
   dailyPublishPolicy: { limit: 15, used: 0, remaining: 15, locked: false, waived: false, day: "" },
@@ -5557,6 +5558,27 @@ function registerSocialTaskToastLanes(tasks = []) {
   });
 }
 
+function socialTaskFailureReason(task) {
+  const candidates = [
+    task?.error,
+    task?.detail,
+    task?.last_error,
+    task?.message,
+    task?.result?.error,
+    task?.result?.detail,
+    task?.result?.message,
+  ];
+  for (const candidate of candidates) {
+    if (candidate == null) continue;
+    const raw = typeof candidate === "object"
+      ? (candidate.message || candidate.detail || JSON.stringify(candidate))
+      : candidate;
+    const text = normalizedTextSnippet(localizeConsoleMessage(raw), 180);
+    if (text && !["failed", "error"].includes(text.toLowerCase())) return text;
+  }
+  return "";
+}
+
 function socialTaskToastMessage(task) {
   const typeLabel = statusLabel(task?.task_type || "自动化任务");
   const taskId = String(task?.id || "").trim();
@@ -5565,10 +5587,19 @@ function socialTaskToastMessage(task) {
   const status = socialTaskPresentationStatus(task);
   if (isFutureScheduledSocialTask(task)) return `${typeLabel}预约等待${suffix} · 预约 ${formatScheduledTime(task.scheduled_at)}`;
   if (status === "success") return withBillingChargeMessage(`${typeLabel}已完成${suffix}`, task);
-  if (status === "failed") return `${typeLabel}执行失败${suffix}`;
+  if (status === "failed") {
+    const reason = socialTaskFailureReason(task);
+    return `${typeLabel}执行失败${reason ? `：${reason}` : ""}${suffix}`;
+  }
   if (status === "cancelled") return `${typeLabel}已取消${suffix}`;
-  if (status === "need_manual") return `${typeLabel}需要人工处理${suffix}`;
-  if (status === "running") return `${typeLabel}执行中${suffix}`;
+  if (status === "need_manual") {
+    const reason = socialTaskFailureReason(task);
+    return `${typeLabel}需要人工处理${reason ? `：${reason}` : ""}${suffix}`;
+  }
+  if (status === "running") {
+    const reason = socialTaskFailureReason(task);
+    return `${typeLabel}执行中${reason ? `：${reason}` : ""}${suffix}`;
+  }
   return `${typeLabel}已排队${suffix}`;
 }
 
@@ -9832,7 +9863,7 @@ function renderPersonaAccountBindingIcon(kind = "bind") {
     return `<svg class="ui-action-icon persona-account-binding-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"></circle><path d="m8.4 12.2 2.35 2.35 4.9-5.1"></path></svg>`;
   }
   if (mode === "replace") {
-    return `<svg class="ui-action-icon persona-account-binding-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 7h-8a5 5 0 0 0-5 5"></path><path d="m17 4 3 3-3 3"></path><path d="M4 17h8a5 5 0 0 0 5-5"></path><path d="m7 20-3-3 3-3"></path></svg>`;
+    return renderReplaceIcon("ui-action-icon persona-account-binding-icon");
   }
   if (mode === "add") return renderPlusIcon();
   return `<svg class="ui-action-icon persona-account-binding-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>`;
@@ -10292,12 +10323,13 @@ function renderInfoIcon() {
   </svg>`;
 }
 
-function renderReplaceIcon() {
-  return `<svg class="ui-replace-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <path d="M20 7h-8a5 5 0 0 0-5 5"></path>
-    <path d="m17 4 3 3-3 3"></path>
-    <path d="M4 17h8a5 5 0 0 0 5-5"></path>
-    <path d="m7 20-3-3 3-3"></path>
+function renderReplaceIcon(extraClass = "") {
+  const className = ["ui-replace-icon", extraClass].filter(Boolean).join(" ");
+  return `<svg class="${className}" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M4 8a7 7 0 0 1 12-3l2 2"></path>
+    <path d="M18 3v4h-4"></path>
+    <path d="M20 16a7 7 0 0 1-12 3l-2-2"></path>
+    <path d="M6 21v-4h4"></path>
   </svg>`;
 }
 
@@ -10309,12 +10341,7 @@ function renderMediaCardViewIcon() {
 }
 
 function renderMediaCardEditIcon() {
-  return `<svg class="ui-media-card-edit-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <path d="M19.5 7.5A8 8 0 0 0 6.2 5.2L4 7.5"></path>
-    <path d="M4 3.5v4h4"></path>
-    <path d="M4.5 16.5a8 8 0 0 0 13.3 2.3l2.2-2.3"></path>
-    <path d="M20 20.5v-4h-4"></path>
-  </svg>`;
+  return renderReplaceIcon("ui-media-card-edit-icon");
 }
 
 function renderUndoIcon() {
@@ -27497,6 +27524,14 @@ function updateLiveBrowserSessionCard(card, session) {
     statusNode.className = `status ${presentationStatus}`;
     statusNode.textContent = liveBrowserPresentationLabel(session);
   }
+  const frame = card.querySelector(".live-browser-frame");
+  const existingHandoff = frame?.querySelector("[data-live-browser-manual-handoff]");
+  const nextHandoff = renderLiveBrowserManualHandoff(session);
+  if (existingHandoff) existingHandoff.remove();
+  if (frame && nextHandoff) {
+    const manualInputNode = frame.querySelector("[data-live-browser-manual-input]");
+    manualInputNode?.insertAdjacentHTML("beforebegin", nextHandoff);
+  }
   const expandButton = card.querySelector("[data-live-browser-fullscreen]");
   if (expandButton) {
     const expanded = String(state.liveBrowserExpandedSessionId || "") === sessionId;
@@ -27879,6 +27914,52 @@ function canInteractWithLiveBrowser(session) {
     && (Boolean(session?.input_allowed) || liveBrowserTaskStatus(session) === "need_manual");
 }
 
+function liveBrowserManualHandoffKey(session) {
+  return [
+    liveBrowserSessionId(session),
+    String(session?.task_id || "").trim(),
+    liveBrowserTaskStatus(session),
+  ].filter(Boolean).join(":");
+}
+
+function liveBrowserManualHandoffState(session) {
+  const mode = liveBrowserLoginMode(session);
+  const status = liveBrowserTaskStatus(session);
+  const shouldShow = ["switching", "takeover_timeout", "manual"].includes(mode)
+    || status === "need_manual";
+  const key = liveBrowserManualHandoffKey(session);
+  return {
+    key,
+    mode,
+    status,
+    show: shouldShow && key && !state.liveBrowserManualHandoffDismissed.has(key),
+  };
+}
+
+function renderLiveBrowserManualHandoff(session) {
+  const handoff = liveBrowserManualHandoffState(session);
+  if (!handoff.show) return "";
+  const waiting = handoff.mode === "switching";
+  const timedOut = handoff.mode === "takeover_timeout";
+  const title = waiting ? "等待人工接管节点" : (timedOut ? "人工接管待重试" : "需要人工处理");
+  const message = waiting
+    ? `系统正在等待“${liveBrowserTakeoverNodeLabel(session)}”，到达后会开放人工操作。`
+    : (timedOut
+      ? `等待“${liveBrowserTakeoverNodeLabel(session)}”超时，可重试接管或停止进程。`
+      : "自动化已暂停，请确认是否由人工接手当前浏览器窗口。");
+  return `
+    <div class="live-browser-manual-handoff" data-live-browser-manual-handoff="${esc(handoff.key)}" role="alertdialog" aria-live="polite">
+      <div class="live-browser-manual-handoff-card">
+        <strong>${esc(title)}</strong>
+        <p>${esc(message)}</p>
+        <div class="live-browser-manual-handoff-actions">
+          ${waiting ? "" : `<button type="button" data-live-browser-manual-dismiss="${esc(handoff.key)}">暂不接手</button>`}
+          <button type="button" class="primary" data-live-browser-manual-accept="${esc(handoff.key)}" data-live-browser-manual-session="${esc(liveBrowserSessionId(session))}" ${waiting ? "disabled" : ""}>${timedOut ? "重试接管" : "人工接手"}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
 function liveBrowserIframeLoadingMode() {
   return !document.hidden && state.accountBrowserPanel === "browsers" ? "eager" : "lazy";
 }
@@ -27943,6 +28024,7 @@ function renderLiveBrowserSession(session) {
           allowfullscreen
          ></iframe>
          <div class="live-browser-lock" data-live-browser-controls-toggle aria-hidden="true"><span>自动化执行中，等待进入人工处理状态后再操作。</span></div>
+         ${renderLiveBrowserManualHandoff(session)}
          <div class="live-browser-manual-input" data-live-browser-manual-input data-expanded="false" ${interactionAllowed ? "" : "hidden"}>
           <button type="button" class="live-browser-input-toggle" data-live-browser-input-toggle="${esc(sessionId)}" aria-expanded="false" title="输入验证码或文本" aria-label="输入验证码或文本">
             ${renderEditIcon()}<span>输入</span>
@@ -31375,6 +31457,37 @@ function bindEvents() {
         deleteSocialAccountRecord(deleteAccount.dataset.socialDeleteAccount || "", "socialMsg")
           .catch((error) => showMsg("socialMsg", error.detail || error.message || "删除账号失败", false));
       });
+    }
+    const manualAccept = event.target.closest("[data-live-browser-manual-accept]");
+    if (manualAccept) {
+      const key = manualAccept.dataset.liveBrowserManualAccept || "";
+      const sessionId = manualAccept.dataset.liveBrowserManualSession || "";
+      const session = (state.socialBrowserSessions || []).find((item) => liveBrowserSessionId(item) === sessionId);
+      if (session && liveBrowserLoginMode(session) === "takeover_timeout") {
+        setLiveBrowserMode(sessionId, "manual").catch((error) => showMsg("socialMsg", error.detail || error.message || "切换人工接管失败", false));
+        return;
+      }
+      if (key) state.liveBrowserManualHandoffDismissed.add(key);
+      renderLiveBrowserSessions();
+      const card = document.querySelector(`[data-live-browser-card="${CSS.escape(sessionId)}"]`);
+      const manualInput = card?.querySelector("[data-live-browser-manual-input]");
+      const tools = card?.querySelector("[data-live-browser-tools]");
+      const inputToggle = card?.querySelector("[data-live-browser-input-toggle]");
+      if (manualInput && tools) {
+        manualInput.dataset.expanded = "true";
+        tools.setAttribute("aria-hidden", "false");
+        tools.removeAttribute("inert");
+        inputToggle?.setAttribute("aria-expanded", "true");
+        window.requestAnimationFrame(() => card.querySelector("[data-live-browser-text]")?.focus());
+      }
+      return;
+    }
+    const manualDismiss = event.target.closest("[data-live-browser-manual-dismiss]");
+    if (manualDismiss) {
+      const key = manualDismiss.dataset.liveBrowserManualDismiss || "";
+      if (key) state.liveBrowserManualHandoffDismissed.add(key);
+      renderLiveBrowserSessions();
+      return;
     }
     const liveBrowserMode = event.target.closest("[data-live-browser-mode]");
     if (liveBrowserMode) {

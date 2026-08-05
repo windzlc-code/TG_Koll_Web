@@ -24598,6 +24598,53 @@ body.console-page {
   border-radius: 3px;
 }
 
+.console-page .live-browser-manual-handoff {
+  position: absolute;
+  inset: 0;
+  z-index: 14;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgb(3 8 9 / 36%);
+  pointer-events: auto;
+}
+
+.console-page .live-browser-manual-handoff-card {
+  width: min(360px, 90%);
+  padding: 18px;
+  color: #142433;
+  background: rgb(248 251 252 / 96%);
+  border: 1px solid rgb(183 199 210 / 82%);
+  border-radius: 12px;
+  box-shadow: 0 16px 34px rgb(0 0 0 / 28%);
+}
+
+.console-page .live-browser-manual-handoff-card strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.console-page .live-browser-manual-handoff-card p {
+  margin: 0;
+  color: #526271;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.console-page .live-browser-manual-handoff-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.console-page .live-browser-manual-handoff-actions button {
+  min-height: 38px;
+  padding: 0 18px;
+}
+
 .console-page .live-browser-manual-input[hidden] {
   display: none !important;
 }

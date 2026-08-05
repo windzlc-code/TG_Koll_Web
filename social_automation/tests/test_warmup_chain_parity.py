@@ -986,15 +986,17 @@ class WarmupChainParityTests(TestCase):
         self.assertEqual(keywords, [])
         self.assertEqual(payload["_warmup_search_keyword_source"], "model_failed")
 
-    def test_warmup_does_not_browse_when_required_model_keywords_are_missing(self):
+    def test_warmup_still_probes_page_when_model_keywords_are_missing(self):
         payload = {
             "session_seconds": 15,
             "browse_limit": 1,
-            "like_limit": 1,
+            "like_limit": 0,
+            "max_comments": 0,
             "require_persona_relevance": True,
         }
         with (
             mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_guard_warmup_risk"),
             mock.patch.object(
                 runner,
                 "_generate_warmup_search_keywords_with_ai",
@@ -1003,18 +1005,24 @@ class WarmupChainParityTests(TestCase):
             mock.patch.object(
                 runner,
                 "_ensure_warmup_relevant_surface",
+                return_value=None,
             ) as ensure,
+            mock.patch.object(runner, "_next_warmup_interaction_at", return_value=99),
+            mock.patch.object(runner, "_open_random_platform_post", return_value=False),
+            mock.patch.object(runner, "_slow_human_scroll", return_value={"delta": 320}),
+            mock.patch.object(runner, "_wait_for_cancellation"),
+            mock.patch.object(runner, "_screenshot", return_value="warmup.png"),
+            mock.patch.object(runner.time, "monotonic", side_effect=[0, 0, 0, 16, 16]),
         ):
-            with self.assertRaisesRegex(RuntimeError, "模型未生成人设关键词"):
-                runner._run_threads_warmup(
-                    _Page(),
-                    {"id": "missing-model-keywords"},
-                    payload,
-                    Path("."),
-                    _Logger(),
-                )
+            runner._run_threads_warmup(
+                _Page(),
+                {"id": "missing-model-keywords"},
+                payload,
+                Path("."),
+                _Logger(),
+            )
 
-        ensure.assert_not_called()
+        ensure.assert_called()
 
     def test_generic_personality_words_are_not_used_as_search_queries(self):
         self.assertEqual(

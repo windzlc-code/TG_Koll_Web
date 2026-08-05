@@ -6,6 +6,7 @@ import unittest
 import shutil
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from video_core.contracts import VideoTaskContext
@@ -38,6 +39,47 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
         path = Path(directory) / name
         path.write_bytes(b"image")
         return str(path)
+
+    def test_explicit_video_tts_settings_override_legacy_runtime_aliases(self):
+        captured: dict = {}
+
+        class FakeResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return {"base_resp": {"status_code": 0}, "data": {"audio": "00"}}
+
+        def fake_post(url, **kwargs):
+            captured["url"] = url
+            captured["json"] = kwargs["json"]
+            return FakeResponse()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            backend = ArchivedSourceBackend()
+            backend.http = SimpleNamespace(post=fake_post)
+            output = backend._generate_minimax_tts(
+                speech_text="hello",
+                output_path=Path(tmpdir) / "speech.mp3",
+                payload={
+                    "video_tts_api_key": "test-key",
+                    "video_tts_base_url": "https://video.example.invalid",
+                    "minimax_base_url": "https://legacy.example.invalid",
+                    "video_tts_model": "explicit-video-model",
+                    "minimax_tts_model": "legacy-runtime-model",
+                    "video_default_voice_id": "explicit-video-voice",
+                    "minimax_tts_voice_id": "legacy-runtime-voice",
+                },
+                context=self._context("create_video"),
+            )
+            output_bytes = output.read_bytes()
+
+        self.assertEqual(captured["url"], "https://video.example.invalid/v1/t2a_v2")
+        self.assertEqual(captured["json"]["model"], "explicit-video-model")
+        self.assertEqual(captured["json"]["voice_setting"]["voice_id"], "explicit-video-voice")
+        self.assertEqual(output_bytes, b"\x00")
 
     def test_image_generate_builds_mode_specific_prompts_and_inputs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
