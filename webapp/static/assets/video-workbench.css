@@ -301,11 +301,18 @@
   line-height: 1.55;
 }
 
-.video-upload-panel .video-file-field-action {
+.video-upload-panel .video-file-field-actions {
   grid-column: 1;
   grid-row: 3;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
   justify-self: start;
   align-self: start;
+}
+
+.video-upload-panel .video-file-field-action {
   min-height: 32px;
   padding: 6px 10px;
   font-size: 11px;
@@ -334,22 +341,6 @@
   height: 132px;
   min-height: 132px;
   border-radius: 14px;
-}
-
-.video-upload-panel .video-voice-studio {
-  min-height: 132px;
-  padding: 16px;
-  background: color-mix(in srgb, #ecfdf5 68%, var(--panel-solid));
-  border-style: dashed;
-  border-color: color-mix(in srgb, #10b981 38%, var(--video-line));
-  border-radius: 18px;
-}
-
-.video-file-field:hover {
-  background: var(--video-panel);
-  border-color: var(--video-accent);
-  box-shadow: var(--hover-shadow);
-  transform: translateY(-1px);
 }
 
 .video-file-field.has-files {
@@ -412,6 +403,20 @@
   cursor: pointer;
 }
 
+.video-file-field-action:hover,
+.video-file-field-action:focus-visible {
+  color: var(--accent-ink);
+  background: var(--video-accent);
+  border-color: var(--video-accent);
+  outline: none;
+}
+
+.video-file-field-action--voice {
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--video-accent) 58%, var(--video-panel));
+  border-color: color-mix(in srgb, var(--video-accent) 72%, var(--video-line));
+}
+
 .video-selected-files {
   grid-column: 2 / -1;
   display: grid;
@@ -448,14 +453,10 @@
   transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
-.video-upload-slots [data-video-file-slot]:hover,
 .video-upload-slots [data-video-file-slot]:focus-visible {
   color: var(--video-ink);
-  background: var(--video-panel);
-  border-color: var(--video-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--video-accent) 18%, transparent);
-  outline: none;
-  transform: translateY(-1px);
+  outline: 2px solid color-mix(in srgb, var(--video-accent) 72%, transparent);
+  outline-offset: 2px;
 }
 
 .video-upload-slots [data-video-file-slot] > span {
@@ -988,6 +989,59 @@
   margin: -2px 0 10px;
 }
 
+.video-voice-modal { z-index: 1200; }
+
+.video-voice-modal-dialog {
+  width: min(860px, calc(100vw - 36px));
+  max-height: min(760px, calc(100vh - 56px));
+  overflow: hidden;
+}
+
+.video-voice-modal-dialog .console-modal-head > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.video-voice-modal-dialog .console-modal-head > div > span {
+  color: var(--video-muted);
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: .15em;
+}
+
+.video-voice-modal-dialog .console-modal-head > div > small {
+  color: var(--video-muted);
+  font-size: 11px;
+  font-weight: 450;
+}
+
+.video-voice-modal-content {
+  display: grid;
+  gap: 14px;
+  overflow-y: auto;
+}
+
+.video-voice-current {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  color: var(--video-ink);
+  background: color-mix(in srgb, #ecfdf5 62%, var(--video-panel));
+  border: 1px solid color-mix(in srgb, #10b981 30%, var(--video-line));
+  border-radius: 10px;
+}
+
+.video-voice-current > span {
+  color: #18804f;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: .1em;
+}
+
+.video-voice-current > strong { font-size: 13px; }
+.video-voice-current > small { color: var(--video-muted); font-size: 10px; font-weight: 450; }
+
 .video-voice-picker > summary {
   padding: 10px 12px;
   color: var(--video-ink);
@@ -1146,7 +1200,7 @@
   }
   .video-upload-panel .video-file-field::before,
   .video-upload-panel .video-file-field-copy,
-  .video-upload-panel .video-file-field-action,
+  .video-upload-panel .video-file-field-actions,
   .video-upload-panel .video-selected-files,
   .video-upload-panel .video-upload-slots {
     grid-column: 1;
@@ -1193,7 +1247,7 @@
   .video-choice-pills { width: 100%; border-radius: 12px; }
   .video-choice-pill { flex: 1 1 calc(50% - 4px); }
   .video-file-field { grid-template-columns: auto minmax(0, 1fr); }
-  .video-file-field:has(.video-upload-slots) .video-file-field-action { display: none; }
+  .video-file-field:has(.video-upload-slots) .video-file-field-actions { display: none; }
   .video-selected-files { grid-column: 1 / -1; }
   .video-section-heading small { line-height: 1.35; }
   .video-advanced-card { padding: 13px; }

@@ -1599,7 +1599,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
     def test_mobile_publish_content_expands_without_inner_scroll(self):
         self.assertIn(".mobile-task-dock {", self.styles)
-        self.assertIn("grid-template-columns: repeat(5, minmax(0, 1fr));", self.styles)
+        self.assertIn(
+            "grid-template-columns: repeat(var(--mobile-task-dock-item-count, 5), minmax(0, 1fr));",
+            self.styles,
+        )
         self.assertIn(".publish-header-main > .publish-mode-tabs", self.styles)
         self.assertIn(".publish-time-tabs {", self.styles)
         self.assertIn(".publish-post-card-snippet {", self.styles)
@@ -2770,6 +2773,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.styles.index("\n  .publish-header-row", self.styles.index("  .mobile-task-dock {\n    position: fixed;"))
         ]
         self.assertIn('if (!dock.querySelector(".mobile-task-dock-button"))', renderer)
+        self.assertIn(
+            'dock.style.setProperty("--mobile-task-dock-item-count", String(mobileDockItems.length));',
+            renderer,
+        )
         self.assertIn("syncMobileTaskDockState(dock);", renderer)
         self.assertNotIn("--mobile-task-dock-offset", renderer)
         self.assertNotIn(".mobile-task-dock::before", dock_styles)
@@ -3380,14 +3387,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("const previewPosts = isMobileTweetStreamMode()", preview)
         self.assertIn("previewPosts.map(", preview)
 
-    def test_mobile_tweet_loading_shows_a_spinner_and_locks_scroll_until_layout_finishes(self):
+    def test_mobile_tweet_loading_shows_a_spinner_without_blocking_page_scroll(self):
         self.assertIn("const MOBILE_TWEET_STREAM_MIN_LOADING_MS = 220;", self.console_script)
         self.assertIn("function renderMobileTweetStreamLoadingIndicator()", self.console_script)
-        self.assertIn("function lockMobileTweetStreamScroll()", self.console_script)
-        self.assertIn("function unlockMobileTweetStreamScroll()", self.console_script)
         self.assertIn("function cancelMobileTweetStreamLoading()", self.console_script)
-        self.assertIn('document.documentElement.classList.add("mobile-tweet-stream-scroll-locked")', self.console_script)
-        self.assertIn('event.preventDefault();', self.console_script)
+        self.assertNotIn("function lockMobileTweetStreamScroll()", self.console_script)
+        self.assertNotIn("function unlockMobileTweetStreamScroll()", self.console_script)
+        self.assertNotIn('mobile-tweet-stream-scroll-locked', self.console_script)
         self.assertIn("function finishMobileTweetStreamLoading(", self.console_script)
         self.assertIn("mobileTweetStreamLoadingGeneration", self.console_script)
         self.assertIn("!node.isConnected || !node.getClientRects().length", self.console_script)
@@ -3396,13 +3402,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('rootMargin: "0px 0px -72px 0px"', self.console_script)
         self.assertIn("threshold: 0.85", self.console_script)
         self.assertIn("@keyframes mobile-tweet-stream-spin", self.styles)
-        self.assertIn(".mobile-tweet-stream-scroll-locked", self.styles)
+        self.assertNotIn(".mobile-tweet-stream-scroll-locked", self.styles)
 
-    def test_dashboard_incremental_append_uses_the_same_loading_lock(self):
+    def test_dashboard_incremental_append_keeps_page_scroll_enabled(self):
         load_start = self.dashboard_script.index("function pdLoadNextMobilePostBatch(")
         load_end = self.dashboard_script.index("\nfunction pdBindMobilePostStream(", load_start)
         loader = self.dashboard_script[load_start:load_end]
-        self.assertIn("lockMobileTweetStreamScroll();", loader)
+        self.assertNotIn("lockMobileTweetStreamScroll();", loader)
         self.assertIn("renderMobileTweetStreamLoadingIndicator()", loader)
         self.assertIn("finishMobileTweetStreamLoading(", loader)
         self.assertIn("triggerStreamKey !== personaDashboardMobilePostKey", loader)

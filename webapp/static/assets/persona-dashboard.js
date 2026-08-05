@@ -768,7 +768,6 @@ function pdLoadNextMobilePostBatch(persona) {
     status.classList.add("is-loading");
     status.innerHTML = renderMobileTweetStreamLoadingIndicator();
   }
-  lockMobileTweetStreamScroll();
   const startedAt = performance.now();
   pdDisconnectMobilePostStream();
   finishMobileTweetStreamLoading(startedAt, () => {

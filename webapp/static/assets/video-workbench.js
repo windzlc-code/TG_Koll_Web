@@ -290,6 +290,7 @@
     voiceError: "",
     voiceFilter: "",
     playingVoiceId: "",
+    voiceModalOpen: false,
     advancedBusy: "",
     timer: 0,
     requestToken: 0,
@@ -673,14 +674,30 @@
     const explicitPreviewSlots = field.previewSlots == null ? null : Math.max(0, Number(field.previewSlots) || 0);
     const previewSlots = explicitPreviewSlots == null && !String(field.accept || "").includes("audio") ? 1 : (explicitPreviewSlots || 0);
     const previewLabels = Array.isArray(field.previewLabels) ? field.previewLabels : [];
-    return `<div class="video-file-field ${files.length ? "has-files" : ""}" data-video-file-field="${escapeHtml(field.key)}" data-video-file-required="${field.required ? "true" : "false"}">
+    const isVoiceInput = VOICE_MODULES.has(state.moduleId) && field.key === "audio";
+    const draft = isVoiceInput ? loadDraft(currentModule()) : null;
+    const selectedVoiceId = String(draft?.values?.voice_id || draft?.values?.speaker || "");
+    const selectedVoice = isVoiceInput
+      ? state.voicePresets.find((voice) => voice.voiceId === selectedVoiceId || voice.id === selectedVoiceId)
+      : null;
+    const hasSource = files.length > 0 || Boolean(selectedVoiceId);
+    const displayLabel = isVoiceInput ? "参考音频/声音" : field.label;
+    const sourceCopy = files.length
+      ? `已选择 ${files.length} 个文件`
+      : (selectedVoice
+        ? `已选择参考声音：${selectedVoice.label}`
+        : (selectedVoiceId ? `已选择参考声音：${draft?.values?.voice_label || selectedVoiceId}` : (field.help || (previewSlots ? "点击对应素材位选择文件" : "点击选择文件"))));
+    return `<div class="video-file-field ${hasSource ? "has-files" : ""} ${isVoiceInput ? "is-voice-source" : ""}" data-video-file-field="${escapeHtml(field.key)}" data-video-file-required="${field.required ? "true" : "false"}">
       <input type="file" data-video-field="${escapeHtml(field.key)}" ${field.accept ? `accept="${escapeHtml(field.accept)}"` : ""} ${field.multiple ? "multiple" : ""} />
       <span class="video-file-field-icon">${moduleIcon(state.moduleId)}</span>
       <span class="video-file-field-copy">
-        <strong>${escapeHtml(field.label)}${field.required ? '<em aria-hidden="true">*</em>' : ""}</strong>
-        <span>${files.length ? `已选择 ${files.length} 个文件` : (field.help || (previewSlots ? "点击对应素材位选择文件" : "点击选择文件"))}</span>
+        <strong>${escapeHtml(displayLabel)}${field.required ? '<em aria-hidden="true">*</em>' : ""}</strong>
+        <span>${escapeHtml(sourceCopy)}</span>
       </span>
-      <button type="button" class="video-file-field-action" data-video-file-pick="${escapeHtml(field.key)}">${files.length ? "重新选择" : "选择文件"}</button>
+      <span class="video-file-field-actions">
+        <button type="button" class="video-file-field-action" data-video-file-pick="${escapeHtml(field.key)}">${files.length ? "重新选择" : "选择文件"}</button>
+        ${isVoiceInput ? `<button type="button" class="video-file-field-action video-file-field-action--voice" data-video-open-voice>${selectedVoiceId ? "更换参考声音" : "声音设置"}</button>` : ""}
+      </span>
       ${previewSlots ? `<span class="video-upload-slots">${Array.from({ length: previewSlots }, (_, index) => {
         const fileItem = fileSlots[index] || null;
         const label = fileItem?.name || previewLabels[index] || `素材 ${index + 1}`;
@@ -728,22 +745,28 @@
   }
 
   function renderVoiceStudio(module, draft, voiceFields = []) {
-    if (!VOICE_MODULES.has(module.id)) return "";
+    if (!VOICE_MODULES.has(module.id) || !state.voiceModalOpen) return "";
     const language = String(state.voiceFilter || draft.values.target_language || draft.values.language || "").toLowerCase();
     const filtered = state.voicePresets.filter((voice) => !language || language === "auto" || voice.language.toLowerCase().includes(language));
     const voices = (filtered.length ? filtered : state.voicePresets).slice(0, 24);
     const selectedId = String(draft.values.voice_id || draft.values.speaker || "");
     const selected = state.voicePresets.find((voice) => voice.voiceId === selectedId || voice.id === selectedId);
     const languages = [...new Set(state.voicePresets.map((voice) => voice.language).filter(Boolean))].sort();
-    return `<section class="video-advanced-card video-voice-studio" data-video-voice-studio>
-      <div class="video-advanced-head">
-        <div><span>VOICE CAST</span><strong>参考声音</strong><small>${escapeHtml(selected?.label || "可上传干音，或选择预设声音试听")}</small></div>
-      </div>
-      ${state.voiceError ? `<div class="video-advanced-notice">${escapeHtml(state.voiceError)}</div>` : ""}
-      ${voiceFields.length ? `<div class="video-voice-inline-fields">${voiceFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : ""}
-      <details class="video-voice-picker">
-        <summary>${selected ? "更换 / 试听预设声音" : "选择 / 试听预设声音"}</summary>
-        <div class="video-voice-picker-body">
+    const uploadedAudio = selectedFiles(module.id, "audio")[0];
+    const currentSource = uploadedAudio
+      ? `已上传音频：${uploadedAudio.name}`
+      : (selected ? `已选择预设声音：${selected.label}` : "尚未选择参考音频或预设声音");
+    return `<div class="console-modal video-voice-modal" data-video-voice-modal>
+      <div class="console-modal-backdrop" data-video-voice-close></div>
+      <section class="console-modal-dialog video-voice-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="videoVoiceModalTitle">
+        <div class="console-modal-head">
+          <div><span>VOICE CAST</span><strong id="videoVoiceModalTitle">参考声音设置</strong><small>选择口播语言、预设声音并试听具体音色。</small></div>
+          <button type="button" class="console-modal-close" data-video-voice-close title="关闭" aria-label="关闭参考声音设置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12"></path><path d="m18 6-12 12"></path></svg></button>
+        </div>
+        <div class="console-modal-content video-voice-modal-content">
+          <div class="video-voice-current"><span>当前参考来源</span><strong>${escapeHtml(currentSource)}</strong><small>上传音频会随任务提交；预设声音会保存到当前模块草稿。</small></div>
+          ${state.voiceError ? `<div class="video-advanced-notice">${escapeHtml(state.voiceError)}</div>` : ""}
+          ${voiceFields.length ? `<div class="video-voice-inline-fields">${voiceFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : ""}
           <div class="video-voice-toolbar">
             <label><span>筛选语言</span><select data-video-voice-filter><option value="">全部语言</option>${languages.map((item) => `<option value="${escapeHtml(item)}" ${item === state.voiceFilter ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label>
             <button type="button" class="video-mini-button" data-video-reload-voices ${state.voiceLoading ? "disabled" : ""}>${state.voiceLoading ? "加载中…" : "刷新音色"}</button>
@@ -760,8 +783,9 @@
             }).join("")}</div>`}
           <audio id="videoVoicePreview" class="video-voice-audio" controls preload="metadata" ${selected?.previewUrl ? `src="${escapeHtml(selected.previewUrl)}"` : ""}>当前浏览器不支持 audio 试听。</audio>
         </div>
-      </details>
-    </section>`;
+        <div class="console-modal-actions"><button type="button" class="primary" data-video-voice-close>完成</button></div>
+      </section>
+    </div>`;
   }
 
   function renderTimelineEditor(module, draft) {
@@ -814,7 +838,6 @@
     const fileFields = fields.filter((field) => field.type === "file");
     const uploadTopFields = fields.filter((field) => field.type !== "file" && field.placement === "uploadTop");
     const uploadFooterFields = fields.filter((field) => field.type !== "file" && field.placement === "uploadFooter");
-    const voiceFields = fields.filter((field) => field.type !== "file" && field.placement === "voice");
     const inputFields = fields.filter((field) => field.type !== "file" && !field.placement && !(VOICE_MODULES.has(module.id) && ["speaker", "voice_id"].includes(field.key)));
     return `<form id="videoWorkbenchForm" class="video-workbench-form" data-video-module-form="${escapeHtml(module.id)}">
       <div class="video-original-layout">
@@ -822,7 +845,6 @@
           <div class="video-original-panel-head"><div><strong>素材上传</strong><small>请按原工作台顺序上传素材。</small></div><button type="button" class="video-button video-button--ghost" data-video-clear-files>清空</button></div>
           ${uploadTopFields.length ? `<div class="video-upload-mode-fields">${uploadTopFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : ""}
           ${fileFields.length ? `<div class="video-file-grid">${fileFields.map(renderFileField).join("")}</div>` : `<div class="video-workbench-state video-workbench-state--empty"><span>当前模块无需上传素材。</span></div>`}
-          ${renderVoiceStudio(module, draft, voiceFields)}
           ${uploadFooterFields.length ? `<div class="video-upload-mode-fields video-upload-mode-fields--footer">${uploadFooterFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : ""}
         </section>
         <section class="video-form-section video-settings-panel">
@@ -1110,7 +1132,8 @@
       return;
     }
     const module = currentModule();
-    loadDraft(module);
+    const draft = loadDraft(module);
+    const voiceFields = resolvedFields(module, draft.values).filter((field) => field.type !== "file" && field.placement === "voice");
     root.innerHTML = `<div class="video-workbench-shell">
       ${renderWorkbenchHero(module)}
       ${state.moduleError ? `<div class="video-catalog-notice is-fallback"><strong>已启用本地模块配置</strong><span>在线模块目录暂不可用，当前功能与字段仍可正常使用。</span><button type="button" data-video-retry-modules>重新连接</button></div>` : ""}
@@ -1119,7 +1142,8 @@
         <main class="video-form-panel">${renderForm(module)}</main>
         ${renderTaskPanel()}
       </div>
-    </div>`;
+    </div>
+    ${renderVoiceStudio(module, draft, voiceFields)}`;
   }
 
   function formatBytes(bytes) {
@@ -1235,6 +1259,19 @@
     if (audio.src !== new URL(voice.previewUrl, window.location.href).href) audio.src = voice.previewUrl;
     state.playingVoiceId = voice.id;
     audio.play().catch(() => {});
+  }
+
+  function openVoiceStudio() {
+    state.voiceModalOpen = true;
+    render();
+    window.requestAnimationFrame(() => document.querySelector("[data-video-voice-modal] .console-modal-close")?.focus());
+  }
+
+  function closeVoiceStudio() {
+    if (!state.voiceModalOpen) return;
+    state.voiceModalOpen = false;
+    render();
+    window.requestAnimationFrame(() => document.querySelector("[data-video-open-voice]")?.focus());
   }
 
   function setTimelineRows(module, draft, rows) {
@@ -1556,6 +1593,7 @@
 
   function selectModule(moduleId) {
     if (!MODULE_ORDER.includes(moduleId) || moduleId === state.moduleId) return;
+    state.voiceModalOpen = false;
     state.moduleId = moduleId;
     state.submitError = "";
     renderActiveModuleOnly();
@@ -1584,6 +1622,16 @@
       if (event.target.id === "videoWorkbenchForm") submit(event);
     });
     document.addEventListener("click", (event) => {
+      if (event.target.closest?.("[data-video-voice-close]")) {
+        event.preventDefault();
+        closeVoiceStudio();
+        return;
+      }
+      if (event.target.closest?.("#videoWorkbenchRoot [data-video-open-voice]")) {
+        event.preventDefault();
+        openVoiceStudio();
+        return;
+      }
       const fileSlot = event.target.closest?.("#videoWorkbenchRoot [data-video-file-slot]");
       if (fileSlot) {
         event.preventDefault();
@@ -1637,6 +1685,9 @@
         });
       }
     });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && state.voiceModalOpen) closeVoiceStudio();
+    });
     document.addEventListener("visibilitychange", syncPolling);
     window.addEventListener("beforeunload", (event) => {
       if (!hasTransientState()) return;
@@ -1662,6 +1713,7 @@
 
   function deactivate() {
     state.active = false;
+    state.voiceModalOpen = false;
     state.requestToken += 1;
     syncPolling();
   }

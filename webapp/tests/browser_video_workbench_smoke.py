@@ -91,6 +91,14 @@ def main() -> None:
 
         product_slots = page.locator('[data-video-file-field="product"] [data-video-file-slot]')
         assert product_slots.count() == 3
+        resting_style = product_slots.nth(0).evaluate(
+            "node => { const style = getComputedStyle(node); return { color: style.color, background: style.backgroundColor, border: style.borderColor, shadow: style.boxShadow, transform: style.transform }; }"
+        )
+        product_slots.nth(0).hover()
+        hovered_style = product_slots.nth(0).evaluate(
+            "node => { const style = getComputedStyle(node); return { color: style.color, background: style.backgroundColor, border: style.borderColor, shadow: style.boxShadow, transform: style.transform }; }"
+        )
+        assert hovered_style == resting_style, f"empty upload slot gained a false selected highlight: {resting_style} -> {hovered_style}"
         with page.expect_file_chooser() as chooser_info:
             product_slots.nth(1).click()
         chooser_info.value.set_files({"name": "slot-2.png", "mimeType": "image/png", "buffer": b"slot-2"})
@@ -178,8 +186,20 @@ def main() -> None:
             assert page.locator('[data-video-field="subtitle_template"]').count() == 0
 
         page.locator('[data-video-module="digital_human_video"]').first.click(force=True)
-        assert page.locator('.video-voice-studio [data-video-field="target_language"]').count() == 1
+        assert page.locator('.video-voice-studio').count() == 0
+        voice_source = page.locator('[data-video-file-field="audio"]')
+        assert voice_source.count() == 1
+        assert "参考音频/声音" in voice_source.inner_text()
+        assert voice_source.locator('[data-video-open-voice]').count() == 1
+        assert page.locator('[data-video-voice-modal]').count() == 0
+        voice_source.locator('[data-video-open-voice]').click()
+        page.locator('[data-video-voice-modal]').wait_for(state="visible")
+        assert page.locator('[data-video-voice-modal] [data-video-field="target_language"]').count() == 1
         assert page.locator('.video-settings-panel [data-video-field="target_language"]').count() == 0
+        if screenshot_dir:
+            page.screenshot(path=str(screenshot_dir / "video-workbench-voice-modal.png"), full_page=False)
+        page.locator('[data-video-voice-modal] [data-video-voice-close]').last.click()
+        assert page.locator('[data-video-voice-modal]').count() == 0
         page.locator('[data-video-choice-field="digital_human_content_mode"][data-video-choice-value="oral_broadcast"]').click()
         assert page.locator('[data-video-field="oral_target_duration_seconds"]').count() == 1
         assert page.locator('[data-video-field="digital_human_short_mode"]').count() == 0

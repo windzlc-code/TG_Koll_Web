@@ -134,6 +134,17 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertNotIn('${field.required ? "required" : ""}', file_renderer)
         self.assertIn(".video-upload-slots [data-video-file-slot]", self.workbench_css)
 
+    def test_upload_placeholders_do_not_look_selected_on_pointer_hover(self):
+        self.assertNotIn(".video-file-field:hover", self.workbench_css)
+        self.assertNotIn(
+            ".video-upload-slots [data-video-file-slot]:hover,",
+            self.workbench_css,
+        )
+        self.assertIn(
+            ".video-upload-slots [data-video-file-slot]:focus-visible",
+            self.workbench_css,
+        )
+
     def test_sidebar_keeps_original_full_width_console_navigation(self):
         self.assertNotIn(".video-module-menu .video-module-group", self.workbench_css)
         self.assertNotIn("grid-template-columns: repeat(2, minmax(0, 1fr))", self.workbench_css.split(".video-workbench-shell", 1)[0])
@@ -189,16 +200,22 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         ):
             self.assertNotIn(f'("{field_name}"', fallback_contract)
 
-    def test_voice_catalog_loads_with_local_fallback_and_inline_audio(self):
+    def test_voice_catalog_loads_with_local_fallback_in_shared_modal(self):
         self.assertIn('const VOICE_PRESETS_ENDPOINT = "/api/video/voice-presets"', self.workbench_js)
         self.assertIn('const VOICE_PRESETS_MANIFEST_URL = "/assets/voice_presets_manifest.json"', self.workbench_js)
         self.assertIn("async function loadVoicePresets", self.workbench_js)
         self.assertIn("ELEVENLABS_OFFICIAL_VOICE_PRESETS", self.workbench_js)
+        self.assertIn('data-video-open-voice', self.workbench_js)
+        self.assertIn('class="console-modal video-voice-modal"', self.workbench_js)
+        self.assertIn('data-video-voice-modal', self.workbench_js)
+        self.assertIn('data-video-voice-close', self.workbench_js)
         self.assertIn('data-video-voice-select=', self.workbench_js)
         self.assertIn('data-video-voice-preview=', self.workbench_js)
         self.assertIn('<audio id="videoVoicePreview"', self.workbench_js)
+        self.assertIn("参考音频/声音", self.workbench_js)
         self.assertIn(".video-voice-list", self.workbench_css)
         self.assertIn(".video-voice-audio", self.workbench_css)
+        self.assertIn(".video-voice-modal-dialog", self.workbench_css)
         self.assertIn('placement: "voice"', self.workbench_js)
         self.assertIn(".video-voice-inline-fields", self.workbench_css)
 

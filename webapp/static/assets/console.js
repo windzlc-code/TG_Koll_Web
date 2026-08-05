@@ -6295,22 +6295,7 @@ function billingRows(payload, keys = []) {
 }
 
 function billingChargeMessage(payload = {}) {
-  const source = billingObject(payload);
-  const receipt = billingObject(source.billing || source.data?.billing || source.task?.billing);
-  const status = String(receipt.status || "").trim().toLowerCase();
-  if (status === "waived") return "本次未扣费（当前操作已免计费）";
-  if (status && status !== "settled") return "";
-  const chargedPoints = Number(receipt.charged_points || 0);
-  const freeImagesUsed = Number(receipt.free_images_used || 0);
-  const details = [];
-  if (Number.isFinite(chargedPoints) && chargedPoints > 0) {
-    details.push(`已扣除 ${chargedPoints.toLocaleString("zh-CN", { maximumFractionDigits: 6 })} 点算力`);
-  }
-  if (Number.isFinite(freeImagesUsed) && freeImagesUsed > 0) {
-    details.push(`已使用 ${freeImagesUsed.toLocaleString("zh-CN")} 张图片额度`);
-  }
-  if (!details.length && receipt.unlimited_compute) return "本次未扣费（无限算力）";
-  return details.join("，");
+  return "";
 }
 
 function withBillingChargeMessage(message, payload = {}) {
@@ -7252,6 +7237,7 @@ function renderMobileTaskDock() {
     ...(VIDEO_WORKBENCH_ENABLED ? [{ id: "video_workspace", label: "视频", view: "video_workspace" }] : []),
     ...modules.filter((item) => item.id !== "browser_list"),
   ];
+  dock.style.setProperty("--mobile-task-dock-item-count", String(mobileDockItems.length));
   if (!dock.querySelector(".mobile-task-dock-button")) {
     dock.innerHTML = mobileDockItems.map((item) => `
         <button type="button" class="mobile-task-dock-button" ${moduleNavigationAttributes(item)} aria-label="${esc(item.label)}">
@@ -8397,7 +8383,6 @@ const MOBILE_TWEET_STREAM_OBSERVER_OPTIONS = {
 };
 let mobileTweetStreamObserver = null;
 let mobileTweetStreamPending = false;
-let mobileTweetStreamScrollLock = null;
 let mobileTweetStreamLoadingGeneration = 0;
 let mobileTweetStreamFinishTimer = 0;
 
@@ -8472,58 +8457,11 @@ function renderMobileTweetStreamLoadingIndicator() {
     </span>`;
 }
 
-function lockMobileTweetStreamScroll() {
-  if (mobileTweetStreamScrollLock) return;
-  const lock = {
-    x: window.scrollX,
-    y: window.scrollY,
-    restoring: false,
-  };
-  const preventScroll = (event) => {
-    if (event.cancelable) event.preventDefault();
-  };
-  const preventScrollKey = (event) => {
-    if (event.target?.matches?.("input, textarea, select, [contenteditable='true']")) return;
-    if ([" ", "ArrowDown", "ArrowUp", "PageDown", "PageUp", "End", "Home"].includes(event.key)) {
-      event.preventDefault();
-    }
-  };
-  const restoreScroll = () => {
-    if (lock.restoring || Math.abs(window.scrollY - lock.y) < 1) return;
-    lock.restoring = true;
-    window.scrollTo(lock.x, lock.y);
-    window.requestAnimationFrame(() => { lock.restoring = false; });
-  };
-  lock.preventScroll = preventScroll;
-  lock.preventScrollKey = preventScrollKey;
-  lock.restoreScroll = restoreScroll;
-  mobileTweetStreamScrollLock = lock;
-  document.documentElement.classList.add("mobile-tweet-stream-scroll-locked");
-  document.body?.classList.add("mobile-tweet-stream-scroll-locked");
-  window.addEventListener("wheel", preventScroll, { passive: false, capture: true });
-  window.addEventListener("touchmove", preventScroll, { passive: false, capture: true });
-  window.addEventListener("keydown", preventScrollKey, true);
-  window.addEventListener("scroll", restoreScroll, { passive: true });
-}
-
-function unlockMobileTweetStreamScroll() {
-  const lock = mobileTweetStreamScrollLock;
-  if (!lock) return;
-  window.removeEventListener("wheel", lock.preventScroll, true);
-  window.removeEventListener("touchmove", lock.preventScroll, true);
-  window.removeEventListener("keydown", lock.preventScrollKey, true);
-  window.removeEventListener("scroll", lock.restoreScroll);
-  document.documentElement.classList.remove("mobile-tweet-stream-scroll-locked");
-  document.body?.classList.remove("mobile-tweet-stream-scroll-locked");
-  mobileTweetStreamScrollLock = null;
-}
-
 function cancelMobileTweetStreamLoading() {
   mobileTweetStreamLoadingGeneration += 1;
   if (mobileTweetStreamFinishTimer) window.clearTimeout(mobileTweetStreamFinishTimer);
   mobileTweetStreamFinishTimer = 0;
   mobileTweetStreamPending = false;
-  unlockMobileTweetStreamScroll();
 }
 
 function finishMobileTweetStreamLoading(startedAt, commit, onComplete) {
@@ -8543,7 +8481,6 @@ function finishMobileTweetStreamLoading(startedAt, commit, onComplete) {
       }
       window.requestAnimationFrame(() => {
         if (generation !== mobileTweetStreamLoadingGeneration) return;
-        unlockMobileTweetStreamScroll();
         onComplete?.();
         if (commitError) window.setTimeout(() => { throw commitError; }, 0);
       });
@@ -8569,7 +8506,6 @@ function advanceMobileTweetStream(node) {
   node.classList.add("is-loading");
   node.innerHTML = renderMobileTweetStreamLoadingIndicator();
   node.closest(".mobile-tweet-stream-footer")?.setAttribute("aria-busy", "true");
-  lockMobileTweetStreamScroll();
   const startedAt = performance.now();
   disconnectMobileTweetStreamObserver();
   finishMobileTweetStreamLoading(startedAt, () => {
@@ -22711,7 +22647,7 @@ function openPersonaCreateModal() {
     void openConsoleModal({
       title: "确认退出",
       message: isBusy
-        ? `${busyKind}正在执行。退出只会关闭当前页面；已完成或服务端继续完成的计费步骤仍会按当前步骤扣费。`
+        ? `${busyKind}正在执行。退出只会关闭当前页面，任务会继续在后台处理。`
         : "当前人设创建尚未完成，退出后本次填写内容和关键词选择不会保留。",
       cancelText: isBusy ? "继续运行" : "继续编辑",
       confirmText: "确认退出",
