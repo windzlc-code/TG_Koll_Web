@@ -2188,6 +2188,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('class="persona-dashboard-toolbar-refresh"', self.markup)
         self.assertIn('class="ui-refresh-icon"', self.markup)
         self.assertIn('id="personaDashboardSyncStatus"', self.markup)
+        self.assertIn('label.textContent = "数据刷新";', self.dashboard_script)
+        self.assertIn("border: 0;", self.styles)
+        self.assertIn(".persona-dashboard-toolbar-refresh span {\n  display: inline;", self.styles)
         self.assertNotIn("刷新显示", self.markup)
         self.assertIn(
             'personaDashboardRoot?.querySelector(`#${id}`) || document.getElementById(id)',
@@ -2203,6 +2206,14 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         self.assertIn('button.classList.toggle("is-loading", active);', self.dashboard_script)
         self.assertIn('.persona-dashboard-toolbar-refresh.is-loading .ui-refresh-icon', self.styles)
+
+    def test_dashboard_sync_control_is_hidden_off_dashboard_and_uses_refresh_label(self):
+        self.assertIn('.mobile-page-toolbar-actions[hidden] {', self.styles)
+        self.assertIn('personaDashboardActions.hidden = state.view !== "persona_dashboard";', self.console_script)
+        self.assertIn('personaDashboardSyncStatus', self.markup)
+        self.assertIn('label.textContent = "数据刷新";', self.dashboard_script)
+        self.assertNotIn('pdSetMsg(running ? `同步中 ${progress}%`', self.dashboard_script)
+        self.assertNotIn('pdSetMsg("同步完成。", "ok")', self.dashboard_script)
 
     def test_dashboard_layout_uses_scoped_console_rules(self):
         required_rules = (

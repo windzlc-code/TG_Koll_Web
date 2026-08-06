@@ -23058,17 +23058,23 @@ body.console-page {
   min-width: 0;
 }
 
+.mobile-page-toolbar-actions[hidden] {
+  display: none !important;
+}
+
 .persona-dashboard-toolbar-refresh {
   --sync-progress: 0%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: auto;
+  min-width: 0;
+  height: 32px;
+  min-height: 32px;
+  padding: 4px 6px;
   gap: 4px;
-  min-width: 30px;
-  min-height: 30px;
-  padding: 3px 7px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
+  border: 0;
+  border-radius: 8px;
   background: linear-gradient(90deg, color-mix(in srgb, var(--soft) 80%, transparent) var(--sync-progress), var(--panel-solid) var(--sync-progress));
   color: var(--ink);
   font-size: 11px;
@@ -23080,7 +23086,8 @@ body.console-page {
 
 .persona-dashboard-toolbar-refresh:hover,
 .persona-dashboard-toolbar-refresh:focus-visible {
-  border-color: var(--accent);
+  background: var(--soft);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .persona-dashboard-toolbar-refresh:disabled {
@@ -23089,13 +23096,18 @@ body.console-page {
 }
 
 .persona-dashboard-toolbar-refresh svg {
-  width: 17px;
-  height: 17px;
+  width: 16px;
+  height: 16px;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.persona-dashboard-toolbar-refresh span {
+  display: inline;
+  white-space: nowrap;
 }
 
 .persona-dashboard-toolbar-refresh.is-loading .ui-refresh-icon {

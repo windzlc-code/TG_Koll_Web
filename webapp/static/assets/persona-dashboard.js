@@ -1327,8 +1327,7 @@ function pdSetRefreshControlState(status = "idle", progress = 0) {
   button.dataset.progress = String(value);
   button.style.setProperty("--sync-progress", `${value}%`);
   button.setAttribute("aria-busy", active ? "true" : "false");
-  const text = active ? `同步 ${value}%` : (done ? "完成" : (failed ? "失败" : "同步"));
-  if (label) label.textContent = text;
+  if (label) label.textContent = "数据刷新";
   const title = active ? `同步中 ${value}%` : (done ? "同步完成" : (failed ? "同步失败，点击重试" : "同步全部数据"));
   button.title = title;
   button.setAttribute("aria-label", title);
@@ -1408,7 +1407,7 @@ async function pdStartRefresh(archiveId, message) {
   if (personaDashboardRefreshTask) return;
   pdSetRefreshControlState("queued", 0);
   try {
-    pdSetMsg(message || (archiveId ? "同步当前人设" : "同步全部数据"), "ok");
+    pdSetMsg("");
     const task = await pdApi("/api/persona_dashboard/refresh", {
       method: "POST",
       body: { archive_id: archiveId || "" },
@@ -1429,7 +1428,8 @@ async function pdPollRefresh(taskId) {
     const progress = Number(task.progress || 0);
     pdSetRefreshControlState(task.status, progress);
     const running = ["queued", "running"].includes(String(task.status));
-    pdSetMsg(running ? `同步中 ${progress}%` : (task.status === "failed" ? "同步失败" : "同步完成"), task.status === "failed" ? "err" : "ok");
+    if (task.status === "failed") pdSetMsg("同步失败", "err");
+    else pdSetMsg("");
     if (running) {
       window.setTimeout(() => pdPollRefresh(taskId), 2500);
       return;
@@ -1439,7 +1439,7 @@ async function pdPollRefresh(taskId) {
     if (task.status === "failed") {
       pdSetMsg("同步失败，请稍后重试。", "err");
     } else {
-      pdSetMsg("同步完成。", "ok");
+      pdSetMsg("");
     }
   } catch (err) {
     personaDashboardRefreshTask = "";
