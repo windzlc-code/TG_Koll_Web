@@ -12278,6 +12278,7 @@ class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
     freshness_days: int = 7
     freshness_policy: str = "legacy"
     selected_memory_ids: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
 
 
 class PersonaDashboardHotCandidatesImportPayload(BaseModel):
@@ -14316,26 +14317,78 @@ def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: i
     return messages[:2]
 
 
-def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload) -> dict[str, Any]:
-    clean_id = str(archive_id or "").strip()
-    if not clean_id:
-        raise HTTPException(status_code=400, detail="缺少人设 ID。")
-
-    memories = _list_selectable_persona_memories(clean_id)
+def _persona_hot_selected_memory_summaries(archive_id: str, selected_memory_ids: list[str] | None) -> list[str]:
+    memories = _list_selectable_persona_memories(archive_id)
     summary_by_id = {
         str(item.get("id") or "").strip(): str(item.get("summary") or "").strip()
         for item in memories
         if str(item.get("id") or "").strip() and str(item.get("summary") or "").strip()
     }
-    selected_ids = [str(item or "").strip() for item in (payload.selected_memory_ids or []) if str(item or "").strip()]
-    selected_summaries = (
+    selected_ids = [str(item or "").strip() for item in (selected_memory_ids or []) if str(item or "").strip()]
+    return (
         [summary_by_id[memory_id] for memory_id in selected_ids if memory_id in summary_by_id]
         if selected_ids
         else [str(item.get("summary") or "").strip() for item in memories if str(item.get("summary") or "").strip()]
     )[:8]
+
+
+def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
+    if not isinstance(raw_keywords, list):
+        return []
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for item in raw_keywords:
+        keyword = _normalize_hot_workflow_text(item)
+        if not keyword or keyword in seen:
+            continue
+        seen.add(keyword)
+        keywords.append(keyword)
+        if len(keywords) >= 32:
+            break
+    return keywords
+
+
+def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="missing persona id")
+    search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
+    result = _run_persona_hot_workflow_cli(
+        {
+            "action": "prepare-hot-keywords",
+            "archiveId": clean_id,
+            "prompt": str(payload.prompt or "").strip(),
+            "refresh": bool(payload.refresh),
+            "searchMode": search_mode,
+            "memorySummaries": _persona_hot_selected_memory_summaries(clean_id, payload.selected_memory_ids),
+        },
+        timeout_seconds=75,
+    )
+    result = result if isinstance(result, dict) else {}
+    warnings = [
+        _normalize_hot_workflow_text(item)
+        for item in (result.get("warnings") if isinstance(result.get("warnings"), list) else [])
+        if _normalize_hot_workflow_text(item)
+    ]
+    return {
+        "ok": True,
+        "archive_name": str(result.get("archiveName") or result.get("archive_name") or "").strip(),
+        "keywords": _persona_hot_payload_keywords(result.get("keywords")),
+        "search_mode": "normal" if str(result.get("searchMode") or search_mode).strip().lower() == "normal" else "strict",
+        "warnings": warnings,
+    }
+
+
+def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+
+    selected_summaries = _persona_hot_selected_memory_summaries(clean_id, payload.selected_memory_ids)
     limit = min(max(_to_int(payload.limit, 10), 1), 20)
     search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
     freshness_days = min(max(_to_int(payload.freshness_days, 7), 0), 15)
+    keywords = _persona_hot_payload_keywords(payload.keywords)
     result = _run_persona_hot_workflow_cli(
         {
             "action": "fetch-hot-candidates",
@@ -14347,6 +14400,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "freshnessDays": freshness_days,
             "freshnessPolicy": "strict" if str(payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
             "memorySummaries": selected_summaries,
+            "keywords": keywords,
             "recordShown": False,
         },
         timeout_seconds=120,
@@ -14382,7 +14436,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             _normalize_hot_workflow_text(item)
             for item in (result.get("keywords") if isinstance(result.get("keywords"), list) else [])
             if _normalize_hot_workflow_text(item)
-        ],
+        ] or keywords,
         "search_mode": "normal" if str(result.get("searchMode") or search_mode).strip().lower() == "normal" else "strict",
         "freshness_days": min(max(_to_int(result.get("freshnessDays"), freshness_days), 0), 15),
         "freshness_policy": "strict" if str(result.get("freshnessPolicy") or payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
@@ -22850,6 +22904,10 @@ def create_app() -> FastAPI:
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates")
     def api_persona_dashboard_fetch_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _fetch_persona_hot_candidates(archive_id, payload)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/hot_keywords")
+    def api_persona_dashboard_prepare_hot_keywords(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
+        return _prepare_persona_hot_keywords(archive_id, payload)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/tasks")
     def api_persona_dashboard_start_hot_candidates_task(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, _user: dict[str, Any] = Depends(require_persona_owner)):

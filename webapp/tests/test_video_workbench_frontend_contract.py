@@ -62,6 +62,7 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertIn('initialConsoleParams.get("video_module")', self.console_js)
         self.assertIn('url.searchParams.set("view", "video_workspace")', self.console_js)
         self.assertIn('url.searchParams.set("video_module", state.activeVideoModule)', self.console_js)
+        self.assertIn('if (state.view === "video_workspace") return "workspace";', self.console_js)
         self.assertIn('openVideoWorkspace', self.console_js)
         self.assertIn('syncVideoModuleMenuState', self.console_js)
         self.assertIn('id="mobileVideoWorkspaceButton"', self.html)

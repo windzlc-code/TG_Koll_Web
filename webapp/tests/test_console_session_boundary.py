@@ -1384,6 +1384,20 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("max-height: 208px;", self.styles)
         self.assertIn("overflow-y: auto;", self.styles)
 
+    def test_persona_hot_fetch_validates_keywords_before_tracking_controller(self):
+        fetch_source = self._function_source("fetchPersonaHotCandidates")
+
+        self.assertIn('showMsg("commandMsg", "请先生成或填写热点关键词。", false);', fetch_source)
+        self.assertIn("const controller = new AbortController();", fetch_source)
+        self.assertLess(
+            fetch_source.index('if (!keywords.length) {'),
+            fetch_source.index("const controller = new AbortController();"),
+        )
+        self.assertIn(
+            '先生成或填写关键词，再点击“按关键词抓取”获取 Threads / Instagram 热点候选。',
+            self.source,
+        )
+
     def test_custom_dropdowns_close_when_clicking_outside(self):
         bind_events = self._function_source("bindEvents")
 

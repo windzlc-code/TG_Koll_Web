@@ -6,6 +6,7 @@ import {
   downloadCandidateMedia,
   fetchSentimentHotCandidates,
   listSentimentHotCandidatePoolStats,
+  prepareSentimentHotKeywords,
   refreshSentimentSourceMetrics,
   warmSentimentHotSearchStrategy,
 } from "@/lib/sentiment-hot-importer";
@@ -31,6 +32,16 @@ type FetchHotCandidatesInput = {
   /** Test-only mode: count only candidates returned by this live search run. */
   liveOnly?: boolean;
   memorySummaries?: string[];
+  keywords?: string[];
+};
+
+type PrepareHotKeywordsInput = {
+  action: "prepare-hot-keywords";
+  archiveId: string;
+  prompt?: string;
+  refresh?: boolean;
+  searchMode?: "normal" | "strict";
+  memorySummaries?: string[];
 };
 
 type ImportHotCandidatesInput = {
@@ -55,7 +66,7 @@ type PoolStatsInput = {
   archiveIds?: string[];
 };
 
-type PersonaHotWorkflowInput = FetchHotCandidatesInput | ImportHotCandidatesInput | RefreshHotPostInput | WarmHotStrategyInput | PoolStatsInput;
+type PersonaHotWorkflowInput = FetchHotCandidatesInput | PrepareHotKeywordsInput | ImportHotCandidatesInput | RefreshHotPostInput | WarmHotStrategyInput | PoolStatsInput;
 
 function printJson(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -121,6 +132,9 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     archive,
     prompt: String(input.prompt || "").trim() || undefined,
     memorySummaries,
+    keywords: Array.isArray(input.keywords)
+      ? input.keywords.map((item) => String(item || "").trim()).filter(Boolean)
+      : [],
     limit: Math.max(1, Math.min(Number(input.limit || 10), 20)),
     refresh: input.refresh === true,
     searchMode: input.searchMode === "normal" ? "normal" : "strict",
@@ -141,6 +155,29 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     cookieStatuses: result.cookieStatuses,
     warnings: result.warnings,
     candidates: result.candidates,
+  };
+}
+
+async function prepareHotKeywords(input: PrepareHotKeywordsInput) {
+  const archive = await loadPersonaArchive(String(input.archiveId || "").trim());
+  if (!archive) throw new Error("浜鸿涓嶅瓨鍦ㄣ€?);
+  const memorySummaries = Array.isArray(input.memorySummaries)
+    ? input.memorySummaries.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8)
+    : [];
+  const result = await prepareSentimentHotKeywords({
+    archive,
+    prompt: String(input.prompt || "").trim() || undefined,
+    memorySummaries,
+    searchMode: input.searchMode === "normal" ? "normal" : "strict",
+    refresh: input.refresh === true,
+  });
+  return {
+    ok: true,
+    archiveId: archive.id,
+    archiveName: archive.name,
+    keywords: result.keywords,
+    searchMode: result.searchMode,
+    warnings: result.warnings,
   };
 }
 
@@ -254,6 +291,9 @@ async function main() {
   const input = JSON.parse(raw) as PersonaHotWorkflowInput;
   if (input.action === "fetch-hot-candidates") {
     await printJsonAndExit(await fetchHotCandidates(input));
+  }
+  if (input.action === "prepare-hot-keywords") {
+    await printJsonAndExit(await prepareHotKeywords(input));
   }
   if (input.action === "warm-hot-strategy") {
     await printJsonAndExit(await warmHotStrategy(input));

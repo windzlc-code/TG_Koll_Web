@@ -1601,6 +1601,26 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('function syncPersonaImagePromptState(input)', self.console_script)
         self.assertIn('data-persona-image-generate-label', panel)
 
+    def test_persona_image_entry_opens_before_background_refresh(self):
+        editor_start = self.console_script.index("async function openPersonaProfileEditorModalWithOptions(")
+        editor_end = self.console_script.index("\nasync function openPersonaImageGeneration", editor_start)
+        editor = self.console_script[editor_start:editor_end]
+        image_start = self.console_script.index("async function openPersonaImageGeneration(")
+        image_end = self.console_script.index("\nasync function createPersonaArchive", image_start)
+        image_entry = self.console_script[image_start:image_end]
+
+        self.assertIn("{ immediate = false }", editor)
+        self.assertIn("immediate ? fallbackPersonaProfile(persona) : await loadPersonaProfile", editor)
+        self.assertIn("if (!immediate) await loadPersonaImageLibrary", editor)
+        self.assertIn("const knownPersona = state.personas.some", image_entry)
+        self.assertIn("await openPersonaProfileEditorModalWithOptions({ immediate: true });", image_entry)
+        self.assertIn("Promise.allSettled([", image_entry)
+        self.assertIn("loadPersonaImageLibrary(cleanPersonaId, { force: true })", image_entry)
+        self.assertLess(
+            image_entry.index("await openPersonaProfileEditorModalWithOptions({ immediate: true });"),
+            image_entry.index("void Promise.allSettled(["),
+        )
+
     def test_avatar_crop_supports_touch_pinch_and_device_neutral_guidance(self):
         start = self.console_script.index("function personaAvatarCropModalHtml")
         end = self.console_script.index("\nfunction personaProfileEditDraft", start)

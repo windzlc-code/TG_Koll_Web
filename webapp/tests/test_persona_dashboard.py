@@ -2982,6 +2982,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "pool-stats"}))
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "import-hot-candidates"}))
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "warm-hot-strategy"}))
+        self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "prepare-hot-keywords"}))
 
     def test_run_persona_hot_workflow_cli_does_not_lease_browser_for_import(self):
         process = mock.Mock()
@@ -3251,6 +3252,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                     "refresh": True,
                     "limit": 6,
                     "freshness_days": 30,
+                    "keywords": ["history", "teacher", "history"],
                     "selected_memory_ids": ["mem-1"],
                 },
             )
@@ -3272,10 +3274,48 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["limit"], 6)
         self.assertEqual(payload["searchMode"], "strict")
         self.assertEqual(payload["freshnessDays"], 15)
+        self.assertEqual(payload["keywords"], ["history", "teacher"])
         self.assertEqual(payload["memorySummaries"], ["记忆一"])
         self.assertIs(payload["recordShown"], False)
         self.assertNotIn("forceLive", payload)
         self.assertNotIn("deferBackgroundRefresh", payload)
+
+    def test_prepare_persona_hot_keywords_calls_hot_workflow_cli(self):
+        self._write_archives()
+        (self.tool_runtime_dir / "persona_memory.json").write_text(json.dumps({
+            "persona-1": [
+                {"id": "mem-1", "date": "2026-07-04T10:00:00Z", "summary": "memory one"},
+                {"id": "mem-2", "date": "2026-07-03T10:00:00Z", "summary": "memory two"},
+            ]
+        }, ensure_ascii=False), encoding="utf-8")
+
+        fake_result = {
+            "ok": True,
+            "archiveName": "History Teacher",
+            "keywords": ["history", "teacher"],
+            "searchMode": "normal",
+            "warnings": [],
+        }
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fake_result) as mocked:
+            body = server._prepare_persona_hot_keywords(
+                "persona-1",
+                server.PersonaDashboardHotCandidatesFetchPayload(
+                    prompt="prepare keywords",
+                    search_mode="normal",
+                    selected_memory_ids=["mem-1"],
+                ),
+            )
+
+        self.assertEqual(body["archive_name"], "History Teacher")
+        self.assertEqual(body["keywords"], ["history", "teacher"])
+        self.assertEqual(body["search_mode"], "normal")
+        payload = mocked.call_args.args[0]
+        self.assertEqual(payload["action"], "prepare-hot-keywords")
+        self.assertEqual(payload["archiveId"], "persona-1")
+        self.assertEqual(payload["prompt"], "prepare keywords")
+        self.assertEqual(payload["searchMode"], "normal")
+        self.assertEqual(payload["memorySummaries"], ["memory one"])
 
     def test_hot_candidate_normalization_keeps_every_media_item(self):
         media = [

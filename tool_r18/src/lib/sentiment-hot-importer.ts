@@ -247,6 +247,12 @@ export interface FetchSentimentHotCandidatesResult {
   warnings: string[];
 }
 
+export interface PrepareSentimentHotKeywordsResult {
+  keywords: string[];
+  searchMode: SentimentHotSearchMode;
+  warnings: string[];
+}
+
 interface SentimentHotSearchStrategy {
   primaryQueries: string[];
   broadQueries: string[];
@@ -1560,6 +1566,33 @@ export async function warmSentimentHotSearchStrategy(archive: PersonaArchive): P
   return sentimentHotStrategyHasModelTerms(strategy);
 }
 
+export async function prepareSentimentHotKeywords(args: {
+  archive?: PersonaArchive;
+  prompt?: string;
+  memorySummaries?: string[];
+  searchMode?: SentimentHotSearchMode;
+  refresh?: boolean;
+}): Promise<PrepareSentimentHotKeywordsResult> {
+  const warnings: string[] = [];
+  const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
+  const strategy = await buildSentimentHotSearchStrategyWithModel({
+    archive: args.archive,
+    prompt: args.prompt,
+    memorySummaries: args.memorySummaries,
+    warnings,
+    timeoutMs: 45_000,
+    useCache: args.refresh === true ? false : true,
+  });
+  if (strategy) {
+    applyPersonaGuardToSentimentHotStrategy({ strategy });
+  }
+  const keywords = resolveSentimentHotModelStrategyKeywords(strategy, searchMode);
+  if (keywords.length === 0 && !warnings.some((warning) => /关键词生成|搜索策略/.test(warning))) {
+    warnings.push("热点关键词不可用，请稍后重试。");
+  }
+  return { keywords, searchMode, warnings };
+}
+
 export function cleanSentimentCandidateContent(value: unknown): string {
   let text = cleanText(value);
   text = text
@@ -1868,6 +1901,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   archive?: PersonaArchive;
   prompt?: string;
   memorySummaries?: string[];
+  keywords?: string[];
   limit?: number;
   refresh?: boolean;
   searchMode?: SentimentHotSearchMode;
@@ -1883,6 +1917,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   const archive = args.archive;
   const archiveId = cleanText(archive?.id) || "default";
   const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
+  const manualKeywords = prepareSentimentHotKeywordsForMode(Array.isArray(args.keywords) ? args.keywords : [], searchMode);
   const freshnessPolicy = normalizeSentimentHotFreshnessPolicy(args.freshnessPolicy);
   const freshnessDays = normalizeSentimentHotFreshnessDays(
     args.freshnessDays ?? (args.refresh === true ? DEFAULT_REFRESH_FRESHNESS_DAYS : 0),
@@ -1915,9 +1950,11 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   if (prefetchedStrategy) {
     applyPersonaGuardToSentimentHotStrategy({ strategy: prefetchedStrategy });
   }
-  const provisionalKeywords = resolveSentimentHotModelStrategyKeywords(prefetchedStrategy, searchMode);
+  const provisionalKeywords = manualKeywords.length > 0
+    ? manualKeywords
+    : resolveSentimentHotModelStrategyKeywords(prefetchedStrategy, searchMode);
   const provisionalQueryKeywords = prefetchedStrategy
-    ? resolveSentimentHotModelQueryKeywords(prefetchedStrategy, searchMode)
+    ? (manualKeywords.length > 0 ? manualKeywords : resolveSentimentHotModelQueryKeywords(prefetchedStrategy, searchMode))
     : provisionalKeywords;
   const provisionalKeywordBatches = [provisionalQueryKeywords];
   const provisionalCacheStartedAt = Date.now();
@@ -1975,26 +2012,34 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     args.refresh === true,
     remainingSentimentHotTotalBudgetMs(startedAt, 25_000),
   );
-  const strategyResult = await measureSentimentStage(
-    warnings,
-    "search-strategy",
-    () => withSentimentTimeout(
-      buildSentimentHotSearchStrategyWithModel({ archive, prompt: args.prompt, memorySummaries: args.memorySummaries, warnings, timeoutMs: strategyTimeoutMs, useCache: true }),
-      strategyTimeoutMs + 250,
-      emptySentimentHotSearchStrategy(),
-    ),
-  );
+  const strategyResult = manualKeywords.length > 0
+    ? (prefetchedStrategy || emptySentimentHotSearchStrategy())
+    : await measureSentimentStage(
+      warnings,
+      "search-strategy",
+      () => withSentimentTimeout(
+        buildSentimentHotSearchStrategyWithModel({ archive, prompt: args.prompt, memorySummaries: args.memorySummaries, warnings, timeoutMs: strategyTimeoutMs, useCache: true }),
+        strategyTimeoutMs + 250,
+        emptySentimentHotSearchStrategy(),
+      ),
+    );
   if (strategyResult) {
     applyPersonaGuardToSentimentHotStrategy({ strategy: strategyResult });
   }
   const hasModelStrategy = Boolean(strategyResult && sentimentHotStrategyHasModelTerms(strategyResult));
-  const keywords = resolveSentimentHotModelStrategyKeywords(strategyResult, searchMode);
-  if (!hasModelStrategy && !warnings.some((warning) => /关键词生成|搜索策略/.test(warning))) {
+  const keywords = manualKeywords.length > 0
+    ? manualKeywords
+    : resolveSentimentHotModelStrategyKeywords(strategyResult, searchMode);
+  if (manualKeywords.length === 0 && !hasModelStrategy && !warnings.some((warning) => /关键词生成|搜索策略/.test(warning))) {
     warnings.push("热点关键词不可用，本次未执行抓取；请稍后重试。");
   }
-  const queryKeywords = resolveSentimentHotModelQueryKeywords(strategyResult, searchMode);
+  const queryKeywords = manualKeywords.length > 0
+    ? manualKeywords
+    : resolveSentimentHotModelQueryKeywords(strategyResult, searchMode);
   warnings.push(searchMode === "normal" ? "热点抓取模式：普通（泛垂直）。" : "热点抓取模式：严格（垂直收口）。");
-  if (liveOnlyRefresh) warnings.push("测试模式：仅统计本轮实时来源，不读取或写入候选缓存、数据库候选、共享候选和展示历史；搜索策略仍使用模型生成结果。");
+  if (liveOnlyRefresh) warnings.push(manualKeywords.length > 0
+    ? "测试模式：仅统计本轮实时来源，不读取或写入候选缓存、数据库候选、共享候选和展示历史；搜索关键词使用本次提交的关键词。"
+    : "测试模式：仅统计本轮实时来源，不读取或写入候选缓存、数据库候选、共享候选和展示历史；搜索策略仍使用模型生成结果。");
   if (strictFreshness) {
     warnings.push(freshnessDays > 0 ? `热点新鲜度：近 ${freshnessDays} 天。` : "热点新鲜度：不限时间。");
   } else {
@@ -2707,6 +2752,7 @@ export async function fetchSentimentHotCandidates(args: {
   freshnessPolicy?: SentimentHotFreshnessPolicy;
   recordShown?: boolean;
   liveOnly?: boolean;
+  keywords?: string[];
 }): Promise<FetchSentimentHotCandidatesResult> {
   const archiveId = cleanText(args.archive?.id) || "default";
   const searchMode = normalizeSentimentHotSearchMode(args.searchMode);

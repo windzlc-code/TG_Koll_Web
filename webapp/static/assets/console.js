@@ -3631,7 +3631,7 @@ function personaFormState(personaId) {
   const key = String(personaId || "").trim();
   if (!key) {
     return {
-      generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotSearchMode: "strict", hotFreshnessMode: "default", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
+      generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotSearchMode: "strict", hotFreshnessMode: "default", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
       draft: defaultPersonaDraftForm(),
       media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1" },
@@ -3655,6 +3655,7 @@ function personaFormState(personaId) {
         hotPreviewId: "",
         hotEditingCandidateId: "",
         hotPrompt: "",
+        hotKeywordText: "",
         hotSearchMode: "strict",
         hotFreshnessMode: "default",
         hotFreshnessDays: 7,
@@ -4170,6 +4171,27 @@ function normalizePersonaHotFreshnessDays(value) {
 function personaHotFreshnessLabel(value) {
   const days = normalizePersonaHotFreshnessDays(value);
   return days > 0 ? `${days} 天内` : "不限时间";
+}
+
+function parsePersonaHotKeywordText(value) {
+  return [...new Set(String(value || "")
+    .split(/[\n\r/／,，;；|]+/u)
+    .map((item) => item.trim())
+    .filter(Boolean))]
+    .slice(0, 32);
+}
+
+function formatPersonaHotKeywordText(keywords) {
+  return (Array.isArray(keywords) ? keywords : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .join(" / ");
+}
+
+function personaHotKeywordText(form, hotState = {}) {
+  const existing = String(form?.hotKeywordText || "").trim();
+  if (existing) return existing;
+  return formatPersonaHotKeywordText(hotState.keywords);
 }
 
 function personaHotCandidates(persona = selectedPersona()) {
@@ -7233,6 +7255,7 @@ function renderMobileNavToggleIcon(back = false) {
 }
 
 function mobilePageBackTarget() {
+  if (state.view === "video_workspace") return "workspace";
   if (state.view === "accounts" && state.accountBrowserPanel === "browsers") return "live-browser";
   if (["tasks", "billing", "console_settings"].includes(state.view)) return "persona_dashboard";
   return "";
@@ -14883,10 +14906,14 @@ async function regeneratePersonaProfileEditorContent() {
 }
 
 async function openPersonaProfileEditorModal() {
+  return openPersonaProfileEditorModalWithOptions();
+}
+
+async function openPersonaProfileEditorModalWithOptions({ immediate = false } = {}) {
   const persona = selectedPersona();
-  const profile = selectedPersonaProfile() || (persona ? await loadPersonaProfile(persona.id) : null);
+  const profile = selectedPersonaProfile() || (persona ? (immediate ? fallbackPersonaProfile(persona) : await loadPersonaProfile(persona.id)) : null);
   if (!persona || !profile) return;
-  await loadPersonaImageLibrary(persona.id).catch(() => {});
+  if (!immediate) await loadPersonaImageLibrary(persona.id).catch(() => {});
   const request = openConsoleModal({
     title: "编辑人设档案",
     contentHtml: " ",
@@ -18587,9 +18614,31 @@ async function openPersonaImageGeneration(personaId) {
     return;
   }
   state.activeModule = "personas";
-  await activateCreatedPersona(cleanPersonaId, { group: "settings", step: "profile" });
-  await openPersonaProfileEditorModal();
+  const knownPersona = state.personas.some((persona) => String(persona?.id || "") === cleanPersonaId);
+  if (!knownPersona) {
+    await activateCreatedPersona(cleanPersonaId, { group: "settings", step: "profile" });
+    await openPersonaProfileEditorModal();
+    renderPersonaProfileEditorModal("image");
+    return;
+  }
+  setSelectedPersonaId(cleanPersonaId);
+  setSelectedPersonaPostId("");
+  state.personaGroup = "settings";
+  state.personaPanels.settings = "profile";
+  state.personaCreateMode = false;
+  await openPersonaProfileEditorModalWithOptions({ immediate: true });
   renderPersonaProfileEditorModal("image");
+  void Promise.allSettled([
+    loadPersonas(),
+    loadPersonaProfile(cleanPersonaId, { force: true }),
+    loadPersonaDraftPosts(cleanPersonaId, { force: true }),
+    loadPersonaImageLibrary(cleanPersonaId, { force: true }),
+  ]).then(() => {
+    if (String(state.selectedPersonaId || "") !== cleanPersonaId) return;
+    const modal = $("consoleModal");
+    if (modal?.dataset.modalKey === "persona-profile-editor") renderPersonaProfileEditorModal("image");
+    renderConfirmSummary();
+  });
 }
 
 async function createPersonaArchive() {
@@ -19543,6 +19592,71 @@ async function stashPersonaDraftEdit() {
   showMsg("commandMsg", "\u5df2\u6682\u5b58\u4e3a\u914d\u56fe\u53c2\u8003\u6b63\u6587\uff1b\u4fee\u6539\u5c1a\u672a\u4fdd\u5b58\u3002", true);
 }
 
+async function preparePersonaHotKeywords(refresh = false) {
+  const persona = selectedPersona();
+  if (!persona) {
+    showMsg("commandMsg", "请先选择一个人设。", false);
+    return;
+  }
+  const lockParts = ["persona", persona.id, "hot_keywords"];
+  if (isActionLocked(...lockParts)) {
+    showMsg("commandMsg", "热点关键词正在生成，请等待当前任务完成。", false);
+    return;
+  }
+  snapshotPersonaCurrentForm();
+  const form = personaFormState(persona.id).generate;
+  form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
+  setPersonaGenerateRunState(persona.id, {
+    kind: "hot",
+    status: "running",
+    message: refresh ? "正在重新生成热点关键词" : "正在生成热点关键词",
+    error: "",
+  });
+  setActionLocked(lockParts, true);
+  renderPersonaDetail();
+  try {
+    const result = await apiWithTimeout(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_keywords`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: String(form.hotPrompt || "").trim(),
+        refresh: Boolean(refresh),
+        search_mode: form.hotSearchMode,
+        selected_memory_ids: Array.isArray(form.selectedMemoryIds) ? form.selectedMemoryIds : [],
+      }),
+    }, 90000);
+    const keywords = Array.isArray(result.keywords) ? result.keywords.map((item) => String(item || "").trim()).filter(Boolean) : [];
+    form.hotKeywordText = formatPersonaHotKeywordText(keywords);
+    state.personaHotCandidateResults[String(persona.id)] = {
+      ...(state.personaHotCandidateResults[String(persona.id)] || {}),
+      keywords,
+      search_mode: normalizePersonaHotSearchMode(result.search_mode || form.hotSearchMode),
+      warnings: Array.isArray(result.warnings) ? result.warnings : [],
+      keyword_prepared_at: new Date().toISOString(),
+    };
+    setPersonaGenerateRunState(persona.id, {
+      kind: "hot",
+      status: keywords.length ? "success" : "error",
+      message: keywords.length ? `已生成 ${keywords.length} 个热点关键词，可编辑后抓取。` : "未生成可用热点关键词。",
+      error: keywords.length ? "" : ((Array.isArray(result.warnings) && result.warnings[0]) || "关键词生成失败"),
+    });
+  } catch (error) {
+    setPersonaGenerateRunState(persona.id, {
+      kind: "hot",
+      status: "error",
+      message: "热点关键词生成失败",
+      error: error.detail || error.message || "关键词生成失败",
+    });
+    throw error;
+  } finally {
+    setActionLocked(lockParts, false);
+    if (isPersonaWorkspaceModule()) {
+      renderPersonaDetail();
+      renderConfirmSummary();
+    }
+  }
+}
+
 async function fetchPersonaHotCandidates(refresh = false) {
   const persona = selectedPersona();
   if (!persona) {
@@ -19555,14 +19669,21 @@ async function fetchPersonaHotCandidates(refresh = false) {
     return;
   }
   const personaKey = String(persona.id || "").trim();
-  const controller = new AbortController();
-  state.personaHotFetchControllers[personaKey]?.abort?.(new DOMException("Request replaced", "AbortError"));
-  state.personaHotFetchControllers[personaKey] = controller;
   snapshotPersonaCurrentForm();
   const form = personaFormState(persona.id).generate;
   const previousCandidates = personaHotCandidates(persona);
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
   form.hotFreshnessDays = normalizePersonaHotFreshnessDays(form.hotFreshnessDays);
+  const hotState = state.personaHotCandidateResults[String(persona.id)] || {};
+  const keywords = parsePersonaHotKeywordText(personaHotKeywordText(form, hotState));
+  if (!keywords.length) {
+    showMsg("commandMsg", "请先生成或填写热点关键词。", false);
+    return;
+  }
+  const controller = new AbortController();
+  state.personaHotFetchControllers[personaKey]?.abort?.(new DOMException("Request replaced", "AbortError"));
+  state.personaHotFetchControllers[personaKey] = controller;
+  form.hotKeywordText = formatPersonaHotKeywordText(keywords);
   setPersonaGenerateRunState(persona.id, {
     kind: "hot",
     status: "running",
@@ -19582,6 +19703,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
         limit: 10,
         search_mode: form.hotSearchMode,
         freshness_days: form.hotFreshnessDays,
+        keywords,
         // A positive freshness window is an explicit request for fresh-only
         // candidates.  Keep the legacy path available when the user enters 0
         // (unbounded freshness), which is also how older callers behaved.
@@ -19614,13 +19736,14 @@ async function fetchPersonaHotCandidates(refresh = false) {
     if (!result) throw { detail: "热点抓取超时，请稍后重试。", status: 408 };
     state.personaHotCandidateResults[String(persona.id)] = {
       candidates: Array.isArray(result.candidates) ? result.candidates : [],
-      keywords: Array.isArray(result.keywords) ? result.keywords : [],
+      keywords: Array.isArray(result.keywords) && result.keywords.length ? result.keywords : keywords,
       cookie_statuses: Array.isArray(result.cookie_statuses) ? result.cookie_statuses : [],
       warnings: Array.isArray(result.warnings) ? result.warnings : [],
       search_mode: normalizePersonaHotSearchMode(result.search_mode || form.hotSearchMode),
       freshness_days: normalizePersonaHotFreshnessDays(result.freshness_days ?? form.hotFreshnessDays),
       fetched_at: new Date().toISOString(),
     };
+    form.hotKeywordText = formatPersonaHotKeywordText(state.personaHotCandidateResults[String(persona.id)].keywords);
     const nextCandidates = personaHotCandidates(persona);
     reconcilePersonaHotMediaStateAfterRefresh(persona.id, previousCandidates, nextCandidates);
     state.transientWorkspaceLeaveAcknowledgement = "";
@@ -21971,6 +22094,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const warnings = Array.isArray(hotState.warnings) ? hotState.warnings : [];
   const cookieStatuses = Array.isArray(hotState.cookie_statuses) ? hotState.cookie_statuses : [];
   const hotBusy = isActionLocked("persona", persona?.id || "", "hot_candidates");
+  const keywordBusy = isActionLocked("persona", persona?.id || "", "hot_keywords");
   const hotBusyStartedAt = actionLockStartedAt("persona", persona?.id || "", "hot_candidates");
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode || hotState.search_mode);
   const hasHotFreshnessMode = form.hotFreshnessMode === "custom" || form.hotFreshnessMode === "default";
@@ -21978,6 +22102,9 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const hotMode = form.hotSearchMode;
   const hotFreshnessDays = form.hotFreshnessDays;
   const hotFreshnessMode = form.hotFreshnessMode === "custom" || hotFreshnessDays !== 7 ? "custom" : "default";
+  const keywordText = personaHotKeywordText(form, hotState);
+  const keywordCount = parsePersonaHotKeywordText(keywordText).length;
+  const controlsBusy = hotBusy || keywordBusy;
   const hotFreshnessOptions = Array.from({ length: 16 }, (_, days) => ({
     days,
     label: days === 0 ? "不限时间" : `${days} 天内`,
@@ -21991,7 +22118,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
             ["normal", "普通"],
             ["strict", "严格"],
           ].map(([value, label]) => `
-            <button type="button" data-persona-hot-search-mode="${esc(value)}" class="${hotMode === value ? "is-active" : ""}" ${hotBusy ? "disabled" : ""}>${esc(label)}</button>
+            <button type="button" data-persona-hot-search-mode="${esc(value)}" class="${hotMode === value ? "is-active" : ""}" ${controlsBusy ? "disabled" : ""}>${esc(label)}</button>
           `).join("")}
         </div>
         <small>${hotMode === "normal" ? "泛垂直：覆盖同领域宽泛热点" : "垂直：更贴合当前人设关键词"}</small>
@@ -22000,8 +22127,8 @@ function renderPersonaHotCandidatePicker(persona, form) {
         <div class="persona-hot-time-window">
           <span>热点时限</span>
           <div class="automation-capsule-tabs persona-hot-freshness-tabs" aria-label="热点时限模式">
-            <button type="button" data-persona-hot-freshness-mode="default" class="${hotFreshnessMode === "default" ? "is-active" : ""}" ${hotBusy ? "disabled" : ""}>保持默认</button>
-            <button type="button" data-persona-hot-freshness-mode="custom" class="${hotFreshnessMode === "custom" ? "is-active" : ""}" ${hotBusy ? "disabled" : ""}>自定义</button>
+            <button type="button" data-persona-hot-freshness-mode="default" class="${hotFreshnessMode === "default" ? "is-active" : ""}" ${controlsBusy ? "disabled" : ""}>保持默认</button>
+            <button type="button" data-persona-hot-freshness-mode="custom" class="${hotFreshnessMode === "custom" ? "is-active" : ""}" ${controlsBusy ? "disabled" : ""}>自定义</button>
           </div>
           <label class="persona-hot-freshness-control" title="${hotFreshnessMode === "custom" ? "选择热点时限" : "默认热点时限"}">
             ${hotFreshnessMode === "custom"
@@ -22016,10 +22143,18 @@ function renderPersonaHotCandidatePicker(persona, form) {
               : `<span class="persona-hot-freshness-default" aria-label="默认热点时限">默认</span>`}
           </label>
         </div>
-        <button type="button" class="primary persona-hot-fetch-action" data-persona-fetch-hot ${hotBusy ? "disabled" : ""}>${hotBusy ? renderBusyButtonContent("正在抓取热点", true, hotBusyStartedAt) : "抓取热点"}</button>
+        <div class="persona-hot-keyword-panel">
+          <div class="persona-hot-step-title">
+            <strong>步骤 1：生成关键词</strong>
+            <small>${keywordCount ? `当前 ${keywordCount} 个，可手动编辑。` : "先生成关键词，也可以直接填写。"}</small>
+          </div>
+          <textarea rows="3" data-persona-hot-keywords placeholder="先生成关键词；也可以手动添加、删除，用 / 或换行分隔。" ${controlsBusy ? "disabled" : ""}>${esc(keywordText)}</textarea>
+          <button type="button" class="persona-hot-fetch-action" data-persona-prepare-hot-keywords="${keywordCount ? "refresh" : "prepare"}" ${controlsBusy ? "disabled" : ""}>${keywordBusy ? renderBusyButtonContent("正在生成关键词", true) : (keywordCount ? "重新生成关键词" : "生成关键词")}</button>
+        </div>
+        <button type="button" class="primary persona-hot-fetch-action" data-persona-fetch-hot ${hotBusy || !keywordCount ? "disabled" : ""}>${hotBusy ? renderBusyButtonContent("正在抓取热点", true, hotBusyStartedAt) : "按关键词抓取"}</button>
         ${hotBusy
           ? `<button type="button" class="persona-hot-fetch-action" data-persona-cancel-hot>取消抓取</button>`
-          : `<button type="button" class="persona-hot-fetch-action" data-persona-fetch-hot-refresh>刷新候选</button>`}
+          : `<button type="button" class="persona-hot-fetch-action" data-persona-fetch-hot-refresh ${keywordCount ? "" : "disabled"}>按当前关键词刷新</button>`}
       </div>
     </div>
     ${(keywords.length || warnings.length || cookieStatuses.length) ? `
@@ -22076,7 +22211,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
         </div>
         ${renderPersonaHotCandidatePreview(preview)}
       </section>
-    </div>` : `<div class="empty-state">还没有热点候选。点击“抓取热点”，系统会按当前人设和已有记忆自动抓取 Threads / Instagram 热点候选。</div>`}
+    </div>` : `<div class="empty-state">还没有热点候选。先生成或填写关键词，再点击“按关键词抓取”获取 Threads / Instagram 热点候选。</div>`}
   `;
 }
 
@@ -29852,6 +29987,11 @@ function bindEvents() {
       }
       return;
     }
+    const hotKeywordButton = event.target.closest("[data-persona-prepare-hot-keywords]");
+    if (hotKeywordButton) {
+      preparePersonaHotKeywords(hotKeywordButton.dataset.personaPrepareHotKeywords === "refresh").catch(() => {});
+      return;
+    }
     if (event.target.closest("[data-persona-fetch-hot]")) {
       fetchPersonaHotCandidates(false).catch(() => {});
       return;
@@ -30906,7 +31046,24 @@ function bindEvents() {
       renderActivePersonaListSurface();
     }
   });
+  $("moduleBody").addEventListener("input", (event) => {
+    if (event.target?.matches?.("[data-persona-hot-keywords]")) {
+      const persona = selectedPersona();
+      if (!persona) return;
+      personaFormState(persona.id).generate.hotKeywordText = String(event.target.value || "");
+      renderConfirmSummary();
+    }
+  });
   $("moduleBody").addEventListener("change", async (event) => {
+    if (event.target?.matches?.("[data-persona-hot-keywords]")) {
+      const persona = selectedPersona();
+      if (!persona) return;
+      const form = personaFormState(persona.id).generate;
+      form.hotKeywordText = formatPersonaHotKeywordText(parsePersonaHotKeywordText(event.target.value));
+      renderPersonaDetail();
+      renderConfirmSummary();
+      return;
+    }
     if (event.target?.matches?.("[data-account-pool-check]")) {
       toggleAccountPoolAccount(event.target.dataset.accountPoolCheck || "");
       renderSocialAccounts();
