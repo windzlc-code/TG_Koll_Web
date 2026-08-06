@@ -1113,10 +1113,8 @@ export function resolveSentimentHotManualQueryKeywords(
   const normalizedManualKeywords = prepareSentimentHotKeywordsForMode(manualKeywords, mode);
   const modelQueryKeywords = resolveSentimentHotModelQueryKeywords(strategy, mode);
   if (!modelQueryKeywords.length) return normalizedManualKeywords;
-  return prepareSentimentHotKeywordsForMode(
-    [...modelQueryKeywords, ...normalizedManualKeywords],
-    mode === "strict" ? "normal" : mode,
-  );
+  return [...new Set([...modelQueryKeywords, ...normalizedManualKeywords])]
+    .slice(0, mode === "strict" ? SENTIMENT_HOT_NORMAL_KEYWORD_TARGET : sentimentHotKeywordTargetForMode(mode));
 }
 
 export function applyPersonaGuardToSentimentHotStrategy(args: {
