@@ -146,8 +146,10 @@ def test_poster_translate_preserves_language_aliases_and_original_constraints(
     assert "避免乱码、伪文字、拼写错误、混合语言和过长段落" in prompt
 
 
-def test_dispatch_rejects_non_dedicated_mode_and_model_product_requires_prompt() -> None:
-    with pytest.raises(ValueError, match="unsupported image_generate prompt mode"):
-        build_image_mode_prompt({"mode": "scene_image", "prompt": "room"})
+def test_dispatch_keeps_hidden_scene_mode_and_model_product_requires_prompt() -> None:
+    scene_prompt = build_image_mode_prompt({"mode": "scene_image", "prompt": "明亮的现代客厅"})
+    assert "数字人口播背景" in scene_prompt
+    assert "不要出现人物" in scene_prompt
+    assert "不是3D渲染" in scene_prompt
     with pytest.raises(RuntimeError, match="图片生成需要填写提示词"):
         build_image_mode_prompt({"mode": "model_product"})

@@ -334,6 +334,28 @@ def build_poster_translate_prompt(payload: Mapping[str, Any] | None) -> str:
     )
 
 
+def build_scene_image_prompt(payload: Mapping[str, Any] | None) -> str:
+    source = payload or {}
+    prompt = _text(source.get("prompt") or source.get("prompt_text") or source.get("message"))
+    if not prompt:
+        raise RuntimeError("图片生成需要填写提示词")
+    prompt = (
+        f"{prompt}\n"
+        "生成一张真实自然、可作为数字人口播背景的场景图。"
+        "画面不要出现人物、商品硬广、可读文字、字幕、水印、Logo 或UI界面。"
+        "必须像真实手机或相机现场拍摄的照片，而不是3D渲染、CG样板间、建筑/室内效果图或AI概念图。"
+        "重点放在真实镜头质感：真实光源方向、明暗层次、局部高光、接触阴影、合理动态范围、轻微镜头畸变、空间透视和背景景深层次。"
+        "光线可以是自然光、室内灯光、窗光与灯光混合或夜间室内光，但必须符合真实现场摄影的受光逻辑，不能是CG渲染式均匀假光。"
+        "如果用户没有明确要求暗调、夜景或低照度氛围，默认生成整体偏明亮通透的普通现场照：主体区域、桌面/墙面/地面和背景层次都要有足够可见度，但不要过曝、发白、丢失高光细节或变成棚拍大平光。"
+        "保留材质微纹理和边缘细节，不要把墙面、桌面、织物、木纹、玻璃、金属或植物表面磨平成塑料质感。"
+        "所有材质都要有真实照片里的非均匀细节：墙面细微颗粒、木纹纹路、纸张纤维、布料织纹、植物叶脉、玻璃反光和金属边缘高光都不能被AI平滑掉。"
+        "场景保持正常整洁、现代、不过度空泛；可以有少量自然摆放的日常物件作为尺度参考，但不要故意做旧、脏污、磨损、杂乱或复古化。"
+        "不要酒店样板间、棚拍布景、塑料质感、完美无瑕的CG光滑表面、虚假全局光、过强景深虚化、过度降噪、AI磨皮式平滑、过度锐化或渲染器高光。"
+        "保持空间透视平稳、光线自然、画面可信，适合后续融合数字人口播人物。"
+    )
+    return ensure_environment_integration_prompt(prompt)
+
+
 def build_image_mode_prompt(payload: Mapping[str, Any] | None, mode: Any = None) -> str:
     source = dict(payload or {})
     normalized_mode = _text(mode if mode is not None else source.get("mode")) or "product_only"
@@ -348,6 +370,8 @@ def build_image_mode_prompt(payload: Mapping[str, Any] | None, mode: Any = None)
         return build_subject_replace_prompt(source)
     if normalized_mode == "poster_translate":
         return build_poster_translate_prompt(source)
+    if normalized_mode == "scene_image":
+        return build_scene_image_prompt(source)
     raise ValueError(f"unsupported image_generate prompt mode: {normalized_mode}")
 
 
@@ -371,6 +395,7 @@ __all__ = [
     "build_image_mode_prompt",
     "build_poster_translate_prompt",
     "build_product_or_model_prompt",
+    "build_scene_image_prompt",
     "build_subject_replace_prompt",
     "build_three_view_prompt",
     "digital_human_character_region_prompt",

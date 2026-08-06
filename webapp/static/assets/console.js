@@ -7236,6 +7236,8 @@ function mobilePageBackTarget() {
 
 function syncMobilePageToolbar() {
   const navToggle = $("mobileNavToggle");
+  const videoButton = $("mobileVideoWorkspaceButton");
+  const videoIcon = $("mobileVideoWorkspaceIcon");
   const title = $("mobilePageToolbarTitle");
   const icon = $("mobilePageToolbarIcon");
   const personaDashboardActions = $("personaDashboardToolbarActions");
@@ -7251,6 +7253,11 @@ function syncMobilePageToolbar() {
     setConsoleUiAttribute(navToggle, "aria-label", navToggleLabel);
     setConsoleUiAttribute(navToggle, "title", navToggleLabel);
   }
+  if (videoButton) {
+    const showVideoButton = VIDEO_WORKBENCH_ENABLED && state.view === "tasks";
+    videoButton.hidden = !showVideoButton;
+    if (showVideoButton && videoIcon) videoIcon.innerHTML = renderMobileTaskIcon("video_workspace");
+  }
   if (personaDashboardActions) personaDashboardActions.hidden = state.view !== "persona_dashboard";
   if (!title || !icon) return;
 
@@ -7264,7 +7271,6 @@ function renderMobileTaskDock() {
   if (!dock) return;
   const mobileDockItems = [
     { id: "persona_dashboard", label: "首页", view: "persona_dashboard" },
-    ...(VIDEO_WORKBENCH_ENABLED ? [{ id: "video_workspace", label: "视频", view: "video_workspace" }] : []),
     ...modules.filter((item) => item.id !== "browser_list"),
   ];
   dock.style.setProperty("--mobile-task-dock-item-count", String(mobileDockItems.length));
@@ -25416,12 +25422,6 @@ function accountProxyCustomAddButtonHtml(scope = "modal") {
   </button>`;
 }
 
-function accountProxyMarketButtonHtml() {
-  return `<button type="button" class="account-proxy-market-add" data-account-proxy-market-open>
-    ${renderProxyMarketIcon()}<span>代理商城</span>
-  </button>`;
-}
-
 function accountProxyInlineCustomFormHtml(scope = "edit") {
   return `<section class="account-proxy-inline-custom" data-account-proxy-inline-custom data-account-proxy-choice-scope="${esc(scope)}" hidden>
     <div class="account-proxy-inline-custom-head">
@@ -25637,7 +25637,6 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
         <div class="account-proxy-picker-toolbar">
           <p data-account-proxy-selection-summary>${account.proxy_id ? `当前绑定：${esc(accountResidentialProxyLabel(account))}` : "当前未使用代理 IP"}</p>
           <div class="account-proxy-picker-toolbar-actions">
-            ${accountProxyMarketButtonHtml()}
             ${accountProxyCustomAddButtonHtml("modal")}
           </div>
         </div>
@@ -25662,15 +25661,6 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
     return true;
   };
   modal.addEventListener("click", (event) => {
-    const marketOpen = event.target.closest("[data-account-proxy-market-open]");
-    if (marketOpen) {
-      if (accountProxyCustomIsBusy(modal)) {
-        accountProxyCustomBusyMessage();
-        return;
-      }
-      openProxyMarketModal({ accountId: account.id, selectedProxyId: modal.dataset.selectedProxyId || "" });
-      return;
-    }
     const customAdd = event.target.closest("[data-account-proxy-custom-add]");
     if (customAdd) {
       if (accountProxyCustomIsBusy(modal)) {
@@ -26795,7 +26785,6 @@ function renderProxyPool() {
       <div class="proxy-pool-head">
         <div><strong>代理 IP</strong><span>独立维护代理信息并查看账号绑定情况。</span></div>
         <div class="proxy-pool-head-actions">
-          <button type="button" class="proxy-market-link" data-proxy-market-open>${renderProxyMarketIcon()}<span>代理商城</span></button>
           <button type="button" class="primary proxy-pool-add" data-proxy-add>${renderCustomProxyIcon()}<span>自定义代理</span></button>
         </div>
       </div>
@@ -31248,10 +31237,6 @@ function bindEvents() {
       event.stopPropagation();
       toggleAccountPasswordVisibility(accountPasswordToggle)
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "读取登录密码失败", false));
-      return;
-    }
-    if (event.target.closest("[data-proxy-market-open]")) {
-      openProxyMarketModal();
       return;
     }
     if (event.target.closest("[data-proxy-add]")) {

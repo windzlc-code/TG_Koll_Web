@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import math
 import json
 import inspect
@@ -39,6 +40,7 @@ REPLACE_PRODUCT_DEFAULT_APP_ID = "1977410328592031746"
 VIDEO_LANGUAGE_AUDIO_SEPARATION_APP_ID = "2054844989808619521"
 _PROMPT_PREVIEW_RECOVERY: dict[str, dict[str, Any]] = {}
 _PROMPT_PREVIEW_RECOVERY_LOCK = threading.RLock()
+_PROMPT_PREVIEW_TASK_TYPE = "video_prompt_preview"
 
 
 VIDEO_RUNTIME_CONFIG_DEFAULTS: dict[str, Any] = {
@@ -1789,6 +1791,113 @@ def _route_now(dependencies: VideoRouteDependencies) -> int:
     return int(time.time())
 
 
+def _prompt_preview_task_id(user_id: int, nonce: str) -> str:
+    digest = hashlib.sha256(f"{int(user_id)}:{str(nonce or '').strip()}".encode("utf-8")).hexdigest()
+    return f"prompt-preview-{digest[:40]}"
+
+
+def _load_persisted_prompt_preview(
+    dependencies: VideoRouteDependencies,
+    *,
+    user_id: int,
+    nonce: str,
+) -> dict[str, Any] | None:
+    if not callable(dependencies.db_factory):
+        return None
+    nonce_text = str(nonce or "").strip()
+    if not nonce_text:
+        return None
+    with dependencies.db_factory() as conn:
+        row = conn.execute(
+            """
+            SELECT status, input_json, output_json
+            FROM tasks
+            WHERE id = ? AND user_id = ? AND type = ?
+            """,
+            (_prompt_preview_task_id(user_id, nonce_text), int(user_id), _PROMPT_PREVIEW_TASK_TYPE),
+        ).fetchone()
+    if row is None or str(row[0] or "").strip().lower() != "success":
+        return None
+    input_payload = _route_json_loads(dependencies, row[1], {})
+    output_payload = _route_json_loads(dependencies, row[2], {})
+    if not isinstance(input_payload, dict) or not isinstance(output_payload, dict):
+        return None
+    if input_payload.get("web_prompt_preview") is not True:
+        return None
+    if str(input_payload.get("web_prompt_preview_nonce") or "").strip() != nonce_text:
+        return None
+    return dict(output_payload)
+
+
+def _persist_completed_prompt_preview(
+    dependencies: VideoRouteDependencies,
+    *,
+    user_id: int,
+    nonce: str,
+    module: str,
+    task_type: str,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    if not callable(dependencies.db_factory):
+        return dict(result)
+    nonce_text = str(nonce or "").strip()
+    task_id = _prompt_preview_task_id(user_id, nonce_text)
+    now = _route_now(dependencies)
+    input_payload = {
+        "web_prompt_preview": True,
+        "web_prompt_preview_nonce": nonce_text,
+        "video_module": str(module or "").strip(),
+        "video_task_type": str(task_type or "").strip(),
+    }
+    values: dict[str, Any] = {
+        "id": task_id,
+        "user_id": int(user_id),
+        "type": _PROMPT_PREVIEW_TASK_TYPE,
+        "status": "success",
+        "input_json": _route_json_dumps(dependencies, input_payload),
+        "output_json": _route_json_dumps(dependencies, result),
+        "error": "",
+        "runninghub_task_id": "",
+        "usage_json": _route_json_dumps(dependencies, {}),
+        "cost_cents": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+    with dependencies.db_factory() as conn:
+        columns = {
+            str(row[1] if not hasattr(row, "keys") else row["name"])
+            for row in conn.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        required = {"id", "user_id", "type", "status", "input_json", "output_json"}
+        if not required.issubset(columns):
+            raise RuntimeError("tasks table does not support prompt preview persistence")
+        insert_columns = [name for name in values if name in columns]
+        placeholders = ", ".join("?" for _ in insert_columns)
+        conn.execute(
+            f"INSERT OR IGNORE INTO tasks({', '.join(insert_columns)}) VALUES ({placeholders})",
+            tuple(values[name] for name in insert_columns),
+        )
+        row = conn.execute(
+            """
+            SELECT status, input_json, output_json
+            FROM tasks
+            WHERE id = ? AND user_id = ? AND type = ?
+            """,
+            (task_id, int(user_id), _PROMPT_PREVIEW_TASK_TYPE),
+        ).fetchone()
+    if row is None or str(row[0] or "").strip().lower() != "success":
+        raise RuntimeError("completed prompt preview was not persisted")
+    stored_input = _route_json_loads(dependencies, row[1], {})
+    stored_output = _route_json_loads(dependencies, row[2], {})
+    if (
+        not isinstance(stored_input, dict)
+        or str(stored_input.get("web_prompt_preview_nonce") or "").strip() != nonce_text
+        or not isinstance(stored_output, dict)
+    ):
+        raise RuntimeError("persisted prompt preview record is invalid")
+    return dict(stored_output)
+
+
 def _require_video_task_id(task_id: Any) -> str:
     value = str(task_id or "").strip()
     if not _VIDEO_TASK_ID_PATTERN.fullmatch(value):
@@ -2914,12 +3023,23 @@ def register_video_routes(app: Any, dependencies: VideoRouteDependencies) -> dic
         ) -> dict[str, Any]:
             nonce_source = request_nonce if isinstance(request_nonce, str) else ""
             nonce = re.sub(r"[^A-Za-z0-9._-]", "", nonce_source.strip())[:120]
-            recovery_key = f"{int(dependencies.workspace_user_id(user))}:{nonce}" if nonce else ""
+            user_id = int(dependencies.workspace_user_id(user))
+            recovery_key = f"{user_id}:{nonce}" if nonce else ""
             if recovery_key:
                 with _PROMPT_PREVIEW_RECOVERY_LOCK:
                     existing = _PROMPT_PREVIEW_RECOVERY.get(recovery_key)
                     if isinstance(existing, dict) and existing.get("status") == "complete" and isinstance(existing.get("result"), dict):
                         return dict(existing["result"])
+                persisted = _load_persisted_prompt_preview(
+                    dependencies,
+                    user_id=user_id,
+                    nonce=nonce,
+                )
+                if persisted is not None:
+                    with _PROMPT_PREVIEW_RECOVERY_LOCK:
+                        _PROMPT_PREVIEW_RECOVERY[recovery_key] = {"status": "complete", "result": dict(persisted)}
+                    return persisted
+                with _PROMPT_PREVIEW_RECOVERY_LOCK:
                     _PROMPT_PREVIEW_RECOVERY[recovery_key] = {"status": "pending"}
             try:
                 parsed = json.loads(str(params_json or "{}").strip() or "{}")
@@ -3012,6 +3132,19 @@ def register_video_routes(app: Any, dependencies: VideoRouteDependencies) -> dic
                 "requires_confirmation": True,
             }
             if recovery_key:
+                try:
+                    response_payload = _persist_completed_prompt_preview(
+                        dependencies,
+                        user_id=user_id,
+                        nonce=nonce,
+                        module=module,
+                        task_type=task_type,
+                        result=response_payload,
+                    )
+                except Exception as exc:
+                    with _PROMPT_PREVIEW_RECOVERY_LOCK:
+                        _PROMPT_PREVIEW_RECOVERY[recovery_key] = {"status": "failed", "detail": str(exc)}
+                    raise HTTPException(status_code=503, detail=f"Prompt preview persistence failed: {exc}") from exc
                 with _PROMPT_PREVIEW_RECOVERY_LOCK:
                     _PROMPT_PREVIEW_RECOVERY[recovery_key] = {"status": "complete", "result": dict(response_payload)}
                     while len(_PROMPT_PREVIEW_RECOVERY) > 200:
@@ -3029,13 +3162,23 @@ def register_video_routes(app: Any, dependencies: VideoRouteDependencies) -> dic
             nonce = re.sub(r"[^A-Za-z0-9._-]", "", str(request_nonce or "").strip())[:120]
             if not nonce:
                 raise HTTPException(status_code=400, detail="request_nonce is required")
-            key = f"{int(dependencies.workspace_user_id(user))}:{nonce}"
+            user_id = int(dependencies.workspace_user_id(user))
+            key = f"{user_id}:{nonce}"
             with _PROMPT_PREVIEW_RECOVERY_LOCK:
                 item = dict(_PROMPT_PREVIEW_RECOVERY.get(key) or {})
-            if not item:
-                raise HTTPException(status_code=404, detail="Prompt preview recovery record not found")
             if item.get("status") == "complete" and isinstance(item.get("result"), dict):
                 return dict(item["result"])
+            persisted = _load_persisted_prompt_preview(
+                dependencies,
+                user_id=user_id,
+                nonce=nonce,
+            )
+            if persisted is not None:
+                with _PROMPT_PREVIEW_RECOVERY_LOCK:
+                    _PROMPT_PREVIEW_RECOVERY[key] = {"status": "complete", "result": dict(persisted)}
+                return persisted
+            if not item:
+                raise HTTPException(status_code=404, detail="Prompt preview recovery record not found")
             if item.get("status") == "failed":
                 raise HTTPException(status_code=503, detail=str(item.get("detail") or "Prompt preview failed"))
             return {"status": "pending", "request_nonce": nonce}

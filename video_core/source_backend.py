@@ -19,7 +19,8 @@ import requests
 from .contracts import VideoDependencyError, VideoTaskCancelled, VideoTaskContext
 from . import digital_human_audio_postprocess, digital_human_image_quality, digital_human_join_cleanup, digital_human_pipeline, digital_human_subtitles, digital_human_views, ecommerce_ad_prompting, ecommerce_animation_redraw, ecommerce_material_intelligence, ecommerce_reference_video, ecommerce_seeding_dynamic, ecommerce_seeding_renderer, ecommerce_segment_audio, ecommerce_segment_continuity, image_generate_dispatch, image_mode_prompts, language_voice_pipeline, replacement_pipeline, runninghub_image_models
 from .source import create_video as source_create_video
-from .source import image_model_api, runninghub_common
+from .source import commerce_video_generator, image_model_api, runninghub_common
+from .video_language_timing import build_atempo_chain, build_timed_audio_layout, normalize_chinese_tts_text
 
 
 DIGITAL_HUMAN_VIDEO_APP_ID = "2068273204367544322"
@@ -35,6 +36,7 @@ _LOCAL_PROCESS_SEMAPHORES_LOCK = threading.RLock()
 _IMAGE_GENERATE_MODES = {
     "product_only",
     "model_product",
+    "scene_image",
     "subject_replace",
     "poster_translate",
     "digital_human_character",
@@ -1009,7 +1011,21 @@ class ArchivedSourceBackend:
                 candidate = Path(candidate_text).expanduser().resolve()
                 if candidate.is_file():
                     reusable[index] = candidate
-        plan: list[dict[str, Any]] = [{**cue, "role": "source", "segment_index": int(cue["index"])} for cue in cues]
+        target_language = (_text(payload.get("target_language") or payload.get("language")) or "Chinese").lower()
+        normalize_chinese = target_language in {"chinese", "zh", "zh-cn", "zh_cn", "中文", "汉语", "普通话"}
+        if normalize_chinese:
+            cues = [{**cue, "text": normalize_chinese_tts_text(str(cue["text"]))} for cue in cues]
+            opening_insert_text = normalize_chinese_tts_text(opening_insert_text)
+            ending_insert_text = normalize_chinese_tts_text(ending_insert_text)
+        plan: list[dict[str, Any]] = [
+            {
+                **cue,
+                "role": "source",
+                "segment_index": int(cue["index"]),
+                "slot_end_seconds": float(cue["end_seconds"]),
+            }
+            for cue in cues
+        ]
         if _text(opening_insert_text):
             plan.insert(0, {
                 "index": 0,
@@ -1029,7 +1045,7 @@ class ArchivedSourceBackend:
                 "end_seconds": ending_start + 0.001,
                 "text": _text(ending_insert_text),
             })
-        generated: list[dict[str, Any]] = []
+        prepared: list[dict[str, Any]] = []
         for cue in plan:
             context.check_cancelled()
             cue_index = int(cue["segment_index"])
@@ -1043,33 +1059,86 @@ class ArchivedSourceBackend:
                     payload=payload,
                     context=context,
                 )
-            generated.append({**cue, "audio_path": str(audio_path), "reused": reused})
-        opening = next((item for item in generated if item.get("role") == "opening"), None)
+            prepared.append(
+                {
+                    **cue,
+                    "audio_path": str(audio_path),
+                    "reused": reused,
+                    "raw_audio_duration_seconds": self._probe_media_duration_seconds(Path(audio_path), payload),
+                }
+            )
+        opening = next((item for item in prepared if item.get("role") == "opening"), None)
         timeline_shift = 0.0
         if opening is not None:
-            opening_duration = self._probe_media_duration_seconds(Path(opening["audio_path"]), payload)
+            opening_duration = float(opening.get("raw_audio_duration_seconds") or 0.0)
             first_source_start = float(cues[0]["start_seconds"])
             timeline_shift = max(opening_duration - first_source_start, 0.0)
-            opening["audio_duration_seconds"] = opening_duration
             opening["start_seconds"] = max(first_source_start - opening_duration, 0.0)
             opening["end_seconds"] = first_source_start + timeline_shift
-        for item in generated:
+            opening["slot_end_seconds"] = first_source_start + timeline_shift
+        for item in prepared:
             if item.get("role") == "source" and timeline_shift:
                 item["start_seconds"] = float(item["start_seconds"]) + timeline_shift
                 item["end_seconds"] = float(item["end_seconds"]) + timeline_shift
-        ending = next((item for item in generated if item.get("role") == "ending"), None)
-        ending_duration = 0.0
+                item["slot_end_seconds"] = float(item["slot_end_seconds"]) + timeline_shift
+        ending = next((item for item in prepared if item.get("role") == "ending"), None)
         if ending is not None:
-            last_source_end = max(float(item["end_seconds"]) for item in generated if item.get("role") == "source")
-            ending_duration = self._probe_media_duration_seconds(Path(ending["audio_path"]), payload)
-            ending["audio_duration_seconds"] = ending_duration
+            last_source_end = max(float(item["end_seconds"]) for item in prepared if item.get("role") == "source")
             ending["start_seconds"] = last_source_end
-            ending["end_seconds"] = last_source_end + ending_duration
-        total_seconds = max(
-            float(source_duration or 0) + timeline_shift,
-            max(float(item["end_seconds"]) for item in generated),
-            0.1,
+            ending["end_seconds"] = last_source_end + float(ending.get("raw_audio_duration_seconds") or 0.0)
+            ending["slot_end_seconds"] = None
+        generated, total_seconds = build_timed_audio_layout(
+            prepared,
+            source_duration=float(source_duration or 0.0) + timeline_shift,
         )
+        previous_speech_end = 0.0
+        for item in generated:
+            role = _text(item.get("role") or "source")
+            playback_tempo = max(float(item.get("playback_tempo") or 1.0), 0.05)
+            raw_duration = max(float(item.get("raw_audio_duration_seconds") or 0.0), 0.0)
+            start_seconds = max(float(item.get("start_seconds") or 0.0), 0.0)
+            duration_seconds = max(float(item.get("audio_duration_seconds") or 0.0), 0.0)
+            detected_onset = 0.0
+            if role == "source":
+                try:
+                    leading_silence = float(
+                        commerce_video_generator._leading_silence_seconds(
+                            Path(str(item["audio_path"])),
+                            noise_db="-45dB",
+                            min_silence=0.05,
+                            max_trim_seconds=1.2,
+                        )
+                        or 0.0
+                    )
+                    if leading_silence > 0.08:
+                        detected_onset = min(max(leading_silence - 0.06, 0.0), 0.9) / playback_tempo
+                except Exception:
+                    detected_onset = 0.0
+            available_pull = max(start_seconds - previous_speech_end, 0.0)
+            onset_compensation = min(detected_onset, available_pull)
+            mix_start = max(start_seconds - onset_compensation, 0.0)
+            try:
+                speech_end_offset = float(
+                    commerce_video_generator._audio_effective_speech_end_seconds(
+                        Path(str(item["audio_path"])),
+                        duration_seconds=raw_duration,
+                    )
+                    or raw_duration
+                ) / playback_tempo
+            except Exception:
+                speech_end_offset = raw_duration / playback_tempo
+            effective_speech_end = min(mix_start + speech_end_offset, mix_start + duration_seconds)
+            item.update(
+                {
+                    "audio_onset_detected_seconds": round(detected_onset, 3),
+                    "audio_onset_compensation_seconds": round(onset_compensation, 3),
+                    "mix_start_seconds": round(mix_start, 3),
+                    "mix_end_seconds": round(mix_start + duration_seconds, 3),
+                    "effective_speech_end_seconds": round(effective_speech_end, 3),
+                    "estimated_speech_start_seconds": round(mix_start + detected_onset, 3),
+                }
+            )
+            previous_speech_end = max(previous_speech_end, effective_speech_end)
         output_path = workdir / "video_language_timed_audio.m4a"
         command = [
             ffmpeg,
@@ -1087,9 +1156,11 @@ class ArchivedSourceBackend:
         filters = [f"[0:a]atrim=0:{total_seconds:.3f},asetpts=N/SR/TB[base]"]
         labels = ["[base]"]
         for index, item in enumerate(generated, start=1):
-            delay_ms = max(int(round(float(item["start_seconds"]) * 1000)), 0)
+            delay_ms = max(int(round(float(item.get("mix_start_seconds", item["start_seconds"])) * 1000)), 0)
+            playback_tempo = max(float(item.get("playback_tempo") or 1.0), 0.05)
+            tempo_filter = f",{build_atempo_chain(playback_tempo)}" if playback_tempo > 1.0005 else ""
             filters.append(
-                f"[{index}:a]aformat=sample_rates=48000:channel_layouts=stereo,adelay={delay_ms}:all=1,"
+                f"[{index}:a]aformat=sample_rates=48000:channel_layouts=stereo{tempo_filter},adelay={delay_ms}:all=1,"
                 f"apad,atrim=0:{total_seconds:.3f},asetpts=N/SR/TB[a{index}]"
             )
             labels.append(f"[a{index}]")
@@ -4303,6 +4374,9 @@ class ArchivedSourceBackend:
                 *listed,
             ]
             minimum, maximum = 0, 3
+        elif mode == "scene_image":
+            candidates = []
+            minimum, maximum = 0, 0
         else:
             candidates = [
                 payload.get("reference_image_local_path"),

@@ -41,6 +41,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script,
         )
 
+    def test_console_has_no_proxy_market_entry_points(self):
+        self.assertNotIn('data-site-nav-key="proxyMarket"', self.markup)
+        self.assertNotIn('href="/proxy-market.html"', self.markup)
+        self.assertNotIn('data-proxy-market-open', self.console_script)
+        self.assertNotIn('data-account-proxy-market-open', self.console_script)
+        self.assertNotIn('class="proxy-market-link"', self.console_script)
+
     def test_empty_persona_workspace_has_a_mobile_first_run_guide_without_replacing_selection_copy(self):
         self.assertIn("personaOverviewLoaded: false", self.console_script)
         self.assertIn("state.personaOverviewLoaded = true", self.console_script)

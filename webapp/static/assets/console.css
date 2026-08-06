@@ -7994,6 +7994,41 @@ body.persona-touch-dragging .persona-list-card:active {
     box-shadow: none;
   }
 
+  .mobile-page-toolbar > .mobile-video-workspace-button {
+    display: grid;
+    grid-column: 1;
+    justify-self: start;
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+    padding: 5px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--panel-solid);
+    color: var(--ink);
+    box-shadow: none;
+  }
+
+  .mobile-video-workspace-button[hidden] {
+    display: none;
+  }
+
+  .mobile-video-workspace-button > span,
+  .mobile-video-workspace-button .mobile-task-dock-icon {
+    display: block;
+    width: 18px;
+    height: 18px;
+  }
+
+  .mobile-video-workspace-button .mobile-task-dock-icon {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
   .mobile-page-toolbar-title {
     display: inline-flex;
     grid-column: 2;
@@ -23060,6 +23095,10 @@ body.console-page {
 
 .mobile-page-toolbar-actions[hidden] {
   display: none !important;
+}
+
+.mobile-video-workspace-button {
+  display: none;
 }
 
 .persona-dashboard-toolbar-refresh {

@@ -56,13 +56,16 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
     def test_deep_link_and_navigation_contract_is_present(self):
         self.assertIn('const VIDEO_WORKBENCH_ENABLED = ADMIN_CONSOLE_SESSION', self.console_js)
         self.assertIn('entry.hidden = !VIDEO_WORKBENCH_ENABLED', self.console_js)
-        self.assertIn('...(VIDEO_WORKBENCH_ENABLED ? [{ id: "video_workspace"', self.console_js)
+        self.assertIn('const showVideoButton = VIDEO_WORKBENCH_ENABLED && state.view === "tasks";', self.console_js)
         self.assertIn('initialConsoleParams.get("video_module")', self.console_js)
         self.assertIn('url.searchParams.set("view", "video_workspace")', self.console_js)
         self.assertIn('url.searchParams.set("video_module", state.activeVideoModule)', self.console_js)
         self.assertIn('openVideoWorkspace', self.console_js)
         self.assertIn('syncVideoModuleMenuState', self.console_js)
-        self.assertIn('{ id: "video_workspace", label: "视频", view: "video_workspace" }', self.console_js)
+        self.assertIn('id="mobileVideoWorkspaceButton"', self.html)
+        self.assertIn('data-view="video_workspace"', self.html)
+        self.assertIn('const showVideoButton = VIDEO_WORKBENCH_ENABLED && state.view === "tasks";', self.console_js)
+        self.assertNotIn('...(VIDEO_WORKBENCH_ENABLED ? [{ id: "video_workspace", label: "视频", view: "video_workspace" }] : []),', self.console_js)
 
     def test_module_planning_and_task_apis_are_used(self):
         self.assertIn('request("/api/video/modules")', self.workbench_js)

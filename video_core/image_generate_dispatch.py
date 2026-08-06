@@ -13,6 +13,7 @@ SUPPORTED_IMAGE_MODES = frozenset(
     {
         "product_only",
         "model_product",
+        "scene_image",
         "subject_replace",
         "poster_translate",
         "digital_human_character",
@@ -70,7 +71,7 @@ def _unique(values: Sequence[str]) -> list[str]:
 
 
 def map_image_reference_roles(mode: str, input_image_paths: Sequence[str | Path]) -> list[str]:
-    """Map already-normalized source-backend inputs to their six mode-specific roles."""
+    """Map already-normalized source-backend inputs to their mode-specific roles."""
 
     normalized_mode = _text(mode).lower()
     if normalized_mode not in SUPPORTED_IMAGE_MODES:
@@ -91,6 +92,8 @@ def map_image_reference_roles(mode: str, input_image_paths: Sequence[str | Path]
         return ["poster"][:count]
     if normalized_mode == "digital_human_character":
         return [f"character_reference_{index}" for index in range(1, count + 1)]
+    if normalized_mode == "scene_image":
+        return []
     return [f"reference_{index}" for index in range(1, count + 1)]
 
 
@@ -452,7 +455,7 @@ def dispatch_image_generate(
 ) -> dict[str, Any]:
     """Dispatch normalized image generation without owning HTTP, DB, server, or Telegram I/O.
 
-    ``source_backend.image_generate`` owns the six-mode input validation and prompt building. This
+    ``source_backend.image_generate`` owns mode-specific input validation and prompt building. This
     function owns only provider selection, workflow chaining, model-priority fallback, count, and
     result aggregation. Every paid or remote boundary is an injected callback.
     """

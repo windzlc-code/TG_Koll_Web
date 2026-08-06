@@ -259,7 +259,8 @@ def main() -> None:
         if announcement.count() and announcement.first.is_visible():
             announcement.locator(".site-notification-broadcast-confirm").click()
         assert page.locator('[data-panel="video_workspace"]').is_visible()
-        assert page.locator('#mobileTaskDock [data-workspace-view="video_workspace"]').count() == 1
+        assert page.locator('#mobileTaskDock [data-workspace-view="video_workspace"]').count() == 0
+        assert page.locator('#mobileVideoWorkspaceButton').count() == 1
         assert page.locator("#videoModuleMenu [data-video-module]").count() == 8
         mobile_shell_handle = page.locator("#videoWorkbenchRoot .video-workbench-shell").element_handle()
         page.locator("#mobileNavToggle").click()
