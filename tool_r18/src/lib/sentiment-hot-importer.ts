@@ -1083,11 +1083,26 @@ export function resolveSentimentHotModelQueryKeywords(
   mode: SentimentHotSearchMode,
 ): string[] {
   if (!strategy || !sentimentHotStrategyHasModelTerms(strategy)) return [];
+  if (mode === "strict") {
+    const anchors = filterConflictingSearchKeywords([...new Set([
+      ...strategy.requiredAnchorTerms,
+      ...strategy.normalAnchorTerms,
+    ].map(cleanText).filter((item) => isConcreteSearchKeyword(item)))]);
+    const broadAnchors = prepareSentimentHotKeywordsForMode([
+      ...strategy.broadQueries,
+      ...strategy.ecosystemQueries,
+    ], "normal");
+    const rest = prepareSentimentHotKeywordsForMode([
+      ...strategy.primaryQueries,
+      ...strategy.strictAcceptTerms,
+      ...strategy.normalAcceptTerms,
+    ], "normal");
+    return [...new Set([...anchors, ...broadAnchors, ...rest])].slice(0, SENTIMENT_HOT_NORMAL_KEYWORD_TARGET);
+  }
   // Strict mode keeps its acceptance filter narrow, but discovery also needs
   // the model's broad vertical queries. The final quality/anchor checks still
   // reject posts that do not match the strict persona keywords.
-  const queryMode = mode === "strict" ? "normal" : mode;
-  return prepareSentimentHotKeywordsForMode(sentimentHotStrategyTermsForMode(strategy, queryMode), queryMode);
+  return prepareSentimentHotKeywordsForMode(sentimentHotStrategyTermsForMode(strategy, mode), mode);
 }
 
 export function resolveSentimentHotManualQueryKeywords(
