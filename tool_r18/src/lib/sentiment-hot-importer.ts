@@ -148,6 +148,20 @@ const SENTIMENT_HOT_GENERIC_QUERY_INTENTS = [
   "步骤",
   "清單",
   "清单",
+  "翻車",
+  "翻车",
+  "踩雷",
+  "吐槽",
+  "互動",
+  "互动",
+  "趣事",
+  "手藝",
+  "手艺",
+  "工具",
+  "場景",
+  "场景",
+  "痛點",
+  "痛点",
 ];
 
 function resolvePreferredChromeExecutablePath(): string | undefined {
@@ -942,7 +956,7 @@ function prepareSentimentHotKeywordsForMode(keywords: string[], mode: SentimentH
   const normalized = filterConflictingSearchKeywords([...new Set(
     keywords.map(cleanText).filter((item) => isConcreteSearchKeyword(item)),
   )]);
-  return normalized.slice(0, sentimentHotKeywordTargetForMode(mode));
+  return rankSearchKeywords(normalized).slice(0, sentimentHotKeywordTargetForMode(mode));
 }
 
 function emptySentimentHotSearchStrategy(): SentimentHotSearchStrategy {
