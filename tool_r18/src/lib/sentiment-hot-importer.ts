@@ -1557,7 +1557,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
     });
     if (sentimentHotStrategyHasModelTerms(strategy)) {
       console.info(`[sentiment_hot_model_strategy] model=${JSON.stringify(result.model)} domain=${JSON.stringify(strategy.domainSummary)}`);
-      if (args.useCache !== false) writeCachedSentimentHotSearchStrategy(cacheKey, strategy);
+      writeCachedSentimentHotSearchStrategy(cacheKey, strategy);
       return strategy;
     }
     args.warnings.push("模型未返回符合规范的热点关键词，本次未执行抓取；请稍后重试。");
