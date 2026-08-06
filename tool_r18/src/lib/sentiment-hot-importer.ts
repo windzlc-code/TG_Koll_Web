@@ -1076,6 +1076,20 @@ export function resolveSentimentHotModelQueryKeywords(
   return prepareSentimentHotKeywordsForMode(sentimentHotStrategyTermsForMode(strategy, queryMode), queryMode);
 }
 
+export function resolveSentimentHotManualQueryKeywords(
+  manualKeywords: string[],
+  strategy: SentimentHotSearchStrategy | null | undefined,
+  mode: SentimentHotSearchMode,
+): string[] {
+  const normalizedManualKeywords = prepareSentimentHotKeywordsForMode(manualKeywords, mode);
+  const modelQueryKeywords = resolveSentimentHotModelQueryKeywords(strategy, mode);
+  if (!modelQueryKeywords.length) return normalizedManualKeywords;
+  return prepareSentimentHotKeywordsForMode(
+    [...modelQueryKeywords, ...normalizedManualKeywords],
+    mode === "strict" ? "normal" : mode,
+  );
+}
+
 export function applyPersonaGuardToSentimentHotStrategy(args: {
   strategy: SentimentHotSearchStrategy;
 }) {
@@ -1954,7 +1968,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     ? manualKeywords
     : resolveSentimentHotModelStrategyKeywords(prefetchedStrategy, searchMode);
   const provisionalQueryKeywords = prefetchedStrategy
-    ? (manualKeywords.length > 0 ? manualKeywords : resolveSentimentHotModelQueryKeywords(prefetchedStrategy, searchMode))
+    ? (manualKeywords.length > 0 ? resolveSentimentHotManualQueryKeywords(manualKeywords, prefetchedStrategy, searchMode) : resolveSentimentHotModelQueryKeywords(prefetchedStrategy, searchMode))
     : provisionalKeywords;
   const provisionalKeywordBatches = [provisionalQueryKeywords];
   const provisionalCacheStartedAt = Date.now();
@@ -2034,7 +2048,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     warnings.push("热点关键词不可用，本次未执行抓取；请稍后重试。");
   }
   const queryKeywords = manualKeywords.length > 0
-    ? manualKeywords
+    ? resolveSentimentHotManualQueryKeywords(manualKeywords, strategyResult, searchMode)
     : resolveSentimentHotModelQueryKeywords(strategyResult, searchMode);
   warnings.push(searchMode === "normal" ? "热点抓取模式：普通（泛垂直）。" : "热点抓取模式：严格（垂直收口）。");
   if (liveOnlyRefresh) warnings.push(manualKeywords.length > 0

@@ -51,6 +51,7 @@ import {
   replaceThreadsSearchVariables,
   resolveSentimentHotModelStrategyKeywords,
   resolveSentimentHotModelQueryKeywords,
+  resolveSentimentHotManualQueryKeywords,
   resolveSentimentHotStrategyTimeoutMs,
   resolveSentimentHotTextModelPreference,
   shouldTreatThreadsProfileAsLoginWall,
@@ -208,6 +209,28 @@ describe("sentiment hot importer", () => {
     } as any;
     expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict")).not.toContain("染发烫发价格踩雷");
     expect(resolveSentimentHotModelQueryKeywords(strategy, "strict")).toContain("染发烫发价格踩雷");
+  });
+
+  it("uses cached model query terms when fetching with manually edited strict keywords", () => {
+    const strategy = {
+      primaryQueries: ["理发店", "剪头发", "发型设计", "剪发", "理发前后"],
+      ecosystemQueries: ["男士发型", "短发发型", "刘海翻车", "烫发避坑"],
+      broadQueries: ["染发烫发价格踩雷", "换发型前后对比", "发型师吐槽"],
+      requiredAnchorTerms: ["理发", "剪发", "发型"],
+      normalAnchorTerms: ["美发", "造型", "发型设计"],
+      strictAcceptTerms: ["理发店", "剪头发", "剪发", "发型师", "发型设计"],
+      normalAcceptTerms: ["染发", "烫发", "刘海", "短发", "男士发型"],
+      rejectTerms: [],
+      personaGuardTerms: [],
+      domainSummary: "理发与美发行业",
+    } as any;
+
+    const queries = resolveSentimentHotManualQueryKeywords(["理发店趣事", "顾客互动"], strategy, "strict");
+
+    expect(queries).toContain("染发烫发价格踩雷");
+    expect(queries).toContain("男士发型");
+    expect(queries).toContain("理发店趣事");
+    expect(queries.indexOf("染发烫发价格踩雷")).toBeLessThan(queries.indexOf("理发店趣事"));
   });
 
   it("clamps custom freshness to fifteen days", () => {

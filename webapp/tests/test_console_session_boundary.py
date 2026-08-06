@@ -1404,16 +1404,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             self.skipTest("npx is not available")
 
         result = subprocess.run(
-            [npx, "tsx", "scripts/skills/persona-hot-workflow.ts"],
+            [npx, "tsx", "scripts/skills/persona-hot-workflow.ts", '{"action":"__syntax_check__"}'],
             cwd=REPO_ROOT / "tool_r18",
-            input="",
             text=True,
             capture_output=True,
             timeout=30,
         )
 
         self.assertEqual(result.returncode, 1)
-        self.assertIn('"missing JSON input"', result.stdout)
+        self.assertIn('"unsupported action"', result.stdout)
         self.assertNotIn("TransformError", result.stderr + result.stdout)
 
     def test_custom_dropdowns_close_when_clicking_outside(self):
