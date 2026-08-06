@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import {
   generatePersonaImage,
   generateReferenceSheet,
@@ -39,6 +41,121 @@ function readPositiveIntEnv(name: string, fallback: number): number {
 
 const CLOSED_IMAGE_TIMEOUT_MS = readPositiveIntEnv("PERSONA_IMAGE_CLOSED_TIMEOUT_MS", 180_000);
 const GENERATED_DATA_URL_TARGET_BYTES = readPositiveIntEnv("PERSONA_IMAGE_DATA_URL_TARGET_BYTES", 512 * 1024);
+const REFERENCE_FETCH_TIMEOUT_MS = readPositiveIntEnv("PERSONA_IMAGE_REFERENCE_FETCH_TIMEOUT_MS", 15_000);
+const REFERENCE_FETCH_MAX_BYTES = readPositiveIntEnv("PERSONA_IMAGE_REFERENCE_MAX_BYTES", 15 * 1024 * 1024);
+
+function isPrivateAddress(address: string): boolean {
+  const normalized = address.trim().toLowerCase();
+  if (isIP(normalized) === 4) {
+    const octets = normalized.split(".").map(Number);
+    return octets[0] === 10
+      || octets[0] === 127
+      || (octets[0] === 169 && octets[1] === 254)
+      || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+      || (octets[0] === 192 && octets[1] === 168)
+      || octets[0] === 0;
+  }
+  return normalized === "::1"
+    || normalized === "::"
+    || normalized.startsWith("fc")
+    || normalized.startsWith("fd")
+    || normalized.startsWith("fe80:");
+}
+
+async function fetchReferenceBytes(url: string): Promise<{ bytes: Buffer; mimeType: string } | null> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+    if (!/^https?:$/i.test(parsed.protocol)) return null;
+    const addresses = isIP(parsed.hostname)
+      ? [{ address: parsed.hostname }]
+      : await lookup(parsed.hostname, { all: true, verbatim: true });
+    if (!addresses.length || addresses.some(({ address }) => isPrivateAddress(address))) return null;
+  } catch {
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REFERENCE_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { redirect: "error", signal: controller.signal });
+    if (!response.ok) return null;
+    const declaredLength = Number(response.headers.get("content-length") || 0);
+    if (declaredLength > REFERENCE_FETCH_MAX_BYTES) return null;
+    const reader = response.body?.getReader();
+    if (!reader) {
+      const bytes = Buffer.from(await response.arrayBuffer());
+      return bytes.length <= REFERENCE_FETCH_MAX_BYTES
+        ? { bytes, mimeType: (response.headers.get("content-type") || "image/jpeg").split(";")[0] }
+        : null;
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      total += chunk.length;
+      if (total > REFERENCE_FETCH_MAX_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(chunk);
+    }
+    return {
+      bytes: Buffer.concat(chunks),
+      mimeType: (response.headers.get("content-type") || "image/jpeg").split(";")[0],
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function resolveClosedModelReference(
+  source: unknown,
+  fallbackMimeType?: string,
+): Promise<{ base64: string; mimeType: string } | null> {
+  const value = String(source || "").trim();
+  if (!value) return null;
+  const dataMatch = value.match(/^data:([^;]+);base64,(.*)$/s);
+  if (dataMatch) {
+    return {
+      base64: dataMatch[2],
+      mimeType: dataMatch[1] || fallbackMimeType || "image/jpeg",
+    };
+  }
+  if (/^https?:\/\//i.test(value)) {
+    const fetched = await fetchReferenceBytes(value);
+    if (!fetched) return null;
+    return {
+      base64: fetched.bytes.toString("base64"),
+      mimeType: fallbackMimeType || fetched.mimeType,
+    };
+  }
+  try {
+    const bytes = fs.readFileSync(value);
+    const inferredMimeType = /\.png$/i.test(value)
+      ? "image/png"
+      : /\.webp$/i.test(value)
+        ? "image/webp"
+        : "image/jpeg";
+    return {
+      base64: bytes.toString("base64"),
+      mimeType: fallbackMimeType || inferredMimeType,
+    };
+  } catch {
+    // The value may already be raw base64 when it does not resolve to a local file.
+  }
+  if (/^[A-Za-z0-9+/=\s]+$/.test(value)) {
+    return {
+      base64: value.replace(/\s+/g, ""),
+      mimeType: fallbackMimeType || "image/jpeg",
+    };
+  }
+  return null;
+}
 
 function dataUrlBytes(url?: string): number | undefined {
   if (!url?.startsWith("data:")) return undefined;
@@ -133,6 +250,16 @@ const unsupportedImageApi = {
         },
       };
     }
+    const rawReference = payload.avatarSource || payload.avatarBase64;
+    const closedReference = await resolveClosedModelReference(rawReference, payload.avatarMimeType);
+    if (rawReference && !closedReference) {
+      return {
+        ok: false,
+        error: "参考图无法读取",
+        retryable: false,
+        reasonCode: "reference_image_unavailable",
+      };
+    }
     const models = uniqueModels([
       payload.model,
       ...configuredImageModels({ configPath: payload.configPath, dataDir: payload.dataDir }),
@@ -147,8 +274,8 @@ const unsupportedImageApi = {
         prompt: payload.prompt,
         model,
         aspectRatio: payload.aspectRatio,
-        avatarBase64: payload.avatarBase64,
-        avatarMimeType: payload.avatarMimeType,
+        avatarBase64: closedReference?.base64 || payload.avatarBase64,
+        avatarMimeType: closedReference?.mimeType || payload.avatarMimeType,
         timeoutMs: payload.timeoutMs || CLOSED_IMAGE_TIMEOUT_MS,
         configPath: payload.configPath,
         dataDir: payload.dataDir,

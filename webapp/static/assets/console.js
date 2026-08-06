@@ -3634,7 +3634,7 @@ function personaFormState(personaId) {
       generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotSearchMode: "strict", hotFreshnessMode: "default", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
       draft: defaultPersonaDraftForm(),
       media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", resolution: "720p", duration: 2, replaceExisting: false },
-      images: { prompt: "", aspectRatio: "1:1" },
+      images: { prompt: "", aspectRatio: "1:1", referenceImageId: "" },
     };
   }
   if (!state.personaForms[key]) {
@@ -3685,6 +3685,7 @@ function personaFormState(personaId) {
       images: {
         prompt: "",
         aspectRatio: "1:1",
+        referenceImageId: "",
       },
     };
   }
@@ -7774,10 +7775,12 @@ function registerMediaPreviewGroup(items) {
   }
   const id = `media-group-${++state.mediaPreviewSeq}`;
   state.mediaPreviewGroups[id] = rows.map((item) => ({
+    id: String(item.id || item.imageId || "").trim(),
     previewUrl: adminWorkspaceUrl(item.previewUrl),
     originalUrl: adminWorkspaceUrl(item.originalUrl || item.original_url || item.previewUrl),
     type: String(item.type || "image").trim() || "image",
     label: mediaPreviewLabel(item.label, mediaKindLabel(item.type)),
+    referenceEligible: item.referenceEligible === true,
   }));
   return id;
 }
@@ -8152,6 +8155,7 @@ function ensurePersonaMediaLightbox() {
       </div>
       <div class="persona-media-lightbox-body" id="personaMediaLightboxBody"></div>
       <div class="persona-media-lightbox-actions">
+        <button type="button" class="persona-media-lightbox-icon-button" id="personaMediaLightboxAddReference" data-media-lightbox-add-reference title="添加为参考图" aria-label="添加为参考图" hidden>${renderPlusIcon()}</button>
         <button type="button" class="persona-media-lightbox-icon-button" id="personaMediaReset" data-media-lightbox-reset title="复位媒体" aria-label="复位媒体">${renderUndoIcon()}</button>
         <button type="button" class="persona-media-lightbox-icon-button" id="personaMediaPrev" data-media-lightbox-prev title="上一张" aria-label="上一张">${renderLightboxArrowIcon("left")}</button>
         <button type="button" class="persona-media-lightbox-icon-button" id="personaMediaNext" data-media-lightbox-next title="下一张" aria-label="下一张">${renderLightboxArrowIcon("right")}</button>
@@ -8164,6 +8168,7 @@ function ensurePersonaMediaLightbox() {
     if (event.target.closest("[data-media-lightbox-reset]")) resetPersonaMediaLightboxTransform();
     if (event.target.closest("[data-media-lightbox-prev]")) movePersonaMediaLightbox(-1);
     if (event.target.closest("[data-media-lightbox-next]")) movePersonaMediaLightbox(1);
+    if (event.target.closest("[data-media-lightbox-add-reference]")) addPersonaMediaLightboxReference();
   });
   node.addEventListener("wheel", handlePersonaMediaLightboxWheel, { passive: false });
   node.addEventListener("pointerdown", handlePersonaMediaLightboxPointerDown);
@@ -8256,6 +8261,28 @@ function syncPersonaMediaLightboxNav(total, index) {
   if (prev) prev.disabled = total <= 1 || index <= 0;
   if (next) next.disabled = total <= 1 || index >= total - 1;
   if (reset) reset.disabled = !mediaLightboxImage();
+  const addReference = $("personaMediaLightboxAddReference");
+  const groupId = String(state.mediaLightbox.groupId || "");
+  const item = (state.mediaPreviewGroups[groupId] || [])[index];
+  const canAddReference = Boolean(item?.referenceEligible && item?.id && item.type === "image" && selectedPersona());
+  if (addReference) {
+    addReference.hidden = !canAddReference;
+    addReference.disabled = !canAddReference;
+  }
+}
+
+function addPersonaMediaLightboxReference() {
+  const persona = selectedPersona();
+  const groupId = String(state.mediaLightbox.groupId || "");
+  const item = (state.mediaPreviewGroups[groupId] || [])[Number(state.mediaLightbox.index || 0)];
+  if (!persona || !item?.referenceEligible || !item.id) return;
+  const form = personaFormState(persona.id);
+  if (!form.images || typeof form.images !== "object") form.images = { prompt: "", aspectRatio: "1:1" };
+  form.images.referenceImageId = String(item.id).trim();
+  closePersonaMediaLightbox();
+  renderPersonaDetail();
+  renderConfirmSummary();
+  showMsg("commandMsg", "已添加参考图，可在补充提示词中描述要修改的部分。", true);
 }
 
 function renderPersonaMediaLightboxCurrent() {
@@ -9703,6 +9730,32 @@ function syncPersonaImagePromptState(input) {
   button.textContent = value.trim() ? `根据提示词${baseLabel}` : baseLabel;
 }
 
+function renderPersonaImagePromptField(imageForm, libraryItems) {
+  const referenceId = String(imageForm?.referenceImageId || "").trim();
+  const reference = Array.isArray(libraryItems)
+    ? libraryItems.find((item) => String(item?.id || "").trim() === referenceId)
+    : null;
+  const referenceUrl = reference
+    ? adminWorkspaceUrl(String(reference.preview_url || reference.image_url || "").trim())
+    : "";
+  const referenceCard = referenceUrl
+    ? `<div class="persona-image-reference-preview">
+        <img src="${esc(referenceUrl)}" alt="已选择的参考图" loading="lazy" decoding="async" />
+        <button type="button" class="persona-image-reference-clear" data-persona-clear-image-reference title="移除参考图" aria-label="移除参考图">${renderCloseIcon()}</button>
+      </div>`
+    : `<div class="persona-image-reference-preview persona-image-reference-preview--empty" aria-label="未选择参考图">
+        ${renderPlusIcon()}<small>未选择参考图</small>
+      </div>`;
+  return `
+    <div class="persona-image-prompt-field">
+      <span class="persona-image-prompt-label">补充提示词（可选）</span>
+      <span class="persona-image-reference-prompt-row">
+        ${referenceCard}
+        <textarea rows="3" data-persona-image-prompt placeholder="留空按人设默认生成；选择参考图后，填写要修改的部分。">${esc(imageForm?.prompt || "")}</textarea>
+      </span>
+    </div>`;
+}
+
 function renderPersonaImagePanel(persona, { embedded = false } = {}) {
   const imageRunState = personaGenerateRunState(persona.id);
   const imageBusy = isActionLocked("persona", persona.id, "image_generate")
@@ -9725,10 +9778,7 @@ function renderPersonaImagePanel(persona, { embedded = false } = {}) {
   const generateLabel = !imageBusy && String(imageForm.prompt || "").trim()
     ? `根据提示词${baseGenerateLabel}`
     : baseGenerateLabel;
-  const promptField = `
-        <label class="persona-image-prompt-field">补充提示词（可选）
-          <textarea rows="3" data-persona-image-prompt placeholder="留空按人设默认生成；填写后按提示词生成。">${esc(imageForm.prompt || "")}</textarea>
-        </label>`;
+  const promptField = renderPersonaImagePromptField(imageForm, libraryItems);
   if (!hasImages) {
     return `
       <div class="persona-profile-image-panel persona-profile-section--empty-images ${embedded ? "is-embedded" : ""}" id="personaImageGenerationSection" data-persona-image-generation-section>
@@ -14994,6 +15044,16 @@ async function openPersonaProfileEditorModalWithOptions({ immediate = false } = 
         renderConfirmSummary();
         showMsg("commandMsg", "推文风格已清空。", true);
       }, "style");
+      return;
+    }
+    if (event.target.closest("[data-persona-clear-image-reference]")) {
+      const persona = selectedPersona();
+      if (persona) {
+        const form = personaFormState(persona.id);
+        if (form.images && typeof form.images === "object") form.images.referenceImageId = "";
+        renderPersonaDetail();
+        renderConfirmSummary();
+      }
       return;
     }
     if (event.target.closest("[data-persona-generate-image]")) {
@@ -20420,6 +20480,7 @@ async function submitPersonaImageGeneration() {
     body.append("params_json", JSON.stringify({
       related_persona_id: persona.id,
       prompt: String(personaFormState(persona.id).images?.prompt || "").trim(),
+      reference_image_id: String(personaFormState(persona.id).images?.referenceImageId || "").trim() || null,
       aspect_ratio: "1:1",
       mode: "person",
     }));
@@ -20577,6 +20638,10 @@ async function deletePersonaLibraryImage(imageId) {
     method: "DELETE",
   });
   state.personaImageLibraries[String(persona.id)] = result;
+  const imageForm = personaFormState(persona.id).images;
+  if (imageForm && String(imageForm.referenceImageId || "").trim() === cleanImageId) {
+    imageForm.referenceImageId = "";
+  }
   await Promise.all([
     loadPersonas(),
     loadPersonaProfile(persona.id, { force: true }).catch(() => {}),
@@ -22640,6 +22705,7 @@ function renderPersonaImageLibraryGrid(library) {
       label: String(item.prompt || item.created_at || "人设图").trim() || "人设图",
       isReference: Boolean(item.is_reference || item.isReference),
       createdAt: String(item.created_at || "").trim(),
+      referenceEligible: true,
     }))
     .filter((item) => item.previewUrl);
   if (!previewable.length) {

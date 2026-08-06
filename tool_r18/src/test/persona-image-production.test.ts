@@ -64,7 +64,8 @@ describe("persona image production", () => {
     expect(result.ok).toBe(true);
     expect(calls[0].prompt).toContain("球场训练");
     expect(calls[0].prompt).toContain("盖帽");
-    expect(calls[0].prompt).toContain("The attached persona reference image is the identity anchor");
+    expect(calls[0].prompt).toContain("Use the attached persona reference image as the source");
+    expect(calls[0].prompt).toContain("unless the current request explicitly asks to change the face or identity");
     expect(calls[0].prompt).toContain("篮球大佬");
     expect(calls[0].prompt).not.toContain("adult woman");
     expect(calls[0].prompt).not.toContain("adult lifestyle social-photo leaning");
@@ -246,6 +247,32 @@ describe("persona image production", () => {
 
     expect(result).toMatchObject({ ok: true, mode: "closed-person" });
     expect(calls[0].avatarBase64).toBe("cmVmZXJlbmNl");
+  });
+
+  it("keeps an explicitly selected reference image for scene edits", async () => {
+    const calls: any[] = [];
+    const imageAPI = {
+      generate: async (payload: any) => {
+        calls.push(payload);
+        return { ok: true, url: "https://example.com/edited-scene.png" };
+      },
+    };
+
+    const result = await generatePersonaImage(
+      imageAPI,
+      nonWorkflowSetup(),
+      "只修改背景为海边黄昏，不要出现人物，只保留海面、天空和原图构图",
+      "auto",
+      "gemini-3.1-flash-image-preview",
+      "1:1",
+      "none",
+      "data:image/png;base64,c2VsZWN0ZWQ=",
+    );
+
+    expect(result).toMatchObject({ ok: true, mode: "closed-scene" });
+    expect(calls[0].avatarBase64).toBe("c2VsZWN0ZWQ=");
+    expect(calls[0].runningHubNewPersonaMode).toBe("image-to-image");
+    expect(calls[0].prompt).toContain("unless the current request explicitly asks to change the face or identity");
   });
 
   it("allows non-workflow POV scene images without a reference and constrains visible hands", async () => {

@@ -1591,15 +1591,37 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         panel_start = self.console_script.index("function renderPersonaImagePanel(persona")
         panel_end = self.console_script.index("\nfunction renderPersonaLinkSettingsContent", panel_start)
         panel = self.console_script[panel_start:panel_end]
+        prompt_start = self.console_script.index("function renderPersonaImagePromptField(")
+        prompt_end = self.console_script.index("\nfunction renderPersonaImagePanel(", prompt_start)
+        prompt_field = self.console_script[prompt_start:prompt_end]
         submit_start = self.console_script.index("async function submitPersonaImageGeneration()")
         submit_end = self.console_script.index("\nasync function applyPersonaReferenceImage", submit_start)
         submit = self.console_script[submit_start:submit_end]
 
-        self.assertIn('data-persona-image-prompt', panel)
+        self.assertIn('data-persona-image-prompt', prompt_field)
         self.assertIn('根据提示词${baseGenerateLabel}', panel)
         self.assertIn('prompt: String(personaFormState(persona.id).images?.prompt || "").trim()', submit)
         self.assertIn('function syncPersonaImagePromptState(input)', self.console_script)
         self.assertIn('data-persona-image-generate-label', panel)
+
+    def test_persona_image_prompt_supports_non_destructive_reference_editing(self):
+        panel_start = self.console_script.index("function renderPersonaImagePromptField(")
+        panel_end = self.console_script.index("\nfunction renderPersonaImagePanel(", panel_start)
+        prompt_field = self.console_script[panel_start:panel_end]
+        lightbox_start = self.console_script.index("function addPersonaMediaLightboxReference()")
+        lightbox_end = self.console_script.index("\nfunction renderPersonaMediaLightboxCurrent", lightbox_start)
+        lightbox = self.console_script[lightbox_start:lightbox_end]
+        submit_start = self.console_script.index("async function submitPersonaImageGeneration()")
+        submit_end = self.console_script.index("\nasync function applyPersonaReferenceImage", submit_start)
+        submit = self.console_script[submit_start:submit_end]
+
+        self.assertIn("persona-image-reference-prompt-row", prompt_field)
+        self.assertIn("data-persona-clear-image-reference", prompt_field)
+        self.assertIn("referenceImageId", lightbox)
+        self.assertIn("renderConfirmSummary()", lightbox)
+        self.assertIn("reference_image_id", submit)
+        self.assertIn("data-media-lightbox-add-reference", self.console_script)
+        self.assertIn(".persona-image-reference-prompt-row {", self.styles)
 
     def test_persona_image_entry_opens_before_background_refresh(self):
         editor_start = self.console_script.index("async function openPersonaProfileEditorModalWithOptions(")

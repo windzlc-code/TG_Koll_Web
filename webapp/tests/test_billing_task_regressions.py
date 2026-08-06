@@ -49,6 +49,39 @@ class BillingTaskRegressionTests(unittest.TestCase):
 
         self.assertEqual(runner.call_args.kwargs["prompt"], "穿深色西装，办公室暖光，半身构图")
 
+    def test_persona_image_task_forwards_reference_image_without_rebuilding_sheet(self):
+        result = {
+            "generation": {"image_url": "/uploads/persona-edited.png"},
+            "saved_item_id": "saved-edited-1",
+        }
+        with mock.patch.object(server, "_run_persona_image_cli_for_web", return_value=result) as runner:
+            server._run_persona_image_task(
+                "task-edited-1",
+                {
+                    "related_persona_id": "persona-1",
+                    "prompt": "保留人脸，换成户外阳光场景",
+                    "reference_image_id": "persona-image-1",
+                },
+            )
+
+        self.assertEqual(runner.call_args.kwargs["reference_image_id"], "persona-image-1")
+        self.assertFalse(runner.call_args.kwargs["generate_reference_sheet"])
+
+    def test_persona_library_reference_resolves_selected_local_file(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+            reference_path = Path(tmpdir) / "reference.png"
+            reference_path.write_bytes(b"reference")
+            resolved = server._persona_library_image_input_for_cli(
+                {
+                    "personaImageLibrary": [
+                        {"id": "persona-image-1", "imageUrl": str(reference_path)},
+                    ],
+                },
+                "persona-image-1",
+            )
+
+        self.assertEqual(resolved, str(reference_path))
+
     def test_startup_releases_only_held_social_reservation_without_task(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
             db_path = Path(tmpdir) / "app.db"

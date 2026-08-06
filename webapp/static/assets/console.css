@@ -10551,6 +10551,75 @@ body.persona-touch-dragging .persona-list-card:active {
   resize: vertical;
 }
 
+.persona-image-reference-prompt-row {
+  display: grid;
+  grid-template-columns: minmax(104px, 32%) minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.persona-image-prompt-label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 700;
+}
+
+.persona-image-reference-preview {
+  position: relative;
+  display: grid;
+  min-height: 76px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+  color: var(--muted);
+}
+
+.persona-image-reference-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 76px;
+  object-fit: cover;
+}
+
+.persona-image-reference-preview--empty {
+  border-style: dashed;
+  gap: 4px;
+  padding: 8px;
+  text-align: center;
+}
+
+.persona-image-reference-preview--empty svg {
+  width: 22px;
+  height: 22px;
+}
+
+.persona-image-reference-preview--empty small {
+  font-size: 12px;
+}
+
+.persona-image-reference-clear {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--danger);
+}
+
+.persona-image-reference-clear svg {
+  width: 16px;
+  height: 16px;
+}
+
 .persona-summary-meta .persona-generate-status-text {
   display: inline-flex;
   align-items: baseline;
@@ -14150,6 +14219,10 @@ body.persona-media-sorting {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.persona-media-lightbox-actions [hidden] {
+  display: none;
 }
 
 .persona-media-lightbox-frame {
