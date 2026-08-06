@@ -20,7 +20,7 @@ from .contracts import VideoDependencyError, VideoTaskCancelled, VideoTaskContex
 from . import digital_human_audio_postprocess, digital_human_image_quality, digital_human_join_cleanup, digital_human_pipeline, digital_human_subtitles, digital_human_views, ecommerce_ad_prompting, ecommerce_animation_redraw, ecommerce_material_intelligence, ecommerce_reference_video, ecommerce_seeding_dynamic, ecommerce_seeding_renderer, ecommerce_segment_audio, ecommerce_segment_continuity, image_generate_dispatch, image_mode_prompts, language_voice_pipeline, replacement_pipeline, runninghub_image_models
 from .source import create_video as source_create_video
 from .source import commerce_video_generator, image_model_api, runninghub_common
-from .video_language_timing import build_atempo_chain, build_timed_audio_layout, normalize_chinese_tts_text
+from .video_language_timing import build_atempo_chain, build_timed_audio_layout, normalize_chinese_tts_text, target_lines_for_segments
 
 
 DIGITAL_HUMAN_VIDEO_APP_ID = "2068273204367544322"
@@ -4042,6 +4042,12 @@ class ArchivedSourceBackend:
                     if isinstance(script_segments, list) and script_segments:
                         payload["script_segments"] = script_segments
             if isinstance(script_segments, list) and script_segments:
+                timed_script_segments = [dict(item) if isinstance(item, dict) else item for item in script_segments]
+                if target_script:
+                    target_lines = target_lines_for_segments(target_script, expected_count=len(timed_script_segments))
+                    for index, line in enumerate(target_lines):
+                        if isinstance(timed_script_segments[index], dict):
+                            timed_script_segments[index]["text"] = line
                 voice_preparation = language_voice_pipeline.prepare_language_voice_settings(
                     payload,
                     context,
@@ -4051,7 +4057,7 @@ class ArchivedSourceBackend:
                 payload["video_default_voice_id"] = voice_settings.minimax_voice_id
                 payload["minimax_tts_voice_id"] = voice_settings.minimax_voice_id
                 target_audio, timed_audio_segments, aligned_total_seconds = self._generate_timed_tts_audio(
-                    segments=script_segments,
+                    segments=timed_script_segments,
                     source_duration=source_duration,
                     payload=payload,
                     context=context,

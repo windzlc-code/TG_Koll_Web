@@ -11,12 +11,13 @@ from video_core.video_language_timing import (
     build_atempo_chain,
     build_timed_audio_layout,
     normalize_chinese_tts_text,
+    target_lines_for_segments,
 )
 
 
 class VideoLanguageTimingParityTests(unittest.TestCase):
     def test_chinese_tts_normalization_matches_source_rules(self):
-        normalized = normalize_chinese_tts_text("臺灣 總價 2,500,000元，管理費 2%")
+        normalized = normalize_chinese_tts_text("臺灣 總價 2,500,000 元，管理費 2%")
 
         self.assertIn("台湾", normalized)
         self.assertIn("总价", normalized)
@@ -52,6 +53,15 @@ class VideoLanguageTimingParityTests(unittest.TestCase):
         self.assertEqual(rows[1]["start_seconds"], 1.0)
         self.assertEqual(total, 2.0)
         self.assertEqual(build_atempo_chain(rows[0]["playback_tempo"]), "atempo=1.200000")
+
+    def test_edited_target_script_maps_back_to_timestamp_rows(self):
+        self.assertEqual(
+            target_lines_for_segments("[00:00.000-00:01.000] New first\nNew second", expected_count=2),
+            ["New first", "New second"],
+        )
+        self.assertEqual(target_lines_for_segments("one\ntwo\nthree", expected_count=2), ["one", "two three"])
+        with self.assertRaisesRegex(RuntimeError, "句数"):
+            target_lines_for_segments("only one", expected_count=2)
 
     def test_large_overrun_shifts_following_segments_without_overlap(self):
         rows, total = build_timed_audio_layout(

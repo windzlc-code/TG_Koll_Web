@@ -180,7 +180,7 @@ def _normalize_chinese_tts_numbers(text: str) -> str:
 
     normalized = re.sub(r"(?P<number>-?\d[\d,]*(?:\.\d+)?)\s*%", replace_percent, normalized)
     return re.sub(
-        r"(?P<number>-?\d[\d,]*(?:\.\d+)?)(?P<suffix>年|月|日|号|號|层|樓|楼|分钟|分|秒|米|平方米|平米|㎡|坪|户|套|层楼|日币|人民币|元|万|千|百|倍)?",
+        r"(?P<number>-?\d[\d,]*(?:\.\d+)?)\s*(?P<suffix>年|月|日|号|號|层|樓|楼|分钟|分|秒|米|平方米|平米|㎡|坪|户|套|层楼|日币|人民币|元|万|千|百|倍)?",
         replace_plain,
         normalized,
     )
@@ -212,6 +212,31 @@ def normalize_chinese_tts_text(text: str) -> str:
     return _restore_chinese_tts_pause_punctuation(
         _normalize_chinese_tts_numbers(_normalize_chinese_text_for_mandarin_tts(text))
     )
+
+
+def target_lines_for_segments(script_text: str, *, expected_count: int) -> list[str]:
+    """Map an edited target script back onto the source timestamp rows."""
+
+    expected = max(int(expected_count or 0), 0)
+    raw_lines = [str(line or "").strip() for line in str(script_text or "").splitlines() if str(line or "").strip()]
+    lines = [re.sub(r"^\s*\[[^\]]+\]\s*", "", line).strip() for line in raw_lines]
+    lines = [line for line in lines if line]
+    if expected <= 0:
+        return lines
+    if len(lines) == expected:
+        return lines
+    plain = re.sub(r"^\s*\[[^\]]+\]\s*", "", str(script_text or "").strip()).strip()
+    if expected == 1 and plain:
+        return [plain]
+    sentence_parts = [part.strip() for part in re.split(r"(?<=[。！？!?；;])\s*", plain) if part.strip()]
+    if len(sentence_parts) == expected:
+        return sentence_parts
+    if len(lines) > expected:
+        merged = lines[: expected - 1] + [" ".join(lines[expected - 1 :]).strip()]
+        if len(merged) == expected and all(merged):
+            return merged
+    actual = len(lines) or len(sentence_parts)
+    raise RuntimeError(f"翻译后的台词句数（{actual}）与原视频时间戳句数（{expected}）不一致，请检查原文断句后重试。")
 
 
 def source_max_playback_tempo_for_text(text: str) -> float:
@@ -311,4 +336,5 @@ __all__ = [
     "build_timed_audio_layout",
     "normalize_chinese_tts_text",
     "source_max_playback_tempo_for_text",
+    "target_lines_for_segments",
 ]
