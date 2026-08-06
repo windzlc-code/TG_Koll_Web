@@ -6846,8 +6846,6 @@ function setView(view) {
   };
   $("viewTitle").textContent = titles[view] || "控制台";
   syncMobilePageToolbar();
-  const personaTopbarActions = $("personaDashboardTopbarActions");
-  if (personaTopbarActions) personaTopbarActions.hidden = view !== "persona_dashboard";
   updateWorkspaceFlow();
   updateVideoWorkspaceFlow();
   if ($("moduleMenu")) syncModuleMenuState();
@@ -7240,6 +7238,7 @@ function syncMobilePageToolbar() {
   const navToggle = $("mobileNavToggle");
   const title = $("mobilePageToolbarTitle");
   const icon = $("mobilePageToolbarIcon");
+  const personaDashboardActions = $("personaDashboardToolbarActions");
   const pageBackTarget = mobilePageBackTarget();
   const showBrowserBack = pageBackTarget === "live-browser";
   const showPageBack = Boolean(pageBackTarget);
@@ -7252,6 +7251,7 @@ function syncMobilePageToolbar() {
     setConsoleUiAttribute(navToggle, "aria-label", navToggleLabel);
     setConsoleUiAttribute(navToggle, "title", navToggleLabel);
   }
+  if (personaDashboardActions) personaDashboardActions.hidden = state.view !== "persona_dashboard";
   if (!title || !icon) return;
 
   const descriptor = mobilePageToolbarDescriptor();

@@ -31,12 +31,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
         self.assertNotIn('<header class="console-topbar">', self.markup)
         self.assertIn('id="viewTitle" class="sr-only"', self.markup)
-        self.assertIn('id="personaDashboardTopbarActions"', dashboard)
-        self.assertIn('id="btnPersonaDashboardRefresh"', dashboard)
-        self.assertIn('id="btnPersonaDashboardRefreshAll"', dashboard)
+        self.assertIn('id="personaDashboardToolbarActions"', self.markup)
+        self.assertIn('id="btnPersonaDashboardSync"', self.markup)
+        self.assertNotIn('id="btnPersonaDashboardRefresh"', dashboard)
+        self.assertNotIn('id="btnPersonaDashboardRefreshAll"', dashboard)
         self.assertNotIn('class="persona-dashboard-hero"', dashboard)
         self.assertIn(
-            'personaTopbarActions.hidden = view !== "persona_dashboard";',
+            'personaDashboardActions.hidden = state.view !== "persona_dashboard";',
             self.console_script,
         )
 
@@ -2184,20 +2185,24 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("-webkit-line-clamp: 2;", self.styles)
 
     def test_refresh_actions_have_distinct_labels_and_behaviors(self):
-        self.assertIn(">刷新显示</button>", self.markup)
-        self.assertIn(">同步全部数据</button>", self.markup)
+        self.assertIn('class="persona-dashboard-toolbar-refresh"', self.markup)
+        self.assertIn('class="ui-refresh-icon"', self.markup)
+        self.assertIn('id="personaDashboardSyncStatus"', self.markup)
+        self.assertNotIn("刷新显示", self.markup)
         self.assertIn(
             'personaDashboardRoot?.querySelector(`#${id}`) || document.getElementById(id)',
             self.dashboard_script,
         )
         self.assertIn(
-            'refresh.addEventListener("click", () => pdLoadDashboard())',
+            'refresh.addEventListener("click", () => pdStartRefresh(""))',
             self.dashboard_script,
         )
         self.assertIn(
-            'refreshAll.addEventListener("click", () => pdStartRefresh(""))',
+            'function pdSetRefreshControlState(status = "idle", progress = 0)',
             self.dashboard_script,
         )
+        self.assertIn('button.classList.toggle("is-loading", active);', self.dashboard_script)
+        self.assertIn('.persona-dashboard-toolbar-refresh.is-loading .ui-refresh-icon', self.styles)
 
     def test_dashboard_layout_uses_scoped_console_rules(self):
         required_rules = (

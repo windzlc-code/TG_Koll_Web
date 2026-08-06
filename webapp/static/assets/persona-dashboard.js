@@ -1311,6 +1311,29 @@ function pdSetMsg(text, type = "ok") {
   msg.className = text ? `msg ${type}` : "msg";
 }
 
+function pdSetRefreshControlState(status = "idle", progress = 0) {
+  const button = pdEl("btnPersonaDashboardSync");
+  const label = pdEl("personaDashboardSyncStatus");
+  if (!button) return;
+  const normalized = String(status || "idle").trim().toLowerCase();
+  const active = normalized === "queued" || normalized === "running";
+  const done = normalized === "done" || normalized === "success" || normalized === "completed";
+  const failed = normalized === "failed" || normalized === "error";
+  const value = Math.max(0, Math.min(100, Number(progress) || 0));
+  button.disabled = active;
+  button.classList.toggle("is-loading", active);
+  button.classList.toggle("is-complete", done);
+  button.classList.toggle("is-failed", failed);
+  button.dataset.progress = String(value);
+  button.style.setProperty("--sync-progress", `${value}%`);
+  button.setAttribute("aria-busy", active ? "true" : "false");
+  const text = active ? `同步 ${value}%` : (done ? "完成" : (failed ? "失败" : "同步"));
+  if (label) label.textContent = text;
+  const title = active ? `同步中 ${value}%` : (done ? "同步完成" : (failed ? "同步失败，点击重试" : "同步全部数据"));
+  button.title = title;
+  button.setAttribute("aria-label", title);
+}
+
 function pdDashboardViewCacheIsFresh() {
   return Boolean(
     personaDashboardData
@@ -1382,15 +1405,19 @@ async function pdDeletePost(persona, postKey) {
 }
 
 async function pdStartRefresh(archiveId, message) {
+  if (personaDashboardRefreshTask) return;
+  pdSetRefreshControlState("queued", 0);
   try {
-    pdSetMsg(message || (archiveId ? "已请求刷新当前人设..." : "已请求全量刷新..."), "ok");
+    pdSetMsg(message || (archiveId ? "同步当前人设" : "同步全部数据"), "ok");
     const task = await pdApi("/api/persona_dashboard/refresh", {
       method: "POST",
       body: { archive_id: archiveId || "" },
     });
     personaDashboardRefreshTask = task.id;
+    pdSetRefreshControlState("queued", Number(task.progress || 0));
     pdPollRefresh(task.id);
   } catch (err) {
+    pdSetRefreshControlState("failed", 0);
     pdSetMsg(String((err && (err.detail || err.message)) || err || "启动刷新失败"), "err");
   }
 }
@@ -1399,24 +1426,24 @@ async function pdPollRefresh(taskId) {
   if (!taskId || taskId !== personaDashboardRefreshTask) return;
   try {
     const task = await pdApi(`/api/persona_dashboard/refresh/${encodeURIComponent(taskId)}`);
-    const status = pdLabel(task.status);
     const progress = Number(task.progress || 0);
-    const step = task.step ? `步骤：${task.step} · ` : "";
-    const elapsed = task.elapsed_seconds ? ` · 已执行 ${task.elapsed_seconds} 秒` : "";
-    pdSetMsg(`刷新任务：${status} · ${step}进度 ${progress}%${elapsed}。${task.message || ""}`, task.status === "failed" ? "err" : "ok");
-    if (["queued", "running"].includes(String(task.status))) {
+    pdSetRefreshControlState(task.status, progress);
+    const running = ["queued", "running"].includes(String(task.status));
+    pdSetMsg(running ? `同步中 ${progress}%` : (task.status === "failed" ? "同步失败" : "同步完成"), task.status === "failed" ? "err" : "ok");
+    if (running) {
       window.setTimeout(() => pdPollRefresh(taskId), 2500);
       return;
     }
     personaDashboardRefreshTask = "";
     await pdLoadDashboard();
     if (task.status === "failed") {
-      pdSetMsg(`刷新失败：${task.message || "请检查浏览器授权或账号绑定。"}`, "err");
+      pdSetMsg("同步失败，请稍后重试。", "err");
     } else {
-      pdSetMsg("刷新完成，数据已重新读取。", "ok");
+      pdSetMsg("同步完成。", "ok");
     }
   } catch (err) {
     personaDashboardRefreshTask = "";
+    pdSetRefreshControlState("failed", 0);
     pdSetMsg(String((err && (err.detail || err.message)) || err || "查询刷新状态失败"), "err");
   }
 }
@@ -1433,10 +1460,8 @@ function pdBindDashboard(root) {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") pdCloseDashboardPlatformPicker();
   });
-  const refresh = pdEl("btnPersonaDashboardRefresh");
-  const refreshAll = pdEl("btnPersonaDashboardRefreshAll");
-  if (refresh) refresh.addEventListener("click", () => pdLoadDashboard());
-  if (refreshAll) refreshAll.addEventListener("click", () => pdStartRefresh(""));
+  const refresh = pdEl("btnPersonaDashboardSync");
+  if (refresh) refresh.addEventListener("click", () => pdStartRefresh(""));
 }
 
 function pdMountDashboard(root) {

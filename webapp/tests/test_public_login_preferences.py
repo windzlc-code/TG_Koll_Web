@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 import time
 import unittest
@@ -358,6 +359,15 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn("window.VectoSiteNavigation?.openConsoleEntry", self.script)
         self.assertIn('openLogin(event)', self.script)
         self.assertEqual(page.count('id="loginModal"'), 1)
+
+    def test_home_workflow_cards_use_authenticated_console_entry(self):
+        page = (self.static_dir / "index.html").read_text(encoding="utf-8")
+        cards = re.findall(r'<a class="home-hero-card-shell"[^>]*>', page)
+        self.assertEqual(len(cards), 8)
+        self.assertTrue(
+            all("data-console-entry" in card for card in cards),
+            "homepage workflow cards must use the shared session-aware console entry",
+        )
 
     def test_admin_origin_is_preserved_and_server_validated_on_public_navigation(self):
         self.assertIn(
