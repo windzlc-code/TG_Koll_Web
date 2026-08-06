@@ -10493,6 +10493,16 @@ body.persona-touch-dragging .persona-list-card:active {
   justify-content: flex-start;
 }
 
+.persona-image-prompt-field {
+  display: grid;
+  gap: 6px;
+}
+
+.persona-image-prompt-field textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
 .persona-summary-meta .persona-generate-status-text {
   display: inline-flex;
   align-items: baseline;

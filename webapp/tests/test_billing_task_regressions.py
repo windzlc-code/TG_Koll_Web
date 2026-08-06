@@ -33,6 +33,22 @@ class BillingTaskRegressionTests(unittest.TestCase):
         self.assertEqual(output["image_url"], "/uploads/persona.png")
         self.assertEqual(output["image_count"], 1)
 
+    def test_persona_image_task_forwards_custom_prompt(self):
+        result = {
+            "generation": {"image_url": "/uploads/persona-prompt.png"},
+            "saved_item_id": "saved-prompt-1",
+        }
+        with mock.patch.object(server, "_run_persona_image_cli_for_web", return_value=result) as runner:
+            server._run_persona_image_task(
+                "task-prompt-1",
+                {
+                    "related_persona_id": "persona-1",
+                    "prompt": "穿深色西装，办公室暖光，半身构图",
+                },
+            )
+
+        self.assertEqual(runner.call_args.kwargs["prompt"], "穿深色西装，办公室暖光，半身构图")
+
     def test_startup_releases_only_held_social_reservation_without_task(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
             db_path = Path(tmpdir) / "app.db"

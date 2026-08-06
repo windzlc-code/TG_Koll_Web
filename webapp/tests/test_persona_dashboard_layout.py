@@ -1581,11 +1581,25 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('title: "还没有可用的人设图"', module)
         self.assertIn('confirmText: "生成人设图"', module)
         self.assertIn('cancelText: "暂不生成"', module)
-        self.assertIn("if (goToGeneration) await submitPersonaImageGeneration();", module)
+        self.assertIn("if (goToGeneration) await openPersonaImageGeneration(persona.id);", module)
         self.assertIn(
             "await loadPersonaImageLibrary(persona.id, { force: true, throwOnError: true });",
             module,
         )
+
+    def test_persona_image_prompt_uses_existing_generation_flow_and_updates_label(self):
+        panel_start = self.console_script.index("function renderPersonaImagePanel(persona")
+        panel_end = self.console_script.index("\nfunction renderPersonaLinkSettingsContent", panel_start)
+        panel = self.console_script[panel_start:panel_end]
+        submit_start = self.console_script.index("async function submitPersonaImageGeneration()")
+        submit_end = self.console_script.index("\nasync function applyPersonaReferenceImage", submit_start)
+        submit = self.console_script[submit_start:submit_end]
+
+        self.assertIn('data-persona-image-prompt', panel)
+        self.assertIn('根据提示词${baseGenerateLabel}', panel)
+        self.assertIn('prompt: String(personaFormState(persona.id).images?.prompt || "").trim()', submit)
+        self.assertIn('function syncPersonaImagePromptState(input)', self.console_script)
+        self.assertIn('data-persona-image-generate-label', panel)
 
     def test_avatar_crop_supports_touch_pinch_and_device_neutral_guidance(self):
         start = self.console_script.index("function personaAvatarCropModalHtml")

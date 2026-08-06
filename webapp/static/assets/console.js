@@ -4997,6 +4997,10 @@ function snapshotPersonaCurrentForm() {
   if ($("personaMediaResolution")) form.media.resolution = String($("personaMediaResolution")?.value || "720p");
   if ($("personaMediaDuration")) form.media.duration = Number($("personaMediaDuration")?.value || form.media.duration || 2);
   if ($("personaMediaReplaceExisting")) form.media.replaceExisting = Boolean($("personaMediaReplaceExisting")?.checked);
+  if (document.querySelector("[data-persona-image-prompt]")) {
+    if (!form.images || typeof form.images !== "object") form.images = { prompt: "", aspectRatio: "1:1" };
+    form.images.prompt = String(document.querySelector("[data-persona-image-prompt]")?.value || "");
+  }
   normalizePersonaMediaGenerationForm(form.media);
 }
 
@@ -9280,7 +9284,7 @@ async function openPersonaAvatarCropModal() {
       cancelText: "暂不生成",
       modalKey: "persona-avatar-image-missing",
     });
-    if (goToGeneration) await submitPersonaImageGeneration();
+    if (goToGeneration) await openPersonaImageGeneration(persona.id);
     return;
   }
   const existing = normalizePersonaAvatar({
@@ -9660,11 +9664,26 @@ function renderPersonaContentOverview(persona, account, profile) {
     </div>`;
 }
 
+function syncPersonaImagePromptState(input) {
+  const persona = selectedPersona();
+  if (!persona || !input) return;
+  const value = String(input.value || "");
+  const form = personaFormState(persona.id);
+  if (!form.images || typeof form.images !== "object") form.images = { prompt: "", aspectRatio: "1:1" };
+  form.images.prompt = value;
+  const button = input.closest("[data-persona-image-generation-section]")?.querySelector("[data-persona-generate-image]")
+    || document.querySelector("[data-persona-generate-image]");
+  if (!button || button.disabled) return;
+  const baseLabel = String(button.dataset.personaImageGenerateLabel || button.textContent || "").trim();
+  button.textContent = value.trim() ? `根据提示词${baseLabel}` : baseLabel;
+}
+
 function renderPersonaImagePanel(persona, { embedded = false } = {}) {
   const imageRunState = personaGenerateRunState(persona.id);
   const imageBusy = isActionLocked("persona", persona.id, "image_generate")
     || (String(imageRunState?.kind || "") === "persona_image" && String(imageRunState?.status || "") === "running");
   const imageBusyStartedAt = actionTaskStartedAt(imageRunState, "persona", persona.id, "image_generate");
+  const imageForm = personaFormState(persona.id).images || { prompt: "", aspectRatio: "1:1" };
   const library = personaImageLibraryState(persona.id);
   const libraryItems = Array.isArray(library?.items) ? library.items : [];
   const hasImages = libraryItems.length > 0;
@@ -9675,9 +9694,16 @@ function renderPersonaImagePanel(persona, { embedded = false } = {}) {
   const imageIntro = hasCurrentReference
     ? "当前已有可用人设图，重新生成会产出新图，原图库仍会保留。"
     : (hasImages ? "图库里已有历史图，可以先设为当前，也可以重新生成一张。" : "先生成一张人设图，生成后会进入图库。");
-  const generateLabel = imageBusy
+  const baseGenerateLabel = imageBusy
     ? "正在生成..."
     : (hasCurrentReference ? "重新生成人设图" : "生成人设图");
+  const generateLabel = !imageBusy && String(imageForm.prompt || "").trim()
+    ? `根据提示词${baseGenerateLabel}`
+    : baseGenerateLabel;
+  const promptField = `
+        <label class="persona-image-prompt-field">补充提示词（可选）
+          <textarea rows="3" data-persona-image-prompt placeholder="留空按人设默认生成；填写后按提示词生成。">${esc(imageForm.prompt || "")}</textarea>
+        </label>`;
   if (!hasImages) {
     return `
       <div class="persona-profile-image-panel persona-profile-section--empty-images ${embedded ? "is-embedded" : ""}" id="personaImageGenerationSection" data-persona-image-generation-section>
@@ -9685,8 +9711,9 @@ function renderPersonaImagePanel(persona, { embedded = false } = {}) {
           <strong>人设图</strong>
           <span class="persona-panel-intro">当前没有可用人设图，请先重新生成。</span>
         </div>
+        ${promptField}
         <div class="row-actions">
-          <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent("重新生成人设图", imageBusy, imageBusyStartedAt)}</button>
+          <button type="button" class="primary" data-persona-generate-image data-persona-image-generate-label="${esc(baseGenerateLabel)}" ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
           <button type="button" data-persona-upload-image-trigger>上传自定义人设图</button>
           <input id="personaImageUploadFile" type="file" accept=".png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.heic" data-persona-upload-image-file hidden />
         </div>
@@ -9698,8 +9725,9 @@ function renderPersonaImagePanel(persona, { embedded = false } = {}) {
         <strong>人设图</strong>
         <span class="persona-panel-intro">${esc(imageIntro)}</span>
       </div>
+      ${promptField}
       <div class="row-actions">
-        <button type="button" class="primary" data-persona-generate-image ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
+        <button type="button" class="primary" data-persona-generate-image data-persona-image-generate-label="${esc(baseGenerateLabel)}" ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
         <input id="personaImageUploadFile" type="file" accept=".png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.heic" data-persona-upload-image-file hidden />
       </div>
       <div class="persona-inline-panel persona-inline-panel--nested">
@@ -15003,6 +15031,9 @@ async function openPersonaProfileEditorModal() {
     if (event.target.closest("[data-persona-delete-preset]")) return run(() => deletePersonaPreset(), "links");
     if (event.target.closest("[data-persona-activate-preset]")) return run(() => activatePersonaPreset(), "links");
   });
+  modal?.addEventListener("input", (event) => {
+    if (event.target?.matches?.("[data-persona-image-prompt]")) syncPersonaImagePromptState(event.target);
+  });
   modal?.addEventListener("change", (event) => {
     const input = event.target?.matches?.("[data-persona-upload-image-file]") ? event.target : null;
     if (!input) return;
@@ -18555,8 +18586,8 @@ async function openPersonaImageGeneration(personaId) {
   }
   state.activeModule = "personas";
   await activateCreatedPersona(cleanPersonaId, { group: "settings", step: "profile" });
-  renderWorkspace();
-  scrollToPersonaImageGeneration();
+  await openPersonaProfileEditorModal();
+  renderPersonaProfileEditorModal("image");
 }
 
 async function createPersonaArchive() {
@@ -20263,6 +20294,7 @@ async function submitPersonaImageGeneration() {
     body.append("task_type", "persona_image");
     body.append("params_json", JSON.stringify({
       related_persona_id: persona.id,
+      prompt: String(personaFormState(persona.id).images?.prompt || "").trim(),
       aspect_ratio: "1:1",
       mode: "person",
     }));
@@ -30973,6 +31005,10 @@ function bindEvents() {
     }
   });
   $("moduleBody").addEventListener("input", (event) => {
+    if (event.target?.matches?.("[data-persona-image-prompt]")) {
+      syncPersonaImagePromptState(event.target);
+      return;
+    }
     if (["personaGenerateCount", "personaMediaImageCount"].includes(event.target?.id || "")) {
       snapshotPersonaCurrentForm();
       renderConfirmSummary();
