@@ -7258,7 +7258,9 @@ function syncMobilePageToolbar() {
     setConsoleUiAttribute(navToggle, "title", navToggleLabel);
   }
   if (videoButton) {
-    const showVideoButton = VIDEO_WORKBENCH_ENABLED && state.view === "tasks";
+    const showVideoButton = VIDEO_WORKBENCH_ENABLED
+      && state.view === "workspace"
+      && state.activeModule === "tweet_generation";
     videoButton.hidden = !showVideoButton;
     if (showVideoButton && videoIcon) videoIcon.innerHTML = renderMobileTaskIcon("video_workspace");
   }
