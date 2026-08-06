@@ -7380,7 +7380,7 @@ def _claim_next_task() -> dict[str, Any] | None:
         claimed = conn.execute(
             """
             UPDATE social_automation_tasks
-            SET status = 'running', started_at = ?, payload_json = ?, updated_at = ?
+            SET status = 'running', started_at = ?, payload_json = ?, error = '', updated_at = ?
             WHERE id = ? AND status = 'queued'
             """,
             (task_started_at, json.dumps(claimed_payload, ensure_ascii=False), now, task_id),
@@ -7692,7 +7692,7 @@ def _mark_publish_batch_item_running(task: dict[str, Any], index: int, total: in
             changed = conn.execute(
                 """
                 UPDATE social_automation_tasks
-                SET status = 'running', started_at = ?, payload_json = ?, updated_at = ?
+                SET status = 'running', started_at = ?, payload_json = ?, error = '', updated_at = ?
                 WHERE id = ? AND status = 'queued'
                 """,
                 (
@@ -8611,7 +8611,7 @@ def _run_social_publish_batch_in_clean_thread(
                 _renew_task_leases(lease_task_ids, now=current)
             last_lease_renewed_at = current
         if control["cancel_event"].is_set():
-            thread.join(timeout=2)
+            thread.join(timeout=0.25)
             if thread.is_alive():
                 raise RuntimeError("publish batch runner did not stop after cancellation")
     _sample_running_task_resources(control)
@@ -8667,7 +8667,7 @@ def _run_social_task_in_clean_thread(
                 _renew_task_leases([task_id], now=current)
             last_lease_renewed_at = current
         if control["cancel_event"].is_set():
-            thread.join(timeout=2)
+            thread.join(timeout=0.25)
             if thread.is_alive():
                 raise RuntimeError("task runner did not stop after cancellation")
     _sample_running_task_resources(control)

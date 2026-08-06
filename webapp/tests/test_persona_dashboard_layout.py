@@ -1924,6 +1924,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('if (status === "need_manual")', toast)
         self.assertIn('if (status === "running")', toast)
         self.assertIn("socialTaskFailureReason(task)", toast)
+        running_block = toast[
+            toast.index('if (status === "running")'):
+            toast.index('return `${typeLabel}已排队', toast.index('if (status === "running")'))
+        ]
+        self.assertNotIn("socialTaskFailureReason(task)", running_block)
         self.assertIn(".console-page .live-browser-manual-handoff {", self.styles)
         self.assertIn("place-items: center;", self.styles)
 

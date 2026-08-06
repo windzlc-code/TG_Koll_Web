@@ -5597,8 +5597,7 @@ function socialTaskToastMessage(task) {
     return `${typeLabel}需要人工处理${reason ? `：${reason}` : ""}${suffix}`;
   }
   if (status === "running") {
-    const reason = socialTaskFailureReason(task);
-    return `${typeLabel}执行中${reason ? `：${reason}` : ""}${suffix}`;
+    return `${typeLabel}执行中${suffix}`;
   }
   return `${typeLabel}已排队${suffix}`;
 }
