@@ -160,7 +160,7 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
 
 async function prepareHotKeywords(input: PrepareHotKeywordsInput) {
   const archive = await loadPersonaArchive(String(input.archiveId || "").trim());
-  if (!archive) throw new Error("浜鸿涓嶅瓨鍦ㄣ€?);
+  if (!archive) throw new Error("人设不存在。");
   const memorySummaries = Array.isArray(input.memorySummaries)
     ? input.memorySummaries.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8)
     : [];

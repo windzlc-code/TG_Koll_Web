@@ -1398,6 +1398,24 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             self.source,
         )
 
+    def test_persona_hot_workflow_cli_entrypoint_parses(self):
+        npx = shutil.which("npx")
+        if not npx:
+            self.skipTest("npx is not available")
+
+        result = subprocess.run(
+            [npx, "tsx", "scripts/skills/persona-hot-workflow.ts"],
+            cwd=REPO_ROOT / "tool_r18",
+            input="",
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('"missing JSON input"', result.stdout)
+        self.assertNotIn("TransformError", result.stderr + result.stdout)
+
     def test_custom_dropdowns_close_when_clicking_outside(self):
         bind_events = self._function_source("bindEvents")
 
