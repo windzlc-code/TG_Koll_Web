@@ -916,6 +916,8 @@
   border: 1px solid var(--video-line);
   border-radius: 9px;
 }
+.video-task-media button.video-task-media-item { padding: 0; color: inherit; text-align: left; cursor: zoom-in; }
+.video-task-media button.video-task-media-item:hover { border-color: var(--video-accent); box-shadow: 0 7px 18px rgba(44, 72, 91, .12); transform: translateY(-1px); }
 
 .video-task-media-item img,
 .video-task-media-item video {
@@ -937,6 +939,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.video-task-media-item > span { overflow: hidden; padding: 7px 8px; color: var(--video-muted); font-size: 9px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .video-task-media-item.is-audio figcaption { padding: 6px 2px 0; }
 
 .video-task-warning {
@@ -946,6 +949,9 @@
   border-bottom: 1px solid #efe2b2;
   font-size: 11px;
 }
+.video-task-pagination { display: flex; align-items: center; justify-content: center; gap: 9px; padding: 10px; border-top: 1px solid var(--video-line); font-size: 10px; }
+.video-task-pagination button { padding: 5px 9px; border: 1px solid var(--video-line); border-radius: 7px; background: #fff; color: var(--video-text); cursor: pointer; }
+.video-task-pagination button:disabled { opacity: .45; cursor: default; }
 
 .video-workbench-state {
   display: grid;
@@ -1133,6 +1139,62 @@
   overflow-y: auto;
 }
 
+.video-speech-modal { z-index: 1220; }
+.video-speech-modal-dialog {
+  width: min(980px, calc(100vw - 36px));
+  max-height: min(820px, calc(100vh - 48px));
+  overflow: hidden;
+}
+.video-speech-modal-dialog .console-modal-content { overflow-y: auto; }
+.video-speech-candidate-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.video-speech-candidate {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  gap: 8px;
+  padding: 14px;
+  color: var(--video-ink);
+  text-align: left;
+  border: 1px solid var(--video-line);
+  border-radius: 12px;
+  background: var(--video-panel);
+  box-shadow: 0 8px 22px rgba(31, 49, 63, .06);
+  cursor: pointer;
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+.video-speech-candidate:hover {
+  transform: translateY(-2px);
+  border-color: var(--video-accent);
+  box-shadow: 0 12px 26px rgba(37, 62, 82, .12);
+}
+.video-speech-candidate.is-selected {
+  border-color: var(--video-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--video-accent) 20%, transparent);
+}
+.video-speech-candidate-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.video-speech-candidate-top em {
+  padding: 3px 7px;
+  color: var(--video-panel);
+  font-size: 9px;
+  font-style: normal;
+  border-radius: 999px;
+  background: var(--video-accent);
+}
+.video-speech-candidate-title { font-size: 14px; font-weight: 850; }
+.video-speech-candidate-copy {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--video-muted);
+  font-size: 11px;
+  line-height: 1.65;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
+}
+
 .video-voice-current {
   display: grid;
   gap: 4px;
@@ -1261,6 +1323,9 @@
 .video-task-segments { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding-top: 7px; border-top: 1px dashed #e0e5e1; }
 .video-task-segments > span { width: 100%; color: #8a504a; font-size: 9px; font-weight: 800; }
 .video-task-segments button { max-width: 100%; padding: 5px 7px; overflow: hidden; color: #8a3c35; text-overflow: ellipsis; white-space: nowrap; }
+.video-task-seeding-scene { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; width: 100%; padding: 6px; border: 1px solid var(--video-line); border-radius: 9px; background: var(--video-soft); }
+.video-task-seeding-scene > strong { margin-right: auto; font-size: 10px; }
+.video-task-seeding-history { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; padding-top: 5px; border-top: 1px dashed var(--video-line); }
 
 /* The unified console keeps a persistent sidebar, so its viewport reaches the
    old platform's 1180px content breakpoint at roughly 1500px. */
@@ -1284,6 +1349,8 @@
 }
 
 @media (max-width: 820px) {
+  .video-speech-candidate-grid { grid-template-columns: 1fr; }
+  .video-speech-candidate-copy { -webkit-line-clamp: 5; }
   .video-workbench-root { min-height: calc(100vh - 138px); }
   .video-workbench-shell { gap: 12px; }
   .video-workbench-hero {

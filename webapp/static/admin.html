@@ -1661,20 +1661,15 @@
                 </div>
                 <div class="admin-runtime-block admin-model-tab-panel" data-model-panel="runninghub">
                   <div class="admin-config-card-title">RunningHub 链路</div>
-                  <div class="small">统一供新建人设、推文配图和视频工作台使用。API 链路按槽位切换，工作流与节点映射由程序内置维护。</div>
+                  <div class="small">用于新建人设图和人设推文配图。API 链路按槽位切换，保存后立即同步到 Web 控制台实际调用配置。</div>
                   <label>RunningHub API 基础地址</label>
                   <input id="rtNewPersonaRunningHubBaseUrl" type="text" placeholder="https://www.runninghub.ai">
-                  <div class="grid-2">
-                    <div>
-                      <label>个人 API Key</label>
-                      <input id="rtRunningHubPersonalApiKey" type="password" placeholder="留空则保留当前密钥">
-                    </div>
-                    <div>
-                      <label>企业级共享 API Key</label>
-                      <input id="rtRunningHubEnterpriseApiKey" type="password" placeholder="留空则保留当前密钥">
-                    </div>
+                  <label>RunningHub 企业共享 API 密钥</label>
+                  <div class="admin-secret-row admin-secret-row-with-check">
+                    <input id="rtNewPersonaRunningHubApiKey" type="password" placeholder="留空则保留当前密钥">
+                    <button class="ghost secret-toggle" type="button" data-secret-target="rtNewPersonaRunningHubApiKey" aria-label="显示或隐藏 RunningHub API 密钥">◉</button>
+                    <button id="btnCheckRunningHubKey" class="ghost admin-provider-key-check" type="button">检测 Key</button>
                   </div>
-                  <button id="btnCheckRunningHubKey" class="ghost admin-provider-key-check" type="button">检测当前可用 Key</button>
                   <div id="rtRunningHubKeyStatus" class="msg admin-runninghub-key-status"></div>
 
                   <div class="admin-content-model-tabs admin-runninghub-slot-tabs" aria-label="RunningHub 链路槽位">
@@ -1711,37 +1706,63 @@
                 </div>
                 <div class="admin-runtime-block admin-model-tab-panel" data-model-panel="video">
                   <div class="admin-config-card-title">视频工作台</div>
-                  <div class="small">视频任务直接共用系统级 RunningHub、文字模型和图片模型配置；这里只维护视频专属的语音服务与本地合成限制。</div>
+                  <div class="small">严格对齐数字人源码后台；文字模型沿用系统文字模型配置，工作流和节点参数由程序内置维护。</div>
 
-                  <div class="admin-config-card-title">共用系统配置</div>
-                  <div class="admin-content-model-tabs admin-runtime-shared-links" aria-label="视频工作台共用配置入口">
-                    <button class="admin-content-model-tab" type="button" data-model-config-jump="runninghub">RunningHub 链路</button>
-                    <button class="admin-content-model-tab" type="button" data-model-config-jump="text">文字模型与调用顺序</button>
-                    <button class="admin-content-model-tab" type="button" data-model-config-jump="image">图片模型与调用顺序</button>
+                  <div class="admin-config-card-title">RunningHub</div>
+                  <div class="grid-2">
+                    <div>
+                      <label>个人 API Key</label>
+                      <input id="rtVideoRunningHubPersonalApiKey" type="password" placeholder="留空则保留当前密钥">
+                    </div>
+                    <div>
+                      <label>企业级共享 API Key</label>
+                      <input id="rtVideoRunningHubEnterpriseApiKey" type="password" placeholder="留空则保留当前密钥">
+                    </div>
                   </div>
-                  <div class="small">修改以上任一共享配置后，视频和现有推文、人设功能会读取同一份运行配置，不需要重复填写。</div>
+                  <div class="small">后台只维护 RunningHub API Key，具体工作流和节点配置由程序内置规则管理。</div>
+
+                  <div class="admin-config-card-title">文字模型</div>
+                  <div class="small">文字模型及调用顺序沿用系统文字模型配置。</div>
+                  <label>口播热点模式</label>
+                  <select id="rtVideoOralHotTopicMode">
+                    <option value="off">关闭热点</option>
+                    <option value="soft">弱热点</option>
+                    <option value="strong">强热点</option>
+                  </select>
+
+                  <div class="admin-config-card-title">图片模型</div>
+                  <label>图片模型优先级</label>
+                  <div class="admin-model-list-editor">
+                    <div id="rtVideoImagePriorityModelList" class="admin-model-priority-list"></div>
+                    <div class="admin-model-list-input-row">
+                      <select id="rtVideoImageModelCandidate" aria-label="候选图片模型">
+                        <option value="gpt image 2">gpt image 2</option>
+                        <option value="openai/gpt-image-2-official">openai/gpt-image-2-official</option>
+                        <option value="nano banana 2">nano banana 2</option>
+                        <option value="google/nano-banana-2-official">google/nano-banana-2-official</option>
+                        <option value="nano banana pro">nano banana pro</option>
+                        <option value="google/nano-banana-pro-official">google/nano-banana-pro-official</option>
+                      </select>
+                      <button id="btnAddVideoImagePriorityModel" type="button" class="ghost admin-model-add-btn" title="添加图片模型" aria-label="添加图片模型">+</button>
+                    </div>
+                  </div>
 
                   <div class="admin-config-card-title">MiniMax Audio</div>
                   <label>MiniMax API Key</label>
                   <input id="rtVideoMiniMaxApiKey" type="password" placeholder="留空则保留当前密钥">
+                  <label>MiniMax 国内版接口地址</label>
+                  <input id="rtVideoMiniMaxBaseUrl" type="url" value="https://api.minimaxi.com" readonly>
+                  <div class="small">系统固定使用 MiniMax 国内版主域名，不再切换海外版。</div>
                   <div class="grid-2">
-                    <div>
-                      <label>MiniMax 国内版接口地址</label>
-                      <input id="rtVideoMiniMaxBaseUrl" type="url" value="https://api.minimaxi.com" readonly>
-                    </div>
                     <div>
                       <label>TTS 模型 ID</label>
                       <input id="rtVideoMiniMaxTtsModel" type="text" value="speech-2.8-hd">
                     </div>
+                    <div>
+                      <label>默认音色 ID</label>
+                      <input id="rtVideoMiniMaxTtsVoiceId" type="text" value="male-qn-qingse">
+                    </div>
                   </div>
-                  <div class="small">系统固定使用 MiniMax 国内版主域名，不切换海外版。</div>
-                  <label>默认音色 ID</label>
-                  <input id="rtVideoMiniMaxTtsVoiceId" type="text" value="male-qn-qingse">
-
-                  <div class="admin-config-card-title">合并平台扩展</div>
-                  <label>本地合成最大并发</label>
-                  <input id="rtVideoLocalMaxConcurrency" type="number" min="1" max="16" step="1" value="2">
-                  <div class="small">仅限制本机 FFmpeg 与合成阶段并发，不改变原数字人工作流参数。</div>
                 </div>
             </div>
           </div>

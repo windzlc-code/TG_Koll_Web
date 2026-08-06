@@ -456,18 +456,28 @@ function bindAdminMobileNavigation() {
 const SENSITIVE_RUNTIME_INPUT_IDS = [
   "rtLlmApiKeyGpt",
   "rtImageGeminiApiKey",
-  "rtRunningHubPersonalApiKey",
-  "rtRunningHubEnterpriseApiKey",
+  "rtVideoRunningHubPersonalApiKey",
+  "rtVideoRunningHubEnterpriseApiKey",
   "rtVideoMiniMaxApiKey",
 ];
 
 const RUNTIME_SECRET_API_NAMES = {
   rtLlmApiKeyGpt: "llm_api_key_gpt",
   rtImageGeminiApiKey: "image_model_provider_api_key_gemini",
-  rtRunningHubPersonalApiKey: "runninghub_personal_api_key",
-  rtRunningHubEnterpriseApiKey: "runninghub_enterprise_api_key",
+  rtNewPersonaRunningHubApiKey: "new_persona_runninghub_api_key",
+  rtVideoRunningHubPersonalApiKey: "runninghub_personal_api_key",
+  rtVideoRunningHubEnterpriseApiKey: "runninghub_enterprise_api_key",
   rtVideoMiniMaxApiKey: "minimax_api_key",
 };
+const VIDEO_IMAGE_MODEL_OPTIONS = [
+  "gpt image 2",
+  "openai/gpt-image-2-official",
+  "nano banana 2",
+  "google/nano-banana-2-official",
+  "nano banana pro",
+  "google/nano-banana-pro-official",
+];
+const VIDEO_IMAGE_MODEL_DEFAULTS = ["gpt image 2", "nano banana 2", "nano banana pro"];
 const SENSITIVE_EYE_ICON_SVG = `
   <svg class="sensitive-eye-icon" viewBox="0 0 24 24" aria-hidden="true">
     <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
@@ -897,11 +907,8 @@ async function switchRunningHubPreset(slotName) {
 async function checkRunningHubKey() {
   const button = el("btnCheckRunningHubKey");
   if (!button) return;
-  const enterpriseKey = runtimeSecretInputValue("rtRunningHubEnterpriseApiKey");
-  const personalKey = runtimeSecretInputValue("rtRunningHubPersonalApiKey");
-  const apiKey = enterpriseKey || personalKey;
-  const hasSavedKey = hasSavedRuntimeSecret("rtRunningHubEnterpriseApiKey") || hasSavedRuntimeSecret("rtRunningHubPersonalApiKey");
-  if (!apiKey && !hasSavedKey) {
+  const apiKey = runtimeSecretInputValue("rtNewPersonaRunningHubApiKey");
+  if (!apiKey && !hasSavedRuntimeSecret("rtNewPersonaRunningHubApiKey")) {
     setMsg("rtRunningHubKeyStatus", "请先填写 RunningHub API Key。", false);
     return;
   }
@@ -1011,6 +1018,10 @@ function imageModelItems(items) {
   return uniqueItems(items).filter(Boolean);
 }
 
+function videoImageModelItems(items) {
+  return uniqueItems(items).filter((model) => VIDEO_IMAGE_MODEL_OPTIONS.includes(model));
+}
+
 function readModelDraft() {
   try {
     const raw = localStorage.getItem(RUNTIME_MODEL_DRAFT_KEY);
@@ -1027,6 +1038,7 @@ function writeModelDraft() {
       llmGeminiModels: [],
       llmGptModels: grokModelItems(adminState.llmGptModels),
       imageGeminiModels: imageModelItems(adminState.imageGeminiModels),
+      videoImagePriorityModels: videoImageModelItems(adminState.videoImagePriorityModels),
     }));
   } catch {
     // localStorage can be unavailable in private browsing; config save still works.
@@ -1045,11 +1057,13 @@ function mergeModelDraft() {
   const draft = readModelDraft();
   if (!draft) return false;
   let changed = false;
-  ["llmGptModels", "imageGeminiModels"].forEach((key) => {
+  ["llmGptModels", "imageGeminiModels", "videoImagePriorityModels"].forEach((key) => {
     const before = uniqueItems(adminState[key]);
     const after = key.startsWith("llm")
       ? grokModelItems([...before, ...(Array.isArray(draft[key]) ? draft[key] : [])])
-      : imageModelItems([...before, ...(Array.isArray(draft[key]) ? draft[key] : [])]);
+      : key === "videoImagePriorityModels"
+        ? videoImageModelItems([...before, ...(Array.isArray(draft[key]) ? draft[key] : [])])
+        : imageModelItems([...before, ...(Array.isArray(draft[key]) ? draft[key] : [])]);
     adminState[key] = after;
     if (after.length !== before.length) changed = true;
   });
@@ -1235,6 +1249,7 @@ function renderAllModelLists() {
   renderPriorityModelListSafe("llmPriorityModels", "rtLlmPriorityModelList");
   renderModelList("imageGeminiModels", "rtImageGeminiModelList");
   renderPriorityModelListSafe("imagePriorityModels", "rtImagePriorityModelList");
+  renderPriorityModelListSafe("videoImagePriorityModels", "rtVideoImagePriorityModelList");
   renderModelSummaries();
 }
 
@@ -1602,9 +1617,6 @@ function bindModelTabs() {
   tabs.forEach((tab) => {
     tab.addEventListener("click", () => activate(tab.dataset.modelTab || "text"));
   });
-  document.querySelectorAll("[data-model-config-jump]").forEach((button) => {
-    button.addEventListener("click", () => activate(button.dataset.modelConfigJump || "text"));
-  });
   activate(tabs.find((tab) => tab.classList.contains("is-active"))?.dataset.modelTab || "text");
 }
 
@@ -1690,6 +1702,7 @@ const adminState = {
   llmModelPickerTargetListKey: "",
   imageGeminiModels: [],
   imagePriorityModels: [],
+  videoImagePriorityModels: [],
   imageModelPickerTargetListKey: "",
   workflowChains: {},
   sentimentCookieProfiles: [],
@@ -2504,7 +2517,7 @@ function initSensitiveInputToggles() {
 }
 
 function initRuntimeSecretMaskInputs() {
-  SENSITIVE_RUNTIME_INPUT_IDS.forEach((id) => {
+  [...SENSITIVE_RUNTIME_INPUT_IDS, "rtNewPersonaRunningHubApiKey"].forEach((id) => {
     const input = el(id);
     if (!input || input.dataset.runtimeSecretMaskBound === "true") return;
     input.dataset.runtimeSecretMaskBound = "true";
@@ -2588,10 +2601,12 @@ function runtimeFormToPayload() {
   adminState.llmPriorityModels = grokModelItems(adminState.llmPriorityModels);
   adminState.imageGeminiModels = imageModelItems(adminState.imageGeminiModels);
   adminState.imagePriorityModels = imageModelItems(adminState.imagePriorityModels);
+  adminState.videoImagePriorityModels = videoImageModelItems(adminState.videoImagePriorityModels);
   const llmGrokModels = stringifyModelList(adminState.llmGptModels);
   const llmPriorityModels = stringifyModelList(adminState.llmPriorityModels);
   const imageGeminiModels = stringifyModelList(adminState.imageGeminiModels);
   const imagePriorityModels = stringifyModelList(adminState.imagePriorityModels);
+  const videoImagePriorityModels = stringifyModelList(adminState.videoImagePriorityModels.length ? adminState.videoImagePriorityModels : VIDEO_IMAGE_MODEL_DEFAULTS);
   return {
     image_generate_mode_default: "closed_model_api",
     image_generate_workflow_ids: [],
@@ -2609,17 +2624,19 @@ function runtimeFormToPayload() {
     image_model_default_model: imageGeminiModels,
     image_model_priority_order: imagePriorityModels || imageGeminiModels,
     new_persona_runninghub_base_url: el("rtNewPersonaRunningHubBaseUrl") ? el("rtNewPersonaRunningHubBaseUrl").value.trim() : "",
+    new_persona_runninghub_api_key: runtimeSecretInputValue("rtNewPersonaRunningHubApiKey"),
     new_persona_runninghub_persona_t2i_detail_url: el("rtNewPersonaPersonaT2iDetailUrl") ? el("rtNewPersonaPersonaT2iDetailUrl").value.trim() : "",
     new_persona_runninghub_persona_t2i_endpoint: el("rtNewPersonaPersonaT2iEndpoint") ? el("rtNewPersonaPersonaT2iEndpoint").value.trim() : "",
     new_persona_runninghub_tweet_i2i_detail_url: el("rtNewPersonaTweetI2iDetailUrl") ? el("rtNewPersonaTweetI2iDetailUrl").value.trim() : "",
     new_persona_runninghub_tweet_i2i_endpoint: el("rtNewPersonaTweetI2iEndpoint") ? el("rtNewPersonaTweetI2iEndpoint").value.trim() : "",
-    runninghub_personal_api_key: runtimeSecretInputValue("rtRunningHubPersonalApiKey"),
-    runninghub_enterprise_api_key: runtimeSecretInputValue("rtRunningHubEnterpriseApiKey"),
+    runninghub_personal_api_key: runtimeSecretInputValue("rtVideoRunningHubPersonalApiKey"),
+    runninghub_enterprise_api_key: runtimeSecretInputValue("rtVideoRunningHubEnterpriseApiKey"),
+    digital_human_oral_hot_topic_mode: el("rtVideoOralHotTopicMode")?.value || "strong",
+    video_image_model_priority_order: videoImagePriorityModels,
     minimax_api_key: runtimeSecretInputValue("rtVideoMiniMaxApiKey"),
-    minimax_base_url: el("rtVideoMiniMaxBaseUrl")?.value.trim() || "https://api.minimaxi.com",
+    minimax_base_url: "https://api.minimaxi.com",
     minimax_tts_model: el("rtVideoMiniMaxTtsModel")?.value.trim() || "speech-2.8-hd",
     minimax_tts_voice_id: el("rtVideoMiniMaxTtsVoiceId")?.value.trim() || "male-qn-qingse",
-    video_local_max_concurrency: Number(el("rtVideoLocalMaxConcurrency")?.value || 2),
     cleanup_enabled: !!el("rtCleanupEnabled").checked,
     cleanup_time: el("rtCleanupTime").value || "03:30",
     cleanup_retention_days: Number(el("rtCleanupRetentionDays").value || 7),
@@ -2675,17 +2692,18 @@ function fillRuntimeForm(data) {
   el("rtImageBaseUrl").value = v.image_model_provider_base_url || "http://202.90.21.53:3008";
   setRuntimeSecretInputState("rtImageGeminiApiKey", v.image_model_provider_api_key_gemini_configured, v.image_model_provider_api_key_gemini_masked);
   if (el("rtNewPersonaRunningHubBaseUrl")) el("rtNewPersonaRunningHubBaseUrl").value = v.new_persona_runninghub_base_url || "https://www.runninghub.ai";
-  setRuntimeSecretInputState("rtRunningHubPersonalApiKey", v.runninghub_personal_api_key_configured, v.runninghub_personal_api_key_masked);
-  setRuntimeSecretInputState("rtRunningHubEnterpriseApiKey", v.runninghub_enterprise_api_key_configured, v.runninghub_enterprise_api_key_masked);
+  setRuntimeSecretInputState("rtNewPersonaRunningHubApiKey", v.new_persona_runninghub_api_key_configured, v.new_persona_runninghub_api_key_masked);
   if (el("rtNewPersonaPersonaT2iDetailUrl")) el("rtNewPersonaPersonaT2iDetailUrl").value = v.new_persona_runninghub_persona_t2i_detail_url || "https://www.runninghub.cn/call-api/api-detail/2046514150500524033";
   if (el("rtNewPersonaPersonaT2iEndpoint")) el("rtNewPersonaPersonaT2iEndpoint").value = v.new_persona_runninghub_persona_t2i_endpoint || "/rhart-image-g-2/text-to-image";
   if (el("rtNewPersonaTweetI2iDetailUrl")) el("rtNewPersonaTweetI2iDetailUrl").value = v.new_persona_runninghub_tweet_i2i_detail_url || "https://www.runninghub.cn/call-api/api-detail/2046503667076751361";
   if (el("rtNewPersonaTweetI2iEndpoint")) el("rtNewPersonaTweetI2iEndpoint").value = v.new_persona_runninghub_tweet_i2i_endpoint || "/rhart-image-g-2/image-to-image";
+  setRuntimeSecretInputState("rtVideoRunningHubPersonalApiKey", v.runninghub_personal_api_key_configured, v.runninghub_personal_api_key_masked);
+  setRuntimeSecretInputState("rtVideoRunningHubEnterpriseApiKey", v.runninghub_enterprise_api_key_configured, v.runninghub_enterprise_api_key_masked);
+  if (el("rtVideoOralHotTopicMode")) el("rtVideoOralHotTopicMode").value = ["off", "soft", "strong"].includes(v.digital_human_oral_hot_topic_mode) ? v.digital_human_oral_hot_topic_mode : "strong";
+  if (el("rtVideoMiniMaxBaseUrl")) el("rtVideoMiniMaxBaseUrl").value = "https://api.minimaxi.com";
   setRuntimeSecretInputState("rtVideoMiniMaxApiKey", v.minimax_api_key_configured, v.minimax_api_key_masked);
-  if (el("rtVideoMiniMaxBaseUrl")) el("rtVideoMiniMaxBaseUrl").value = v.minimax_base_url || "https://api.minimaxi.com";
   if (el("rtVideoMiniMaxTtsModel")) el("rtVideoMiniMaxTtsModel").value = v.minimax_tts_model || "speech-2.8-hd";
   if (el("rtVideoMiniMaxTtsVoiceId")) el("rtVideoMiniMaxTtsVoiceId").value = v.minimax_tts_voice_id || "male-qn-qingse";
-  if (el("rtVideoLocalMaxConcurrency")) el("rtVideoLocalMaxConcurrency").value = String(v.video_local_max_concurrency || 2);
   renderRunningHubPresetSelect("persona");
   renderRunningHubPresetSelect("tweet");
   adminState.imageGeminiModels = imageModelItems([
@@ -2693,6 +2711,7 @@ function fillRuntimeForm(data) {
     ...parseModelList(v.image_model_default_model || ""),
   ]);
   adminState.imagePriorityModels = imageModelItems(v.image_model_priority_order ? parseModelList(v.image_model_priority_order) : adminState.imageGeminiModels);
+  adminState.videoImagePriorityModels = videoImageModelItems(parseModelList(v.video_image_model_priority_order || VIDEO_IMAGE_MODEL_DEFAULTS.join(", ")));
   syncPriorityModelsFromCatalog("llm");
   const restoredModelDraft = mergeModelDraft();
   renderAllModelLists();
@@ -9645,6 +9664,18 @@ function bindActions() {
     el("btnAddImagePriorityModel").addEventListener("click", (event) => {
       event.stopPropagation();
       openImagePriorityModelPicker();
+    });
+  }
+  if (el("btnAddVideoImagePriorityModel")) {
+    el("btnAddVideoImagePriorityModel").addEventListener("click", (event) => {
+      event.stopPropagation();
+      const model = String(el("rtVideoImageModelCandidate")?.value || "").trim();
+      if (!VIDEO_IMAGE_MODEL_OPTIONS.includes(model)) return;
+      if (!adminState.videoImagePriorityModels.includes(model)) {
+        adminState.videoImagePriorityModels.push(model);
+        writeModelDraft();
+        renderAllModelLists();
+      }
     });
   }
 

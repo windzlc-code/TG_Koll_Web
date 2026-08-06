@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import sqlite3
 import threading
 import tempfile
 import unittest
 from contextlib import contextmanager
+from dataclasses import replace
 from types import SimpleNamespace
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from starlette.datastructures import UploadFile
 
 from video_core import ArchivedSourceBackend, VideoTaskCancelled, VideoTaskContext
 from webapp import video_workbench
@@ -128,6 +131,34 @@ class VideoWorkbenchTests(unittest.TestCase):
         self.assertFalse(video_workbench.MODULE_METADATA["queue_managed"])
         self.assertNotIn("telegram", video_workbench.__dict__)
 
+    def test_task_types_map_back_to_all_eight_workbench_modules(self):
+        cases = {
+            ("create_video", ""): "digital_human_video",
+            ("ecommerce_short_video", ""): "ecommerce_short_video",
+            ("video_language_replace", ""): "video_language_replace",
+            ("replace_model", ""): "video_subject_replace",
+            ("replace_product", ""): "video_subject_replace",
+            ("image_generate", "product_only"): "ecommerce_image",
+            ("image_generate", "model_product"): "ecommerce_image",
+            ("image_generate", "subject_replace"): "subject_replace",
+            ("image_generate", "poster_translate"): "poster_translate",
+            ("image_generate", "digital_human_character"): "subject_generate",
+            ("image_generate", "three_view"): "subject_generate",
+        }
+        for (task_type, mode), expected in cases.items():
+            with self.subTest(task_type=task_type, mode=mode):
+                payload = {"video_image_mode": mode} if mode else {}
+                self.assertEqual(video_workbench.video_ui_module_for_task(task_type, payload), expected)
+
+    def test_explicit_workbench_module_wins_for_persisted_task_routing(self):
+        self.assertEqual(
+            video_workbench.video_ui_module_for_task(
+                "image_generate",
+                {"_video_module_id": "poster_translate", "video_image_mode": "single_reference"},
+            ),
+            "poster_translate",
+        )
+
     def test_runner_preserves_source_fields_and_normalizes_result_shape(self):
         calls = []
 
@@ -193,10 +224,13 @@ class VideoWorkbenchTests(unittest.TestCase):
         self.assertEqual(merged["duration"], 12)
         self.assertEqual(merged["ratio"], "16:9")
         self.assertEqual(merged["resolution"], "1080p")
+        self.assertTrue(merged["_ecommerce_seeding_dynamic_enabled"])
         merged["ecommerce_short_video_workflow_ids"].append("mutated")
         self.assertEqual(runtime["ecommerce_short_video_workflow_ids"], ["custom-workflow"])
         self.assertEqual(video_workbench.VIDEO_RUNTIME_CONFIG_DEFAULTS["video_tts_provider"], "minimax")
         self.assertIn("video_runninghub_api_key", video_workbench.VIDEO_RUNTIME_CONFIG_DEFAULTS)
+        digital_human_runtime = video_workbench.apply_video_runtime_defaults("create_video", {}, {})
+        self.assertEqual(digital_human_runtime["_digital_human_view_retry_count"], 2)
 
     def test_billing_spec_and_actual_quantity(self):
         self.assertEqual(
@@ -225,6 +259,43 @@ class VideoWorkbenchTests(unittest.TestCase):
         self.assertEqual(
             video_workbench.video_task_billing_spec("image_generate", {"video_image_mode": "poster_translate", "count": 2}),
             ("poster_translate_image", 2, True),
+        )
+        self.assertEqual(
+            video_workbench.video_task_billing_spec(
+                "ecommerce_short_video",
+                {"ecommerce_video_mode": "seeding_video", "storyboard": [{}, {}, {}, {}]},
+            ),
+            ("ecommerce_seeding_image", 4, True),
+        )
+        self.assertEqual(
+            video_workbench.video_task_billing_spec(
+                "video_language_replace",
+                {
+                    "duration_seconds": 20,
+                    "resume": True,
+                    "video_workbench_action": "resume",
+                    "completed_segments": [
+                        {"start_seconds": 0, "end_seconds": 6},
+                        {"duration_seconds": 5.2},
+                    ],
+                },
+            ),
+            ("video_language_replace_second", 9, False),
+        )
+        self.assertEqual(
+            video_workbench.video_task_billing_spec(
+                "create_video",
+                {"duration_seconds": 20, "video_workbench_action": "segment_regenerate", "segment": {"duration_seconds": 3.1}},
+            ),
+            ("oral_video_second", 4, False),
+        )
+        self.assertEqual(
+            video_workbench.video_billing_actual_quantity(
+                "create_video",
+                {"ok": True, "raw_result": {"duration_seconds": 20}},
+                {"video_workbench_action": "segment_regenerate", "segment": {"duration_seconds": 3.1}},
+            ),
+            4,
         )
 
     def test_all_eight_ui_modules_resolve_to_queue_task_types(self):
@@ -375,7 +446,7 @@ class VideoWorkbenchTests(unittest.TestCase):
             "script_text": "你好",
             "opening_insert_text": "欢迎",
             "ending_insert_text": "再见",
-            "source_segments": [{"start_seconds": 0, "end_seconds": 1.2, "source_text": "你好"}],
+            "video_language_source_segments": [{"start_seconds": 0, "end_seconds": 1.2, "source_text": "你好"}],
         })
         self.assertTrue(result["ok"])
         self.assertEqual(result["raw_result"]["target_script"], "Hello")
@@ -384,8 +455,92 @@ class VideoWorkbenchTests(unittest.TestCase):
         self.assertEqual(calls[0]["video_paths"], [str(Path("C:/uploads/source.mp4").resolve())])
         self.assertEqual(calls[0]["retry_count"], 2)
         self.assertIn("Use this supplied source transcript exactly", calls[0]["user_input"])
+        self.assertIn("Use these supplied source time segments", calls[0]["user_input"])
         self.assertIn("Translate and insert this opening line", calls[0]["user_input"])
         self.assertIn("Translate and append this ending line", calls[0]["user_input"])
+
+    def test_injected_digital_human_copy_uses_supplied_references_and_duration(self):
+        calls = []
+
+        def llm_json_request(**kwargs):
+            calls.append(kwargs)
+            return (
+                {"parsed": {"speech_text": "A complete spoken script.", "segment_scripts": []}},
+                {"provider": "fake", "model": "fake-text-model"},
+                [{"ok": True}],
+            )
+
+        def backend(task_type, task_id, payload):
+            result = payload["_digital_human_ai_copy_provider"](
+                payload=payload,
+                mode="single",
+                model_references=[payload["model_image_local_path"]],
+                product_references=[payload["product_image_local_path"]],
+            )
+            return {"ok": True, "raw_result": result}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            model = root / "model.png"
+            product = root / "product.png"
+            model.write_bytes(b"model")
+            product.write_bytes(b"product")
+            server = SimpleNamespace(
+                TASK_RUNNERS={},
+                DEFAULT_RUNTIME_CONFIG={},
+                _NORMAL_TASK_CONTROLS={},
+                _NORMAL_TASK_CONTROLS_LOCK=threading.RLock(),
+                _apply_runtime_defaults=lambda task_type, payload: dict(payload),
+                _normal_task_billing_spec=lambda task_type, payload: None,
+                _billing_actual_quantity=lambda task_type, output, payload: 0,
+                _request_llm_json_with_fallback=llm_json_request,
+            )
+            video_workbench.inject_video_workbench(server, backend=backend)
+            result = server.TASK_RUNNERS["create_video"]("task-ai-copy", {
+                "model_image_local_path": str(model),
+                "product_image_local_path": str(product),
+                "target_language": "English",
+                "oral_target_duration_seconds": 30,
+            })
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls[0]["image_paths"], [str(model), str(product)])
+        self.assertIn("30 seconds", calls[0]["system_prompt"])
+        self.assertIn("66 to 84 English words", calls[0]["system_prompt"])
+
+    def test_oral_hot_topic_mode_uses_source_search_and_off_mode_skips_it(self):
+        calls: list[dict] = []
+
+        class Response:
+            text = (
+                '<a class="result__a" href="https://news.example/item">AI 工具本周趋势</a>'
+                '<a class="result__snippet">近期用户讨论集中在自动化工作流。</a>'
+            )
+
+            @staticmethod
+            def raise_for_status():
+                return None
+
+        def http_get(*args, **kwargs):
+            calls.append({"args": args, "kwargs": kwargs})
+            return Response()
+
+        research = video_workbench._digital_human_oral_hot_topic_research(
+            "AI 工具干货",
+            "面向职场用户介绍自动化工作流",
+            mode="soft",
+            http_get=http_get,
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(research["mode"], "soft")
+        self.assertEqual(research["results"][0]["title"], "AI 工具本周趋势")
+        disabled = video_workbench._digital_human_oral_hot_topic_research(
+            "AI 工具干货",
+            "自动化工作流",
+            mode="off",
+            http_get=lambda *args, **kwargs: self.fail("off mode must not search"),
+        )
+        self.assertEqual(disabled["attempted_queries"], [])
 
     def test_submit_payload_maps_uploads_and_rejects_local_path_injection(self):
         payload = video_workbench.build_video_submit_payload(
@@ -537,6 +692,7 @@ class VideoWorkbenchTests(unittest.TestCase):
         self.assertIn("/api/video/modules", paths)
         self.assertIn("/api/video/tasks", paths)
         self.assertIn("/api/video/prompt-preview", paths)
+        self.assertIn("/api/video/prompt-preview/recover", paths)
         self.assertIn("/api/video/voice-presets", paths)
         self.assertIn("/api/video/voice-preview", paths)
         self.assertIn("/api/video/tasks/{task_id}/storyboard", paths)
@@ -545,8 +701,93 @@ class VideoWorkbenchTests(unittest.TestCase):
         self.assertIn("/api/video/tasks/{task_id}/segments/{segment_index}/regenerate", paths)
         self.assertIn("/api/video/tasks/{task_id}/resume", paths)
         self.assertIn("/api/video/language-script/parse", paths)
+        self.assertIn("/api/video/language-script/analyze", paths)
+        self.assertIn("/api/tasks/video_language_replace/script", paths)
+        self.assertIn("/api/video/tasks/{task_id}/digital-human/finalize", paths)
+        self.assertIn("/api/video/tasks/{task_id}/seeding/finalize", paths)
+        self.assertIn("/api/video/tasks/{task_id}/seeding-images/{scene_index}/regenerate", paths)
+        self.assertIn("/api/video/tasks/{task_id}/seeding-images/{scene_index}/upload", paths)
+        self.assertIn("/api/video/tasks/{task_id}/seeding-images/{scene_index}/history", paths)
+        self.assertIn("/api/video/tasks/{task_id}/seeding-images/{scene_index}/use", paths)
+        self.assertIn("/api/video/tasks/{task_id}/digital-human/assets/{asset_index}/history", paths)
+        self.assertIn("/api/video/tasks/{task_id}/digital-human/assets/{asset_index}/use", paths)
         for task_type in video_workbench.VIDEO_TASK_RUNNERS:
             self.assertIn(f"/api/video/{task_type}", paths)
+
+    def test_prompt_preview_preserves_candidates_and_hidden_ecommerce_analysis(self):
+        app = FastAPI()
+        dependencies = video_workbench.VideoRouteDependencies(
+            get_current_user=lambda: {"id": 1, "username": "tester"},
+            enqueue_task=lambda *args: None,
+            save_upload_file=lambda **kwargs: "",
+            new_task_id=lambda: "task-preview",
+            workspace_username=lambda user: str(user["username"]),
+            workspace_user_id=lambda user: int(user["id"]),
+            generate_prompt_preview=lambda **kwargs: {
+                "speech_text": "selected copy",
+                "prompt_text": "director prompt",
+                "speech_candidates": [{"title": "A", "speech_text": "selected copy"}],
+                "selected_speech_candidate_index": 0,
+                "ecommerce_material_analysis": {"usable_image_indexes": [1]},
+                "ecommerce_creative_brief": {"ontology": {"primary_subject": "product"}},
+                "ecommerce_segments": [{"duration": 15, "shots": []}],
+            },
+        )
+        video_workbench.register_video_routes(app, dependencies)
+        endpoint = self._route_endpoint(app, "/api/video/prompt-preview", "POST")
+        result = asyncio.run(
+            endpoint(
+                module="ecommerce_short_video",
+                params_json=json.dumps({"prompt_text": "make an ad"}),
+                files=None,
+                user={"id": 1, "username": "tester"},
+            )
+        )
+        self.assertEqual(result["speech_candidates"][0]["title"], "A")
+        self.assertEqual(result["ecommerce_material_analysis"]["usable_image_indexes"], [1])
+        self.assertEqual(result["ecommerce_creative_brief"]["ontology"]["primary_subject"], "product")
+
+    def test_prompt_preview_nonce_can_recover_completed_result_without_second_provider_call(self):
+        calls: list[dict] = []
+
+        def generate(**kwargs):
+            calls.append(kwargs)
+            return {"prompt_text": "recovered prompt", "speech_text": "recovered speech"}
+
+        app = FastAPI()
+        dependencies = video_workbench.VideoRouteDependencies(
+            get_current_user=lambda: {"id": 1, "username": "tester"},
+            enqueue_task=lambda *args: None,
+            save_upload_file=lambda **kwargs: "",
+            new_task_id=lambda: "task-preview-recovery",
+            workspace_username=lambda user: str(user["username"]),
+            workspace_user_id=lambda user: int(user["id"]),
+            generate_prompt_preview=generate,
+        )
+        video_workbench.register_video_routes(app, dependencies)
+        preview = self._route_endpoint(app, "/api/video/prompt-preview", "POST")
+        recover = self._route_endpoint(app, "/api/video/prompt-preview/recover", "GET")
+        user = {"id": 1, "username": "tester"}
+
+        first = asyncio.run(preview(
+            module="digital_human_video",
+            params_json=json.dumps({"prompt_text": "source"}),
+            request_nonce="nonce-preview-1",
+            files=None,
+            user=user,
+        ))
+        recovered = asyncio.run(recover(request_nonce="nonce-preview-1", user=user))
+        repeated = asyncio.run(preview(
+            module="digital_human_video",
+            params_json=json.dumps({"prompt_text": "source"}),
+            request_nonce="nonce-preview-1",
+            files=None,
+            user=user,
+        ))
+
+        self.assertEqual(first, recovered)
+        self.assertEqual(first, repeated)
+        self.assertEqual(len(calls), 1)
 
     def test_voice_preview_returns_only_a_fixed_preset_resource(self):
         app = FastAPI()
@@ -659,6 +900,23 @@ class VideoWorkbenchTests(unittest.TestCase):
                     "completed_segments": [1],
                 },
             )
+            self._insert_task(
+                db_path,
+                task_id="task-language-success",
+                task_type="video_language_replace",
+                input_payload={"target_language": "English"},
+                output_payload={"raw_result": {"timed_audio_segments": [
+                    {"index": 1, "start_seconds": 0, "end_seconds": 1.5, "text": "Hello", "audio_path": "C:/task/1.mp3"},
+                    {"index": 2, "start_seconds": 1.5, "end_seconds": 3, "text": "World", "audio_path": "C:/task/2.mp3"},
+                ]}},
+            )
+            self._insert_task(
+                db_path,
+                task_id="task-digital-human-scripts",
+                task_type="create_video",
+                input_payload={"prompt": "base"},
+                output_payload={"segment_scripts": ["first spoken segment", "second spoken segment"]},
+            )
             enqueued: list = []
             app = FastAPI()
             video_workbench.register_video_routes(app, self._workflow_dependencies(db_path, enqueued, []))
@@ -679,6 +937,21 @@ class VideoWorkbenchTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as bad_index:
                 asyncio.run(segment_regenerate(task_id="task-success", segment_index=3, payload={}, user=user))
             self.assertEqual(bad_index.exception.status_code, 400)
+
+            language_segment = asyncio.run(segment_regenerate(
+                task_id="task-language-success", segment_index=2, payload={}, user=user
+            ))
+            self.assertEqual(language_segment["action"], "segment_regenerate")
+            self.assertEqual(enqueued[-1]["payload"]["regenerate_segment_index"], 2)
+            self.assertEqual(len(enqueued[-1]["payload"]["script_segments"]), 2)
+            self.assertEqual(len(enqueued[-1]["payload"]["_video_language_reuse_segments"]), 2)
+
+            digital_human_segment = asyncio.run(segment_regenerate(
+                task_id="task-digital-human-scripts", segment_index=2, payload={}, user=user
+            ))
+            self.assertEqual(digital_human_segment["action"], "segment_regenerate")
+            self.assertEqual(enqueued[-1]["payload"]["regenerate_segment_index"], 2)
+            self.assertEqual(enqueued[-1]["payload"]["speech_text"], "second spoken segment")
 
             regenerated = asyncio.run(storyboard_regenerate(task_id="task-success", payload={}, user=user))
             self.assertEqual(regenerated["action"], "storyboard_regenerate")
@@ -709,8 +982,239 @@ class VideoWorkbenchTests(unittest.TestCase):
         self.assertFalse(plain["has_timecodes"])
         self.assertEqual([item["text"] for item in plain["segments"]], ["first line", "second line"])
 
+    def test_visual_confirmation_endpoints_enqueue_final_tasks_with_confirmed_paths(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "tasks.sqlite"
+            self._create_task_db(db_path)
+            fusion = root / "fusion.png"
+            scene = root / "scene.png"
+            fusion.write_bytes(b"fusion")
+            scene.write_bytes(b"scene")
+            self._insert_task(
+                db_path,
+                task_id="task-digital-review",
+                task_type="create_video",
+                input_payload={"digital_human_operation": "visual_review"},
+                output_payload={
+                    "fusion_images": [str(fusion)],
+                    "speech_text": "confirmed copy",
+                    "raw_result": {"digital_human_stage": "visual_review", "fusion_images": [str(fusion)]},
+                },
+            )
+            self._insert_task(
+                db_path,
+                task_id="task-seeding-review",
+                input_payload={"ecommerce_seeding_operation": "images_only"},
+                output_payload={
+                    "image_paths": [str(scene)],
+                    "raw_result": {"seeding_stage": "images_only", "generated_scene_image_paths": [str(scene)]},
+                },
+            )
+            enqueued: list = []
+            app = FastAPI()
+            video_workbench.register_video_routes(app, self._workflow_dependencies(db_path, enqueued, []))
+            digital_finalize = self._route_endpoint(app, "/api/video/tasks/{task_id}/digital-human/finalize", "POST")
+            seeding_finalize = self._route_endpoint(app, "/api/video/tasks/{task_id}/seeding/finalize", "POST")
+            user = {"id": 1, "username": "tester"}
+
+            digital_result = asyncio.run(digital_finalize(task_id="task-digital-review", user=user))
+            self.assertEqual(digital_result["action"], "digital_human_finalize")
+            self.assertEqual(enqueued[-1]["payload"]["digital_human_operation"], "final_video")
+            self.assertEqual(enqueued[-1]["payload"]["digital_human_fusion_image_paths"], [str(fusion)])
+            seeding_result = asyncio.run(seeding_finalize(task_id="task-seeding-review", user=user))
+            self.assertEqual(seeding_result["action"], "ecommerce_seeding_finalize")
+            self.assertEqual(enqueued[-1]["payload"]["ecommerce_seeding_operation"], "final_video")
+            self.assertEqual(enqueued[-1]["payload"]["ecommerce_seeding_confirmed_image_paths"], [str(scene)])
+
+    def test_language_script_analysis_uses_enriched_media_provider_without_enqueuing(self):
+        calls: list[dict] = []
+
+        def enrich(_task_type, _task_id, payload):
+            result = dict(payload)
+
+            def provider(**kwargs):
+                calls.append(kwargs)
+                return {
+                    "source_language": "Chinese",
+                    "source_script": "第一句\n第二句",
+                    "segments": [
+                        {"start_seconds": 0, "end_seconds": 1.2, "source_text": "第一句", "text": "First"},
+                        {"start_seconds": 1.2, "end_seconds": 2.4, "source_text": "第二句", "text": "Second"},
+                    ],
+                }
+
+            result["_video_language_transcribe_translate"] = provider
+            return result
+
+        app = FastAPI()
+        dependencies = video_workbench.VideoRouteDependencies(
+            get_current_user=lambda: {"id": 1, "username": "tester"},
+            enqueue_task=lambda *args: self.fail("script analysis must not enqueue a video task"),
+            save_upload_file=lambda **kwargs: "",
+            new_task_id=lambda: "preview-language",
+            workspace_username=lambda user: str(user["username"]),
+            workspace_user_id=lambda user: int(user["id"]),
+            enrich_video_payload=enrich,
+        )
+        video_workbench.register_video_routes(app, dependencies)
+        endpoint = self._route_endpoint(app, "/api/video/language-script/analyze", "POST")
+        upload = UploadFile(file=io.BytesIO(b"mock-video"), filename="source.mp4")
+        result = asyncio.run(endpoint(
+            params_json=json.dumps({"target_language": "English"}),
+            files=[upload],
+            user={"id": 1, "username": "tester"},
+        ))
+
+        self.assertEqual(result["params"]["script_text"], "第一句\n第二句")
+        self.assertEqual(result["params"]["video_language_source_segments"][0]["text"], "第一句")
+        self.assertEqual(len(calls), 1)
+
+    def test_seeding_scene_regenerate_upload_history_and_restore_form_a_closed_loop(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "tasks.sqlite"
+            self._create_task_db(db_path)
+            original = root / "scene-original.png"
+            regenerated = root / "scene-regenerated.png"
+            uploaded = root / "scene-uploaded.png"
+            for item in (original, regenerated):
+                item.write_bytes(item.stem.encode())
+            self._insert_task(
+                db_path,
+                task_id="task-seeding-source",
+                input_payload={
+                    "ecommerce_video_mode": "seeding_video",
+                    "ecommerce_seeding_operation": "images_only",
+                    "storyboard": [{"prompt": "scene one", "duration_seconds": 4}],
+                },
+                output_payload={
+                    "image_paths": [str(original)],
+                    "raw_result": {"seeding_stage": "images_only", "generated_scene_image_paths": [str(original)]},
+                },
+            )
+            self._insert_task(
+                db_path,
+                task_id="task-seeding-child",
+                input_payload={
+                    "source_task_id": "task-seeding-source",
+                    "ecommerce_seeding_regenerate_scene_index": 1,
+                },
+                output_payload={
+                    "image_paths": [str(regenerated)],
+                    "raw_result": {"seeding_stage": "images_only", "generated_scene_image_paths": [str(regenerated)]},
+                },
+            )
+            enqueued: list = []
+            events: list = []
+            base = self._workflow_dependencies(db_path, enqueued, events)
+
+            async def save_upload_file(upload, **_kwargs):
+                uploaded.write_bytes(await upload.read())
+                return str(uploaded)
+
+            app = FastAPI()
+            video_workbench.register_video_routes(app, replace(base, save_upload_file=save_upload_file))
+            regenerate = self._route_endpoint(app, "/api/video/tasks/{task_id}/seeding-images/{scene_index}/regenerate", "POST")
+            history = self._route_endpoint(app, "/api/video/tasks/{task_id}/seeding-images/{scene_index}/history", "GET")
+            use = self._route_endpoint(app, "/api/video/tasks/{task_id}/seeding-images/{scene_index}/use", "POST")
+            upload = self._route_endpoint(app, "/api/video/tasks/{task_id}/seeding-images/{scene_index}/upload", "POST")
+            user = {"id": 1, "username": "tester"}
+
+            regenerated_task = asyncio.run(regenerate(task_id="task-seeding-source", scene_index=1, user=user))
+            self.assertEqual(regenerated_task["action"], "ecommerce_seeding_image_regenerate")
+            self.assertEqual(enqueued[-1]["payload"]["ecommerce_seeding_regenerate_scene_index"], 1)
+            history_result = asyncio.run(history(task_id="task-seeding-source", scene_index=1, user=user))
+            self.assertEqual({Path(item["path"]).name for item in history_result["items"]}, {original.name, regenerated.name})
+            asyncio.run(use(
+                task_id="task-seeding-source",
+                scene_index=1,
+                payload={"path": str(regenerated)},
+                user=user,
+            ))
+            replacement_upload = UploadFile(file=io.BytesIO(b"uploaded"), filename="replacement.png")
+            asyncio.run(upload(task_id="task-seeding-source", scene_index=1, image=replacement_upload, user=user))
+            conn = sqlite3.connect(db_path)
+            try:
+                output = json.loads(conn.execute("SELECT output_json FROM tasks WHERE id = ?", ("task-seeding-source",)).fetchone()[0])
+            finally:
+                conn.close()
+            self.assertEqual(output["image_paths"], [str(uploaded.resolve())])
+            self.assertTrue(events)
+
+    def test_digital_human_asset_history_can_restore_only_the_owned_slot(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "tasks.sqlite"
+            self._create_task_db(db_path)
+            current = root / "fusion-current.png"
+            previous = root / "fusion-previous.png"
+            outside = root / "outside.png"
+            for item in (current, previous, outside):
+                item.write_bytes(item.stem.encode())
+            self._insert_task(
+                db_path,
+                task_id="task-digital-history",
+                task_type="create_video",
+                input_payload={"digital_human_fusion_image_paths": [str(current)]},
+                output_payload={
+                    "fusion_images": [str(current)],
+                    "digital_human_asset_history": {
+                        "main": [{"path": str(previous), "source": "regenerated", "created_at": 1}]
+                    },
+                    "raw_result": {"fusion_images": [str(current)]},
+                },
+            )
+            app = FastAPI()
+            video_workbench.register_video_routes(app, self._workflow_dependencies(db_path, [], []))
+            history = self._route_endpoint(
+                app, "/api/video/tasks/{task_id}/digital-human/assets/{asset_index}/history", "GET"
+            )
+            use = self._route_endpoint(
+                app, "/api/video/tasks/{task_id}/digital-human/assets/{asset_index}/use", "POST"
+            )
+            user = {"id": 1, "username": "tester"}
+
+            listed = asyncio.run(history(task_id="task-digital-history", asset_index=1, user=user))
+            self.assertEqual({Path(item["path"]).name for item in listed["items"]}, {current.name, previous.name})
+            restored = asyncio.run(use(
+                task_id="task-digital-history", asset_index=1, payload={"path": str(previous)}, user=user
+            ))
+            self.assertEqual(Path(restored["path"]).name, previous.name)
+            with self.assertRaises(HTTPException) as denied:
+                asyncio.run(use(
+                    task_id="task-digital-history", asset_index=1, payload={"path": str(outside)}, user=user
+                ))
+            self.assertEqual(denied.exception.status_code, 403)
+
+            conn = sqlite3.connect(db_path)
+            try:
+                row = conn.execute(
+                    "SELECT input_json, output_json FROM tasks WHERE id = ?", ("task-digital-history",)
+                ).fetchone()
+            finally:
+                conn.close()
+            stored_input = json.loads(row[0])
+            stored_output = json.loads(row[1])
+            self.assertEqual(stored_input["digital_human_main_image_local_path"], str(previous.resolve()))
+            self.assertEqual(stored_output["fusion_images"], [str(previous.resolve())])
+
     def test_archived_source_backend_create_video_is_runnable_with_server_hooks(self):
         class FakeSourceBackend(ArchivedSourceBackend):
+            def image_generate(self, *, payload, **_kwargs):
+                output = Path(payload["output_dir"]) / "fusion.png"
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(b"image")
+                return {"ok": True, "image_path": str(output), "image_paths": [str(output)]}
+
+            def _generate_minimax_tts(self, *, output_path, **_kwargs):
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(b"audio")
+                return output_path
+
+            def _probe_duration(self, *_args, **_kwargs):
+                return 5
+
             def _resolve_media(self, **kwargs):
                 return f"https://media.invalid/{kwargs['media_kind']}"
 
@@ -721,9 +1225,14 @@ class VideoWorkbenchTests(unittest.TestCase):
                 return {"status": "success", "runninghub_task_id": "rh-source-1", "message": "ok"}
 
         with tempfile.TemporaryDirectory() as tmpdir:
+            model_path = Path(tmpdir) / "person.png"
+            product_path = Path(tmpdir) / "product.png"
+            model_path.write_bytes(b"model")
+            product_path.write_bytes(b"product")
             payload = {
-                "model_image_local_path": str(Path(tmpdir) / "person.png"),
-                "audio_local_path": str(Path(tmpdir) / "speech.mp3"),
+                "model_image_local_path": str(model_path),
+                "product_image_local_path": str(product_path),
+                "speech_text": "hello",
                 "output_dir": tmpdir,
                 "duration_seconds": 5,
             }

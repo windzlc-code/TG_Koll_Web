@@ -4,17 +4,21 @@ import inspect
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import requests
 
 from .contracts import VideoDependencyError, VideoTaskCancelled, VideoTaskContext
+from . import digital_human_audio_postprocess, digital_human_image_quality, digital_human_join_cleanup, digital_human_pipeline, digital_human_subtitles, digital_human_views, ecommerce_ad_prompting, ecommerce_animation_redraw, ecommerce_material_intelligence, ecommerce_reference_video, ecommerce_seeding_dynamic, ecommerce_seeding_renderer, ecommerce_segment_audio, ecommerce_segment_continuity, image_generate_dispatch, image_mode_prompts, language_voice_pipeline, replacement_pipeline, runninghub_image_models
+from .source import create_video as source_create_video
 from .source import image_model_api, runninghub_common
 
 
@@ -96,6 +100,91 @@ def _unique_text_values(values: list[Any] | tuple[Any, ...]) -> list[str]:
         seen.add(normalized)
         result.append(normalized)
     return result
+
+
+def _unique_provider_ids(values: Any) -> list[str]:
+    """Deduplicate opaque provider IDs without treating them as filesystem paths."""
+
+    result: list[str] = []
+    seen: set[str] = set()
+
+    def append(value: Any) -> None:
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                append(item)
+            return
+        item = _text(value)
+        if not item or item in seen:
+            return
+        seen.add(item)
+        result.append(item)
+
+    append(values)
+    return result
+
+
+def _collect_runninghub_task_ids(value: Any) -> list[str]:
+    collected: list[str] = []
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            for key in ("runninghub_task_id", "provider_task_id"):
+                if key in item:
+                    candidate = _text(item.get(key))
+                    if candidate and candidate not in collected:
+                        collected.append(candidate)
+            for key, child in item.items():
+                if key in {"runninghub_task_id", "provider_task_id"}:
+                    continue
+                if key == "runninghub_task_ids":
+                    for candidate in _unique_provider_ids(child):
+                        if candidate not in collected:
+                            collected.append(candidate)
+                elif isinstance(child, (dict, list, tuple)):
+                    visit(child)
+        elif isinstance(item, (list, tuple)):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return collected
+
+
+def _iter_runninghub_usage(value: Any):
+    if isinstance(value, dict):
+        preferred = value.get("runninghub_usage")
+        if isinstance(preferred, dict) and preferred:
+            yield from _iter_runninghub_usage(preferred)
+            return
+        preferred = value.get("usage")
+        if isinstance(preferred, dict) and preferred:
+            yield from _iter_runninghub_usage(preferred)
+            return
+        if any(key in value for key in ("consumeCoins", "consumeMoney", "thirdPartyConsumeMoney")):
+            yield value
+            return
+        for child in value.values():
+            yield from _iter_runninghub_usage(child)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            yield from _iter_runninghub_usage(child)
+
+
+def _merge_runninghub_usage(*values: Any) -> dict[str, float]:
+    totals = {
+        "consumeCoins": 0.0,
+        "consumeMoney": 0.0,
+        "thirdPartyConsumeMoney": 0.0,
+    }
+    found = False
+    for value in values:
+        for usage in _iter_runninghub_usage(value):
+            found = True
+            for key in totals:
+                totals[key] += _number(usage.get(key), 0.0)
+    if not found:
+        return {}
+    return {key: round(value, 6) for key, value in totals.items()}
 
 
 def _segment_prompt_lines(value: Any, *, name: str) -> list[str]:
@@ -219,7 +308,7 @@ def _run_local_process(command: list[str], *, timeout_seconds: int, payload: dic
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         deadline = time.monotonic() + max(int(timeout_seconds), 1)
         try:
-            while process.poll() is None:
+            while True:
                 if context.cancelled():
                     process.terminate()
                     try:
@@ -230,9 +319,13 @@ def _run_local_process(command: list[str], *, timeout_seconds: int, payload: dic
                 if time.monotonic() >= deadline:
                     process.kill()
                     raise TimeoutError("本地视频处理超时")
-                time.sleep(0.2)
-            stdout, stderr = process.communicate()
-            return int(process.returncode or 0), stdout or "", stderr or ""
+                try:
+                    stdout, stderr = process.communicate(
+                        timeout=min(max(deadline - time.monotonic(), 0.01), 0.25)
+                    )
+                    return int(process.returncode or 0), stdout or "", stderr or ""
+                except subprocess.TimeoutExpired:
+                    continue
         finally:
             if process.poll() is None:
                 process.kill()
@@ -262,6 +355,8 @@ class ArchivedSourceBackend:
             "video_language_replace": self.video_language_replace,
             "replace_model": self.replace_model,
             "replace_product": self.replace_product,
+            "replace_product_and_model": self.replace_product_and_model,
+            "replace_productANDmodel": self.replace_product_and_model,
             "image_generate": self.image_generate,
         }
         runner = runners.get(_text(task_type))
@@ -304,41 +399,72 @@ class ArchivedSourceBackend:
         payload: dict[str, Any],
         context: VideoTaskContext,
         workdir: Path,
+        speech_text: str = "",
+        segment_texts: list[str] | None = None,
+        segment_durations: list[float] | None = None,
     ) -> tuple[Path, int]:
         cues = _subtitle_cues(payload)
-        if not cues:
+        prepared_segment_texts = [str(item or "").strip() for item in (segment_texts or []) if str(item or "").strip()]
+        prepared_segment_durations = [max(_number(item, 0.0), 0.1) for item in (segment_durations or [])]
+        use_original_ass = bool(
+            prepared_segment_texts
+            and len(prepared_segment_texts) == len(prepared_segment_durations)
+        )
+        if not cues and not use_original_ass:
             return video_path, 0
         if not video_path.exists() or not video_path.is_file():
             raise FileNotFoundError(f"cannot burn subtitles because video output is missing: {video_path}")
         ffmpeg = _text(payload.get("ffmpeg_path")) or shutil.which("ffmpeg") or ""
         if not ffmpeg:
             raise VideoDependencyError("subtitle rendering requires ffmpeg")
-        subtitle_path = workdir / f"{video_path.stem}.srt"
-        subtitle_text = "\n\n".join(
-            "\n".join(
-                [
-                    str(cue["index"]),
-                    f"{_srt_timestamp(cue['start_seconds'])} --> {_srt_timestamp(cue['end_seconds'])}",
-                    str(cue["text"]).replace("\r", " ").strip(),
-                ]
-            )
-            for cue in cues
-        ) + "\n"
-        subtitle_path.write_text(subtitle_text, encoding="utf-8-sig")
         rendered_path = workdir / f"{video_path.stem}_subtitled.mp4"
-        font_size = min(max(_integer(payload.get("subtitle_font_size"), 18), 10), 72)
-        margin = min(max(_integer(payload.get("subtitle_margin_vertical"), 36), 0), 400)
         subtitle_config = payload.get("subtitles") if isinstance(payload.get("subtitles"), dict) else {}
-        template = _text(payload.get("subtitle_template") or subtitle_config.get("template") or "keyword_focus")
-        template_styles = {
-            "keyword_focus": "Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00111111",
-            "bilingual_dual": "Bold=0,Spacing=0.5",
-            "handwritten_quote": "Italic=1,MarginV=60",
-            "split_hook": "Bold=1,MarginV=80",
-        }
-        template_style = template_styles.get(template, template_styles["keyword_focus"])
-        force_style = f"FontSize={font_size},Outline=2,Shadow=0,Alignment=2,MarginV={margin},{template_style}"
-        subtitle_filter = f"subtitles=filename='{_ffmpeg_filter_path(subtitle_path)}':force_style='{force_style}'"
+        template = _text(payload.get("subtitle_template") or subtitle_config.get("template") or "split_hook")
+        if use_original_ass:
+            raw_keyword_lines = payload.get("subtitle_keyword_lines") or payload.get("video_cover_keywords") or []
+            if isinstance(raw_keyword_lines, str):
+                raw_keyword_lines = [item for item in re.split(r"[\n，,。；;、|/]+", raw_keyword_lines) if item.strip()]
+            keyword_lines = [str(item or "").strip()[:14] for item in raw_keyword_lines] if isinstance(raw_keyword_lines, list) else []
+            subtitle_path, subtitle_filter = digital_human_subtitles.write_ass_subtitles(
+                output_path=workdir / f"{video_path.stem}.ass",
+                segment_texts=prepared_segment_texts,
+                segment_durations=prepared_segment_durations,
+                media_path=video_path,
+                timing_shift_seconds=_number(payload.get("subtitle_timing_shift_seconds"), 0.0),
+                template_key=template,
+                keyword_lines=keyword_lines,
+                include_fixed_overlays=_boolean(
+                    payload.get("subtitle_fixed_overlays_enabled"),
+                    name="subtitle_fixed_overlays_enabled",
+                    default=True,
+                ),
+            )
+            subtitle_count = len(prepared_segment_texts)
+        else:
+            subtitle_path = workdir / f"{video_path.stem}.srt"
+            subtitle_text = "\n\n".join(
+                "\n".join(
+                    [
+                        str(cue["index"]),
+                        f"{_srt_timestamp(cue['start_seconds'])} --> {_srt_timestamp(cue['end_seconds'])}",
+                        str(cue["text"]).replace("\r", " ").strip(),
+                    ]
+                )
+                for cue in cues
+            ) + "\n"
+            subtitle_path.write_text(subtitle_text, encoding="utf-8-sig")
+            font_size = min(max(_integer(payload.get("subtitle_font_size"), 18), 10), 72)
+            margin = min(max(_integer(payload.get("subtitle_margin_vertical"), 36), 0), 400)
+            template_styles = {
+                "keyword_focus": "Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00111111",
+                "bilingual_dual": "Bold=0,Spacing=0.5",
+                "handwritten_quote": "Italic=1,MarginV=60",
+                "split_hook": "Bold=1,MarginV=80",
+            }
+            template_style = template_styles.get(template, template_styles["keyword_focus"])
+            force_style = f"FontSize={font_size},Outline=2,Shadow=0,Alignment=2,MarginV={margin},{template_style}"
+            subtitle_filter = f"subtitles=filename='{_ffmpeg_filter_path(subtitle_path)}':force_style='{force_style}'"
+            subtitle_count = len(cues)
         command = [
             ffmpeg,
             "-hide_banner",
@@ -369,7 +495,7 @@ class ArchivedSourceBackend:
         context.check_cancelled()
         if returncode != 0 or not rendered_path.exists():
             raise RuntimeError(f"ffmpeg subtitle rendering failed: {_text(stderr)[-1000:]}")
-        return rendered_path, len(cues)
+        return rendered_path, subtitle_count
 
     def _apply_optional_subtitles(
         self,
@@ -378,6 +504,9 @@ class ArchivedSourceBackend:
         payload: dict[str, Any],
         context: VideoTaskContext,
         workdir: Path,
+        speech_text: str = "",
+        segment_texts: list[str] | None = None,
+        segment_durations: list[float] | None = None,
     ) -> tuple[Path, int, str]:
         try:
             rendered, count = self._burn_subtitles_if_requested(
@@ -385,8 +514,13 @@ class ArchivedSourceBackend:
                 payload=payload,
                 context=context,
                 workdir=workdir,
+                speech_text=speech_text,
+                segment_texts=segment_texts,
+                segment_durations=segment_durations,
             )
             return rendered, count, ""
+        except VideoTaskCancelled:
+            raise
         except Exception as exc:
             return video_path, 0, f"subtitle rendering skipped: {str(exc).strip()}"
 
@@ -739,45 +873,54 @@ class ArchivedSourceBackend:
         workdir: Path,
         provider_state: dict[str, Any],
     ) -> dict[str, Any]:
-        source_audio = self._extract_source_audio_for_separation(
-            source_video=source_video,
-            payload=payload,
-            context=context,
-            workdir=workdir,
-        )
-        audio_reference = self._upload_runninghub_audio(path=source_audio, payload=payload, context=context)
         app_id = _text(payload.get("video_language_audio_separation_app_id")) or VIDEO_LANGUAGE_AUDIO_SEPARATION_APP_ID
-        submit_payload = {
-            "nodeInfoList": [
-                {
-                    "nodeId": "3",
-                    "fieldName": "audio",
-                    "fieldValue": audio_reference,
-                    "description": "source video audio",
-                }
-            ],
-            "instanceType": _text(payload.get("video_language_audio_separation_instance_type") or payload.get("instance_type") or "default"),
-            "usePersonalQueue": False,
-        }
         api_key = self._api_key(payload)
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
-        context.check_cancelled()
-        response = self.http.post(
-            self._workflow_submit_url(payload, app_id),
-            headers=headers,
-            data=json.dumps(submit_payload, ensure_ascii=False),
-            timeout=120,
-        )
-        response.raise_for_status()
-        submit_body = response.json()
-        normalized = runninghub_common._normalize_submit_result(submit_body)
-        provider_task_id = _text(normalized.get("task_id") or normalized.get("task id"))
+        provider_task_id = _text(payload.get("resume_runninghub_task_id"))
+        submit_body: dict[str, Any] = {}
         if not provider_task_id:
-            raise RuntimeError(f"RunningHub background separation submit failed: {json.dumps(submit_body, ensure_ascii=False)[:800]}")
+            source_audio = self._extract_source_audio_for_separation(
+                source_video=source_video,
+                payload=payload,
+                context=context,
+                workdir=workdir,
+            )
+            audio_reference = self._upload_runninghub_audio(path=source_audio, payload=payload, context=context)
+            submit_payload = {
+                "nodeInfoList": [
+                    {
+                        "nodeId": "3",
+                        "fieldName": "audio",
+                        "fieldValue": audio_reference,
+                        "description": "source video audio",
+                    }
+                ],
+                "instanceType": _text(payload.get("video_language_audio_separation_instance_type") or payload.get("instance_type") or "default"),
+                "usePersonalQueue": False,
+            }
+            context.progress(stage="provider_submitting", status="running", message="submitting background audio separation")
+            context.check_cancelled()
+            response = self.http.post(
+                self._workflow_submit_url(payload, app_id),
+                headers=headers,
+                data=json.dumps(submit_payload, ensure_ascii=False),
+                timeout=120,
+            )
+            response.raise_for_status()
+            submit_body = response.json()
+            normalized = runninghub_common._normalize_submit_result(submit_body)
+            provider_task_id = _text(normalized.get("task_id") or normalized.get("task id"))
+            if not provider_task_id:
+                raise RuntimeError(f"RunningHub background separation submit failed: {json.dumps(submit_body, ensure_ascii=False)[:800]}")
         provider_state["task_id"] = provider_task_id
         register = payload.get("_register_runninghub_task")
         if callable(register):
             _invoke_compatible(register, task_id=str(task_id), runninghub_task_id=provider_task_id)
+        context.progress(
+            stage="provider_running",
+            status="running",
+            message="background audio separation running",
+        )
         timeout_seconds = max(_integer(payload.get("video_task_timeout_seconds"), 3600), 30)
         poll_seconds = max(_number(payload.get("video_poll_interval_seconds"), 3.0), 0.25)
         started = time.monotonic()
@@ -841,6 +984,8 @@ class ArchivedSourceBackend:
         payload: dict[str, Any],
         context: VideoTaskContext,
         workdir: Path,
+        opening_insert_text: str = "",
+        ending_insert_text: str = "",
     ) -> tuple[Path, list[dict[str, Any]], float]:
         cues = _subtitle_cues({"subtitles": {"enabled": True, "items": segments}})
         if not cues:
@@ -848,18 +993,80 @@ class ArchivedSourceBackend:
         ffmpeg = _text(payload.get("ffmpeg_path")) or shutil.which("ffmpeg") or ""
         if not ffmpeg:
             raise VideoDependencyError("timed language replacement requires ffmpeg")
+        regenerate_index = _integer(payload.get("regenerate_segment_index"), 0)
+        if regenerate_index and not 1 <= regenerate_index <= len(cues):
+            raise ValueError(f"regenerate_segment_index must be between 1 and {len(cues)}")
+        reusable_values = payload.get("_video_language_reuse_segments")
+        reusable: dict[int, Path] = {}
+        if regenerate_index and isinstance(reusable_values, list):
+            for offset, item in enumerate(reusable_values, start=1):
+                if not isinstance(item, dict):
+                    continue
+                index = _integer(item.get("index") or item.get("segment_index"), offset)
+                candidate_text = _text(item.get("audio_path"))
+                if not candidate_text:
+                    continue
+                candidate = Path(candidate_text).expanduser().resolve()
+                if candidate.is_file():
+                    reusable[index] = candidate
+        plan: list[dict[str, Any]] = [{**cue, "role": "source", "segment_index": int(cue["index"])} for cue in cues]
+        if _text(opening_insert_text):
+            plan.insert(0, {
+                "index": 0,
+                "segment_index": 0,
+                "role": "opening",
+                "start_seconds": 0.0,
+                "end_seconds": max(float(cues[0]["start_seconds"]), 0.001),
+                "text": _text(opening_insert_text),
+            })
+        if _text(ending_insert_text):
+            ending_start = max(float(cues[-1]["end_seconds"]), float(source_duration or 0))
+            plan.append({
+                "index": len(cues) + 1,
+                "segment_index": len(cues) + 1,
+                "role": "ending",
+                "start_seconds": ending_start,
+                "end_seconds": ending_start + 0.001,
+                "text": _text(ending_insert_text),
+            })
         generated: list[dict[str, Any]] = []
-        for cue in cues:
+        for cue in plan:
             context.check_cancelled()
-            audio_path = self._generate_minimax_tts(
-                speech_text=str(cue["text"]),
-                output_path=workdir / f"video_language_segment_{int(cue['index']):03d}.mp3",
-                payload=payload,
-                context=context,
-            )
-            generated.append({**cue, "audio_path": str(audio_path)})
+            cue_index = int(cue["segment_index"])
+            is_source = cue.get("role") == "source"
+            audio_path = reusable.get(cue_index) if is_source and cue_index != regenerate_index else None
+            reused = audio_path is not None
+            if audio_path is None:
+                audio_path = self._generate_minimax_tts(
+                    speech_text=str(cue["text"]),
+                    output_path=workdir / f"video_language_{cue.get('role', 'source')}_{cue_index:03d}.mp3",
+                    payload=payload,
+                    context=context,
+                )
+            generated.append({**cue, "audio_path": str(audio_path), "reused": reused})
+        opening = next((item for item in generated if item.get("role") == "opening"), None)
+        timeline_shift = 0.0
+        if opening is not None:
+            opening_duration = self._probe_media_duration_seconds(Path(opening["audio_path"]), payload)
+            first_source_start = float(cues[0]["start_seconds"])
+            timeline_shift = max(opening_duration - first_source_start, 0.0)
+            opening["audio_duration_seconds"] = opening_duration
+            opening["start_seconds"] = max(first_source_start - opening_duration, 0.0)
+            opening["end_seconds"] = first_source_start + timeline_shift
+        for item in generated:
+            if item.get("role") == "source" and timeline_shift:
+                item["start_seconds"] = float(item["start_seconds"]) + timeline_shift
+                item["end_seconds"] = float(item["end_seconds"]) + timeline_shift
+        ending = next((item for item in generated if item.get("role") == "ending"), None)
+        ending_duration = 0.0
+        if ending is not None:
+            last_source_end = max(float(item["end_seconds"]) for item in generated if item.get("role") == "source")
+            ending_duration = self._probe_media_duration_seconds(Path(ending["audio_path"]), payload)
+            ending["audio_duration_seconds"] = ending_duration
+            ending["start_seconds"] = last_source_end
+            ending["end_seconds"] = last_source_end + ending_duration
         total_seconds = max(
-            float(source_duration or 0),
+            float(source_duration or 0) + timeline_shift,
             max(float(item["end_seconds"]) for item in generated),
             0.1,
         )
@@ -912,6 +1119,20 @@ class ArchivedSourceBackend:
         if returncode != 0 or not output_path.exists():
             raise RuntimeError(f"ffmpeg timed language audio composition failed: {_text(stderr)[-1000:]}")
         return output_path, generated, total_seconds
+
+    @staticmethod
+    def _probe_media_duration_seconds(path: Path, payload: dict[str, Any]) -> float:
+        ffprobe = _text(payload.get("ffprobe_path")) or shutil.which("ffprobe") or ""
+        if not ffprobe:
+            return 0.0
+        completed = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        return max(_number(completed.stdout, 0.0), 0.0) if completed.returncode == 0 else 0.0
 
     def _resolve_media(
         self,
@@ -991,6 +1212,19 @@ class ArchivedSourceBackend:
             normalized: dict[str, Any] = {}
             for attempt in range(1, max_submit_attempts + 1):
                 context.check_cancelled()
+                checkpoint = payload.get("_checkpoint_video_progress")
+                if callable(checkpoint):
+                    _invoke_compatible(
+                        checkpoint,
+                        task_id=str(task_id),
+                        stage="provider_submitting",
+                        provider_submission_key=(
+                            f"{task_id}:{label}:{_integer(payload.get('_segment_index'), 0)}:{attempt}"
+                        ),
+                        provider_submit_attempt=attempt,
+                        segment_index=_integer(payload.get("_segment_index"), 0),
+                        message=f"{label} provider submission is in flight",
+                    )
                 response = self.http.post(submit_url, headers=headers, data=json.dumps(submit_payload, ensure_ascii=False), timeout=120)
                 response.raise_for_status()
                 submit_body = response.json()
@@ -1007,6 +1241,15 @@ class ArchivedSourceBackend:
         register = payload.get("_register_runninghub_task")
         if callable(register):
             _invoke_compatible(register, task_id=str(task_id), runninghub_task_id=runninghub_task_id)
+        checkpoint = payload.get("_checkpoint_video_progress")
+        if callable(checkpoint):
+            _invoke_compatible(
+                checkpoint,
+                task_id=str(task_id),
+                stage="provider_running",
+                segment_index=_integer(payload.get("_segment_index"), 0),
+                message=f"{label} provider task is running",
+            )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         timeout_seconds = max(_integer(payload.get("video_task_timeout_seconds"), 3600), 30)
         poll_seconds = max(_number(payload.get("video_poll_interval_seconds"), 3.0), 0.25)
@@ -1024,6 +1267,14 @@ class ArchivedSourceBackend:
             progress = last.get("progress")
             context.progress(stage="runninghub", status="running", message=f"{label}执行中", progress=progress)
             if status == "success":
+                if callable(checkpoint):
+                    _invoke_compatible(
+                        checkpoint,
+                        task_id=str(task_id),
+                        stage="provider_success",
+                        segment_index=_integer(payload.get("_segment_index"), 0),
+                        message=f"{label} provider task completed",
+                    )
                 return {
                     **last,
                     "status": "success",
@@ -1034,6 +1285,14 @@ class ArchivedSourceBackend:
                     "submit": submit_body,
                 }
             if status == "failed":
+                if callable(checkpoint):
+                    _invoke_compatible(
+                        checkpoint,
+                        task_id=str(task_id),
+                        stage="provider_failed",
+                        segment_index=_integer(payload.get("_segment_index"), 0),
+                        message=f"{label} provider task failed",
+                    )
                 return {
                     **last,
                     "status": "failed",
@@ -1061,7 +1320,1157 @@ class ArchivedSourceBackend:
         base = ArchivedSourceBackend._base_url(payload)
         return f"{base}/openapi/v2/run/ai-app/{app_id}"
 
+    @staticmethod
+    def _digital_human_fusion_count(payload: dict[str, Any], mode: str) -> int:
+        requested = _integer(payload.get("digital_human_fusion_count"), 0)
+        count = requested or (4 if str(mode or "").strip().lower() == "storyboard" else 1)
+        return min(max(count, 1), 4)
+
+    @staticmethod
+    def _digital_human_main_fusion_prompt(payload: dict[str, Any], speech_text: str, storyboard: list[Any]) -> str:
+        explicit = _text(payload.get("fusion_main_prompt"))
+        if explicit:
+            return explicit
+        ratio = _text(payload.get("ratio") or payload.get("ratio_label") or payload.get("image_size")) or "9:16"
+        storyboard_text = "; ".join(
+            _text(item.get("description") or item.get("scene") or item.get("visual_prompt") or item.get("prompt"))
+            for item in storyboard
+            if isinstance(item, dict)
+        )
+        context_text = "; ".join(value for value in (speech_text, storyboard_text) if value)
+        return (
+            f"Create one photorealistic {ratio} digital-human presenter and product fusion master image. "
+            "@Image 1 is the exact product reference and @Image 2 is the exact presenter identity reference. "
+            "Preserve the presenter's face, hair, body proportions and clothing, and preserve the product's shape, "
+            "materials, colors, branding and proportions. Integrate both in one physically plausible scene with "
+            "consistent perspective, contact, occlusion, lighting and shadows. Use a natural eye-level talking-video "
+            "composition, no split screen, no collage, no readable text, no watermark and no white border. "
+            f"Content context: {context_text or 'present the referenced product naturally'}."
+        )
+
+    @staticmethod
+    def _digital_human_consistency_view_prompt(
+        payload: dict[str, Any],
+        *,
+        view_index: int,
+        speech_text: str,
+        storyboard: list[Any],
+    ) -> str:
+        configured = payload.get("digital_human_view_prompts")
+        if isinstance(configured, (list, tuple)) and 0 <= view_index - 2 < len(configured):
+            explicit = _text(configured[view_index - 2])
+            if explicit:
+                return explicit
+        plans = {
+            2: "Move to a three-quarter left, eye-level medium close-up while keeping the presenter facing the camera.",
+            3: "Move to a three-quarter right or side-front eye-level medium shot with a different natural gesture.",
+            4: "Use a new eye-level medium close-up with changed framing and presenter position for the closing view.",
+        }
+        storyboard_prompt = ""
+        storyboard_offset = view_index - 1
+        if 0 <= storyboard_offset < len(storyboard) and isinstance(storyboard[storyboard_offset], dict):
+            storyboard_prompt = _text(
+                storyboard[storyboard_offset].get("visual_prompt")
+                or storyboard[storyboard_offset].get("prompt")
+                or storyboard[storyboard_offset].get("description")
+                or storyboard[storyboard_offset].get("scene")
+            )
+        return (
+            "Generate one new consistency view for the same digital-human talking video. "
+            "@Image 1 is the confirmed fusion master image and is the authoritative reference for the complete scene, "
+            "presenter identity and exact product appearance. @Image 2 is the original presenter identity reference. "
+            f"{plans.get(view_index, 'Use a clearly different eye-level camera position and natural presenter gesture.')} "
+            "Keep the same person, product, clothing, environment, lighting logic and visual style; change only camera "
+            "position, framing, pose and gesture. Do not replace the scene or redesign the product. Keep the face clear, "
+            "the product recognizable, and produce one continuous photorealistic frame without text, watermark or border. "
+            f"Shot direction: {storyboard_prompt or speech_text or 'continue the same product presentation'}."
+        )
+
+    def generate_digital_human_fusion_main(
+        self,
+        *,
+        task_id: str,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+        workdir: Path,
+        speech_text: str,
+        storyboard: list[Any],
+        model_references: list[str],
+        product_references: list[str],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        context.check_cancelled()
+        local_models = [value for value in model_references if not value.lower().startswith(("http://", "https://"))]
+        local_products = [value for value in product_references if not value.lower().startswith(("http://", "https://"))]
+        if not local_models or not local_products:
+            raise ValueError("digital human image fusion requires local model and product references")
+        main_payload = dict(payload)
+        for key in ("mode", "image_count", "imageCount", "nano_images", "count", "resume_checkpoint"):
+            main_payload.pop(key, None)
+        main_payload.update(
+            {
+                "output_dir": str((Path(workdir) / "digital_human_fusion" / "main").resolve()),
+                "video_image_mode": "model_product",
+                "product_image_local_path": local_products[0],
+                "model_image_local_path": local_models[0],
+                "secondary_image_local_path": local_models[1] if len(local_models) > 1 else None,
+                "product_image_local_paths": local_products[1:2],
+                "prompt": self._digital_human_main_fusion_prompt(payload, speech_text, storyboard),
+                "count": 1,
+            }
+        )
+        result = digital_human_image_quality.run_digital_human_image_generate_with_quality_gate(
+            f"{task_id}-fusion-main",
+            main_payload,
+            product_category=payload.get("product_category") or payload.get("category"),
+            generate_image=lambda image_task_id, image_payload: self.image_generate(
+                task_id=image_task_id,
+                payload=image_payload,
+                context=context,
+            ),
+            visual_semantic_llm=(
+                payload.get("_digital_human_visual_semantic_llm")
+                if callable(payload.get("_digital_human_visual_semantic_llm"))
+                else None
+            ),
+            context=context,
+        )
+        context.check_cancelled()
+        main_path = _text(result.get("image_path") or result.get("download_path")) if isinstance(result, dict) else ""
+        if not main_path or not Path(main_path).is_file():
+            raise RuntimeError("digital human fusion main image generation returned no local image")
+        normalized = dict(result) if isinstance(result, dict) else {}
+        normalized.update(
+            {
+                "ok": True,
+                "image_path": str(Path(main_path).resolve()),
+                "fusion_main_image": str(Path(main_path).resolve()),
+                "fusion_images": [str(Path(main_path).resolve())],
+            }
+        )
+        return normalized
+
+    def generate_digital_human_single_consistency_view(
+        self,
+        *,
+        task_id: str,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+        workdir: Path,
+        main_image_path: str,
+        view_index: int,
+        speech_text: str,
+        storyboard: list[Any],
+        model_references: list[str],
+        image_task_id: str = "",
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        context.check_cancelled()
+        index = max(_integer(view_index, 2), 2)
+        main_path = Path(main_image_path).expanduser().resolve()
+        if not main_path.is_file():
+            raise FileNotFoundError(f"digital human fusion main image does not exist: {main_path}")
+        local_models = [value for value in model_references if not value.lower().startswith(("http://", "https://"))]
+        if not local_models:
+            raise ValueError("digital human consistency view requires a local model reference")
+        view_payload = dict(payload)
+        for key in ("mode", "image_count", "imageCount", "nano_images", "count", "resume_checkpoint"):
+            view_payload.pop(key, None)
+        view_payload.update(
+            {
+                "output_dir": str((Path(workdir) / "digital_human_fusion" / f"view_{index}").resolve()),
+                "video_image_mode": "model_product",
+                "product_image_local_path": str(main_path),
+                "model_image_local_path": local_models[0],
+                "secondary_image_local_path": local_models[1] if len(local_models) > 1 else None,
+                "product_image_local_paths": [],
+                "prompt": self._digital_human_consistency_view_prompt(
+                    payload,
+                    view_index=index,
+                    speech_text=speech_text,
+                    storyboard=storyboard,
+                ),
+                "count": 1,
+            }
+        )
+        result = digital_human_image_quality.run_digital_human_image_generate_with_quality_gate(
+            _text(image_task_id) or f"{task_id}-fusion-view-{index}",
+            view_payload,
+            product_category=payload.get("product_category") or payload.get("category"),
+            generate_image=lambda view_task_id, view_generation_payload: self.image_generate(
+                task_id=view_task_id,
+                payload=view_generation_payload,
+                context=context,
+            ),
+            visual_semantic_llm=(
+                payload.get("_digital_human_visual_semantic_llm")
+                if callable(payload.get("_digital_human_visual_semantic_llm"))
+                else None
+            ),
+            context=context,
+        )
+        context.check_cancelled()
+        view_path = _text(result.get("image_path") or result.get("download_path")) if isinstance(result, dict) else ""
+        if not view_path or not Path(view_path).is_file():
+            raise RuntimeError(f"digital human consistency view {index} returned no local image")
+        normalized = dict(result) if isinstance(result, dict) else {}
+        normalized.update(
+            {
+                "ok": True,
+                "view_index": index,
+                "image_path": str(Path(view_path).resolve()),
+                "fusion_images": [str(Path(view_path).resolve())],
+            }
+        )
+        return normalized
+
+    def generate_digital_human_consistency_views(
+        self,
+        *,
+        task_id: str,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+        workdir: Path,
+        main_image_path: str,
+        speech_text: str,
+        storyboard: list[Any],
+        mode: str,
+        model_references: list[str],
+        existing_fusion_images: list[str] | None = None,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        context.check_cancelled()
+        main_path = str(Path(main_image_path).expanduser().resolve())
+        paths = _unique_text_values([main_path, *(existing_fusion_images or [])])
+        if not paths or paths[0] != main_path:
+            paths.insert(0, main_path)
+        desired_count = self._digital_human_fusion_count(payload, mode)
+        checkpoint = payload.get("resume_checkpoint") if isinstance(payload.get("resume_checkpoint"), dict) else {}
+        task_ids = _unique_provider_ids(
+            [
+                payload.get("_digital_human_fusion_runninghub_task_ids"),
+                checkpoint.get("runninghub_task_ids"),
+                checkpoint.get("runninghub_task_id"),
+            ]
+        )
+        results: list[dict[str, Any]] = []
+        resume_task_id = _text(payload.get("resume_runninghub_task_id"))
+        missing_view_indexes = [
+            view_index
+            for view_index in range(2, desired_count + 1)
+            if len(paths) <= view_index - 1 or not Path(paths[view_index - 1]).is_file()
+        ]
+        first_resume_index = missing_view_indexes[0] if resume_task_id and missing_view_indexes else 0
+        late_view_indexes: dict[str, int] = {}
+
+        def generate_one_view(view_index: int, attempt: int, attempt_task_id: str) -> dict[str, Any]:
+            view_payload = dict(payload)
+            late_view_indexes[attempt_task_id] = view_index
+            if resume_task_id and view_index == first_resume_index and attempt == 1:
+                view_payload["resume_runninghub_task_id"] = resume_task_id
+            else:
+                view_payload.pop("resume_runninghub_task_id", None)
+            return self.generate_digital_human_single_consistency_view(
+                task_id=attempt_task_id,
+                payload=view_payload,
+                context=context,
+                workdir=workdir,
+                main_image_path=main_path,
+                view_index=view_index,
+                speech_text=speech_text,
+                storyboard=storyboard,
+                model_references=model_references,
+                image_task_id=(
+                    f"{task_id}-fusion-view-{view_index}"
+                    if attempt == 1
+                    else f"{task_id}-fusion-view-{view_index}-retry-{attempt}"
+                ),
+            )
+
+        def late_view_output(attempt_task_id: str, _error: Exception) -> dict[str, Any] | None:
+            view_index = late_view_indexes.get(attempt_task_id)
+            if not view_index:
+                return None
+            output_dir = Path(workdir) / "digital_human_fusion" / f"view_{view_index}"
+            candidates = sorted(
+                (
+                    path for path in output_dir.rglob("*")
+                    if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+                ),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            ) if output_dir.exists() else []
+            if not candidates:
+                return None
+            return {"ok": True, "view_index": view_index, "image_path": str(candidates[0].resolve()), "late_output": True}
+
+        if missing_view_indexes:
+            view_retry_count = min(
+                max(
+                    _integer(
+                        payload.get("_digital_human_view_retry_count", payload.get("digital_human_view_retry_count")),
+                        0,
+                    ),
+                    0,
+                ),
+                2,
+            )
+            if view_retry_count <= 0:
+                generated_views = []
+                view_attempts = {}
+                for view_index in missing_view_indexes:
+                    result = generate_one_view(
+                        view_index,
+                        1,
+                        f"{context.task_id}_fusion-view_{view_index}_try1",
+                    )
+                    generated_views.append(result)
+                    view_attempts[view_index] = 1
+                    slot = view_index - 1
+                    while len(paths) <= slot:
+                        paths.append("")
+                    paths[slot] = _text(result.get("image_path"))
+                    task_ids = _unique_provider_ids(
+                        [task_ids, result.get("runninghub_task_ids"), result.get("runninghub_task_id")]
+                    )
+                    checkpoint_callback = payload.get("_checkpoint_video_progress")
+                    if callable(checkpoint_callback):
+                        _invoke_compatible(
+                            checkpoint_callback,
+                            task_id=str(task_id),
+                            stage="digital_human_fusion_views_partial",
+                            fusion_images=list(paths),
+                            runninghub_task_id=task_ids[-1] if task_ids else "",
+                            runninghub_task_ids=task_ids,
+                            message=f"Digital-human consistency view {view_index}/{desired_count} complete",
+                        )
+            else:
+                generated_views, view_attempts = digital_human_views.run_digital_human_view_images_parallel(
+                    view_indexes=missing_view_indexes,
+                    generate_one=generate_one_view,
+                    late_output=late_view_output,
+                    context=context,
+                    max_workers=min(max(_integer(payload.get("digital_human_view_parallelism"), 3), 1), 3),
+                    retries=view_retry_count,
+                    task_suffix="fusion-view",
+                    stage_message="Generating digital-human consistency views",
+                )
+        else:
+            generated_views, view_attempts = [], {}
+
+        for result in generated_views:
+            view_index = max(_integer(result.get("view_index"), 0), 0)
+            if view_index <= 1:
+                raise RuntimeError("digital human consistency view returned an invalid view index")
+            slot = view_index - 1
+            view_path = _text(result.get("image_path"))
+            while len(paths) <= slot:
+                paths.append("")
+            paths[slot] = view_path
+            results.append(result)
+            task_ids = _unique_provider_ids([task_ids, result.get("runninghub_task_ids"), result.get("runninghub_task_id")])
+            checkpoint = payload.get("_checkpoint_video_progress")
+            if callable(checkpoint):
+                _invoke_compatible(
+                    checkpoint,
+                    task_id=str(task_id),
+                    stage="digital_human_fusion_views_partial",
+                    fusion_images=list(paths),
+                    runninghub_task_id=task_ids[-1] if task_ids else "",
+                    runninghub_task_ids=task_ids,
+                    message=f"Digital-human consistency view {view_index}/{desired_count} complete",
+                )
+        if len(paths) < desired_count or any(not _text(path) or not Path(path).is_file() for path in paths[:desired_count]):
+            raise RuntimeError("digital human consistency view generation did not complete every required view")
+        return {
+            "ok": True,
+            "image_path": paths[0],
+            "image_paths": paths[:desired_count],
+            "fusion_main_image": paths[0],
+            "fusion_images": paths[:desired_count],
+            "runninghub_task_id": task_ids[-1] if task_ids else "",
+            "runninghub_task_ids": task_ids,
+            "runninghub_usage": _merge_runninghub_usage(results),
+            "raw_result": {"view_results": results, "view_attempts": view_attempts},
+        }
+
+    def generate_digital_human_fusion_views(
+        self,
+        *,
+        task_id: str,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+        workdir: Path,
+        speech_text: str,
+        storyboard: list[Any],
+        mode: str,
+        model_references: list[str],
+        product_references: list[str],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        resume_checkpoint = payload.get("resume_checkpoint") if isinstance(payload.get("resume_checkpoint"), dict) else {}
+        existing = payload.get("digital_human_fusion_image_paths") or resume_checkpoint.get("fusion_images") or []
+        if isinstance(existing, (str, Path)):
+            existing = [str(existing)]
+        existing = [value for value in _unique_text_values(list(existing)) if Path(value).is_file()]
+        main_result: dict[str, Any] = {}
+        if not existing:
+            main_result = self.generate_digital_human_fusion_main(
+                task_id=task_id,
+                payload=payload,
+                context=context,
+                workdir=workdir,
+                speech_text=speech_text,
+                storyboard=storyboard,
+                model_references=model_references,
+                product_references=product_references,
+            )
+            existing = [str(main_result["image_path"])]
+        views_result = self.generate_digital_human_consistency_views(
+            task_id=task_id,
+            payload=payload,
+            context=context,
+            workdir=workdir,
+            main_image_path=existing[0],
+            speech_text=speech_text,
+            storyboard=storyboard,
+            mode=mode,
+            model_references=model_references,
+            existing_fusion_images=existing,
+        )
+        task_ids = _unique_provider_ids(
+            [
+                main_result.get("runninghub_task_ids"),
+                main_result.get("runninghub_task_id"),
+                views_result.get("runninghub_task_ids"),
+                views_result.get("runninghub_task_id"),
+            ]
+        )
+        views_result["runninghub_task_id"] = task_ids[-1] if task_ids else ""
+        views_result["runninghub_task_ids"] = task_ids
+        views_result["runninghub_usage"] = _merge_runninghub_usage(main_result, views_result)
+        return views_result
+
+    @staticmethod
+    def _digital_human_workflow_ids(payload: dict[str, Any]) -> list[str]:
+        raw = payload.get("oral_digital_human_workflow_ids")
+        values = raw if isinstance(raw, (list, tuple)) else str(raw or "").split(",")
+        workflow_ids = _unique_provider_ids(list(values))
+        if not workflow_ids:
+            workflow_ids = _unique_provider_ids(
+                [payload.get("video_create_video_app_id"), payload.get("create_video_app_id"), payload.get("video_app_id")]
+            )
+        return workflow_ids or [DIGITAL_HUMAN_VIDEO_APP_ID]
+
+    def _split_digital_human_audio(
+        self,
+        *,
+        audio_path: Path,
+        duration_seconds: float,
+        segment_index: int,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+        workdir: Path,
+    ) -> list[tuple[Path, float]]:
+        total = max(float(duration_seconds or 0), 0.0)
+        max_seconds = 15.0
+        if total <= max_seconds + 0.25:
+            return [(audio_path, max(total, 1.0))]
+        ffmpeg = _text(payload.get("ffmpeg_path")) or shutil.which("ffmpeg") or ""
+        if not ffmpeg:
+            raise VideoDependencyError("digital human audio longer than 15 seconds requires ffmpeg splitting")
+        split_dir = Path(workdir) / "digital_human_short_out" / "audio" / f"{segment_index}_parts"
+        split_dir.mkdir(parents=True, exist_ok=True)
+        parts: list[tuple[Path, float]] = []
+        part_count = int(math.ceil(total / max_seconds))
+        for part_index in range(part_count):
+            context.check_cancelled()
+            start = part_index * max_seconds
+            length = min(max_seconds, total - start)
+            part_path = split_dir / f"{part_index + 1:02d}.m4a"
+            command = [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                f"{start:.3f}",
+                "-t",
+                f"{length:.3f}",
+                "-i",
+                str(audio_path),
+                "-vn",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "160k",
+                str(part_path),
+            ]
+            returncode, _stdout, stderr = _run_local_process(
+                command,
+                timeout_seconds=max(_integer(payload.get("video_task_timeout_seconds"), 3600), 30),
+                payload=payload,
+                context=context,
+            )
+            if returncode != 0 or not part_path.exists():
+                raise RuntimeError(f"ffmpeg digital human audio split failed: {_text(stderr)[-1000:]}")
+            parts.append((part_path, max(length, 1.0)))
+        return parts
+
+    def generate_digital_human_segment(
+        self,
+        *,
+        task_id: str,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+        workdir: Path,
+        output_path: Path,
+        segment_index: int,
+        script_text: str,
+        prompt_text: str,
+        source_image_path: str,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        segment_payload = dict(payload)
+        resume_runninghub_task_id = _text(segment_payload.pop("resume_runninghub_task_id", ""))
+        segment_payload.setdefault("audio_speed", 1.08)
+        cached_voice_id = _text(payload.get("_digital_human_cloned_voice_id"))
+        if not cached_voice_id and _text(payload.get("audio_local_path") or payload.get("voice_audio_local_path")):
+            prepared = language_voice_pipeline.prepare_language_voice_settings(payload, context, workdir)
+            cached_voice_id = _text(prepared.get("cloned_voice_id"))
+            if cached_voice_id:
+                payload["_digital_human_cloned_voice_id"] = cached_voice_id
+        if cached_voice_id:
+            segment_payload["video_default_voice_id"] = cached_voice_id
+            segment_payload["minimax_tts_voice_id"] = cached_voice_id
+        audio_path = self._generate_minimax_tts(
+            speech_text=script_text,
+            output_path=(Path(workdir) / "digital_human_short_out" / "audio" / f"{segment_index}.mp3").resolve(),
+            payload=segment_payload,
+            context=context,
+        )
+        image_url = self._resolve_media(
+            task_id=task_id,
+            payload=segment_payload,
+            context=context,
+            media_kind=f"digital_human_segment_{segment_index}_image",
+            local_values=(source_image_path,),
+            remote_values=(),
+        )
+        precise_duration = max(float(self._probe_duration(audio_path, segment_payload) or 0), 1.0)
+        audio_parts = self._split_digital_human_audio(
+            audio_path=audio_path,
+            duration_seconds=precise_duration,
+            segment_index=segment_index,
+            payload=segment_payload,
+            context=context,
+            workdir=Path(workdir),
+        )
+        provider_ids: list[str] = []
+        workflow_ids = self._digital_human_workflow_ids(segment_payload)
+        video_parts: list[Path] = []
+        for audio_part_index, (audio_part_path, audio_part_duration) in enumerate(audio_parts, start=1):
+            audio_url = self._resolve_media(
+                task_id=task_id,
+                payload=segment_payload,
+                context=context,
+                media_kind=f"digital_human_segment_{segment_index}_audio_{audio_part_index}",
+                local_values=(str(audio_part_path),),
+                remote_values=(),
+            )
+            current_video_url = ""
+            part_output = (
+                Path(output_path)
+                if len(audio_parts) == 1
+                else Path(workdir) / "digital_human_short_out" / "videos" / f"{segment_index}_audio_{audio_part_index}.mp4"
+            )
+            for step_index, app_id in enumerate(workflow_ids, start=1):
+                context.check_cancelled()
+                step_output = part_output if step_index == len(workflow_ids) else (
+                    Path(workdir) / "digital_human_short_out" / "videos" / f"{segment_index}_audio_{audio_part_index}_step_{step_index}.mp4"
+                )
+                nodes = source_create_video._build_node_info_list(
+                    app_id=app_id,
+                    image_url=image_url,
+                    audio_url=audio_url,
+                    duration_seconds=max(_integer(audio_part_duration, 1), 1),
+                    prompt_text=prompt_text,
+                    camera_video_url=current_video_url or None,
+                    max_resolution=source_create_video.CURRENT_VIDEO_MAX_RESOLUTION,
+                )
+                step_payload = {**segment_payload, "_segment_index": segment_index}
+                if resume_runninghub_task_id:
+                    step_payload["resume_runninghub_task_id"] = resume_runninghub_task_id
+                    resume_runninghub_task_id = ""
+                result = self._submit_and_poll(
+                    task_id=task_id,
+                    payload=step_payload,
+                    context=context,
+                    submit_url=self._workflow_submit_url(step_payload, app_id),
+                    submit_payload={
+                        "nodeInfoList": nodes,
+                        "instanceType": source_create_video.resolve_instance_type_for_workflow(
+                            app_id, _text(step_payload.get("instance_type") or "default")
+                        ),
+                        "usePersonalQueue": _boolean(
+                            step_payload.get("use_personal_queue"), name="use_personal_queue", default=False
+                        ),
+                    },
+                    output_path=step_output,
+                    label=f"digital human segment {segment_index} audio {audio_part_index} step {step_index}",
+                )
+                if _text(result.get("status")).lower() != "success":
+                    raise RuntimeError(_text(result.get("message")) or f"digital human workflow {app_id} failed")
+                provider_id = _text(result.get("runninghub_task_id"))
+                if provider_id:
+                    provider_ids.append(provider_id)
+                if step_index < len(workflow_ids):
+                    current_video_url = self._resolve_media(
+                        task_id=task_id,
+                        payload=step_payload,
+                        context=context,
+                        media_kind=f"digital_human_segment_{segment_index}_audio_{audio_part_index}_step_{step_index}_video",
+                        local_values=(str(step_output),),
+                        remote_values=(),
+                    )
+            video_parts.append(part_output)
+        if len(video_parts) > 1:
+            self._concat_ecommerce_segments(
+                segment_paths=video_parts,
+                output_path=Path(output_path),
+                payload=segment_payload,
+                context=context,
+                workdir=Path(workdir),
+            )
+        return {
+            "ok": True,
+            "status": "success",
+            "video_path": str(Path(output_path).resolve()),
+            "duration_seconds": precise_duration,
+            "runninghub_task_id": provider_ids[-1] if provider_ids else "",
+            "runninghub_task_ids": provider_ids,
+        }
+
+    def concat_digital_human_segments(
+        self,
+        *,
+        video_paths: list[Path],
+        output_path: Path,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+        workdir: Path,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        context.check_cancelled()
+        segment_paths = [Path(value).expanduser().resolve() for value in video_paths]
+        tail_noise_trims: list[dict[str, Any]] = []
+        if self._digital_human_segment_tail_audio_cleanup_enabled(payload):
+            segment_paths, tail_noise_trims = self._clean_video_segments_tail_audio_noise(
+                segment_paths,
+                output_dir=Path(workdir) / "tail_audio_noise_trimmed_segments",
+                payload=payload,
+                context=context,
+            )
+        context.check_cancelled()
+        join_cleanup_trims: list[dict[str, Any]] = []
+
+        def probe_segment(path: Path, **_values: Any) -> float:
+            return self._postprocess_duration(Path(path), payload)
+
+        def run_cleanup_process(command: list[str], timeout_seconds: int = 300, **_values: Any) -> tuple[int, str, str]:
+            return _run_local_process(
+                list(command),
+                timeout_seconds=max(int(timeout_seconds or 300), 1),
+                payload=payload,
+                context=context,
+            )
+
+        segment_paths, join_cleanup_trims = digital_human_join_cleanup.normalize_digital_human_segment_joins(
+            segment_paths,
+            output_dir=Path(workdir) / "segment_join_cleanup",
+            payload=payload,
+            context=context,
+            probe=probe_segment,
+            run=run_cleanup_process,
+        )
+        context.check_cancelled()
+        requested_crossfade_seconds = self._digital_human_effective_micro_crossfade_seconds(
+            segment_paths,
+            payload=payload,
+            context=context,
+        )
+        crossfade_applied = self._concat_digital_human_video_segments(
+            segment_paths,
+            Path(output_path),
+            payload=payload,
+            context=context,
+            workdir=Path(workdir),
+            crossfade_seconds=requested_crossfade_seconds,
+        )
+        context.check_cancelled()
+        return {
+            "ok": True,
+            "video_path": str(Path(output_path).resolve()),
+            "tail_audio_noise_trims": tail_noise_trims,
+            "segment_join_cleanup_trims": join_cleanup_trims,
+            "segment_join_crossfade_seconds": requested_crossfade_seconds if crossfade_applied else 0.0,
+        }
+
+    def build_digital_human_segment_previews(
+        self,
+        *,
+        video_paths: list[Path],
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+        workdir: Path,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        def probe_segment(path: Path, **_values: Any) -> float:
+            return self._postprocess_duration(Path(path), payload)
+
+        def run_preview_process(command: list[str], timeout_seconds: int = 600, **_values: Any) -> tuple[int, str, str]:
+            return _run_local_process(
+                list(command),
+                timeout_seconds=max(int(timeout_seconds or 600), 1),
+                payload=payload,
+                context=context,
+            )
+
+        paths, metadata = digital_human_audio_postprocess.build_digital_human_segment_previews(
+            video_paths,
+            output_dir=Path(workdir) / "segment_preview_tail_padded",
+            payload=payload,
+            context=context,
+            probe=probe_segment,
+            run=run_preview_process,
+        )
+        return {"paths": [str(path) for path in paths], "metadata": metadata}
+
+    def postprocess_digital_human_audio(
+        self,
+        *,
+        video_path: Path,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        def probe_video(path: Path, **_values: Any) -> float:
+            return self._postprocess_duration(Path(path), payload)
+
+        def run_audio_process(command: list[str], timeout_seconds: int = 600, **_values: Any) -> tuple[int, str, str]:
+            return _run_local_process(
+                list(command),
+                timeout_seconds=max(int(timeout_seconds or 600), 1),
+                payload=payload,
+                context=context,
+            )
+
+        output, metadata = digital_human_audio_postprocess.postprocess_digital_human_audio(
+            video_path,
+            payload=payload,
+            context=context,
+            probe=probe_video,
+            run=run_audio_process,
+        )
+        return {"video_path": str(output), **metadata}
+
+    @staticmethod
+    def _digital_human_segment_tail_audio_cleanup_enabled(payload: dict[str, Any] | None = None) -> bool:
+        source = payload or {}
+        for key in (
+            "digital_human_segment_tail_audio_cleanup_enabled",
+            "digital_human_clean_segment_tail_audio_noise",
+        ):
+            if key in source:
+                return _boolean(source.get(key), name=key, default=False)
+        return _boolean(
+            os.getenv("DIGITAL_HUMAN_SEGMENT_TAIL_AUDIO_CLEANUP_ENABLED", "false"),
+            name="DIGITAL_HUMAN_SEGMENT_TAIL_AUDIO_CLEANUP_ENABLED",
+            default=False,
+        )
+
+    @staticmethod
+    def _digital_human_audio_micro_crossfade_seconds(payload: dict[str, Any] | None = None) -> float:
+        source = payload or {}
+        value = source.get("digital_human_audio_micro_crossfade_seconds")
+        if value is None:
+            value = os.getenv("DIGITAL_HUMAN_AUDIO_MICRO_CROSSFADE_SECONDS", "0.04")
+        return min(max(_number(value, 0.04), 0.0), 0.12)
+
+    def _postprocess_duration(self, path: Path, payload: dict[str, Any]) -> float:
+        probe_payload = dict(payload or {})
+        probe_payload.pop("source_video_duration_seconds", None)
+        probe_payload.pop("duration_seconds", None)
+        return self._probe_duration(Path(path), probe_payload)
+
+    def _detect_audio_silence_ranges(
+        self,
+        media_path: Path,
+        *,
+        duration_seconds: float,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+        noise_db: str = "-34dB",
+        min_silence: float = 0.12,
+    ) -> list[tuple[float, float]]:
+        if duration_seconds <= 0:
+            return []
+        ffmpeg = _text(payload.get("ffmpeg_path")) or shutil.which("ffmpeg") or ""
+        if not ffmpeg:
+            raise VideoDependencyError("digital human audio silence detection requires ffmpeg")
+        context.check_cancelled()
+        returncode, stdout, stderr = _run_local_process(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-i",
+                str(media_path),
+                "-af",
+                f"silencedetect=noise={noise_db}:d={max(float(min_silence or 0.0), 0.05):.3f}",
+                "-f",
+                "null",
+                "-",
+            ],
+            timeout_seconds=min(max(_integer(payload.get("video_task_timeout_seconds"), 3600), 30), 120),
+            payload=payload,
+            context=context,
+        )
+        context.check_cancelled()
+        text = f"{stdout or ''}\n{stderr or ''}"
+        if returncode != 0 and not text.strip():
+            return []
+        ranges: list[tuple[float, float]] = []
+        current_start: float | None = None
+        for line in text.splitlines():
+            start_match = re.search(r"silence_start:\s*([0-9.]+)", line)
+            if start_match:
+                try:
+                    current_start = max(float(start_match.group(1)), 0.0)
+                except Exception:
+                    current_start = None
+            end_match = re.search(r"silence_end:\s*([0-9.]+)", line)
+            if end_match and current_start is not None:
+                try:
+                    end_value = min(max(float(end_match.group(1)), current_start), duration_seconds)
+                except Exception:
+                    end_value = current_start
+                if end_value - current_start >= min_silence:
+                    ranges.append((current_start, end_value))
+                current_start = None
+        if current_start is not None and duration_seconds - current_start >= min_silence:
+            ranges.append((current_start, duration_seconds))
+        return ranges
+
+    def _tail_audio_noise_trim_seconds(
+        self,
+        media_path: Path,
+        *,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+        duration_seconds: float | None = None,
+        max_noise_seconds: float = 0.9,
+        min_noise_seconds: float = 0.08,
+        min_preceding_silence: float = 0.12,
+        keep_quiet_tail_seconds: float = 0.08,
+    ) -> float | None:
+        duration = float(duration_seconds or 0.0)
+        if duration <= 0:
+            duration = self._postprocess_duration(media_path, payload)
+        if duration <= 0.5:
+            return None
+        try:
+            silence_ranges = self._detect_audio_silence_ranges(
+                media_path,
+                duration_seconds=duration,
+                payload=payload,
+                context=context,
+                min_silence=min_preceding_silence,
+            )
+        except VideoTaskCancelled:
+            raise
+        except Exception:
+            return None
+        for silence_start, silence_end in reversed(silence_ranges):
+            tail_noise_seconds = duration - silence_end
+            if tail_noise_seconds < min_noise_seconds or tail_noise_seconds > max_noise_seconds:
+                continue
+            if silence_end - silence_start < min_preceding_silence:
+                continue
+            if duration - silence_start > max_noise_seconds + 1.4:
+                continue
+            trim_at = min(max(silence_start + keep_quiet_tail_seconds, 0.2), silence_end)
+            if duration - trim_at >= min_noise_seconds + min_preceding_silence:
+                return trim_at
+        return None
+
+    def _trim_video_tail_audio_noise(
+        self,
+        input_path: Path,
+        output_path: Path,
+        *,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+    ) -> Path:
+        source = Path(input_path).expanduser().resolve()
+        duration = self._postprocess_duration(source, payload)
+        trim_at = self._tail_audio_noise_trim_seconds(
+            source,
+            duration_seconds=duration,
+            payload=payload,
+            context=context,
+        )
+        if trim_at is None:
+            return source
+        ffmpeg = _text(payload.get("ffmpeg_path")) or shutil.which("ffmpeg") or ""
+        if not ffmpeg:
+            raise VideoDependencyError("digital human tail audio cleanup requires ffmpeg")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        timeout_seconds = max(_integer(payload.get("video_task_timeout_seconds"), 3600), 30)
+        copy_cmd = [
+            ffmpeg,
+            "-y",
+            "-t",
+            f"{trim_at:.3f}",
+            "-i",
+            str(source),
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "make_zero",
+            str(output_path),
+        ]
+        context.check_cancelled()
+        returncode, stdout, stderr = _run_local_process(
+            copy_cmd,
+            timeout_seconds=min(timeout_seconds, 180),
+            payload=payload,
+            context=context,
+        )
+        context.check_cancelled()
+        copy_ok = returncode == 0 and output_path.exists()
+        if copy_ok:
+            copied_duration = self._postprocess_duration(output_path, payload)
+            if copied_duration <= 0 or copied_duration > trim_at + 0.18 or copied_duration < trim_at - 0.18:
+                copy_ok = False
+                try:
+                    output_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        if not copy_ok:
+            reencode_cmd = [
+                ffmpeg,
+                "-y",
+                "-t",
+                f"{trim_at:.3f}",
+                "-i",
+                str(source),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "18",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "160k",
+                str(output_path),
+            ]
+            context.check_cancelled()
+            returncode, stdout, stderr = _run_local_process(
+                reencode_cmd,
+                timeout_seconds=min(timeout_seconds, 300),
+                payload=payload,
+                context=context,
+            )
+            context.check_cancelled()
+            if returncode != 0 or not output_path.exists():
+                raise RuntimeError((_text(stderr) or _text(stdout) or "ffmpeg tail noise trim failed")[-1000:])
+        return output_path.resolve()
+
+    def _clean_video_segments_tail_audio_noise(
+        self,
+        segment_paths: list[Path],
+        *,
+        output_dir: Path,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+    ) -> tuple[list[Path], list[dict[str, Any]]]:
+        cleaned_paths: list[Path] = []
+        trims: list[dict[str, Any]] = []
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for idx, path in enumerate(segment_paths, start=1):
+            context.check_cancelled()
+            source = Path(path).expanduser().resolve()
+            target = output_dir / f"{source.stem}_tail_noise_trimmed{source.suffix or '.mp4'}"
+            try:
+                cleaned = self._trim_video_tail_audio_noise(
+                    source,
+                    target,
+                    payload=payload,
+                    context=context,
+                )
+            except VideoTaskCancelled:
+                raise
+            except Exception as exc:
+                cleaned_paths.append(source)
+                trims.append({"index": idx, "path": str(source), "skipped": str(exc)[:240]})
+                continue
+            cleaned_paths.append(cleaned)
+            if cleaned != source:
+                trims.append(
+                    {
+                        "index": idx,
+                        "path": str(source),
+                        "trimmed_path": str(cleaned),
+                        "original_seconds": self._postprocess_duration(source, payload),
+                        "trimmed_seconds": self._postprocess_duration(cleaned, payload),
+                        "reason": "tail_audio_noise",
+                    }
+                )
+        return cleaned_paths, trims
+
+    def _digital_human_effective_micro_crossfade_seconds(
+        self,
+        segment_paths: list[Path],
+        *,
+        payload: dict[str, Any] | None = None,
+        context: VideoTaskContext,
+    ) -> float:
+        resolved_paths = [
+            Path(path).expanduser().resolve()
+            for path in segment_paths
+            if Path(path).expanduser().exists()
+        ]
+        if len(resolved_paths) <= 1:
+            return 0.0
+        crossfade_seconds = self._digital_human_audio_micro_crossfade_seconds(payload)
+        if crossfade_seconds <= 0:
+            return 0.0
+        durations: list[float] = []
+        for path in resolved_paths:
+            context.check_cancelled()
+            durations.append(self._postprocess_duration(path, payload or {}))
+        if any(duration <= crossfade_seconds + 0.1 for duration in durations):
+            return 0.0
+        return crossfade_seconds
+
+    def _concat_digital_human_video_segments(
+        self,
+        segment_paths: list[Path],
+        output_path: Path,
+        *,
+        payload: dict[str, Any] | None,
+        context: VideoTaskContext,
+        workdir: Path,
+        crossfade_seconds: float | None = None,
+    ) -> bool:
+        source_payload = payload or {}
+        resolved_paths = [
+            Path(path).expanduser().resolve()
+            for path in segment_paths
+            if Path(path).expanduser().exists()
+        ]
+        if len(resolved_paths) <= 1:
+            self._concat_ecommerce_segments(
+                segment_paths=resolved_paths,
+                output_path=output_path,
+                payload=source_payload,
+                context=context,
+                workdir=workdir,
+            )
+            return False
+        if crossfade_seconds is None:
+            crossfade_seconds = self._digital_human_effective_micro_crossfade_seconds(
+                resolved_paths,
+                payload=source_payload,
+                context=context,
+            )
+        if crossfade_seconds <= 0:
+            self._concat_ecommerce_segments(
+                segment_paths=resolved_paths,
+                output_path=output_path,
+                payload=source_payload,
+                context=context,
+                workdir=workdir,
+            )
+            return False
+        durations = [self._postprocess_duration(path, source_payload) for path in resolved_paths]
+        ffmpeg = _text(source_payload.get("ffmpeg_path")) or shutil.which("ffmpeg") or ""
+        if not ffmpeg:
+            raise VideoDependencyError("digital human video segment concatenation requires ffmpeg")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        inputs: list[str] = []
+        for path in resolved_paths:
+            inputs.extend(["-i", str(path)])
+        filter_parts: list[str] = []
+        video_label = "[0:v:0]"
+        audio_label = "[0:a:0]"
+        elapsed = float(durations[0])
+        for idx in range(1, len(resolved_paths)):
+            context.check_cancelled()
+            next_video_label = f"[{idx}:v:0]"
+            next_audio_label = f"[{idx}:a:0]"
+            video_out = f"[vxf{idx}]"
+            audio_out = f"[axf{idx}]"
+            offset = max(elapsed - crossfade_seconds, 0.0)
+            filter_parts.append(
+                f"{video_label}{next_video_label}xfade=transition=fade:duration={crossfade_seconds:.3f}:offset={offset:.3f}{video_out}"
+            )
+            filter_parts.append(
+                f"{audio_label}{next_audio_label}acrossfade=d={crossfade_seconds:.3f}:c1=tri:c2=tri{audio_out}"
+            )
+            video_label = video_out
+            audio_label = audio_out
+            elapsed += float(durations[idx]) - crossfade_seconds
+        command = [
+            ffmpeg,
+            "-y",
+            *inputs,
+            "-filter_complex",
+            ";".join(filter_parts),
+            "-map",
+            video_label,
+            "-map",
+            audio_label,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "160k",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+        context.check_cancelled()
+        returncode, _stdout, _stderr = _run_local_process(
+            command,
+            timeout_seconds=min(max(_integer(source_payload.get("video_task_timeout_seconds"), 3600), 30), 600),
+            payload=source_payload,
+            context=context,
+        )
+        context.check_cancelled()
+        if returncode != 0 or not output_path.exists():
+            self._concat_ecommerce_segments(
+                segment_paths=resolved_paths,
+                output_path=output_path,
+                payload=source_payload,
+                context=context,
+                workdir=workdir,
+            )
+            return False
+        return True
+
     def create_video(self, *, task_id: str, payload: dict[str, Any], context: VideoTaskContext) -> dict[str, Any]:
+        return digital_human_pipeline.run_digital_human_pipeline(self, task_id, payload, context)
+
+    def _create_video_single_workflow(self, *, task_id: str, payload: dict[str, Any], context: VideoTaskContext) -> dict[str, Any]:
         workdir = self._workdir(task_id, payload)
         image_url = self._resolve_media(
             task_id=task_id,
@@ -1129,13 +2538,14 @@ class ArchivedSourceBackend:
                 payload=payload,
                 context=context,
                 workdir=workdir,
+                speech_text=_text(payload.get("speech_text") or payload.get("script") or payload.get("copy_text")),
             )
         return {
             "ok": ok,
             "message": "视频流程完成" if ok else _text(result.get("message") or "视频生成失败"),
             "runninghub_task_id": _text(result.get("runninghub_task_id")),
             "runninghub_task_ids": [_text(result.get("runninghub_task_id"))] if _text(result.get("runninghub_task_id")) else [],
-            "runninghub_usage": {},
+            "runninghub_usage": _merge_runninghub_usage(result),
             "speech_text": _text(payload.get("speech_text") or payload.get("script") or payload.get("copy_text")),
             "prompt_text": _text(payload.get("prompt_text") or payload.get("prompt")),
             "video_path": str(final_path) if final_path.exists() else "",
@@ -1222,7 +2632,7 @@ class ArchivedSourceBackend:
             "message": ("替换完成" if ok else _text(result.get("message") or "替换失败")),
             "runninghub_task_id": _text(result.get("runninghub_task_id")),
             "runninghub_task_ids": [_text(result.get("runninghub_task_id"))] if _text(result.get("runninghub_task_id")) else [],
-            "runninghub_usage": {},
+            "runninghub_usage": _merge_runninghub_usage(result),
             "download_path": str(output_path) if output_path.exists() else "",
             "duration_seconds": duration,
             "raw_result": result,
@@ -1230,10 +2640,44 @@ class ArchivedSourceBackend:
         }
 
     def replace_model(self, *, task_id: str, payload: dict[str, Any], context: VideoTaskContext) -> dict[str, Any]:
-        return self._run_replace(task_type="replace_model", task_id=task_id, payload=payload, context=context)
+        return replacement_pipeline.run_replacement_pipeline(
+            self,
+            "replace_model",
+            task_id,
+            payload,
+            context,
+        )
 
     def replace_product(self, *, task_id: str, payload: dict[str, Any], context: VideoTaskContext) -> dict[str, Any]:
-        return self._run_replace(task_type="replace_product", task_id=task_id, payload=payload, context=context)
+        return replacement_pipeline.run_replacement_pipeline(
+            self,
+            "replace_product",
+            task_id,
+            payload,
+            context,
+        )
+
+    def replace_product_and_model(
+        self,
+        *,
+        task_id: str,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+    ) -> dict[str, Any]:
+        """Retain the archived hidden combined replacement capability.
+
+        It intentionally stays outside ``VIDEO_TASK_TYPES`` and the public
+        navigation, but internal callers can execute the original two-subject
+        chain through ``ArchivedSourceBackend.run_task``.
+        """
+
+        return replacement_pipeline.run_replacement_pipeline(
+            self,
+            "replace_product_and_model",
+            task_id,
+            payload,
+            context,
+        )
 
     @staticmethod
     def _ecommerce_duration_text(value: float) -> str:
@@ -1241,6 +2685,44 @@ class ArchivedSourceBackend:
         if duration.is_integer():
             return str(int(duration))
         return f"{duration:.3f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def _cut_ecommerce_audio_segment(
+        source_path: Path,
+        output_path: Path,
+        start_seconds: float,
+        duration_seconds: float,
+        *,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+    ) -> Path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            _text(payload.get("ffmpeg_path")) or "ffmpeg",
+            "-y",
+            "-ss",
+            f"{max(float(start_seconds), 0.0):.3f}",
+            "-i",
+            str(source_path),
+            "-t",
+            f"{max(float(duration_seconds), 0.1):.3f}",
+            "-vn",
+            "-acodec",
+            "libmp3lame",
+            "-q:a",
+            "4",
+            str(output_path),
+        ]
+        returncode, _stdout, stderr = _run_local_process(
+            command,
+            timeout_seconds=max(_integer(payload.get("video_task_timeout_seconds"), 3600), 30),
+            payload=payload,
+            context=context,
+        )
+        context.check_cancelled()
+        if returncode != 0 or not output_path.is_file():
+            raise RuntimeError(f"ffmpeg ecommerce audio segment failed: {_text(stderr)[-1000:]}")
+        return output_path.resolve()
 
     @staticmethod
     def _ecommerce_storyboard_items(storyboard: Any) -> list[Any]:
@@ -1414,18 +2896,514 @@ class ArchivedSourceBackend:
             },
         )
 
-    def ecommerce_short_video(self, *, task_id: str, payload: dict[str, Any], context: VideoTaskContext) -> dict[str, Any]:
+    def _run_local_ecommerce_seeding(
+        self,
+        *,
+        task_id: str,
+        payload: dict[str, Any],
+        context: VideoTaskContext,
+    ) -> dict[str, Any]:
         workdir = self._workdir(task_id, payload)
+        reference_video_value = _text(payload.get("reference_video_local_path") or payload.get("video_local_path"))
+        if reference_video_value and not isinstance(payload.get("ecommerce_reference_video_audit"), dict):
+            try:
+                payload["ecommerce_reference_video_audit"] = ecommerce_reference_video.audit_ecommerce_reference_video(
+                    reference_video_value,
+                    workdir=workdir / "reference_video_audit",
+                    ffmpeg_path=_text(payload.get("ffmpeg_path")),
+                    ffprobe_path=_text(payload.get("ffprobe_path")),
+                    context=context,
+                )
+            except VideoTaskCancelled:
+                raise
+            except Exception as exc:
+                payload["ecommerce_reference_video_audit"] = {
+                    "video_path": reference_video_value,
+                    "error": _text(exc)[:240],
+                    "style_tags": [],
+                }
+        product_values = payload.get("product_image_local_paths")
+        if product_values is not None and not isinstance(product_values, list):
+            raise ValueError("product_image_local_paths must be a list")
+        product_paths = _unique_text_values(
+            [payload.get("product_image_local_path") or payload.get("image_local_path"), *(product_values or [])]
+        )
+        if not product_paths:
+            raise ValueError("ecommerce seeding video requires at least one local product image")
+        for value in product_paths:
+            path = Path(value)
+            if not path.exists() or not path.is_file():
+                raise FileNotFoundError(f"ecommerce seeding product image does not exist: {path}")
+        model_path = _text(payload.get("model_image_local_path"))
+        if model_path:
+            resolved_model = Path(model_path).expanduser().resolve()
+            if not resolved_model.exists() or not resolved_model.is_file():
+                raise FileNotFoundError(f"ecommerce seeding model image does not exist: {resolved_model}")
+            model_path = str(resolved_model)
+
+        workbench = payload.get("video_workbench") if isinstance(payload.get("video_workbench"), dict) else {}
+        storyboard = payload.get("storyboard")
+        if storyboard is None:
+            storyboard = workbench.get("storyboard")
+        prompt_segments = payload.get("prompt_segments")
+        if prompt_segments is None:
+            prompt_segments = workbench.get("prompt_segments")
+        storyboard_lines = _segment_prompt_lines(storyboard, name="storyboard")
+        prompt_segment_lines = _segment_prompt_lines(prompt_segments, name="prompt_segments")
+        base_prompt = _text(payload.get("prompt") or payload.get("prompt_text") or payload.get("message"))
+        common_prompt_parts = [base_prompt or "Natural ecommerce recommendation video with authentic product details."]
+        product_name = _text(payload.get("product_name") or payload.get("product_project_name"))
+        speech_text = _text(payload.get("speech_text") or payload.get("script") or payload.get("copy_text"))
+        if product_name:
+            common_prompt_parts.append(f"Product: {product_name}")
+        if speech_text:
+            common_prompt_parts.append(f"Spoken copy: {speech_text}")
+        aggregate_parts = list(common_prompt_parts)
+        reference_video_audit = payload.get("ecommerce_reference_video_audit")
+        if isinstance(reference_video_audit, dict) and _text(reference_video_audit.get("style_summary")):
+            aggregate_parts.append(
+                "Reference video rhythm and composition: " + _text(reference_video_audit.get("style_summary"))
+            )
+        if storyboard_lines:
+            aggregate_parts.append("Storyboard:\n" + "\n".join(f"{index}. {line}" for index, line in enumerate(storyboard_lines, start=1)))
+        if prompt_segment_lines:
+            aggregate_parts.append("Prompt segments:\n" + "\n".join(f"{index}. {line}" for index, line in enumerate(prompt_segment_lines, start=1)))
+        aggregated_prompt = "\n\n".join(aggregate_parts)
+        segment_plan, duration = self._ecommerce_segment_plan(
+            payload=payload,
+            content_mode="planting",
+            common_prompt_parts=common_prompt_parts,
+            aggregated_prompt=aggregated_prompt,
+            storyboard=storyboard,
+            storyboard_lines=storyboard_lines,
+            prompt_segment_lines=prompt_segment_lines,
+        )
+        regenerate_value = payload.get("regenerate_segment_index")
+        if regenerate_value is None:
+            regenerate_value = payload.get("ecommerce_seeding_regenerate_scene_index")
+        if regenerate_value is not None:
+            if isinstance(regenerate_value, bool):
+                raise ValueError("regenerate_segment_index must be a valid 1-based segment index")
+            regenerate_number = _number(regenerate_value, float("nan"))
+            regenerate_index = int(regenerate_number) if math.isfinite(regenerate_number) else 0
+            if regenerate_number != regenerate_index or regenerate_index < 1 or regenerate_index > len(segment_plan):
+                raise ValueError(f"regenerate_segment_index must be between 1 and {len(segment_plan)}")
+            segment_plan = [segment_plan[regenerate_index - 1]]
+            duration = float(segment_plan[0]["duration_seconds"])
+
+        completed = {} if regenerate_value is not None else self._ecommerce_completed_segments(payload)
+        resume_available = bool(_text(payload.get("resume_runninghub_task_id")))
+
+        def generate_scene(*, segment: dict[str, Any], segment_index: int, output_dir: Path) -> dict[str, Any]:
+            nonlocal resume_available
+            scene_payload = dict(payload)
+            for key in ("image_count", "imageCount", "nano_images", "count"):
+                scene_payload.pop(key, None)
+            scene_payload["count"] = 1
+            scene_payload["output_dir"] = str(output_dir)
+            scene_payload["product_image_local_path"] = product_paths[0]
+            scene_payload["product_image_local_paths"] = product_paths[:3]
+            scene_payload["prompt"] = (
+                f"{_text(segment.get('prompt'))}\n"
+                f"Use ecommerce seeding layout {ecommerce_seeding_renderer.normalize_template(payload.get('ecommerce_seeding_template'))}. "
+                "Create a clean scene plate without baked-in captions or watermarks."
+            )
+            if model_path:
+                scene_payload["video_image_mode"] = "model_product"
+                scene_payload["model_image_local_path"] = model_path
+            else:
+                scene_payload["video_image_mode"] = "product_only"
+                scene_payload.pop("model_image_local_path", None)
+            if resume_available:
+                resume_available = False
+            else:
+                scene_payload.pop("resume_runninghub_task_id", None)
+            return self.image_generate(
+                task_id=f"{task_id}_seeding_scene_{segment_index}",
+                payload=scene_payload,
+                context=context,
+            )
+
+        operation = _text(payload.get("ecommerce_seeding_operation") or "final_video").lower()
+        tts_configured = bool(_text(payload.get("video_tts_api_key") or payload.get("minimax_api_key")))
+        dynamic_enabled_value = payload.get("_ecommerce_seeding_dynamic_enabled")
+        if dynamic_enabled_value is None:
+            dynamic_enabled_value = payload.get("ecommerce_seeding_dynamic_enabled")
+        dynamic_enabled = _boolean(
+            dynamic_enabled_value,
+            name="ecommerce_seeding_dynamic_enabled",
+            default=False,
+        )
+        dynamic_rendered = False
+        if operation != "images_only" and dynamic_enabled and (tts_configured or not speech_text):
+            dynamic_rendered = True
+            timeout_seconds = max(_integer(payload.get("video_task_timeout_seconds"), 3600), 30)
+
+            def dynamic_generate_image(**values: Any) -> dict[str, Any]:
+                segment = dict(values.get("segment") or {})
+                segment["prompt"] = _text(values.get("prompt") or segment.get("prompt"))
+                output_dir = Path(values.get("output_path") or workdir).expanduser().resolve().parent
+                return generate_scene(
+                    segment=segment,
+                    segment_index=_integer(values.get("segment_index"), 1),
+                    output_dir=output_dir,
+                )
+
+            def dynamic_synthesize_tts(**values: Any) -> Path:
+                return self._generate_minimax_tts(
+                    speech_text=_text(values.get("text")),
+                    output_path=Path(values.get("output_path")).expanduser().resolve(),
+                    payload=dict(values.get("payload") or payload),
+                    context=context,
+                )
+
+            def dynamic_probe_duration(**values: Any) -> float:
+                probe_payload = dict(payload)
+                probe_payload.pop("source_video_duration_seconds", None)
+                probe_payload.pop("duration_seconds", None)
+                return self._probe_duration(Path(values.get("path")).expanduser().resolve(), probe_payload)
+
+            def dynamic_encode_frames(**values: Any) -> Path:
+                ffmpeg = _text(payload.get("ffmpeg_path")) or shutil.which("ffmpeg") or ""
+                if not ffmpeg:
+                    raise VideoDependencyError("dynamic ecommerce seeding frame encoding requires ffmpeg")
+                output_path = Path(values.get("output_path")).expanduser().resolve()
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                command = [
+                    ffmpeg,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-framerate",
+                    str(max(_integer(values.get("fps"), 25), 1)),
+                    "-i",
+                    str(values.get("frame_pattern")),
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    _text(payload.get("language_encode_preset") or "medium"),
+                    "-crf",
+                    str(min(max(_integer(payload.get("language_crf"), 18), 0), 51)),
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    str(output_path),
+                ]
+                returncode, _stdout, stderr = _run_local_process(
+                    command,
+                    timeout_seconds=timeout_seconds,
+                    payload=payload,
+                    context=context,
+                )
+                if returncode != 0 or not output_path.exists():
+                    raise RuntimeError(f"dynamic ecommerce seeding frame encoding failed: {_text(stderr)[-1000:]}")
+                return output_path
+
+            def dynamic_concat_videos(**values: Any) -> Path:
+                output_path = Path(values.get("output_path")).expanduser().resolve()
+                self._concat_ecommerce_segments(
+                    segment_paths=[Path(item).expanduser().resolve() for item in values.get("segment_paths") or []],
+                    output_path=output_path,
+                    payload=payload,
+                    context=context,
+                    workdir=workdir,
+                )
+                return output_path
+
+            def dynamic_mux_audio(**values: Any) -> Path:
+                video_path = Path(values.get("video_path")).expanduser().resolve()
+                audio_path = Path(values.get("audio_path")).expanduser().resolve()
+                output_path = Path(values.get("output_path")).expanduser().resolve()
+                source_seconds = dynamic_probe_duration(path=video_path)
+                self._replace_video_audio_track(
+                    source_video=video_path,
+                    audio_path=audio_path,
+                    source_seconds=source_seconds,
+                    target_seconds=max(_number(values.get("target_duration_seconds"), source_seconds), 0.1),
+                    output_path=output_path,
+                    payload=payload,
+                    context=context,
+                )
+                return output_path
+
+            rendered = ecommerce_seeding_dynamic.render_ecommerce_seeding_dynamic(
+                task_id=task_id,
+                payload=payload,
+                context=context,
+                workdir=workdir,
+                segments=segment_plan,
+                completed_segments=completed,
+                callbacks=ecommerce_seeding_dynamic.EcommerceSeedingCallbacks(
+                    generate_image=dynamic_generate_image,
+                    inspect_image=ecommerce_seeding_dynamic.inspect_ecommerce_seeding_generated_frame,
+                    synthesize_tts=dynamic_synthesize_tts,
+                    probe_duration=dynamic_probe_duration,
+                    encode_frames=dynamic_encode_frames,
+                    concat_videos=dynamic_concat_videos,
+                    mux_audio=dynamic_mux_audio,
+                    checkpoint_segment=lambda **values: self._checkpoint_ecommerce_segment(
+                        task_id=_text(values.get("task_id") or task_id),
+                        payload=payload,
+                        segment=dict(values.get("segment") or values.get("completed_segment") or {}),
+                    ),
+                ),
+            )
+            rendered["scene_results"] = rendered.get("image_generation_qa") or []
+            rendered["image_paths"] = rendered.get("generated_scene_image_paths") or []
+            rendered["template"] = rendered.get("template") or ecommerce_seeding_renderer.normalize_template(payload.get("ecommerce_seeding_template"))
+        else:
+            rendered = ecommerce_seeding_renderer.render_ecommerce_seeding(
+                task_id=task_id,
+                payload=payload,
+                context=context,
+                workdir=workdir,
+                segments=segment_plan,
+                completed_segments=completed,
+                generate_scene=generate_scene,
+                run_local_process=_run_local_process,
+                concat_segments=lambda *, segment_paths, output_path: self._concat_ecommerce_segments(
+                    segment_paths=segment_paths,
+                    output_path=output_path,
+                    payload=payload,
+                    context=context,
+                    workdir=workdir,
+                ),
+                checkpoint_segment=self._checkpoint_ecommerce_segment,
+            )
+        scene_results = rendered.get("scene_results") if isinstance(rendered.get("scene_results"), list) else []
+        runninghub_task_ids: list[str] = []
+        for item in scene_results:
+            if not isinstance(item, dict):
+                continue
+            for provider_id in item.get("runninghub_task_ids") or [item.get("runninghub_task_id")]:
+                provider_text = _text(provider_id)
+                if provider_text and provider_text not in runninghub_task_ids:
+                    runninghub_task_ids.append(provider_text)
+        for provider_text in _collect_runninghub_task_ids(scene_results):
+            if provider_text not in runninghub_task_ids:
+                runninghub_task_ids.append(provider_text)
+        runninghub_usage = _merge_runninghub_usage(scene_results)
+
+        if rendered.get("images_only"):
+            return {
+                "ok": True,
+                "message": "Ecommerce seeding storyboard images generated",
+                "runninghub_task_id": runninghub_task_ids[-1] if runninghub_task_ids else "",
+                "runninghub_task_ids": runninghub_task_ids,
+                "runninghub_usage": runninghub_usage,
+                "download_path": _text(rendered.get("download_path")),
+                "image_path": _text(rendered.get("image_path")),
+                "image_paths": rendered.get("image_paths") or [],
+                "completed_segments": rendered.get("completed_segments") or [],
+                "raw_result": {
+                    "local_renderer": "ffmpeg_programmatic_seeding_v1",
+                    "seeding_stage": "images_only",
+                    "ecommerce_seeding_template": rendered["template"],
+                    "layout_variant": rendered["layout_variant"],
+                    "segments": rendered.get("segments") or [],
+                    "generated_scene_image_paths": rendered.get("image_paths") or [],
+                    "duration": duration,
+                    "ratio": rendered["ratio"],
+                    "resolution": rendered["resolution"],
+                },
+            }
+
+        final_path = Path(str(rendered["video_path"])).resolve()
+        audio_path_text = _text(payload.get("audio_local_path") or payload.get("voice_audio_local_path"))
+        if not dynamic_rendered and not audio_path_text and speech_text and _text(payload.get("video_tts_api_key") or payload.get("minimax_api_key")):
+            audio_path_text = str(
+                self._generate_minimax_tts(
+                    speech_text=speech_text,
+                    output_path=workdir / "ecommerce_seeding_speech.mp3",
+                    payload=payload,
+                    context=context,
+                )
+            )
+        if not dynamic_rendered and audio_path_text:
+            audio_path = Path(audio_path_text).expanduser().resolve()
+            if not audio_path.exists() or not audio_path.is_file():
+                raise FileNotFoundError(f"ecommerce seeding audio does not exist: {audio_path}")
+            narrated_path = workdir / "ecommerce_short_video_local_narrated.mp4"
+            self._replace_video_audio_track(
+                source_video=final_path,
+                audio_path=audio_path,
+                source_seconds=duration,
+                target_seconds=duration,
+                output_path=narrated_path,
+                payload=payload,
+                context=context,
+            )
+            final_path = narrated_path.resolve()
+        final_path, subtitle_count, subtitle_warning = self._apply_optional_subtitles(
+            video_path=final_path,
+            payload=payload,
+            context=context,
+            workdir=workdir,
+            speech_text=speech_text,
+            segment_texts=[
+                _text(item.get("speech_text") or item.get("copy") or item.get("text") or item.get("prompt"))
+                for item in (storyboard if isinstance(storyboard, list) else [])
+                if isinstance(item, dict)
+            ],
+            segment_durations=[
+                _number(item.get("duration_seconds") or item.get("duration"), 0.0)
+                for item in (storyboard if isinstance(storyboard, list) else [])
+                if isinstance(item, dict)
+            ],
+        )
+        return {
+            "ok": True,
+            "message": "Ecommerce seeding video generated",
+            "runninghub_task_id": runninghub_task_ids[-1] if runninghub_task_ids else "",
+            "runninghub_task_ids": runninghub_task_ids,
+            "runninghub_usage": runninghub_usage,
+            "seedance_model_used": "",
+            "download_path": str(final_path),
+            "video_path": str(final_path),
+            "subtitle_count": subtitle_count,
+            "subtitles_applied": subtitle_count > 0,
+            "subtitle_warning": subtitle_warning,
+            "completed_segments": rendered.get("completed_segments") or [],
+            "raw_result": {
+                "local_renderer": _text(rendered.get("local_renderer") or "ffmpeg_programmatic_seeding_v1"),
+                "seeding_stage": "final_video",
+                "ecommerce_seeding_template": rendered["template"],
+                "layout_variant": rendered["layout_variant"],
+                "duration": duration,
+                "ratio": rendered["ratio"],
+                "resolution": rendered["resolution"],
+                "content_mode": "planting",
+                "storyboard": storyboard,
+                "prompt_segments": prompt_segments,
+                "aggregated_prompt": aggregated_prompt,
+                "segments": rendered.get("segments") or [],
+                "generated_scene_image_paths": rendered.get("image_paths") or [],
+                "scene_results": scene_results,
+            },
+        }
+
+    def ecommerce_short_video(self, *, task_id: str, payload: dict[str, Any], context: VideoTaskContext) -> dict[str, Any]:
+        payload = dict(payload or {})
+        product_values = [
+            _text(item)
+            for item in (payload.get("product_image_local_paths") or [])
+            if _text(item)
+        ]
+        primary_product = _text(payload.get("product_image_local_path") or payload.get("image_local_path"))
+        if primary_product and primary_product not in product_values:
+            product_values.insert(0, primary_product)
+        material_analysis = payload.get("ecommerce_material_analysis")
+        if product_values and isinstance(material_analysis, dict):
+            effective = ecommerce_material_intelligence.select_ecommerce_effective_references(
+                product_paths=product_values,
+                model_path=_text(payload.get("model_image_local_path")),
+                material_analysis=material_analysis,
+                max_images=9,
+                priority_product_paths=[
+                    _text(item)
+                    for item in (payload.get("ecommerce_product_three_view_image_local_paths") or [])
+                    if _text(item)
+                ],
+            )
+            selected_products = list(effective.get("product_image_local_paths") or [])
+            if selected_products:
+                payload["product_image_local_paths"] = selected_products
+                payload["product_image_local_path"] = selected_products[0]
+                payload["ecommerce_effective_reference_order"] = list(effective.get("reference_order") or [])
+                payload["ecommerce_effective_selected_indexes"] = list(effective.get("selected_original_indexes") or [])
+        if _text(payload.get("ecommerce_video_mode")).lower() == "seeding_video":
+            return self._run_local_ecommerce_seeding(task_id=task_id, payload=payload, context=context)
+        model_config = ecommerce_ad_prompting.normalize_ecommerce_model_workflow(payload)
+        payload = dict(model_config["payload"])
+        workdir = self._workdir(task_id, payload)
+        animation_redraw_meta: dict[str, Any] = {}
+        animation_redraw_provider_results: list[dict[str, Any]] = []
+        if (
+            _text(payload.get("ecommerce_ad_style")).lower() == "animation"
+            and not _boolean(
+                payload.get("ecommerce_animation_redraw_done"),
+                name="ecommerce_animation_redraw_done",
+                default=False,
+            )
+        ):
+            def generate_animation_image(**values: Any) -> tuple[dict[str, Any], dict[str, Any], list[Any]]:
+                source = dict(values.get("source") or payload)
+                prompt = _text(values.get("prompt"))
+                output_image_path = Path(_text(values.get("output_image_path"))).expanduser().resolve()
+                input_image_path = Path(_text(values.get("input_image_path"))).expanduser().resolve()
+                if runninghub_image_models.resolve_api_key(source):
+                    result = runninghub_image_models.generate_image_with_fallback(
+                        source,
+                        prompt,
+                        [input_image_path],
+                        output_image_path,
+                        context,
+                        logger=context.logger,
+                        poll_interval_seconds=max(_number(source.get("video_poll_interval_seconds"), 2.0), 0.0),
+                        max_poll_attempts=max(_integer(source.get("video_image_max_poll_attempts"), 180), 1),
+                    )
+                    attempts = list(result.get("image_model_attempts") or [])
+                    selected_model = _text(result.get("selected_model"))
+                    if not selected_model:
+                        selected_model = next(
+                            (_text(item.get("model")) for item in reversed(attempts) if isinstance(item, dict) and item.get("ok")),
+                            "",
+                        )
+                else:
+                    legacy_generate = getattr(image_model_api, "generate_image", None)
+                    if not callable(legacy_generate):
+                        raise VideoDependencyError("animation reference redraw image provider is not configured")
+                    result = legacy_generate(
+                        base_url=_text(source.get("image_model_provider_base_url")),
+                        model=_text(
+                            source.get("image_generate_model")
+                            or source.get("image_model_priority_order")
+                            or source.get("image_model_default_model")
+                        ),
+                        prompt=prompt,
+                        output_image_path=str(output_image_path),
+                        gemini_api_key=_text(source.get("image_model_provider_api_key_gemini")),
+                        gpt_api_key=_text(source.get("image_model_provider_api_key_gpt")),
+                        input_image_path=str(input_image_path),
+                        input_image_paths=[str(input_image_path)],
+                        size=_text(source.get("image_size") or source.get("size") or "1:1"),
+                        logger=context.logger,
+                    )
+                    attempts = list(result.get("attempts") or []) if isinstance(result, dict) else []
+                    selected_model = _text(result.get("selected_model")) if isinstance(result, dict) else ""
+                animation_redraw_provider_results.append(dict(result or {}))
+                return dict(result or {}), {"model": selected_model}, attempts
+
+            redraw_result = ecommerce_animation_redraw.redraw_animation_references(
+                payload,
+                task_id=str(task_id),
+                workdir=workdir / "animation_redraw",
+                context=context,
+                generate_image=generate_animation_image,
+            )
+            payload = dict(redraw_result.get("params") or payload)
+            animation_redraw_meta = dict(payload.get("ecommerce_animation_redraw_result") or {})
         product_image_paths = payload.get("product_image_local_paths")
         if product_image_paths is not None and not isinstance(product_image_paths, list):
             raise ValueError("product_image_local_paths must be a list")
-        image_values = _unique_text_values(
-            [
-                payload.get("model_image_local_path"),
-                payload.get("product_image_local_path") or payload.get("image_local_path"),
-                *(product_image_paths or []),
-            ]
+        product_image_values = _unique_text_values(
+            [payload.get("product_image_local_path") or payload.get("image_local_path"), *(product_image_paths or [])]
         )
+        model_image_value = _text(payload.get("model_image_local_path"))
+        model_reference_skipped = _boolean(
+            payload.get("ecommerce_model_reference_skipped") or payload.get("model_reference_skipped"),
+            name="ecommerce_model_reference_skipped",
+            default=not bool(model_image_value),
+        )
+        reference_constraints = ecommerce_ad_prompting.build_ecommerce_reference_constraints(
+            product_paths=product_image_values,
+            model_path=model_image_value,
+            model_reference_skipped=model_reference_skipped,
+            max_images=9,
+        )
+        image_values = list(reference_constraints["reference_paths"])
         image_urls: list[str] = []
         remote_values = payload.get("image_urls")
         if remote_values is not None and not isinstance(remote_values, list):
@@ -1471,22 +3449,18 @@ class ArchivedSourceBackend:
                 remote_values=(reference_video_remote,),
             ))
         audio_urls: list[str] = []
-        reference_audio_local = _text(payload.get("audio_local_path"))
+        listed_audio_values = payload.get("audio_local_paths") or payload.get("voice_audio_local_paths") or []
+        if not isinstance(listed_audio_values, list):
+            raise ValueError("audio_local_paths must be a list")
+        audio_local_values = _unique_text_values([
+            payload.get("audio_local_path") or payload.get("voice_audio_local_path"),
+            *listed_audio_values,
+        ])
         reference_audio_remote = _text(payload.get("audio_url"))
-        if reference_audio_local or reference_audio_remote:
-            audio_urls.append(self._resolve_media(
-                task_id=task_id,
-                payload=payload,
-                context=context,
-                media_kind="ecommerce_reference_audio",
-                local_values=(reference_audio_local,),
-                remote_values=(reference_audio_remote,),
-            ))
-        model = _text(payload.get("ecommerce_model") or payload.get("ecommerce_short_video_model") or payload.get("seedance_model") or "seedance2.0").lower()
-        fast = "fast" in model
-        model_slug = "sparkvideo-2.0-fast" if fast else "sparkvideo-2.0"
-        ratio = _text(payload.get("ratio") or payload.get("video_default_ratio") or "9:16")
-        resolution = _text(payload.get("resolution") or payload.get("video_default_resolution") or "720p")
+        model = _text(model_config["model"])
+        model_slug = _text(model_config["model_slug"])
+        ratio = _text(model_config["ratio"])
+        resolution = _text(model_config["resolution"])
         workbench = payload.get("video_workbench") if isinstance(payload.get("video_workbench"), dict) else {}
         storyboard = payload.get("storyboard")
         if storyboard is None:
@@ -1497,7 +3471,31 @@ class ArchivedSourceBackend:
         storyboard_lines = _segment_prompt_lines(storyboard, name="storyboard")
         prompt_segment_lines = _segment_prompt_lines(prompt_segments, name="prompt_segments")
         base_prompt = _text(payload.get("prompt") or payload.get("prompt_text") or payload.get("message"))
+        product_category = ecommerce_ad_prompting.normalize_ecommerce_product_category(
+            payload.get("product_category") or payload.get("category"),
+            prompt=base_prompt,
+        )
+        payload["product_category"] = product_category
         common_prompt_parts = [base_prompt or "真实自然的产品广告短视频，无字幕，无水印。"]
+        common_prompt_parts[0] = ecommerce_ad_prompting.clean_ecommerce_video_prompt_text(
+            common_prompt_parts[0],
+            product_category=product_category,
+        )
+        creative_brief = ecommerce_ad_prompting.normalize_ecommerce_creative_brief(
+            payload.get("ecommerce_creative_brief") or payload.get("creative_brief"),
+            category=product_category,
+            prompt=common_prompt_parts[0],
+            image_count=len(image_values),
+            has_model=bool(reference_constraints.get("model_ref")),
+        )
+        payload["ecommerce_creative_brief"] = creative_brief
+        reference_note = _text(reference_constraints.get("reference_note"))
+        creative_guidance = ecommerce_ad_prompting.format_ecommerce_creative_brief_execution_guidance(creative_brief)
+        common_prompt_parts = [
+            item
+            for item in (reference_note, creative_guidance, *common_prompt_parts)
+            if _text(item)
+        ]
         product_name = _text(payload.get("product_name"))
         style_hint = _text(payload.get("style_hint"))
         nano_prompt = _text(payload.get("nano_prompt"))
@@ -1528,6 +3526,47 @@ class ArchivedSourceBackend:
             storyboard_lines=storyboard_lines,
             prompt_segment_lines=prompt_segment_lines,
         )
+        submission_constraints = ecommerce_ad_prompting.build_ecommerce_submission_constraints(
+            payload,
+            reference_constraints=reference_constraints,
+            has_audio=bool(audio_local_values or reference_audio_remote),
+        )
+        for segment in segment_plan:
+            cleaned_segment_prompt = ecommerce_ad_prompting.clean_ecommerce_video_prompt_text(
+                segment.get("prompt"),
+                product_category=product_category,
+            )
+            segment["prompt"] = ecommerce_ad_prompting.clean_ecommerce_video_prompt_text(
+                ecommerce_ad_prompting.compose_ecommerce_segment_prompt(
+                    prompt=cleaned_segment_prompt,
+                    constraints=submission_constraints.get("segment_constraints") or [],
+                    sound_constraint=submission_constraints.get("sound_constraint") or "",
+                    product_category=product_category,
+                    preserve_dialogue=True,
+                ),
+                product_category=product_category,
+            )
+        segment_audio_paths = ecommerce_segment_audio.prepare_ecommerce_segment_audio_paths(
+            audio_inputs=[Path(item) for item in audio_local_values],
+            segment_durations=[float(item["duration_seconds"]) for item in segment_plan],
+            workdir=workdir / "segment_audio",
+            segment_dialogues=[str(item.get("prompt") or "") for item in segment_plan],
+            probe_duration=lambda path: self._probe_media_duration_seconds(path, payload),
+            cut_segment=lambda source, target, start, length: self._cut_ecommerce_audio_segment(
+                source,
+                target,
+                start,
+                length,
+                payload=payload,
+                context=context,
+            ),
+            check_cancelled=context.check_cancelled,
+        )
+        segment_audio_by_index = {
+            int(segment["index"]): segment_audio_paths[offset]
+            for offset, segment in enumerate(segment_plan)
+            if offset < len(segment_audio_paths)
+        }
         regenerate_value = payload.get("regenerate_segment_index")
         if regenerate_value is not None:
             if isinstance(regenerate_value, bool):
@@ -1550,7 +3589,52 @@ class ArchivedSourceBackend:
         ok = True
         failure_message = ""
         submit_url = f"{self._base_url(payload)}/openapi/v2/rhart-video/{model_slug}/multimodal-video"
-        for segment in segment_plan:
+        previous_storyboard_url = ""
+        storyboard_local_paths: list[str] = []
+        storyboard_urls: list[str] = []
+
+        def build_continuity_sheet(segment: dict[str, Any], video_path: Path) -> None:
+            nonlocal previous_storyboard_url
+            summary = ecommerce_segment_continuity._ecommerce_storyboard_recap_from_prompt(
+                segment_prompt=str(segment.get("prompt") or ""),
+                segment_index=int(segment["index"]),
+                segment_duration=max(_integer(segment.get("duration_seconds"), 1), 1),
+            )
+
+            def run_storyboard_process(command: list[str], **_kwargs: Any) -> SimpleNamespace:
+                returncode, stdout, stderr = _run_local_process(
+                    command,
+                    timeout_seconds=max(_integer(payload.get("video_task_timeout_seconds"), 3600), 30),
+                    payload=payload,
+                    context=context,
+                )
+                return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+            storyboard_path = ecommerce_segment_continuity._build_ecommerce_storyboard_sheet(
+                video_path=video_path,
+                output_path=workdir / f"ecommerce_storyboard_segment_{int(segment['index'])}.jpg",
+                segment_index=int(segment["index"]),
+                segment_duration=max(_integer(segment.get("duration_seconds"), 1), 1),
+                summary=summary,
+                ratio=ratio,
+                include_annotations=True,
+                context=context,
+                ffmpeg_path=_text(payload.get("ffmpeg_path")),
+                run_process=run_storyboard_process,
+                probe_duration=lambda path: self._probe_media_duration_seconds(path, payload),
+            )
+            storyboard_local_paths.append(str(storyboard_path))
+            previous_storyboard_url = self._resolve_media(
+                task_id=task_id,
+                payload=payload,
+                context=context,
+                media_kind=f"ecommerce_storyboard_segment_{int(segment['index'])}",
+                local_values=(str(storyboard_path),),
+                remote_values=(),
+            )
+            storyboard_urls.append(previous_storyboard_url)
+
+        for segment_position, segment in enumerate(segment_plan):
             context.check_cancelled()
             segment_index = int(segment["index"])
             existing = completed.get(segment_index)
@@ -1574,24 +3658,55 @@ class ArchivedSourceBackend:
                         "runninghub_task_id": record["runninghub_task_id"],
                     }
                 )
+                if segment_position < len(segment_plan) - 1:
+                    build_continuity_sheet(segment, Path(record["path"]))
                 continue
 
             segment_output_path = workdir / f"ecommerce_short_video_segment_{segment_index:03d}.mp4"
+            segment_audio_urls: list[str] = []
+            segment_audio_path = segment_audio_by_index.get(segment_index)
+            if segment_audio_path is not None or reference_audio_remote:
+                resolved_audio = self._resolve_media(
+                    task_id=task_id,
+                    payload=payload,
+                    context=context,
+                    media_kind=(
+                        "ecommerce_voice_audio"
+                        if len(segment_plan) == 1
+                        else f"ecommerce_voice_audio_segment_{segment_index}"
+                    ),
+                    local_values=(str(segment_audio_path) if segment_audio_path is not None else "",),
+                    remote_values=(reference_audio_remote,),
+                )
+                segment_audio_urls.append(resolved_audio)
+                if resolved_audio not in audio_urls:
+                    audio_urls.append(resolved_audio)
+            segment_image_urls = list(image_urls[:9])
+            segment_prompt = str(segment["prompt"])
+            if previous_storyboard_url:
+                segment_image_urls = segment_image_urls[:8]
+                segment_image_urls.append(previous_storyboard_url)
+                storyboard_image_index = len(segment_image_urls)
+                segment_prompt = (
+                    f"@Image {storyboard_image_index}为上一段视频的前情六宫格提要，延续其人物身份、商品外观、"
+                    f"空间方向、光线和镜头运动。\n{segment_prompt}"
+                )
             submit_payload = {
-                "prompt": str(segment["prompt"]),
+                "prompt": segment_prompt,
                 "resolution": resolution,
                 "duration": self._ecommerce_duration_text(float(segment["duration_seconds"])),
-                "imageUrls": image_urls[:9],
+                "imageUrls": segment_image_urls,
                 "videoUrls": video_urls,
-                "audioUrls": audio_urls,
+                "audioUrls": segment_audio_urls,
                 "generateAudio": True,
                 "ratio": ratio,
-                "realPersonMode": _text(payload.get("real_person_mode") or "allow"),
+                "realPersonMode": bool(model_config["real_person_mode"]),
                 "conversionSlots": ["all"],
                 "returnLastFrame": False,
                 "seed": _integer(payload.get("seed"), -1),
             }
             segment_payload = dict(payload)
+            segment_payload["_segment_index"] = segment_index
             if resume_runninghub_task_id and not resume_consumed:
                 segment_payload["resume_runninghub_task_id"] = resume_runninghub_task_id
                 resume_consumed = True
@@ -1611,6 +3726,7 @@ class ArchivedSourceBackend:
             provider_id = _text(result.get("runninghub_task_id") or result.get("provider_task_id"))
             record = {
                 **segment,
+                "prompt": segment_prompt,
                 "path": str(segment_output_path) if segment_output_path.exists() else "",
                 "runninghub_task_id": provider_id,
                 "provider_task_id": _text(result.get("provider_task_id") or provider_id),
@@ -1634,14 +3750,23 @@ class ArchivedSourceBackend:
             }
             completed_output.append(checkpoint_segment)
             self._checkpoint_ecommerce_segment(task_id=task_id, payload=payload, segment=checkpoint_segment)
+            if segment_position < len(segment_plan) - 1:
+                build_continuity_sheet(segment, segment_output_path)
 
         output_path = workdir / "ecommerce_short_video.mp4"
         final_path = output_path
         subtitle_count = 0
         subtitle_warning = ""
+        tail_audio_noise_trims: list[dict[str, Any]] = []
         if ok:
+            cleaned_segment_paths, tail_audio_noise_trims = self._clean_video_segments_tail_audio_noise(
+                [Path(item["path"]) for item in segment_results],
+                output_dir=workdir / "tail_audio_noise_trimmed_segments",
+                payload=payload,
+                context=context,
+            )
             self._concat_ecommerce_segments(
-                segment_paths=[Path(item["path"]) for item in segment_results],
+                segment_paths=cleaned_segment_paths,
                 output_path=output_path,
                 payload=payload,
                 context=context,
@@ -1652,12 +3777,21 @@ class ArchivedSourceBackend:
                 payload=payload,
                 context=context,
                 workdir=workdir,
+                speech_text=speech_text,
+                segment_texts=[_text(item.get("text") or item.get("prompt")) for item in segment_plan],
+                segment_durations=[_number(item.get("duration_seconds"), 0.0) for item in segment_plan],
             )
-        task_ids = [
+        task_ids = _unique_provider_ids([
+            [
+                result.get("runninghub_task_ids") or result.get("runninghub_task_id")
+                for result in animation_redraw_provider_results
+            ],
+            [
             _text(item.get("runninghub_task_id"))
             for item in segment_results
             if _text(item.get("runninghub_task_id"))
-        ]
+            ],
+        ])
         task_id_value = task_ids[-1] if task_ids else ""
         submit_payloads = [item["submit_payload"] for item in segment_results if isinstance(item.get("submit_payload"), dict)]
         declared_segment_count = len(storyboard_lines) + len(prompt_segment_lines)
@@ -1666,8 +3800,8 @@ class ArchivedSourceBackend:
             "message": "广告短视频生成完成" if ok else (failure_message or "广告短视频生成失败"),
             "runninghub_task_id": task_id_value,
             "runninghub_task_ids": task_ids,
-            "runninghub_usage": {},
-            "seedance_model_used": "seedance2.0fast" if fast else "seedance2.0",
+            "runninghub_usage": _merge_runninghub_usage(animation_redraw_provider_results, provider_results),
+            "seedance_model_used": model,
             "download_path": str(final_path) if ok and final_path.exists() else "",
             "video_path": str(final_path) if ok and final_path.exists() else "",
             "subtitle_count": subtitle_count,
@@ -1675,20 +3809,48 @@ class ArchivedSourceBackend:
             "subtitle_warning": subtitle_warning,
             "completed_segments": completed_output,
             "raw_result": {
+                "workflow_id": _text(model_config.get("workflow_id")),
+                "seedance_model_used": model,
+                "seedance_submit_slug": model_slug,
+                "segment_durations": [
+                    _number(item.get("duration_seconds"), 0.0)
+                    for item in segment_plan
+                ],
                 "duration": duration,
                 "ratio": ratio,
                 "resolution": resolution,
                 "content_mode": content_mode,
                 "image_urls": image_urls,
+                "reference_image_paths": image_values,
+                "reference_image_count": len(image_values),
+                "model_reference_skipped": model_reference_skipped,
+                "product_category": product_category,
+                "ecommerce_creative_brief": creative_brief,
+                "animation_redraw": animation_redraw_meta,
                 "storyboard": storyboard,
                 "prompt_segments": prompt_segments,
+                "prompt": prompt,
                 "aggregated_prompt": prompt,
+                "segment_prompts": [str(item.get("prompt") or "") for item in segment_results],
+                "copy_text": speech_text,
+                "product_image_local_paths": product_image_values,
+                "audio_path": audio_local_values[0] if audio_local_values else "",
+                "audio_paths": audio_local_values,
+                "audio_url_count": len(audio_urls),
+                "audio_urls": audio_urls,
+                "tail_audio_noise_trims": tail_audio_noise_trims,
+                "storyboard_local_paths": storyboard_local_paths,
+                "storyboard_urls": storyboard_urls,
                 "segment_count": declared_segment_count or len(segment_plan),
                 "segments": segment_results,
+                "submits": submit_payloads,
                 "submit_payload": submit_payloads[0] if submit_payloads else {},
                 "submit_payloads": submit_payloads,
                 "query": provider_results[-1] if provider_results else {},
                 "queries": provider_results,
+                "submit_url": submit_url,
+                "subtitled": subtitle_count > 0,
+                "warnings": [subtitle_warning] if subtitle_warning else [],
             },
         }
 
@@ -1759,13 +3921,20 @@ class ArchivedSourceBackend:
         target_script = _text(payload.get("target_script") or payload.get("translated_script") or payload.get("script") or payload.get("speech_text"))
         script_segments = payload.get("script_segments") or payload.get("subtitle_segments")
         source_script = _text(payload.get("source_script"))
+        opening_insert_text = _text(payload.get("opening_insert_text"))
+        ending_insert_text = _text(payload.get("ending_insert_text"))
         source_language = _text(payload.get("source_language"))
-        source_segments: Any = payload.get("source_segments") or []
+        source_segments: Any = (
+            payload.get("source_segments")
+            or payload.get("video_language_source_segments")
+            or []
+        )
         transcribe_translate_meta: dict[str, Any] = {}
         transcribe_translate_mode = "provided"
-        audio_value = _text(payload.get("target_audio_local_path") or payload.get("audio_local_path"))
-        if audio_value:
-            target_audio = Path(audio_value).expanduser().resolve()
+        voice_preparation: dict[str, Any] = {}
+        provided_target_audio = _text(payload.get("target_audio_local_path"))
+        if provided_target_audio:
+            target_audio = Path(provided_target_audio).expanduser().resolve()
             if not target_audio.exists() or not target_audio.is_file():
                 raise FileNotFoundError(f"目标音频不存在: {target_audio}")
         else:
@@ -1802,24 +3971,37 @@ class ArchivedSourceBackend:
                     if isinstance(script_segments, list) and script_segments:
                         payload["script_segments"] = script_segments
             if isinstance(script_segments, list) and script_segments:
+                voice_preparation = language_voice_pipeline.prepare_language_voice_settings(
+                    payload,
+                    context,
+                    workdir,
+                )
+                voice_settings = voice_preparation["settings"]
+                payload["video_default_voice_id"] = voice_settings.minimax_voice_id
+                payload["minimax_tts_voice_id"] = voice_settings.minimax_voice_id
                 target_audio, timed_audio_segments, aligned_total_seconds = self._generate_timed_tts_audio(
                     segments=script_segments,
                     source_duration=source_duration,
                     payload=payload,
                     context=context,
                     workdir=workdir,
+                    opening_insert_text=opening_insert_text,
+                    ending_insert_text=ending_insert_text,
                 )
             else:
-                target_audio = self._generate_minimax_tts(
-                    speech_text=target_script,
-                    output_path=workdir / "video_language_target.mp3",
-                    payload=payload,
-                    context=context,
+                final_tts_script = "\n".join(
+                    item for item in (opening_insert_text, target_script, ending_insert_text) if _text(item)
                 )
+                voice_preparation = language_voice_pipeline.prepare_language_voice(
+                    {**payload, "target_script": final_tts_script},
+                    context,
+                    workdir,
+                )
+                target_audio = Path(voice_preparation["target_audio_path"])
         preserve_background = _boolean(
             payload.get("preserve_background_audio"),
             name="preserve_background_audio",
-            default=False,
+            default=True,
         )
         mux_audio = target_audio
         background_bed_path = ""
@@ -1971,6 +4153,12 @@ class ArchivedSourceBackend:
             payload=payload,
             context=context,
             workdir=workdir,
+            speech_text="\n".join(_text(item.get("text")) for item in timed_audio_segments if _text(item.get("text"))) or target_script,
+            segment_texts=[_text(item.get("text")) for item in timed_audio_segments],
+            segment_durations=[
+                max(_number(item.get("end_seconds"), 0.0) - _number(item.get("start_seconds"), 0.0), 0.0)
+                for item in timed_audio_segments
+            ],
         )
         return {
             "ok": True,
@@ -1990,12 +4178,19 @@ class ArchivedSourceBackend:
                 "timed_audio_segments": timed_audio_segments,
                 "target_language": _text(payload.get("target_language") or payload.get("language")),
                 "target_script": target_script,
+                "opening_insert_text": opening_insert_text,
+                "ending_insert_text": ending_insert_text,
                 "source_script": source_script,
                 "source_language": source_language,
                 "source_segments": source_segments,
                 "transcribe_translate_mode": transcribe_translate_mode,
                 "transcribe_translate_meta": transcribe_translate_meta,
                 "target_audio_path": str(target_audio),
+                "voice_preparation": {
+                    key: value
+                    for key, value in voice_preparation.items()
+                    if key != "settings"
+                },
                 "mux_audio_path": str(mux_audio),
                 "background_bed_path": background_bed_path,
                 "background_audio_preserved": background_audio_mode not in {"tts_only", "tts_only_fallback"},
@@ -2131,63 +4326,6 @@ class ArchivedSourceBackend:
         return paths
 
     @staticmethod
-    def _image_generate_prompt(payload: dict[str, Any], mode: str) -> str:
-        user_prompt = _text(payload.get("prompt") or payload.get("prompt_text") or payload.get("message"))
-        if not user_prompt and mode == "poster_translate":
-            user_prompt = "Translate all readable poster text accurately and keep the original visual design coherent."
-        if not user_prompt:
-            raise ValueError("image_generate requires prompt/prompt_text/message")
-        product_name = _text(payload.get("product_name")) or "the referenced product"
-        style_hint = _text(payload.get("style_hint"))
-        negative_prompt = _text(payload.get("negative_prompt"))
-        if mode == "product_only":
-            instruction = (
-                f"Create a product-only ecommerce image for {product_name}. Use the single reference as the exact product; "
-                "preserve its shape, materials, colors, branding, and proportions. Do not add a model or unrelated products."
-            )
-        elif mode == "model_product":
-            instruction = (
-                f"Create a model-and-product ecommerce image for {product_name}. The first reference is the product and the "
-                "second reference is the model; preserve both identities and show a physically plausible interaction."
-            )
-        elif mode == "subject_replace":
-            subject_kind = _text(payload.get("subject_kind") or payload.get("replace_kind") or "subject")
-            instruction = (
-                f"Perform subject replacement for the {subject_kind}. The first reference is the source composition and the "
-                "second reference is the replacement subject. Preserve source framing, pose, lighting, shadows, and background."
-            )
-        elif mode == "poster_translate":
-            target_language = _text(payload.get("target_language"))
-            if not target_language:
-                raise ValueError("poster_translate requires target_language")
-            source_language = _text(payload.get("source_language")) or "auto-detected language"
-            preserve_layout = _boolean(payload.get("preserve_layout"), name="preserve_layout", default=True)
-            layout_text = "Preserve the original layout, hierarchy, typography, and branding." if preserve_layout else "Adjust the layout only where required for readable translated text."
-            notes = _text(payload.get("translation_notes"))
-            instruction = (
-                f"Perform poster translation from {source_language} to {target_language}. Translate every readable marketing "
-                f"text element while leaving non-text artwork unchanged. {layout_text}"
-            )
-            if notes:
-                instruction += f" Translation notes: {notes}."
-        elif mode == "digital_human_character":
-            instruction = (
-                "Create a digital human character suitable for consistent downstream image and video generation. Produce one "
-                "clear full-body character with a recognizable face, coherent anatomy, neutral presentation, and clean background."
-            )
-        else:
-            instruction = (
-                "Create a three-view turnaround sheet of one consistent subject: front view, side view, and back view. Use a "
-                "neutral pose, matching scale, consistent identity and materials, even lighting, and a clean background."
-            )
-        parts = [instruction, f"Creative direction: {user_prompt}"]
-        if style_hint:
-            parts.append(f"Visual style: {style_hint}")
-        if negative_prompt:
-            parts.append(f"Exclude: {negative_prompt}")
-        return "\n".join(parts)
-
-    @staticmethod
     def _image_generate_size(payload: dict[str, Any]) -> str:
         width_value = payload.get("width")
         height_value = payload.get("height")
@@ -2200,69 +4338,108 @@ class ArchivedSourceBackend:
         return _text(payload.get("image_size") or payload.get("size") or "1:1")
 
     def image_generate(self, *, task_id: str, payload: dict[str, Any], context: VideoTaskContext) -> dict[str, Any]:
-        generate = getattr(image_model_api, "generate_image", None)
-        if not callable(generate):
-            raise VideoDependencyError(
-                "当前 image_model_api 未暴露 archive generate_image；在现有 server 注入时会保留其原生 image_generate runner"
-            )
+        """Run the original provider/workflow dispatcher after mode-specific normalization."""
+
+        legacy_generate = getattr(image_model_api, "generate_image", None)
+        use_runninghub_standard = bool(runninghub_image_models.resolve_api_key(payload))
+        workflow_ids = payload.get("image_generate_workflow_ids") or payload.get("image_runninghub_workflow_id")
+        if not use_runninghub_standard and not callable(legacy_generate) and not workflow_ids:
+            raise VideoDependencyError("image generation provider is not configured")
         mode = self._image_generate_mode(payload)
+        if mode == "product_only":
+            payload = image_mode_prompts.apply_product_only_prompt_constraints({**payload, "mode": mode})
         count = self._image_generate_count(payload)
         input_paths = self._image_generate_inputs(payload, mode)
-        prompt = self._image_generate_prompt(payload, mode)
+        prompt = image_mode_prompts.build_image_generate_prompt(payload, mode)
         size = self._image_generate_size(payload)
         workdir = self._workdir(task_id, payload)
-        generations: list[dict[str, Any]] = []
-        image_paths: list[str] = []
-        for index in range(1, count + 1):
-            context.check_cancelled()
-            output_path = workdir / ("image_generate.png" if count == 1 else f"image_generate_{index:03d}.png")
-            result = generate(
+
+        def standard_api_callback(**values: Any) -> dict[str, Any]:
+            generation_payload = dict(values.get("payload") or payload)
+            generation_payload["_task_id"] = str(values.get("task_id") or task_id)
+            value_paths = [Path(str(item)).expanduser().resolve() for item in (values.get("input_image_paths") or input_paths)]
+            return runninghub_image_models.generate_image_with_fallback(
+                generation_payload,
+                _text(values.get("prompt") or prompt),
+                value_paths,
+                Path(_text(values.get("output_path"))).expanduser().resolve(),
+                context,
+                logger=context.logger,
+                poll_interval_seconds=max(_number(payload.get("video_poll_interval_seconds"), 2.0), 0.0),
+                max_poll_attempts=max(_integer(payload.get("video_image_max_poll_attempts"), 180), 1),
+            )
+
+        def closed_model_callback(**values: Any) -> dict[str, Any]:
+            if not callable(legacy_generate):
+                return standard_api_callback(**values)
+            value_paths = [_text(item) for item in (values.get("input_image_paths") or input_paths) if _text(item)]
+            return legacy_generate(
                 base_url=_text(payload.get("image_model_provider_base_url")),
-                model=_text(payload.get("image_generate_model") or payload.get("image_model_priority_order") or payload.get("image_model_default_model")),
-                prompt=prompt,
-                output_image_path=str(output_path),
+                model=_text(values.get("model") or payload.get("image_generate_model") or payload.get("image_model_default_model")),
+                prompt=_text(values.get("prompt") or prompt),
+                output_image_path=_text(values.get("output_path")),
                 gemini_api_key=_text(payload.get("image_model_provider_api_key_gemini")),
                 gpt_api_key=_text(payload.get("image_model_provider_api_key_gpt")),
-                input_image_path=input_paths[0] if input_paths else None,
-                input_image_paths=input_paths,
-                size=size,
+                input_image_path=value_paths[0] if value_paths else None,
+                input_image_paths=value_paths,
+                size=_text(values.get("size") or size),
                 logger=context.logger,
             )
-            context.check_cancelled()
-            returned_path = _text(result.get("image_path") if isinstance(result, dict) else "")
-            image_path = Path(returned_path).expanduser().resolve() if returned_path else output_path.resolve()
-            if not image_path.exists() or not image_path.is_file():
-                raise RuntimeError(f"image model did not create output {index}/{count}: {image_path}")
-            image_paths.append(str(image_path))
-            generations.append({"index": index, "image_path": str(image_path), "result": result})
-            context.progress(
-                stage="image_generate",
-                status="running" if index < count else "success",
-                message=f"图片生成 {index}/{count}",
-                progress=round(index * 100 / count, 2),
+
+        def workflow_callback(**values: Any) -> dict[str, Any]:
+            workflow_id = _text(values.get("workflow_id"))
+            if not workflow_id:
+                raise ValueError("image workflow callback requires workflow_id")
+            value_paths = [_text(item) for item in (values.get("input_image_paths") or []) if _text(item)]
+            product_input = Path(_text(values.get("product_input") or (value_paths[0] if value_paths else ""))).expanduser().resolve()
+            model_input = Path(_text(values.get("model_input") or (value_paths[1] if len(value_paths) > 1 else product_input))).expanduser().resolve()
+            workflow_payload = dict(values.get("payload") or payload)
+            product_url = self._upload_runninghub_image(path=product_input, payload=workflow_payload)
+            model_url = self._upload_runninghub_image(path=model_input, payload=workflow_payload)
+            product_name = _text(workflow_payload.get("product_name") or "商品")
+            output_path = Path(_text(values.get("output_path"))).expanduser().resolve()
+            result = self._submit_and_poll(
+                task_id=_text(values.get("task_id") or task_id),
+                payload=workflow_payload,
+                context=context,
+                submit_url=self._workflow_submit_url(workflow_payload, workflow_id),
+                submit_payload={
+                    "nodeInfoList": [
+                        {"nodeId": "16", "fieldName": "image", "fieldValue": product_url, "description": "产品图片"},
+                        {"nodeId": "142", "fieldName": "string", "fieldValue": product_name, "description": "目标描述（可以是单个或者多个）"},
+                        {"nodeId": "12", "fieldName": "image", "fieldValue": model_url, "description": "背景或模特图"},
+                        {"nodeId": "141", "fieldName": "string", "fieldValue": _text(workflow_payload.get("replace_target_name") or product_name), "description": "被替换区域描述（可以单个可以多个）"},
+                        {"nodeId": "143", "fieldName": "value", "fieldValue": str(max(_integer(workflow_payload.get("output_height_limit"), 1980), 256)), "description": "输出高度限制"},
+                        {"nodeId": "215", "fieldName": "string", "fieldValue": _text(workflow_payload.get("style_hint") or values.get("prompt")), "description": "提示词（可不填，可以增加被替换后的约束）"},
+                    ],
+                    "instanceType": runninghub_common.instance_type_for_workflow(
+                        workflow_id,
+                        workflow_payload.get("instance_type") or workflow_payload.get("runninghub_instance_type"),
+                    ),
+                    "usePersonalQueue": False,
+                },
+                output_path=output_path,
+                label=f"image generate workflow {workflow_id}",
             )
-        first_image = image_paths[0]
-        return {
-            "ok": True,
-            "message": "图片生成完成",
-            "runninghub_task_id": "",
-            "runninghub_task_ids": [],
-            "runninghub_usage": {},
-            "nano_images": len(image_paths),
-            "image_count": len(image_paths),
-            "image_path": first_image,
-            "image_paths": image_paths,
-            "download_path": first_image,
-            "download_paths": image_paths,
-            "raw_result": {
-                "mode": mode,
-                "prompt": prompt,
-                "input_image_paths": input_paths,
-                "size": size,
-                "requested_count": count,
-                "generations": generations,
-            },
-        }
+            if _text(result.get("status")).lower() != "success":
+                raise RuntimeError(f"image generate workflow failed: {_text(result.get('error') or result.get('message'))}")
+            result["image_path"] = str(output_path)
+            return result
+
+        return image_generate_dispatch.dispatch_image_generate(
+            task_id=task_id,
+            payload=payload,
+            mode=mode,
+            prompt=prompt,
+            input_image_paths=input_paths,
+            output_dir=workdir,
+            count=count,
+            size=size,
+            context=context,
+            workflow_callback=workflow_callback,
+            standard_api_callback=standard_api_callback if use_runninghub_standard else None,
+            closed_model_callback=closed_model_callback if callable(legacy_generate) or use_runninghub_standard else None,
+        )
 
 
 DEFAULT_SOURCE_BACKEND = ArchivedSourceBackend()

@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PIL import Image
+
 from video_core.contracts import VideoTaskContext
 from video_core.source_backend import ArchivedSourceBackend
 
@@ -35,7 +37,11 @@ class EcommerceVideoSegmentTests(unittest.TestCase):
     def _fake_ffmpeg(commands: list[list[str]]):
         def run(command, **_kwargs):
             commands.append(command)
-            Path(command[-1]).write_bytes(b"concatenated")
+            output = Path(command[-1])
+            if output.suffix.lower() in {".jpg", ".jpeg"}:
+                Image.new("RGB", (120, 80), "navy").save(output, format="JPEG")
+            else:
+                output.write_bytes(b"concatenated")
             return 0, "", ""
 
         return run
@@ -74,8 +80,8 @@ class EcommerceVideoSegmentTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual([call["submit_payload"]["duration"] for call in backend.submissions], ["15", "15", "1"])
-        self.assertEqual(len(commands), 1)
-        self.assertIn("concat", commands[0])
+        concat_commands = [command for command in commands if "concat" in command]
+        self.assertEqual(len(concat_commands), 1)
         subtitle_mock.assert_called_once()
         self.assertEqual(result["subtitle_count"], 2)
         self.assertEqual([item["completed_segment"]["index"] for item in checkpoints], [1, 2, 3])
@@ -83,6 +89,18 @@ class EcommerceVideoSegmentTests(unittest.TestCase):
             set(checkpoints[0]["completed_segment"]),
             {"index", "path", "duration_seconds", "runninghub_task_id"},
         )
+        raw_result = result["raw_result"]
+        self.assertEqual(raw_result["seedance_model_used"], result["seedance_model_used"])
+        self.assertEqual(raw_result["segment_durations"], [15.0, 15.0, 1.0])
+        self.assertEqual(raw_result["prompt"], raw_result["aggregated_prompt"])
+        self.assertEqual(raw_result["product_image_local_paths"], [str(Path(tmpdir) / "product.png")])
+        self.assertEqual(raw_result["audio_path"], "")
+        self.assertEqual(raw_result["audio_paths"], [])
+        self.assertEqual(raw_result["audio_url_count"], 0)
+        self.assertEqual(raw_result["audio_urls"], [])
+        self.assertEqual(raw_result["submits"], raw_result["submit_payloads"])
+        self.assertTrue(raw_result["subtitled"])
+        self.assertEqual(raw_result["warnings"], [])
 
     def test_planting_uses_each_storyboard_timing_prompt_and_provider_id(self):
         backend = _SegmentBackend()
@@ -113,12 +131,20 @@ class EcommerceVideoSegmentTests(unittest.TestCase):
         self.assertIn("macro product reveal", backend.submissions[0]["submit_payload"]["prompt"])
         self.assertNotIn("handheld product demo", backend.submissions[0]["submit_payload"]["prompt"])
         self.assertIn("handheld product demo", backend.submissions[1]["submit_payload"]["prompt"])
+        self.assertIn("前情六宫格提要", backend.submissions[1]["submit_payload"]["prompt"])
+        self.assertIn(
+            "https://media.invalid/ecommerce_storyboard_segment_1",
+            backend.submissions[1]["submit_payload"]["imageUrls"],
+        )
         segments = result["raw_result"]["segments"]
         self.assertEqual([item["duration_seconds"] for item in segments], [4.5, 6.0])
         self.assertEqual([item["runninghub_task_id"] for item in segments], ["rh-segment-1", "rh-segment-2"])
         self.assertEqual([item["prompt"] for item in segments], [
             backend.submissions[0]["submit_payload"]["prompt"],
             backend.submissions[1]["submit_payload"]["prompt"],
+        ])
+        self.assertEqual(result["raw_result"]["storyboard_urls"], [
+            "https://media.invalid/ecommerce_storyboard_segment_1"
         ])
 
     def test_regenerate_segment_index_submits_only_requested_storyboard_segment(self):
@@ -188,7 +214,7 @@ class EcommerceVideoSegmentTests(unittest.TestCase):
         self.assertEqual([item["runninghub_task_id"] for item in result["raw_result"]["segments"]], ["rh-existing", "rh-segment-1"])
         self.assertTrue(result["raw_result"]["segments"][0]["skipped"])
         self.assertEqual([item["completed_segment"]["index"] for item in checkpoints], [2])
-        self.assertEqual(len(commands), 1)
+        self.assertEqual(len([command for command in commands if "concat" in command]), 1)
 
 
 if __name__ == "__main__":

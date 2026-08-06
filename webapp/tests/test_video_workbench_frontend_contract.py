@@ -71,6 +71,13 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertIn('body.append("params_json"', self.workbench_js)
         self.assertIn('body.append("video_module", module.id)', self.workbench_js)
 
+    def test_oral_copy_preview_restores_three_candidate_selection(self):
+        self.assertIn("function chooseSpeechCandidate(preview)", self.workbench_js)
+        self.assertIn("preview?.speech_candidates", self.workbench_js)
+        self.assertIn("selected_speech_candidate_index: selectedIndex", self.workbench_js)
+        self.assertIn(".video-speech-candidate-grid", self.workbench_css)
+        self.assertIn(".video-speech-candidate.is-selected", self.workbench_css)
+
     def test_drafts_and_leave_confirmation_protect_local_work(self):
         self.assertIn("wk-video-workbench-draft:", self.workbench_js)
         self.assertIn("window.localStorage.setItem", self.workbench_js)
@@ -260,12 +267,25 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         for template in ("template_b", "template_d", "template_f"):
             self.assertIn(f'value: "{template}"', self.workbench_js)
         self.assertIn('values.content_mode = seeding ? "planting" : "advertising"', self.workbench_js)
+        self.assertIn('values.ecommerce_seeding_operation = "images_only"', self.workbench_js)
+
+    def test_guided_video_workflows_require_visual_or_script_confirmation_before_final_video(self):
+        self.assertIn('digital_human_operation: "visual_review"', self.workbench_js)
+        self.assertIn('"digital-human/finalize"', self.workbench_js)
+        self.assertIn('"seeding/finalize"', self.workbench_js)
+        self.assertIn('/api/video/language-script/analyze', self.workbench_js)
+        self.assertIn('video_language_script_confirmed = true', self.workbench_js)
+        self.assertIn('data-video-seeding-regenerate', self.workbench_js)
+        self.assertIn('data-video-seeding-upload', self.workbench_js)
+        self.assertIn('data-video-seeding-history', self.workbench_js)
         self.assertNotIn("function buildStoryboard", self.workbench_js)
         self.assertNotIn("storyboard_confirmed", self.workbench_js)
 
     def test_language_script_parser_and_timestamp_editor_are_wired(self):
         self.assertIn("function parseTimedScript", self.workbench_js)
-        self.assertIn('request("/api/video/language-script/parse"', self.workbench_js)
+        self.assertNotIn('request("/api/video/language-script/parse"', self.workbench_js)
+        self.assertIn('/api/video/language-script/analyze', self.workbench_js)
+        self.assertIn("if (!timed) return [];", self.workbench_js)
         self.assertIn("srtPattern", self.workbench_js)
         self.assertIn('textarea("script_text", "原文台词"', self.workbench_js)
         self.assertIn("第一步会自动解析原视频台词和时间戳", self.workbench_js)
@@ -326,10 +346,10 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertIn(retry, self.workbench_js)
         self.assertLess(self.workbench_js.index(resume), self.workbench_js.index(retry))
         self.assertIn("catch (resumeError)", self.workbench_js)
-        self.assertIn("data-video-regenerate-segment", self.workbench_js)
+        self.assertNotIn("data-video-regenerate-segment", self.workbench_js)
         self.assertIn("data-video-task-segment-regenerate", self.workbench_js)
         self.assertIn('/segments/${encodeURIComponent(segmentId)}/regenerate', self.workbench_js)
-        self.assertIn("function regenerateDraftSegment", self.workbench_js)
+        self.assertNotIn("function regenerateDraftSegment", self.workbench_js)
         self.assertIn("function regenerateTaskSegment", self.workbench_js)
 
     def test_advanced_interactions_keep_scoped_mobile_layout(self):

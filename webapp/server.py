@@ -132,7 +132,13 @@ from .proxy_market import (
     stop_proxy_market_health_monitor,
 )
 from .notifications import create_notification, register_notification_routes
-from .video_workbench import inject_video_workbench, register_video_routes, server_video_route_dependencies
+from .video_workbench import (
+    cancel_video_remote_tasks,
+    inject_video_workbench,
+    register_video_routes,
+    server_video_route_dependencies,
+    video_task_payload_for_storage,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -270,6 +276,15 @@ class BillingManualSubscriptionPayload(BaseModel):
     renewal_subscription_ids: list[str] = Field(default_factory=list)
     note: str = Field(default="管理员人工开通", max_length=1000)
 
+VIDEO_SOURCE_IMAGE_MODELS = (
+    "gpt image 2",
+    "openai/gpt-image-2-official",
+    "nano banana 2",
+    "google/nano-banana-2-official",
+    "nano banana pro",
+    "google/nano-banana-pro-official",
+)
+
 DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "upload_server_ip": "",
     "upload_file_api_key": "",
@@ -292,6 +307,8 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "runninghub_api_key": "",
     "runninghub_personal_api_key": "",
     "runninghub_enterprise_api_key": "",
+    "digital_human_oral_hot_topic_mode": "strong",
+    "video_image_model_priority_order": "gpt image 2, nano banana 2, nano banana pro",
     "video_create_audio_app_id": "",
     "video_create_video_app_id": "",
     "video_replace_model_app_id": "",
@@ -2219,31 +2236,77 @@ def _resume_pending_tasks() -> None:
                 )
                 checkpoint = output.get("video_checkpoint") if isinstance(output, dict) else None
                 provider_task_id = str(
-                    (checkpoint or {}).get("runninghub_task_id")
+                    (checkpoint or {}).get("runninghub_task_id") or ""
                     if isinstance(checkpoint, dict)
                     else ""
                 ).strip()
-                if task_type in video_task_types and provider_task_id:
+                checkpoint_stage = str(
+                    (checkpoint or {}).get("stage")
+                    if isinstance(checkpoint, dict)
+                    else ""
+                ).strip().lower()
+                if task_type in video_task_types and isinstance(checkpoint, dict) and checkpoint.get("recoverable"):
+                    if checkpoint_stage == "provider_submitting" and not provider_task_id:
+                        uncertain_error = (
+                            "provider submission outcome is unknown after restart; automatic retry was blocked "
+                            "to prevent duplicate paid work"
+                        )
+                        checkpoint = dict(checkpoint)
+                        checkpoint.update({
+                            "recoverable": False,
+                            "stage": "provider_submission_uncertain",
+                            "recovery_blocked": True,
+                        })
+                        output = dict(output) if isinstance(output, dict) else {}
+                        output["video_checkpoint"] = checkpoint
+                        if reservation_id:
+                            commercial_billing.release_reservation(conn, reservation_id)
+                        conn.execute(
+                            "UPDATE tasks SET status = ?, output_json = ?, error = ?, updated_at = ? WHERE id = ?",
+                            ("failed", _json_dumps(output), uncertain_error, _now_ts(), tid),
+                        )
+                        _insert_task_event(
+                            conn,
+                            task_id=tid,
+                            user_id=user_id,
+                            kind="done",
+                            message="供应商提交结果未知，已阻止自动重复提交",
+                            data={
+                                "status": "failed",
+                                "stage": "provider_submission_uncertain",
+                                "source": "startup_recovery",
+                                "user_visible": True,
+                                "error": uncertain_error,
+                            },
+                        )
+                        continue
+                    completed_segments = checkpoint.get("completed_segments")
                     payload.update({
                         "resume": True,
                         "resume_after_restart": True,
-                        "resume_runninghub_task_id": provider_task_id,
+                        "resume_checkpoint": dict(checkpoint),
+                        "completed_segments": list(completed_segments) if isinstance(completed_segments, list) else [],
                     })
+                    if provider_task_id and checkpoint_stage == "provider_running":
+                        payload["resume_runninghub_task_id"] = provider_task_id
+                    else:
+                        payload.pop("resume_runninghub_task_id", None)
                     conn.execute(
                         "UPDATE tasks SET status = ?, input_json = ?, error = '', updated_at = ? WHERE id = ?",
-                        ("queued", _json_dumps(_sanitize_payload(payload)), _now_ts(), tid),
+                        ("queued", _json_dumps(video_task_payload_for_storage(task_type, payload)), _now_ts(), tid),
                     )
                     _insert_task_event(
                         conn,
                         task_id=tid,
                         user_id=user_id,
                         kind="queued",
-                        message="服务重启后继续轮询已有视频供应商任务",
+                        message="服务重启后恢复视频任务执行",
                         data={
                             "status": "queued",
                             "stage": "startup_recovery",
                             "resume": True,
-                            "provider_task_id": provider_task_id,
+                            "provider_task_id": payload.get("resume_runninghub_task_id") or "",
+                            "checkpoint_stage": checkpoint_stage,
                         },
                     )
                     try:
@@ -5212,42 +5275,28 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     merged["image_generate_workflow_ids"] = image_chain
 
     merged["video_runninghub_base_url"] = str(
-        merged.get("video_runninghub_base_url") or merged.get("new_persona_runninghub_base_url") or "https://www.runninghub.ai"
+        current.get("video_runninghub_base_url") or "https://www.runninghub.ai"
     ).strip()
+    merged["video_runninghub_api_key"] = str(current.get("video_runninghub_api_key") or "").strip()
     personal_runninghub_key = str(current.get("runninghub_personal_api_key") or "").strip()
     enterprise_runninghub_key = str(current.get("runninghub_enterprise_api_key") or "").strip()
-    legacy_new_persona_key = str(current.get("new_persona_runninghub_api_key") or "").strip()
-    legacy_runninghub_key = str(
-        current.get("video_runninghub_api_key") or current.get("runninghub_api_key") or ""
-    ).strip()
-    if not enterprise_runninghub_key and legacy_new_persona_key:
-        enterprise_runninghub_key = legacy_new_persona_key
-    if not personal_runninghub_key and legacy_runninghub_key and legacy_runninghub_key != enterprise_runninghub_key:
-        personal_runninghub_key = legacy_runninghub_key
     merged["runninghub_personal_api_key"] = personal_runninghub_key
     merged["runninghub_enterprise_api_key"] = enterprise_runninghub_key
     merged["runninghub_api_key"] = personal_runninghub_key or enterprise_runninghub_key
-    merged["video_runninghub_api_key"] = merged["runninghub_api_key"]
-    merged["new_persona_runninghub_api_key"] = enterprise_runninghub_key or personal_runninghub_key
-    merged["video_runninghub_base_url"] = str(
-        merged.get("new_persona_runninghub_base_url") or merged.get("video_runninghub_base_url") or "https://www.runninghub.ai"
-    ).strip()
-
-    minimax_api_key = str(current.get("minimax_api_key") or current.get("video_tts_api_key") or "").strip()
-    minimax_model = str(
-        current.get("minimax_tts_model") or current.get("video_tts_model") or "speech-2.8-hd"
-    ).strip() or "speech-2.8-hd"
-    minimax_voice_id = str(
-        current.get("minimax_tts_voice_id") or current.get("video_default_voice_id") or "male-qn-qingse"
-    ).strip() or "male-qn-qingse"
-    merged["minimax_api_key"] = minimax_api_key
+    hot_topic_mode = str(current.get("digital_human_oral_hot_topic_mode") or "strong").strip().lower()
+    merged["digital_human_oral_hot_topic_mode"] = hot_topic_mode if hot_topic_mode in {"off", "soft", "strong"} else "strong"
+    video_image_models = [
+        model
+        for model in parse_model_list(current.get("video_image_model_priority_order"))
+        if model in VIDEO_SOURCE_IMAGE_MODELS
+    ]
+    if not video_image_models:
+        video_image_models = ["gpt image 2", "nano banana 2", "nano banana pro"]
+    merged["video_image_model_priority_order"] = ", ".join(dict.fromkeys(video_image_models))
+    merged["minimax_api_key"] = str(current.get("minimax_api_key") or "").strip()
     merged["minimax_base_url"] = "https://api.minimaxi.com"
-    merged["minimax_tts_model"] = minimax_model
-    merged["minimax_tts_voice_id"] = minimax_voice_id
-    merged["video_tts_api_key"] = minimax_api_key
-    merged["video_tts_base_url"] = merged["minimax_base_url"]
-    merged["video_tts_model"] = minimax_model
-    merged["video_default_voice_id"] = minimax_voice_id
+    merged["minimax_tts_model"] = str(current.get("minimax_tts_model") or "speech-2.8-hd").strip() or "speech-2.8-hd"
+    merged["minimax_tts_voice_id"] = str(current.get("minimax_tts_voice_id") or "male-qn-qingse").strip() or "male-qn-qingse"
     for key in (
         "video_create_audio_app_id",
         "video_create_video_app_id",
@@ -5459,8 +5508,6 @@ def _sync_tool_r18_api_config_from_runtime(runtime: dict[str, Any], explicit: di
             "image_model_priority_order",
             "new_persona_runninghub_base_url",
             "new_persona_runninghub_api_key",
-            "runninghub_personal_api_key",
-            "runninghub_enterprise_api_key",
             "new_persona_runninghub_persona_t2i_detail_url",
             "new_persona_runninghub_persona_t2i_endpoint",
             "new_persona_runninghub_tweet_i2i_detail_url",
@@ -11108,7 +11155,7 @@ def _insert_task_record_in_transaction(
             int(user_id),
             str(task_type),
             "queued",
-            _json_dumps(input_payload),
+            _json_dumps(video_task_payload_for_storage(task_type, input_payload)),
             _json_dumps({}),
             "",
             "",
@@ -11140,7 +11187,7 @@ def _create_task_record(task_id: str, user_id: int, task_type: str, input_payloa
                 int(user_id),
                 str(task_type),
                 "queued",
-                _json_dumps(input_payload),
+                _json_dumps(video_task_payload_for_storage(task_type, input_payload)),
                 _json_dumps({}),
                 "",
                 "",
@@ -11187,7 +11234,10 @@ def _cancel_task_record_for_user(
         raise HTTPException(status_code=400, detail="task_id 不能为空")
     actor = str(requested_by or "用户").strip() or "用户"
     with db() as conn:
-        row = conn.execute("SELECT id, user_id, type, status, input_json, billing_reservation_id FROM tasks WHERE id = ?", (tid,)).fetchone()
+        row = conn.execute(
+            "SELECT id, user_id, type, status, input_json, output_json, runninghub_task_id, billing_reservation_id FROM tasks WHERE id = ?",
+            (tid,),
+        ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="任务不存在")
         task = dict(row)
@@ -11242,6 +11292,37 @@ def _cancel_task_record_for_user(
         cancel_event = _NORMAL_TASK_CONTROLS.get(tid)
     if cancel_event is not None:
         cancel_event.set()
+    remote_cancellation: list[dict[str, Any]] = []
+    task_type = str(task.get("type") or "").strip()
+    if task_type in set((globals().get("VIDEO_WORKBENCH_INTEGRATION") or {}).get("task_types") or []):
+        try:
+            with db() as conn:
+                runtime = _get_runtime_config(conn)
+            remote_cancellation = cancel_video_remote_tasks(
+                task_type,
+                input_payload=_json_loads(task.get("input_json"), {}),
+                output_payload=_json_loads(task.get("output_json"), {}),
+                runninghub_task_id=task.get("runninghub_task_id"),
+                runtime=runtime,
+            )
+        except Exception as exc:
+            remote_cancellation = [{"ok": False, "task_id": "", "message": str(exc)}]
+        if remote_cancellation:
+            with db() as conn:
+                _insert_task_event(
+                    conn,
+                    task_id=tid,
+                    user_id=int(user_id),
+                    kind="log",
+                    message="RunningHub 远端任务取消请求已发送",
+                    data={
+                        "status": "cancelled",
+                        "stage": "remote_cancel",
+                        "source": "webapp",
+                        "user_visible": True,
+                        "results": remote_cancellation,
+                    },
+                )
     return {
         "ok": True,
         "cancelled": True,
@@ -11250,6 +11331,7 @@ def _cancel_task_record_for_user(
         "type": task.get("type"),
         "status": "cancelled",
         "previous_status": status,
+        "remote_cancellation": remote_cancellation,
         "message": f"任务 {tid} 已强制停止。",
     }
 
@@ -11795,6 +11877,8 @@ class RuntimeConfigPayload(BaseModel):
     runninghub_api_key: str = ""
     runninghub_personal_api_key: str = ""
     runninghub_enterprise_api_key: str = ""
+    digital_human_oral_hot_topic_mode: str = "strong"
+    video_image_model_priority_order: str = "gpt image 2, nano banana 2, nano banana pro"
     video_create_audio_app_id: str = ""
     video_create_video_app_id: str = ""
     video_replace_model_app_id: str = ""
@@ -23918,8 +24002,8 @@ def create_app() -> FastAPI:
         source_keys = {
             "llm_api_key_gpt": ("llm_api_key_gpt", "llm_api_key"),
             "image_model_provider_api_key_gemini": ("image_model_provider_api_key_gemini",),
-            "new_persona_runninghub_api_key": ("new_persona_runninghub_api_key", "runninghub_enterprise_api_key", "runninghub_personal_api_key"),
-            "video_runninghub_api_key": ("video_runninghub_api_key", "new_persona_runninghub_api_key"),
+            "new_persona_runninghub_api_key": ("new_persona_runninghub_api_key",),
+            "video_runninghub_api_key": ("video_runninghub_api_key",),
             "video_tts_api_key": ("video_tts_api_key",),
             "runninghub_personal_api_key": ("runninghub_personal_api_key", "runninghub_api_key", "video_runninghub_api_key"),
             "runninghub_enterprise_api_key": ("runninghub_enterprise_api_key", "new_persona_runninghub_api_key"),
@@ -24396,12 +24480,7 @@ def create_app() -> FastAPI:
         if not api_key:
             with db() as conn:
                 runtime = _get_runtime_config(conn)
-            api_key = str(
-                runtime.get("runninghub_enterprise_api_key")
-                or runtime.get("runninghub_personal_api_key")
-                or runtime.get("new_persona_runninghub_api_key")
-                or ""
-            ).strip()
+            api_key = str(runtime.get("new_persona_runninghub_api_key") or "").strip()
         if not api_key:
             raise HTTPException(status_code=400, detail="请先配置 RunningHub API Key。")
 

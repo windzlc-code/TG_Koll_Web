@@ -86,24 +86,24 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
             first = self._write_image(tmpdir, "first.png")
             second = self._write_image(tmpdir, "second.png")
             cases = {
-                "product_only": ({"product_image_local_path": first, "product_name": "Jacket"}, "product-only", 1),
+                "product_only": ({"product_image_local_path": first, "product_name": "Jacket"}, "纯产品电商广告图", 1),
                 "model_product": (
                     {"product_image_local_path": first, "model_image_local_path": second, "style_hint": "studio"},
-                    "model-and-product",
+                    "图2人物",
                     2,
                 ),
                 "subject_replace": (
                     {"source_image_local_path": first, "subject_image_local_path": second, "subject_kind": "person"},
-                    "subject replacement",
+                    "纯局部图片主体替换任务",
                     2,
                 ),
                 "poster_translate": (
                     {"poster_image_local_path": first, "source_language": "English", "target_language": "Chinese"},
-                    "poster translation",
+                    "电商海报文字语种切换任务",
                     1,
                 ),
-                "digital_human_character": ({"negative_prompt": "watermark"}, "digital human character", 0),
-                "three_view": ({"reference_image_local_path": first}, "three-view turnaround", 1),
+                "digital_human_character": ({"negative_prompt": "watermark"}, "数字人人设三视图", 0),
+                "three_view": ({"reference_image_local_path": first}, "结构参考三视图", 1),
             }
             calls: list[dict] = []
 
@@ -125,8 +125,9 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
                             task_id=f"task-{mode}", payload=payload, context=self._context("image_generate")
                         )
                         call = calls[-1]
-                        self.assertIn(marker, call["prompt"].lower())
-                        self.assertIn("user creative direction", call["prompt"])
+                        self.assertIn(marker, call["prompt"])
+                        if mode != "poster_translate":
+                            self.assertIn("user creative direction", call["prompt"])
                         self.assertEqual(len(call["input_image_paths"]), input_count)
                         self.assertEqual(result["raw_result"]["mode"], mode)
 
@@ -181,13 +182,12 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
                         "video_image_mode": "poster_translate",
                         "poster_image_local_path": poster,
                         "source_language": "English",
-                        "target_language": "Chinese",
                     },
                     context=self._context("image_generate"),
                 )
             self.assertTrue(result["ok"])
-            self.assertIn("poster translation", calls[0]["prompt"].lower())
-            self.assertIn("Chinese", calls[0]["prompt"])
+            self.assertIn("电商海报文字语种切换任务", calls[0]["prompt"])
+            self.assertIn("中文", calls[0]["prompt"])
 
     def test_image_generate_rejects_invalid_or_incompatible_parameters(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -197,7 +197,6 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
             invalid_payloads = (
                 ({"video_image_mode": "unknown", "prompt": "x"}, "video_image_mode"),
                 ({"video_image_mode": "model_product", "prompt": "x", "product_image_local_path": first}, "2-4"),
-                ({"video_image_mode": "poster_translate", "prompt": "x", "poster_image_local_path": first}, "target_language"),
                 ({"video_image_mode": "product_only", "prompt": "x", "product_image_local_path": first, "count": 0}, "count"),
                 ({"video_image_mode": "product_only", "prompt": "x", "product_image_url": "https://example.invalid/a.png"}, "local"),
             )
@@ -229,6 +228,23 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
                 )
             self.assertEqual(calls[0]["input_image_paths"], paths)
 
+    def test_hidden_combined_replacement_runner_remains_internally_reachable(self):
+        backend = ArchivedSourceBackend()
+        context = self._context("replace_product_and_model")
+        with patch(
+            "video_core.source_backend.replacement_pipeline.run_replacement_pipeline",
+            return_value={"ok": True, "task_type": "replace_product_and_model"},
+        ) as combined:
+            result = backend.run_task(
+                "replace_productANDmodel",
+                "task-combined",
+                {"internal": True},
+                context,
+            )
+        self.assertTrue(result["ok"])
+        self.assertEqual(combined.call_args.args[1], "replace_product_and_model")
+        self.assertEqual(combined.call_args.args[2], "task-combined")
+
     def test_ecommerce_storyboard_is_aggregated_into_one_paid_submission_and_preserved(self):
         backend = _FakeEcommerceBackend()
         storyboard = [
@@ -258,10 +274,53 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
             self.assertIn(expected, aggregate)
         self.assertEqual(result["raw_result"]["storyboard"], storyboard)
         self.assertEqual(result["raw_result"]["prompt_segments"], prompt_segments)
-        self.assertEqual(result["raw_result"]["aggregated_prompt"], aggregate)
+        self.assertEqual(result["raw_result"]["segment_prompts"][0], aggregate)
         self.assertEqual(result["raw_result"]["segment_count"], 4)
         self.assertEqual(backend.submissions[0]["submit_payload"]["videoUrls"], ["https://media.invalid/ecommerce_reference_video"])
-        self.assertEqual(backend.submissions[0]["submit_payload"]["audioUrls"], ["https://media.invalid/ecommerce_reference_audio"])
+        self.assertEqual(backend.submissions[0]["submit_payload"]["audioUrls"], ["https://media.invalid/ecommerce_voice_audio"])
+
+    def test_ecommerce_animation_redraw_is_applied_before_video_submission(self):
+        backend = _FakeEcommerceBackend()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original = Path(tmpdir) / "product.png"
+            original.write_bytes(b"original")
+            redrawn = Path(tmpdir) / "redrawn.png"
+            redrawn.write_bytes(b"redrawn")
+            resolved_locals: list[tuple[str, ...]] = []
+
+            def resolve_media(**kwargs):
+                resolved_locals.append(tuple(str(value) for value in kwargs.get("local_values") or ()))
+                return f"https://media.invalid/{kwargs['media_kind']}"
+
+            with patch(
+                "video_core.source_backend.ecommerce_animation_redraw.redraw_animation_references",
+                return_value={
+                    "ok": True,
+                    "params": {
+                        "output_dir": tmpdir,
+                        "ecommerce_ad_style": "animation",
+                        "ecommerce_animation_redraw_done": True,
+                        "product_image_local_path": str(redrawn),
+                        "prompt": "animated product campaign",
+                    },
+                    "image_paths": [str(redrawn)],
+                },
+            ) as redraw, patch.object(backend, "_resolve_media", side_effect=resolve_media):
+                result = backend.ecommerce_short_video(
+                    task_id="task-animation-redraw",
+                    payload={
+                        "output_dir": tmpdir,
+                        "ecommerce_ad_style": "animation",
+                        "product_image_local_path": str(original),
+                        "prompt": "animated product campaign",
+                    },
+                    context=self._context("ecommerce_short_video"),
+                )
+
+            self.assertTrue(result["ok"])
+            redraw.assert_called_once()
+            self.assertIn((str(redrawn),), resolved_locals)
+            self.assertEqual(len(backend.submissions), 1)
 
     def test_ecommerce_rejects_malformed_segment_parameters_before_submission(self):
         backend = _FakeEcommerceBackend()
@@ -401,6 +460,7 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertEqual(len(commands), 3)
             self.assertEqual(result["raw_result"]["background_audio_mode"], "ffmpeg_side_bed")
+            self.assertEqual(result["raw_result"]["background_audio_mode"], "ffmpeg_side_bed")
             self.assertTrue(result["raw_result"]["background_audio_preserved"])
             self.assertTrue(Path(result["video_path"]).is_file())
             self.assertTrue(any(str(item).endswith("video_language_mix_audio.m4a") for item in commands[-1]))
@@ -454,6 +514,51 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
             self.assertEqual(result["raw_result"]["source_language"], "Spanish")
             self.assertEqual(result["raw_result"]["transcribe_translate_meta"], {"provider": "mock"})
             self.assertEqual(len(result["raw_result"]["timed_audio_segments"]), 1)
+
+    def test_language_timed_tts_regenerates_only_requested_segment_when_audio_is_reusable(self):
+        class FakeTtsBackend(ArchivedSourceBackend):
+            def __init__(self):
+                super().__init__()
+                self.generated_texts: list[str] = []
+
+            def _generate_minimax_tts(self, *, speech_text, output_path, **_kwargs):
+                self.generated_texts.append(speech_text)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(speech_text.encode("utf-8"))
+                return output_path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            reused = root / "segment-1.mp3"
+            reused.write_bytes(b"existing")
+            backend = FakeTtsBackend()
+
+            def fake_process(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"mixed")
+                return 0, "", ""
+
+            with patch("video_core.source_backend._run_local_process", side_effect=fake_process):
+                _audio, generated, _duration = backend._generate_timed_tts_audio(
+                    segments=[
+                        {"start_seconds": 0, "end_seconds": 1, "text": "Hello"},
+                        {"start_seconds": 1, "end_seconds": 2, "text": "World"},
+                    ],
+                    source_duration=2,
+                    payload={
+                        "ffmpeg_path": "ffmpeg",
+                        "regenerate_segment_index": 2,
+                        "_video_language_reuse_segments": [
+                            {"index": 1, "audio_path": str(reused)},
+                        ],
+                    },
+                    context=self._context("video_language_replace"),
+                    workdir=root / "work",
+                )
+
+            self.assertEqual(backend.generated_texts, ["World"])
+            self.assertTrue(generated[0]["reused"])
+            self.assertFalse(generated[1]["reused"])
+            self.assertEqual(Path(generated[0]["audio_path"]), reused.resolve())
 
     def test_language_replace_uses_injected_background_separator(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -645,12 +750,62 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertEqual(len(result["raw_result"]["timed_audio_segments"]), 2)
             self.assertEqual(result["raw_result"]["aligned_total_duration_seconds"], 6)
-            self.assertEqual(len(commands), 3)
+            self.assertEqual(len(commands), 5)
+            self.assertEqual(result["raw_result"]["background_audio_mode"], "ffmpeg_side_bed")
             self.assertIn("adelay=500:all=1", commands[0][commands[0].index("-filter_complex") + 1])
             mux_command = next(command for command in commands if str(command[-1]).endswith("video_language_replaced.mp4"))
             self.assertNotIn("-shortest", mux_command)
             self.assertIn("6.000", mux_command)
             self.assertTrue(result["subtitles_applied"])
+
+    def test_language_replace_inserts_opening_and_ending_into_timed_tts_plan(self):
+        class FakeTtsBackend(ArchivedSourceBackend):
+            def _generate_minimax_tts(self, *, speech_text, output_path, **_kwargs):
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(speech_text.encode("utf-8"))
+                return output_path
+
+            @staticmethod
+            def _probe_media_duration_seconds(path, payload):
+                if "opening" in path.name:
+                    return 1.5
+                if "ending" in path.name:
+                    return 2.0
+                return 1.0
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_video = root / "source.mp4"
+            source_video.write_bytes(b"video")
+
+            def fake_process(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"result")
+                return 0, "", ""
+
+            with patch("video_core.source_backend._run_local_process", side_effect=fake_process):
+                result = FakeTtsBackend().video_language_replace(
+                    task_id="task-language-inserts",
+                    payload={
+                        "output_dir": str(root / "output"),
+                        "video_local_path": str(source_video),
+                        "duration_seconds": 5,
+                        "ffmpeg_path": "ffmpeg",
+                        "target_script": "Main line",
+                        "opening_insert_text": "Opening line",
+                        "ending_insert_text": "Ending line",
+                        "script_segments": [{"start_seconds": 0.5, "end_seconds": 4, "text": "Main line"}],
+                    },
+                    context=self._context("video_language_replace"),
+                )
+
+            rows = result["raw_result"]["timed_audio_segments"]
+            self.assertEqual([item["role"] for item in rows], ["opening", "source", "ending"])
+            self.assertEqual(rows[0]["start_seconds"], 0)
+            self.assertEqual(rows[1]["start_seconds"], 1.5)
+            self.assertEqual(rows[2]["start_seconds"], 5.0)
+            self.assertEqual(result["raw_result"]["aligned_total_duration_seconds"], 7.0)
+            self.assertEqual(result["raw_result"]["opening_insert_text"], "Opening line")
+            self.assertEqual(result["raw_result"]["ending_insert_text"], "Ending line")
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe are required")
     def test_language_replace_local_ffmpeg_smoke_with_background_and_subtitles(self):
