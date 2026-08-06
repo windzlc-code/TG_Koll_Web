@@ -6611,7 +6611,13 @@ def _worker_loop() -> None:
             _launch_available_social_tasks()
         except Exception as exc:
             _WORKER_STATE["last_error"] = str(exc)
-        _WORKER_WAKE.wait(timeout=max(1, int(os.getenv("SOCIAL_AUTOMATION_WORKER_POLL_SECONDS", "5"))))
+        try:
+            poll_seconds = max(0.2, float(os.getenv("SOCIAL_AUTOMATION_WORKER_POLL_SECONDS", "5") or 5))
+        except Exception:
+            poll_seconds = 5.0
+        if bool(_WORKER_STATE.get("resource_paused")):
+            poll_seconds = min(poll_seconds, 0.5)
+        _WORKER_WAKE.wait(timeout=poll_seconds)
         _WORKER_WAKE.clear()
 
 

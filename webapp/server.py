@@ -18826,7 +18826,7 @@ def _persona_dashboard_monitor_enabled() -> bool:
 
 
 def _persona_dashboard_monitor_source() -> str:
-    source = (os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "browser").strip().lower() or "browser"
+    source = (os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "rsshub").strip().lower() or "rsshub"
     return source if source in {"rsshub", "browser"} else "browser"
 
 
