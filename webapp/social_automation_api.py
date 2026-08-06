@@ -8613,7 +8613,7 @@ def _run_social_publish_batch_in_clean_thread(
         if control["cancel_event"].is_set():
             thread.join(timeout=0.25)
             if thread.is_alive():
-                raise RuntimeError("publish batch runner did not stop after cancellation")
+                return []
     _sample_running_task_resources(control)
     if error_box:
         raise error_box["error"]
@@ -8669,7 +8669,7 @@ def _run_social_task_in_clean_thread(
         if control["cancel_event"].is_set():
             thread.join(timeout=0.25)
             if thread.is_alive():
-                raise RuntimeError("task runner did not stop after cancellation")
+                return {"ok": False, "cancelled": True, "error": "用户取消"}
     _sample_running_task_resources(control)
     if error_box:
         raise error_box["error"]
