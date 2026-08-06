@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   buildSentimentCandidateId,
   getSentimentHotExcludedIds,
@@ -62,6 +65,21 @@ afterEach(() => {
 });
 
 describe("sentiment hot importer", () => {
+  it("prioritizes dedicated hot keyword models before global defaults", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sentiment-hot-config-"));
+    const configPath = path.join(dir, "api_config.json");
+    fs.writeFileSync(configPath, JSON.stringify({
+      llmFreeModelPriorityOrder: "google/gemini-3.1-pro-preview, xai/grok-4.3, xai/grok-4.5",
+    }));
+    vi.stubEnv("AUTO_TWEET_API_CONFIG_PATH", configPath);
+
+    expect(resolveSentimentHotTextModelPreference().split(",").map((model) => model.trim()).slice(0, 3)).toEqual([
+      "xai/grok-4.3",
+      "xai/grok-4.5",
+      "google/gemini-3.1-pro-preview",
+    ]);
+  });
+
   it("normalizes millisecond cookie expiry before Playwright uses it", () => {
     expect(normalizeSentimentBrowserCookieExpiry(1_825_453_191_068)).toBeCloseTo(1_825_453_191.068, 3);
     expect(normalizeSentimentBrowserCookieExpiry(1_893_456_000)).toBe(1_893_456_000);
@@ -308,10 +326,9 @@ describe("sentiment hot importer", () => {
     expect(resolveSentimentHotStrategyTimeoutMs(true, 5_000)).toBe(5_000);
   });
 
-  it("uses the configured hot-topic text models before the keyword fallback model", () => {
+  it("uses dedicated hot-topic text models before the configured global models", () => {
     const models = resolveSentimentHotTextModelPreference().split(",");
-    expect(models[0]).toBe("google/gemini-3.1-pro-preview");
-    expect(models).toContain("xai/grok-4.3");
+    expect(models.slice(0, 2)).toEqual(["xai/grok-4.3", "xai/grok-4.5"]);
   });
 
   it("never manufactures fallback keywords when the model strategy is unavailable", () => {

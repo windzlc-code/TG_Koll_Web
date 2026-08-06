@@ -60,7 +60,7 @@ const THREADS_BROWSER_DETAIL_RESCUE_POOL_LIMIT = 120;
 const THREADS_BROWSER_DETAIL_RESCUE_BATCH_SIZE = 10;
 const THREADS_BROWSER_DETAIL_RESCUE_MIN_REMAINING_MS = 5_000;
 const SENTIMENT_MODEL_KEYWORD_TARGET = 20;
-const SENTIMENT_HOT_KEYWORD_MODEL = "xai/grok-4.3";
+const SENTIMENT_HOT_KEYWORD_MODEL = "xai/grok-4.3, xai/grok-4.5";
 const THREADS_READER_INITIAL_QUERY_LIMIT = 24;
 const THREADS_READER_TOTAL_QUERY_LIMIT = 48;
 const THREADS_READER_QUERY_BATCH_SIZE = 8;
@@ -1438,8 +1438,8 @@ export function resolveSentimentHotTextModelPreference(): string {
     .find(Boolean) || "";
   const configuredModels = configured.split(/[,\n]/).map((model) => model.trim()).filter(Boolean);
   return [...new Set([
+    ...SENTIMENT_HOT_KEYWORD_MODEL.split(/[,\n]/).map((model) => model.trim()).filter(Boolean),
     ...configuredModels,
-    SENTIMENT_HOT_KEYWORD_MODEL,
   ])].join(",");
 }
 
@@ -1577,7 +1577,7 @@ export async function warmSentimentHotSearchStrategy(archive: PersonaArchive): P
   const strategy = await buildSentimentHotSearchStrategyWithModel({
     archive,
     warnings,
-    timeoutMs: 45_000,
+    timeoutMs: 58_000,
   });
   return sentimentHotStrategyHasModelTerms(strategy);
 }
