@@ -1219,7 +1219,7 @@ export function candidateMatchesSentimentHotStrategyAnchors(candidate: Sentiment
   if (rejectTerms.some((term) => countMatchedNeedles(candidate, [term]) > 0)) return false;
   if ((candidate.metrics as any)?.globalPersonaBackfill === true) {
     const sourceQuery = cleanText((candidate.metrics as any)?.query);
-    const currentQueries = sentimentHotStrategyTermsForMode(strategy, mode)
+    const currentQueries = expandSentimentHotCoreKeywordVariants(sentimentHotStrategyTermsForMode(strategy, mode))
       .flatMap((term) => [term, ...expandSentimentSearchKeywordVariants(term)])
       .map(cleanText)
       .filter((term) => term.length >= 2);
@@ -1230,10 +1230,10 @@ export function candidateMatchesSentimentHotStrategyAnchors(candidate: Sentiment
     ));
     if (!belongsToCurrentStrategy) return false;
   }
-  const requiredAnchors = strategy.requiredAnchorTerms.filter((term) => term.length >= 2);
-  const normalAnchors = strategy.normalAnchorTerms.filter((term) => term.length >= 2);
+  const requiredAnchors = expandSentimentHotCoreKeywordVariants(strategy.requiredAnchorTerms).filter((term) => term.length >= 2);
+  const normalAnchors = expandSentimentHotCoreKeywordVariants(strategy.normalAnchorTerms).filter((term) => term.length >= 2);
   const sourceQuery = cleanText((candidate.metrics as any)?.query);
-  const currentStrategyTerms = new Set(sentimentHotStrategyTermsForMode(strategy, "normal").map(cleanText));
+  const currentStrategyTerms = new Set(expandSentimentHotCoreKeywordVariants(sentimentHotStrategyTermsForMode(strategy, "normal")).map(cleanText));
   if (sourceQuery && sourceQuery.length <= 3 && !currentStrategyTerms.has(sourceQuery) && normalAnchors[0]) {
     const leadingContent = cleanSentimentCandidateContent(candidate.content).slice(0, 120);
     if (!matchesExactAnchor(normalAnchors[0], { ...candidate, content: leadingContent })) return false;
@@ -1254,6 +1254,7 @@ export function candidateMatchesSentimentHotStrategyAnchors(candidate: Sentiment
   // domain anchor is stronger and keeps niche searches from requiring two
   // different topic words in every valid post.
   const directPrimaryAnchors = [...strategy.primaryQueries, ...strategy.strictAcceptTerms]
+    .flatMap((term) => expandSentimentHotCoreKeywordVariants([term]))
     .map(cleanText)
     .filter((term) => term.length >= 3 && isConcreteSearchKeyword(term));
   return [...new Set([...requiredAnchors, ...directPrimaryAnchors])]

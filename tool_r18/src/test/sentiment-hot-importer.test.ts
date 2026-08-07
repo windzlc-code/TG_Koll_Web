@@ -304,6 +304,36 @@ describe("sentiment hot importer", () => {
     expect(queryKeywords.indexOf("\u7406\u53d1")).toBeLessThan(queryKeywords.indexOf("\u7406\u53d1\u907f\u5751"));
   });
 
+  it("matches strategy anchors through derived model core terms", () => {
+    const strategy = {
+      primaryQueries: ["\u7406\u53d1\u5e97", "\u526a\u5934\u53d1", "\u53d1\u578b\u5e08", "\u70eb\u53d1", "\u67d3\u53d1"],
+      ecosystemQueries: ["\u7406\u53d1\u5e97\u4e92\u52a8", "\u7406\u53d1\u771f\u5b9e\u4f53\u9a8c", "\u526a\u53d1\u4ef7\u683c"],
+      broadQueries: ["\u7406\u53d1\u907f\u5751", "\u53d1\u578b\u670d\u52a1", "\u7406\u53d1\u6d4b\u8bc4"],
+      requiredAnchorTerms: ["\u7406\u53d1\u5e97", "\u53d1\u578b\u5e08", "\u526a\u5934\u53d1"],
+      normalAnchorTerms: ["\u7406\u53d1\u5e97", "\u53d1\u578b\u5e08", "\u7f8e\u53d1\u5e97"],
+      strictAcceptTerms: ["\u7406\u53d1\u5e97", "\u526a\u5934\u53d1", "\u53d1\u578b\u5e08", "\u53d1\u578b\u670d\u52a1", "\u7406\u53d1\u907f\u5751"],
+      normalAcceptTerms: ["\u7406\u53d1\u5e97", "\u526a\u5934\u53d1", "\u53d1\u578b\u5e08", "\u7406\u53d1\u771f\u5b9e\u4f53\u9a8c", "\u53d1\u578b\u670d\u52a1"],
+      rejectTerms: [],
+      personaGuardTerms: [],
+      domainSummary: "\u7406\u53d1\u4e0e\u7f8e\u53d1\u884c\u4e1a",
+    } as any;
+    const candidate = {
+      id: "instagram-core-haircut",
+      platform: "instagram",
+      sourceUrl: "https://www.instagram.com/p/core/",
+      author: "salon",
+      content: "\u8fd9\u4f4d\u8d44\u6df1\u53d1\u578b\u5e08\u5206\u4eab\u7406\u53d1\u540e\u7684\u62a4\u7406\u6280\u5de7\uff0c\u9488\u5bf9\u6f6e\u6e7f\u5929\u6c14\u4e0b\u5934\u53d1\u6bdb\u8e81\u548c\u53d1\u5c3e\u5e72\u67af\u95ee\u9898\u7ed9\u51fa\u5177\u4f53\u5efa\u8bae\u3002",
+      hotScore: 1600,
+      metrics: { source: "instagram-account-search", query: "\u7406\u53d1" },
+      engagement: { likeCount: 1500, commentCount: 100, rawSignals: [1500, 100] },
+      publishedAt: new Date().toISOString(),
+      capturedAt: new Date().toISOString(),
+      warnings: [],
+    } as any;
+
+    expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(true);
+  });
+
   it("keeps manually edited strict keywords before cached model query terms", () => {
     const strategy = {
       primaryQueries: ["理发店", "剪头发", "发型设计", "剪发", "理发前后"],
