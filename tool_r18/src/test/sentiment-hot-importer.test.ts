@@ -252,6 +252,17 @@ describe("sentiment hot importer", () => {
     }));
   });
 
+  it("separates hot-keyword strategy caches by requested writing locale", () => {
+    const base = {
+      archive: { id: "persona-1", name: "hairdresser", content: "hair and beauty" },
+      prompt: "",
+      personaText: "persona: hairdresser",
+    };
+
+    expect(buildSentimentHotSearchStrategyCacheKey({ ...base, writingLocale: "zh-CN" }))
+      .not.toBe(buildSentimentHotSearchStrategyCacheKey({ ...base, writingLocale: "zh-TW" }));
+  });
+
   it("keeps model search phrases intact instead of spending queries on generic fragments", () => {
     const queries = buildModelOrderedThreadsSearchQueries([
       "理发师 手工 改造",
@@ -2401,6 +2412,66 @@ Instagram
 
     expect(parsed.posts).toEqual([]);
     expect(parsed.hasNextPage).toBe(false);
+  });
+
+  it("skips reposted or quoted Threads GraphQL profile rows", () => {
+    const parsed = parseThreadsGraphqlProfilePagePayload({
+      username: "stevie875443",
+      payload: {
+        data: {
+          mediaData: {
+            edges: [
+              {
+                node: {
+                  thread_items: [{
+                    post: {
+                      pk: "quote-post",
+                      code: "DbQuote123",
+                      canonical_url: "https://www.threads.com/@stevie875443/post/DbQuote123",
+                      user: { username: "stevie875443" },
+                      caption: { text: "這是引用別人的串文，不能算成本帳號原創全量數據。" },
+                      like_count: 99,
+                      text_post_app_info: {
+                        direct_reply_count: 12,
+                        repost_count: 8,
+                        reshare_count: 5,
+                        quoted_post: { pk: "original-foreign-post" },
+                      },
+                    },
+                  }],
+                },
+              },
+              {
+                node: {
+                  thread_items: [{
+                    post: {
+                      pk: "own-post",
+                      code: "DbOwn123",
+                      canonical_url: "https://www.threads.com/@stevie875443/post/DbOwn123",
+                      user: { username: "stevie875443" },
+                      caption: { text: "這是自己原創發布的串文，應該進入全量互動統計。" },
+                      like_count: 31,
+                      text_post_app_info: {
+                        direct_reply_count: 4,
+                        repost_count: 2,
+                        reshare_count: 1,
+                      },
+                    },
+                  }],
+                },
+              },
+            ],
+            page_info: {
+              end_cursor: "",
+              has_next_page: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(parsed.posts).toHaveLength(1);
+    expect(parsed.posts[0].code).toBe("DbOwn123");
   });
 
   it("normalizes relative Threads profile post times for fresh posts", () => {

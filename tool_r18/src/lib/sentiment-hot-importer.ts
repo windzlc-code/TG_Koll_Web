@@ -1409,6 +1409,7 @@ export function buildSentimentHotSearchStrategyCacheKey(args: {
   archive?: Partial<Pick<PersonaArchive, "name" | "content" | "setup">>;
   prompt?: string;
   memorySummaries?: string[];
+  writingLocale?: string;
   personaText: string;
 }): string {
   const archive = args.archive || {};
@@ -1430,6 +1431,7 @@ export function buildSentimentHotSearchStrategyCacheKey(args: {
       tweetStyleSample: cleanText((setup as any).tweetStyleSample),
     },
     prompt: cleanText(args.prompt),
+    writingLocale: cleanText(args.writingLocale),
   };
   return crypto.createHash("sha1").update(JSON.stringify(payload)).digest("hex");
 }
@@ -1483,14 +1485,19 @@ function readCachedSentimentHotSearchStrategyForArgs(args: {
   archive?: Partial<Pick<PersonaArchive, "name" | "content" | "setup">>;
   prompt?: string;
   memorySummaries?: string[];
+  writingLocale?: string;
 }): SentimentHotSearchStrategy | null {
   const cacheKey = buildSentimentHotSearchStrategyCacheKey({ ...args, personaText: "" });
   const cached = readCachedSentimentHotSearchStrategy(cacheKey);
   if (cached) return cached;
-  const legacyKeys = [...new Set([
-    buildLegacySentimentHotSearchStrategyCacheKey(args),
-    buildLegacySentimentHotSearchStrategyCacheKey({ ...args, memorySummaries: [] }),
-  ])];
+  // Older cache entries were not scoped by writing locale, so they cannot be
+  // trusted when the caller explicitly requests Simplified or Traditional.
+  const legacyKeys = cleanText(args.writingLocale)
+    ? []
+    : [...new Set([
+      buildLegacySentimentHotSearchStrategyCacheKey(args),
+      buildLegacySentimentHotSearchStrategyCacheKey({ ...args, memorySummaries: [] }),
+    ])];
   for (const legacyKey of legacyKeys) {
     const legacy = readCachedSentimentHotSearchStrategy(legacyKey);
     if (!legacy) continue;
@@ -1541,6 +1548,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
   archive?: Partial<Pick<PersonaArchive, "name" | "content" | "setup">>;
   prompt?: string;
   memorySummaries?: string[];
+  writingLocale?: string;
   warnings: string[];
   timeoutMs?: number;
   useCache?: boolean;
@@ -1560,26 +1568,31 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
     setup.tweetStyleProfile ? `推文风格：${setup.tweetStyleProfile}` : "",
     setup.tweetStyleSample ? `推文样例：${setup.tweetStyleSample}` : "",
     args.memorySummaries?.length ? `近期记忆：${args.memorySummaries.join("；")}` : "",
+    args.writingLocale ? `热点关键词书写语言：${args.writingLocale}` : "",
     args.prompt ? `本次补充要求：${args.prompt}` : "",
   ].filter(Boolean).join("\n");
   if (!personaText.trim()) return emptySentimentHotSearchStrategy();
   const chineseScript = cleanText((setup as any).chineseScript || (setup as any).script || (setup as any).locale).toLowerCase();
   const targetMarket = cleanText((setup as any).targetMarket || (setup as any).market || (setup as any).region).toLowerCase();
-  const prefersTraditional = /traditional|繁|tw|taiwan|hk|hong\s*kong|mo|macau|臺|台灣|香港|澳門/u.test(`${chineseScript} ${targetMarket}`)
-    && !/simplified|简|簡|cn|mainland|china|中国|中國/u.test(`${chineseScript} ${targetMarket}`);
+  const explicitWritingLocale = cleanText(args.writingLocale).toLowerCase();
+  const prefersTraditional = explicitWritingLocale === "zh-tw"
+    || (!explicitWritingLocale && /traditional|繁|tw|taiwan|hk|hong\s*kong|mo|macau|臺|台灣|香港|澳門/u.test(`${chineseScript} ${targetMarket}`)
+    && !/simplified|简|簡|cn|mainland|china|中国|中國/u.test(`${chineseScript} ${targetMarket}`));
   const chineseSearchInstruction = prefersTraditional
-    ? "使用繁体中文为主，可保留常用简体同义词；搜索词必须是平台上真实用户会直接搜索的高流量词。"
-    : "使用简体中文为主，可保留常用繁体同义词；搜索词必须是平台上真实用户会直接搜索的高流量词。";
+    ? "关键词必须使用繁體中文输出，禁止混入简体中文；专有名词除外。搜索词必须是平台上真实用户会直接搜索的高流量词。"
+    : "关键词必须使用简体中文输出，禁止混入繁體中文；专有名词除外。搜索词必须是平台上真实用户会直接搜索的高流量词。";
   const cacheKey = buildSentimentHotSearchStrategyCacheKey({
     archive,
     prompt: args.prompt,
     memorySummaries: args.memorySummaries,
+    writingLocale: args.writingLocale,
     personaText,
   });
   const cached = args.useCache === false ? null : readCachedSentimentHotSearchStrategyForArgs({
     archive,
     prompt: args.prompt,
     memorySummaries: args.memorySummaries,
+    writingLocale: args.writingLocale,
   });
   if (cached) return cached;
 
@@ -1660,7 +1673,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
     args.warnings.push(
       /timeout|timed\s*out|abort|超时|超時/i.test(detail)
         ? "热点关键词生成超时，本次未执行抓取；请稍后重试。"
-        : `热点关键词生成失败，本次未执行抓取：${detail}`,
+        : "热点关键词服务暂时不可用，本次未执行抓取；请稍后重试。",
     );
   }
   return emptySentimentHotSearchStrategy();
@@ -1680,6 +1693,7 @@ export async function prepareSentimentHotKeywords(args: {
   archive?: PersonaArchive;
   prompt?: string;
   memorySummaries?: string[];
+  writingLocale?: string;
   searchMode?: SentimentHotSearchMode;
   refresh?: boolean;
 }): Promise<PrepareSentimentHotKeywordsResult> {
@@ -1689,6 +1703,7 @@ export async function prepareSentimentHotKeywords(args: {
     archive: args.archive,
     prompt: args.prompt,
     memorySummaries: args.memorySummaries,
+    writingLocale: args.writingLocale,
     warnings,
     timeoutMs: 45_000,
     useCache: args.refresh === true ? false : true,
@@ -2011,6 +2026,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   archive?: PersonaArchive;
   prompt?: string;
   memorySummaries?: string[];
+  writingLocale?: string;
   keywords?: string[];
   limit?: number;
   refresh?: boolean;
@@ -2056,6 +2072,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     archive,
     prompt: args.prompt,
     memorySummaries: args.memorySummaries,
+    writingLocale: args.writingLocale,
   });
   if (prefetchedStrategy) {
     applyPersonaGuardToSentimentHotStrategy({ strategy: prefetchedStrategy });
@@ -2128,7 +2145,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       warnings,
       "search-strategy",
       () => withSentimentTimeout(
-        buildSentimentHotSearchStrategyWithModel({ archive, prompt: args.prompt, memorySummaries: args.memorySummaries, warnings, timeoutMs: strategyTimeoutMs, useCache: true }),
+        buildSentimentHotSearchStrategyWithModel({ archive, prompt: args.prompt, memorySummaries: args.memorySummaries, writingLocale: args.writingLocale, warnings, timeoutMs: strategyTimeoutMs, useCache: true }),
         strategyTimeoutMs + 250,
         emptySentimentHotSearchStrategy(),
       ),
@@ -2863,6 +2880,7 @@ export async function fetchSentimentHotCandidates(args: {
   archive?: PersonaArchive;
   prompt?: string;
   memorySummaries?: string[];
+  writingLocale?: string;
   limit?: number;
   refresh?: boolean;
   searchMode?: SentimentHotSearchMode;
@@ -5386,6 +5404,35 @@ function isThreadsGraphqlProfileOwnedPost(username: string, post: any): boolean 
   return !target || !owner || owner === target;
 }
 
+function isThreadsGraphqlProfileRepostOrQuote(post: any): boolean {
+  if (!post || typeof post !== "object") return false;
+  const info = post.text_post_app_info && typeof post.text_post_app_info === "object"
+    ? post.text_post_app_info
+    : {};
+  if (
+    post.is_repost === true
+    || post.is_reshare === true
+    || post.is_quote === true
+    || info.is_repost === true
+    || info.is_reshare === true
+    || info.is_quote === true
+  ) return true;
+  const stack = [post, info];
+  const visited = new Set<any>();
+  while (stack.length) {
+    const value = stack.pop();
+    if (!value || typeof value !== "object" || visited.has(value)) continue;
+    visited.add(value);
+    for (const [key, child] of Object.entries(value)) {
+      if (/^(?:repost|reshare|quote|quoted)_?(?:info|post|media|thread|item|content|share)$/i.test(key)) {
+        if (child && (typeof child !== "object" || Object.keys(child as Record<string, unknown>).length > 0)) return true;
+      }
+      if (child && typeof child === "object") stack.push(child);
+    }
+  }
+  return false;
+}
+
 function isSuspiciousThreadsProfileMetricMix(post: Partial<ThreadsGraphqlProfilePostAggregate>): boolean {
   if (typeof post.viewCount !== "number" || post.viewCount <= 0) return false;
   const strongestInteraction = Math.max(
@@ -5443,6 +5490,7 @@ export function parseThreadsGraphqlProfilePagePayload(args: {
   for (const edge of edges) {
     const post = edge?.node?.thread_items?.[0]?.post;
     if (!isThreadsGraphqlProfileOwnedPost(args.username, post)) continue;
+    if (isThreadsGraphqlProfileRepostOrQuote(post)) continue;
     const pk = cleanText(post?.pk);
     const sourceUrl = buildThreadsGraphqlProfileSourceUrl(args.username, post);
     const content = cleanText(post?.caption?.text || post?.text_post_app_info?.share_text || post?.text_post_app_info?.text || "");
@@ -6703,7 +6751,7 @@ async function readThreadsBrowserDetailMetricsFromPage(page: any, sourceUrl: str
   return parseThreadsBrowserPostDetailMetrics({ text: detailText, actionTexts });
 }
 
-async function fetchThreadsBrowserDetailMetricsBatch(sourceUrls: string[], concurrency = 2, existingContext?: any) {
+export async function fetchThreadsBrowserDetailMetricsBatch(sourceUrls: string[], concurrency = 2, existingContext?: any) {
   if (process.env.VITEST_WORKER_ID) return null;
   const normalizedUrls = [...new Set(sourceUrls.map(normalizeThreadsPostUrl).filter(Boolean))];
   const results = new Map<string, Pick<ThreadsBrowserProfilePublishedPostSnapshot, "hotScore" | "engagement" | "metrics">>();
@@ -7599,7 +7647,42 @@ function mergeBrowserAuthCookies(...groups: any[][]): any[] {
   return [...byKey.values()];
 }
 
+function readThreadsCookiesFromProfileDir(profileDir: unknown): any[] {
+  const cookieDbPath = path.join(cleanText(profileDir), "cookies.sqlite");
+  if (!fs.existsSync(cookieDbPath)) return [];
+  let cookieDb: any = null;
+  try {
+    cookieDb = new Database(cookieDbPath, { readonly: true, fileMustExist: true });
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const rows = cookieDb.prepare(`
+      SELECT host, name, value, path, expiry, isSecure, isHttpOnly, sameSite
+      FROM moz_cookies
+      WHERE lower(host) LIKE '%threads.%'
+        AND (expiry = 0 OR expiry > ?)
+    `).all(nowSeconds);
+    return rows.map((row: any) => ({
+      name: String(row.name || ""),
+      value: String(row.value || ""),
+      domain: String(row.host || ""),
+      path: String(row.path || "/"),
+      expires: normalizeSentimentBrowserCookieExpiry(row.expiry),
+      httpOnly: Boolean(row.isHttpOnly),
+      secure: Boolean(row.isSecure),
+      sameSite: Number(row.sameSite) === 2 ? "Strict" : Number(row.sameSite) === 1 ? "Lax" : "None",
+    }));
+  } catch {
+    return [];
+  } finally {
+    cookieDb?.close?.();
+  }
+}
+
 function readManagedThreadsAccountCookies(): any[] {
+  const preferredProfileDir = cleanText(process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR || process.env.THREADS_AUTH_PROFILE_DIR);
+  if (preferredProfileDir) {
+    const preferredCookies = readThreadsCookiesFromProfileDir(preferredProfileDir);
+    if (hasValidThreadsSessionCookie(preferredCookies)) return preferredCookies;
+  }
   const dataDirs = [
     cleanText(process.env.WEBAPP_DATA_DIR),
     "/data/webapp_data",
@@ -7624,40 +7707,14 @@ function readManagedThreadsAccountCookies(): any[] {
         LIMIT 8
       `).all();
       for (const account of accounts) {
-        const cookieDbPath = path.join(cleanText(account?.profile_dir), "cookies.sqlite");
-        if (!fs.existsSync(cookieDbPath)) continue;
-        let cookieDb: any = null;
-        try {
-          cookieDb = new Database(cookieDbPath, { readonly: true, fileMustExist: true });
-          const nowSeconds = Math.floor(Date.now() / 1000);
-          const rows = cookieDb.prepare(`
-            SELECT host, name, value, path, expiry, isSecure, isHttpOnly, sameSite
-            FROM moz_cookies
-            WHERE lower(host) LIKE '%threads.%'
-              AND (expiry = 0 OR expiry > ?)
-          `).all(nowSeconds);
-          const cookies = rows.map((row: any) => ({
-            name: String(row.name || ""),
-            value: String(row.value || ""),
-            domain: String(row.host || ""),
-            path: String(row.path || "/"),
-            expires: normalizeSentimentBrowserCookieExpiry(row.expiry),
-            httpOnly: Boolean(row.isHttpOnly),
-            secure: Boolean(row.isSecure),
-            sameSite: Number(row.sameSite) === 2 ? "Strict" : Number(row.sameSite) === 1 ? "Lax" : "None",
-          }));
-          if (hasValidThreadsSessionCookie(cookies)) {
-            const cookieNames = new Set(cookies.map((cookie: any) => cleanText(cookie?.name).toLowerCase()).filter(Boolean));
-            const cookieScore = cookieNames.size * 10 + cookies.length;
-            if (cookieScore > bestCookieScore) {
-              bestCookies = cookies;
-              bestCookieScore = cookieScore;
-            }
+        const cookies = readThreadsCookiesFromProfileDir(account?.profile_dir);
+        if (hasValidThreadsSessionCookie(cookies)) {
+          const cookieNames = new Set(cookies.map((cookie: any) => cleanText(cookie?.name).toLowerCase()).filter(Boolean));
+          const cookieScore = cookieNames.size * 10 + cookies.length;
+          if (cookieScore > bestCookieScore) {
+            bestCookies = cookies;
+            bestCookieScore = cookieScore;
           }
-        } catch {
-          // Try the next ready account when a browser profile is locked or incomplete.
-        } finally {
-          cookieDb?.close?.();
         }
       }
     } catch {

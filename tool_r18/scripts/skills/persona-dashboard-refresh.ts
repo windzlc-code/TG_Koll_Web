@@ -1,9 +1,15 @@
 import "@/runtime/node/browser-shim";
-import { fetchThreadsProfileHotMetrics, getLiveSentimentBrowserAuthProfileBinding, refreshSentimentBrowserCookiesForPlatform } from "@/lib/sentiment-hot-importer";
+import fs from "node:fs";
+import path from "node:path";
+import { createRequire } from "node:module";
+import { fetchThreadsBrowserDetailMetricsBatch, fetchThreadsProfileHotMetrics, getLiveSentimentBrowserAuthProfileBinding, refreshSentimentBrowserCookiesForPlatform } from "@/lib/sentiment-hot-importer";
 import { listPersonaArchives } from "@/lib/persona-archives";
 import { installNodePersonaArchiveBridge, updatePersonaArchiveThreadsHotMetrics } from "@/runtime/node/persona-archive-store";
 
 installNodePersonaArchiveBridge();
+
+const require = createRequire(import.meta.url);
+const Database = require("better-sqlite3");
 
 function normalizeThreadsUsername(value: unknown): string {
   return String(value || "")
@@ -17,6 +23,14 @@ function normalizeThreadsUsername(value: unknown): string {
 function hotMetricKey(username: string): string {
   return `threads:${normalizeThreadsUsername(username).toLowerCase()}`;
 }
+
+type PersonaThreadsAccountBinding = {
+  username: string;
+  accountId?: string;
+  profileDir?: string;
+  status?: string;
+  source?: "account_pool" | "legacy_binding" | "publish_history";
+};
 
 function argValue(name: string): string {
   const prefix = `--${name}=`;
@@ -33,6 +47,139 @@ function archiveIdsFromArgs(): string[] {
   } catch {
     throw new Error("invalid archive-ids-b64 argument");
   }
+}
+
+function resolveWebappDataDirs(): string[] {
+  return Array.from(new Set([
+    String(process.env.WEBAPP_DATA_DIR || "").trim(),
+    "/data/webapp_data",
+    path.resolve(process.cwd(), "..", "webapp_data"),
+    path.resolve(process.cwd(), "webapp_data"),
+  ].filter(Boolean)));
+}
+
+let cachedThreadsAccountPool: PersonaThreadsAccountBinding[] | null = null;
+
+function readThreadsAccountPool(): PersonaThreadsAccountBinding[] {
+  if (cachedThreadsAccountPool) return cachedThreadsAccountPool;
+  const out: PersonaThreadsAccountBinding[] = [];
+  for (const dataDir of resolveWebappDataDirs()) {
+    const dbPath = path.join(dataDir, "app.db");
+    if (!fs.existsSync(dbPath)) continue;
+    let appDb: any = null;
+    try {
+      appDb = new Database(dbPath, { readonly: true, fileMustExist: true });
+      const rows = appDb.prepare(`
+        SELECT id, persona_id, username, profile_dir, status
+        FROM social_accounts
+        WHERE lower(platform) = 'threads'
+          AND lower(status) IN ('ready', 'active')
+          AND trim(username) <> ''
+        ORDER BY last_login_check_at DESC, updated_at DESC, created_at DESC
+      `).all();
+      for (const row of rows) {
+        const username = normalizeThreadsUsername(row?.username);
+        if (!username) continue;
+        out.push({
+          username,
+          accountId: String(row?.id || "").trim() || undefined,
+          archiveId: String(row?.persona_id || "").trim() || undefined,
+          profileDir: String(row?.profile_dir || "").trim() || undefined,
+          status: String(row?.status || "").trim() || undefined,
+          source: "account_pool",
+        } as PersonaThreadsAccountBinding & { archiveId?: string });
+      }
+    } catch {
+      // Try the next known webapp data directory.
+    } finally {
+      appDb?.close?.();
+    }
+    if (out.length) break;
+  }
+  cachedThreadsAccountPool = out;
+  return out;
+}
+
+function threadsHandleFromPostUrl(value: unknown): string {
+  const text = String(value || "").trim();
+  const match = text.match(/^https?:\/\/(?:www\.)?threads\.(?:net|com)\/@([^/?#]+)\/post\/[^/?#]+/i);
+  return normalizeThreadsUsername(match?.[1] || "");
+}
+
+function publishedThreadsUrlsFromRecord(record: any): string[] {
+  if (!record || typeof record !== "object") return [];
+  const publishedMeta = record.publishedMeta && typeof record.publishedMeta === "object" ? record.publishedMeta : {};
+  const sourceMeta = record.sourceMeta && typeof record.sourceMeta === "object" ? record.sourceMeta : {};
+  return [
+    record.publishedUrl,
+    record.published_url,
+    record.postUrl,
+    record.post_url,
+    record.url,
+    publishedMeta.publishedUrl,
+    publishedMeta.postUrl,
+    publishedMeta.url,
+    sourceMeta.publishedUrl,
+    sourceMeta.postUrl,
+    sourceMeta.url,
+  ].map(String).filter((item) => /^https?:\/\/(?:www\.)?threads\.(?:net|com)\/@[^/]+\/post\//i.test(item));
+}
+
+function normalizeThreadsPostUrl(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .replace(/^https:\/\/www\.threads\.com\//i, "https://www.threads.net/")
+    .replace(/[?#].*$/, "")
+    .replace(/\/+$/, "");
+}
+
+function threadsPostCodeFromUrl(value: unknown): string {
+  const match = normalizeThreadsPostUrl(value).match(/\/post\/([^/?#]+)/i);
+  return String(match?.[1] || "").trim();
+}
+
+function publishedThreadsUrlsForHandle(archive: any, usernameInput: string): string[] {
+  const username = normalizeThreadsUsername(usernameInput).toLowerCase();
+  if (!username) return [];
+  const out = new Set<string>();
+  for (const record of Array.isArray(archive?.publishHistory) ? archive.publishHistory : []) {
+    for (const url of publishedThreadsUrlsFromRecord(record)) {
+      const handle = threadsHandleFromPostUrl(url).toLowerCase();
+      if (handle !== username) continue;
+      const normalized = normalizeThreadsPostUrl(url);
+      if (normalized) out.add(normalized);
+    }
+  }
+  return [...out.values()];
+}
+
+function collectThreadsRefreshTargets(archive: any): PersonaThreadsAccountBinding[] {
+  const setup: any = archive?.setup || {};
+  const accounts = setup.accountManagement || {};
+  const currentLegacyHandle = normalizeThreadsUsername(accounts?.threads?.handle);
+  const accountPool = readThreadsAccountPool();
+  const byUsername = new Map(accountPool.map((item: any) => [normalizeThreadsUsername(item.username).toLowerCase(), item]));
+  const out = new Map<string, PersonaThreadsAccountBinding>();
+  const add = (binding: PersonaThreadsAccountBinding | null, source: PersonaThreadsAccountBinding["source"]) => {
+    const username = normalizeThreadsUsername(binding?.username);
+    if (!username) return;
+    const key = username.toLowerCase();
+    const existing = out.get(key) || {};
+    out.set(key, { ...existing, ...binding, username, source: existing.source || source });
+  };
+  for (const binding of accountPool as Array<PersonaThreadsAccountBinding & { archiveId?: string }>) {
+    if (String(binding.archiveId || "").trim() === String(archive?.id || "").trim()) add(binding, "account_pool");
+  }
+  add(currentLegacyHandle ? { username: currentLegacyHandle } : null, "legacy_binding");
+  for (const record of Array.isArray(archive?.publishHistory) ? archive.publishHistory : []) {
+    for (const url of publishedThreadsUrlsFromRecord(record)) {
+      const username = threadsHandleFromPostUrl(url);
+      if (!username) continue;
+      const pooled = byUsername.get(username.toLowerCase());
+      add({ ...(pooled || {}), username }, "publish_history");
+    }
+  }
+  return [...out.values()];
 }
 
 function decodeXml(value: string): string {
@@ -139,6 +286,85 @@ function mergePostMetrics(previous: any, next: any[]): any[] {
   return [...merged.values()]
     .sort((a, b) => postSortTime(b) - postSortTime(a))
     .slice(0, Number(process.env.PERSONA_DASHBOARD_MAX_POST_METRICS || 500));
+}
+
+function postMetricMatchesUrl(post: any, sourceUrl: string): boolean {
+  const expectedUrl = normalizeThreadsPostUrl(sourceUrl).toLowerCase();
+  const expectedCode = threadsPostCodeFromUrl(sourceUrl).toLowerCase();
+  const actualUrl = normalizeThreadsPostUrl(post?.sourceUrl || post?.source_url).toLowerCase();
+  const actualCode = String(post?.code || "").trim().toLowerCase();
+  return Boolean(
+    (expectedUrl && actualUrl && expectedUrl === actualUrl)
+    || (expectedCode && actualCode && expectedCode === actualCode),
+  );
+}
+
+async function backfillPublishedThreadsPostMetrics(args: {
+  archive: any;
+  username: string;
+  postMetrics: any[];
+  targetProfileDir?: string;
+  capturedAt: string;
+}): Promise<any[]> {
+  const publishedUrls = publishedThreadsUrlsForHandle(args.archive, args.username);
+  if (!publishedUrls.length) return args.postMetrics;
+  const existingRows = Array.isArray(args.postMetrics) ? args.postMetrics : [];
+  const missingUrls = publishedUrls.filter((url) => !existingRows.some((post) => postMetricMatchesUrl(post, url)));
+  if (!missingUrls.length) return existingRows;
+  const previousProfileDir = process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
+  try {
+    const concurrency = Number(process.env.PERSONA_DASHBOARD_DETAIL_BACKFILL_CONCURRENCY || 2);
+    const readWithProfileDir = async (urls: string[], profileDir?: string) => {
+      if (profileDir) {
+        process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR = profileDir;
+      } else {
+        delete process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
+      }
+      return await fetchThreadsBrowserDetailMetricsBatch(urls, concurrency).catch(() => null);
+    };
+    const detailRows = new Map<string, any>();
+    const mergeDetails = (details: Map<string, any> | null | undefined) => {
+      for (const [key, value] of details || []) {
+        if (value && !detailRows.has(key)) detailRows.set(key, value);
+      }
+    };
+    mergeDetails(await readWithProfileDir(missingUrls, args.targetProfileDir));
+    let fallbackMissingUrls = missingUrls.filter((url) => !detailRows.has(normalizeThreadsPostUrl(url)));
+    if (fallbackMissingUrls.length && args.targetProfileDir) {
+      for (const binding of readThreadsAccountPool()) {
+        const profileDir = String(binding.profileDir || "").trim();
+        if (!profileDir || profileDir === args.targetProfileDir) continue;
+        mergeDetails(await readWithProfileDir(fallbackMissingUrls, profileDir));
+        fallbackMissingUrls = missingUrls.filter((url) => !detailRows.has(normalizeThreadsPostUrl(url)));
+        if (!fallbackMissingUrls.length) break;
+      }
+    }
+    const backfilled = missingUrls.flatMap((sourceUrl) => {
+      const key = normalizeThreadsPostUrl(sourceUrl);
+      const detail = detailRows.get(key);
+      if (!detail) return [];
+      const engagement = detail.engagement || {};
+      const metrics = detail.metrics || {};
+      return [{
+        code: threadsPostCodeFromUrl(sourceUrl),
+        sourceUrl: normalizeThreadsPostUrl(sourceUrl),
+        likeCount: typeof engagement.likeCount === "number" ? engagement.likeCount : undefined,
+        commentCount: typeof engagement.commentCount === "number" ? engagement.commentCount : undefined,
+        repostCount: typeof metrics.repost_count === "number" ? metrics.repost_count : undefined,
+        shareCount: typeof metrics.send_count === "number" ? metrics.send_count : undefined,
+        viewCount: typeof engagement.viewCount === "number" ? engagement.viewCount : undefined,
+        capturedAt: args.capturedAt,
+        method: "browser_detail_backfill",
+      }];
+    });
+    return backfilled.length ? mergePostMetrics({ postMetrics: existingRows }, backfilled) : existingRows;
+  } finally {
+    if (previousProfileDir) {
+      process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR = previousProfileDir;
+    } else {
+      delete process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
+    }
+  }
 }
 
 async function fetchThreadsProfileHotMetricsViaRssHub(usernameInput: string): Promise<any> {
@@ -260,99 +486,142 @@ async function main() {
 
   for (const archive of targets) {
     const setup: any = archive.setup || {};
-    const accounts = setup.accountManagement || {};
-    const username = normalizeThreadsUsername(accounts?.threads?.handle);
-    if (!username) {
-      results.push({ archiveId: archive.id, name: archive.name, ok: false, skipped: true, message: "未绑定 Threads 用户名" });
+    const refreshTargets = collectThreadsRefreshTargets(archive);
+    if (!refreshTargets.length) {
+      results.push({ archiveId: archive.id, name: archive.name, ok: false, skipped: true, message: "未绑定可用 Threads 账号，请先在账号池绑定并确认账号已登录。" });
       continue;
     }
-    if (!auth.ok) {
-      results.push({ archiveId: archive.id, name: archive.name, username, ok: false, message: auth.message || refreshAuth.message || "Threads 授权无效，请先在后台授权中心更新 Cookie" });
-      continue;
-    }
-    try {
-      const metrics: any = useRssHub
-        ? await fetchThreadsProfileHotMetricsViaRssHub(username)
-        : await fetchThreadsProfileHotMetrics(username);
-      const key = hotMetricKey(username);
-      const existingHotMetrics = setup.hotMetrics || {};
-      const previousMetrics = existingHotMetrics[key] || {};
-      const usable = hasUsableMetrics(metrics);
-      const complete = useRssHub ? metrics.complete === true : isCompleteMetrics(metrics);
-      const mergedPostMetrics = Array.isArray(metrics.postMetrics)
-        ? mergePostMetrics(previousMetrics, metrics.postMetrics)
-        : previousMetrics.postMetrics;
-      const nextMetric = complete
-        ? {
-            ...previousMetrics,
-            platform: "threads",
-            username: metrics.username || username,
-            method: metrics.method,
-            feedUrl: metrics.feedUrl,
-            followers: metrics.followers,
-            following: metrics.following,
-            recentViews: metrics.recentViews,
-            posts: useRssHub ? mergedPostMetrics.length : metrics.posts,
-            likes: metrics.likes,
-            comments: metrics.comments,
-            reposts: metrics.reposts,
-            shares: metrics.shares,
-            views: metrics.views,
-            viewResolvedPosts: metrics.viewResolvedPosts,
-            viewMissingPosts: metrics.viewMissingPosts,
-            scannedPosts: useRssHub ? mergedPostMetrics.length : metrics.scannedPosts,
-            postMetrics: mergedPostMetrics,
-            complete: true,
-            scope: useRssHub ? "rsshub_feed_monitor" : "authenticated_full_profile",
-            refreshedAt: metrics.refreshedAt,
-            error: undefined,
+    for (const target of refreshTargets) {
+      const username = normalizeThreadsUsername(target.username);
+      if (!username) continue;
+      if (!auth.ok) {
+        results.push({ archiveId: archive.id, name: archive.name, username, ok: false, message: auth.message || refreshAuth.message || "Threads 授权无效，请先在后台授权中心更新 Cookie" });
+        continue;
+      }
+      try {
+        const previousProfileDir = process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
+        let metrics: any;
+        try {
+          if (target.profileDir) {
+            process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR = target.profileDir;
+          } else {
+            delete process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
           }
-        : {
-            ...previousMetrics,
-            platform: "threads",
-            username: metrics.username || username,
-            method: metrics.method,
-            feedUrl: metrics.feedUrl,
-            complete: false,
-            scope: metrics.scope,
-            refreshedAt: metrics.refreshedAt,
-            scannedPosts: metrics.scannedPosts,
-            error: metrics.error || (usable ? "本次只读取到局部资料，未覆盖为完整热点数据。" : "未读取到可用热点数据。"),
-          };
-      const updatedAt = new Date().toISOString();
-      const saved = updatePersonaArchiveThreadsHotMetrics({
-        archiveId: archive.id,
-        expectedHandle: username,
-        metricKey: key,
-        metric: nextMetric,
-        authProfileKey: auth.profileKey,
-        updatedAt,
-      });
-      if (!saved.ok) {
+          metrics = useRssHub
+            ? await fetchThreadsProfileHotMetricsViaRssHub(username)
+            : await fetchThreadsProfileHotMetrics(username);
+        } finally {
+          if (previousProfileDir) {
+            process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR = previousProfileDir;
+          } else {
+            delete process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
+          }
+        }
+        const key = hotMetricKey(username);
+        const existingHotMetrics = setup.hotMetrics || {};
+        const previousMetrics = existingHotMetrics[key] || {};
+        const usable = hasUsableMetrics(metrics);
+        const complete = useRssHub ? metrics.complete === true : isCompleteMetrics(metrics);
+        let mergedPostMetrics = Array.isArray(metrics.postMetrics)
+          ? mergePostMetrics(previousMetrics, metrics.postMetrics)
+          : Array.isArray(previousMetrics.postMetrics) ? previousMetrics.postMetrics : [];
+        if (Array.isArray(mergedPostMetrics)) {
+          mergedPostMetrics = await backfillPublishedThreadsPostMetrics({
+            archive,
+            username,
+            postMetrics: mergedPostMetrics,
+            targetProfileDir: target.profileDir,
+            capturedAt: metrics.refreshedAt || new Date().toISOString(),
+          });
+        }
+        const mergedRows = Array.isArray(mergedPostMetrics) ? mergedPostMetrics : [];
+        const mergedResolvedViews = mergedRows.filter((post: any) => typeof post?.viewCount === "number").length;
+        const mergedTotalViews = mergedRows.reduce((sum: number, post: any) => sum + (typeof post?.viewCount === "number" ? post.viewCount : 0), 0);
+        const nextMetric = complete
+          ? {
+              ...previousMetrics,
+              platform: "threads",
+              username: metrics.username || username,
+              accountId: target.accountId,
+              targetSource: target.source,
+              method: metrics.method,
+              feedUrl: metrics.feedUrl,
+              followers: metrics.followers,
+              following: metrics.following,
+              recentViews: metrics.recentViews,
+              posts: useRssHub ? mergedRows.length : Math.max(Number(metrics.posts || 0), mergedRows.length),
+              likes: metrics.likes,
+              comments: metrics.comments,
+              reposts: metrics.reposts,
+              shares: metrics.shares,
+              views: mergedResolvedViews > 0 ? mergedTotalViews : metrics.views,
+              viewResolvedPosts: mergedResolvedViews,
+              viewMissingPosts: Math.max(0, mergedRows.length - mergedResolvedViews),
+              scannedPosts: useRssHub ? mergedRows.length : Math.max(Number(metrics.scannedPosts || 0), mergedRows.length),
+              postMetrics: mergedPostMetrics,
+              complete: true,
+              scope: useRssHub ? "rsshub_feed_monitor" : "authenticated_full_profile",
+              refreshedAt: metrics.refreshedAt,
+              error: undefined,
+            }
+          : {
+              ...previousMetrics,
+              platform: "threads",
+              username: metrics.username || username,
+              accountId: target.accountId,
+              targetSource: target.source,
+              method: metrics.method,
+              feedUrl: metrics.feedUrl,
+              complete: false,
+              scope: metrics.scope,
+              refreshedAt: metrics.refreshedAt,
+              posts: mergedRows.length ? Math.max(Number(metrics.posts || 0), mergedRows.length) : metrics.posts,
+              scannedPosts: mergedRows.length ? Math.max(Number(metrics.scannedPosts || 0), mergedRows.length) : metrics.scannedPosts,
+              ...(mergedRows.length ? {
+                postMetrics: mergedPostMetrics,
+                views: mergedResolvedViews > 0 ? mergedTotalViews : metrics.views,
+                viewResolvedPosts: mergedResolvedViews,
+                viewMissingPosts: Math.max(0, mergedRows.length - mergedResolvedViews),
+              } : {}),
+              error: metrics.error || (usable ? "本次只读取到局部资料，未覆盖为完整热点数据。" : "未读取到可用热点数据。"),
+            };
+        const updatedAt = new Date().toISOString();
+        const saved = updatePersonaArchiveThreadsHotMetrics({
+          archiveId: archive.id,
+          expectedHandle: username,
+          metricKey: key,
+          metric: nextMetric,
+          authProfileKey: auth.profileKey,
+          allowAdditionalHandle: target.source === "publish_history",
+          updatedAt,
+        });
+        if (!saved.ok) {
+          results.push({
+            archiveId: archive.id,
+            name: archive.name,
+            username,
+            ok: false,
+            skipped: true,
+            message: saved.reason === "threads_binding_changed"
+              ? "刷新期间 Threads 绑定已变化，本次结果未写入。"
+              : "人设已不存在，本次结果未写入。",
+          });
+          continue;
+        }
         results.push({
           archiveId: archive.id,
           name: archive.name,
           username,
-          ok: false,
-          skipped: true,
-          message: saved.reason === "threads_binding_changed"
-            ? "刷新期间 Threads 绑定已变化，本次结果未写入。"
-            : "人设已不存在，本次结果未写入。",
+          ok: complete,
+          partial: !complete,
+          targetSource: target.source,
+          scannedPosts: metrics.scannedPosts || 0,
+          postMetrics: Array.isArray(metrics.postMetrics) ? metrics.postMetrics.length : 0,
+          message: complete ? "刷新完成" : nextMetric.error,
         });
-        continue;
+      } catch (error: any) {
+        results.push({ archiveId: archive.id, name: archive.name, username, ok: false, message: error instanceof Error ? error.message : String(error || "刷新失败") });
       }
-      results.push({
-        archiveId: archive.id,
-        name: archive.name,
-        username,
-        ok: complete,
-        partial: !complete,
-        scannedPosts: metrics.scannedPosts || 0,
-        postMetrics: Array.isArray(metrics.postMetrics) ? metrics.postMetrics.length : 0,
-        message: complete ? "刷新完成" : nextMetric.error,
-      });
-    } catch (error: any) {
-      results.push({ archiveId: archive.id, name: archive.name, username, ok: false, message: error instanceof Error ? error.message : String(error || "刷新失败") });
     }
   }
 
