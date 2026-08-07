@@ -282,6 +282,28 @@ describe("sentiment hot importer", () => {
     expect(resolveSentimentHotModelQueryKeywords(strategy, "strict")).toContain("染发烫发价格踩雷");
   });
 
+  it("derives core search terms from model generated concrete keywords", () => {
+    const strategy = {
+      primaryQueries: ["\u7406\u53d1\u5e97", "\u526a\u5934\u53d1", "\u70eb\u53d1", "\u67d3\u53d1", "\u53d1\u578b"],
+      ecosystemQueries: ["\u7406\u53d1\u5e97\u4e92\u52a8", "\u7406\u53d1\u771f\u5b9e\u4f53\u9a8c", "\u526a\u53d1\u4ef7\u683c"],
+      broadQueries: ["\u7406\u53d1\u907f\u5751", "\u53d1\u578b\u670d\u52a1", "\u7406\u53d1\u6d4b\u8bc4"],
+      requiredAnchorTerms: ["\u7406\u53d1\u5e97", "\u53d1\u578b\u5e08", "\u526a\u5934\u53d1"],
+      normalAnchorTerms: ["\u7406\u53d1\u5e97", "\u53d1\u578b\u5e08", "\u7f8e\u53d1\u5e97"],
+      strictAcceptTerms: ["\u7406\u53d1\u5e97", "\u526a\u5934\u53d1", "\u53d1\u578b\u5e08", "\u53d1\u578b\u670d\u52a1", "\u7406\u53d1\u907f\u5751"],
+      normalAcceptTerms: ["\u7406\u53d1\u5e97", "\u526a\u5934\u53d1", "\u53d1\u578b\u5e08", "\u7406\u53d1\u771f\u5b9e\u4f53\u9a8c", "\u53d1\u578b\u670d\u52a1"],
+      rejectTerms: [],
+      personaGuardTerms: [],
+      domainSummary: "\u7406\u53d1\u4e0e\u7f8e\u53d1\u884c\u4e1a",
+    } as any;
+
+    const acceptanceKeywords = resolveSentimentHotModelStrategyKeywords(strategy, "strict");
+    const queryKeywords = resolveSentimentHotModelQueryKeywords(strategy, "strict");
+
+    expect(acceptanceKeywords).toContain("\u7406\u53d1");
+    expect(queryKeywords.slice(0, 8)).toContain("\u7406\u53d1");
+    expect(queryKeywords.indexOf("\u7406\u53d1")).toBeLessThan(queryKeywords.indexOf("\u7406\u53d1\u907f\u5751"));
+  });
+
   it("keeps manually edited strict keywords before cached model query terms", () => {
     const strategy = {
       primaryQueries: ["理发店", "剪头发", "发型设计", "剪发", "理发前后"],

@@ -902,6 +902,72 @@ function filterConflictingSearchKeywords(keywords: string[]): string[] {
   return keywords;
 }
 
+function expandSentimentHotCoreKeywordVariants(keywords: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: unknown) => {
+    const text = cleanText(value);
+    if (!text || !isConcreteSearchKeyword(text)) return;
+    const key = text.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(text);
+  };
+  const suffixes = [
+    "前后对比",
+    "前後對比",
+    "行业动态",
+    "行業動態",
+    "真实体验",
+    "真實體驗",
+    "使用经验",
+    "使用經驗",
+    "价格争议",
+    "價格爭議",
+    "避坑",
+    "互动",
+    "互動",
+    "吐槽",
+    "痛点",
+    "痛點",
+    "测评",
+    "測評",
+    "场景",
+    "場景",
+    "推荐",
+    "推薦",
+    "价格",
+    "價格",
+    "服务",
+    "服務",
+    "体验",
+    "體驗",
+    "工具",
+    "社区",
+    "社群",
+    "对象",
+    "對象",
+    "产品",
+    "產品",
+    "行业",
+    "行業",
+    "店",
+    "师",
+    "師",
+  ];
+  for (const keyword of keywords) {
+    const text = cleanText(keyword);
+    add(text);
+    if (!text || !hasHan(text)) continue;
+    if (/头发/u.test(text)) add(text.replace(/头发/gu, "发"));
+    for (const suffix of suffixes) {
+      if (text.length <= suffix.length + 1 || !text.endsWith(suffix)) continue;
+      add(text.slice(0, -suffix.length));
+    }
+  }
+  return out;
+}
+
 function rankSearchKeywords(keywords: string[]): string[] {
   return keywords
     .map((keyword, index) => {
@@ -954,7 +1020,7 @@ function sentimentHotKeywordTargetForMode(mode: SentimentHotSearchMode): number 
 
 function prepareSentimentHotKeywordsForMode(keywords: string[], mode: SentimentHotSearchMode): string[] {
   const normalized = filterConflictingSearchKeywords([...new Set(
-    keywords.map(cleanText).filter((item) => isConcreteSearchKeyword(item)),
+    expandSentimentHotCoreKeywordVariants(keywords).map(cleanText).filter((item) => isConcreteSearchKeyword(item)),
   )]);
   return rankSearchKeywords(normalized).slice(0, sentimentHotKeywordTargetForMode(mode));
 }
@@ -1087,7 +1153,7 @@ export function resolveSentimentHotModelQueryKeywords(
     const anchors = filterConflictingSearchKeywords([...new Set([
       ...strategy.requiredAnchorTerms,
       ...strategy.normalAnchorTerms,
-    ].map(cleanText).filter((item) => isConcreteSearchKeyword(item)))]);
+    ].flatMap((item) => expandSentimentHotCoreKeywordVariants([item])).map(cleanText).filter((item) => isConcreteSearchKeyword(item)))]);
     const broadAnchors = prepareSentimentHotKeywordsForMode([
       ...strategy.broadQueries,
       ...strategy.ecosystemQueries,
