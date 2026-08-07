@@ -19825,6 +19825,7 @@ async function preparePersonaPostDirections() {
   const form = personaFormState(persona.id);
   const composeMode = personaComposeDraftInputKey(form.generate.composeMode) || "tweet";
   const directionState = personaPostDirectionState(persona.id, composeMode);
+  const requestSourceFingerprint = personaPostDirectionSourceFingerprint(form);
   const lockParts = ["persona", persona.id, "post_directions"];
   if (isActionLocked(...lockParts)) return;
   const payload = {
@@ -19834,6 +19835,7 @@ async function preparePersonaPostDirections() {
     writing_locale: PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.generate.writingLocale || ""))
       ? String(form.generate.writingLocale)
       : PERSONA_DEFAULT_WRITING_LOCALE,
+    interface_language: currentLanguage(),
     previous_keywords: directionState.keywords.slice(0, PERSONA_POST_DIRECTION_COUNT),
   };
   const operationStep = `post-directions:${persona.id}:${composeMode}`;
@@ -19857,10 +19859,20 @@ async function preparePersonaPostDirections() {
     if (keywords.length !== PERSONA_POST_DIRECTION_COUNT) {
       throw { detail: "模型未返回 10 个有效推文方向，请重试。", status: 502 };
     }
+    const latestForm = personaFormState(persona.id);
+    const latestComposeMode = personaComposeDraftInputKey(latestForm.generate.composeMode) || "tweet";
+    if (
+      latestComposeMode !== composeMode
+      || personaPostDirectionSourceFingerprint(latestForm) !== requestSourceFingerprint
+    ) {
+      clearPersonaStepOperationKey(operationStep, operationKey);
+      showMsg("commandMsg", "输入内容已变化，本次方向结果未采用，请重新点击 AI 生成。", false);
+      return;
+    }
     const targetState = personaPostDirectionState(persona.id, composeMode);
     targetState.keywords = keywords;
     targetState.selectedKeywords = [];
-    targetState.sourceFingerprint = personaPostDirectionSourceFingerprint(form);
+    targetState.sourceFingerprint = requestSourceFingerprint;
     clearPersonaStepOperationKey(operationStep, operationKey);
     showMsg("commandMsg", withBillingChargeMessage("已生成 10 个推文方向，可单选或多选。", result), true);
   } catch (error) {
@@ -24556,10 +24568,10 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           </div>` : ""}
         ` : `
           <label>草稿标题（可选）
-            <input id="personaDraftTitle" value="${esc(draftForm.title || "")}" placeholder="输入便于管理和识别的草稿标题" />
+            <input id="personaDraftTitle" value="${esc(draftForm.title || "")}" placeholder="输入便于管理和识别的草稿标题" ${postDirectionsLocked ? "disabled" : ""} />
           </label>
           <label>推文内容（可选）
-            <textarea id="personaDraftContent" rows="6" placeholder="留空由 AI 按当前人设生成；输入内容后可保存草稿或使用 AI 润色。">${esc(draftForm.content || "")}</textarea>
+            <textarea id="personaDraftContent" rows="6" placeholder="留空由 AI 按当前人设生成；输入内容后可保存草稿或使用 AI 润色。" ${postDirectionsLocked ? "disabled" : ""}>${esc(draftForm.content || "")}</textarea>
           </label>
           ${!preflight.ready ? `<div class="persona-warning-inline">${esc(preflight.issues.join(" / "))}，请先补齐配置。</div>` : ""}
           <label>可选人设记忆（已识别 ${esc(memoryRows.length)} 条）</label>

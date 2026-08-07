@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from webapp import server
 
 
@@ -11,6 +13,7 @@ PERSONA_WORKFLOW = ROOT / "tool_r18" / "scripts" / "skills" / "persona-create-wo
 
 def test_post_direction_helper_uses_persona_input_and_previous_batch(monkeypatch):
     captured = {}
+    generated = ["理发沟通", "发型误区", "染发维护", "客诉复盘", "工具选择", "脸型判断", "造型教学", "行业观察", "门店故事", "季节护理"]
     archive = {
         "id": "persona-1",
         "name": "理发师",
@@ -29,24 +32,47 @@ def test_post_direction_helper_uses_persona_input_and_previous_batch(monkeypatch
     def fake_cli(payload, timeout_seconds=0):
         captured.update(payload)
         captured["timeout_seconds"] = timeout_seconds
-        return {"keywords": [f"差异方向{i}" for i in range(1, 11)]}
+        return {"keywords": generated}
 
     monkeypatch.setattr(server, "_run_persona_create_cli", fake_cli)
     payload = server.PersonaDashboardPostDirectionsPayload(
         input_title="夏季短发",
         input_content="想写给第一次剪短发的客人",
+        interface_language="zh-Hant",
         previous_keywords=["旧方向"],
     )
 
     result = server._persona_dashboard_suggest_post_directions("persona-1", payload)
 
-    assert result["keywords"] == [f"差异方向{i}" for i in range(1, 11)]
+    assert result["keywords"] == generated
     assert result["source"] == "content"
     assert captured["action"] == "suggest-post-directions"
     assert "理发师" in captured["personaCore"]
     assert "夏季短发" in captured["userContent"]
     assert captured["previousKeywords"] == ["旧方向"]
+    assert captured["interfaceLanguage"] == "zh-Hant"
     assert captured["timeout_seconds"] == 90
+
+
+def test_post_direction_helper_rejects_a_replayed_previous_batch(monkeypatch):
+    previous = [f"方向{i}" for i in range(1, 11)]
+    archive = {
+        "id": "persona-1",
+        "name": "理发师",
+        "content": "专注真实理发现场和发型建议",
+        "setup": {},
+    }
+    monkeypatch.setattr(server, "_persona_archive_source_for_write", lambda _archive_id: (Path("unused"), {}, [archive]))
+    monkeypatch.setattr(server, "_run_persona_create_cli", lambda _payload, timeout_seconds=0: {"keywords": previous})
+
+    with pytest.raises(server.HTTPException) as error:
+        server._persona_dashboard_suggest_post_directions(
+            "persona-1",
+            server.PersonaDashboardPostDirectionsPayload(previous_keywords=previous),
+        )
+
+    assert error.value.status_code == 502
+    assert "上一批" in str(error.value.detail)
 
 
 def test_selected_directions_are_highest_topic_priority_without_losing_locale():
@@ -87,3 +113,5 @@ def test_model_prompt_requires_ten_distinct_directions_and_input_decomposition()
     assert "主题、对象、场景、痛点、立场和预期结果" in source
     assert "不要输出近义改写或上下位重复" in source
     assert "尽量避开上一批关键词及其近义表达" in source
+    assert "interfaceLanguage" in source
+    assert "統一輸出繁體中文" in source

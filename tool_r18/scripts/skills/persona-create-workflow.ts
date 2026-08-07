@@ -21,7 +21,7 @@ const POST_DIRECTION_KEYWORD_COUNT = 10;
 
 type Input =
   | { action: "suggest-keywords"; personaName: string; userPrompt: string }
-  | { action: "suggest-post-directions"; personaName: string; personaCore: string; userContent?: string; previousKeywords?: string[] }
+  | { action: "suggest-post-directions"; personaName: string; personaCore: string; userContent?: string; previousKeywords?: string[]; interfaceLanguage?: string }
   | { action: "derive-profile"; personaName: string; userPrompt: string; selectedKeywords?: string[] }
   | { action: "create-from-prompt"; personaName: string; userPrompt: string; selectedKeywords?: string[] };
 
@@ -364,7 +364,7 @@ function postDirectionsAreTooSimilar(left: string, right: string): boolean {
   return union > 0 && intersection / union >= 0.72;
 }
 
-function normalizePostDirectionKeywords(raw: unknown): string[] {
+function normalizePostDirectionKeywords(raw: unknown, excluded: string[] = []): string[] {
   const source = Array.isArray(raw)
     ? raw
     : Array.isArray((raw as any)?.keywords)
@@ -374,7 +374,11 @@ function normalizePostDirectionKeywords(raw: unknown): string[] {
   for (const item of source) {
     const value = typeof item === "string" ? item : (item as any)?.label || (item as any)?.keyword || (item as any)?.name;
     const keyword = normalizePostDirectionKeyword(value);
-    if (keyword.length < 2 || result.some((existing) => postDirectionsAreTooSimilar(existing, keyword))) continue;
+    if (
+      keyword.length < 2
+      || excluded.some((existing) => postDirectionsAreTooSimilar(existing, keyword))
+      || result.some((existing) => postDirectionsAreTooSimilar(existing, keyword))
+    ) continue;
     result.push(keyword);
     if (result.length >= POST_DIRECTION_KEYWORD_COUNT) break;
   }
@@ -433,6 +437,7 @@ async function derivePostDirectionKeywordsWithCodex(
   personaCore: string,
   userContent = "",
   previousKeywords: string[] = [],
+  interfaceLanguage = "zh-Hans",
 ): Promise<string[]> {
   const coreInput = compactLongAiInput(String(personaCore || "").trim(), 5000);
   const contentInput = compactLongAiInput(String(userContent || "").trim(), 3000);
@@ -440,6 +445,9 @@ async function derivePostDirectionKeywordsWithCodex(
     .map((item) => normalizePostDirectionKeyword(item))
     .filter(Boolean)
     .slice(0, 20);
+  const directionLanguageRule = interfaceLanguage === "zh-Hant"
+    ? "6. 關鍵詞用於繁體中文控制台選擇，統一輸出繁體中文；最終推文語言由後續語言選項決定。"
+    : "6. 关键词用于简体中文控制台选择，统一输出简体中文；最终推文语言由后续语言选项决定。";
   const instruction = [
     "你是自动化推文运营控制台的选题方向策划助手。",
     "任务：根据当前人设内核生成恰好 10 个可供用户选择的推文核心方向关键词。",
@@ -450,7 +458,7 @@ async function derivePostDirectionKeywordsWithCodex(
     "3. 优先从不同切面展开，例如真实场景、常见问题、经验方法、误区反差、过程细节、结果变化、人物故事、观点判断、受众痛点与行业观察；只选择适合该人设的切面。",
     "4. 如果用户输入了本次内容，先拆解其中的主题、对象、场景、痛点、立场和预期结果，再生成十个彼此不同但仍围绕该内容的方向。",
     "5. 每个关键词要短、具体、看一眼就知道写作方向，建议 3 到 12 个中文字；不要写完整标题、句子、说明或营销口号。",
-    "6. 关键词只用于中文控制台选择，统一输出简体中文；最终推文语言由后续语言选项决定。",
+    directionLanguageRule,
     previous.length ? `7. 这是“换一批”，尽量避开上一批关键词及其近义表达：${previous.join("、")}` : "7. 首次生成时覆盖十个不同切面。",
     "8. 只输出 JSON，不要 Markdown，不要解释。",
     "",
@@ -462,7 +470,7 @@ async function derivePostDirectionKeywordsWithCodex(
     contentInput ? `用户本次输入内容：${contentInput}` : "用户本次未输入内容，请只依据人设内核生成方向。",
   ].join("\n");
   try {
-    const keywords = normalizePostDirectionKeywords(await runCodexJsonInstruction(instruction));
+    const keywords = normalizePostDirectionKeywords(await runCodexJsonInstruction(instruction), previous);
     if (keywords.length !== POST_DIRECTION_KEYWORD_COUNT) {
       throw new Error(`模型仅返回 ${keywords.length} 个足够区分的有效方向`);
     }
@@ -664,10 +672,11 @@ async function main() {
     const personaCore = String(input.personaCore || "").trim();
     const userContent = String(input.userContent || "").trim();
     const previousKeywords = Array.isArray(input.previousKeywords) ? input.previousKeywords : [];
+    const interfaceLanguage = input.interfaceLanguage === "zh-Hant" ? "zh-Hant" : "zh-Hans";
     if (!personaName) throw new Error("persona name cannot be empty");
     if (!personaCore) throw new Error("persona core cannot be empty");
     try {
-      const keywords = await derivePostDirectionKeywordsWithCodex(personaName, personaCore, userContent, previousKeywords);
+      const keywords = await derivePostDirectionKeywordsWithCodex(personaName, personaCore, userContent, previousKeywords, interfaceLanguage);
       printJson({ ok: true, action: input.action, personaName, keywords });
     } catch (error: any) {
       printJson({ ok: false, action: input.action, personaName, error: String(error?.message || "推文方向生成失败，请稍后重试。") });

@@ -12124,6 +12124,7 @@ class PersonaDashboardPostDirectionsPayload(BaseModel):
     input_content: str = ""
     platform: str = "threads"
     writing_locale: str = "zh-TW"
+    interface_language: str = "zh-Hans"
     previous_keywords: list[str] = Field(default_factory=list)
 
 
@@ -15643,6 +15644,32 @@ def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywor
     }
 
 
+def _persona_post_direction_key(value: Any) -> str:
+    return re.sub(r"[\s，。；;：:、\-_/]+", "", str(value or "")).lower()
+
+
+def _persona_post_direction_bigrams(value: Any) -> set[str]:
+    key = _persona_post_direction_key(value)
+    if len(key) < 2:
+        return {key} if key else set()
+    return {key[index:index + 2] for index in range(len(key) - 1)}
+
+
+def _persona_post_directions_are_too_similar(left: Any, right: Any) -> bool:
+    left_key = _persona_post_direction_key(left)
+    right_key = _persona_post_direction_key(right)
+    if not left_key or not right_key:
+        return True
+    if left_key == right_key:
+        return True
+    if min(len(left_key), len(right_key)) >= 4 and (left_key in right_key or right_key in left_key):
+        return True
+    left_bigrams = _persona_post_direction_bigrams(left_key)
+    right_bigrams = _persona_post_direction_bigrams(right_key)
+    union = left_bigrams | right_bigrams
+    return bool(union) and len(left_bigrams & right_bigrams) / len(union) >= 0.72
+
+
 def _persona_dashboard_suggest_post_directions(
     archive_id: str,
     payload: PersonaDashboardPostDirectionsPayload,
@@ -15675,12 +15702,14 @@ def _persona_dashboard_suggest_post_directions(
         for item in (payload.previous_keywords or [])
         if str(item or "").strip()
     ][:20]
+    interface_language = "zh-Hant" if str(payload.interface_language or "").strip() == "zh-Hant" else "zh-Hans"
     result = _run_persona_create_cli({
         "action": "suggest-post-directions",
         "personaName": persona_name,
         "personaCore": json.dumps(persona_core, ensure_ascii=False, separators=(",", ":")),
         "userContent": user_content,
         "previousKeywords": previous_keywords,
+        "interfaceLanguage": interface_language,
         "platform": _normalize_persona_content_platform(payload.platform),
         "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
     }, timeout_seconds=90)
@@ -15689,14 +15718,25 @@ def _persona_dashboard_suggest_post_directions(
     for item in result.get("keywords") if isinstance(result.get("keywords"), list) else []:
         keyword = re.sub(r"\s+", " ", str(item or "")).strip()[:24]
         normalized = re.sub(r"[\s，。；;：:、\-_/]+", "", keyword).lower()
-        if len(keyword) < 2 or not normalized or normalized in seen:
+        if (
+            len(keyword) < 2
+            or not normalized
+            or normalized in seen
+            or any(_persona_post_directions_are_too_similar(keyword, previous) for previous in previous_keywords)
+            or any(_persona_post_directions_are_too_similar(keyword, existing) for existing in keywords)
+        ):
             continue
         seen.add(normalized)
         keywords.append(keyword)
         if len(keywords) >= 10:
             break
     if len(keywords) != 10:
-        raise HTTPException(status_code=502, detail="推文方向生成失败：模型未返回 10 个有效且有区分度的关键词，请换一批重试。")
+        detail = (
+            "推文方向生成失败：新结果与上一批重复或不足 10 个，请再次换一批。"
+            if previous_keywords
+            else "推文方向生成失败：模型未返回 10 个有效且有区分度的关键词，请重试。"
+        )
+        raise HTTPException(status_code=502, detail=detail)
     return {
         "ok": True,
         "archive_id": clean_id,
@@ -16283,6 +16323,7 @@ def _persona_post_directions_request_fingerprint(
             "input_content": str(raw.get("input_content") or "").strip(),
             "platform": _normalize_persona_content_platform(raw.get("platform")),
             "writing_locale": _normalize_persona_writing_locale(raw.get("writing_locale")),
+            "interface_language": "zh-Hant" if str(raw.get("interface_language") or "").strip() == "zh-Hant" else "zh-Hans",
             "previous_keywords": [
                 str(item or "").strip()
                 for item in (raw.get("previous_keywords") or [])
