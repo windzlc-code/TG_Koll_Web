@@ -4128,6 +4128,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   const stats = { pages: 1, queries: 0, graphql: 0, hydration: 0, accepted: 0, rejected: {} as Record<string, number> };
   const templateStats = { seen: 0, noVariables: 0, apiNonSearch: 0, noSearchMarker: 0, captured: 0 };
   const capturedGraphqlPayloadKeys = new Set<string>();
+  const debugRejectedCandidates: Array<{ reason: string; hotScore: number; source: string; publishedAt?: string; author?: string; content: string; metrics?: any }> = [];
   let threadsAuthBlocked = false;
   const markThreadsAuthBlocked = (reason: string) => {
     threadsAuthBlocked = true;
@@ -4142,6 +4143,25 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       countRejection ? stats.rejected : undefined,
     );
     if (!normalized) {
+      if (process.env.SENTIMENT_HOT_DEBUG_GRAPHQL === "1" && debugRejectedCandidates.length < 80) {
+        const localRejection: Record<string, number> = {};
+        candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays, localRejection);
+        debugRejectedCandidates.push({
+          reason: Object.keys(localRejection)[0] || "unknown",
+          hotScore: Number(candidate.hotScore || 0),
+          source: sentimentCandidateSource(candidate),
+          publishedAt: candidate.publishedAt,
+          author: candidate.author,
+          content: cleanSentimentCandidateContent(candidate.content || "").slice(0, 100),
+          metrics: {
+            like_count: (candidate.metrics as any)?.like_count,
+            comment_count: (candidate.metrics as any)?.comment_count,
+            repost_count: (candidate.metrics as any)?.repost_count,
+            reshare_count: (candidate.metrics as any)?.reshare_count,
+            view_count: (candidate.metrics as any)?.view_count,
+          },
+        });
+      }
       if (
         !isUsefulHotCandidate(candidate)
         && detailRescueCandidates.size < THREADS_BROWSER_DETAIL_RESCUE_POOL_LIMIT
@@ -4671,6 +4691,12 @@ async function fetchThreadsBrowserSearchCandidates(args: {
     // Playwright is optional; reader/cache/database paths still keep the Telegram flow alive.
   } finally {
     releaseBrowserSlot();
+  }
+  if (process.env.SENTIMENT_HOT_DEBUG_GRAPHQL === "1" && debugRejectedCandidates.length > 0) {
+    const topRejected = [...debugRejectedCandidates]
+      .sort((a, b) => b.hotScore - a.hotScore)
+      .slice(0, 12);
+    console.info(`[sentiment_hot_rejection_debug] archiveId=${args.archiveId} samples=${JSON.stringify(topRejected)}`);
   }
   console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=done total=${results.length} pages=${stats.pages} queries=${stats.queries} graphql=${stats.graphql} hydration=${stats.hydration} accepted=${stats.accepted} rejected=${JSON.stringify(stats.rejected)}`);
   return sortSentimentHotCandidatePool(results, args.keywords, args.limit, args.searchMode);
