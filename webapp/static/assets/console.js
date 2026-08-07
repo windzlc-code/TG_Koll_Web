@@ -21,7 +21,7 @@ const PERSONA_GENERATE_DEFAULT_COUNT = 3;
 const PERSONA_GENERATE_MAX_COUNT = 5;
 const PERSONA_GENERATE_DEFAULT_TARGET_WORDS = 120;
 const PERSONA_WRITING_LOCALES = [
-  ["zh-TW", "繁體中文"],
+  ["zh-TW", "繁体中文（默认）"],
   ["zh-CN", "简体中文"],
   ["en-US", "English"],
   ["ja-JP", "日本語"],
