@@ -1334,6 +1334,22 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             'class="primary persona-profile-editor-launch" data-persona-open-profile-editor',
             self.console_script,
         )
+        self.assertIn(
+            'data-persona-open-profile-editor>${renderEditIcon()}<span>编辑人设档案</span>',
+            self.console_script,
+        )
+
+    def test_persona_identity_has_a_platform_account_homepage_action(self):
+        self.assertIn('data-persona-open-account-homepage', self.console_script)
+        self.assertIn('function personaAccountHomepageUrl(', self.console_script)
+        self.assertIn('https://www.instagram.com/${handle}/', self.console_script)
+        self.assertIn('https://www.threads.net/@${handle}', self.console_script)
+        self.assertIn('function openPersonaAccountHomepage()', self.console_script)
+        self.assertIn('event.target.closest("[data-persona-open-account-homepage]")', self.console_script)
+        self.assertIn('class="persona-profile-action-row"', self.console_script)
+        self.assertIn('.persona-profile-action-row {', self.styles)
+        self.assertIn('appearance: none;', self.styles)
+        self.assertIn('.persona-profile-editor-launch svg,', self.styles)
 
     def test_persona_create_keyword_limit_and_running_exit_confirmation_are_explicit(self):
         create_start = self.console_script.index("function renderPersonaCreateWorkbench()")

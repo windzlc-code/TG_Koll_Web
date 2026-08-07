@@ -6228,6 +6228,30 @@ function renderPersonaExecutionAccountBadge(persona) {
   return `<span class="persona-status-chip ${statusClass}">${platformLogos}<span>账号：${esc(accountLabel)}</span></span>`;
 }
 
+function personaAccountHomepageUrl(persona = selectedPersona()) {
+  const platform = personaContentPlatform(persona);
+  const account = personaAccounts(persona).find(
+    (item) => String(item?.platform || "").trim().toLowerCase() === platform,
+  ) || null;
+  const username = String(account?.username || account?.account_username || account?.login_username || "")
+    .trim()
+    .replace(/^@+/, "");
+  if (!username) return "";
+  const handle = encodeURIComponent(username);
+  return platform === "instagram"
+    ? `https://www.instagram.com/${handle}/`
+    : `https://www.threads.net/@${handle}`;
+}
+
+function openPersonaAccountHomepage() {
+  const url = personaAccountHomepageUrl();
+  if (!url) {
+    showMsg("commandMsg", "当前平台尚未绑定可打开的账号。", false);
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
 function personaSummaryCounts(persona) {
   const personaId = String(persona?.id || "");
   const selectedPlatform = personaContentPlatform(persona);
@@ -9796,7 +9820,10 @@ function renderPersonaProfileIdentity(persona, profile, {
             <div class="persona-profile-name-row">
               <strong>${esc(resolvedProfile?.name || persona?.name || "未命名人设")}</strong>
             </div>
-            <button type="button" class="primary persona-profile-editor-launch" data-persona-open-profile-editor>编辑人设档案</button>
+            <div class="persona-profile-action-row">
+              <button type="button" class="primary persona-profile-editor-launch" data-persona-open-profile-editor>${renderEditIcon()}<span>编辑人设档案</span></button>
+              <button type="button" class="persona-profile-open-account" data-persona-open-account-homepage>${renderBrowserLaunchIcon()}<span>打开账号主页</span></button>
+            </div>
           </div>
           <div class="persona-profile-summary-strip" aria-label="当前人设信息">
             <div class="persona-profile-summary-grid">
@@ -31075,6 +31102,10 @@ function bindEvents() {
     if (event.target.closest("[data-persona-publish-submit]")) submitPersonaPublishTask().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
     if (event.target.closest("[data-persona-open-profile-editor]")) {
       openPersonaProfileEditorModal().catch((error) => showMsg("commandMsg", error.detail || error.message || "打开人设档案失败", false));
+      return;
+    }
+    if (event.target.closest("[data-persona-open-account-homepage]")) {
+      openPersonaAccountHomepage();
       return;
     }
     if (event.target.closest("[data-persona-edit-name]")) {

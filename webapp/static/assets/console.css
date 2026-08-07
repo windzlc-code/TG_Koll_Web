@@ -9277,14 +9277,54 @@ body.persona-touch-dragging .persona-list-card:active {
   overflow-wrap: anywhere;
 }
 
-.persona-profile-editor-launch {
+.persona-profile-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.persona-profile-editor-launch,
+.persona-profile-open-account {
+  display: inline-flex;
+  align-items: center;
   width: 100%;
   min-height: 36px;
-  margin-top: 6px;
+  margin: 0;
+  padding: 7px 10px;
+  justify-content: center;
+  gap: 6px;
+  appearance: none;
+  box-shadow: none;
+  text-shadow: none;
+  transform: none;
+}
+
+.persona-profile-editor-launch {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--accent-contrast, #fff);
   font-weight: 850;
+}
+
+.persona-profile-open-account {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background-image: none;
+  background: var(--panel-solid);
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.persona-profile-editor-launch svg,
+.persona-profile-open-account svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
 }
 
 .persona-menu-tab .persona-menu-icon {
@@ -9312,6 +9352,15 @@ body.persona-touch-dragging .persona-list-card:active {
   border-color: var(--accent-dark);
   background: var(--accent-dark);
   color: var(--accent-contrast, #fff);
+}
+
+.persona-profile-open-account:hover,
+.persona-profile-open-account:focus-visible {
+  border-color: var(--accent);
+  background: var(--panel-solid);
+  color: var(--accent);
+  box-shadow: none;
+  transform: none;
 }
 
 .persona-profile-name-block > input {
@@ -23066,6 +23115,16 @@ body.console-page {
   .console-page .persona-detail .persona-profile-editor-launch {
     min-height: 32px;
     margin-top: 2px;
+  }
+
+  .console-page .persona-detail .persona-profile-action-row {
+    gap: 6px;
+    margin-top: 2px;
+  }
+
+  .console-page .persona-detail .persona-profile-open-account {
+    min-height: 32px;
+    font-size: 12px;
   }
 
   .console-page .persona-detail .persona-profile-intro-edit {
