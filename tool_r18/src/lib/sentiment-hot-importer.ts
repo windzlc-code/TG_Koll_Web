@@ -3768,6 +3768,19 @@ export function isUsableThreadsSearchGraphqlTemplate(value: unknown): boolean {
     || (Array.isArray(template.sourceTerms) && template.sourceTerms.some((term) => cleanText(term)));
 }
 
+function threadsSearchTemplateMatchesQueries(template: ThreadsSearchGraphqlTemplate | null | undefined, queries: string[]): boolean {
+  if (!template) return false;
+  const templateTerms = Array.isArray(template.sourceTerms)
+    ? template.sourceTerms.map(cleanText).filter(Boolean)
+    : [];
+  if (templateTerms.length === 0) return true;
+  const currentTerms = queries.map(cleanText).filter(Boolean);
+  if (currentTerms.length === 0) return true;
+  return templateTerms.some((templateTerm) => currentTerms.some((term) => (
+    templateTerm === term || templateTerm.includes(term) || term.includes(templateTerm)
+  )));
+}
+
 function valueContainsAnyThreadsSearchTerm(value: unknown, terms: string[]): boolean {
   if (!value || terms.length === 0) return false;
   if (typeof value === "string") {
@@ -4119,9 +4132,10 @@ async function fetchThreadsBrowserSearchCandidates(args: {
         await detailRescueRunning;
       };
       const persistedTemplate = readPersistedThreadsSearchTemplate();
-      if (!recentThreadsSearchTemplate && persistedTemplate) recentThreadsSearchTemplate = persistedTemplate;
+      if (!recentThreadsSearchTemplate && persistedTemplate && threadsSearchTemplateMatchesQueries(persistedTemplate.template, args.queries)) recentThreadsSearchTemplate = persistedTemplate;
       const cachedTemplate = recentThreadsSearchTemplate
         && Date.now() - recentThreadsSearchTemplate.capturedAt <= THREADS_BROWSER_TEMPLATE_CACHE_TTL_MS
+        && threadsSearchTemplateMatchesQueries(recentThreadsSearchTemplate.template, args.queries)
         ? recentThreadsSearchTemplate.template
         : null;
       let template: ThreadsSearchGraphqlTemplate | null = cachedTemplate;
