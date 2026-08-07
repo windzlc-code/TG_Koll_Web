@@ -4193,6 +4193,9 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           await searchPage.waitForTimeout(Math.min(300, remainingSentimentDeadlineMs(args.deadlineAt, 300))).catch(() => undefined);
           const selectors = [
             'input[type="search"]',
+            'textarea',
+            '[role="textbox"]',
+            '[contenteditable="true"]',
             'input[placeholder*="Search"]',
             'input[placeholder*="搜尋"]',
             'input[placeholder*="搜索"]',
@@ -4215,6 +4218,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
             console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} source=threads_manual_search query=${JSON.stringify(query)} url=${JSON.stringify(String(searchPage.url?.() || ""))}`);
             return true;
           }
+          console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} source=threads_manual_search status=no_input query=${JSON.stringify(query)} url=${JSON.stringify(String(searchPage.url?.() || ""))}`);
         } catch {
           // Manual search is only a capture aid; direct URL and DOM parsing remain available.
         }
