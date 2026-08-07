@@ -4261,6 +4261,24 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       if (!template) page.on("request", captureTemplate);
       const bootstrapQueries = [...new Set(args.queries.slice(0, THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT).filter(Boolean))];
       const recentSearch = typeof args.recentSearch === "boolean" ? args.recentSearch : Number(args.freshnessDays || 0) > 0;
+      let droppedNonPostGraphqlTemplate = false;
+      const activateThreadsSearchResultTab = async (searchPage: any, useRecentSearch: boolean, query: string) => {
+        if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) return false;
+        const labelPattern = useRecentSearch
+          ? /^(?:最近|最新|Recent|Latest)$/i
+          : /^(?:最相關|最相关|Top)$/i;
+        const tabs = searchPage.locator('a, button, [role="tab"], [role="button"]').filter({ hasText: labelPattern });
+        const count = Math.min(await tabs.count().catch(() => 0), 6);
+        for (let index = 0; index < count; index += 1) {
+          const tab = tabs.nth(index);
+          if (!await tab.isVisible({ timeout: 400 }).catch(() => false)) continue;
+          await tab.click({ timeout: 800 }).catch(() => undefined);
+          await searchPage.waitForTimeout(Math.min(850, remainingSentimentDeadlineMs(args.deadlineAt, 850))).catch(() => undefined);
+          console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} source=threads_search_tab query=${JSON.stringify(query)} recent=${useRecentSearch ? 1 : 0} url=${JSON.stringify(String(searchPage.url?.() || ""))}`);
+          return true;
+        }
+        return false;
+      };
       const triggerThreadsManualSearch = async (searchPage: any, query: string) => {
         if (!query || results.length >= args.limit) return false;
         if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000) return false;
@@ -4395,9 +4413,11 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           const cookieConsentButtons = searchPage.locator("button").filter({ hasText: /Cookie/i });
           if (await cookieConsentButtons.count().catch(() => 0)) await cookieConsentButtons.last().click().catch(() => undefined);
           await searchPage.waitForTimeout(Math.min(350, remainingSentimentDeadlineMs(args.deadlineAt, 350))).catch(() => undefined);
+          await activateThreadsSearchResultTab(searchPage, useRecentSearch, query);
           await collectGraphqlResponseCandidates();
           const initialHydrationCount = await collectHydrationCandidates();
           if (!template && results.length < args.limit && await triggerThreadsManualSearch(searchPage, query)) {
+            await activateThreadsSearchResultTab(searchPage, useRecentSearch, query);
             await collectGraphqlResponseCandidates();
             await collectHydrationCandidates();
           }
@@ -4459,6 +4479,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
         if (smokePayload && smokeParsed.length === 0 && isKnownNonPostThreadsSearchPayload(smokePayload)) {
           console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=drop_non_post_graphql_template query=${JSON.stringify(smokeQuery)} samples=${process.env.SENTIMENT_HOT_DEBUG_GRAPHQL === "1" ? JSON.stringify(summarizeThreadsGraphqlPayloadForDebug(smokePayload)) : "[]"}`);
           template = null;
+          droppedNonPostGraphqlTemplate = true;
           recentThreadsSearchTemplate = null;
           clearPersistedThreadsSearchTemplate();
         } else {
@@ -4472,12 +4493,14 @@ async function fetchThreadsBrowserSearchCandidates(args: {
         }
       }
       if (!template) {
-        for (const bootstrapQuery of bootstrapQueries) {
-          if (threadsAuthBlocked || template || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
-          // The unfiltered search page emits the reusable GraphQL request more
-          // consistently. Parsed posts still pass the normal freshness checks,
-          // and once captured the API payload includes real publication times.
-          await collectDomCandidates(page, bootstrapQuery, THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS, false);
+        if (!droppedNonPostGraphqlTemplate) {
+          for (const bootstrapQuery of bootstrapQueries) {
+            if (threadsAuthBlocked || template || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
+            // The unfiltered search page emits the reusable GraphQL request more
+            // consistently. Parsed posts still pass the normal freshness checks,
+            // and once captured the API payload includes real publication times.
+            await collectDomCandidates(page, bootstrapQuery, THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS, false);
+          }
         }
         if (!threadsAuthBlocked && !template && recentSearch && results.length < args.limit) {
           for (const bootstrapQuery of bootstrapQueries) {
