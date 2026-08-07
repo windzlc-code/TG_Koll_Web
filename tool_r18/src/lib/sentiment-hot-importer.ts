@@ -3738,14 +3738,6 @@ function persistThreadsSearchTemplate(value: { template: ThreadsSearchGraphqlTem
   }
 }
 
-function clearPersistedThreadsSearchTemplate() {
-  try {
-    fs.rmSync(THREADS_SEARCH_GRAPHQL_TEMPLATE_CACHE_FILE, { force: true });
-  } catch {
-    // A later browser request can capture the template again.
-  }
-}
-
 function threadsSearchVariableQuery(value: unknown): string {
   if (!value || typeof value !== "object") return "";
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
@@ -3843,30 +3835,13 @@ export function parseThreadsGraphqlSearchPayload(args: {
       const code = cleanText(value?.code || value?.shortcode);
       const content = cleanSentimentCandidateContent(value?.caption?.text || value?.text_post_app_info?.text || value?.text || "");
       if (username && code && content) {
-        const info = value?.text_post_app_info || {};
-        const likeCount = Math.max(0, Number(value?.like_count ?? info?.like_count ?? info?.likeCount) || 0);
-        const commentCount = Math.max(0, Number(
-          info?.direct_reply_count
-          ?? info?.reply_count
-          ?? info?.comment_count
-          ?? info?.directReplyCount
-          ?? info?.replyCount
-          ?? info?.commentCount,
-        ) || 0);
-        const repostCount = Math.max(0, Number(info?.repost_count ?? info?.repostCount) || 0);
-        const reshareCount = Math.max(0, Number(
-          info?.reshare_count
-          ?? info?.share_count
-          ?? info?.send_count
-          ?? info?.reshareCount
-          ?? info?.shareCount
-          ?? info?.sendCount,
-        ) || 0);
+        const likeCount = Math.max(0, Number(value?.like_count) || 0);
+        const commentCount = Math.max(0, Number(value?.text_post_app_info?.direct_reply_count) || 0);
+        const repostCount = Math.max(0, Number(value?.text_post_app_info?.repost_count) || 0);
+        const reshareCount = Math.max(0, Number(value?.text_post_app_info?.reshare_count) || 0);
         const rawViewCount = [
-          info?.view_count,
-          info?.viewCount,
-          info?.impression_count,
-          info?.impressionCount,
+          value?.text_post_app_info?.view_count,
+          value?.text_post_app_info?.viewCount,
           value?.view_count,
           value?.viewCount,
           value?.play_count,
@@ -3966,77 +3941,6 @@ export function parseThreadsGraphqlSearchPageInfo(payload: any): { endCursor: st
   return null;
 }
 
-function summarizeThreadsGraphqlPayloadForDebug(payload: any): any[] {
-  const samples: any[] = [];
-  const stack: Array<{ value: any; path: string; depth: number }> = [{ value: payload, path: "$", depth: 0 }];
-  const visited = new Set<any>();
-  while (stack.length > 0 && samples.length < 12 && visited.size < 1200) {
-    const item = stack.pop()!;
-    const value = item.value;
-    if (!value || typeof value !== "object" || visited.has(value)) continue;
-    visited.add(value);
-    if (!Array.isArray(value)) {
-      const keys = Object.keys(value).slice(0, 24);
-      const text = cleanText(
-        value?.text_post_app_info?.text
-        || value?.caption?.text
-        || value?.caption_text
-        || value?.text
-        || value?.title
-        || "",
-      );
-      const code = cleanText(value?.code || value?.shortcode || value?.pk || value?.id);
-      const username = cleanText(value?.user?.username || value?.owner?.username || value?.username);
-      if (text || code || username || keys.some((key) => /post|thread|media|caption|text|user|owner|search/i.test(key))) {
-        samples.push({
-          path: item.path,
-          keys,
-          code: code.slice(0, 40),
-          username: username.slice(0, 40),
-          text: text.slice(0, 120),
-        });
-      }
-    }
-    if (item.depth >= 8) continue;
-    if (Array.isArray(value)) {
-      for (let index = Math.min(value.length - 1, 20); index >= 0; index -= 1) {
-        stack.push({ value: value[index], path: `${item.path}[${index}]`, depth: item.depth + 1 });
-      }
-    } else {
-      for (const [key, child] of Object.entries(value).reverse()) {
-        if (child && typeof child === "object") stack.push({ value: child, path: `${item.path}.${key}`, depth: item.depth + 1 });
-      }
-    }
-  }
-  return samples;
-}
-
-export function isKnownNonPostThreadsSearchPayload(payload: any): boolean {
-  if (!payload || typeof payload !== "object") return false;
-  const stack: any[] = [payload];
-  const visited = new Set<any>();
-  let sawNonPostSearch = false;
-  while (stack.length > 0) {
-    const value = stack.pop();
-    if (!value || typeof value !== "object" || visited.has(value)) continue;
-    visited.add(value);
-    if (!Array.isArray(value)) {
-      const keys = Object.keys(value);
-      if (keys.some((key) => /(?:users__search_connection|text_feed__keyword_search|keyword_search|search_keywords|search_users)/i.test(key))) {
-        sawNonPostSearch = true;
-      }
-      if (
-        cleanText((value as any).text_post_app_info?.text || (value as any).caption?.text || (value as any).text)
-        && cleanText((value as any).code || (value as any).shortcode)
-      ) return false;
-    }
-    for (const child of Object.values(value)) {
-      if (child && typeof child === "object") stack.push(child);
-    }
-  }
-  return sawNonPostSearch;
-}
-
 async function requestThreadsGraphqlSearchPayload(args: {
   page: any;
   template: ThreadsSearchGraphqlTemplate;
@@ -4128,7 +4032,6 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   const stats = { pages: 1, queries: 0, graphql: 0, hydration: 0, accepted: 0, rejected: {} as Record<string, number> };
   const templateStats = { seen: 0, noVariables: 0, apiNonSearch: 0, noSearchMarker: 0, captured: 0 };
   const capturedGraphqlPayloadKeys = new Set<string>();
-  const debugRejectedCandidates: Array<{ reason: string; hotScore: number; source: string; publishedAt?: string; author?: string; content: string; metrics?: any }> = [];
   let threadsAuthBlocked = false;
   const markThreadsAuthBlocked = (reason: string) => {
     threadsAuthBlocked = true;
@@ -4143,25 +4046,6 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       countRejection ? stats.rejected : undefined,
     );
     if (!normalized) {
-      if (process.env.SENTIMENT_HOT_DEBUG_GRAPHQL === "1" && debugRejectedCandidates.length < 80) {
-        const localRejection: Record<string, number> = {};
-        candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays, localRejection);
-        debugRejectedCandidates.push({
-          reason: Object.keys(localRejection)[0] || "unknown",
-          hotScore: Number(candidate.hotScore || 0),
-          source: sentimentCandidateSource(candidate),
-          publishedAt: candidate.publishedAt,
-          author: candidate.author,
-          content: cleanSentimentCandidateContent(candidate.content || "").slice(0, 100),
-          metrics: {
-            like_count: (candidate.metrics as any)?.like_count,
-            comment_count: (candidate.metrics as any)?.comment_count,
-            repost_count: (candidate.metrics as any)?.repost_count,
-            reshare_count: (candidate.metrics as any)?.reshare_count,
-            view_count: (candidate.metrics as any)?.view_count,
-          },
-        });
-      }
       if (
         !isUsefulHotCandidate(candidate)
         && detailRescueCandidates.size < THREADS_BROWSER_DETAIL_RESCUE_POOL_LIMIT
@@ -4298,28 +4182,9 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       if (!template) page.on("request", captureTemplate);
       const bootstrapQueries = [...new Set(args.queries.slice(0, THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT).filter(Boolean))];
       const recentSearch = typeof args.recentSearch === "boolean" ? args.recentSearch : Number(args.freshnessDays || 0) > 0;
-      let droppedNonPostGraphqlTemplate = false;
-      const activateThreadsSearchResultTab = async (searchPage: any, useRecentSearch: boolean, query: string) => {
-        if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) return false;
-        const labelPattern = useRecentSearch
-          ? /^(?:最近|最新|Recent|Latest)$/i
-          : /^(?:最相關|最相关|Top)$/i;
-        const tabs = searchPage.locator('a, button, [role="tab"], [role="button"]').filter({ hasText: labelPattern });
-        const count = Math.min(await tabs.count().catch(() => 0), 6);
-        for (let index = 0; index < count; index += 1) {
-          const tab = tabs.nth(index);
-          if (!await tab.isVisible({ timeout: 400 }).catch(() => false)) continue;
-          await tab.click({ timeout: 800 }).catch(() => undefined);
-          await searchPage.waitForTimeout(Math.min(850, remainingSentimentDeadlineMs(args.deadlineAt, 850))).catch(() => undefined);
-          console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} source=threads_search_tab query=${JSON.stringify(query)} recent=${useRecentSearch ? 1 : 0} url=${JSON.stringify(String(searchPage.url?.() || ""))}`);
-          return true;
-        }
-        return false;
-      };
-      const triggerThreadsManualSearch = async (searchPage: any, query: string, useRecentSearch: boolean) => {
+      const triggerThreadsManualSearch = async (searchPage: any, query: string) => {
         if (!query || results.length >= args.limit) return false;
         if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000) return false;
-        const previousUrl = String(searchPage.url?.() || buildThreadsSearchUrl(query, useRecentSearch));
         try {
           await searchPage.goto("https://www.threads.com/search", {
             waitUntil: "domcontentloaded",
@@ -4328,9 +4193,6 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           await searchPage.waitForTimeout(Math.min(300, remainingSentimentDeadlineMs(args.deadlineAt, 300))).catch(() => undefined);
           const selectors = [
             'input[type="search"]',
-            'textarea',
-            '[role="textbox"]',
-            '[contenteditable="true"]',
             'input[placeholder*="Search"]',
             'input[placeholder*="搜尋"]',
             'input[placeholder*="搜索"]',
@@ -4353,21 +4215,8 @@ async function fetchThreadsBrowserSearchCandidates(args: {
             console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} source=threads_manual_search query=${JSON.stringify(query)} url=${JSON.stringify(String(searchPage.url?.() || ""))}`);
             return true;
           }
-          if (/^https?:\/\//i.test(previousUrl) && String(searchPage.url?.() || "") !== previousUrl) {
-            await searchPage.goto(previousUrl, {
-              waitUntil: "domcontentloaded",
-              timeout: Math.min(3_000, remainingSentimentDeadlineMs(args.deadlineAt, 3_000)),
-            }).catch(() => undefined);
-          }
-          console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} source=threads_manual_search status=no_input query=${JSON.stringify(query)} url=${JSON.stringify(String(searchPage.url?.() || ""))}`);
         } catch {
           // Manual search is only a capture aid; direct URL and DOM parsing remain available.
-          if (/^https?:\/\//i.test(previousUrl) && String(searchPage.url?.() || "") !== previousUrl) {
-            await searchPage.goto(previousUrl, {
-              waitUntil: "domcontentloaded",
-              timeout: Math.min(3_000, remainingSentimentDeadlineMs(args.deadlineAt, 3_000)),
-            }).catch(() => undefined);
-          }
         }
         return false;
       };
@@ -4463,11 +4312,9 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           const cookieConsentButtons = searchPage.locator("button").filter({ hasText: /Cookie/i });
           if (await cookieConsentButtons.count().catch(() => 0)) await cookieConsentButtons.last().click().catch(() => undefined);
           await searchPage.waitForTimeout(Math.min(350, remainingSentimentDeadlineMs(args.deadlineAt, 350))).catch(() => undefined);
-          await activateThreadsSearchResultTab(searchPage, useRecentSearch, query);
           await collectGraphqlResponseCandidates();
           const initialHydrationCount = await collectHydrationCandidates();
-          if (!template && initialHydrationCount === 0 && results.length < args.limit && await triggerThreadsManualSearch(searchPage, query, useRecentSearch)) {
-            await activateThreadsSearchResultTab(searchPage, useRecentSearch, query);
+          if (!template && results.length < args.limit && await triggerThreadsManualSearch(searchPage, query)) {
             await collectGraphqlResponseCandidates();
             await collectHydrationCandidates();
           }
@@ -4481,13 +4328,6 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           if (initialHydrationCount === 0) await collectHydrationCandidates();
           await collectGraphqlResponseCandidates();
           const bodyText = await searchPage.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
-          if (process.env.SENTIMENT_HOT_DEBUG_GRAPHQL === "1" && results.length < args.limit) {
-            const navTexts = await searchPage.$$eval('a, button, [role="tab"], [role="button"]', (items: any[]) => items
-              .map((item: any) => String(item.innerText || item.textContent || item.getAttribute?.("aria-label") || "").replace(/\s+/g, " ").trim())
-              .filter(Boolean)
-              .slice(0, 80)).catch(() => []);
-            console.info(`[sentiment_hot_page_debug] archiveId=${args.archiveId} query=${JSON.stringify(query)} url=${JSON.stringify(String(searchPage.url?.() || ""))} nav=${JSON.stringify(navTexts.slice(0, 40))} body=${JSON.stringify(bodyText.slice(0, 500))}`);
-          }
           const postUrls = await searchPage.$$eval('a[href*="/post/"]', (anchors: any[]) => anchors
             .map((anchor) => String(anchor.href || anchor.getAttribute?.("href") || "").trim())
             .filter(Boolean)).catch(() => []);
@@ -4514,49 +4354,13 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           waitUntil: "domcontentloaded",
           timeout: Math.min(3_000, remainingSentimentDeadlineMs(args.deadlineAt, 3_000)),
         }).catch(() => undefined);
-        const smokeQuery = args.queries[0] || "";
-        const smokePayload = smokeQuery
-          ? await requestThreadsGraphqlSearchPayload({ page, template, query: smokeQuery, recent: recentSearch, deadlineAt: args.deadlineAt })
-          : null;
-        const smokeParsed = smokePayload
-          ? parseThreadsGraphqlSearchPayload({
-            payload: smokePayload,
-            query: smokeQuery,
-            keywords: args.keywords,
-            freshnessFallbackAt: recentSearch ? new Date().toISOString() : undefined,
-          })
-          : [];
-        if (smokePayload && smokeParsed.length === 0 && isKnownNonPostThreadsSearchPayload(smokePayload)) {
-          console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=drop_non_post_graphql_template query=${JSON.stringify(smokeQuery)} samples=${process.env.SENTIMENT_HOT_DEBUG_GRAPHQL === "1" ? JSON.stringify(summarizeThreadsGraphqlPayloadForDebug(smokePayload)) : "[]"}`);
-          template = null;
-          droppedNonPostGraphqlTemplate = true;
-          recentThreadsSearchTemplate = null;
-          clearPersistedThreadsSearchTemplate();
-        } else {
-          for (const candidate of smokeParsed) {
-            if (excluded.has(candidate.id)) continue;
-            if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
-            considerCandidate(candidate);
-            if (results.length >= args.limit) break;
-          }
-          stats.graphql += smokeParsed.length;
-        }
-      }
-      if (!template) {
-        if (!droppedNonPostGraphqlTemplate && !recentSearch) {
-          for (const bootstrapQuery of bootstrapQueries) {
-            if (threadsAuthBlocked || template || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
-            // The unfiltered search page emits the reusable GraphQL request more
-            // consistently. Parsed posts still pass the normal freshness checks,
-            // and once captured the API payload includes real publication times.
-            await collectDomCandidates(page, bootstrapQuery, THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS, false);
-          }
-        }
-        if (!threadsAuthBlocked && !template && recentSearch && results.length < args.limit) {
-          for (const bootstrapQuery of bootstrapQueries) {
-            if (results.length >= args.limit || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
-            await collectDomCandidates(page, bootstrapQuery, 3, true);
-          }
+      } else {
+        for (const bootstrapQuery of bootstrapQueries) {
+          if (threadsAuthBlocked || template || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
+          // The unfiltered search page emits the reusable GraphQL request more
+          // consistently. Parsed posts still pass the normal freshness checks,
+          // and once captured the API payload includes real publication times.
+          await collectDomCandidates(page, bootstrapQuery, THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS, false);
         }
         if (!threadsAuthBlocked && !template && results.length < args.limit) await rescueDetailCandidates();
       }
@@ -4632,17 +4436,14 @@ async function fetchThreadsBrowserSearchCandidates(args: {
               return { ...item, nextPayload };
             }));
             for (const item of payloadsWithNext) {
-            const parsed = parseThreadsGraphqlSearchPayload({
-              payload: item.payload,
-              query: item.query,
-              keywords: args.keywords,
-              freshnessFallbackAt: recentSearch ? new Date().toISOString() : undefined,
-            });
-            if (process.env.SENTIMENT_HOT_DEBUG_GRAPHQL === "1" && parsed.length === 0 && item.payload) {
-              console.info(`[sentiment_hot_graphql_debug] archiveId=${args.archiveId} query=${JSON.stringify(item.query)} samples=${JSON.stringify(summarizeThreadsGraphqlPayloadForDebug(item.payload))}`);
-            }
-            stats.graphql += parsed.length;
-            let accepted = 0;
+              const parsed = parseThreadsGraphqlSearchPayload({
+                payload: item.payload,
+                query: item.query,
+                keywords: args.keywords,
+                freshnessFallbackAt: recentSearch ? new Date().toISOString() : undefined,
+              });
+              stats.graphql += parsed.length;
+              let accepted = 0;
               for (const candidate of parsed) {
                 if (excluded.has(candidate.id)) continue;
                 if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
@@ -4692,12 +4493,6 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   } finally {
     releaseBrowserSlot();
   }
-  if (process.env.SENTIMENT_HOT_DEBUG_GRAPHQL === "1" && debugRejectedCandidates.length > 0) {
-    const topRejected = [...debugRejectedCandidates]
-      .sort((a, b) => b.hotScore - a.hotScore)
-      .slice(0, 12);
-    console.info(`[sentiment_hot_rejection_debug] archiveId=${args.archiveId} samples=${JSON.stringify(topRejected)}`);
-  }
   console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=done total=${results.length} pages=${stats.pages} queries=${stats.queries} graphql=${stats.graphql} hydration=${stats.hydration} accepted=${stats.accepted} rejected=${JSON.stringify(stats.rejected)}`);
   return sortSentimentHotCandidatePool(results, args.keywords, args.limit, args.searchMode);
 }
@@ -4706,10 +4501,7 @@ const JINA_READER_PREFIX = "https://r.jina.ai/http://";
 
 export function buildThreadsSearchUrl(query: string, recent = false): string {
   const params = new URLSearchParams({ q: String(query || "") });
-  if (recent) {
-    params.set("serp_type", "default");
-    params.set("filter", "recent");
-  }
+  if (recent) params.set("filter", "recent");
   return `https://www.threads.com/search?${params.toString()}`;
 }
 

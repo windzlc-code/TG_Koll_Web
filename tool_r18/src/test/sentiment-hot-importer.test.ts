@@ -44,7 +44,6 @@ import {
   normalizeSentimentHotFreshnessPolicy,
   normalizeSentimentBrowserCookieExpiry,
   orderSentimentHotCandidatesForLegacyFallback,
-  isKnownNonPostThreadsSearchPayload,
   isSentimentHotCandidateRepeatEligible,
   parseThreadsPostViewCountFromText,
   parseThreadsReaderSearchMarkdownCandidates,
@@ -142,7 +141,7 @@ describe("sentiment hot importer", () => {
   it("uses Threads recent search only for freshness-scoped fetches", () => {
     expect(buildThreadsSearchUrl("tea")).toBe("https://www.threads.com/search?q=tea");
     expect(buildThreadsSearchUrl("茶文化", true)).toBe(
-      "https://www.threads.com/search?q=%E8%8C%B6%E6%96%87%E5%8C%96&serp_type=default&filter=recent",
+      "https://www.threads.com/search?q=%E8%8C%B6%E6%96%87%E5%8C%96&filter=recent",
     );
   });
 
@@ -203,34 +202,6 @@ describe("sentiment hot importer", () => {
       variables: { query: "理发" },
       headers: {},
     })).toBe(true);
-  });
-
-  it("recognizes Threads user-search GraphQL payloads as non-post results", () => {
-    expect(isKnownNonPostThreadsSearchPayload({
-      data: {
-        xdt_api__v1__users__search_connection: {
-          edges: [{
-            node: {
-              username: "barber_shop",
-              pk: "123",
-              is_active_on_text_post_app: true,
-              follower_count: 1000,
-            },
-          }],
-        },
-      },
-    })).toBe(true);
-
-    expect(isKnownNonPostThreadsSearchPayload({
-      data: {
-        media: {
-          code: "ABC123",
-          user: { username: "barber_shop" },
-          text_post_app_info: { text: "今天这个理发店太离谱了", direct_reply_count: 8 },
-          like_count: 80,
-        },
-      },
-    })).toBe(false);
   });
 
   it("reuses a persona search strategy when only volatile memory summaries change", () => {
@@ -1631,39 +1602,6 @@ tea\u8336\u6587\u5316\u65e5\u5e38\u5206\u4eab\u8207\u6162\u751f\u6d3b\u9ad4\u9a5
         view_count: 12000,
         realEngagementTotal: 12000,
       },
-    });
-  });
-
-  it("parses nested Threads text_post_app_info engagement fields", () => {
-    const candidates = parseThreadsGraphqlSearchPayload({
-      freshnessFallbackAt: "2026-07-17T09:00:00.000Z",
-      query: "理发店",
-      keywords: ["理发店"],
-      payload: {
-        data: {
-          node: {
-            code: "NESTED123",
-            user: { username: "barber_demo" },
-            text_post_app_info: {
-              text: "这家理发店剪发体验真的很离谱，从预约到沟通再到最终发型都值得拿出来给大家避坑参考。",
-              like_count: 880,
-              reply_count: 120,
-              repost_count: 30,
-              share_count: 40,
-              impression_count: 3200,
-            },
-          },
-        },
-      },
-    });
-
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0].hotScore).toBe(3200);
-    expect(candidates[0].engagement).toMatchObject({
-      likeCount: 880,
-      commentCount: 120,
-      shareCount: 40,
-      viewCount: 3200,
     });
   });
 
