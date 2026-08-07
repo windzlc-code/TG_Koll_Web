@@ -66,10 +66,10 @@ const THREADS_READER_INITIAL_QUERY_LIMIT = 24;
 const THREADS_READER_TOTAL_QUERY_LIMIT = 48;
 const THREADS_READER_QUERY_BATCH_SIZE = 8;
 const INSTAGRAM_READER_QUERY_LIMIT = 48;
-const INSTAGRAM_AUTHENTICATED_QUERY_LIMIT = 32;
-const INSTAGRAM_GRAPHQL_PAGE_QUERY_LIMIT = 8;
-const INSTAGRAM_KEYWORD_SEARCH_PAGE_QUERY_LIMIT = 6;
-const INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE = 8;
+const INSTAGRAM_AUTHENTICATED_QUERY_LIMIT = 16;
+const INSTAGRAM_GRAPHQL_PAGE_QUERY_LIMIT = 10;
+const INSTAGRAM_KEYWORD_SEARCH_PAGE_QUERY_LIMIT = 10;
+const INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE = 2;
 const DEFAULT_REFRESH_FRESHNESS_DAYS = 7;
 const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 42_000;
 const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 105_000;
@@ -1276,7 +1276,7 @@ async function filterSentimentHotCandidatesWithModel(args: {
         `候选：${JSON.stringify(candidatePayload)}`,
       ].join("\n") }] }],
       { temperature: 0, maxOutputTokens: 2048 },
-      AbortSignal.timeout(Math.max(1_000, args.timeoutMs || 31_000)),
+      buildAbortSignalTimeout(Math.max(1_000, args.timeoutMs || 31_000)),
       {
         attemptTimeoutMs: ({ index }) => index === 0
           ? Math.min(5_000, Math.max(1_000, args.timeoutMs || 31_000))
@@ -1302,7 +1302,7 @@ async function filterSentimentHotCandidatesWithModel(args: {
             `候选：${JSON.stringify(remainingCandidates)}`,
           ].join("\n") }] }],
           { temperature: 0, maxOutputTokens: 2048 },
-          AbortSignal.timeout(45_000),
+          buildAbortSignalTimeout(45_000),
           {
             attemptTimeoutMs: 20_000,
             isUsableResponse: (data) => parseSentimentHotSemanticAcceptedIds(extractText(data)) !== null,
@@ -1560,7 +1560,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
         }],
       }],
       { temperature: 0.1, maxOutputTokens: 768, responseMimeType: "application/json" },
-      AbortSignal.timeout(totalTimeoutMs),
+      buildAbortSignalTimeout(totalTimeoutMs),
       {
         isUsableResponse: (data) => {
           const candidate = parseSentimentHotSearchStrategy(extractText(data), {
@@ -1841,7 +1841,7 @@ export async function refreshSentimentBrowserCookiesForPlatform(platform: Sentim
         domain: profile.domain || new URL(authUrl).hostname,
         cookies: refreshedCookies,
       }),
-      signal: AbortSignal.timeout(8000),
+      signal: buildAbortSignalTimeout(8000),
     });
     if (!response.ok) return { ok: false, message: `${sentimentCookiePlatformLabel(platform)} Cookie 回写失败：HTTP ${response.status}` };
     return { ok: true, message: `${sentimentCookiePlatformLabel(platform)} Cookie 已自动刷新。` };
@@ -1887,7 +1887,7 @@ async function triggerRealtimeSentimentScan(platforms: SentimentHotPlatform[], w
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ reason: "manual", mode: "fast", sources, days: 2 }),
-      signal: AbortSignal.timeout(5000),
+      signal: buildAbortSignalTimeout(5000),
     });
     if (!response.ok) {
       warnings.push(`实时扫描触发失败：HTTP ${response.status}`);
@@ -2945,7 +2945,7 @@ async function syncSentimentKeywords(keywords: string[]) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ keyword }),
-      signal: AbortSignal.timeout(5_000),
+      signal: buildAbortSignalTimeout(5_000),
     });
     if (!response.ok && response.status !== 409) throw new Error(`HTTP ${response.status}`);
   }
@@ -4857,8 +4857,12 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
         + ` accepted=${stats.accepted - beforeAccepted} total=${results.length}`,
       );
     }
-    for (let offset = 0; offset < queries.length && results.length < args.limit; offset += INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE) {
+    for (let offset = INSTAGRAM_GRAPHQL_PAGE_QUERY_LIMIT; offset < queries.length && results.length < args.limit; offset += INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE) {
       if (remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
+      if (stats.rateLimited > 0) {
+        console.info(`[sentiment_hot_instagram_account_search] archiveId=${args.archiveId} status=skip_api_batch_after_rate_limit retrying=0`);
+        break;
+      }
       const batch = queries.slice(offset, offset + INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE);
       stats.requests += batch.length;
       const requestTimeoutMs = Math.min(3_500, remainingSentimentDeadlineMs(args.deadlineAt, 3_500));
@@ -4931,6 +4935,7 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
         + ` requests=${stats.requests} ok=${stats.ok} parsed=${stats.parsed} accepted=${stats.accepted}`
         + ` rejected=${JSON.stringify(stats.rejected)}`,
       );
+      if (stats.rateLimited > 0) break;
     }
     await context.close().catch(() => undefined);
   } catch (error) {
@@ -7930,7 +7935,7 @@ export async function downloadCandidatePrimaryMedia(candidate: SentimentHotCandi
   if (primary.localPath && fs.existsSync(primary.localPath)) return primary;
   if (!/^https?:\/\//i.test(primary.url)) return primary;
   try {
-    const response = await fetch(primary.url, { signal: AbortSignal.timeout(15_000) });
+    const response = await fetch(primary.url, { signal: buildAbortSignalTimeout(15_000) });
     if (!response.ok) return primary;
     const contentType = response.headers.get("content-type") || "";
     if (!/^image\/|^video\//i.test(contentType)) return primary;
@@ -7960,7 +7965,7 @@ export async function downloadCandidateMedia(candidate: SentimentHotCandidate, l
       continue;
     }
     try {
-      const response = await fetch(item.url, { signal: AbortSignal.timeout(15_000) });
+      const response = await fetch(item.url, { signal: buildAbortSignalTimeout(15_000) });
       if (!response.ok) {
         downloaded.push(item);
         continue;
