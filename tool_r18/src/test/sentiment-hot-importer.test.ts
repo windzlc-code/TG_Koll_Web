@@ -16,6 +16,7 @@ import {
   acquireSentimentBrowserWorkSlot,
   applyPersonaGuardToSentimentHotStrategy,
   boundedBrowserPageConcurrency,
+  buildInstagramHotSearchQueries,
   buildModelOrderedThreadsSearchQueries,
   buildSentimentHotSearchStrategyCacheKey,
   buildJinaReaderUrl,
@@ -301,6 +302,16 @@ describe("sentiment hot importer", () => {
     expect(queries).toContain("男士发型");
     expect(queries).toContain("理发店趣事");
     expect(queries.indexOf("理发店趣事")).toBeLessThan(queries.indexOf("染发烫发价格踩雷"));
+  });
+
+  it("keeps Instagram search aligned with Threads query keyword order", () => {
+    const queries = buildInstagramHotSearchQueries(
+      ["\u7406\u53d1", "\u526a\u53d1", "\u53d1\u578b"],
+      ["\u7406\u53d1\u907f\u5751", "\u7406\u53d1\u5e97\u4e92\u52a8", "\u7406\u53d1"],
+    );
+
+    expect(queries.slice(0, 3)).toEqual(["\u7406\u53d1", "\u526a\u53d1", "\u53d1\u578b"]);
+    expect(queries.indexOf("\u7406\u53d1")).toBeLessThan(queries.indexOf("\u7406\u53d1\u907f\u5751"));
   });
 
   it("clamps custom freshness to fifteen days", () => {

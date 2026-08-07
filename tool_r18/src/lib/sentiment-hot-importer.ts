@@ -7661,7 +7661,7 @@ function buildThreadsSearchQueries(keywords: string[]): string[] {
   return [...new Set(out)].slice(0, 48);
 }
 
-function buildInstagramHotSearchQueries(queryKeywords: string[], keywords: string[]): string[] {
+export function buildInstagramHotSearchQueries(queryKeywords: string[], keywords: string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const add = (value: unknown) => {
@@ -7672,8 +7672,14 @@ function buildInstagramHotSearchQueries(queryKeywords: string[], keywords: strin
     seen.add(key);
     out.push(text);
   };
-  keywords.forEach(add);
+  // Keep Instagram discovery aligned with the Threads browser path. The
+  // `keywords` set is the acceptance/filtering set and may be re-ranked or
+  // expanded with intent terms; using it first makes code search diverge from
+  // a user's manual platform search and wastes the short authenticated page
+  // window on derivative phrases. Search with queryKeywords first, then use
+  // acceptance keywords only as additional coverage.
   queryKeywords.forEach(add);
+  keywords.forEach(add);
   buildThreadsSearchQueries(queryKeywords).forEach(add);
   return out.slice(0, 80);
 }
