@@ -204,7 +204,7 @@ describe("sentiment hot importer", () => {
     })).toBe(true);
   });
 
-  it("rejects Threads account and keyword suggestion GraphQL templates", () => {
+  it("allows Threads account post search but rejects keyword suggestion GraphQL templates", () => {
     expect(isUsableThreadsSearchGraphqlTemplate({
       endpoint: "/graphql/query",
       method: "POST",
@@ -216,7 +216,7 @@ describe("sentiment hot importer", () => {
       },
       headers: {},
       sourceTerms: ["barber"],
-    })).toBe(false);
+    })).toBe(true);
 
     expect(isUsableThreadsSearchGraphqlTemplate({
       endpoint: "/graphql/query",

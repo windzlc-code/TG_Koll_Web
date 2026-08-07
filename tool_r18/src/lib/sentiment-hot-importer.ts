@@ -3755,7 +3755,7 @@ function threadsSearchVariableQuery(value: unknown): string {
 
 function isKnownNonSearchThreadsGraphqlFriendlyName(value: unknown): boolean {
   const name = cleanText(value);
-  return /(?:AccountSearchGraphQLDataSource|KeywordSearchGraphQLDataSource|CommunityEntityCards|EntityCards|Profile|User|Post|Story|Viewer|Notification|Direct|Activity|Insights|Mailbox|Presence|Settings|Follow)/i.test(name);
+  return /(?:KeywordSearchGraphQLDataSource|CommunityEntityCards|EntityCards|Profile|User|Post|Story|Viewer|Notification|Direct|Activity|Insights|Mailbox|Presence|Settings|Follow)/i.test(name);
 }
 
 export function isUsableThreadsSearchGraphqlTemplate(value: unknown): boolean {
@@ -4838,7 +4838,7 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
           if (status === 401 || status === 403) stats.unauthorized += 1;
           if (status < 200 || status >= 300) return;
           responseTasks.push((async () => {
-            const text = await withSentimentTimeout(response.text().catch(() => ""), 1_500, "");
+            const text = await withSentimentTimeout(response.text().catch(() => ""), 4_000, "");
             const parsed = parseInstagramAuthenticatedSearchPayload({
               payload: safeJson(text),
               query: tag,
@@ -4855,6 +4855,7 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
       page.on("response", onGraphqlResponse);
       if (queries.indexOf(tag) < INSTAGRAM_KEYWORD_SEARCH_PAGE_QUERY_LIMIT) {
         await triggerInstagramKeywordSearch(tag);
+        await page.waitForTimeout(Math.min(2_500, remainingSentimentDeadlineMs(args.deadlineAt, 2_500))).catch(() => undefined);
         await withSentimentTimeout(Promise.all(responseTasks.splice(0, responseTasks.length)).then(() => undefined), 2_000, undefined);
       }
       await page.goto(`https://www.instagram.com/explore/tags/${encodeURIComponent(tag)}/`, {
