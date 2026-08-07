@@ -281,7 +281,7 @@ describe("sentiment hot importer", () => {
     expect(resolveSentimentHotModelQueryKeywords(strategy, "strict")).toContain("染发烫发价格踩雷");
   });
 
-  it("uses cached model query terms when fetching with manually edited strict keywords", () => {
+  it("keeps manually edited strict keywords before cached model query terms", () => {
     const strategy = {
       primaryQueries: ["理发店", "剪头发", "发型设计", "剪发", "理发前后"],
       ecosystemQueries: ["男士发型", "短发发型", "刘海翻车", "烫发避坑"],
@@ -300,7 +300,7 @@ describe("sentiment hot importer", () => {
     expect(queries).toContain("染发烫发价格踩雷");
     expect(queries).toContain("男士发型");
     expect(queries).toContain("理发店趣事");
-    expect(queries.indexOf("染发烫发价格踩雷")).toBeLessThan(queries.indexOf("理发店趣事"));
+    expect(queries.indexOf("理发店趣事")).toBeLessThan(queries.indexOf("染发烫发价格踩雷"));
   });
 
   it("clamps custom freshness to fifteen days", () => {

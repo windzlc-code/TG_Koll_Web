@@ -1113,7 +1113,7 @@ export function resolveSentimentHotManualQueryKeywords(
   const normalizedManualKeywords = prepareSentimentHotKeywordsForMode(manualKeywords, mode);
   const modelQueryKeywords = resolveSentimentHotModelQueryKeywords(strategy, mode);
   if (!modelQueryKeywords.length) return normalizedManualKeywords;
-  return [...new Set([...modelQueryKeywords, ...normalizedManualKeywords])]
+  return [...new Set([...normalizedManualKeywords, ...modelQueryKeywords])]
     .slice(0, mode === "strict" ? SENTIMENT_HOT_NORMAL_KEYWORD_TARGET : sentimentHotKeywordTargetForMode(mode));
 }
 
@@ -7671,8 +7671,8 @@ function buildInstagramHotSearchQueries(queryKeywords: string[], keywords: strin
     seen.add(key);
     out.push(text);
   };
-  queryKeywords.forEach(add);
   keywords.forEach(add);
+  queryKeywords.forEach(add);
   buildThreadsSearchQueries(queryKeywords).forEach(add);
   return out.slice(0, 80);
 }
