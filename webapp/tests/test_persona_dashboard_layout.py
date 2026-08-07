@@ -1600,6 +1600,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
         self.assertIn('data-persona-image-prompt', prompt_field)
         self.assertIn('根据提示词${baseGenerateLabel}', panel)
+        self.assertIn('根据提示词生成图生图', panel)
+        self.assertIn('data-persona-image-reference-mode', panel)
         self.assertIn('prompt: String(personaFormState(persona.id).images?.prompt || "").trim()', submit)
         self.assertIn('function syncPersonaImagePromptState(input)', self.console_script)
         self.assertIn('data-persona-image-generate-label', panel)
@@ -1615,13 +1617,27 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         submit_end = self.console_script.index("\nasync function applyPersonaReferenceImage", submit_start)
         submit = self.console_script[submit_start:submit_end]
 
-        self.assertIn("persona-image-reference-prompt-row", prompt_field)
-        self.assertIn("data-persona-clear-image-reference", prompt_field)
+        self.assertNotIn("persona-image-reference-prompt-row", prompt_field)
+        self.assertNotIn("data-persona-clear-image-reference", prompt_field)
+        self.assertIn("点击图片右上角添加按钮", prompt_field)
+        self.assertIn("图生图提示词", prompt_field)
         self.assertIn("referenceImageId", lightbox)
         self.assertIn("renderConfirmSummary()", lightbox)
         self.assertIn("reference_image_id", submit)
         self.assertIn("data-media-lightbox-add-reference", self.console_script)
-        self.assertIn(".persona-image-reference-prompt-row {", self.styles)
+        self.assertIn("function renderPersonaImageLibraryPreview", self.console_script)
+        self.assertIn("data-persona-image-select", self.console_script)
+        self.assertIn("function togglePersonaImageSelection", self.console_script)
+        image_preview_start = self.console_script.index("function renderPersonaImageLibraryPreview")
+        image_preview_end = self.console_script.index("\nfunction renderPersonaImageLibraryGrid", image_preview_start)
+        image_preview = self.console_script[image_preview_start:image_preview_end]
+        media_error_start = self.console_script.index("function handlePersonaMediaFrameError")
+        media_error_end = self.console_script.index("\nfunction handlePersonaMediaLightboxError", media_error_start)
+        media_error = self.console_script[media_error_start:media_error_end]
+        self.assertIn('class="persona-image-library-zoom-button"', image_preview)
+        self.assertNotIn('const zoomButton = unavailable', image_preview)
+        self.assertIn('if (libraryWrap) return;', media_error)
+        self.assertNotIn(".persona-image-reference-prompt-row {", self.styles)
 
     def test_persona_image_entry_opens_before_background_refresh(self):
         editor_start = self.console_script.index("async function openPersonaProfileEditorModalWithOptions(")
@@ -1912,15 +1928,24 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
         self.assertIn('const previewButton = event.target.closest("[data-media-preview-group]");', editor_handler)
         self.assertIn("openPersonaMediaLightbox(", editor_handler)
+        self.assertIn("const imageSelection = event.target.closest(\"[data-persona-image-select]\");", editor_handler)
+        self.assertIn("const referenceToggle = event.target.closest(\"[data-persona-reference-image-toggle]\");", editor_handler)
+        self.assertNotIn("!event.target.closest(\"[data-media-preview-group]\")", editor_handler)
         self.assertLess(
             editor_handler.index('const previewButton = event.target.closest("[data-media-preview-group]");'),
+            editor_handler.index('const referenceToggle = event.target.closest("[data-persona-reference-image-toggle]");'),
+        )
+        self.assertLess(
+            editor_handler.index('const referenceToggle = event.target.closest("[data-persona-reference-image-toggle]");'),
             editor_handler.index('const pageButton = event.target.closest("button[data-persona-profile-editor-page]");'),
         )
-        self.assertIn("zoomHint: true,", self.console_script)
+        self.assertIn('class="persona-image-library-zoom-button"', self.console_script)
         self.assertIn("function renderZoomInIcon()", self.console_script)
         self.assertIn("${renderZoomInIcon()}", self.console_script)
         self.assertIn(".persona-profile-editor-item--profile .persona-profile-editor-item-copy b {", self.styles)
         self.assertIn(".persona-profile-editor-form #personaProfileEditorName {", self.styles)
+        self.assertIn(".persona-image-library-zoom-button {", self.styles)
+        self.assertIn("min-width: 32px;", self.styles)
         self.assertIn(".persona-image-library-zoom-hint {", self.styles)
         self.assertIn(".persona-image-library-zoom-hint .ui-zoom-in-icon {", self.styles)
 

@@ -1866,6 +1866,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const assert = require("assert");
             {self._function_source("statusLabel")}
             {self._function_source("statusTone")}
+            {self._function_source("accountStatusDisplayLabel")}
+            {self._function_source("accountStatusDisplayTone")}
             {self._function_source("accountStatusClassNames")}
             assert.strictEqual(statusTone("ready"), "success");
             assert.strictEqual(statusTone("pending_login"), "manual");
@@ -1878,7 +1880,17 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.strictEqual(statusTone("disabled"), "muted");
             assert.strictEqual(statusLabel("need_verification"), "需验证");
             assert.strictEqual(statusLabel("account_confirmation_required"), "需确认关联账号");
-            assert.strictEqual(accountStatusClassNames("account_confirmation_required"), "account_confirmation_required need_verification");
+            assert.strictEqual(accountStatusDisplayLabel("ready_unverified"), "已登录");
+            assert.strictEqual(accountStatusDisplayLabel("cookie_expired"), "未登录");
+            assert.strictEqual(accountStatusDisplayLabel("account_confirmation_required"), "需验证");
+            assert.strictEqual(accountStatusDisplayLabel("check_failed"), "登录异常");
+            assert.strictEqual(accountStatusDisplayLabel("disabled"), "账号不可用");
+            assert.strictEqual(accountStatusDisplayLabel("banned"), "账号不可用");
+            assert.strictEqual(accountStatusDisplayTone("ready_unverified"), "success");
+            assert.strictEqual(accountStatusDisplayTone("disabled"), "error");
+            assert.strictEqual(accountStatusClassNames("account_confirmation_required"), "need_verification");
+            assert.strictEqual(accountStatusClassNames("cookie_expired"), "pending_login");
+            assert.strictEqual(accountStatusClassNames("banned"), "disabled");
             assert.strictEqual(statusLabel("preparing"), "准备执行");
             """
         )
