@@ -420,11 +420,11 @@ class AccountSettingsApiTests(unittest.TestCase):
         self.assertEqual(login.status_code, 200, login.text)
 
         returned = self.client.get(
-            "/admin?return_url=%2Fproxy-market.html%3Fadmin_console%3D1",
+            "/admin?return_url=%2Fabout-vecto.html%3Fadmin_console%3D1",
             follow_redirects=False,
         )
         self.assertEqual(returned.status_code, 302, returned.text)
-        self.assertEqual(returned.headers["location"], "/proxy-market.html?admin_console=1")
+        self.assertEqual(returned.headers["location"], "/about-vecto.html?admin_console=1")
 
         rejected = self.client.get(
             "/admin?return_url=https%3A%2F%2Fevil.example%2Fsteal",
@@ -459,11 +459,11 @@ class AccountSettingsApiTests(unittest.TestCase):
         )
         self.assertEqual(
             server._role_safe_return_url(
-                "/proxy-market.html?admin_workspace_user_id=42",
+                "/about-vecto.html?admin_workspace_user_id=42",
                 "/admin.html",
                 admin=True,
             ),
-            "/proxy-market.html?admin_workspace_user_id=42&admin_console=1",
+            "/about-vecto.html?admin_workspace_user_id=42&admin_console=1",
         )
         conflict = self.client.get(
             "/console.html?manage_user_id=41&admin_workspace_user_id=42",

@@ -21,7 +21,6 @@
   let logoutPending = false;
   let logoutConfirmationOpen = false;
   let logoutMessage = "";
-  let proxyMarketBadgeRequest = 0;
   let accountBillingRequest = 0;
   let notificationRequest = 0;
   let notificationPollTimer = 0;
@@ -59,7 +58,6 @@
       accounts: "三账号架构",
       scenarios: "应用场景",
       pricing: "订阅方案",
-      proxyMarket: "代理商城",
       difference: "服务差异",
       console: "控制台",
       adminConsole: "运营后台",
@@ -158,7 +156,6 @@
       accounts: "三帳架構",
       scenarios: "應用場景",
       pricing: "訂閱方案",
-      proxyMarket: "代理商城",
       difference: "服務差異",
       console: "控制台",
       adminConsole: "營運後台",
@@ -285,7 +282,6 @@
     removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
     if (currentSessionMode === "admin") {
       currentSessionMode = "guest";
-      proxyMarketBadgeRequest += 1;
     }
   }
 
@@ -337,7 +333,6 @@
       "/",
       "/index.html",
       "/about-vecto.html",
-      "/proxy-market.html",
       "/subscription.html",
       "/pricing.html",
     ].includes(url.pathname);
@@ -356,11 +351,9 @@
         '[data-site-home-label]',
         '[data-site-nav-key="solution"]',
         '[data-site-nav-key="aboutVecto"]',
-        '[data-site-nav-key="proxyMarket"]',
         '[data-site-nav-key="pricing"]',
         '[data-site-subscription-entry]',
         'a[href^="/about-vecto.html"]',
-        'a[href^="/proxy-market.html"]',
         'a[href^="/subscription.html"]',
         'a[href^="/pricing.html"]',
       ].join(", "),
@@ -371,7 +364,7 @@
 
   function publicPagePreservesAdminWorkspace() {
     const page = document.querySelector("[data-site-header]")?.dataset.sitePage || "";
-    return ["home", "aboutVecto", "proxyMarket", "pricing"].includes(page)
+    return ["home", "aboutVecto", "pricing"].includes(page)
       || (window.location.pathname === "/admin-profile.html" && Boolean(storedAdminWorkspaceUserId()));
   }
 
@@ -481,7 +474,6 @@
   function navigationLinks(page, current) {
     return [
       navLink({ key: "solution", href: navHref(page, "#solution"), current }),
-      navLink({ key: "proxyMarket", href: "/proxy-market.html", current }),
       navLink({ key: "console", href: "/console.html", current }),
       navLink({ key: "aboutVecto", href: "/about-vecto.html", current }),
     ].join("");
@@ -550,7 +542,6 @@
   function mobileMenuItemIcon(key) {
     const paths = {
       solution: '<path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path d="m18.5 16 .7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"></path>',
-      proxyMarket: '<path d="M12 21s6-5.6 6-11a6 6 0 0 0-12 0c0 5.4 6 11 6 11Z"></path><circle cx="12" cy="10" r="2"></circle>',
       pricing: '<rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M4 9h16M8 14h3"></path><path d="m16 12 .7 1.4 1.6.2-1.2 1.1.3 1.6-1.4-.8-1.4.8.3-1.6-1.2-1.1 1.6-.2z"></path>',
       console: '<rect x="4" y="4" width="6" height="6" rx="1"></rect><rect x="14" y="4" width="6" height="6" rx="1"></rect><rect x="4" y="14" width="6" height="6" rx="1"></rect><path d="M15 17h5M17.5 14.5v5"></path>',
       aboutVecto: '<circle cx="12" cy="12" r="8"></circle><path d="M12 10v5M12 7h.01"></path>',
@@ -653,7 +644,6 @@
   function mobileNavigationLinks(page, current) {
     return [
       { key: "solution", href: navHref(page, "#solution") },
-      { key: "proxyMarket", href: "/proxy-market.html" },
       { key: "pricing", href: "/subscription.html" },
       { key: "console", href: "/console.html" },
       { key: "aboutVecto", href: "/about-vecto.html" },
@@ -2025,7 +2015,6 @@
     currentSessionMode = "guest";
     setAccount(null);
     syncPublicAuthCtas(false);
-    proxyMarketBadgeRequest += 1;
     sync();
   }
 
@@ -2121,7 +2110,6 @@
       }
       currentSessionMode = session.mode === "admin" ? "admin" : "user";
       showAuthenticatedAccount(header, session.account);
-      void syncProxyMarketBadge();
       return session.account;
     } catch {
       // The admin session may have expired while the public page was open.
@@ -2145,7 +2133,7 @@
     const page = header.dataset.sitePage || "home";
     const mode = header.dataset.siteMode || (page === "console" ? "authenticated" : "public");
     const resolvedMode = mode === "public" ? page : mode;
-    const current = ["pricing", "console", "proxyMarket", "aboutVecto"].includes(page) ? page : "";
+    const current = ["pricing", "console", "aboutVecto"].includes(page) ? page : "";
 
     if (mode === "public" && !header.dataset.siteAuthState) header.dataset.siteAuthState = "pending";
 
@@ -2232,39 +2220,6 @@
     setLogoutPending(logoutPending, logoutMessage);
   }
 
-  async function syncProxyMarketBadge() {
-    const requestId = ++proxyMarketBadgeRequest;
-    if (currentSessionMode === "guest") return;
-    const headers = new Headers({ Accept: "application/json" });
-    if (currentSessionMode === "admin") {
-      headers.set("X-Admin-Console", "1");
-      const workspaceUserId = storedAdminWorkspaceUserId();
-      if (workspaceUserId) headers.set("X-Admin-Workspace-User-ID", workspaceUserId);
-    }
-    try {
-      const response = await fetch("/api/proxy-market/me", {
-        credentials: "same-origin",
-        headers,
-      });
-      if (requestId !== proxyMarketBadgeRequest) return;
-      if (!response.ok) return;
-      const payload = await response.json();
-      if (requestId !== proxyMarketBadgeRequest) return;
-      const count = Math.max(0, Number(payload?.unread_catalog_count || 0));
-      document.querySelectorAll('[data-site-nav-key="proxyMarket"]').forEach((link) => {
-        let badge = link.querySelector(".site-nav-badge");
-        if (!badge && count > 0) {
-          badge = document.createElement("span");
-          badge.className = "site-nav-badge";
-          link.appendChild(badge);
-        }
-        if (!badge) return;
-        badge.textContent = count > 99 ? "99+" : String(count);
-        badge.hidden = count <= 0;
-      });
-    } catch {}
-  }
-
   document.addEventListener("click", (event) => {
     document.querySelectorAll("[data-site-language-menu].is-open").forEach((menu) => {
       if (!menu.contains(event.target)) setLanguageMenuOpen(menu, false);
@@ -2291,11 +2246,9 @@
       setTheme("light", { persist: false });
       setLanguage(DEFAULT_LANGUAGE, { persist: false });
     }
-    if (event.key === "vecto-proxy-market-read") void syncProxyMarketBadge();
     if (event.key === NOTIFICATION_STORAGE_KEY) void loadNotifications({ force: true, announce: false });
     if (event.key === AUTH_SESSION_STORAGE_KEY) void refreshPublicSession();
   });
-  window.addEventListener("vecto:proxy-market-read", () => void syncProxyMarketBadge());
   window.addEventListener(EVENT_ACCOUNT_MENU_OPEN, () => {
     void loadAccountProfile().then(() => loadAccountBilling({ force: true }));
   });
@@ -2329,7 +2282,6 @@
     showAuthFeedback,
     refreshPublicSession,
     announceAuthSessionChange,
-    syncProxyMarketBadge,
     refreshNotifications: () => loadNotifications({ force: true }),
   };
   window.dispatchEvent(new CustomEvent("vecto:navigation-ready"));

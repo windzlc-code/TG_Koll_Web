@@ -42,7 +42,6 @@
 :root[data-theme="light"] :is(
   .home-canvas,
   .about-canvas,
-  .proxy-market-page,
   body[data-login-redirect="/subscription.html"]
 ) main {
   color: var(--public-ink);
@@ -51,7 +50,6 @@
 :root[data-theme="light"] :is(
   .home-canvas,
   .about-canvas,
-  .proxy-market-page,
   body[data-login-redirect="/subscription.html"]
 ) :is(input, select, textarea) {
   color: var(--public-ink);
@@ -62,7 +60,6 @@
 :root[data-theme="light"] :is(
   .home-canvas,
   .about-canvas,
-  .proxy-market-page,
   body[data-login-redirect="/subscription.html"]
 ) :is(input, select, textarea):focus {
   border-color: var(--public-cool);
@@ -76,9 +73,8 @@
 :root[data-theme="light"] :is(
   .home-canvas,
   .about-canvas,
-  .proxy-market-page,
   body[data-login-redirect="/subscription.html"]
-) :is(.button-primary, .home-button-primary, .proxy-filter-submit, .proxy-claim-button) {
+) :is(.button-primary, .home-button-primary) {
   color: #fff;
   background-color: var(--public-cool-dark);
   background-image: var(--public-action-gradient);
@@ -88,9 +84,8 @@
 :root[data-theme="light"] :is(
   .home-canvas,
   .about-canvas,
-  .proxy-market-page,
   body[data-login-redirect="/subscription.html"]
-) :is(.button-primary, .home-button-primary, .proxy-filter-submit, .proxy-claim-button):hover {
+) :is(.button-primary, .home-button-primary):hover {
   color: #fff;
   background-color: var(--public-cool);
   background-image: var(--public-action-gradient-hover);
@@ -829,89 +824,6 @@
   background: #dfe7ed;
 }
 
-/* Proxy marketplace */
-:root[data-theme="light"] .proxy-market-page {
-  color: var(--public-ink);
-  background: var(--public-page);
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-market-facts {
-  color: #f8fafc;
-  background: #182b3a;
-  border-color: #34495e;
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-market-facts > div {
-  border-color: #34495e;
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-market-facts strong {
-  color: #f8fafc;
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-market-facts span {
-  color: #b9c9d7;
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-market-account {
-  background: var(--public-paper);
-  border-color: var(--public-line);
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-market-account.is-authenticated {
-  background: #f2f6fa;
-  border-color: #c4d6e4;
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-market-account-copy span,
-:root[data-theme="light"] .proxy-market-page .proxy-market-section-heading .eyebrow,
-:root[data-theme="light"] .proxy-market-page .proxy-market-hero-copy .eyebrow {
-  color: var(--public-cool);
-}
-
-:root[data-theme="light"] .proxy-market-page :is(.proxy-card, .proxy-empty-state) {
-  background: var(--public-paper);
-  border-color: var(--public-line);
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-card:hover {
-  border-color: #9fb6ca;
-  box-shadow: 0 16px 34px rgb(51 70 92 / 10%);
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-country-code {
-  color: #fff;
-  background: var(--public-cool-dark);
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-card-kicker {
-  color: var(--public-cool);
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-claim-success {
-  color: var(--public-ink);
-  background: var(--public-paper);
-  border-color: #c4d6e4;
-  box-shadow: 0 18px 52px rgb(41 55 75 / 14%);
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-claim-success :is(h2, p:not(.eyebrow)) {
-  color: var(--public-ink);
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-claim-success :is(
-  .eyebrow,
-  .proxy-success-icon,
-  .proxy-success-close,
-  .button-ghost
-) {
-  color: var(--public-cool-dark);
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-empty-state > svg {
-  color: var(--public-cool);
-}
-
 /* Console, profile and admin stay light and share the same restrained accents. */
 :root[data-theme="light"] .console-page {
   --bg: var(--public-page);
@@ -1630,14 +1542,6 @@
   color: var(--public-muted);
 }
 
-:root[data-theme="light"] .proxy-market-page .proxy-market-filters {
-  border-color: var(--public-line);
-}
-
-:root[data-theme="light"] .proxy-market-page .proxy-card-kicker {
-  color: var(--public-ink-soft);
-}
-
 :root[data-theme="light"] .auth-dialog .auth-close {
   background: transparent;
   border: 0;
@@ -1857,8 +1761,7 @@
   .home-agent-stage article,
   .about-module-grid article,
   .pricing-tier-overview article,
-  .pricing-package-grid article,
-  .proxy-card
+  .pricing-package-grid article
 ) :is(h2, h3, h4, p, li, strong, small) {
   min-width: 0;
   overflow-wrap: break-word;
@@ -1867,7 +1770,6 @@
 :root[data-theme="light"] :is(
   .home-canvas,
   .about-canvas,
-  .proxy-market-page,
   body[data-login-redirect="/subscription.html"]
 ) :is(
   .home-proof,
@@ -1876,8 +1778,7 @@
   .about-module-grid article,
   .about-engine-grid article,
   .pricing-tier-overview article,
-  .pricing-package-grid article,
-  .proxy-card
+  .pricing-package-grid article
 ) {
   border-color: var(--public-line);
 }
@@ -1948,11 +1849,6 @@
     border-top-color: var(--public-line);
     border-left-color: transparent;
   }
-}
-
-/* Keep narrow utility pages and dense task rows inside the mobile viewport. */
-:root[data-theme="light"] .proxy-market-page {
-  min-width: 0;
 }
 
 @media (max-width: 720px) {

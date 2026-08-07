@@ -787,7 +787,7 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         self.assertEqual(username_change.status_code, 403, username_change.text)
         fresh_admin = TestClient(self.app).post(
             "/api/auth/admin-login",
-            json={"username": "admin", "password": self.ADMIN_PASSWORD},
+            json={"username": "admin", "password": self.ADMIN_PASSWORD, "force_takeover": True},
         )
         self.assertEqual(fresh_admin.status_code, 200, fresh_admin.text)
 
@@ -812,68 +812,64 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
                 ).fetchone()
             )
 
-    def test_purge_removes_proxy_market_read_state_and_historical_allocation(self):
+    def test_purge_removes_legacy_proxy_market_state_and_historical_allocation(self):
         customer, user_id = self._create_customer("proxy_market_purge")
-        read = customer.post(
-            "/api/proxy-market/read",
-            json={"scope": "catalog"},
-            headers={"Origin": "http://testserver"},
-        )
-        self.assertEqual(read.status_code, 200, read.text)
-
-        created = self.admin.post(
-            "/api/admin/proxy-market/items",
-            headers={"Origin": "http://testserver"},
-            json={
-                "sku": "PURGE-HISTORY-001",
-                "display_name": "Purge history proxy",
-                "provider_key": "purge-regression",
-                "proxy_type": "socks5",
-                "host": "203.0.113.40",
-                "port": 1080,
-                "username": "proxy-user",
-                "password": "proxy-password",
-                "country": "Taiwan",
-                "region": "Taipei",
-                "city": "Taipei",
-                "isp": "Regression ISP",
-                "tags": ["purge"],
-                "use_cases": ["Threads"],
-            },
-        )
-        self.assertEqual(created.status_code, 200, created.text)
-        item_id = str(created.json()["item"]["id"])
+        item_id = "legacy-market-purge-item"
+        allocation_id = "legacy-market-purge-released"
+        active_allocation_id = "legacy-market-purge-active"
+        proxy_id = "legacy-market-proxy-released"
+        active_proxy_id = "legacy-market-proxy-active"
         now = server._now_ts()
         with server.db() as conn:
             conn.execute(
                 """
-                UPDATE proxy_market_items
-                SET status = 'active', health_status = 'healthy',
-                    last_check_at = ?, published_at = ?
-                WHERE id = ?
+                INSERT INTO proxy_market_items (
+                    id, sku, display_name, provider_key, proxy_type, host, port,
+                    country, region, city, isp, status, health_status,
+                    last_check_at, published_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'socks5', '203.0.113.40', 1080,
+                          'Taiwan', 'Taipei', 'Taipei', 'Regression ISP',
+                          'allocated', 'healthy', ?, ?, ?, ?)
                 """,
-                (now, now, item_id),
+                (item_id, "PURGE-HISTORY-001", "Purge history proxy", "purge-regression", now, now, now, now),
             )
-
-        claimed = customer.post(
-            f"/api/proxy-market/items/{item_id}/claim",
-            headers={"Origin": "http://testserver", "Idempotency-Key": "purge-history-claim"},
-        )
-        self.assertEqual(claimed.status_code, 200, claimed.text)
-        allocation_id = str(claimed.json()["allocation"]["id"])
-        proxy_id = str(claimed.json()["allocation"]["social_proxy_id"])
-        released = customer.post(
-            f"/api/proxy-market/allocations/{allocation_id}/release",
-            headers={"Origin": "http://testserver"},
-        )
-        self.assertEqual(released.status_code, 200, released.text)
-        reclaimed = customer.post(
-            f"/api/proxy-market/items/{item_id}/claim",
-            headers={"Origin": "http://testserver", "Idempotency-Key": "purge-active-claim"},
-        )
-        self.assertEqual(reclaimed.status_code, 200, reclaimed.text)
-        active_allocation_id = str(reclaimed.json()["allocation"]["id"])
-        active_proxy_id = str(reclaimed.json()["allocation"]["social_proxy_id"])
+            conn.execute(
+                """
+                INSERT INTO social_proxies (
+                    id, user_id, name, proxy_type, host, port, source,
+                    ip_type, purchase_status, status, market_item_id,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, 'socks5', '203.0.113.40', 1080,
+                          'marketplace', 'datacenter', 'owned', 'active', ?, ?, ?)
+                """,
+                (active_proxy_id, user_id, active_proxy_id, item_id, now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO proxy_market_allocations (
+                    id, item_id, user_id, social_proxy_id, status,
+                    idempotency_key, claimed_at, released_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'released', 'legacy-released', ?, ?, ?, ?)
+                """,
+                (allocation_id, item_id, user_id, proxy_id, now, now, now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO proxy_market_allocations (
+                    id, item_id, user_id, social_proxy_id, status,
+                    idempotency_key, claimed_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'active', 'legacy-active', ?, ?, ?)
+                """,
+                (active_allocation_id, item_id, user_id, active_proxy_id, now, now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO proxy_market_user_state (
+                    user_id, last_catalog_seen_at, last_proxy_pool_seen_at, updated_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (user_id, now, now, now),
+            )
 
         archived = self.admin.delete(f"/api/admin/users/{user_id}")
         self.assertEqual(archived.status_code, 200, archived.text)
@@ -1120,11 +1116,7 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         (upload_dir / "artifact.txt").write_text("purge race", encoding="utf-8")
 
         restore_admin = TestClient(self.app)
-        restore_login = restore_admin.post(
-            "/api/auth/admin-login",
-            json={"username": "admin", "password": self.ADMIN_PASSWORD},
-        )
-        self.assertEqual(restore_login.status_code, 200, restore_login.text)
+        restore_admin.cookies.update(self.admin.cookies)
 
         purge_paused = threading.Event()
         allow_purge = threading.Event()

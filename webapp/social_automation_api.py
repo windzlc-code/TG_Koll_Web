@@ -55,6 +55,13 @@ from .proxy_market_credentials import (
     ProxyMarketCredentialAuthorizationError,
     resolve_market_proxy_credentials,
 )
+from .system_proxy_pool import (
+    claim_system_proxy_in_transaction,
+    is_system_proxy_option_id,
+    list_available_system_proxy_options,
+    release_system_proxy_in_transaction,
+    system_proxy_item_id,
+)
 
 
 BUSINESS_TIMEZONE_NAME = "Asia/Shanghai"
@@ -2138,7 +2145,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
             _require_persona_reference_access(payload.persona_id, user)
         if payload.profile_dir:
             raise HTTPException(status_code=400, detail="普通用户不能指定浏览器配置目录")
-        if payload.proxy_id:
+        if payload.proxy_id and not is_system_proxy_option_id(payload.proxy_id):
             proxy = _require_proxy_access(payload.proxy_id, user)
             if int(proxy["user_id"] or 0) != int(_require_account_access(account_id, user)["user_id"] or 0):
                 raise HTTPException(status_code=404, detail="代理不存在")
@@ -2337,9 +2344,16 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
     @app.get("/api/persona_dashboard/automation/proxies")
     def api_social_proxies(user: dict[str, Any] = Depends(get_current_user)):
+        owner_user_id = _identity_user_id(user)
         with db() as conn:
-            rows = conn.execute("SELECT * FROM social_proxies WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC", (_identity_user_id(user),)).fetchall()
+            rows = conn.execute("SELECT * FROM social_proxies WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC", (owner_user_id,)).fetchall()
             proxies = _proxy_public_rows(conn, rows)
+            proxies.extend(
+                list_available_system_proxy_options(
+                    conn,
+                    owner_user_id=owner_user_id,
+                )
+            )
         return {"ok": True, "proxies": proxies}
 
     @app.post("/api/persona_dashboard/automation/proxies")
@@ -2370,27 +2384,16 @@ def register_social_automation_routes(app: FastAPI) -> None:
         if str(proxy["market_item_id"] or ""):
             raise HTTPException(
                 status_code=409,
-                detail="商城代理的连接配置由管理员统一维护，用户只能绑定、检测或释放",
+                detail="系统导入代理的连接配置由管理员统一维护，用户只能绑定、检测或删除",
             )
         return {"ok": True, "proxy": update_social_proxy(proxy_id, payload)}
 
     @app.delete("/api/persona_dashboard/automation/proxies/{proxy_id}")
     def api_social_proxy_delete(
         proxy_id: str,
-        request: Request,
         user: dict[str, Any] = Depends(get_current_user),
     ):
-        proxy = _require_proxy_access(proxy_id, user)
-        if str(proxy["market_item_id"] or ""):
-            from .proxy_market import release_market_proxy
-
-            released = release_market_proxy(
-                proxy_id,
-                owner_user_id=_identity_user_id(user),
-                actor_user_id=int(user.get("id") or 0),
-                request=request,
-            )
-            return {"ok": True, "deleted": 1, "released": True, **released}
+        _require_proxy_access(proxy_id, user)
         return {"ok": True, "deleted": delete_social_proxy(proxy_id)}
 
     @app.post("/api/persona_dashboard/automation/proxies/{proxy_id}/check")
@@ -4819,7 +4822,7 @@ def delete_social_proxy(proxy_id: str) -> int:
     clean_proxy_id = str(proxy_id or "").strip()
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT id FROM social_proxies WHERE id = ?", (clean_proxy_id,)).fetchone()
+        row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (clean_proxy_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="代理不存在")
         bound = conn.execute(
@@ -4828,6 +4831,12 @@ def delete_social_proxy(proxy_id: str) -> int:
         ).fetchall()
         if bound:
             raise HTTPException(status_code=409, detail="代理仍被账号绑定，不能删除")
+        if release_system_proxy_in_transaction(
+            conn,
+            proxy=row,
+            owner_user_id=int(row["user_id"] or 0),
+        ):
+            return 1
         return int(conn.execute("DELETE FROM social_proxies WHERE id = ?", (clean_proxy_id,)).rowcount or 0)
 
 
@@ -5152,12 +5161,12 @@ def test_social_proxy(payload: SocialProxyCheckPayload, *, owner_user_id: int = 
             except ProxyMarketCredentialAuthorizationError as exc:
                 raise HTTPException(
                     status_code=409,
-                    detail="商城代理领取授权已失效",
+                    detail="系统导入代理授权已失效",
                 ) from exc
             except PasswordVaultError as exc:
                 raise HTTPException(
                     status_code=503,
-                    detail="商城代理凭据暂时不可用",
+                    detail="系统导入代理凭据暂时不可用",
                 ) from exc
     market_proxy = bool(str(current.get("market_item_id") or ""))
     if market_proxy:
@@ -5216,12 +5225,12 @@ def check_social_proxy(proxy_id: str) -> dict[str, Any]:
         except ProxyMarketCredentialAuthorizationError as exc:
             raise HTTPException(
                 status_code=409,
-                detail="商城代理领取授权已失效",
+                detail="系统导入代理授权已失效",
             ) from exc
         except PasswordVaultError as exc:
             raise HTTPException(
                 status_code=503,
-                detail="商城代理凭据暂时不可用",
+                detail="系统导入代理凭据暂时不可用",
             ) from exc
     safe_result = _run_proxy_connection_check(proxy, previous_exit_ip=_last_proxy_exit_ip(proxy))
     status = "active" if safe_result.get("ok") else "failed"
@@ -5306,8 +5315,9 @@ def create_social_account(
                         f"当前订阅最多允许 {int(account_limit)} 个 Threads 账号，请增加订阅后再创建",
                         409,
                     )
-        if payload.proxy_id:
-            _require_proxy(conn, payload.proxy_id, owner_user_id=owner_user_id)
+        requested_proxy_id = str(payload.proxy_id or "").strip()
+        if requested_proxy_id and not is_system_proxy_option_id(requested_proxy_id):
+            _require_proxy(conn, requested_proxy_id, owner_user_id=owner_user_id)
         if persona_id:
             bound = conn.execute(
                 "SELECT id FROM social_accounts WHERE user_id = ? AND persona_id = ? AND platform = ? LIMIT 1",
@@ -5349,7 +5359,16 @@ def create_social_account(
             profile_dir = str((_DATA_DIR / "social_automation" / "profiles" / platform / account_id).resolve())
         Path(profile_dir).mkdir(parents=True, exist_ok=True)
         proxy_row = None
-        proxy_id = str(payload.proxy_id or "").strip()
+        proxy_id = requested_proxy_id
+        source_item_id = system_proxy_item_id(proxy_id)
+        if source_item_id:
+            proxy_row = claim_system_proxy_in_transaction(
+                conn,
+                item_id=source_item_id,
+                owner_user_id=owner_user_id,
+                client_request_id=f"account-create:{account_id}:{source_item_id}",
+            )
+            proxy_id = str(proxy_row["id"] or "")
         if payload.residential_proxy is not None:
             proxy_row = _save_account_residential_proxy(
                 conn,
@@ -5456,6 +5475,17 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
             expected_proxy_id = str(payload.expected_proxy_id or "").strip()
             if current_proxy_id != expected_proxy_id:
                 raise HTTPException(status_code=409, detail="账号代理绑定已变更，请刷新后重试")
+        proxy_row = None
+        source_item_id = system_proxy_item_id(target_proxy_id)
+        if source_item_id:
+            proxy_row = claim_system_proxy_in_transaction(
+                conn,
+                item_id=source_item_id,
+                owner_user_id=owner_user_id,
+                client_request_id=f"account-bind:{account_id}:{source_item_id}",
+            )
+            target_proxy_id = str(proxy_row["id"] or "")
+            updates["proxy_id"] = target_proxy_id
         proxy_binding_changes = target_proxy_id != current_proxy_id or payload.residential_proxy is not None
         if proxy_binding_changes:
             active_proxy_task = conn.execute(
@@ -5537,7 +5567,6 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
                 raise HTTPException(status_code=409, detail="代理不可用，请先启用、修复或重新检测")
             if not _proxy_has_verified_check(proxy):
                 raise HTTPException(status_code=409, detail="代理尚未通过真实网络检测，请先检测后再绑定")
-        proxy_row = None
         if payload.residential_proxy is not None:
             proxy_row = _save_account_residential_proxy(
                 conn,
@@ -5903,7 +5932,7 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
                 raise HTTPException(status_code=409, detail="账号绑定的住宅代理不存在，不能创建任务")
             proxy_status = str(proxy["status"] or "").strip().lower()
             if not _account_proxy_type_allowed(proxy):
-                raise HTTPException(status_code=409, detail="账号仅允许使用静态住宅 IP 或商城认证的机房代理")
+                raise HTTPException(status_code=409, detail="账号仅允许使用静态住宅 IP 或系统导入的机房代理")
             if _proxy_is_expired(proxy):
                 raise HTTPException(status_code=409, detail="账号绑定的静态住宅代理已过期，请续费或更换后再执行任务")
             if proxy_status != "active":
@@ -8262,7 +8291,7 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
     account = dict(account_row)
     proxy = dict(proxy_row) if proxy_row else None
     if proxy is not None and not _account_proxy_type_allowed(proxy):
-        raise RuntimeError("账号代理不是静态住宅 IP 或商城认证的机房代理，已阻止浏览器启动")
+        raise RuntimeError("账号代理不是静态住宅 IP 或系统导入的机房代理，已阻止浏览器启动")
     if proxy_id and proxy is None:
         raise RuntimeError("账号绑定的住宅代理不存在，已阻止浏览器启动")
     if proxy is not None and _proxy_is_expired(proxy):
@@ -11097,7 +11126,7 @@ def _require_proxy(conn, proxy_id: str, *, owner_user_id: int | None = None) -> 
             (proxy_id, int(owner_user_id)),
         ).fetchone()
     if row and not _account_proxy_type_allowed(row):
-        raise HTTPException(status_code=400, detail="账号仅允许绑定静态住宅 IP 或商城认证的机房代理")
+        raise HTTPException(status_code=400, detail="账号仅允许绑定静态住宅 IP 或系统导入的机房代理")
     if not row:
         raise HTTPException(status_code=404, detail="绑定代理不存在")
     return row

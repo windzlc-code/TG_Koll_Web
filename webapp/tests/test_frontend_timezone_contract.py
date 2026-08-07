@@ -14,7 +14,6 @@ class FrontendTimezoneContractTests(unittest.TestCase):
         cls.console = (STATIC_ROOT / "assets" / "console.js").read_text(encoding="utf-8")
         cls.dashboard = (STATIC_ROOT / "assets" / "persona-dashboard.js").read_text(encoding="utf-8")
         cls.automation_log = (STATIC_ROOT / "persona-automation-log.html").read_text(encoding="utf-8")
-        cls.proxy_market = (STATIC_ROOT / "assets" / "opc" / "proxy-market.js").read_text(encoding="utf-8")
 
     @staticmethod
     def _function_source(source: str, name: str) -> str:
@@ -41,7 +40,9 @@ class FrontendTimezoneContractTests(unittest.TestCase):
         chart_date = re.search(r"new Date\(time\)\.toLocaleDateString\([^;]+", self.console)
         self.assertIsNotNone(chart_date)
         self.assertIn("timeZone: SHANGHAI_TIME_ZONE", chart_date.group(0))
-        self.assertIn('chargedPoints.toLocaleString("zh-CN", { maximumFractionDigits: 6 })', self.console)
+        numeric_format = self._function_source(self.console, "numberText")
+        self.assertIn("n.toLocaleString()", numeric_format)
+        self.assertNotIn("timeZone", numeric_format)
 
     def test_secondary_frontends_use_shanghai_for_every_displayed_date(self):
         self.assertIn('const PERSONA_DASHBOARD_TIME_ZONE = "Asia/Shanghai";', self.dashboard)
@@ -51,9 +52,6 @@ class FrontendTimezoneContractTests(unittest.TestCase):
         self.assertIn('const AUTOMATION_LOG_TIME_ZONE = "Asia/Shanghai";', self.automation_log)
         self.assertIn("timeZone: AUTOMATION_LOG_TIME_ZONE", self.automation_log)
 
-        self.assertIn('const PROXY_MARKET_TIME_ZONE = "Asia/Shanghai";', self.proxy_market)
-        self.assertIn("timeZone: PROXY_MARKET_TIME_ZONE", self.proxy_market)
-        self.assertIn('toLocaleString("zh-TW", { minimumFractionDigits: 0, maximumFractionDigits: 2 })', self.proxy_market)
 
 
 if __name__ == "__main__":

@@ -761,26 +761,86 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         self.assertEqual(updated["proxy_id"], valid["id"])
 
     def test_proxy_binding_accepts_verified_marketplace_datacenter_proxy(self):
-        account = self._account("marketplace-datacenter-binding")
-        proxy = social_api.create_social_proxy(
-            social_api.SocialProxyPayload(host="marketplace-datacenter.example", port=8080)
-        )
+        now = social_api._now()
+        account_id = "system-proxy-account"
+        item_id = "system-proxy-item"
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
-                UPDATE social_proxies
-                SET ip_type = 'datacenter', status = 'active', last_check_at = 100,
-                    last_check_result = ?, market_item_id = 'market-1'
-                WHERE id = ?
+                INSERT INTO users(
+                    id, username, password_hash, approval_status,
+                    is_disabled, created_at, updated_at
+                ) VALUES (42, 'system-proxy-owner', 'x', 'approved', 0, ?, ?)
                 """,
-                (json.dumps({"ok": True, "exit_ip": "8.8.8.8"}), proxy["id"]),
+                (now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO social_accounts(
+                    id, user_id, persona_id, platform, username, display_name,
+                    profile_dir, status, created_at, updated_at
+                ) VALUES (?, 42, '', 'threads', 'system-proxy-account', '', ?,
+                          'pending_login', ?, ?)
+                """,
+                (account_id, str(self.root / "profiles" / account_id), now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO proxy_market_items(
+                    id, sku, display_name, provider_key, proxy_type, host, port,
+                    country, ip_type, status, health_status, last_check_at,
+                    last_check_result_json, published_at, created_at, updated_at
+                ) VALUES (?, 'SYSTEM-001', '后台系统代理', 'system', 'socks5',
+                          'system-proxy.example', 1080, 'TW', 'datacenter',
+                          'active', 'healthy', ?, ?, ?, ?, ?)
+                """,
+                (
+                    item_id,
+                    now,
+                    json.dumps({"ok": True, "exit_ip": "8.8.8.8"}),
+                    now,
+                    now,
+                    now,
+                ),
             )
 
+        with social_api.db() as conn:
+            options = social_api.list_available_system_proxy_options(conn, owner_user_id=42)
+        self.assertEqual(len(options), 1)
+        self.assertEqual(options[0]["id"], f"system_proxy_item:{item_id}")
+
         updated = social_api.update_social_account(
-            account["id"],
-            social_api.SocialAccountPatchPayload(proxy_id=proxy["id"], expected_proxy_id=""),
+            account_id,
+            social_api.SocialAccountPatchPayload(proxy_id=options[0]["id"], expected_proxy_id=""),
         )
-        self.assertEqual(updated["proxy_id"], proxy["id"])
+        allocated_proxy_id = updated["proxy_id"]
+        self.assertTrue(allocated_proxy_id.startswith("social_proxy_"))
+        with social_api.db() as conn:
+            proxy = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (allocated_proxy_id,)).fetchone()
+            resolved = social_api.resolve_market_proxy_credentials(conn, proxy, owner_user_id=42)
+            allocation = conn.execute(
+                "SELECT status FROM proxy_market_allocations WHERE social_proxy_id = ?",
+                (allocated_proxy_id,),
+            ).fetchone()
+        self.assertEqual(resolved["market_item_id"], item_id)
+        self.assertEqual(allocation["status"], "active")
+
+        social_api.update_social_account(
+            account_id,
+            social_api.SocialAccountPatchPayload(
+                clear_residential_proxy=True,
+                expected_proxy_id=allocated_proxy_id,
+            ),
+        )
+        self.assertEqual(social_api.delete_social_proxy(allocated_proxy_id), 1)
+        with social_api.db() as conn:
+            released = conn.execute(
+                "SELECT status FROM proxy_market_allocations WHERE social_proxy_id = ?",
+                (allocated_proxy_id,),
+            ).fetchone()
+            item = conn.execute("SELECT status FROM proxy_market_items WHERE id = ?", (item_id,)).fetchone()
+        self.assertEqual(released["status"], "released")
+        self.assertEqual(item["status"], "active")
 
     def test_invalid_legacy_binding_remains_readable_editable_and_clearable(self):
         proxy = social_api.create_social_proxy(

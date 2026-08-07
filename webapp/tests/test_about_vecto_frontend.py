@@ -22,7 +22,7 @@ class AboutVectoFrontendContractTests(unittest.TestCase):
             self.navigation_script.index("function navigationLinks")
             : self.navigation_script.index("function accountMenuMarkup")
         ]
-        for key in ("solution", "proxyMarket", "console", "aboutVecto"):
+        for key in ("solution", "console", "aboutVecto"):
             self.assertIn(f'key: "{key}"', navigation)
         for removed_key in ("accounts", "scenarios", "difference"):
             self.assertNotIn(f'key: "{removed_key}"', navigation)
@@ -32,7 +32,6 @@ class AboutVectoFrontendContractTests(unittest.TestCase):
         for page_name in (
             "index.html",
             "pricing.html",
-            "proxy-market.html",
             "console.html",
             "about-vecto.html",
         ):
@@ -53,7 +52,7 @@ class AboutVectoFrontendContractTests(unittest.TestCase):
             "data-open-login",
         ):
             self.assertIn(control, self.about_markup)
-        self.assertIn('["pricing", "console", "proxyMarket", "aboutVecto"].includes(page)', self.navigation_script)
+        self.assertIn('["pricing", "console", "aboutVecto"].includes(page)', self.navigation_script)
         for heading in (
             "六個階段，把內容投入沉澱成營運資產",
             "七個產品模組，支撐內容與帳號日常營運",
@@ -79,7 +78,7 @@ class AboutVectoFrontendContractTests(unittest.TestCase):
     def test_server_exposes_versioned_about_page(self):
         route = self.server_source[
             self.server_source.index('@app.get("/about-vecto.html"')
-            : self.server_source.index('@app.get("/proxy-market.html"')
+            : self.server_source.index('@app.get("/profile.html"')
         ]
         self.assertIn('"about-vecto.html"', route)
         for token in (

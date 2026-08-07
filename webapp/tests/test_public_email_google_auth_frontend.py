@@ -14,7 +14,6 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         cls.styles = STYLES_PATH.read_text(encoding="utf-8")
         cls.fixed_light = (STATIC_DIR / "assets" / "fixed-light.css").read_text(encoding="utf-8")
         cls.shared_styles = (STATIC_DIR / "assets" / "style.css").read_text(encoding="utf-8")
-        cls.proxy_styles = (STATIC_DIR / "assets" / "opc" / "proxy-market.css").read_text(encoding="utf-8")
         cls.admin_script = (STATIC_DIR / "assets" / "admin.js").read_text(encoding="utf-8")
         cls.admin_markup = (STATIC_DIR / "admin.html").read_text(encoding="utf-8")
         cls.google_svg = (STATIC_DIR / "assets" / "opc" / "google-g-gradient.svg").read_text(encoding="utf-8")
@@ -172,7 +171,6 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
             "index.html",
             "pricing.html",
             "about-vecto.html",
-            "proxy-market.html",
         ):
             with self.subTest(page=page_name):
                 markup = (STATIC_DIR / page_name).read_text(encoding="utf-8")
@@ -221,7 +219,6 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
             "index.html",
             "pricing.html",
             "about-vecto.html",
-            "proxy-market.html",
         ):
             with self.subTest(page=page_name):
                 markup = (STATIC_DIR / page_name).read_text(encoding="utf-8")
@@ -329,7 +326,6 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
             self.styles,
             self.fixed_light,
             self.shared_styles,
-            self.proxy_styles,
             self.admin_script,
             self.admin_markup,
         )).lower()

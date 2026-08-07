@@ -539,14 +539,6 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('purpose.value = String(item.purpose || "")', service_accounts)
         self.assertIn('scopes.value = (item.allowed_scopes || []).join(", ")', service_accounts)
 
-        proxy_market = self.script[
-            self.script.index("function renderProxyMarketItems")
-            : self.script.index("function proxyMarketItemQuery")
-        ]
-        self.assertIn("proxyMarketAvailabilityText(item)", proxy_market)
-        self.assertIn('createAdminDynamicUiText("尚未检测")', proxy_market)
-        self.assertNotIn("markAdminDynamicUiElement(endpoint)", proxy_market)
-
         health = self.script[
             self.script.index("function renderGovernanceHealth")
             : self.script.index("function renderGovernanceQueue")
@@ -575,25 +567,6 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             self.assertIn(declaration, self.styles)
         self.assertIn('document.documentElement.dataset.theme = "light"', self.html)
         self.assertNotIn('html[data-theme="dark"] body.page-admin', self.styles)
-
-    def test_proxy_market_reuses_atomic_test_and_publish_api(self):
-        proxy_market = self.script[
-            self.script.index("function renderProxyMarketItems")
-            : self.script.index("async function updateProxyMarketStatus")
-        ]
-        self.assertIn('/test-and-publish`', proxy_market)
-        self.assertNotIn('/test`', proxy_market)
-        self.assertNotIn('/publish`', proxy_market)
-        self.assertNotIn("pending_check_id", proxy_market)
-        self.assertNotIn("pending_check_status", proxy_market)
-        self.assertNotIn("confirm(`将重新检测并发布", proxy_market)
-        self.assertIn('publish.disabled = String(item.status || "") === "archived"', proxy_market)
-        self.assertIn('["draft", "active", "disabled"]', proxy_market)
-        self.assertIn('if (status === "active") return publishProxyMarketRow(itemId, control);', self.script)
-        self.assertIn("showAdminPublicPrompt", proxy_market)
-        self.assertIn('id="adminPublicPromptModal"', self.html)
-        self.assertIn("检测并发布", self.html)
-
 
 if __name__ == "__main__":
     unittest.main()

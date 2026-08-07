@@ -183,9 +183,8 @@
   background: var(--theme-bg);
 }
 
-/* Pricing and proxy market */
-:root[data-theme="dark"] body[data-login-redirect="/subscription.html"],
-:root[data-theme="dark"] .proxy-market-page {
+/* Pricing */
+:root[data-theme="dark"] body[data-login-redirect="/subscription.html"] {
   color: var(--theme-text);
   background: var(--theme-bg);
 }

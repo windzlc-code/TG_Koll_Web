@@ -69,6 +69,19 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("data-publish-history-refresh", panel)
         self.assertIn("刷新热点数据", panel)
 
+    def test_publish_history_renders_source_link_and_account_mismatch_notice(self):
+        selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")
+        preview = function_source("renderPublishHistoryPreview", "renderPublishHistoryPanel")
+        detail = function_source("openPublishHistoryRecordModal", "requeuePublishHistoryRecord")
+
+        self.assertIn("renderPublishHistoryAccountWarning(record)", selection)
+        self.assertIn("renderPublishHistoryAccountWarning(activeRecord)", preview)
+        self.assertIn("renderPublishHistoryAccountWarning(record)", detail)
+        self.assertIn("renderPublishHistorySourceLink(publishedUrl, { showUrl: true })", detail)
+        self.assertIn("renderSourceLinkIcon()", selection)
+        self.assertIn(".publish-history-source-url", CONSOLE_CSS)
+        self.assertIn(".publish-history-account-warning", CONSOLE_CSS)
+
     def test_manual_hot_refresh_uses_authenticated_source_and_reloads_history(self):
         refresh = function_source("refreshPublishHistoryHotData", "publishGroupSelectionState")
 

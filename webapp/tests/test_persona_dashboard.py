@@ -2680,6 +2680,24 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(media_resp.status_code, 200)
         self.assertEqual(media_resp.headers["content-type"], "image/png")
 
+    def test_persona_publish_history_marks_account_mismatch_only_when_current_handle_differs(self):
+        self._write_archives()
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        archive = archives[0]
+        archive["setup"]["accountManagement"]["threads"]["handle"] = "current_user"
+        archive["publishHistory"][0]["publishedMeta"]["sourceUrl"] = "https://www.threads.com/@old_user/post/abc"
+        path.write_text(json.dumps(archives), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
+
+        self.assertEqual(resp.status_code, 200)
+        row = resp.json()["publish_history"][0]
+        self.assertFalse(row["account_match"]["matches_current"])
+        self.assertEqual(row["account_match"]["source_handle"], "old_user")
+        self.assertEqual(row["account_match"]["current_handle"], "current_user")
+        self.assertIn("@old_user", row["account_match"]["warning"])
+
     def test_publish_history_requeue_persists_media_in_both_archive_sources_and_platform_queues(self):
         self._write_archives()
         primary_path = self.tool_runtime_dir / "persona_archives.json"
@@ -3303,6 +3321,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 server.PersonaDashboardHotCandidatesFetchPayload(
                     prompt="prepare keywords",
                     search_mode="normal",
+                    writing_locale="zh-CN",
                     selected_memory_ids=["mem-1"],
                 ),
             )
@@ -3315,7 +3334,16 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["archiveId"], "persona-1")
         self.assertEqual(payload["prompt"], "prepare keywords")
         self.assertEqual(payload["searchMode"], "normal")
+        self.assertEqual(payload["writingLocale"], "zh-CN")
         self.assertEqual(payload["memorySummaries"], ["memory one"])
+
+    def test_hot_keyword_gateway_html_error_is_not_exposed(self):
+        detail = server._normalize_persona_hot_workflow_error_detail(
+            "<html><head><title>502 Bad Gateway</title></head></html>",
+            action="prepare-hot-keywords",
+        )
+
+        self.assertEqual(detail, "热点关键词服务暂时不可用，请稍后重试。")
 
     def test_hot_candidate_normalization_keeps_every_media_item(self):
         media = [

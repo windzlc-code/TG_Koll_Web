@@ -126,11 +126,6 @@ from .social_automation_api import (
     stop_social_automation_worker,
     wake_social_automation_worker,
 )
-from .proxy_market import (
-    ensure_proxy_market_health_monitor_started,
-    register_proxy_market_routes,
-    stop_proxy_market_health_monitor,
-)
 from .notifications import create_notification, register_notification_routes
 from .video_workbench import (
     cancel_video_remote_tasks,
@@ -12278,6 +12273,7 @@ class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
     refresh: bool = False
     limit: int = 10
     search_mode: str = "strict"
+    writing_locale: str = "zh-TW"
     freshness_days: int = 7
     freshness_policy: str = "legacy"
     selected_memory_ids: list[str] = Field(default_factory=list)
@@ -13983,6 +13979,17 @@ def _terminate_persona_hot_process(process: subprocess.Popen[str] | None) -> Non
             process.wait(timeout=2)
 
 
+def _normalize_persona_hot_workflow_error_detail(value: Any, *, action: str = "") -> str:
+    detail = str(value or "").strip()
+    if re.search(r"<\s*(?:!doctype|html|head|body|title)\b|\b(?:502|503|504)\b|bad gateway|gateway timeout|service unavailable", detail, re.IGNORECASE):
+        if action == "prepare-hot-keywords":
+            return "热点关键词服务暂时不可用，请稍后重试。"
+        return "热点服务暂时不可用，请稍后重试。"
+    if detail:
+        return detail
+    return "热点关键词生成失败，请稍后重试。" if action == "prepare-hot-keywords" else "热点任务执行失败，请稍后重试。"
+
+
 def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int = 180, *, background: bool = False) -> dict[str, Any]:
     global _PERSONA_HOT_BACKGROUND_PROCESS, _PERSONA_HOT_INTERACTIVE_PROCESS, _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID, _PERSONA_HOT_LAST_INTERACTIVE_AT
     _sync_tool_r18_api_config_for_persona_workflow()
@@ -14077,12 +14084,21 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
     stderr = str(stderr or "").strip()
     data = _parse_tool_r18_json_output(stdout)
     if process.returncode != 0:
-        detail = str((data or {}).get("error") or stderr or stdout or "热点抓取失败。").strip()
+        detail = _normalize_persona_hot_workflow_error_detail(
+            (data or {}).get("error") or stderr or stdout,
+            action=str(payload.get("action") or ""),
+        )
         raise HTTPException(status_code=500, detail=detail)
     if not isinstance(data, dict):
         raise HTTPException(status_code=500, detail="热点抓取返回格式无效。")
     if data.get("ok") is False:
-        raise HTTPException(status_code=500, detail=str(data.get("error") or "热点抓取失败。").strip())
+        raise HTTPException(
+            status_code=500,
+            detail=_normalize_persona_hot_workflow_error_detail(
+                data.get("error"),
+                action=str(payload.get("action") or ""),
+            ),
+        )
     return data
 
 
@@ -14385,6 +14401,7 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
             "prompt": str(payload.prompt or "").strip(),
             "refresh": bool(payload.refresh),
             "searchMode": search_mode,
+            "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
             "memorySummaries": _persona_hot_selected_memory_summaries(clean_id, payload.selected_memory_ids),
         },
         timeout_seconds=75,
@@ -14422,6 +14439,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "refresh": bool(payload.refresh),
             "limit": limit,
             "searchMode": search_mode,
+            "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
             "freshnessDays": freshness_days,
             "freshnessPolicy": "strict" if str(payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
             "memorySummaries": selected_summaries,
@@ -15378,12 +15396,16 @@ def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any
     archive = _find_persona_archive(archives, clean_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+    threads_account = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
+    current_threads_handle = _normalize_threads_username(threads_account.get("handle"))
     publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
     rows = []
     for record in publish_history:
         if not _is_persona_publish_history_record(record):
             continue
-        compact = _compact_publish_record(record, _publish_history_hot_metrics(record, archive))
+        compact = _compact_publish_record(record, _publish_history_hot_metrics(record, archive), current_threads_handle)
         compact["media_items"] = _previewable_persona_media_items(
             compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
             archive_id=clean_id,
@@ -18084,7 +18106,26 @@ def _published_record_url(record: dict[str, Any]) -> str:
     return ""
 
 
-def _compact_publish_record(record: dict[str, Any], hot_metrics: dict[str, Any] | None = None) -> dict[str, Any]:
+def _threads_username_from_published_url(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = urlsplit(text)
+    except ValueError:
+        return ""
+    host = (parsed.netloc or "").lower().split("@")[-1].split(":")[0]
+    if host not in {"threads.net", "www.threads.net", "threads.com", "www.threads.com"}:
+        return ""
+    match = re.match(r"^/@([^/]+)/post/", parsed.path or "", flags=re.I)
+    return _normalize_threads_username(match.group(1) if match else "")
+
+
+def _compact_publish_record(
+    record: dict[str, Any],
+    hot_metrics: dict[str, Any] | None = None,
+    current_threads_handle: str = "",
+) -> dict[str, Any]:
     published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
     source_meta = record.get("sourceMeta") if isinstance(record.get("sourceMeta"), dict) else {}
     published_targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
@@ -18130,6 +18171,17 @@ def _compact_publish_record(record: dict[str, Any], hot_metrics: dict[str, Any] 
             "source": "published_snapshot",
             "scope": "published_snapshot",
         }
+    source_url = _published_record_url(record)
+    source_threads_handle = _threads_username_from_published_url(source_url)
+    current_threads_handle = _normalize_threads_username(current_threads_handle)
+    account_matches_current = bool(
+        not source_threads_handle
+        or not current_threads_handle
+        or source_threads_handle.lower() == current_threads_handle.lower()
+    )
+    account_match_warning = ""
+    if source_threads_handle and current_threads_handle and source_threads_handle.lower() != current_threads_handle.lower():
+        account_match_warning = f"该历史发布来自 @{source_threads_handle}，当前人设绑定账号为 @{current_threads_handle}。"
     return {
         "id": record.get("id"),
         "archive_post_id": record.get("archivePostId") or record.get("archive_post_id"),
@@ -18138,7 +18190,7 @@ def _compact_publish_record(record: dict[str, Any], hot_metrics: dict[str, Any] 
         "content": content[:220],
         "published_at": record.get("publishedAt") or record.get("published_at"),
         "status": record.get("status"),
-        "source_url": _published_record_url(record),
+        "source_url": source_url,
         "captured_at": resolved_hot_metrics.get("refreshed_at") or published_meta.get("capturedAt") or published_meta.get("captured_at"),
         "hot_score": _number(resolved_hot_metrics.get("hot_score"), 0),
         "likes": _number(resolved_hot_metrics.get("likes"), snapshot_metrics["likes"]),
@@ -18147,6 +18199,12 @@ def _compact_publish_record(record: dict[str, Any], hot_metrics: dict[str, Any] 
         "reposts": _number(resolved_hot_metrics.get("reposts"), snapshot_metrics["reposts"]),
         "views": _number(resolved_hot_metrics.get("views"), snapshot_metrics["views"]),
         "hot_metrics": resolved_hot_metrics,
+        "account_match": {
+            "matches_current": account_matches_current,
+            "source_handle": source_threads_handle,
+            "current_handle": current_threads_handle,
+            "warning": account_match_warning,
+        },
         "automation_task_type": automation_task_type,
         "automation_task_id": record.get("automationTaskId") or record.get("automation_task_id") or published_meta.get("taskId") or published_meta.get("task_id"),
         "media_items": _compact_dashboard_media_items(record, published_meta, source_meta, published_targets),
@@ -19354,7 +19412,7 @@ def _build_persona_dashboard_overview(
             "hot_platforms": hot_platforms,
             "post_metrics": post_metric_rows[:80],
             "publish_history": [
-                _compact_publish_record(item, _publish_history_hot_metrics(item, archive))
+                _compact_publish_record(item, _publish_history_hot_metrics(item, archive), threads_handle)
                 for item in visible_publish_history[:20]
                 if isinstance(item, dict)
             ],
@@ -19735,13 +19793,11 @@ def create_app() -> FastAPI:
     async def lifespan(_: FastAPI):
         _ensure_persona_dashboard_monitor_started()
         ensure_social_automation_worker_started()
-        ensure_proxy_market_health_monitor_started()
         _start_persona_hot_pool_worker()
         try:
             yield
         finally:
             stop_social_automation_worker()
-            stop_proxy_market_health_monitor()
             _stop_persona_hot_pool_worker()
 
     app = FastAPI(
@@ -19981,20 +20037,6 @@ def create_app() -> FastAPI:
             },
         )
 
-    @app.get("/proxy-market.html", include_in_schema=False)
-    def page_proxy_market() -> HTMLResponse:
-        return _html_response_with_versions(
-            "proxy-market.html",
-            replacements={
-                "__OPC_STYLES_VERSION__": _asset_version("assets", "opc", "styles.css"),
-                "__PROXY_MARKET_CSS_VERSION__": _asset_version("assets", "opc", "proxy-market.css"),
-                "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
-                "__PROXY_MARKET_JS_VERSION__": _asset_version("assets", "opc", "proxy-market.js"),
-                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
-                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
-            },
-        )
-
     @app.get("/profile.html", include_in_schema=False)
     @app.get("/admin-profile.html", include_in_schema=False)
     def page_profile(
@@ -20218,7 +20260,6 @@ def create_app() -> FastAPI:
         return _html_response_with_versions("batch.html")
 
     register_social_automation_routes(app)
-    register_proxy_market_routes(app)
     register_notification_routes(app)
     register_video_routes(app, server_video_route_dependencies(sys.modules[__name__]))
 

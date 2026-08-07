@@ -2279,7 +2279,14 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('data-publish-history-view="${esc(recordId)}"', self.console_script)
         self.assertIn('data-publish-history-requeue="${esc(recordId)}"', self.console_script)
         self.assertIn("function openPublishHistoryRecordModal", self.console_script)
-        self.assertIn('extraActions: [{ value: "requeue", text: "重入队" }]', self.console_script)
+        self.assertIn('extraActions: [{ value: "requeue", text: "重回草稿", iconHtml: renderRequeueIcon() }]', self.console_script)
+        self.assertIn("renderSourceLinkIcon()", self.console_script)
+        self.assertIn(".publish-history-card-requeue", self.styles)
+        self.assertIn('title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>', self.console_script)
+        self.assertIn(".publish-history-card .publish-post-card-copy {\n    display: contents;", self.styles)
+        self.assertIn(".publish-history-card-requeue span {\n  display: inline-block;", self.styles)
+        self.assertIn(".publish-history-card-main {\n    align-items: center;\n    padding: 5px 7px;", self.styles)
+        self.assertIn(".publish-history-card .publish-post-card-head {\n    align-items: center;\n    flex-wrap: nowrap;", self.styles)
         self.assertIn(
             ".publish-history-preview {\n    display: none;",
             self.styles,
@@ -3153,7 +3160,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         ):
             with self.subTest(action=action):
                 self.assertIn(action, self.console_script)
-        self.assertIn('${isMarketplace ? renderProxyReleaseIcon() : renderTrashIcon()}</button>', self.console_script)
+        self.assertIn('${renderTrashIcon()}</button>', self.console_script)
         self.assertNotIn("account-pool-delete-icon", self.console_script)
         self.assertIn(".persona-link-actions button.danger,", self.styles)
         self.assertIn(".proxy-card-actions button.danger {", self.styles)
@@ -3161,7 +3168,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
     def test_proxy_pool_uses_desktop_field_list_and_mobile_summary_cards(self):
         proxy_pool = self.console_script[
             self.console_script.index("function renderProxyPool()"):
-            self.console_script.index("\nfunction proxyMarketCatalogRoot", self.console_script.index("function renderProxyPool()"))
+            self.console_script.index("\nfunction proxyFormPayload", self.console_script.index("function renderProxyPool()"))
         ]
         detail_modal = self.console_script[
             self.console_script.index("function openProxyDetailModal("):
@@ -3192,15 +3199,15 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         mobile_cards = proxy_pool[proxy_pool.index('class="proxy-card-grid" data-proxy-mobile-cards'):]
         self.assertNotIn('data-proxy-view=', desktop_list)
         self.assertIn('${renderNetworkIcon()}</button>', desktop_list)
-        self.assertIn('商城代理不可编辑', desktop_list)
-        self.assertIn('${isMarketplace ? renderProxyReleaseIcon() : renderTrashIcon()}</button>', desktop_list)
+        self.assertIn('系统导入代理不可编辑', desktop_list)
+        self.assertIn('${renderTrashIcon()}</button>', desktop_list)
         self.assertNotIn('${renderRefreshIcon()}</button>', desktop_list)
         self.assertNotIn('${isMarketplace ? "释放" : "删除"}', desktop_list)
         self.assertIn('data-proxy-view="${esc(proxy.id)}"', mobile_actions)
         self.assertIn('${renderEyeIcon()}</button>', mobile_actions)
         self.assertIn('${renderNetworkIcon()}</button>', mobile_actions)
         self.assertIn('${renderEditIcon()}</button>', mobile_actions)
-        self.assertIn('${isMarketplace ? renderProxyReleaseIcon() : renderTrashIcon()}</button>', mobile_actions)
+        self.assertIn('${renderTrashIcon()}</button>', mobile_actions)
         self.assertIn('${renderProxyMobileActions(proxy)}', mobile_cards)
         self.assertIn('const mobileStream = mobileTweetStreamInfo(rows, "proxy-pool", pageSize);', proxy_pool)
         self.assertIn('const visibleRows = mobileStream.mobile ? mobileStream.items : pageRows;', proxy_pool)
@@ -3242,26 +3249,6 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".automation-plan-detail-strategy--summary dd {", self.styles)
         self.assertIn("white-space: nowrap;", self.styles)
         self.assertIn("overflow-wrap: normal;", self.styles)
-
-    def test_proxy_market_modal_uses_card_skeletons_and_corrects_stale_country_titles(self):
-        modal = self.console_script[
-            self.console_script.index("function proxyMarketCatalogRoot"):
-            self.console_script.index("function proxyFormPayload")
-        ]
-
-        self.assertIn("function proxyMarketCatalogTotal(payload = {})", modal)
-        self.assertIn("function renderProxyMarketMiniSkeletonCards(count = 4)", modal)
-        self.assertIn('class="proxy-market-mini-card is-loading"', modal)
-        self.assertIn("proxyMarketAvailableCount: 0", self.console_script)
-        self.assertIn("state.proxyMarketAvailableCount = Math.max(0, Number(summary?.available_catalog_count || 0));", self.console_script)
-        self.assertIn("let placeholderCount = Math.max(1, Math.min(12, Number(state.proxyMarketAvailableCount || 0) || 4));", modal)
-        self.assertIn("grid.innerHTML = renderProxyMarketMiniSkeletonCards(placeholderCount);", modal)
-        self.assertIn("function proxyMarketItemTitle(item = {})", modal)
-        self.assertIn("/^[a-z]{2}$/i.test(alias)", modal)
-        self.assertIn("actualCountry.key !== namedCountry.key", modal)
-        self.assertIn("const title = proxyMarketItemTitle(item);", modal)
-        self.assertIn(".proxy-market-mini-card.is-loading", self.styles)
-        self.assertIn("@keyframes proxy-market-mini-skeleton-shift", self.styles)
 
     def test_media_generation_requires_a_loadable_persona_reference_image(self):
         self.assertIn(

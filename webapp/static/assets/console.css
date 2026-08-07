@@ -8832,8 +8832,9 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .publish-history-card-action {
-  display: inline-grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 32px;
   min-width: 32px;
   height: 32px;
@@ -8844,6 +8845,7 @@ body.persona-touch-dragging .persona-list-card:active {
   background: var(--panel-solid);
   color: var(--muted);
   box-shadow: none;
+  text-decoration: none;
 }
 
 .publish-history-card-action:hover,
@@ -8854,7 +8856,11 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .publish-history-card-action .ui-eye-icon,
-.publish-history-card-action .ui-requeue-icon {
+.publish-history-card-action .ui-requeue-icon,
+.publish-history-card-action .ui-source-link-icon,
+.publish-history-source-link .ui-source-link-icon,
+.publish-history-requeue-button .ui-requeue-icon,
+.console-modal-actions .ui-requeue-icon {
   width: 17px;
   height: 17px;
   fill: none;
@@ -8864,13 +8870,91 @@ body.persona-touch-dragging .persona-list-card:active {
   stroke-linejoin: round;
 }
 
+.publish-history-card-requeue {
+  gap: 5px;
+  width: auto;
+  min-width: 82px;
+  padding: 0 8px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.publish-history-card-requeue span {
+  display: inline-block;
+  color: inherit;
+  line-height: 1;
+}
+
+.publish-history-account-warning {
+  margin-top: 6px;
+  padding: 7px 9px;
+  border: 1px solid rgba(216, 153, 43, .34);
+  border-radius: 8px;
+  background: rgba(216, 153, 43, .08);
+  color: #7a4b00;
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 700;
+}
+
 .publish-history-modal-card {
   max-height: min(68vh, 680px);
 }
 
-.publish-history-modal-source {
+.publish-history-source-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 8px;
+}
+
+.publish-history-source-row.is-compact {
+  margin-top: 0;
+}
+
+.publish-history-source-link,
+.publish-history-requeue-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
   color: var(--accent-dark);
   font-weight: 800;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.publish-history-source-link:hover,
+.publish-history-source-link:focus-visible,
+.publish-history-requeue-button:hover,
+.publish-history-requeue-button:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+  outline: none;
+}
+
+.publish-history-source-url {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 700;
+  opacity: .82;
+}
+
+.console-modal-actions button .ui-requeue-icon {
+  margin-right: 6px;
+  vertical-align: -3px;
 }
 
 .persona-profile-data-panel .persona-hot-summary-metrics strong {
@@ -15644,25 +15728,6 @@ body.persona-media-sorting {
   color: var(--vecto-action-ink);
 }
 
-.account-browser-tab-badge {
-  display: inline-grid;
-  place-items: center;
-  min-width: 18px;
-  height: 18px;
-  margin-left: 6px;
-  padding: 0 5px;
-  color: #06221d;
-  background: #6ee7c6;
-  border-radius: 9px;
-  font-size: 10px;
-  font-weight: 900;
-  font-variant-numeric: tabular-nums;
-}
-
-.account-browser-tab-badge[hidden] {
-  display: none;
-}
-
 .account-browser-page {
   min-width: 0;
 }
@@ -16747,28 +16812,6 @@ body.persona-media-sorting {
   flex-wrap: wrap;
 }
 
-.account-proxy-market-add {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 34px;
-  padding: 0 10px;
-  border-radius: 8px;
-  line-height: 1;
-}
-
-.account-proxy-market-add .ui-action-icon,
-.account-proxy-market-add svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 @media (max-width: 480px) {
   .account-proxy-picker-toolbar {
     align-items: stretch;
@@ -17062,39 +17105,6 @@ body.persona-media-sorting {
   flex: 0 0 auto;
 }
 
-.proxy-market-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 36px;
-  padding: 0 11px;
-  color: var(--ink);
-  background: var(--panel-solid);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  font-size: 12px;
-  font-weight: 850;
-  text-decoration: none;
-}
-
-button.proxy-market-link {
-  cursor: pointer;
-  font: inherit;
-}
-
-.proxy-market-link:hover,
-.proxy-market-link:focus-visible {
-  color: var(--ink);
-  border-color: var(--ink);
-  background: var(--soft);
-  box-shadow: none;
-}
-
-.proxy-market-link svg {
-  width: 17px;
-  height: 17px;
-}
-
 .proxy-pool-add svg {
   width: 17px;
   height: 17px;
@@ -17142,8 +17152,7 @@ button.proxy-market-link {
   border-left: 3px solid #9aa9b5;
 }
 
-.proxy-table .proxy-source-badge,
-.proxy-table .proxy-new-badge {
+.proxy-table .proxy-source-badge {
   min-height: 20px;
   padding: 2px 7px;
 }
@@ -17158,13 +17167,6 @@ button.proxy-market-link {
   color: #4f6170;
   background: #edf1f4;
   border-color: #d1dae0;
-}
-
-.proxy-table .proxy-new-badge {
-  margin-top: 3px;
-  color: #7a4300;
-  background: #fff0cf;
-  border-color: #f0c879;
 }
 
 .proxy-table-row--head {
@@ -17341,8 +17343,7 @@ button.proxy-market-link {
   font-size: 10px;
 }
 
-.proxy-source-badge,
-.proxy-new-badge {
+.proxy-source-badge {
   display: inline-flex;
   align-items: center;
   width: fit-content;
@@ -17359,12 +17360,6 @@ button.proxy-market-link {
   color: var(--ink);
   background: var(--soft);
   border: 1px solid var(--line);
-}
-
-.proxy-new-badge {
-  color: var(--panel-solid);
-  background: var(--ink);
-  border: 1px solid var(--ink);
 }
 
 .proxy-pool-card-endpoint {
@@ -17533,192 +17528,6 @@ button.proxy-market-link {
 
 .proxy-edit-modal {
   width: min(920px, calc(100vw - 32px));
-}
-
-.proxy-market-mini-modal {
-  width: min(840px, calc(100vw - 32px));
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.proxy-market-mini-content {
-  display: grid;
-  gap: 12px;
-  max-height: min(70vh, 720px);
-  overflow-y: auto;
-}
-
-.proxy-market-mini-filters {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--soft);
-}
-
-.proxy-market-mini-filters label {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.proxy-market-mini-filters select {
-  width: 100%;
-  min-width: 0;
-  min-height: 36px;
-  padding: 5px 8px;
-  color: var(--ink);
-  background: var(--panel-solid);
-}
-
-.proxy-market-mini-status {
-  min-height: 18px;
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.proxy-market-mini-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.proxy-market-mini-card,
-.proxy-market-mini-loading,
-.proxy-market-mini-empty {
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel-solid);
-}
-
-.proxy-market-mini-card {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-}
-
-.proxy-market-mini-card.is-loading {
-  min-height: 188px;
-  pointer-events: none;
-}
-
-.proxy-market-mini-skeleton {
-  display: block;
-  min-height: 12px;
-  border-radius: 5px;
-  background: linear-gradient(90deg, var(--soft) 20%, color-mix(in srgb, var(--soft) 72%, #fff) 50%, var(--soft) 80%);
-  background-size: 220% 100%;
-  animation: proxy-market-mini-skeleton-shift 1.15s ease-in-out infinite;
-}
-
-.proxy-market-mini-skeleton.skeleton-badge {
-  width: 36px;
-  min-height: 22px;
-  border-radius: 999px;
-}
-
-.proxy-market-mini-skeleton.skeleton-title {
-  width: 72%;
-  min-height: 18px;
-}
-
-.proxy-market-mini-skeleton.skeleton-location {
-  width: 58%;
-}
-
-.proxy-market-mini-skeleton.skeleton-meta {
-  width: 46px;
-}
-
-.proxy-market-mini-skeleton.skeleton-price {
-  width: 52px;
-  margin-left: auto;
-}
-
-.proxy-market-mini-skeleton.skeleton-button {
-  width: 100%;
-  min-height: 34px;
-}
-
-@keyframes proxy-market-mini-skeleton-shift {
-  to { background-position: -220% 0; }
-}
-
-.proxy-market-mini-card-head,
-.proxy-market-mini-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.proxy-market-mini-country,
-.proxy-market-mini-stock {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 850;
-}
-
-.proxy-market-mini-country {
-  color: var(--ink);
-  background: var(--soft);
-}
-
-.proxy-market-mini-stock {
-  color: #0b6957;
-  background: #ddf7ef;
-}
-
-.proxy-market-mini-card > strong {
-  overflow: hidden;
-  color: var(--ink);
-  font-size: 14px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.proxy-market-mini-location {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.proxy-market-mini-meta {
-  align-items: flex-end;
-  flex-wrap: wrap;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.proxy-market-mini-meta strong {
-  margin-left: auto;
-  color: var(--ink);
-  font-size: 13px;
-}
-
-.proxy-market-mini-card > button {
-  width: 100%;
-  min-height: 34px;
-}
-
-.proxy-market-mini-loading,
-.proxy-market-mini-empty {
-  grid-column: 1 / -1;
-  padding: 20px 12px;
-  color: var(--muted);
-  text-align: center;
 }
 
 .proxy-edit-modal-content {
@@ -24199,11 +24008,19 @@ body.console-page {
 
   .publish-history-card-main {
     grid-template-columns: 28px minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto auto;
+    align-items: center;
+    column-gap: 7px;
+    row-gap: 2px;
   }
 
   .publish-history-card-actions {
     display: inline-flex;
     align-items: center;
+    align-self: center;
+    grid-column: 3;
+    grid-row: 1;
+    justify-content: flex-end;
     gap: 4px;
   }
 
@@ -24212,6 +24029,50 @@ body.console-page {
     min-width: 30px;
     height: 30px;
     min-height: 30px;
+  }
+
+  .publish-history-card-requeue {
+    min-width: 82px;
+    padding-inline: 7px;
+  }
+
+  .publish-history-card-requeue span {
+    display: inline-block;
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .publish-history-card .publish-post-card-index {
+    align-self: center;
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .publish-history-card .publish-post-card-copy {
+    display: contents;
+  }
+
+  .publish-history-card .publish-post-card-head {
+    align-self: center;
+    grid-column: 2;
+    grid-row: 1;
+    min-height: 30px;
+  }
+
+  .publish-history-card .publish-post-card-meta {
+    grid-column: 2 / -1;
+    grid-row: 2;
+    margin-top: 1px;
+  }
+
+  .publish-history-card .publish-post-card-snippet {
+    grid-column: 2 / -1;
+    grid-row: 3;
+  }
+
+  .publish-history-card .publish-history-account-warning {
+    grid-column: 2 / -1;
   }
 
   .publish-history-preview .publish-preview-card {
@@ -24289,17 +24150,27 @@ body.console-page {
   }
 
   .publish-history-card-main {
-    align-items: start;
+    align-items: center;
     padding: 5px 7px;
   }
 
   .publish-history-card .publish-post-card-head {
-    align-items: flex-start;
-    flex-wrap: wrap;
+    align-items: center;
+    flex-wrap: nowrap;
+    height: 32px;
+    min-height: 32px;
+  }
+
+  .publish-history-card .publish-post-card-head strong {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow-wrap: normal;
+    line-height: 1.2;
   }
 
   .publish-history-card :is(
-    .publish-post-card-head strong,
     .publish-post-card-meta,
     .publish-post-card-snippet
   ) {
@@ -25955,25 +25826,6 @@ body.console-page {
     opacity: .68;
   }
 
-  .console-page .proxy-market-mini-modal {
-    width: 100%;
-  }
-
-  .console-page .proxy-market-mini-filters {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 7px;
-    padding: 8px;
-  }
-
-  .console-page .proxy-market-mini-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  .console-page .proxy-market-mini-card {
-    gap: 7px;
-    padding: 10px;
-  }
 }
 
 @media (max-width: 360px) {

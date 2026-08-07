@@ -26,6 +26,7 @@ type FetchHotCandidatesInput = {
   limit?: number;
   refresh?: boolean;
   searchMode?: "normal" | "strict";
+  writingLocale?: string;
   freshnessDays?: number;
   freshnessPolicy?: "legacy" | "strict";
   recordShown?: boolean;
@@ -41,6 +42,7 @@ type PrepareHotKeywordsInput = {
   prompt?: string;
   refresh?: boolean;
   searchMode?: "normal" | "strict";
+  writingLocale?: string;
   memorySummaries?: string[];
 };
 
@@ -138,6 +140,7 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     limit: Math.max(1, Math.min(Number(input.limit || 10), 20)),
     refresh: input.refresh === true,
     searchMode: input.searchMode === "normal" ? "normal" : "strict",
+    writingLocale: String(input.writingLocale || "").trim() || undefined,
     freshnessDays: input.freshnessDays,
     freshnessPolicy: input.freshnessPolicy === "strict" ? "strict" : "legacy",
     recordShown: input.recordShown !== false,
@@ -169,6 +172,7 @@ async function prepareHotKeywords(input: PrepareHotKeywordsInput) {
     prompt: String(input.prompt || "").trim() || undefined,
     memorySummaries,
     searchMode: input.searchMode === "normal" ? "normal" : "strict",
+    writingLocale: String(input.writingLocale || "").trim() || undefined,
     refresh: input.refresh === true,
   });
   return {

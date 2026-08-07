@@ -181,7 +181,7 @@ class PublicLoginPreferenceTests(unittest.TestCase):
         self.assertEqual(direct_admin.headers["location"], "/?login=1&return_url=%2Fconsole.html")
 
         admin_query = client.get(
-            "/login.html?return_url=%2Fproxy-market.html%3Fadmin_console%3D1",
+            "/login.html?return_url=%2Fabout-vecto.html%3Fadmin_console%3D1",
             follow_redirects=False,
         )
         self.assertEqual(admin_query.status_code, 302, admin_query.text)
@@ -214,7 +214,7 @@ class PublicLoginPreferenceTests(unittest.TestCase):
 
     def test_public_pages_receive_the_shared_fixed_light_stylesheet_last(self):
         client = TestClient(self.app)
-        for path in ("/", "/subscription.html", "/about-vecto.html", "/proxy-market.html"):
+        for path in ("/", "/subscription.html", "/about-vecto.html"):
             with self.subTest(path=path):
                 response = client.get(path)
                 self.assertEqual(response.status_code, 200, response.text)
@@ -236,7 +236,6 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         cls.site_nav_script = (cls.static_dir / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
         cls.site_nav_styles = (cls.static_dir / "assets" / "opc" / "site-navigation.css").read_text(encoding="utf-8")
         cls.fixed_light_styles = (cls.static_dir / "assets" / "fixed-light.css").read_text(encoding="utf-8")
-        cls.proxy_market_js = (cls.static_dir / "assets" / "opc" / "proxy-market.js").read_text(encoding="utf-8")
         cls.admin_js = (cls.static_dir / "assets" / "admin.js").read_text(encoding="utf-8")
         cls.console_js = (cls.static_dir / "assets" / "console.js").read_text(encoding="utf-8")
         cls.admin_html = (cls.static_dir / "admin.html").read_text(encoding="utf-8")
@@ -427,20 +426,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
                     page,
                 )
 
-    def test_admin_proxy_market_entry_preserves_separate_admin_session(self):
-        self.assertIn('href="/proxy-market.html?admin_console=1"', self.admin_html)
-        self.assertIn(
-            'const ADMIN_CONTEXT_STORAGE_KEY = "vecto-admin-console-context"',
-            self.proxy_market_js,
-        )
-        self.assertIn("function adminConsoleContextActive()", self.proxy_market_js)
-        self.assertIn("function seedAdminConsoleContext()", self.proxy_market_js)
-        self.assertIn('headers.set("X-Admin-Console", "1")', self.proxy_market_js)
-        self.assertIn("seedAdminConsoleContext();", self.proxy_market_js)
-        self.assertIn("function captureSessionContext()", self.proxy_market_js)
-        self.assertIn("captureSessionContext();", self.proxy_market_js)
-        self.assertIn('headers.set("X-Admin-Workspace-User-ID", state.workspaceUserId)', self.proxy_market_js)
-        self.assertIn('MARKET_PARAMS.get("admin_workspace_user_id")', self.proxy_market_js)
+    def test_admin_public_entry_preserves_separate_admin_session(self):
         self.assertIn("function seedExplicitAdminContext()", self.site_nav_script)
         self.assertIn(
             "const preserveWorkspace = publicPagePreservesAdminWorkspace()",
@@ -456,7 +442,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('[data-site-home-label]', self.site_nav_script)
         self.assertIn('[data-site-nav-key="aboutVecto"]', self.site_nav_script)
         self.assertIn('"/about-vecto.html",', self.site_nav_script)
-        self.assertIn('["home", "aboutVecto", "proxyMarket", "pricing"].includes(page)', self.site_nav_script)
+        self.assertIn('["home", "aboutVecto", "pricing"].includes(page)', self.site_nav_script)
         self.assertIn('url.searchParams.delete("admin_workspace_user_id")', self.site_nav_script)
         self.assertIn("function adminWorkspacePageUrl(value)", self.console_js)
         self.assertNotIn('data-proxy-market-open', self.console_js)
@@ -536,7 +522,6 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             ".home-canvas .home-flow-section",
             ".about-canvas .about-capabilities",
             'body[data-login-redirect="/subscription.html"] .pricing-comparison-band',
-            ".proxy-market-page .proxy-market-facts",
         ):
             self.assertIn(selector, self.fixed_light_styles)
         self.assertIn("--public-cool: #4b6478", self.fixed_light_styles)
@@ -686,7 +671,6 @@ class PublicLoginUiSourceTests(unittest.TestCase):
             "index.html",
             "pricing.html",
             "about-vecto.html",
-            "proxy-market.html",
         ):
             page = (self.static_dir / page_name).read_text(encoding="utf-8")
             with self.subTest(page=page_name):

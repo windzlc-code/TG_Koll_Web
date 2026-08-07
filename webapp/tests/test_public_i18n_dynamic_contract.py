@@ -6,8 +6,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "webapp" / "static" / "assets" / "opc" / "script.js"
 NAVIGATION_PATH = REPO_ROOT / "webapp" / "static" / "assets" / "opc" / "site-navigation.js"
 CONSOLE_PATH = REPO_ROOT / "webapp" / "static" / "console.html"
-PROXY_MARKET_PATH = REPO_ROOT / "webapp" / "static" / "proxy-market.html"
-PROXY_MARKET_SCRIPT_PATH = REPO_ROOT / "webapp" / "static" / "assets" / "opc" / "proxy-market.js"
 AUTH_PATH = REPO_ROOT / "webapp" / "static" / "assets" / "auth.js"
 CHANGE_PASSWORD_PATH = REPO_ROOT / "webapp" / "static" / "change-password.html"
 AUTOMATION_LOG_PATH = REPO_ROOT / "webapp" / "static" / "persona-automation-log.html"
@@ -19,8 +17,6 @@ class PublicI18nDynamicContractTests(unittest.TestCase):
         cls.script = SCRIPT_PATH.read_text(encoding="utf-8")
         cls.navigation = NAVIGATION_PATH.read_text(encoding="utf-8")
         cls.console = CONSOLE_PATH.read_text(encoding="utf-8")
-        cls.proxy_market = PROXY_MARKET_PATH.read_text(encoding="utf-8")
-        cls.proxy_market_script = PROXY_MARKET_SCRIPT_PATH.read_text(encoding="utf-8")
         cls.auth = AUTH_PATH.read_text(encoding="utf-8")
         cls.change_password = CHANGE_PASSWORD_PATH.read_text(encoding="utf-8")
         cls.automation_log = AUTOMATION_LOG_PATH.read_text(encoding="utf-8")
@@ -87,7 +83,7 @@ class PublicI18nDynamicContractTests(unittest.TestCase):
         sync = self.navigation_slice(
             self.navigation,
             "function sync()",
-            "async function syncProxyMarketBadge(",
+            'document.addEventListener("click",',
         )
         self.assertIn("[data-site-account-close]", sync)
         self.assertIn("labels.accountClose", sync)
@@ -147,16 +143,6 @@ class PublicI18nDynamicContractTests(unittest.TestCase):
         self.assertIn('data-site-copy="adminConsole"', self.console)
         self.assertIn('adminConsole: "运营后台"', self.navigation)
         self.assertIn('adminConsole: "營運後台"', self.navigation)
-
-    def test_proxy_market_traditional_guest_copy_is_not_mixed_script(self):
-        self.assertNotIn("游客", self.proxy_market)
-        self.assertNotIn('"游客瀏覽"', self.proxy_market_script)
-        self.assertIn("遊客", self.proxy_market)
-        self.assertIn('"遊客瀏覽"', self.proxy_market_script)
-
-    def test_proxy_market_exposes_all_supported_public_ip_type_filters(self):
-        self.assertIn('<option value="static_residential">靜態住宅</option>', self.proxy_market)
-        self.assertIn('<option value="datacenter">機房 IP</option>', self.proxy_market)
 
     @staticmethod
     def navigation_slice(source, start, end):

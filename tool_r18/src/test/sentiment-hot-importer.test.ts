@@ -345,6 +345,101 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(true);
   });
 
+  it("adds script variants only from model generated hot query terms", () => {
+    const keywords = [
+      "\u7406\u9aee\u907f\u5751",
+      "\u7406\u9aee\u5e97\u63a8\u85a6",
+      "\u526a\u9aee\u670d\u52d9",
+    ];
+    const queries = buildModelOrderedThreadsSearchQueries(keywords);
+    const instagramQueries = buildInstagramHotSearchQueries(keywords, keywords);
+
+    expect(queries).toContain("\u7406\u9aee\u907f\u5751");
+    expect(queries).toContain("\u7406\u53d1\u907f\u5751");
+    expect(queries).toContain("\u7406\u53d1\u5e97\u63a8\u8350");
+    expect(queries).toContain("\u526a\u53d1\u670d\u52a1");
+    expect(queries).not.toContain("\u6309\u6469\u6280\u5e08");
+    expect(instagramQueries).toContain("\u7406\u53d1\u907f\u5751");
+    expect(instagramQueries).toContain("\u7406\u53d1\u5e97\u63a8\u8350");
+    expect(instagramQueries).not.toContain("\u6309\u6469\u6280\u5e08");
+  });
+
+  it("keeps script variants inside the first browser query window", () => {
+    const queries = buildModelOrderedThreadsSearchQueries([
+      "\u7406\u9aee\u907f\u5751",
+      "\u7406\u9aee\u5e97\u63a8\u85a6",
+      "\u526a\u9aee\u670d\u52d9",
+      "\u7406\u9aee\u524d\u5f8c",
+      "\u9867\u5ba2\u4e92\u52d5",
+      "\u7406\u9aee\u50f9\u683c",
+      "\u9aee\u578b\u8a2d\u8a08",
+      "\u7406\u9aee\u771f\u5be6\u9ad4\u9a57",
+      "\u7406\u9aee\u6e2c\u8a55",
+      "\u7406\u9aee\u5834\u666f",
+      "\u526a\u9aee\u75db\u9ede",
+      "\u7406\u9aee\u4e92\u52d5",
+    ]);
+    const firstBrowserWindow = queries.slice(0, 12);
+
+    expect(firstBrowserWindow).toContain("\u7406\u53d1\u907f\u5751");
+    expect(firstBrowserWindow).toContain("\u7406\u53d1\u5e97\u63a8\u8350");
+    expect(firstBrowserWindow).toContain("\u526a\u53d1\u670d\u52a1");
+  });
+
+  it("matches simplified candidate text against traditional strategy anchors in strict mode", () => {
+    const strategy = {
+      primaryQueries: ["\u7406\u9aee\u907f\u5751", "\u7406\u9aee\u5e97\u63a8\u85a6", "\u526a\u9aee\u670d\u52d9"],
+      ecosystemQueries: ["\u7406\u9aee\u771f\u5be6\u9ad4\u9a57"],
+      broadQueries: ["\u9aee\u578b\u8a2d\u8a08"],
+      requiredAnchorTerms: ["\u7406\u9aee\u5e97", "\u526a\u9aee", "\u9aee\u578b\u5e2b"],
+      normalAnchorTerms: ["\u7f8e\u9aee\u5e97", "\u9aee\u578b\u8a2d\u8a08"],
+      strictAcceptTerms: ["\u7406\u9aee\u5e97", "\u526a\u9aee", "\u7406\u9aee\u907f\u5751"],
+      normalAcceptTerms: ["\u7f8e\u9aee", "\u9aee\u578b"],
+      rejectTerms: [],
+      personaGuardTerms: [],
+      domainSummary: "\u7406\u9aee\u8207\u7f8e\u9aee\u884c\u696d",
+    } as any;
+    const candidate = {
+      id: "simplified-haircut",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@salon/post/simplified-haircut",
+      author: "salon",
+      content: "\u8fd9\u5bb6\u7406\u53d1\u5e97\u5206\u4eab\u526a\u53d1\u524d\u540e\u5bf9\u6bd4\u548c\u53d1\u578b\u5e08\u6c9f\u901a\u7ecf\u9a8c\uff0c\u63d0\u9192\u987e\u5ba2\u5148\u786e\u8ba4\u53d1\u578b\u9700\u6c42\u3001\u4ef7\u683c\u548c\u5934\u53d1\u62a4\u7406\u65b9\u5f0f\u3002",
+      media: [],
+      hotScore: 5000,
+      metrics: { query: "\u7406\u53d1\u907f\u5751" },
+    } as any;
+
+    expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(true);
+  });
+
+  it("still rejects unrelated simplified candidates after script expansion", () => {
+    const strategy = {
+      primaryQueries: ["\u7406\u9aee\u907f\u5751", "\u7406\u9aee\u5e97\u63a8\u85a6", "\u526a\u9aee\u670d\u52d9"],
+      ecosystemQueries: [],
+      broadQueries: [],
+      requiredAnchorTerms: ["\u7406\u9aee\u5e97", "\u526a\u9aee", "\u9aee\u578b\u5e2b"],
+      normalAnchorTerms: ["\u7f8e\u9aee\u5e97", "\u9aee\u578b\u8a2d\u8a08"],
+      strictAcceptTerms: ["\u7406\u9aee\u5e97", "\u526a\u9aee", "\u7406\u9aee\u907f\u5751"],
+      normalAcceptTerms: ["\u7f8e\u9aee", "\u9aee\u578b"],
+      rejectTerms: [],
+      personaGuardTerms: [],
+      domainSummary: "\u7406\u9aee\u8207\u7f8e\u9aee\u884c\u696d",
+    } as any;
+    const candidate = {
+      id: "unrelated-massage",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@spa/post/unrelated",
+      author: "spa",
+      content: "\u4eca\u5929\u8ba8\u8bba\u6309\u6469\u5e97\u670d\u52a1\u548c\u6280\u5e08\u5de5\u4f5c\u6d41\u7a0b\uff0c\u5305\u542b\u9884\u7ea6\u3001\u5ba2\u670d\u3001\u4f1a\u5458\u4ef7\u683c\u548c\u95e8\u5e97\u73af\u5883\u4f53\u9a8c\uff0c\u91cd\u70b9\u662f\u653e\u677e\u9879\u76ee\u548c\u7a7a\u95f4\u5b89\u6392\u3002",
+      media: [],
+      hotScore: 8000,
+      metrics: { query: "\u6309\u6469\u670d\u52a1" },
+    } as any;
+
+    expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(false);
+  });
+
   it("keeps manually edited strict keywords before cached model query terms", () => {
     const strategy = {
       primaryQueries: ["理发店", "剪头发", "发型设计", "剪发", "理发前后"],
@@ -574,7 +669,7 @@ describe("sentiment hot importer", () => {
     expect(finalizeSentimentHotCandidatesForDisplay([candidate] as any, 10, {
       keywords: ["刺青 cosplay", "cosplay"],
       searchMode: "strict",
-    }).map((item) => item.id)).toEqual([]);
+    }).map((item) => item.id)).toEqual(["cosplay-strict"]);
   });
 
   it("does not treat a generic live-stream word as strict persona relevance", () => {
@@ -599,19 +694,20 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesCurrentKeywords(gameLive as any, ["直播", "游戏直播"], "strict")).toBe(true);
   });
 
-  it("does not invent hard-coded script variants for search terms", () => {
+  it("matches script variants without inventing unrelated industry synonyms", () => {
     const candidate = {
       id: "traditional-auto-repair",
       platform: "threads",
       sourceUrl: "https://www.threads.net/@garage/post/traditional-auto-repair",
       author: "garage",
-      content: "請問泡水車的汽車維修費用大概多少，想找可靠的保養廠檢查底盤。",
+      content: "\u8acb\u554f\u6ce1\u6c34\u8eca\u7684\u6c7d\u8eca\u7dad\u4fee\u8cbb\u7528\u5927\u6982\u591a\u5c11\uff0c\u60f3\u627e\u53ef\u9760\u7684\u4fdd\u990a\u5ee0\u6aa2\u67e5\u5e95\u76e4\u3002",
       hotScore: 5000,
       metrics: {},
       capturedAt: new Date().toISOString(),
     };
 
-    expect(candidateMatchesCurrentKeywords(candidate as any, ["汽车维修", "车辆保养"], "strict")).toBe(false);
+    expect(candidateMatchesCurrentKeywords(candidate as any, ["汽车维修", "车辆保养"], "strict")).toBe(true);
+    expect(candidateMatchesCurrentKeywords(candidate as any, ["汽修", "修車"], "strict")).toBe(false);
     expect(candidateMatchesCurrentKeywords(candidate as any, ["汽車維修", "車輛保養"], "strict")).toBe(true);
   });
 
@@ -1306,7 +1402,7 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesCurrentKeywords(relevant, keywords, "strict")).toBe(true);
   });
 
-  it("does not display hot candidates shorter than 60 Chinese characters", () => {
+  it("does not display hot candidates shorter than 25 Chinese characters", () => {
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
         id: "short-hot",
@@ -1333,6 +1429,33 @@ describe("sentiment hot importer", () => {
     ] as any, 10);
 
     expect(candidates.map((candidate) => candidate.id)).toEqual(["long-hot"]);
+  });
+
+  it("uses a 25 Chinese character floor for hot candidates", () => {
+    const base = {
+      platform: "threads",
+      author: "demo",
+      media: [],
+      hotScore: 9_000,
+      metrics: {},
+      capturedAt: new Date().toISOString(),
+    };
+    const candidates = finalizeSentimentHotCandidatesForDisplay([
+      {
+        ...base,
+        id: "under-25",
+        sourceUrl: "https://www.threads.net/@demo/post/under-25",
+        content: "\u7406".repeat(24),
+      },
+      {
+        ...base,
+        id: "at-25",
+        sourceUrl: "https://www.threads.net/@demo/post/at-25",
+        content: "\u7406".repeat(25),
+      },
+    ] as any, 10);
+
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["at-25"]);
   });
 
   it("applies the same content floor to Threads search candidates", () => {
@@ -1721,9 +1844,7 @@ tea\u8336\u6587\u5316\u65e5\u5e38\u5206\u4eab\u8207\u6162\u751f\u6d3b\u9ad4\u9a5
   });
 
   it("enriches final Threads.com candidates with real views from post details", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      text: async () => `
+    const fetchMock = vi.fn(async () => new Response(`
 Title: Demo on Threads
 
 ## [Thread 186K views](https://www.threads.com/@demo/post/real-views)
@@ -1737,8 +1858,7 @@ Demo post body
 3.3K
 
 1.7K
-`,
-    }));
+`, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const [candidate] = await enrichThreadsCandidateDetails([{
@@ -1771,16 +1891,16 @@ Demo post body
   });
 
   it("keeps a detail-enriched post hidden when its body remains below the content floor", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({
-      ok: true,
-      text: async () => "## [Thread 12K views](https://www.threads.com/@tea/post/detail-rescue)",
-    })));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      "## [Thread 12K views](https://www.threads.com/@tea/post/detail-rescue)",
+      { status: 200 },
+    )));
     const source = {
       id: "detail-rescue",
       platform: "threads",
       sourceUrl: "https://www.threads.com/@tea/post/detail-rescue",
       author: "tea",
-      content: "\u8336\u6587\u5316\u9928\u5206\u4eab\u54c1\u8336\u3001\u8336\u5177\u4f7f\u7528\u8207\u8336\u9053\u9ad4\u9a57\uff0c\u4e26\u6574\u7406\u8336\u8449\u4fdd\u5b58\u3001\u6c96\u6ce1\u6eab\u5ea6\u3001\u98a8\u5473\u8a18\u9304\u8207\u65e5\u5e38\u6162\u751f\u6d3b\u5be6\u8e10\u65b9\u6cd5\u3002",
+      content: "\u8336\u6587\u5316\u9928\u54c1\u8336\u8336\u9053\u5fc3\u5f97",
       media: [],
       hotScore: 191,
       metrics: { source: "threads-account-search" },
@@ -1803,10 +1923,10 @@ Demo post body
   });
 
   it("forces a fresh detail read when a cached candidate already has views", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      text: async () => "## [Thread 99 views](https://www.threads.com/@demo/post/refresh-views)",
-    }));
+    const fetchMock = vi.fn(async () => new Response(
+      "## [Thread 99 views](https://www.threads.com/@demo/post/refresh-views)",
+      { status: 200 },
+    ));
     vi.stubGlobal("fetch", fetchMock);
 
     const [candidate] = await enrichThreadsCandidateDetails([{
@@ -2110,9 +2230,7 @@ Translate
   });
 
   it("overwrites existing named metrics when refreshing a stored Threads source", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      text: async () => `
+    const fetchMock = vi.fn(async () => new Response(`
 Title: Demo on Threads
 
 # [Thread 250 views](https://www.threads.net/@demo/post/abc)
@@ -2126,8 +2244,7 @@ Demo post body
 3
 
 88
-`,
-    }));
+`, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const refreshed = await refreshSentimentSourceMetrics({

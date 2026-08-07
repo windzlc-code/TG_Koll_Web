@@ -9,6 +9,11 @@ import { withSentimentHotExecutionLock } from "@/lib/sentiment-hot-execution-loc
 import {
   AdaptiveHotRateLimiter,
 } from "@/lib/adaptive-hot-rate-limiter";
+import {
+  createReaderResponseCoordinator,
+  type ReaderResponseCacheMode,
+  type ReaderResponseSnapshot,
+} from "@/lib/reader-response-coordinator";
 import { readRuntimeApiConfig } from "@/runtime/node/config";
 import { callTextUnderstandingModelWithFallback, extractText, getTextUnderstandingModelFallbacks, isTextModelFallbackError } from "@/lib/gemini-client";
 import {
@@ -39,7 +44,7 @@ const MIN_SENTIMENT_HOT_SCORE = 1000;
 // High-heat results remain preferred. For a sparse niche, the browser may add
 // recent, topic-anchored posts with verified engagement fields behind them.
 const MIN_THREADS_SEARCH_PAGE_HOT_SCORE = MIN_SENTIMENT_HOT_SCORE;
-const MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT = 60;
+const MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT = 25;
 const SENTIMENT_HOT_CANDIDATE_POOL_TARGET = 400;
 const THREADS_SEARCH_CACHE_CANDIDATE_LIMIT = 2000;
 const THREADS_SEARCH_CACHE_MAX_ROWS_PER_ARCHIVE = 40;
@@ -118,6 +123,12 @@ const sharedReaderRateLimiter = new AdaptiveHotRateLimiter({
   baseBackoffMs: 750,
   maxBackoffMs: 30_000,
   recoverySuccessThreshold: 4,
+});
+const sharedReaderResponseCoordinator = createReaderResponseCoordinator({
+  freshTtlMs: 5 * 60_000,
+  staleTtlMs: 10 * 60_000,
+  maxEntries: 200,
+  storageDir: resolveRuntimeFile("sentiment_reader_response_cache"),
 });
 
 export function resolveSentimentHotStrategyTimeoutMs(refresh: boolean, remainingMs: number): number {
@@ -384,6 +395,66 @@ function isSearchableRelevanceTerm(value: unknown): boolean {
   return hasHan(text) || /^[A-Za-z][A-Za-z0-9.+-]{2,20}$/.test(text);
 }
 
+const SENTIMENT_HOT_SCRIPT_VARIANT_PAIRS: Array<[string, string]> = [
+  ["發", "发"],
+  ["髮", "发"],
+  ["頭", "头"],
+  ["後", "后"],
+  ["師", "师"],
+  ["價", "价"],
+  ["體", "体"],
+  ["驗", "验"],
+  ["實", "实"],
+  ["場", "场"],
+  ["業", "业"],
+  ["動", "动"],
+  ["對", "对"],
+  ["設", "设"],
+  ["計", "计"],
+  ["車", "车"],
+  ["輛", "辆"],
+  ["維", "维"],
+  ["養", "养"],
+  ["廠", "厂"],
+  ["檢", "检"],
+  ["費", "费"],
+  ["評", "评"],
+  ["薦", "荐"],
+  ["顧", "顾"],
+  ["選", "选"],
+  ["擇", "择"],
+  ["務", "务"],
+  ["點", "点"],
+  ["燙", "烫"],
+  ["麼", "么"],
+  ["會", "会"],
+  ["還", "还"],
+  ["這", "这"],
+  ["個", "个"],
+  ["與", "与"],
+];
+
+function expandChineseScriptVariants(value: string): string[] {
+  const text = cleanText(value);
+  if (!text || !hasHan(text)) return [];
+  const toSimplified = new Map<string, string>();
+  const toTraditional = new Map<string, string>();
+  for (const [traditional, simplified] of SENTIMENT_HOT_SCRIPT_VARIANT_PAIRS) {
+    toSimplified.set(traditional, simplified);
+    if (!toTraditional.has(simplified)) toTraditional.set(simplified, traditional);
+  }
+  const convert = (source: string, table: Map<string, string>) => Array.from(source)
+    .map((char) => table.get(char) || char)
+    .join("");
+  const variants = new Set<string>([text, convert(text, toSimplified), convert(text, toTraditional)]);
+  const replaceAllText = (source: string, from: string, to: string) => source.split(from).join(to);
+  for (const [traditional, simplified] of SENTIMENT_HOT_SCRIPT_VARIANT_PAIRS) {
+    if (text.includes(traditional)) variants.add(replaceAllText(text, traditional, simplified));
+    if (text.includes(simplified)) variants.add(replaceAllText(text, simplified, traditional));
+  }
+  return [...variants].map(cleanText).filter(Boolean);
+}
+
 function expandSentimentSearchKeywordVariants(value: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -399,7 +470,7 @@ function expandSentimentSearchKeywordVariants(value: string): string[] {
   };
 
   const text = cleanText(value);
-  add(text);
+  for (const variant of expandChineseScriptVariants(text)) add(variant);
   return out;
 }
 
@@ -4621,26 +4692,51 @@ async function fetchWithSharedReaderLimit(
   targetUrl: string,
   init: Omit<RequestInit, "signal">,
   timeoutMs: number,
+  cacheMode: ReaderResponseCacheMode = "swr",
 ): Promise<{
   ok: boolean;
   status: number;
   headers: Headers;
   text: () => Promise<string>;
 }> {
-  return sharedReaderRateLimiter.run(
-    SHARED_READER_UPSTREAM_KEY,
-    async ({ signal }) => {
-      const response = await fetch(buildJinaReaderUrl(targetUrl), { ...init, signal });
-      const body = await response.text();
-      return {
-        ok: response.ok,
-        status: response.status,
-        headers: response.headers,
-        text: async () => body,
-      };
+  const readerUrl = buildJinaReaderUrl(targetUrl);
+  const requestHeaders = new Headers(init.headers);
+  const cacheKey = JSON.stringify({
+    url: readerUrl,
+    method: String(init.method || "GET").toUpperCase(),
+    accept: requestHeaders.get("accept") || "",
+  });
+  const snapshot = await sharedReaderResponseCoordinator.getOrLoad(
+    cacheKey,
+    async (): Promise<ReaderResponseSnapshot> => sharedReaderRateLimiter.run(
+      SHARED_READER_UPSTREAM_KEY,
+      async ({ signal }) => {
+        const response = await fetch(readerUrl, { ...init, signal });
+        const body = await response.text();
+        return {
+          ok: response.ok,
+          status: response.status,
+          headers: Object.fromEntries(response.headers.entries()),
+          body,
+        };
+      },
+      { timeoutMs },
+    ),
+    {
+      mode: cacheMode,
+      isCacheable: (value) => value.ok
+        && value.status >= 200
+        && value.status < 300
+        && value.body.trim().length > 0
+        && !/<title>\s*(?:502|503|504)\b|bad gateway|gateway timeout|service unavailable/i.test(value.body),
     },
-    { timeoutMs },
   );
+  return {
+    ok: snapshot.ok,
+    status: snapshot.status,
+    headers: new Headers(snapshot.headers),
+    text: async () => snapshot.body,
+  };
 }
 
 async function fetchThreadsReaderSearchCandidates(args: {
@@ -4699,7 +4795,7 @@ async function fetchThreadsReaderSearchCandidates(args: {
               accept: "text/plain, text/markdown, */*",
               "cache-control": "max-age=300",
             },
-          }, timeoutMs);
+          }, timeoutMs, args.refresh ? "blocking-refresh" : "swr");
           if (!response.ok) return { query, targetUrl, text: "" };
           return { query, targetUrl, text: await response.text() };
         } catch {
@@ -5106,7 +5202,7 @@ async function fetchInstagramReaderSearchCandidates(args: {
               accept: "text/plain, text/markdown, */*",
               "cache-control": "max-age=300",
             },
-          }, 8_000);
+          }, 8_000, args.refresh ? "blocking-refresh" : "swr");
           if (!response.ok) {
             failedResponses += 1;
             if (response.status === 429) rateLimitedResponses += 1;
@@ -6305,7 +6401,7 @@ export async function fetchThreadsProfileHotMetrics(usernameInput: string): Prom
         "cache-control": "no-cache",
         pragma: "no-cache",
       },
-    }, 15_000);
+    }, 15_000, "bypass");
     const text = response.ok ? await response.text() : "";
     const links = Array.from(text.matchAll(/https?:\/\/(?:www\.)?threads\.(?:net|com)\/@[^)\]\s]+\/post\/[^)\]\s]+/gi))
       .map((match) => match[0]);
@@ -6926,7 +7022,7 @@ async function fetchThreadsDetailData(sourceUrl: string): Promise<{
         "cache-control": "no-cache",
         pragma: "no-cache",
       },
-    }, 12_000);
+    }, 12_000, "bypass");
     if (!response.ok) return { engagement: {}, media: [] };
     const text = await response.text();
     return {
@@ -7823,8 +7919,8 @@ export function buildModelOrderedThreadsSearchQueries(keywords: string[]): strin
     if (!out.includes(text)) out.push(text);
   };
   const orderedKeywords = meaningfulNeedles(keywords);
-  for (const keyword of orderedKeywords) add(keyword);
   for (const keyword of orderedKeywords) {
+    add(keyword);
     for (const variant of expandSentimentSearchKeywordVariants(keyword)) add(variant);
   }
   return out.slice(0, 48);

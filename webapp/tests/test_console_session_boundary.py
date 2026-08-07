@@ -868,8 +868,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             }}
 
             assert.equal(
-              adminWorkspacePageUrl("/proxy-market.html#inventory"),
-              "/proxy-market.html?admin_console=1&admin_workspace_user_id=42#inventory",
+              adminWorkspacePageUrl("/about-vecto.html#story"),
+              "/about-vecto.html?admin_console=1&admin_workspace_user_id=42#story",
             );
             assert.equal(
               pdSafeLinkUrl("/persona-automation-log.html?task_id=7"),
@@ -902,7 +902,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               ["/", "/?admin_console=1&admin_workspace_user_id=42"],
               ["/#solution", "/?admin_console=1&admin_workspace_user_id=42#solution"],
               ["/about-vecto.html", "/about-vecto.html?admin_console=1&admin_workspace_user_id=42"],
-              ["/proxy-market.html", "/proxy-market.html?admin_console=1&admin_workspace_user_id=42"],
               ["/subscription.html", "/subscription.html?admin_console=1&admin_workspace_user_id=42"],
               ["/pricing.html", "/pricing.html?admin_console=1&admin_workspace_user_id=42"],
             ]);
@@ -2924,7 +2923,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         bind_events = self._function_source("bindEvents")
         change_events = bind_events[
             bind_events.index('$("moduleBody").addEventListener("change"'):
-            bind_events.index('$("moduleBody").addEventListener("input"')
+            bind_events.index('if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click"')
         ]
         account_events = bind_events[
             bind_events.index('if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click"'):
@@ -3168,7 +3167,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.deepStrictEqual(accountProxyEligibility(null, now), {{ eligible: true, reason: "" }});
             assert.strictEqual(accountProxyEligibility(valid, now).eligible, true);
             assert.strictEqual(accountProxyEligibility({{ ...valid, ip_type: "datacenter", market_item_id: "market-1" }}, now).eligible, true);
-            assert.strictEqual(accountProxyEligibility({{ ...valid, ip_type: "datacenter", market_item_id: "" }}, now).reason, "仅支持静态住宅 IP 或商城认证的机房代理");
+            assert.strictEqual(accountProxyEligibility({{ ...valid, ip_type: "datacenter", market_item_id: "" }}, now).reason, "仅支持静态住宅 IP 或系统导入的机房代理");
             assert.strictEqual(accountProxyEligibility({{ ...valid, expires_at: now }}, now).reason, "已过期");
             assert.strictEqual(accountProxyEligibility({{ ...valid, status: "inactive" }}, now).eligible, false);
             assert.strictEqual(accountProxyEligibility({{ ...valid, last_check_at: 0 }}, now).reason, "未通过网络检测");
@@ -3204,18 +3203,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         proxy_modal = self._section("function openProxyModal", "async function refreshProxyPool")
 
         self.assertIn("data-account-proxy-custom-add", picker)
-        self.assertIn("data-account-proxy-market-open", picker)
+        self.assertNotIn("data-account-proxy-market-open", picker)
         self.assertIn('function openAccountProxyPickerModal(accountId = "", initialProxyId = null)', self.source)
         self.assertIn('initialProxyId === null || initialProxyId === undefined', picker)
         self.assertIn('if (accountProxyCustomIsBusy(modal))', picker)
         self.assertIn('accountProxyCustomBusyMessage();', picker)
-        self.assertIn("openProxyMarketModal({ accountId: account.id, selectedProxyId: modal.dataset.selectedProxyId || \"\" })", picker)
         self.assertIn("accountProxyInlineCustomFormHtml", picker)
         self.assertIn("saveAccountInlineCustomProxy", picker)
         self.assertNotIn("openProxyModal", picker)
-        self.assertIn("function openProxyMarketModal({ accountId = \"\", selectedProxyId = \"\" } = {})", self.source)
-        self.assertIn("result?.allocation?.social_proxy_id", self.source)
-        self.assertIn("openAccountProxyPickerModal(returnAccountId, claimedProxyId)", self.source)
+        self.assertNotIn("function openProxyMarketModal", self.source)
         self.assertIn("data-account-proxy-custom-add", editor_modal)
         self.assertIn("saveAccountInlineCustomProxy", editor_modal)
         self.assertNotIn("openProxyModal", editor_modal)
@@ -3565,6 +3561,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             self._function_source("isFutureScheduledSocialTask"),
             self._function_source("renderSocialQueueTaskStatus"),
             self._function_source("socialTaskDisplayStatus"),
+            self._function_source("socialTaskFailureReason"),
             self._function_source("socialTaskToastMessage"),
             self._function_source("renderSocialTasks"),
         ])

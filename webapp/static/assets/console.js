@@ -366,11 +366,6 @@ const state = {
   transientWorkspaceAllowNextUnload: false,
   accountBrowserPanel: initialAccountBrowserPanelIsSupported ? initialAccountBrowserPanel : "accounts",
   activeVideoModule: initialVideoModuleIsSupported ? initialVideoModule : VIDEO_WORKSPACE_MODULES[0].id,
-  proxyMarketUnreadCount: 0,
-  proxyMarketAvailableCount: 0,
-  proxyMarketSummaryLoaded: false,
-  proxyMarketReadRevision: 0,
-  proxyMarketMarkReadPromise: null,
   liveBrowserExpandedSessionId: "",
   liveBrowserReturnTarget: null,
   workspaceMenuOpen: true,
@@ -2495,7 +2490,7 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
         ${(showCancel || showConfirm || (Array.isArray(extraActions) && extraActions.length)) ? `
           <div class="console-modal-actions">
             ${showCancel ? `<button type="button" data-console-modal-cancel>${esc(cancelText)}</button>` : ""}
-            ${Array.isArray(extraActions) ? extraActions.map((action) => `<button type="button" class="${action?.danger ? "danger" : (action?.primary ? "primary" : "")}" data-console-modal-value="${esc(action?.value || "")}">${esc(action?.text || "")}</button>`).join("") : ""}
+            ${Array.isArray(extraActions) ? extraActions.map((action) => `<button type="button" class="${action?.danger ? "danger" : (action?.primary ? "primary" : "")}" data-console-modal-value="${esc(action?.value || "")}">${action?.iconHtml || ""}${esc(action?.text || "")}</button>`).join("") : ""}
             ${showConfirm ? `<button type="button" class="${danger ? "danger" : "primary"}" data-console-modal-confirm>${esc(confirmText)}</button>` : ""}
           </div>` : ""}
       </section>
@@ -10447,10 +10442,19 @@ function renderBrowserLaunchIcon() {
   </svg>`;
 }
 
+function renderSourceLinkIcon() {
+  return `<svg class="ui-action-icon ui-link-icon ui-source-link-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+  </svg>`;
+}
+
 function renderRequeueIcon() {
   return `<svg class="ui-action-icon ui-requeue-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <path d="M6 21V4"></path>
-    <path d="M6 5c3.1-2 6.2 2 10 0v9c-3.8 2-6.9-2-10 0"></path>
+    <path d="M5 12a7 7 0 0 1 11.9-4.95L19 9"></path>
+    <path d="M19 5v4h-4"></path>
+    <path d="M19 12a7 7 0 0 1-11.9 4.95L5 15"></path>
+    <path d="M5 19v-4h4"></path>
   </svg>`;
 }
 
@@ -10461,15 +10465,6 @@ function renderNetworkIcon() {
     <path d="M3.6 15h16.8"></path>
     <path d="M12 3a14 14 0 0 1 0 18"></path>
     <path d="M12 3a14 14 0 0 0 0 18"></path>
-  </svg>`;
-}
-
-function renderProxyMarketIcon() {
-  return `<svg class="ui-action-icon ui-proxy-market-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M4 10.5h16v9H4z"></path>
-    <path d="M3 10.5 5 5h14l2 5.5"></path>
-    <path d="M4 10.5c0 1.55 1.12 2.5 2.5 2.5s2.5-.95 2.5-2.5c0 1.55 1.12 2.5 2.5 2.5s2.5-.95 2.5-2.5c0 1.55 1.12 2.5 2.5 2.5s2.5-.95 2.5-2.5"></path>
-    <path d="M8 19.5v-4h4v4"></path>
   </svg>`;
 }
 
@@ -13165,6 +13160,29 @@ function renderPublishHistoryMetrics(record = {}, className = "") {
     </div>`;
 }
 
+function publishHistoryAccountWarning(record = {}) {
+  const match = record?.account_match || {};
+  const warning = String(match.warning || "").trim();
+  return match.matches_current === false && warning ? warning : "";
+}
+
+function renderPublishHistoryAccountWarning(record = {}) {
+  const warning = publishHistoryAccountWarning(record);
+  return warning ? `<div class="publish-history-account-warning">${esc(warning)}</div>` : "";
+}
+
+function renderPublishHistorySourceLink(url = "", { showUrl = false, compact = false } = {}) {
+  const safeUrl = safeExternalHttpUrl(url);
+  if (!safeUrl) return "";
+  return `
+    <div class="publish-history-source-row ${compact ? "is-compact" : ""}">
+      <a class="publish-history-source-link" href="${esc(safeUrl)}" target="_blank" rel="noopener">
+        ${renderSourceLinkIcon()}<span>查看来源</span>
+      </a>
+      ${showUrl ? `<span class="publish-history-source-url" title="${esc(safeUrl)}">${esc(safeUrl)}</span>` : ""}
+    </div>`;
+}
+
 function renderPublishHistorySelectionList(persona = selectedPersona()) {
   const rows = personaPublishHistoryRows(persona);
   if (!rows.length) return `<div class="empty-state">当前人设还没有任务历史。</div>`;
@@ -13179,6 +13197,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona()) {
         const displayIndex = fullIndex >= 0 ? fullIndex : index;
         const active = recordId === activeId;
         const mediaItems = personaHistoryMediaItems(record);
+        const publishedUrl = safeExternalHttpUrl(record.source_url || record.published_url || record.url || record.post_url);
         const platform = String(record.platform || record.publishPlatform || "").trim();
         const status = String(record.status || "").trim();
         const meta = [platform, status ? statusLabel(status) : "", formatTime(publishHistoryRecordTime(record))].filter(Boolean).join(" · ");
@@ -13193,10 +13212,12 @@ function renderPublishHistorySelectionList(persona = selectedPersona()) {
                 </span>
                 <span class="publish-post-card-meta">${esc(meta || "任务记录")}</span>
                 <span class="publish-post-card-snippet">${esc(String(record.content || record.caption || record.text || record.source_url || "").trim() || "该记录没有正文摘要。")}</span>
+                ${renderPublishHistoryAccountWarning(record)}
               </span>
               <span class="publish-history-card-actions" aria-label="任务历史操作">
+                ${publishedUrl ? `<a class="publish-history-card-action" href="${esc(publishedUrl)}" target="_blank" rel="noopener" title="打开来源链接" aria-label="打开来源链接">${renderSourceLinkIcon()}</a>` : ""}
                 <button type="button" class="publish-history-card-action" data-publish-history-view="${esc(recordId)}" title="查看任务历史" aria-label="查看任务历史">${renderEyeIcon()}</button>
-                <button type="button" class="publish-history-card-action" data-publish-history-requeue="${esc(recordId)}" title="重入队" aria-label="重入队">${renderRequeueIcon()}</button>
+                <button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>
               </span>
               ${renderPublishHistoryMetrics(record, "publish-history-card-metrics")}
             </div>
@@ -13238,10 +13259,11 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
             </div>
             <p>${esc(String(activeRecord?.content || activeRecord?.caption || activeRecord?.text || activeRecord?.source_url || "").trim() || "该记录没有正文或链接摘要。")}</p>
             ${renderPublishHistoryMetrics(activeRecord)}
+            ${renderPublishHistoryAccountWarning(activeRecord)}
             <div class="publish-history-hot-status ${hotMetrics.complete ? "is-complete" : "is-stale"}">${esc(hotStatus)}</div>
             <div class="row-actions publish-history-actions">
-              ${publishedUrl ? `<a href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看来源</a>` : ""}
-              <button type="button" data-publish-history-requeue="${esc(String(activeRecord?.id || ""))}">重入队</button>
+              ${renderPublishHistorySourceLink(publishedUrl, { compact: true })}
+              <button type="button" class="publish-history-requeue-button" data-publish-history-requeue="${esc(String(activeRecord?.id || ""))}">${renderRequeueIcon()}<span>重回草稿</span></button>
             </div>
             ${renderPublishPreviewMedia(activeMediaItems)}
           </article>
@@ -13310,12 +13332,13 @@ async function openPublishHistoryRecordModal(historyId = "", persona = selectedP
         </div>
         ${renderPublishHistoryMetrics(record, "publish-history-modal-metrics")}
         <p>${esc(String(record.content || record.caption || record.text || record.source_url || "").trim() || "该记录没有正文或链接摘要。")}</p>
-        ${publishedUrl ? `<a class="publish-history-modal-source" href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看来源</a>` : ""}
+        ${renderPublishHistoryAccountWarning(record)}
+        ${renderPublishHistorySourceLink(publishedUrl, { showUrl: true })}
         ${renderPublishPreviewMedia(mediaItems)}
       </article>`,
     cancelText: "关闭",
     showConfirm: false,
-    extraActions: [{ value: "requeue", text: "重入队" }],
+    extraActions: [{ value: "requeue", text: "重回草稿", iconHtml: renderRequeueIcon() }],
     modalKey: "publish-history-detail",
   });
   if (action === "requeue") await requeuePublishHistoryRecord(cleanHistoryId, persona);
@@ -13330,12 +13353,12 @@ async function requeuePublishHistoryRecord(historyId = "", persona = selectedPer
   }
   const lockParts = ["publish_history_requeue", cleanPersonaId, cleanHistoryId];
   if (isActionLocked(...lockParts)) {
-    showMsg("commandMsg", "该任务历史正在重入队，请等待当前操作完成。", false);
+    showMsg("commandMsg", "该任务历史正在重回草稿，请等待当前操作完成。", false);
     return;
   }
   setActionLocked(lockParts, true);
   try {
-    showMsg("commandMsg", "正在将任务历史重入草稿队列...", true);
+    showMsg("commandMsg", "正在将任务历史重回草稿...", true);
     const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(cleanPersonaId)}/publish_history/${encodeURIComponent(cleanHistoryId)}/requeue`, {
       method: "POST",
     });
@@ -13345,10 +13368,10 @@ async function requeuePublishHistoryRecord(historyId = "", persona = selectedPer
       loadPersonas().catch(() => {}),
     ]);
     const postTitle = String(result?.post?.title || "任务历史").trim();
-    showMsg("commandMsg", `已重入队：${postTitle}`, true);
+    showMsg("commandMsg", `已重回草稿：${postTitle}`, true);
     if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
   } catch (error) {
-    showMsg("commandMsg", error.detail || error.message || "重入队失败", false);
+    showMsg("commandMsg", error.detail || error.message || "重回草稿失败", false);
   } finally {
     setActionLocked(lockParts, false);
   }
@@ -14244,7 +14267,7 @@ function bindSimpleFlowInputs(moduleId) {
     });
     document.querySelectorAll("[data-publish-history-card]").forEach((node) => {
       node.addEventListener("click", (event) => {
-        if (event.target.closest("[data-publish-history-view], [data-publish-history-requeue]")) return;
+        if (event.target.closest("[data-publish-history-view], [data-publish-history-requeue], a")) return;
         state.publishHistoryPreviewId = String(node.dataset.publishHistoryCard || "").trim();
         renderSimpleFlowModule("publishing");
       });
@@ -19874,6 +19897,9 @@ async function preparePersonaHotKeywords(refresh = false) {
         prompt: String(form.hotPrompt || "").trim(),
         refresh: Boolean(refresh),
         search_mode: form.hotSearchMode,
+        writing_locale: PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.writingLocale || ""))
+          ? String(form.writingLocale)
+          : PERSONA_DEFAULT_WRITING_LOCALE,
         selected_memory_ids: Array.isArray(form.selectedMemoryIds) ? form.selectedMemoryIds : [],
       }),
     }, 90000);
@@ -19893,11 +19919,14 @@ async function preparePersonaHotKeywords(refresh = false) {
       error: keywords.length ? "" : ((Array.isArray(result.warnings) && result.warnings[0]) || "关键词生成失败"),
     });
   } catch (error) {
+    const detail = String(error?.detail || error?.message || "");
     setPersonaGenerateRunState(persona.id, {
       kind: "hot",
       status: "error",
       message: "热点关键词生成失败",
-      error: error.detail || error.message || "关键词生成失败",
+      error: /<\s*(?:!doctype|html|head|body|title)\b|\b(?:502|503|504)\b|bad gateway|gateway timeout|service unavailable/i.test(detail)
+        ? "热点关键词服务暂时不可用，请稍后重试。"
+        : (detail || "关键词生成失败"),
     });
     throw error;
   } finally {
@@ -19954,6 +19983,9 @@ async function fetchPersonaHotCandidates(refresh = false) {
         refresh: Boolean(refresh),
         limit: 10,
         search_mode: form.hotSearchMode,
+        writing_locale: PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.writingLocale || ""))
+          ? String(form.writingLocale)
+          : PERSONA_DEFAULT_WRITING_LOCALE,
         freshness_days: form.hotFreshnessDays,
         keywords,
         // A positive freshness window is an explicit request for fresh-only
@@ -24459,7 +24491,6 @@ async function fetchSocialDataShared({ force = false } = {}) {
     api("/api/persona_dashboard/automation/accounts").catch((error) => ({ accounts: tenantArrayFallback(error, state.socialAccounts) })),
     api("/api/persona_dashboard/automation/proxies").catch((error) => ({ proxies: tenantArrayFallback(error, state.socialProxies) })),
     loadAutomationTasksShared({ force }).catch((error) => ({ tasks: tenantArrayFallback(error, state.socialTasks) })),
-    loadProxyMarketSummary().catch(() => null),
   ]).then(([overview, accountsData, proxiesData, tasksData]) => {
     state.socialBrowserSessions = Array.isArray(overview.browser_sessions) ? overview.browser_sessions : tenantArrayFallback(null, state.socialBrowserSessions);
     state.socialAccounts = Array.isArray(accountsData.accounts) ? accountsData.accounts : [];
@@ -25813,7 +25844,7 @@ function accountProxyEligibility(proxy = null, nowSeconds = Math.floor(Date.now(
   const ipType = String(proxy.ip_type || "").trim().toLowerCase();
   const marketItemId = String(proxy.market_item_id || "").trim();
   if (ipType !== "static_residential" && !(ipType === "datacenter" && marketItemId)) {
-    return { eligible: false, reason: "仅支持静态住宅 IP 或商城认证的机房代理" };
+    return { eligible: false, reason: "仅支持静态住宅 IP 或系统导入的机房代理" };
   }
   const expiresAt = Number(proxy.expires_at || 0);
   if (expiresAt > 0 && expiresAt <= Number(nowSeconds || 0)) {
@@ -25837,7 +25868,7 @@ function accountProxyBindingChanged(originalProxyId = "", selectedProxyId = "") 
 
 function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal" } = {}) {
   const selectedId = String(selectedProxyId || "").trim();
-  const rows = proxyPoolRows();
+  const rows = proxyPoolRows({ includeSystemAvailable: true });
   const option = (proxy = null) => {
     const proxyId = String(proxy?.id || "").trim();
     const selected = proxyId === selectedId;
@@ -27099,8 +27130,9 @@ async function unbindAccountPoolAccount(accountId = "", successMessage = "账号
   await loadSocial();
 }
 
-function proxyPoolRows() {
-  return Array.isArray(state.socialProxies) ? state.socialProxies : [];
+function proxyPoolRows({ includeSystemAvailable = false } = {}) {
+  const rows = Array.isArray(state.socialProxies) ? state.socialProxies : [];
+  return includeSystemAvailable ? rows : rows.filter((proxy) => proxy?.system_available !== true);
 }
 
 function proxyProtocol(proxy = {}) {
@@ -27125,7 +27157,7 @@ function proxyStatusLabel(value = "") {
 
 function proxySourceLabel(value = "") {
   const clean = String(value || "").trim().toLowerCase();
-  return { manual: "自定义添加", marketplace: "商城添加", owlproxy: "OwlProxy", provider: "其他购买代理", self_owned: "自有代理" }[clean] || (value || "-");
+  return { manual: "手动添加", marketplace: "系统导入", owlproxy: "OwlProxy", provider: "其他购买代理", self_owned: "自有代理" }[clean] || (value || "-");
 }
 
 function proxyPurchaseStatusLabel(value = "") {
@@ -27147,14 +27179,6 @@ function renderEditIcon() {
   return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <path d="M4 20h4L19 9l-4-4L4 16v4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
     <path d="m13.5 6.5 4 4" fill="none" stroke="currentColor" stroke-width="1.8" />
-  </svg>`;
-}
-
-function renderProxyReleaseIcon() {
-  return `<svg class="ui-action-icon ui-proxy-release-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <path d="M5 4h14v16H5z"></path>
-    <path d="M9 12h10"></path>
-    <path d="m15 8 4 4-4 4"></path>
   </svg>`;
 }
 
@@ -27198,7 +27222,7 @@ function openProxyDetailModal(proxyId = "") {
         <div><span>购买状态</span><strong>${esc(proxyPurchaseStatusLabel(proxy.purchase_status))}</strong></div>
         <div><span>系统有效性</span><strong>${esc(proxyAutomaticValidityLabel(proxy))}</strong></div>
         <div><span>最近检测</span><strong>${proxy.last_check_at ? esc(formatTime(proxy.last_check_at)) : "尚未检测"}</strong></div>
-        <div class="proxy-detail-modal-note"><span>备注</span><p>${esc(proxy.note || (isMarketplace ? "商城代理" : "暂无备注"))}</p></div>
+        <div class="proxy-detail-modal-note"><span>备注</span><p>${esc(proxy.note || (isMarketplace ? "历史导入代理" : "暂无备注"))}</p></div>
       </div>`,
     modalKey: "proxy-details",
     cancelText: "关闭",
@@ -27222,21 +27246,21 @@ function renderProxyPool() {
   const renderProxyMobileActions = (proxy) => {
     const isMarketplace = String(proxy.source || "").trim().toLowerCase() === "marketplace";
     const boundCount = proxyBoundAccountCount(proxy);
-    const deleteTitle = boundCount ? "代理已绑定账号，不能释放" : (isMarketplace ? "释放并退回商城" : "删除代理");
-    const deleteLabel = isMarketplace ? "释放代理" : "删除代理";
+    const deleteTitle = boundCount ? "代理已绑定账号，不能删除" : "删除代理";
+    const deleteLabel = "删除代理";
     const editAction = isMarketplace ? "" : `<button type="button" data-proxy-edit="${esc(proxy.id)}" title="编辑代理" aria-label="编辑代理">${renderEditIcon()}</button>`;
     return `
       <button type="button" data-proxy-view="${esc(proxy.id)}" title="查看详情" aria-label="查看代理详情">${renderEyeIcon()}</button>
       <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderNetworkIcon()}</button>
       ${editAction}
-      <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${deleteTitle}" aria-label="${deleteLabel}" ${boundCount ? "disabled" : ""}>${isMarketplace ? renderProxyReleaseIcon() : renderTrashIcon()}</button>`;
+      <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${deleteTitle}" aria-label="${deleteLabel}" ${boundCount ? "disabled" : ""}>${renderTrashIcon()}</button>`;
   };
   root.innerHTML = `
     <section class="proxy-pool-panel">
       <div class="proxy-pool-head">
         <div><strong>代理 IP</strong><span>独立维护代理信息并查看账号绑定情况。</span></div>
         <div class="proxy-pool-head-actions">
-          <button type="button" class="primary proxy-pool-add" data-proxy-add>${renderCustomProxyIcon()}<span>自定义代理</span></button>
+          <button type="button" class="primary proxy-pool-add" data-proxy-add>${renderCustomProxyIcon()}<span>添加代理</span></button>
         </div>
       </div>
       <div class="proxy-table-wrap" data-proxy-desktop-list>
@@ -27247,13 +27271,12 @@ function renderProxyPool() {
             const country = String(proxy.country || "").trim() || "待识别";
             const authLabel = proxy.username_configured || proxy.password_configured ? "需认证" : "无认证";
             const isMarketplace = String(proxy.source || "").trim().toLowerCase() === "marketplace";
-            const isNew = Boolean(proxy.marketplace?.is_new);
             const sourceClass = isMarketplace ? "marketplace" : "custom";
             return `<div class="proxy-table-row ${isMarketplace ? "is-marketplace" : "is-custom"}" role="row">
               <span role="cell" class="proxy-detail-cell proxy-numeric" data-mobile-label="序号">${offset + index + 1}</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="分组">未分组</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="IP 类型">${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
-              <span role="cell" class="proxy-detail-cell" data-mobile-label="来源"><span class="proxy-source-badge is-${sourceClass}">${esc(proxySourceLabel(proxy.source))}</span>${isNew ? '<span class="proxy-new-badge">新</span>' : ""}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="来源"><span class="proxy-source-badge is-${sourceClass}">${esc(proxySourceLabel(proxy.source))}</span></span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="购买状态">${esc(proxyPurchaseStatusLabel(proxy.purchase_status))}</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="节点名称"><strong>${esc(proxy.name || endpoint)}</strong></span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="代理资讯"><strong>${esc(endpoint)}</strong><small>${esc(authLabel)}</small></span>
@@ -27266,8 +27289,8 @@ function renderProxyPool() {
               <span role="cell" class="proxy-detail-cell" data-mobile-label="系统有效性">${esc(proxyAutomaticValidityLabel(proxy))}</span>
               <span role="cell" class="proxy-table-actions" data-mobile-label="操作">
                 <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderNetworkIcon()}</button>
-                <button type="button" data-proxy-edit="${esc(proxy.id)}" title="${isMarketplace ? "商城代理由管理员统一维护" : "编辑代理"}" aria-label="${isMarketplace ? "商城代理不可编辑" : "编辑代理"}" ${isMarketplace ? "disabled" : ""}>${renderEditIcon()}</button>
-                <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${proxyBoundAccountCount(proxy) ? "代理已绑定账号，不能释放" : (isMarketplace ? "释放并退回商城" : "删除代理")}" aria-label="${isMarketplace ? "释放代理" : "删除代理"}" ${proxyBoundAccountCount(proxy) ? "disabled" : ""}>${isMarketplace ? renderProxyReleaseIcon() : renderTrashIcon()}</button>
+                <button type="button" data-proxy-edit="${esc(proxy.id)}" title="${isMarketplace ? "系统导入代理不可编辑" : "编辑代理"}" aria-label="${isMarketplace ? "系统导入代理不可编辑" : "编辑代理"}" ${isMarketplace ? "disabled" : ""}>${renderEditIcon()}</button>
+                <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${proxyBoundAccountCount(proxy) ? "代理已绑定账号，不能删除" : "删除代理"}" aria-label="删除代理" ${proxyBoundAccountCount(proxy) ? "disabled" : ""}>${renderTrashIcon()}</button>
               </span>
             </div>`;
           }).join("") : `<div class="empty-state proxy-pool-empty">暂无代理 IP，点击新增代理开始配置。</div>`}
@@ -27279,13 +27302,12 @@ function renderProxyPool() {
             const country = String(proxy.country || "").trim() || "待识别";
             const authLabel = proxy.username_configured || proxy.password_configured ? "需认证" : "无认证";
             const isMarketplace = String(proxy.source || "").trim().toLowerCase() === "marketplace";
-            const isNew = Boolean(proxy.marketplace?.is_new);
             const sourceClass = isMarketplace ? "marketplace" : "custom";
             const boundCount = proxyBoundAccountCount(proxy);
             return `<article class="proxy-pool-card ${isMarketplace ? "is-marketplace" : "is-custom"}" role="listitem">
               <div class="proxy-pool-card-head">
                 <div class="proxy-pool-card-identity">
-                  <span class="proxy-pool-card-kicker"><span>代理 ${offset + index + 1}</span><span class="proxy-source-badge is-${sourceClass}">${esc(proxySourceLabel(proxy.source))}</span>${isNew ? '<span class="proxy-new-badge">新</span>' : ""}</span>
+                  <span class="proxy-pool-card-kicker"><span>代理 ${offset + index + 1}</span><span class="proxy-source-badge is-${sourceClass}">${esc(proxySourceLabel(proxy.source))}</span></span>
                   <strong title="${esc(proxy.name || endpoint)}">${esc(proxy.name || endpoint)}</strong>
                 </div>
                 <span class="status ${esc(proxy.status || "")}">${esc(proxyStatusLabel(proxy.status))}</span>
@@ -27320,210 +27342,6 @@ function renderProxyPool() {
   if (mobileStream.mobile) bindMobileTweetStreamObservers();
 }
 
-function proxyMarketCatalogRoot(payload = {}) {
-  const source = payload && typeof payload === "object" ? payload : {};
-  return source.data && typeof source.data === "object" && !Array.isArray(source.data) ? source.data : source;
-}
-
-function proxyMarketCatalogItems(payload = {}) {
-  const root = proxyMarketCatalogRoot(payload);
-  return Array.isArray(root.items) ? root.items : (Array.isArray(payload?.items) ? payload.items : []);
-}
-
-function proxyMarketCatalogTotal(payload = {}) {
-  const root = proxyMarketCatalogRoot(payload);
-  return Math.max(0, Number(root?.total ?? payload?.total ?? 0) || 0);
-}
-
-function proxyMarketItemId(item = {}) {
-  return String(item?.id || item?.item_id || "").trim();
-}
-
-const PROXY_MARKET_COUNTRY_LABELS = [
-  { key: "TW", label: "台湾", aliases: ["tw", "taiwan", "台湾", "台灣"] },
-  { key: "JP", label: "日本", aliases: ["jp", "japan", "日本"] },
-  { key: "US", label: "美国", aliases: ["us", "usa", "united states", "美国"] },
-  { key: "ES", label: "西班牙", aliases: ["es", "spain", "西班牙"] },
-  { key: "HK", label: "香港", aliases: ["hk", "hong kong", "香港"] },
-  { key: "SG", label: "新加坡", aliases: ["sg", "singapore", "新加坡"] },
-];
-
-function proxyMarketCountryInfo(value = "") {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (!normalized) return null;
-  return PROXY_MARKET_COUNTRY_LABELS.find((item) => item.aliases.some((alias) => (
-    /^[a-z]{2}$/i.test(alias) ? normalized === alias : normalized === alias || normalized.includes(alias)
-  ))) || null;
-}
-
-function proxyMarketItemTitle(item = {}) {
-  const displayName = String(item?.display_name || item?.sku || "").trim();
-  const actualCountry = proxyMarketCountryInfo(item?.country_code || item?.country);
-  const namedCountry = proxyMarketCountryInfo(displayName);
-  if (actualCountry && namedCountry && actualCountry.key !== namedCountry.key) {
-    const type = String(item?.ip_type || "static_residential").trim().toLowerCase();
-    return `${actualCountry.label}${type === "datacenter" ? "机房" : "静态住宅"}代理`;
-  }
-  return displayName || `${actualCountry?.label || "全球"}${String(item?.ip_type || "").trim().toLowerCase() === "datacenter" ? "机房" : "静态住宅"} IP`;
-}
-
-function proxyMarketItemLocation(item = {}) {
-  return [item?.city_name || item?.city, item?.region_name || item?.region, item?.country_name || item?.country]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean)
-    .slice(0, 2)
-    .join(" · ") || "全球节点";
-}
-
-function proxyMarketItemPrice(item = {}) {
-  const cents = Math.max(0, Number(item?.display_price_cents ?? item?.price_cents ?? 0) || 0);
-  const currency = String(item?.currency || "TWD").trim().toUpperCase() || "TWD";
-  return `${currency} ${(cents / 100).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`;
-}
-
-function proxyMarketItemValidity(item = {}) {
-  const expiresAt = Number(item?.expires_at || 0);
-  return expiresAt > 0 ? `有效至 ${formatTime(expiresAt)}` : "长期有效";
-}
-
-function renderProxyMarketMiniCard(item = {}) {
-  const id = proxyMarketItemId(item);
-  const country = String(item?.country_code || item?.country || "GL").trim().slice(0, 3).toUpperCase() || "GL";
-  const title = proxyMarketItemTitle(item);
-  const protocol = String(item?.proxy_type || "SOCKS5").trim().toUpperCase();
-  return `<article class="proxy-market-mini-card" data-proxy-market-item="${esc(id)}">
-    <div class="proxy-market-mini-card-head"><span class="proxy-market-mini-country">${esc(country)}</span><span class="proxy-market-mini-stock">可领取</span></div>
-    <strong>${esc(title)}</strong>
-    <span class="proxy-market-mini-location">${esc(proxyMarketItemLocation(item))}</span>
-    <div class="proxy-market-mini-meta"><span>${esc(proxyMarketItemValidity(item))}</span><span>${esc(protocol)}</span><strong>${esc(proxyMarketItemPrice(item))}</strong></div>
-    <button type="button" class="primary" data-proxy-market-claim="${esc(id)}" ${id ? "" : "disabled"}>加入代理池</button>
-  </article>`;
-}
-
-function renderProxyMarketMiniSkeletonCards(count = 4) {
-  const safeCount = Math.max(1, Math.min(12, Number(count) || 4));
-  return Array.from({ length: safeCount }, () => `<article class="proxy-market-mini-card is-loading" aria-hidden="true">
-    <div class="proxy-market-mini-card-head"><span class="proxy-market-mini-skeleton skeleton-badge"></span><span class="proxy-market-mini-skeleton skeleton-badge"></span></div>
-    <span class="proxy-market-mini-skeleton skeleton-title"></span>
-    <span class="proxy-market-mini-skeleton skeleton-location"></span>
-    <div class="proxy-market-mini-meta"><span class="proxy-market-mini-skeleton skeleton-meta"></span><span class="proxy-market-mini-skeleton skeleton-meta"></span><span class="proxy-market-mini-skeleton skeleton-price"></span></div>
-    <span class="proxy-market-mini-skeleton skeleton-button"></span>
-  </article>`).join("");
-}
-
-function openProxyMarketModal({ accountId = "", selectedProxyId = "" } = {}) {
-  const returnAccountId = String(accountId || "").trim();
-  const returnSelectedProxyId = String(selectedProxyId || "").trim();
-  closeConsoleModal(null);
-  const modal = document.createElement("div");
-  modal.id = "consoleModal";
-  modal.className = "console-modal";
-  modal.dataset.modalKey = "proxy-market-mini";
-  modal.innerHTML = `
-    <div class="console-modal-backdrop" data-proxy-market-modal-cancel></div>
-    <section class="console-modal-dialog proxy-market-mini-modal" role="dialog" aria-modal="true" aria-labelledby="proxyMarketMiniTitle">
-      <div class="console-modal-head">
-        <div><strong id="proxyMarketMiniTitle">代理商城</strong><p>浏览可领取的静态住宅 IP，加入后会自动进入代理池。</p></div>
-        ${renderModalCloseButton("data-proxy-market-modal-cancel")}
-      </div>
-      <div class="console-modal-content proxy-market-mini-content">
-        <form class="proxy-market-mini-filters" data-proxy-market-filter-form>
-          <label>常用地区
-            <select name="country"><option value="">全部地区</option><option value="TW">台湾</option><option value="HK">香港</option><option value="JP">日本</option><option value="SG">新加坡</option><option value="US">美国</option></select>
-          </label>
-          <label>有效时间
-            <select name="valid_for_days"><option value="">不限</option><option value="7">至少 7 天</option><option value="30">至少 30 天</option><option value="90">至少 90 天</option></select>
-          </label>
-          <label>价格
-            <select name="price_range"><option value="">不限</option><option value="0-5000">TWD 50 以下</option><option value="5000-15000">TWD 50–150</option><option value="15000-">TWD 150 以上</option></select>
-          </label>
-          <label>排序
-            <select name="sort"><option value="">推荐排序</option><option value="newest">最新上架</option><option value="price_asc">价格从低到高</option><option value="price_desc">价格从高到低</option></select>
-          </label>
-        </form>
-        <p class="proxy-market-mini-status" data-proxy-market-mini-status role="status" aria-live="polite">可领取 IP</p>
-        <div class="proxy-market-mini-grid" data-proxy-market-mini-grid aria-busy="true">${renderProxyMarketMiniSkeletonCards()}</div>
-      </div>
-    </section>`;
-  document.body.appendChild(modal);
-  const form = modal.querySelector("[data-proxy-market-filter-form]");
-  const grid = modal.querySelector("[data-proxy-market-mini-grid]");
-  const status = modal.querySelector("[data-proxy-market-mini-status]");
-  let catalogRequest = 0;
-  let placeholderCount = Math.max(1, Math.min(12, Number(state.proxyMarketAvailableCount || 0) || 4));
-  const loadCatalog = async () => {
-    const requestId = ++catalogRequest;
-    const fields = form?.elements;
-    const params = new URLSearchParams({ availability: "available", page: "1", page_size: "12" });
-    const country = String(fields?.country?.value || "").trim();
-    const validForDays = String(fields?.valid_for_days?.value || "").trim();
-    const priceRange = String(fields?.price_range?.value || "").trim();
-    const sort = String(fields?.sort?.value || "").trim();
-    if (country) params.set("country", country);
-    if (validForDays) params.set("valid_for_days", validForDays);
-    if (sort) params.set("sort", sort);
-    const [minPrice, maxPrice] = priceRange.split("-");
-    if (minPrice) params.set("min_price_cents", minPrice);
-    if (maxPrice) params.set("max_price_cents", maxPrice);
-    grid.setAttribute("aria-busy", "true");
-    grid.innerHTML = renderProxyMarketMiniSkeletonCards(placeholderCount);
-    status.textContent = "可领取 IP";
-    try {
-      const payload = await api(`/api/proxy-market/catalog?${params.toString()}`);
-      if (!modal.isConnected || requestId !== catalogRequest) return;
-      const items = proxyMarketCatalogItems(payload);
-      placeholderCount = Math.max(1, Math.min(12, proxyMarketCatalogTotal(payload) || items.length || placeholderCount));
-      grid.innerHTML = items.length ? items.map((item) => renderProxyMarketMiniCard(item)).join("") : '<div class="proxy-market-mini-empty">当前筛选条件下暂无可领取 IP。</div>';
-      status.textContent = `已显示 ${items.length} 个可领取 IP`;
-    } catch (error) {
-      if (!modal.isConnected || requestId !== catalogRequest) return;
-      grid.innerHTML = '<div class="proxy-market-mini-empty">商城暂时无法读取，请稍后重试。</div>';
-      status.textContent = error?.detail || error?.message || "读取商城失败";
-    } finally {
-      if (modal.isConnected && requestId === catalogRequest) grid.setAttribute("aria-busy", "false");
-    }
-  };
-  const close = (returnToAccountPicker = true) => {
-    modal.remove();
-    if (returnToAccountPicker && returnAccountId) openAccountProxyPickerModal(returnAccountId, returnSelectedProxyId);
-  };
-  modal.addEventListener("click", (event) => {
-    if (event.target.closest("[data-proxy-market-modal-cancel]")) { close(); return; }
-    const claim = event.target.closest("[data-proxy-market-claim]");
-    if (!claim || claim.disabled) return;
-    const itemId = String(claim.dataset.proxyMarketClaim || "").trim();
-    if (!itemId) return;
-    const key = `proxy-market:${itemId}:${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`.slice(0, 128);
-    claim.disabled = true;
-    claim.textContent = "正在加入";
-    api(`/api/proxy-market/items/${encodeURIComponent(itemId)}/claim`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Idempotency-Key": key },
-      body: JSON.stringify({ idempotency_key: key }),
-    }).then(async (result) => {
-      await refreshProxyPool();
-      const claimedProxyId = String(
-        result?.allocation?.social_proxy_id
-          || state.socialProxies?.find((proxy) => String(proxy.market_item_id || "") === itemId)?.id
-          || "",
-      ).trim();
-      if (returnAccountId && claimedProxyId) {
-        close(false);
-        openAccountProxyPickerModal(returnAccountId, claimedProxyId);
-        return;
-      }
-      status.textContent = "IP 已加入代理池。";
-      await loadCatalog();
-    }).catch((error) => {
-      claim.disabled = false;
-      claim.textContent = "加入代理池";
-      status.textContent = error?.detail || error?.message || "加入代理池失败";
-    });
-  });
-  form?.addEventListener("change", () => { void loadCatalog(); });
-  void loadCatalog();
-}
-
 function proxyFormPayload(proxy = null) {
   return sharedProxyPayload("proxyForm", proxy);
 }
@@ -27535,7 +27353,7 @@ function openProxyModal(proxyId = "") {
     return;
   }
   if (proxy && String(proxy.source || "").trim().toLowerCase() === "marketplace") {
-    showMsg("socialMsg", "商城代理的连接配置由管理员统一维护。", false);
+    showMsg("socialMsg", "系统导入代理的连接配置不可编辑。", false);
     return;
   }
   closeConsoleModal(null);
@@ -27636,76 +27454,21 @@ async function deleteProxy(proxyId = "") {
   const cleanId = String(proxyId || "").trim();
   const proxy = socialProxyById(cleanId);
   if (!cleanId || !proxy) return;
-  const isMarketplace = String(proxy.source || "").trim().toLowerCase() === "marketplace";
   const ok = await confirmDangerAction(
-    isMarketplace
-      ? `确定释放商城代理“${proxy.name || proxy.host || cleanId}”并退回商城吗？`
-      : `确定删除代理“${proxy.name || proxy.host || cleanId}”吗？`,
-    {
-      title: isMarketplace ? "释放商城代理" : "删除代理",
-      confirmText: isMarketplace ? "释放代理" : "删除代理",
-    },
+    `确定删除代理“${proxy.name || proxy.host || cleanId}”吗？`,
+    { title: "删除代理", confirmText: "删除代理" },
   );
   if (!ok) return;
   await api(`/api/persona_dashboard/automation/proxies/${encodeURIComponent(cleanId)}`, { method: "DELETE" });
   state.socialProxies = (state.socialProxies || []).filter((item) => String(item?.id || "") !== cleanId);
   renderProxyPool();
-  const successMessage = isMarketplace ? "商城代理已释放并退回商城。" : "代理已删除。";
+  const successMessage = "代理已删除。";
   try {
     await refreshProxyPool();
     showMsg("socialMsg", successMessage, true);
   } catch (error) {
     showMsg("socialMsg", `${successMessage} 但代理池刷新失败：${error.detail || error.message || "请稍后手动刷新"}`, true);
   }
-}
-
-function syncProxyMarketUnreadBadge() {
-  const badge = $("proxyMarketUnreadBadge");
-  if (!badge) return;
-  const count = Math.max(0, Number(state.proxyMarketUnreadCount || 0));
-  badge.textContent = count > 99 ? "99+" : String(count);
-  badge.hidden = count <= 0;
-}
-
-async function loadProxyMarketSummary() {
-  const revision = Number(state.proxyMarketReadRevision || 0);
-  try {
-    const summary = await api("/api/proxy-market/me");
-    if (revision !== Number(state.proxyMarketReadRevision || 0)) return summary;
-    state.proxyMarketUnreadCount = Math.max(0, Number(summary?.unread_proxy_count || 0));
-    state.proxyMarketAvailableCount = Math.max(0, Number(summary?.available_catalog_count || 0));
-    state.proxyMarketSummaryLoaded = true;
-    syncProxyMarketUnreadBadge();
-    return summary;
-  } catch {
-    return null;
-  }
-}
-
-async function markProxyPoolRead() {
-  if (state.accountBrowserPanel !== "proxies" || state.view !== "accounts") return;
-  if (state.proxyMarketMarkReadPromise) return state.proxyMarketMarkReadPromise;
-  state.proxyMarketReadRevision = Number(state.proxyMarketReadRevision || 0) + 1;
-  const request = api("/api/proxy-market/read", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scope: "proxy_pool" }),
-    }).then(() => {
-    state.proxyMarketUnreadCount = 0;
-    (state.socialProxies || []).forEach((proxy) => {
-      if (proxy?.marketplace) proxy.marketplace.is_new = false;
-    });
-    syncProxyMarketUnreadBadge();
-    renderProxyPool();
-    try {
-      localStorage.setItem("vecto-proxy-market-read", String(Date.now()));
-    } catch {}
-    window.dispatchEvent(new CustomEvent("vecto:proxy-market-read"));
-  }).catch(() => null).finally(() => {
-    if (state.proxyMarketMarkReadPromise === request) state.proxyMarketMarkReadPromise = null;
-  });
-  state.proxyMarketMarkReadPromise = request;
-  return request;
 }
 
 function renderSocialAccounts() {
@@ -27724,16 +27487,6 @@ function renderSocialAccounts() {
   }
   const grid = $("accountGrid");
   renderProxyPool();
-  if (
-    state.view === "accounts"
-    && state.accountBrowserPanel === "proxies"
-    && (
-      Number(state.proxyMarketUnreadCount || 0) > 0
-      || (state.socialProxies || []).some((proxy) => Boolean(proxy?.marketplace?.is_new))
-    )
-  ) {
-    window.setTimeout(() => void markProxyPoolRead(), 0);
-  }
   if (state.accountBrowserPanel === "browsers") renderLiveBrowserSessions();
   if (!grid) return;
   discardAccountPoolPlatformMotion();
@@ -27758,7 +27511,6 @@ function setAccountBrowserPanel(panel = "accounts") {
   syncAccountBrowserPanel();
   if ($("moduleMenu")) syncModuleMenuState();
   if (normalized === "browsers") renderLiveBrowserSessions();
-  if (normalized === "proxies") window.setTimeout(() => void markProxyPoolRead(), 0);
   syncLiveBrowserAutoRefresh();
   } finally {
     restoreConsoleScrollState(scrollSnapshot);
@@ -27783,7 +27535,6 @@ function syncAccountBrowserPanel() {
     page.classList.toggle("is-active", selected);
     page.hidden = !selected;
   });
-  syncProxyMarketUnreadBadge();
   syncMobilePageToolbar();
 }
 
@@ -32225,13 +31976,8 @@ window.addEventListener("vecto:navigation-ready", () => {
   if (state.currentUser) window.VectoSiteNavigation?.setAccount(state.currentUser);
 });
 window.addEventListener("storage", (event) => {
-  if (event.key === "vecto-proxy-market-read") void loadProxyMarketSummary();
   if (event.key === "vecto-auth-session-changed") window.location.reload();
 });
-if ("BroadcastChannel" in window) {
-  const proxyMarketChannel = new BroadcastChannel("vecto-proxy-market");
-  proxyMarketChannel.addEventListener("message", () => void loadProxyMarketSummary());
-}
 
 init().catch((error) => {
   finishWorkspaceBootstrapLoading();
