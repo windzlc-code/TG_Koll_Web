@@ -4663,7 +4663,10 @@ const JINA_READER_PREFIX = "https://r.jina.ai/http://";
 
 export function buildThreadsSearchUrl(query: string, recent = false): string {
   const params = new URLSearchParams({ q: String(query || "") });
-  if (recent) params.set("filter", "recent");
+  if (recent) {
+    params.set("serp_type", "default");
+    params.set("filter", "recent");
+  }
   return `https://www.threads.com/search?${params.toString()}`;
 }
 

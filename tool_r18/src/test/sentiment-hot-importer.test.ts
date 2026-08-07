@@ -142,7 +142,7 @@ describe("sentiment hot importer", () => {
   it("uses Threads recent search only for freshness-scoped fetches", () => {
     expect(buildThreadsSearchUrl("tea")).toBe("https://www.threads.com/search?q=tea");
     expect(buildThreadsSearchUrl("茶文化", true)).toBe(
-      "https://www.threads.com/search?q=%E8%8C%B6%E6%96%87%E5%8C%96&filter=recent",
+      "https://www.threads.com/search?q=%E8%8C%B6%E6%96%87%E5%8C%96&serp_type=default&filter=recent",
     );
   });
 
