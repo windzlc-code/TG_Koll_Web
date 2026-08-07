@@ -4279,9 +4279,10 @@ async function fetchThreadsBrowserSearchCandidates(args: {
         }
         return false;
       };
-      const triggerThreadsManualSearch = async (searchPage: any, query: string) => {
+      const triggerThreadsManualSearch = async (searchPage: any, query: string, useRecentSearch: boolean) => {
         if (!query || results.length >= args.limit) return false;
         if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000) return false;
+        const previousUrl = String(searchPage.url?.() || buildThreadsSearchUrl(query, useRecentSearch));
         try {
           await searchPage.goto("https://www.threads.com/search", {
             waitUntil: "domcontentloaded",
@@ -4315,9 +4316,21 @@ async function fetchThreadsBrowserSearchCandidates(args: {
             console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} source=threads_manual_search query=${JSON.stringify(query)} url=${JSON.stringify(String(searchPage.url?.() || ""))}`);
             return true;
           }
+          if (/^https?:\/\//i.test(previousUrl) && String(searchPage.url?.() || "") !== previousUrl) {
+            await searchPage.goto(previousUrl, {
+              waitUntil: "domcontentloaded",
+              timeout: Math.min(3_000, remainingSentimentDeadlineMs(args.deadlineAt, 3_000)),
+            }).catch(() => undefined);
+          }
           console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} source=threads_manual_search status=no_input query=${JSON.stringify(query)} url=${JSON.stringify(String(searchPage.url?.() || ""))}`);
         } catch {
           // Manual search is only a capture aid; direct URL and DOM parsing remain available.
+          if (/^https?:\/\//i.test(previousUrl) && String(searchPage.url?.() || "") !== previousUrl) {
+            await searchPage.goto(previousUrl, {
+              waitUntil: "domcontentloaded",
+              timeout: Math.min(3_000, remainingSentimentDeadlineMs(args.deadlineAt, 3_000)),
+            }).catch(() => undefined);
+          }
         }
         return false;
       };
@@ -4416,7 +4429,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           await activateThreadsSearchResultTab(searchPage, useRecentSearch, query);
           await collectGraphqlResponseCandidates();
           const initialHydrationCount = await collectHydrationCandidates();
-          if (!template && results.length < args.limit && await triggerThreadsManualSearch(searchPage, query)) {
+          if (!template && initialHydrationCount === 0 && results.length < args.limit && await triggerThreadsManualSearch(searchPage, query, useRecentSearch)) {
             await activateThreadsSearchResultTab(searchPage, useRecentSearch, query);
             await collectGraphqlResponseCandidates();
             await collectHydrationCandidates();
