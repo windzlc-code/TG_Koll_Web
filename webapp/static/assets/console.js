@@ -18996,6 +18996,7 @@ async function openPersonaWritingLocalePicker() {
   const nextLocale = await request;
   if (!PERSONA_WRITING_LOCALES.some(([value]) => value === String(nextLocale || ""))) return;
   form.writingLocale = String(nextLocale);
+  if ($("personaWritingLocale")) $("personaWritingLocale").value = String(nextLocale);
   renderPersonaDetail();
   renderConfirmSummary();
 }

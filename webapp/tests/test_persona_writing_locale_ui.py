@@ -38,6 +38,16 @@ class PersonaWritingLocaleUiContractTests(unittest.TestCase):
         edit_end = panel.index('generateMode === "hot"', edit_start)
         self.assertIn("renderPersonaWritingLocaleSelect(", panel[edit_start:edit_end])
 
+    def test_mobile_choice_syncs_the_hidden_select_before_rerender(self):
+        picker_start = self.script.index("async function openPersonaWritingLocalePicker()")
+        picker_end = self.script.index("\nfunction personaGenerateRunState", picker_start)
+        picker = self.script[picker_start:picker_end]
+        state_update = picker.index("form.writingLocale = String(nextLocale);")
+        select_update = picker.index('$("personaWritingLocale").value = String(nextLocale);')
+        rerender = picker.index("renderPersonaDetail();")
+        self.assertLess(state_update, select_update)
+        self.assertLess(select_update, rerender)
+
 
 if __name__ == "__main__":
     unittest.main()
