@@ -204,6 +204,34 @@ describe("sentiment hot importer", () => {
     })).toBe(true);
   });
 
+  it("rejects Threads account and keyword suggestion GraphQL templates", () => {
+    expect(isUsableThreadsSearchGraphqlTemplate({
+      endpoint: "/graphql/query",
+      method: "POST",
+      params: { fb_api_req_friendly_name: "useBarcelonaAccountSearchGraphQLDataSourceQuery" },
+      variables: {
+        query: "barber",
+        first: 10,
+        should_fetch_friendship_status: true,
+      },
+      headers: {},
+      sourceTerms: ["barber"],
+    })).toBe(false);
+
+    expect(isUsableThreadsSearchGraphqlTemplate({
+      endpoint: "/graphql/query",
+      method: "POST",
+      params: { fb_api_req_friendly_name: "useBarcelonaKeywordSearchGraphQLDataSourceQuery" },
+      variables: {
+        query: "barber",
+        has_communities: true,
+        has_favicons: true,
+      },
+      headers: {},
+      sourceTerms: ["barber"],
+    })).toBe(false);
+  });
+
   it("reuses a persona search strategy when only volatile memory summaries change", () => {
     const base = {
       archive: {

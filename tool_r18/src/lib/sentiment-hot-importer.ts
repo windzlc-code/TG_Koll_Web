@@ -70,6 +70,7 @@ const INSTAGRAM_AUTHENTICATED_QUERY_LIMIT = 16;
 const INSTAGRAM_GRAPHQL_PAGE_QUERY_LIMIT = 10;
 const INSTAGRAM_KEYWORD_SEARCH_PAGE_QUERY_LIMIT = 10;
 const INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE = 2;
+const INSTAGRAM_DIRECT_TAG_API_QUERY_LIMIT = 0;
 const DEFAULT_REFRESH_FRESHNESS_DAYS = 7;
 const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 42_000;
 const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 105_000;
@@ -3754,7 +3755,7 @@ function threadsSearchVariableQuery(value: unknown): string {
 
 function isKnownNonSearchThreadsGraphqlFriendlyName(value: unknown): boolean {
   const name = cleanText(value);
-  return /(?:CommunityEntityCards|EntityCards|Profile|User|Post|Story|Viewer|Notification|Direct|Activity|Insights|Mailbox|Presence|Settings|Follow)/i.test(name);
+  return /(?:AccountSearchGraphQLDataSource|KeywordSearchGraphQLDataSource|CommunityEntityCards|EntityCards|Profile|User|Post|Story|Viewer|Notification|Direct|Activity|Insights|Mailbox|Presence|Settings|Follow)/i.test(name);
 }
 
 export function isUsableThreadsSearchGraphqlTemplate(value: unknown): boolean {
@@ -4871,7 +4872,8 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
         + ` accepted=${stats.accepted - beforeAccepted} total=${results.length}`,
       );
     }
-    for (let offset = INSTAGRAM_GRAPHQL_PAGE_QUERY_LIMIT; offset < queries.length && results.length < args.limit; offset += INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE) {
+    const directApiEnd = Math.min(queries.length, INSTAGRAM_GRAPHQL_PAGE_QUERY_LIMIT + INSTAGRAM_DIRECT_TAG_API_QUERY_LIMIT);
+    for (let offset = INSTAGRAM_GRAPHQL_PAGE_QUERY_LIMIT; offset < directApiEnd && results.length < args.limit; offset += INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE) {
       if (remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
       if (stats.rateLimited > 0) {
         console.info(`[sentiment_hot_instagram_account_search] archiveId=${args.archiveId} status=skip_api_batch_after_rate_limit retrying=0`);
