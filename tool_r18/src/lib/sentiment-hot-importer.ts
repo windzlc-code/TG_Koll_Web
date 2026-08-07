@@ -4377,6 +4377,13 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           if (initialHydrationCount === 0) await collectHydrationCandidates();
           await collectGraphqlResponseCandidates();
           const bodyText = await searchPage.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+          if (process.env.SENTIMENT_HOT_DEBUG_GRAPHQL === "1" && results.length < args.limit) {
+            const navTexts = await searchPage.$$eval('a, button, [role="tab"], [role="button"]', (items: any[]) => items
+              .map((item: any) => String(item.innerText || item.textContent || item.getAttribute?.("aria-label") || "").replace(/\s+/g, " ").trim())
+              .filter(Boolean)
+              .slice(0, 80)).catch(() => []);
+            console.info(`[sentiment_hot_page_debug] archiveId=${args.archiveId} query=${JSON.stringify(query)} url=${JSON.stringify(String(searchPage.url?.() || ""))} nav=${JSON.stringify(navTexts.slice(0, 40))} body=${JSON.stringify(bodyText.slice(0, 500))}`);
+          }
           const postUrls = await searchPage.$$eval('a[href*="/post/"]', (anchors: any[]) => anchors
             .map((anchor) => String(anchor.href || anchor.getAttribute?.("href") || "").trim())
             .filter(Boolean)).catch(() => []);
