@@ -59,6 +59,7 @@ const THREADS_BROWSER_DETAIL_RESCUE_LIMIT = 30;
 const THREADS_BROWSER_DETAIL_RESCUE_POOL_LIMIT = 120;
 const THREADS_BROWSER_DETAIL_RESCUE_BATCH_SIZE = 10;
 const THREADS_BROWSER_DETAIL_RESCUE_MIN_REMAINING_MS = 5_000;
+const THREADS_MANUAL_SEARCH_TRIGGER_WAIT_MS = 1_200;
 const SENTIMENT_MODEL_KEYWORD_TARGET = 20;
 const SENTIMENT_HOT_KEYWORD_MODEL = "xai/grok-4.3, xai/grok-4.5";
 const THREADS_READER_INITIAL_QUERY_LIMIT = 24;
@@ -67,6 +68,7 @@ const THREADS_READER_QUERY_BATCH_SIZE = 8;
 const INSTAGRAM_READER_QUERY_LIMIT = 48;
 const INSTAGRAM_AUTHENTICATED_QUERY_LIMIT = 32;
 const INSTAGRAM_GRAPHQL_PAGE_QUERY_LIMIT = 8;
+const INSTAGRAM_KEYWORD_SEARCH_PAGE_QUERY_LIMIT = 6;
 const INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE = 8;
 const DEFAULT_REFRESH_FRESHNESS_DAYS = 7;
 const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 42_000;
@@ -596,9 +598,6 @@ function buildSentimentCookieStatusFromProfile(platform: SentimentHotPlatform, p
 export function getSentimentBrowserAuthProfileBinding(platform: SentimentHotPlatform): SentimentCookieStatus {
   const profile = readSentimentBrowserAuthProfilesConfig().find((item: any) => sentimentProfileMatchesPlatform(item, platform));
   if (platform !== "threads") return buildSentimentCookieStatusFromProfile(platform, profile);
-  if (profile && hasValidThreadsSessionCookie(Array.isArray(profile?.cookies) ? profile.cookies : [])) {
-    return buildSentimentCookieStatusFromProfile(platform, profile);
-  }
   const managedCookies = readManagedThreadsAccountCookies();
   if (!hasValidThreadsSessionCookie(managedCookies)) return buildSentimentCookieStatusFromProfile(platform, profile);
   return buildSentimentCookieStatusFromProfile(platform, {
@@ -3742,7 +3741,11 @@ function persistThreadsSearchTemplate(value: { template: ThreadsSearchGraphqlTem
 function threadsSearchVariableQuery(value: unknown): string {
   if (!value || typeof value !== "object") return "";
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (/^(?:query|search_query|searchQuery)$/i.test(key) && typeof child === "string" && cleanText(child)) return cleanText(child);
+    if (
+      typeof child === "string"
+      && cleanText(child)
+      && /^(?:query|search_query|searchQuery|keyword|keywords|term|terms|text|searchText|search_text|searchTerm|search_term|searchKeyword|search_keyword)$/i.test(key)
+    ) return cleanText(child);
     const nested = threadsSearchVariableQuery(child);
     if (nested) return nested;
   }
@@ -3761,8 +3764,7 @@ export function isUsableThreadsSearchGraphqlTemplate(value: unknown): boolean {
   if (!template.variables || typeof template.variables !== "object") return false;
   const friendlyName = cleanText(template.params?.fb_api_req_friendly_name);
   if (isKnownNonSearchThreadsGraphqlFriendlyName(friendlyName)) return false;
-  return /search/i.test(friendlyName)
-    || Boolean(threadsSearchVariableQuery(template.variables))
+  return Boolean(threadsSearchVariableQuery(template.variables))
     || (Array.isArray(template.sourceTerms) && template.sourceTerms.some((term) => cleanText(term)));
 }
 
@@ -3784,7 +3786,10 @@ export function replaceThreadsSearchVariables(value: unknown, query: string, aft
   if (!value || typeof value !== "object") return value;
   const next: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (/^(?:query|search_query|searchQuery)$/i.test(key) && typeof child === "string") next[key] = query;
+    if (
+      /^(?:query|search_query|searchQuery|keyword|keywords|term|terms|text|searchText|search_text|searchTerm|search_term|searchKeyword|search_keyword)$/i.test(key)
+      && typeof child === "string"
+    ) next[key] = query;
     else if (/^(?:after|cursor)$/i.test(key) && (child === null || typeof child === "string")) next[key] = after || null;
     else if (/^recent$/i.test(key) && recent !== undefined && (typeof child === "number" || typeof child === "boolean")) next[key] = recent ? 1 : 0;
     else if (/^first$/i.test(key) && typeof child === "number" && pageSize) next[key] = Math.max(child, pageSize);
@@ -4177,6 +4182,44 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       if (!template) page.on("request", captureTemplate);
       const bootstrapQueries = [...new Set(args.queries.slice(0, THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT).filter(Boolean))];
       const recentSearch = typeof args.recentSearch === "boolean" ? args.recentSearch : Number(args.freshnessDays || 0) > 0;
+      const triggerThreadsManualSearch = async (searchPage: any, query: string) => {
+        if (!query || results.length >= args.limit) return false;
+        if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000) return false;
+        try {
+          await searchPage.goto("https://www.threads.com/search", {
+            waitUntil: "domcontentloaded",
+            timeout: Math.min(5_000, remainingSentimentDeadlineMs(args.deadlineAt, 5_000)),
+          }).catch(() => undefined);
+          await searchPage.waitForTimeout(Math.min(300, remainingSentimentDeadlineMs(args.deadlineAt, 300))).catch(() => undefined);
+          const selectors = [
+            'input[type="search"]',
+            'input[placeholder*="Search"]',
+            'input[placeholder*="搜尋"]',
+            'input[placeholder*="搜索"]',
+            'input[aria-label*="Search"]',
+            'input[aria-label*="搜尋"]',
+            'input[aria-label*="搜索"]',
+            'input[type="text"]',
+          ];
+          for (const selector of selectors) {
+            const input = searchPage.locator(selector).first();
+            const visible = await input.isVisible({ timeout: 600 }).catch(() => false);
+            if (!visible) continue;
+            await input.click({ timeout: 800 }).catch(() => undefined);
+            await input.fill(query, { timeout: 1_000 }).catch(async () => {
+              await searchPage.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => undefined);
+              await searchPage.keyboard.type(query, { delay: 8 }).catch(() => undefined);
+            });
+            await input.press("Enter", { timeout: 1_000 }).catch(() => searchPage.keyboard.press("Enter").catch(() => undefined));
+            await searchPage.waitForTimeout(Math.min(THREADS_MANUAL_SEARCH_TRIGGER_WAIT_MS, remainingSentimentDeadlineMs(args.deadlineAt, THREADS_MANUAL_SEARCH_TRIGGER_WAIT_MS))).catch(() => undefined);
+            console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} source=threads_manual_search query=${JSON.stringify(query)} url=${JSON.stringify(String(searchPage.url?.() || ""))}`);
+            return true;
+          }
+        } catch {
+          // Manual search is only a capture aid; direct URL and DOM parsing remain available.
+        }
+        return false;
+      };
       const collectDomCandidates = async (searchPage: any, query: string, scrollAttempts = 3, useRecentSearch = recentSearch) => {
         if (results.length >= args.limit) return;
         const responsePayloads: Promise<any | null>[] = [];
@@ -4271,6 +4314,10 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           await searchPage.waitForTimeout(Math.min(350, remainingSentimentDeadlineMs(args.deadlineAt, 350))).catch(() => undefined);
           await collectGraphqlResponseCandidates();
           const initialHydrationCount = await collectHydrationCandidates();
+          if (!template && results.length < args.limit && await triggerThreadsManualSearch(searchPage, query)) {
+            await collectGraphqlResponseCandidates();
+            await collectHydrationCandidates();
+          }
           const effectiveScrollAttempts = initialHydrationCount > 0 ? Math.min(scrollAttempts, 2) : scrollAttempts;
           for (let attempt = 0; !template && attempt < effectiveScrollAttempts; attempt += 1) {
             if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
@@ -4716,6 +4763,52 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
       timeout: Math.min(10_000, remainingSentimentDeadlineMs(args.deadlineAt, 10_000)),
     }).catch(() => null);
     console.info(`[sentiment_hot_instagram_account_search] archiveId=${args.archiveId} status=origin_ready url=${JSON.stringify(String(page.url?.() || ""))}`);
+    let instagramKeywordSearchBlocked = false;
+    const triggerInstagramKeywordSearch = async (query: string) => {
+      if (instagramKeywordSearchBlocked) return false;
+      if (!query || results.length >= args.limit) return false;
+      if (remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000) return false;
+      try {
+        await page.goto(`https://www.instagram.com/explore/search/keyword/?q=${encodeURIComponent(query)}`, {
+          waitUntil: "domcontentloaded",
+          timeout: Math.min(5_000, remainingSentimentDeadlineMs(args.deadlineAt, 5_000)),
+        }).catch(() => undefined);
+        await page.waitForTimeout(Math.min(700, remainingSentimentDeadlineMs(args.deadlineAt, 700))).catch(() => undefined);
+        const currentUrl = String(page.url?.() || "");
+        if (/\/accounts\/login\//i.test(currentUrl)) {
+          instagramKeywordSearchBlocked = true;
+          console.info(`[sentiment_hot_instagram_account_search] archiveId=${args.archiveId} source=instagram_keyword_search status=login_wall query=${JSON.stringify(query)} url=${JSON.stringify(currentUrl)}`);
+          return false;
+        }
+        const selectors = [
+          'input[placeholder*="Search"]',
+          'input[placeholder*="搜尋"]',
+          'input[placeholder*="搜索"]',
+          'input[aria-label*="Search"]',
+          'input[aria-label*="搜尋"]',
+          'input[aria-label*="搜索"]',
+          'input[type="text"]',
+        ];
+        for (const selector of selectors) {
+          const input = page.locator(selector).first();
+          const visible = await input.isVisible({ timeout: 400 }).catch(() => false);
+          if (!visible) continue;
+          await input.click({ timeout: 800 }).catch(() => undefined);
+          await input.fill(query, { timeout: 1_000 }).catch(async () => {
+            await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => undefined);
+            await page.keyboard.type(query, { delay: 8 }).catch(() => undefined);
+          });
+          await page.waitForTimeout(Math.min(900, remainingSentimentDeadlineMs(args.deadlineAt, 900))).catch(() => undefined);
+          await input.press("Enter", { timeout: 800 }).catch(() => page.keyboard.press("Enter").catch(() => undefined));
+          await page.waitForTimeout(Math.min(900, remainingSentimentDeadlineMs(args.deadlineAt, 900))).catch(() => undefined);
+          break;
+        }
+        console.info(`[sentiment_hot_instagram_account_search] archiveId=${args.archiveId} source=instagram_keyword_search query=${JSON.stringify(query)} url=${JSON.stringify(String(page.url?.() || ""))}`);
+        return true;
+      } catch {
+        return false;
+      }
+    };
     for (const tag of queries.slice(0, INSTAGRAM_GRAPHQL_PAGE_QUERY_LIMIT)) {
       if (results.length >= args.limit || remainingSentimentDeadlineMs(args.deadlineAt, 0) < 5_000) break;
       const beforeParsed = stats.parsed;
@@ -4745,6 +4838,10 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
         }
       };
       page.on("response", onGraphqlResponse);
+      if (queries.indexOf(tag) < INSTAGRAM_KEYWORD_SEARCH_PAGE_QUERY_LIMIT) {
+        await triggerInstagramKeywordSearch(tag);
+        await withSentimentTimeout(Promise.all(responseTasks.splice(0, responseTasks.length)).then(() => undefined), 2_000, undefined);
+      }
       await page.goto(`https://www.instagram.com/explore/tags/${encodeURIComponent(tag)}/`, {
         waitUntil: "domcontentloaded",
         timeout: Math.min(8_000, remainingSentimentDeadlineMs(args.deadlineAt, 8_000)),
@@ -7508,11 +7605,11 @@ function readSentimentBrowserAuthCookies(platform: SentimentHotPlatform) {
         };
       });
     if (platform !== "threads") return cookies;
-    if (hasValidThreadsSessionCookie(cookies)) {
-      return expandThreadsAuthCookiesForBrowser(cookies);
-    }
     const managedCookies = readManagedThreadsAccountCookies();
-    return expandThreadsAuthCookiesForBrowser(managedCookies);
+    const mergedCookies = hasValidThreadsSessionCookie(managedCookies)
+      ? mergeBrowserAuthCookies(managedCookies, cookies)
+      : mergeBrowserAuthCookies(cookies, managedCookies);
+    return expandThreadsAuthCookiesForBrowser(mergedCookies);
   } catch {
     return [];
   }

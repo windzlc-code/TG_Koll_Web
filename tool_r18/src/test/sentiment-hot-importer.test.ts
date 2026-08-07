@@ -161,6 +161,30 @@ describe("sentiment hot importer", () => {
     });
   });
 
+  it("recognizes newer Threads GraphQL search variable names", () => {
+    expect(isUsableThreadsSearchGraphqlTemplate({
+      endpoint: "/graphql/query",
+      method: "POST",
+      params: { fb_api_req_friendly_name: "BarcelonaSearchComposerQuery" },
+      variables: { input: { search_text: "\u526a\u53d1", pagination: { first: 10 } } },
+      headers: {},
+    })).toBe(true);
+
+    expect(replaceThreadsSearchVariables({
+      input: {
+        search_text: "\u526a\u53d1",
+        searchTerm: "\u526a\u53d1",
+        text: "\u526a\u53d1",
+      },
+    }, "\u7406\u53d1\u5e97")).toEqual({
+      input: {
+        search_text: "\u7406\u53d1\u5e97",
+        searchTerm: "\u7406\u53d1\u5e97",
+        text: "\u7406\u53d1\u5e97",
+      },
+    });
+  });
+
   it("rejects non-search Threads GraphQL templates even when they contain the searched tag", () => {
     expect(isUsableThreadsSearchGraphqlTemplate({
       endpoint: "/graphql/query",
