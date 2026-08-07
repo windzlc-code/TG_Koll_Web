@@ -13,6 +13,7 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         cls.server_source = (WEBAPP_ROOT / "server.py").read_text(encoding="utf-8")
         cls.console_markup = (STATIC_ROOT / "console.html").read_text(encoding="utf-8")
         cls.console_script = (STATIC_ROOT / "assets" / "console.js").read_text(encoding="utf-8")
+        cls.console_styles = (STATIC_ROOT / "assets" / "console.css").read_text(encoding="utf-8")
         cls.navigation_script = (STATIC_ROOT / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
         cls.admin_markup = (STATIC_ROOT / "admin.html").read_text(encoding="utf-8")
         cls.admin_script = (STATIC_ROOT / "assets" / "admin.js").read_text(encoding="utf-8")
@@ -47,23 +48,63 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         ):
             self.assertNotIn(fragment, combined)
 
-    def test_console_restores_shared_add_proxy_flow(self):
+    def test_console_keeps_custom_proxy_and_adds_on_demand_system_pool(self):
+        self.assertIn("data-system-proxy-pool-open", self.console_script)
         self.assertIn("data-proxy-add", self.console_script)
-        self.assertIn("<span>添加代理</span>", self.console_script)
-        self.assertIn("function openProxyModal(proxyId = \"\")", self.console_script)
+        self.assertIn("<span>添加 IP</span>", self.console_script)
+        self.assertIn("<span>自定义代理</span>", self.console_script)
         self.assertIn(
-            '"/api/persona_dashboard/automation/proxies"',
+            'function openSystemProxyPoolModal({ accountId = "", selectedProxyId = "" } = {})',
             self.console_script,
         )
+        self.assertIn(
+            '"/api/persona_dashboard/automation/system-proxy-pool"',
+            self.console_script,
+        )
+        self.assertIn("function openProxyModal(proxyId = \"\")", self.console_script)
+        self.assertNotIn("data-system-proxy-custom-add", self.console_script)
+        self.assertIn("data-account-system-proxy-pool-open", self.console_script)
+        self.assertIn(".system-proxy-pool-link {", self.console_styles)
+        self.assertIn(".account-system-proxy-pool-add {", self.console_styles)
         self.assertNotIn("openProxyMarketModal", self.console_script)
         self.assertNotIn("proxyMarketUnreadBadge", self.console_markup)
 
-    def test_backend_system_proxies_are_only_exposed_in_account_picker(self):
+    def test_shared_system_pool_uses_the_legacy_embedded_market_dimensions(self):
+        self.assertIn(
+            "width: min(840px, calc(100vw - 32px));",
+            self.console_styles,
+        )
+        self.assertIn(
+            ".system-proxy-pool-modal {\n  width: min(840px, calc(100vw - 32px));\n  grid-template-rows: auto minmax(0, 1fr);",
+            self.console_styles,
+        )
+        self.assertIn("max-height: min(70vh, 720px);", self.console_styles)
+        self.assertIn(
+            ".system-proxy-pool-list {\n  display: grid;\n  grid-template-columns: repeat(3, minmax(0, 1fr));",
+            self.console_styles,
+        )
+        self.assertIn(
+            ".system-proxy-pool-list {\n    grid-template-columns: repeat(2, minmax(0, 1fr));",
+            self.console_styles,
+        )
+        self.assertNotIn("system-proxy-pool-actions", self.console_script)
+        self.assertNotIn("data-system-proxy-pool-close>完成", self.console_script)
+
+    def test_backend_system_proxies_are_exposed_only_through_the_shared_pool(self):
+        regular_list_route = self.social_api_source[
+            self.social_api_source.index('@app.get("/api/persona_dashboard/automation/proxies")'):
+            self.social_api_source.index('@app.get("/api/persona_dashboard/automation/system-proxy-pool")')
+        ]
         self.assertIn("list_available_system_proxy_options", self.social_api_source)
+        self.assertIn("list_system_proxy_pool_options", self.social_api_source)
+        self.assertIn("switch_system_proxy_in_transaction", self.social_api_source)
         self.assertIn('SYSTEM_PROXY_OPTION_PREFIX = "system_proxy_item:"', self.system_proxy_pool_source)
         self.assertIn("claim_system_proxy_in_transaction", self.social_api_source)
         self.assertIn("release_system_proxy_in_transaction", self.social_api_source)
-        self.assertIn("proxyPoolRows({ includeSystemAvailable: true })", self.console_script)
+        self.assertIn('@app.get("/api/persona_dashboard/automation/system-proxy-pool")', self.social_api_source)
+        self.assertIn('@app.post("/api/persona_dashboard/automation/system-proxy-pool/select")', self.social_api_source)
+        self.assertNotIn("list_available_system_proxy_options", regular_list_route)
+        self.assertNotIn("proxyPoolRows({ includeSystemAvailable: true })", self.console_script)
         self.assertIn("proxy?.system_available !== true", self.console_script)
 
     def test_legacy_claimed_proxy_runtime_compatibility_is_retained(self):

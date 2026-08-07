@@ -294,7 +294,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('?manage_user_id=', self.profile_source)
         self.assertIn('params.set("return_manage_user_id", workspaceUserId)', self.site_nav_source)
 
-    def test_persona_image_empty_state_supports_custom_upload_and_drop_placeholder(self):
+    def test_persona_image_panel_removes_only_reference_image_controls(self):
         for marker in (
             "data-persona-upload-image-file",
             "data-persona-upload-image-trigger",
@@ -302,18 +302,19 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             "uploadPersonaReferenceImage",
             "/images/upload",
             "建议优先使用三视图",
-            "accept=\".png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.heic\"",
+            "persona-image-upload-placeholder",
+            "persona-image-library-card--empty",
         ):
-            self.assertIn(marker, self.source)
-        self.assertIn("persona-image-library-card--empty", self.styles)
-        self.assertIn("persona-image-upload-placeholder", self.styles)
-        self.assertIn("aspect-ratio: 1 / 1", self.styles)
-        self.assertIn("box-sizing: border-box", self.styles)
-        self.assertIn("grid-template-rows: auto 18px auto", self.styles)
-        self.assertIn("persona-image-library-meta-placeholder", self.source)
-        self.assertIn("persona-image-library-actions--placeholder", self.source)
-        self.assertNotIn("原始人设图占位", self.source)
-        self.assertNotIn("data-persona-upload-image-trigger", self._function_source("renderPersonaImagePanel"))
+            self.assertIn(marker, self.source + self.styles)
+        panel_start = self.source.index("function renderPersonaImagePanel(persona")
+        panel_end = self.source.index("\nfunction renderPersonaLinkSettingsContent", panel_start)
+        panel = self.source[panel_start:panel_end]
+        self.assertIn("data-persona-generate-image", panel)
+        self.assertIn("renderPersonaImageLibraryGrid", panel)
+        self.assertIn(".persona-image-library-card.is-selected::after", self.styles)
+        self.assertIn("animation: persona-image-selection-sweep", self.styles)
+        self.assertNotIn("data-persona-reference-image-toggle", self.source)
+        self.assertNotIn("data-media-lightbox-add-reference", self.source)
 
     def test_mobile_workspace_controls_keep_distinct_icons_and_stable_layout(self):
         self.assertIn('<svg class="mobile-nav-toggle-icon"', self.markup)
@@ -843,8 +844,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
     def test_result_links_reject_unsafe_protocols_and_preserve_admin_context(self):
         console_link_source = self._function_source("adminWorkspacePageUrl")
-        dashboard_workspace_source = self._persona_dashboard_function_source("pdAdminWorkspaceUrl")
-        dashboard_link_source = self._persona_dashboard_function_source("pdSafeLinkUrl")
         harness = textwrap.dedent(
             f"""
             const assert = require("node:assert/strict");
@@ -852,11 +851,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const window = {{ location: {{ origin: location.origin, href: `${{location.origin}}/admin-console.html` }} }};
             const ADMIN_WORKSPACE_USER_ID = "42";
             const ADMIN_CONSOLE_SESSION = true;
-            const PD_ADMIN_WORKSPACE_USER_ID = "42";
-            const PD_ADMIN_CONSOLE_SESSION = true;
             {console_link_source}
-            {dashboard_workspace_source}
-            {dashboard_link_source}
 
             for (const unsafe of [
               "javascript:alert(1)",
@@ -864,16 +859,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               "https://user:pass@example.test/path",
             ]) {{
               assert.equal(adminWorkspacePageUrl(unsafe), "");
-              assert.equal(pdSafeLinkUrl(unsafe), "");
             }}
 
             assert.equal(
               adminWorkspacePageUrl("/about-vecto.html#story"),
               "/about-vecto.html?admin_console=1&admin_workspace_user_id=42#story",
-            );
-            assert.equal(
-              pdSafeLinkUrl("/persona-automation-log.html?task_id=7"),
-              "/persona-automation-log.html?task_id=7&admin_workspace_user_id=42&admin_console=1",
             );
             assert.equal(
               adminWorkspacePageUrl("https://docs.example.test/result"),
@@ -3203,11 +3193,16 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         proxy_modal = self._section("function openProxyModal", "async function refreshProxyPool")
 
         self.assertIn("data-account-proxy-custom-add", picker)
+        self.assertIn("data-account-system-proxy-pool-open", picker)
         self.assertNotIn("data-account-proxy-market-open", picker)
         self.assertIn('function openAccountProxyPickerModal(accountId = "", initialProxyId = null)', self.source)
         self.assertIn('initialProxyId === null || initialProxyId === undefined', picker)
         self.assertIn('if (accountProxyCustomIsBusy(modal))', picker)
         self.assertIn('accountProxyCustomBusyMessage();', picker)
+        self.assertIn(
+            'openSystemProxyPoolModal({ accountId: account.id, selectedProxyId: modal.dataset.selectedProxyId || "" })',
+            picker,
+        )
         self.assertIn("accountProxyInlineCustomFormHtml", picker)
         self.assertIn("saveAccountInlineCustomProxy", picker)
         self.assertNotIn("openProxyModal", picker)

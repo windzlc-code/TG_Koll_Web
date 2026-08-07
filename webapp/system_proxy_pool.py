@@ -13,7 +13,7 @@ from .db import get_admin_config
 
 SYSTEM_PROXY_OPTION_PREFIX = "system_proxy_item:"
 SYSTEM_PROXY_SETTINGS_KEY = "proxy_market_settings"
-DEFAULT_SYSTEM_PROXY_LIMIT = 3
+DEFAULT_SYSTEM_PROXY_LIMIT = 1
 DEFAULT_HEALTH_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
@@ -48,13 +48,8 @@ def _settings(conn: sqlite3.Connection) -> dict[str, int]:
 
 
 def _claim_limit(conn: sqlite3.Connection, owner_user_id: int) -> int:
-    row = conn.execute(
-        "SELECT claim_limit_override FROM proxy_market_user_state WHERE user_id = ?",
-        (int(owner_user_id),),
-    ).fetchone()
-    if row is not None and row["claim_limit_override"] is not None:
-        return max(0, min(100, int(row["claim_limit_override"])))
-    return int(_settings(conn)["default_claim_limit"])
+    del conn, owner_user_id
+    return DEFAULT_SYSTEM_PROXY_LIMIT
 
 
 def _fresh_and_healthy(item: dict[str, Any], *, now: int, max_age_seconds: int) -> bool:
@@ -144,12 +139,92 @@ def list_available_system_proxy_options(
     return options
 
 
+def list_system_proxy_pool_options(
+    conn: sqlite3.Connection,
+    *,
+    owner_user_id: int,
+) -> list[dict[str, Any]]:
+    """Return the user's current system proxy and currently unclaimed choices.
+
+    Occupied proxies belonging to other users are intentionally omitted. This
+    keeps the shared pool useful for selection without exposing other users'
+    allocations in the normal proxy list or in the selector.
+    """
+
+    owner_id = int(owner_user_id or 0)
+    if owner_id <= 0:
+        return []
+    now = int(time.time())
+    max_age = int(_settings(conn)["health_max_age_seconds"])
+    rows = conn.execute(
+        """
+        SELECT item.*, allocation.user_id AS allocation_user_id,
+               allocation.social_proxy_id, allocation.claimed_at,
+               (
+                 SELECT COUNT(*)
+                 FROM social_accounts account
+                 WHERE account.proxy_id = allocation.social_proxy_id
+               ) AS bound_account_count
+        FROM proxy_market_items item
+        LEFT JOIN proxy_market_allocations allocation
+          ON allocation.item_id = item.id AND allocation.status = 'active'
+        WHERE allocation.id IS NULL OR allocation.user_id = ?
+        ORDER BY CASE WHEN allocation.user_id = ? THEN 0 ELSE 1 END,
+                 item.published_at DESC, item.updated_at DESC, item.id ASC
+        """,
+        (owner_id, owner_id),
+    ).fetchall()
+    options: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        selected = int(item.get("allocation_user_id") or 0) == owner_id
+        if not selected:
+            if str(item.get("status") or "") != "active":
+                continue
+            if not _fresh_and_healthy(item, now=now, max_age_seconds=max_age):
+                continue
+        check_result = str(item.get("last_check_result_json") or "{}")
+        try:
+            parsed_check = json.loads(check_result)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed_check = {}
+        if not isinstance(parsed_check, dict):
+            parsed_check = {}
+        options.append(
+            {
+                "id": f"{SYSTEM_PROXY_OPTION_PREFIX}{str(item.get('id') or '')}",
+                "market_item_id": str(item.get("id") or ""),
+                "social_proxy_id": str(item.get("social_proxy_id") or ""),
+                "name": str(item.get("display_name") or item.get("sku") or "系统代理"),
+                "proxy_type": str(item.get("proxy_type") or "socks5"),
+                "host": str(item.get("host") or ""),
+                "port": int(item.get("port") or 0),
+                "country": str(item.get("country") or ""),
+                "region": str(item.get("region") or ""),
+                "city": str(item.get("city") or ""),
+                "isp": str(item.get("isp") or ""),
+                "ip_type": str(item.get("ip_type") or "static_residential"),
+                "description": str(item.get("description") or ""),
+                "expires_at": int(item.get("expires_at") or 0),
+                "health_status": str(item.get("health_status") or "pending"),
+                "last_check_at": int(item.get("last_check_at") or 0),
+                "exit_ip": str(parsed_check.get("exit_ip") or parsed_check.get("ip") or ""),
+                "selected": selected,
+                "available": not selected,
+                "bound_account_count": int(item.get("bound_account_count") or 0),
+                "claimed_at": int(item.get("claimed_at") or 0),
+            }
+        )
+    return options
+
+
 def claim_system_proxy_in_transaction(
     conn: sqlite3.Connection,
     *,
     item_id: str,
     owner_user_id: int,
     client_request_id: str = "",
+    allow_replacement: bool = False,
 ) -> Any:
     owner_id = int(owner_user_id or 0)
     clean_item_id = str(item_id or "").strip()
@@ -183,7 +258,7 @@ def claim_system_proxy_in_transaction(
         ).fetchone()[0]
     )
     limit = _claim_limit(conn, owner_id)
-    if active_count >= limit:
+    if active_count >= limit and not allow_replacement:
         raise HTTPException(status_code=409, detail=f"系统代理使用数量已达到上限（{limit} 个）")
     row = conn.execute("SELECT * FROM proxy_market_items WHERE id = ?", (clean_item_id,)).fetchone()
     if row is None:
@@ -266,6 +341,72 @@ def claim_system_proxy_in_transaction(
     except sqlite3.IntegrityError as exc:
         raise HTTPException(status_code=409, detail="该系统代理刚刚已被其他用户选择") from exc
     return conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+
+
+def switch_system_proxy_in_transaction(
+    conn: sqlite3.Connection,
+    *,
+    item_id: str,
+    owner_user_id: int,
+    client_request_id: str = "",
+    expected_current_item_id: str | None = None,
+) -> tuple[Any, bool]:
+    """Select one system proxy per user without changing account bindings."""
+
+    owner_id = int(owner_user_id or 0)
+    clean_item_id = str(item_id or "").strip()
+    current_rows = conn.execute(
+        """
+        SELECT proxy.*, allocation.item_id AS allocated_item_id
+        FROM proxy_market_allocations allocation
+        JOIN social_proxies proxy ON proxy.id = allocation.social_proxy_id
+        WHERE allocation.user_id = ? AND allocation.status = 'active'
+        ORDER BY allocation.claimed_at DESC, allocation.id DESC
+        """,
+        (owner_id,),
+    ).fetchall()
+    current = next(
+        (row for row in current_rows if str(row["allocated_item_id"] or "") == clean_item_id),
+        None,
+    )
+    actual_current_item_id = str(current_rows[0]["allocated_item_id"] or "") if current_rows else ""
+    if expected_current_item_id is not None:
+        expected = str(expected_current_item_id or "").strip()
+        if expected != actual_current_item_id:
+            raise HTTPException(status_code=409, detail="当前代理已在其他页面变更，请刷新公共代理池后重试")
+    if current is not None and len(current_rows) == 1:
+        return current, 0
+
+    current_proxy_ids = [str(row["id"] or "") for row in current_rows if str(row["id"] or "")]
+    if current_proxy_ids:
+        placeholders = ",".join("?" for _ in current_proxy_ids)
+        bound_account = conn.execute(
+            f"""
+            SELECT account.id
+            FROM social_accounts account
+            WHERE account.user_id = ?
+              AND account.proxy_id IN ({placeholders})
+            LIMIT 1
+            """,
+            (owner_id, *current_proxy_ids),
+        ).fetchone()
+        if bound_account is not None:
+            raise HTTPException(status_code=409, detail="当前代理仍有账号绑定，请先解除账号绑定后再切换代理 IP")
+
+    selected = current or claim_system_proxy_in_transaction(
+        conn,
+        item_id=clean_item_id,
+        owner_user_id=owner_id,
+        client_request_id=client_request_id,
+        allow_replacement=bool(current_rows),
+    )
+    selected_proxy_id = str(selected["id"] or "")
+    replaced_proxy = any(str(row["id"] or "") != selected_proxy_id for row in current_rows)
+    for row in current_rows:
+        if str(row["id"] or "") == selected_proxy_id:
+            continue
+        release_system_proxy_in_transaction(conn, proxy=row, owner_user_id=owner_id)
+    return conn.execute("SELECT * FROM social_proxies WHERE id = ?", (selected_proxy_id,)).fetchone(), replaced_proxy
 
 
 def release_system_proxy_in_transaction(

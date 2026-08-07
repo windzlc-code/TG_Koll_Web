@@ -41,7 +41,8 @@ export class ReaderResponseCoordinator {
   private readonly now: () => number;
   private readonly memory = new Map<string, ReaderResponseCacheEntry>();
   private readonly inFlight = new Map<string, Promise<ReaderResponseSnapshot>>();
-  private writesSincePrune = 0;
+  private readonly latestLoadToken = new Map<string, symbol>();
+  private writesSincePrune = 24;
 
   constructor(options: ReaderResponseCoordinatorOptions = {}) {
     this.freshTtlMs = Math.max(0, Number(options.freshTtlMs ?? DEFAULT_FRESH_TTL_MS));
@@ -64,16 +65,17 @@ export class ReaderResponseCoordinator {
     if (mode === "swr" && cached && ageMs <= this.freshTtlMs) return cached.value;
 
     if (mode === "swr" && cached && ageMs <= this.freshTtlMs + this.staleTtlMs) {
-      this.startLoad(key, loader, cached, options.isCacheable).catch(() => undefined);
+      this.startLoad(key, loader, cached, options.isCacheable, mode).catch(() => undefined);
       return cached.value;
     }
 
-    return this.startLoad(key, loader, cached, options.isCacheable);
+    return this.startLoad(key, loader, cached, options.isCacheable, mode);
   }
 
   clearMemory() {
     this.memory.clear();
     this.inFlight.clear();
+    this.latestLoadToken.clear();
   }
 
   private startLoad(
@@ -81,9 +83,13 @@ export class ReaderResponseCoordinator {
     loader: () => Promise<ReaderResponseSnapshot>,
     cached: ReaderResponseCacheEntry | null,
     isCacheable: ReaderResponseLoadOptions["isCacheable"],
+    mode: Exclude<ReaderResponseCacheMode, "bypass">,
   ): Promise<ReaderResponseSnapshot> {
-    const existing = this.inFlight.get(key);
+    const inFlightKey = mode === "blocking-refresh" ? `${key}\0blocking-refresh` : key;
+    const existing = this.inFlight.get(inFlightKey);
     if (existing) return existing;
+    const loadToken = Symbol(key);
+    this.latestLoadToken.set(key, loadToken);
     const fallback = cached && this.now() - cached.cachedAt <= this.freshTtlMs + this.staleTtlMs
       ? cached.value
       : null;
@@ -91,7 +97,9 @@ export class ReaderResponseCoordinator {
     const pending = loader()
       .then((value) => {
         if (!isCacheable || isCacheable(value)) {
-          this.writeEntry(key, { cachedAt: this.now(), value });
+          if (this.latestLoadToken.get(key) === loadToken) {
+            this.writeEntry(key, { cachedAt: this.now(), value });
+          }
           return value;
         }
         return fallback || value;
@@ -101,9 +109,10 @@ export class ReaderResponseCoordinator {
         throw error;
       })
       .finally(() => {
-        if (this.inFlight.get(key) === pending) this.inFlight.delete(key);
+        if (this.inFlight.get(inFlightKey) === pending) this.inFlight.delete(inFlightKey);
+        if (this.latestLoadToken.get(key) === loadToken) this.latestLoadToken.delete(key);
       });
-    this.inFlight.set(key, pending);
+    this.inFlight.set(inFlightKey, pending);
     return pending;
   }
 
@@ -137,10 +146,16 @@ export class ReaderResponseCoordinator {
       fs.mkdirSync(this.storageDir, { recursive: true });
       const file = this.cacheFile(key);
       withExclusiveJsonFileLock(file, () => {
-        fs.writeFileSync(file, JSON.stringify(entry), "utf8");
+        const temporaryFile = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+        try {
+          fs.writeFileSync(temporaryFile, JSON.stringify(entry), "utf8");
+          fs.renameSync(temporaryFile, file);
+        } finally {
+          fs.rmSync(temporaryFile, { force: true });
+        }
       });
       this.writesSincePrune += 1;
-      if (this.writesSincePrune === 1 || this.writesSincePrune >= 25) {
+      if (this.writesSincePrune >= 25) {
         this.writesSincePrune = 0;
         this.pruneDiskCache();
       }

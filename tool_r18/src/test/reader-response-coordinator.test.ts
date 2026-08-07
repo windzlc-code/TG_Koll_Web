@@ -101,6 +101,32 @@ describe("reader response coordinator", () => {
     expect((await coordinator.getOrLoad("stale", loader)).body).toBe("new");
   });
 
+  it("does not merge a manual refresh into an ordinary background refresh", async () => {
+    let now = 0;
+    const coordinator = createReaderResponseCoordinator({
+      freshTtlMs: 100,
+      staleTtlMs: 200,
+      now: () => now,
+    });
+    await coordinator.getOrLoad("manual", async () => response("old"));
+    now = 150;
+    const background = deferred<ReaderResponseSnapshot>();
+    const stale = await coordinator.getOrLoad("manual", () => background.promise);
+
+    const manual = await coordinator.getOrLoad(
+      "manual",
+      async () => response("manual-fresh"),
+      { mode: "blocking-refresh" },
+    );
+
+    expect(stale.body).toBe("old");
+    expect(manual.body).toBe("manual-fresh");
+    background.resolve(response("background-fresh"));
+    await background.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((await coordinator.getOrLoad("manual", async () => response("unexpected"))).body).toBe("manual-fresh");
+  });
+
   it("does not replace a stale response with a rate-limit response", async () => {
     let now = 0;
     const coordinator = createReaderResponseCoordinator({

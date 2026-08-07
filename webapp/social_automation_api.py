@@ -59,7 +59,9 @@ from .system_proxy_pool import (
     claim_system_proxy_in_transaction,
     is_system_proxy_option_id,
     list_available_system_proxy_options,
+    list_system_proxy_pool_options,
     release_system_proxy_in_transaction,
+    switch_system_proxy_in_transaction,
     system_proxy_item_id,
 )
 
@@ -385,6 +387,12 @@ class SocialProxyCheckPayload(StrictProxyModel):
     port: int = 0
     username: str | None = None
     password: str | None = None
+
+
+class SystemProxySelectionPayload(StrictProxyModel):
+    item_id: str = Field(min_length=1, max_length=160)
+    expected_current_item_id: str = Field(default="", max_length=160)
+    client_request_id: str = Field(default="", max_length=128)
 
 
 class SocialAccountPayload(BaseModel):
@@ -2348,13 +2356,42 @@ def register_social_automation_routes(app: FastAPI) -> None:
         with db() as conn:
             rows = conn.execute("SELECT * FROM social_proxies WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC", (owner_user_id,)).fetchall()
             proxies = _proxy_public_rows(conn, rows)
-            proxies.extend(
-                list_available_system_proxy_options(
-                    conn,
-                    owner_user_id=owner_user_id,
-                )
-            )
         return {"ok": True, "proxies": proxies}
+
+    @app.get("/api/persona_dashboard/automation/system-proxy-pool")
+    def api_system_proxy_pool(user: dict[str, Any] = Depends(get_current_user)):
+        owner_user_id = _identity_user_id(user)
+        with db() as conn:
+            options = list_system_proxy_pool_options(conn, owner_user_id=owner_user_id)
+        current = next((option for option in options if bool(option.get("selected"))), None)
+        return {
+            "ok": True,
+            "claim_limit": 1,
+            "current": current,
+            "options": options,
+        }
+
+    @app.post("/api/persona_dashboard/automation/system-proxy-pool/select")
+    def api_system_proxy_pool_select(
+        payload: SystemProxySelectionPayload,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        owner_user_id = _identity_user_id(user)
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            proxy_row, replaced_proxy = switch_system_proxy_in_transaction(
+                conn,
+                item_id=payload.item_id,
+                owner_user_id=owner_user_id,
+                client_request_id=payload.client_request_id,
+                expected_current_item_id=payload.expected_current_item_id,
+            )
+            proxy = _proxy_public_rows(conn, [proxy_row])[0]
+        return {
+            "ok": True,
+            "proxy": proxy,
+            "replaced_proxy": bool(replaced_proxy),
+        }
 
     @app.post("/api/persona_dashboard/automation/proxies")
     def api_social_proxy_create(

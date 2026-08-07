@@ -10758,8 +10758,6 @@ def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, 
             prompt=str(payload.get("prompt") or "").strip(),
             aspect_ratio=str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1",
             mode=str(payload.get("mode") or "person").strip() or "person",
-            reference_image_id=str(payload.get("reference_image_id") or payload.get("referenceImageId") or "").strip(),
-            generate_reference_sheet=not bool(str(payload.get("reference_image_id") or payload.get("referenceImageId") or "").strip()),
         )
     except HTTPException as exc:
         raise RuntimeError(str(exc.detail or "人设图生成失败。")) from exc
@@ -12255,7 +12253,6 @@ class PersonaDashboardPersonaImageGeneratePayload(BaseModel):
     prompt: str = ""
     aspect_ratio: str = "1:1"
     mode: str = "person"
-    reference_image_id: str = ""
 
 
 class PersonaDashboardPostMediaTaskAttachPayload(BaseModel):
@@ -16980,31 +16977,6 @@ def _persona_reference_image_input_for_cli(archive: dict[str, Any]) -> str:
     return raw_url
 
 
-def _persona_library_image_input_for_cli(archive: dict[str, Any], image_id: str) -> str:
-    clean_image_id = str(image_id or "").strip()
-    if not clean_image_id:
-        return ""
-    library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
-    item = next(
-        (
-            row for row in library
-            if isinstance(row, dict) and str(row.get("id") or "").strip() == clean_image_id
-        ),
-        None,
-    )
-    if not item:
-        raise HTTPException(status_code=404, detail="选择的参考图不存在")
-    raw_url = str(item.get("imageUrl") or item.get("image_url") or "").strip()
-    if not raw_url:
-        raise HTTPException(status_code=404, detail="选择的参考图文件不存在")
-    if raw_url.startswith("data:") or re.match(r"^https?://", raw_url, re.I):
-        return raw_url
-    path = Path(raw_url).expanduser()
-    if path.is_file():
-        return str(path)
-    raise HTTPException(status_code=404, detail="选择的参考图文件无法读取")
-
-
 def _persona_library_preview_url(archive_id: str, image_id: str, raw_url: str) -> str:
     text = str(raw_url or "").strip()
     if not text:
@@ -17385,7 +17357,7 @@ async def _replace_persona_archive_image(archive_id: str, image_id: str, usernam
     return data
 
 
-def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_ratio: str = "1:1", mode: str = "person", reference_image_id: str = "", generate_reference_sheet: bool = True) -> dict[str, Any]:
+def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_ratio: str = "1:1", mode: str = "person") -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
@@ -17394,15 +17366,15 @@ def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
     setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
-    selected_reference = _persona_library_image_input_for_cli(archive, reference_image_id)
+    reference_sheet = _persona_reference_image_input_for_cli(archive)
     payload = {
         "setup": setup,
         "content": str(prompt or archive.get("content") or ""),
         "aspectRatio": str(aspect_ratio or "1:1").strip() or "1:1",
         "mode": str(mode or "person").strip() or "person",
-        "referenceImageUrl": selected_reference or None,
-        "referenceSheetUrl": None if selected_reference else (_persona_reference_image_input_for_cli(archive) or None),
-        "generateReferenceSheet": bool(generate_reference_sheet and not selected_reference),
+        "referenceImageUrl": None,
+        "referenceSheetUrl": reference_sheet or None,
+        "generateReferenceSheet": not bool(reference_sheet),
         "dryRun": False,
     }
     _sync_tool_r18_api_config_for_persona_workflow()
@@ -17438,8 +17410,8 @@ def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_
         clean_id,
         image_url=image_url,
         prompt=prompt.strip() or f"人设图：{archive.get('name') or clean_id}",
-        mode=str(image_result.get("mode") or ("image-to-image" if selected_reference else "closed-model")),
-        source="image-to-image" if selected_reference else "portrait",
+        mode=str(image_result.get("mode") or "closed-model"),
+        source="portrait",
         aspect_ratio=str(payload.get("aspectRatio") or "1:1"),
     )
     persisted["generation"] = {
@@ -22877,8 +22849,6 @@ def create_app() -> FastAPI:
                 prompt=str(payload.prompt or "").strip(),
                 aspect_ratio=str(payload.aspect_ratio or "1:1").strip() or "1:1",
                 mode=str(payload.mode or "person").strip() or "person",
-                reference_image_id=str(payload.reference_image_id or "").strip(),
-                generate_reference_sheet=not bool(str(payload.reference_image_id or "").strip()),
             )
         except Exception:
             with db() as conn:
@@ -24071,7 +24041,6 @@ def create_app() -> FastAPI:
             payload["prompt"] = str(payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
             payload["aspect_ratio"] = str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1"
             payload["mode"] = str(payload.get("mode") or "person").strip() or "person"
-            payload["reference_image_id"] = str(payload.get("reference_image_id") or payload.get("referenceImageId") or "").strip()
             if not payload["related_persona_id"]:
                 raise HTTPException(status_code=400, detail="人设图生成需要关联人设 ID")
             task_id = _new_id("task")

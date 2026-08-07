@@ -76,7 +76,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
         self.assertIn('id="personaDashboardPlatformTabs"', dashboard)
         self.assertIn("persona-dashboard-top-controls", dashboard)
-        self.assertIn('id="personaDashboardTabs"', dashboard)
+        self.assertNotIn('id="personaDashboardTabs"', dashboard)
+        self.assertNotIn('id="personaDashboardList"', dashboard)
         self.assertNotIn('>平台<', dashboard)
         self.assertLess(
             dashboard.index("persona-dashboard-top-controls"),
@@ -100,26 +101,20 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("persona-dashboard-top-controls", self.styles)
         self.assertIn("persona-dashboard-platform-trigger", self.styles)
         self.assertIn("persona-dashboard-platform-options", self.styles)
-        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
+        self.assertIn("grid-template-columns: minmax(0, 1fr);", self.styles)
         self.assertIn(".persona-dashboard-view .persona-dashboard-platform-menu", self.styles)
         self.assertIn("min-height: 50px;", self.styles)
 
     def test_platform_tabs_keep_the_full_persona_archive_visible(self):
-        matcher_start = self.dashboard_script.index("function pdMatches()")
-        matcher_end = self.dashboard_script.index("\nfunction pdRenderSummary", matcher_start)
-        matcher = self.dashboard_script[matcher_start:matcher_end]
-
-        self.assertIn("Platform tabs refine platform-specific posts and engagement only.", matcher)
-        self.assertIn("return true;", matcher)
-        self.assertNotIn("pdPlatformFilter()", matcher)
-        self.assertIn("const visible = (data.personas || []).filter(pdMatches);", self.dashboard_script)
+        self.assertNotIn("function pdMatches()", self.dashboard_script)
+        self.assertIn("const visible = data.personas || [];", self.dashboard_script)
 
     def test_platform_tabs_filter_only_platform_metrics_not_global_archive_counts(self):
-        summary_start = self.dashboard_script.index("function pdRenderSummary(data, visiblePersonas)")
-        summary_end = self.dashboard_script.index("\nfunction pdPersonaWarnings", summary_start)
+        summary_start = self.dashboard_script.index("function pdRenderSummary(visiblePersonas)")
+        summary_end = self.dashboard_script.index("\nfunction pdRenderDashboard", summary_start)
         summary = self.dashboard_script[summary_start:summary_end]
         charts_start = self.dashboard_script.index("function pdBuildFilteredCharts(visiblePersonas, data)")
-        charts_end = self.dashboard_script.index("\nfunction pdMatches", charts_start)
+        charts_end = self.dashboard_script.index("\nfunction pdRenderSummary", charts_start)
         charts = self.dashboard_script[charts_start:charts_end]
 
         self.assertIn("全局人设归档，不受平台切换影响", summary)
@@ -130,9 +125,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("const platforms = (persona.hot_platforms || []).filter", charts)
         self.assertIn("value: pdPersonaHot(item).hot_score", self.dashboard_script)
 
-    def test_dashboard_summary_and_persona_tabs_stay_compact_on_mobile(self):
-        summary_start = self.dashboard_script.index("function pdRenderSummary(data, visiblePersonas)")
-        summary_end = self.dashboard_script.index("\nfunction pdPersonaWarnings", summary_start)
+    def test_dashboard_summary_stays_compact_on_mobile(self):
+        summary_start = self.dashboard_script.index("function pdRenderSummary(visiblePersonas)")
+        summary_end = self.dashboard_script.index("\nfunction pdRenderDashboard", summary_start)
         summary = self.dashboard_script[summary_start:summary_end]
 
         self.assertIn('class="kpi persona-kpi" title=', summary)
@@ -140,24 +135,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("display: flex;", self.styles)
         self.assertIn("grid-template-columns: 1fr;", self.styles)
         self.assertIn("overflow: visible;", self.styles)
-        self.assertIn("width: 116px;", self.styles)
-        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
         self.assertIn(".persona-dashboard-view .persona-chart-panel-wide {", self.styles)
-
-    def test_persona_hot_detail_keeps_all_metrics_in_a_compact_grid(self):
-        detail_start = self.dashboard_script.index("function pdPersonaWarnings(persona)")
-        detail_end = self.dashboard_script.index("\nfunction pdPersonaKey", detail_start)
-        detail = self.dashboard_script[detail_start:detail_end]
-
-        self.assertIn('class="persona-warning-summary"', detail)
-        self.assertIn('class="persona-detail-grid persona-detail-grid--compact"', detail)
-        self.assertIn("const metrics = [", detail)
-        self.assertIn("metrics.map((metric)", detail)
-        self.assertIn("hot.recent_views", detail)
-        self.assertIn("hot.post_views", detail)
-        self.assertNotIn('class="persona-platform-list"', detail)
-        self.assertNotIn('class="persona-content-preview"', detail)
-        self.assertIn(".persona-detail-grid--compact", self.styles)
 
     def test_dashboard_metric_units_match_publish_history_units(self):
         number_start = self.dashboard_script.index("function pdNumber(value)")
@@ -170,67 +148,29 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('pdFormatMetricUnit(n, 1000, "k")', formatter)
         self.assertNotIn('"万"', formatter)
 
-    def test_post_cards_and_detail_split_reposts_from_shares_without_extra_heading(self):
-        card_start = self.dashboard_script.index("function pdRenderPersonaCard(persona)")
-        card_end = self.dashboard_script.index("\nfunction pdPersonaKey", card_start)
-        row_start = self.dashboard_script.index("function pdRenderPostTableRow(row)")
-        row_end = self.dashboard_script.index("\nfunction pdRenderMobilePostStreamStatus", row_start)
-        card = self.dashboard_script[row_start:row_end] + self.dashboard_script[card_start:card_end]
-        modal_start = self.dashboard_script.index("function pdRenderPostModal(persona)")
-        modal_end = self.dashboard_script.index("\nfunction pdRenderPersonaTabs", modal_start)
-        modal = self.dashboard_script[modal_start:modal_end]
-
-        self.assertNotIn("<strong>发送推文指标</strong>", card)
-        self.assertIn('data-label="转发">${pdEscape(pdNumber(row.repost_count))}', card)
-        self.assertIn('data-label="分享">${pdEscape(pdNumber(row.share_count))}', card)
-        self.assertNotIn('data-label="转发/分享"', card)
-        self.assertIn('value="reposts_desc"', card)
-        self.assertIn('value="shares_desc"', card)
-        self.assertIn("<span>转发</span>", modal)
-        self.assertIn("<span>分享</span>", modal)
-        self.assertNotIn("<span>转发/分享</span>", modal)
-
-    def test_mobile_dashboard_keeps_five_hot_metrics_and_post_metrics_in_compact_rows(self):
-        mobile_start = self.styles.index("@media (max-width: 760px) {")
-        mobile_styles = self.styles[mobile_start:]
-
-        self.assertIn(
-            ".persona-dashboard-view .persona-detail-grid--compact {\n"
-            "    grid-template-columns: repeat(5, minmax(0, 1fr));",
-            mobile_styles,
-        )
-        self.assertIn('"platform platform platform time actions"', mobile_styles)
-        self.assertIn("grid-template-columns: repeat(5, minmax(0, 1fr));", mobile_styles)
-        self.assertIn('"source source source source source"', mobile_styles)
-        self.assertIn('"likes comments reposts shares views"', mobile_styles)
-        self.assertIn('"meta-top meta-top meta-top meta-top meta-top"', mobile_styles)
-        self.assertIn('"meta-bottom meta-bottom meta-bottom meta-bottom meta-bottom"', mobile_styles)
-        self.assertIn("grid-area: meta-top;", mobile_styles)
-        self.assertIn("grid-area: meta-bottom;", mobile_styles)
-        self.assertIn(".persona-dashboard-view .persona-post-table td:nth-child(n + 4):nth-child(-n + 8) {", mobile_styles)
-        self.assertIn(".persona-dashboard-view .persona-post-table td:nth-child(-n + 3)::before {", mobile_styles)
-        self.assertIn("display: none;", mobile_styles)
-        self.assertIn(".persona-dashboard-view .persona-post-content-badges {", mobile_styles)
-
-    def test_mobile_post_filters_stay_inline_and_post_rows_need_no_horizontal_scroll(self):
-        card_start = self.dashboard_script.index("function pdRenderPersonaCard(persona)")
-        card_end = self.dashboard_script.index("\nfunction pdPersonaKey", card_start)
-        row_start = self.dashboard_script.index("function pdRenderPostTableRow(row)")
-        row_end = self.dashboard_script.index("\nfunction pdRenderMobilePostStreamStatus", row_start)
-        card = self.dashboard_script[row_start:row_end] + self.dashboard_script[card_start:card_end]
-
-        self.assertIn('data-label="平台"', card)
-        self.assertIn('data-label="推文内容"', card)
-        self.assertIn('data-label="发布时间"', card)
-        self.assertIn('class="persona-post-platform-name"', card)
-        self.assertIn('class="persona-post-platform" data-label="平台"', card)
-        self.assertIn('class="persona-post-empty"', card)
-        self.assertIn(".persona-dashboard-view .persona-post-controls {", self.styles)
-        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
-        self.assertIn(".persona-dashboard-view .persona-table-wrap {", self.styles)
-        self.assertIn(".persona-dashboard-view .persona-post-table thead {", self.styles)
-        self.assertIn(".persona-dashboard-view .persona-post-platform .persona-post-content-badges {", self.styles)
-        self.assertIn("overflow: visible;", self.styles)
+    def test_homepage_has_no_post_filters_and_history_keeps_the_full_list(self):
+        for removed_code in (
+            "personaDashboardSelectedId",
+            "personaDashboardInitialPersonaId",
+            "function pdRenderPersonaCard",
+            "function pdRenderPersonaTabs",
+            "function pdOpenPersonaDashboardPicker",
+            "function pdApplyInitialPersonaSelection",
+            'modalKey: "persona-dashboard-picker"',
+        ):
+            self.assertNotIn(removed_code, self.dashboard_script)
+        for removed_style in (
+            "persona-dashboard-picker",
+            "persona-dashboard-persona-control",
+            "persona-dashboard-list",
+            "persona-detail-card",
+        ):
+            self.assertNotIn(removed_style, self.styles)
+        self.assertIn('overview.style.display = "grid";', self.dashboard_script)
+        self.assertIn('id="personaOverviewPane"', self.markup)
+        self.assertIn('data-persona-data-tab="history"', self.console_script)
+        self.assertIn("人设历史推文", self.console_script)
+        self.assertIn("renderPublishHistorySelectionList", self.console_script)
 
     def test_platform_picker_closes_on_outside_click_and_filter_summary_is_not_rendered(self):
         binder_start = self.dashboard_script.index("function pdBindDashboard(root)")
@@ -242,10 +182,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('event.key === "Escape"', binder)
         self.assertIn("pdCloseDashboardPlatformPicker();", binder)
         self.assertNotIn("function pdCurrentPostFilterText()", self.dashboard_script)
-        self.assertIn(".persona-post-actions .persona-post-delete {", self.dashboard_styles)
-        delete_styles = self.dashboard_styles[self.dashboard_styles.index(".persona-post-delete {"):self.dashboard_styles.index(".persona-post-delete .ui-trash-icon {")]
-        self.assertIn("border: 0;", delete_styles)
-        self.assertNotIn("border: 1px solid #ef4444;", delete_styles)
+        self.assertNotIn("data-post-delete", self.dashboard_script)
+        self.assertNotIn("function pdDeletePost", self.dashboard_script)
 
     def test_platform_picker_trigger_does_not_reclose_from_the_same_click(self):
         picker_start = self.dashboard_script.index("function pdRenderDashboardPlatformTabs(data)")
@@ -271,21 +209,16 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             chart,
         )
 
-    def test_post_detail_prefers_backend_preview_urls_and_does_not_render_schema_field_names(self):
-        media_start = self.dashboard_script.index("function pdPostMediaItems(row)")
-        media_end = self.dashboard_script.index("\nfunction pdPostComposition", media_start)
-        media = self.dashboard_script[media_start:media_end]
-        render_start = self.dashboard_script.index("function pdRenderPostMedia(row)")
-        render_end = self.dashboard_script.index("\nfunction pdRenderPostGallery", render_start)
-        renderer = self.dashboard_script[render_start:render_end]
-
-        self.assertIn("item.preview_url || item.previewUrl", media)
-        self.assertIn("original_url: rawUrl", media)
-        self.assertIn("url: pdAdminWorkspaceUrl(previewUrl || (item.unavailable ? \"\" : rawUrl))", media)
-        self.assertIn("genericLabel", media)
-        self.assertIn("item.unavailable || !url", renderer)
-        self.assertIn("persona-post-media-unavailable", renderer)
-        self.assertIn(".persona-post-modal {\n  position: fixed;\n  inset: 0;\n  z-index: 6000;", self.dashboard_styles)
+    def test_homepage_removes_its_legacy_post_detail_stack(self):
+        for legacy_function in (
+            "pdPostMediaItems",
+            "pdRenderPostMedia",
+            "pdRenderPostGallery",
+            "pdRenderPostInfo",
+            "pdRenderPostModal",
+        ):
+            self.assertNotIn(f"function {legacy_function}", self.dashboard_script)
+        self.assertIn("function renderPublishHistoryPreview", self.console_script)
 
     def test_dashboard_media_uses_owner_scoped_route_and_hides_uncached_external_urls(self):
         row = {"id": "metric-1", "content": "same post"}
@@ -307,69 +240,6 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         self.assertTrue(external[0]["unavailable"])
         self.assertEqual(external[0]["reason"], "媒体未缓存到本地")
-
-    def test_mobile_metric_context_wraps_without_ellipsis(self):
-        title_start = self.styles.index(".persona-dashboard-view .persona-table-title {")
-        title_end = self.styles.index(".persona-dashboard-view .persona-post-controls {", title_start)
-        title_styles = self.styles[title_start:title_end]
-
-        self.assertIn("white-space: normal;", title_styles)
-        self.assertIn("overflow-wrap: anywhere;", title_styles)
-        self.assertNotIn("text-overflow: ellipsis;", title_styles)
-
-    def test_persona_data_selection_uses_a_common_modal_instead_of_a_horizontal_rail(self):
-        renderer_start = self.dashboard_script.index("function pdRenderPersonaTabs(visiblePersonas, selectedPersona)")
-        renderer_end = self.dashboard_script.index("\nfunction pdRenderSettings", renderer_start)
-        renderer = self.dashboard_script[renderer_start:renderer_end]
-
-        self.assertIn('id="personaDashboardPickerTrigger"', renderer)
-        self.assertNotIn('class="persona-tab-list"', renderer)
-        self.assertIn("function pdOpenPersonaDashboardPicker", renderer)
-        self.assertIn('modalKey: "persona-dashboard-picker"', renderer)
-        self.assertIn("data-dashboard-persona-picker", renderer)
-        self.assertIn(".persona-dashboard-picker-trigger", self.styles)
-        self.assertIn(".persona-dashboard-persona-control .persona-dashboard-picker-trigger strong", self.styles)
-        self.assertIn("text-overflow: ellipsis;", self.styles)
-        self.assertIn("white-space: nowrap;", self.styles)
-        self.assertIn('data-modal-key="persona-dashboard-picker"', self.styles)
-
-    def test_persona_picker_uses_consistent_cards_with_grouped_sections(self):
-        picker_start = self.dashboard_script.index("function pdOpenPersonaDashboardPicker")
-        picker_end = self.dashboard_script.index("\nfunction pdRenderSettings", picker_start)
-        picker = self.dashboard_script[picker_start:picker_end]
-
-        self.assertIn("persona-dashboard-picker-section--overview", picker)
-        self.assertIn("persona-dashboard-picker-section--personas", picker)
-        self.assertIn("persona-dashboard-picker-section--settings", picker)
-        self.assertIn("persona-dashboard-picker-option--${type}", picker)
-        self.assertIn('renderOption(overview, "overview")', picker)
-        self.assertIn('renderOption(settings, "settings")', picker)
-        self.assertIn("总览数据", picker)
-        self.assertIn("普通人设", picker)
-        self.assertIn("显示设置", picker)
-        self.assertIn("accountBound: Boolean(handle)", picker)
-        self.assertIn('"is-account-unbound"', picker)
-
-        picker_start = self.styles.index(".persona-dashboard-picker-tabs {")
-        picker_end = self.styles.index(".persona-dashboard-view .persona-tab {", picker_start)
-        picker_styles = self.styles[picker_start:picker_end]
-        self.assertIn(".persona-dashboard-picker-section:not(.persona-dashboard-picker-section--overview)", picker_styles)
-        self.assertNotIn("border-style: dashed;", picker_styles)
-        self.assertIn(".persona-dashboard-picker-option--overview {", picker_styles)
-        self.assertIn(".persona-dashboard-picker-option--settings {", picker_styles)
-        self.assertIn(".persona-dashboard-picker-option::after {", picker_styles)
-        self.assertIn(".persona-dashboard-picker-copy span::before {", picker_styles)
-        self.assertIn("linear-gradient(110deg", picker_styles)
-        self.assertIn("text-overflow: ellipsis;", picker_styles)
-        self.assertIn("#e3efed", picker_styles)
-        self.assertIn("#1d3446", picker_styles)
-        self.assertIn("#71979a", picker_styles)
-        self.assertIn("background: #ffffff;", picker_styles)
-        self.assertIn(".persona-dashboard-picker-option.is-account-unbound .persona-dashboard-picker-copy span::before", picker_styles)
-        self.assertIn("background: #28465a;", picker_styles)
-        self.assertIn("linear-gradient(110deg, #f5fbfa 0%, #eaf4f2 58%, #e3efed 100%)", picker_styles)
-        self.assertNotIn("var(--brand-bg)", picker_styles)
-        self.assertNotIn("#071112", picker_styles)
 
     def test_dashboard_does_not_render_device_or_bot_fields(self):
         self.assertNotIn("绑定设备", self.dashboard_script)
@@ -483,11 +353,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("background: #050b0a;", self.styles)
         self.assertIn("object-fit: contain;", self.styles)
         self.assertIn("object-position: center;", self.styles)
-        self.assertIn(".persona-post-gallery-card", self.dashboard_styles)
-        self.assertIn("background: #111817;", self.dashboard_styles)
-        self.assertIn(".persona-post-gallery-stage", self.dashboard_styles)
-        self.assertIn("background: #050b0a;", self.dashboard_styles)
-        self.assertIn("object-position: center;", self.dashboard_styles)
+        self.assertNotIn("function pdRenderPostGallery", self.dashboard_script)
 
     def test_generation_and_media_result_actions_use_clear_compact_labels(self):
         self.assertIn('hasGenerateContent ? "AI 润色" : "AI 生成"', self.console_script)
@@ -1616,31 +1482,25 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
         self.assertIn('data-persona-image-prompt', prompt_field)
         self.assertIn('根据提示词${baseGenerateLabel}', panel)
-        self.assertIn('根据提示词生成图生图', panel)
-        self.assertIn('data-persona-image-reference-mode', panel)
         self.assertIn('prompt: String(personaFormState(persona.id).images?.prompt || "").trim()', submit)
         self.assertIn('function syncPersonaImagePromptState(input)', self.console_script)
         self.assertIn('data-persona-image-generate-label', panel)
+        self.assertNotIn('data-persona-image-reference-mode', panel)
+        self.assertNotIn('图生图', panel)
 
-    def test_persona_image_prompt_supports_non_destructive_reference_editing(self):
+    def test_persona_image_prompt_uses_text_generation_without_reference_controls(self):
         panel_start = self.console_script.index("function renderPersonaImagePromptField(")
         panel_end = self.console_script.index("\nfunction renderPersonaImagePanel(", panel_start)
         prompt_field = self.console_script[panel_start:panel_end]
-        lightbox_start = self.console_script.index("function addPersonaMediaLightboxReference()")
-        lightbox_end = self.console_script.index("\nfunction renderPersonaMediaLightboxCurrent", lightbox_start)
-        lightbox = self.console_script[lightbox_start:lightbox_end]
         submit_start = self.console_script.index("async function submitPersonaImageGeneration()")
         submit_end = self.console_script.index("\nasync function applyPersonaReferenceImage", submit_start)
         submit = self.console_script[submit_start:submit_end]
 
-        self.assertNotIn("persona-image-reference-prompt-row", prompt_field)
-        self.assertNotIn("data-persona-clear-image-reference", prompt_field)
-        self.assertIn("点击图片右上角添加按钮", prompt_field)
-        self.assertIn("图生图提示词", prompt_field)
-        self.assertIn("referenceImageId", lightbox)
-        self.assertIn("renderConfirmSummary()", lightbox)
-        self.assertIn("reference_image_id", submit)
-        self.assertIn("data-media-lightbox-add-reference", self.console_script)
+        self.assertIn("填写后将按提示词生成新图", prompt_field)
+        self.assertNotIn("图生图", prompt_field)
+        self.assertNotIn("reference_image_id", submit)
+        self.assertIn("delete state.personaForms[key].images.referenceImageId;", self.console_script)
+        self.assertNotIn("data-media-lightbox-add-reference", self.console_script)
         self.assertIn("function renderPersonaImageLibraryPreview", self.console_script)
         self.assertIn("data-persona-image-select", self.console_script)
         self.assertIn("function togglePersonaImageSelection", self.console_script)
@@ -1945,14 +1805,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('const previewButton = event.target.closest("[data-media-preview-group]");', editor_handler)
         self.assertIn("openPersonaMediaLightbox(", editor_handler)
         self.assertIn("const imageSelection = event.target.closest(\"[data-persona-image-select]\");", editor_handler)
-        self.assertIn("const referenceToggle = event.target.closest(\"[data-persona-reference-image-toggle]\");", editor_handler)
+        self.assertNotIn("data-persona-reference-image-toggle", editor_handler)
         self.assertNotIn("!event.target.closest(\"[data-media-preview-group]\")", editor_handler)
         self.assertLess(
             editor_handler.index('const previewButton = event.target.closest("[data-media-preview-group]");'),
-            editor_handler.index('const referenceToggle = event.target.closest("[data-persona-reference-image-toggle]");'),
-        )
-        self.assertLess(
-            editor_handler.index('const referenceToggle = event.target.closest("[data-persona-reference-image-toggle]");'),
             editor_handler.index('const pageButton = event.target.closest("button[data-persona-profile-editor-page]");'),
         )
         self.assertIn('class="persona-image-library-zoom-button"', self.console_script)
@@ -2279,7 +2135,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('data-publish-history-view="${esc(recordId)}"', self.console_script)
         self.assertIn('data-publish-history-requeue="${esc(recordId)}"', self.console_script)
         self.assertIn("function openPublishHistoryRecordModal", self.console_script)
-        self.assertIn('extraActions: [{ value: "requeue", text: "重回草稿", iconHtml: renderRequeueIcon() }]', self.console_script)
+        self.assertIn('extraActions: record.__dashboard_metric_only', self.console_script)
+        self.assertIn('{ value: "requeue", text: "重回草稿", iconHtml: renderRequeueIcon() }', self.console_script)
         self.assertIn("renderSourceLinkIcon()", self.console_script)
         self.assertIn(".publish-history-card-requeue", self.styles)
         self.assertIn('title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>', self.console_script)
@@ -2308,7 +2165,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.dashboard_script,
         )
         self.assertIn(
-            'refresh.addEventListener("click", () => pdStartRefresh(""))',
+            'refresh.addEventListener("click", pdStartRefresh)',
             self.dashboard_script,
         )
         self.assertIn(
@@ -2349,7 +2206,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("clearInitialConsoleRouteHint();", self.console_script)
         mobile_dashboard_styles = self.styles[
             self.styles.index("@media (max-width: 760px) {"):
-            self.styles.index(".persona-dashboard-view .persona-tab-rail {", self.styles.index("@media (max-width: 760px) {"))
+            self.styles.index(".persona-dashboard-view .persona-chart-grid {", self.styles.index("@media (max-width: 760px) {"))
         ]
         self.assertIn("grid-template-columns: repeat(12, minmax(0, 1fr));", mobile_dashboard_styles)
         self.assertIn("min-height: 64px;", mobile_dashboard_styles)
@@ -2359,8 +2216,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("grid-column: span 3;", mobile_dashboard_styles)
         self.assertIn("font-size: 18px;", mobile_dashboard_styles)
         self.assertIn("font-size: 11px;", mobile_dashboard_styles)
-        summary_start = self.dashboard_script.index("function pdRenderSummary(data, visiblePersonas)")
-        summary_end = self.dashboard_script.index("\nfunction pdPersonaWarnings", summary_start)
+        summary_start = self.dashboard_script.index("function pdRenderSummary(visiblePersonas)")
+        summary_end = self.dashboard_script.index("\nfunction pdRenderDashboard", summary_start)
         summary = self.dashboard_script[summary_start:summary_end]
         self.assertNotIn(".filter((card) => Number(card.value || 0) > 0)", summary)
 
@@ -2372,14 +2229,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.styles,
         )
 
-    def test_dashboard_uses_compact_persona_tabs_and_chart_placeholders_for_empty_data(self):
-        mobile_dashboard_styles = self.styles[
-            self.styles.index("@media (max-width: 760px) {"):
-            self.styles.index(".persona-dashboard-view .persona-chart-grid {", self.styles.index("@media (max-width: 760px) {"))
-        ]
-        self.assertIn("width: 116px;", mobile_dashboard_styles)
-        self.assertIn("min-width: 116px;", mobile_dashboard_styles)
-        self.assertIn("min-height: 38px;", mobile_dashboard_styles)
+    def test_dashboard_removes_persona_tabs_and_keeps_chart_placeholders_for_empty_data(self):
+        self.assertNotIn("persona-dashboard-control-tab", self.styles)
+        self.assertNotIn("persona-dashboard-picker", self.styles)
+        self.assertNotIn("personaDashboardSelectedId", self.dashboard_script)
         self.assertIn("function pdRenderChartPlaceholder(kind", self.dashboard_script)
         self.assertIn('pdRenderChartPlaceholder("bars", "暂无热度数据")', self.dashboard_script)
         self.assertIn('pdRenderChartPlaceholder("donut", "暂无分布数据")', self.dashboard_script)
@@ -3469,15 +3322,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("grid-area: status;", self.styles)
         self.assertIn("grid-area: totp;", self.styles)
 
-    def test_mobile_persona_dashboard_posts_load_at_the_bottom_without_replacing_desktop_pager(self):
-        self.assertIn('const PD_MOBILE_TWEET_STREAM_QUERY = "(max-width: 760px)";', self.dashboard_script)
-        self.assertIn("function pdBindMobilePostStream(", self.dashboard_script)
-        self.assertIn('data-persona-mobile-post-sentinel', self.dashboard_script)
-        self.assertIn("new IntersectionObserver(", self.dashboard_script)
-        self.assertIn("insertAdjacentHTML(\"beforeend\"", self.dashboard_script)
-        self.assertIn('id="personaPostPrev"', self.dashboard_script)
-        self.assertIn('id="personaPostNext"', self.dashboard_script)
-        self.assertIn("pdDisconnectMobilePostStream();", self.dashboard_script)
+    def test_homepage_no_longer_owns_a_mobile_post_stream(self):
+        self.assertNotIn("PD_MOBILE_TWEET_STREAM_QUERY", self.dashboard_script)
+        self.assertNotIn("function pdBindMobilePostStream(", self.dashboard_script)
+        self.assertNotIn('data-persona-mobile-post-sentinel', self.dashboard_script)
+        self.assertNotIn('id="personaPostPrev"', self.dashboard_script)
+        self.assertNotIn('id="personaPostNext"', self.dashboard_script)
+        self.assertNotIn('id="personaDashboardSettings"', self.markup)
 
     def test_mobile_tweet_surfaces_share_one_incremental_loading_manager(self):
         self.assertIn('const MOBILE_TWEET_STREAM_QUERY = "(max-width: 760px)";', self.console_script)
@@ -3527,7 +3378,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('mobileTweetStreamInfo(rows, `publish-source:', source_renderer)
         self.assertIn("stream.items.map(", source_renderer)
         self.assertIn('renderMobileTweetStreamFooter(stream, "publishing")', source_renderer)
-        self.assertIn('mobileTweetStreamInfo(rows, `publish-history:', history_renderer)
+        self.assertIn('mobileTweetStreamInfo(rows, options.streamKey || `publish-history:', history_renderer)
         self.assertIn("stream.items.map(", history_renderer)
         self.assertIn('renderMobileTweetStreamFooter(stream, "publishing")', history_renderer)
 
@@ -3555,15 +3406,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("@keyframes mobile-tweet-stream-spin", self.styles)
         self.assertNotIn(".mobile-tweet-stream-scroll-locked", self.styles)
 
-    def test_dashboard_incremental_append_keeps_page_scroll_enabled(self):
-        load_start = self.dashboard_script.index("function pdLoadNextMobilePostBatch(")
-        load_end = self.dashboard_script.index("\nfunction pdBindMobilePostStream(", load_start)
-        loader = self.dashboard_script[load_start:load_end]
-        self.assertNotIn("lockMobileTweetStreamScroll();", loader)
-        self.assertIn("renderMobileTweetStreamLoadingIndicator()", loader)
-        self.assertIn("finishMobileTweetStreamLoading(", loader)
-        self.assertIn("triggerStreamKey !== personaDashboardMobilePostKey", loader)
-        self.assertIn("!status?.isConnected", loader)
+    def test_dashboard_has_no_obsolete_incremental_post_loader(self):
+        self.assertNotIn("function pdLoadNextMobilePostBatch(", self.dashboard_script)
+        self.assertNotIn("personaDashboardMobilePostKey", self.dashboard_script)
+        self.assertNotIn("personaDashboardMobilePostPending", self.dashboard_script)
+        self.assertNotIn("renderMobileTweetStreamLoadingIndicator()", self.dashboard_script)
 
     def test_ai_post_generation_exposes_locale_selector_and_submits_selection(self):
         self.assertIn('const PERSONA_DEFAULT_WRITING_LOCALE = "zh-TW";', self.console_script)

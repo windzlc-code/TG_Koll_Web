@@ -485,6 +485,14 @@ const state = {
   personaPostPages: {},
   mobileTweetStreamLimits: {},
   personaPublishHistories: {},
+  personaDashboardOverview: null,
+  personaDashboardOverviewFetch: null,
+  personaDataTab: "hot",
+  personaHistoryFilters: {
+    platform: "all",
+    content: localStorage.getItem("personaDashboardPostTypeFilter") || "all",
+    sort: localStorage.getItem("personaDashboardPostSort") || "hot_desc",
+  },
   personaPublishAccountIds: {},
   personaPublishResults: {},
   personaPublishWatchers: {},
@@ -669,7 +677,12 @@ function storedSelectedPersonaId(user = state.currentUser) {
 
 function setSelectedPersonaId(personaId, { persist = true } = {}) {
   const cleanId = String(personaId || "").trim();
+  const changed = cleanId !== String(state.selectedPersonaId || "").trim();
   state.selectedPersonaId = cleanId;
+  if (changed) {
+    state.personaDataTab = "hot";
+    state.publishHistoryPreviewId = "";
+  }
   if (!persist) return cleanId;
   const key = selectedPersonaStorageKey();
   if (!key) return cleanId;
@@ -777,6 +790,14 @@ function clearTenantInMemoryState() {
   state.personaPublishAccountIds = {};
   state.personaPublishResults = {};
   state.personaPublishWatchers = {};
+  state.personaDashboardOverview = null;
+  state.personaDashboardOverviewFetch = null;
+  state.personaDataTab = "hot";
+  state.personaHistoryFilters = {
+    platform: "all",
+    content: localStorage.getItem("personaDashboardPostTypeFilter") || "all",
+    sort: localStorage.getItem("personaDashboardPostSort") || "hot_desc",
+  };
   state.personaAutomationResults = {};
   state.personaAutomationWatchers = {};
   state.accountPoolAccountId = "";
@@ -3673,7 +3694,7 @@ function personaFormState(personaId) {
       generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", writingLocale: PERSONA_DEFAULT_WRITING_LOCALE, prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotSearchMode: "strict", hotFreshnessMode: "default", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
       draft: defaultPersonaDraftForm(),
       media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", resolution: "720p", duration: 2, replaceExisting: false },
-      images: { prompt: "", aspectRatio: "1:1", referenceImageId: "", selectedImageId: "" },
+      images: { prompt: "", aspectRatio: "1:1", selectedImageId: "" },
     };
   }
   if (!state.personaForms[key]) {
@@ -3725,18 +3746,18 @@ function personaFormState(personaId) {
       images: {
         prompt: "",
         aspectRatio: "1:1",
-        referenceImageId: "",
         selectedImageId: "",
       },
     };
   }
   const generate = state.personaForms[key].generate;
   if (!state.personaForms[key].images || typeof state.personaForms[key].images !== "object") {
-    state.personaForms[key].images = { prompt: "", aspectRatio: "1:1", referenceImageId: "", selectedImageId: "" };
+    state.personaForms[key].images = { prompt: "", aspectRatio: "1:1", selectedImageId: "" };
   }
   if (!("selectedImageId" in state.personaForms[key].images)) {
     state.personaForms[key].images.selectedImageId = "";
   }
+  delete state.personaForms[key].images.referenceImageId;
   if (!PERSONA_WRITING_LOCALES.some(([value]) => value === String(generate.writingLocale || ""))) {
     generate.writingLocale = PERSONA_DEFAULT_WRITING_LOCALE;
   }
@@ -4241,8 +4262,7 @@ function formatPersonaHotKeywordText(keywords) {
 
 function personaHotKeywordText(form, hotState = {}) {
   const existing = String(form?.hotKeywordText || "").trim();
-  if (existing) return existing;
-  return formatPersonaHotKeywordText(hotState.keywords);
+  return existing || formatPersonaHotKeywordText(hotState.keywords);
 }
 
 function personaHotCandidates(persona = selectedPersona()) {
@@ -7855,7 +7875,6 @@ function registerMediaPreviewGroup(items) {
     originalUrl: adminWorkspaceUrl(item.originalUrl || item.original_url || item.previewUrl),
     type: String(item.type || "image").trim() || "image",
     label: mediaPreviewLabel(item.label, mediaKindLabel(item.type)),
-    referenceEligible: item.referenceEligible === true,
   }));
   return id;
 }
@@ -8230,7 +8249,6 @@ function ensurePersonaMediaLightbox() {
       </div>
       <div class="persona-media-lightbox-body" id="personaMediaLightboxBody"></div>
       <div class="persona-media-lightbox-actions">
-        <button type="button" class="persona-media-lightbox-icon-button" id="personaMediaLightboxAddReference" data-media-lightbox-add-reference title="添加为参考图" aria-label="添加为参考图" hidden>${renderPlusIcon()}</button>
         <button type="button" class="persona-media-lightbox-icon-button" id="personaMediaReset" data-media-lightbox-reset title="复位媒体" aria-label="复位媒体">${renderUndoIcon()}</button>
         <button type="button" class="persona-media-lightbox-icon-button" id="personaMediaPrev" data-media-lightbox-prev title="上一张" aria-label="上一张">${renderLightboxArrowIcon("left")}</button>
         <button type="button" class="persona-media-lightbox-icon-button" id="personaMediaNext" data-media-lightbox-next title="下一张" aria-label="下一张">${renderLightboxArrowIcon("right")}</button>
@@ -8243,7 +8261,6 @@ function ensurePersonaMediaLightbox() {
     if (event.target.closest("[data-media-lightbox-reset]")) resetPersonaMediaLightboxTransform();
     if (event.target.closest("[data-media-lightbox-prev]")) movePersonaMediaLightbox(-1);
     if (event.target.closest("[data-media-lightbox-next]")) movePersonaMediaLightbox(1);
-    if (event.target.closest("[data-media-lightbox-add-reference]")) addPersonaMediaLightboxReference();
   });
   node.addEventListener("wheel", handlePersonaMediaLightboxWheel, { passive: false });
   node.addEventListener("pointerdown", handlePersonaMediaLightboxPointerDown);
@@ -8336,47 +8353,6 @@ function syncPersonaMediaLightboxNav(total, index) {
   if (prev) prev.disabled = total <= 1 || index <= 0;
   if (next) next.disabled = total <= 1 || index >= total - 1;
   if (reset) reset.disabled = !mediaLightboxImage();
-  const addReference = $("personaMediaLightboxAddReference");
-  const groupId = String(state.mediaLightbox.groupId || "");
-  const item = (state.mediaPreviewGroups[groupId] || [])[index];
-  const canAddReference = Boolean(item?.referenceEligible && item?.id && item.type === "image" && selectedPersona());
-  if (addReference) {
-    addReference.hidden = !canAddReference;
-    addReference.disabled = !canAddReference;
-    const persona = selectedPersona();
-    const selectedReferenceId = persona
-      ? String(personaFormState(persona.id).images?.referenceImageId || "").trim()
-      : "";
-    const isSelected = canAddReference && selectedReferenceId === String(item?.id || "").trim();
-    addReference.setAttribute("aria-pressed", isSelected ? "true" : "false");
-    addReference.title = isSelected ? "取消参考图" : "添加为参考图";
-    addReference.setAttribute("aria-label", addReference.title);
-    addReference.innerHTML = isSelected ? renderCloseIcon() : renderPlusIcon();
-    addReference.classList.toggle("is-selected", isSelected);
-  }
-}
-
-function addPersonaMediaLightboxReference() {
-  const persona = selectedPersona();
-  const groupId = String(state.mediaLightbox.groupId || "");
-  const item = (state.mediaPreviewGroups[groupId] || [])[Number(state.mediaLightbox.index || 0)];
-  if (!persona || !item?.referenceEligible || !item.id || item.type !== "image") return;
-  const form = personaFormState(persona.id);
-  if (!form.images || typeof form.images !== "object") form.images = { prompt: "", aspectRatio: "1:1" };
-  const referenceId = String(item.id).trim();
-  const selectedReferenceId = String(form.images.referenceImageId || "").trim();
-  form.images.referenceImageId = selectedReferenceId === referenceId ? "" : referenceId;
-  syncPersonaMediaLightboxNav(
-    (state.mediaPreviewGroups[groupId] || []).length,
-    Number(state.mediaLightbox.index || 0),
-  );
-  refreshPersonaImageEditor();
-  renderConfirmSummary();
-  if (form.images.referenceImageId) {
-    showMsg("commandMsg", "已添加参考图，可在补充提示词中描述要修改的部分。", true);
-  } else {
-    clearMsg("commandMsg");
-  }
 }
 
 function refreshPersonaImageEditor() {
@@ -8388,24 +8364,12 @@ function refreshPersonaImageEditor() {
   }
 }
 
-function togglePersonaImageReference(imageId) {
-  const persona = selectedPersona();
-  const referenceId = String(imageId || "").trim();
-  if (!persona || !referenceId) return;
-  const form = personaFormState(persona.id);
-  if (!form.images || typeof form.images !== "object") form.images = { prompt: "", aspectRatio: "1:1" };
-  const currentReferenceId = String(form.images.referenceImageId || "").trim();
-  form.images.referenceImageId = currentReferenceId === referenceId ? "" : referenceId;
-  refreshPersonaImageEditor();
-  renderConfirmSummary();
-}
-
 function togglePersonaImageSelection(imageId) {
   const persona = selectedPersona();
   const selectedImageId = String(imageId || "").trim();
   if (!persona || !selectedImageId) return;
   const form = personaFormState(persona.id);
-  if (!form.images || typeof form.images !== "object") form.images = { prompt: "", aspectRatio: "1:1", referenceImageId: "", selectedImageId: "" };
+  if (!form.images || typeof form.images !== "object") form.images = { prompt: "", aspectRatio: "1:1", selectedImageId: "" };
   const currentImageId = String(form.images.selectedImageId || "").trim();
   form.images.selectedImageId = currentImageId === selectedImageId ? "" : selectedImageId;
   refreshPersonaImageEditor();
@@ -9697,7 +9661,167 @@ async function savePersonaProfileEdit() {
   showMsg("commandMsg", field === "name" ? "人设名称已保存。" : "人设简介已保存。", true);
 }
 
-function renderPersonaDataPanel(persona) {
+function normalizePersonaDataTab(value) {
+  return value === "history" ? "history" : "hot";
+}
+
+function personaDashboardDetail(persona = selectedPersona()) {
+  const personaId = String(persona?.id || "").trim();
+  if (!personaId) return null;
+  return (state.personaDashboardOverview?.personas || [])
+    .find((item) => String(item?.id || "").trim() === personaId) || null;
+}
+
+function personaHistoryDashboardMetricRecord(row = {}, index = 0) {
+  const postKey = String(row.post_key || row.id || `post-${index + 1}`).trim();
+  const likes = Number(row.like_count || 0);
+  const comments = Number(row.comment_count || 0);
+  const shares = Number(row.share_count || 0);
+  const reposts = Number(row.repost_count || 0);
+  const views = Number(row.view_count || 0);
+  return {
+    id: `dashboard:${postKey}`,
+    dashboard_post_key: postKey,
+    archive_post_id: String(row.id || "").trim(),
+    title: "历史推文",
+    automation_task_type: "publish_post",
+    status: "success",
+    platform: String(row.platform || "").trim(),
+    content: String(row.full_content || row.content || "").trim(),
+    source_url: String(row.source_url || "").trim(),
+    published_url: String(row.source_url || "").trim(),
+    published_at: row.published_at || row.captured_at || "",
+    captured_at: row.captured_at || "",
+    media_items: Array.isArray(row.media_items) ? row.media_items : [],
+    hot_metrics: {
+      hot_score: views + likes + comments + shares + reposts,
+      views,
+      likes,
+      comments,
+      shares,
+      reposts,
+      complete: true,
+      refreshed_at: row.captured_at || row.published_at || "",
+    },
+    __dashboard_metric_only: true,
+  };
+}
+
+function personaHistoryIdentityKeys(record = {}) {
+  const keys = new Set();
+  const add = (prefix, value) => {
+    const text = String(value || "").trim().toLowerCase();
+    if (text) keys.add(`${prefix}:${text}`);
+  };
+  [record.source_url, record.published_url, record.url, record.post_url].forEach((value) => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    try {
+      const url = new URL(text, window.location.origin);
+      url.hash = "";
+      url.search = "";
+      add("url", url.href.replace(/\/$/, ""));
+    } catch {}
+  });
+  [record.archive_post_id, record.post_id, record.dashboard_post_key].forEach((value) => add("post", value));
+  const content = String(record.content || record.caption || record.text || "").replace(/\s+/g, " ").trim().slice(0, 180);
+  if (content) add("content", `${String(record.platform || "").toLowerCase()}:${content}`);
+  return keys;
+}
+
+function personaMergedHistoryRows(persona = selectedPersona()) {
+  const taskRows = personaPublishHistoryRows(persona).map((record) => ({ ...record, __dashboard_metric_only: false }));
+  const metricRows = (personaDashboardDetail(persona)?.post_metrics || [])
+    .map(personaHistoryDashboardMetricRecord);
+  const merged = [...taskRows];
+  metricRows.forEach((metric) => {
+    const metricKeys = personaHistoryIdentityKeys(metric);
+    const index = merged.findIndex((record) => {
+      const recordKeys = personaHistoryIdentityKeys(record);
+      return [...metricKeys].some((key) => recordKeys.has(key));
+    });
+    if (index < 0) {
+      merged.push(metric);
+      return;
+    }
+    const current = merged[index];
+    const currentHot = current.hot_metrics || {};
+    const metricHot = metric.hot_metrics || {};
+    const metricValue = (key) => Number(currentHot[key] || 0) || Number(metricHot[key] || 0);
+    merged[index] = {
+      ...metric,
+      ...current,
+      media_items: Array.isArray(current.media_items) && current.media_items.length ? current.media_items : metric.media_items,
+      source_url: current.source_url || current.published_url || metric.source_url,
+      published_url: current.published_url || current.source_url || metric.published_url,
+      hot_metrics: {
+        ...metricHot,
+        ...currentHot,
+        hot_score: metricValue("hot_score"),
+        views: metricValue("views"),
+        likes: metricValue("likes"),
+        comments: metricValue("comments"),
+        shares: metricValue("shares"),
+        reposts: metricValue("reposts"),
+        complete: currentHot.complete === true || metricHot.complete === true,
+      },
+      __dashboard_metric_only: false,
+    };
+  });
+  return sortPersonaPublishHistory(merged);
+}
+
+function personaHistoryContentParts(record = {}) {
+  const media = personaHistoryMediaItems(record);
+  return {
+    hasText: Boolean(String(record.content || record.caption || record.text || "").trim()),
+    imageCount: media.filter((item) => guessMediaType(item.url || item.previewUrl, item.type) === "image").length,
+    videoCount: media.filter((item) => guessMediaType(item.url || item.previewUrl, item.type) === "video").length,
+    mediaCount: media.length,
+  };
+}
+
+function personaHistorySortValue(record = {}, sort = "hot_desc") {
+  const metrics = record.hot_metrics || record;
+  if (sort.startsWith("time_")) return timeValue(publishHistoryRecordTime(record));
+  if (sort.startsWith("likes_")) return Number(metrics.likes || 0);
+  if (sort.startsWith("comments_")) return Number(metrics.comments || 0);
+  if (sort.startsWith("reposts_")) return Number(metrics.reposts || 0);
+  if (sort.startsWith("shares_")) return Number(metrics.shares || 0);
+  if (sort.startsWith("views_")) return Number(metrics.views || 0);
+  return Number(metrics.hot_score || 0);
+}
+
+function personaFilteredHistoryRows(persona = selectedPersona()) {
+  const filters = state.personaHistoryFilters || {};
+  const platform = String(filters.platform || "all").toLowerCase();
+  const content = String(filters.content || "all").toLowerCase();
+  const sort = String(filters.sort || "hot_desc");
+  const direction = sort.endsWith("_asc") ? 1 : -1;
+  return personaMergedHistoryRows(persona).filter((record) => {
+    if (platform !== "all" && String(record.platform || "").toLowerCase() !== platform) return false;
+    const parts = personaHistoryContentParts(record);
+    if (content === "text") return parts.hasText;
+    if (content === "image") return parts.imageCount > 0;
+    if (content === "video") return parts.videoCount > 0;
+    if (content === "media") return parts.mediaCount > 0;
+    return true;
+  }).sort((left, right) => {
+    const difference = personaHistorySortValue(left, sort) - personaHistorySortValue(right, sort);
+    if (difference) return difference * direction;
+    return timeValue(publishHistoryRecordTime(right)) - timeValue(publishHistoryRecordTime(left));
+  });
+}
+
+function renderPersonaDataTabs(activeTab) {
+  const active = normalizePersonaDataTab(activeTab);
+  return `<div class="persona-data-tabs" role="tablist" aria-label="人设数据切换">
+    <button type="button" role="tab" aria-selected="${active === "hot" ? "true" : "false"}" class="${active === "hot" ? "is-active" : ""}" data-persona-data-tab="hot">热点数据</button>
+    <button type="button" role="tab" aria-selected="${active === "history" ? "true" : "false"}" class="${active === "history" ? "is-active" : ""}" data-persona-data-tab="history">人设历史推文</button>
+  </div>`;
+}
+
+function renderPersonaHotDataContent(persona) {
   const hot = persona?.hot || {};
   const personaId = String(persona?.id || "");
   const drafts = personaDraftPosts(persona);
@@ -9716,25 +9840,87 @@ function renderPersonaDataPanel(persona) {
     ["分享", Number(hot.shares || 0)],
     ["转发", Number(hot.reposts || 0)],
   ];
+  return `<div class="persona-data-tab-panel" role="tabpanel" data-persona-data-panel="hot">
+    <aside class="persona-hot-summary-card persona-hot-summary-card--hot">
+      <div class="persona-hot-summary-head"><span>热点数据</span><strong>${persona?.hot ? "实时统计" : "暂无统计"}</strong></div>
+      <div class="persona-hot-summary-metrics persona-hot-summary-metrics--hot">
+        <div class="persona-hot-total-metric"><span>总热点</span><strong>${esc(numberText(totalHotScore))}</strong></div>
+        ${hotStats.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(numberText(value))}</strong></div>`).join("")}
+      </div>
+    </aside>
+    <aside class="persona-hot-summary-card persona-hot-summary-card--profile">
+      <div class="persona-hot-summary-head"><span>人设数据</span><strong>基础统计</strong></div>
+      <div class="persona-hot-summary-metrics persona-hot-summary-metrics--profile">
+        ${profileStats.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(numberText(value))}</strong></div>`).join("")}
+      </div>
+    </aside>
+  </div>`;
+}
+
+function renderPersonaHistoryFilters(rows = [], persona = selectedPersona()) {
+  const filters = state.personaHistoryFilters || {};
+  const personaId = String(persona?.id || "");
+  const refreshing = Boolean(personaId && state.publishHistoryRefreshPersonaId === personaId && state.publishHistoryRefreshTaskId);
+  const refreshStatus = refreshing ? state.publishHistoryRefreshStatus : null;
+  return `<div class="persona-history-toolbar">
+    <div class="persona-history-filters" aria-label="历史推文筛选">
+      <label><span>平台</span><select data-persona-history-filter="platform">
+        <option value="all" ${filters.platform === "all" ? "selected" : ""}>全部平台</option>
+        <option value="threads" ${filters.platform === "threads" ? "selected" : ""}>Threads</option>
+        <option value="instagram" ${filters.platform === "instagram" ? "selected" : ""}>Instagram</option>
+      </select></label>
+      <label><span>内容</span><select data-persona-history-filter="content">
+        <option value="all" ${filters.content === "all" ? "selected" : ""}>全部内容</option>
+        <option value="text" ${filters.content === "text" ? "selected" : ""}>有文字</option>
+        <option value="image" ${filters.content === "image" ? "selected" : ""}>有图片</option>
+        <option value="video" ${filters.content === "video" ? "selected" : ""}>有视频</option>
+        <option value="media" ${filters.content === "media" ? "selected" : ""}>有媒体</option>
+      </select></label>
+      <label><span>排序</span><select data-persona-history-filter="sort">
+        <option value="hot_desc" ${filters.sort === "hot_desc" ? "selected" : ""}>热度最高</option>
+        <option value="hot_asc" ${filters.sort === "hot_asc" ? "selected" : ""}>热度最低</option>
+        <option value="time_desc" ${filters.sort === "time_desc" ? "selected" : ""}>发布时间最新</option>
+        <option value="time_asc" ${filters.sort === "time_asc" ? "selected" : ""}>发布时间最早</option>
+        <option value="likes_desc" ${filters.sort === "likes_desc" ? "selected" : ""}>点赞最多</option>
+        <option value="comments_desc" ${filters.sort === "comments_desc" ? "selected" : ""}>评论最多</option>
+        <option value="reposts_desc" ${filters.sort === "reposts_desc" ? "selected" : ""}>转发最多</option>
+        <option value="shares_desc" ${filters.sort === "shares_desc" ? "selected" : ""}>分享最多</option>
+        <option value="views_desc" ${filters.sort === "views_desc" ? "selected" : ""}>逐帖浏览最多</option>
+      </select></label>
+    </div>
+    <div class="persona-history-toolbar-actions">
+      <span class="persona-history-count">共 ${esc(numberText(rows.length))} 条</span>
+      <button type="button" class="persona-history-refresh" data-publish-history-refresh aria-busy="${refreshing ? "true" : "false"}" ${refreshing ? "disabled" : ""}>${refreshing ? `刷新中 ${esc(Number(refreshStatus?.progress || 0))}%` : "刷新热点数据"}</button>
+    </div>
+  </div>`;
+}
+
+function renderPersonaHistoryDataContent(persona) {
+  const hasDashboardData = Boolean(personaDashboardDetail(persona));
+  if (!hasDashboardData && !state.personaDashboardOverviewFetch) {
+    loadPersonaDashboardOverview().catch((error) => showMsg("commandMsg", error.detail || error.message || "历史推文数据加载失败", false));
+  }
+  const rows = personaFilteredHistoryRows(persona);
+  const personaId = String(persona?.id || "");
+  const loading = !hasDashboardData && Boolean(state.personaDashboardOverviewFetch);
+  return `<div class="persona-data-tab-panel persona-history-data-panel" role="tabpanel" data-persona-data-panel="history">
+    ${renderPersonaHistoryFilters(rows, persona)}
+    <div class="publish-history-note">汇总首页人设看板和任务历史；可按平台、内容类型与真实互动数据筛选排序。</div>
+    ${loading ? `<div class="persona-history-loading" role="status">正在同步完整人设历史推文...</div>` : ""}
+    ${renderPublishHistorySelectionList(persona, {
+      rows,
+      streamKey: `persona-data-history:${personaId}:${state.personaHistoryFilters.platform}:${state.personaHistoryFilters.content}:${state.personaHistoryFilters.sort}`,
+    })}
+  </div>`;
+}
+
+function renderPersonaDataPanel(persona) {
+  const activeTab = normalizePersonaDataTab(state.personaDataTab);
+  state.personaDataTab = activeTab;
   return `
     <section class="persona-profile-data-panel" aria-label="人设相关数据">
-      <div class="persona-profile-data-panel-head">
-        <strong>相关数据</strong>
-        <span>基础统计与热点统计</span>
-      </div>
-      <aside class="persona-hot-summary-card persona-hot-summary-card--hot">
-        <div class="persona-hot-summary-head"><span>热点数据</span><strong>${persona?.hot ? "实时统计" : "暂无统计"}</strong></div>
-        <div class="persona-hot-summary-metrics persona-hot-summary-metrics--hot">
-          <div class="persona-hot-total-metric"><span>总热点</span><strong>${esc(numberText(totalHotScore))}</strong></div>
-          ${hotStats.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(numberText(value))}</strong></div>`).join("")}
-        </div>
-      </aside>
-      <aside class="persona-hot-summary-card persona-hot-summary-card--profile">
-        <div class="persona-hot-summary-head"><span>人设数据</span><strong>基础统计</strong></div>
-        <div class="persona-hot-summary-metrics persona-hot-summary-metrics--profile">
-          ${profileStats.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(numberText(value))}</strong></div>`).join("")}
-        </div>
-      </aside>
+      ${renderPersonaDataTabs(activeTab)}
+      ${activeTab === "history" ? renderPersonaHistoryDataContent(persona) : renderPersonaHotDataContent(persona)}
     </section>`;
 }
 
@@ -9860,17 +10046,12 @@ function syncPersonaImagePromptState(input) {
     || document.querySelector("[data-persona-generate-image]");
   if (!button || button.disabled) return;
   const baseLabel = String(button.dataset.personaImageGenerateLabel || button.textContent || "").trim();
-  const imageToImage = button.dataset.personaImageReferenceMode === "true";
-  button.textContent = value.trim()
-    ? (imageToImage ? "根据提示词生成图生图" : `根据提示词${baseLabel}`)
-    : baseLabel;
+  button.textContent = value.trim() ? `根据提示词${baseLabel}` : baseLabel;
 }
 
-function renderPersonaImagePromptField(imageForm, { imageToImage = false } = {}) {
-  const label = imageToImage ? "图生图提示词（可选）" : "补充提示词（可选）";
-  const placeholder = imageToImage
-    ? "填写需要修改的部分；将根据已添加的参考图生成新图。"
-    : "留空按人设默认生成；如需图生图，请点击图片右上角添加按钮。";
+function renderPersonaImagePromptField(imageForm) {
+  const label = "补充提示词（可选）";
+  const placeholder = "留空按人设默认生成；填写后将按提示词生成新图。";
   return `
     <div class="persona-image-prompt-field">
       <span class="persona-image-prompt-label">${label}</span>
@@ -9891,17 +10072,16 @@ function renderPersonaImagePanel(persona, { embedded = false } = {}) {
     String(library?.current_reference_url || "").trim()
     || libraryItems.some((item) => item && (item.is_reference || item.isReference))
   );
-  const imageToImage = Boolean(String(imageForm.referenceImageId || "").trim());
   const imageIntro = hasCurrentReference
     ? "当前已有可用人设图，重新生成会产出新图，原图库仍会保留。"
     : (hasImages ? "图库里已有历史图，可以先设为当前，也可以重新生成一张。" : "先生成一张人设图，生成后会进入图库。");
   const baseGenerateLabel = imageBusy
     ? "正在生成..."
-    : (imageToImage ? "根据参考图生成新图" : (hasCurrentReference ? "重新生成人设图" : "生成人设图"));
+    : (hasCurrentReference ? "重新生成人设图" : "生成人设图");
   const generateLabel = !imageBusy && String(imageForm.prompt || "").trim()
-    ? (imageToImage ? "根据提示词生成图生图" : `根据提示词${baseGenerateLabel}`)
+    ? `根据提示词${baseGenerateLabel}`
     : baseGenerateLabel;
-  const promptField = renderPersonaImagePromptField(imageForm, { imageToImage });
+  const promptField = renderPersonaImagePromptField(imageForm);
   if (!hasImages) {
     return `
       <div class="persona-profile-image-panel persona-profile-section--empty-images ${embedded ? "is-embedded" : ""}" id="personaImageGenerationSection" data-persona-image-generation-section>
@@ -9911,7 +10091,7 @@ function renderPersonaImagePanel(persona, { embedded = false } = {}) {
         </div>
         ${promptField}
         <div class="row-actions">
-          <button type="button" class="primary" data-persona-generate-image data-persona-image-generate-label="${esc(baseGenerateLabel)}" data-persona-image-reference-mode="${imageToImage ? "true" : "false"}" ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
+          <button type="button" class="primary" data-persona-generate-image data-persona-image-generate-label="${esc(baseGenerateLabel)}" ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
           <button type="button" data-persona-upload-image-trigger>上传自定义人设图</button>
           <input id="personaImageUploadFile" type="file" accept=".png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.heic" data-persona-upload-image-file hidden />
         </div>
@@ -9925,12 +10105,12 @@ function renderPersonaImagePanel(persona, { embedded = false } = {}) {
       </div>
       ${promptField}
       <div class="row-actions">
-        <button type="button" class="primary" data-persona-generate-image data-persona-image-generate-label="${esc(baseGenerateLabel)}" data-persona-image-reference-mode="${imageToImage ? "true" : "false"}" ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
+        <button type="button" class="primary" data-persona-generate-image data-persona-image-generate-label="${esc(baseGenerateLabel)}" ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
         <input id="personaImageUploadFile" type="file" accept=".png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.heic" data-persona-upload-image-file hidden />
       </div>
       <div class="persona-inline-panel persona-inline-panel--nested">
         <strong>图库预览</strong>
-        ${renderPersonaImageLibraryGrid(library, imageForm.referenceImageId, imageForm.selectedImageId)}
+        ${renderPersonaImageLibraryGrid(library, imageForm.selectedImageId)}
       </div>
     </div>`;
 }
@@ -10465,6 +10645,15 @@ function renderNetworkIcon() {
     <path d="M3.6 15h16.8"></path>
     <path d="M12 3a14 14 0 0 1 0 18"></path>
     <path d="M12 3a14 14 0 0 0 0 18"></path>
+  </svg>`;
+}
+
+function renderSystemProxyPoolIcon() {
+  return `<svg class="ui-action-icon ui-system-proxy-pool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 10.5h16v9H4z"></path>
+    <path d="M3 10.5 5 5h14l2 5.5"></path>
+    <path d="M4 10.5c0 1.55 1.12 2.5 2.5 2.5s2.5-.95 2.5-2.5c0 1.55 1.12 2.5 2.5 2.5s2.5-.95 2.5-2.5c0 1.55 1.12 2.5 2.5 2.5s2.5-.95 2.5-2.5"></path>
+    <path d="M8 19.5v-4h4v4"></path>
   </svg>`;
 }
 
@@ -11779,7 +11968,6 @@ function renderPublishModeTabs(mode) {
     ["publish_now", "普通任务"],
     ["matrix_start", "矩阵任务"],
     ["automation_tasks", "自动化任务"],
-    ["publish_history", "任务历史"],
   ];
   return `
     <div class="publish-mode-tabs" aria-label="任务方式">
@@ -13183,12 +13371,12 @@ function renderPublishHistorySourceLink(url = "", { showUrl = false, compact = f
     </div>`;
 }
 
-function renderPublishHistorySelectionList(persona = selectedPersona()) {
-  const rows = personaPublishHistoryRows(persona);
+function renderPublishHistorySelectionList(persona = selectedPersona(), options = {}) {
+  const rows = Array.isArray(options.rows) ? options.rows : personaPublishHistoryRows(persona);
   if (!rows.length) return `<div class="empty-state">当前人设还没有任务历史。</div>`;
   const activeId = String(state.publishHistoryPreviewId || rows[0]?.id || "");
   const personaId = String(persona?.id || "");
-  const stream = mobileTweetStreamInfo(rows, `publish-history:${personaId}`, MOBILE_PUBLISH_HISTORY_BATCH_SIZE);
+  const stream = mobileTweetStreamInfo(rows, options.streamKey || `publish-history:${personaId}`, MOBILE_PUBLISH_HISTORY_BATCH_SIZE);
   return `
     <div class="publish-post-list">
       ${stream.items.map((record, index) => {
@@ -13217,7 +13405,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona()) {
               <span class="publish-history-card-actions" aria-label="任务历史操作">
                 ${publishedUrl ? `<a class="publish-history-card-action" href="${esc(publishedUrl)}" target="_blank" rel="noopener" title="打开来源链接" aria-label="打开来源链接">${renderSourceLinkIcon()}</a>` : ""}
                 <button type="button" class="publish-history-card-action" data-publish-history-view="${esc(recordId)}" title="查看任务历史" aria-label="查看任务历史">${renderEyeIcon()}</button>
-                <button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>
+                ${record.__dashboard_metric_only ? "" : `<button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>`}
               </span>
               ${renderPublishHistoryMetrics(record, "publish-history-card-metrics")}
             </div>
@@ -13312,7 +13500,10 @@ function syncPublishHistoryRefreshDom(persona = selectedPersona()) {
 
 async function openPublishHistoryRecordModal(historyId = "", persona = selectedPersona()) {
   const cleanHistoryId = String(historyId || "").trim();
-  const record = personaPublishHistoryRows(persona)
+  const availableRows = isPersonaWorkspaceModule() && state.personaDataTab === "history"
+    ? personaMergedHistoryRows(persona)
+    : personaPublishHistoryRows(persona);
+  const record = availableRows
     .find((item) => String(item?.id || "").trim() === cleanHistoryId);
   if (!record) return;
   const mediaItems = personaHistoryMediaItems(record);
@@ -13338,7 +13529,9 @@ async function openPublishHistoryRecordModal(historyId = "", persona = selectedP
       </article>`,
     cancelText: "关闭",
     showConfirm: false,
-    extraActions: [{ value: "requeue", text: "重回草稿", iconHtml: renderRequeueIcon() }],
+    extraActions: record.__dashboard_metric_only
+      ? []
+      : [{ value: "requeue", text: "重回草稿", iconHtml: renderRequeueIcon() }],
     modalKey: "publish-history-detail",
   });
   if (action === "requeue") await requeuePublishHistoryRecord(cleanHistoryId, persona);
@@ -13370,6 +13563,7 @@ async function requeuePublishHistoryRecord(historyId = "", persona = selectedPer
     const postTitle = String(result?.post?.title || "任务历史").trim();
     showMsg("commandMsg", `已重回草稿：${postTitle}`, true);
     if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
+    if (isPersonaWorkspaceModule()) renderPersonaDetail();
   } catch (error) {
     showMsg("commandMsg", error.detail || error.message || "重回草稿失败", false);
   } finally {
@@ -13406,7 +13600,10 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
         progress: Number(current?.progress || 0),
         message: `${current?.step ? `${current.step} · ` : ""}${current?.message || "正在刷新热点数据..."}`,
       };
-      if (state.activeModule === "publishing" && normalizedPublishMode(state.simpleBranches.publishing) === "publish_history") {
+      if (
+        (state.activeModule === "publishing" && normalizedPublishMode(state.simpleBranches.publishing) === "publish_history")
+        || (isPersonaWorkspaceModule() && state.personaDataTab === "history")
+      ) {
         syncPublishHistoryRefreshDom();
       }
       if (!["queued", "running"].includes(String(current?.status || ""))) {
@@ -13417,6 +13614,7 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
     }
     await loadPersonas().catch(() => {});
     await loadPersonaPublishHistory(cleanPersonaId, { force: true });
+    await loadPersonaDashboardOverview({ force: true }).catch(() => null);
     state.publishHistoryRefreshStatus = { progress: 100, message: "全量热点刷新完成，任务历史已更新。" };
     showMsg("commandMsg", "全量热点刷新完成，任务历史已更新。", true);
   } catch (error) {
@@ -13427,6 +13625,7 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
     if (state.activeModule === "publishing" && normalizedPublishMode(state.simpleBranches.publishing) === "publish_history") {
       renderSimpleFlowModule("publishing");
     }
+    if (isPersonaWorkspaceModule() && state.personaDataTab === "history") renderPersonaDetail();
     window.setTimeout(() => {
       if (state.publishHistoryRefreshTaskId || state.publishHistoryRefreshPersonaId !== cleanPersonaId) return;
       state.publishHistoryRefreshPersonaId = "";
@@ -15147,8 +15346,6 @@ async function openPersonaProfileEditorModalWithOptions({ immediate = false } = 
       );
       return;
     }
-    const referenceToggle = event.target.closest("[data-persona-reference-image-toggle]");
-    if (referenceToggle) return togglePersonaImageReference(referenceToggle.dataset.personaReferenceImageToggle || "");
     const imageSelection = event.target.closest("[data-persona-image-select]");
     if (imageSelection) return togglePersonaImageSelection(imageSelection.dataset.personaImageSelect || "");
     // The modal itself records the active page with this data attribute. Limit
@@ -15201,16 +15398,6 @@ async function openPersonaProfileEditorModalWithOptions({ immediate = false } = 
       }, "style");
       return;
     }
-    if (event.target.closest("[data-persona-clear-image-reference]")) {
-      const persona = selectedPersona();
-      if (persona) {
-        const form = personaFormState(persona.id);
-        if (form.images && typeof form.images === "object") form.images.referenceImageId = "";
-        refreshPersonaImageEditor();
-        renderConfirmSummary();
-      }
-      return;
-    }
     if (event.target.closest("[data-persona-generate-image]")) {
       return run(() => submitPersonaImageGeneration(), "image");
     }
@@ -15224,15 +15411,6 @@ async function openPersonaProfileEditorModalWithOptions({ immediate = false } = 
     }
     const applyImage = event.target.closest("[data-persona-apply-image]");
     if (applyImage) return run(() => applyPersonaReferenceImage(applyImage.dataset.personaApplyImage || ""), "image");
-    const replaceImage = event.target.closest("[data-persona-replace-image]");
-    if (replaceImage) {
-      const input = $("personaImageUploadFile");
-      if (input) {
-        input.dataset.personaReplaceImage = replaceImage.dataset.personaReplaceImage || "";
-        input.click();
-      }
-      return;
-    }
     const deleteImage = event.target.closest("[data-persona-delete-image]");
     if (deleteImage) {
       const imageId = String(deleteImage.dataset.personaDeleteImage || "").trim();
@@ -16123,6 +16301,24 @@ async function loadPersonas() {
     .catch(() => api("/api/persona_dashboard/overview"))
     .catch(() => ({ personas: [] }));
   applyPersonaOverviewData(data);
+}
+
+async function loadPersonaDashboardOverview({ force = false } = {}) {
+  if (!force && state.personaDashboardOverview && Array.isArray(state.personaDashboardOverview.personas)) {
+    return state.personaDashboardOverview;
+  }
+  if (state.personaDashboardOverviewFetch) return state.personaDashboardOverviewFetch;
+  const request = api("/api/persona_dashboard/overview")
+    .then((data) => {
+      state.personaDashboardOverview = data && Array.isArray(data.personas) ? data : { personas: [] };
+      if (isPersonaWorkspaceModule() && state.personaDataTab === "history") renderPersonaDetail();
+      return state.personaDashboardOverview;
+    })
+    .finally(() => {
+      if (state.personaDashboardOverviewFetch === request) state.personaDashboardOverviewFetch = null;
+    });
+  state.personaDashboardOverviewFetch = request;
+  return request;
 }
 
 async function refreshPersonaCollections(message = "") {
@@ -20704,7 +20900,6 @@ async function submitPersonaImageGeneration() {
     body.append("params_json", JSON.stringify({
       related_persona_id: persona.id,
       prompt: String(personaFormState(persona.id).images?.prompt || "").trim(),
-      reference_image_id: String(personaFormState(persona.id).images?.referenceImageId || "").trim() || null,
       aspect_ratio: "1:1",
       mode: "person",
     }));
@@ -20863,9 +21058,6 @@ async function deletePersonaLibraryImage(imageId) {
   });
   state.personaImageLibraries[String(persona.id)] = result;
   const imageForm = personaFormState(persona.id).images;
-  if (imageForm && String(imageForm.referenceImageId || "").trim() === cleanImageId) {
-    imageForm.referenceImageId = "";
-  }
   if (imageForm && String(imageForm.selectedImageId || "").trim() === cleanImageId) {
     imageForm.selectedImageId = "";
   }
@@ -22904,6 +23096,21 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
   </div>`;
 }
 
+function renderPersonaImageLibraryPreview(item, groupId, index, unavailable = false) {
+  const displayUrl = adminWorkspaceUrl(item.previewUrl);
+  const label = mediaPreviewLabel(item.label, "人设图");
+  const caption = item.isReference ? "当前参考图" : "历史图";
+  const frame = unavailable
+    ? `<div class="persona-image-library-frame persona-media-frame--empty"><strong>媒体已失效</strong><small>源文件无法加载</small></div>`
+    : `<img class="persona-image-library-frame" src="${esc(displayUrl)}" data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "人设图")}" loading="lazy" decoding="async" draggable="false" onerror="handlePersonaMediaFrameError(this)" />`;
+  const zoomButton = `<button type="button" class="persona-image-library-zoom-button" data-media-preview-group="${esc(groupId)}" data-media-preview-index="${esc(index)}" data-media-preview-type="image" data-media-preview-label="${esc(label || caption)}" title="点击放大查看" aria-label="点击放大查看 ${esc(label || caption)}">${renderZoomInIcon()}</button>`;
+  return `<div class="persona-image-library-preview${unavailable ? " is-unavailable" : ""}" data-persona-image-select="${esc(item.id)}">
+    ${frame}
+    ${zoomButton}
+    <span>${esc(caption)}</span>
+  </div>`;
+}
+
 function renderPersonaImageUploadPlaceholderCard() {
   return `
     <div class="persona-image-library-card persona-image-library-card--empty">
@@ -22922,22 +23129,7 @@ function renderPersonaImageUploadPlaceholderCard() {
     </div>`;
 }
 
-function renderPersonaImageLibraryPreview(item, groupId, index, unavailable = false) {
-  const displayUrl = adminWorkspaceUrl(item.previewUrl);
-  const label = mediaPreviewLabel(item.label, "人设图");
-  const caption = item.isReference ? "当前参考图" : "历史图";
-  const frame = unavailable
-    ? `<div class="persona-image-library-frame persona-media-frame--empty"><strong>媒体已失效</strong><small>源文件无法加载</small></div>`
-    : `<img class="persona-image-library-frame" src="${esc(displayUrl)}" data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "人设图")}" loading="lazy" decoding="async" draggable="false" onerror="handlePersonaMediaFrameError(this)" />`;
-  const zoomButton = `<button type="button" class="persona-image-library-zoom-button" data-media-preview-group="${esc(groupId)}" data-media-preview-index="${esc(index)}" data-media-preview-type="image" data-media-preview-label="${esc(label || caption)}" title="点击放大查看" aria-label="点击放大查看 ${esc(label || caption)}">${renderZoomInIcon()}</button>`;
-  return `<div class="persona-image-library-preview${unavailable ? " is-unavailable" : ""}" data-persona-image-select="${esc(item.id)}">
-    ${frame}
-    ${zoomButton}
-    <span>${esc(caption)}</span>
-  </div>`;
-}
-
-function renderPersonaImageLibraryGrid(library, selectedReferenceId = "", selectedImageId = "") {
+function renderPersonaImageLibraryGrid(library, selectedImageId = "") {
   const rows = Array.isArray(library?.items) ? library.items : [];
   const previewable = rows
     .map((item) => ({
@@ -22947,7 +23139,6 @@ function renderPersonaImageLibraryGrid(library, selectedReferenceId = "", select
       label: String(item.prompt || item.created_at || "人设图").trim() || "人设图",
       isReference: Boolean(item.is_reference || item.isReference),
       createdAt: String(item.created_at || "").trim(),
-      referenceEligible: true,
       unavailable: Boolean(item.unavailable),
     }))
     .filter((item) => item.previewUrl);
@@ -22958,15 +23149,13 @@ function renderPersonaImageLibraryGrid(library, selectedReferenceId = "", select
       </div>`;
   }
   const groupId = registerMediaPreviewGroup(previewable);
-  const selectedId = String(selectedReferenceId || "").trim();
   const selectedCardId = String(selectedImageId || "").trim();
   return `<div class="persona-image-library-grid">${previewable.map((item, index) => {
     const itemUnavailable = Boolean(item.unavailable || state.failedMediaPreviewUrls.has(adminWorkspaceUrl(item.previewUrl)));
     return `
-    <div class="persona-image-library-card ${item.isReference ? "is-reference" : ""}${selectedCardId === item.id ? " is-selected" : ""}${selectedId === item.id ? " is-edit-reference" : ""}">
+    <div class="persona-image-library-card ${item.isReference ? "is-reference" : ""}${selectedCardId === item.id ? " is-selected" : ""}">
       <div class="persona-image-library-preview-wrap${itemUnavailable ? " is-media-unavailable" : ""}">
       ${renderPersonaImageLibraryPreview(item, groupId, index, itemUnavailable)}
-        <button type="button" class="persona-image-library-reference-toggle${selectedId === item.id ? " is-selected" : ""}" data-persona-reference-image-toggle="${esc(item.id)}" title="${selectedId === item.id ? "取消参考图" : "添加为参考图"}" aria-label="${selectedId === item.id ? "取消参考图" : "添加为参考图"}" aria-pressed="${selectedId === item.id ? "true" : "false"}">${selectedId === item.id ? renderCloseIcon() : renderPlusIcon()}</button>
       </div>
       <small>${esc(item.createdAt ? formatTime(item.createdAt) : "")}</small>
       <div class="row-actions persona-image-library-actions">
@@ -25868,7 +26057,7 @@ function accountProxyBindingChanged(originalProxyId = "", selectedProxyId = "") 
 
 function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal" } = {}) {
   const selectedId = String(selectedProxyId || "").trim();
-  const rows = proxyPoolRows({ includeSystemAvailable: true });
+  const rows = proxyPoolRows();
   const option = (proxy = null) => {
     const proxyId = String(proxy?.id || "").trim();
     const selected = proxyId === selectedId;
@@ -25901,6 +26090,12 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal" } =
 function accountProxyCustomAddButtonHtml(scope = "modal") {
   return `<button type="button" class="account-proxy-custom-add" data-account-proxy-custom-add data-account-proxy-choice-scope="${esc(scope)}" aria-expanded="false">
     ${renderPlusIcon()}<span>添加自定义代理</span>
+  </button>`;
+}
+
+function accountSystemProxyPoolButtonHtml() {
+  return `<button type="button" class="account-system-proxy-pool-add" data-account-system-proxy-pool-open>
+    ${renderSystemProxyPoolIcon()}<span>添加 IP</span>
   </button>`;
 }
 
@@ -26119,6 +26314,7 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
         <div class="account-proxy-picker-toolbar">
           <p data-account-proxy-selection-summary>${account.proxy_id ? `当前绑定：${esc(accountResidentialProxyLabel(account))}` : "当前未使用代理 IP"}</p>
           <div class="account-proxy-picker-toolbar-actions">
+            ${accountSystemProxyPoolButtonHtml()}
             ${accountProxyCustomAddButtonHtml("modal")}
           </div>
         </div>
@@ -26143,6 +26339,15 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
     return true;
   };
   modal.addEventListener("click", (event) => {
+    const systemPoolOpen = event.target.closest("[data-account-system-proxy-pool-open]");
+    if (systemPoolOpen) {
+      if (accountProxyCustomIsBusy(modal)) {
+        accountProxyCustomBusyMessage();
+        return;
+      }
+      openSystemProxyPoolModal({ accountId: account.id, selectedProxyId: modal.dataset.selectedProxyId || "" });
+      return;
+    }
     const customAdd = event.target.closest("[data-account-proxy-custom-add]");
     if (customAdd) {
       if (accountProxyCustomIsBusy(modal)) {
@@ -27260,7 +27465,8 @@ function renderProxyPool() {
       <div class="proxy-pool-head">
         <div><strong>代理 IP</strong><span>独立维护代理信息并查看账号绑定情况。</span></div>
         <div class="proxy-pool-head-actions">
-          <button type="button" class="primary proxy-pool-add" data-proxy-add>${renderCustomProxyIcon()}<span>添加代理</span></button>
+          <button type="button" class="system-proxy-pool-link" data-system-proxy-pool-open>${renderSystemProxyPoolIcon()}<span>添加 IP</span></button>
+          <button type="button" class="primary proxy-pool-add" data-proxy-add>${renderCustomProxyIcon()}<span>自定义代理</span></button>
         </div>
       </div>
       <div class="proxy-table-wrap" data-proxy-desktop-list>
@@ -27340,6 +27546,173 @@ function renderProxyPool() {
       </div>`}
     </section>`;
   if (mobileStream.mobile) bindMobileTweetStreamObservers();
+}
+
+function systemProxyPoolLocation(proxy = {}) {
+  return [proxy.country, proxy.region, proxy.city]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" · ") || "待识别";
+}
+
+function systemProxyPoolCardsHtml(data = {}) {
+  const options = Array.isArray(data.options) ? data.options : [];
+  const currentItemId = String(data.current?.market_item_id || "").trim();
+  if (!options.length) {
+    return `<div class="empty-state system-proxy-pool-empty">
+      <strong>当前没有可领取的代理 IP</strong>
+      <span>公共代理池暂时没有空闲节点，请稍后再试。</span>
+    </div>`;
+  }
+  return options.map((proxy) => {
+    const itemId = String(proxy.market_item_id || "").trim();
+    const selected = Boolean(proxy.selected) || (itemId && itemId === currentItemId);
+    const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
+    const actionText = selected ? "当前使用" : (currentItemId ? "切换使用" : "免费获取");
+    return `<article class="system-proxy-pool-card${selected ? " is-selected" : ""}" data-system-proxy-pool-card="${esc(itemId)}">
+      <div class="system-proxy-pool-card-head">
+        <div>
+          <span class="system-proxy-pool-card-kicker">公共代理池</span>
+          <strong>${esc(proxy.name || endpoint)}</strong>
+        </div>
+        <span class="status active">${selected ? "已获取" : "可领取"}</span>
+      </div>
+      <div class="system-proxy-pool-endpoint">
+        ${renderNetworkIcon()}
+        <span><strong>${esc(endpoint)}</strong><small>${esc(proxyProtocol(proxy))} · ${esc(systemProxyPoolLocation(proxy))}</small></span>
+      </div>
+      <div class="system-proxy-pool-meta">
+        <span><small>IP 类型</small><strong>${esc(proxyIpTypeLabel(proxy.ip_type))}</strong></span>
+        <span><small>系统状态</small><strong>${esc(String(proxy.health_status || "healthy").toLowerCase() === "healthy" ? "检测可用" : "待检测")}</strong></span>
+        <span><small>已绑账号</small><strong>${Number(proxy.bound_account_count || 0)}</strong></span>
+      </div>
+      ${proxy.description ? `<p>${esc(proxy.description)}</p>` : ""}
+      <button type="button" class="${selected ? "" : "primary"}" data-system-proxy-select="${esc(itemId)}" ${selected ? "disabled" : ""}>${esc(actionText)}</button>
+    </article>`;
+  }).join("");
+}
+
+async function refreshSystemProxyPoolModal(modal) {
+  if (!modal?.isConnected) return null;
+  const list = modal.querySelector("[data-system-proxy-pool-list]");
+  const notice = modal.querySelector("[data-system-proxy-pool-notice]");
+  if (list) list.setAttribute("aria-busy", "true");
+  if (notice) {
+    notice.textContent = "";
+    notice.className = "system-proxy-pool-notice";
+  }
+  try {
+    const data = await api("/api/persona_dashboard/automation/system-proxy-pool");
+    if (!modal.isConnected) return data;
+    modal.dataset.currentSystemProxyItemId = String(data.current?.market_item_id || "");
+    if (list) {
+      list.innerHTML = systemProxyPoolCardsHtml(data);
+      list.setAttribute("aria-busy", "false");
+    }
+    return data;
+  } catch (error) {
+    if (list) {
+      list.innerHTML = `<div class="empty-state system-proxy-pool-empty"><strong>公共代理池加载失败</strong><span>${esc(error.detail || error.message || "请稍后重试")}</span><button type="button" data-system-proxy-retry>重新加载</button></div>`;
+      list.setAttribute("aria-busy", "false");
+    }
+    return null;
+  }
+}
+
+function openSystemProxyPoolModal({ accountId = "", selectedProxyId = "" } = {}) {
+  const returnAccountId = String(accountId || "").trim();
+  const returnSelectedProxyId = String(selectedProxyId || "").trim();
+  closeConsoleModal(null);
+  const modal = document.createElement("div");
+  modal.id = "consoleModal";
+  modal.className = "console-modal";
+  modal.dataset.modalKey = "system-proxy-pool";
+  modal.innerHTML = `
+    <div class="console-modal-backdrop" data-system-proxy-pool-close></div>
+    <section class="console-modal-dialog system-proxy-pool-modal" role="dialog" aria-modal="true" aria-labelledby="systemProxyPoolTitle">
+      <div class="console-modal-head">
+        <div><strong id="systemProxyPoolTitle">公共代理池</strong><p>选择尚未被其他用户获取的代理 IP。</p></div>
+        ${renderModalCloseButton("data-system-proxy-pool-close")}
+      </div>
+      <div class="console-modal-content system-proxy-pool-content">
+        <div class="system-proxy-pool-guide">
+          <div><strong>每个 Vecto 账号可免费获取 1 个</strong><span>只显示当前账号已获取和尚未被其他人选择的代理。</span></div>
+          <small>切换前需先解除现有社媒账号绑定；成功后原代理自动释放。</small>
+        </div>
+        <div class="system-proxy-pool-notice" data-system-proxy-pool-notice aria-live="polite"></div>
+        <div class="system-proxy-pool-list" data-system-proxy-pool-list aria-busy="true">
+          <div class="system-proxy-pool-loading" role="status">正在加载公共代理池...</div>
+        </div>
+      </div>
+    </section>`;
+  document.body.appendChild(modal);
+  markConsoleDynamicUi(modal);
+  translateConsoleLanguage(modal, currentLanguage());
+  modal.querySelector(".console-modal-close")?.focus();
+  const close = (returnToAccountPicker = true) => {
+    closeConsoleModal(null, modal);
+    if (returnToAccountPicker && returnAccountId) {
+      openAccountProxyPickerModal(returnAccountId, returnSelectedProxyId);
+    }
+  };
+  modal.addEventListener("click", async (event) => {
+    if (event.target.closest("[data-system-proxy-pool-close]")) {
+      close();
+      return;
+    }
+    if (event.target.closest("[data-system-proxy-retry]")) {
+      await refreshSystemProxyPoolModal(modal);
+      return;
+    }
+    const select = event.target.closest("[data-system-proxy-select]");
+    if (!select || select.disabled) return;
+    const itemId = String(select.dataset.systemProxySelect || "").trim();
+    if (!itemId) return;
+    const notice = modal.querySelector("[data-system-proxy-pool-notice]");
+    select.disabled = true;
+    select.setAttribute("aria-busy", "true");
+    if (notice) {
+      notice.textContent = modal.dataset.currentSystemProxyItemId ? "正在切换代理 IP..." : "正在获取代理 IP...";
+      notice.className = "system-proxy-pool-notice is-working";
+    }
+    try {
+      const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const result = await api("/api/persona_dashboard/automation/system-proxy-pool/select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          item_id: itemId,
+          expected_current_item_id: String(modal.dataset.currentSystemProxyItemId || ""),
+          client_request_id: `system-proxy:${requestId}`,
+        }),
+      });
+      await loadSocial();
+      if (!modal.isConnected) return;
+      const claimedProxyId = String(result?.proxy?.id || "").trim();
+      if (returnAccountId && claimedProxyId) {
+        close(false);
+        openAccountProxyPickerModal(returnAccountId, claimedProxyId);
+        return;
+      }
+      await refreshSystemProxyPoolModal(modal);
+      if (notice) {
+        notice.textContent = result.replaced_proxy ? "代理 IP 已切换，原代理已经释放。" : "代理 IP 已获取。";
+        notice.className = "system-proxy-pool-notice is-success";
+      }
+    } catch (error) {
+      if (!modal.isConnected) return;
+      select.disabled = false;
+      select.removeAttribute("aria-busy");
+      if (notice) {
+        notice.textContent = error.detail || error.message || "代理 IP 获取失败";
+        notice.className = "system-proxy-pool-notice is-error";
+      }
+    }
+  });
+  modal.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
+  });
+  void refreshSystemProxyPoolModal(modal);
 }
 
 function proxyFormPayload(proxy = null) {
@@ -29674,6 +30047,39 @@ function bindEvents() {
       return;
     }
     if (handleUploadDropzoneAction(event)) return;
+    const personaDataPanel = event.target.closest(".persona-profile-data-panel");
+    if (personaDataPanel) {
+      const dataTab = event.target.closest("[data-persona-data-tab]");
+      if (dataTab) {
+        state.personaDataTab = normalizePersonaDataTab(dataTab.dataset.personaDataTab);
+        state.publishHistoryPreviewId = "";
+        if (state.personaDataTab === "history") loadPersonaDashboardOverview().catch(() => null);
+        renderPersonaDetail();
+        return;
+      }
+      const historyCard = event.target.closest("[data-publish-history-card]");
+      if (historyCard && !event.target.closest("[data-publish-history-view], [data-publish-history-requeue], a")) {
+        state.publishHistoryPreviewId = String(historyCard.dataset.publishHistoryCard || "").trim();
+        renderPersonaDetail();
+        return;
+      }
+      const historyView = event.target.closest("[data-publish-history-view]");
+      if (historyView) {
+        event.stopPropagation();
+        openPublishHistoryRecordModal(historyView.dataset.publishHistoryView || "").catch(() => {});
+        return;
+      }
+      const historyRequeue = event.target.closest("[data-publish-history-requeue]");
+      if (historyRequeue) {
+        event.stopPropagation();
+        requeuePublishHistoryRecord(historyRequeue.dataset.publishHistoryRequeue || "").catch(() => {});
+        return;
+      }
+      if (event.target.closest("[data-publish-history-refresh]")) {
+        refreshPublishHistoryHotData(selectedPersona()).catch(() => {});
+        return;
+      }
+    }
     if (Date.now() < Number(state.personaSuppressClickUntil || 0)) {
       event.preventDefault();
       event.stopPropagation();
@@ -29779,8 +30185,6 @@ function bindEvents() {
       );
       return;
     }
-    const referenceToggle = event.target.closest("[data-persona-reference-image-toggle]");
-    if (referenceToggle) return togglePersonaImageReference(referenceToggle.dataset.personaReferenceImageToggle || "");
     const imageSelection = event.target.closest("[data-persona-image-select]");
     if (imageSelection) return togglePersonaImageSelection(imageSelection.dataset.personaImageSelect || "");
     const memoryBulkButton = event.target.closest("[data-persona-memory-bulk]");
@@ -31100,6 +31504,17 @@ function bindEvents() {
     }
   });
   $("moduleBody").addEventListener("change", async (event) => {
+    const historyFilter = event.target?.closest?.("[data-persona-history-filter]");
+    if (historyFilter) {
+      const key = String(historyFilter.dataset.personaHistoryFilter || "");
+      const value = String(historyFilter.value || "");
+      if (["platform", "content", "sort"].includes(key)) state.personaHistoryFilters[key] = value;
+      if (key === "content") localStorage.setItem("personaDashboardPostTypeFilter", value);
+      if (key === "sort") localStorage.setItem("personaDashboardPostSort", value);
+      state.publishHistoryPreviewId = "";
+      renderPersonaDetail();
+      return;
+    }
     if (event.target?.matches?.("[data-persona-hot-keywords]")) {
       const persona = selectedPersona();
       if (!persona) return;
@@ -31477,6 +31892,10 @@ function bindEvents() {
       event.stopPropagation();
       toggleAccountPasswordVisibility(accountPasswordToggle)
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "读取登录密码失败", false));
+      return;
+    }
+    if (event.target.closest("[data-system-proxy-pool-open]")) {
+      openSystemProxyPoolModal();
       return;
     }
     if (event.target.closest("[data-proxy-add]")) {

@@ -101,6 +101,42 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
                 (json.dumps({"ok": True, "exit_ip": exit_ip, "response": {"ip": exit_ip}}), proxy_id),
             )
 
+    def _seed_system_proxy_owner_and_items(self, *item_ids: str) -> None:
+        now = social_api._now()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO users(
+                    id, username, password_hash, approval_status,
+                    is_disabled, created_at, updated_at
+                ) VALUES (42, 'system-pool-owner', 'x', 'approved', 0, ?, ?)
+                """,
+                (now, now),
+            )
+            for index, item_id in enumerate(item_ids, start=1):
+                conn.execute(
+                    """
+                    INSERT INTO proxy_market_items(
+                        id, sku, display_name, provider_key, proxy_type, host, port,
+                        country, ip_type, status, health_status, last_check_at,
+                        last_check_result_json, published_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'system', 'socks5', ?, ?, 'TW', 'datacenter',
+                              'active', 'healthy', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item_id,
+                        f"SYSTEM-POOL-{index}",
+                        f"公共代理 {index}",
+                        f"proxy-{index}.example",
+                        1080 + index,
+                        now,
+                        json.dumps({"ok": True, "exit_ip": f"8.8.8.{index}"}),
+                        now,
+                        now,
+                        now,
+                    ),
+                )
+
     def test_create_and_patch_proxy_are_atomic_and_password_is_write_only(self):
         account = self._account(
             "creator",
@@ -841,6 +877,99 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             item = conn.execute("SELECT status FROM proxy_market_items WHERE id = ?", (item_id,)).fetchone()
         self.assertEqual(released["status"], "released")
         self.assertEqual(item["status"], "active")
+
+    def test_system_proxy_pool_switches_single_unbound_allocation(self):
+        self._seed_system_proxy_owner_and_items("pool-first", "pool-second")
+        with social_api.db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            first, replaced = social_api.switch_system_proxy_in_transaction(
+                conn,
+                item_id="pool-first",
+                owner_user_id=42,
+                client_request_id="select-first",
+            )
+            self.assertFalse(replaced)
+
+        with social_api.db() as conn:
+            choices = social_api.list_system_proxy_pool_options(conn, owner_user_id=42)
+        self.assertEqual([row["market_item_id"] for row in choices], ["pool-first", "pool-second"])
+        self.assertTrue(choices[0]["selected"])
+        self.assertTrue(choices[1]["available"])
+
+        with social_api.db() as conn:
+            other_user_choices = social_api.list_system_proxy_pool_options(conn, owner_user_id=43)
+        self.assertEqual(
+            [row["market_item_id"] for row in other_user_choices],
+            ["pool-second"],
+        )
+        self.assertTrue(other_user_choices[0]["available"])
+
+        with social_api.db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            second, replaced = social_api.switch_system_proxy_in_transaction(
+                conn,
+                item_id="pool-second",
+                owner_user_id=42,
+                client_request_id="select-second",
+            )
+        self.assertTrue(replaced)
+        with social_api.db() as conn:
+            active = conn.execute(
+                "SELECT item_id, social_proxy_id FROM proxy_market_allocations WHERE user_id = 42 AND status = 'active'"
+            ).fetchall()
+            first_status = conn.execute("SELECT status FROM proxy_market_items WHERE id = 'pool-first'").fetchone()
+        self.assertEqual([(row["item_id"], row["social_proxy_id"]) for row in active], [("pool-second", second["id"])])
+        self.assertEqual(first_status["status"], "active")
+
+        with self.assertRaises(HTTPException) as stale:
+            with social_api.db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                social_api.switch_system_proxy_in_transaction(
+                    conn,
+                    item_id="pool-first",
+                    owner_user_id=42,
+                    expected_current_item_id="pool-first",
+                )
+        self.assertEqual(stale.exception.status_code, 409)
+        self.assertIn("其他页面变更", stale.exception.detail)
+
+    def test_system_proxy_pool_rejects_switch_while_current_proxy_is_bound(self):
+        self._seed_system_proxy_owner_and_items("busy-first", "busy-second")
+        now = social_api._now()
+        with social_api.db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            first, _ = social_api.switch_system_proxy_in_transaction(
+                conn,
+                item_id="busy-first",
+                owner_user_id=42,
+            )
+            conn.execute(
+                """
+                INSERT INTO social_accounts(
+                    id, user_id, persona_id, platform, username, display_name,
+                    profile_dir, proxy_id, status, created_at, updated_at
+                ) VALUES ('busy-account', 42, '', 'threads', 'busy-account', '', ?, ?,
+                          'pending_login', ?, ?)
+                """,
+                (str(self.root / "profiles" / "busy-account"), first["id"], now, now),
+            )
+        with self.assertRaises(HTTPException) as caught:
+            with social_api.db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                social_api.switch_system_proxy_in_transaction(
+                    conn,
+                    item_id="busy-second",
+                    owner_user_id=42,
+                )
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertIn("解除账号绑定", caught.exception.detail)
+        with social_api.db() as conn:
+            active_item = conn.execute(
+                "SELECT item_id FROM proxy_market_allocations WHERE user_id = 42 AND status = 'active'"
+            ).fetchone()
+            account = conn.execute("SELECT proxy_id FROM social_accounts WHERE id = 'busy-account'").fetchone()
+        self.assertEqual(active_item["item_id"], "busy-first")
+        self.assertEqual(account["proxy_id"], first["id"])
 
     def test_invalid_legacy_binding_remains_readable_editable_and_clearable(self):
         proxy = social_api.create_social_proxy(

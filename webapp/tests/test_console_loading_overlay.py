@@ -61,7 +61,7 @@ class ConsoleLoadingOverlayTests(unittest.TestCase):
 
     def test_manual_dashboard_refresh_remains_blocking(self):
         dashboard_js = (ROOT / "webapp" / "static" / "assets" / "persona-dashboard.js").read_text(encoding="utf-8")
-        self.assertIn('refresh.addEventListener("click", () => pdStartRefresh(""));', dashboard_js)
+        self.assertIn('refresh.addEventListener("click", pdStartRefresh);', dashboard_js)
         self.assertIn('if (personaDashboardRefreshTask) return;', dashboard_js)
         self.assertIn('if (personaDashboardLoadPromise) {\n    return personaDashboardLoadPromise;', dashboard_js)
         self.assertIn('if (!silent) pdSetMsg("正在加载人设数据...", "ok");', dashboard_js)

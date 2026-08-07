@@ -16,11 +16,16 @@ def function_source(name: str, next_name: str) -> str:
 
 
 class AutomationPlanFrontendContractTests(unittest.TestCase):
-    def test_task_navigation_places_automation_between_matrix_and_history(self):
+    def test_task_navigation_moves_history_into_persona_workspace(self):
         tabs = function_source("renderPublishModeTabs", "renderPublishHeaderRow")
         self.assertLess(tabs.index('["matrix_start", "矩阵任务"]'), tabs.index('["automation_tasks", "自动化任务"]'))
-        self.assertLess(tabs.index('["automation_tasks", "自动化任务"]'), tabs.index('["publish_history", "任务历史"]'))
-        self.assertIn('repeat(4, minmax(0, 1fr))', CONSOLE_CSS)
+        self.assertNotIn('["publish_history", "任务历史"]', tabs)
+        self.assertIn("人设历史推文", CONSOLE_JS)
+        self.assertIn(
+            ".publish-header-main > .publish-mode-tabs {\n"
+            "    grid-template-columns: repeat(3, minmax(0, 1fr));",
+            CONSOLE_CSS,
+        )
 
     def test_old_task_time_controls_are_removed_from_normal_matrix_and_persona_publish(self):
         self.assertNotIn("任务时间", CONSOLE_JS)

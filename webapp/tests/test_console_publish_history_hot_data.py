@@ -16,6 +16,40 @@ def function_source(name: str, next_name: str) -> str:
 
 
 class ConsolePublishHistoryHotDataTests(unittest.TestCase):
+    def test_persona_workspace_combines_hot_data_and_history_behind_two_tabs(self):
+        tabs = function_source("renderPersonaDataTabs", "renderPersonaHotDataContent")
+        panel = function_source("renderPersonaDataPanel", "renderPersonaProfileIdentity")
+
+        self.assertIn('data-persona-data-tab="hot"', tabs)
+        self.assertIn('data-persona-data-tab="history"', tabs)
+        self.assertIn("热点数据", tabs)
+        self.assertIn("人设历史推文", tabs)
+        self.assertIn('activeTab === "history"', panel)
+        self.assertIn('personaDataTab: "hot"', CONSOLE_JS)
+        self.assertIn(".persona-data-tabs {", CONSOLE_CSS)
+
+    def test_persona_history_merges_dashboard_metrics_with_real_task_history(self):
+        merge = function_source("personaMergedHistoryRows", "personaHistoryContentParts")
+        history = function_source("renderPersonaHistoryDataContent", "renderPersonaDataPanel")
+
+        self.assertIn("personaPublishHistoryRows(persona)", merge)
+        self.assertIn("personaDashboardDetail(persona)?.post_metrics", merge)
+        self.assertIn("personaHistoryIdentityKeys", merge)
+        self.assertIn("renderPublishHistorySelectionList(persona, {", history)
+        self.assertIn("loadPersonaDashboardOverview()", history)
+        self.assertIn('streamKey: `persona-data-history:', history)
+
+    def test_persona_history_reuses_dashboard_filters_and_keeps_archive_only_rows_read_only(self):
+        filters = function_source("renderPersonaHistoryFilters", "renderPersonaHistoryDataContent")
+        selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")
+
+        self.assertIn('data-persona-history-filter="platform"', filters)
+        self.assertIn('data-persona-history-filter="content"', filters)
+        self.assertIn('data-persona-history-filter="sort"', filters)
+        self.assertIn('value="hot_desc"', filters)
+        self.assertIn('value="time_desc"', filters)
+        self.assertIn('record.__dashboard_metric_only ? ""', selection)
+
     def test_history_list_preview_renders_all_six_hot_metrics_before_opening_detail(self):
         selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")
 
