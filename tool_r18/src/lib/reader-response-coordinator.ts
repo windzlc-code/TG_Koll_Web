@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { withExclusiveJsonFileLock } from "@/runtime/node/json-file-lock";
 
 export type ReaderResponseCacheMode = "swr" | "blocking-refresh" | "bypass";
 
@@ -40,6 +41,7 @@ export class ReaderResponseCoordinator {
   private readonly now: () => number;
   private readonly memory = new Map<string, ReaderResponseCacheEntry>();
   private readonly inFlight = new Map<string, Promise<ReaderResponseSnapshot>>();
+  private writesSincePrune = 0;
 
   constructor(options: ReaderResponseCoordinatorOptions = {}) {
     this.freshTtlMs = Math.max(0, Number(options.freshTtlMs ?? DEFAULT_FRESH_TTL_MS));
@@ -82,6 +84,9 @@ export class ReaderResponseCoordinator {
   ): Promise<ReaderResponseSnapshot> {
     const existing = this.inFlight.get(key);
     if (existing) return existing;
+    const fallback = cached && this.now() - cached.cachedAt <= this.freshTtlMs + this.staleTtlMs
+      ? cached.value
+      : null;
 
     const pending = loader()
       .then((value) => {
@@ -89,12 +94,10 @@ export class ReaderResponseCoordinator {
           this.writeEntry(key, { cachedAt: this.now(), value });
           return value;
         }
-        return cached?.value || value;
+        return fallback || value;
       })
       .catch((error) => {
-        if (cached && this.now() - cached.cachedAt <= this.freshTtlMs + this.staleTtlMs) {
-          return cached.value;
-        }
+        if (fallback) return fallback;
         throw error;
       })
       .finally(() => {
@@ -113,8 +116,13 @@ export class ReaderResponseCoordinator {
     }
     if (!this.storageDir) return null;
     try {
-      const parsed = JSON.parse(fs.readFileSync(this.cacheFile(key), "utf8")) as ReaderResponseCacheEntry;
+      const file = this.cacheFile(key);
+      const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as ReaderResponseCacheEntry;
       if (!this.isValidEntry(parsed)) return null;
+      if (this.now() - parsed.cachedAt > this.freshTtlMs + this.staleTtlMs) {
+        fs.rmSync(file, { force: true });
+        return null;
+      }
       this.remember(key, parsed);
       return parsed;
     } catch {
@@ -128,10 +136,14 @@ export class ReaderResponseCoordinator {
     try {
       fs.mkdirSync(this.storageDir, { recursive: true });
       const file = this.cacheFile(key);
-      const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
-      fs.writeFileSync(temp, JSON.stringify(entry), "utf8");
-      fs.rmSync(file, { force: true });
-      fs.renameSync(temp, file);
+      withExclusiveJsonFileLock(file, () => {
+        fs.writeFileSync(file, JSON.stringify(entry), "utf8");
+      });
+      this.writesSincePrune += 1;
+      if (this.writesSincePrune === 1 || this.writesSincePrune >= 25) {
+        this.writesSincePrune = 0;
+        this.pruneDiskCache();
+      }
     } catch {
       // The response remains available in memory when the shared cache is busy.
     }
@@ -150,6 +162,31 @@ export class ReaderResponseCoordinator {
   private cacheFile(key: string): string {
     const digest = crypto.createHash("sha256").update(key).digest("hex");
     return path.join(this.storageDir || "", `${digest}.json`);
+  }
+
+  private pruneDiskCache() {
+    if (!this.storageDir) return;
+    try {
+      const now = this.now();
+      const files = fs.readdirSync(this.storageDir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+        .map((entry) => {
+          const file = path.join(this.storageDir || "", entry.name);
+          return { file, mtimeMs: fs.statSync(file).mtimeMs };
+        })
+        .sort((left, right) => right.mtimeMs - left.mtimeMs);
+      for (const [index, entry] of files.entries()) {
+        if (index >= this.maxEntries || now - entry.mtimeMs > this.freshTtlMs + this.staleTtlMs) {
+          try {
+            fs.rmSync(entry.file, { force: true });
+          } catch {
+            // Another process may currently own this cache shard.
+          }
+        }
+      }
+    } catch {
+      // Cache pruning is best effort and never blocks the live request path.
+    }
   }
 
   private isValidEntry(value: ReaderResponseCacheEntry): boolean {

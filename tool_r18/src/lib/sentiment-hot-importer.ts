@@ -4700,7 +4700,15 @@ async function fetchWithSharedReaderLimit(
   text: () => Promise<string>;
 }> {
   const readerUrl = buildJinaReaderUrl(targetUrl);
+  const refreshedTargetUrl = cacheMode === "blocking-refresh"
+    ? `${targetUrl}${targetUrl.includes("?") ? "&" : "?"}__reader_refresh=${Date.now().toString(36)}`
+    : targetUrl;
+  const upstreamReaderUrl = buildJinaReaderUrl(refreshedTargetUrl);
   const requestHeaders = new Headers(init.headers);
+  if (cacheMode === "blocking-refresh") {
+    requestHeaders.set("cache-control", "no-cache");
+    requestHeaders.set("pragma", "no-cache");
+  }
   const cacheKey = JSON.stringify({
     url: readerUrl,
     method: String(init.method || "GET").toUpperCase(),
@@ -4711,7 +4719,7 @@ async function fetchWithSharedReaderLimit(
     async (): Promise<ReaderResponseSnapshot> => sharedReaderRateLimiter.run(
       SHARED_READER_UPSTREAM_KEY,
       async ({ signal }) => {
-        const response = await fetch(readerUrl, { ...init, signal });
+        const response = await fetch(upstreamReaderUrl, { ...init, headers: requestHeaders, signal });
         const body = await response.text();
         return {
           ok: response.ok,
@@ -4728,7 +4736,7 @@ async function fetchWithSharedReaderLimit(
         && value.status >= 200
         && value.status < 300
         && value.body.trim().length > 0
-        && !/<title>\s*(?:502|503|504)\b|bad gateway|gateway timeout|service unavailable/i.test(value.body),
+        && !/<title>\s*(?:502|503|504)\b|bad gateway|gateway timeout|service unavailable|log into instagram|登入 Instagram|登录 Instagram|continue to instagram/i.test(value.body),
     },
   );
   return {

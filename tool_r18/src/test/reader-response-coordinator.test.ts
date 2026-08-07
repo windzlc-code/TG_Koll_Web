@@ -122,6 +122,27 @@ describe("reader response coordinator", () => {
     expect(stale.status).toBe(200);
   });
 
+  it("does not use an expired response when a refresh is rate limited", async () => {
+    let now = 0;
+    const coordinator = createReaderResponseCoordinator({
+      freshTtlMs: 100,
+      staleTtlMs: 200,
+      now: () => now,
+    });
+    const isCacheable = (value: ReaderResponseSnapshot) => value.ok && value.body.length > 0;
+    await coordinator.getOrLoad("expired", async () => response("old"), { isCacheable });
+    now = 301;
+
+    const limited = await coordinator.getOrLoad(
+      "expired",
+      async () => response("too many requests", 429),
+      { mode: "blocking-refresh", isCacheable },
+    );
+
+    expect(limited.body).toBe("too many requests");
+    expect(limited.status).toBe(429);
+  });
+
   it("bypasses both cache reads and writes for forced detail requests", async () => {
     const coordinator = createReaderResponseCoordinator();
     let loads = 0;
