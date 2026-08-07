@@ -1634,6 +1634,39 @@ tea\u8336\u6587\u5316\u65e5\u5e38\u5206\u4eab\u8207\u6162\u751f\u6d3b\u9ad4\u9a5
     });
   });
 
+  it("parses nested Threads text_post_app_info engagement fields", () => {
+    const candidates = parseThreadsGraphqlSearchPayload({
+      freshnessFallbackAt: "2026-07-17T09:00:00.000Z",
+      query: "理发店",
+      keywords: ["理发店"],
+      payload: {
+        data: {
+          node: {
+            code: "NESTED123",
+            user: { username: "barber_demo" },
+            text_post_app_info: {
+              text: "这家理发店剪发体验真的很离谱，从预约到沟通再到最终发型都值得拿出来给大家避坑参考。",
+              like_count: 880,
+              reply_count: 120,
+              repost_count: 30,
+              share_count: 40,
+              impression_count: 3200,
+            },
+          },
+        },
+      },
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].hotScore).toBe(3200);
+    expect(candidates[0].engagement).toMatchObject({
+      likeCount: 880,
+      commentCount: 120,
+      shareCount: 40,
+      viewCount: 3200,
+    });
+  });
+
   it("reads the next-page cursor from Threads search GraphQL payloads", () => {
     expect(parseThreadsGraphqlSearchPageInfo({
       data: {

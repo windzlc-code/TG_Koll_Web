@@ -3843,13 +3843,30 @@ export function parseThreadsGraphqlSearchPayload(args: {
       const code = cleanText(value?.code || value?.shortcode);
       const content = cleanSentimentCandidateContent(value?.caption?.text || value?.text_post_app_info?.text || value?.text || "");
       if (username && code && content) {
-        const likeCount = Math.max(0, Number(value?.like_count) || 0);
-        const commentCount = Math.max(0, Number(value?.text_post_app_info?.direct_reply_count) || 0);
-        const repostCount = Math.max(0, Number(value?.text_post_app_info?.repost_count) || 0);
-        const reshareCount = Math.max(0, Number(value?.text_post_app_info?.reshare_count) || 0);
+        const info = value?.text_post_app_info || {};
+        const likeCount = Math.max(0, Number(value?.like_count ?? info?.like_count ?? info?.likeCount) || 0);
+        const commentCount = Math.max(0, Number(
+          info?.direct_reply_count
+          ?? info?.reply_count
+          ?? info?.comment_count
+          ?? info?.directReplyCount
+          ?? info?.replyCount
+          ?? info?.commentCount,
+        ) || 0);
+        const repostCount = Math.max(0, Number(info?.repost_count ?? info?.repostCount) || 0);
+        const reshareCount = Math.max(0, Number(
+          info?.reshare_count
+          ?? info?.share_count
+          ?? info?.send_count
+          ?? info?.reshareCount
+          ?? info?.shareCount
+          ?? info?.sendCount,
+        ) || 0);
         const rawViewCount = [
-          value?.text_post_app_info?.view_count,
-          value?.text_post_app_info?.viewCount,
+          info?.view_count,
+          info?.viewCount,
+          info?.impression_count,
+          info?.impressionCount,
           value?.view_count,
           value?.viewCount,
           value?.play_count,
