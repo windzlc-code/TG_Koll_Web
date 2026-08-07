@@ -4506,7 +4506,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
         }
       }
       if (!template) {
-        if (!droppedNonPostGraphqlTemplate) {
+        if (!droppedNonPostGraphqlTemplate && !recentSearch) {
           for (const bootstrapQuery of bootstrapQueries) {
             if (threadsAuthBlocked || template || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
             // The unfiltered search page emits the reusable GraphQL request more
