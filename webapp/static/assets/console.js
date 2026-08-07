@@ -20,6 +20,7 @@ const REORDER_LONG_PRESS_MOVE_TOLERANCE = 10;
 const PERSONA_GENERATE_DEFAULT_COUNT = 3;
 const PERSONA_GENERATE_MAX_COUNT = 5;
 const PERSONA_GENERATE_DEFAULT_TARGET_WORDS = 120;
+const PERSONA_POST_DIRECTION_COUNT = 10;
 const PERSONA_WRITING_LOCALES = [
   ["zh-TW", "繁体中文（默认）", "繁體中文（預設）"],
   ["zh-CN", "简体中文", "簡體中文"],
@@ -3691,7 +3692,7 @@ function personaFormState(personaId) {
   const key = String(personaId || "").trim();
   if (!key) {
     return {
-      generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", writingLocale: PERSONA_DEFAULT_WRITING_LOCALE, prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotSearchMode: "strict", hotFreshnessMode: "default", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
+      generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", writingLocale: PERSONA_DEFAULT_WRITING_LOCALE, prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, postDirectionsByMode: { tweet: defaultPersonaPostDirectionState(), tweet_media: defaultPersonaPostDirectionState() }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotSearchMode: "strict", hotFreshnessMode: "default", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
       draft: defaultPersonaDraftForm(),
       media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1", selectedImageId: "" },
@@ -3710,6 +3711,10 @@ function personaFormState(personaId) {
         composeDraftInputs: {
           tweet: { title: "", content: "" },
           tweet_media: { title: "", content: "" },
+        },
+        postDirectionsByMode: {
+          tweet: defaultPersonaPostDirectionState(),
+          tweet_media: defaultPersonaPostDirectionState(),
         },
         selectedMemoryIds: [],
         hotSelectedIds: [],
@@ -3773,6 +3778,7 @@ function personaFormState(personaId) {
   if (!generate.hotSelectedReplacementPoolIdByCandidate || typeof generate.hotSelectedReplacementPoolIdByCandidate !== "object") {
     generate.hotSelectedReplacementPoolIdByCandidate = {};
   }
+  ensurePersonaPostDirectionsByMode(state.personaForms[key]);
   return state.personaForms[key];
 }
 
@@ -3812,6 +3818,66 @@ function defaultPersonaComposeDraftInput(overrides = {}) {
     content: "",
     ...overrides,
   };
+}
+
+function defaultPersonaPostDirectionState(overrides = {}) {
+  return {
+    keywords: [],
+    selectedKeywords: [],
+    sourceFingerprint: "",
+    ...overrides,
+  };
+}
+
+function ensurePersonaPostDirectionsByMode(form) {
+  if (!form || typeof form !== "object") {
+    return { tweet: defaultPersonaPostDirectionState(), tweet_media: defaultPersonaPostDirectionState() };
+  }
+  if (!form.generate || typeof form.generate !== "object") form.generate = {};
+  if (!form.generate.postDirectionsByMode || typeof form.generate.postDirectionsByMode !== "object") {
+    form.generate.postDirectionsByMode = {};
+  }
+  for (const key of ["tweet", "tweet_media"]) {
+    const current = form.generate.postDirectionsByMode[key];
+    form.generate.postDirectionsByMode[key] = defaultPersonaPostDirectionState({
+      ...(current && typeof current === "object" ? current : {}),
+      keywords: Array.isArray(current?.keywords) ? current.keywords.map((item) => String(item || "").trim()).filter(Boolean).slice(0, PERSONA_POST_DIRECTION_COUNT) : [],
+      selectedKeywords: Array.isArray(current?.selectedKeywords) ? current.selectedKeywords.map((item) => String(item || "").trim()).filter(Boolean).slice(0, PERSONA_POST_DIRECTION_COUNT) : [],
+      sourceFingerprint: String(current?.sourceFingerprint || ""),
+    });
+  }
+  return form.generate.postDirectionsByMode;
+}
+
+function personaPostDirectionState(personaId, composeMode = "") {
+  const form = personaFormState(personaId);
+  const key = personaComposeDraftInputKey(composeMode || form.generate.composeMode) || "tweet";
+  return ensurePersonaPostDirectionsByMode(form)[key];
+}
+
+function personaPostDirectionSourceFingerprint(form) {
+  const draft = normalizePersonaDraftForm(form?.draft);
+  return JSON.stringify({
+    title: String(draft.title || "").trim(),
+    content: String(draft.content || "").trim(),
+  });
+}
+
+function clearPersonaPostDirections(personaId, composeMode = "") {
+  const form = personaFormState(personaId);
+  const key = personaComposeDraftInputKey(composeMode || form.generate.composeMode);
+  if (!key) return;
+  ensurePersonaPostDirectionsByMode(form)[key] = defaultPersonaPostDirectionState();
+}
+
+function invalidatePersonaPostDirectionsForCurrentInput(personaId) {
+  const form = personaFormState(personaId);
+  const directionState = personaPostDirectionState(personaId, form.generate.composeMode);
+  if (!directionState.keywords.length || !directionState.sourceFingerprint) return false;
+  if (directionState.sourceFingerprint === personaPostDirectionSourceFingerprint(form)) return false;
+  clearPersonaPostDirections(personaId, form.generate.composeMode);
+  document.querySelector(".persona-post-direction-panel")?.remove();
+  return true;
 }
 
 function ensurePersonaComposeDraftInputs(form) {
@@ -3860,6 +3926,7 @@ function clearPersonaDraftComposerInputs(personaId, composeMode = personaFormSta
   const form = personaFormState(personaId);
   const key = personaComposeDraftInputKey(composeMode);
   if (key) ensurePersonaComposeDraftInputs(form)[key] = defaultPersonaComposeDraftInput();
+  if (key) clearPersonaPostDirections(personaId, key);
   form.generate.prompt = "";
   clearUploadDropzoneState(
     "personaPostMediaUploadFiles",
@@ -4047,9 +4114,38 @@ function bindPersonaDraftSaveLongPress(host) {
 function syncPersonaGenerateActionState() {
   const button = document.querySelector("[data-persona-generate-posts]");
   if (!button || button.getAttribute("aria-busy") === "true") return;
-  const hasContent = Boolean(String($("personaDraftContent")?.value || "").trim());
-  button.textContent = hasContent ? "AI 润色" : "AI 生成";
-  button.setAttribute("aria-label", hasContent ? "使用 AI 润色当前内容" : "使用 AI 生成推文");
+  const persona = selectedPersona();
+  if (!persona) return;
+  const form = personaFormState(persona.id);
+  if (String(form.draft?.editingPostId || "").trim()) return;
+  const directionState = personaPostDirectionState(persona.id, form.generate.composeMode);
+  const hasKeywords = directionState.keywords.length > 0;
+  const hasSelection = directionState.selectedKeywords.length > 0;
+  if (hasKeywords && !hasSelection) {
+    button.innerHTML = `${renderRefreshIcon()}<span>换一批</span>`;
+    button.setAttribute("aria-label", "重新生成一批推文方向关键词");
+    return;
+  }
+  button.textContent = "AI 生成";
+  button.setAttribute("aria-label", hasSelection ? "按已选方向生成推文" : "生成推文方向关键词");
+}
+
+function renderPersonaPostDirectionPicker(persona, generateForm, disabled = false) {
+  const directionState = personaPostDirectionState(persona.id, generateForm.composeMode);
+  if (!directionState.keywords.length) return "";
+  const selected = new Set(directionState.selectedKeywords);
+  return `<section class="persona-post-direction-panel" aria-label="推文生成方向">
+    <div class="persona-post-direction-heading">
+      <strong>选择推文方向</strong>
+      <span>可单选或多选</span>
+    </div>
+    <div class="persona-post-direction-tags">
+      ${directionState.keywords.map((keyword) => {
+        const active = selected.has(keyword);
+        return `<button type="button" class="persona-post-direction-tag ${active ? "is-selected" : ""}" data-persona-post-direction-keyword="${esc(keyword)}" aria-pressed="${active ? "true" : "false"}" ${disabled ? "disabled" : ""}>${esc(keyword)}</button>`;
+      }).join("")}
+    </div>
+  </section>`;
 }
 
 function persistPersonaHotImports() {
@@ -19262,6 +19358,7 @@ function generatePersonaPayloadFromState(persona, profile = selectedPersonaProfi
       ? String(form.writingLocale)
       : PERSONA_DEFAULT_WRITING_LOCALE,
     selected_memory_ids: Array.isArray(form.selectedMemoryIds) ? form.selectedMemoryIds : [],
+    selected_directions: personaPostDirectionState(persona.id, form.composeMode).selectedKeywords.slice(0, PERSONA_POST_DIRECTION_COUNT),
     selection_required: String(form.composeMode || "tweet") === "tweet",
   };
   const rewriteSourcePostId = String(draft.rewriteSourcePostId || draft.editingPostId || "").trim();
@@ -19716,6 +19813,80 @@ function personaPostGenerationErrorIsTransient(error) {
   const status = Number(error?.status);
   if (!Number.isFinite(status)) return true;
   return status === 0 || status === 408 || status === 429 || status === 499 || status >= 500;
+}
+
+async function preparePersonaPostDirections() {
+  const persona = selectedPersona();
+  if (!persona) {
+    showMsg("commandMsg", "请先选择一个人设。", false);
+    return;
+  }
+  snapshotPersonaCurrentForm();
+  const form = personaFormState(persona.id);
+  const composeMode = personaComposeDraftInputKey(form.generate.composeMode) || "tweet";
+  const directionState = personaPostDirectionState(persona.id, composeMode);
+  const lockParts = ["persona", persona.id, "post_directions"];
+  if (isActionLocked(...lockParts)) return;
+  const payload = {
+    input_title: String(form.draft?.title || "").trim(),
+    input_content: String(form.draft?.content || "").trim(),
+    platform: personaContentPlatform(persona),
+    writing_locale: PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.generate.writingLocale || ""))
+      ? String(form.generate.writingLocale)
+      : PERSONA_DEFAULT_WRITING_LOCALE,
+    previous_keywords: directionState.keywords.slice(0, PERSONA_POST_DIRECTION_COUNT),
+  };
+  const operationStep = `post-directions:${persona.id}:${composeMode}`;
+  const operationKey = personaStepOperationKey(operationStep, payload);
+  setActionLocked(lockParts, true);
+  clearMsg("commandMsg");
+  renderPersonaDetail();
+  try {
+    const result = await apiWithTimeout(
+      `/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/post_directions`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": operationKey },
+        body: JSON.stringify(payload),
+      },
+      120000,
+    );
+    const keywords = Array.isArray(result?.keywords)
+      ? result.keywords.map((item) => String(item || "").trim()).filter(Boolean).slice(0, PERSONA_POST_DIRECTION_COUNT)
+      : [];
+    if (keywords.length !== PERSONA_POST_DIRECTION_COUNT) {
+      throw { detail: "模型未返回 10 个有效推文方向，请重试。", status: 502 };
+    }
+    const targetState = personaPostDirectionState(persona.id, composeMode);
+    targetState.keywords = keywords;
+    targetState.selectedKeywords = [];
+    targetState.sourceFingerprint = personaPostDirectionSourceFingerprint(form);
+    clearPersonaStepOperationKey(operationStep, operationKey);
+    showMsg("commandMsg", withBillingChargeMessage("已生成 10 个推文方向，可单选或多选。", result), true);
+  } catch (error) {
+    if (!personaStepErrorKeepsOperationKey(error)) clearPersonaStepOperationKey(operationStep, operationKey);
+    throw error;
+  } finally {
+    setActionLocked(lockParts, false);
+    renderPersonaDetail();
+  }
+}
+
+async function handlePersonaGeneratePrimaryAction() {
+  const persona = selectedPersona();
+  if (!persona) {
+    showMsg("commandMsg", "请先选择一个人设。", false);
+    return;
+  }
+  const form = personaFormState(persona.id);
+  const editingPost = Boolean(String(form.draft?.editingPostId || "").trim());
+  const storedTask = storedPersonaPostGenerationTask(persona.id);
+  const directionState = personaPostDirectionState(persona.id, form.generate.composeMode);
+  if (editingPost || storedTask || directionState.selectedKeywords.length) {
+    await generatePersonaDraftPosts();
+    return;
+  }
+  await preparePersonaPostDirections();
 }
 
 async function generatePersonaDraftPosts() {
@@ -24296,8 +24467,14 @@ function renderPersonaContentPanel(persona, account, profile, step) {
       ? "可修改正文、媒体或 AI 重写。"
       : `这里处理推文内容。已识别 ${memoryRows.length} 条可选记忆。`);
   const generationLocked = isActionLocked("persona", persona.id, "generate_posts");
+  const postDirectionsLocked = isActionLocked("persona", persona.id, "post_directions");
+  const generationControlsLocked = generationLocked || postDirectionsLocked;
   const activeGenerateComposeMode = String(personaGenerateRunState(persona.id)?.composeMode || composeMode);
   const generateBusy = generationLocked && activeGenerateComposeMode === composeMode;
+  const directionState = personaPostDirectionState(persona.id, composeMode);
+  const directionButtonContent = directionState.keywords.length && !directionState.selectedKeywords.length
+    ? `${renderRefreshIcon()}<span>换一批</span>`
+    : "AI 生成";
   const hotImportBusy = isActionLocked("persona", persona.id, "hot_import");
   const generatePreviewDock = renderPersonaGeneratePreviewDock(persona, composeMode);
   const hasComposeAside = canComposeMedia || Boolean(generatePreviewDock);
@@ -24316,7 +24493,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           </div>
         ` : ""}
         ${renderPersonaContentPlatformRail(persona, {
-          disabled: isEditingDraft || generationLocked || hotImportBusy,
+          disabled: isEditingDraft || generationControlsLocked || hotImportBusy,
         })}
         <div class="persona-compose-workspace ${hasComposeAside ? "has-media" : ""}">
           <section class="persona-compose-post-side persona-production-section ${isEditingDraft ? "is-editing-draft" : ""} ${editingDirty ? "is-dirty" : ""}">
@@ -24335,7 +24512,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             <div class="persona-compose-mode-slot">
               ${renderPersonaGenerateComposeTabs(composeMode, {
                 editingDraft: isEditingDraft,
-                disabled: generationLocked,
+                disabled: generationControlsLocked,
               })}
             </div>
             ${isEditingDraft ? `<p class="persona-compose-lock-hint" role="status">正在编辑单条草稿，批量推文和热点抓取不可用；请先保存或退出编辑后切换。</p>` : ""}
@@ -24387,11 +24564,12 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           ${!preflight.ready ? `<div class="persona-warning-inline">${esc(preflight.issues.join(" / "))}，请先补齐配置。</div>` : ""}
           <label>可选人设记忆（已识别 ${esc(memoryRows.length)} 条）</label>
           ${renderPersonaMemoryOptions(persona, generateForm.selectedMemoryIds || [])}
+          ${renderPersonaPostDirectionPicker(persona, generateForm, generationControlsLocked)}
           <div class="row-actions persona-generate-actions">
             <button type="button" data-persona-create-post>${isEditingDraft ? "保存修改" : "保存草稿"}</button>
             <button type="button" data-persona-route-step="content:posts">查看草稿</button>
-            ${renderPersonaWritingLocaleSelect(generateForm.writingLocale, generationLocked)}
-            <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="${hasGenerateContent ? "使用 AI 润色当前内容" : "使用 AI 生成推文"}" ${preflight.ready && !generationLocked ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent(hasGenerateContent ? "正在润色推文" : "正在生成草稿", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : (hasGenerateContent ? "AI 润色" : "AI 生成")}</button>
+            ${renderPersonaWritingLocaleSelect(generateForm.writingLocale, generationControlsLocked)}
+            <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="${directionState.selectedKeywords.length ? "按已选方向生成推文" : (directionState.keywords.length ? "重新生成一批推文方向关键词" : "生成推文方向关键词")}" ${preflight.ready && !generationControlsLocked ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent("正在生成草稿", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : (postDirectionsLocked ? renderBusyButtonContent("正在生成方向", true, actionLockStartedAt("persona", persona.id, "post_directions")) : directionButtonContent)}</button>
           </div>
         `}
           </section>
@@ -30334,7 +30512,23 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-generate-posts]")) {
-      generatePersonaDraftPosts().catch(() => {});
+      handlePersonaGeneratePrimaryAction().catch((error) => showMsg("commandMsg", error.detail || error.message || "生成推文失败", false));
+      return;
+    }
+    const postDirectionButton = event.target.closest("[data-persona-post-direction-keyword]");
+    if (postDirectionButton) {
+      const persona = selectedPersona();
+      if (!persona) return;
+      snapshotPersonaCurrentForm();
+      const form = personaFormState(persona.id);
+      const keyword = String(postDirectionButton.dataset.personaPostDirectionKeyword || "").trim();
+      const directionState = personaPostDirectionState(persona.id, form.generate.composeMode);
+      if (!keyword || !directionState.keywords.includes(keyword)) return;
+      const selected = new Set(directionState.selectedKeywords);
+      if (selected.has(keyword)) selected.delete(keyword);
+      else selected.add(keyword);
+      directionState.selectedKeywords = Array.from(selected);
+      renderPersonaDetail();
       return;
     }
     if (event.target.closest("[data-persona-writing-locale-open]")) {
@@ -31648,6 +31842,9 @@ function bindEvents() {
       window.__personaNewGroupName = state.personaNewGroupName;
     }
     if (event.target?.id === "personaDraftTitle" || event.target?.id === "personaDraftContent") {
+      snapshotPersonaCurrentForm();
+      const personaId = String(selectedPersona()?.id || "").trim();
+      if (personaId) invalidatePersonaPostDirectionsForCurrentInput(personaId);
       updatePersonaDraftEditVisualState();
       syncPersonaGenerateActionState();
       renderConfirmSummary();

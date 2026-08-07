@@ -12119,6 +12119,14 @@ class PersonaDashboardPersonaAiKeywordsPayload(BaseModel):
     prompt: str = ""
 
 
+class PersonaDashboardPostDirectionsPayload(BaseModel):
+    input_title: str = ""
+    input_content: str = ""
+    platform: str = "threads"
+    writing_locale: str = "zh-TW"
+    previous_keywords: list[str] = Field(default_factory=list)
+
+
 class PersonaDashboardPersonaAiCreatePayload(BaseModel):
     name: str = ""
     prompt: str = ""
@@ -12213,6 +12221,7 @@ class PersonaDashboardGeneratePostsPayload(BaseModel):
     writing_locale: str = "zh-TW"
     selected_memory_ids: list[str] = Field(default_factory=list)
     selected_memory_summaries: list[str] = Field(default_factory=list)
+    selected_directions: list[str] = Field(default_factory=list)
     selection_required: bool = False
     rewrite_source_post_id: str = ""
     rewrite_source_title: str = ""
@@ -14680,6 +14689,11 @@ def _build_persona_generate_instruction(payload: PersonaDashboardGeneratePostsPa
     platform = _normalize_persona_content_platform(payload.platform)
     writing_locale = _normalize_persona_writing_locale(payload.writing_locale)
     writing_language, writing_convention = _PERSONA_WRITING_LOCALE_INSTRUCTIONS[writing_locale]
+    selected_directions = [
+        str(item or "").strip()
+        for item in (payload.selected_directions or [])
+        if str(item or "").strip()
+    ][:10]
     content_time_slot = str(payload.content_time_slot or "").strip().lower()
     lines: list[str] = [
         f"Target publishing platform: {platform}. Adapt the draft to this platform's native tone and interaction style.",
@@ -14695,6 +14709,11 @@ def _build_persona_generate_instruction(payload: PersonaDashboardGeneratePostsPa
             f"Rewrite source title: {rewrite_source_title}",
             f"Rewrite source content: {rewrite_source_content}",
             "Use the source content as reference only. Produce fresh rewritten draft posts for the same persona. Do not copy the source verbatim.",
+        ])
+    if selected_directions:
+        lines.extend([
+            f"User-selected post directions (highest topic priority): {' / '.join(selected_directions)}",
+            "Use all selected directions as compatible facets of the same post theme. Do not merely list or explain the keywords.",
         ])
     if prompt:
         lines.append(f"本次用户主题/要求（最高优先级）：{prompt}")
@@ -15624,6 +15643,68 @@ def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywor
     }
 
 
+def _persona_dashboard_suggest_post_directions(
+    archive_id: str,
+    payload: PersonaDashboardPostDirectionsPayload,
+) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    _, _, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    persona_name = str(archive.get("name") or setup.get("personaName") or "").strip()
+    persona_core = {
+        "name": persona_name,
+        "content": str(archive.get("content") or "").strip(),
+        "description": str(setup.get("personaDescription") or "").strip(),
+        "personality": str(setup.get("personaPersonality") or "").strip(),
+        "style": str(setup.get("personaStyle") or "").strip(),
+        "content_theme": str(setup.get("contentTheme") or "").strip(),
+        "interests": [str(item or "").strip() for item in (setup.get("interests") or []) if str(item or "").strip()][:12],
+        "genres": [str(item or "").strip() for item in (setup.get("genres") or []) if str(item or "").strip()][:12],
+        "tweet_style_sample": str(setup.get("tweetStyleSample") or "").strip(),
+        "tweet_style_profile": str(setup.get("tweetStyleProfile") or "").strip(),
+    }
+    user_content = "\n".join([
+        str(payload.input_title or "").strip(),
+        str(payload.input_content or "").strip(),
+    ]).strip()
+    previous_keywords = [
+        str(item or "").strip()
+        for item in (payload.previous_keywords or [])
+        if str(item or "").strip()
+    ][:20]
+    result = _run_persona_create_cli({
+        "action": "suggest-post-directions",
+        "personaName": persona_name,
+        "personaCore": json.dumps(persona_core, ensure_ascii=False, separators=(",", ":")),
+        "userContent": user_content,
+        "previousKeywords": previous_keywords,
+        "platform": _normalize_persona_content_platform(payload.platform),
+        "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
+    }, timeout_seconds=90)
+    keywords = []
+    seen: set[str] = set()
+    for item in result.get("keywords") if isinstance(result.get("keywords"), list) else []:
+        keyword = re.sub(r"\s+", " ", str(item or "")).strip()[:24]
+        normalized = re.sub(r"[\s，。；;：:、\-_/]+", "", keyword).lower()
+        if len(keyword) < 2 or not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        keywords.append(keyword)
+        if len(keywords) >= 10:
+            break
+    if len(keywords) != 10:
+        raise HTTPException(status_code=502, detail="推文方向生成失败：模型未返回 10 个有效且有区分度的关键词，请换一批重试。")
+    return {
+        "ok": True,
+        "archive_id": clean_id,
+        "keywords": keywords,
+        "source": "content" if user_content else "persona",
+    }
+
+
 def _persona_dashboard_create_persona_with_ai(payload: PersonaDashboardPersonaAiCreatePayload) -> dict[str, Any]:
     name = str(payload.name or "").strip()
     prompt = str(payload.prompt or "").strip()
@@ -16183,6 +16264,31 @@ def _persona_ai_request_fingerprint(payload: BaseModel) -> str:
         ]
     encoded = json.dumps(
         normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _persona_post_directions_request_fingerprint(
+    archive_id: str,
+    payload: PersonaDashboardPostDirectionsPayload,
+) -> str:
+    raw = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload.dict()
+    encoded = json.dumps(
+        {
+            "archive_id": str(archive_id or "").strip(),
+            "input_title": str(raw.get("input_title") or "").strip(),
+            "input_content": str(raw.get("input_content") or "").strip(),
+            "platform": _normalize_persona_content_platform(raw.get("platform")),
+            "writing_locale": _normalize_persona_writing_locale(raw.get("writing_locale")),
+            "previous_keywords": [
+                str(item or "").strip()
+                for item in (raw.get("previous_keywords") or [])
+                if str(item or "").strip()
+            ][:20],
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -22745,6 +22851,23 @@ def create_app() -> FastAPI:
             sku="basic_text_post",
             quantity=1,
             operation=lambda: _persona_dashboard_generate_profile_content(payload),
+        )
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/post_directions")
+    def api_persona_dashboard_post_directions(
+        archive_id: str,
+        payload: PersonaDashboardPostDirectionsPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_persona_owner),
+    ):
+        return _run_billable_operation(
+            user,
+            ref_type="persona_post_directions",
+            sku="basic_text_post",
+            quantity=1,
+            operation=lambda: _persona_dashboard_suggest_post_directions(archive_id, payload),
+            idempotency_key=str(request.headers.get("idempotency-key") or ""),
+            request_fingerprint=_persona_post_directions_request_fingerprint(archive_id, payload),
         )
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/duplicate")

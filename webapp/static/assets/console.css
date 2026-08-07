@@ -10498,6 +10498,61 @@ body.persona-touch-dragging .persona-list-card:active {
   align-items: center;
 }
 
+.persona-post-direction-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+}
+
+.persona-post-direction-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.persona-post-direction-heading strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.persona-post-direction-heading span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.persona-post-direction-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.persona-post-direction-tag {
+  min-height: 34px;
+  padding: 6px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-solid);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.persona-post-direction-tag.is-selected {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.persona-generate-ai-action .ui-refresh-icon {
+  width: 17px;
+  height: 17px;
+}
+
 .persona-generate-actions .persona-generate-ai-action {
   margin-left: auto;
 }
@@ -21913,6 +21968,21 @@ body.console-page {
 
 /* Final mobile density pass: keep the workspace readable without oversized controls. */
 @media (max-width: 760px) {
+  .console-page .persona-post-direction-panel {
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .console-page .persona-post-direction-tags {
+    gap: 6px;
+  }
+
+  .console-page .persona-post-direction-tag {
+    min-height: 32px;
+    padding: 5px 9px;
+    font-size: 12px;
+  }
+
   .console-page .persona-writing-locale {
     width: 112px;
     min-width: 96px;
