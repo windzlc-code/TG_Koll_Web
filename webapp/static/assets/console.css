@@ -11173,6 +11173,27 @@ body.persona-touch-dragging .persona-list-card:active {
   margin-left: auto;
 }
 
+.persona-writing-locale {
+  display: block;
+  width: 132px;
+  min-width: 112px;
+  margin: 0 0 0 auto;
+}
+
+.persona-writing-locale select {
+  width: 100%;
+  min-height: 42px;
+  margin: 0;
+  padding-right: 30px;
+  border-color: var(--line-strong);
+  background-color: var(--panel-solid);
+  font-weight: 700;
+}
+
+.persona-generate-actions > .persona-writing-locale + .persona-generate-ai-action {
+  margin-left: 0;
+}
+
 .persona-warning-inline {
   padding: 8px 10px;
   border: 1px solid var(--line);
@@ -22426,6 +22447,17 @@ body.console-page {
 
 /* Final mobile density pass: keep the workspace readable without oversized controls. */
 @media (max-width: 760px) {
+  .console-page .persona-writing-locale {
+    width: 112px;
+    min-width: 96px;
+  }
+
+  .console-page .persona-writing-locale select {
+    min-height: var(--mobile-touch-target);
+    padding-inline: 10px 28px;
+    font-size: 13px;
+  }
+
   .console-page .persona-draft-toolbar > .row-actions {
     align-items: center;
   }

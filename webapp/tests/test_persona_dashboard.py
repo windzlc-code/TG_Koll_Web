@@ -5112,5 +5112,23 @@ class PersonaDashboardApiTests(unittest.TestCase):
             self.assertIn("max-age=86400", original_response.headers["cache-control"])
             self.assertEqual(original_response.content, source_path.read_bytes())
 
+    def test_persona_generation_instruction_uses_native_locale_writing_rules(self):
+        japanese = server._build_persona_generate_instruction(
+            server.PersonaDashboardGeneratePostsPayload(
+                platform="threads",
+                writing_locale="ja-JP",
+                prompt="朝の仕事について",
+            )
+        )
+        self.assertIn("Target writing locale: ja-JP (日本語).", japanese)
+        self.assertIn("Compose natively for the selected locale", japanese)
+        self.assertIn("翻訳調を避ける", japanese)
+
+        fallback = server._build_persona_generate_instruction(
+            server.PersonaDashboardGeneratePostsPayload(writing_locale="unsupported")
+        )
+        self.assertIn("Target writing locale: zh-TW (繁體中文).", fallback)
+        self.assertIn("不套用簡體中文句式", fallback)
+
 if __name__ == "__main__":
     unittest.main()

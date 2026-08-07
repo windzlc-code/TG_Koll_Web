@@ -20,6 +20,22 @@ const REORDER_LONG_PRESS_MOVE_TOLERANCE = 10;
 const PERSONA_GENERATE_DEFAULT_COUNT = 3;
 const PERSONA_GENERATE_MAX_COUNT = 5;
 const PERSONA_GENERATE_DEFAULT_TARGET_WORDS = 120;
+const PERSONA_WRITING_LOCALES = [
+  ["zh-TW", "繁體中文"],
+  ["zh-CN", "简体中文"],
+  ["en-US", "English"],
+  ["ja-JP", "日本語"],
+  ["ko-KR", "한국어"],
+  ["vi-VN", "Tiếng Việt"],
+  ["th-TH", "ภาษาไทย"],
+  ["id-ID", "Bahasa Indonesia"],
+  ["ms-MY", "Bahasa Melayu"],
+  ["es-ES", "Español"],
+  ["pt-BR", "Português"],
+  ["fr-FR", "Français"],
+  ["de-DE", "Deutsch"],
+];
+const PERSONA_DEFAULT_WRITING_LOCALE = "zh-TW";
 const ADMIN_WORKSPACE_USER_ID = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
 const ADMIN_CONSOLE_SESSION = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
 
@@ -3631,7 +3647,7 @@ function personaFormState(personaId) {
   const key = String(personaId || "").trim();
   if (!key) {
     return {
-      generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotSearchMode: "strict", hotFreshnessMode: "default", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
+      generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", writingLocale: PERSONA_DEFAULT_WRITING_LOCALE, prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotSearchMode: "strict", hotFreshnessMode: "default", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
       draft: defaultPersonaDraftForm(),
       media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1", referenceImageId: "" },
@@ -3645,6 +3661,7 @@ function personaFormState(personaId) {
         count: PERSONA_GENERATE_DEFAULT_COUNT,
         targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS,
         contentTimeSlot: "",
+        writingLocale: PERSONA_DEFAULT_WRITING_LOCALE,
         prompt: "",
         composeDraftInputs: {
           tweet: { title: "", content: "" },
@@ -3690,6 +3707,9 @@ function personaFormState(personaId) {
     };
   }
   const generate = state.personaForms[key].generate;
+  if (!PERSONA_WRITING_LOCALES.some(([value]) => value === String(generate.writingLocale || ""))) {
+    generate.writingLocale = PERSONA_DEFAULT_WRITING_LOCALE;
+  }
   if (!generate.hotReplacementFilesByCandidate || typeof generate.hotReplacementFilesByCandidate !== "object") {
     generate.hotReplacementFilesByCandidate = {};
   }
@@ -5001,6 +5021,7 @@ function snapshotPersonaCurrentForm() {
   const form = personaFormState(key);
   if ($("personaGenerateMode")) form.generate.mode = String($("personaGenerateMode")?.value || "ai");
   if ($("personaGenerateTimeSlot")) form.generate.contentTimeSlot = String($("personaGenerateTimeSlot")?.value || "");
+  if ($("personaWritingLocale")) form.generate.writingLocale = String($("personaWritingLocale")?.value || PERSONA_DEFAULT_WRITING_LOCALE);
   if ($("personaGenerateCount")) form.generate.count = Math.min(Math.max(Number.parseInt(String($("personaGenerateCount")?.value || ""), 10) || PERSONA_GENERATE_DEFAULT_COUNT, 1), PERSONA_GENERATE_MAX_COUNT);
   if ($("personaGenerateTargetWords")) form.generate.targetWords = Math.min(Math.max(Number.parseInt(String($("personaGenerateTargetWords")?.value || ""), 10) || PERSONA_GENERATE_DEFAULT_TARGET_WORDS, 10), 2000);
   if ($("personaGeneratePrompt")) form.generate.prompt = String($("personaGeneratePrompt")?.value || "");
@@ -18907,6 +18928,9 @@ function generatePersonaPayloadFromState(persona, profile = selectedPersonaProfi
     platform: personaContentPlatform(persona),
     target_words: targetWords,
     content_time_slot: String(form.contentTimeSlot || "").trim(),
+    writing_locale: PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.writingLocale || ""))
+      ? String(form.writingLocale)
+      : PERSONA_DEFAULT_WRITING_LOCALE,
     selected_memory_ids: Array.isArray(form.selectedMemoryIds) ? form.selectedMemoryIds : [],
     selection_required: String(form.composeMode || "tweet") === "tweet",
   };
@@ -18918,6 +18942,18 @@ function generatePersonaPayloadFromState(persona, profile = selectedPersonaProfi
     payload.rewrite_source_content = rewriteSourceContent || String(draft.originalContent || "").trim();
   }
   return payload;
+}
+
+function renderPersonaWritingLocaleSelect(selectedLocale = PERSONA_DEFAULT_WRITING_LOCALE, disabled = false) {
+  const normalized = PERSONA_WRITING_LOCALES.some(([value]) => value === String(selectedLocale || ""))
+    ? String(selectedLocale)
+    : PERSONA_DEFAULT_WRITING_LOCALE;
+  return `<label class="persona-writing-locale" title="按当地常用口吻、节奏和排版生成推文">
+    <span class="sr-only">推文语言与地区口吻</span>
+    <select id="personaWritingLocale" aria-label="推文语言与地区口吻" ${disabled ? "disabled" : ""}>
+      ${PERSONA_WRITING_LOCALES.map(([value, label]) => `<option value="${esc(value)}" ${value === normalized ? "selected" : ""}>${esc(label)}</option>`).join("")}
+    </select>
+  </label>`;
 }
 
 function personaGenerateRunState(personaId) {
@@ -23954,6 +23990,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           <div class="row-actions persona-generate-actions">
             <button type="button" data-persona-create-post>${isEditingDraft ? "保存修改" : "保存草稿"}</button>
             <button type="button" data-persona-route-step="content:posts">查看草稿</button>
+            ${renderPersonaWritingLocaleSelect(generateForm.writingLocale, generationLocked)}
             <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="${hasGenerateContent ? "使用 AI 润色当前内容" : "使用 AI 生成推文"}" ${preflight.ready && !generationLocked ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent(hasGenerateContent ? "正在润色推文" : "正在生成草稿", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : (hasGenerateContent ? "AI 润色" : "AI 生成")}</button>
           </div>
         `}
@@ -31135,7 +31172,7 @@ function bindEvents() {
       renderSocialAccounts();
       return;
     }
-    if (event.target?.id === "personaGenerateCount") {
+    if (["personaGenerateCount", "personaWritingLocale"].includes(event.target?.id || "")) {
       snapshotPersonaCurrentForm();
       renderConfirmSummary();
       return;

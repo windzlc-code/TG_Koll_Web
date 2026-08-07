@@ -12217,6 +12217,7 @@ class PersonaDashboardGeneratePostsPayload(BaseModel):
     platform: str = "threads"
     target_words: int = 120
     content_time_slot: str = ""
+    writing_locale: str = "zh-TW"
     selected_memory_ids: list[str] = Field(default_factory=list)
     selected_memory_summaries: list[str] = Field(default_factory=list)
     selection_required: bool = False
@@ -12927,6 +12928,28 @@ def _compact_persona_source_meta(source_meta: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_persona_content_platform(value: Any) -> str:
     return "instagram" if str(value or "").strip().lower() == "instagram" else "threads"
+
+
+_PERSONA_WRITING_LOCALE_INSTRUCTIONS: dict[str, tuple[str, str]] = {
+    "zh-TW": ("繁體中文", "以繁體中文直接創作，採用台灣社群常見的自然口語、詞彙與全形標點；節奏親切俐落，依語意分段，不套用簡體中文句式。"),
+    "zh-CN": ("简体中文", "以简体中文直接创作，采用中国大陆社交平台常见的自然口语、词汇与标点；表达清楚利落，按语意分段。"),
+    "en-US": ("English", "Write natively in conversational English. Use natural contractions, concise sentences, short social-media paragraphs, and an authentic rhythm rather than translated Chinese syntax."),
+    "ja-JP": ("日本語", "日本のSNSで自然に読める日本語で直接作成する。文脈に合う敬語レベルを保ち、短い文と改行で自然な間を作り、翻訳調を避ける。"),
+    "ko-KR": ("한국어", "한국 SNS에서 자연스러운 한국어로 직접 작성한다. 말투의 높임 수준을 일관되게 유지하고, 짧은 문장과 줄바꿈으로 리듬을 살리며 번역투를 피한다."),
+    "vi-VN": ("Tiếng Việt", "Viết trực tiếp bằng tiếng Việt tự nhiên như người địa phương trên mạng xã hội; dùng đại từ, trợ từ, nhịp câu và cách xuống dòng phù hợp với ngữ cảnh, tránh văn phong dịch máy."),
+    "th-TH": ("ภาษาไทย", "เขียนเป็นภาษาไทยที่เป็นธรรมชาติแบบผู้ใช้โซเชียลในท้องถิ่น ใช้ระดับความสุภาพ คำลงท้าย จังหวะประโยค และการขึ้นบรรทัดใหม่ให้เหมาะกับบริบท หลีกเลี่ยงสำนวนแปลตรงตัว"),
+    "id-ID": ("Bahasa Indonesia", "Tulis langsung dalam Bahasa Indonesia yang alami untuk media sosial; gunakan sapaan, partikel, ritme kalimat, dan pemenggalan paragraf yang lazim, bukan gaya terjemahan harfiah."),
+    "ms-MY": ("Bahasa Melayu", "Tulis terus dalam Bahasa Melayu yang semula jadi untuk media sosial tempatan; gunakan sapaan, rentak ayat dan susunan perenggan yang sesuai, serta elakkan gaya terjemahan literal."),
+    "es-ES": ("Español", "Escribe directamente en un español natural y conversacional para redes sociales, con frases ágiles, conectores y saltos de línea propios de un hablante local; evita el tono de traducción literal."),
+    "pt-BR": ("Português", "Escreva diretamente em português brasileiro natural para redes sociais, com ritmo coloquial, contrações e quebras de linha autênticas; evite estruturas de tradução literal."),
+    "fr-FR": ("Français", "Rédige directement dans un français naturel et conversationnel adapté aux réseaux sociaux, avec un rythme fluide et des paragraphes courts; évite toute tournure traduite littéralement."),
+    "de-DE": ("Deutsch", "Schreibe direkt in natürlichem, alltagstauglichem Deutsch für soziale Medien, mit klaren kurzen Sätzen und passenden Absätzen; vermeide wörtlich übersetzte Satzmuster."),
+}
+
+
+def _normalize_persona_writing_locale(value: Any) -> str:
+    clean = str(value or "").strip()
+    return clean if clean in _PERSONA_WRITING_LOCALE_INSTRUCTIONS else "zh-TW"
 
 
 def _compact_persona_archive_post(post: dict[str, Any]) -> dict[str, Any]:
@@ -14640,9 +14663,15 @@ def _build_persona_generate_instruction(payload: PersonaDashboardGeneratePostsPa
     rewrite_source_content = str(getattr(payload, "rewrite_source_content", "") or "").strip()
     target_words = max(10, min(int(payload.target_words or 120), 2000))
     platform = _normalize_persona_content_platform(payload.platform)
+    writing_locale = _normalize_persona_writing_locale(payload.writing_locale)
+    writing_language, writing_convention = _PERSONA_WRITING_LOCALE_INSTRUCTIONS[writing_locale]
     content_time_slot = str(payload.content_time_slot or "").strip().lower()
     lines: list[str] = [
-        f"Target publishing platform: {platform}. Adapt the draft to this platform's native tone and interaction style."
+        f"Target publishing platform: {platform}. Adapt the draft to this platform's native tone and interaction style.",
+        f"Target writing locale: {writing_locale} ({writing_language}).",
+        "Compose natively for the selected locale; do not write in another language and then translate it.",
+        f"Locale writing convention: {writing_convention}",
+        "Apply the selected locale to the title and body. Keep unavoidable proper names in their established form.",
     ]
     if rewrite_source_post_id or rewrite_source_content:
         lines.extend([

@@ -3537,6 +3537,20 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("triggerStreamKey !== personaDashboardMobilePostKey", loader)
         self.assertIn("!status?.isConnected", loader)
 
+    def test_ai_post_generation_exposes_locale_selector_and_submits_selection(self):
+        self.assertIn('const PERSONA_DEFAULT_WRITING_LOCALE = "zh-TW";', self.console_script)
+        for locale in ("zh-TW", "zh-CN", "en-US", "ja-JP", "ko-KR", "vi-VN"):
+            self.assertIn(f'["{locale}",', self.console_script)
+        self.assertIn('id="personaWritingLocale"', self.console_script)
+        self.assertIn("renderPersonaWritingLocaleSelect(generateForm.writingLocale, generationLocked)", self.console_script)
+        payload_builder = self.console_script[
+            self.console_script.index("function generatePersonaPayloadFromState"):
+            self.console_script.index("function personaGenerateRunState")
+        ]
+        self.assertIn("writing_locale:", payload_builder)
+        self.assertIn('if ($("personaWritingLocale")) form.generate.writingLocale', self.console_script)
+        self.assertIn(".persona-writing-locale", self.styles)
+
 
 if __name__ == "__main__":
     unittest.main()
