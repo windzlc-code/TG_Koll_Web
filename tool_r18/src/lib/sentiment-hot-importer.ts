@@ -2070,6 +2070,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     applyPersonaGuardToSentimentHotStrategy({ strategy: strategyResult });
   }
   const hasModelStrategy = Boolean(strategyResult && sentimentHotStrategyHasModelTerms(strategyResult));
+  const useModelStrategyForAcceptance = manualKeywords.length === 0 && hasModelStrategy && Boolean(strategyResult);
   const keywords = manualKeywords.length > 0
     ? manualKeywords
     : resolveSentimentHotModelStrategyKeywords(strategyResult, searchMode);
@@ -2126,7 +2127,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     channelStats.push(`並行實時來源 ${provisionalCandidates.length}，新增 ${added}`);
   }
 
-  if (!liveOnlyRefresh && hasModelStrategy && strategyResult && candidates.length < semanticSourceTarget) {
+  if (!liveOnlyRefresh && useModelStrategyForAcceptance && strategyResult && candidates.length < semanticSourceTarget) {
     const globalBackfill = readGlobalThreadsCandidateBackfill(
       archiveId,
       [...strategyResult.requiredAnchorTerms, ...keywords],
@@ -2165,7 +2166,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   }
 
   const cachedReadyCount = hasSearchKeywords
-    ? (hasModelStrategy && strategyResult
+    ? (useModelStrategyForAcceptance && strategyResult
       ? candidates.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode)).length
       : sortRelevantHotCandidates(candidates, keywords, poolLimit, searchMode).length)
     : 0;
@@ -2275,7 +2276,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     // when another query window has usable material. Run one bounded second
     // round only while the result is still short; queryRound rotates the
     // search window so this is not a duplicate burst of the first round.
-    const liveReadyPool = hasModelStrategy && strategyResult
+    const liveReadyPool = useModelStrategyForAcceptance && strategyResult
       ? candidates.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode))
       : candidates;
     const liveReadyCount = finalizeSentimentHotCandidatesForDisplay(
@@ -2312,7 +2313,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
           const byKeyInstagram = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
           for (const candidate of instagramCandidates) {
             if (!candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays)) continue;
-            if (hasModelStrategy && strategyResult && !candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode)) continue;
+            if (useModelStrategyForAcceptance && strategyResult && !candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode)) continue;
             const dedupeKey = sentimentCandidateDedupeKey(candidate);
             if (!byIdInstagram.has(candidate.id) && !byKeyInstagram.has(dedupeKey)) {
               byIdInstagram.set(candidate.id, candidate);
@@ -2331,7 +2332,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         if (instagramAddedCount > 0) warnings.push(`已檢查 Instagram 登入態與 Reader，加入 ${instagramAddedCount} 篇合格候選。`);
       }
     }
-    const readyAfterInstagramPool = hasModelStrategy && strategyResult
+    const readyAfterInstagramPool = useModelStrategyForAcceptance && strategyResult
       ? candidates.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode))
       : candidates;
     const readyAfterInstagramCount = finalizeSentimentHotCandidatesForDisplay(
@@ -2422,7 +2423,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       const byKey = new Set(candidates.map((candidate) => sentimentCandidateDedupeKey(candidate)));
       for (const candidate of instagramCandidates) {
         if (!candidateMatchesOperationalFreshness(candidate, operationalFreshnessDays)) continue;
-        if (hasModelStrategy && strategyResult && !candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode)) continue;
+        if (useModelStrategyForAcceptance && strategyResult && !candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode)) continue;
         const dedupeKey = sentimentCandidateDedupeKey(candidate);
         if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
           byId.set(candidate.id, candidate);
@@ -2533,7 +2534,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
 
   let modelParentCandidatePool: SentimentHotCandidate[] = [];
   let parentSupplementCount = 0;
-  if (hasModelStrategy && strategyResult) {
+  if (useModelStrategyForAcceptance && strategyResult) {
     const strategyCandidatePool = candidates;
     modelParentCandidatePool = strategyCandidatePool.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode));
     // Normal mode is the broad vertical search path. Its keyword quality
@@ -2570,7 +2571,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
        limit: poolLimit,
        excludeShown: false,
      }).catch(() => [])),
-    ].filter((candidate) => !hasModelStrategy || !strategyResult || candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode));
+    ].filter((candidate) => !useModelStrategyForAcceptance || !strategyResult || candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode));
     const orderedSupplements = orderSentimentHotCandidatesForLegacyFallback(
       finalizeSentimentHotCandidatesForDisplay([...displayCandidatePool, ...archiveHistory], poolLimit, {
         archiveId,
@@ -2627,7 +2628,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       warnings.push(`最终去重后已用模型直接父领域候选补充 ${parentSupplements.length} 篇。`);
     }
   }
-  if (!liveOnlyRefresh && candidates.length < limit && hasModelStrategy && strategyResult) {
+  if (!liveOnlyRefresh && candidates.length < limit && useModelStrategyForAcceptance && strategyResult) {
     const globalParentPool = readGlobalThreadsCandidateBackfill(
       archiveId,
       sentimentHotStrategyTermsForMode(strategyResult, searchMode),
@@ -2667,7 +2668,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     // even after both search rounds. As a last resort, rotate compliant recent
     // same-persona history. Never cross the bounded freshness window just to
     // fill the requested count.
-    const emergencyKeywords = hasModelStrategy && strategyResult
+    const emergencyKeywords = useModelStrategyForAcceptance && strategyResult
       ? sentimentHotStrategyTermsForMode(strategyResult, searchMode)
       : keywords;
     const emergencyHistory = [
@@ -2679,7 +2680,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         limit: poolLimit,
         excludeShown: false,
       }).catch(() => [])),
-      ...(hasModelStrategy && strategyResult
+      ...(useModelStrategyForAcceptance && strategyResult
         ? readGlobalThreadsCandidateBackfill(
           archiveId,
           [...emergencyKeywords, ...keywords],
@@ -2688,7 +2689,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         )
         : []),
     ];
-    const scopedEmergencyHistory = hasModelStrategy && strategyResult
+    const scopedEmergencyHistory = useModelStrategyForAcceptance && strategyResult
       ? emergencyHistory.filter((candidate) => candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode))
       : emergencyHistory;
     const emergencyPool = finalizeSentimentHotCandidatesForDisplay(scopedEmergencyHistory, poolLimit, {
