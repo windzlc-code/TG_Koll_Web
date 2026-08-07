@@ -21,19 +21,19 @@ const PERSONA_GENERATE_DEFAULT_COUNT = 3;
 const PERSONA_GENERATE_MAX_COUNT = 5;
 const PERSONA_GENERATE_DEFAULT_TARGET_WORDS = 120;
 const PERSONA_WRITING_LOCALES = [
-  ["zh-TW", "繁体中文（默认）"],
-  ["zh-CN", "简体中文"],
-  ["en-US", "English"],
-  ["ja-JP", "日本語"],
-  ["ko-KR", "한국어"],
-  ["vi-VN", "Tiếng Việt"],
-  ["th-TH", "ภาษาไทย"],
-  ["id-ID", "Bahasa Indonesia"],
-  ["ms-MY", "Bahasa Melayu"],
-  ["es-ES", "Español"],
-  ["pt-BR", "Português"],
-  ["fr-FR", "Français"],
-  ["de-DE", "Deutsch"],
+  ["zh-TW", "繁体中文（默认）", "繁體中文（預設）"],
+  ["zh-CN", "简体中文", "簡體中文"],
+  ["en-US", "英语", "英語"],
+  ["ja-JP", "日语", "日語"],
+  ["ko-KR", "韩语", "韓語"],
+  ["vi-VN", "越南语", "越南語"],
+  ["th-TH", "泰语", "泰語"],
+  ["id-ID", "印度尼西亚语", "印尼語"],
+  ["ms-MY", "马来语", "馬來語"],
+  ["es-ES", "西班牙语", "西班牙語"],
+  ["pt-BR", "葡萄牙语", "葡萄牙語"],
+  ["fr-FR", "法语", "法語"],
+  ["de-DE", "德语", "德語"],
 ];
 const PERSONA_DEFAULT_WRITING_LOCALE = "zh-TW";
 const ADMIN_WORKSPACE_USER_ID = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
@@ -18944,16 +18944,60 @@ function generatePersonaPayloadFromState(persona, profile = selectedPersonaProfi
   return payload;
 }
 
+function personaWritingLocaleLabel(locale, language = "zh-Hans") {
+  const row = PERSONA_WRITING_LOCALES.find(([value]) => value === String(locale || ""))
+    || PERSONA_WRITING_LOCALES[0];
+  return String(language === "zh-Hant" ? row[2] : row[1]);
+}
+
 function renderPersonaWritingLocaleSelect(selectedLocale = PERSONA_DEFAULT_WRITING_LOCALE, disabled = false) {
   const normalized = PERSONA_WRITING_LOCALES.some(([value]) => value === String(selectedLocale || ""))
     ? String(selectedLocale)
     : PERSONA_DEFAULT_WRITING_LOCALE;
-  return `<label class="persona-writing-locale" title="按当地常用口吻、节奏和排版生成推文">
-    <span class="sr-only">推文语言与地区口吻</span>
-    <select id="personaWritingLocale" aria-label="推文语言与地区口吻" ${disabled ? "disabled" : ""}>
-      ${PERSONA_WRITING_LOCALES.map(([value, label]) => `<option value="${esc(value)}" ${value === normalized ? "selected" : ""}>${esc(label)}</option>`).join("")}
-    </select>
-  </label>`;
+  const label = personaWritingLocaleLabel(normalized);
+  return `<span class="persona-writing-locale" title="按当地常用口吻、节奏和排版生成推文">
+    <label class="persona-writing-locale-select">
+      <span class="sr-only">推文语言与地区口吻</span>
+      <select id="personaWritingLocale" aria-label="推文语言与地区口吻" ${disabled ? "disabled" : ""}>
+        ${PERSONA_WRITING_LOCALES.map(([value]) => `<option value="${esc(value)}" ${value === normalized ? "selected" : ""}>${esc(personaWritingLocaleLabel(value))}</option>`).join("")}
+      </select>
+    </label>
+    <button type="button" class="persona-writing-locale-mobile" data-persona-writing-locale-open aria-label="选择推文语言与地区口吻" ${disabled ? "disabled" : ""}>${esc(label)}</button>
+  </span>`;
+}
+
+async function openPersonaWritingLocalePicker() {
+  const persona = selectedPersona();
+  if (!persona) return;
+  snapshotPersonaCurrentForm();
+  const form = personaFormState(persona.id).generate;
+  const selectedLocale = PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.writingLocale || ""))
+    ? String(form.writingLocale)
+    : PERSONA_DEFAULT_WRITING_LOCALE;
+  const request = openConsoleModal({
+    title: "选择推文语言",
+    message: "生成或 AI 重写时，将按所选地区的日常口吻、节奏和排版表达。",
+    contentHtml: `<div class="persona-writing-locale-options" role="listbox" aria-label="推文语言与地区口吻">
+      ${PERSONA_WRITING_LOCALES.map(([value]) => `<button type="button" class="persona-writing-locale-option ${value === selectedLocale ? "is-selected" : ""}" data-persona-writing-locale-choice="${esc(value)}" role="option" aria-selected="${value === selectedLocale ? "true" : "false"}">
+        <span>${esc(personaWritingLocaleLabel(value))}</span>
+        ${value === selectedLocale ? renderAutomationPlanCheckIcon() : ""}
+      </button>`).join("")}
+    </div>`,
+    cancelText: "取消",
+    showConfirm: false,
+    modalKey: "persona-writing-locale-picker",
+  });
+  const modal = $("consoleModal");
+  modal?.addEventListener("click", (event) => {
+    const option = event.target.closest("[data-persona-writing-locale-choice]");
+    if (!option) return;
+    closeConsoleModal(option.dataset.personaWritingLocaleChoice || null, modal);
+  });
+  const nextLocale = await request;
+  if (!PERSONA_WRITING_LOCALES.some(([value]) => value === String(nextLocale || ""))) return;
+  form.writingLocale = String(nextLocale);
+  renderPersonaDetail();
+  renderConfirmSummary();
 }
 
 function personaGenerateRunState(personaId) {
@@ -23962,10 +24006,11 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           <label>自定义正文
             <textarea id="personaDraftContent" class="persona-draft-content--full" rows="6" placeholder="直接输入本次要保存的推文正文。">${esc(draftForm.content || "")}</textarea>
           </label>
-          <div class="row-actions">
+          <div class="row-actions ${isEditingDraft ? "persona-generate-actions persona-generate-actions--editing" : ""}">
             ${isEditingDraft ? `
-              <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="使用 AI 重新生成当前推文" ${preflight.ready && !generationLocked ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent("正在重新生成", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : "AI 重新生成"}</button>
               <button type="button" data-persona-stash-draft-edit>暂存草稿</button>
+              ${renderPersonaWritingLocaleSelect(generateForm.writingLocale, generationLocked)}
+              <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="使用 AI 重新生成当前推文" ${preflight.ready && !generationLocked ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent("正在重新生成", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : "AI 重新生成"}</button>
             ` : `
               <button type="button" class="primary" data-persona-create-post>保存草稿</button>
               <button type="button" data-persona-route-step="content:posts">查看草稿</button>
@@ -29997,6 +30042,10 @@ function bindEvents() {
     }
     if (event.target.closest("[data-persona-generate-posts]")) {
       generatePersonaDraftPosts().catch(() => {});
+      return;
+    }
+    if (event.target.closest("[data-persona-writing-locale-open]")) {
+      openPersonaWritingLocalePicker().catch((error) => showMsg("commandMsg", error.detail || error.message || "打开语言选择失败", false));
       return;
     }
     if (event.target.closest("[data-persona-stash-draft-edit]")) {

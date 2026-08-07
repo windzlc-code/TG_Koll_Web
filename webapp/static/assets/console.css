@@ -11190,6 +11190,60 @@ body.persona-touch-dragging .persona-list-card:active {
   font-weight: 700;
 }
 
+.persona-writing-locale-mobile {
+  display: none;
+}
+
+.console-modal[data-modal-key="persona-writing-locale-picker"] .console-modal-dialog {
+  width: min(420px, calc(100vw - 28px));
+}
+
+.console-modal[data-modal-key="persona-writing-locale-picker"] .console-modal-content {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.persona-writing-locale-options {
+  display: grid;
+  max-height: min(58vh, 420px);
+  gap: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px;
+  scrollbar-gutter: stable;
+}
+
+.persona-writing-locale-option {
+  display: flex;
+  width: 100%;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+  color: var(--ink);
+  text-align: left;
+}
+
+.persona-writing-locale-option.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-solid));
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.persona-writing-locale-option .automation-plan-check-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.2;
+}
+
 .persona-generate-actions > .persona-writing-locale + .persona-generate-ai-action {
   margin-left: 0;
 }
@@ -22452,10 +22506,24 @@ body.console-page {
     min-width: 96px;
   }
 
-  .console-page .persona-writing-locale select {
+  .console-page .persona-writing-locale-select {
+    display: none;
+  }
+
+  .console-page .persona-writing-locale-mobile {
+    display: block;
+    width: 100%;
     min-height: var(--mobile-touch-target);
-    padding-inline: 10px 28px;
+    margin: 0;
+    padding-inline: 10px;
+    overflow: hidden;
+    border-color: var(--line-strong);
+    background: var(--panel-solid);
+    color: var(--ink);
     font-size: 13px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .console-page .persona-draft-toolbar > .row-actions {
