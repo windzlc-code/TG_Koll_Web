@@ -44,6 +44,7 @@ import {
   normalizeSentimentHotFreshnessPolicy,
   normalizeSentimentBrowserCookieExpiry,
   orderSentimentHotCandidatesForLegacyFallback,
+  isKnownNonPostThreadsSearchPayload,
   isSentimentHotCandidateRepeatEligible,
   parseThreadsPostViewCountFromText,
   parseThreadsReaderSearchMarkdownCandidates,
@@ -202,6 +203,34 @@ describe("sentiment hot importer", () => {
       variables: { query: "理发" },
       headers: {},
     })).toBe(true);
+  });
+
+  it("recognizes Threads user-search GraphQL payloads as non-post results", () => {
+    expect(isKnownNonPostThreadsSearchPayload({
+      data: {
+        xdt_api__v1__users__search_connection: {
+          edges: [{
+            node: {
+              username: "barber_shop",
+              pk: "123",
+              is_active_on_text_post_app: true,
+              follower_count: 1000,
+            },
+          }],
+        },
+      },
+    })).toBe(true);
+
+    expect(isKnownNonPostThreadsSearchPayload({
+      data: {
+        media: {
+          code: "ABC123",
+          user: { username: "barber_shop" },
+          text_post_app_info: { text: "今天这个理发店太离谱了", direct_reply_count: 8 },
+          like_count: 80,
+        },
+      },
+    })).toBe(false);
   });
 
   it("reuses a persona search strategy when only volatile memory summaries change", () => {

@@ -3738,6 +3738,14 @@ function persistThreadsSearchTemplate(value: { template: ThreadsSearchGraphqlTem
   }
 }
 
+function clearPersistedThreadsSearchTemplate() {
+  try {
+    fs.rmSync(THREADS_SEARCH_GRAPHQL_TEMPLATE_CACHE_FILE, { force: true });
+  } catch {
+    // A later browser request can capture the template again.
+  }
+}
+
 function threadsSearchVariableQuery(value: unknown): string {
   if (!value || typeof value !== "object") return "";
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
@@ -3984,6 +3992,32 @@ function summarizeThreadsGraphqlPayloadForDebug(payload: any): any[] {
     }
   }
   return samples;
+}
+
+export function isKnownNonPostThreadsSearchPayload(payload: any): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  const stack: any[] = [payload];
+  const visited = new Set<any>();
+  let sawNonPostSearch = false;
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (!value || typeof value !== "object" || visited.has(value)) continue;
+    visited.add(value);
+    if (!Array.isArray(value)) {
+      const keys = Object.keys(value);
+      if (keys.some((key) => /(?:users__search_connection|text_feed__keyword_search|keyword_search|search_keywords|search_users)/i.test(key))) {
+        sawNonPostSearch = true;
+      }
+      if (
+        cleanText((value as any).text_post_app_info?.text || (value as any).caption?.text || (value as any).text)
+        && cleanText((value as any).code || (value as any).shortcode)
+      ) return false;
+    }
+    for (const child of Object.values(value)) {
+      if (child && typeof child === "object") stack.push(child);
+    }
+  }
+  return sawNonPostSearch;
 }
 
 async function requestThreadsGraphqlSearchPayload(args: {
@@ -4410,7 +4444,34 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           waitUntil: "domcontentloaded",
           timeout: Math.min(3_000, remainingSentimentDeadlineMs(args.deadlineAt, 3_000)),
         }).catch(() => undefined);
-      } else {
+        const smokeQuery = args.queries[0] || "";
+        const smokePayload = smokeQuery
+          ? await requestThreadsGraphqlSearchPayload({ page, template, query: smokeQuery, recent: recentSearch, deadlineAt: args.deadlineAt })
+          : null;
+        const smokeParsed = smokePayload
+          ? parseThreadsGraphqlSearchPayload({
+            payload: smokePayload,
+            query: smokeQuery,
+            keywords: args.keywords,
+            freshnessFallbackAt: recentSearch ? new Date().toISOString() : undefined,
+          })
+          : [];
+        if (smokePayload && smokeParsed.length === 0 && isKnownNonPostThreadsSearchPayload(smokePayload)) {
+          console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=drop_non_post_graphql_template query=${JSON.stringify(smokeQuery)} samples=${process.env.SENTIMENT_HOT_DEBUG_GRAPHQL === "1" ? JSON.stringify(summarizeThreadsGraphqlPayloadForDebug(smokePayload)) : "[]"}`);
+          template = null;
+          recentThreadsSearchTemplate = null;
+          clearPersistedThreadsSearchTemplate();
+        } else {
+          for (const candidate of smokeParsed) {
+            if (excluded.has(candidate.id)) continue;
+            if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
+            considerCandidate(candidate);
+            if (results.length >= args.limit) break;
+          }
+          stats.graphql += smokeParsed.length;
+        }
+      }
+      if (!template) {
         for (const bootstrapQuery of bootstrapQueries) {
           if (threadsAuthBlocked || template || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
           // The unfiltered search page emits the reusable GraphQL request more
