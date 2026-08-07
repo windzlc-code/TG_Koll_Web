@@ -2373,6 +2373,13 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
           ),
         ).catch(() => []);
         threadsCandidates = [...threadsCandidates, ...secondRoundCandidates];
+        for (const candidate of candidates) {
+          const dedupeKey = sentimentCandidateDedupeKey(candidate);
+          if (!byId.has(candidate.id) && !byKey.has(dedupeKey)) {
+            byId.set(candidate.id, candidate);
+            byKey.add(dedupeKey);
+          }
+        }
         mergeThreadsCandidates(secondRoundCandidates);
         candidates = sortSentimentHotCandidatePool([...byId.values()], keywords, poolLimit, searchMode);
         channelStats.push(`Threads 第二轮原始 ${secondRoundCandidates.length}，新增 ${Math.max(0, candidates.length - secondRoundBefore)}`);
