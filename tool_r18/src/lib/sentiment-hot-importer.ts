@@ -3941,6 +3941,51 @@ export function parseThreadsGraphqlSearchPageInfo(payload: any): { endCursor: st
   return null;
 }
 
+function summarizeThreadsGraphqlPayloadForDebug(payload: any): any[] {
+  const samples: any[] = [];
+  const stack: Array<{ value: any; path: string; depth: number }> = [{ value: payload, path: "$", depth: 0 }];
+  const visited = new Set<any>();
+  while (stack.length > 0 && samples.length < 12 && visited.size < 1200) {
+    const item = stack.pop()!;
+    const value = item.value;
+    if (!value || typeof value !== "object" || visited.has(value)) continue;
+    visited.add(value);
+    if (!Array.isArray(value)) {
+      const keys = Object.keys(value).slice(0, 24);
+      const text = cleanText(
+        value?.text_post_app_info?.text
+        || value?.caption?.text
+        || value?.caption_text
+        || value?.text
+        || value?.title
+        || "",
+      );
+      const code = cleanText(value?.code || value?.shortcode || value?.pk || value?.id);
+      const username = cleanText(value?.user?.username || value?.owner?.username || value?.username);
+      if (text || code || username || keys.some((key) => /post|thread|media|caption|text|user|owner|search/i.test(key))) {
+        samples.push({
+          path: item.path,
+          keys,
+          code: code.slice(0, 40),
+          username: username.slice(0, 40),
+          text: text.slice(0, 120),
+        });
+      }
+    }
+    if (item.depth >= 8) continue;
+    if (Array.isArray(value)) {
+      for (let index = Math.min(value.length - 1, 20); index >= 0; index -= 1) {
+        stack.push({ value: value[index], path: `${item.path}[${index}]`, depth: item.depth + 1 });
+      }
+    } else {
+      for (const [key, child] of Object.entries(value).reverse()) {
+        if (child && typeof child === "object") stack.push({ value: child, path: `${item.path}.${key}`, depth: item.depth + 1 });
+      }
+    }
+  }
+  return samples;
+}
+
 async function requestThreadsGraphqlSearchPayload(args: {
   page: any;
   template: ThreadsSearchGraphqlTemplate;
@@ -4446,14 +4491,17 @@ async function fetchThreadsBrowserSearchCandidates(args: {
               return { ...item, nextPayload };
             }));
             for (const item of payloadsWithNext) {
-              const parsed = parseThreadsGraphqlSearchPayload({
-                payload: item.payload,
-                query: item.query,
-                keywords: args.keywords,
-                freshnessFallbackAt: recentSearch ? new Date().toISOString() : undefined,
-              });
-              stats.graphql += parsed.length;
-              let accepted = 0;
+            const parsed = parseThreadsGraphqlSearchPayload({
+              payload: item.payload,
+              query: item.query,
+              keywords: args.keywords,
+              freshnessFallbackAt: recentSearch ? new Date().toISOString() : undefined,
+            });
+            if (process.env.SENTIMENT_HOT_DEBUG_GRAPHQL === "1" && parsed.length === 0 && item.payload) {
+              console.info(`[sentiment_hot_graphql_debug] archiveId=${args.archiveId} query=${JSON.stringify(item.query)} samples=${JSON.stringify(summarizeThreadsGraphqlPayloadForDebug(item.payload))}`);
+            }
+            stats.graphql += parsed.length;
+            let accepted = 0;
               for (const candidate of parsed) {
                 if (excluded.has(candidate.id)) continue;
                 if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
