@@ -4366,6 +4366,12 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           // and once captured the API payload includes real publication times.
           await collectDomCandidates(page, bootstrapQuery, THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS, false);
         }
+        if (!threadsAuthBlocked && !template && recentSearch && results.length < args.limit) {
+          for (const bootstrapQuery of bootstrapQueries) {
+            if (results.length >= args.limit || (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 3_000)) break;
+            await collectDomCandidates(page, bootstrapQuery, 3, true);
+          }
+        }
         if (!threadsAuthBlocked && !template && results.length < args.limit) await rescueDetailCandidates();
       }
       if (!cachedTemplate) page.off("request", captureTemplate);
