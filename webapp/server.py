@@ -12237,6 +12237,9 @@ class PersonaDashboardResolveGeneratedCandidatesPayload(BaseModel):
     title: str | None = None
 
 
+PERSONA_PUBLISH_SEQUENCE_LIMIT = 5
+
+
 class PersonaDashboardDraftPublishPayload(BaseModel):
     account_id: str = ""
     platform: str = ""
@@ -15349,7 +15352,7 @@ def _list_persona_archive_posts(
     return rows
 
 
-def _serve_persona_archive_post_media(archive_id: str, post_id: str, index: int, source: str = "posts") -> FileResponse:
+def _persona_archive_post_media_path(archive_id: str, post_id: str, index: int, source: str = "posts") -> Path:
     clean_archive_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
     if not clean_archive_id or not clean_post_id:
@@ -15376,10 +15379,62 @@ def _serve_persona_archive_post_media(archive_id: str, post_id: str, index: int,
     path = Path(raw_url).expanduser().resolve()
     if not path.is_file() or not _is_allowed_dashboard_media_path(path):
         raise HTTPException(status_code=404, detail="媒体源文件不存在。")
-    return FileResponse(str(path), filename=path.name)
+    return path
 
 
-def _serve_persona_archive_publish_history_media(archive_id: str, history_id: str, index: int) -> FileResponse:
+def _persona_media_cache_token(path: Path) -> str:
+    stat = path.stat()
+    return hashlib.sha256(f"{path}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")).hexdigest()[:16]
+
+
+def _serve_persona_media_file(path: Path) -> FileResponse:
+    return FileResponse(
+        str(path),
+        filename=path.name,
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
+
+
+def _serve_persona_media_thumbnail(path: Path) -> FileResponse:
+    if path.suffix.lower() not in IMAGE_EXTS:
+        return _serve_persona_media_file(path)
+    source_key = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
+    version = _persona_media_cache_token(path)
+    cache_dir = path.parent / ".thumbnails"
+    cache_path = cache_dir / f"{source_key}-{version}.jpg"
+    if not cache_path.is_file():
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        temp_path = cache_dir / f".{cache_path.name}.{uuid.uuid4().hex}.tmp"
+        try:
+            with Image.open(path) as source_image:
+                image = ImageOps.exif_transpose(source_image)
+                image.thumbnail((480, 480), Image.Resampling.LANCZOS)
+                if "A" in image.getbands():
+                    rgb = Image.new("RGB", image.size, "white")
+                    rgb.paste(image, mask=image.getchannel("A"))
+                else:
+                    rgb = image.convert("RGB")
+                rgb.save(temp_path, format="JPEG", quality=78, optimize=True)
+            temp_path.replace(cache_path)
+        except (OSError, ValueError):
+            return _serve_persona_media_file(path)
+        finally:
+            temp_path.unlink(missing_ok=True)
+        for stale in cache_dir.glob(f"{source_key}-*.jpg"):
+            if stale != cache_path:
+                stale.unlink(missing_ok=True)
+    return FileResponse(
+        str(cache_path),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
+
+
+def _serve_persona_archive_post_media(archive_id: str, post_id: str, index: int, source: str = "posts") -> FileResponse:
+    return _serve_persona_media_file(_persona_archive_post_media_path(archive_id, post_id, index, source))
+
+
+def _persona_archive_publish_history_media_path(archive_id: str, history_id: str, index: int) -> Path:
     clean_archive_id = str(archive_id or "").strip()
     clean_history_id = str(history_id or "").strip()
     if not clean_archive_id or not clean_history_id:
@@ -15407,7 +15462,11 @@ def _serve_persona_archive_publish_history_media(archive_id: str, history_id: st
     path = Path(raw_url).expanduser().resolve()
     if not path.is_file() or not _is_allowed_dashboard_media_path(path):
         raise HTTPException(status_code=404, detail="媒体源文件不存在。")
-    return FileResponse(str(path), filename=path.name)
+    return path
+
+
+def _serve_persona_archive_publish_history_media(archive_id: str, history_id: str, index: int) -> FileResponse:
+    return _serve_persona_media_file(_persona_archive_publish_history_media_path(archive_id, history_id, index))
 
 
 def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any]]:
@@ -15419,14 +15478,8 @@ def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
     current_accounts = _persona_bound_account_identities(clean_id, archive)
-    publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
     rows = []
-    for record in publish_history:
-        if not _is_persona_publish_history_record(record):
-            continue
-        reconciled_record = _publish_record_for_dashboard(record, archive)
-        if reconciled_record is None:
-            continue
+    for reconciled_record in _verified_persona_publish_history(archive):
         compact = _compact_publish_record(
             reconciled_record,
             _publish_history_hot_metrics(reconciled_record, archive),
@@ -16023,6 +16076,12 @@ def _update_persona_archive_post(archive_id: str, post_id: str, payload: Persona
     _write_persona_archives_preserving_shape(path, raw, archives)
     compact = _compact_persona_archive_post(target)
     compact["source"] = _persona_post_source_name(source)
+    compact["media_items"] = _previewable_persona_media_items(
+        compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
+        archive_id=clean_id,
+        post_id=clean_post_id,
+        source=_persona_post_source_name(source),
+    )
     return compact
 
 
@@ -16543,6 +16602,23 @@ def _publish_persona_archive_post(
     clean_post_id = str(post_id or "").strip()
     if not clean_archive_id or not clean_post_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID 或推文 ID。")
+    publish_batch_id = str(payload.publish_batch_id or "").strip()
+    publish_sequence_total = max(1, int(payload.publish_sequence_total or 1))
+    publish_sequence_index = max(1, int(payload.publish_sequence_index or 1))
+    publish_sequence_targets = [
+        str(item or "").strip()
+        for item in (payload.publish_sequence_targets or [])
+        if str(item or "").strip()
+    ]
+    if (
+        publish_sequence_total > PERSONA_PUBLISH_SEQUENCE_LIMIT
+        or publish_sequence_index > PERSONA_PUBLISH_SEQUENCE_LIMIT
+        or len(publish_sequence_targets) > PERSONA_PUBLISH_SEQUENCE_LIMIT
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"单次连续发布最多选择 {PERSONA_PUBLISH_SEQUENCE_LIMIT} 篇。",
+        )
     source_name = _persona_post_source_name(source)
     media_paths = [
         path for path in _extract_existing_file_paths(payload.media_paths)
@@ -16586,14 +16662,6 @@ def _publish_persona_archive_post(
             "task": get_social_task(str(active_task.get("id") or "")),
             "reused": True,
         }
-    publish_batch_id = str(payload.publish_batch_id or "").strip()
-    publish_sequence_total = max(1, int(payload.publish_sequence_total or 1))
-    publish_sequence_index = max(1, int(payload.publish_sequence_index or 1))
-    publish_sequence_targets = [
-        str(item or "").strip()
-        for item in (payload.publish_sequence_targets or [])
-        if str(item or "").strip()
-    ]
     task_payload = {
         "caption": content,
         "content": content,
@@ -16691,7 +16759,13 @@ def _publish_persona_matrix(
             persona_ids.append(clean_id)
     if not persona_ids:
         raise HTTPException(status_code=400, detail="请至少选择一个人设。")
-    per_count = max(1, min(int(payload.per_persona_count or 1), 20))
+    requested_per_count = int(payload.per_persona_count or 1)
+    if requested_per_count > PERSONA_PUBLISH_SEQUENCE_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"每个人设单次连续发布最多选择 {PERSONA_PUBLISH_SEQUENCE_LIMIT} 篇。",
+        )
+    per_count = max(1, min(requested_per_count, PERSONA_PUBLISH_SEQUENCE_LIMIT))
     _, _, archives = _persona_archive_source_for_write()
     archive_map = {str(item.get("id") or "").strip(): item for item in archives if isinstance(item, dict)}
     created: list[dict[str, Any]] = []
@@ -18227,6 +18301,33 @@ def _published_record_url(record: dict[str, Any]) -> str:
     return ""
 
 
+def _confirmed_archive_publish_url(record: dict[str, Any]) -> str:
+    """Return only a permalink written as a publish result, never a source URL.
+
+    A captured source post can also have a public URL, but it is not evidence
+    that the persona published it.  Dashboard history and quotas therefore
+    accept the explicit publish fields only; generic source/url fields remain
+    available to the archive for traceability but cannot become a publish.
+    """
+    fields = ("publishedUrl", "published_url", "postUrl", "post_url")
+    targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
+    containers = [record, *[target for target in targets if isinstance(target, dict)]]
+    for container in containers:
+        published_meta = container.get("publishedMeta")
+        values = (container, published_meta) if isinstance(published_meta, dict) else (container,)
+        for value in (source.get(field) for source in values for field in fields):
+            text = str(value or "").strip()
+            if not text:
+                continue
+            try:
+                parsed = urlsplit(text)
+            except ValueError:
+                continue
+            if parsed.scheme.lower() == "https" and parsed.netloc:
+                return text
+    return ""
+
+
 def _threads_username_from_published_url(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -18321,6 +18422,29 @@ def _publish_record_account_identity(record: dict[str, Any]) -> tuple[str, str, 
     return platform, account_id, account_username
 
 
+def _is_internal_social_account_username(value: Any) -> bool:
+    username = str(value or "").strip().lstrip("@").lower()
+    return username.startswith(("sentiment_authorized_", "system_authorized_"))
+
+
+def _historical_social_account_username(account_id: str, archived_username: str) -> str:
+    """Prefer the username captured at publish time, then resolve legacy account ids."""
+    clean_username = str(archived_username or "").strip().lstrip("@")
+    if clean_username and not _is_internal_social_account_username(clean_username):
+        return clean_username
+    clean_account_id = str(account_id or "").strip()
+    if clean_account_id:
+        with db() as conn:
+            row = conn.execute(
+                "SELECT username FROM social_accounts WHERE id = ? LIMIT 1",
+                (clean_account_id,),
+            ).fetchone()
+        stored_username = str(row["username"] or "").strip().lstrip("@") if row else ""
+        if stored_username and not _is_internal_social_account_username(stored_username):
+            return stored_username
+    return ""
+
+
 def _compact_publish_record(
     record: dict[str, Any],
     hot_metrics: dict[str, Any] | None = None,
@@ -18382,7 +18506,11 @@ def _compact_publish_record(
             ),
         }
     published_url = _published_record_url(record)
-    platform, source_account_id, source_account_username = _publish_record_account_identity(record)
+    platform, source_account_id, archived_account_username = _publish_record_account_identity(record)
+    source_account_username = _historical_social_account_username(
+        source_account_id,
+        archived_account_username,
+    )
     if isinstance(current_accounts, str):
         current_account_map = {
             "threads": {"account_id": "", "username": _normalize_threads_username(current_accounts)}
@@ -18400,7 +18528,7 @@ def _compact_publish_record(
         account_matches_current = True
     account_match_warning = ""
     if not account_matches_current:
-        source_label = f"@{source_account_username}" if source_account_username else source_account_id
+        source_label = f"@{source_account_username}" if source_account_username else "系统授权账号"
         account_match_warning = f"历史账号：{source_label}"
     return {
         "id": record.get("id"),
@@ -18634,6 +18762,7 @@ def _previewable_persona_media_items(
         if not url:
             continue
         preview_url = ""
+        thumbnail_url = ""
         reason = ""
         if _is_direct_preview_media_url(url) and (
             allow_external or not re.match(r"^(?:https?:)?//", url, re.I)
@@ -18645,13 +18774,21 @@ def _previewable_persona_media_items(
             path = Path(url).expanduser().resolve()
             if path.is_file():
                 source_path = "favorites" if _persona_post_source_name(source) == "favorites" else "posts"
-                preview_url = f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/{source_path}/{quote(str(post_id).strip(), safe='')}/media/{index}"
+                base_url = f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/{source_path}/{quote(str(post_id).strip(), safe='')}/media/{index}"
+                version = _persona_media_cache_token(path)
+                preview_url = f"{base_url}?v={version}"
+                if path.suffix.lower() in IMAGE_EXTS:
+                    thumbnail_url = f"{base_url}/thumbnail?v={version}"
             else:
                 reason = "原始媒体文件不存在"
         elif archive_id and history_id:
             path = Path(url).expanduser().resolve()
             if path.is_file():
-                preview_url = f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/publish_history/{quote(str(history_id).strip(), safe='')}/media/{index}"
+                base_url = f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/publish_history/{quote(str(history_id).strip(), safe='')}/media/{index}"
+                version = _persona_media_cache_token(path)
+                preview_url = f"{base_url}?v={version}"
+                if path.suffix.lower() in IMAGE_EXTS:
+                    thumbnail_url = f"{base_url}/thumbnail?v={version}"
             else:
                 reason = "原始媒体文件不存在"
         elif re.match(r"^(?:/|[A-Za-z]:[\\/]|~[\\/])", url):
@@ -18665,6 +18802,7 @@ def _previewable_persona_media_items(
             "type": str((item or {}).get("type") or "").strip(),
             "label": str((item or {}).get("label") or "").strip(),
             "preview_url": preview_url,
+            "thumbnail_url": thumbnail_url,
             "unavailable": not bool(preview_url),
             "reason": reason if not preview_url else "",
         })
@@ -18875,10 +19013,45 @@ def _publish_record_url_conflicts_with_hot_metrics(record: dict[str, Any], archi
 
 
 def _publish_record_for_dashboard(record: dict[str, Any], archive: dict[str, Any]) -> dict[str, Any] | None:
-    reconciled = _publish_record_with_reconciled_url(record, archive)
-    if _publish_record_url_conflicts_with_hot_metrics(reconciled, archive):
+    # A publish entry is a user-facing fact only after the automation has
+    # returned a canonical, externally addressable permalink.  Legacy audit
+    # rows without one stay in the archive, but must not inflate published
+    # totals or be presented as a completed post.
+    confirmed_url = _confirmed_archive_publish_url(record)
+    if not _normalized_dashboard_post_url(confirmed_url):
         return None
-    return reconciled
+    verified = copy.deepcopy(record)
+    verified["publishedUrl"] = confirmed_url
+    if _publish_record_url_conflicts_with_hot_metrics(verified, archive):
+        return None
+    return verified
+
+
+def _verified_persona_publish_history(archive: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return one displayable record per confirmed public permalink.
+
+    The archive is intentionally append-only for audit/recovery.  Dashboard
+    counts, however, must use one truth set: an addressable permalink that is
+    not contradicted by the current platform snapshot.  A duplicate permalink
+    represents the same external post and is counted once.
+    """
+    publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for record in publish_history:
+        if not _is_persona_publish_history_record(record):
+            continue
+        resolved = _publish_record_for_dashboard(record, archive)
+        if resolved is None:
+            continue
+        platform, _, _ = _publish_record_account_identity(resolved)
+        permalink = _normalized_dashboard_post_url(_published_record_url(resolved))
+        key = (platform, permalink)
+        if not permalink or key in seen:
+            continue
+        seen.add(key)
+        rows.append(resolved)
+    return rows
 
 
 def _publish_history_hot_metrics(record: dict[str, Any], archive: dict[str, Any]) -> dict[str, Any]:
@@ -19550,6 +19723,19 @@ def _build_persona_dashboard_overview(
     task_status_counts = dict(queue_stats.get("by_status") or {})
     daily: dict[str, dict[str, int]] = {}
     platform_daily: dict[str, dict[str, dict[str, int]]] = {}
+
+    def _new_trend_bucket() -> dict[str, int]:
+        return {
+            "published": 0,
+            "likes": 0,
+            "comments": 0,
+            "shares": 0,
+            "reposts": 0,
+            "post_views": 0,
+            "followers": 0,
+            "hot_score": 0,
+            "snapshot_count": 0,
+        }
     personas: list[dict[str, Any]] = []
     totals = {
         "posts": 0,
@@ -19574,13 +19760,7 @@ def _build_persona_dashboard_overview(
         posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
         platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else {}
         publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
-        visible_publish_history = [
-            resolved
-            for record in publish_history
-            if _is_persona_publish_history_record(record)
-            for resolved in [_publish_record_for_dashboard(record, archive)]
-            if resolved is not None
-        ]
+        visible_publish_history = _verified_persona_publish_history(archive)
         platform_published_counts: dict[str, int] = {}
         image_library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
         hot_metrics_raw = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
@@ -19668,6 +19848,19 @@ def _build_persona_dashboard_overview(
             persona_hot["scanned_posts"] += _number(metric_value.get("scannedPosts") or metric_value.get("posts"), 0)
             persona_hot["view_resolved_posts"] += _number(metric_value.get("viewResolvedPosts"), 0)
             persona_hot["view_missing_posts"] += _number(metric_value.get("viewMissingPosts"), 0)
+            snapshot_at = str(metric_value.get("refreshedAt") or metric_value.get("lightRefreshedAt") or "").strip()
+            snapshot_day = _date_key(snapshot_at)
+            if snapshot_day:
+                followers = _number(metric_value.get("followers"), 0)
+                bucket = daily.setdefault(snapshot_day, _new_trend_bucket())
+                bucket["followers"] += followers
+                bucket["hot_score"] += platform_hot_score
+                bucket["snapshot_count"] += 1
+                platform_bucket = platform_daily.setdefault(platform_name, {}).setdefault(snapshot_day, _new_trend_bucket())
+                platform_bucket["followers"] += followers
+                platform_bucket["hot_score"] += platform_hot_score
+                platform_bucket["snapshot_count"] += 1
+                latest_update = max(latest_update, snapshot_at)
             if metric_value.get("complete") is True:
                 totals["complete_hot_metrics"] += 1
             else:
@@ -19736,11 +19929,11 @@ def _build_persona_dashboard_overview(
                 platform_counts[platform_key] = platform_counts.get(platform_key, 0) + 1
                 platform_published_counts[platform_key] = platform_published_counts.get(platform_key, 0) + 1
                 if published_day:
-                    bucket = daily.setdefault(published_day, {"published": 0, "likes": 0, "comments": 0, "shares": 0, "post_views": 0})
+                    bucket = daily.setdefault(published_day, _new_trend_bucket())
                     bucket["published"] += 1
                     platform_bucket = platform_daily.setdefault(platform_key, {}).setdefault(
                         published_day,
-                        {"published": 0, "likes": 0, "comments": 0, "shares": 0, "post_views": 0},
+                        _new_trend_bucket(),
                     )
                     platform_bucket["published"] += 1
 
@@ -19750,18 +19943,20 @@ def _build_persona_dashboard_overview(
                     continue
                 day = _date_key(source.get("capturedAt") or record.get("publishedAt"))
                 if day:
-                    bucket = daily.setdefault(day, {"published": 0, "likes": 0, "comments": 0, "shares": 0, "post_views": 0})
+                    bucket = daily.setdefault(day, _new_trend_bucket())
                     bucket["likes"] += _source_metric(source, "likeCount", "like_count")
                     bucket["comments"] += _source_metric(source, "commentCount", "comment_count")
                     bucket["shares"] += _source_metric(source, "shareCount", "share_count", "send_count")
+                    bucket["reposts"] += _source_metric(source, "repostCount", "repost_count")
                     bucket["post_views"] += _source_metric(source, "viewCount", "view_count")
                     platform_bucket = platform_daily.setdefault(platform_key, {}).setdefault(
                         day,
-                        {"published": 0, "likes": 0, "comments": 0, "shares": 0, "post_views": 0},
+                        _new_trend_bucket(),
                     )
                     platform_bucket["likes"] += _source_metric(source, "likeCount", "like_count")
                     platform_bucket["comments"] += _source_metric(source, "commentCount", "comment_count")
                     platform_bucket["shares"] += _source_metric(source, "shareCount", "share_count", "send_count")
+                    platform_bucket["reposts"] += _source_metric(source, "repostCount", "repost_count")
                     platform_bucket["post_views"] += _source_metric(source, "viewCount", "view_count")
             latest_update = max(latest_update, str(record.get("publishedAt") or ""))
 
@@ -20027,13 +20222,7 @@ def _build_persona_dashboard_console_overview(
             )
         ]
         publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
-        visible_publish_history = [
-            resolved
-            for record in publish_history
-            if _is_persona_publish_history_record(record)
-            for resolved in [_publish_record_for_dashboard(record, archive)]
-            if resolved is not None
-        ]
+        visible_publish_history = _verified_persona_publish_history(archive)
         image_library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
         favorite_posts = archive.get("favoritePosts") if isinstance(archive.get("favoritePosts"), list) else []
         compact_visible_posts = [_compact_persona_archive_post(post) for post in visible_posts if isinstance(post, dict)]
@@ -20155,13 +20344,7 @@ def _admin_user_content_metrics(conn: sqlite3.Connection, user_ids: Iterable[int
             )
         )
         publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
-        visible_publish_history = [
-            resolved
-            for record in publish_history
-            if _is_persona_publish_history_record(record)
-            for resolved in [_publish_record_for_dashboard(record, archive)]
-            if resolved is not None
-        ]
+        visible_publish_history = _verified_persona_publish_history(archive)
         published_count = len(visible_publish_history)
         published_from_drafts = sum(
             1
@@ -22686,7 +22869,7 @@ def create_app() -> FastAPI:
             )
         return {"ok": True}
 
-    DEFAULT_ACCOUNT_AVATAR_URL = "/assets/opc/account-avatar-default.svg"
+    DEFAULT_ACCOUNT_AVATAR_URL = "/assets/opc/account-avatar-mascot.png"
 
     def _clean_user_avatar_url(value: str) -> str:
         clean = str(value or "").strip()
@@ -23364,9 +23547,17 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_persona_post_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _serve_persona_archive_post_media(archive_id, post_id, index)
 
+    @app.get("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/{index}/thumbnail")
+    def api_persona_dashboard_persona_post_media_thumbnail(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
+        return _serve_persona_media_thumbnail(_persona_archive_post_media_path(archive_id, post_id, index))
+
     @app.get("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/media/{index}")
     def api_persona_dashboard_persona_favorite_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _serve_persona_archive_post_media(archive_id, post_id, index, source="favorites")
+
+    @app.get("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/media/{index}/thumbnail")
+    def api_persona_dashboard_persona_favorite_media_thumbnail(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
+        return _serve_persona_media_thumbnail(_persona_archive_post_media_path(archive_id, post_id, index, source="favorites"))
 
     @app.get("/api/persona_dashboard/media/{token}")
     def api_persona_dashboard_media_proxy(token: str, _user: dict[str, Any] = Depends(require_admin)):
@@ -23379,6 +23570,10 @@ def create_app() -> FastAPI:
     @app.get("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/media/{index}")
     def api_persona_dashboard_persona_publish_history_media(archive_id: str, history_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _serve_persona_archive_publish_history_media(archive_id, history_id, index)
+
+    @app.get("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/media/{index}/thumbnail")
+    def api_persona_dashboard_persona_publish_history_media_thumbnail(archive_id: str, history_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
+        return _serve_persona_media_thumbnail(_persona_archive_publish_history_media_path(archive_id, history_id, index))
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/requeue")
     def api_persona_dashboard_persona_publish_history_requeue(archive_id: str, history_id: str, user: dict[str, Any] = Depends(require_persona_owner)):

@@ -36,8 +36,8 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("published", metrics)
         self.assertIn("row?.account_id", metrics)
         self.assertIn("const metricRows = account ? accountRows : platformRows;", metrics)
-        self.assertIn("const metricPublished = metricRows.reduce", metrics)
-        self.assertIn("published: metricPublished || publishedRows.length", metrics)
+        self.assertNotIn("const metricPublished = metricRows.reduce", metrics)
+        self.assertIn("published: publishedRows.length", metrics)
         self.assertIn("return !account;", metrics)
         self.assertIn("人设发布推文", panel)
         self.assertIn("renderPersonaPlatformMetricStrip(persona)", identity)
@@ -147,6 +147,7 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("-webkit-line-clamp: 2;", CONSOLE_CSS)
         self.assertIn(".publish-history-card-platform", CONSOLE_CSS)
         self.assertIn(".publish-history-card-requeue", CONSOLE_CSS)
+        self.assertIn("<span>重回草稿</span>", selection)
         mobile_history_start = CONSOLE_CSS.index(".publish-history-card {\n    content-visibility: auto;")
         mobile_action_start = CONSOLE_CSS.index(".publish-history-card-action {", mobile_history_start)
         mobile_action_end = CONSOLE_CSS.index("}", mobile_action_start)
@@ -155,9 +156,9 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         mobile_requeue_start = CONSOLE_CSS.index(".publish-history-card-requeue {", mobile_action_end)
         mobile_requeue_end = CONSOLE_CSS.index("}", mobile_requeue_start)
         mobile_requeue_style = CONSOLE_CSS[mobile_requeue_start:mobile_requeue_end]
-        self.assertIn("width: 32px;", mobile_requeue_style)
-        self.assertIn("min-width: 32px;", mobile_requeue_style)
-        self.assertIn("padding: 0;", mobile_requeue_style)
+        self.assertIn("width: auto;", mobile_requeue_style)
+        self.assertIn("min-width: max-content;", mobile_requeue_style)
+        self.assertIn("padding: 0 7px;", mobile_requeue_style)
         self.assertIn(
             ':is(.account-pool-card, .publish-history-card)[data-account-platform="threads"] .account-pool-card-platform',
             CONSOLE_CSS,

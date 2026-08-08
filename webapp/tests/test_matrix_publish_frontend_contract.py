@@ -36,7 +36,8 @@ class MatrixPublishFrontendContractTests(unittest.TestCase):
 
         self.assertIn('<select id="matrixPublishCount"', panel)
         self.assertIn("countOptions.map", panel)
-        self.assertIn("Math.min(matrixPublishCommonLimit(availability), 20)", panel)
+        self.assertIn("Math.min(matrixPublishCommonLimit(availability), PUBLISH_MULTI_SELECT_LIMIT)", panel)
+        self.assertIn("const PUBLISH_MULTI_SELECT_LIMIT = 5", CONSOLE_JS)
         self.assertIn("submitPosts", candidates)
         self.assertIn("availableCount: detail.availablePosts.length", CONSOLE_JS)
         self.assertIn("submitCount: detail.submitPosts.length", CONSOLE_JS)

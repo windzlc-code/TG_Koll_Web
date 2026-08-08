@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import tempfile
@@ -139,11 +140,90 @@ class DailyPublishLimitTests(unittest.TestCase):
                 (self.now, task["id"]),
             )
         with mock.patch.object(social_automation_api, "_now", return_value=self.now):
-            social_automation_api._finish_task(task["id"], "success", {"publish_submitted": True}, "")
+            social_automation_api._finish_task(
+                task["id"],
+                "success",
+                {"publish_submitted": True, "published_url": f"https://www.threads.net/@customer/post/{task['id']}"},
+                "",
+            )
             confirmed_policy = social_automation_api.get_daily_publish_policy(self.customer_id)
         self.assertEqual(confirmed_policy["used"], 1)
         self.assertEqual(confirmed_policy["remaining"], 14)
         self.assertEqual(confirmed_policy["capacity_used"], 1)
+
+    def test_success_without_a_queryable_post_link_is_not_counted_as_published(self):
+        task = self._create(self._payload())
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET status = 'running', started_at = ? WHERE id = ?",
+                (self.now, task["id"]),
+            )
+        with mock.patch.object(social_automation_api, "_now", return_value=self.now):
+            social_automation_api._finish_task(
+                task["id"],
+                "success",
+                {"ok": True, "publish_submitted": True},
+                "",
+            )
+            policy = social_automation_api.get_daily_publish_policy(self.customer_id)
+        self.assertEqual(policy["used"], 0)
+        self.assertEqual(policy["remaining"], 15)
+        self.assertEqual(policy["capacity_used"], 1)
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT status, error, result_json FROM social_automation_tasks WHERE id = ?",
+                (task["id"],),
+            ).fetchone()
+        self.assertEqual(row[0], "failed")
+        self.assertIn("可查询链接", row[1])
+        self.assertTrue(json.loads(row[2])["publish_verification_missing"])
+
+    def test_legacy_confirmed_slot_without_a_public_link_is_not_counted(self):
+        task = self._create(self._payload())
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET status = 'success', result_json = ? WHERE id = ?",
+                (json.dumps({"ok": True, "publish_submitted": True}), task["id"]),
+            )
+            conn.execute(
+                "UPDATE social_daily_publish_slots SET state = 'confirmed' WHERE task_id = ?",
+                (task["id"],),
+            )
+        with mock.patch.object(social_automation_api, "_now", return_value=self.now):
+            policy = social_automation_api.get_daily_publish_policy(self.customer_id)
+        self.assertEqual(policy["used"], 0)
+        self.assertEqual(policy["remaining"], 15)
+        self.assertEqual(policy["capacity_used"], 1)
+
+    def test_only_platform_post_permalinks_are_confirmed(self):
+        self.assertEqual(
+            social_automation_api._confirmed_published_url(
+                {"published_url": "https://www.threads.net/@customer/post/abc123"},
+                "threads",
+            ),
+            "https://www.threads.net/@customer/post/abc123",
+        )
+        self.assertEqual(
+            social_automation_api._confirmed_published_url(
+                {"published_url": "https://www.instagram.com/reel/abc123/?utm_source=test"},
+                "instagram",
+            ),
+            "https://www.instagram.com/reel/abc123/",
+        )
+        self.assertEqual(
+            social_automation_api._confirmed_published_url(
+                {"published_url": "https://example.com/post/abc123"},
+                "threads",
+            ),
+            "",
+        )
+        self.assertEqual(
+            social_automation_api._confirmed_published_url(
+                {"url": "https://www.threads.net/@customer/post/abc123"},
+                "threads",
+            ),
+            "",
+        )
 
     def test_cancelled_and_failed_tasks_release_daily_capacity(self):
         tasks = [self._create(self._payload()) for _ in range(15)]
@@ -209,7 +289,12 @@ class DailyPublishLimitTests(unittest.TestCase):
             )
         with mock.patch.object(social_automation_api, "_now", return_value=self.now):
             for task in tasks:
-                social_automation_api._finish_task(task["id"], "success", {"publish_submitted": True}, "")
+                social_automation_api._finish_task(
+                    task["id"],
+                    "success",
+                    {"publish_submitted": True, "published_url": f"https://www.threads.net/@customer/post/{task['id']}"},
+                    "",
+                )
 
         with mock.patch.object(social_automation_api, "_now", return_value=self.now):
             claimed = social_automation_api._claim_next_task()
@@ -248,7 +333,12 @@ class DailyPublishLimitTests(unittest.TestCase):
                 (self.now, self.now, task["id"]),
             )
         with mock.patch.object(social_automation_api, "_now", return_value=self.now):
-            social_automation_api._finish_task(task["id"], "success", {"publish_submitted": True}, "")
+            social_automation_api._finish_task(
+                task["id"],
+                "success",
+                {"publish_submitted": True, "published_url": f"https://www.threads.net/@customer/post/{task['id']}"},
+                "",
+            )
             social_automation_api.clear_social_task(task["id"])
         for _ in range(14):
             self._create(self._payload())
@@ -279,7 +369,12 @@ class DailyPublishLimitTests(unittest.TestCase):
             )
         with mock.patch.object(social_automation_api, "_now", return_value=self.now):
             for task in tasks:
-                social_automation_api._finish_task(task["id"], "success", {"publish_submitted": True}, "")
+                social_automation_api._finish_task(
+                    task["id"],
+                    "success",
+                    {"publish_submitted": True, "published_url": f"https://www.threads.net/@customer/post/{task['id']}"},
+                    "",
+                )
         with sqlite3.connect(self.db_path) as conn:
             conn.executemany(
                 """
@@ -455,7 +550,7 @@ class DailyPublishLimitTests(unittest.TestCase):
             self.assertTrue(
                 social_automation_api._finish_publish_batch_item(
                     first_task,
-                    {"ok": True},
+                    {"ok": True, "published_url": f"https://www.threads.net/@admin/post/{first_task['id']}"},
                     1,
                     2,
                 )
@@ -467,7 +562,10 @@ class DailyPublishLimitTests(unittest.TestCase):
                     2,
                 )
             )
-            sync_archive.assert_called_once_with(first_task["id"], {"ok": True})
+            sync_archive.assert_called_once_with(
+                first_task["id"],
+                {"ok": True, "published_url": f"https://www.threads.net/@admin/post/{first_task['id']}"},
+            )
         with sqlite3.connect(self.db_path) as conn:
             statuses = conn.execute(
                 """
@@ -529,7 +627,7 @@ class DailyPublishLimitTests(unittest.TestCase):
             self.assertTrue(
                 social_automation_api._finish_publish_batch_item(
                     tasks[0],
-                    {"ok": True},
+                    {"ok": True, "published_url": f"https://www.threads.net/@admin/post/{tasks[0]['id']}"},
                     1,
                     2,
                 )

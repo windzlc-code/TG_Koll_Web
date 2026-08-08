@@ -899,18 +899,27 @@ def _daily_publish_used_count(
     separate capacity count below, so a queued, cancelled, or failed task never
     appears as a successful publish in the account profile.
     """
-    row = conn.execute(
+    rows = conn.execute(
         """
-        SELECT COUNT(*) AS task_count
-        FROM social_daily_publish_slots
-        WHERE user_id = ?
-          AND waived = 0
-          AND quota_day = ?
-          AND state = 'confirmed'
+        SELECT slot.task_id, task.platform, task.result_json
+        FROM social_daily_publish_slots AS slot
+        JOIN social_automation_tasks AS task ON task.id = slot.task_id
+        WHERE slot.user_id = ?
+          AND slot.waived = 0
+          AND slot.quota_day = ?
+          AND slot.state = 'confirmed'
         """,
         (int(user_id), str(quota_day)),
-    ).fetchone()
-    return int(row["task_count"] or 0) if row else 0
+    ).fetchall()
+    confirmed = 0
+    for row in rows:
+        try:
+            result = json.loads(str(row["result_json"] or "{}"))
+        except (TypeError, ValueError):
+            result = {}
+        if _confirmed_published_url(result, row["platform"]):
+            confirmed += 1
+    return confirmed
 
 
 def _daily_publish_capacity_count(
@@ -7851,12 +7860,19 @@ def _finish_publish_batch_item(
     task_id = str(task.get("id") or "")
     if not task_id or _is_task_cancelled(task_id):
         return False
-    status = "success" if result.get("ok") else "failed"
+    confirmed_url = _confirmed_published_url(result, task.get("platform"))
+    status = "success" if result.get("ok") and confirmed_url else "failed"
+    if result.get("ok") and not confirmed_url:
+        result = {
+            **result,
+            "publish_verification_missing": True,
+            "publish_outcome_unknown": bool(result.get("publish_submitted")),
+        }
     finished = _finish_task(
         task_id,
         status,
         result,
-        "" if status == "success" else str(result.get("error") or "执行失败"),
+        "" if status == "success" else str(result.get("error") or "发布结果未返回可查询链接，未计入已发布数量或今日额度。"),
         account_status="ready" if status == "success" else "",
         sync_persona_archive=True,
     )
@@ -9175,6 +9191,23 @@ def _finish_task(
         task = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
         if not task:
             return False
+        task_type = str(task["task_type"] or "")
+        if task_type == "publish_post" and status == "success":
+            confirmed_url = _confirmed_published_url(result, task["platform"])
+            if confirmed_url:
+                result = {**(result or {}), "published_url": confirmed_url}
+            else:
+                # Do not present a browser-side completion as a real publish
+                # when the runner did not confirm the resulting public link.
+                # A submitted attempt remains an unknown safety reservation,
+                # but it is not billed/displayed as a confirmed post.
+                result = {
+                    **(result or {}),
+                    "publish_verification_missing": True,
+                    "publish_outcome_unknown": bool((result or {}).get("publish_submitted")),
+                }
+                status = "failed"
+                error = "发布结果未返回可查询链接，未计入已发布数量或今日额度。"
         result_json = json.dumps(result or {}, ensure_ascii=False)
         existing_committed = bool(int(task["daily_publish_committed"] or 0))
         publish_committed = bool(
@@ -9294,7 +9327,6 @@ def _finish_task(
                 "UPDATE social_accounts SET last_run_at = ?, last_error = ?, updated_at = ? WHERE id = ?",
                 (now, error, now, str(task["account_id"])),
             )
-        task_type = str(task["task_type"] or "")
         if task_type in {"check_login", "open_login"}:
             conn.execute(
                 """
@@ -9781,6 +9813,34 @@ def _normalize_instagram_post_url(value: Any) -> str:
     return ""
 
 
+def _confirmed_published_url(result: dict[str, Any] | None, platform: Any) -> str:
+    """Return the canonical public post URL reported by a completed publish.
+
+    A browser reaching a success screen is not enough for accounting: the
+    runner must also return the permalink it confirmed on the account page.
+    Keeping this check in the write path prevents a stale or partial result
+    from becoming a published-history entry or consuming the visible quota.
+    """
+    payload = result if isinstance(result, dict) else {}
+    published = payload.get("published") if isinstance(payload.get("published"), dict) else {}
+    candidates: list[Any] = [
+        payload.get("published_url"),
+        payload.get("publishedUrl"),
+    ]
+    # The browser runner writes this object only after it has located the post
+    # again on the account profile.  A generic task ``url`` can instead be a
+    # compose, source, or redirect URL, so it must never settle a publish.
+    if published.get("confirmed") is True:
+        candidates.extend((published.get("permalink"), published.get("url")))
+    raw_url = next((value for value in candidates if str(value or "").strip()), "")
+    clean_platform = str(platform or "").strip().lower()
+    if clean_platform == "threads":
+        return _normalize_threads_post_url(raw_url)
+    if clean_platform == "instagram":
+        return _normalize_instagram_post_url(raw_url)
+    return ""
+
+
 def _archive_metric_number(item: dict[str, Any], *keys: str) -> int:
     containers = [item]
     for name in ("engagement", "metrics", "publishedMeta", "sourceMeta", "hotMetrics"):
@@ -10235,15 +10295,7 @@ def _build_archive_sync_records(task: dict[str, Any], account: dict[str, Any], p
     archive_post_id = str(payload.get("archive_post_id") or "").strip() or f"webauto-{task_id}"
     archive_post_title = str(payload.get("archive_post_title") or "").strip()
     target_url = str(payload.get("target_url") or payload.get("post_url") or "").strip()
-    published_result = result.get("published") if isinstance(result.get("published"), dict) else {}
-    result_url = str(
-        result.get("published_url")
-        or result.get("publishedUrl")
-        or published_result.get("permalink")
-        or published_result.get("url")
-        or result.get("url")
-        or ""
-    ).strip()
+    result_url = _confirmed_published_url(result, platform) if task_type == "publish_post" else ""
     if task_type != "publish_post" and not result_url:
         result_url = target_url
     source_meta = {
@@ -10332,6 +10384,11 @@ def _sync_successful_task_to_persona_archive_once(task_id: str, result: dict[str
             or not owner_row
             or int(account.get("user_id") or 0) != int(task.get("user_id") or 0)
             or str(account.get("persona_id") or "").strip() != persona_id
+        ):
+            return
+        if task_type == "publish_post" and not _confirmed_published_url(
+            result,
+            task.get("platform") or account.get("platform"),
         ):
             return
         payload = json.loads(str(task.get("payload_json") or "{}"))

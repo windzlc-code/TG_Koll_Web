@@ -731,7 +731,14 @@ class SocialTaskCancellationTests(unittest.TestCase):
                 (json.dumps({"caption": "hello", "_publish_confirmation": {"phase": "confirm_only", "attempt": 1}}),),
             )
 
-        self.assertTrue(social_automation_api._finish_task("publish-confirmed", "success", {"ok": True}, ""))
+        self.assertTrue(
+            social_automation_api._finish_task(
+                "publish-confirmed",
+                "success",
+                {"ok": True, "published_url": "https://www.threads.net/@tester/post/publish-confirmed"},
+                "",
+            )
+        )
         with sqlite3.connect(self.db_path) as conn:
             payload = json.loads(conn.execute("SELECT payload_json FROM social_automation_tasks WHERE id = 'publish-confirmed'").fetchone()[0])
         self.assertNotIn("_publish_confirmation", payload)
@@ -1476,7 +1483,10 @@ class SocialTaskCancellationTests(unittest.TestCase):
                 try:
                     barrier.wait()
                     social_automation_api._finish_task(
-                        task_id, "success", {"ok": True}, ""
+                        task_id,
+                        "success",
+                        {"ok": True, "published_url": f"https://www.threads.net/@tester/post/{task_id}"},
+                        "",
                     )
                 except BaseException as exc:
                     errors.append(exc)

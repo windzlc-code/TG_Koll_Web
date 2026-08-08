@@ -8166,6 +8166,7 @@ function personaDraftMediaItems(personaId, post = {}) {
     return {
       url,
       previewUrl,
+      thumbnailUrl: String(item?.thumbnail_url || item?.thumbnailUrl || "").trim(),
       type: guessMediaType(url, item?.type || post.media_type || ""),
       label: String(item?.label || item?.type || "").trim(),
     };
@@ -10057,16 +10058,16 @@ function personaPlatformMetricSummary(persona = selectedPersona()) {
     if (accountUsername && recordUsername) return recordUsername === accountUsername;
     return !account;
   });
-  const metricPublished = metricRows.reduce(
-    (maximum, row) => Math.max(maximum, Number(row?.posts || row?.scanned_posts || 0)),
-    0,
-  );
   return {
     platform,
     followers,
     hot_views: postViews || recentViews,
     interactions,
-    published: metricPublished || publishedRows.length,
+    // Platform snapshots report the account's historical post total.  The
+    // profile's “发布” counter must instead match the verified publication
+    // history rendered below it, otherwise a crawler refresh can overwrite
+    // the user's real in-product publish count.
+    published: publishedRows.length,
   };
 }
 
@@ -13308,6 +13309,9 @@ function publishSourceRows(persona = selectedPersona(), source = state.publishCo
   return [];
 }
 
+const PUBLISH_MULTI_SELECT_LIMIT = 5;
+const PUBLISH_MULTI_SELECT_LIMIT_MESSAGE = `单次连续发布最多选择 ${PUBLISH_MULTI_SELECT_LIMIT} 篇。`;
+
 function syncPublishSelectedPostIds(persona = selectedPersona(), source = state.publishContentSource, rows = publishSourceRows(persona, source)) {
   const cleanSource = normalizePublishContentSource(source);
   if (cleanSource === "custom") return [];
@@ -13320,6 +13324,7 @@ function syncPublishSelectedPostIds(persona = selectedPersona(), source = state.
     if (valid.has(preferred)) selected = [preferred];
     else if ((rows || [])[0]?.id) selected = [String(rows[0].id)];
   }
+  selected = selected.slice(0, PUBLISH_MULTI_SELECT_LIMIT);
   state.publishSelectedPostIds[key] = selected;
   return selected;
 }
@@ -13328,7 +13333,10 @@ function setPublishSelectedPostIds(persona = selectedPersona(), source = state.p
   const cleanSource = normalizePublishContentSource(source);
   const rows = publishSourceRows(persona, cleanSource);
   const selected = new Set((ids || []).map((id) => String(id || "")).filter(Boolean));
-  const next = rows.map((post) => String(post.id || "")).filter((id) => id && selected.has(id));
+  const next = rows
+    .map((post) => String(post.id || ""))
+    .filter((id) => id && selected.has(id))
+    .slice(0, PUBLISH_MULTI_SELECT_LIMIT);
   state.publishSelectedPostIds[publishSelectionKey(persona, cleanSource)] = next;
   if (next[0]) setSelectedPersonaPostId(next[0]);
   if (!next.includes(String(state.publishPreviewPostId || ""))) state.publishPreviewPostId = next[0] || "";
@@ -13384,12 +13392,15 @@ function renderPublishSourceActions(persona = selectedPersona(), source = state.
   if (cleanSource === "custom") return "";
   const rows = publishSourceRows(persona, cleanSource);
   const selectedCount = syncPublishSelectedPostIds(persona, cleanSource, rows).length;
-  const allSelected = Boolean(rows.length) && selectedCount === rows.length;
+  const selectableCount = Math.min(rows.length, PUBLISH_MULTI_SELECT_LIMIT);
+  const allSelected = Boolean(selectableCount) && selectedCount === selectableCount;
   const selectionAction = allSelected ? "clear" : "all";
-  const selectionLabel = allSelected ? "取消全选" : "全选";
+  const selectionLabel = allSelected
+    ? (rows.length > PUBLISH_MULTI_SELECT_LIMIT ? "取消选择" : "取消全选")
+    : (rows.length > PUBLISH_MULTI_SELECT_LIMIT ? `选择前 ${PUBLISH_MULTI_SELECT_LIMIT} 篇` : "全选");
   return `
     <div class="publish-source-actions">
-      <span>已选 ${esc(selectedCount)} / ${esc(rows.length)}</span>
+      <span>已选 ${esc(selectedCount)} / ${esc(rows.length)}${rows.length > PUBLISH_MULTI_SELECT_LIMIT ? ` · 单次最多 ${PUBLISH_MULTI_SELECT_LIMIT} 篇` : ""}</span>
       <div>
         <button type="button" class="bulk-selection-icon-button" data-publish-source-select="${selectionAction}" title="${selectionLabel}" aria-label="${selectionLabel}" ${rows.length ? "" : "disabled"}>${allSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}</button>
       </div>
@@ -13417,6 +13428,7 @@ function renderPublishPostSelectionList(persona = selectedPersona(), source = st
   if (cleanSource === "custom") return "";
   const rows = publishSourceRows(persona, cleanSource);
   const selectedIds = new Set(syncPublishSelectedPostIds(persona, cleanSource, rows));
+  const selectionLimitReached = selectedIds.size >= PUBLISH_MULTI_SELECT_LIMIT;
   if (!rows.length) return renderModuleEmptyState({
     icon: "content",
     title: cleanSource === "favorites" ? "暂无收藏内容" : "暂无草稿",
@@ -13435,7 +13447,7 @@ function renderPublishPostSelectionList(persona = selectedPersona(), source = st
         return `
           <article class="publish-post-card ${checked ? "is-selected" : ""}" data-publish-post-card="${esc(postId)}">
             <label class="publish-post-card-main">
-              <input type="checkbox" data-publish-post-id="${esc(postId)}" ${checked ? "checked" : ""} />
+              <input type="checkbox" data-publish-post-id="${esc(postId)}" ${checked ? "checked" : ""} ${!checked && selectionLimitReached ? "disabled" : ""} />
               <span class="publish-persona-check ${checked ? "is-checked" : ""}" aria-hidden="true"></span>
               <span class="publish-post-card-index">${esc((fullIndex >= 0 ? fullIndex : index) + 1)}</span>
               <span class="publish-post-card-copy">
@@ -13782,7 +13794,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona(), options 
               <span class="publish-history-card-actions" aria-label="任务历史操作">
                 ${publishedUrl ? `<a class="publish-history-card-action" href="${esc(publishedUrl)}" target="_blank" rel="noopener" title="打开已发布推文" aria-label="打开已发布推文">${renderSourceLinkIcon()}</a>` : ""}
                 <button type="button" class="publish-history-card-action" data-publish-history-view="${esc(recordId)}" title="查看任务历史" aria-label="查看任务历史">${renderEyeIcon()}</button>
-                <button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}</button>
+                <button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>
               </span>
               ${renderPublishHistoryMetrics(record, "publish-history-card-metrics")}
             </div>
@@ -14767,6 +14779,9 @@ function bindSimpleFlowInputs(moduleId) {
         const action = String(node.dataset.publishSourceSelect || "");
         setPublishSelectedPostIds(persona, source, action === "all" ? rows.map((post) => String(post.id || "")).filter(Boolean) : []);
         renderSimpleFlowModule("publishing");
+        if (action === "all" && rows.length > PUBLISH_MULTI_SELECT_LIMIT) {
+          showMsg("commandMsg", `单次连续发布最多选择 ${PUBLISH_MULTI_SELECT_LIMIT} 篇，已为你选择前 ${PUBLISH_MULTI_SELECT_LIMIT} 篇。`, false);
+        }
       });
     });
     document.querySelectorAll("[data-publish-mobile-jump]").forEach((node) => {
@@ -14799,7 +14814,10 @@ function bindSimpleFlowInputs(moduleId) {
         const rows = publishSourceRows(persona, source);
         const selected = new Set(syncPublishSelectedPostIds(persona, source, rows));
         const postId = String(node.dataset.publishPostId || "").trim();
-        if (node.checked) selected.add(postId);
+        if (node.checked && !selected.has(postId) && selected.size >= PUBLISH_MULTI_SELECT_LIMIT) {
+          node.checked = false;
+          showMsg("commandMsg", PUBLISH_MULTI_SELECT_LIMIT_MESSAGE, false);
+        } else if (node.checked) selected.add(postId);
         else selected.delete(postId);
         setPublishSelectedPostIds(persona, source, Array.from(selected));
         renderSimpleFlowModule("publishing");
@@ -14814,7 +14832,10 @@ function bindSimpleFlowInputs(moduleId) {
         const postId = String(node.dataset.publishPostCard || "").trim();
         const selected = new Set(syncPublishSelectedPostIds(persona, source, rows));
         if (selected.has(postId)) selected.delete(postId);
-        else selected.add(postId);
+        else if (selected.size >= PUBLISH_MULTI_SELECT_LIMIT) {
+          showMsg("commandMsg", PUBLISH_MULTI_SELECT_LIMIT_MESSAGE, false);
+          return;
+        } else selected.add(postId);
         setPublishSelectedPostIds(persona, source, Array.from(selected));
         renderSimpleFlowModule("publishing");
       });
@@ -15367,6 +15388,10 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
   const posts = rows.filter((post) => selectedInSourceOrder.includes(String(post.id || "")));
   if (!posts.length) {
     showMsg(messageId, `请先选择要执行的${publishContentSourceLabel(source)}。`, false);
+    return null;
+  }
+  if (posts.length > PUBLISH_MULTI_SELECT_LIMIT) {
+    showMsg(messageId, PUBLISH_MULTI_SELECT_LIMIT_MESSAGE, false);
     return null;
   }
   const platform = String(account.platform || "threads").trim().toLowerCase() || "threads";
@@ -20551,11 +20576,14 @@ async function createPersonaDraftPost() {
     ? await preparePersonaDraftMediaOps(queuedMediaOps, pendingMediaFiles)
     : [];
   showMsg("commandMsg", editingPostId ? `正在保存${editingSource === "favorites" ? "收藏" : "草稿"}修改...` : "正在保存推文草稿...", true);
-  const result = await api(
-    editingPostId
-      ? `/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/${editingSource === "favorites" ? "favorites" : "posts"}/${encodeURIComponent(editingPostId)}`
-      : `/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/posts`,
-    {
+  const createPath = `/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/posts`;
+  const updatePath = editingPostId
+    ? `/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/${editingSource === "favorites" ? "favorites" : "posts"}/${encodeURIComponent(editingPostId)}`
+    : "";
+  let recreatedMissingEdit = false;
+  let result;
+  try {
+    result = await api(editingPostId ? updatePath : createPath, {
       method: editingPostId ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -20565,12 +20593,51 @@ async function createPersonaDraftPost() {
         media_paths: initialMediaPaths,
         media_ops: preparedMediaOps,
       }),
-    },
-  );
+    });
+  } catch (error) {
+    const missingEdit = editingPostId
+      && Number(error?.status || 0) === 404
+      && /(?:post not found|草稿已发布|草稿.*不存在)/i.test(String(error?.detail || error?.message || ""));
+    if (!missingEdit) throw error;
+    let recreatedMediaPaths = [];
+    try {
+      recreatedMediaPaths = JSON.parse(String(form.originalMediaSignature || ""))
+        .map((item) => String(item?.url || "").trim())
+        .filter((path) => path && !/^(?:blob:|data:|https?:|\/api\/)/i.test(path));
+    } catch (_) {
+      recreatedMediaPaths = [];
+    }
+    for (const op of preparedMediaOps) {
+      const paths = Array.from(op.media_paths || []).map((path) => String(path || "").trim()).filter(Boolean);
+      const index = Number(op.index ?? -1);
+      if (op.type === "append") paths.forEach((path) => { if (!recreatedMediaPaths.includes(path)) recreatedMediaPaths.push(path); });
+      else if (op.type === "replace" && paths.length && index >= 0 && index < recreatedMediaPaths.length) recreatedMediaPaths.splice(index, 1, ...paths);
+      else if (op.type === "delete" && index >= 0 && index < recreatedMediaPaths.length) recreatedMediaPaths.splice(index, 1);
+      else if (op.type === "move") {
+        const fromIndex = Number(op.from_index ?? -1);
+        const toIndex = Number(op.to_index ?? -1);
+        if (fromIndex >= 0 && toIndex >= 0 && fromIndex < recreatedMediaPaths.length && toIndex < recreatedMediaPaths.length && fromIndex !== toIndex) {
+          recreatedMediaPaths.splice(toIndex, 0, recreatedMediaPaths.splice(fromIndex, 1)[0]);
+        }
+      }
+    }
+    result = await api(createPath, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title,
+        content,
+        platform: personaContentPlatform(persona),
+        media_paths: recreatedMediaPaths,
+        media_ops: [],
+      }),
+    });
+    recreatedMissingEdit = true;
+  }
   const savedPostId = result.id || editingPostId || "";
   clearUploadDropzoneState("personaPostMediaUploadFiles", pendingUploadState.stateKey);
   setSelectedPersonaPostId(savedPostId);
-  setPersonaPostSource(editingPostId ? editingSource : "posts", persona);
+  setPersonaPostSource(editingPostId && !recreatedMissingEdit ? editingSource : "posts", persona);
   state.personaPanels.content = "posts";
   clearPersonaDraftComposerInputs(persona.id, personaFormState(persona.id).generate.composeMode);
   await Promise.all([
@@ -20582,7 +20649,9 @@ async function createPersonaDraftPost() {
   const mediaSuffix = queuedMediaOps.length
     ? `，并更新 ${queuedMediaOps.length} 项媒体操作`
     : (pendingMediaFiles.length ? `，并追加 ${pendingMediaFiles.length} 个媒体文件` : "");
-  showMsg("commandMsg", editingPostId ? `${editingSource === "favorites" ? "收藏" : "草稿"}已更新：${result.title || result.id || "-"}${mediaSuffix}` : `草稿已保存：${result.title || result.id || "-"}${mediaSuffix}`, true);
+  showMsg("commandMsg", recreatedMissingEdit
+    ? `原草稿已结束，修改内容已另存为新草稿：${result.title || result.id || "-"}${mediaSuffix}`
+    : (editingPostId ? `${editingSource === "favorites" ? "收藏" : "草稿"}已更新：${result.title || result.id || "-"}${mediaSuffix}` : `草稿已保存：${result.title || result.id || "-"}${mediaSuffix}`), true);
 }
 
 async function stashPersonaDraftEdit() {
@@ -21985,15 +22054,12 @@ function queuePersonaDraftMediaChange(action, {
   const current = draft.mediaItems;
   if (action === "append") {
     if (!mediaFiles.length) {
-      showMsg("commandMsg", "请先选择要追加的媒体文件。", false);
       return true;
     }
     current.push(...mediaFiles.map(filePersonaDraftMediaItem));
     draft.mediaOps.push({ type: "append", files: mediaFiles });
-    showMsg("commandMsg", `已临时追加 ${mediaFiles.length} 个媒体，保存修改后生效。`, true);
   } else if (action === "replace") {
     if (!mediaFiles.length) {
-      showMsg("commandMsg", "请先选择要替换的媒体文件。", false);
       return true;
     }
     const requestedIndex = Number.parseInt(String(index ?? ""), 10);
@@ -22001,26 +22067,22 @@ function queuePersonaDraftMediaChange(action, {
       ? Math.min(Math.max(requestedIndex, 0), current.length - 1)
       : selectedPersonaMediaIndex(persona.id, source, post.id, current.length);
     if (safeIndex < 0) {
-      showMsg("commandMsg", "当前没有可替换的媒体。", false);
       return true;
     }
     current.splice(safeIndex, 1, ...mediaFiles.map(filePersonaDraftMediaItem));
     draft.mediaOps.push({ type: "replace", index: safeIndex, files: mediaFiles });
     setSelectedPersonaMediaIndex(persona.id, source, post.id, safeIndex);
-    showMsg("commandMsg", `已临时替换第 ${safeIndex + 1} 个媒体，保存修改后生效。`, true);
   } else if (action === "delete") {
     const requestedIndex = Number.parseInt(String(index ?? ""), 10);
     const safeIndex = Number.isFinite(requestedIndex)
       ? Math.min(Math.max(requestedIndex, 0), current.length - 1)
       : selectedPersonaMediaIndex(persona.id, source, post.id, current.length);
     if (safeIndex < 0) {
-      showMsg("commandMsg", "当前没有可删除的媒体。", false);
       return true;
     }
     current.splice(safeIndex, 1);
     draft.mediaOps.push({ type: "delete", index: safeIndex });
     setSelectedPersonaMediaIndex(persona.id, source, post.id, Math.max(0, Math.min(safeIndex, current.length - 1)));
-    showMsg("commandMsg", `已临时删除第 ${safeIndex + 1} 个媒体，保存修改后生效。`, true);
   } else if (action === "move") {
     const safeFromIndex = Number.parseInt(String(fromIndex ?? ""), 10);
     const safeToIndex = Number.parseInt(String(toIndex ?? ""), 10);
@@ -22038,7 +22100,6 @@ function queuePersonaDraftMediaChange(action, {
     const [movedItem] = current.splice(safeFromIndex, 1);
     current.splice(safeToIndex, 0, movedItem);
     draft.mediaOps.push({ type: "move", fromIndex: safeFromIndex, toIndex: safeToIndex });
-    showMsg("commandMsg", `媒体顺序已调整，保存修改后生效。`, true);
   }
   if (action === "delete" || action === "move") {
     setPersonaMediaBulkSelection(persona.id, source, post.id, []);
@@ -22522,7 +22583,6 @@ async function deleteSelectedPersonaPostMedia(trigger) {
     syncPersonaDraftDirty(draft);
     renderPersonaDetail();
     renderConfirmSummary();
-    showMsg("commandMsg", `已临时删除 ${selected.length} 个媒体，保存修改后生效。`, true);
     return;
   }
   const sourceLabel = source === "favorites" ? "收藏" : "草稿";
@@ -29775,7 +29835,7 @@ function updateMatrixPublishStateFromForm() {
   const selectedIds = Array.from(document.querySelectorAll("[data-matrix-persona]:checked")).map((node) => String(node.value || "").trim()).filter(Boolean);
   const source = "posts";
   const platform = $("matrixPublishPlatform")?.value || state.matrixPublish.platform || "threads";
-  const availableLimit = Math.min(matrixPublishCommonLimit(matrixPublishAvailabilityRows(selectedIds, source, platform)), 20);
+  const availableLimit = Math.min(matrixPublishCommonLimit(matrixPublishAvailabilityRows(selectedIds, source, platform)), PUBLISH_MULTI_SELECT_LIMIT);
   const requestedCount = availableLimit
     ? Math.min(Math.max(Number($("matrixPublishCount")?.value || state.matrixPublish.perPersonaCount || 1), 1), availableLimit)
     : 1;
@@ -29877,7 +29937,7 @@ function matrixPublishCommonLimit(rows = []) {
 }
 
 function matrixPublishRequestedCount(rows = matrixPublishAvailabilityRows()) {
-  const perPersonaCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), 20);
+  const perPersonaCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), PUBLISH_MULTI_SELECT_LIMIT);
   return (rows || []).reduce((total, row) => total + Math.min(perPersonaCount, Number(row?.submitCount || 0)), 0);
 }
 
@@ -29891,7 +29951,7 @@ function renderMatrixPublishPanel() {
   ensureMatrixDraftLoads(selectedIds);
   const platform = state.matrixPublish.platform || "threads";
   const availability = matrixPublishAvailabilityRows(selectedIds, source, platform);
-  const availableLimit = Math.min(matrixPublishCommonLimit(availability), 20);
+  const availableLimit = Math.min(matrixPublishCommonLimit(availability), PUBLISH_MULTI_SELECT_LIMIT);
   const perCount = availableLimit
     ? Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), availableLimit)
     : 0;
@@ -30007,7 +30067,11 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
   }
   const personaIds = eligible.map((row) => row.personaId);
   const commonLimit = matrixPublishCommonLimit(eligible);
-  const perPersonaCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), Math.max(commonLimit, 1), 20);
+  const perPersonaCount = Math.min(
+    Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1),
+    Math.max(commonLimit, 1),
+    PUBLISH_MULTI_SELECT_LIMIT,
+  );
   state.matrixPublish.perPersonaCount = perPersonaCount;
   const lockParts = ["matrix_publish", source, platform, personaIds.join("_")];
   if (isActionLocked(...lockParts)) {

@@ -164,10 +164,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("width: 100%;", context_rule)
         self.assertIn("justify-content: center;", context_rule)
         self.assertIn("text-align: center;", context_rule)
-        self.assertIn("width: 22px;", logo_rule)
-        self.assertIn("height: 22px;", logo_rule)
-        self.assertIn("width: 22px;", logo_svg_rule)
-        self.assertIn("height: 22px;", logo_svg_rule)
+        self.assertIn("width: 24px;", logo_rule)
+        self.assertIn("height: 24px;", logo_rule)
+        self.assertIn("width: 24px;", logo_svg_rule)
+        self.assertIn("height: 24px;", logo_svg_rule)
 
     def test_dashboard_summary_stays_compact_on_mobile(self):
         summary_start = self.dashboard_script.index("function pdRenderSummary(visiblePersonas)")
@@ -253,7 +253,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
         self.assertIn('const platformTotal = Number(pdPersonaHot(persona, "").hot_score || 0);', chart)
         self.assertIn('data-platform="all"', chart)
-        self.assertIn('平台总和', chart)
+        self.assertIn('全部平台', chart)
         self.assertIn('data-platform="all"] .persona-heat-platform-track i', self.styles)
 
     def test_persona_platform_heat_rows_keep_the_compact_ranking_rhythm(self):
@@ -290,6 +290,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("pdRenderDashboard();", chart)
         self.assertIn("persona-grid-line", chart)
         self.assertIn("persona-trend-range", self.styles)
+        self.assertIn('label: "粉丝"', chart)
+        self.assertIn('label: "热度"', chart)
+        footer_render = chart[chart.index('<div class="persona-trend-footer">', chart.index("host.innerHTML = `")):]
+        self.assertLess(footer_render.index("${rangeControls()}"), footer_render.index("${legend()}"))
 
         footer_selector = ".persona-dashboard-view .persona-trend-footer {"
         footer_start = self.styles.index(footer_selector)
@@ -300,7 +304,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("grid-template-columns: 1fr;", footer_rule)
         self.assertIn("justify-items: center;", footer_rule)
         self.assertIn("justify-content: center;", legend_rule)
-        self.assertIn("font-size: 10px;", self.styles)
+        self.assertIn("font-size: 12px;", self.styles)
 
     def test_trend_chart_uses_high_contrast_series_colors_per_platform(self):
         palette_start = self.dashboard_script.index("function pdPlatformPalette(platform = pdPlatformFilter())")
@@ -1941,7 +1945,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         panel = self.console_script[panel_start:panel_end]
 
         self.assertIn("matrixPublishCommonLimit(matrixPublishAvailabilityRows(selectedIds, source, platform))", update)
-        self.assertIn("const availableLimit = Math.min(matrixPublishCommonLimit(availability), 20);", panel)
+        self.assertIn(
+            "const availableLimit = Math.min(matrixPublishCommonLimit(availability), PUBLISH_MULTI_SELECT_LIMIT);",
+            panel,
+        )
         self.assertIn("const countOptions = availableLimit", panel)
         self.assertIn('<select id="matrixPublishCount" ${countOptions.length ? "" : "disabled"}>', panel)
         self.assertIn("Array.from({ length: availableLimit }, (_, index) => index + 1)", panel)

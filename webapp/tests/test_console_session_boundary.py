@@ -491,6 +491,94 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("if (targetTaskId && !matched && observedTarget)", refresh_source)
         self.assertIn("if (!taskFinished && attempt < attempts)", refresh_source)
 
+    def test_missing_edited_draft_is_recreated_with_current_text_and_media(self):
+        create_source = self._javascript_function_source(self.source, "createPersonaDraftPost")
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const requests = [];
+            const messages = [];
+            const draft = {{
+              title: "重新编辑的标题",
+              content: "重新编辑的正文",
+              editingPostId: "published-draft-1",
+              editingSource: "posts",
+              originalMediaSignature: JSON.stringify([
+                {{ url: "uploads/users/7/old-a.png", type: "image", label: "旧图 A" }},
+                {{ url: "uploads/users/7/old-b.png", type: "image", label: "旧图 B" }},
+              ]),
+              mediaItems: [
+                {{ url: "blob:replacement", pending: true }},
+                {{ url: "uploads/users/7/old-b.png" }},
+                {{ url: "blob:new", pending: true }},
+              ],
+              mediaOps: [
+                {{ type: "replace", index: 0, files: [{{ name: "replacement.png" }}] }},
+                {{ type: "append", files: [{{ name: "new.png" }}] }},
+              ],
+            }};
+            const formState = {{ draft, generate: {{ composeMode: "tweet" }} }};
+            const state = {{ personaPanels: {{}}, personaDraftPosts: {{}}, personaFavoritePosts: {{}} }};
+            function selectedPersona() {{ return {{ id: "persona-1" }}; }}
+            function snapshotPersonaCurrentForm() {{}}
+            function personaFormState() {{ return formState; }}
+            function captureUploadDropzoneState() {{ return {{ files: [], stateKey: "upload-state" }}; }}
+            function personaContentPlatform() {{ return "threads"; }}
+            async function uploadAutomationMedia() {{ return []; }}
+            async function preparePersonaDraftMediaOps() {{
+              return [
+                {{ type: "replace", index: 0, media_paths: ["uploads/users/7/replacement.png"] }},
+                {{ type: "append", index: -1, media_paths: ["uploads/users/7/new.png"] }},
+              ];
+            }}
+            async function loadPersonaDraftPosts() {{ return []; }}
+            async function loadPersonaFavoritePosts() {{ return []; }}
+            async function api(path, options) {{
+              requests.push({{ path, options, body: JSON.parse(options.body) }});
+              if (path.endsWith("/published-draft-1")) {{
+                throw {{ status: 404, detail: "post not found" }};
+              }}
+              return {{ id: "replacement-draft-2", title: "重新编辑的标题" }};
+            }}
+            function showMsg(_id, message) {{ messages.push(message); }}
+            function clearUploadDropzoneState() {{}}
+            function setSelectedPersonaPostId() {{}}
+            function setPersonaPostSource() {{}}
+            function clearPersonaDraftComposerInputs() {{}}
+            function renderPersonaDetail() {{}}
+            function renderConfirmSummary() {{}}
+            async {create_source}
+            (async () => {{
+              await createPersonaDraftPost();
+              assert.equal(requests.length, 2);
+              assert.equal(requests[0].path, "/api/persona_dashboard/personas/persona-1/posts/published-draft-1");
+              assert.equal(requests[0].options.method, "PATCH");
+              assert.equal(requests[1].path, "/api/persona_dashboard/personas/persona-1/posts");
+              assert.equal(requests[1].options.method, "POST");
+              assert.deepEqual(requests[1].body.media_paths, [
+                "uploads/users/7/replacement.png",
+                "uploads/users/7/old-b.png",
+                "uploads/users/7/new.png",
+              ]);
+              assert.deepEqual(requests[1].body.media_ops, []);
+              assert.ok(messages.some((message) => message.includes("另存为新草稿")));
+            }})().catch((error) => {{ console.error(error); process.exit(1); }});
+            """
+        )
+        self._run_node(harness)
+
+    def test_draft_media_edits_only_notify_after_the_final_save(self):
+        queue_source = self._javascript_function_source(self.source, "queuePersonaDraftMediaChange")
+        bulk_delete_source = self._javascript_function_source(self.source, "deleteSelectedPersonaPostMedia")
+        for intermediate_message in (
+            "已临时追加",
+            "已临时替换",
+            "已临时删除",
+            "媒体顺序已调整",
+        ):
+            self.assertNotIn(intermediate_message, queue_source)
+            self.assertNotIn(intermediate_message, bulk_delete_source)
+
     def test_console_header_boundary_has_no_drop_shadow(self):
         start = self.site_nav_styles.index('.site-header.is-scrolled,')
         end = self.site_nav_styles.index('}', start)
@@ -2606,6 +2694,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         harness = textwrap.dedent(
             f"""
             const assert = require("node:assert/strict");
+            const PUBLISH_MULTI_SELECT_LIMIT = 5;
+            const PUBLISH_MULTI_SELECT_LIMIT_MESSAGE = "单次连续发布最多选择 5 篇。";
             const requests = [];
             const state = {{
               socialTaskToastLabels: {{}},
@@ -2625,9 +2715,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
                 {{ id: "post-1", content: "one" }},
                 {{ id: "post-2", content: "two" }},
                 {{ id: "post-3", content: "three" }},
+                {{ id: "post-4", content: "four" }},
+                {{ id: "post-5", content: "five" }},
               ];
             }}
-            function syncPublishSelectedPostIds() {{ return ["post-1", "post-2", "post-3"]; }}
+            function syncPublishSelectedPostIds() {{ return ["post-1", "post-2", "post-3", "post-4", "post-5"]; }}
             function publishContentSourceLabel() {{ return "草稿"; }}
             function normalizeScheduleValueForApi() {{ return ""; }}
             function $() {{ return null; }}
@@ -2666,23 +2758,23 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
             (async () => {{
               const results = await submitPublishContentTasks("account-1", {{ id: "persona-1" }});
-              assert.equal(results.length, 3);
-              assert.equal(requests.length, 3);
+              assert.equal(results.length, 5);
+              assert.equal(requests.length, 5);
               const batchIds = new Set(requests.map((item) => item.body.publish_batch_id));
               assert.equal(batchIds.size, 1);
               assert.ok([...batchIds][0].startsWith("publish_batch_"));
               assert.deepEqual(
                 requests.map((item) => item.body.publish_sequence_index),
-                [1, 2, 3],
+                [1, 2, 3, 4, 5],
               );
               assert.deepEqual(
                 requests.map((item) => item.body.publish_sequence_total),
-                [3, 3, 3],
+                [5, 5, 5, 5, 5],
               );
               for (const request of requests) {{
                 assert.deepEqual(
                   request.body.publish_sequence_targets,
-                  ["发布第1篇", "发布第2篇", "发布第3篇"],
+                  ["发布第1篇", "发布第2篇", "发布第3篇", "发布第4篇", "发布第5篇"],
                 );
                 assert.ok(!request.body.publish_sequence_targets.join("").includes("threads"));
                 assert.ok(!request.body.publish_sequence_targets.join("").includes("publisher"));
@@ -2698,11 +2790,46 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
+    def test_publish_selection_state_caps_every_multi_select_path_at_five_posts(self):
+        sync_selection = self._function_source("syncPublishSelectedPostIds")
+        set_selection = self._function_source("setPublishSelectedPostIds")
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const PUBLISH_MULTI_SELECT_LIMIT = 5;
+            const posts = Array.from({{ length: 6 }}, (_, index) => ({{ id: `post-${{index + 1}}` }}));
+            const state = {{
+              publishSelectedPostIds: {{ "persona-1::threads::posts": posts.map((post) => post.id) }},
+              selectedPersonaPostId: "",
+              publishPreviewPostId: "",
+            }};
+            function selectedPersona() {{ return {{ id: "persona-1" }}; }}
+            function normalizePublishContentSource() {{ return "posts"; }}
+            function personaContentPlatform() {{ return "threads"; }}
+            function publishSelectionKey() {{ return "persona-1::threads::posts"; }}
+            function publishSourceRows() {{ return posts; }}
+            function setSelectedPersonaPostId(id) {{ state.selectedPersonaPostId = id; }}
+            {sync_selection}
+            {set_selection}
+
+            assert.deepEqual(syncPublishSelectedPostIds(selectedPersona(), "posts", posts), [
+              "post-1", "post-2", "post-3", "post-4", "post-5",
+            ]);
+            setPublishSelectedPostIds(selectedPersona(), "posts", posts.map((post) => post.id));
+            assert.deepEqual(state.publishSelectedPostIds["persona-1::threads::posts"], [
+              "post-1", "post-2", "post-3", "post-4", "post-5",
+            ]);
+            """
+        )
+        self._run_node(harness)
+
     def test_single_publish_submission_uses_minimal_non_batch_payload(self):
         submit_publish = f"async {self._function_source('submitPublishContentTasks')}"
         harness = textwrap.dedent(
             f"""
             const assert = require("node:assert/strict");
+            const PUBLISH_MULTI_SELECT_LIMIT = 5;
+            const PUBLISH_MULTI_SELECT_LIMIT_MESSAGE = "单次连续发布最多选择 5 篇。";
             const requests = [];
             const state = {{
               socialTaskToastLabels: {{}},
@@ -2782,6 +2909,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         harness = textwrap.dedent(
             f"""
             const assert = require("node:assert/strict");
+            const PUBLISH_MULTI_SELECT_LIMIT = 5;
+            const PUBLISH_MULTI_SELECT_LIMIT_MESSAGE = "单次连续发布最多选择 5 篇。";
             const requests = [];
             const resolutions = [];
             let capacityChecks = 0;

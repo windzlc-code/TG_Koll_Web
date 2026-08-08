@@ -157,6 +157,10 @@ class AccountSettingsApiTests(unittest.TestCase):
         self.assertEqual(login.status_code, 200, login.text)
         self.assertIsNotNone(customer.cookies.get("session_token"))
         self.assertIsNone(customer.cookies.get("admin_session_token"))
+        self.assertEqual(
+            customer.get("/api/me").json()["avatar_url"],
+            "/assets/opc/account-avatar-mascot.png",
+        )
 
         page = customer.get("/profile.html")
         self.assertEqual(page.status_code, 200, page.text)

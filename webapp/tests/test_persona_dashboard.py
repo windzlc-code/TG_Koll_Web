@@ -525,6 +525,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                         "content": "post",
                         "wordCount": 4,
                         "publishedAt": "2026-06-30T02:00:00Z",
+                        "publishedUrl": "https://www.threads.net/@history/post/abc",
                         "platform": "threads",
                         "publishedMeta": {
                             "platform": "threads",
@@ -751,6 +752,28 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(threads_trend[0]["likes"], 3)
         self.assertNotIn("instagram", data["charts"]["platform_trend"])
 
+    def test_overview_adds_hot_snapshot_fields_to_platform_trend(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        hot_metric = archives[0]["setup"]["hotMetrics"]["threads"]
+        hot_metric["refreshedAt"] = "2026-07-31T08:00:00Z"
+        hot_metric["followers"] = 42
+        archives[0]["publishHistory"][0]["publishedMeta"]["engagement"]["repostCount"] = 2
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        response = self.client.get("/api/persona_dashboard/overview")
+
+        self.assertEqual(response.status_code, 200)
+        rows = {
+            row["date"]: row
+            for row in response.json()["charts"]["platform_trend"]["threads"]
+        }
+        self.assertEqual(rows["2026-06-30"]["reposts"], 2)
+        self.assertEqual(rows["2026-07-31"]["followers"], 42)
+        self.assertEqual(rows["2026-07-31"]["snapshot_count"], 1)
+        self.assertGreater(rows["2026-07-31"]["hot_score"], 0)
+
     def test_overview_attributes_multi_platform_publish_targets_to_each_platform(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"
@@ -836,6 +859,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_overview_uses_owner_scoped_media_route_for_matched_archive_post(self):
         self._write_archives()
+        Image.new("RGB", (20, 20), "blue").save(self.draft_media_path)
         archives_path = self.tool_runtime_dir / "persona_archives.json"
         archives = json.loads(archives_path.read_text(encoding="utf-8"))
         metric = archives[0]["setup"]["hotMetrics"]["threads"]["postMetrics"][0]
@@ -848,10 +872,17 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         item = response.json()["personas"][0]["post_metrics"][0]["media_items"][0]
         self.assertIn("/api/persona_dashboard/personas/persona-1/posts/post-1/media/0", item["preview_url"])
+        self.assertIn("?v=", item["preview_url"])
+        self.assertIn("/media/0/thumbnail?v=", item["thumbnail_url"])
         self.assertNotIn("/api/persona_dashboard/media/", item["preview_url"])
         media_response = self.client.get(item["preview_url"])
         self.assertEqual(media_response.status_code, 200)
         self.assertEqual(media_response.headers["content-type"], "image/png")
+        self.assertEqual(media_response.headers["cache-control"], "private, max-age=31536000, immutable")
+        thumbnail_response = self.client.get(item["thumbnail_url"])
+        self.assertEqual(thumbnail_response.status_code, 200)
+        self.assertEqual(thumbnail_response.headers["content-type"], "image/jpeg")
+        self.assertEqual(thumbnail_response.headers["cache-control"], "private, max-age=31536000, immutable")
 
     def test_console_overview_aggregates_hot_metrics_without_heavy_rows(self):
         self._write_archives()
@@ -2008,6 +2039,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(append_resp.status_code, 200, append_resp.text)
+        appended = append_resp.json()
+        self.assertTrue(all(item["preview_url"] for item in appended["media_items"]))
+        self.assertTrue(all(item["thumbnail_url"] for item in appended["media_items"] if item["type"] == "image"))
 
         move_resp = self.client.patch(
             "/api/persona_dashboard/personas/persona-1/posts/post-1",
@@ -2028,6 +2062,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
             [item["url"] for item in moved["media_items"]],
             [str(third_path), str(self.draft_media_path), str(second_path)],
         )
+        self.assertTrue(all(item["preview_url"] for item in moved["media_items"]))
+        self.assertTrue(all(item["thumbnail_url"] for item in moved["media_items"] if item["type"] == "image"))
 
         archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
         persisted = next(item for item in archives[0]["posts"] if item["id"] == "post-1")
@@ -2726,9 +2762,29 @@ class PersonaDashboardApiTests(unittest.TestCase):
         preview_item = next(item for item in rows[0]["media_items"] if "/publish_history/pub-1/media/" in str(item.get("preview_url") or ""))
         preview_path = str(preview_item["preview_url"])
         self.assertIn("/publish_history/pub-1/media/", preview_path)
+        self.assertIn("?v=", preview_path)
+        self.assertIn("/publish_history/pub-1/media/", preview_item["thumbnail_url"])
+        self.assertIn("/thumbnail?v=", preview_item["thumbnail_url"])
         media_resp = self.client.get(preview_path)
         self.assertEqual(media_resp.status_code, 200)
         self.assertEqual(media_resp.headers["content-type"], "image/png")
+        self.assertEqual(media_resp.headers["cache-control"], "private, max-age=31536000, immutable")
+
+    def test_persona_publish_history_counts_a_permalink_once(self):
+        self._write_archives()
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        duplicate = json.loads(json.dumps(archives[0]["publishHistory"][0], ensure_ascii=False))
+        duplicate["id"] = "pub-duplicate"
+        archives[0]["publishHistory"].append(duplicate)
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
+
+        self.assertEqual(resp.status_code, 200)
+        rows = resp.json()["publish_history"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], "pub-1")
 
     def test_persona_publish_history_never_promotes_original_hot_source_url(self):
         self._write_archives()
@@ -2745,13 +2801,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         row = resp.json()["publish_history"][0]
-        self.assertEqual(row.get("published_url"), "")
-        self.assertEqual(row.get("source_url"), "")
-        self.assertFalse(row["hot_metrics"]["matched"])
-        self.assertEqual(row["hot_metrics"]["source"], "published_snapshot")
-        self.assertEqual(row["likes"], 3)
-        self.assertEqual(row["comments"], 1)
-        self.assertEqual(row["views"], 40)
+        self.assertEqual(row.get("published_url"), "https://www.threads.net/@history/post/abc")
+        self.assertNotEqual(row.get("published_url"), original_url)
 
     def test_persona_publish_history_marks_account_mismatch_only_when_current_handle_differs(self):
         self._write_archives()
@@ -2759,6 +2810,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         archives = json.loads(path.read_text(encoding="utf-8"))
         archive = archives[0]
         archive["setup"]["accountManagement"]["threads"]["handle"] = "current_user"
+        archive["publishHistory"][0]["publishedUrl"] = "https://www.threads.com/@old_user/post/abc"
         archive["publishHistory"][0]["publishedMeta"].update({
             "accountId": "threads-current",
             "username": "current_user",
@@ -2805,6 +2857,45 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(row["account_match"]["current_account_id"], "instagram-current")
         self.assertEqual(row["account_match"]["current_handle"], "current.ig")
         self.assertEqual(row["account_match"]["warning"], "历史账号：@old.ig")
+
+    def test_publish_history_resolves_internal_account_name_from_historical_account_id(self):
+        self._insert_social_account(
+            account_id="threads-history",
+            platform="threads",
+            username="published_user",
+        )
+        record = {
+            "publishedMeta": {
+                "platform": "threads",
+                "accountId": "threads-history",
+                "username": "sentiment_authorized_threads",
+            },
+        }
+        row = server._compact_publish_record(
+            record,
+            current_accounts={"threads": {"account_id": "threads-current", "username": "current_user"}},
+        )
+
+        self.assertEqual(row["account_username"], "published_user")
+        self.assertEqual(row["account_match"]["source_handle"], "published_user")
+        self.assertEqual(row["account_match"]["warning"], "历史账号：@published_user")
+
+    def test_publish_history_uses_chinese_system_label_when_historical_account_is_missing(self):
+        record = {
+            "publishedMeta": {
+                "platform": "threads",
+                "accountId": "missing-history-account",
+                "username": "sentiment_authorized_threads",
+            },
+        }
+        row = server._compact_publish_record(
+            record,
+            current_accounts={"threads": {"account_id": "threads-current", "username": "current_user"}},
+        )
+
+        self.assertEqual(row["account_username"], "")
+        self.assertEqual(row["account_match"]["source_handle"], "")
+        self.assertEqual(row["account_match"]["warning"], "历史账号：系统授权账号")
 
     def test_overview_exposes_hot_metric_account_id_for_current_account_filtering(self):
         self._write_archives()
@@ -4733,6 +4824,48 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(publish_resp.status_code, 200)
         self.assertEqual(mocked.call_args.args[0].max_retries, 0)
 
+    def test_publish_persona_post_rejects_batch_larger_than_five(self):
+        self._write_archives()
+        self._insert_social_account(account_id="acct-batch-limit", platform="threads", username="threads_user")
+        create_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "Batch limit", "content": "Do not create an oversized batch"},
+        )
+        post = create_resp.json()
+
+        with mock.patch.object(server, "create_social_task") as mocked:
+            publish_resp = self.client.post(
+                f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
+                json={
+                    "account_id": "acct-batch-limit",
+                    "platform": "threads",
+                    "publish_batch_id": "batch-too-large",
+                    "publish_sequence_index": 1,
+                    "publish_sequence_total": 6,
+                    "publish_sequence_targets": [f"发布第{index}篇" for index in range(1, 7)],
+                },
+            )
+
+        self.assertEqual(publish_resp.status_code, 400)
+        self.assertEqual(publish_resp.json()["detail"], "单次连续发布最多选择 5 篇。")
+        mocked.assert_not_called()
+
+    def test_matrix_publish_rejects_more_than_five_posts_per_persona(self):
+        self._write_archives()
+
+        response = self.client.post(
+            "/api/persona_dashboard/matrix_publish",
+            json={
+                "persona_ids": ["persona-1"],
+                "source": "posts",
+                "platform": "threads",
+                "per_persona_count": 6,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "每个人设单次连续发布最多选择 5 篇。")
+
     def test_publish_persona_post_reuses_active_task_for_same_draft(self):
         self._write_archives()
         self._insert_social_account(account_id="acct-idempotent", platform="threads", username="threads_user")
@@ -4865,8 +4998,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(synced["publishHistory"][0]["archivePostId"], "draft-sync-1")
         self.assertEqual(synced["publishHistory"][0]["publishedUrl"], "https://threads.example/draft-sync-1")
 
-    def test_three_and_four_item_publish_batches_sync_each_success_without_cross_contamination(self):
-        for publish_count in (3, 4):
+    def test_three_four_and_five_item_publish_batches_sync_each_success_without_cross_contamination(self):
+        for publish_count in (3, 4, 5):
             with self.subTest(publish_count=publish_count):
                 self._write_archives()
                 primary_path = self.tool_runtime_dir / "persona_archives.json"

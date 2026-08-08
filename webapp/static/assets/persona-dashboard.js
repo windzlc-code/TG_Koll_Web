@@ -400,7 +400,7 @@ function pdRenderPersonaHeatCarousel(hostId, personas, platforms) {
           <header><strong>${pdEscape(persona.name || "未命名人设")}</strong><span>${pdEscape(heatLabel)} <b>${pdEscape(pdNumber(total))}</b></span></header>
           <div class="persona-heat-platform-list">
             <div class="persona-heat-platform-row ${selectedPlatform ? "" : "is-highlighted"}" data-platform="all">
-              <span class="persona-heat-platform-label">${pdPlatformIcon("")}<b>平台总和</b></span>
+              <span class="persona-heat-platform-label">${pdPlatformIcon("")}<b>全部平台</b></span>
               <span class="persona-heat-platform-track"><i style="width:${platformTotalPct}%"></i></span>
               <strong>${pdEscape(pdNumber(platformTotal))}</strong>
             </div>
@@ -500,7 +500,9 @@ function pdRenderDonutChart(hostId, entries, options = {}) {
 }
 
 function pdAggregateTrendRows(rows, range = personaDashboardTrendRange) {
-  const safeRows = Array.isArray(rows) ? rows : [];
+  const safeRows = (Array.isArray(rows) ? rows : [])
+    .filter((row) => /^\d{4}-\d{2}-\d{2}/.test(String(row && row.date || "")))
+    .sort((left, right) => String(left.date).localeCompare(String(right.date)));
   const keyFor = (row) => {
     const date = String(row.date || "");
     if (range === "year") return date.slice(0, 4);
@@ -511,14 +513,53 @@ function pdAggregateTrendRows(rows, range = personaDashboardTrendRange) {
   safeRows.forEach((row) => {
     const key = keyFor(row);
     if (!key) return;
-    const current = grouped.get(key) || { date: key, published: 0, post_views: 0, likes: 0, comments: 0, shares: 0, reposts: 0 };
-    Object.keys(current).filter((field) => field !== "date").forEach((field) => {
+    const current = grouped.get(key) || {
+      date: key,
+      published: 0,
+      post_views: 0,
+      likes: 0,
+      comments: 0,
+      shares: 0,
+      reposts: 0,
+      followers: 0,
+      hot_score: 0,
+      snapshot_count: 0,
+    };
+    ["published", "post_views", "likes", "comments", "shares", "reposts"].forEach((field) => {
       current[field] += Number(row[field] || 0);
     });
+    if (Number(row.snapshot_count || 0) > 0) {
+      current.followers = Number(row.followers || 0);
+      current.hot_score = Number(row.hot_score || 0);
+      current.snapshot_count += Number(row.snapshot_count || 0);
+    }
     grouped.set(key, current);
   });
   const limits = { day: 30, month: 12, year: 5 };
-  return Array.from(grouped.values()).sort((left, right) => String(left.date).localeCompare(String(right.date))).slice(-(limits[range] || 30));
+  const groupedRows = Array.from(grouped.values()).sort((left, right) => String(left.date).localeCompare(String(right.date)));
+  if (!groupedRows.length) return [];
+  const limit = limits[range] || 30;
+  const latest = new Date(`${safeRows[safeRows.length - 1].date.slice(0, 10)}T00:00:00Z`);
+  const keys = [];
+  for (let offset = limit - 1; offset >= 0; offset -= 1) {
+    const cursor = new Date(latest);
+    if (range === "year") cursor.setUTCFullYear(cursor.getUTCFullYear() - offset);
+    else if (range === "month") cursor.setUTCMonth(cursor.getUTCMonth() - offset);
+    else cursor.setUTCDate(cursor.getUTCDate() - offset);
+    keys.push(range === "year" ? String(cursor.getUTCFullYear()) : cursor.toISOString().slice(0, range === "month" ? 7 : 10));
+  }
+  return keys.map((date) => grouped.get(date) || {
+    date,
+    published: 0,
+    post_views: 0,
+    likes: 0,
+    comments: 0,
+    shares: 0,
+    reposts: 0,
+    followers: 0,
+    hot_score: 0,
+    snapshot_count: 0,
+  });
 }
 
 function pdRenderTrendChart(hostId, rows) {
@@ -526,11 +567,20 @@ function pdRenderTrendChart(hostId, rows) {
   if (!host) return;
   const items = pdAggregateTrendRows(rows);
   const rangeOptions = [["day", "日"], ["month", "月"], ["year", "年"]];
+  const colors = pdPlatformPalette();
+  const series = [
+    { key: "published", label: "发布", color: colors[0] },
+    { key: "post_views", label: "逐帖浏览", color: colors[1] },
+    { key: "engagement", label: "互动", color: colors[2] },
+    { key: "followers", label: "粉丝", color: "#16a36a" },
+    { key: "hot_score", label: "热度", color: pdPlatformFilter() === "instagram" ? "#833ab4" : "#dc335f" },
+  ];
   const rangeControls = () => `<div class="persona-trend-range" role="tablist" aria-label="趋势时间范围">
     ${rangeOptions.map(([value, label]) => `<button type="button" role="tab" class="${personaDashboardTrendRange === value ? "is-active" : ""}" aria-selected="${personaDashboardTrendRange === value ? "true" : "false"}" data-persona-trend-range="${value}">${label}</button>`).join("")}
   </div>`;
+  const legend = () => `<div class="persona-line-legend">${series.map((item) => `<span><i style="background:${item.color}"></i>${item.label}</span>`).join("")}</div>`;
   if (!items.length) {
-    host.innerHTML = `${pdRenderChartPlaceholder("line", "暂无走势数据")}<div class="persona-trend-footer">${rangeControls()}</div>`;
+    host.innerHTML = `${pdRenderChartPlaceholder("line", "暂无走势数据")}<div class="persona-trend-footer">${rangeControls()}${legend()}</div>`;
     host.querySelectorAll("[data-persona-trend-range]").forEach((button) => {
       button.addEventListener("click", () => {
         personaDashboardTrendRange = String(button.dataset.personaTrendRange || "day");
@@ -542,12 +592,6 @@ function pdRenderTrendChart(hostId, rows) {
   const width = 720;
   const height = 250;
   const pad = { top: 20, right: 18, bottom: 38, left: 52 };
-  const colors = pdPlatformPalette();
-  const series = [
-    { key: "published", label: "发布", color: colors[0] },
-    { key: "post_views", label: "逐帖浏览", color: colors[1] },
-    { key: "engagement", label: "互动", color: colors[2] },
-  ];
   const normalizedItems = items.map((row) => ({
     ...row,
     engagement: Number(row.likes || 0) + Number(row.comments || 0) + Number(row.shares || 0) + Number(row.reposts || 0),
@@ -571,8 +615,8 @@ function pdRenderTrendChart(hostId, rows) {
       ${normalizedItems.map((row, index) => (index % labelStep === 0 || index === normalizedItems.length - 1) ? `<text x="${x(index)}" y="${height - 10}" text-anchor="middle">${pdEscape(labelFor(row.date))}</text>` : "").join("")}
     </svg>
     <div class="persona-trend-footer">
-      <div class="persona-line-legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${s.label}</span>`).join("")}</div>
       ${rangeControls()}
+      ${legend()}
     </div>
   `;
   host.querySelectorAll("[data-persona-trend-range]").forEach((button) => {
