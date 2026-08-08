@@ -26899,6 +26899,60 @@ body.console-page {
   color: inherit;
 }
 
+/* Fade in only the newly selected dashboard platform; the carousel remains touch-driven. */
+.console-page .persona-dashboard-view
+.persona-dashboard-platform-track.account-pool-platform-tabs
+> button.is-active.is-platform-fill-entering {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: var(--panel-solid);
+  background-image: none;
+  --persona-dashboard-platform-fill: var(--accent);
+}
+
+.console-page .persona-dashboard-view
+.persona-dashboard-platform-track.account-pool-platform-tabs
+> button.is-active.is-platform-fill-entering[data-persona-dashboard-platform-option="threads"] {
+  --persona-dashboard-platform-fill: #000;
+}
+
+.console-page .persona-dashboard-view
+.persona-dashboard-platform-track.account-pool-platform-tabs
+> button.is-active.is-platform-fill-entering[data-persona-dashboard-platform-option="instagram"] {
+  --persona-dashboard-platform-fill: var(--instagram-platform-gradient);
+}
+
+.console-page .persona-dashboard-view .persona-dashboard-platform-track > button.is-platform-fill-entering::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: var(--persona-dashboard-platform-fill);
+  opacity: 0;
+  animation: persona-dashboard-platform-fill-fade 520ms ease-out both;
+  pointer-events: none;
+}
+
+.console-page .persona-dashboard-view .persona-dashboard-platform-track > button.is-platform-fill-entering > :is(svg, strong) {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes persona-dashboard-platform-fill-fade {
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console-page .persona-dashboard-view .persona-dashboard-platform-track > button.is-platform-fill-entering::before {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 .console-page :is(.account-pool-card, .publish-history-card)[data-account-platform="threads"] .account-pool-card-platform {
   color: #000;
 }

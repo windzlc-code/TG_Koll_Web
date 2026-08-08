@@ -2289,7 +2289,7 @@ async function openToastTarget(rawTarget) {
 }
 
 function createToast(request) {
-  const { host, toastKey, ok, message, target, status, scheduled } = request;
+  const { host, toastKey, ok, message, target, status, scheduled, stack } = request;
   const toast = document.createElement("div");
   toast.innerHTML = `
     <span class="toast-message-status-icon" aria-hidden="true"></span>
@@ -2301,6 +2301,7 @@ function createToast(request) {
     </button>
   `;
   applyToastMeta(toast, { key: toastKey, ok, message, target, status, scheduled });
+  if (stack) toast.dataset.toastStacked = "true";
   host.appendChild(toast);
   toast.querySelector(".toast-message-close")?.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -2321,7 +2322,8 @@ function createToast(request) {
 }
 
 function removeToastsBeforeInsert(host, nextToastKey) {
-  const outgoing = Array.from(host.children);
+  const outgoing = Array.from(host.children)
+    .filter((toast) => toast.dataset.toastStacked !== "true");
   if (!outgoing.length) return false;
   toastReplacementInProgress = true;
   const reduceMotion = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
@@ -2362,7 +2364,16 @@ function showToast(text, ok = true, options = {}) {
   const deliverOnce = Boolean(options.oncePerState || options.taskId);
   if (deliverOnce && !existingToast && deliveredToastStateKeys.has(toastStateKey)) return null;
   const scheduled = typeof options.scheduled === "boolean" ? options.scheduled : undefined;
-  const request = { host, toastKey, ok, message, target, status, scheduled };
+  const request = {
+    host,
+    toastKey,
+    ok,
+    message,
+    target,
+    status,
+    scheduled,
+    stack: Boolean(options.stack),
+  };
   if (deliverOnce) deliveredToastStateKeys.add(toastStateKey);
 
   if (existingToast && !toastReplacementInProgress) {
@@ -2387,6 +2398,8 @@ function showToast(text, ok = true, options = {}) {
         return existingToast;
     }
   }
+
+  if (request.stack) return createToast(request);
 
   // The host is intentionally single-message: each new operation withdraws the
   // previous card before the new card enters, instead of mutating it in place.
@@ -5755,6 +5768,12 @@ function socialTaskToastTerminal(task) {
   return ["success", "failed", "cancelled", "need_manual"].includes(status);
 }
 
+function socialTaskUsesIndependentTerminalToast(task, status = socialTaskPresentationStatus(task)) {
+  const taskType = String(task?.task_type || "").trim();
+  return ["threads_warmup", "instagram_warmup"].includes(taskType)
+    && ["success", "failed", "cancelled", "need_manual"].includes(String(status || "").trim());
+}
+
 function clearDeliveredToastStates(toastKey) {
   const prefix = `${String(toastKey || "").trim()}:`;
   if (!prefix || prefix === ":") return;
@@ -5908,6 +5927,7 @@ function syncSocialTaskToast(task, { force = false } = {}) {
     personaId: task?.persona_id || "",
     scheduled: waitingForSchedule,
     target: socialTaskToastTarget(task, status),
+    stack: socialTaskUsesIndependentTerminalToast(task, status),
   });
   if (resolved.transition && resolved.nextTask) {
     if (activeTransition?.timer) window.clearTimeout(activeTransition.timer);

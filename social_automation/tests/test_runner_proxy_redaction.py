@@ -150,6 +150,103 @@ class RunnerProxyRedactionTests(unittest.TestCase):
             },
         )
 
+    def test_browse_only_threads_warmup_uses_bounded_image_cache(self):
+        context_control = {
+            "task": {
+                "task_type": "threads_warmup",
+                "platform": "threads",
+                "payload": {"strategy_id": "browse_only"},
+            }
+        }
+        original_task = {
+            "task_type": context_control["task"]["task_type"],
+            "platform": context_control["task"]["platform"],
+            "payload": dict(context_control["task"]["payload"]),
+        }
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "SOCIAL_AUTOMATION_LIGHTWEIGHT_THREADS_WARMUP": "1",
+                "SOCIAL_AUTOMATION_LIGHTWEIGHT_IMAGE_CACHE_MB": "128",
+            },
+        ):
+            preferences = runner._browser_firefox_user_preferences(context_control)
+
+        self.assertEqual(context_control["task"], original_task)
+        self.assertFalse(preferences["dom.ipc.processPrelaunch.enabled"])
+        self.assertEqual(preferences["dom.ipc.processPrelaunch.fission.number"], 0)
+        self.assertEqual(
+            preferences["image.mem.surfacecache.max_size_kb"],
+            128 * 1024,
+        )
+        self.assertEqual(preferences["browser.cache.disk.capacity"], 128 * 1024)
+
+    def test_lightweight_warmup_preferences_do_not_leak_to_other_tasks(self):
+        excluded_tasks = (
+            {
+                "task_type": "publish_post",
+                "platform": "threads",
+                "payload": {"strategy_id": "browse_only"},
+            },
+            {
+                "task_type": "open_login",
+                "platform": "threads",
+                "payload": {"strategy_id": "browse_only"},
+            },
+            {
+                "task_type": "threads_warmup",
+                "platform": "threads",
+                "payload": {"strategy_id": "tg_default"},
+            },
+            {
+                "task_type": "instagram_warmup",
+                "platform": "instagram",
+                "payload": {"strategy_id": "browse_only"},
+            },
+            {
+                "task_type": "threads_warmup",
+                "platform": "threads",
+                "payload": "browse_only",
+            },
+        )
+
+        for task in excluded_tasks:
+            with self.subTest(task=task):
+                preferences = runner._browser_firefox_user_preferences(
+                    {"task": task}
+                )
+                self.assertNotIn(
+                    "dom.ipc.processPrelaunch.enabled",
+                    preferences,
+                )
+                self.assertNotIn(
+                    "dom.ipc.processPrelaunch.fission.number",
+                    preferences,
+                )
+                self.assertNotIn(
+                    "image.mem.surfacecache.max_size_kb",
+                    preferences,
+                )
+
+    def test_lightweight_warmup_preferences_have_environment_kill_switch(self):
+        context_control = {
+            "task": {
+                "task_type": "threads_warmup",
+                "platform": "threads",
+                "payload": {"strategy_id": "browse_only"},
+            }
+        }
+
+        with mock.patch.dict(
+            os.environ,
+            {"SOCIAL_AUTOMATION_LIGHTWEIGHT_THREADS_WARMUP": "0"},
+        ):
+            preferences = runner._browser_firefox_user_preferences(context_control)
+
+        self.assertNotIn("dom.ipc.processPrelaunch.enabled", preferences)
+        self.assertNotIn("image.mem.surfacecache.max_size_kb", preferences)
+
     def test_concurrent_camoufox_launches_use_their_own_display(self):
         observed = []
         rendezvous = threading.Barrier(2)

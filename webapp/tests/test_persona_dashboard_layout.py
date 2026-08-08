@@ -99,6 +99,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('["touchend", "touchcancel"].forEach', self.dashboard_script)
         self.assertIn('viewport.addEventListener("scrollend"', self.dashboard_script)
         self.assertIn("platformTouchActive", self.dashboard_script)
+        self.assertIn("personaDashboardPlatformFillPending = true", self.dashboard_script)
+        self.assertIn("is-platform-fill-entering", self.dashboard_script)
         self.assertIn("Math.round(viewport.scrollLeft / viewport.clientWidth)", self.dashboard_script)
         self.assertNotIn("window.setTimeout(settlePlatform, 90)", self.dashboard_script)
         self.assertNotIn("pdBindThreads", self.dashboard_script)
@@ -116,6 +118,19 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("border-top: 1px solid var(--line);", self.styles)
         self.assertIn("border-bottom: 1px solid var(--line);", self.styles)
         self.assertIn(".persona-dashboard-view .persona-dashboard-platform-nav {\n  border: 0;", self.styles)
+        self.assertIn("persona-dashboard-platform-fill-fade", self.styles)
+        self.assertIn(
+            "> button.is-active.is-platform-fill-entering {\n"
+            "  position: relative;\n"
+            "  isolation: isolate;\n"
+            "  overflow: hidden;\n"
+            "  background: var(--panel-solid);\n"
+            "  background-image: none;",
+            self.styles,
+        )
+        self.assertIn("opacity: 0;", self.styles)
+        self.assertIn("520ms ease-out both", self.styles)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", self.styles)
         self.assertNotIn("persona-dashboard-platform-title", self.styles)
         self.assertNotIn(".persona-dashboard-view .persona-dashboard-platform-menu", self.styles)
 
@@ -2823,7 +2838,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
     def test_segmented_controls_use_a_simple_sliding_background_without_click_highlight(self):
         interaction_start = self.styles.index("/* Segmented controls keep their existing state behavior")
-        interaction = self.styles[interaction_start:]
+        interaction_end = self.styles.index("/* Billing command center */", interaction_start)
+        interaction = self.styles[interaction_start:interaction_end]
         slider = self.console_script[
             self.console_script.index("async function slideSegmentedButtonBackground"):
             self.console_script.index("\nfunction bindEvents()")

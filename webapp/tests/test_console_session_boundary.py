@@ -1941,6 +1941,30 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             2,
         )
 
+    def test_warmup_terminal_toasts_use_independent_stack(self):
+        independent = self._function_source("socialTaskUsesIndependentTerminalToast")
+        sync_toast = self._section("function syncSocialTaskToast(", "\nfunction syncSocialTaskToasts(")
+        show_toast = self._section("function showToast", "function defaultToastTargetForMessage")
+        create_toast = self._function_source("createToast")
+        remove_toasts = self._function_source("removeToastsBeforeInsert")
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            {independent}
+
+            assert.equal(socialTaskUsesIndependentTerminalToast({{ task_type: "threads_warmup" }}, "success"), true);
+            assert.equal(socialTaskUsesIndependentTerminalToast({{ task_type: "instagram_warmup" }}, "failed"), true);
+            assert.equal(socialTaskUsesIndependentTerminalToast({{ task_type: "threads_warmup" }}, "running"), false);
+            assert.equal(socialTaskUsesIndependentTerminalToast({{ task_type: "publish_post" }}, "success"), false);
+            """
+        )
+        self._run_node(harness)
+
+        self.assertIn("stack: socialTaskUsesIndependentTerminalToast(task, status)", sync_toast)
+        self.assertIn("if (request.stack) return createToast(request);", show_toast)
+        self.assertIn('toast.dataset.toastStacked = "true"', create_toast)
+        self.assertIn('toast.dataset.toastStacked !== "true"', remove_toasts)
+
     def test_status_tone_covers_live_detection_and_recovery_states(self):
         harness = textwrap.dedent(
             f"""
@@ -2694,8 +2718,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         harness = textwrap.dedent(
             f"""
             const assert = require("node:assert/strict");
-            const PUBLISH_MULTI_SELECT_LIMIT = 5;
+            const PUBLISH_MULTI_SELECT_LIMIT = 2;
             const PUBLISH_MULTI_SELECT_LIMIT_MESSAGE = "单次连续发布最多选择 5 篇。";
+            function publishBatchLimit(platform) {{ return platform === "instagram" ? 1 : 2; }}
             const requests = [];
             const state = {{
               socialTaskToastLabels: {{}},
@@ -2714,12 +2739,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               return [
                 {{ id: "post-1", content: "one" }},
                 {{ id: "post-2", content: "two" }},
-                {{ id: "post-3", content: "three" }},
-                {{ id: "post-4", content: "four" }},
-                {{ id: "post-5", content: "five" }},
-              ];
+            ];
             }}
-            function syncPublishSelectedPostIds() {{ return ["post-1", "post-2", "post-3", "post-4", "post-5"]; }}
+            function syncPublishSelectedPostIds() {{ return ["post-1", "post-2"]; }}
             function publishContentSourceLabel() {{ return "草稿"; }}
             function normalizeScheduleValueForApi() {{ return ""; }}
             function $() {{ return null; }}
@@ -2758,23 +2780,23 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
             (async () => {{
               const results = await submitPublishContentTasks("account-1", {{ id: "persona-1" }});
-              assert.equal(results.length, 5);
-              assert.equal(requests.length, 5);
+              assert.equal(results.length, 2);
+              assert.equal(requests.length, 2);
               const batchIds = new Set(requests.map((item) => item.body.publish_batch_id));
               assert.equal(batchIds.size, 1);
               assert.ok([...batchIds][0].startsWith("publish_batch_"));
               assert.deepEqual(
                 requests.map((item) => item.body.publish_sequence_index),
-                [1, 2, 3, 4, 5],
+                [1, 2],
               );
               assert.deepEqual(
                 requests.map((item) => item.body.publish_sequence_total),
-                [5, 5, 5, 5, 5],
+                [2, 2],
               );
               for (const request of requests) {{
                 assert.deepEqual(
                   request.body.publish_sequence_targets,
-                  ["发布第1篇", "发布第2篇", "发布第3篇", "发布第4篇", "发布第5篇"],
+                  ["发布第1篇", "发布第2篇"],
                 );
                 assert.ok(!request.body.publish_sequence_targets.join("").includes("threads"));
                 assert.ok(!request.body.publish_sequence_targets.join("").includes("publisher"));
@@ -2790,13 +2812,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
-    def test_publish_selection_state_caps_every_multi_select_path_at_five_posts(self):
+    def test_publish_selection_state_caps_every_multi_select_path_at_platform_limit(self):
         sync_selection = self._function_source("syncPublishSelectedPostIds")
         set_selection = self._function_source("setPublishSelectedPostIds")
         harness = textwrap.dedent(
             f"""
             const assert = require("node:assert/strict");
-            const PUBLISH_MULTI_SELECT_LIMIT = 5;
+            const PUBLISH_MULTI_SELECT_LIMIT = 2;
+            function publishBatchLimit() {{ return 2; }}
+            function publishSelectionLimit() {{ return 2; }}
             const posts = Array.from({{ length: 6 }}, (_, index) => ({{ id: `post-${{index + 1}}` }}));
             const state = {{
               publishSelectedPostIds: {{ "persona-1::threads::posts": posts.map((post) => post.id) }},
@@ -2813,11 +2837,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             {set_selection}
 
             assert.deepEqual(syncPublishSelectedPostIds(selectedPersona(), "posts", posts), [
-              "post-1", "post-2", "post-3", "post-4", "post-5",
+              "post-1", "post-2",
             ]);
             setPublishSelectedPostIds(selectedPersona(), "posts", posts.map((post) => post.id));
             assert.deepEqual(state.publishSelectedPostIds["persona-1::threads::posts"], [
-              "post-1", "post-2", "post-3", "post-4", "post-5",
+              "post-1", "post-2",
             ]);
             """
         )
@@ -2830,6 +2854,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const assert = require("node:assert/strict");
             const PUBLISH_MULTI_SELECT_LIMIT = 5;
             const PUBLISH_MULTI_SELECT_LIMIT_MESSAGE = "单次连续发布最多选择 5 篇。";
+            function publishBatchLimit(platform) {{ return platform === "instagram" ? 1 : 2; }}
             const requests = [];
             const state = {{
               socialTaskToastLabels: {{}},
@@ -2911,6 +2936,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const assert = require("node:assert/strict");
             const PUBLISH_MULTI_SELECT_LIMIT = 5;
             const PUBLISH_MULTI_SELECT_LIMIT_MESSAGE = "单次连续发布最多选择 5 篇。";
+            function publishBatchLimit(platform) {{ return platform === "instagram" ? 1 : 2; }}
             const requests = [];
             const resolutions = [];
             let capacityChecks = 0;

@@ -40,6 +40,9 @@ DEFAULT_WARMUP_RESOURCE_COMPACTION_COOLDOWN_SECONDS = 90
 DEFAULT_BROWSER_DISK_CACHE_CAPACITY_MB = 128
 MIN_BROWSER_DISK_CACHE_CAPACITY_MB = 64
 MAX_BROWSER_DISK_CACHE_CAPACITY_MB = 1024
+DEFAULT_LIGHTWEIGHT_WARMUP_IMAGE_CACHE_MB = 128
+MIN_LIGHTWEIGHT_WARMUP_IMAGE_CACHE_MB = 64
+MAX_LIGHTWEIGHT_WARMUP_IMAGE_CACHE_MB = 512
 SUPPORTED_TASK_TYPES = {
     "check_login",
     "open_login",
@@ -84,6 +87,63 @@ def _browser_disk_cache_preferences() -> dict[str, Any]:
         # Firefox expresses browser.cache.disk.capacity in KiB.
         "browser.cache.disk.capacity": capacity_mb * 1024,
     }
+
+
+def _lightweight_threads_warmup_requested(
+    context_control: dict[str, Any] | None,
+) -> bool:
+    """Limit low-memory browser prefs to the conservative Threads browse task."""
+    enabled = str(
+        os.getenv("SOCIAL_AUTOMATION_LIGHTWEIGHT_THREADS_WARMUP", "1") or "1"
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    if not enabled or not isinstance(context_control, dict):
+        return False
+    task = context_control.get("task")
+    if not isinstance(task, dict):
+        return False
+    payload = task.get("payload")
+    return bool(
+        str(task.get("task_type") or "").strip() == "threads_warmup"
+        and str(task.get("platform") or "").strip().lower() == "threads"
+        and isinstance(payload, dict)
+        and str(payload.get("strategy_id") or "").strip() == "browse_only"
+    )
+
+
+def _browser_firefox_user_preferences(
+    context_control: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build task-scoped Firefox prefs without changing login or publish browsers."""
+    preferences = _browser_disk_cache_preferences()
+    if not _lightweight_threads_warmup_requested(context_control):
+        return preferences
+    try:
+        image_cache_mb = int(
+            str(
+                os.getenv(
+                    "SOCIAL_AUTOMATION_LIGHTWEIGHT_IMAGE_CACHE_MB",
+                    DEFAULT_LIGHTWEIGHT_WARMUP_IMAGE_CACHE_MB,
+                )
+            ).strip()
+        )
+    except (TypeError, ValueError):
+        image_cache_mb = DEFAULT_LIGHTWEIGHT_WARMUP_IMAGE_CACHE_MB
+    image_cache_mb = max(
+        MIN_LIGHTWEIGHT_WARMUP_IMAGE_CACHE_MB,
+        min(image_cache_mb, MAX_LIGHTWEIGHT_WARMUP_IMAGE_CACHE_MB),
+    )
+    preferences.update(
+        {
+            # Avoid keeping empty content processes ready for future tabs. This
+            # does not reduce the content processes required by the active page.
+            "dom.ipc.processPrelaunch.enabled": False,
+            "dom.ipc.processPrelaunch.fission.number": 0,
+            # Keep visible images intact while bounding decoded off-screen
+            # surfaces. Firefox expresses this preference in KiB.
+            "image.mem.surfacecache.max_size_kb": image_cache_mb * 1024,
+        }
+    )
+    return preferences
 
 
 class AutomationLogger(Protocol):
@@ -874,7 +934,9 @@ class _BrowserContextManager:
             "user_data_dir": str(profile_dir),
             "headless": headless,
             "humanize": float(os.getenv("SOCIAL_AUTOMATION_HUMANIZE_MAX_SECONDS", "0.5")),
-            "firefox_user_prefs": _browser_disk_cache_preferences(),
+            "firefox_user_prefs": _browser_firefox_user_preferences(
+                self.context_control
+            ),
         }
         if self.live_session is not None:
             geometry_config = _live_browser_geometry_config(self.live_session)

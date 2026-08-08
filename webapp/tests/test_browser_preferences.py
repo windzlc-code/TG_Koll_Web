@@ -75,25 +75,25 @@ class BrowserPreferencesTests(unittest.TestCase):
                 social_automation_api.LiveBrowserSettingsPayload(
                     standby_seconds=0,
                     auto_close_seconds=30,
-                    max_concurrency=3,
+                    max_concurrency=5,
                     text_input_mode="paste",
                 )
             )
         self.assertEqual(global_error.exception.status_code, 400)
-        self.assertIn("最多允许 2", str(global_error.exception.detail))
+        self.assertIn("最多允许 4", str(global_error.exception.detail))
 
         with self.assertRaises(social_automation_api.HTTPException) as user_error:
             social_automation_api.set_user_browser_preferences(
                 1,
                 social_automation_api.BrowserPreferencesPayload(
-                    requested_concurrency=3,
+                    requested_concurrency=5,
                 ),
                 auto_configured=False,
             )
         self.assertEqual(user_error.exception.status_code, 400)
-        self.assertIn("最多允许 2", str(user_error.exception.detail))
+        self.assertIn("最多允许 4", str(user_error.exception.detail))
 
-    def test_legacy_concurrency_above_server_limit_is_read_as_two(self):
+    def test_legacy_concurrency_above_server_limit_is_read_as_four(self):
         with db_module.db() as conn:
             conn.execute(
                 """
@@ -101,19 +101,19 @@ class BrowserPreferencesTests(unittest.TestCase):
                   user_id, completion_policy, review_hold_seconds, manual_timeout_seconds,
                   requested_concurrency, text_input_mode, auto_configured, updated_at,
                   standby_seconds, auto_close_seconds
-                ) VALUES (1, 'immediate_close', 30, 900, 4, 'paste', 0, 100, 0, 30)
+                ) VALUES (1, 'immediate_close', 30, 900, 6, 'paste', 0, 100, 0, 30)
                 """
             )
             conn.execute(
                 """
                 UPDATE admin_config
-                SET value_json = '{"standby_seconds":0,"auto_close_seconds":30,"max_concurrency":4,"text_input_mode":"paste"}'
+                SET value_json = '{"standby_seconds":0,"auto_close_seconds":30,"max_concurrency":6,"text_input_mode":"paste"}'
                 WHERE key = 'live_browser_settings'
                 """
             )
 
-        self.assertEqual(social_automation_api.get_live_browser_settings()["max_concurrency"], 2)
-        self.assertEqual(social_automation_api.get_user_browser_preferences(1)["requested_concurrency"], 2)
+        self.assertEqual(social_automation_api.get_live_browser_settings()["max_concurrency"], 4)
+        self.assertEqual(social_automation_api.get_user_browser_preferences(1)["requested_concurrency"], 4)
 
     def test_worker_resource_gate_blocks_new_browser_when_memory_is_low(self):
         with mock.patch.object(

@@ -45,6 +45,7 @@ let personaDashboardData = pdInitialDashboardData && Array.isArray(pdInitialDash
   : null;
 let personaDashboardRefreshTask = "";
 let personaDashboardPlatform = "";
+let personaDashboardPlatformFillPending = false;
 let personaDashboardPersonaIndex = 0;
 let personaDashboardPersonaKey = "";
 let personaDashboardHeatRenderRevision = 0;
@@ -194,6 +195,8 @@ function pdRenderDashboardContext(data) {
   const platforms = pdDashboardPlatforms(data);
   if (personaDashboardPlatform && !platforms.includes(personaDashboardPlatform)) personaDashboardPlatform = "";
   const activeIndex = Math.max(0, platforms.indexOf(pdPlatformFilter()));
+  const animatePlatformFill = personaDashboardPlatformFillPending;
+  personaDashboardPlatformFillPending = false;
   host.innerHTML = `
     <div class="persona-dashboard-platform-switcher" data-persona-dashboard-platform-switcher>
       <button class="persona-dashboard-platform-nav" type="button" data-persona-dashboard-platform-step="-1" aria-label="上一个平台" ${activeIndex === 0 ? "disabled" : ""}>
@@ -204,7 +207,7 @@ function pdRenderDashboardContext(data) {
           ${platforms.map((platform) => {
             const isActive = personaDashboardPlatform === platform;
             return `<button
-              class="${isActive ? "is-active" : ""}"
+              class="${isActive ? `is-active${animatePlatformFill ? " is-platform-fill-entering" : ""}` : ""}"
               type="button"
               role="tab"
               aria-selected="${isActive ? "true" : "false"}"
@@ -224,6 +227,7 @@ function pdRenderDashboardContext(data) {
     const nextPlatform = String(platform || "");
     if (nextPlatform === personaDashboardPlatform) return;
     personaDashboardPlatform = nextPlatform;
+    personaDashboardPlatformFillPending = true;
     pdRenderDashboard();
   };
   const viewport = host.querySelector("[data-persona-dashboard-platform-viewport]");
