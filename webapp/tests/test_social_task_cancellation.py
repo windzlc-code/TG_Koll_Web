@@ -1385,11 +1385,17 @@ class SocialTaskCancellationTests(unittest.TestCase):
         failure = RuntimeError("batch browser failed")
         failure.failed_batch_task_id = tasks[0]["id"]
         failure.completed_batch_results = []
+        observed = {}
+
+        def fail_batch_runner(*_args, **kwargs):
+            observed["task_id"] = str((kwargs["control"].get("task") or {}).get("id") or "")
+            observed["current_task_id"] = str(kwargs["control"].get("current_task_id") or "")
+            raise failure
 
         with mock.patch.object(
             social_automation_api,
             "_run_social_publish_batch_in_clean_thread",
-            side_effect=failure,
+            side_effect=fail_batch_runner,
         ):
             social_automation_api._execute_claimed_task_with_control(
                 tasks[0],
@@ -1398,6 +1404,10 @@ class SocialTaskCancellationTests(unittest.TestCase):
 
         self.assertEqual(self._status("batch-exception-1"), "failed")
         self.assertEqual(self._status("batch-exception-2"), "failed")
+        self.assertEqual(observed, {
+            "task_id": "batch-exception-1",
+            "current_task_id": "batch-exception-1",
+        })
 
     def test_cancel_all_only_changes_active_states_and_scrubs_their_secrets(self):
         active_ids = []

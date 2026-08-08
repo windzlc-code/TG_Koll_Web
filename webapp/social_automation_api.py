@@ -893,6 +893,34 @@ def _daily_publish_used_count(
     *,
     include_active_carryover: bool = False,
 ) -> int:
+    """Return the user-facing count of posts confirmed as published for a day.
+
+    Reservations are deliberately not included here.  They are handled by the
+    separate capacity count below, so a queued, cancelled, or failed task never
+    appears as a successful publish in the account profile.
+    """
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS task_count
+        FROM social_daily_publish_slots
+        WHERE user_id = ?
+          AND waived = 0
+          AND quota_day = ?
+          AND state = 'confirmed'
+        """,
+        (int(user_id), str(quota_day)),
+    ).fetchone()
+    return int(row["task_count"] or 0) if row else 0
+
+
+def _daily_publish_capacity_count(
+    conn: Any,
+    user_id: int,
+    quota_day: str,
+    *,
+    include_active_carryover: bool = False,
+) -> int:
+    """Return reservations that must continue to occupy the safety cap."""
     row = conn.execute(
         """
         SELECT COUNT(*) AS task_count
@@ -1035,10 +1063,17 @@ def _daily_publish_policy_in_transaction(
         day,
         include_active_carryover=day == current_day,
     )
+    capacity_used = 0 if waived else _daily_publish_capacity_count(
+        conn,
+        clean_user_id,
+        day,
+        include_active_carryover=day == current_day,
+    )
     remaining = max(0, limit - used)
+    capacity_remaining = max(0, limit - capacity_used)
     requested = max(0, int(requested_count or 0))
-    locked = bool(not waived and used >= limit)
-    request_blocked = bool(not waived and requested > remaining)
+    locked = bool(not waived and capacity_used >= limit)
+    request_blocked = bool(not waived and requested > capacity_remaining)
     message = ""
     if locked:
         message = f"每日最多发布 {limit} 篇。超过 {limit} 篇会有封号风险，系统已强制禁止继续发布。"
@@ -1048,6 +1083,9 @@ def _daily_publish_policy_in_transaction(
         "limit": limit,
         "used": used,
         "remaining": remaining,
+        "capacity_used": capacity_used,
+        "capacity_remaining": capacity_remaining,
+        "reserved": max(0, capacity_used - used),
         "requested": requested,
         "locked": locked,
         "request_blocked": request_blocked,
@@ -7820,7 +7858,7 @@ def _finish_publish_batch_item(
         result,
         "" if status == "success" else str(result.get("error") or "执行失败"),
         account_status="ready" if status == "success" else "",
-        sync_persona_archive=False,
+        sync_persona_archive=True,
     )
     return bool(finished and status == "success")
 
@@ -8379,6 +8417,8 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
                 _apply_runtime_task_preferences(dict(item), account, control)
                 for item in batch_tasks
             ]
+            control["task"] = dict(prepared_batch[0])
+            control["current_task_id"] = str(prepared_batch[0].get("id") or task_id)
             batch_loggers = [_DbTaskLogger(str(item.get("id") or "")) for item in prepared_batch]
             try:
                 batch_results = _run_social_publish_batch_in_clean_thread(

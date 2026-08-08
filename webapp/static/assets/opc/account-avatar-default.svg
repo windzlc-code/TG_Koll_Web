@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="默认账号头像">
+  <defs>
+    <linearGradient id="avatarBackground" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#edf4f7"/>
+      <stop offset="1" stop-color="#d8e6ee"/>
+    </linearGradient>
+  </defs>
+  <circle cx="64" cy="64" r="62" fill="url(#avatarBackground)" stroke="#9eb8c8" stroke-width="4"/>
+  <circle cx="64" cy="46" r="18" fill="none" stroke="#24445b" stroke-width="8" stroke-linecap="round"/>
+  <path d="M29 101c4-19 18-31 35-31s31 12 35 31" fill="none" stroke="#24445b" stroke-width="8" stroke-linecap="round"/>
+</svg>

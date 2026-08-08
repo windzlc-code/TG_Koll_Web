@@ -3460,8 +3460,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             function statusLabel(value) {{ return value === "success" ? "成功" : String(value || ""); }}
             function statusTone(value) {{ return value === "success" ? "success" : "neutral"; }}
             function socialTaskPayload(task) {{ return task?.payload || {{}}; }}
-            function taskResultUrl(task) {{ return task?.result?.published_url || ""; }}
-            function adminWorkspacePageUrl(value) {{ return String(value || ""); }}
             function collectTaskScreenshots(task) {{
               const path = task?.result?.screenshot_path || "";
               return path ? [{{ previewUrl: path, label: "最终截图" }}] : [];
@@ -3495,11 +3493,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             ], []);
             assert.match(html, /2 篇 · 2 张截图/);
             assert.ok(html.indexOf("第一篇正文") < html.indexOf("第二篇正文"));
-            assert.match(html, /https:\\/\\/threads.net\\/post\\/one/);
-            assert.match(html, /https:\\/\\/threads.net\\/post\\/two/);
             assert.match(html, /\\/shots\\/one.png/);
             assert.match(html, /\\/shots\\/two.png/);
             assert.doesNotMatch(html, /发布媒体/);
+            assert.doesNotMatch(html, /查看已发布推文/);
         """)
         self._run_node(harness)
 
@@ -3526,8 +3523,14 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         queue_view = self._function_source("renderTaskQueueView")
         bind_events = self._function_source("bindEvents")
         self.assertIn("renderTaskQueuePersonaTypeFilter(personaSourceRows)", queue_view)
+        self.assertLess(queue_view.index("task-queue-persona-select-button"), queue_view.index("renderTaskQueuePersonaTypeFilter(personaSourceRows)"))
         self.assertIn("data-task-queue-type-filter", self.source)
         self.assertIn('state.taskQueuePersonaTypeFilter = String(taskQueueTypeFilter.value || "all")', bind_events)
+        filter_css = self._css_block(".task-queue-type-filter")
+        self.assertIn("width: 36px", filter_css)
+        self.assertIn("height: 36px", filter_css)
+        self.assertIn("margin: 0", filter_css)
+        self.assertIn("z-index: 3", self._css_block(".task-queue-type-filter:focus-within"))
 
     def test_console_settings_use_user_browser_policy_endpoints_and_keep_pagination_local(self):
         render = self._function_source("renderConsoleSettingsPage")

@@ -102,8 +102,8 @@
       billingSubscription: "当前订阅",
       billingImages: "图片额度",
       billingPending: "待审批",
-      publishToday: "今日任务",
-      publishRemaining: "今日剩余任务额度",
+      publishToday: "今日发布",
+      publishRemaining: "今日剩余发布额度",
       billingUnread: "尚未读取",
       billingLoading: "读取中…",
       billingReady: "已同步",
@@ -203,8 +203,8 @@
       billingSubscription: "目前訂閱",
       billingImages: "圖片額度",
       billingPending: "待審批",
-      publishToday: "今日任務",
-      publishRemaining: "今日剩餘任務額度",
+      publishToday: "今日發布",
+      publishRemaining: "今日剩餘發布額度",
       billingUnread: "尚未讀取",
       billingLoading: "讀取中…",
       billingReady: "已同步",
@@ -629,8 +629,8 @@
             <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M7 14h4"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="billingSubscription">当前订阅</span><strong data-site-billing-subscription>—</strong></span></div>
             <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.2"/><path d="m5.5 17 4-4 3 3 2-2 4 3"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="billingImages">图片额度</span><strong data-site-billing-images>—</strong></span></div>
             <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="billingPending">待审批</span><strong data-site-billing-pending>—</strong></span></div>
-            <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="publishToday">今日任务</span><strong data-site-publish-used>—</strong></span></div>
-            <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 2v4M16 2v4M4 9h16M12 13v3l2 1"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="publishRemaining">剩余额度</span><strong data-site-publish-remaining>—</strong></span></div>
+            <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="publishToday">今日发布</span><strong data-site-publish-used>—</strong></span></div>
+            <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 2v4M16 2v4M4 9h16M12 13v3l2 1"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="publishRemaining">今日剩余发布额度</span><strong data-site-publish-remaining>—</strong></span></div>
           </div>
           <div class="site-account-action-row">
             <button type="button" data-site-open-billing data-site-copy="billingView"></button>

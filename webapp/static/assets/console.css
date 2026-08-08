@@ -1389,23 +1389,26 @@ button.primary,
 }
 
 .persona-dashboard-view .persona-dashboard-context {
-  display: inline-flex;
+  display: flex;
+  width: 100%;
   min-width: 0;
   align-items: center;
+  justify-content: center;
   gap: 7px;
+  text-align: center;
 }
 
 .persona-dashboard-view .persona-dashboard-context-logo {
   display: inline-grid;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   flex: 0 0 auto;
   place-items: center;
 }
 
 .persona-dashboard-view .persona-dashboard-context-logo svg {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
 }
 
 .persona-dashboard-view :is(
@@ -1621,6 +1624,10 @@ button.primary,
   background: var(--instagram-platform-gradient);
 }
 
+.persona-dashboard-view .persona-heat-platform-row[data-platform="all"] .persona-heat-platform-track i {
+  background: linear-gradient(90deg, #243b53, #0f8a8a);
+}
+
 .persona-dashboard-view .persona-heat-platform-row > strong {
   color: var(--ink);
   text-align: right;
@@ -1628,34 +1635,51 @@ button.primary,
 
 .persona-dashboard-view .persona-trend-range {
   display: inline-grid;
-  grid-template-columns: repeat(3, 30px);
+  grid-template-columns: repeat(3, 26px);
   flex: 0 0 auto;
-  gap: 2px;
+  gap: 1px;
   width: auto;
   margin: 0;
-  padding: 2px;
+  padding: 1px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--panel-solid);
 }
 
 .persona-dashboard-view .persona-trend-range button {
-  min-width: 30px;
-  min-height: 22px;
-  padding: 1px 5px;
+  min-width: 26px;
+  min-height: 18px;
+  height: 18px;
+  padding: 0 3px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
+  line-height: 1;
 }
 
 .persona-dashboard-view .persona-trend-footer {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-items: center;
+  gap: 4px;
   margin-top: 4px;
+}
+
+.persona-dashboard-view .persona-line-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 10px;
+}
+
+.persona-dashboard-view .persona-line-legend i {
+  width: 16px;
+  height: 3px;
+  border-radius: 999px;
 }
 
 .persona-dashboard-view .persona-trend-panel .persona-chart-head h3 {
@@ -1663,9 +1687,13 @@ button.primary,
 }
 
 .persona-dashboard-view .persona-trend-panel .persona-chart-head .small,
-.persona-dashboard-view .persona-line-legend span,
 .persona-dashboard-view .persona-line-chart text {
   font-size: 13px;
+  font-weight: 600;
+}
+
+.persona-dashboard-view .persona-line-legend span {
+  font-size: 10px;
   font-weight: 600;
 }
 
@@ -2008,9 +2036,12 @@ button.primary,
   }
 
   .persona-dashboard-view .persona-trend-panel .persona-chart-head .small,
-  .persona-dashboard-view .persona-line-legend span,
   .persona-dashboard-view .persona-line-chart text {
     font-size: 12px;
+  }
+
+  .persona-dashboard-view .persona-line-legend span {
+    font-size: 10px;
   }
 
   .persona-dashboard-view .persona-line-chart {
@@ -2720,13 +2751,6 @@ textarea:focus {
 
 .automation-plan-task-control.is-empty {
   grid-template-columns: minmax(0, 1fr) repeat(2, 30px);
-}
-
-.automation-plan-task-control.is-empty .automation-plan-task-picker {
-  border: 1px solid var(--status-queued-border);
-  border-radius: 8px;
-  background: var(--status-queued-bg);
-  color: var(--status-queued-ink);
 }
 
 .automation-plan-task-detail .ui-eye-icon {
@@ -14582,6 +14606,18 @@ body.persona-media-sorting {
   height: 36px;
   min-height: 36px;
   padding: 0;
+}
+
+.task-queue-type-filter {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  margin: 0;
+  z-index: 1;
+}
+
+.task-queue-type-filter:focus-within {
+  z-index: 3;
 }
 
 .task-queue-persona-select-button .ui-action-icon {

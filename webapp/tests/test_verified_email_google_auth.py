@@ -397,6 +397,7 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
         self.assertEqual(me.status_code, 200, me.text)
         self.assertFalse(me.json()["password_login_enabled"])
         self.assertEqual(me.json()["verified_email"], "google.user@gmail.com")
+        self.assertEqual(me.json()["avatar_url"], "https://example.com/avatar.png")
         with db_module.db() as conn:
             google_user = conn.execute(
                 "SELECT id FROM users WHERE username = 'google-user'"

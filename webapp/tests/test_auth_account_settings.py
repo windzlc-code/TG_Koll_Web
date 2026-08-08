@@ -182,6 +182,10 @@ class AccountSettingsApiTests(unittest.TestCase):
         refreshed = customer.get("/api/me")
         self.assertEqual(refreshed.status_code, 200, refreshed.text)
         self.assertEqual(refreshed.json()["full_name"], "Updated Profile")
+        # A blank avatar saved by the user is an explicit preference, not an
+        # unset value.  It must not be replaced by the password-account
+        # fallback template on a later profile read.
+        self.assertEqual(refreshed.json()["avatar_url"], "")
         self.assertEqual(refreshed.json()["profile_tags"], "AI, 营销, 品牌")
 
         self.client.cookies.set("session_token", customer.cookies.get("session_token"))

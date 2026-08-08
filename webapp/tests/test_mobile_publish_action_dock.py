@@ -219,14 +219,24 @@ class MobilePublishActionDockTests(unittest.TestCase):
 
     def test_mobile_publish_task_stays_on_the_task_page_until_the_second_tap(self):
         self.assertIn('mobilePublishingTaskId: ""', SCRIPT)
-        self.assertIn("function deferMobilePublishingBrowserView(taskId = \"\")", SCRIPT)
-        self.assertIn("if (!cleanTaskId || !isMobileNavMode()) return false;", SCRIPT)
-        self.assertIn("state.mobilePublishingTaskId = cleanTaskId;", SCRIPT)
-        self.assertIn('if (moduleId === "publishing" && state.mobilePublishingTaskId)', SCRIPT)
+        self.assertIn("mobilePublishingTaskIds: []", SCRIPT)
+        self.assertIn("mobilePublishingTaskStartedAt: 0", SCRIPT)
+        self.assertIn("function deferMobilePublishingBrowserView(taskIds = \"\", startedAt = 0)", SCRIPT)
+        self.assertIn("if (!cleanTaskIds.length || !isMobileNavMode()) return false;", SCRIPT)
+        self.assertIn("state.mobilePublishingTaskIds = Array.from(new Set(cleanTaskIds));", SCRIPT)
+        self.assertIn("state.mobilePublishingTaskId = state.mobilePublishingTaskIds[0];", SCRIPT)
+        self.assertIn("state.mobilePublishingTaskStartedAt = toastTimestampMs(startedAt) || Date.now();", SCRIPT)
+        self.assertIn("const mobileTask = moduleId === \"publishing\" ? mobilePublishingTask() : null;", SCRIPT)
+        self.assertIn("const mobilePublishingTaskPending = Boolean(mobileTask);", SCRIPT)
         self.assertIn("state.mobilePublishingTaskId = \"\";", SCRIPT)
+        self.assertIn("state.mobilePublishingTaskIds = [];", SCRIPT)
+        self.assertIn("state.mobilePublishingTaskStartedAt = 0;", SCRIPT)
         self.assertIn("openLiveBrowserTaskView(taskId);", SCRIPT)
         self.assertIn('renderBusyButtonContent(moduleId === "publishing" ? "任务执行中"', SCRIPT)
-        self.assertIn("!deferMobilePublishingBrowserView(immediateTaskId)", SCRIPT)
+        self.assertIn(
+            "!deferMobilePublishingBrowserView(immediateTaskIds, state.simpleFlowPendingStartedAt)",
+            SCRIPT,
+        )
         self.assertIn("!deferMobilePublishingBrowserView(firstImmediateTaskId)", SCRIPT)
 
     def test_mobile_publish_media_defers_decode_and_offscreen_paint(self):

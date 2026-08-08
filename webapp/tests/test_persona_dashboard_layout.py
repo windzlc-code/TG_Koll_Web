@@ -151,6 +151,24 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-dashboard-context-logo,", self.styles)
         self.assertIn("svg.platform-brand-icon", self.styles)
 
+        context_selector = ".persona-dashboard-view .persona-dashboard-context {"
+        context_start = self.styles.index(context_selector)
+        context_rule = self.styles[context_start:self.styles.index("}", context_start) + 1]
+        logo_selector = ".persona-dashboard-view .persona-dashboard-context-logo {"
+        logo_start = self.styles.index(logo_selector)
+        logo_rule = self.styles[logo_start:self.styles.index("}", logo_start) + 1]
+        logo_svg_selector = ".persona-dashboard-view .persona-dashboard-context-logo svg {"
+        logo_svg_start = self.styles.index(logo_svg_selector)
+        logo_svg_rule = self.styles[logo_svg_start:self.styles.index("}", logo_svg_start) + 1]
+
+        self.assertIn("width: 100%;", context_rule)
+        self.assertIn("justify-content: center;", context_rule)
+        self.assertIn("text-align: center;", context_rule)
+        self.assertIn("width: 22px;", logo_rule)
+        self.assertIn("height: 22px;", logo_rule)
+        self.assertIn("width: 22px;", logo_svg_rule)
+        self.assertIn("height: 22px;", logo_svg_rule)
+
     def test_dashboard_summary_stays_compact_on_mobile(self):
         summary_start = self.dashboard_script.index("function pdRenderSummary(visiblePersonas)")
         summary_end = self.dashboard_script.index("\nfunction pdRenderDashboard", summary_start)
@@ -228,6 +246,16 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('[data-platform="threads"] .persona-heat-platform-track i', self.styles)
         self.assertIn('[data-platform="instagram"] .persona-heat-platform-track i', self.styles)
 
+    def test_persona_heat_always_includes_a_platform_total_bar(self):
+        chart_start = self.dashboard_script.index("function pdRenderPersonaHeatCarousel(hostId, personas, platforms)")
+        chart_end = self.dashboard_script.index("\nfunction pdRenderDonutChart", chart_start)
+        chart = self.dashboard_script[chart_start:chart_end]
+
+        self.assertIn('const platformTotal = Number(pdPersonaHot(persona, "").hot_score || 0);', chart)
+        self.assertIn('data-platform="all"', chart)
+        self.assertIn('平台总和', chart)
+        self.assertIn('data-platform="all"] .persona-heat-platform-track i', self.styles)
+
     def test_persona_platform_heat_rows_keep_the_compact_ranking_rhythm(self):
         row_selector = ".persona-dashboard-view .persona-heat-platform-row {"
         row_start = self.styles.index(row_selector)
@@ -253,8 +281,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('const rangeOptions = [["day", "日"], ["month", "月"], ["year", "年"]];', chart)
         self.assertIn('if (range === "year") return date.slice(0, 4);', chart)
         self.assertIn('class="persona-trend-footer"', chart)
-        self.assertIn('grid-template-columns: repeat(3, 30px);', self.styles)
-        self.assertIn('min-height: 22px;', self.styles)
+        self.assertIn('grid-template-columns: repeat(3, 26px);', self.styles)
+        self.assertIn('min-height: 18px;', self.styles)
         self.assertIn('if (range === "month") return date.slice(0, 7);', chart)
         self.assertIn("const limits = { day: 30, month: 12, year: 5 };", chart)
         self.assertIn("data-persona-trend-range", chart)
@@ -262,6 +290,26 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("pdRenderDashboard();", chart)
         self.assertIn("persona-grid-line", chart)
         self.assertIn("persona-trend-range", self.styles)
+
+        footer_selector = ".persona-dashboard-view .persona-trend-footer {"
+        footer_start = self.styles.index(footer_selector)
+        footer_rule = self.styles[footer_start:self.styles.index("}", footer_start) + 1]
+        legend_selector = ".persona-dashboard-view .persona-line-legend {"
+        legend_start = self.styles.index(legend_selector)
+        legend_rule = self.styles[legend_start:self.styles.index("}", legend_start) + 1]
+        self.assertIn("grid-template-columns: 1fr;", footer_rule)
+        self.assertIn("justify-items: center;", footer_rule)
+        self.assertIn("justify-content: center;", legend_rule)
+        self.assertIn("font-size: 10px;", self.styles)
+
+    def test_trend_chart_uses_high_contrast_series_colors_per_platform(self):
+        palette_start = self.dashboard_script.index("function pdPlatformPalette(platform = pdPlatformFilter())")
+        palette_end = self.dashboard_script.index("\nfunction pdVisibleSummary", palette_start)
+        palette = self.dashboard_script[palette_start:palette_end]
+
+        self.assertIn('["#050505", "#2563eb", "#f59e0b"]', palette)
+        self.assertIn('["#c13584", "#405de6", "#f77737"]', palette)
+        self.assertIn('["#243b53", "#0f8a8a", "#e59d18"]', palette)
 
     def test_homepage_removes_its_legacy_post_detail_stack(self):
         for legacy_function in (
@@ -2257,7 +2305,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('data-publish-history-view="${esc(recordId)}"', self.console_script)
         self.assertIn('data-publish-history-requeue="${esc(recordId)}"', self.console_script)
         self.assertIn("function openPublishHistoryRecordModal", self.console_script)
-        self.assertIn('extraActions: record.__dashboard_metric_only', self.console_script)
+        self.assertNotIn('extraActions: record.__dashboard_metric_only', self.console_script)
+        self.assertIn('extraActions: [{ value: "requeue"', self.console_script)
         self.assertIn('{ value: "requeue", text: "重回草稿", iconHtml: renderRequeueIcon() }', self.console_script)
         self.assertIn("renderSourceLinkIcon()", self.console_script)
         self.assertIn(".publish-history-card-requeue", self.styles)

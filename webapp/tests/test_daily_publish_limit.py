@@ -102,7 +102,13 @@ class DailyPublishLimitTests(unittest.TestCase):
         )
 
     def _create(self, *args, **kwargs):
-        with mock.patch.object(social_automation_api, "_now", return_value=self.now):
+        # These are policy tests.  Keep the background worker out of the
+        # reservation setup so task state transitions are controlled here.
+        with (
+            mock.patch.object(social_automation_api, "_now", return_value=self.now),
+            mock.patch.object(social_automation_api, "wake_social_automation_worker"),
+            mock.patch.object(social_automation_api, "run_social_automation_once"),
+        ):
             return social_automation_api.create_social_task(*args, **kwargs)
 
     def test_customer_is_blocked_after_fifteen_across_social_accounts(self):
@@ -116,9 +122,28 @@ class DailyPublishLimitTests(unittest.TestCase):
         self.assertIn("超过 15 篇会有封号风险", str(raised.exception.detail))
         with mock.patch.object(social_automation_api, "_now", return_value=self.now):
             policy = social_automation_api.get_daily_publish_policy(self.customer_id)
-        self.assertEqual(policy["used"], 15)
-        self.assertEqual(policy["remaining"], 0)
+        self.assertEqual(policy["used"], 0)
+        self.assertEqual(policy["remaining"], 15)
+        self.assertEqual(policy["capacity_used"], 15)
         self.assertTrue(policy["locked"])
+
+    def test_profile_count_increases_only_after_a_publish_succeeds(self):
+        task = self._create(self._payload())
+        with mock.patch.object(social_automation_api, "_now", return_value=self.now):
+            queued_policy = social_automation_api.get_daily_publish_policy(self.customer_id)
+            self.assertEqual(queued_policy["used"], 0)
+            self.assertEqual(queued_policy["capacity_used"], 1)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET status = 'running', started_at = ? WHERE id = ?",
+                (self.now, task["id"]),
+            )
+        with mock.patch.object(social_automation_api, "_now", return_value=self.now):
+            social_automation_api._finish_task(task["id"], "success", {"publish_submitted": True}, "")
+            confirmed_policy = social_automation_api.get_daily_publish_policy(self.customer_id)
+        self.assertEqual(confirmed_policy["used"], 1)
+        self.assertEqual(confirmed_policy["remaining"], 14)
+        self.assertEqual(confirmed_policy["capacity_used"], 1)
 
     def test_cancelled_and_failed_tasks_release_daily_capacity(self):
         tasks = [self._create(self._payload()) for _ in range(15)]
@@ -159,7 +184,8 @@ class DailyPublishLimitTests(unittest.TestCase):
         with mock.patch.object(social_automation_api, "_now", return_value=tomorrow):
             tomorrow_policy = social_automation_api.get_daily_publish_policy(self.customer_id)
         self.assertTrue(tomorrow_policy["locked"])
-        self.assertEqual(tomorrow_policy["used"], 15)
+        self.assertEqual(tomorrow_policy["used"], 0)
+        self.assertEqual(tomorrow_policy["capacity_used"], 15)
 
     def test_worker_does_not_claim_a_backlogged_sixteenth_publish(self):
         tasks = [self._create(self._payload()) for _ in range(15)]
@@ -359,7 +385,8 @@ class DailyPublishLimitTests(unittest.TestCase):
                 (task["id"],),
             ).fetchone()[0]
         self.assertEqual(slot_state, "unknown")
-        self.assertEqual(policy["used"], 1)
+        self.assertEqual(policy["used"], 0)
+        self.assertEqual(policy["capacity_used"], 1)
 
     def test_publish_batch_waits_until_complete_and_claims_in_sequence(self):
         batch_id = "publish-batch-test"
@@ -440,7 +467,7 @@ class DailyPublishLimitTests(unittest.TestCase):
                     2,
                 )
             )
-            sync_archive.assert_not_called()
+            sync_archive.assert_called_once_with(first_task["id"], {"ok": True})
         with sqlite3.connect(self.db_path) as conn:
             statuses = conn.execute(
                 """

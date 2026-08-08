@@ -16,6 +16,14 @@ def function_source(name: str, next_name: str) -> str:
 
 
 class ConsolePublishHistoryHotDataTests(unittest.TestCase):
+    def test_publish_sequence_syncs_each_success_without_shortening_later_task_deadlines(self):
+        watcher = function_source("watchPersonaPublishTaskSequence", "loadPersonaDraftPosts")
+        loop_start = watcher.index("for (const taskId of ids)")
+
+        self.assertIn("syncPublishedPostLocalState(task);", watcher)
+        self.assertIn("const startedAt = Date.now();", watcher[loop_start:])
+        self.assertIn("personaPublishWatchDeadline(knownTask, startedAt)", watcher)
+
     def test_persona_workspace_moves_platform_metrics_into_identity_and_shows_published_posts(self):
         metrics = function_source("personaPlatformMetricSummary", "renderPersonaPlatformMetricStrip")
         panel = function_source("renderPersonaDataPanel", "renderPersonaProfileIdentity")
@@ -44,14 +52,24 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
 
     def test_persona_history_merges_only_verified_current_account_posts(self):
         dashboard_record = function_source("personaHistoryDashboardMetricRecord", "personaHistoryIdentityKeys")
+        identity = function_source("personaHistoryIdentityKeys", "personaHistoryContentCompatible")
         merge = function_source("personaMergedHistoryRows", "personaHistoryContentParts")
+        matcher = function_source("personaHistoryRowsMatch", "personaMergedHistoryRows")
         history = function_source("renderPersonaHistoryDataContent", "renderPersonaDataPanel")
 
         self.assertIn("personaPublishHistoryRows(persona)", merge)
         self.assertIn("personaDashboardDetail(persona)?.post_metrics", merge)
-        self.assertIn("personaHistoryIdentityKeys", merge)
-        self.assertIn("record?.account_match?.matches_current !== false", merge)
-        self.assertIn("currentValue !== null", merge)
+        self.assertIn("personaHistoryRowsMatch", merge)
+        self.assertNotIn("record?.account_match?.matches_current !== false", merge)
+        self.assertNotIn("merged.push(metric)", merge)
+        self.assertIn("personaHistoryRowsMatch(record, metric)", merge)
+        self.assertIn("normalizePersonaContentPlatform", matcher)
+        self.assertIn("account_id", matcher)
+        self.assertIn("account_username", matcher)
+        self.assertIn("published_url", identity)
+        self.assertIn("personaHistoryContentCompatible", matcher)
+        self.assertIn("preferMetric", merge)
+        self.assertIn("metricIsNewer", merge)
         self.assertNotIn("Number(currentHot[key] || 0) ||", merge)
         self.assertIn("row?.is_published_post !== true", dashboard_record)
         self.assertIn("published_url: String(row.source_url || \"\").trim()", dashboard_record)
@@ -102,7 +120,8 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertNotIn("filters.platform", history_rows)
         self.assertIn('value="hot_desc"', filters)
         self.assertIn('value="time_desc"', filters)
-        self.assertIn('record.__dashboard_metric_only ? ""', selection)
+        self.assertNotIn('record.__dashboard_metric_only ? ""', selection)
+        self.assertIn('data-publish-history-requeue="${esc(recordId)}"', selection)
 
     def test_history_list_preview_uses_one_reach_metric_and_hides_compact_only_fields(self):
         selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")

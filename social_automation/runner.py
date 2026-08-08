@@ -624,6 +624,8 @@ def run_social_publish_batch(
     screenshot_dir.mkdir(parents=True, exist_ok=True)
     first_payload = tasks[0].get("payload") if isinstance(tasks[0].get("payload"), dict) else {}
     results: list[dict[str, Any]] = []
+    if platform == "threads" and isinstance(context_control, dict):
+        context_control["threads_publish_session_permalinks"] = set()
     with _open_camoufox_context(
         account=account,
         proxy=proxy,
@@ -9617,6 +9619,30 @@ def _normalize_threads_post_permalink(value: Any) -> str:
     return f"https://www.threads.net{path}"
 
 
+def _threads_publish_session_permalinks(context_control: dict[str, Any] | None) -> set[str]:
+    if not isinstance(context_control, dict):
+        return set()
+    values = context_control.get("threads_publish_session_permalinks")
+    if not isinstance(values, (set, list, tuple)):
+        return set()
+    return {
+        permalink
+        for value in values
+        if (permalink := _normalize_threads_post_permalink(value))
+    }
+
+
+def _remember_threads_publish_permalink(context_control: dict[str, Any] | None, value: Any) -> None:
+    if not isinstance(context_control, dict):
+        return
+    permalink = _normalize_threads_post_permalink(value)
+    if not permalink:
+        return
+    known = _threads_publish_session_permalinks(context_control)
+    known.add(permalink)
+    context_control["threads_publish_session_permalinks"] = known
+
+
 def _find_threads_post_permalink(page, caption: str) -> str:
     current_url = _normalize_threads_post_permalink(getattr(page, "url", ""))
     if current_url:
@@ -9628,15 +9654,30 @@ def _find_threads_post_permalink(page, caption: str) -> str:
         candidate = page.evaluate(
             r"""caption => {
                 const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
+                const compact = value => normalize(value).replace(/\s+/g, '');
+                const normalizedCaption = normalize(caption);
+                const compactCaption = compact(caption);
+                const probes = [
+                    normalizedCaption.slice(0, 96),
+                    compactCaption.slice(0, 64),
+                ].filter(value => value.length >= 12);
+                const containsCaption = value => {
+                    const normalizedValue = normalize(value);
+                    const compactValue = compact(value);
+                    return normalizedValue.includes(normalizedCaption)
+                        || probes.some(probe => normalizedValue.includes(probe) || compactValue.includes(probe));
+                };
                 const matches = Array.from(document.querySelectorAll('div, span, p')).filter(
-                    node => normalize(node.innerText || node.textContent) === caption
+                    node => containsCaption(node.innerText || node.textContent)
                 );
+                matches.sort((left, right) => normalize(left.innerText || left.textContent).length - normalize(right.innerText || right.textContent).length);
                 for (const match of matches) {
                     let root = match;
                     for (let depth = 0; root && root !== document.body && depth < 12; depth += 1, root = root.parentElement) {
                         const links = root.matches?.('a[href]') ? [root] : Array.from(root.querySelectorAll('a[href]'));
-                        const postLink = links.find(link => /\/@[^/]+\/(?:post|thread)\/[^/?#]+/i.test(link.href || link.getAttribute('href') || ''));
-                        if (postLink) return postLink.href || postLink.getAttribute('href') || '';
+                        const postLinks = links.filter(link => /\/@[^/]+\/(?:post|thread)\/[^/?#]+/i.test(link.href || link.getAttribute('href') || ''));
+                        const uniquePostLinks = Array.from(new Map(postLinks.map(link => [link.href || link.getAttribute('href') || '', link])).values());
+                        if (uniquePostLinks.length === 1) return uniquePostLinks[0].href || uniquePostLinks[0].getAttribute('href') || '';
                     }
                 }
                 const postLinks = Array.from(document.querySelectorAll('a[href]')).filter(
@@ -9645,24 +9686,14 @@ def _find_threads_post_permalink(page, caption: str) -> str:
                 for (const postLink of postLinks) {
                     let root = postLink;
                     for (let depth = 0; root && root !== document.body && depth < 12; depth += 1, root = root.parentElement) {
-                        if (normalize(root.innerText || root.textContent).includes(caption)) {
+                        const localLinks = Array.from(root.querySelectorAll('a[href]')).filter(
+                            link => /\/@[^/]+\/(?:post|thread)\/[^/?#]+/i.test(link.href || link.getAttribute('href') || '')
+                        );
+                        const uniqueLocalLinks = new Set(localLinks.map(link => link.href || link.getAttribute('href') || ''));
+                        if (uniqueLocalLinks.size === 1 && containsCaption(root.innerText || root.textContent)) {
                             return postLink.href || postLink.getAttribute('href') || '';
                         }
                     }
-                }
-                const profileMatch = String(window.location.pathname || '').match(/^\/(\@[^/]+)/);
-                const pageText = normalize(document.body?.innerText || document.body?.textContent);
-                if (profileMatch && pageText.includes(caption)) {
-                    const ownPrefix = `/${profileMatch[1]}/`;
-                    const ownPost = postLinks.find(link => {
-                        try {
-                            const path = new URL(link.href || link.getAttribute('href') || '', window.location.href).pathname;
-                            return path.startsWith(ownPrefix) && /\/(?:post|thread)\//i.test(path);
-                        } catch (_) {
-                            return false;
-                        }
-                    });
-                    if (ownPost) return ownPost.href || ownPost.getAttribute('href') || '';
                 }
                 return '';
             }""",
@@ -9982,15 +10013,7 @@ def _wait_for_threads_own_post(
         ]
         if str(caption or "").strip():
             matched_permalink = _find_threads_post_permalink(page, caption)
-            if matched_permalink in new_own_permalinks:
-                permalink = matched_permalink
-            else:
-                # Threads may split the post body across deeply nested nodes even
-                # though the timestamp permalink is already present. The profile
-                # baseline is captured immediately before submit and tasks for one
-                # account are serialized, so one newly added own permalink is
-                # sufficient confirmation without risking an old-post match.
-                permalink = new_own_permalinks[0] if len(new_own_permalinks) == 1 else ""
+            permalink = matched_permalink if matched_permalink in new_own_permalinks else ""
         else:
             permalink = new_own_permalinks[0] if len(new_own_permalinks) == 1 else ""
         if baseline_known and permalink:
@@ -10087,12 +10110,26 @@ def _capture_threads_profile_baseline(page, profile_url: str, logger: Automation
         return None
     last_error = ""
     stable_empty_count = 0
-    for attempt in range(2):
+    observed_permalinks: set[str] = set()
+    successful_reads = 0
+    for attempt in range(3):
         try:
             _goto(page, profile_url, logger, "threads_publish_baseline", timeout_ms=5000, networkidle_ms=1500)
+        except Exception as exc:
+            last_error = str(exc)
+        try:
+            expected_profile = _normalize_threads_profile_url(profile_url)
+            current_profile = _normalize_threads_profile_url(getattr(page, "url", ""))
+            if not expected_profile or current_profile != expected_profile:
+                raise RuntimeError(last_error or "Threads profile navigation did not reach the expected account.")
             permalinks = _find_threads_post_permalinks(page)
+            if permalinks is not None:
+                successful_reads += 1
             if permalinks:
-                return set(permalinks)
+                observed_permalinks.update(permalinks)
+                stable_empty_count = 0
+                if successful_reads >= 2:
+                    return observed_permalinks
             if permalinks == [] and _threads_profile_is_stably_empty(page, profile_url):
                 stable_empty_count += 1
                 if stable_empty_count >= 2:
@@ -10101,9 +10138,11 @@ def _capture_threads_profile_baseline(page, profile_url: str, logger: Automation
                 stable_empty_count = 0
         except Exception as exc:
             last_error = str(exc)
-        if attempt == 0:
+        if attempt < 2:
             _sleep_between(0.8, 1.2)
-    logger.log("warn", "threads_publish_baseline_failed", "发布前连续两次无法读取账号主页基线，任务不会点击发布。", {"error": last_error[:500]})
+    if observed_permalinks:
+        return observed_permalinks
+    logger.log("warn", "threads_publish_baseline_failed", "发布前多次无法读取账号主页基线，任务不会点击发布。", {"error": last_error[:500]})
     return None
 
 
@@ -10317,6 +10356,7 @@ def _run_threads_publish_post(
             for value in raw_baseline
             if (permalink := _normalize_threads_post_permalink(value))
         }
+        previous_permalinks.update(_threads_publish_session_permalinks(context_control))
         profile_confirmation = _wait_for_threads_own_post(
             page,
             caption,
@@ -10350,6 +10390,7 @@ def _run_threads_publish_post(
             "profile_confirmed": True,
             "confirmation_source": "profile_caption_permalink",
         }
+        _remember_threads_publish_permalink(context_control, permalink)
         _resolve_completed_manual_takeover(context_control)
         return {"ok": True, "published": published, "url": permalink, "screenshot_path": shot}
 
@@ -10367,8 +10408,21 @@ def _run_threads_publish_post(
     with _temporary_background_page(page, logger, "threads_publish_baseline_background") as verification_page:
         baseline_used_primary_page = verification_page is page
         previous_permalinks = _capture_threads_profile_baseline(verification_page, profile_url, logger)
+    session_permalinks = _threads_publish_session_permalinks(context_control)
     if previous_permalinks is None:
-        raise RuntimeError("发布前无法读取 Threads 账号主页基线，已停止任务且未点击发布按钮。")
+        if not session_permalinks:
+            raise RuntimeError("发布前无法读取 Threads 账号主页基线，已停止任务且未点击发布按钮。")
+        previous_permalinks = set(session_permalinks)
+        logger.log(
+            "warn",
+            "threads_publish_baseline_reused",
+            "账号主页本次加载超时，已复用同一批次内已确认的 Threads 帖子基线。",
+            {"known_permalinks": len(previous_permalinks)},
+        )
+    else:
+        previous_permalinks.update(session_permalinks)
+        for known_permalink in previous_permalinks:
+            _remember_threads_publish_permalink(context_control, known_permalink)
     if baseline_used_primary_page:
         _ensure_threads_home_for_publish(page, logger)
     _dismiss_threads_compose_dialogs(page, logger)
@@ -10544,6 +10598,7 @@ def _run_threads_publish_post(
     }
     if profile_confirmation:
         published["profile_confirmed"] = True
+    _remember_threads_publish_permalink(context_control, permalink)
     _resolve_completed_manual_takeover(context_control)
     return {"ok": True, "published": published, "url": permalink, "screenshot_path": shot}
 

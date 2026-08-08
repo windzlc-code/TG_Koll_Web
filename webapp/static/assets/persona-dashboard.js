@@ -270,9 +270,9 @@ function pdPersonaFollowers(persona, platformOverride = pdPlatformFilter()) {
 
 function pdPlatformPalette(platform = pdPlatformFilter()) {
   const value = String(platform || "").trim().toLowerCase();
-  if (value === "threads") return ["#050505", "#555b62", "#9299a1"];
-  if (value === "instagram") return ["#c13584", "#833ab4", "#f77737"];
-  return ["var(--accent)", "#4f7186", "#d8992b"];
+  if (value === "threads") return ["#050505", "#2563eb", "#f59e0b"];
+  if (value === "instagram") return ["#c13584", "#405de6", "#f77737"];
+  return ["#243b53", "#0f8a8a", "#e59d18"];
 }
 
 function pdVisibleSummary(visiblePersonas) {
@@ -374,7 +374,7 @@ function pdRenderPersonaHeatCarousel(hostId, personas, platforms) {
   const selectedPlatform = pdPlatformFilter();
   const platformRows = (platforms || []).filter(Boolean);
   const metricRows = items.flatMap((persona) => [
-    Number(pdPersonaHot(persona, selectedPlatform).hot_score || 0),
+    Number(pdPersonaHot(persona, "").hot_score || 0),
     ...platformRows.map((platform) => Number(pdPersonaHot(persona, platform).hot_score || 0)),
   ]);
   const max = Math.max(1, ...metricRows);
@@ -393,14 +393,21 @@ function pdRenderPersonaHeatCarousel(hostId, personas, platforms) {
     <div class="persona-heat-carousel" data-persona-heat-carousel>
       ${items.map((persona, index) => {
         const total = Number(pdPersonaHot(persona, selectedPlatform).hot_score || 0);
+        const platformTotal = Number(pdPersonaHot(persona, "").hot_score || 0);
+        const platformTotalPct = platformTotal > 0 ? Math.max(3, Math.round((platformTotal / max) * 100)) : 0;
         const heatLabel = selectedPlatform ? `${pdPlatformLabel(selectedPlatform)}热度` : "总热度";
         return `<article class="persona-heat-card" data-persona-heat-index="${index}">
           <header><strong>${pdEscape(persona.name || "未命名人设")}</strong><span>${pdEscape(heatLabel)} <b>${pdEscape(pdNumber(total))}</b></span></header>
           <div class="persona-heat-platform-list">
+            <div class="persona-heat-platform-row ${selectedPlatform ? "" : "is-highlighted"}" data-platform="all">
+              <span class="persona-heat-platform-label">${pdPlatformIcon("")}<b>平台总和</b></span>
+              <span class="persona-heat-platform-track"><i style="width:${platformTotalPct}%"></i></span>
+              <strong>${pdEscape(pdNumber(platformTotal))}</strong>
+            </div>
             ${platformRows.map((platform) => {
               const value = Number(pdPersonaHot(persona, platform).hot_score || 0);
               const pct = value > 0 ? Math.max(3, Math.round((value / max) * 100)) : 0;
-              return `<div class="persona-heat-platform-row ${pdPlatformFilter() === platform ? "is-highlighted" : ""}" data-platform="${pdEscape(platform)}">
+              return `<div class="persona-heat-platform-row ${selectedPlatform === platform ? "is-highlighted" : ""}" data-platform="${pdEscape(platform)}">
                 <span class="persona-heat-platform-label">${pdPlatformIcon(platform)}<b>${pdEscape(pdPlatformLabel(platform))}</b></span>
                 <span class="persona-heat-platform-track"><i style="width:${pct}%"></i></span>
                 <strong>${pdEscape(pdNumber(value))}</strong>

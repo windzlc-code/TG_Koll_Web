@@ -509,7 +509,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         callback.assert_called_once_with("ready")
 
-    def test_publish_batch_reuses_one_browser_context_for_all_posts(self):
+    def test_publish_batch_reuses_one_browser_context_for_four_posts(self):
         page = mock.Mock()
         context = mock.Mock()
         manager = mock.MagicMock()
@@ -527,6 +527,8 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         tasks = [
             {"id": "publish-1", "task_type": "publish_post", "platform": "threads", "payload": {}},
             {"id": "publish-2", "task_type": "publish_post", "platform": "threads", "payload": {}},
+            {"id": "publish-3", "task_type": "publish_post", "platform": "threads", "payload": {}},
+            {"id": "publish-4", "task_type": "publish_post", "platform": "threads", "payload": {}},
         ]
 
         with (
@@ -538,7 +540,12 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             mock.patch.object(
                 runner,
                 "_run_publish_post",
-                side_effect=[{"ok": True, "post": 1}, {"ok": True, "post": 2}],
+                side_effect=[
+                    {"ok": True, "post": 1},
+                    {"ok": True, "post": 2},
+                    {"ok": True, "post": 3},
+                    {"ok": True, "post": 4},
+                ],
             ) as publish,
         ):
             results = runner.run_social_publish_batch(
@@ -546,24 +553,31 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 account={"platform": "threads"},
                 proxy=None,
                 data_dir=Path("."),
-                loggers=[_Logger(), _Logger()],
+                loggers=[_Logger(), _Logger(), _Logger(), _Logger()],
                 context_control=control,
             )
 
-        self.assertEqual([item["task_id"] for item in results], ["publish-1", "publish-2"])
+        self.assertEqual(
+            [item["task_id"] for item in results],
+            ["publish-1", "publish-2", "publish-3", "publish-4"],
+        )
         self.assertEqual(open_context.call_count, 1)
         self.assertEqual(manager.__enter__.call_count, 1)
         self.assertEqual(manager.__exit__.call_count, 1)
         self.assertEqual(login.call_count, 1)
-        self.assertEqual(publish.call_count, 2)
-        self.assertEqual(control["current_task_id"], "publish-2")
+        self.assertEqual(publish.call_count, 4)
+        self.assertEqual(control["current_task_id"], "publish-4")
         self.assertEqual(
             lifecycle,
             [
-                ("started", "publish-1", 1, 2),
-                ("completed", "publish-1", 1, 1, 2),
-                ("started", "publish-2", 2, 2),
-                ("completed", "publish-2", 2, 2, 2),
+                ("started", "publish-1", 1, 4),
+                ("completed", "publish-1", 1, 1, 4),
+                ("started", "publish-2", 2, 4),
+                ("completed", "publish-2", 2, 2, 4),
+                ("started", "publish-3", 3, 4),
+                ("completed", "publish-3", 3, 3, 4),
+                ("started", "publish-4", 4, 4),
+                ("completed", "publish-4", 4, 4, 4),
             ],
         )
 
@@ -3212,7 +3226,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertFalse(result["confirmed"])
 
-    def test_threads_caption_confirmation_accepts_unique_new_permalink_when_dom_text_is_split(self):
+    def test_threads_caption_confirmation_rejects_unique_new_permalink_without_caption_match(self):
         old_permalink = "https://www.threads.net/@alice/post/OLD"
         new_permalink = "https://www.threads.net/@alice/post/NEW"
         page = _Page("https://www.threads.net/@alice")
@@ -3225,6 +3239,8 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 "_find_threads_post_permalinks",
                 return_value=[new_permalink, old_permalink],
             ),
+            mock.patch.object(runner.time, "monotonic", side_effect=[0, 0, 151]),
+            mock.patch.object(runner, "_wait_for_cancellation"),
         ):
             result = runner._wait_for_threads_own_post(
                 page,
@@ -3234,8 +3250,149 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 previous_permalinks={old_permalink},
             )
 
-        self.assertTrue(result["confirmed"])
-        self.assertEqual(result["url"], new_permalink)
+        self.assertFalse(result["confirmed"])
+
+    def test_threads_profile_baseline_unions_repeated_nonempty_reads(self):
+        latest = "https://www.threads.net/@alice/post/LATEST"
+        older = "https://www.threads.net/@alice/post/OLDER"
+        page = _Page("https://www.threads.net/@alice")
+        with (
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(
+                runner,
+                "_find_threads_post_permalinks",
+                side_effect=[[latest], [latest, older]],
+            ),
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            baseline = runner._capture_threads_profile_baseline(
+                page,
+                "https://www.threads.net/@alice",
+                _Logger(),
+            )
+
+        self.assertEqual(baseline, {latest, older})
+        self.assertEqual(goto.call_count, 2)
+
+    def test_threads_profile_baseline_reads_loaded_dom_after_navigation_timeout(self):
+        permalink = "https://www.threads.net/@alice/post/LOADED"
+        page = _Page("https://www.threads.com/@alice")
+        with (
+            mock.patch.object(runner, "_goto", side_effect=TimeoutError("network idle timed out")),
+            mock.patch.object(runner, "_find_threads_post_permalinks", return_value=[permalink]),
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            baseline = runner._capture_threads_profile_baseline(
+                page,
+                "https://www.threads.net/@alice",
+                _Logger(),
+            )
+
+        self.assertEqual(baseline, {permalink})
+
+    def test_threads_publish_session_remembers_all_four_confirmed_permalinks(self):
+        control = {}
+        expected = {
+            f"https://www.threads.net/@alice/post/POST{index}"
+            for index in range(1, 5)
+        }
+
+        for permalink in sorted(expected):
+            runner._remember_threads_publish_permalink(control, permalink)
+
+        self.assertEqual(runner._threads_publish_session_permalinks(control), expected)
+
+    def test_threads_publish_reuses_batch_baseline_when_later_profile_probe_times_out(self):
+        old_permalink = "https://www.threads.net/@alice/post/OLD"
+        new_permalink = "https://www.threads.net/@alice/post/NEW3"
+        control = {"threads_publish_session_permalinks": {old_permalink}}
+        page = _PageWithBackground("https://www.threads.net/")
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_ensure_threads_compose_ready", return_value=_Locator()),
+            mock.patch.object(runner, "_human_click"),
+            mock.patch.object(runner, "_clear_and_type"),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_threads_active_dialog_text", return_value="third post"),
+            mock.patch.object(runner, "_click_threads_active_dialog_post", return_value=True),
+            mock.patch.object(
+                runner,
+                "_wait_for_threads_publish_success",
+                return_value={"confirmed": True, "submitted": True, "url": new_permalink},
+            ) as confirm,
+            mock.patch.object(runner, "_capture_threads_profile_baseline", return_value=None),
+            mock.patch.object(runner, "_resolve_threads_profile_url", return_value="https://www.threads.net/@alice"),
+            mock.patch.object(runner, "_capture_threads_publish_evidence", return_value="done.png"),
+        ):
+            result = runner._run_threads_publish_post(
+                page,
+                {"id": "publish-3"},
+                {"caption": "third post"},
+                Path("."),
+                _Logger(),
+                {"username": "alice"},
+                control,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(confirm.call_args.kwargs["previous_permalinks"], {old_permalink})
+        self.assertEqual(
+            runner._threads_publish_session_permalinks(control),
+            {old_permalink, new_permalink},
+        )
+
+    def test_threads_four_sequential_posts_keep_distinct_confirmed_links(self):
+        old_permalink = "https://www.threads.net/@alice/post/OLD"
+        new_permalinks = [
+            f"https://www.threads.net/@alice/post/NEW{index}"
+            for index in range(1, 5)
+        ]
+        control = {}
+        page = _PageWithBackground("https://www.threads.net/")
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_ensure_threads_compose_ready", return_value=_Locator()),
+            mock.patch.object(runner, "_human_click"),
+            mock.patch.object(runner, "_clear_and_type"),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_threads_active_dialog_text", side_effect=[f"post {index}" for index in range(1, 5)]),
+            mock.patch.object(runner, "_click_threads_active_dialog_post", return_value=True),
+            mock.patch.object(
+                runner,
+                "_wait_for_threads_publish_success",
+                side_effect=[
+                    {"confirmed": True, "submitted": True, "url": permalink}
+                    for permalink in new_permalinks
+                ],
+            ),
+            mock.patch.object(
+                runner,
+                "_capture_threads_profile_baseline",
+                side_effect=[{old_permalink}, None, None, None],
+            ),
+            mock.patch.object(runner, "_resolve_threads_profile_url", return_value="https://www.threads.net/@alice"),
+            mock.patch.object(runner, "_capture_threads_publish_evidence", return_value="done.png"),
+        ):
+            results = [
+                runner._run_threads_publish_post(
+                    page,
+                    {"id": f"publish-{index}"},
+                    {"caption": f"post {index}"},
+                    Path("."),
+                    _Logger(),
+                    {"username": "alice"},
+                    control,
+                )
+                for index in range(1, 5)
+            ]
+
+        self.assertEqual([result["url"] for result in results], new_permalinks)
+        self.assertEqual(
+            runner._threads_publish_session_permalinks(control),
+            {old_permalink, *new_permalinks},
+        )
 
     def test_threads_confirmation_refreshes_profile_while_waiting_for_delayed_post(self):
         page = mock.Mock(url="https://www.threads.net/@alice")
@@ -3423,8 +3580,8 @@ class RunnerPublishSafetyTests(unittest.TestCase):
     def test_threads_profile_baseline_rejects_only_one_empty_observation(self):
         page = _Page("https://www.threads.net/@alice")
         with (
-            mock.patch.object(runner, "_goto", side_effect=[TimeoutError("slow"), None]),
-            mock.patch.object(runner, "_find_threads_post_permalinks", return_value=[]),
+            mock.patch.object(runner, "_goto", side_effect=[TimeoutError("slow"), None, TimeoutError("slow again")]),
+            mock.patch.object(runner, "_find_threads_post_permalinks", side_effect=[None, [], None]),
             mock.patch.object(runner, "_threads_profile_is_stably_empty", return_value=True),
             mock.patch.object(runner, "_sleep_between"),
         ):
@@ -3770,7 +3927,11 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         page = _PageWithBackground("https://www.threads.net/@alice")
         with (
             mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
-            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(
+                runner,
+                "_goto",
+                side_effect=lambda target_page, url, *_args, **_kwargs: setattr(target_page, "url", url),
+            ) as goto,
             mock.patch.object(runner, "_ensure_threads_compose_ready", return_value=_Locator()),
             mock.patch.object(runner, "_human_click"),
             mock.patch.object(runner, "_clear_and_type"),

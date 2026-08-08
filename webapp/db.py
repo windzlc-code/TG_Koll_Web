@@ -806,6 +806,8 @@ def init_db() -> None:
               approval_status TEXT NOT NULL DEFAULT 'approved',
               full_name TEXT NOT NULL DEFAULT '',
               avatar_url TEXT NOT NULL DEFAULT '',
+              avatar_cleared INTEGER NOT NULL DEFAULT 0
+                CHECK(avatar_cleared IN (0, 1)),
               email TEXT NOT NULL DEFAULT '',
               phone TEXT NOT NULL DEFAULT '',
               profile_signature TEXT NOT NULL DEFAULT '',
@@ -1313,6 +1315,7 @@ def init_db() -> None:
             "approval_status": "TEXT NOT NULL DEFAULT 'approved'",
             "full_name": "TEXT NOT NULL DEFAULT ''",
             "avatar_url": "TEXT NOT NULL DEFAULT ''",
+            "avatar_cleared": "INTEGER NOT NULL DEFAULT 0 CHECK(avatar_cleared IN (0, 1))",
             "email": "TEXT NOT NULL DEFAULT ''",
             "phone": "TEXT NOT NULL DEFAULT ''",
             "profile_signature": "TEXT NOT NULL DEFAULT ''",

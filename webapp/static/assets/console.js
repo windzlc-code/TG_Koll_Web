@@ -408,6 +408,7 @@ const state = {
   simpleFlowPendingModule: "",
   simpleFlowPendingStartedAt: 0,
   mobilePublishingTaskId: "",
+  mobilePublishingTaskIds: [],
   mobilePublishingTaskStartedAt: 0,
   publishMobileSelectionExpanded: false,
   publishFiles: [],
@@ -5617,20 +5618,31 @@ function blockingTaskStatus(status) {
 }
 
 function mobilePublishingTask() {
-  const taskId = String(state.mobilePublishingTaskId || "").trim();
-  if (!taskId) return null;
-  const task = (state.socialTasks || []).find((item) => String(item?.id || "").trim() === taskId) || null;
-  if (task && !blockingTaskStatus(task.status)) {
-    state.mobilePublishingTaskId = "";
-    state.mobilePublishingTaskStartedAt = 0;
-    return null;
-  }
-  if (task) return task;
+  const taskIds = Array.from(new Set([
+    ...(Array.isArray(state.mobilePublishingTaskIds) ? state.mobilePublishingTaskIds : []),
+    state.mobilePublishingTaskId,
+  ].map((value) => String(value || "").trim()).filter(Boolean)));
+  if (!taskIds.length) return null;
+  const tasksById = new Map((state.socialTasks || []).map((item) => [String(item?.id || "").trim(), item]));
+  const activeTask = taskIds
+    .map((taskId) => tasksById.get(taskId) || null)
+    .find((task) => ["preparing", "queued", "running", "need_manual"].includes(String(task?.status || "").trim()));
   const startedAt = Number(state.mobilePublishingTaskStartedAt || 0);
-  if (startedAt && Date.now() - startedAt < 10000) {
-    return { id: taskId, status: "queued", created_at: startedAt };
+  if (activeTask) {
+    state.mobilePublishingTaskId = String(activeTask.id || taskIds[0]);
+    return {
+      ...activeTask,
+      created_at: startedAt || activeTask.created_at,
+      started_at: startedAt || activeTask.started_at,
+    };
+  }
+  const missingTaskId = taskIds.find((taskId) => !tasksById.has(taskId));
+  if (missingTaskId && startedAt && Date.now() - startedAt < 10000) {
+    state.mobilePublishingTaskId = missingTaskId;
+    return { id: missingTaskId, status: "queued", created_at: startedAt, started_at: startedAt };
   }
   state.mobilePublishingTaskId = "";
+  state.mobilePublishingTaskIds = [];
   state.mobilePublishingTaskStartedAt = 0;
   return null;
 }
@@ -6849,7 +6861,7 @@ function renderPersonalBillingSummary() {
   const publishUsedNode = host.querySelector("[data-site-publish-used]");
   const publishRemainingNode = host.querySelector("[data-site-publish-remaining]");
   const publishRemainingLabel = host.querySelector('[data-site-copy="publishRemaining"]');
-  if (publishRemainingLabel) publishRemainingLabel.textContent = traditional ? "今日剩餘任務額度" : "今日剩余任务额度";
+  if (publishRemainingLabel) publishRemainingLabel.textContent = traditional ? "今日剩餘發布額度" : "今日剩余发布额度";
   if (state.billing.loading && !state.billing.loaded) {
     if (statusNode) statusNode.textContent = billingCopy.loading;
     [pointsNode, subscriptionNode, imagesNode, pendingNode].forEach((node) => {
@@ -9866,8 +9878,9 @@ function personaHistoryDashboardMetricRecord(row = {}, index = 0) {
       views_available: row.view_available === true,
       complete: row.view_available === true,
       refreshed_at: row.captured_at || row.published_at || "",
+      matched: true,
+      source: "dashboard_current_account",
     },
-    __dashboard_metric_only: true,
   };
 }
 
@@ -9884,41 +9897,63 @@ function personaHistoryIdentityKeys(record = {}) {
       const url = new URL(text, window.location.origin);
       url.hash = "";
       url.search = "";
-      add("url", url.href.replace(/\/$/, ""));
+      const hostname = url.hostname.toLowerCase().replace(/^www\./, "").replace(/^threads\.net$/, "threads.com");
+      let pathname = url.pathname.replace(/\/+$/, "").toLowerCase();
+      const instagramPost = pathname.match(/\/(?:[a-z0-9._]+\/)?(?:p|reel|tv)\/([^/]+)$/i);
+      if (hostname === "instagram.com" && instagramPost) pathname = `/p/${instagramPost[1].toLowerCase()}`;
+      add("url", `${hostname}${pathname}`);
     } catch {}
   });
-  [record.archive_post_id, record.post_id, record.dashboard_post_key].forEach((value) => add("post", value));
   return keys;
 }
 
+function personaHistoryContentCompatible(left = {}, right = {}) {
+  const normalize = (value) => String(value || "").trim().replace(/\s+/g, "").toLowerCase();
+  const leftContent = normalize(left.content || left.caption || left.text);
+  const rightContent = normalize(right.content || right.caption || right.text);
+  if (!leftContent || !rightContent) return true;
+  return leftContent === rightContent
+    || leftContent.startsWith(rightContent)
+    || rightContent.startsWith(leftContent);
+}
+
+function personaHistoryRowsMatch(record = {}, metric = {}) {
+  const recordPlatform = normalizePersonaContentPlatform(record.platform || record.publishPlatform);
+  const metricPlatform = normalizePersonaContentPlatform(metric.platform || metric.publishPlatform);
+  if (recordPlatform && metricPlatform && recordPlatform !== metricPlatform) return false;
+  const normalizeUsername = (value) => String(value || "").trim().replace(/^@+/, "").toLowerCase();
+  const recordAccountId = String(record.account_id || record.accountId || "").trim();
+  const metricAccountId = String(metric.account_id || metric.accountId || "").trim();
+  if (recordAccountId && metricAccountId && recordAccountId !== metricAccountId) return false;
+  const recordUsername = normalizeUsername(record.account_username || record.accountUsername || record.username);
+  const metricUsername = normalizeUsername(metric.account_username || metric.accountUsername || metric.username);
+  if (recordUsername && metricUsername && recordUsername !== metricUsername) return false;
+  const recordKeys = personaHistoryIdentityKeys(record);
+  const metricKeys = personaHistoryIdentityKeys(metric);
+  if (!recordKeys.size || !metricKeys.size || ![...metricKeys].some((key) => recordKeys.has(key))) return false;
+  return personaHistoryContentCompatible(record, metric);
+}
+
 function personaMergedHistoryRows(persona = selectedPersona()) {
-  const taskRows = personaPublishHistoryRows(persona)
-    .filter((record) => record?.account_match?.matches_current !== false)
-    .map((record) => ({ ...record, __dashboard_metric_only: false }));
+  const taskRows = personaPublishHistoryRows(persona);
   const metricRows = (personaDashboardDetail(persona)?.post_metrics || [])
     .map(personaHistoryDashboardMetricRecord)
     .filter(Boolean);
   const merged = [...taskRows];
   metricRows.forEach((metric) => {
-    const metricKeys = personaHistoryIdentityKeys(metric);
-    const index = merged.findIndex((record) => {
-      const recordKeys = personaHistoryIdentityKeys(record);
-      return [...metricKeys].some((key) => recordKeys.has(key));
-    });
-    if (index < 0) {
-      merged.push(metric);
-      return;
-    }
+    const index = merged.findIndex((record) => personaHistoryRowsMatch(record, metric));
+    if (index < 0) return;
     const current = merged[index];
     const currentHot = current.hot_metrics || {};
     const metricHot = metric.hot_metrics || {};
+    const metricIsNewer = timeValue(metricHot.refreshed_at) >= timeValue(currentHot.refreshed_at);
+    const preferMetric = metricHot.matched === true && (currentHot.matched !== true || metricIsNewer);
     const metricValue = (key) => {
-      const currentValue = currentHot[key];
-      const currentAvailable = key !== "views" || currentHot.views_available !== false;
-      if (currentAvailable && currentValue !== null && currentValue !== undefined && currentValue !== "") {
-        return Number(currentValue) || 0;
+      const preferredValue = (preferMetric ? metricHot : currentHot)[key];
+      if (preferredValue !== null && preferredValue !== undefined && preferredValue !== "") {
+        return Number(preferredValue) || 0;
       }
-      const fallbackValue = metricHot[key];
+      const fallbackValue = (preferMetric ? currentHot : metricHot)[key];
       return fallbackValue === null || fallbackValue === undefined || fallbackValue === ""
         ? 0
         : Number(fallbackValue) || 0;
@@ -9937,10 +9972,12 @@ function personaMergedHistoryRows(persona = selectedPersona()) {
         comments: metricValue("comments"),
         shares: metricValue("shares"),
         reposts: metricValue("reposts"),
-        views_available: currentHot.views_available === true || metricHot.views_available === true,
-        complete: currentHot.complete === true || metricHot.complete === true,
+        views_available: (preferMetric ? metricHot : currentHot).views_available === true,
+        complete: (preferMetric ? metricHot : currentHot).complete === true,
+        matched: (preferMetric ? metricHot : currentHot).matched === true,
+        source: (preferMetric ? metricHot : currentHot).source || "",
+        refreshed_at: (preferMetric ? metricHot : currentHot).refreshed_at || "",
       },
-      __dashboard_metric_only: false,
     };
   });
   return sortPersonaPublishHistory(merged);
@@ -11137,7 +11174,7 @@ function renderTaskQueuePersonaTypeFilter(rows = []) {
   const types = Array.from(new Set((Array.isArray(rows) ? rows : []).map(taskQueuePersonaType).filter(Boolean)));
   const selectedType = String(state.taskQueuePersonaTypeFilter || "all");
   return `
-    <label class="persona-history-filter-trigger ${selectedType !== "all" ? "is-active" : ""}" title="筛选日志类型">
+    <label class="persona-history-filter-trigger task-queue-type-filter ${selectedType !== "all" ? "is-active" : ""}" title="筛选日志类型">
       <span class="sr-only">筛选日志类型</span>
       <span class="persona-history-filter-icon">${renderTaskQueueFilterIcon()}</span>
       <select data-task-queue-type-filter aria-label="筛选日志类型">
@@ -11204,12 +11241,12 @@ function renderTaskQueueView() {
       title: "当前人设自动化队列",
       description: persona ? `这里统一查看「${persona.name || persona.id}」的浏览器自动化任务，不再单独放在人设页签里。` : "先在右侧点选一个人设，这里会同步显示对应自动化队列。",
       extraActions: `
-        ${persona ? renderTaskQueuePersonaTypeFilter(personaSourceRows) : ""}
         <button type="button" class="persona-mobile-list-toggle task-queue-persona-select-button" data-persona-mobile-list-toggle="taskQueuePersonaSidebar" aria-controls="taskQueuePersonaSidebar" aria-expanded="false" title="选择人设" aria-label="选择人设">
           <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
           </svg>
-        </button>`,
+        </button>
+        ${persona ? renderTaskQueuePersonaTypeFilter(personaSourceRows) : ""}`,
       actions: `
         <div class="task-queue-actionbar">
           ${renderTaskQueueBulkControls("persona")}
@@ -12837,28 +12874,34 @@ function clearAutomationPlanDraft() {
   }).catch(() => {});
 }
 
-function automationPlanPickerTaskType(item = {}) {
-  return ["threads_reply_comment", "threads_reply_hot", "threads_warmup", "instagram_warmup"].includes(String(item.taskType || ""))
-    ? "automation_mode"
-    : String(item.taskType || "");
+function automationPlanPickerTaskType(item = {}, platform = "threads") {
+  const taskType = String(item.taskType || "");
+  if (["threads_reply_comment", "threads_auto_reply", "instagram_auto_reply"].includes(taskType)) return "threads_reply_comment";
+  if (taskType === "threads_reply_hot") return taskType;
+  if (["threads_warmup", "instagram_warmup"].includes(taskType)) {
+    return String(platform || "").trim().toLowerCase() === "instagram" ? "instagram_warmup" : "threads_warmup";
+  }
+  return taskType;
 }
 
 function openAutomationPlanTaskPicker(index) {
-  const { draft } = currentAutomationPlanDraft();
+  const { draft, account } = currentAutomationPlanDraft();
   draft.openTimePickerIndex = -1;
   const item = draft.items[index];
   if (!item) return;
-  const options = [["normal_publish", "普通任务"], ["automation_mode", "自动化模式"]];
+  const platform = String(account?.platform || "threads").trim().toLowerCase();
+  const options = automationPlanTaskOptions(platform);
+  const selectedTaskType = automationPlanPickerTaskType(item, platform);
   const request = openConsoleModal({
     title: "选择任务",
     message: "选择任务后直接进入现有配置，不会创建另一套参数。",
     contentHtml: `
       <div class="automation-plan-task-picker-grid">
         ${options.map(([taskType, label]) => `
-          <button type="button" class="automation-plan-task-option ${automationPlanPickerTaskType(item) === taskType ? "is-selected" : ""}" data-automation-plan-task-option="${esc(taskType)}">
+          <button type="button" class="automation-plan-task-option ${selectedTaskType === taskType ? "is-selected" : ""}" data-automation-plan-task-option="${esc(taskType)}">
             <span>
               <strong>${esc(label)}</strong>
-              <small>${esc(taskType === "automation_mode" ? "统一配置自动回复评论、自动回复热点或养号" : automationPlanTaskDescription(taskType))}</small>
+              <small>${esc(automationPlanTaskDescription(taskType))}</small>
             </span>
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m9 18 6-6-6-6"></path></svg>
           </button>`).join("")}
@@ -12879,12 +12922,12 @@ function openAutomationPlanTaskPicker(index) {
       window.requestAnimationFrame(() => openAutomationPlanNormalPublishConfigurator(index));
       return;
     }
-    if (taskType === "automation_mode") {
-      const hasExistingAutomationTask = ["threads_reply_comment", "threads_reply_hot", "threads_warmup", "instagram_warmup"].includes(item.taskType);
+    if (["threads_reply_comment", "threads_reply_hot", "threads_warmup", "instagram_warmup"].includes(taskType)) {
+      const isCurrentTaskType = selectedTaskType === taskType;
       closeConsoleModal(taskType);
       window.requestAnimationFrame(() => openAutomationPlanTaskConfigurator(
         index,
-        hasExistingAutomationTask ? null : { initialStep: "warmup" },
+        isCurrentTaskType ? null : { initialStep: automationPlanStepForTask(taskType) },
       ));
       return;
     }
@@ -13739,7 +13782,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona(), options 
               <span class="publish-history-card-actions" aria-label="任务历史操作">
                 ${publishedUrl ? `<a class="publish-history-card-action" href="${esc(publishedUrl)}" target="_blank" rel="noopener" title="打开已发布推文" aria-label="打开已发布推文">${renderSourceLinkIcon()}</a>` : ""}
                 <button type="button" class="publish-history-card-action" data-publish-history-view="${esc(recordId)}" title="查看任务历史" aria-label="查看任务历史">${renderEyeIcon()}</button>
-                ${record.__dashboard_metric_only ? "" : `<button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>`}
+                <button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>
               </span>
               ${renderPublishHistoryMetrics(record, "publish-history-card-metrics")}
             </div>
@@ -13862,9 +13905,7 @@ async function openPublishHistoryRecordModal(historyId = "", persona = selectedP
       </article>`,
     cancelText: "关闭",
     showConfirm: false,
-    extraActions: record.__dashboard_metric_only
-      ? []
-      : [{ value: "requeue", text: "重回草稿", iconHtml: renderRequeueIcon() }],
+    extraActions: [{ value: "requeue", text: "重回草稿", iconHtml: renderRequeueIcon() }],
     modalKey: "publish-history-detail",
   });
   if (action === "requeue") await requeuePublishHistoryRecord(cleanHistoryId, persona);
@@ -16344,11 +16385,14 @@ async function promptPersonaAccountBinding(persona = selectedPersona()) {
   return openPersonaAccountBindingPage(persona, account);
 }
 
-function deferMobilePublishingBrowserView(taskId = "") {
-  const cleanTaskId = String(taskId || "").trim();
-  if (!cleanTaskId || !isMobileNavMode()) return false;
-  state.mobilePublishingTaskId = cleanTaskId;
-  state.mobilePublishingTaskStartedAt = Date.now();
+function deferMobilePublishingBrowserView(taskIds = "", startedAt = 0) {
+  const cleanTaskIds = (Array.isArray(taskIds) ? taskIds : [taskIds])
+    .map((taskId) => String(taskId || "").trim())
+    .filter(Boolean);
+  if (!cleanTaskIds.length || !isMobileNavMode()) return false;
+  state.mobilePublishingTaskIds = Array.from(new Set(cleanTaskIds));
+  state.mobilePublishingTaskId = state.mobilePublishingTaskIds[0];
+  state.mobilePublishingTaskStartedAt = toastTimestampMs(startedAt) || Date.now();
   return true;
 }
 
@@ -16382,9 +16426,12 @@ async function executeSimpleFlow() {
         const resultItems = Array.isArray(result) ? result : (result ? [result] : []);
         const resultTasks = resultItems.map((item) => item?.task).filter((task) => task?.id);
         const createdTasks = Array.isArray(result?.created) ? result.created : [];
-        const immediateTask = [...resultTasks, ...createdTasks].find((task) => task?.id && !isFutureScheduledSocialTask(task));
-        const immediateTaskId = String(immediateTask?.id || "").trim();
-        if (immediateTaskId && !deferMobilePublishingBrowserView(immediateTaskId)) openLiveBrowserTaskView(immediateTaskId);
+        const immediateTaskIds = [...resultTasks, ...createdTasks]
+          .filter((task) => task?.id && !isFutureScheduledSocialTask(task))
+          .map((task) => String(task.id || "").trim())
+          .filter(Boolean);
+        const immediateTaskId = immediateTaskIds[0] || "";
+        if (immediateTaskId && !deferMobilePublishingBrowserView(immediateTaskIds, state.simpleFlowPendingStartedAt)) openLiveBrowserTaskView(immediateTaskId);
         return;
       }
     }
@@ -18442,8 +18489,7 @@ function renderSocialPublishBatchResults(batchTasks = [], logs = []) {
     const screenshots = collectTaskScreenshots(item, taskLogs);
     const content = String(payload.caption || payload.content || payload.text || "").trim();
     const title = String(payload.archive_post_title || payload.title || `第 ${sequenceIndex} 篇`).trim();
-    const resultHref = adminWorkspacePageUrl(taskResultUrl(item));
-    return { item, sequenceIndex, sequenceTotal, screenshots, content, title, resultHref };
+    return { item, sequenceIndex, sequenceTotal, screenshots, content, title };
   });
   const screenshotCount = details.reduce((total, detail) => total + detail.screenshots.length, 0);
   return `
@@ -18461,7 +18507,6 @@ function renderSocialPublishBatchResults(batchTasks = [], logs = []) {
             </div>
             <span>${esc(formatTime(detail.item.finished_at || detail.item.updated_at || detail.item.created_at || ""))}</span>
             <p>${esc(detail.content || "该篇没有正文。")}</p>
-            ${detail.resultHref ? `<div class="row-actions"><a href="${esc(detail.resultHref)}" target="_blank" rel="noopener">查看已发布推文</a></div>` : ""}
             <div><strong>最终截图</strong>${renderTaskScreenshotGallery(detail.screenshots, { emptyText: "该篇暂未保存最终截图。" })}</div>
           </article>
         `).join("")}
@@ -18818,6 +18863,8 @@ async function watchPersonaPublishTaskSequence(taskIds = [], personaId = "") {
           if (status !== "success") {
             throw new Error(`连续发布任务 ${taskId.slice(0, 8)} 状态为${statusLabel(status)}，已停止跟踪后续任务。`);
           }
+          syncPublishedPostLocalState(task);
+          schedulePersonaDetailRender(key);
           completed = true;
           break;
         }

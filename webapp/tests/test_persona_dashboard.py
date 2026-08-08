@@ -751,6 +751,36 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(threads_trend[0]["likes"], 3)
         self.assertNotIn("instagram", data["charts"]["platform_trend"])
 
+    def test_overview_attributes_multi_platform_publish_targets_to_each_platform(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        record = archives[0]["publishHistory"][0]
+        threads_meta = record["publishedMeta"]
+        record["publishedTargets"] = [
+            {"platform": "threads", "publishedMeta": threads_meta},
+            {
+                "platform": "instagram",
+                "publishedMeta": {
+                    "platform": "instagram",
+                    "capturedAt": "2026-06-30T03:00:00Z",
+                    "engagement": {"likeCount": 9, "commentCount": 2, "viewCount": 90},
+                },
+            },
+        ]
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        response = self.client.get("/api/persona_dashboard/overview")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["personas"][0]["counts"]["platform_published"], {
+            "threads": 1,
+            "instagram": 1,
+        })
+        self.assertEqual(data["charts"]["platform_trend"]["threads"][0]["likes"], 3)
+        self.assertEqual(data["charts"]["platform_trend"]["instagram"][0]["likes"], 9)
+
     def test_overview_post_count_ignores_legacy_published_drafts(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"
@@ -2933,6 +2963,137 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(matched["comments"], 3)
         self.assertFalse(matched["views_available"])
 
+    def test_publish_history_rejects_metrics_from_different_account(self):
+        archive = {
+            "setup": {
+                "hotMetrics": {
+                    "threads:other_user": {
+                        "platform": "threads",
+                        "accountId": "threads-other",
+                        "username": "other_user",
+                        "postMetrics": [{
+                            "sourceUrl": "https://www.threads.com/@current_user/post/same-code",
+                            "content": "current post body",
+                            "likeCount": 99,
+                        }],
+                    },
+                },
+            },
+        }
+
+        matched = server._publish_history_hot_metrics({
+            "platform": "threads",
+            "content": "current post body",
+            "publishedUrl": "https://www.threads.com/@current_user/post/same-code",
+            "publishedMeta": {
+                "accountId": "threads-current",
+                "username": "current_user",
+            },
+        }, archive)
+
+        self.assertFalse(matched["matched"])
+        self.assertEqual(matched["likes"], 0)
+
+    def test_publish_history_rejects_same_permalink_with_conflicting_content(self):
+        archive = {
+            "setup": {
+                "hotMetrics": {
+                    "threads:current_user": {
+                        "platform": "threads",
+                        "accountId": "threads-current",
+                        "username": "current_user",
+                        "postMetrics": [{
+                            "sourceUrl": "https://www.threads.com/@current_user/post/old-link",
+                            "content": "an older and completely unrelated post",
+                            "likeCount": 88,
+                            "viewCount": 1000,
+                        }],
+                    },
+                },
+            },
+        }
+
+        matched = server._publish_history_hot_metrics({
+            "platform": "threads",
+            "content": "the newly published third post",
+            "publishedUrl": "https://www.threads.com/@current_user/post/old-link",
+            "publishedMeta": {
+                "accountId": "threads-current",
+                "username": "current_user",
+            },
+        }, archive)
+
+        self.assertFalse(matched["matched"])
+        self.assertEqual(matched["hot_score"], 0)
+
+    def test_publish_record_for_dashboard_hides_proven_wrong_legacy_permalink(self):
+        record = {
+            "platform": "threads",
+            "content": "new post content",
+            "publishedUrl": "https://www.threads.com/@owner/post/old-code",
+            "publishedMeta": {"accountId": "account-1"},
+        }
+        archive = {
+            "setup": {
+                "hotMetrics": {
+                    "threads:owner": {
+                        "platform": "threads",
+                        "accountId": "account-1",
+                        "username": "owner",
+                        "postMetrics": [{
+                            "sourceUrl": "https://www.threads.com/@owner/post/old-code",
+                            "content": "the real old post content",
+                        }],
+                    }
+                }
+            }
+        }
+
+        self.assertIsNone(server._publish_record_for_dashboard(record, archive))
+
+    def test_publish_history_reconciles_wrong_permalink_by_unique_account_content(self):
+        archive = {
+            "setup": {
+                "hotMetrics": {
+                    "threads:current_user": {
+                        "platform": "threads",
+                        "accountId": "threads-current",
+                        "username": "current_user",
+                        "postMetrics": [
+                            {
+                                "sourceUrl": "https://www.threads.com/@current_user/post/old-link",
+                                "content": "older unrelated post",
+                            },
+                            {
+                                "sourceUrl": "https://www.threads.com/@current_user/post/correct-third",
+                                "content": "the newly published third post",
+                                "likeCount": 7,
+                            },
+                        ],
+                    },
+                },
+            },
+        }
+        record = {
+            "platform": "threads",
+            "content": "the newly published third post",
+            "publishedUrl": "https://www.threads.com/@current_user/post/old-link",
+            "publishedMeta": {
+                "accountId": "threads-current",
+                "username": "current_user",
+            },
+        }
+
+        reconciled = server._publish_record_with_reconciled_url(record, archive)
+        matched = server._publish_history_hot_metrics(reconciled, archive)
+
+        self.assertEqual(
+            reconciled["publishedUrl"],
+            "https://www.threads.com/@current_user/post/correct-third",
+        )
+        self.assertTrue(matched["matched"])
+        self.assertEqual(matched["likes"], 7)
+
     def test_publish_sync_does_not_use_target_url_as_published_url(self):
         task = {
             "id": "task-source-only",
@@ -2980,6 +3141,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             self.assertEqual(stored["imageUrl"], "https://example.com/publish-image.png")
             for platform in ("threads", "telegram"):
                 self.assertIn(requeued["id"], [item["id"] for item in archive["platformPosts"][platform]])
+            self.assertIn(requeued["id"], [item["id"] for item in archive["platformPosts"]["instagram"]])
 
         refreshed = self.client.get("/api/persona_dashboard/personas/persona-1/posts")
         self.assertEqual(refreshed.status_code, 200)
@@ -4702,6 +4864,130 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertFalse(any(post.get("id") == "draft-sync-1" for post in synced["platformPosts"]["threads"]))
         self.assertEqual(synced["publishHistory"][0]["archivePostId"], "draft-sync-1")
         self.assertEqual(synced["publishHistory"][0]["publishedUrl"], "https://threads.example/draft-sync-1")
+
+    def test_three_and_four_item_publish_batches_sync_each_success_without_cross_contamination(self):
+        for publish_count in (3, 4):
+            with self.subTest(publish_count=publish_count):
+                self._write_archives()
+                primary_path = self.tool_runtime_dir / "persona_archives.json"
+                cache_path = self.tool_runtime_dir / "persona_archives_cache.json"
+                archives = json.loads(primary_path.read_text(encoding="utf-8"))
+                archive = archives[0]
+                batch_id = f"publish-batch-{publish_count}"
+                account_id = f"acct-batch-{publish_count}"
+                username = f"batch_user_{publish_count}"
+                expected = {}
+
+                for index in range(1, publish_count + 1):
+                    post_id = f"batch-{publish_count}-draft-{index}"
+                    task_id = f"batch-{publish_count}-task-{index}"
+                    content = f"Batch {publish_count} unique content {index}"
+                    title = f"Batch {publish_count} title {index}"
+                    media_path = self.tool_runtime_dir / "admin" / f"batch-{publish_count}-{index}.png"
+                    media_path.write_bytes(self.draft_media_path.read_bytes())
+                    published_url = f"https://www.threads.com/@{username}/post/batch-{publish_count}-{index}"
+                    draft = {
+                        "id": post_id,
+                        "title": title,
+                        "content": content,
+                        "createdAt": f"2026-08-08T00:0{index}:00Z",
+                        "updatedAt": f"2026-08-08T00:0{index}:00Z",
+                        "mediaUrl": str(media_path),
+                        "mediaType": "image",
+                    }
+                    archive["posts"].append(dict(draft))
+                    archive["platformPosts"]["threads"].append(dict(draft))
+                    expected[post_id] = {
+                        "task_id": task_id,
+                        "content": content,
+                        "title": title,
+                        "media_path": str(media_path),
+                        "published_url": published_url,
+                    }
+
+                serialized = json.dumps(archives, ensure_ascii=False)
+                primary_path.write_text(serialized, encoding="utf-8")
+                cache_path.write_text(serialized, encoding="utf-8")
+                self._insert_social_account(
+                    account_id=account_id,
+                    platform="threads",
+                    username=username,
+                )
+
+                ordered_post_ids = list(expected)
+                for index, post_id in enumerate(ordered_post_ids, start=1):
+                    item = expected[post_id]
+                    self._insert_social_task(
+                        task_id=item["task_id"],
+                        account_id=account_id,
+                        platform="threads",
+                        task_type="publish_post",
+                        status="running",
+                        payload={
+                            "archive_post_id": post_id,
+                            "archive_post_title": item["title"],
+                            "archive_post_source": "posts",
+                            "caption": item["content"],
+                            "media_paths": [item["media_path"]],
+                            "publish_batch_id": batch_id,
+                            "publish_sequence_index": index,
+                            "publish_sequence_total": publish_count,
+                            "publish_sequence_targets": ordered_post_ids,
+                        },
+                        created_at=1_720_000_000 + (publish_count * 100) + index,
+                    )
+                    task = social_automation_api.get_social_task(item["task_id"])
+                    result = {
+                        "ok": True,
+                        "published_url": item["published_url"],
+                        "published": {"permalink": item["published_url"]},
+                    }
+
+                    self.assertTrue(
+                        social_automation_api._finish_publish_batch_item(
+                            task,
+                            result,
+                            index,
+                            publish_count,
+                        )
+                    )
+
+                    for storage_path in (primary_path, cache_path):
+                        synced = json.loads(storage_path.read_text(encoding="utf-8"))[0]
+                        remaining_ids = {
+                            str(post.get("id") or "")
+                            for post in synced.get("posts", [])
+                            if isinstance(post, dict)
+                        }
+                        platform_remaining_ids = {
+                            str(post.get("id") or "")
+                            for post in synced.get("platformPosts", {}).get("threads", [])
+                            if isinstance(post, dict)
+                        }
+                        self.assertNotIn(post_id, remaining_ids)
+                        self.assertNotIn(post_id, platform_remaining_ids)
+                        self.assertTrue(set(ordered_post_ids[index:]).issubset(remaining_ids))
+
+                        history_by_post_id = {
+                            str(record.get("archivePostId") or ""): record
+                            for record in synced.get("publishHistory", [])
+                            if isinstance(record, dict)
+                        }
+                        self.assertEqual(
+                            set(ordered_post_ids[:index]),
+                            set(ordered_post_ids).intersection(history_by_post_id),
+                        )
+                        for completed_post_id in ordered_post_ids[:index]:
+                            completed = expected[completed_post_id]
+                            record = history_by_post_id[completed_post_id]
+                            self.assertEqual(record["automationTaskId"], completed["task_id"])
+                            self.assertEqual(record["title"], completed["title"])
+                            self.assertEqual(record["content"], completed["content"])
+                            self.assertEqual(record["publishedUrl"], completed["published_url"])
+                            self.assertEqual(
+                                record["publishedMeta"]["mediaItems"][0]["url"],
+                                completed["media_path"],
+                            )
 
     def test_publish_favorite_post_sync_marks_favorite_not_source_post(self):
         self._write_archives()

@@ -731,8 +731,9 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         )
         self.assertEqual(exhausted.status_code, 200, exhausted.text)
         self.assertFalse(exhausted.json()["publish_policy"]["waived"])
-        self.assertEqual(exhausted.json()["publish_policy"]["used"], 15)
-        self.assertEqual(exhausted.json()["publish_policy"]["remaining"], 0)
+        self.assertEqual(exhausted.json()["publish_policy"]["used"], 0)
+        self.assertEqual(exhausted.json()["publish_policy"]["remaining"], 15)
+        self.assertEqual(exhausted.json()["publish_policy"]["capacity_used"], 15)
         self.assertTrue(exhausted.json()["publish_policy"]["locked"])
 
     def test_account_owner_can_reveal_saved_social_login_password(self):

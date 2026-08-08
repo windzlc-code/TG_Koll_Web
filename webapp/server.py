@@ -15424,7 +15424,14 @@ def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any
     for record in publish_history:
         if not _is_persona_publish_history_record(record):
             continue
-        compact = _compact_publish_record(record, _publish_history_hot_metrics(record, archive), current_accounts)
+        reconciled_record = _publish_record_for_dashboard(record, archive)
+        if reconciled_record is None:
+            continue
+        compact = _compact_publish_record(
+            reconciled_record,
+            _publish_history_hot_metrics(reconciled_record, archive),
+            current_accounts,
+        )
         compact["media_items"] = _previewable_persona_media_items(
             compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
             archive_id=clean_id,
@@ -15520,7 +15527,7 @@ def _requeue_persona_publish_record(archive_id: str, history_id: str) -> dict[st
         platform_posts = storage_archive.get("platformPosts")
         if isinstance(platform_posts, dict):
             next_platform_posts = dict(platform_posts)
-            for platform in ("threads", "telegram"):
+            for platform in ("threads", "instagram", "telegram"):
                 platform_rows = next_platform_posts.get(platform)
                 if not isinstance(platform_rows, list):
                     platform_rows = storage_posts
@@ -18715,6 +18722,18 @@ def _normalized_dashboard_post_content(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).lower()
 
 
+def _dashboard_post_content_compatible(left: Any, right: Any) -> bool:
+    left_content = _normalized_dashboard_post_content(left)
+    right_content = _normalized_dashboard_post_content(right)
+    if not left_content or not right_content:
+        return True
+    return (
+        left_content == right_content
+        or left_content.startswith(right_content)
+        or right_content.startswith(left_content)
+    )
+
+
 def _publish_record_match_values(record: Any) -> tuple[set[str], set[str], str]:
     if not isinstance(record, dict):
         return set(), set(), ""
@@ -18773,6 +18792,95 @@ def _hot_metric_row_match_values(row: Any) -> tuple[set[str], set[str], str]:
     return urls, codes, content
 
 
+def _publish_record_with_reconciled_url(record: dict[str, Any], archive: dict[str, Any]) -> dict[str, Any]:
+    current_url = _published_record_url(record)
+    record_platform, record_account_id, record_account_username = _publish_record_account_identity(record)
+    _, _, record_content = _publish_record_match_values(record)
+    if not record_content:
+        return record
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    hot_metrics = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
+    candidates: dict[str, str] = {}
+    for platform_key, platform_metric in hot_metrics.items():
+        if not isinstance(platform_metric, dict):
+            continue
+        platform_name = _normalize_persona_content_platform(platform_metric.get("platform") or platform_key)
+        if record_platform and platform_name and record_platform != platform_name:
+            continue
+        metric_account_id = str(platform_metric.get("accountId") or platform_metric.get("account_id") or "").strip()
+        metric_username = str(platform_metric.get("username") or platform_metric.get("accountUsername") or platform_metric.get("account_username") or "").strip().lstrip("@")
+        if record_account_id and metric_account_id and record_account_id != metric_account_id:
+            continue
+        if record_account_username and metric_username and record_account_username.lower() != metric_username.lower():
+            continue
+        for row in platform_metric.get("postMetrics") if isinstance(platform_metric.get("postMetrics"), list) else []:
+            if not isinstance(row, dict):
+                continue
+            row_url_keys = (
+                "sourceUrl", "source_url",
+                "publishedUrl", "published_url", "postUrl", "post_url", "url",
+            ) if current_url else (
+                "publishedUrl", "published_url", "postUrl", "post_url", "url",
+            )
+            row_url = next((
+                str(row.get(key) or "").strip()
+                for key in row_url_keys
+                if str(row.get(key) or "").strip()
+            ), "")
+            normalized_url = _normalized_dashboard_post_url(row_url)
+            _, _, row_content = _hot_metric_row_match_values(row)
+            if normalized_url and row_content and _dashboard_post_content_compatible(record_content, row_content):
+                candidates[normalized_url] = row_url
+    if len(candidates) != 1:
+        return record
+    resolved_url = next(iter(candidates.values()))
+    if _normalized_dashboard_post_url(resolved_url) == _normalized_dashboard_post_url(current_url):
+        return record
+    reconciled = copy.deepcopy(record)
+    reconciled["publishedUrl"] = resolved_url
+    return reconciled
+
+
+def _publish_record_url_conflicts_with_hot_metrics(record: dict[str, Any], archive: dict[str, Any]) -> bool:
+    current_url = _normalized_dashboard_post_url(_published_record_url(record))
+    record_platform, record_account_id, record_account_username = _publish_record_account_identity(record)
+    _, _, record_content = _publish_record_match_values(record)
+    if not current_url or not record_content:
+        return False
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    hot_metrics = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
+    conflicting_match = False
+    for platform_key, platform_metric in hot_metrics.items():
+        if not isinstance(platform_metric, dict):
+            continue
+        platform_name = _normalize_persona_content_platform(platform_metric.get("platform") or platform_key)
+        if record_platform and platform_name and record_platform != platform_name:
+            continue
+        metric_account_id = str(platform_metric.get("accountId") or platform_metric.get("account_id") or "").strip()
+        metric_username = str(platform_metric.get("username") or platform_metric.get("accountUsername") or platform_metric.get("account_username") or "").strip().lstrip("@")
+        if record_account_id and metric_account_id and record_account_id != metric_account_id:
+            continue
+        if record_account_username and metric_username and record_account_username.lower() != metric_username.lower():
+            continue
+        for row in platform_metric.get("postMetrics") if isinstance(platform_metric.get("postMetrics"), list) else []:
+            if not isinstance(row, dict):
+                continue
+            row_urls, _, row_content = _hot_metric_row_match_values(row)
+            if current_url not in row_urls or not row_content:
+                continue
+            if _dashboard_post_content_compatible(record_content, row_content):
+                return False
+            conflicting_match = True
+    return conflicting_match
+
+
+def _publish_record_for_dashboard(record: dict[str, Any], archive: dict[str, Any]) -> dict[str, Any] | None:
+    reconciled = _publish_record_with_reconciled_url(record, archive)
+    if _publish_record_url_conflicts_with_hot_metrics(reconciled, archive):
+        return None
+    return reconciled
+
+
 def _publish_history_hot_metrics(record: dict[str, Any], archive: dict[str, Any]) -> dict[str, Any]:
     published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
     snapshot = {
@@ -18794,8 +18902,8 @@ def _publish_history_hot_metrics(record: dict[str, Any], archive: dict[str, Any]
     )
     setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
     hot_metrics = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
-    record_platform = str(record.get("platform") or published_meta.get("platform") or "").strip().lower()
-    record_urls, record_codes, _ = _publish_record_match_values(record)
+    record_platform, record_account_id, record_account_username = _publish_record_account_identity(record)
+    record_urls, record_codes, record_content = _publish_record_match_values(record)
     platform_candidates: list[dict[str, Any]] = []
     identity_matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for platform_key, platform_metric in hot_metrics.items():
@@ -18804,16 +18912,26 @@ def _publish_history_hot_metrics(record: dict[str, Any], archive: dict[str, Any]
         platform_name = str(platform_metric.get("platform") or platform_key or "").strip().lower()
         if record_platform and platform_name and record_platform != platform_name:
             continue
+        metric_account_id = str(platform_metric.get("accountId") or platform_metric.get("account_id") or "").strip()
+        metric_account_username = str(platform_metric.get("username") or platform_metric.get("accountUsername") or platform_metric.get("account_username") or "").strip().lstrip("@")
+        if record_account_id and metric_account_id and record_account_id != metric_account_id:
+            continue
+        if (
+            record_account_username
+            and metric_account_username
+            and record_account_username.lower() != metric_account_username.lower()
+        ):
+            continue
         platform_candidates.append(platform_metric)
         for row in platform_metric.get("postMetrics") if isinstance(platform_metric.get("postMetrics"), list) else []:
             if not isinstance(row, dict):
                 continue
-            row_urls, row_codes, _ = _hot_metric_row_match_values(row)
+            row_urls, row_codes, row_content = _hot_metric_row_match_values(row)
             exact_identity = bool(
                 (record_urls and row_urls and record_urls.intersection(row_urls))
                 or (record_codes and row_codes and record_codes.intersection(row_codes))
             )
-            if exact_identity:
+            if exact_identity and _dashboard_post_content_compatible(record_content, row_content):
                 identity_matches.append((row, platform_metric))
     matched = identity_matches
     if matched:
@@ -19456,7 +19574,13 @@ def _build_persona_dashboard_overview(
         posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
         platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else {}
         publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
-        visible_publish_history = [record for record in publish_history if _is_persona_publish_history_record(record)]
+        visible_publish_history = [
+            resolved
+            for record in publish_history
+            if _is_persona_publish_history_record(record)
+            for resolved in [_publish_record_for_dashboard(record, archive)]
+            if resolved is not None
+        ]
         platform_published_counts: dict[str, int] = {}
         image_library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
         hot_metrics_raw = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
@@ -19591,22 +19715,37 @@ def _build_persona_dashboard_overview(
         for record in visible_publish_history:
             if not isinstance(record, dict):
                 continue
-            platform_key = _normalize_persona_content_platform(record.get("platform") or "unknown")
-            platform_counts[platform_key] = platform_counts.get(platform_key, 0) + 1
-            platform_published_counts[platform_key] = platform_published_counts.get(platform_key, 0) + 1
-            day = _date_key(record.get("publishedAt"))
-            if day:
-                bucket = daily.setdefault(day, {"published": 0, "likes": 0, "comments": 0, "shares": 0, "post_views": 0})
-                bucket["published"] += 1
-                platform_bucket = platform_daily.setdefault(platform_key, {}).setdefault(
-                    day,
-                    {"published": 0, "likes": 0, "comments": 0, "shares": 0, "post_views": 0},
-                )
-                platform_bucket["published"] += 1
+            record_platform_key = _normalize_persona_content_platform(record.get("platform") or "unknown")
             published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
             targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
-            sources = [published_meta] + [target.get("publishedMeta") for target in targets if isinstance(target, dict)]
-            for source in sources:
+            target_sources: list[tuple[str, dict[str, Any]]] = []
+            for target in targets:
+                if not isinstance(target, dict):
+                    continue
+                target_meta = target.get("publishedMeta") if isinstance(target.get("publishedMeta"), dict) else {}
+                target_platform_key = _normalize_persona_content_platform(
+                    target.get("platform") or target_meta.get("platform") or record_platform_key
+                )
+                target_sources.append((target_platform_key, target_meta))
+
+            published_platform_keys = list(dict.fromkeys(
+                platform_key for platform_key, _ in target_sources
+            )) or [record_platform_key]
+            published_day = _date_key(record.get("publishedAt"))
+            for platform_key in published_platform_keys:
+                platform_counts[platform_key] = platform_counts.get(platform_key, 0) + 1
+                platform_published_counts[platform_key] = platform_published_counts.get(platform_key, 0) + 1
+                if published_day:
+                    bucket = daily.setdefault(published_day, {"published": 0, "likes": 0, "comments": 0, "shares": 0, "post_views": 0})
+                    bucket["published"] += 1
+                    platform_bucket = platform_daily.setdefault(platform_key, {}).setdefault(
+                        published_day,
+                        {"published": 0, "likes": 0, "comments": 0, "shares": 0, "post_views": 0},
+                    )
+                    platform_bucket["published"] += 1
+
+            sources = target_sources or [(record_platform_key, published_meta)]
+            for platform_key, source in sources:
                 if not isinstance(source, dict):
                     continue
                 day = _date_key(source.get("capturedAt") or record.get("publishedAt"))
@@ -19714,7 +19853,11 @@ def _build_persona_dashboard_overview(
             "hot_platforms": hot_platforms,
             "post_metrics": post_metric_rows[:80],
             "publish_history": [
-                _compact_publish_record(item, _publish_history_hot_metrics(item, archive), current_accounts)
+                _compact_publish_record(
+                    item,
+                    _publish_history_hot_metrics(item, archive),
+                    current_accounts,
+                )
                 for item in visible_publish_history[:20]
                 if isinstance(item, dict)
             ],
@@ -19884,7 +20027,13 @@ def _build_persona_dashboard_console_overview(
             )
         ]
         publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
-        visible_publish_history = [record for record in publish_history if _is_persona_publish_history_record(record)]
+        visible_publish_history = [
+            resolved
+            for record in publish_history
+            if _is_persona_publish_history_record(record)
+            for resolved in [_publish_record_for_dashboard(record, archive)]
+            if resolved is not None
+        ]
         image_library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
         favorite_posts = archive.get("favoritePosts") if isinstance(archive.get("favoritePosts"), list) else []
         compact_visible_posts = [_compact_persona_archive_post(post) for post in visible_posts if isinstance(post, dict)]
@@ -20006,7 +20155,13 @@ def _admin_user_content_metrics(conn: sqlite3.Connection, user_ids: Iterable[int
             )
         )
         publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
-        visible_publish_history = [record for record in publish_history if _is_persona_publish_history_record(record)]
+        visible_publish_history = [
+            resolved
+            for record in publish_history
+            if _is_persona_publish_history_record(record)
+            for resolved in [_publish_record_for_dashboard(record, archive)]
+            if resolved is not None
+        ]
         published_count = len(visible_publish_history)
         published_from_drafts = sum(
             1
@@ -21355,6 +21510,12 @@ def create_app() -> FastAPI:
                     """,
                     (email, profile_json, now, now, subject),
                 )
+                _sync_google_profile_avatar_if_unset(
+                    conn,
+                    int(identity_data["id"]),
+                    claims.get("picture"),
+                    now,
+                )
                 try:
                     return _google_customer_login_response(
                         conn,
@@ -21391,6 +21552,12 @@ def create_app() -> FastAPI:
                     ) VALUES (?, 'google', ?, ?, 1, ?, 1, ?, ?, ?)
                     """,
                     (int(linked_user["id"]), subject, email, profile_json, now, now, now),
+                )
+                _sync_google_profile_avatar_if_unset(
+                    conn,
+                    int(linked_user["id"]),
+                    claims.get("picture"),
+                    now,
                 )
                 try:
                     return _google_customer_login_response(
@@ -21542,6 +21709,12 @@ def create_app() -> FastAPI:
                         now,
                         now,
                     ),
+                )
+                _sync_google_profile_avatar_if_unset(
+                    conn,
+                    user_id,
+                    claims.get("picture"),
+                    now,
                 )
                 _initialize_new_customer_benefits(
                     conn,
@@ -22513,6 +22686,8 @@ def create_app() -> FastAPI:
             )
         return {"ok": True}
 
+    DEFAULT_ACCOUNT_AVATAR_URL = "/assets/opc/account-avatar-default.svg"
+
     def _clean_user_avatar_url(value: str) -> str:
         clean = str(value or "").strip()
         if not clean:
@@ -22527,6 +22702,68 @@ def create_app() -> FastAPI:
         if lower.startswith(("https://", "http://", "/assets/", "/uploads/")):
             return clean[:900000]
         raise HTTPException(status_code=400, detail="avatar must be an image url")
+
+    def _google_profile_avatar_url(value: Any) -> str:
+        """Accept only the HTTPS picture URL returned by Google's OIDC profile."""
+        clean = str(value or "").strip()
+        if len(clean) > 2048 or not clean.lower().startswith("https://"):
+            return ""
+        return clean
+
+    def _effective_user_avatar_url(account: dict[str, Any]) -> str:
+        """Prefer a saved avatar, otherwise use Google profile picture or the shared template."""
+        try:
+            avatar_cleared = bool(int(account.get("avatar_cleared") or 0))
+        except (TypeError, ValueError):
+            avatar_cleared = False
+        if avatar_cleared:
+            # A user intentionally removed their avatar in the profile editor.
+            # Do not silently replace that explicit choice with a login fallback.
+            return ""
+        stored = str(account.get("avatar_url") or "").strip()
+        if stored and stored != DEFAULT_ACCOUNT_AVATAR_URL:
+            return stored
+        account_id = int(account.get("id") or 0)
+        if account_id:
+            with db() as conn:
+                identity = conn.execute(
+                    """
+                    SELECT profile_json
+                    FROM oauth_identities
+                    WHERE user_id = ? AND provider = 'google'
+                    LIMIT 1
+                    """,
+                    (account_id,),
+                ).fetchone()
+            if identity is not None:
+                try:
+                    picture = json.loads(str(identity["profile_json"] or "{}")).get("picture")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    picture = ""
+                google_avatar = _google_profile_avatar_url(picture)
+                if google_avatar:
+                    return google_avatar
+        return DEFAULT_ACCOUNT_AVATAR_URL
+
+    def _sync_google_profile_avatar_if_unset(
+        conn: Any,
+        user_id: int,
+        picture: Any,
+        now: int,
+    ) -> None:
+        google_avatar = _google_profile_avatar_url(picture)
+        if not google_avatar:
+            return
+        conn.execute(
+            """
+            UPDATE users
+            SET avatar_url = ?, updated_at = ?
+            WHERE id = ?
+              AND COALESCE(avatar_cleared, 0) = 0
+              AND (COALESCE(TRIM(avatar_url), '') = '' OR avatar_url = ?)
+            """,
+            (google_avatar, int(now), int(user_id), DEFAULT_ACCOUNT_AVATAR_URL),
+        )
 
     def _clean_profile_tags(value: str) -> str:
         raw_items = re.split(r"[,，\n]+", str(value or ""))
@@ -22549,7 +22786,7 @@ def create_app() -> FastAPI:
     def _user_profile_payload(row: dict[str, Any]) -> dict[str, Any]:
         return {
             "full_name": str(row.get("full_name") or ""),
-            "avatar_url": str(row.get("avatar_url") or ""),
+            "avatar_url": _effective_user_avatar_url(row),
             "email": str(row.get("email") or ""),
             "phone": str(row.get("phone") or ""),
             "profile_signature": str(row.get("profile_signature") or ""),
@@ -22564,6 +22801,7 @@ def create_app() -> FastAPI:
         if full_name and (len(full_name) < 2 or len(full_name) > 80):
             raise HTTPException(status_code=400, detail="显示名称长度需在 2-80 个字符之间")
         avatar_url = _clean_user_avatar_url(payload.avatar_url)
+        avatar_cleared = 1 if not avatar_url else 0
         email = str(payload.email or "").strip().lower()
         phone = str(payload.phone or "").strip()
         profile_signature = str(payload.profile_signature or "").strip()
@@ -22575,8 +22813,8 @@ def create_app() -> FastAPI:
         now = _now_ts()
         with db() as conn:
             conn.execute(
-                "UPDATE users SET full_name = ?, avatar_url = ?, email = ?, phone = ?, profile_signature = ?, profile_tags = ?, updated_at = ? WHERE id = ?",
-                (full_name, avatar_url, email, phone, profile_signature, profile_tags, now, int(user["id"])),
+                "UPDATE users SET full_name = ?, avatar_url = ?, avatar_cleared = ?, email = ?, phone = ?, profile_signature = ?, profile_tags = ?, updated_at = ? WHERE id = ?",
+                (full_name, avatar_url, avatar_cleared, email, phone, profile_signature, profile_tags, now, int(user["id"])),
             )
             row = conn.execute("SELECT * FROM users WHERE id = ?", (int(user["id"]),)).fetchone()
         if row is None:
@@ -22635,7 +22873,7 @@ def create_app() -> FastAPI:
                 "is_archived": bool(int(target_user.get("deleted_at") or 0)),
                 "balance_cents": int(target_user.get("balance_cents") or 0),
                 "full_name": str(target_user.get("full_name") or ""),
-                "avatar_url": str(target_user.get("avatar_url") or ""),
+                "avatar_url": _effective_user_avatar_url(target_user),
                 "email": str(target_user.get("email") or ""),
                 "phone": str(target_user.get("phone") or ""),
                 "profile_signature": str(target_user.get("profile_signature") or ""),
@@ -22654,7 +22892,7 @@ def create_app() -> FastAPI:
             "is_disabled": bool(int(user.get("is_disabled") or 0)),
             "balance_cents": int(user.get("balance_cents") or 0),
             "full_name": str(user.get("full_name") or ""),
-            "avatar_url": str(user.get("avatar_url") or ""),
+            "avatar_url": _effective_user_avatar_url(user),
             "email": str(user.get("email") or ""),
             "phone": str(user.get("phone") or ""),
             "profile_signature": str(user.get("profile_signature") or ""),
