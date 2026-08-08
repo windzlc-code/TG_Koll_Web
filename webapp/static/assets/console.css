@@ -1286,118 +1286,97 @@ button.primary,
   padding: 8px 10px;
 }
 
-.persona-dashboard-view .persona-dashboard-platform-select-host,
-.persona-dashboard-view .persona-dashboard-platform-picker {
+.persona-dashboard-view .persona-dashboard-platform-select-host {
   display: block;
   flex: 1 1 auto;
   min-width: 0;
   width: 100%;
 }
 
-.persona-dashboard-view .persona-dashboard-platform-picker {
-  position: relative;
+.persona-dashboard-view .persona-dashboard-platform-switcher {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
 }
 
-.persona-dashboard-view .persona-dashboard-platform-trigger {
+.persona-dashboard-view .persona-dashboard-platform-viewport {
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  touch-action: pan-y;
+  overscroll-behavior-inline: contain;
+}
+
+.persona-dashboard-view .persona-dashboard-platform-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 7px;
+  grid-template-columns: repeat(var(--persona-platform-count, 3), minmax(0, 1fr));
   width: 100%;
-  height: 50px;
-  min-height: 50px;
-  padding: 6px 8px;
+  margin: 0;
+  padding: 0;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  padding: 7px 12px;
+  scroll-snap-align: center;
+}
+
+.persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button > svg {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+}
+
+.persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button > strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.persona-dashboard-view .persona-dashboard-platform-nav,
+.persona-dashboard-view .persona-heat-carousel-actions button {
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
+  place-items: center;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--soft);
+  background: var(--panel-solid);
   color: var(--ink);
-  text-align: left;
-  font-size: 12px;
-  font-weight: 800;
 }
 
-.persona-dashboard-view .persona-dashboard-platform-trigger > svg {
-  width: 17px;
-  height: 17px;
+.persona-dashboard-view :is(.persona-dashboard-platform-nav, .persona-heat-carousel-actions button) svg {
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.9;
+  stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-.persona-dashboard-view .persona-dashboard-platform-trigger > svg.platform-brand-icon {
-  fill: currentColor;
-  stroke: none;
-}
-
-.persona-dashboard-view .persona-dashboard-platform-trigger > strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.persona-dashboard-view .persona-dashboard-platform-chevron {
-  transition: transform var(--motion-fast);
-}
-
-.persona-dashboard-view .persona-dashboard-platform-trigger[aria-expanded="true"] .persona-dashboard-platform-chevron {
-  transform: rotate(180deg);
-}
-
-.persona-dashboard-view .persona-dashboard-platform-menu {
-  position: absolute;
-  z-index: 70;
-  top: calc(100% + 4px);
-  left: 0;
-  width: 100%;
-  padding: 4px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-solid);
-  box-shadow: 0 14px 32px color-mix(in srgb, var(--ink) 18%, transparent);
-}
-
-.persona-dashboard-view .persona-dashboard-platform-options.account-pool-platforms.account-pool-platform-tabs {
-  position: static;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  width: 100%;
-  margin: 0;
-  padding: 0;
-  gap: 4px;
-  overflow: visible;
-}
-
-.persona-dashboard-view .persona-dashboard-platform-options.account-pool-platform-tabs button {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  grid-template-areas: "icon label";
-  grid-template-rows: minmax(0, 1fr);
-  align-items: center;
-  column-gap: 8px;
-  row-gap: 0;
-  width: 100%;
-  min-width: 0;
-  min-height: 44px;
-  padding: 6px 8px;
-}
-
-.persona-dashboard-view .persona-dashboard-platform-options.account-pool-platform-tabs button > svg {
-  grid-area: icon;
-  width: 18px;
-  height: 18px;
-}
-
-.persona-dashboard-view .persona-dashboard-platform-options.account-pool-platform-tabs button > strong {
-  grid-area: label;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 14px;
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.persona-dashboard-view :is(.persona-dashboard-platform-nav, .persona-heat-carousel-actions button):disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .persona-dashboard-view .persona-bar-value,
@@ -1428,6 +1407,186 @@ button.primary,
     var(--accent),
     color-mix(in srgb, var(--accent) 58%, var(--panel-solid))
   );
+}
+
+.persona-dashboard-view .persona-heat-carousel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.persona-dashboard-view .persona-heat-carousel-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.persona-dashboard-view .persona-heat-carousel-actions button {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+}
+
+.persona-dashboard-view .persona-heat-carousel {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  touch-action: pan-x pan-y;
+  overscroll-behavior-inline: contain;
+}
+
+.persona-dashboard-view .persona-heat-carousel::-webkit-scrollbar {
+  display: none;
+}
+
+.persona-dashboard-view .persona-heat-card {
+  display: grid;
+  flex: 0 0 100%;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  scroll-snap-align: start;
+}
+
+.persona-dashboard-view .persona-heat-card > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.persona-dashboard-view .persona-heat-card > header > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.persona-dashboard-view .persona-heat-card > header > span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.persona-dashboard-view .persona-heat-card > header b {
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.persona-dashboard-view .persona-heat-platform-list {
+  display: grid;
+  gap: 8px;
+}
+
+.persona-dashboard-view .persona-heat-platform-row {
+  display: grid;
+  grid-template-columns: minmax(104px, 0.8fr) minmax(120px, 2fr) 70px;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+}
+
+.persona-dashboard-view .persona-heat-platform-row.is-highlighted {
+  border-color: var(--line);
+  background: var(--soft);
+}
+
+.persona-dashboard-view .persona-heat-platform-label {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.persona-dashboard-view .persona-heat-platform-label svg,
+.persona-dashboard-view .persona-donut-legend svg {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+}
+
+.persona-dashboard-view .persona-heat-platform-track {
+  display: block;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 70%, var(--panel-solid));
+}
+
+.persona-dashboard-view .persona-heat-platform-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.persona-dashboard-view .persona-heat-platform-row[data-platform="threads"] .persona-heat-platform-track i {
+  background: #050505;
+}
+
+.persona-dashboard-view .persona-heat-platform-row[data-platform="instagram"] .persona-heat-platform-track i {
+  background: var(--instagram-platform-gradient);
+}
+
+.persona-dashboard-view .persona-heat-platform-row > strong {
+  color: var(--ink);
+  text-align: right;
+}
+
+.persona-dashboard-view .persona-trend-range {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  width: min(100%, 330px);
+  margin: 0 0 10px auto;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+}
+
+.persona-dashboard-view .persona-trend-range button {
+  min-height: 34px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.persona-dashboard-view .persona-trend-range button.is-active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.persona-dashboard-view .persona-grid-line {
+  stroke: color-mix(in srgb, var(--line) 78%, transparent);
+  stroke-width: 1;
+}
+
+.persona-dashboard-view .persona-line-chart circle {
+  stroke: var(--panel-solid);
+  stroke-width: 2;
+}
+
+.persona-dashboard-view .persona-donut-legend div {
+  align-items: center;
 }
 
 .persona-dashboard-view .persona-workbench-panel {
@@ -1639,6 +1798,40 @@ button.primary,
     grid-template-columns: 1fr;
   }
 
+  .persona-dashboard-view .persona-dashboard-filters.persona-dashboard-platform-filter {
+    padding: 6px;
+  }
+
+  .persona-dashboard-view .persona-dashboard-platform-switcher {
+    grid-template-columns: 34px minmax(0, 1fr) 34px;
+    gap: 5px;
+  }
+
+  .persona-dashboard-view .persona-dashboard-platform-nav {
+    width: 34px;
+    height: 34px;
+    min-height: 34px;
+  }
+
+  .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs {
+    gap: 5px;
+  }
+
+  .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button {
+    min-height: 42px;
+    gap: 4px;
+    padding-inline: 4px;
+  }
+
+  .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button > svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button > strong {
+    font-size: 12px;
+  }
+
   .persona-dashboard-view .persona-dashboard-filters > div:first-child {
     grid-column: auto;
   }
@@ -1689,6 +1882,31 @@ button.primary,
 
   .persona-dashboard-view .persona-chart-panel-wide {
     grid-column: span 2;
+  }
+
+  .persona-dashboard-view .persona-heat-card {
+    gap: 10px;
+    padding: 9px;
+  }
+
+  .persona-dashboard-view .persona-heat-platform-row {
+    grid-template-columns: minmax(92px, 0.9fr) minmax(64px, 1.2fr) 54px;
+    gap: 6px;
+    padding-inline: 3px;
+  }
+
+  .persona-dashboard-view .persona-heat-platform-label {
+    gap: 5px;
+    font-size: 12px;
+  }
+
+  .persona-dashboard-view .persona-trend-range {
+    width: 100%;
+    margin-bottom: 6px;
+  }
+
+  .persona-dashboard-view .persona-line-chart {
+    height: 190px;
   }
 
   .persona-dashboard-view .persona-chart-head {
@@ -2390,6 +2608,17 @@ textarea:focus {
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.automation-plan-task-control.is-empty {
+  grid-template-columns: minmax(0, 1fr) repeat(2, 30px);
+}
+
+.automation-plan-task-control.is-empty .automation-plan-task-picker {
+  border: 1px solid var(--status-queued-border);
+  border-radius: 8px;
+  background: var(--status-queued-bg);
+  color: var(--status-queued-ink);
 }
 
 .automation-plan-task-detail .ui-eye-icon {

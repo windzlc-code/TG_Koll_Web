@@ -7864,10 +7864,10 @@ function renderPersonaHistoryRows(rows, { hiddenCount = 0 } = {}) {
       || row.platform
       || "发布记录"
     ).trim();
-    const content = String(row.content || row.caption || row.text || row.reply_text || row.source_url || "").trim();
+    const content = String(row.content || row.caption || row.text || row.reply_text || "").trim();
     const platform = String(row.platform || row.publishPlatform || "").trim();
     const status = String(row.status || "").trim();
-    const publishedUrl = String(row.source_url || row.published_url || row.url || row.post_url || "").trim();
+    const publishedUrl = String(row.published_url || "").trim();
     const historyMedia = personaHistoryMediaItems(row);
     const time = row.published_at || row.finished_at || row.updated_at || row.created_at || "";
     const meta = [platform, status ? statusLabel(status) : "", formatTime(time)].filter(Boolean).join(" · ");
@@ -7878,7 +7878,7 @@ function renderPersonaHistoryRows(rows, { hiddenCount = 0 } = {}) {
         ${renderPersonaMediaPreview(historyMedia, { compact: true })}
         <span>${esc(meta)}</span>
         ${publishedUrl ? `<div class="row-actions">
-          ${publishedUrl ? `<a href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看来源</a>` : ""}
+          ${publishedUrl ? `<a href="${esc(publishedUrl)}" target="_blank" rel="noopener">查看已发布推文</a>` : ""}
         </div>` : ""}
       </article>`;
   }).join("")}</div>`;
@@ -9815,6 +9815,7 @@ function personaDashboardDetail(persona = selectedPersona()) {
 }
 
 function personaHistoryDashboardMetricRecord(row = {}, index = 0) {
+  if (row?.is_published_post !== true) return null;
   const postKey = String(row.post_key || row.id || `post-${index + 1}`).trim();
   const likes = Number(row.like_count || 0);
   const comments = Number(row.comment_count || 0);
@@ -9830,8 +9831,10 @@ function personaHistoryDashboardMetricRecord(row = {}, index = 0) {
     status: "success",
     platform: String(row.platform || "").trim(),
     content: String(row.full_content || row.content || "").trim(),
-    source_url: String(row.source_url || "").trim(),
     published_url: String(row.source_url || "").trim(),
+    account_id: String(row.account_id || "").trim(),
+    account_username: String(row.account_username || "").trim(),
+    account_match: { matches_current: true },
     published_at: row.published_at || row.captured_at || "",
     captured_at: row.captured_at || "",
     media_items: Array.isArray(row.media_items) ? row.media_items : [],
@@ -9842,7 +9845,8 @@ function personaHistoryDashboardMetricRecord(row = {}, index = 0) {
       comments,
       shares,
       reposts,
-      complete: true,
+      views_available: row.view_available === true,
+      complete: row.view_available === true,
       refreshed_at: row.captured_at || row.published_at || "",
     },
     __dashboard_metric_only: true,
@@ -9855,7 +9859,7 @@ function personaHistoryIdentityKeys(record = {}) {
     const text = String(value || "").trim().toLowerCase();
     if (text) keys.add(`${prefix}:${text}`);
   };
-  [record.source_url, record.published_url, record.url, record.post_url].forEach((value) => {
+  [record.published_url, record.url, record.post_url].forEach((value) => {
     const text = String(value || "").trim();
     if (!text) return;
     try {
@@ -9866,15 +9870,16 @@ function personaHistoryIdentityKeys(record = {}) {
     } catch {}
   });
   [record.archive_post_id, record.post_id, record.dashboard_post_key].forEach((value) => add("post", value));
-  const content = String(record.content || record.caption || record.text || "").replace(/\s+/g, " ").trim().slice(0, 180);
-  if (content) add("content", `${String(record.platform || "").toLowerCase()}:${content}`);
   return keys;
 }
 
 function personaMergedHistoryRows(persona = selectedPersona()) {
-  const taskRows = personaPublishHistoryRows(persona).map((record) => ({ ...record, __dashboard_metric_only: false }));
+  const taskRows = personaPublishHistoryRows(persona)
+    .filter((record) => record?.account_match?.matches_current !== false)
+    .map((record) => ({ ...record, __dashboard_metric_only: false }));
   const metricRows = (personaDashboardDetail(persona)?.post_metrics || [])
-    .map(personaHistoryDashboardMetricRecord);
+    .map(personaHistoryDashboardMetricRecord)
+    .filter(Boolean);
   const merged = [...taskRows];
   metricRows.forEach((metric) => {
     const metricKeys = personaHistoryIdentityKeys(metric);
@@ -9889,13 +9894,22 @@ function personaMergedHistoryRows(persona = selectedPersona()) {
     const current = merged[index];
     const currentHot = current.hot_metrics || {};
     const metricHot = metric.hot_metrics || {};
-    const metricValue = (key) => Number(currentHot[key] || 0) || Number(metricHot[key] || 0);
+    const metricValue = (key) => {
+      const currentValue = currentHot[key];
+      const currentAvailable = key !== "views" || currentHot.views_available !== false;
+      if (currentAvailable && currentValue !== null && currentValue !== undefined && currentValue !== "") {
+        return Number(currentValue) || 0;
+      }
+      const fallbackValue = metricHot[key];
+      return fallbackValue === null || fallbackValue === undefined || fallbackValue === ""
+        ? 0
+        : Number(fallbackValue) || 0;
+    };
     merged[index] = {
       ...metric,
       ...current,
       media_items: Array.isArray(current.media_items) && current.media_items.length ? current.media_items : metric.media_items,
-      source_url: current.source_url || current.published_url || metric.source_url,
-      published_url: current.published_url || current.source_url || metric.published_url,
+      published_url: current.published_url || metric.published_url,
       hot_metrics: {
         ...metricHot,
         ...currentHot,
@@ -9905,6 +9919,7 @@ function personaMergedHistoryRows(persona = selectedPersona()) {
         comments: metricValue("comments"),
         shares: metricValue("shares"),
         reposts: metricValue("reposts"),
+        views_available: currentHot.views_available === true || metricHot.views_available === true,
         complete: currentHot.complete === true || metricHot.complete === true,
       },
       __dashboard_metric_only: false,
@@ -12891,16 +12906,15 @@ function renderAutomationPlanRows(draft, platform) {
             </div>
           </div>
           <div class="automation-plan-task-cell">
-            <div class="automation-plan-task-control">
+            <div class="automation-plan-task-control ${selectedTask ? "" : "is-empty"}">
               <strong class="automation-plan-task-value">${esc(selectedTask ? automationPlanTaskLabel(selectedTask) : "未添加")}</strong>
-              <button
+              ${selectedTask ? `<button
                 type="button"
                 class="automation-plan-task-detail unified-action-icon-button"
                 data-automation-plan-view-details="${index}"
                 title="查看任务明细"
                 aria-label="查看任务明细"
-                ${selectedTask ? "" : "disabled"}
-              >${renderEyeIcon()}</button>
+              >${renderEyeIcon()}</button>` : ""}
               <button
                 type="button"
                 class="automation-plan-task-picker unified-action-icon-button"
@@ -13581,8 +13595,16 @@ function activePublishHistoryRecord(rows = []) {
 
 function publishHistoryMetricEntries(record = {}) {
   const source = record?.hot_metrics || record || {};
+  const interactions = [source.likes, source.comments, source.shares, source.reposts]
+    .reduce((total, value) => total + Math.max(0, Number(value || 0)), 0);
+  const views = source.views_available === false
+    || source.views === null
+    || source.views === undefined
+    || (Number(source.views || 0) === 0 && interactions > 0)
+    ? null
+    : source.views;
   return [
-    ["热度 / 浏览", source.views ?? source.hot_score],
+    ["浏览", views],
     ["点赞", source.likes],
     ["评论", source.comments],
     ["分享", source.shares],
@@ -13597,8 +13619,9 @@ function formatPublishHistoryMetricUnit(number, divisor, suffix) {
 }
 
 function publishHistoryMetricText(value) {
+  if (value === null || value === undefined || value === "") return "未获取";
   const number = Number(value || 0);
-  if (!Number.isFinite(number)) return "0";
+  if (!Number.isFinite(number)) return "未获取";
   const absolute = Math.abs(number);
   if (absolute >= 100000000) return formatPublishHistoryMetricUnit(number, 100000000, "亿");
   if (absolute >= 1000000) return formatPublishHistoryMetricUnit(number, 1000000, "m");
@@ -13611,7 +13634,7 @@ function renderPublishHistoryMetrics(record = {}, className = "") {
   return `
     <div class="publish-history-metrics ${esc(className)}">
       ${publishHistoryMetricEntries(record).map(([label, value]) => `
-        <span title="${esc(`${label}：${Number(value || 0).toLocaleString("zh-CN")}`)}">
+        <span title="${esc(`${label}：${value === null ? "未获取" : Number(value || 0).toLocaleString("zh-CN")}`)}">
           <small>${esc(label)}</small>
           <strong>${esc(publishHistoryMetricText(value))}</strong>
         </span>
@@ -13636,7 +13659,7 @@ function renderPublishHistorySourceLink(url = "", { showUrl = false, compact = f
   return `
     <div class="publish-history-source-row ${compact ? "is-compact" : ""}">
       <a class="publish-history-source-link" href="${esc(safeUrl)}" target="_blank" rel="noopener">
-        ${renderSourceLinkIcon()}<span>查看来源</span>
+        ${renderSourceLinkIcon()}<span>查看已发布推文</span>
       </a>
       ${showUrl ? `<span class="publish-history-source-url" title="${esc(safeUrl)}">${esc(safeUrl)}</span>` : ""}
     </div>`;
@@ -13655,7 +13678,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona(), options 
         const fullIndex = rows.findIndex((item) => String(item?.id || "") === recordId);
         const displayIndex = fullIndex >= 0 ? fullIndex : index;
         const active = recordId === activeId;
-        const publishedUrl = safeExternalHttpUrl(record.source_url || record.published_url || record.url || record.post_url);
+        const publishedUrl = safeExternalHttpUrl(record.published_url);
         const platform = String(record.platform || record.publishPlatform || "").trim();
         const platformName = platformLabel(platform);
         const publishedAt = formatTime(publishHistoryRecordTime(record));
@@ -13668,11 +13691,11 @@ function renderPublishHistorySelectionList(persona = selectedPersona(), options 
                   <span class="publish-history-card-platform account-pool-card-platform" title="${esc(platformName)}" aria-label="${esc(platformName)}">${renderAccountPoolPlatformIcon(platform)}<span>${esc(platformName)}</span></span>
                   <time class="publish-history-card-time">${esc(publishedAt || "时间未知")}</time>
                 </span>
-                <span class="publish-post-card-snippet">${esc(String(record.content || record.caption || record.text || record.source_url || "").trim() || "该记录没有正文摘要。")}</span>
+                <span class="publish-post-card-snippet">${esc(String(record.content || record.caption || record.text || "").trim() || "该记录没有正文摘要。")}</span>
                 ${renderPublishHistoryAccountWarning(record)}
               </span>
               <span class="publish-history-card-actions" aria-label="任务历史操作">
-                ${publishedUrl ? `<a class="publish-history-card-action" href="${esc(publishedUrl)}" target="_blank" rel="noopener" title="打开来源链接" aria-label="打开来源链接">${renderSourceLinkIcon()}</a>` : ""}
+                ${publishedUrl ? `<a class="publish-history-card-action" href="${esc(publishedUrl)}" target="_blank" rel="noopener" title="打开已发布推文" aria-label="打开已发布推文">${renderSourceLinkIcon()}</a>` : ""}
                 <button type="button" class="publish-history-card-action" data-publish-history-view="${esc(recordId)}" title="查看任务历史" aria-label="查看任务历史">${renderEyeIcon()}</button>
                 ${record.__dashboard_metric_only ? "" : `<button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}</button>`}
               </span>
@@ -13688,7 +13711,7 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
   const rows = personaPublishHistoryRows(persona);
   const activeRecord = activePublishHistoryRecord(rows);
   const activeMediaItems = activeRecord ? personaHistoryMediaItems(activeRecord) : [];
-  const publishedUrl = safeExternalHttpUrl(activeRecord?.source_url || activeRecord?.published_url || activeRecord?.url || activeRecord?.post_url);
+  const publishedUrl = safeExternalHttpUrl(activeRecord?.published_url);
   const hotMetrics = activeRecord?.hot_metrics || activeRecord || {};
   const hotStatus = hotMetrics.complete
     ? `全量互动 · 更新于 ${formatTime(hotMetrics.refreshed_at) || "时间未知"}`
@@ -13713,7 +13736,7 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
               <span>${esc(formatTime(publishHistoryRecordTime(activeRecord)) || "时间未知")}</span>
               ${activeRecord?.status ? `<span>${esc(statusLabel(activeRecord.status))}</span>` : ""}
             </div>
-            <p>${esc(String(activeRecord?.content || activeRecord?.caption || activeRecord?.text || activeRecord?.source_url || "").trim() || "该记录没有正文或链接摘要。")}</p>
+            <p>${esc(String(activeRecord?.content || activeRecord?.caption || activeRecord?.text || "").trim() || "该记录没有正文摘要。")}</p>
             ${renderPublishHistoryMetrics(activeRecord)}
             ${renderPublishHistoryAccountWarning(activeRecord)}
             <div class="publish-history-hot-status ${hotMetrics.complete ? "is-complete" : "is-stale"}">${esc(hotStatus)}</div>
@@ -13775,7 +13798,7 @@ async function openPublishHistoryRecordModal(historyId = "", persona = selectedP
     .find((item) => String(item?.id || "").trim() === cleanHistoryId);
   if (!record) return;
   const mediaItems = personaHistoryMediaItems(record);
-  const publishedUrl = safeExternalHttpUrl(record.source_url || record.published_url || record.url || record.post_url);
+  const publishedUrl = safeExternalHttpUrl(record.published_url);
   const action = await openConsoleModal({
     title: "任务历史详情",
     contentHtml: `
@@ -13790,7 +13813,7 @@ async function openPublishHistoryRecordModal(historyId = "", persona = selectedP
           ${record.status ? `<span>${esc(statusLabel(record.status))}</span>` : ""}
         </div>
         ${renderPublishHistoryMetrics(record, "publish-history-modal-metrics")}
-        <p>${esc(String(record.content || record.caption || record.text || record.source_url || "").trim() || "该记录没有正文或链接摘要。")}</p>
+        <p>${esc(String(record.content || record.caption || record.text || "").trim() || "该记录没有正文摘要。")}</p>
         ${renderPublishHistoryAccountWarning(record)}
         ${renderPublishHistorySourceLink(publishedUrl, { showUrl: true })}
         ${renderPublishPreviewMedia(mediaItems)}

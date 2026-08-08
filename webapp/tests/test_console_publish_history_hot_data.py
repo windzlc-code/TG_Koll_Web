@@ -42,13 +42,20 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn(".persona-profile-platform-metrics {", CONSOLE_CSS)
         self.assertIn(".persona-history-empty-state {", CONSOLE_CSS)
 
-    def test_persona_history_merges_dashboard_metrics_with_real_task_history(self):
+    def test_persona_history_merges_only_verified_current_account_posts(self):
+        dashboard_record = function_source("personaHistoryDashboardMetricRecord", "personaHistoryIdentityKeys")
         merge = function_source("personaMergedHistoryRows", "personaHistoryContentParts")
         history = function_source("renderPersonaHistoryDataContent", "renderPersonaDataPanel")
 
         self.assertIn("personaPublishHistoryRows(persona)", merge)
         self.assertIn("personaDashboardDetail(persona)?.post_metrics", merge)
         self.assertIn("personaHistoryIdentityKeys", merge)
+        self.assertIn("record?.account_match?.matches_current !== false", merge)
+        self.assertIn("currentValue !== null", merge)
+        self.assertNotIn("Number(currentHot[key] || 0) ||", merge)
+        self.assertIn("row?.is_published_post !== true", dashboard_record)
+        self.assertIn("published_url: String(row.source_url || \"\").trim()", dashboard_record)
+        self.assertNotIn("source_url: String(row.source_url", dashboard_record)
         self.assertIn("renderPublishHistorySelectionList(persona, {", history)
         self.assertIn("loadPersonaDashboardOverview()", history)
         self.assertIn('streamKey: `persona-data-history:', history)
@@ -111,7 +118,7 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertNotIn("renderMediaTypeBadge(mediaItems)", selection)
         self.assertNotIn("publish-history-card-media", selection)
         self.assertNotIn("<strong>${esc(publishHistoryRecordTitle", selection)
-        self.assertIn("热度 / 浏览", metrics)
+        self.assertIn('"浏览"', metrics)
         self.assertNotIn('["浏览", source.views]', metrics)
         self.assertIn(".publish-history-card-metrics", CONSOLE_CSS)
         self.assertIn(
@@ -185,7 +192,7 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         panel = function_source("renderPublishHistoryPanel", "requeuePublishHistoryRecord")
 
         self.assertIn("hot_metrics", preview)
-        for label in ("热度 / 浏览", "点赞", "评论", "分享", "转发"):
+        for label in ("浏览", "点赞", "评论", "分享", "转发"):
             self.assertIn(label, metrics)
         self.assertIn("data-publish-history-refresh", panel)
         self.assertIn("renderPublishHistoryRefreshContent", panel)
@@ -193,7 +200,7 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("刷新数据", refresh_content)
         self.assertIn("renderRefreshIcon()", refresh_content)
 
-    def test_publish_history_renders_source_link_and_account_mismatch_notice(self):
+    def test_publish_history_renders_published_link_and_account_mismatch_notice(self):
         selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")
         preview = function_source("renderPublishHistoryPreview", "renderPublishHistoryPanel")
         detail = function_source("openPublishHistoryRecordModal", "requeuePublishHistoryRecord")
@@ -202,9 +209,32 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("renderPublishHistoryAccountWarning(activeRecord)", preview)
         self.assertIn("renderPublishHistoryAccountWarning(record)", detail)
         self.assertIn("renderPublishHistorySourceLink(publishedUrl, { showUrl: true })", detail)
+        self.assertIn("safeExternalHttpUrl(record.published_url)", selection)
+        self.assertIn("safeExternalHttpUrl(activeRecord?.published_url)", preview)
+        self.assertIn("safeExternalHttpUrl(record.published_url)", detail)
+        self.assertNotIn("record.source_url ||", selection)
+        self.assertNotIn("activeRecord?.source_url ||", preview)
         self.assertIn("renderSourceLinkIcon()", selection)
         self.assertIn(".publish-history-source-url", CONSOLE_CSS)
         self.assertIn(".publish-history-account-warning", CONSOLE_CSS)
+
+    def test_unpublished_hot_draft_keeps_original_post_link(self):
+        hot_origin = function_source("renderPersonaHotOrigin", "renderPersonaHotMetricStrip")
+
+        self.assertIn("meta.source_url", hot_origin)
+        self.assertIn("查看原帖", hot_origin)
+
+    def test_publish_history_does_not_render_missing_views_as_zero(self):
+        entries = function_source("publishHistoryMetricEntries", "formatPublishHistoryMetricUnit")
+        metric_text = function_source("publishHistoryMetricText", "renderPublishHistoryMetrics")
+
+        self.assertIn('source.views_available === false', entries)
+        self.assertIn('["浏览",', entries)
+        self.assertNotIn('source.views ?? source.hot_score', entries)
+        self.assertIn('value === null', metric_text)
+        self.assertIn('"未获取"', metric_text)
+        dashboard_record = function_source("personaHistoryDashboardMetricRecord", "personaHistoryIdentityKeys")
+        self.assertIn("complete: row.view_available === true", dashboard_record)
 
     def test_manual_hot_refresh_uses_authenticated_source_and_reloads_history(self):
         refresh = function_source("refreshPublishHistoryHotData", "publishGroupSelectionState")

@@ -18192,8 +18192,6 @@ def _published_record_url(record: dict[str, Any]) -> str:
         record.get("url"),
         published_meta.get("publishedUrl"),
         published_meta.get("published_url"),
-        published_meta.get("sourceUrl"),
-        published_meta.get("source_url"),
     ]
     for target in record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []:
         if not isinstance(target, dict):
@@ -18202,12 +18200,8 @@ def _published_record_url(record: dict[str, Any]) -> str:
         candidates.extend([
             target.get("publishedUrl"),
             target.get("published_url"),
-            target.get("sourceUrl"),
-            target.get("source_url"),
             target_meta.get("publishedUrl"),
             target_meta.get("published_url"),
-            target_meta.get("sourceUrl"),
-            target_meta.get("source_url"),
         ])
     for value in candidates:
         text = str(value or "").strip()
@@ -18306,8 +18300,13 @@ def _publish_record_account_identity(record: dict[str, Any]) -> tuple[str, str, 
         for source in identity_sources
         if str(source.get("username") or source.get("accountUsername") or source.get("account_username") or "").strip()
     ), "")
-    if platform == "threads" and not account_username:
-        account_username = _threads_username_from_published_url(_published_record_url(record))
+    if platform == "threads":
+        # The permalink owner is authoritative. This also rejects legacy rows
+        # whose metadata says "current account" but whose URL is a hot post or
+        # a post published by a previously bound account.
+        published_username = _threads_username_from_published_url(_published_record_url(record))
+        if published_username:
+            account_username = published_username
     return platform, account_id, account_username
 
 
@@ -18360,8 +18359,18 @@ def _compact_publish_record(
             "stale": True,
             "source": "published_snapshot",
             "scope": "published_snapshot",
+            "views_available": bool(
+                _source_view_available(published_meta)
+                and (
+                    published_meta.get("metricComplete") is True
+                    or published_meta.get("metric_complete") is True
+                    or published_meta.get("metricMatched") is True
+                    or published_meta.get("metric_matched") is True
+                    or snapshot_metrics["views"] > 0
+                )
+            ),
         }
-    source_url = _published_record_url(record)
+    published_url = _published_record_url(record)
     platform, source_account_id, source_account_username = _publish_record_account_identity(record)
     if isinstance(current_accounts, str):
         current_account_map = {
@@ -18392,7 +18401,10 @@ def _compact_publish_record(
         "content": content[:220],
         "published_at": record.get("publishedAt") or record.get("published_at"),
         "status": record.get("status"),
-        "source_url": source_url,
+        "published_url": published_url,
+        # Compatibility field for older console clients. It must never contain
+        # the source hot-post URL for a published-history record.
+        "source_url": published_url,
         "captured_at": resolved_hot_metrics.get("refreshed_at") or published_meta.get("capturedAt") or published_meta.get("captured_at"),
         "hot_score": _number(resolved_hot_metrics.get("hot_score"), 0),
         "likes": _number(resolved_hot_metrics.get("likes"), snapshot_metrics["likes"]),
@@ -18452,6 +18464,39 @@ def _source_metric(source: Any, *keys: str) -> int:
         if key in metrics:
             return _number(metrics.get(key), 0)
     return _number(source.get(keys[0]), 0) if keys else 0
+
+
+def _source_metric_available(source: Any, *keys: str) -> bool:
+    if not isinstance(source, dict):
+        return False
+    engagement = source.get("engagement") if isinstance(source.get("engagement"), dict) else {}
+    metrics = source.get("metrics") if isinstance(source.get("metrics"), dict) else {}
+    for container in (engagement, metrics, source):
+        for key in keys:
+            if key not in container:
+                continue
+            value = container.get(key)
+            if isinstance(value, bool) or value is None or value == "":
+                continue
+            try:
+                if math.isfinite(float(value)):
+                    return True
+            except (TypeError, ValueError, OverflowError):
+                continue
+    return False
+
+
+def _source_view_available(source: Any) -> bool:
+    if not _source_metric_available(source, "viewCount", "view_count"):
+        return False
+    views = _source_metric(source, "viewCount", "view_count")
+    interactions = _sum_numbers(
+        _source_metric(source, "likeCount", "like_count"),
+        _source_metric(source, "commentCount", "comment_count"),
+        _source_metric(source, "shareCount", "share_count", "send_count"),
+        _source_metric(source, "repostCount", "repost_count"),
+    )
+    return not (views <= 0 and interactions > 0)
 
 
 def _source_share_metric(source: Any) -> int:
@@ -18676,7 +18721,7 @@ def _publish_record_match_values(record: Any) -> tuple[set[str], set[str], str]:
     urls: set[str] = set()
     codes: set[str] = set()
     for source in sources:
-        for key in ("publishedUrl", "published_url", "sourceUrl", "source_url", "postUrl", "post_url", "url"):
+        for key in ("publishedUrl", "published_url", "postUrl", "post_url", "url"):
             normalized = _normalized_dashboard_post_url(source.get(key))
             if normalized:
                 urls.add(normalized)
@@ -18729,13 +18774,22 @@ def _publish_history_hot_metrics(record: dict[str, Any], archive: dict[str, Any]
         "reposts": _source_metric(published_meta, "repostCount", "repost_count"),
         "views": _source_metric(published_meta, "viewCount", "view_count"),
     }
+    snapshot_views_available = bool(
+        _source_view_available(published_meta)
+        and (
+            published_meta.get("metricComplete") is True
+            or published_meta.get("metric_complete") is True
+            or published_meta.get("metricMatched") is True
+            or published_meta.get("metric_matched") is True
+            or snapshot["views"] > 0
+        )
+    )
     setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
     hot_metrics = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
     record_platform = str(record.get("platform") or published_meta.get("platform") or "").strip().lower()
-    record_urls, record_codes, record_content = _publish_record_match_values(record)
+    record_urls, record_codes, _ = _publish_record_match_values(record)
     platform_candidates: list[dict[str, Any]] = []
     identity_matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    content_matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for platform_key, platform_metric in hot_metrics.items():
         if not isinstance(platform_metric, dict):
             continue
@@ -18746,20 +18800,14 @@ def _publish_history_hot_metrics(record: dict[str, Any], archive: dict[str, Any]
         for row in platform_metric.get("postMetrics") if isinstance(platform_metric.get("postMetrics"), list) else []:
             if not isinstance(row, dict):
                 continue
-            row_urls, row_codes, row_content = _hot_metric_row_match_values(row)
+            row_urls, row_codes, _ = _hot_metric_row_match_values(row)
             exact_identity = bool(
                 (record_urls and row_urls and record_urls.intersection(row_urls))
                 or (record_codes and row_codes and record_codes.intersection(row_codes))
             )
-            content_match = bool(
-                len(record_content) >= 16
-                and record_content == row_content
-            )
             if exact_identity:
                 identity_matches.append((row, platform_metric))
-            elif content_match:
-                content_matches.append((row, platform_metric))
-    matched = identity_matches or (content_matches if len(content_matches) == 1 else [])
+    matched = identity_matches
     if matched:
         row, platform_metric = max(
             matched,
@@ -18779,10 +18827,16 @@ def _publish_history_hot_metrics(record: dict[str, Any], archive: dict[str, Any]
             "views": _metric_value(row, "viewCount", "view_count"),
         }
         scope = str(platform_metric.get("scope") or "").strip()
-        complete = bool(platform_metric.get("complete") is True and scope == "authenticated_full_profile")
+        views_available = _source_view_available(row)
+        complete = bool(
+            platform_metric.get("complete") is True
+            and scope == "authenticated_full_profile"
+            and views_available
+        )
         return {
             "hot_score": _sum_numbers(*values.values()),
             **values,
+            "views_available": views_available,
             "refreshed_at": row.get("capturedAt") or row.get("captured_at") or platform_metric.get("refreshedAt") or platform_metric.get("lightRefreshedAt"),
             "complete": complete,
             "matched": True,
@@ -18794,6 +18848,7 @@ def _publish_history_hot_metrics(record: dict[str, Any], archive: dict[str, Any]
     return {
         "hot_score": _sum_numbers(*snapshot.values()),
         **snapshot,
+        "views_available": snapshot_views_available,
         "refreshed_at": published_meta.get("capturedAt") or published_meta.get("captured_at") or platform_metric.get("refreshedAt") or platform_metric.get("lightRefreshedAt"),
         "complete": False,
         "matched": False,
@@ -18877,6 +18932,7 @@ def _compact_hot_post(raw: Any, archive_id: str = "") -> dict[str, Any]:
         "repost_count": _metric_value(raw, "repostCount", "repost_count"),
         "share_count": _metric_value(raw, "shareCount", "share_count", "send_count"),
         "view_count": _metric_value(raw, "viewCount", "view_count"),
+        "view_available": _source_view_available(raw),
         "media_items": _compact_dashboard_media_items(raw),
         "details": _sanitize_dashboard_value(raw, "post"),
     }
@@ -19424,7 +19480,23 @@ def _build_persona_dashboard_overview(
         for platform, metric_value in hot_metrics_raw.items():
             if not isinstance(metric_value, dict):
                 continue
-            platform_name = str(metric_value.get("platform") or platform or "unknown").strip() or "unknown"
+            platform_name = _normalize_persona_content_platform(
+                metric_value.get("platform") or str(platform).split(":", 1)[0] or "unknown"
+            )
+            metric_account_id = str(metric_value.get("accountId") or metric_value.get("account_id") or "").strip()
+            metric_account_username = str(metric_value.get("username") or "").strip().lstrip("@")
+            current_identity = current_accounts.get(platform_name) if isinstance(current_accounts.get(platform_name), dict) else {}
+            current_account_id = str(current_identity.get("account_id") or "").strip()
+            current_account_username = str(current_identity.get("username") or "").strip().lstrip("@")
+            has_current_identity = bool(current_account_id or current_account_username)
+            if current_account_username and metric_account_username:
+                matches_current_account = current_account_username.lower() == metric_account_username.lower()
+            elif current_account_id and metric_account_id:
+                matches_current_account = current_account_id == metric_account_id
+            else:
+                matches_current_account = False
+            if has_current_identity and not matches_current_account:
+                continue
             platform_counts[platform_name] = platform_counts.get(platform_name, 0) + 1
             post_metrics = metric_value.get("postMetrics") if isinstance(metric_value.get("postMetrics"), list) else []
             platform_likes = _number(metric_value.get("likes"), 0)
@@ -19470,6 +19542,9 @@ def _build_persona_dashboard_overview(
                 compact = _compact_hot_post(row, archive_id)
                 if compact:
                     compact["platform"] = platform_name
+                    compact["account_id"] = metric_account_id
+                    compact["account_username"] = metric_account_username
+                    compact["is_published_post"] = bool(has_current_identity and matches_current_account)
                     related_media, media_context = _related_dashboard_media_context(
                         row,
                         posts,
@@ -19484,8 +19559,8 @@ def _build_persona_dashboard_overview(
                     post_metric_rows.append(compact)
             hot_platforms.append({
                 "platform": platform_name,
-                "account_id": str(metric_value.get("accountId") or metric_value.get("account_id") or "").strip(),
-                "username": metric_value.get("username"),
+                "account_id": metric_account_id,
+                "username": metric_account_username,
                 "followers": _number(metric_value.get("followers"), 0),
                 "following": _number(metric_value.get("following"), 0),
                 "recent_views": platform_recent_views,
@@ -19568,6 +19643,9 @@ def _build_persona_dashboard_overview(
                     "repost_count": _source_metric(source, "repostCount", "repost_count"),
                     "share_count": _source_share_metric(source),
                     "view_count": _source_metric(source, "viewCount", "view_count"),
+                    "view_available": _source_view_available(source),
+                    "is_published_post": False,
+                    "metric_origin": meta_key,
                     "media_items": _compact_dashboard_media_items(post, source),
                     "details": _sanitize_dashboard_value({"post": post, meta_key: source}, "post"),
                 }
@@ -19677,9 +19755,9 @@ def _build_persona_dashboard_overview(
                 "partial_or_unknown": totals["partial_hot_metrics"],
                 "none": max(0, len(personas) - totals["complete_hot_metrics"] - totals["partial_hot_metrics"]),
             },
-            "trend": trend[-90:],
+            "trend": trend[-1095:],
             "platform_trend": {
-                platform: [{"date": day, **values} for day, values in sorted(days.items())][-90:]
+                platform: [{"date": day, **values} for day, values in sorted(days.items())][-1095:]
                 for platform, days in platform_daily.items()
             },
             "pad_distribution": pad_counts,

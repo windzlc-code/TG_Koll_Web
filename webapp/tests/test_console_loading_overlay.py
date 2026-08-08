@@ -56,7 +56,9 @@ class ConsoleLoadingOverlayTests(unittest.TestCase):
     def test_dashboard_reentry_refreshes_stale_data_silently(self):
         dashboard_js = (ROOT / "webapp" / "static" / "assets" / "persona-dashboard.js").read_text(encoding="utf-8")
         self.assertIn('function pdDashboardViewCacheIsFresh()', dashboard_js)
-        self.assertIn('if (!pdDashboardViewCacheIsFresh()) void pdLoadDashboard({ silent: true });', dashboard_js)
+        self.assertIn('function pdDashboardDataIsComplete(data)', dashboard_js)
+        self.assertIn('if (!pdDashboardDataIsComplete(personaDashboardData) || !pdDashboardViewCacheIsFresh()) {', dashboard_js)
+        self.assertIn('void pdLoadDashboard({ silent: true });', dashboard_js)
         self.assertIn('const silent = Boolean(options && options.silent);', dashboard_js)
 
     def test_manual_dashboard_refresh_remains_blocking(self):

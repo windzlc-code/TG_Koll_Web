@@ -2680,13 +2680,40 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(media_resp.status_code, 200)
         self.assertEqual(media_resp.headers["content-type"], "image/png")
 
+    def test_persona_publish_history_never_promotes_original_hot_source_url(self):
+        self._write_archives()
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        original_url = "https://www.threads.com/@hot_source/post/original-1"
+        record = archives[0]["publishHistory"][0]
+        record["sourceMeta"] = {"platform": "threads", "sourceUrl": original_url}
+        record["publishedMeta"]["sourceUrl"] = original_url
+        archives[0]["setup"]["hotMetrics"]["threads"]["postMetrics"][0]["sourceUrl"] = original_url
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
+
+        self.assertEqual(resp.status_code, 200)
+        row = resp.json()["publish_history"][0]
+        self.assertEqual(row.get("published_url"), "")
+        self.assertEqual(row.get("source_url"), "")
+        self.assertFalse(row["hot_metrics"]["matched"])
+        self.assertEqual(row["hot_metrics"]["source"], "published_snapshot")
+        self.assertEqual(row["likes"], 3)
+        self.assertEqual(row["comments"], 1)
+        self.assertEqual(row["views"], 40)
+
     def test_persona_publish_history_marks_account_mismatch_only_when_current_handle_differs(self):
         self._write_archives()
         path = self.tool_runtime_dir / "persona_archives.json"
         archives = json.loads(path.read_text(encoding="utf-8"))
         archive = archives[0]
         archive["setup"]["accountManagement"]["threads"]["handle"] = "current_user"
-        archive["publishHistory"][0]["publishedMeta"]["sourceUrl"] = "https://www.threads.com/@old_user/post/abc"
+        archive["publishHistory"][0]["publishedMeta"].update({
+            "accountId": "threads-current",
+            "username": "current_user",
+            "publishedUrl": "https://www.threads.com/@old_user/post/abc",
+        })
         path.write_text(json.dumps(archives), encoding="utf-8")
 
         resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
@@ -2741,6 +2768,140 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         platform = resp.json()["personas"][0]["hot_platforms"][0]
         self.assertEqual(platform["account_id"], "threads-current")
+
+    def test_overview_uses_only_current_bound_account_profile_metrics(self):
+        self._write_archives()
+        self._insert_social_account(
+            account_id="threads-current",
+            persona_id="persona-1",
+            platform="threads",
+            username="current_user",
+        )
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        archives[0]["setup"]["hotMetrics"] = {
+            "threads:current_user": {
+                "platform": "threads",
+                "accountId": "threads-current",
+                "username": "current_user",
+                "likes": 2,
+                "comments": 1,
+                "shares": 0,
+                "views": 12,
+                "complete": True,
+                "postMetrics": [{
+                    "sourceUrl": "https://www.threads.com/@current_user/post/current-1",
+                    "content": "current account post",
+                    "likeCount": 2,
+                    "commentCount": 1,
+                    "viewCount": 12,
+                }],
+            },
+            "threads:old_user": {
+                "platform": "threads",
+                "accountId": "threads-old",
+                "username": "old_user",
+                "likes": 79,
+                "comments": 5,
+                "shares": 40,
+                "views": 300,
+                "complete": True,
+                "postMetrics": [{
+                    "sourceUrl": "https://www.threads.com/@old_user/post/old-1",
+                    "content": "old account post",
+                    "likeCount": 79,
+                    "commentCount": 5,
+                    "shareCount": 40,
+                    "viewCount": 300,
+                }],
+            },
+        }
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/overview")
+
+        self.assertEqual(resp.status_code, 200)
+        persona = resp.json()["personas"][0]
+        self.assertEqual([item["username"] for item in persona["hot_platforms"]], ["current_user"])
+        self.assertEqual(persona["hot"]["likes"], 2)
+        self.assertEqual(persona["hot"]["comments"], 1)
+        self.assertEqual(len(persona["post_metrics"]), 1)
+        self.assertTrue(persona["post_metrics"][0]["is_published_post"])
+        self.assertEqual(persona["post_metrics"][0]["account_username"], "current_user")
+        self.assertTrue(persona["post_metrics"][0]["view_available"])
+
+    def test_overview_marks_missing_post_views_as_unavailable_not_real_zero(self):
+        self._write_archives()
+        self._insert_social_account(
+            account_id="threads-current",
+            persona_id="persona-1",
+            platform="threads",
+            username="current_user",
+        )
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        archives[0]["setup"]["hotMetrics"] = {
+            "threads:current_user": {
+                "platform": "threads",
+                "accountId": "threads-current",
+                "username": "current_user",
+                "complete": True,
+                "scope": "authenticated_full_profile",
+                "postMetrics": [{
+                    "sourceUrl": "https://www.threads.com/@current_user/post/missing-view",
+                    "content": "post with interaction but no view field",
+                    "likeCount": 8,
+                    "commentCount": 2,
+                }],
+            },
+        }
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/overview")
+
+        self.assertEqual(resp.status_code, 200)
+        row = resp.json()["personas"][0]["post_metrics"][0]
+        self.assertEqual(row["view_count"], 0)
+        self.assertFalse(row["view_available"])
+
+        matched = server._publish_history_hot_metrics({
+            "platform": "threads",
+            "publishedUrl": "https://www.threads.com/@current_user/post/missing-view",
+            "publishedMeta": {},
+        }, archives[0])
+        self.assertTrue(matched["matched"])
+        self.assertEqual(matched["likes"], 8)
+        self.assertFalse(matched["views_available"])
+        self.assertFalse(matched["complete"])
+
+        inconsistent = server._compact_hot_post({
+            "sourceUrl": "https://www.threads.com/@current_user/post/inconsistent-view",
+            "viewCount": 0,
+            "likeCount": 3,
+        })
+        self.assertEqual(inconsistent["view_count"], 0)
+        self.assertFalse(inconsistent["view_available"])
+
+    def test_publish_sync_does_not_use_target_url_as_published_url(self):
+        task = {
+            "id": "task-source-only",
+            "task_type": "publish_post",
+            "platform": "threads",
+            "account_id": "threads-current",
+            "created_at": 1,
+        }
+        account = {"platform": "threads", "username": "current_user"}
+        payload = {
+            "caption": "new post",
+            "target_url": "https://www.threads.com/@hot_source/post/original-1",
+        }
+
+        publish_record, post_record = social_automation_api._build_archive_sync_records(task, account, payload, {})
+
+        self.assertEqual(publish_record["sourceMeta"]["sourceUrl"], payload["target_url"])
+        self.assertEqual(publish_record["publishedUrl"], "")
+        self.assertEqual(publish_record["publishedMeta"]["publishedUrl"], "")
+        self.assertEqual(post_record["publishedUrl"], "")
 
     def test_publish_history_requeue_persists_media_in_both_archive_sources_and_platform_queues(self):
         self._write_archives()

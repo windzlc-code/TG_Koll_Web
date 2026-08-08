@@ -45,7 +45,8 @@ let personaDashboardData = pdInitialDashboardData && Array.isArray(pdInitialDash
   : null;
 let personaDashboardRefreshTask = "";
 let personaDashboardPlatform = "";
-let personaDashboardPlatformPickerOpen = false;
+let personaDashboardPersonaIndex = 0;
+let personaDashboardTrendRange = "day";
 let personaDashboardAutoPollTimer = 0;
 let personaDashboardLastLoadedAt = personaDashboardData ? Date.now() : 0;
 let personaDashboardLoadPromise = null;
@@ -163,73 +164,73 @@ function pdRenderDashboardPlatformTabs(data) {
   if (!host) return;
   const platforms = pdDashboardPlatforms(data);
   if (personaDashboardPlatform && !platforms.includes(personaDashboardPlatform)) personaDashboardPlatform = "";
-  const selectedPlatform = personaDashboardPlatform;
-  const renderPlatformOption = (platform) => {
-    const isActive = selectedPlatform === platform;
-    return `
-      <button
-        class="${isActive ? "is-active" : ""}"
-        type="button"
-        role="option"
-        aria-selected="${isActive ? "true" : "false"}"
-        data-persona-dashboard-platform-option="${pdEscape(platform)}"
-      >
-        ${pdPlatformIcon(platform)}
-        <strong>${pdEscape(pdPlatformLabel(platform))}</strong>
-      </button>
-    `;
-  };
+  const selectedIndex = Math.max(0, platforms.indexOf(personaDashboardPlatform));
   host.innerHTML = `
-    <div class="persona-dashboard-platform-picker">
-      <button
-        id="personaDashboardPlatformPickerTrigger"
-        class="persona-dashboard-platform-trigger"
-        type="button"
-        aria-haspopup="listbox"
-        aria-expanded="${personaDashboardPlatformPickerOpen ? "true" : "false"}"
-      >
-        ${pdPlatformIcon(selectedPlatform)}
-        <strong>${pdEscape(pdPlatformLabel(selectedPlatform))}</strong>
-        <svg class="persona-dashboard-platform-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"></path></svg>
+    <div class="persona-dashboard-platform-switcher" data-persona-dashboard-platform-switcher>
+      <button class="persona-dashboard-platform-nav" type="button" data-persona-dashboard-platform-step="-1" aria-label="上一个平台" ${selectedIndex === 0 ? "disabled" : ""}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
       </button>
-      ${personaDashboardPlatformPickerOpen ? `
-        <div class="persona-dashboard-platform-menu" role="listbox" aria-label="选择平台">
-          <div class="account-pool-platforms account-pool-platform-tabs persona-dashboard-platform-options">
-            ${platforms.map(renderPlatformOption).join("")}
-          </div>
+      <div class="persona-dashboard-platform-viewport" data-persona-dashboard-platform-viewport>
+        <div class="account-pool-platforms account-pool-platform-tabs persona-dashboard-platform-track" role="tablist" aria-label="平台筛选" style="--persona-platform-count:${platforms.length}">
+          ${platforms.map((platform) => {
+            const isActive = personaDashboardPlatform === platform;
+            return `<button
+              class="persona-dashboard-platform-card ${isActive ? "is-active" : ""}"
+              type="button"
+              role="tab"
+              aria-selected="${isActive ? "true" : "false"}"
+              data-persona-dashboard-platform-option="${pdEscape(platform)}"
+            >${pdPlatformIcon(platform)}<strong>${pdEscape(pdPlatformLabel(platform))}</strong></button>`;
+          }).join("")}
         </div>
-      ` : ""}
+      </div>
+      <button class="persona-dashboard-platform-nav" type="button" data-persona-dashboard-platform-step="1" aria-label="下一个平台" ${selectedIndex === platforms.length - 1 ? "disabled" : ""}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
+      </button>
     </div>
   `;
-  pdEl("personaDashboardPlatformPickerTrigger")?.addEventListener("click", (event) => {
-    event.stopPropagation();
-    personaDashboardPlatformPickerOpen = !personaDashboardPlatformPickerOpen;
-    pdRenderDashboard();
-  });
   host.querySelectorAll("[data-persona-dashboard-platform-option]").forEach((node) => {
     node.addEventListener("click", () => {
       personaDashboardPlatform = String(node.getAttribute("data-persona-dashboard-platform-option") || "");
-      personaDashboardPlatformPickerOpen = false;
       pdRenderDashboard();
     });
   });
-}
-
-function pdCloseDashboardPlatformPicker() {
-  if (!personaDashboardPlatformPickerOpen) return;
-  personaDashboardPlatformPickerOpen = false;
-  pdRenderDashboard();
+  host.querySelectorAll("[data-persona-dashboard-platform-step]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const nextIndex = Math.max(0, Math.min(platforms.length - 1, selectedIndex + Number(node.dataset.personaDashboardPlatformStep || 0)));
+      if (nextIndex === selectedIndex) return;
+      personaDashboardPlatform = platforms[nextIndex];
+      pdRenderDashboard();
+    });
+  });
+  const viewport = host.querySelector("[data-persona-dashboard-platform-viewport]");
+  const active = host.querySelector("[data-persona-dashboard-platform-option].is-active");
+  active?.scrollIntoView({ behavior: "auto", block: "nearest", inline: "center" });
+  let touchStartX = 0;
+  viewport?.addEventListener("touchstart", (event) => {
+    touchStartX = Number(event.touches?.[0]?.clientX || 0);
+  }, { passive: true });
+  viewport?.addEventListener("touchend", (event) => {
+    const distance = Number(event.changedTouches?.[0]?.clientX || 0) - touchStartX;
+    if (Math.abs(distance) < 48) return;
+    const nextIndex = Math.max(0, Math.min(platforms.length - 1, selectedIndex + (distance < 0 ? 1 : -1)));
+    if (nextIndex === selectedIndex) return;
+    personaDashboardPlatform = platforms[nextIndex];
+    pdRenderDashboard();
+  }, { passive: true });
 }
 
 function pdFilterTrend(rows) {
   return rows || [];
 }
 
-function pdPersonaHot(persona) {
-  const platform = pdPlatformFilter();
+function pdPersonaHot(persona, platformOverride = pdPlatformFilter()) {
+  const platform = String(platformOverride || "").trim().toLowerCase();
   const base = persona.hot || {};
-  if (!platform) return base;
-  const rows = (persona.hot_platforms || []).filter((item) => String(item.platform || "").toLowerCase() === platform);
+  if (!platform && Object.prototype.hasOwnProperty.call(base, "hot_score")) return base;
+  const rows = (persona.hot_platforms || []).filter((item) => (
+    !platform || String(item.platform || "").toLowerCase() === platform
+  ));
   if (!rows.length) return {
     likes: 0,
     comments: 0,
@@ -249,6 +250,13 @@ function pdPersonaHot(persona) {
     sum.hot_score += Number(row.likes || 0) + Number(row.comments || 0) + Number(row.shares || 0) + Number(row.reposts || 0) + Number(row.post_views || 0);
     return sum;
   }, { likes: 0, comments: 0, shares: 0, reposts: 0, recent_views: 0, post_views: 0, hot_score: 0 });
+}
+
+function pdPlatformPalette(platform = pdPlatformFilter()) {
+  const value = String(platform || "").trim().toLowerCase();
+  if (value === "threads") return ["#050505", "#555b62", "#9299a1"];
+  if (value === "instagram") return ["#c13584", "#833ab4", "#f77737"];
+  return ["var(--accent)", "#4f7186", "#d8992b"];
 }
 
 function pdVisibleSummary(visiblePersonas) {
@@ -335,35 +343,99 @@ function pdRenderChartPlaceholder(kind = "bars", message = "暂无可展示数�
   </div>`;
 }
 
-function pdRenderBarChart(hostId, rows) {
+function pdRenderPersonaHeatCarousel(hostId, personas, platforms) {
   const host = pdEl(hostId);
   if (!host) return;
-  const items = (rows || [])
-    .filter((row) => Number(row.value || 0) > 0)
-    .sort((left, right) => Number(right.value || 0) - Number(left.value || 0))
-    .slice(0, 12);
+  const items = Array.isArray(personas) ? personas : [];
   if (!items.length) {
     host.innerHTML = pdRenderChartPlaceholder("bars", "暂无热度数据");
     return;
   }
-  const max = Math.max(...items.map((row) => Number(row.value || 0)), 1);
+  personaDashboardPersonaIndex = Math.max(0, Math.min(items.length - 1, personaDashboardPersonaIndex));
+  const platformRows = (platforms || []).filter(Boolean);
+  const metricRows = items.flatMap((persona) => [
+    Number(pdPersonaHot(persona, "").hot_score || 0),
+    ...platformRows.map((platform) => Number(pdPersonaHot(persona, platform).hot_score || 0)),
+  ]);
+  const max = Math.max(1, ...metricRows);
   host.innerHTML = `
-    <div class="persona-bar-list">
-      ${items.map((row, index) => {
-        const pct = Math.max(3, Math.round((Number(row.value || 0) / max) * 100));
-        return `
-          <div class="persona-bar-row">
-            <div class="persona-bar-label"><span>${index + 1}</span>${pdEscape(row.label || row.name || "-")}</div>
-            <div class="persona-bar-track"><div class="persona-bar-fill" style="width:${pct}%"></div></div>
-            <div class="persona-bar-value">${pdEscape(pdNumber(row.value))}</div>
+    <div class="persona-heat-carousel-toolbar">
+      <span><b data-persona-heat-current>${personaDashboardPersonaIndex + 1}</b> / ${items.length}</span>
+      <div class="persona-heat-carousel-actions">
+        <button type="button" data-persona-heat-step="-1" aria-label="上一个人设" ${personaDashboardPersonaIndex === 0 ? "disabled" : ""}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+        </button>
+        <button type="button" data-persona-heat-step="1" aria-label="下一个人设" ${personaDashboardPersonaIndex === items.length - 1 ? "disabled" : ""}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
+        </button>
+      </div>
+    </div>
+    <div class="persona-heat-carousel" data-persona-heat-carousel>
+      ${items.map((persona, index) => {
+        const total = Number(pdPersonaHot(persona, "").hot_score || 0);
+        return `<article class="persona-heat-card" data-persona-heat-index="${index}">
+          <header><strong>${pdEscape(persona.name || "未命名人设")}</strong><span>总热度 <b>${pdEscape(pdNumber(total))}</b></span></header>
+          <div class="persona-heat-platform-list">
+            ${platformRows.map((platform) => {
+              const value = Number(pdPersonaHot(persona, platform).hot_score || 0);
+              const pct = value > 0 ? Math.max(3, Math.round((value / max) * 100)) : 0;
+              return `<div class="persona-heat-platform-row ${pdPlatformFilter() === platform ? "is-highlighted" : ""}" data-platform="${pdEscape(platform)}">
+                <span class="persona-heat-platform-label">${pdPlatformIcon(platform)}<b>${pdEscape(pdPlatformLabel(platform))}</b></span>
+                <span class="persona-heat-platform-track"><i style="width:${pct}%"></i></span>
+                <strong>${pdEscape(pdNumber(value))}</strong>
+              </div>`;
+            }).join("")}
           </div>
-        `;
+        </article>`;
       }).join("")}
     </div>
   `;
+  const carousel = host.querySelector("[data-persona-heat-carousel]");
+  let programmaticScrollTimer = 0;
+  const updateCurrentIndex = (index) => {
+    const next = Math.max(0, Math.min(items.length - 1, index));
+    personaDashboardPersonaIndex = next;
+    const current = host.querySelector("[data-persona-heat-current]");
+    if (current) current.textContent = String(next + 1);
+    host.querySelectorAll("[data-persona-heat-step]").forEach((button) => {
+      const step = Number(button.dataset.personaHeatStep || 0);
+      button.disabled = (step < 0 && next === 0) || (step > 0 && next === items.length - 1);
+    });
+    return next;
+  };
+  const scrollToIndex = (index, behavior = "smooth") => {
+    const next = updateCurrentIndex(index);
+    const card = carousel?.querySelector(`[data-persona-heat-index="${next}"]`);
+    if (!card || !carousel) return;
+    const targetLeft = card.offsetLeft;
+    if (behavior === "smooth") {
+      if (programmaticScrollTimer) window.clearTimeout(programmaticScrollTimer);
+      programmaticScrollTimer = window.setTimeout(() => {
+        programmaticScrollTimer = 0;
+      }, 420);
+    }
+    if (Math.abs(carousel.scrollLeft - targetLeft) > 1) carousel.scrollTo({ left: targetLeft, behavior });
+  };
+  host.querySelectorAll("[data-persona-heat-step]").forEach((button) => {
+    button.addEventListener("click", () => scrollToIndex(personaDashboardPersonaIndex + Number(button.dataset.personaHeatStep || 0)));
+  });
+  let scrollFrame = 0;
+  carousel?.addEventListener("scroll", () => {
+    if (programmaticScrollTimer) return;
+    if (scrollFrame) window.cancelAnimationFrame(scrollFrame);
+    scrollFrame = window.requestAnimationFrame(() => {
+      const cards = Array.from(carousel.querySelectorAll("[data-persona-heat-index]"));
+      const center = carousel.scrollLeft + carousel.clientWidth / 2;
+      const nearest = cards.reduce((best, card) => (
+        Math.abs(card.offsetLeft + card.offsetWidth / 2 - center) < Math.abs(best.offsetLeft + best.offsetWidth / 2 - center) ? card : best
+      ), cards[0]);
+      if (nearest) updateCurrentIndex(Number(nearest.dataset.personaHeatIndex || 0));
+    });
+  }, { passive: true });
+  window.requestAnimationFrame(() => scrollToIndex(personaDashboardPersonaIndex, "auto"));
 }
 
-function pdRenderDonutChart(hostId, entries) {
+function pdRenderDonutChart(hostId, entries, options = {}) {
   const host = pdEl(hostId);
   if (!host) return;
   const rows = pdEntries(entries);
@@ -372,13 +444,18 @@ function pdRenderDonutChart(hostId, entries) {
     host.innerHTML = pdRenderChartPlaceholder("donut", "暂无分布数据");
     return;
   }
-  const colors = ["var(--accent)", "#d8992b", "#3f8d67", "#ba554f", "#7b6a9b", "#4f7775"];
+  const colors = rows.map((row, index) => {
+    const platform = String(row.label || "").trim().toLowerCase();
+    if (options.platformColors && platform === "threads") return "#050505";
+    if (options.platformColors && platform === "instagram") return "#c13584";
+    return ["var(--accent)", "#d8992b", "#3f8d67", "#ba554f", "#7b6a9b", "#4f7775"][index % 6];
+  });
   let cursor = 0;
   const segments = rows.map((row, index) => {
     const start = cursor;
     const size = (row.value / total) * 100;
     cursor += size;
-    return `${colors[index % colors.length]} ${start}% ${cursor}%`;
+    return `${colors[index]} ${start}% ${cursor}%`;
   }).join(", ");
   host.innerHTML = `
     <div class="persona-donut-wrap">
@@ -387,42 +464,96 @@ function pdRenderDonutChart(hostId, entries) {
       </div>
       <div class="persona-donut-legend">
         ${rows.map((row, index) => `
-          <div><span style="background:${colors[index % colors.length]}"></span>${pdEscape(row.label)}<b>${pdEscape(pdNumber(row.value))}</b></div>
+          <div><span style="background:${colors[index]}"></span>${options.platformColors ? `${pdPlatformIcon(row.label)}${pdEscape(pdPlatformLabel(row.label))}` : pdEscape(row.label)}<b>${pdEscape(pdNumber(row.value))}</b></div>
         `).join("")}
       </div>
     </div>
   `;
 }
 
+function pdAggregateTrendRows(rows, range = personaDashboardTrendRange) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const keyFor = (row) => {
+    const date = String(row.date || "");
+    if (range === "year") return date.slice(0, 4);
+    if (range === "month") return date.slice(0, 7);
+    return date.slice(0, 10);
+  };
+  const grouped = new Map();
+  safeRows.forEach((row) => {
+    const key = keyFor(row);
+    if (!key) return;
+    const current = grouped.get(key) || { date: key, published: 0, post_views: 0, likes: 0, comments: 0, shares: 0, reposts: 0 };
+    Object.keys(current).filter((field) => field !== "date").forEach((field) => {
+      current[field] += Number(row[field] || 0);
+    });
+    grouped.set(key, current);
+  });
+  const limits = { day: 30, month: 12, year: 5 };
+  return Array.from(grouped.values()).sort((left, right) => String(left.date).localeCompare(String(right.date))).slice(-(limits[range] || 30));
+}
+
 function pdRenderTrendChart(hostId, rows) {
   const host = pdEl(hostId);
   if (!host) return;
-  const items = (rows || []).slice(-30);
+  const items = pdAggregateTrendRows(rows);
+  const rangeOptions = [["day", "日"], ["month", "月"], ["year", "年"]];
   if (!items.length) {
-    host.innerHTML = pdRenderChartPlaceholder("line", "暂无走势数据");
+    host.innerHTML = `<div class="persona-trend-range" role="tablist" aria-label="趋势时间范围">
+      ${rangeOptions.map(([value, label]) => `<button type="button" role="tab" class="${personaDashboardTrendRange === value ? "is-active" : ""}" data-persona-trend-range="${value}">${label}</button>`).join("")}
+    </div>${pdRenderChartPlaceholder("line", "暂无走势数据")}`;
+    host.querySelectorAll("[data-persona-trend-range]").forEach((button) => {
+      button.addEventListener("click", () => {
+        personaDashboardTrendRange = String(button.dataset.personaTrendRange || "day");
+        pdRenderTrendChart(hostId, rows);
+      });
+    });
     return;
   }
   const width = 720;
-  const height = 220;
-  const pad = 28;
+  const height = 250;
+  const pad = { top: 20, right: 18, bottom: 38, left: 52 };
+  const colors = pdPlatformPalette();
   const series = [
-    { key: "published", label: "发布", color: "var(--accent)" },
-    { key: "post_views", label: "帖子浏览", color: "#d8992b" },
-    { key: "likes", label: "点赞", color: "#3f8d67" },
+    { key: "published", label: "发布", color: colors[0] },
+    { key: "post_views", label: "逐帖浏览", color: colors[1] },
+    { key: "engagement", label: "互动", color: colors[2] },
   ];
-  const max = Math.max(1, ...items.flatMap((row) => series.map((s) => Number(row[s.key] || 0))));
-  const x = (index) => pad + (items.length === 1 ? 0 : (index / (items.length - 1)) * (width - pad * 2));
-  const y = (value) => height - pad - (Number(value || 0) / max) * (height - pad * 2);
-  const pathFor = (key) => items.map((row, index) => `${index === 0 ? "M" : "L"}${x(index).toFixed(1)},${y(row[key]).toFixed(1)}`).join(" ");
+  const normalizedItems = items.map((row) => ({
+    ...row,
+    engagement: Number(row.likes || 0) + Number(row.comments || 0) + Number(row.shares || 0) + Number(row.reposts || 0),
+  }));
+  const max = Math.max(1, ...normalizedItems.flatMap((row) => series.map((s) => Number(row[s.key] || 0))));
+  const x = (index) => pad.left + (normalizedItems.length === 1 ? (width - pad.left - pad.right) / 2 : (index / (normalizedItems.length - 1)) * (width - pad.left - pad.right));
+  const y = (value) => height - pad.bottom - (Number(value || 0) / max) * (height - pad.top - pad.bottom);
+  const normalizedPathFor = (key) => normalizedItems.map((row, index) => `${index === 0 ? "M" : "L"}${x(index).toFixed(1)},${y(row[key]).toFixed(1)}`).join(" ");
+  const labelFor = (date) => personaDashboardTrendRange === "day" ? String(date).slice(5) : String(date);
+  const labelStep = Math.max(1, Math.ceil(normalizedItems.length / 6));
   host.innerHTML = `
+    <div class="persona-trend-range" role="tablist" aria-label="趋势时间范围">
+      ${rangeOptions.map(([value, label]) => `<button type="button" role="tab" class="${personaDashboardTrendRange === value ? "is-active" : ""}" aria-selected="${personaDashboardTrendRange === value ? "true" : "false"}" data-persona-trend-range="${value}">${label}</button>`).join("")}
+    </div>
     <svg class="persona-line-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="流量走势图">
-      <line x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}" class="persona-axis" />
-      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" class="persona-axis" />
-      ${series.map((s) => `<path d="${pathFor(s.key)}" fill="none" stroke="${s.color}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />`).join("")}
-      ${items.map((row, index) => `<text x="${x(index)}" y="${height - 6}" text-anchor="middle">${pdEscape(String(row.date || "").slice(5))}</text>`).join("")}
+      ${[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+        const gridY = y(max * ratio);
+        return `<line x1="${pad.left}" y1="${gridY}" x2="${width - pad.right}" y2="${gridY}" class="persona-grid-line" />
+          <text x="${pad.left - 8}" y="${gridY + 4}" text-anchor="end">${pdEscape(pdNumber(max * ratio))}</text>`;
+      }).join("")}
+      <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" class="persona-axis" />
+      ${series.map((s) => `<path d="${normalizedPathFor(s.key)}" fill="none" stroke="${s.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+        ${normalizedItems.map((row, index) => `<circle cx="${x(index)}" cy="${y(row[s.key])}" r="3.5" fill="${s.color}" />`).join("")}`).join("")}
+      ${normalizedItems.map((row, index) => (index % labelStep === 0 || index === normalizedItems.length - 1) ? `<text x="${x(index)}" y="${height - 10}" text-anchor="middle">${pdEscape(labelFor(row.date))}</text>` : "").join("")}
     </svg>
     <div class="persona-line-legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${s.label}</span>`).join("")}</div>
   `;
+  host.querySelectorAll("[data-persona-trend-range]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const next = String(button.dataset.personaTrendRange || "day");
+      if (next === personaDashboardTrendRange) return;
+      personaDashboardTrendRange = next;
+      pdRenderTrendChart(hostId, rows);
+    });
+  });
 }
 
 function pdRenderSummary(visiblePersonas) {
@@ -456,8 +587,8 @@ function pdRenderDashboard() {
   const visible = data.personas || [];
   const charts = pdBuildFilteredCharts(visible, data);
   pdRenderSummary(visible);
-  pdRenderBarChart("personaHotRankChart", visible.map((item) => ({ label: item.name, value: pdPersonaHot(item).hot_score })));
-  pdRenderDonutChart("personaPlatformChart", charts.platform_distribution);
+  pdRenderPersonaHeatCarousel("personaHotRankChart", visible, pdDashboardPlatforms(data));
+  pdRenderDonutChart("personaPlatformChart", charts.platform_distribution, { platformColors: true });
   pdRenderDonutChart("personaCoverageChart", charts.hot_coverage);
   pdRenderTrendChart("personaTrendChart", charts.trend);
   pdRenderDonutChart("personaEngagementChart", charts.engagement_mix);
@@ -501,6 +632,16 @@ function pdDashboardViewCacheIsFresh() {
     personaDashboardData
     && personaDashboardLastLoadedAt
     && Date.now() - personaDashboardLastLoadedAt < PD_DASHBOARD_VIEW_CACHE_MS,
+  );
+}
+
+function pdDashboardDataIsComplete(data) {
+  return Boolean(
+    data
+    && Array.isArray(data.personas)
+    && data.charts
+    && Array.isArray(data.charts.trend)
+    && data.charts.platform_trend,
   );
 }
 
@@ -598,15 +739,6 @@ async function pdPollRefresh(taskId) {
 function pdBindDashboard(root) {
   if (!root || personaDashboardBoundRoot === root) return;
   personaDashboardBoundRoot = root;
-  document.addEventListener("click", (event) => {
-    if (!personaDashboardPlatformPickerOpen) return;
-    const picker = pdEl("personaDashboardPlatformTabs")?.querySelector(".persona-dashboard-platform-picker");
-    if (picker?.contains(event.target)) return;
-    pdCloseDashboardPlatformPicker();
-  });
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") pdCloseDashboardPlatformPicker();
-  });
   const refresh = pdEl("btnPersonaDashboardSync");
   if (refresh) refresh.addEventListener("click", pdStartRefresh);
 }
@@ -617,7 +749,9 @@ function pdMountDashboard(root) {
   pdBindDashboard(root);
   if (personaDashboardData) {
     pdRenderDashboard();
-    if (!pdDashboardViewCacheIsFresh()) void pdLoadDashboard({ silent: true });
+    if (!pdDashboardDataIsComplete(personaDashboardData) || !pdDashboardViewCacheIsFresh()) {
+      void pdLoadDashboard({ silent: true });
+    }
   } else {
     void pdLoadDashboard();
   }
@@ -625,7 +759,6 @@ function pdMountDashboard(root) {
 }
 
 function pdUnmountDashboard() {
-  personaDashboardPlatformPickerOpen = false;
   pdStopAutoPoll();
 }
 

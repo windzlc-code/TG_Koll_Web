@@ -68,7 +68,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("persona-auto-", self.dashboard_styles)
         self.assertNotIn("persona-strategy-", self.dashboard_styles)
 
-    def test_dashboard_uses_account_pool_platform_picker_aligned_with_persona_data_without_legacy_filters_or_binding_form(self):
+    def test_dashboard_uses_visible_platform_cards_aligned_with_persona_data_without_legacy_filters_or_binding_form(self):
         dashboard_start = self.markup.index(
             '<section class="view persona-dashboard-view" data-panel="persona_dashboard">'
         )
@@ -88,24 +88,24 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('id="personaDashboardPlatform"', dashboard)
 
         self.assertIn("function pdRenderDashboardPlatformTabs(data)", self.dashboard_script)
-        self.assertIn('id="personaDashboardPlatformPickerTrigger"', self.dashboard_script)
-        self.assertIn("account-pool-platforms account-pool-platform-tabs persona-dashboard-platform-options", self.dashboard_script)
+        self.assertNotIn('id="personaDashboardPlatformPickerTrigger"', self.dashboard_script)
+        self.assertIn("account-pool-platforms account-pool-platform-tabs persona-dashboard-platform-track", self.dashboard_script)
         self.assertIn("data-persona-dashboard-platform-option", self.dashboard_script)
+        self.assertIn("data-persona-dashboard-platform-step", self.dashboard_script)
         self.assertIn("pdPlatformIcon(platform)", self.dashboard_script)
-        self.assertIn("platforms.map(renderPlatformOption)", self.dashboard_script)
+        self.assertIn("platforms.map((platform) =>", self.dashboard_script)
         self.assertNotIn("pdBindThreads", self.dashboard_script)
         self.assertNotIn("pdUnbindThreads", self.dashboard_script)
         self.assertNotIn("persona-account-compact", self.dashboard_script)
         self.assertNotIn("personaDashboardAccountPlatform", self.dashboard_script)
         self.assertIn("persona-dashboard-platform-filter", self.styles)
         self.assertIn("persona-dashboard-top-controls", self.styles)
-        self.assertIn("persona-dashboard-platform-trigger", self.styles)
-        self.assertIn("persona-dashboard-platform-options", self.styles)
+        self.assertIn("persona-dashboard-platform-switcher", self.styles)
+        self.assertIn("persona-dashboard-platform-track", self.styles)
+        self.assertIn("persona-dashboard-platform-nav", self.styles)
         self.assertIn('[data-persona-dashboard-platform-option="threads"]', self.styles)
         self.assertIn('[data-persona-dashboard-platform-option="instagram"]', self.styles)
-        self.assertIn("grid-template-columns: minmax(0, 1fr);", self.styles)
-        self.assertIn(".persona-dashboard-view .persona-dashboard-platform-menu", self.styles)
-        self.assertIn("min-height: 50px;", self.styles)
+        self.assertNotIn(".persona-dashboard-view .persona-dashboard-platform-menu", self.styles)
 
     def test_platform_tabs_keep_the_full_persona_archive_visible(self):
         self.assertNotIn("function pdMatches()", self.dashboard_script)
@@ -125,7 +125,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("const selectedPlatform = pdPlatformFilter();", charts)
         self.assertIn("data.charts.platform_trend[selectedPlatform]", charts)
         self.assertIn("const platforms = (persona.hot_platforms || []).filter", charts)
-        self.assertIn("value: pdPersonaHot(item).hot_score", self.dashboard_script)
+        self.assertIn('pdRenderPersonaHeatCarousel("personaHotRankChart"', self.dashboard_script)
 
     def test_dashboard_summary_stays_compact_on_mobile(self):
         summary_start = self.dashboard_script.index("function pdRenderSummary(visiblePersonas)")
@@ -174,42 +174,50 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("renderPersonaPlatformMetricStrip", self.console_script)
         self.assertIn("renderPublishHistorySelectionList", self.console_script)
 
-    def test_platform_picker_closes_on_outside_click_and_filter_summary_is_not_rendered(self):
+    def test_visible_platform_cards_do_not_install_document_level_picker_handlers(self):
         binder_start = self.dashboard_script.index("function pdBindDashboard(root)")
         binder_end = self.dashboard_script.index("\nfunction pdMountDashboard", binder_start)
         binder = self.dashboard_script[binder_start:binder_end]
 
-        self.assertIn('document.addEventListener("click"', binder)
-        self.assertIn('".persona-dashboard-platform-picker"', binder)
-        self.assertIn('event.key === "Escape"', binder)
-        self.assertIn("pdCloseDashboardPlatformPicker();", binder)
+        self.assertNotIn('document.addEventListener("click"', binder)
+        self.assertNotIn('event.key === "Escape"', binder)
+        self.assertNotIn("pdCloseDashboardPlatformPicker", self.dashboard_script)
         self.assertNotIn("function pdCurrentPostFilterText()", self.dashboard_script)
         self.assertNotIn("data-post-delete", self.dashboard_script)
         self.assertNotIn("function pdDeletePost", self.dashboard_script)
 
-    def test_platform_picker_trigger_does_not_reclose_from_the_same_click(self):
-        picker_start = self.dashboard_script.index("function pdRenderDashboardPlatformTabs(data)")
-        picker_end = self.dashboard_script.index(
-            "\nfunction pdCloseDashboardPlatformPicker",
-            picker_start,
-        )
-        picker = self.dashboard_script[picker_start:picker_end]
-
-        self.assertIn(
-            'pdEl("personaDashboardPlatformPickerTrigger")?.addEventListener("click", (event) => {',
-            picker,
-        )
-        self.assertIn("event.stopPropagation();", picker)
-
-    def test_persona_heat_ranking_is_sorted_from_high_to_low(self):
-        chart_start = self.dashboard_script.index("function pdRenderBarChart(hostId, rows)")
+    def test_persona_heat_uses_swipeable_persona_cards_without_ranking_sort(self):
+        chart_start = self.dashboard_script.index("function pdRenderPersonaHeatCarousel(hostId, personas, platforms)")
         chart_end = self.dashboard_script.index("\nfunction pdRenderDonutChart", chart_start)
         chart = self.dashboard_script[chart_start:chart_end]
 
-        self.assertIn(
-            ".sort((left, right) => Number(right.value || 0) - Number(left.value || 0))",
-            chart,
-        )
+        self.assertNotIn(".sort(", chart)
+        self.assertIn("data-persona-heat-carousel", chart)
+        self.assertIn("data-persona-heat-index", chart)
+        self.assertIn("persona-heat-platform-row", chart)
+        self.assertIn("pdPersonaHot(persona, platform)", chart)
+        self.assertIn("pdPlatformIcon(platform)", chart)
+        self.assertIn("let programmaticScrollTimer = 0;", chart)
+        self.assertIn("if (programmaticScrollTimer) return;", chart)
+        self.assertIn("updateCurrentIndex(Number(nearest.dataset.personaHeatIndex || 0))", chart)
+        self.assertIn("scroll-snap-type: x mandatory;", self.styles)
+        self.assertIn('[data-platform="threads"] .persona-heat-platform-track i', self.styles)
+        self.assertIn('[data-platform="instagram"] .persona-heat-platform-track i', self.styles)
+
+    def test_trend_chart_supports_day_month_and_year_aggregation(self):
+        chart_start = self.dashboard_script.index("function pdAggregateTrendRows(rows, range = personaDashboardTrendRange)")
+        chart_end = self.dashboard_script.index("\nfunction pdRenderSummary", chart_start)
+        chart = self.dashboard_script[chart_start:chart_end]
+
+        self.assertIn('const rangeOptions = [["day", "日"], ["month", "月"], ["year", "年"]];', chart)
+        self.assertIn('if (range === "year") return date.slice(0, 4);', chart)
+        self.assertIn('if (range === "month") return date.slice(0, 7);', chart)
+        self.assertIn("const limits = { day: 30, month: 12, year: 5 };", chart)
+        self.assertIn("data-persona-trend-range", chart)
+        self.assertIn("pdRenderTrendChart(hostId, rows);", chart)
+        self.assertNotIn("pdRenderDashboard();", chart)
+        self.assertIn("persona-grid-line", chart)
+        self.assertIn("persona-trend-range", self.styles)
 
     def test_homepage_removes_its_legacy_post_detail_stack(self):
         for legacy_function in (
@@ -2291,13 +2299,12 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         summary = self.dashboard_script[summary_start:summary_end]
         self.assertNotIn(".filter((card) => Number(card.value || 0) > 0)", summary)
 
-    def test_dashboard_charts_reuse_the_console_accent(self):
-        self.assertIn('const colors = ["var(--accent)"', self.dashboard_script)
-        self.assertIn('color: "var(--accent)"', self.dashboard_script)
-        self.assertIn(
-            ".persona-dashboard-view .persona-bar-fill",
-            self.styles,
-        )
+    def test_dashboard_charts_reuse_platform_colors_with_console_accent_fallback(self):
+        self.assertIn('if (value === "threads") return ["#050505"', self.dashboard_script)
+        self.assertIn('if (value === "instagram") return ["#c13584"', self.dashboard_script)
+        self.assertIn('return ["var(--accent)"', self.dashboard_script)
+        self.assertIn("var(--instagram-platform-gradient)", self.styles)
+        self.assertIn("background: var(--accent);", self.styles)
 
     def test_dashboard_removes_persona_tabs_and_keeps_chart_placeholders_for_empty_data(self):
         self.assertNotIn("persona-dashboard-control-tab", self.styles)

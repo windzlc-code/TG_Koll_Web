@@ -10186,8 +10186,18 @@ def _build_archive_sync_records(task: dict[str, Any], account: dict[str, Any], p
     caption = str(payload.get("caption") or payload.get("comment") or payload.get("reply") or payload.get("text") or "").strip()
     archive_post_id = str(payload.get("archive_post_id") or "").strip() or f"webauto-{task_id}"
     archive_post_title = str(payload.get("archive_post_title") or "").strip()
-    target_url = str(payload.get("target_url") or payload.get("post_url") or result.get("url") or "").strip()
-    result_url = str(result.get("url") or target_url or "").strip()
+    target_url = str(payload.get("target_url") or payload.get("post_url") or "").strip()
+    published_result = result.get("published") if isinstance(result.get("published"), dict) else {}
+    result_url = str(
+        result.get("published_url")
+        or result.get("publishedUrl")
+        or published_result.get("permalink")
+        or published_result.get("url")
+        or result.get("url")
+        or ""
+    ).strip()
+    if task_type != "publish_post" and not result_url:
+        result_url = target_url
     source_meta = {
         "platform": platform,
         "source": "web_social_automation",
@@ -10205,6 +10215,8 @@ def _build_archive_sync_records(task: dict[str, Any], account: dict[str, Any], p
         "shareCount": 0,
         "repostCount": 0,
         "viewCount": 0,
+        "metricComplete": False,
+        "metricMatched": False,
     }
     media_fields = _media_fields_from_payload(payload)
     source_meta.update({key: value for key, value in media_fields.items() if key in {"imageUrl", "videoUrl", "mediaUrl", "mediaItems"}})
