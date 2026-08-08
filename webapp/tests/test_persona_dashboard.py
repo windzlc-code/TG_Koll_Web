@@ -4989,14 +4989,14 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         social_automation_api._sync_successful_task_to_persona_archive(
             "task-draft-publish",
-            {"url": "https://www.threads.com/@threads_user/post/draft-sync-1"},
+            {"published_url": "https://www.threads.com/@threads_user/post/draft-sync-1"},
         )
 
         synced = json.loads(archives_path.read_text(encoding="utf-8"))[0]
         self.assertFalse(any(post.get("id") == "draft-sync-1" for post in synced["posts"]))
         self.assertFalse(any(post.get("id") == "draft-sync-1" for post in synced["platformPosts"]["threads"]))
         self.assertEqual(synced["publishHistory"][0]["archivePostId"], "draft-sync-1")
-        self.assertEqual(synced["publishHistory"][0]["publishedUrl"], "https://www.threads.com/@threads_user/post/draft-sync-1")
+        self.assertEqual(synced["publishHistory"][0]["publishedUrl"], "https://www.threads.net/@threads_user/post/draft-sync-1")
 
     def test_three_four_and_five_item_publish_batches_sync_each_success_without_cross_contamination(self):
         for publish_count in (3, 4, 5):
@@ -5116,7 +5116,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
                             self.assertEqual(record["automationTaskId"], completed["task_id"])
                             self.assertEqual(record["title"], completed["title"])
                             self.assertEqual(record["content"], completed["content"])
-                            self.assertEqual(record["publishedUrl"], completed["published_url"])
+                            self.assertEqual(
+                                record["publishedUrl"],
+                                completed["published_url"].replace("www.threads.com", "www.threads.net"),
+                            )
                             self.assertEqual(
                                 record["publishedMeta"]["mediaItems"][0]["url"],
                                 completed["media_path"],
@@ -5152,13 +5155,13 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         social_automation_api._sync_successful_task_to_persona_archive(
             "task-favorite-publish",
-            {"url": "https://threads.example/favorite-1"},
+            {"published_url": "https://www.threads.com/@threads_user/post/favorite-1"},
         )
 
         synced = json.loads(archives_path.read_text(encoding="utf-8"))[0]
         favorite = synced["favoritePosts"][0]
         self.assertEqual(favorite["id"], "favorite-1")
-        self.assertEqual(favorite["publishedUrl"], "https://threads.example/favorite-1")
+        self.assertEqual(favorite["publishedUrl"], "https://www.threads.net/@threads_user/post/favorite-1")
         self.assertTrue(str(favorite.get("publishedAt") or "").strip())
         self.assertEqual(favorite["sourceMeta"]["archivePostSource"], "favorites")
         self.assertNotIn("publishedAt", synced["posts"][0])

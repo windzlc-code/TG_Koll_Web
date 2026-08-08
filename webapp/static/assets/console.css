@@ -1272,84 +1272,6 @@ button.primary,
   gap: 0;
 }
 
-.persona-dashboard-view .persona-dashboard-top-controls {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  align-items: stretch;
-}
-
-.persona-dashboard-view .persona-dashboard-filters.persona-dashboard-platform-filter {
-  display: flex;
-  align-items: center;
-  min-height: 52px;
-  padding: 8px 10px;
-}
-
-.persona-dashboard-view .persona-dashboard-platform-select-host {
-  display: block;
-  flex: 1 1 auto;
-  min-width: 0;
-  width: 100%;
-}
-
-.persona-dashboard-view .persona-dashboard-platform-switcher {
-  display: block;
-  width: 100%;
-}
-
-.persona-dashboard-view .persona-dashboard-platform-viewport {
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-  scroll-snap-type: x proximity;
-  touch-action: pan-x pan-y;
-  overscroll-behavior-inline: contain;
-  -webkit-overflow-scrolling: touch;
-}
-
-.persona-dashboard-view .persona-dashboard-platform-viewport::-webkit-scrollbar {
-  display: none;
-}
-
-.persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs {
-  display: flex;
-  width: max-content;
-  min-width: 100%;
-  margin: 0;
-  padding: 0;
-  gap: 6px;
-  overflow: visible;
-}
-
-.persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  gap: 5px;
-  width: auto;
-  min-width: 96px;
-  min-height: 36px;
-  padding: 5px 9px;
-  scroll-snap-align: center;
-}
-
-.persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button > svg {
-  flex: 0 0 auto;
-  width: 17px;
-  height: 17px;
-}
-
-.persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button > strong {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 13px;
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .persona-dashboard-view .persona-heat-carousel-actions button {
   display: inline-grid;
   width: 38px;
@@ -1389,13 +1311,59 @@ button.primary,
 }
 
 .persona-dashboard-view .persona-dashboard-context {
-  display: flex;
+  display: block;
   width: 100%;
   min-width: 0;
+  overflow: hidden;
+}
+
+.persona-dashboard-view .persona-dashboard-context-viewport {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  scroll-snap-type: x mandatory;
+  touch-action: pan-x pan-y;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.persona-dashboard-view .persona-dashboard-context-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.persona-dashboard-view .persona-dashboard-context-track {
+  display: flex;
+  width: 100%;
+}
+
+.persona-dashboard-view .persona-dashboard-context-tab {
+  display: flex;
+  width: 100%;
+  min-width: 100%;
+  min-height: 48px;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  text-align: center;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  box-shadow: none;
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+  cursor: grab;
+}
+
+.persona-dashboard-view .persona-dashboard-context-tab:active {
+  cursor: grabbing;
+}
+
+.persona-dashboard-view .persona-dashboard-context-tab:focus,
+.persona-dashboard-view .persona-dashboard-context-tab:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .persona-dashboard-view .persona-dashboard-context-logo {
@@ -1411,7 +1379,7 @@ button.primary,
   height: 24px;
 }
 
-.persona-dashboard-view .persona-dashboard-context[data-platform="instagram"] .persona-dashboard-context-logo svg {
+.persona-dashboard-view .persona-dashboard-context-tab[data-platform="instagram"] .persona-dashboard-context-logo svg {
   color: #c13584;
   stroke: #c13584;
   transform: scale(1.12);
@@ -1439,28 +1407,28 @@ button.primary,
   stroke: none;
 }
 
-.persona-dashboard-view .persona-dashboard-context[data-platform="threads"],
-.persona-dashboard-view .persona-dashboard-context[data-platform="threads"] .persona-dashboard-context-logo,
+.persona-dashboard-view .persona-dashboard-context-tab[data-platform="threads"],
+.persona-dashboard-view .persona-dashboard-context-tab[data-platform="threads"] .persona-dashboard-context-logo,
 .persona-dashboard-view .persona-heat-platform-row[data-platform="threads"] .persona-heat-platform-label,
 .persona-dashboard-view .persona-donut-legend .is-platform[data-platform="threads"] {
   color: #050505;
 }
 
-.persona-dashboard-view .persona-dashboard-context[data-platform="instagram"],
-.persona-dashboard-view .persona-dashboard-context[data-platform="instagram"] .persona-dashboard-context-logo,
+.persona-dashboard-view .persona-dashboard-context-tab[data-platform="instagram"],
+.persona-dashboard-view .persona-dashboard-context-tab[data-platform="instagram"] .persona-dashboard-context-logo,
 .persona-dashboard-view .persona-heat-platform-row[data-platform="instagram"] .persona-heat-platform-label,
 .persona-dashboard-view .persona-donut-legend .is-platform[data-platform="instagram"] {
   color: #c13584;
 }
 
-:root[data-theme="dark"] .persona-dashboard-view .persona-dashboard-context[data-platform="threads"],
-:root[data-theme="dark"] .persona-dashboard-view .persona-dashboard-context[data-platform="threads"] .persona-dashboard-context-logo,
+:root[data-theme="dark"] .persona-dashboard-view .persona-dashboard-context-tab[data-platform="threads"],
+:root[data-theme="dark"] .persona-dashboard-view .persona-dashboard-context-tab[data-platform="threads"] .persona-dashboard-context-logo,
 :root[data-theme="dark"] .persona-dashboard-view .persona-heat-platform-row[data-platform="threads"] .persona-heat-platform-label,
 :root[data-theme="dark"] .persona-dashboard-view .persona-donut-legend .is-platform[data-platform="threads"] {
   color: #fff;
 }
 
-.persona-dashboard-view .persona-dashboard-context h3 {
+.persona-dashboard-view .persona-dashboard-context-tab strong {
   margin: 0;
   font-size: 20px;
   line-height: 24px;
@@ -1933,34 +1901,6 @@ button.primary,
 
   .persona-dashboard-view .persona-dashboard-filters {
     grid-template-columns: 1fr;
-  }
-
-  .persona-dashboard-view .persona-dashboard-filters.persona-dashboard-platform-filter {
-    padding: 6px;
-  }
-
-  .persona-dashboard-view .persona-dashboard-platform-switcher {
-    display: block;
-  }
-
-  .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs {
-    gap: 5px;
-  }
-
-  .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button {
-    min-width: 90px;
-    min-height: 34px;
-    gap: 4px;
-    padding: 4px 8px;
-  }
-
-  .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button > svg {
-    width: 16px;
-    height: 16px;
-  }
-
-  .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button > strong {
-    font-size: 12px;
   }
 
   .persona-dashboard-view .persona-dashboard-filters > div:first-child {
@@ -2810,19 +2750,6 @@ textarea:focus {
   border: 0;
   background: transparent;
   box-shadow: none;
-}
-
-@media (max-width: 680px) {
-  .persona-dashboard-view .persona-dashboard-top-controls {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
-  }
-
-  .persona-dashboard-view .persona-dashboard-filters.persona-dashboard-platform-filter {
-    min-height: 54px;
-    padding: 7px 8px;
-  }
-
 }
 
 .automation-plan-task-detail:hover,

@@ -163,39 +163,6 @@ function pdDashboardPlatforms(data) {
   return ["", ...preferred.filter((platform) => platforms.has(platform)), ...extra];
 }
 
-function pdRenderDashboardPlatformTabs(data) {
-  const host = pdEl("personaDashboardPlatformTabs");
-  if (!host) return;
-  const platforms = pdDashboardPlatforms(data);
-  if (personaDashboardPlatform && !platforms.includes(personaDashboardPlatform)) personaDashboardPlatform = "";
-  host.innerHTML = `
-    <div class="persona-dashboard-platform-switcher" data-persona-dashboard-platform-switcher>
-      <div class="persona-dashboard-platform-viewport" data-persona-dashboard-platform-viewport>
-        <div class="account-pool-platforms account-pool-platform-tabs persona-dashboard-platform-track" role="tablist" aria-label="平台筛选">
-          ${platforms.map((platform) => {
-            const isActive = personaDashboardPlatform === platform;
-            return `<button
-              class="persona-dashboard-platform-card ${isActive ? "is-active" : ""}"
-              type="button"
-              role="tab"
-              aria-selected="${isActive ? "true" : "false"}"
-              data-persona-dashboard-platform-option="${pdEscape(platform)}"
-            >${pdPlatformIcon(platform)}<strong>${pdEscape(pdPlatformLabel(platform))}</strong></button>`;
-          }).join("")}
-        </div>
-      </div>
-    </div>
-  `;
-  host.querySelectorAll("[data-persona-dashboard-platform-option]").forEach((node) => {
-    node.addEventListener("click", () => {
-      personaDashboardPlatform = String(node.getAttribute("data-persona-dashboard-platform-option") || "");
-      pdRenderDashboard();
-    });
-  });
-  const active = host.querySelector("[data-persona-dashboard-platform-option].is-active");
-  active?.scrollIntoView({ behavior: "auto", block: "nearest", inline: "center" });
-}
-
 function pdPlatformCount(values, platform) {
   const selected = String(platform || "").trim().toLowerCase();
   if (!selected) return 0;
@@ -215,12 +182,58 @@ function pdPersonaSupportsPlatform(persona, platform = pdPlatformFilter()) {
     || (persona && persona.hot_platforms || []).some((item) => String(item && item.platform || "").trim().toLowerCase() === selected);
 }
 
-function pdRenderDashboardContext() {
+function pdRenderDashboardContext(data) {
   const host = pdEl("personaDashboardContext");
   if (!host) return;
-  const platform = pdPlatformFilter();
-  host.dataset.platform = platform || "all";
-  host.innerHTML = `<span class="persona-dashboard-context-logo" aria-hidden="true">${pdPlatformIcon(platform)}</span><h3>${pdEscape(pdPlatformLabel(platform))}</h3>`;
+  const platforms = pdDashboardPlatforms(data);
+  if (personaDashboardPlatform && !platforms.includes(personaDashboardPlatform)) personaDashboardPlatform = "";
+  const activeIndex = Math.max(0, platforms.indexOf(pdPlatformFilter()));
+  host.innerHTML = `
+    <div class="persona-dashboard-context-viewport" data-persona-dashboard-context-viewport>
+      <div class="persona-dashboard-context-track" role="tablist" aria-label="平台筛选">
+        ${platforms.map((platform) => {
+          const isActive = personaDashboardPlatform === platform;
+          return `<button
+            class="persona-dashboard-context-tab ${isActive ? "is-active" : ""}"
+            type="button"
+            role="tab"
+            aria-selected="${isActive ? "true" : "false"}"
+            tabindex="${isActive ? "0" : "-1"}"
+            data-platform="${pdEscape(platform || "all")}"
+            data-persona-dashboard-platform-option="${pdEscape(platform)}"
+          ><span class="persona-dashboard-context-logo" aria-hidden="true">${pdPlatformIcon(platform)}</span><strong>${pdEscape(pdPlatformLabel(platform))}</strong></button>`;
+        }).join("")}
+      </div>
+    </div>
+  `;
+
+  const viewport = host.querySelector("[data-persona-dashboard-context-viewport]");
+  const selectPlatform = (platform) => {
+    const nextPlatform = String(platform || "");
+    if (nextPlatform === personaDashboardPlatform) return;
+    personaDashboardPlatform = nextPlatform;
+    pdRenderDashboard();
+  };
+  host.querySelectorAll("[data-persona-dashboard-platform-option]").forEach((node) => {
+    node.addEventListener("click", () => selectPlatform(node.getAttribute("data-persona-dashboard-platform-option")));
+  });
+  if (!viewport) return;
+
+  let scrollTimer = 0;
+  const settlePlatform = () => {
+    if (!viewport.clientWidth) return;
+    const nextIndex = Math.max(0, Math.min(platforms.length - 1, Math.round(viewport.scrollLeft / viewport.clientWidth)));
+    selectPlatform(platforms[nextIndex]);
+  };
+  viewport.addEventListener("scroll", () => {
+    if (viewport.dataset.ready !== "true") return;
+    window.clearTimeout(scrollTimer);
+    scrollTimer = window.setTimeout(settlePlatform, 90);
+  }, { passive: true });
+  window.requestAnimationFrame(() => {
+    viewport.scrollLeft = activeIndex * viewport.clientWidth;
+    viewport.dataset.ready = "true";
+  });
 }
 
 function pdFilterTrend(rows) {
@@ -655,8 +668,7 @@ function pdRenderDashboard() {
   const empty = pdEl("personaDashboardEmpty");
   const overview = pdEl("personaOverviewPane");
   if (!data || !empty) return;
-  pdRenderDashboardPlatformTabs(data);
-  pdRenderDashboardContext();
+  pdRenderDashboardContext(data);
   const visible = (data.personas || []).filter((persona) => pdPersonaSupportsPlatform(persona));
   const charts = pdBuildFilteredCharts(visible, data);
   pdRenderSummary(visible);
