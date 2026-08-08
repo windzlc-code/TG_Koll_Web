@@ -4350,7 +4350,7 @@ def browser_environment_recommendation(user_id: int) -> dict[str, Any]:
     except Exception:
         running_tasks = 0
     continuity = _recent_user_task_continuity(user_id)
-    recommended_concurrency = max(1, min(2 if resource_level != "ample" else 3, global_limit))
+    recommended_concurrency = max(1, min(1 if resource_level == "limited" else 2, global_limit))
     reasons = [
         f"当前运行环境为{resource_label}，个人并发建议设为 {recommended_concurrency}。",
         "任务结束后立即关闭浏览器，可释放 Camoufox 与实时画面占用的内存。",

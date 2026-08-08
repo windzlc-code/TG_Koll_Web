@@ -451,7 +451,7 @@ class BrowserPreferencesTests(unittest.TestCase):
         self.assertEqual(body["preferences"]["completion_policy"], "immediate_close")
         self.assertEqual(body["preferences"]["standby_seconds"], 0)
         self.assertEqual(body["preferences"]["auto_close_seconds"], 30)
-        self.assertEqual(body["preferences"]["requested_concurrency"], 2)
+        self.assertEqual(body["preferences"]["requested_concurrency"], 1)
         self.assertTrue(body["preferences"]["auto_configured"])
         self.assertNotIn("path", str(body).lower())
 
