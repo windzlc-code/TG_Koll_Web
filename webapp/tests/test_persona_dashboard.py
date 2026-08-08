@@ -2011,23 +2011,42 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_persona_draft_media_ops_reject_paths_outside_current_user_directory(self):
         self._write_archives()
-        other_user_dir = self.tool_runtime_dir / "other_user"
+        user_id = int(self.client.get("/api/auth/me").json()["id"])
+        other_user_dir = self.data_dir / "social_automation" / "uploads" / str(user_id + 1)
         other_user_dir.mkdir(parents=True, exist_ok=True)
         other_user_media = other_user_dir / "other.png"
         other_user_media.write_bytes(self.draft_media_path.read_bytes())
 
-        response = self.client.patch(
-            "/api/persona_dashboard/personas/persona-1/posts/post-1",
-            json={
-                "title": "Keep",
-                "content": "Keep existing draft safe",
-                "media_ops": [
-                    {"type": "append", "media_paths": [str(other_user_media)]},
-                ],
-            },
-        )
+        with mock.patch.object(server, "DATA_DIR", self.data_dir):
+            response = self.client.patch(
+                "/api/persona_dashboard/personas/persona-1/posts/post-1",
+                json={
+                    "title": "Keep",
+                    "content": "Keep existing draft safe",
+                    "media_ops": [{"type": "append", "media_paths": [str(other_user_media)]}],
+                },
+            )
 
         self.assertEqual(response.status_code, 404, response.text)
+
+    def test_persona_draft_accepts_current_user_automation_media_path(self):
+        self._write_archives()
+        user_id = int(self.client.get("/api/auth/me").json()["id"])
+        uploaded_path = self.data_dir / "social_automation" / "uploads" / str(user_id) / "upload" / "media.png"
+        uploaded_path.parent.mkdir(parents=True, exist_ok=True)
+        uploaded_path.write_bytes(self.draft_media_path.read_bytes())
+        with mock.patch.object(server, "DATA_DIR", self.data_dir):
+            response = self.client.patch(
+                "/api/persona_dashboard/personas/persona-1/posts/post-1",
+                json={
+                    "title": "Keep",
+                    "content": "Keep existing draft safe",
+                    "media_ops": [{"type": "append", "media_paths": [str(uploaded_path)]}],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn(str(uploaded_path), [item["url"] for item in response.json()["media_items"]])
 
     def test_persona_media_endpoint_rejects_legacy_path_outside_trusted_roots(self):
         self._write_archives()

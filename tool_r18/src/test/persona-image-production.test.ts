@@ -296,6 +296,7 @@ describe("persona image production", () => {
 
     expect(result).toMatchObject({ ok: true, mode: "closed-pov" });
     expect(calls[0].avatarBase64).toBeUndefined();
+    expect(calls[0].runningHubNewPersonaMode).toBe("text-to-image");
     expect(calls[0].prompt).toContain("gender: 女性");
     expect(calls[0].prompt).toContain("neat soft hands");
   });

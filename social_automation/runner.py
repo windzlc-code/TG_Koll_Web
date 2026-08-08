@@ -1760,7 +1760,7 @@ def _goto(page, url: str, logger: AutomationLogger, stage: str, *, timeout_ms: i
         except Exception as exc:
             message = str(exc)
             current_url = str(getattr(page, "url", "") or "").strip()
-            is_recoverable_navigation = any(
+            is_redirect_navigation = any(
                 marker in message
                 for marker in (
                     "NS_ERROR_REDIRECT_LOOP",
@@ -1768,9 +1768,12 @@ def _goto(page, url: str, logger: AutomationLogger, stage: str, *, timeout_ms: i
                     "interrupted by another navigation",
                 )
             )
-            if not is_recoverable_navigation:
+            is_transient_threads_navigation = (
+                url == THREADS_HOME and _is_transient_navigation_exception(message)
+            )
+            if not is_redirect_navigation and not is_transient_threads_navigation:
                 raise
-            if current_url and current_url != "about:blank":
+            if is_redirect_navigation and current_url and current_url != "about:blank":
                 logger.log(
                     "warn",
                     stage,
@@ -1782,9 +1785,9 @@ def _goto(page, url: str, logger: AutomationLogger, stage: str, *, timeout_ms: i
                 next_url = candidates[index + 1]
                 logger.log(
                     "warn",
-                    f"{stage}_redirect_recovery",
-                    "Threads navigation redirected in a loop; trying the canonical host.",
-                    {"from": candidate, "to": next_url},
+                    f"{stage}_navigation_recovery",
+                    "Threads navigation failed transiently; trying the canonical host without closing the browser.",
+                    {"from": candidate, "to": next_url, "error": message.splitlines()[0]},
                 )
                 continue
             logger.log(
@@ -2404,7 +2407,7 @@ def _self_heal_login_page(
 
 
 def _prepare_manual_threads_login_page(page, logger: AutomationLogger) -> None:
-    """Normalize the one-time Threads-to-Instagram handoff for manual login."""
+    """Handle only the official Threads-to-Instagram handoff shown by Threads."""
     status = _detect_threads_login_state(page)
     if status.get("status") == "ready":
         return
@@ -2441,14 +2444,8 @@ def _prepare_manual_threads_login_page(page, logger: AutomationLogger) -> None:
         _sleep_between(2.0, 4.0)
         with contextlib.suppress(Exception):
             page.wait_for_load_state("domcontentloaded", timeout=15000)
-        return
-
-    _goto(
-        page,
-        "https://www.instagram.com/accounts/login/",
-        logger,
-        "manual_login_instagram_fallback",
-    )
+    # Do not force-open an Instagram page when Threads did not present its
+    # official handoff. Keep the current Threads page open for recovery.
 
 
 def _restore_threads_after_instagram_login(page, status: dict[str, Any], logger: AutomationLogger) -> dict[str, Any]:
@@ -2626,30 +2623,26 @@ def _run_open_login(
                     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
                 last_status = stable_status
             if platform == "threads" and last_status.get("status") == "account_confirmation_required":
-                if auto_submit and has_credentials:
-                    logger.log(
-                        "info",
-                        "threads_account_confirmation",
-                        "Threads account confirmation detected; using the saved username/password login path instead of the SSO continue button.",
-                        {"url": _safe_navigation_url(page.url)},
-                    )
-                else:
-                    continued = _click_text_button(
-                        page,
-                        logger,
-                        ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
-                        "threads_account_confirmation",
-                        abort_if=lambda: _manual_takeover_requested(context_control),
-                    )
-                    logger.log(
-                        "info" if continued else "warn",
-                        "threads_account_confirmation",
-                        "Threads 关联账号确认流程已处理。" if continued else "Threads 关联账号确认按钮尚不可用，页面保持原状。",
-                        {"clicked": continued, "url": _safe_navigation_url(page.url)},
-                    )
-                    if continued:
-                        _sleep_between(1.5, 3.0)
-                        continue
+                continued = _click_text_button(
+                    page,
+                    logger,
+                    ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
+                    "threads_account_confirmation",
+                    abort_if=lambda: _manual_takeover_requested(context_control),
+                )
+                logger.log(
+                    "info" if continued else "warn",
+                    "threads_account_confirmation",
+                    "Threads 关联账号确认流程已处理。" if continued else "Threads 关联账号确认按钮尚不可用，页面保持原状。",
+                    {
+                        "clicked": continued,
+                        "url": _safe_navigation_url(page.url),
+                        "screen_sample": "threads_account_confirmation",
+                    },
+                )
+                if continued:
+                    _sleep_between(1.5, 3.0)
+                    continue
             if _verification_visible(page):
                 totp_result = _try_auto_totp_challenge(
                     page,
@@ -9152,36 +9145,13 @@ def _auto_submit_login_form(
         if not continue_clicked:
             if _manual_takeover_requested(context_control):
                 return False
-            if payload.get("_threads_instagram_handoff_attempted"):
-                logger.log(
-                    "warn",
-                    "auto_login_handoff_bounded",
-                    "Threads to Instagram login handoff was already attempted; keeping recovery on Threads.",
-                    {"url": _safe_navigation_url(page.url)},
-                )
-                return False
             logger.log(
-                "info",
-                "threads_login_target_account",
-                "Opening the standard Instagram username/password login page for Threads auto login.",
+                "warn",
+                "threads_login_native_form_missing",
+                "Threads-native username/password form is not available yet; keeping recovery on threads.com.",
                 {"url": _safe_navigation_url(page.url)},
             )
-            _goto(page, INSTAGRAM_LOGIN, logger, "threads_login_target_account")
-            continue_clicked = True
-            instagram_hostname = str(urlparse(str(page.url or "")).hostname or "").lower()
-            if instagram_hostname == "instagram.com" or instagram_hostname.endswith(".instagram.com"):
-                has_login_form = bool(
-                    _visible_first(page, ['input[name="username"]', 'input[autocomplete="username"]'], 700)
-                    and _visible_first(page, ['input[type="password"]', 'input[autocomplete="current-password"]'], 700)
-                )
-                if not has_login_form:
-                    # Only reset a remembered Instagram session after the
-                    # Instagram page itself is reachable. A transient proxy
-                    # failure must not destroy the current Threads session.
-                    with contextlib.suppress(Exception):
-                        page.context.clear_cookies(domain=re.compile(r"(^|\.)instagram\.com$"))
-                    _goto(page, INSTAGRAM_LOGIN, logger, "threads_login_target_account")
-            payload["_threads_instagram_handoff_attempted"] = True
+            return False
 
     logger.log("info", "auto_login_find_inputs", "正在查找用户名和密码输入框。", {"url": _safe_navigation_url(page.url)})
     username_selectors = [

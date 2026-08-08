@@ -265,7 +265,6 @@ const unsupportedImageApi = {
       ...configuredImageModels({ configPath: payload.configPath, dataDir: payload.dataDir }),
       process.env.PERSONA_IMAGE_MODEL,
       "gemini-3.1-flash-image-preview",
-      "gpt-image-2",
     ]);
     let result: any;
     const fallbackAttempts: Array<{ model: string; ok: boolean; reasonCode?: string; error?: string }> = [];
@@ -295,7 +294,7 @@ const unsupportedImageApi = {
       timings: {
         ...((result as any)?.timings || {}),
         provider: "closed-model-image",
-        model: fallbackAttempts[fallbackAttempts.length - 1]?.model || payload.model || process.env.PERSONA_IMAGE_MODEL || "gpt-image-2",
+        model: fallbackAttempts[fallbackAttempts.length - 1]?.model || payload.model || process.env.PERSONA_IMAGE_MODEL || "gemini-3.1-flash-image-preview",
         fallbackAttempts,
         elapsedMs: Date.now() - startedAt,
         timeoutMs: payload.timeoutMs || CLOSED_IMAGE_TIMEOUT_MS,
@@ -324,7 +323,7 @@ async function main() {
   const model = input.model
     || configuredImageModels(runtimeOptions)[0]
     || process.env.PERSONA_IMAGE_MODEL
-    || "gpt-image-2";
+    || "gemini-3.1-flash-image-preview";
 
   let referenceSheetMs: number | undefined;
   const referenceSheet = input.generateReferenceSheet

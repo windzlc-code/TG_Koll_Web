@@ -81,6 +81,26 @@ class _RedirectedPage(_Page):
         self.waited_states.append(state)
 
 
+class _TransientThreadsHomePage(_Page):
+    def __init__(self):
+        super().__init__("about:blank")
+        self.goto_calls = []
+        self.waited_states = []
+
+    def goto(self, url, **_kwargs):
+        self.goto_calls.append(url)
+        if url == runner.THREADS_HOME:
+            self.url = "about:blank"
+            raise RuntimeError(
+                'Page.goto: NS_ERROR_NET_EMPTY_RESPONSE\n'
+                'Call log:\n  - navigating to "https://www.threads.net/"'
+            )
+        self.url = url
+
+    def wait_for_load_state(self, state, **_kwargs):
+        self.waited_states.append(state)
+
+
 class _PageWithBackground(_Page):
     def __init__(self, url="https://www.threads.net/"):
         super().__init__(url)
@@ -1134,6 +1154,49 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(result["status"], "ready")
         detect.assert_called()
         self.assertNotIn(runner.INSTAGRAM_LOGIN, [call.args[1] for call in goto.call_args_list])
+
+    def test_threads_auto_login_uses_official_account_confirmation_handoff(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/login"
+        logger = _Logger()
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(
+                runner,
+                "_detect_platform_login_state",
+                side_effect=[
+                    {
+                        "status": "account_confirmation_required",
+                        "url": page.url,
+                    },
+                    {"status": "ready", "url": runner.THREADS_HOME},
+                ],
+            ),
+            mock.patch.object(runner, "_click_text_button", return_value=True) as click,
+            mock.patch.object(runner, "_auto_submit_login_form", return_value=False) as submit,
+            mock.patch.object(runner, "_confirm_platform_ready", return_value={"status": "ready"}),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_screenshot", return_value="login-complete.png"),
+        ):
+            result = runner._run_open_login(
+                page,
+                {"id": "threads-official-account-confirmation"},
+                {},
+                {
+                    "login_wait_seconds": 30,
+                    "auto_submit": True,
+                    "login_username": "saved-user",
+                    "login_password": "saved-password",
+                },
+                Path("."),
+                logger,
+                "threads",
+            )
+
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(click.call_count, 1)
+        self.assertEqual(click.call_args.args[3], "threads_account_confirmation")
+        submit.assert_not_called()
 
     def test_manual_login_does_not_auto_heal_or_navigate_the_user_page(self):
         page = mock.Mock()
@@ -2571,7 +2634,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         click.assert_not_called()
 
-    def test_manual_threads_login_falls_back_to_top_level_instagram_login(self):
+    def test_manual_threads_login_never_falls_back_to_instagram(self):
         page = mock.Mock()
         page.url = "https://www.threads.com/"
         logger = _Logger()
@@ -2582,12 +2645,28 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         ):
             runner._prepare_manual_threads_login_page(page, logger)
 
-        goto.assert_called_once_with(
-            page,
-            "https://www.instagram.com/accounts/login/",
-            logger,
-            "manual_login_instagram_fallback",
-        )
+        goto.assert_not_called()
+
+    def test_threads_auto_login_never_forces_instagram_when_native_entry_is_missing(self):
+        page = _Page(url="https://www.threads.com/")
+        with (
+            mock.patch.object(runner, "_click_text_button", return_value=False),
+            mock.patch.object(runner, "_visible_first", return_value=None),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_screenshot", return_value="missing.png"),
+            mock.patch.object(runner, "_goto") as goto,
+        ):
+            submitted = runner._auto_submit_login_form(
+                page,
+                "threads",
+                {"login_username": "saved-user", "login_password": "saved-password"},
+                _Logger(),
+                {"id": "threads-native-entry-missing"},
+                Path("."),
+            )
+
+        self.assertFalse(submitted)
+        goto.assert_not_called()
 
     def test_manual_threads_login_returns_from_instagram_for_final_confirmation(self):
         page = mock.Mock()
@@ -3383,6 +3462,25 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(page.goto_calls, ["https://www.threads.net/@alice"])
         self.assertEqual(page.url, "https://www.threads.com/@alice")
+        self.assertEqual(page.waited_states, ["networkidle"])
+
+    def test_threads_home_empty_response_uses_canonical_host_without_closing_browser(self):
+        page = _TransientThreadsHomePage()
+
+        runner._goto(
+            page,
+            runner.THREADS_HOME,
+            _Logger(),
+            "open_login",
+            timeout_ms=5000,
+            networkidle_ms=1500,
+        )
+
+        self.assertEqual(
+            page.goto_calls,
+            [runner.THREADS_HOME, "https://www.threads.com/"],
+        )
+        self.assertEqual(page.url, "https://www.threads.com/")
         self.assertEqual(page.waited_states, ["networkidle"])
 
     def test_threads_profile_unconfirmed_never_returns_ok(self):

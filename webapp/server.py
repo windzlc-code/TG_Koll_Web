@@ -1274,13 +1274,16 @@ def _require_social_account_access(account_id: str, user: dict[str, Any]) -> Non
 
 
 def _require_user_media_paths(media_paths: list[str], user: dict[str, Any]) -> None:
-    root = (UPLOAD_ROOT / _workspace_username(user)).resolve()
+    roots = (
+        (UPLOAD_ROOT / _workspace_username(user)).resolve(),
+        (DATA_DIR / "social_automation" / "uploads" / str(_workspace_user_id(user))).resolve(),
+    )
     for value in media_paths or []:
         try:
             path = Path(str(value or "")).expanduser().resolve()
         except Exception as exc:
             raise HTTPException(status_code=404, detail="媒体文件不存在") from exc
-        if root not in path.parents or not path.is_file() or not _is_allowed_dashboard_media_path(path):
+        if not any(root in path.parents for root in roots) or not path.is_file() or not _is_allowed_dashboard_media_path(path):
             raise HTTPException(status_code=404, detail="媒体文件不存在")
 
 
@@ -14146,7 +14149,9 @@ _PERSONA_HOT_POOL_CURSOR = 0
 
 
 def _persona_hot_pool_worker_enabled() -> bool:
-    return _to_bool(os.getenv("PERSONA_HOT_POOL_WORKER_ENABLED", "1"), True)
+    # Candidate-pool refills launch browser-backed scans. Keep the background
+    # worker opt-in so it cannot compete with account login and publishing.
+    return _to_bool(os.getenv("PERSONA_HOT_POOL_WORKER_ENABLED", "0"), False)
 
 
 def _persona_hot_pool_resources_available() -> bool:
@@ -19252,6 +19257,9 @@ def _persona_dashboard_monitor_interval_seconds() -> int:
 
 
 def _persona_dashboard_monitor_enabled() -> bool:
+    # Dashboard data refresh is a low-frequency (24-hour by default) task and
+    # remains enabled. High-frequency candidate-pool scans are controlled
+    # separately by PERSONA_HOT_POOL_WORKER_ENABLED.
     return str(os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
 

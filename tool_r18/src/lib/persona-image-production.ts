@@ -265,7 +265,9 @@ export async function generatePersonaImage(
     : undefined;
 
   const result = await callClosedModel(imageAPI, finalPrompt, model, aspectRatio, avatarBase64, avatarMimeType, runtimeOptions, {
-    runningHubNewPersonaMode: withAvatar ? "image-to-image" : undefined,
+    // 推文配图统一使用后台配置的 RunningHub 链路：有参考图走图生图，
+    // 无参考图的场景或 POV 走文生图，不能回退到通用闭源模型。
+    runningHubNewPersonaMode: withAvatar ? "image-to-image" : "text-to-image",
     avatarSource,
   });
   return { ok: !!result?.ok, url: result?.url, mode, error: result?.error, timings: (result as any)?.timings };

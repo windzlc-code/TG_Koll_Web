@@ -1449,9 +1449,9 @@ button.primary,
 .persona-dashboard-view .persona-heat-card {
   display: grid;
   flex: 0 0 100%;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
-  padding: 12px;
+  padding: 10px;
   box-sizing: border-box;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1488,37 +1488,37 @@ button.primary,
 
 .persona-dashboard-view .persona-heat-platform-list {
   display: grid;
-  gap: 8px;
+  gap: 4px;
 }
 
 .persona-dashboard-view .persona-heat-platform-row {
   display: grid;
-  grid-template-columns: minmax(104px, 0.8fr) minmax(120px, 2fr) 70px;
+  grid-template-columns: minmax(96px, 0.8fr) minmax(120px, 2fr) 62px;
   align-items: center;
-  gap: 10px;
-  min-height: 34px;
-  padding: 4px 6px;
+  gap: 8px;
+  min-height: 24px;
+  padding: 0 2px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 5px;
 }
 
 .persona-dashboard-view .persona-heat-platform-row.is-highlighted {
-  border-color: var(--line);
-  background: var(--soft);
+  border-color: transparent;
+  background: transparent;
 }
 
 .persona-dashboard-view .persona-heat-platform-label {
   display: inline-flex;
   min-width: 0;
   align-items: center;
-  gap: 7px;
+  gap: 5px;
 }
 
 .persona-dashboard-view .persona-heat-platform-label svg,
 .persona-dashboard-view .persona-donut-legend svg {
   flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
 }
 
 .persona-dashboard-view .persona-heat-platform-track {
@@ -1885,14 +1885,15 @@ button.primary,
   }
 
   .persona-dashboard-view .persona-heat-card {
-    gap: 10px;
-    padding: 9px;
+    gap: 6px;
+    padding: 8px;
   }
 
   .persona-dashboard-view .persona-heat-platform-row {
-    grid-template-columns: minmax(92px, 0.9fr) minmax(64px, 1.2fr) 54px;
-    gap: 6px;
-    padding-inline: 3px;
+    grid-template-columns: minmax(84px, 0.9fr) minmax(64px, 1.35fr) 50px;
+    gap: 5px;
+    min-height: 22px;
+    padding-inline: 1px;
   }
 
   .persona-dashboard-view .persona-heat-platform-label {

@@ -204,6 +204,23 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('[data-platform="threads"] .persona-heat-platform-track i', self.styles)
         self.assertIn('[data-platform="instagram"] .persona-heat-platform-track i', self.styles)
 
+    def test_persona_platform_heat_rows_keep_the_compact_ranking_rhythm(self):
+        row_selector = ".persona-dashboard-view .persona-heat-platform-row {"
+        row_start = self.styles.index(row_selector)
+        row_rule = self.styles[row_start:self.styles.index("}", row_start) + 1]
+        list_selector = ".persona-dashboard-view .persona-heat-platform-list {"
+        list_start = self.styles.index(list_selector)
+        list_rule = self.styles[list_start:self.styles.index("}", list_start) + 1]
+
+        self.assertIn("gap: 4px;", list_rule)
+        self.assertIn("min-height: 24px;", row_rule)
+        self.assertIn("padding: 0 2px;", row_rule)
+        self.assertNotIn("min-height: 34px;", row_rule)
+        self.assertIn("background: transparent;", self.styles[
+            self.styles.index(".persona-dashboard-view .persona-heat-platform-row.is-highlighted {"):
+            self.styles.index("}", self.styles.index(".persona-dashboard-view .persona-heat-platform-row.is-highlighted {")) + 1
+        ])
+
     def test_trend_chart_supports_day_month_and_year_aggregation(self):
         chart_start = self.dashboard_script.index("function pdAggregateTrendRows(rows, range = personaDashboardTrendRange)")
         chart_end = self.dashboard_script.index("\nfunction pdRenderSummary", chart_start)
