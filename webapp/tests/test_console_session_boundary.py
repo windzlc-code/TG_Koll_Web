@@ -3450,6 +3450,63 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('String(task?.task_type || "") === "publish_post"', layout_renderer)
         self.assertIn('String(task?.status || "") === "success"', layout_renderer)
 
+    def test_publish_batch_log_renders_every_member_result_in_one_modal(self):
+        media_items = self._function_source("socialPublishBatchTaskMediaItems")
+        renderer = self._function_source("renderSocialPublishBatchResults")
+        harness = textwrap.dedent(f"""
+            const assert = require("assert");
+            function esc(value) {{ return String(value ?? ""); }}
+            function formatTime(value) {{ return String(value ?? ""); }}
+            function timeValue(value) {{ return Number(value || 0); }}
+            function statusLabel(value) {{ return value === "success" ? "成功" : String(value || ""); }}
+            function statusTone(value) {{ return value === "success" ? "success" : "neutral"; }}
+            function socialTaskPayload(task) {{ return task?.payload || {{}}; }}
+            function taskResultUrl(task) {{ return task?.result?.published_url || ""; }}
+            function adminWorkspacePageUrl(value) {{ return String(value || ""); }}
+            function guessMediaType() {{ return "image"; }}
+            function collectTaskScreenshots(task) {{
+              const path = task?.result?.screenshot_path || "";
+              return path ? [{{ previewUrl: path, label: "最终截图" }}] : [];
+            }}
+            function renderTaskScreenshotGallery(items) {{
+              return `<div data-gallery>${{items.map((item) => item.previewUrl).join("|")}}</div>`;
+            }}
+            {media_items}
+            {renderer}
+
+            const html = renderSocialPublishBatchResults([
+              {{
+                id: "publish-2",
+                status: "success",
+                finished_at: 22,
+                publish_sequence_index: 2,
+                publish_sequence_total: 2,
+                persona_id: "persona-1",
+                payload: {{ caption: "第二篇正文", archive_post_title: "第二篇", media_paths: ["/data/two.png"] }},
+                result: {{ published_url: "https://threads.net/post/two", screenshot_path: "/shots/two.png" }},
+              }},
+              {{
+                id: "publish-1",
+                status: "success",
+                finished_at: 11,
+                publish_sequence_index: 1,
+                publish_sequence_total: 2,
+                persona_id: "persona-1",
+                payload: {{ caption: "第一篇正文", archive_post_title: "第一篇", media_paths: ["/data/one.png"] }},
+                result: {{ published_url: "https://threads.net/post/one", screenshot_path: "/shots/one.png" }},
+              }},
+            ], []);
+            assert.match(html, /2 篇 · 2 张截图/);
+            assert.ok(html.indexOf("第一篇正文") < html.indexOf("第二篇正文"));
+            assert.match(html, /https:\\/\\/threads.net\\/post\\/one/);
+            assert.match(html, /https:\\/\\/threads.net\\/post\\/two/);
+            assert.match(html, /\\/shots\\/one.png/);
+            assert.match(html, /\\/shots\\/two.png/);
+            assert.match(html, /publish_history\\/webauto-pub-publish-1\\/media\\/0/);
+            assert.match(html, /publish_history\\/webauto-pub-publish-2\\/media\\/0/);
+        """)
+        self._run_node(harness)
+
     def test_console_settings_use_user_browser_policy_endpoints_and_keep_pagination_local(self):
         render = self._function_source("renderConsoleSettingsPage")
         save = self._function_source("saveConsoleSettingsPage")

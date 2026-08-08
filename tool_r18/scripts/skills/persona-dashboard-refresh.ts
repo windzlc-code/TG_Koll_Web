@@ -243,6 +243,37 @@ function collectInstagramRefreshTargets(archive: any): PersonaThreadsAccountBind
   );
 }
 
+function publishedInstagramUrlsForTarget(archive: any, target: PersonaThreadsAccountBinding): string[] {
+  const targetAccountId = String(target.accountId || "").trim();
+  const targetUsername = normalizeInstagramUsername(target.username).toLowerCase();
+  const out = new Set<string>();
+  for (const record of Array.isArray(archive?.publishHistory) ? archive.publishHistory : []) {
+    if (!record || typeof record !== "object") continue;
+    const publishedMeta = record.publishedMeta && typeof record.publishedMeta === "object" ? record.publishedMeta : {};
+    const sourceMeta = record.sourceMeta && typeof record.sourceMeta === "object" ? record.sourceMeta : {};
+    const platform = String(record.platform || publishedMeta.platform || sourceMeta.platform || "").trim().toLowerCase();
+    if (platform !== "instagram") continue;
+    const recordAccountId = String(publishedMeta.accountId || sourceMeta.accountId || record.accountId || "").trim();
+    const recordUsername = normalizeInstagramUsername(publishedMeta.username || sourceMeta.username || record.username).toLowerCase();
+    if (targetAccountId && recordAccountId && targetAccountId !== recordAccountId) continue;
+    if (!recordAccountId && targetUsername && recordUsername && targetUsername !== recordUsername) continue;
+    for (const value of [
+      record.publishedUrl,
+      record.published_url,
+      record.postUrl,
+      record.post_url,
+      publishedMeta.publishedUrl,
+      publishedMeta.postUrl,
+      sourceMeta.publishedUrl,
+      sourceMeta.postUrl,
+    ]) {
+      const url = String(value || "").trim();
+      if (/^https?:\/\/(?:www\.)?instagram\.com\/(?:p|reel|tv)\/[A-Za-z0-9_-]+/i.test(url)) out.add(url);
+    }
+  }
+  return [...out.values()];
+}
+
 function decodeXml(value: string): string {
   return String(value || "")
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
@@ -370,7 +401,9 @@ async function backfillPublishedThreadsPostMetrics(args: {
   const publishedUrls = publishedThreadsUrlsForHandle(args.archive, args.username);
   if (!publishedUrls.length) return args.postMetrics;
   const existingRows = Array.isArray(args.postMetrics) ? args.postMetrics : [];
-  const missingUrls = publishedUrls.filter((url) => !existingRows.some((post) => postMetricMatchesUrl(post, url)));
+  const missingUrls = publishedUrls.filter((url) => !existingRows.some((post) => (
+    postMetricMatchesUrl(post, url) && typeof post?.viewCount === "number"
+  )));
   if (!missingUrls.length) return existingRows;
   const previousProfileDir = process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
   try {
@@ -701,7 +734,10 @@ async function main() {
             } else {
               delete process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR;
             }
-            metrics = await fetchInstagramProfileHotMetrics(username);
+            metrics = await fetchInstagramProfileHotMetrics(
+              username,
+              publishedInstagramUrlsForTarget(archive, target),
+            );
           } finally {
             if (previousProfileDir) {
               process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR = previousProfileDir;

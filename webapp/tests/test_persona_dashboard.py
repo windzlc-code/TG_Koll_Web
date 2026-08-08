@@ -744,6 +744,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(data["summary"]["persona_count"], 1)
         self.assertEqual(data["summary"]["post_count"], 1)
         self.assertEqual(data["summary"]["published_count"], 1)
+        self.assertEqual(data["personas"][0]["counts"]["platform_published"], {"threads": 1})
         threads_trend = data["charts"]["platform_trend"]["threads"]
         self.assertEqual(threads_trend[0]["date"], "2026-06-30")
         self.assertEqual(threads_trend[0]["published"], 1)
@@ -2900,6 +2901,37 @@ class PersonaDashboardApiTests(unittest.TestCase):
         })
         self.assertEqual(inconsistent["view_count"], 0)
         self.assertFalse(inconsistent["view_available"])
+
+    def test_publish_history_matches_equivalent_instagram_post_routes_by_shortcode(self):
+        archive = {
+            "setup": {
+                "hotMetrics": {
+                    "instagram:warr_0408": {
+                        "platform": "instagram",
+                        "username": "warr_0408",
+                        "scope": "authenticated_profile_snapshot",
+                        "complete": False,
+                        "postMetrics": [{
+                            "sourceUrl": "https://www.instagram.com/reel/Dbxft0dmYdw/",
+                            "code": "Dbxft0dmYdw",
+                            "likeCount": 12,
+                            "commentCount": 3,
+                        }],
+                    },
+                },
+            },
+        }
+
+        matched = server._publish_history_hot_metrics({
+            "platform": "instagram",
+            "publishedUrl": "https://www.instagram.com/p/Dbxft0dmYdw/",
+            "publishedMeta": {},
+        }, archive)
+
+        self.assertTrue(matched["matched"])
+        self.assertEqual(matched["likes"], 12)
+        self.assertEqual(matched["comments"], 3)
+        self.assertFalse(matched["views_available"])
 
     def test_publish_sync_does_not_use_target_url_as_published_url(self):
         task = {

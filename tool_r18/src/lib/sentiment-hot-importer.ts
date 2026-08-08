@@ -6487,6 +6487,57 @@ function instagramProfileMetricNumber(...values: unknown[]): number | undefined 
   return undefined;
 }
 
+function instagramPostCodeFromUrl(value: unknown): string {
+  const match = cleanText(value).match(/instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/i);
+  return cleanText(match?.[1]);
+}
+
+export function instagramMediaPkFromShortcode(shortcodeInput: string): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const shortcode = cleanText(shortcodeInput);
+  if (!shortcode || !/^[A-Za-z0-9_-]+$/.test(shortcode)) return "";
+  let value = 0n;
+  for (const character of shortcode) {
+    const index = alphabet.indexOf(character);
+    if (index < 0) return "";
+    value = (value * 64n) + BigInt(index);
+  }
+  return value.toString();
+}
+
+export function parseInstagramPostHotMetricPayload(args: {
+  payload: any;
+  sourceUrl: string;
+  refreshedAt?: string;
+}): ThreadsProfilePostHotMetrics | null {
+  const item = Array.isArray(args.payload?.items)
+    ? args.payload.items[0]
+    : args.payload?.item || args.payload?.data?.item;
+  if (!item || typeof item !== "object") return null;
+  const sourceUrl = cleanText(args.sourceUrl);
+  const code = cleanText(item.code || item.shortcode || instagramPostCodeFromUrl(sourceUrl));
+  const normalizedSourceUrl = sourceUrl || (code ? `https://www.instagram.com/p/${encodeURIComponent(code)}/` : "");
+  if (!normalizedSourceUrl && !item.pk && !item.id) return null;
+  const caption = cleanText(item.caption?.text || item.caption);
+  return {
+    pk: cleanText(item.pk || item.id) || undefined,
+    code: code || undefined,
+    sourceUrl: normalizedSourceUrl,
+    content: caption || undefined,
+    publishedAt: normalizeThreadsTimestamp(item.taken_at_timestamp || item.taken_at || item.device_timestamp),
+    likeCount: instagramProfileMetricNumber(item.like_count, item?.edge_media_preview_like?.count, item?.edge_liked_by?.count),
+    commentCount: instagramProfileMetricNumber(item.comment_count, item?.edge_media_to_comment?.count),
+    viewCount: instagramProfileMetricNumber(
+      item.content_views_count,
+      item.play_count,
+      item.view_count,
+      item.video_view_count,
+      item.video_play_count,
+    ),
+    capturedAt: args.refreshedAt || new Date().toISOString(),
+  };
+}
+
 export function parseInstagramProfileHotMetricsPayload(args: {
   payload: any;
   username: string;
@@ -6557,7 +6608,10 @@ export function parseInstagramProfileHotMetricsPayload(args: {
   };
 }
 
-export async function fetchInstagramProfileHotMetrics(usernameInput: string): Promise<InstagramProfileHotMetrics> {
+export async function fetchInstagramProfileHotMetrics(
+  usernameInput: string,
+  publishedUrlsInput: string[] = [],
+): Promise<InstagramProfileHotMetrics> {
   const username = cleanText(usernameInput).replace(/^@+/, "");
   const refreshedAt = new Date().toISOString();
   if (!username) {
@@ -6614,11 +6668,89 @@ export async function fetchInstagramProfileHotMetrics(usernameInput: string): Pr
     if (Number(response?.status || 0) < 200 || Number(response?.status || 0) >= 300) {
       throw new Error(`Instagram 账号资料接口返回 ${Number(response?.status || 0) || "异常状态"}`);
     }
-    return parseInstagramProfileHotMetricsPayload({
+    const profileMetrics = parseInstagramProfileHotMetricsPayload({
       payload: safeJson(response?.text),
       username,
       refreshedAt,
     });
+    const publishedUrls = [...new Set(
+      (Array.isArray(publishedUrlsInput) ? publishedUrlsInput : [])
+        .map((value) => cleanText(value))
+        .filter((value) => Boolean(instagramPostCodeFromUrl(value))),
+    )];
+    const postMetrics = Array.isArray(profileMetrics.postMetrics) ? [...profileMetrics.postMetrics] : [];
+    const knownCodes = new Set(postMetrics.map((row) => cleanText(row.code).toLowerCase()).filter(Boolean));
+    let targetLookupFailures = 0;
+    for (const sourceUrl of publishedUrls) {
+      const code = instagramPostCodeFromUrl(sourceUrl);
+      if (!code || knownCodes.has(code.toLowerCase())) continue;
+      const mediaPk = instagramMediaPkFromShortcode(code);
+      if (!mediaPk) continue;
+      try {
+        const detailResponse = await page.evaluate(async ({ targetPk, csrf }: { targetPk: string; csrf: string }) => {
+          const controller = new AbortController();
+          const timer = window.setTimeout(() => controller.abort(), 12_000);
+          try {
+            const result = await fetch(`/api/v1/media/${encodeURIComponent(targetPk)}/info/`, {
+              method: "GET",
+              credentials: "include",
+              signal: controller.signal,
+              headers: {
+                accept: "*/*",
+                "x-ig-app-id": "936619743392459",
+                ...(csrf ? { "x-csrftoken": csrf } : {}),
+              },
+            });
+            return { status: result.status, text: await result.text() };
+          } finally {
+            window.clearTimeout(timer);
+          }
+        }, { targetPk: mediaPk, csrf: csrfToken });
+        if (Number(detailResponse?.status || 0) < 200 || Number(detailResponse?.status || 0) >= 300) {
+          targetLookupFailures += 1;
+          continue;
+        }
+        const row = parseInstagramPostHotMetricPayload({
+          payload: safeJson(detailResponse?.text),
+          sourceUrl,
+          refreshedAt,
+        });
+        if (!row) {
+          targetLookupFailures += 1;
+          continue;
+        }
+        postMetrics.push(row);
+        knownCodes.add(code.toLowerCase());
+      } catch {
+        targetLookupFailures += 1;
+      }
+    }
+    const posts = profileMetrics.posts;
+    const complete = typeof posts === "number" && (posts === 0 || postMetrics.length >= posts);
+    const likes = postMetrics.length || posts === 0
+      ? postMetrics.reduce((sum, row) => sum + Number(row.likeCount || 0), 0)
+      : profileMetrics.likes;
+    const comments = postMetrics.length || posts === 0
+      ? postMetrics.reduce((sum, row) => sum + Number(row.commentCount || 0), 0)
+      : profileMetrics.comments;
+    const views = postMetrics.length || posts === 0
+      ? postMetrics.reduce((sum, row) => sum + Number(row.viewCount || 0), 0)
+      : profileMetrics.views;
+    return {
+      ...profileMetrics,
+      likes,
+      comments,
+      views,
+      scannedPosts: postMetrics.length,
+      postMetrics,
+      complete,
+      scope: complete ? "authenticated_full_profile" : "authenticated_profile_snapshot",
+      error: complete
+        ? undefined
+        : targetLookupFailures
+          ? `Instagram 已读取 ${postMetrics.length} 条帖子；${targetLookupFailures} 条已发布链接暂未返回明细。`
+          : profileMetrics.error,
+    };
   } catch (error: any) {
     return {
       platform: "instagram",
@@ -7016,8 +7148,11 @@ export function parseThreadsBrowserPostDetailMetrics(args: {
     likeCount: sequence.likeCount,
     commentCount: sequence.commentCount,
     shareCount: sequence.repostCount,
+    // Threads omits the view label on a successfully loaded post while the
+    // count is still zero. A complete action row proves this is the post
+    // detail, so preserve that platform-reported zero instead of "unknown".
+    viewCount: typeof viewCount === "number" ? viewCount : 0,
   };
-  if (typeof viewCount === "number") engagement.viewCount = viewCount;
   if (rawSignals.length) engagement.rawSignals = rawSignals;
   const interactionHotScore = sequence.likeCount + sequence.commentCount + sequence.repostCount + sequence.sendCount;
   const hotScore = typeof viewCount === "number" ? viewCount : interactionHotScore;
@@ -7028,7 +7163,7 @@ export function parseThreadsBrowserPostDetailMetrics(args: {
       ...compactEngagementMetrics(engagement),
       repost_count: sequence.repostCount,
       send_count: sequence.sendCount,
-      ...(typeof viewCount === "number" ? { view_count: viewCount } : {}),
+      view_count: typeof viewCount === "number" ? viewCount : 0,
     },
   };
 }

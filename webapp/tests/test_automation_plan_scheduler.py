@@ -428,7 +428,7 @@ class AutomationPlanSchedulerTests(unittest.TestCase):
 
         self.assertEqual(rejected.exception.status_code, 400)
 
-    def test_admin_workspace_billing_waiver_persists_for_every_cycle(self):
+    def test_admin_workspace_billing_waiver_does_not_waive_daily_publish_slots(self):
         with db() as conn:
             conn.execute("UPDATE users SET is_admin = 0 WHERE id = ?", (self.user_id,))
         managed_user = {
@@ -461,7 +461,7 @@ class AutomationPlanSchedulerTests(unittest.TestCase):
             )
 
         self.assertEqual(int(stored["billing_admin_waived"]), 1)
-        self.assertEqual(int(first_cycle[0]["daily_publish_waived"]), 1)
+        self.assertEqual(int(first_cycle[0]["daily_publish_waived"]), 0)
 
         social_api._reconcile_social_automation_plans()
 
@@ -471,7 +471,7 @@ class AutomationPlanSchedulerTests(unittest.TestCase):
                 plan["id"],
                 cycle_index=2,
             )
-        self.assertEqual(int(second_cycle[0]["daily_publish_waived"]), 1)
+        self.assertEqual(int(second_cycle[0]["daily_publish_waived"]), 0)
 
     def test_cancel_during_materialization_cannot_reactivate_the_plan(self):
         plan_id = self._insert_plan(plan_id="plan-cancel-race", offsets=(0, 30))

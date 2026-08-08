@@ -91,7 +91,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('id="personaDashboardPlatformPickerTrigger"', self.dashboard_script)
         self.assertIn("account-pool-platforms account-pool-platform-tabs persona-dashboard-platform-track", self.dashboard_script)
         self.assertIn("data-persona-dashboard-platform-option", self.dashboard_script)
-        self.assertIn("data-persona-dashboard-platform-step", self.dashboard_script)
+        self.assertNotIn("data-persona-dashboard-platform-step", self.dashboard_script)
         self.assertIn("pdPlatformIcon(platform)", self.dashboard_script)
         self.assertIn("platforms.map((platform) =>", self.dashboard_script)
         self.assertNotIn("pdBindThreads", self.dashboard_script)
@@ -102,16 +102,24 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("persona-dashboard-top-controls", self.styles)
         self.assertIn("persona-dashboard-platform-switcher", self.styles)
         self.assertIn("persona-dashboard-platform-track", self.styles)
-        self.assertIn("persona-dashboard-platform-nav", self.styles)
+        self.assertNotIn("persona-dashboard-platform-nav", self.styles)
+        self.assertIn("scroll-snap-type: x proximity;", self.styles)
+        self.assertIn("touch-action: pan-x pan-y;", self.styles)
+        self.assertIn("width: max-content;", self.styles)
         self.assertIn('[data-persona-dashboard-platform-option="threads"]', self.styles)
         self.assertIn('[data-persona-dashboard-platform-option="instagram"]', self.styles)
         self.assertNotIn(".persona-dashboard-view .persona-dashboard-platform-menu", self.styles)
 
-    def test_platform_tabs_keep_the_full_persona_archive_visible(self):
+    def test_platform_tabs_filter_personas_by_the_selected_platform(self):
         self.assertNotIn("function pdMatches()", self.dashboard_script)
-        self.assertIn("const visible = data.personas || [];", self.dashboard_script)
+        self.assertIn("function pdPersonaSupportsPlatform", self.dashboard_script)
+        self.assertIn(".filter((persona) => pdPersonaSupportsPlatform(persona))", self.dashboard_script)
 
-    def test_platform_tabs_filter_only_platform_metrics_not_global_archive_counts(self):
+    def test_platform_tabs_keep_threads_before_instagram(self):
+        self.assertIn('const preferred = ["threads", "instagram"];', self.dashboard_script)
+        self.assertIn('return ["", ...preferred.filter', self.dashboard_script)
+
+    def test_platform_tabs_filter_platform_counts_and_metrics_together(self):
         summary_start = self.dashboard_script.index("function pdRenderSummary(visiblePersonas)")
         summary_end = self.dashboard_script.index("\nfunction pdRenderDashboard", summary_start)
         summary = self.dashboard_script[summary_start:summary_end]
@@ -119,13 +127,29 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         charts_end = self.dashboard_script.index("\nfunction pdRenderSummary", charts_start)
         charts = self.dashboard_script[charts_start:charts_end]
 
-        self.assertIn("全局人设归档，不受平台切换影响", summary)
-        self.assertIn("全局归档帖子，不受平台切换影响", summary)
-        self.assertIn("全局发布归档，不受平台切换影响", summary)
+        self.assertIn("pdPlatformCount(counts.platform_posts, selectedPlatform)", self.dashboard_script)
+        self.assertIn("pdPlatformCount(counts.platform_published, selectedPlatform)", self.dashboard_script)
+        self.assertIn("当前平台归档帖子", summary)
+        self.assertIn("当前平台发布归档", summary)
         self.assertIn("const selectedPlatform = pdPlatformFilter();", charts)
         self.assertIn("data.charts.platform_trend[selectedPlatform]", charts)
         self.assertIn("const platforms = (persona.hot_platforms || []).filter", charts)
         self.assertIn('pdRenderPersonaHeatCarousel("personaHotRankChart"', self.dashboard_script)
+
+    def test_dashboard_uses_followers_for_the_first_kpi(self):
+        self.assertIn("function pdPersonaFollowers", self.dashboard_script)
+        self.assertIn("summary.follower_count += pdPersonaFollowers(persona, selectedPlatform);", self.dashboard_script)
+        self.assertIn("value: summary.follower_count", self.dashboard_script)
+
+    def test_dashboard_heading_is_the_current_platform_context(self):
+        self.assertIn('id="personaDashboardContext"', self.markup)
+        self.assertNotIn('id="personaDashboardMeta"', self.markup)
+        self.assertNotIn("总览首页", self.markup)
+        self.assertIn("function pdRenderDashboardContext()", self.dashboard_script)
+        self.assertIn("pdPlatformIcon(platform)", self.dashboard_script)
+        self.assertIn("pdPlatformLabel(platform)", self.dashboard_script)
+        self.assertIn(".persona-dashboard-context-logo,", self.styles)
+        self.assertIn("svg.platform-brand-icon", self.styles)
 
     def test_dashboard_summary_stays_compact_on_mobile(self):
         summary_start = self.dashboard_script.index("function pdRenderSummary(visiblePersonas)")
@@ -212,9 +236,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         list_start = self.styles.index(list_selector)
         list_rule = self.styles[list_start:self.styles.index("}", list_start) + 1]
 
-        self.assertIn("gap: 4px;", list_rule)
-        self.assertIn("min-height: 24px;", row_rule)
-        self.assertIn("padding: 0 2px;", row_rule)
+        self.assertIn("gap: 0;", list_rule)
+        self.assertIn("min-height: 18px;", row_rule)
+        self.assertIn("padding: 0 1px;", row_rule)
         self.assertNotIn("min-height: 34px;", row_rule)
         self.assertIn("background: transparent;", self.styles[
             self.styles.index(".persona-dashboard-view .persona-heat-platform-row.is-highlighted {"):
@@ -228,6 +252,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
         self.assertIn('const rangeOptions = [["day", "日"], ["month", "月"], ["year", "年"]];', chart)
         self.assertIn('if (range === "year") return date.slice(0, 4);', chart)
+        self.assertIn('class="persona-trend-footer"', chart)
+        self.assertIn('grid-template-columns: repeat(3, 30px);', self.styles)
+        self.assertIn('min-height: 22px;', self.styles)
         self.assertIn('if (range === "month") return date.slice(0, 7);', chart)
         self.assertIn("const limits = { day: 30, month: 12, year: 5 };", chart)
         self.assertIn("data-persona-trend-range", chart)
@@ -2234,9 +2261,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('{ value: "requeue", text: "重回草稿", iconHtml: renderRequeueIcon() }', self.console_script)
         self.assertIn("renderSourceLinkIcon()", self.console_script)
         self.assertIn(".publish-history-card-requeue", self.styles)
-        self.assertIn('title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}</button>', self.console_script)
+        self.assertIn('title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>', self.console_script)
         self.assertIn(".publish-history-card .publish-post-card-copy {\n    display: contents;", self.styles)
-        self.assertIn(".publish-history-card-requeue span {\n  display: none;", self.styles)
+        self.assertIn(".publish-history-card-requeue span {\n  display: inline;", self.styles)
         self.assertIn(".publish-history-card-main {\n    align-items: center;\n    padding: 5px 7px;", self.styles)
         self.assertIn(".publish-history-card .publish-post-card-head {\n    align-items: center;\n    flex-wrap: nowrap;", self.styles)
         self.assertIn(

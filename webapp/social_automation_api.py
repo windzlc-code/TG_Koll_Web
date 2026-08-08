@@ -1103,6 +1103,14 @@ def _billing_admin_waived(user: dict[str, Any]) -> bool:
     return bool(int(user.get("_workspace_admin_user_id") or 0) or int(user.get("is_admin") or 0))
 
 
+def _daily_publish_admin_waived(user: dict[str, Any]) -> bool:
+    """Keep a managed customer's daily limit separate from billing support privileges."""
+    return bool(
+        int(user.get("is_admin") or 0)
+        and not int(user.get("_workspace_admin_user_id") or 0)
+    )
+
+
 def _create_social_task_for_user(payload: SocialTaskPayload, user: dict[str, Any]) -> dict[str, Any]:
     waived = _billing_admin_waived(user)
     if waived:
@@ -2022,7 +2030,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_automation_overview(user: dict[str, Any] = Depends(get_current_user)):
         return build_social_automation_overview(
             user_id=_identity_user_id(user),
-            admin_waived=_billing_admin_waived(user),
+            admin_waived=_daily_publish_admin_waived(user),
         )
 
     @app.get("/api/persona_dashboard/automation/browser_sessions")
@@ -2445,7 +2453,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
         return {
             "ok": True,
             "tasks": list_social_tasks(status=status, account_id=account_id, limit=limit, user_id=user_id),
-            "publish_policy": get_daily_publish_policy(user_id, admin_waived=_billing_admin_waived(user)),
+            "publish_policy": get_daily_publish_policy(user_id, admin_waived=_daily_publish_admin_waived(user)),
         }
 
     @app.get("/api/persona_dashboard/automation/publish_policy")
@@ -2460,7 +2468,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
                 _identity_user_id(user),
                 scheduled_at=scheduled_at,
                 requested_count=max(0, min(int(requested_count or 0), 100)),
-                admin_waived=_billing_admin_waived(user),
+                admin_waived=_daily_publish_admin_waived(user),
             ),
         }
 
@@ -6021,7 +6029,7 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
                         )
                         reused["reused"] = True
                         return reused
-        daily_publish_waived = bool(billing_admin_waived or _owner_is_admin(conn, owner_user_id))
+        daily_publish_waived = _owner_is_admin(conn, owner_user_id)
         if task_type == "publish_post" and not daily_publish_waived:
             publish_policy = _daily_publish_policy_in_transaction(
                 conn,

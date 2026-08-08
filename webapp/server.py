@@ -16805,7 +16805,6 @@ def _publish_persona_matrix(
             int(owner_user_id or 0),
             requested_count=len(pending),
             scheduled_at=payload.scheduled_at or 0,
-            admin_waived=bool(billing_admin_waived),
         )
     reservation_ids: list[str] = []
     for item in pending:
@@ -18699,12 +18698,16 @@ def _normalized_dashboard_post_url(value: Any) -> str:
     if host == "threads.net":
         host = "threads.com"
     path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/").lower()
+    if host == "instagram.com":
+        instagram_post = re.search(r"/(?:[a-z0-9._]+/)?(?:p|reel|tv)/([^/?#]+)$", path, re.I)
+        if instagram_post:
+            path = f"/p/{instagram_post.group(1).lower()}"
     return f"{host}{path}" if host and path else ""
 
 
 def _dashboard_post_code(value: Any) -> str:
     normalized = _normalized_dashboard_post_url(value)
-    match = re.search(r"/post/([^/?#]+)$", normalized, re.I)
+    match = re.search(r"/(?:post|p|reel|tv)/([^/?#]+)$", normalized, re.I)
     return match.group(1).lower() if match else ""
 
 
@@ -19454,6 +19457,7 @@ def _build_persona_dashboard_overview(
         platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else {}
         publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
         visible_publish_history = [record for record in publish_history if _is_persona_publish_history_record(record)]
+        platform_published_counts: dict[str, int] = {}
         image_library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
         hot_metrics_raw = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
         deleted_post_keys = deleted_posts.get(archive_id, set())
@@ -19587,9 +19591,9 @@ def _build_persona_dashboard_overview(
         for record in visible_publish_history:
             if not isinstance(record, dict):
                 continue
-            platform = str(record.get("platform") or "unknown").strip() or "unknown"
-            platform_key = platform.lower()
-            platform_counts[platform] = platform_counts.get(platform, 0) + 1
+            platform_key = _normalize_persona_content_platform(record.get("platform") or "unknown")
+            platform_counts[platform_key] = platform_counts.get(platform_key, 0) + 1
+            platform_published_counts[platform_key] = platform_published_counts.get(platform_key, 0) + 1
             day = _date_key(record.get("publishedAt"))
             if day:
                 bucket = daily.setdefault(day, {"published": 0, "likes": 0, "comments": 0, "shares": 0, "post_views": 0})
@@ -19698,7 +19702,12 @@ def _build_persona_dashboard_overview(
                 "published_raw": raw_published_count,
                 "published_hidden": hidden_published_count,
                 "images": image_count,
-                "platform_posts": {str(k): len(v) if isinstance(v, list) else 0 for k, v in platform_posts.items()},
+                "platform_posts": {
+                    _normalize_persona_content_platform(k): len(v) if isinstance(v, list) else 0
+                    for k, v in platform_posts.items()
+                },
+                "platform_published": platform_published_counts,
+                "platform_accounts": sorted(current_accounts.keys()),
             },
             "hot": persona_hot,
             "hot_score_formula": "热度 = 逐帖浏览合计 + 点赞 + 评论 + 分享 + 转发；不包含账号主页浏览。",
@@ -22635,7 +22644,7 @@ def create_app() -> FastAPI:
                 "must_change_password": False,
                 "acting_admin": True,
                 "admin_user_id": _identity_user_id(user),
-                "publish_policy": get_daily_publish_policy(_workspace_user_id(user), admin_waived=True),
+                "publish_policy": get_daily_publish_policy(_workspace_user_id(user)),
                 **_me_auth_metadata(target_user),
             }
         return {

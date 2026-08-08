@@ -156,7 +156,11 @@ function pdDashboardPlatforms(data) {
       if (pdIsWebVisiblePlatform(platform)) platforms.add(String(platform).trim().toLowerCase());
     });
   });
-  return ["", ...Array.from(platforms).filter(pdIsWebVisiblePlatform).sort()];
+  const preferred = ["threads", "instagram"];
+  const extra = Array.from(platforms)
+    .filter((platform) => pdIsWebVisiblePlatform(platform) && !preferred.includes(platform))
+    .sort();
+  return ["", ...preferred.filter((platform) => platforms.has(platform)), ...extra];
 }
 
 function pdRenderDashboardPlatformTabs(data) {
@@ -164,14 +168,10 @@ function pdRenderDashboardPlatformTabs(data) {
   if (!host) return;
   const platforms = pdDashboardPlatforms(data);
   if (personaDashboardPlatform && !platforms.includes(personaDashboardPlatform)) personaDashboardPlatform = "";
-  const selectedIndex = Math.max(0, platforms.indexOf(personaDashboardPlatform));
   host.innerHTML = `
     <div class="persona-dashboard-platform-switcher" data-persona-dashboard-platform-switcher>
-      <button class="persona-dashboard-platform-nav" type="button" data-persona-dashboard-platform-step="-1" aria-label="上一个平台" ${selectedIndex === 0 ? "disabled" : ""}>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
-      </button>
       <div class="persona-dashboard-platform-viewport" data-persona-dashboard-platform-viewport>
-        <div class="account-pool-platforms account-pool-platform-tabs persona-dashboard-platform-track" role="tablist" aria-label="平台筛选" style="--persona-platform-count:${platforms.length}">
+        <div class="account-pool-platforms account-pool-platform-tabs persona-dashboard-platform-track" role="tablist" aria-label="平台筛选">
           ${platforms.map((platform) => {
             const isActive = personaDashboardPlatform === platform;
             return `<button
@@ -184,9 +184,6 @@ function pdRenderDashboardPlatformTabs(data) {
           }).join("")}
         </div>
       </div>
-      <button class="persona-dashboard-platform-nav" type="button" data-persona-dashboard-platform-step="1" aria-label="下一个平台" ${selectedIndex === platforms.length - 1 ? "disabled" : ""}>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
-      </button>
     </div>
   `;
   host.querySelectorAll("[data-persona-dashboard-platform-option]").forEach((node) => {
@@ -195,29 +192,35 @@ function pdRenderDashboardPlatformTabs(data) {
       pdRenderDashboard();
     });
   });
-  host.querySelectorAll("[data-persona-dashboard-platform-step]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const nextIndex = Math.max(0, Math.min(platforms.length - 1, selectedIndex + Number(node.dataset.personaDashboardPlatformStep || 0)));
-      if (nextIndex === selectedIndex) return;
-      personaDashboardPlatform = platforms[nextIndex];
-      pdRenderDashboard();
-    });
-  });
-  const viewport = host.querySelector("[data-persona-dashboard-platform-viewport]");
   const active = host.querySelector("[data-persona-dashboard-platform-option].is-active");
   active?.scrollIntoView({ behavior: "auto", block: "nearest", inline: "center" });
-  let touchStartX = 0;
-  viewport?.addEventListener("touchstart", (event) => {
-    touchStartX = Number(event.touches?.[0]?.clientX || 0);
-  }, { passive: true });
-  viewport?.addEventListener("touchend", (event) => {
-    const distance = Number(event.changedTouches?.[0]?.clientX || 0) - touchStartX;
-    if (Math.abs(distance) < 48) return;
-    const nextIndex = Math.max(0, Math.min(platforms.length - 1, selectedIndex + (distance < 0 ? 1 : -1)));
-    if (nextIndex === selectedIndex) return;
-    personaDashboardPlatform = platforms[nextIndex];
-    pdRenderDashboard();
-  }, { passive: true });
+}
+
+function pdPlatformCount(values, platform) {
+  const selected = String(platform || "").trim().toLowerCase();
+  if (!selected) return 0;
+  return Object.entries(values || {}).reduce((sum, [key, value]) => (
+    String(key || "").trim().toLowerCase() === selected ? sum + Number(value || 0) : sum
+  ), 0);
+}
+
+function pdPersonaSupportsPlatform(persona, platform = pdPlatformFilter()) {
+  const selected = String(platform || "").trim().toLowerCase();
+  if (!selected) return true;
+  const counts = persona && persona.counts || {};
+  const accounts = Array.isArray(counts.platform_accounts) ? counts.platform_accounts : [];
+  return accounts.some((item) => String(item || "").trim().toLowerCase() === selected)
+    || pdPlatformCount(counts.platform_posts, selected) > 0
+    || pdPlatformCount(counts.platform_published, selected) > 0
+    || (persona && persona.hot_platforms || []).some((item) => String(item && item.platform || "").trim().toLowerCase() === selected);
+}
+
+function pdRenderDashboardContext() {
+  const host = pdEl("personaDashboardContext");
+  if (!host) return;
+  const platform = pdPlatformFilter();
+  host.dataset.platform = platform || "all";
+  host.innerHTML = `<span class="persona-dashboard-context-logo" aria-hidden="true">${pdPlatformIcon(platform)}</span><h3>${pdEscape(pdPlatformLabel(platform))}</h3>`;
 }
 
 function pdFilterTrend(rows) {
@@ -252,6 +255,19 @@ function pdPersonaHot(persona, platformOverride = pdPlatformFilter()) {
   }, { likes: 0, comments: 0, shares: 0, reposts: 0, recent_views: 0, post_views: 0, hot_score: 0 });
 }
 
+function pdPersonaFollowers(persona, platformOverride = pdPlatformFilter()) {
+  const platform = String(platformOverride || "").trim().toLowerCase();
+  const accountFollowers = new Map();
+  (persona && persona.hot_platforms || []).forEach((item, index) => {
+    const itemPlatform = String(item && item.platform || "").trim().toLowerCase();
+    if (platform && itemPlatform !== platform) return;
+    const identity = String(item && (item.account_id || item.username) || index).trim().toLowerCase();
+    const key = `${itemPlatform}:${identity}`;
+    accountFollowers.set(key, Math.max(accountFollowers.get(key) || 0, Number(item && item.followers || 0)));
+  });
+  return Array.from(accountFollowers.values()).reduce((sum, value) => sum + value, 0);
+}
+
 function pdPlatformPalette(platform = pdPlatformFilter()) {
   const value = String(platform || "").trim().toLowerCase();
   if (value === "threads") return ["#050505", "#555b62", "#9299a1"];
@@ -260,8 +276,10 @@ function pdPlatformPalette(platform = pdPlatformFilter()) {
 }
 
 function pdVisibleSummary(visiblePersonas) {
+  const selectedPlatform = pdPlatformFilter();
   const summary = {
     persona_count: visiblePersonas.length,
+    follower_count: 0,
     post_count: 0,
     published_count: 0,
     total_interactions: 0,
@@ -272,8 +290,9 @@ function pdVisibleSummary(visiblePersonas) {
   visiblePersonas.forEach((persona) => {
     const counts = persona.counts || {};
     const hot = pdPersonaHot(persona);
-    summary.post_count += Number(counts.posts || 0);
-    summary.published_count += Number(counts.published || 0);
+    summary.follower_count += pdPersonaFollowers(persona, selectedPlatform);
+    summary.post_count += selectedPlatform ? pdPlatformCount(counts.platform_posts, selectedPlatform) : Number(counts.posts || 0);
+    summary.published_count += selectedPlatform ? pdPlatformCount(counts.platform_published, selectedPlatform) : Number(counts.published || 0);
     summary.recent_views += Number(hot.recent_views || 0);
     summary.post_views += Number(hot.post_views || 0);
     summary.hot_score += Number(hot.hot_score || 0);
@@ -352,9 +371,10 @@ function pdRenderPersonaHeatCarousel(hostId, personas, platforms) {
     return;
   }
   personaDashboardPersonaIndex = Math.max(0, Math.min(items.length - 1, personaDashboardPersonaIndex));
+  const selectedPlatform = pdPlatformFilter();
   const platformRows = (platforms || []).filter(Boolean);
   const metricRows = items.flatMap((persona) => [
-    Number(pdPersonaHot(persona, "").hot_score || 0),
+    Number(pdPersonaHot(persona, selectedPlatform).hot_score || 0),
     ...platformRows.map((platform) => Number(pdPersonaHot(persona, platform).hot_score || 0)),
   ]);
   const max = Math.max(1, ...metricRows);
@@ -372,9 +392,10 @@ function pdRenderPersonaHeatCarousel(hostId, personas, platforms) {
     </div>
     <div class="persona-heat-carousel" data-persona-heat-carousel>
       ${items.map((persona, index) => {
-        const total = Number(pdPersonaHot(persona, "").hot_score || 0);
+        const total = Number(pdPersonaHot(persona, selectedPlatform).hot_score || 0);
+        const heatLabel = selectedPlatform ? `${pdPlatformLabel(selectedPlatform)}热度` : "总热度";
         return `<article class="persona-heat-card" data-persona-heat-index="${index}">
-          <header><strong>${pdEscape(persona.name || "未命名人设")}</strong><span>总热度 <b>${pdEscape(pdNumber(total))}</b></span></header>
+          <header><strong>${pdEscape(persona.name || "未命名人设")}</strong><span>${pdEscape(heatLabel)} <b>${pdEscape(pdNumber(total))}</b></span></header>
           <div class="persona-heat-platform-list">
             ${platformRows.map((platform) => {
               const value = Number(pdPersonaHot(persona, platform).hot_score || 0);
@@ -464,7 +485,7 @@ function pdRenderDonutChart(hostId, entries, options = {}) {
       </div>
       <div class="persona-donut-legend">
         ${rows.map((row, index) => `
-          <div><span style="background:${colors[index]}"></span>${options.platformColors ? `${pdPlatformIcon(row.label)}${pdEscape(pdPlatformLabel(row.label))}` : pdEscape(row.label)}<b>${pdEscape(pdNumber(row.value))}</b></div>
+          <div class="${options.platformColors ? "is-platform" : ""}"${options.platformColors ? ` data-platform="${pdEscape(String(row.label || "").trim().toLowerCase())}"` : ""}>${options.platformColors ? `${pdPlatformIcon(row.label)}<em>${pdEscape(pdPlatformLabel(row.label))}</em>` : `<span style="background:${colors[index]}"></span><em>${pdEscape(row.label)}</em>`}<b>${pdEscape(pdNumber(row.value))}</b></div>
         `).join("")}
       </div>
     </div>
@@ -498,10 +519,11 @@ function pdRenderTrendChart(hostId, rows) {
   if (!host) return;
   const items = pdAggregateTrendRows(rows);
   const rangeOptions = [["day", "日"], ["month", "月"], ["year", "年"]];
+  const rangeControls = () => `<div class="persona-trend-range" role="tablist" aria-label="趋势时间范围">
+    ${rangeOptions.map(([value, label]) => `<button type="button" role="tab" class="${personaDashboardTrendRange === value ? "is-active" : ""}" aria-selected="${personaDashboardTrendRange === value ? "true" : "false"}" data-persona-trend-range="${value}">${label}</button>`).join("")}
+  </div>`;
   if (!items.length) {
-    host.innerHTML = `<div class="persona-trend-range" role="tablist" aria-label="趋势时间范围">
-      ${rangeOptions.map(([value, label]) => `<button type="button" role="tab" class="${personaDashboardTrendRange === value ? "is-active" : ""}" data-persona-trend-range="${value}">${label}</button>`).join("")}
-    </div>${pdRenderChartPlaceholder("line", "暂无走势数据")}`;
+    host.innerHTML = `${pdRenderChartPlaceholder("line", "暂无走势数据")}<div class="persona-trend-footer">${rangeControls()}</div>`;
     host.querySelectorAll("[data-persona-trend-range]").forEach((button) => {
       button.addEventListener("click", () => {
         personaDashboardTrendRange = String(button.dataset.personaTrendRange || "day");
@@ -530,9 +552,6 @@ function pdRenderTrendChart(hostId, rows) {
   const labelFor = (date) => personaDashboardTrendRange === "day" ? String(date).slice(5) : String(date);
   const labelStep = Math.max(1, Math.ceil(normalizedItems.length / 6));
   host.innerHTML = `
-    <div class="persona-trend-range" role="tablist" aria-label="趋势时间范围">
-      ${rangeOptions.map(([value, label]) => `<button type="button" role="tab" class="${personaDashboardTrendRange === value ? "is-active" : ""}" aria-selected="${personaDashboardTrendRange === value ? "true" : "false"}" data-persona-trend-range="${value}">${label}</button>`).join("")}
-    </div>
     <svg class="persona-line-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="流量走势图">
       ${[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
         const gridY = y(max * ratio);
@@ -544,7 +563,10 @@ function pdRenderTrendChart(hostId, rows) {
         ${normalizedItems.map((row, index) => `<circle cx="${x(index)}" cy="${y(row[s.key])}" r="3.5" fill="${s.color}" />`).join("")}`).join("")}
       ${normalizedItems.map((row, index) => (index % labelStep === 0 || index === normalizedItems.length - 1) ? `<text x="${x(index)}" y="${height - 10}" text-anchor="middle">${pdEscape(labelFor(row.date))}</text>` : "").join("")}
     </svg>
-    <div class="persona-line-legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${s.label}</span>`).join("")}</div>
+    <div class="persona-trend-footer">
+      <div class="persona-line-legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${s.label}</span>`).join("")}</div>
+      ${rangeControls()}
+    </div>
   `;
   host.querySelectorAll("[data-persona-trend-range]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -561,9 +583,9 @@ function pdRenderSummary(visiblePersonas) {
   if (!host) return;
   const summary = pdVisibleSummary(visiblePersonas);
   const cards = [
-    { label: "人设", value: summary.persona_count, hint: "全局人设归档，不受平台切换影响" },
-    { label: "帖子", value: summary.post_count, hint: "全局归档帖子，不受平台切换影响" },
-    { label: "发布", value: summary.published_count, hint: "全局发布归档，不受平台切换影响" },
+    { label: "粉丝", value: summary.follower_count, hint: "当前平台账号粉丝总数" },
+    { label: "帖子", value: summary.post_count, hint: "当前平台归档帖子" },
+    { label: "发布", value: summary.published_count, hint: "当前平台发布归档" },
     { label: "互动", value: summary.total_interactions, hint: "点赞、评论、转发、分享" },
     { label: "主页浏览", value: summary.recent_views, hint: "账号主页级浏览" },
     { label: "逐帖浏览", value: summary.post_views, hint: "逐帖浏览，不与主页浏览合并" },
@@ -580,11 +602,11 @@ function pdRenderSummary(visiblePersonas) {
 function pdRenderDashboard() {
   const data = personaDashboardData;
   const empty = pdEl("personaDashboardEmpty");
-  const meta = pdEl("personaDashboardMeta");
   const overview = pdEl("personaOverviewPane");
   if (!data || !empty) return;
   pdRenderDashboardPlatformTabs(data);
-  const visible = data.personas || [];
+  pdRenderDashboardContext();
+  const visible = (data.personas || []).filter((persona) => pdPersonaSupportsPlatform(persona));
   const charts = pdBuildFilteredCharts(visible, data);
   pdRenderSummary(visible);
   pdRenderPersonaHeatCarousel("personaHotRankChart", visible, pdDashboardPlatforms(data));
@@ -594,7 +616,6 @@ function pdRenderDashboard() {
   pdRenderDonutChart("personaEngagementChart", charts.engagement_mix);
   pdRenderDonutChart("personaTaskStatusChart", charts.task_status_distribution);
   if (overview) overview.style.display = "grid";
-  if (meta) meta.textContent = `当前显示 ${visible.length} / ${(data.personas || []).length} 个人设`;
   empty.style.display = visible.length ? "none" : "block";
 }
 

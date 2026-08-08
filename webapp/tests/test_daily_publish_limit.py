@@ -135,23 +135,16 @@ class DailyPublishLimitTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             self._create(self._payload())
 
-    def test_admin_and_admin_managed_tasks_are_waived(self):
+    def test_actual_admin_account_remains_waived(self):
         for _ in range(18):
             task = self._create(self._payload("account-admin", "persona-admin"))
             self.assertEqual(task["status"], "queued")
 
-        for _ in range(15):
-            self._create(self._payload())
-        managed = self._create(self._payload(), billing_admin_waived=True)
-        with sqlite3.connect(self.db_path) as conn:
-            waived = conn.execute(
-                "SELECT daily_publish_waived FROM social_automation_tasks WHERE id = ?",
-                (managed["id"],),
-            ).fetchone()[0]
-        self.assertEqual(waived, 1)
         with mock.patch.object(social_automation_api, "_now", return_value=self.now):
-            policy = social_automation_api.get_daily_publish_policy(self.customer_id)
-        self.assertEqual(policy["used"], 15)
+            policy = social_automation_api.get_daily_publish_policy(self.admin_id)
+        self.assertTrue(policy["waived"])
+        self.assertEqual(policy["used"], 0)
+        self.assertFalse(policy["locked"])
 
     def test_scheduled_tasks_reserve_the_target_day_and_roll_over(self):
         tomorrow = self.now + 24 * 60 * 60

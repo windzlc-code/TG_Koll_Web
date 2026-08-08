@@ -1255,8 +1255,8 @@
 
 :root[data-theme="light"] .site-mobile-menu-close {
   color: var(--public-ink-soft);
-  background: var(--public-cool-muted);
-  border-color: var(--public-line);
+  background: transparent;
+  border-color: transparent;
 }
 
 :root[data-theme="light"] :is(
@@ -1268,18 +1268,18 @@
 ) {
   color: var(--public-ink);
   background: var(--public-cool-soft);
-  border-color: #b7cbdc;
+  border-color: transparent;
 }
 
 :root[data-theme="light"] .site-mobile-menu-link-icon {
   color: var(--public-cool-dark);
-  background: var(--public-cool-soft);
-  border-color: #c4d6e4;
+  background: transparent;
+  border-color: transparent;
 }
 
 :root[data-theme="light"] .site-mobile-menu-link[aria-current="page"] .site-mobile-menu-link-icon {
-  color: #fff;
-  background: var(--public-cool);
+  color: var(--public-cool);
+  background: transparent;
 }
 
 :root[data-theme="light"] .site-account-avatar,

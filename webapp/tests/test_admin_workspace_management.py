@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -673,6 +674,66 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         self.assertEqual(int(images["count"]), 3)
         self.assertEqual({str(row["ref_id"]): str(row["status"]) for row in reservations}, {task_id: "waived" for task_id in task_ids})
         self.assertEqual({str(row["ref_id"]) for row in waived_events}, set(task_ids))
+
+    def test_admin_workspace_publish_uses_the_target_customer_daily_limit(self):
+        customer, user_id = self._create_customer("managed_daily_limit_owner")
+        resources = self._seed_workspace(customer, user_id, "managed-daily-limit")
+        headers = self._target_headers(user_id)
+        scheduled_at = int(time.time()) + 3600
+
+        profile = self.admin.get("/api/me", headers=headers)
+        self.assertEqual(profile.status_code, 200, profile.text)
+        self.assertFalse(profile.json()["publish_policy"]["waived"])
+        self.assertEqual(profile.json()["publish_policy"]["limit"], 15)
+
+        policy = self.admin.get(
+            "/api/persona_dashboard/automation/publish_policy",
+            headers=headers,
+            params={"scheduled_at": scheduled_at},
+        )
+        self.assertEqual(policy.status_code, 200, policy.text)
+        self.assertFalse(policy.json()["publish_policy"]["waived"])
+        self.assertEqual(policy.json()["publish_policy"]["limit"], 15)
+        self.assertEqual(policy.json()["publish_policy"]["used"], 0)
+        self.assertEqual(policy.json()["publish_policy"]["remaining"], 15)
+
+        for index in range(15):
+            created = self.admin.post(
+                "/api/persona_dashboard/automation/tasks",
+                headers=headers,
+                json={
+                    "account_id": resources["account_id"],
+                    "platform": "threads",
+                    "task_type": "publish_post",
+                    "scheduled_at": scheduled_at,
+                    "payload": {"content": f"managed daily limit {index}"},
+                },
+            )
+            self.assertEqual(created.status_code, 200, created.text)
+
+        blocked = self.admin.post(
+            "/api/persona_dashboard/automation/tasks",
+            headers=headers,
+            json={
+                "account_id": resources["account_id"],
+                "platform": "threads",
+                "task_type": "publish_post",
+                "scheduled_at": scheduled_at,
+                "payload": {"content": "managed daily limit overflow"},
+            },
+        )
+        self.assertEqual(blocked.status_code, 429, blocked.text)
+
+        exhausted = self.admin.get(
+            "/api/persona_dashboard/automation/publish_policy",
+            headers=headers,
+            params={"scheduled_at": scheduled_at},
+        )
+        self.assertEqual(exhausted.status_code, 200, exhausted.text)
+        self.assertFalse(exhausted.json()["publish_policy"]["waived"])
+        self.assertEqual(exhausted.json()["publish_policy"]["used"], 15)
+        self.assertEqual(exhausted.json()["publish_policy"]["remaining"], 0)
+        self.assertTrue(exhausted.json()["publish_policy"]["locked"])
 
     def test_account_owner_can_reveal_saved_social_login_password(self):
         customer, _user_id = self._create_customer("credential_workspace_owner")

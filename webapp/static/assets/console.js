@@ -13597,11 +13597,12 @@ function publishHistoryMetricEntries(record = {}) {
   const source = record?.hot_metrics || record || {};
   const interactions = [source.likes, source.comments, source.shares, source.reposts]
     .reduce((total, value) => total + Math.max(0, Number(value || 0)), 0);
-  const views = source.views_available === false
+  const viewUnavailable = source.views_available === false
     || source.views === null
     || source.views === undefined
-    || (Number(source.views || 0) === 0 && interactions > 0)
-    ? null
+    || (Number(source.views || 0) === 0 && interactions > 0);
+  const views = viewUnavailable
+    ? (source.matched === true ? "不适用" : null)
     : source.views;
   return [
     ["浏览", views],
@@ -13620,6 +13621,7 @@ function formatPublishHistoryMetricUnit(number, divisor, suffix) {
 
 function publishHistoryMetricText(value) {
   if (value === null || value === undefined || value === "") return "未获取";
+  if (typeof value === "string") return value === "不适用" ? value : "未获取";
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return "未获取";
   const absolute = Math.abs(number);
@@ -13634,7 +13636,7 @@ function renderPublishHistoryMetrics(record = {}, className = "") {
   return `
     <div class="publish-history-metrics ${esc(className)}">
       ${publishHistoryMetricEntries(record).map(([label, value]) => `
-        <span title="${esc(`${label}：${value === null ? "未获取" : Number(value || 0).toLocaleString("zh-CN")}`)}">
+        <span title="${esc(`${label}：${typeof value === "string" ? value : (value === null ? "未获取" : Number(value || 0).toLocaleString("zh-CN"))}`)}">
           <small>${esc(label)}</small>
           <strong>${esc(publishHistoryMetricText(value))}</strong>
         </span>
@@ -13697,7 +13699,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona(), options 
               <span class="publish-history-card-actions" aria-label="任务历史操作">
                 ${publishedUrl ? `<a class="publish-history-card-action" href="${esc(publishedUrl)}" target="_blank" rel="noopener" title="打开已发布推文" aria-label="打开已发布推文">${renderSourceLinkIcon()}</a>` : ""}
                 <button type="button" class="publish-history-card-action" data-publish-history-view="${esc(recordId)}" title="查看任务历史" aria-label="查看任务历史">${renderEyeIcon()}</button>
-                ${record.__dashboard_metric_only ? "" : `<button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}</button>`}
+                ${record.__dashboard_metric_only ? "" : `<button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>`}
               </span>
               ${renderPublishHistoryMetrics(record, "publish-history-card-metrics")}
             </div>
@@ -18385,6 +18387,71 @@ function renderTaskDetailStatusField(status, label = "") {
     </div>`;
 }
 
+function socialPublishBatchTaskMediaItems(task) {
+  task = task || {};
+  if (String(task?.status || "").trim() !== "success") return [];
+  const payload = socialTaskPayload(task);
+  const mediaPaths = Array.isArray(payload.media_paths) ? payload.media_paths.filter(Boolean) : [];
+  const personaId = String(task?.persona_id || payload.persona_id || payload.archive_id || "").trim();
+  const taskId = String(task?.id || "").trim();
+  if (!personaId || !taskId) return [];
+  const historyId = `webauto-pub-${taskId}`;
+  return mediaPaths.map((path, index) => {
+    const previewUrl = `/api/persona_dashboard/personas/${encodeURIComponent(personaId)}/publish_history/${encodeURIComponent(historyId)}/media/${index}`;
+    return {
+      previewUrl,
+      originalUrl: previewUrl,
+      thumbnailUrl: previewUrl,
+      type: guessMediaType(path),
+      label: `发布媒体 ${index + 1}`,
+    };
+  });
+}
+
+function renderSocialPublishBatchResults(batchTasks = [], logs = []) {
+  const rows = (Array.isArray(batchTasks) ? batchTasks : []).slice().sort((left, right) => (
+    Number(left?.publish_sequence_index || socialTaskPayload(left).publish_sequence_index || 1)
+      - Number(right?.publish_sequence_index || socialTaskPayload(right).publish_sequence_index || 1)
+    || timeValue(left?.created_at || 0) - timeValue(right?.created_at || 0)
+  ));
+  if (rows.length <= 1) return "";
+  const details = rows.map((item, offset) => {
+    const payload = socialTaskPayload(item);
+    const sequenceIndex = Math.max(1, Number(item?.publish_sequence_index || payload.publish_sequence_index || offset + 1));
+    const sequenceTotal = Math.max(rows.length, Number(item?.publish_sequence_total || payload.publish_sequence_total || rows.length));
+    const taskLogs = (Array.isArray(logs) ? logs : []).filter((log) => String(log?.task_id || "") === String(item?.id || ""));
+    const screenshots = collectTaskScreenshots(item, taskLogs);
+    const mediaItems = socialPublishBatchTaskMediaItems(item);
+    const content = String(payload.caption || payload.content || payload.text || "").trim();
+    const title = String(payload.archive_post_title || payload.title || `第 ${sequenceIndex} 篇`).trim();
+    const resultHref = adminWorkspacePageUrl(taskResultUrl(item));
+    return { item, sequenceIndex, sequenceTotal, screenshots, mediaItems, content, title, resultHref };
+  });
+  const screenshotCount = details.reduce((total, detail) => total + detail.screenshots.length, 0);
+  return `
+    <section class="task-detail-log-list">
+      <div class="task-detail-section-head">
+        <strong>批次发布明细</strong>
+        <span>${esc(`${details.length} 篇 · ${screenshotCount} 张截图`)}</span>
+      </div>
+      <div class="compact-list">
+        ${details.map((detail) => `
+          <article class="task-detail-result-panel">
+            <div class="task-detail-section-head">
+              <strong>${esc(`第 ${detail.sequenceIndex}/${detail.sequenceTotal} 篇 · ${detail.title}`)}</strong>
+              <span class="task-detail-status is-${esc(statusTone(detail.item.status || ""))}">${esc(statusLabel(detail.item.status || ""))}</span>
+            </div>
+            <span>${esc(formatTime(detail.item.finished_at || detail.item.updated_at || detail.item.created_at || ""))}</span>
+            <p>${esc(detail.content || "该篇没有正文。")}</p>
+            ${detail.resultHref ? `<div class="row-actions"><a href="${esc(detail.resultHref)}" target="_blank" rel="noopener">查看已发布推文</a></div>` : ""}
+            ${detail.mediaItems.length ? `<div><strong>发布媒体</strong>${renderTaskScreenshotGallery(detail.mediaItems)}</div>` : ""}
+            <div><strong>最终截图</strong>${renderTaskScreenshotGallery(detail.screenshots, { emptyText: "该篇暂未保存最终截图。" })}</div>
+          </article>
+        `).join("")}
+      </div>
+    </section>`;
+}
+
 function renderTaskDetailLogs(logs = [], { limit = 200, hideScreenshots = false, batchTasks = [] } = {}) {
   const rows = (Array.isArray(logs) ? logs : []).slice(-limit).reverse();
   const batchTaskMap = new Map((Array.isArray(batchTasks) ? batchTasks : []).map((item) => [
@@ -18436,7 +18503,10 @@ function renderTaskDetailLayout(task = {}, logs = [], {
   const resultUrl = taskResultUrl(task);
   const resultHref = adminWorkspacePageUrl(resultUrl);
   const presentationStatus = kind === "social" ? socialTaskPresentationStatus(task) : String(task.status || "");
-  const screenshots = collectTaskScreenshots(task, logs);
+  const isPublishBatch = kind === "social" && Array.isArray(batchTasks) && batchTasks.length > 1;
+  const screenshots = isPublishBatch ? [] : collectTaskScreenshots(task, logs);
+  const batchResults = isPublishBatch ? renderSocialPublishBatchResults(batchTasks, logs) : "";
+  const displayResultHref = isPublishBatch ? "" : resultHref;
   const previewCountLabel = kind === "regular" ? `${screenshots.length} 张图片` : `${screenshots.length} 张截图`;
   const taskSummaryDetail = String(task?.task_summary?.detail || "").trim();
   const fields = kind === "social"
@@ -18467,7 +18537,8 @@ function renderTaskDetailLayout(task = {}, logs = [], {
       <section class="task-detail-field-grid">
         ${fields}
       </section>
-      ${(downloadUrl || resultHref || screenshots.length) ? `
+      ${batchResults}
+      ${(downloadUrl || displayResultHref || screenshots.length) ? `
         <section class="task-detail-result-panel">
           <div class="task-detail-section-head">
             <strong>结果预览</strong>
@@ -18475,7 +18546,7 @@ function renderTaskDetailLayout(task = {}, logs = [], {
           </div>
           <div class="row-actions">
             ${downloadUrl ? `<a href="${esc(adminWorkspaceUrl(downloadUrl))}">下载结果文件</a>` : ""}
-            ${resultHref ? `<a href="${esc(resultHref)}" target="_blank" rel="noopener">查看任务结果</a>` : ""}
+            ${displayResultHref ? `<a href="${esc(displayResultHref)}" target="_blank" rel="noopener">查看任务结果</a>` : ""}
           </div>
           ${renderTaskScreenshotGallery(screenshots)}
         </section>` : ""}

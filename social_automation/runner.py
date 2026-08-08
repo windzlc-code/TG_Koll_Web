@@ -2623,26 +2623,34 @@ def _run_open_login(
                     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
                 last_status = stable_status
             if platform == "threads" and last_status.get("status") == "account_confirmation_required":
-                continued = _click_text_button(
-                    page,
-                    logger,
-                    ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
-                    "threads_account_confirmation",
-                    abort_if=lambda: _manual_takeover_requested(context_control),
-                )
-                logger.log(
-                    "info" if continued else "warn",
-                    "threads_account_confirmation",
-                    "Threads 关联账号确认流程已处理。" if continued else "Threads 关联账号确认按钮尚不可用，页面保持原状。",
-                    {
-                        "clicked": continued,
-                        "url": _safe_navigation_url(page.url),
-                        "screen_sample": "threads_account_confirmation",
-                    },
-                )
-                if continued:
-                    _sleep_between(1.5, 3.0)
-                    continue
+                if auto_submit and has_credentials:
+                    logger.log(
+                        "info",
+                        "threads_account_confirmation",
+                        "Threads account confirmation detected; trying the saved username/password login path first.",
+                        {"url": _safe_navigation_url(page.url)},
+                    )
+                else:
+                    continued = _click_text_button(
+                        page,
+                        logger,
+                        ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
+                        "threads_account_confirmation",
+                        abort_if=lambda: _manual_takeover_requested(context_control),
+                    )
+                    logger.log(
+                        "info" if continued else "warn",
+                        "threads_account_confirmation",
+                        "Threads 关联账号确认流程已处理。" if continued else "Threads 关联账号确认按钮尚不可用，页面保持原状。",
+                        {
+                            "clicked": continued,
+                            "url": _safe_navigation_url(page.url),
+                            "screen_sample": "threads_account_confirmation",
+                        },
+                    )
+                    if continued:
+                        _sleep_between(1.5, 3.0)
+                        continue
             if _verification_visible(page):
                 totp_result = _try_auto_totp_challenge(
                     page,
@@ -9109,42 +9117,63 @@ def _auto_submit_login_form(
         (".threads.net", ".threads.com")
     )
     if platform == "threads" and on_threads_host:
-        username_entry_clicked = False
-        for username_entry_attempt in range(1, 4):
-            if _manual_takeover_requested(context_control):
-                return False
-            try:
-                page.keyboard.press("Escape")
-            except Exception:
-                pass
-            if not _click_text_button(
-                page,
-                logger,
-                [
-                    "Log in with username instead",
-                    "Log in with username",
-                    "Use username instead",
-                    "代わりにユーザーネームでログイン",
-                    "ユーザーネームでログイン",
-                    "改用用户名登录",
-                    "使用用户名登录",
-                    "改用用戶名稱登入",
-                    "使用用戶名稱登入",
-                ],
-                "threads_login_username_instead",
-                abort_if=takeover_requested,
-            ):
-                continue
-            username_entry_clicked = True
-            _sleep_between(1.2, 2.2)
-            if _visible_first(page, ['input[name="username"]', 'input[autocomplete="username"]', 'input[type="text"]'], 700) and _visible_first(page, ['input[type="password"]', 'input[autocomplete="current-password"]'], 700):
-                logger.log("info", "threads_login_username_instead", "Threads username/password login entry was opened.", {"attempt": username_entry_attempt, "url": _safe_navigation_url(page.url)})
-                continue_clicked = True
-                break
-            logger.log("warn", "threads_login_username_instead", "Threads username login entry click did not expose inputs yet; retrying.", {"attempt": username_entry_attempt, "url": _safe_navigation_url(page.url)})
+        native_username_selectors = ['input[name="username"]', 'input[autocomplete="username"]', 'input[type="text"]']
+        native_password_selectors = ['input[type="password"]', 'input[autocomplete="current-password"]']
+        if _visible_first(page, native_username_selectors, 700) and _visible_first(page, native_password_selectors, 700):
+            continue_clicked = True
+            logger.log(
+                "info",
+                "threads_login_native_form_ready",
+                "Threads username/password inputs are already visible; filling them without opening another login route.",
+                {"url": _safe_navigation_url(page.url)},
+            )
+        else:
+            for username_entry_attempt in range(1, 4):
+                if _manual_takeover_requested(context_control):
+                    return False
+                try:
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                if not _click_text_button(
+                    page,
+                    logger,
+                    [
+                        "Log in with username instead",
+                        "Log in with username",
+                        "Use username instead",
+                        "代わりにユーザーネームでログイン",
+                        "ユーザーネームでログイン",
+                        "改用用户名登录",
+                        "使用用户名登录",
+                        "改用用戶名稱登入",
+                        "使用用戶名稱登入",
+                    ],
+                    "threads_login_username_instead",
+                    abort_if=takeover_requested,
+                ):
+                    continue
+                _sleep_between(1.2, 2.2)
+                if _visible_first(page, native_username_selectors, 700) and _visible_first(page, native_password_selectors, 700):
+                    logger.log("info", "threads_login_username_instead", "Threads username/password login entry was opened.", {"attempt": username_entry_attempt, "url": _safe_navigation_url(page.url)})
+                    continue_clicked = True
+                    break
+                logger.log("warn", "threads_login_username_instead", "Threads username login entry click did not expose inputs yet; retrying.", {"attempt": username_entry_attempt, "url": _safe_navigation_url(page.url)})
         if not continue_clicked:
             if _manual_takeover_requested(context_control):
                 return False
+            if not payload.get("_threads_official_handoff_attempted"):
+                official_handoff = _click_text_button(
+                    page,
+                    logger,
+                    ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
+                    "threads_login_official_handoff",
+                    abort_if=takeover_requested,
+                )
+                if official_handoff:
+                    payload["_threads_official_handoff_attempted"] = True
+                    _sleep_between(1.5, 3.0)
+                    return True
             logger.log(
                 "warn",
                 "threads_login_native_form_missing",

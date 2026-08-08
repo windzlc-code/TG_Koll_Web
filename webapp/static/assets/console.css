@@ -1294,10 +1294,7 @@ button.primary,
 }
 
 .persona-dashboard-view .persona-dashboard-platform-switcher {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 38px;
-  align-items: center;
-  gap: 8px;
+  display: block;
   width: 100%;
 }
 
@@ -1305,8 +1302,10 @@ button.primary,
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
-  touch-action: pan-y;
+  scroll-snap-type: x proximity;
+  touch-action: pan-x pan-y;
   overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .persona-dashboard-view .persona-dashboard-platform-viewport::-webkit-scrollbar {
@@ -1314,43 +1313,43 @@ button.primary,
 }
 
 .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs {
-  display: grid;
-  grid-template-columns: repeat(var(--persona-platform-count, 3), minmax(0, 1fr));
-  width: 100%;
+  display: flex;
+  width: max-content;
+  min-width: 100%;
   margin: 0;
   padding: 0;
-  gap: 8px;
-  overflow: hidden;
+  gap: 6px;
+  overflow: visible;
 }
 
 .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
-  min-height: 46px;
-  padding: 7px 12px;
+  flex: 0 0 auto;
+  gap: 5px;
+  width: auto;
+  min-width: 96px;
+  min-height: 36px;
+  padding: 5px 9px;
   scroll-snap-align: center;
 }
 
 .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button > svg {
   flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
+  width: 17px;
+  height: 17px;
 }
 
 .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button > strong {
   min-width: 0;
   overflow: hidden;
-  font-size: 14px;
-  line-height: 20px;
+  font-size: 13px;
+  line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.persona-dashboard-view .persona-dashboard-platform-nav,
 .persona-dashboard-view .persona-heat-carousel-actions button {
   display: inline-grid;
   width: 38px;
@@ -1364,7 +1363,7 @@ button.primary,
   color: var(--ink);
 }
 
-.persona-dashboard-view :is(.persona-dashboard-platform-nav, .persona-heat-carousel-actions button) svg {
+.persona-dashboard-view .persona-heat-carousel-actions button svg {
   width: 18px;
   height: 18px;
   fill: none;
@@ -1374,7 +1373,7 @@ button.primary,
   stroke-linejoin: round;
 }
 
-.persona-dashboard-view :is(.persona-dashboard-platform-nav, .persona-heat-carousel-actions button):disabled {
+.persona-dashboard-view .persona-heat-carousel-actions button:disabled {
   opacity: 0.35;
   cursor: default;
 }
@@ -1387,6 +1386,78 @@ button.primary,
 .persona-dashboard-view .persona-donut-legend div,
 .persona-dashboard-view .persona-line-legend span {
   color: var(--muted);
+}
+
+.persona-dashboard-view .persona-dashboard-context {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.persona-dashboard-view .persona-dashboard-context-logo {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
+.persona-dashboard-view .persona-dashboard-context-logo svg {
+  width: 20px;
+  height: 20px;
+}
+
+.persona-dashboard-view :is(
+  .persona-dashboard-context-logo,
+  .persona-heat-platform-label,
+  .persona-donut-legend .is-platform
+) svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.persona-dashboard-view :is(
+  .persona-dashboard-context-logo,
+  .persona-heat-platform-label,
+  .persona-donut-legend .is-platform
+) svg.platform-brand-icon {
+  fill: currentColor;
+  stroke: none;
+}
+
+.persona-dashboard-view .persona-dashboard-context[data-platform="threads"],
+.persona-dashboard-view .persona-heat-platform-row[data-platform="threads"] .persona-heat-platform-label,
+.persona-dashboard-view .persona-donut-legend .is-platform[data-platform="threads"] {
+  color: #050505;
+}
+
+.persona-dashboard-view .persona-dashboard-context[data-platform="instagram"],
+.persona-dashboard-view .persona-heat-platform-row[data-platform="instagram"] .persona-heat-platform-label,
+.persona-dashboard-view .persona-donut-legend .is-platform[data-platform="instagram"] {
+  color: #c13584;
+}
+
+.persona-dashboard-view .persona-dashboard-context h3 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 24px;
+}
+
+.persona-dashboard-view .persona-donut-legend em {
+  min-width: 0;
+  overflow: hidden;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.persona-dashboard-view .persona-donut-legend .is-platform {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 6px;
 }
 
 .persona-dashboard-view .persona-donut > div {
@@ -1449,9 +1520,9 @@ button.primary,
 .persona-dashboard-view .persona-heat-card {
   display: grid;
   flex: 0 0 100%;
-  gap: 8px;
+  gap: 5px;
   min-width: 0;
-  padding: 10px;
+  padding: 8px;
   box-sizing: border-box;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1463,7 +1534,7 @@ button.primary,
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
 }
 
 .persona-dashboard-view .persona-heat-card > header > strong {
@@ -1488,16 +1559,16 @@ button.primary,
 
 .persona-dashboard-view .persona-heat-platform-list {
   display: grid;
-  gap: 4px;
+  gap: 0;
 }
 
 .persona-dashboard-view .persona-heat-platform-row {
   display: grid;
   grid-template-columns: minmax(96px, 0.8fr) minmax(120px, 2fr) 62px;
   align-items: center;
-  gap: 8px;
-  min-height: 24px;
-  padding: 0 2px;
+  gap: 6px;
+  min-height: 18px;
+  padding: 0 1px;
   border: 1px solid transparent;
   border-radius: 5px;
 }
@@ -1523,7 +1594,7 @@ button.primary,
 
 .persona-dashboard-view .persona-heat-platform-track {
   display: block;
-  height: 10px;
+  height: 8px;
   overflow: hidden;
   border-radius: 999px;
   background: color-mix(in srgb, var(--line) 70%, var(--panel-solid));
@@ -1550,24 +1621,46 @@ button.primary,
 }
 
 .persona-dashboard-view .persona-trend-range {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 4px;
-  width: min(100%, 330px);
-  margin: 0 0 10px auto;
-  padding: 3px;
+  display: inline-grid;
+  grid-template-columns: repeat(3, 30px);
+  flex: 0 0 auto;
+  gap: 2px;
+  width: auto;
+  margin: 0;
+  padding: 2px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-solid);
 }
 
 .persona-dashboard-view .persona-trend-range button {
-  min-height: 34px;
-  padding: 5px 12px;
+  min-width: 30px;
+  min-height: 22px;
+  padding: 1px 5px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 5px;
   background: transparent;
   color: var(--muted);
+  font-size: 11px;
+}
+
+.persona-dashboard-view .persona-trend-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.persona-dashboard-view .persona-trend-panel .persona-chart-head h3 {
+  font-size: 19px;
+}
+
+.persona-dashboard-view .persona-trend-panel .persona-chart-head .small,
+.persona-dashboard-view .persona-line-legend span,
+.persona-dashboard-view .persona-line-chart text {
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .persona-dashboard-view .persona-trend-range button.is-active {
@@ -1803,14 +1896,7 @@ button.primary,
   }
 
   .persona-dashboard-view .persona-dashboard-platform-switcher {
-    grid-template-columns: 34px minmax(0, 1fr) 34px;
-    gap: 5px;
-  }
-
-  .persona-dashboard-view .persona-dashboard-platform-nav {
-    width: 34px;
-    height: 34px;
-    min-height: 34px;
+    display: block;
   }
 
   .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs {
@@ -1818,14 +1904,15 @@ button.primary,
   }
 
   .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button {
-    min-height: 42px;
+    min-width: 90px;
+    min-height: 34px;
     gap: 4px;
-    padding-inline: 4px;
+    padding: 4px 8px;
   }
 
   .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button > svg {
-    width: 17px;
-    height: 17px;
+    width: 16px;
+    height: 16px;
   }
 
   .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs button > strong {
@@ -1885,14 +1972,14 @@ button.primary,
   }
 
   .persona-dashboard-view .persona-heat-card {
-    gap: 6px;
-    padding: 8px;
+    gap: 4px;
+    padding: 7px;
   }
 
   .persona-dashboard-view .persona-heat-platform-row {
-    grid-template-columns: minmax(84px, 0.9fr) minmax(64px, 1.35fr) 50px;
-    gap: 5px;
-    min-height: 22px;
+    grid-template-columns: minmax(82px, 0.9fr) minmax(64px, 1.35fr) 48px;
+    gap: 4px;
+    min-height: 18px;
     padding-inline: 1px;
   }
 
@@ -1902,8 +1989,22 @@ button.primary,
   }
 
   .persona-dashboard-view .persona-trend-range {
-    width: 100%;
-    margin-bottom: 6px;
+    width: auto;
+    margin: 0;
+  }
+
+  .persona-dashboard-view .persona-trend-footer {
+    gap: 5px;
+  }
+
+  .persona-dashboard-view .persona-trend-panel .persona-chart-head h3 {
+    font-size: 18px;
+  }
+
+  .persona-dashboard-view .persona-trend-panel .persona-chart-head .small,
+  .persona-dashboard-view .persona-line-legend span,
+  .persona-dashboard-view .persona-line-chart text {
+    font-size: 12px;
   }
 
   .persona-dashboard-view .persona-line-chart {
@@ -8298,10 +8399,10 @@ body.persona-touch-dragging .persona-list-card:active {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  min-height: 32px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -8324,8 +8425,8 @@ body.persona-touch-dragging .persona-list-card:active {
 .publish-history-source-link .ui-source-link-icon,
 .publish-history-requeue-button .ui-requeue-icon,
 .console-modal-actions .ui-requeue-icon {
-  width: 17px;
-  height: 17px;
+  width: 15px;
+  height: 15px;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
@@ -8334,13 +8435,17 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .publish-history-card-requeue {
-  width: 32px;
-  min-width: 32px;
-  padding: 0;
+  width: auto;
+  min-width: 0;
+  gap: 4px;
+  padding: 0 7px;
 }
 
 .publish-history-card-requeue span {
-  display: none;
+  display: inline;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1;
 }
 
 .publish-history-card-platform {
@@ -23743,20 +23848,20 @@ body.console-page {
   }
 
   .publish-history-card-action {
-    width: var(--mobile-touch-target);
-    min-width: var(--mobile-touch-target);
-    height: var(--mobile-touch-target);
-    min-height: var(--mobile-touch-target);
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
   }
 
   .publish-history-card-requeue {
-    width: var(--mobile-touch-target);
-    min-width: var(--mobile-touch-target);
-    padding: 0;
+    width: auto;
+    min-width: 0;
+    padding: 0 7px;
   }
 
   .publish-history-card-requeue span {
-    display: none;
+    display: inline;
   }
 
   .publish-history-card .publish-post-card-index {

@@ -1155,7 +1155,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         detect.assert_called()
         self.assertNotIn(runner.INSTAGRAM_LOGIN, [call.args[1] for call in goto.call_args_list])
 
-    def test_threads_auto_login_uses_official_account_confirmation_handoff(self):
+    def test_threads_auto_login_prefers_saved_credentials_before_official_handoff(self):
         page = mock.Mock()
         page.url = "https://www.threads.com/login"
         logger = _Logger()
@@ -1173,7 +1173,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 ],
             ),
             mock.patch.object(runner, "_click_text_button", return_value=True) as click,
-            mock.patch.object(runner, "_auto_submit_login_form", return_value=False) as submit,
+            mock.patch.object(runner, "_auto_submit_login_form", return_value=True) as submit,
             mock.patch.object(runner, "_confirm_platform_ready", return_value={"status": "ready"}),
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner, "_screenshot", return_value="login-complete.png"),
@@ -1194,9 +1194,8 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(result["status"], "ready")
-        self.assertEqual(click.call_count, 1)
-        self.assertEqual(click.call_args.args[3], "threads_account_confirmation")
-        submit.assert_not_called()
+        click.assert_not_called()
+        submit.assert_called_once()
 
     def test_manual_login_does_not_auto_heal_or_navigate_the_user_page(self):
         page = mock.Mock()
@@ -2666,6 +2665,71 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             )
 
         self.assertFalse(submitted)
+        goto.assert_not_called()
+
+    def test_threads_auto_login_fills_visible_native_form_before_clicking_handoff(self):
+        page = _Page(url="https://www.threads.com/login")
+        username_input = _Locator()
+        password_input = _Locator()
+        with (
+            mock.patch.object(
+                runner,
+                "_visible_first",
+                side_effect=[
+                    username_input,
+                    password_input,
+                    username_input,
+                    password_input,
+                ],
+            ),
+            mock.patch.object(runner, "_clear_and_type") as type_text,
+            mock.patch.object(runner, "_click_text_button", return_value=True) as click,
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner.time, "sleep"),
+            mock.patch.object(runner, "_screenshot", return_value="native-login.png"),
+        ):
+            submitted = runner._auto_submit_login_form(
+                page,
+                "threads",
+                {"login_username": "saved-user", "login_password": "saved-password"},
+                _Logger(),
+                {"id": "threads-visible-native-form"},
+                Path("."),
+            )
+
+        self.assertTrue(submitted)
+        self.assertEqual(
+            [call.args[2] for call in type_text.call_args_list],
+            ["saved-user", "saved-password"],
+        )
+        self.assertEqual([call.args[3] for call in click.call_args_list], ["auto_login_submit"])
+
+    def test_threads_auto_login_uses_official_handoff_only_after_native_form_is_missing(self):
+        page = _Page(url="https://www.threads.com/login")
+        payload = {"login_username": "saved-user", "login_password": "saved-password"}
+        with (
+            mock.patch.object(runner, "_visible_first", return_value=None),
+            mock.patch.object(
+                runner,
+                "_click_text_button",
+                side_effect=[False, False, False, True],
+            ) as click,
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_screenshot", return_value="handoff.png"),
+            mock.patch.object(runner, "_goto") as goto,
+        ):
+            submitted = runner._auto_submit_login_form(
+                page,
+                "threads",
+                payload,
+                _Logger(),
+                {"id": "threads-official-handoff-fallback"},
+                Path("."),
+            )
+
+        self.assertTrue(submitted)
+        self.assertEqual(click.call_args_list[-1].args[3], "threads_login_official_handoff")
+        self.assertTrue(payload["_threads_official_handoff_attempted"])
         goto.assert_not_called()
 
     def test_manual_threads_login_returns_from_instagram_for_final_confirmation(self):

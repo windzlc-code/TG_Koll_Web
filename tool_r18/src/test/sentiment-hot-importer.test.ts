@@ -2230,6 +2230,16 @@ Translate
     });
   });
 
+  it("treats an omitted Threads view label as zero after the post action row loads", () => {
+    const detail = parseThreadsBrowserPostDetailMetrics({
+      text: "Thread\ndemo\nNo replies yet",
+      actionTexts: ["Like", "Comment", "Repost", "Share"],
+    });
+
+    expect(detail?.engagement.viewCount).toBe(0);
+    expect(detail?.metrics.view_count).toBe(0);
+  });
+
   it("overwrites existing named metrics when refreshing a stored Threads source", async () => {
     const fetchMock = vi.fn(async () => new Response(`
 Title: Demo on Threads

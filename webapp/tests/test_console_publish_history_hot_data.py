@@ -132,11 +132,13 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         mobile_action_start = CONSOLE_CSS.index(".publish-history-card-action {", mobile_history_start)
         mobile_action_end = CONSOLE_CSS.index("}", mobile_action_start)
         mobile_action_style = CONSOLE_CSS[mobile_action_start:mobile_action_end]
-        self.assertEqual(mobile_action_style.count("var(--mobile-touch-target)"), 4)
+        self.assertEqual(mobile_action_style.count("30px"), 4)
         mobile_requeue_start = CONSOLE_CSS.index(".publish-history-card-requeue {", mobile_action_end)
         mobile_requeue_end = CONSOLE_CSS.index("}", mobile_requeue_start)
         mobile_requeue_style = CONSOLE_CSS[mobile_requeue_start:mobile_requeue_end]
-        self.assertEqual(mobile_requeue_style.count("var(--mobile-touch-target)"), 2)
+        self.assertIn("width: auto;", mobile_requeue_style)
+        self.assertIn("min-width: 0;", mobile_requeue_style)
+        self.assertIn("padding: 0 7px;", mobile_requeue_style)
         self.assertIn(
             ':is(.account-pool-card, .publish-history-card)[data-account-platform="threads"] .account-pool-card-platform',
             CONSOLE_CSS,
@@ -229,10 +231,13 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         metric_text = function_source("publishHistoryMetricText", "renderPublishHistoryMetrics")
 
         self.assertIn('source.views_available === false', entries)
+        self.assertIn('source.matched === true ? "不适用" : null', entries)
         self.assertIn('["浏览",', entries)
         self.assertNotIn('source.views ?? source.hot_score', entries)
         self.assertIn('value === null', metric_text)
         self.assertIn('"未获取"', metric_text)
+        self.assertIn('typeof value === "string"', metric_text)
+        self.assertIn('"不适用"', metric_text)
         dashboard_record = function_source("personaHistoryDashboardMetricRecord", "personaHistoryIdentityKeys")
         self.assertIn("complete: row.view_available === true", dashboard_record)
 

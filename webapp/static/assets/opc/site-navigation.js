@@ -52,6 +52,9 @@
       homeLabel: "Vecto 首页",
       navigationLabel: "站内导航",
       closeNavigation: "关闭导航",
+      mobileExplore: "浏览",
+      mobileServices: "服务",
+      mobileWorkspace: "工作区",
       menu: "导航",
       skip: "跳至主要内容",
       solution: "解决方案",
@@ -150,6 +153,9 @@
       homeLabel: "Vecto 首頁",
       navigationLabel: "站內導覽",
       closeNavigation: "關閉導覽",
+      mobileExplore: "瀏覽",
+      mobileServices: "服務",
+      mobileWorkspace: "工作區",
       menu: "導覽",
       skip: "跳至主要內容",
       solution: "解決方案",
@@ -643,14 +649,17 @@
 
   function mobileNavigationLinks(page, current) {
     return [
-      { key: "solution", href: navHref(page, "#solution") },
-      { key: "pricing", href: "/subscription.html" },
-      { key: "console", href: "/console.html" },
-      { key: "aboutVecto", href: "/about-vecto.html" },
-    ].map(({ key, href }) => {
+      { group: "mobileExplore", key: "solution", href: navHref(page, "#solution") },
+      { group: "mobileExplore", key: "aboutVecto", href: "/about-vecto.html" },
+      { group: "mobileServices", key: "pricing", href: "/subscription.html" },
+      { group: "mobileWorkspace", key: "console", href: "/console.html" },
+    ].map(({ group, key, href }, index, items) => {
       const active = current === key ? ' aria-current="page"' : "";
       const consoleEntry = key === "console" ? " data-console-entry" : "";
-      return `<a class="site-mobile-menu-link" data-site-nav-key="${key}" href="${href}"${active}${consoleEntry}><span class="site-mobile-menu-link-icon">${mobileMenuItemIcon(key)}</span><span data-site-copy="${key}"></span><svg class="site-mobile-menu-link-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg></a>`;
+      const groupLabel = index === 0 || items[index - 1].group !== group
+        ? `<span class="site-mobile-menu-group-label" data-site-copy="${group}"></span>`
+        : "";
+      return `${groupLabel}<a class="site-mobile-menu-link" data-site-nav-key="${key}" href="${href}"${active}${consoleEntry}><span class="site-mobile-menu-link-icon">${mobileMenuItemIcon(key)}</span><span data-site-copy="${key}"></span></a>`;
     }).join("");
   }
 
@@ -659,7 +668,7 @@
       <button class="site-menu-toggle" type="button" aria-controls="siteMobileMenuDrawer" aria-expanded="false" data-site-menu-toggle>${menuIcon()}<span data-site-copy="menu"></span></button>
       <div class="site-mobile-menu-backdrop" data-site-mobile-menu-backdrop hidden>
         <aside id="siteMobileMenuDrawer" class="site-mobile-menu-panel" aria-label="站内导航" data-site-navigation>
-          <div class="site-mobile-menu-panel-head"><span data-site-copy="navigationLabel"></span><button class="site-mobile-menu-close" type="button" aria-label="关闭导航" data-site-mobile-menu-close>${closeIcon()}</button></div>
+          <div class="site-mobile-menu-panel-head"><a class="site-mobile-menu-brand" href="/" data-site-home-label><span class="site-mobile-menu-brand-mark" aria-hidden="true"><img src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt=""></span><span><strong>Vecto</strong><small data-site-copy="brandLocal"></small></span></a><button class="site-mobile-menu-close" type="button" aria-label="关闭导航" data-site-mobile-menu-close>${closeIcon()}</button></div>
           <nav class="site-mobile-menu-links">${mobileNavigationLinks(page, current)}</nav>
         </aside>
       </div>
