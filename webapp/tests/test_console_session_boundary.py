@@ -3451,7 +3451,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('String(task?.status || "") === "success"', layout_renderer)
 
     def test_publish_batch_log_renders_every_member_result_in_one_modal(self):
-        media_items = self._function_source("socialPublishBatchTaskMediaItems")
         renderer = self._function_source("renderSocialPublishBatchResults")
         harness = textwrap.dedent(f"""
             const assert = require("assert");
@@ -3463,7 +3462,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             function socialTaskPayload(task) {{ return task?.payload || {{}}; }}
             function taskResultUrl(task) {{ return task?.result?.published_url || ""; }}
             function adminWorkspacePageUrl(value) {{ return String(value || ""); }}
-            function guessMediaType() {{ return "image"; }}
             function collectTaskScreenshots(task) {{
               const path = task?.result?.screenshot_path || "";
               return path ? [{{ previewUrl: path, label: "最终截图" }}] : [];
@@ -3471,7 +3469,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             function renderTaskScreenshotGallery(items) {{
               return `<div data-gallery>${{items.map((item) => item.previewUrl).join("|")}}</div>`;
             }}
-            {media_items}
             {renderer}
 
             const html = renderSocialPublishBatchResults([
@@ -3502,10 +3499,35 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.match(html, /https:\\/\\/threads.net\\/post\\/two/);
             assert.match(html, /\\/shots\\/one.png/);
             assert.match(html, /\\/shots\\/two.png/);
-            assert.match(html, /publish_history\\/webauto-pub-publish-1\\/media\\/0/);
-            assert.match(html, /publish_history\\/webauto-pub-publish-2\\/media\\/0/);
+            assert.doesNotMatch(html, /发布媒体/);
         """)
         self._run_node(harness)
+
+    def test_persona_task_queue_filters_existing_rows_by_task_type(self):
+        harness = textwrap.dedent(f"""
+            const assert = require("assert");
+            const state = {{ taskQueuePersonaTypeFilter: "all" }};
+            {self._function_source("taskQueuePersonaType")}
+            {self._function_source("filterTaskQueuePersonaRows")}
+
+            const rows = [
+              {{ id: "publish-1", task_type: "publish_post" }},
+              {{ id: "login-1", task_type: "check_login" }},
+            ];
+            assert.deepStrictEqual(filterTaskQueuePersonaRows(rows).map((item) => item.id), ["publish-1", "login-1"]);
+            state.taskQueuePersonaTypeFilter = "publish_post";
+            assert.deepStrictEqual(filterTaskQueuePersonaRows(rows).map((item) => item.id), ["publish-1"]);
+            state.taskQueuePersonaTypeFilter = "missing";
+            assert.deepStrictEqual(filterTaskQueuePersonaRows(rows).map((item) => item.id), ["publish-1", "login-1"]);
+            assert.strictEqual(state.taskQueuePersonaTypeFilter, "all");
+        """)
+        self._run_node(harness)
+
+        queue_view = self._function_source("renderTaskQueueView")
+        bind_events = self._function_source("bindEvents")
+        self.assertIn("renderTaskQueuePersonaTypeFilter(personaSourceRows)", queue_view)
+        self.assertIn("data-task-queue-type-filter", self.source)
+        self.assertIn('state.taskQueuePersonaTypeFilter = String(taskQueueTypeFilter.value || "all")', bind_events)
 
     def test_console_settings_use_user_browser_policy_endpoints_and_keep_pagination_local(self):
         render = self._function_source("renderConsoleSettingsPage")

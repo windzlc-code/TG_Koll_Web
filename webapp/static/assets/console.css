@@ -14566,6 +14566,7 @@ body.persona-media-sorting {
   flex: 0 0 auto;
   align-items: center;
   justify-content: flex-end;
+  gap: 8px;
 }
 
 .task-panel-section-actions {

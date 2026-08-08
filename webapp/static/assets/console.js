@@ -580,6 +580,7 @@ const state = {
   taskQueuePanel: "persona",
   taskQueuePersonaPage: 1,
   taskQueueRegularPage: 1,
+  taskQueuePersonaTypeFilter: "all",
   taskQueuePersonaPageSize: storedTaskQueuePersonaPageSize(),
   taskQueueRegularPageSize: storedTaskQueueRegularPageSize(),
   browserPreferences: null,
@@ -2266,6 +2267,7 @@ async function openToastTarget(rawTarget) {
   }
   if (moduleId === "queue" || view === "tasks") {
     if (target.taskPanel) state.taskQueuePanel = target.taskPanel === "regular" ? "regular" : "persona";
+    if (target.taskId && state.taskQueuePanel === "persona") state.taskQueuePersonaTypeFilter = "all";
     await loadTasks().catch(() => {});
     if (target.taskId) {
       const page = taskQueuePageForTarget(state.taskQueuePanel, target.taskId);
@@ -6102,10 +6104,26 @@ function taskQueueSet(kind) {
   return kind === "regular" ? state.taskQueueSelectedRegularIds : state.taskQueueSelectedPersonaIds;
 }
 
+function taskQueuePersonaType(task) {
+  return String(task?.task_type || "").trim();
+}
+
+function filterTaskQueuePersonaRows(rows = []) {
+  const source = Array.isArray(rows) ? rows : [];
+  let selectedType = String(state.taskQueuePersonaTypeFilter || "all");
+  if (selectedType !== "all" && !source.some((task) => taskQueuePersonaType(task) === selectedType)) {
+    selectedType = "all";
+    state.taskQueuePersonaTypeFilter = "all";
+  }
+  return selectedType === "all"
+    ? source
+    : source.filter((task) => taskQueuePersonaType(task) === selectedType);
+}
+
 function taskQueueRowsForKind(kind) {
   if (kind === "regular") return Array.isArray(state.tasks) ? state.tasks : [];
   const persona = selectedPersona();
-  return persona ? personaAutomationTasksFor(persona.id) : [];
+  return filterTaskQueuePersonaRows(persona ? personaAutomationTasksFor(persona.id) : []);
 }
 
 function syncTaskQueueSelection(kind) {
@@ -10847,6 +10865,12 @@ function renderPersonaHistoryContentFilterIcon() {
   </svg>`;
 }
 
+function renderTaskQueueFilterIcon() {
+  return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M4 5h16l-6.25 7.1v5.15L10.25 19v-6.9L4 5Z"></path>
+  </svg>`;
+}
+
 function renderPersonaHistorySortFilterIcon() {
   return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <path d="M7 5v14m0-14-3 3m3-3 3 3M17 19V5m0 14-3-3m3 3 3-3"></path>
@@ -11109,14 +11133,29 @@ function renderTaskQueuePersonaSelector() {
     <div class="persona-mobile-drawer-backdrop" data-persona-mobile-list-backdrop data-persona-mobile-list-close hidden></div>`;
 }
 
+function renderTaskQueuePersonaTypeFilter(rows = []) {
+  const types = Array.from(new Set((Array.isArray(rows) ? rows : []).map(taskQueuePersonaType).filter(Boolean)));
+  const selectedType = String(state.taskQueuePersonaTypeFilter || "all");
+  return `
+    <label class="persona-history-filter-trigger ${selectedType !== "all" ? "is-active" : ""}" title="筛选日志类型">
+      <span class="sr-only">筛选日志类型</span>
+      <span class="persona-history-filter-icon">${renderTaskQueueFilterIcon()}</span>
+      <select data-task-queue-type-filter aria-label="筛选日志类型">
+        <option value="all" ${selectedType === "all" ? "selected" : ""}>全部类型</option>
+        ${types.map((type) => `<option value="${esc(type)}" ${selectedType === type ? "selected" : ""}>${esc(statusLabel(type))}</option>`).join("")}
+      </select>
+    </label>`;
+}
+
 function renderTaskQueueView() {
   const persona = selectedPersona();
   const personaPageSize = Math.min(Math.max(Number(state.taskQueuePersonaPageSize || 12), 1), 100);
   const regularPageSize = Math.min(Math.max(Number(state.taskQueueRegularPageSize || 20), 1), 100);
-  const personaRows = persona ? personaAutomationTasksFor(persona.id) : [];
+  const personaSourceRows = persona ? personaAutomationTasksFor(persona.id) : [];
+  const personaRows = filterTaskQueuePersonaRows(personaSourceRows);
   const regularRows = Array.isArray(state.tasks) ? state.tasks : [];
   const personaPageInfo = isMobileTweetStreamMode()
-    ? mobileTweetStreamInfo(personaRows, `task-queue:persona:${String(persona?.id || "none")}`, personaPageSize)
+    ? mobileTweetStreamInfo(personaRows, `task-queue:persona:${String(persona?.id || "none")}:${String(state.taskQueuePersonaTypeFilter || "all")}`, personaPageSize)
     : paginateTaskQueueRows(personaRows, state.taskQueuePersonaPage, personaPageSize);
   if (!personaPageInfo.mobile) state.taskQueuePersonaPage = personaPageInfo.page;
   const personaTasks = personaPageInfo.items;
@@ -11165,6 +11204,7 @@ function renderTaskQueueView() {
       title: "当前人设自动化队列",
       description: persona ? `这里统一查看「${persona.name || persona.id}」的浏览器自动化任务，不再单独放在人设页签里。` : "先在右侧点选一个人设，这里会同步显示对应自动化队列。",
       extraActions: `
+        ${persona ? renderTaskQueuePersonaTypeFilter(personaSourceRows) : ""}
         <button type="button" class="persona-mobile-list-toggle task-queue-persona-select-button" data-persona-mobile-list-toggle="taskQueuePersonaSidebar" aria-controls="taskQueuePersonaSidebar" aria-expanded="false" title="选择人设" aria-label="选择人设">
           <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
@@ -18387,27 +18427,6 @@ function renderTaskDetailStatusField(status, label = "") {
     </div>`;
 }
 
-function socialPublishBatchTaskMediaItems(task) {
-  task = task || {};
-  if (String(task?.status || "").trim() !== "success") return [];
-  const payload = socialTaskPayload(task);
-  const mediaPaths = Array.isArray(payload.media_paths) ? payload.media_paths.filter(Boolean) : [];
-  const personaId = String(task?.persona_id || payload.persona_id || payload.archive_id || "").trim();
-  const taskId = String(task?.id || "").trim();
-  if (!personaId || !taskId) return [];
-  const historyId = `webauto-pub-${taskId}`;
-  return mediaPaths.map((path, index) => {
-    const previewUrl = `/api/persona_dashboard/personas/${encodeURIComponent(personaId)}/publish_history/${encodeURIComponent(historyId)}/media/${index}`;
-    return {
-      previewUrl,
-      originalUrl: previewUrl,
-      thumbnailUrl: previewUrl,
-      type: guessMediaType(path),
-      label: `发布媒体 ${index + 1}`,
-    };
-  });
-}
-
 function renderSocialPublishBatchResults(batchTasks = [], logs = []) {
   const rows = (Array.isArray(batchTasks) ? batchTasks : []).slice().sort((left, right) => (
     Number(left?.publish_sequence_index || socialTaskPayload(left).publish_sequence_index || 1)
@@ -18421,11 +18440,10 @@ function renderSocialPublishBatchResults(batchTasks = [], logs = []) {
     const sequenceTotal = Math.max(rows.length, Number(item?.publish_sequence_total || payload.publish_sequence_total || rows.length));
     const taskLogs = (Array.isArray(logs) ? logs : []).filter((log) => String(log?.task_id || "") === String(item?.id || ""));
     const screenshots = collectTaskScreenshots(item, taskLogs);
-    const mediaItems = socialPublishBatchTaskMediaItems(item);
     const content = String(payload.caption || payload.content || payload.text || "").trim();
     const title = String(payload.archive_post_title || payload.title || `第 ${sequenceIndex} 篇`).trim();
     const resultHref = adminWorkspacePageUrl(taskResultUrl(item));
-    return { item, sequenceIndex, sequenceTotal, screenshots, mediaItems, content, title, resultHref };
+    return { item, sequenceIndex, sequenceTotal, screenshots, content, title, resultHref };
   });
   const screenshotCount = details.reduce((total, detail) => total + detail.screenshots.length, 0);
   return `
@@ -18444,7 +18462,6 @@ function renderSocialPublishBatchResults(batchTasks = [], logs = []) {
             <span>${esc(formatTime(detail.item.finished_at || detail.item.updated_at || detail.item.created_at || ""))}</span>
             <p>${esc(detail.content || "该篇没有正文。")}</p>
             ${detail.resultHref ? `<div class="row-actions"><a href="${esc(detail.resultHref)}" target="_blank" rel="noopener">查看已发布推文</a></div>` : ""}
-            ${detail.mediaItems.length ? `<div><strong>发布媒体</strong>${renderTaskScreenshotGallery(detail.mediaItems)}</div>` : ""}
             <div><strong>最终截图</strong>${renderTaskScreenshotGallery(detail.screenshots, { emptyText: "该篇暂未保存最终截图。" })}</div>
           </article>
         `).join("")}
@@ -32138,6 +32155,14 @@ function bindEvents() {
     }
   });
   $("moduleBody").addEventListener("change", async (event) => {
+    const taskQueueTypeFilter = event.target?.closest?.("[data-task-queue-type-filter]");
+    if (taskQueueTypeFilter) {
+      state.taskQueuePersonaTypeFilter = String(taskQueueTypeFilter.value || "all");
+      state.taskQueuePersonaPage = 1;
+      state.taskQueueSelectedPersonaIds.clear();
+      renderTaskQueueSurface();
+      return;
+    }
     const historyFilter = event.target?.closest?.("[data-persona-history-filter]");
     if (historyFilter) {
       const key = String(historyFilter.dataset.personaHistoryFilter || "");
@@ -32361,7 +32386,7 @@ function bindEvents() {
       const [kind, action] = String(taskQueuePageButton.dataset.taskQueuePage || "").split(":");
       if (kind === "persona") {
         const pageSize = Math.min(Math.max(Number(state.taskQueuePersonaPageSize || 12), 1), 100);
-        const totalPages = Math.max(1, Math.ceil(personaAutomationTasksFor(selectedPersona()?.id).length / pageSize));
+        const totalPages = Math.max(1, Math.ceil(taskQueueRowsForKind("persona").length / pageSize));
         if (action === "prev") state.taskQueuePersonaPage = Math.max(1, Number(state.taskQueuePersonaPage || 1) - 1);
         if (action === "next") state.taskQueuePersonaPage = Math.min(totalPages, Number(state.taskQueuePersonaPage || 1) + 1);
       }
@@ -32381,6 +32406,7 @@ function bindEvents() {
       );
       setSelectedPersonaId(taskPersonaSelect.dataset.taskPersonaSelect || "");
       setSelectedPersonaPostId("");
+      state.taskQueuePersonaTypeFilter = "all";
       state.taskQueuePersonaPage = 1;
       renderTaskQueueSurface();
       setPersonaMobileSidebarOpen(reopenTaskQueuePersonaSidebar, "taskQueuePersonaSidebar");
