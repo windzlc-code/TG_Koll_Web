@@ -1441,6 +1441,12 @@ button.primary,
   color: #c13584;
 }
 
+:root[data-theme="dark"] .persona-dashboard-view .persona-dashboard-context[data-platform="threads"],
+:root[data-theme="dark"] .persona-dashboard-view .persona-heat-platform-row[data-platform="threads"] .persona-heat-platform-label,
+:root[data-theme="dark"] .persona-dashboard-view .persona-donut-legend .is-platform[data-platform="threads"] {
+  color: #fff;
+}
+
 .persona-dashboard-view .persona-dashboard-context h3 {
   margin: 0;
   font-size: 18px;
