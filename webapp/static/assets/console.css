@@ -1314,11 +1314,25 @@ button.primary,
   display: block;
   width: 100%;
   min-width: 0;
+  padding: 8px 10px;
   overflow: hidden;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--panel-solid);
+  box-shadow: none;
 }
 
-.persona-dashboard-view .persona-dashboard-context-viewport {
+.persona-dashboard-view .persona-dashboard-platform-switcher {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 8px;
   width: 100%;
+}
+
+.persona-dashboard-view .persona-dashboard-platform-viewport {
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
@@ -1328,78 +1342,65 @@ button.primary,
   -webkit-overflow-scrolling: touch;
 }
 
-.persona-dashboard-view .persona-dashboard-context-viewport::-webkit-scrollbar {
+.persona-dashboard-view .persona-dashboard-platform-viewport::-webkit-scrollbar {
   display: none;
 }
 
-.persona-dashboard-view .persona-dashboard-context-track {
+.console-page .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs {
+  position: static;
   display: flex;
+  gap: 0;
   width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
 }
 
-.persona-dashboard-view .persona-dashboard-context-tab {
-  display: flex;
+.console-page .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs > button {
+  flex: 0 0 100%;
   width: 100%;
   min-width: 100%;
-  min-height: 48px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 8px 12px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--ink);
-  box-shadow: none;
-  scroll-snap-align: center;
+  min-height: 46px;
+  scroll-snap-align: start;
   scroll-snap-stop: always;
-  cursor: grab;
 }
 
-.persona-dashboard-view .persona-dashboard-context-tab:active {
-  cursor: grabbing;
-}
-
-.persona-dashboard-view .persona-dashboard-context-tab:focus,
-.persona-dashboard-view .persona-dashboard-context-tab:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-
-.persona-dashboard-view .persona-dashboard-context-logo {
+.persona-dashboard-view .persona-dashboard-platform-nav,
+.persona-dashboard-view .persona-heat-carousel-actions button {
   display: inline-grid;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
   place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  color: var(--ink);
 }
 
-.persona-dashboard-view .persona-dashboard-context-logo svg {
-  width: 24px;
-  height: 24px;
-}
-
-.persona-dashboard-view .persona-dashboard-context-tab[data-platform="instagram"] .persona-dashboard-context-logo svg {
-  color: #c13584;
-  stroke: #c13584;
-  transform: scale(1.12);
-  transform-origin: center;
+.persona-dashboard-view .persona-dashboard-platform-nav {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .persona-dashboard-view :is(
-  .persona-dashboard-context-logo,
+  .persona-dashboard-platform-nav,
+  .persona-heat-carousel-actions button,
   .persona-heat-platform-label,
   .persona-donut-legend .is-platform
 ) svg {
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.9;
+  stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 .persona-dashboard-view :is(
-  .persona-dashboard-context-logo,
   .persona-heat-platform-label,
   .persona-donut-legend .is-platform
 ) svg.platform-brand-icon {
@@ -1407,31 +1408,24 @@ button.primary,
   stroke: none;
 }
 
-.persona-dashboard-view .persona-dashboard-context-tab[data-platform="threads"],
-.persona-dashboard-view .persona-dashboard-context-tab[data-platform="threads"] .persona-dashboard-context-logo,
 .persona-dashboard-view .persona-heat-platform-row[data-platform="threads"] .persona-heat-platform-label,
 .persona-dashboard-view .persona-donut-legend .is-platform[data-platform="threads"] {
   color: #050505;
 }
 
-.persona-dashboard-view .persona-dashboard-context-tab[data-platform="instagram"],
-.persona-dashboard-view .persona-dashboard-context-tab[data-platform="instagram"] .persona-dashboard-context-logo,
 .persona-dashboard-view .persona-heat-platform-row[data-platform="instagram"] .persona-heat-platform-label,
 .persona-dashboard-view .persona-donut-legend .is-platform[data-platform="instagram"] {
   color: #c13584;
 }
 
-:root[data-theme="dark"] .persona-dashboard-view .persona-dashboard-context-tab[data-platform="threads"],
-:root[data-theme="dark"] .persona-dashboard-view .persona-dashboard-context-tab[data-platform="threads"] .persona-dashboard-context-logo,
 :root[data-theme="dark"] .persona-dashboard-view .persona-heat-platform-row[data-platform="threads"] .persona-heat-platform-label,
 :root[data-theme="dark"] .persona-dashboard-view .persona-donut-legend .is-platform[data-platform="threads"] {
   color: #fff;
 }
 
-.persona-dashboard-view .persona-dashboard-context-tab strong {
-  margin: 0;
-  font-size: 20px;
-  line-height: 24px;
+.persona-dashboard-view :is(.persona-dashboard-platform-nav, .persona-heat-carousel-actions button):disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .persona-dashboard-view .persona-donut-legend em {
@@ -1493,7 +1487,6 @@ button.primary,
   gap: 10px;
   width: 100%;
   overflow-x: auto;
-  scroll-behavior: smooth;
   scroll-snap-type: x mandatory;
   scrollbar-width: none;
   touch-action: pan-x pan-y;
@@ -1869,6 +1862,27 @@ button.primary,
 }
 
 @media (max-width: 760px) {
+  .persona-dashboard-view .persona-dashboard-context {
+    padding: 6px;
+  }
+
+  .persona-dashboard-view .persona-dashboard-platform-switcher {
+    grid-template-columns: 34px minmax(0, 1fr) 34px;
+    gap: 5px;
+  }
+
+  .persona-dashboard-view .persona-dashboard-platform-nav {
+    width: 34px;
+    height: 34px;
+    min-height: 34px;
+  }
+
+  .console-page .persona-dashboard-view .persona-dashboard-platform-track.account-pool-platform-tabs > button {
+    flex-basis: 100%;
+    min-width: 100%;
+    min-height: 42px;
+  }
+
   .persona-dashboard-view .persona-dashboard-hero {
     align-items: stretch;
   }

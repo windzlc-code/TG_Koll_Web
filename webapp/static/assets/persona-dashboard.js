@@ -46,6 +46,8 @@ let personaDashboardData = pdInitialDashboardData && Array.isArray(pdInitialDash
 let personaDashboardRefreshTask = "";
 let personaDashboardPlatform = "";
 let personaDashboardPersonaIndex = 0;
+let personaDashboardPersonaKey = "";
+let personaDashboardHeatRenderRevision = 0;
 let personaDashboardTrendRange = "day";
 let personaDashboardAutoPollTimer = 0;
 let personaDashboardLastLoadedAt = personaDashboardData ? Date.now() : 0;
@@ -182,6 +184,10 @@ function pdPersonaSupportsPlatform(persona, platform = pdPlatformFilter()) {
     || (persona && persona.hot_platforms || []).some((item) => String(item && item.platform || "").trim().toLowerCase() === selected);
 }
 
+function pdPersonaStableKey(persona, fallbackIndex = 0) {
+  return String(persona && (persona.id || persona.persona_id || persona.name) || fallbackIndex);
+}
+
 function pdRenderDashboardContext(data) {
   const host = pdEl("personaDashboardContext");
   if (!host) return;
@@ -189,51 +195,81 @@ function pdRenderDashboardContext(data) {
   if (personaDashboardPlatform && !platforms.includes(personaDashboardPlatform)) personaDashboardPlatform = "";
   const activeIndex = Math.max(0, platforms.indexOf(pdPlatformFilter()));
   host.innerHTML = `
-    <div class="persona-dashboard-context-viewport" data-persona-dashboard-context-viewport>
-      <div class="persona-dashboard-context-track" role="tablist" aria-label="平台筛选">
-        ${platforms.map((platform) => {
-          const isActive = personaDashboardPlatform === platform;
-          return `<button
-            class="persona-dashboard-context-tab ${isActive ? "is-active" : ""}"
-            type="button"
-            role="tab"
-            aria-selected="${isActive ? "true" : "false"}"
-            tabindex="${isActive ? "0" : "-1"}"
-            data-platform="${pdEscape(platform || "all")}"
-            data-persona-dashboard-platform-option="${pdEscape(platform)}"
-          ><span class="persona-dashboard-context-logo" aria-hidden="true">${pdPlatformIcon(platform)}</span><strong>${pdEscape(pdPlatformLabel(platform))}</strong></button>`;
-        }).join("")}
+    <div class="persona-dashboard-platform-switcher" data-persona-dashboard-platform-switcher>
+      <button class="persona-dashboard-platform-nav" type="button" data-persona-dashboard-platform-step="-1" aria-label="上一个平台" ${activeIndex === 0 ? "disabled" : ""}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+      </button>
+      <div class="persona-dashboard-platform-viewport" data-persona-dashboard-platform-viewport>
+        <div class="account-pool-platforms account-pool-platform-tabs persona-dashboard-platform-track" role="tablist" aria-label="平台筛选">
+          ${platforms.map((platform) => {
+            const isActive = personaDashboardPlatform === platform;
+            return `<button
+              class="${isActive ? "is-active" : ""}"
+              type="button"
+              role="tab"
+              aria-selected="${isActive ? "true" : "false"}"
+              tabindex="${isActive ? "0" : "-1"}"
+              data-persona-dashboard-platform-option="${pdEscape(platform)}"
+            >${pdPlatformIcon(platform)}<strong>${pdEscape(pdPlatformLabel(platform))}</strong></button>`;
+          }).join("")}
+        </div>
       </div>
+      <button class="persona-dashboard-platform-nav" type="button" data-persona-dashboard-platform-step="1" aria-label="下一个平台" ${activeIndex === platforms.length - 1 ? "disabled" : ""}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
+      </button>
     </div>
   `;
 
-  const viewport = host.querySelector("[data-persona-dashboard-context-viewport]");
   const selectPlatform = (platform) => {
     const nextPlatform = String(platform || "");
     if (nextPlatform === personaDashboardPlatform) return;
     personaDashboardPlatform = nextPlatform;
     pdRenderDashboard();
   };
+  const viewport = host.querySelector("[data-persona-dashboard-platform-viewport]");
+  if (!viewport) return;
+
+  const scrollToIndex = (index, behavior = "smooth") => {
+    const nextIndex = Math.max(0, Math.min(platforms.length - 1, index));
+    viewport.scrollTo({ left: nextIndex * viewport.clientWidth, behavior });
+  };
+  host.querySelectorAll("[data-persona-dashboard-platform-step]").forEach((node) => {
+    node.addEventListener("click", () => {
+      scrollToIndex(activeIndex + Number(node.dataset.personaDashboardPlatformStep || 0));
+    });
+  });
   host.querySelectorAll("[data-persona-dashboard-platform-option]").forEach((node) => {
     node.addEventListener("click", () => selectPlatform(node.getAttribute("data-persona-dashboard-platform-option")));
   });
-  if (!viewport) return;
 
   let scrollTimer = 0;
+  let platformTouchActive = false;
   const settlePlatform = () => {
-    if (!viewport.clientWidth) return;
+    if (!viewport.isConnected || viewport.dataset.ready !== "true" || platformTouchActive || !viewport.clientWidth) return;
     const nextIndex = Math.max(0, Math.min(platforms.length - 1, Math.round(viewport.scrollLeft / viewport.clientWidth)));
     selectPlatform(platforms[nextIndex]);
   };
-  viewport.addEventListener("scroll", () => {
-    if (viewport.dataset.ready !== "true") return;
+  const schedulePlatformSettle = () => {
     window.clearTimeout(scrollTimer);
-    scrollTimer = window.setTimeout(settlePlatform, 90);
+    scrollTimer = window.setTimeout(settlePlatform, 160);
+  };
+  viewport.addEventListener("touchstart", () => {
+    platformTouchActive = true;
+    window.clearTimeout(scrollTimer);
   }, { passive: true });
-  window.requestAnimationFrame(() => {
-    viewport.scrollLeft = activeIndex * viewport.clientWidth;
-    viewport.dataset.ready = "true";
+  ["touchend", "touchcancel"].forEach((eventName) => {
+    viewport.addEventListener(eventName, () => {
+      platformTouchActive = false;
+      schedulePlatformSettle();
+    }, { passive: true });
   });
+  viewport.addEventListener("scroll", () => {
+    if (viewport.dataset.ready !== "true" || platformTouchActive) return;
+    schedulePlatformSettle();
+  }, { passive: true });
+  viewport.addEventListener("scrollend", settlePlatform, { passive: true });
+  scrollToIndex(activeIndex, "auto");
+  viewport.dataset.ready = "true";
 }
 
 function pdFilterTrend(rows) {
@@ -378,12 +414,19 @@ function pdRenderChartPlaceholder(kind = "bars", message = "暂无可展示数�
 function pdRenderPersonaHeatCarousel(hostId, personas, platforms) {
   const host = pdEl(hostId);
   if (!host) return;
+  const renderRevision = ++personaDashboardHeatRenderRevision;
   const items = Array.isArray(personas) ? personas : [];
   if (!items.length) {
     host.innerHTML = pdRenderChartPlaceholder("bars", "暂无热度数据");
     return;
   }
-  personaDashboardPersonaIndex = Math.max(0, Math.min(items.length - 1, personaDashboardPersonaIndex));
+  const stableIndex = personaDashboardPersonaKey
+    ? items.findIndex((persona, index) => pdPersonaStableKey(persona, index) === personaDashboardPersonaKey)
+    : -1;
+  personaDashboardPersonaIndex = stableIndex >= 0
+    ? stableIndex
+    : 0;
+  personaDashboardPersonaKey = pdPersonaStableKey(items[personaDashboardPersonaIndex], personaDashboardPersonaIndex);
   const selectedPlatform = pdPlatformFilter();
   const platformRows = (platforms || []).filter(Boolean);
   const metricRows = items.flatMap((persona) => [
@@ -435,7 +478,9 @@ function pdRenderPersonaHeatCarousel(hostId, personas, platforms) {
   let programmaticScrollTimer = 0;
   const updateCurrentIndex = (index) => {
     const next = Math.max(0, Math.min(items.length - 1, index));
+    if (renderRevision !== personaDashboardHeatRenderRevision) return next;
     personaDashboardPersonaIndex = next;
+    personaDashboardPersonaKey = pdPersonaStableKey(items[next], next);
     const current = host.querySelector("[data-persona-heat-current]");
     if (current) current.textContent = String(next + 1);
     host.querySelectorAll("[data-persona-heat-step]").forEach((button) => {

@@ -118,6 +118,7 @@ from .social_automation_api import (
     get_social_task,
     mark_admin_billing_waived_payload,
     mark_trusted_batch_task,
+    publish_batch_limit,
     require_daily_publish_capacity,
     register_social_automation_routes,
     release_external_browser_lease,
@@ -12237,7 +12238,7 @@ class PersonaDashboardResolveGeneratedCandidatesPayload(BaseModel):
     title: str | None = None
 
 
-PERSONA_PUBLISH_SEQUENCE_LIMIT = 5
+PERSONA_PUBLISH_SEQUENCE_LIMIT = 2
 
 
 class PersonaDashboardDraftPublishPayload(BaseModel):
@@ -16640,6 +16641,16 @@ def _publish_persona_archive_post(
         raise HTTPException(status_code=400, detail="推文草稿内容为空，不能发布。")
     account = _persona_publish_account_for_archive(clean_archive_id, payload.account_id, payload.platform, owner_user_id)
     platform = str(account.get("platform") or "instagram").strip().lower() or "instagram"
+    platform_batch_limit = publish_batch_limit(platform)
+    if (
+        publish_sequence_total > platform_batch_limit
+        or publish_sequence_index > platform_batch_limit
+        or len(publish_sequence_targets) > platform_batch_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{platform.title()} 单个账号每批最多发布 {platform_batch_limit} 篇。",
+        )
     if platform == "instagram" and not media_paths:
         raise HTTPException(status_code=400, detail="Instagram 发布至少需要一份媒体素材。")
     active_task = _active_publish_task_for_post(
@@ -16679,6 +16690,9 @@ def _publish_persona_archive_post(
             "publish_sequence_total": publish_sequence_total,
             "publish_sequence_targets": publish_sequence_targets,
         })
+    scheduled_at = int(payload.scheduled_at or 0)
+    if publish_sequence_total > 1 and publish_sequence_index > 1 and not billing_admin_waived:
+        scheduled_at = (scheduled_at if scheduled_at > 0 else _now_ts()) + (publish_sequence_index - 1) * 30 * 60
     task = _create_social_task_with_billing(
         SocialTaskPayload(
             persona_id=clean_archive_id,
@@ -16686,7 +16700,7 @@ def _publish_persona_archive_post(
             platform=platform,
             task_type="publish_post",
             priority=max(1, min(int(payload.priority or 50), 100)),
-            scheduled_at=payload.scheduled_at or 0,
+            scheduled_at=scheduled_at,
             payload=task_payload,
             max_retries=max(0, min(int(payload.max_retries), 5)),
         ),
@@ -16760,12 +16774,13 @@ def _publish_persona_matrix(
     if not persona_ids:
         raise HTTPException(status_code=400, detail="请至少选择一个人设。")
     requested_per_count = int(payload.per_persona_count or 1)
-    if requested_per_count > PERSONA_PUBLISH_SEQUENCE_LIMIT:
+    platform_batch_limit = publish_batch_limit(platform)
+    if requested_per_count > platform_batch_limit:
         raise HTTPException(
             status_code=400,
-            detail=f"每个人设单次连续发布最多选择 {PERSONA_PUBLISH_SEQUENCE_LIMIT} 篇。",
+            detail=f"{platform.title()} 单个账号每批最多发布 {platform_batch_limit} 篇。",
         )
-    per_count = max(1, min(requested_per_count, PERSONA_PUBLISH_SEQUENCE_LIMIT))
+    per_count = max(1, min(requested_per_count, platform_batch_limit))
     _, _, archives = _persona_archive_source_for_write()
     archive_map = {str(item.get("id") or "").strip(): item for item in archives if isinstance(item, dict)}
     created: list[dict[str, Any]] = []
@@ -16868,6 +16883,25 @@ def _publish_persona_matrix(
     pending_by_account: dict[str, list[dict[str, Any]]] = {}
     for item in pending:
         pending_by_account.setdefault(str(item.get("account_id") or ""), []).append(item)
+    over_limit_accounts = [
+        account_id
+        for account_id, account_items in pending_by_account.items()
+        if len(account_items) > platform_batch_limit
+    ]
+    if over_limit_accounts:
+        return {
+            "ok": False,
+            "batch_id": batch_id,
+            "created": [],
+            "skipped": skipped,
+            "errors": [
+                {
+                    "account_id": account_id,
+                    "reason": f"{platform.title()} 单个账号每批最多发布 {platform_batch_limit} 篇。",
+                }
+                for account_id in over_limit_accounts
+            ],
+        }
     for account_id, account_items in pending_by_account.items():
         targets = [f"发布第{index + 1}篇" for index, _item in enumerate(account_items)]
         for index, item in enumerate(account_items):
@@ -16880,6 +16914,9 @@ def _publish_persona_matrix(
                 "publish_sequence_total": len(account_items),
                 "publish_sequence_targets": targets,
             })
+            if index > 0 and not billing_admin_waived:
+                base_schedule = int(payload.scheduled_at or 0)
+                task_payload.scheduled_at = (base_schedule if base_schedule > 0 else _now_ts()) + index * 30 * 60
 
     if pending:
         require_daily_publish_capacity(

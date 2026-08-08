@@ -636,6 +636,7 @@
             <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="billingPending">待审批</span><strong data-site-billing-pending>—</strong></span></div>
             <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="publishToday">今日发布</span><strong data-site-publish-used>—</strong></span></div>
             <div class="site-account-billing-card"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 2v4M16 2v4M4 9h16M12 13v3l2 1"/></svg></span><span class="site-account-billing-copy"><span data-site-copy="publishRemaining">今日剩余发布额度</span><strong data-site-publish-remaining>—</strong></span></div>
+            <div class="site-account-billing-card site-account-publish-cooldown"><span class="site-account-billing-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2M7 3.5 5 5.5M17 3.5l2 2"/></svg></span><span class="site-account-billing-copy"><span>发布间隔</span><strong data-site-publish-cooldown>30 分钟起</strong><small data-site-publish-cooldown-note>按执行账号计算</small></span></div>
           </div>
           <div class="site-account-action-row">
             <button type="button" data-site-open-billing data-site-copy="billingView"></button>
@@ -1718,6 +1719,8 @@
       const pendingNode = host.querySelector("[data-site-billing-pending]");
       const publishUsedNode = host.querySelector("[data-site-publish-used]");
       const publishRemainingNode = host.querySelector("[data-site-publish-remaining]");
+      const publishCooldownNode = host.querySelector("[data-site-publish-cooldown]");
+      const publishCooldownNoteNode = host.querySelector("[data-site-publish-cooldown-note]");
       if (accountBillingState.loading && !accountBillingState.loaded) {
         if (statusNode) statusNode.textContent = labels.billingLoading;
         [pointsNode, subscriptionNode, imagesNode, pendingNode].forEach((node) => {
@@ -1740,6 +1743,12 @@
       if (publishRemainingNode) publishRemainingNode.textContent = publishWaived
         ? labels.billingUnlimited
         : `${accountNumber(publishRemaining)} ${labels.billingPostUnit}`;
+      if (publishCooldownNode) publishCooldownNode.textContent = publishWaived
+        ? "管理员不受限制"
+        : "30 分钟起";
+      if (publishCooldownNoteNode) publishCooldownNoteNode.textContent = publishWaived
+        ? "发布间隔仅限制普通账号"
+        : "同账号连续发布会延长至 1 小时";
     });
   }
 

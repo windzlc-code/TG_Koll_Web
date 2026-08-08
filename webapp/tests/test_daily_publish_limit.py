@@ -80,15 +80,15 @@ class DailyPublishLimitTests(unittest.TestCase):
             os.environ["COMMERCIAL_BILLING_ENABLED"] = self._old_billing_enabled
         self._tmpdir.cleanup()
 
-    def _insert_account(self, conn, account_id, user_id, persona_id):
+    def _insert_account(self, conn, account_id, user_id, persona_id, platform="threads"):
         conn.execute(
             """
             INSERT INTO social_accounts(
               id, user_id, persona_id, platform, username, display_name, profile_dir,
               status, created_at, updated_at
-            ) VALUES (?, ?, ?, 'threads', ?, ?, ?, 'ready', 1, 1)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', 1, 1)
             """,
-            (account_id, user_id, persona_id, account_id, account_id, f"profiles/{account_id}"),
+            (account_id, user_id, persona_id, platform, account_id, account_id, f"profiles/{account_id}"),
         )
 
     def _payload(self, account_id="account-customer-1", persona_id="persona-customer", *, scheduled_at=0):
@@ -250,6 +250,120 @@ class DailyPublishLimitTests(unittest.TestCase):
         self.assertTrue(policy["waived"])
         self.assertEqual(policy["used"], 0)
         self.assertFalse(policy["locked"])
+
+    def test_publish_cooldown_escalates_only_after_a_confirmed_thirty_minute_gap(self):
+        first = self._create(self._payload())
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET status = 'running', started_at = ? WHERE id = ?",
+                (self.now, first["id"]),
+            )
+        with mock.patch.object(social_automation_api, "_now", return_value=self.now):
+            social_automation_api._finish_task(
+                first["id"],
+                "success",
+                {"published_url": "https://www.threads.net/@customer/post/first"},
+                "",
+            )
+
+        with (
+            mock.patch.object(social_automation_api, "_now", return_value=self.now + 60),
+            mock.patch.object(social_automation_api, "wake_social_automation_worker"),
+            mock.patch.object(social_automation_api, "run_social_automation_once"),
+        ):
+            with self.assertRaises(HTTPException) as early:
+                social_automation_api.create_social_task(self._payload())
+        self.assertEqual(early.exception.status_code, 429)
+
+        second_now = self.now + 30 * 60
+        with (
+            mock.patch.object(social_automation_api, "_now", return_value=second_now),
+            mock.patch.object(social_automation_api, "wake_social_automation_worker"),
+            mock.patch.object(social_automation_api, "run_social_automation_once"),
+        ):
+            second = social_automation_api.create_social_task(self._payload())
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET status = 'running', started_at = ? WHERE id = ?",
+                (second_now, second["id"]),
+            )
+        with mock.patch.object(social_automation_api, "_now", return_value=second_now):
+            social_automation_api._finish_task(
+                second["id"],
+                "success",
+                {"published_url": "https://www.threads.net/@customer/post/second"},
+                "",
+            )
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                policy = social_automation_api._publish_cooldown_policy_in_transaction(
+                    conn,
+                    self.customer_id,
+                    "account-customer-1",
+                    "threads",
+                    target_at=second_now,
+                )
+        self.assertEqual(policy["cooldown_seconds"], 60 * 60)
+        self.assertFalse(policy["can_publish"])
+
+    def test_publish_cooldown_returns_to_thirty_minutes_after_an_hour_gap(self):
+        tasks = [self._create(self._payload()) for _ in range(2)]
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            for task, (offset, suffix) in zip(tasks, ((0, "first"), (90 * 60, "second"))):
+                conn.execute(
+                    "UPDATE social_automation_tasks SET status = 'success', finished_at = ?, daily_publish_committed_at = ?, result_json = ? WHERE id = ?",
+                    (
+                        self.now + offset,
+                        self.now + offset,
+                        json.dumps({"published_url": f"https://www.threads.net/@customer/post/{suffix}"}),
+                        task["id"],
+                    ),
+                )
+            policy = social_automation_api._publish_cooldown_policy_in_transaction(
+                conn,
+                self.customer_id,
+                "account-customer-1",
+                "threads",
+                target_at=self.now + 90 * 60,
+            )
+        self.assertEqual(policy["cooldown_seconds"], 30 * 60)
+
+    def test_instagram_automation_normal_publish_allows_only_one_post_per_batch(self):
+        with sqlite3.connect(self.db_path) as conn:
+            self._insert_account(conn, "account-customer-instagram", self.customer_id, "persona-customer", "instagram")
+        payload = social_automation_api.SocialAutomationPlanPayload(
+            persona_id="persona-customer",
+            account_id="account-customer-instagram",
+            platform="instagram",
+            items=[
+                social_automation_api.SocialAutomationPlanItemPayload(
+                    reservation_minutes=0,
+                    task_type="normal_publish",
+                    payload={"publish_count": 2},
+                )
+            ],
+        )
+        with self.assertRaises(HTTPException) as rejected:
+            social_automation_api.create_social_automation_plan(payload, user={"id": self.customer_id, "is_admin": 0})
+        self.assertEqual(rejected.exception.status_code, 400)
+        self.assertIn("1", str(rejected.exception.detail))
+
+    def test_instagram_publish_task_rejects_a_two_item_batch(self):
+        with sqlite3.connect(self.db_path) as conn:
+            self._insert_account(conn, "account-customer-instagram", self.customer_id, "persona-customer", "instagram")
+        payload = self._payload(account_id="account-customer-instagram")
+        payload.platform = "instagram"
+        payload.payload.update({
+            "publish_batch_id": "instagram-batch",
+            "publish_sequence_index": 1,
+            "publish_sequence_total": 2,
+            "publish_sequence_targets": ["draft-1", "draft-2"],
+        })
+        with self.assertRaises(HTTPException) as rejected:
+            self._create(payload)
+        self.assertEqual(rejected.exception.status_code, 400)
+        self.assertIn("1", str(rejected.exception.detail))
 
     def test_scheduled_tasks_reserve_the_target_day_and_roll_over(self):
         tomorrow = self.now + 24 * 60 * 60
@@ -649,12 +763,12 @@ class DailyPublishLimitTests(unittest.TestCase):
     def test_failed_publish_batch_item_deterministically_fails_queued_tail(self):
         batch_id = "publish-batch-failed-tail"
         tasks = []
-        for index in range(1, 4):
+        for index in range(1, 3):
             payload = self._payload(account_id="account-admin", persona_id="persona-admin")
             payload.payload.update({
                 "publish_batch_id": batch_id,
                 "publish_sequence_index": index,
-                "publish_sequence_total": 3,
+                "publish_sequence_total": 2,
             })
             tasks.append(self._create(payload))
 
@@ -666,7 +780,7 @@ class DailyPublishLimitTests(unittest.TestCase):
                     tasks[0],
                     {"ok": False, "error": "runner failed"},
                     1,
-                    3,
+                    2,
                 )
             )
 
@@ -680,7 +794,7 @@ class DailyPublishLimitTests(unittest.TestCase):
                 """,
                 (batch_id,),
             ).fetchall()
-        self.assertEqual([row[0] for row in rows], ["failed", "failed", "failed"])
+        self.assertEqual([row[0] for row in rows], ["failed", "failed"])
         self.assertTrue(all("previous publish batch item failed" in row[1] for row in rows[1:]))
 
     def test_incomplete_publish_batch_is_cancelled_after_prepare_timeout(self):

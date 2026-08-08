@@ -2682,16 +2682,61 @@ function updateDailyPublishPolicy(value, { notify = true, requestSeq = 0, force 
   return next;
 }
 
-async function ensureDailyPublishCapacity(requestedCount = 1, { scheduledAt = "" } = {}) {
+function normalizePublishCooldownPolicy(value = {}) {
+  return {
+    ...value,
+    waived: Boolean(value?.waived),
+    can_publish: value?.can_publish !== false,
+    remaining_seconds: Math.max(0, Number(value?.remaining_seconds || 0)),
+    next_available_at: Number(value?.next_available_at || 0),
+    cooldown_seconds: Math.max(0, Number(value?.cooldown_seconds || 0)),
+  };
+}
+
+function formatPublishCooldown(seconds = 0) {
+  const safe = Math.max(0, Math.ceil(Number(seconds || 0)));
+  const minutes = Math.max(1, Math.ceil(safe / 60));
+  return minutes >= 60 && minutes % 60 === 0 ? `${minutes / 60} 小时` : `${minutes} 分钟`;
+}
+
+async function showPublishCooldownWarning(policy = {}) {
+  const normalized = normalizePublishCooldownPolicy(policy);
+  return openConsoleModal({
+    title: "发布间隔提醒",
+    message: normalized.message || `该账号仍需等待 ${formatPublishCooldown(normalized.remaining_seconds)} 后才能再次发布。`,
+    contentHtml: `<div class="daily-publish-risk-panel" role="alert"><strong>为保护账号安全，发布任务会按账号间隔执行。</strong><p>等待结束后可继续提交；管理员账号不受此间隔限制。</p></div>`,
+    confirmText: "我知道了",
+    showCancel: false,
+    modalKey: "publish-cooldown",
+  }).then(() => false);
+}
+
+async function showPublishBatchLimitWarning(platform, limit) {
+  return openConsoleModal({
+    title: "本批发布数量超限",
+    message: `${platformLabel(platform)} 单个账号每批最多发布 ${limit} 篇。请减少本次选择后再提交。`,
+    confirmText: "返回调整",
+    showCancel: false,
+    modalKey: "publish-batch-limit",
+  }).then(() => false);
+}
+
+async function ensureDailyPublishCapacity(requestedCount = 1, { scheduledAt = "", accountId = "", platform = "" } = {}) {
   const requested = Math.max(1, Number(requestedCount || 1));
   let policy = normalizeDailyPublishPolicy(state.dailyPublishPolicy);
   const requestSeq = beginDailyPublishPolicyRequest();
   try {
     const query = new URLSearchParams({ requested_count: String(requested) });
     if (scheduledAt) query.set("scheduled_at", String(scheduledAt));
+    if (accountId) query.set("account_id", String(accountId));
+    if (platform) query.set("platform", String(platform));
     const result = await api(`/api/persona_dashboard/automation/publish_policy?${query.toString()}`);
     policy = normalizeDailyPublishPolicy(result?.publish_policy || result || policy);
     if (!scheduledAt) updateDailyPublishPolicy(policy, { notify: false, requestSeq });
+    const batchLimit = Math.max(0, Number(result?.batch_limit || 0));
+    if (batchLimit && requested > batchLimit) return showPublishBatchLimitWarning(platform, batchLimit);
+    const cooldown = normalizePublishCooldownPolicy(result?.cooldown_policy || {});
+    if (accountId && !cooldown.waived && !cooldown.can_publish) return showPublishCooldownWarning(cooldown);
   } catch (error) {
     if (Number(error?.status || 0) === 401 || Number(error?.status || 0) === 403) throw error;
     if (policy.waived) return true;
@@ -13309,8 +13354,26 @@ function publishSourceRows(persona = selectedPersona(), source = state.publishCo
   return [];
 }
 
-const PUBLISH_MULTI_SELECT_LIMIT = 5;
-const PUBLISH_MULTI_SELECT_LIMIT_MESSAGE = `单次连续发布最多选择 ${PUBLISH_MULTI_SELECT_LIMIT} 篇。`;
+const PUBLISH_BATCH_LIMITS = Object.freeze({ threads: 2, instagram: 1 });
+const PUBLISH_MULTI_SELECT_LIMIT = Math.max(...Object.values(PUBLISH_BATCH_LIMITS));
+
+function publishBatchLimit(platform = "threads") {
+  return Number(PUBLISH_BATCH_LIMITS[String(platform || "threads").trim().toLowerCase()] || 1);
+}
+
+function publishSelectionPlatform(persona = selectedPersona()) {
+  const account = publishAccountForPersona(persona) || selectedPublishAccountForPersona(persona);
+  return String(account?.platform || "threads").trim().toLowerCase() || "threads";
+}
+
+function publishSelectionLimit(persona = selectedPersona()) {
+  return publishBatchLimit(publishSelectionPlatform(persona));
+}
+
+function publishSelectionLimitMessage(persona = selectedPersona()) {
+  const platform = publishSelectionPlatform(persona);
+  return `${platformLabel(platform)} 单个账号每批最多发布 ${publishSelectionLimit(persona)} 篇。`;
+}
 
 function syncPublishSelectedPostIds(persona = selectedPersona(), source = state.publishContentSource, rows = publishSourceRows(persona, source)) {
   const cleanSource = normalizePublishContentSource(source);
@@ -13324,7 +13387,7 @@ function syncPublishSelectedPostIds(persona = selectedPersona(), source = state.
     if (valid.has(preferred)) selected = [preferred];
     else if ((rows || [])[0]?.id) selected = [String(rows[0].id)];
   }
-  selected = selected.slice(0, PUBLISH_MULTI_SELECT_LIMIT);
+  selected = selected.slice(0, publishSelectionLimit(persona));
   state.publishSelectedPostIds[key] = selected;
   return selected;
 }
@@ -13336,7 +13399,7 @@ function setPublishSelectedPostIds(persona = selectedPersona(), source = state.p
   const next = rows
     .map((post) => String(post.id || ""))
     .filter((id) => id && selected.has(id))
-    .slice(0, PUBLISH_MULTI_SELECT_LIMIT);
+    .slice(0, publishSelectionLimit(persona));
   state.publishSelectedPostIds[publishSelectionKey(persona, cleanSource)] = next;
   if (next[0]) setSelectedPersonaPostId(next[0]);
   if (!next.includes(String(state.publishPreviewPostId || ""))) state.publishPreviewPostId = next[0] || "";
@@ -13391,16 +13454,17 @@ function renderPublishSourceActions(persona = selectedPersona(), source = state.
   const cleanSource = normalizePublishContentSource(source);
   if (cleanSource === "custom") return "";
   const rows = publishSourceRows(persona, cleanSource);
+  const selectionLimit = publishSelectionLimit(persona);
   const selectedCount = syncPublishSelectedPostIds(persona, cleanSource, rows).length;
-  const selectableCount = Math.min(rows.length, PUBLISH_MULTI_SELECT_LIMIT);
+  const selectableCount = Math.min(rows.length, selectionLimit);
   const allSelected = Boolean(selectableCount) && selectedCount === selectableCount;
   const selectionAction = allSelected ? "clear" : "all";
   const selectionLabel = allSelected
-    ? (rows.length > PUBLISH_MULTI_SELECT_LIMIT ? "取消选择" : "取消全选")
-    : (rows.length > PUBLISH_MULTI_SELECT_LIMIT ? `选择前 ${PUBLISH_MULTI_SELECT_LIMIT} 篇` : "全选");
+    ? (rows.length > selectionLimit ? "取消选择" : "取消全选")
+    : (rows.length > selectionLimit ? `选择前 ${selectionLimit} 篇` : "全选");
   return `
     <div class="publish-source-actions">
-      <span>已选 ${esc(selectedCount)} / ${esc(rows.length)}${rows.length > PUBLISH_MULTI_SELECT_LIMIT ? ` · 单次最多 ${PUBLISH_MULTI_SELECT_LIMIT} 篇` : ""}</span>
+      <span>已选 ${esc(selectedCount)} / ${esc(rows.length)}${rows.length > selectionLimit ? ` · 单次最多 ${selectionLimit} 篇` : ""}</span>
       <div>
         <button type="button" class="bulk-selection-icon-button" data-publish-source-select="${selectionAction}" title="${selectionLabel}" aria-label="${selectionLabel}" ${rows.length ? "" : "disabled"}>${allSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}</button>
       </div>
@@ -13428,7 +13492,7 @@ function renderPublishPostSelectionList(persona = selectedPersona(), source = st
   if (cleanSource === "custom") return "";
   const rows = publishSourceRows(persona, cleanSource);
   const selectedIds = new Set(syncPublishSelectedPostIds(persona, cleanSource, rows));
-  const selectionLimitReached = selectedIds.size >= PUBLISH_MULTI_SELECT_LIMIT;
+  const selectionLimitReached = selectedIds.size >= publishSelectionLimit(persona);
   if (!rows.length) return renderModuleEmptyState({
     icon: "content",
     title: cleanSource === "favorites" ? "暂无收藏内容" : "暂无草稿",
@@ -14779,8 +14843,9 @@ function bindSimpleFlowInputs(moduleId) {
         const action = String(node.dataset.publishSourceSelect || "");
         setPublishSelectedPostIds(persona, source, action === "all" ? rows.map((post) => String(post.id || "")).filter(Boolean) : []);
         renderSimpleFlowModule("publishing");
-        if (action === "all" && rows.length > PUBLISH_MULTI_SELECT_LIMIT) {
-          showMsg("commandMsg", `单次连续发布最多选择 ${PUBLISH_MULTI_SELECT_LIMIT} 篇，已为你选择前 ${PUBLISH_MULTI_SELECT_LIMIT} 篇。`, false);
+        const selectionLimit = publishSelectionLimit(persona);
+        if (action === "all" && rows.length > selectionLimit) {
+          showMsg("commandMsg", `已按 ${platformLabel(publishSelectionPlatform(persona))} 规则选择前 ${selectionLimit} 篇。`, false);
         }
       });
     });
@@ -14814,9 +14879,9 @@ function bindSimpleFlowInputs(moduleId) {
         const rows = publishSourceRows(persona, source);
         const selected = new Set(syncPublishSelectedPostIds(persona, source, rows));
         const postId = String(node.dataset.publishPostId || "").trim();
-        if (node.checked && !selected.has(postId) && selected.size >= PUBLISH_MULTI_SELECT_LIMIT) {
+        if (node.checked && !selected.has(postId) && selected.size >= publishSelectionLimit(persona)) {
           node.checked = false;
-          showMsg("commandMsg", PUBLISH_MULTI_SELECT_LIMIT_MESSAGE, false);
+          showMsg("commandMsg", publishSelectionLimitMessage(persona), false);
         } else if (node.checked) selected.add(postId);
         else selected.delete(postId);
         setPublishSelectedPostIds(persona, source, Array.from(selected));
@@ -14832,8 +14897,8 @@ function bindSimpleFlowInputs(moduleId) {
         const postId = String(node.dataset.publishPostCard || "").trim();
         const selected = new Set(syncPublishSelectedPostIds(persona, source, rows));
         if (selected.has(postId)) selected.delete(postId);
-        else if (selected.size >= PUBLISH_MULTI_SELECT_LIMIT) {
-          showMsg("commandMsg", PUBLISH_MULTI_SELECT_LIMIT_MESSAGE, false);
+        else if (selected.size >= publishSelectionLimit(persona)) {
+          showMsg("commandMsg", publishSelectionLimitMessage(persona), false);
           return;
         } else selected.add(postId);
         setPublishSelectedPostIds(persona, source, Array.from(selected));
@@ -15317,7 +15382,7 @@ async function submitPersonaPublishTask() {
     await requestInstagramPublishMediaResolution({ persona, source, post });
     return;
   }
-  if (!(await ensureDailyPublishCapacity(1))) return;
+  if (!(await ensureDailyPublishCapacity(1, { accountId: account.id, platform }))) return;
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
@@ -15390,11 +15455,12 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
     showMsg(messageId, `请先选择要执行的${publishContentSourceLabel(source)}。`, false);
     return null;
   }
-  if (posts.length > PUBLISH_MULTI_SELECT_LIMIT) {
-    showMsg(messageId, PUBLISH_MULTI_SELECT_LIMIT_MESSAGE, false);
+  const platform = String(account.platform || "threads").trim().toLowerCase() || "threads";
+  const batchLimit = publishBatchLimit(platform);
+  if (posts.length > batchLimit) {
+    await showPublishBatchLimitWarning(platform, batchLimit);
     return null;
   }
-  const platform = String(account.platform || "threads").trim().toLowerCase() || "threads";
   const publishFiles = filesFromInput("simpleMediaFiles");
   if (platform === "instagram" && !publishFiles.length) {
     const missingMedia = posts.find((post) => !personaPublishPostMediaItems(String(persona.id || ""), post).length);
@@ -15403,7 +15469,7 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
       return null;
     }
   }
-  if (!(await ensureDailyPublishCapacity(posts.length))) return null;
+  if (!(await ensureDailyPublishCapacity(posts.length, { accountId: cleanAccountId, platform }))) return null;
   const lockParts = ["publish_content", source, persona.id, cleanAccountId, selectedInSourceOrder.join("_"), "now"];
   const batchToastKey = socialTaskToastLaneKey({
     task_type: "publish_post",
@@ -29835,7 +29901,7 @@ function updateMatrixPublishStateFromForm() {
   const selectedIds = Array.from(document.querySelectorAll("[data-matrix-persona]:checked")).map((node) => String(node.value || "").trim()).filter(Boolean);
   const source = "posts";
   const platform = $("matrixPublishPlatform")?.value || state.matrixPublish.platform || "threads";
-  const availableLimit = Math.min(matrixPublishCommonLimit(matrixPublishAvailabilityRows(selectedIds, source, platform)), PUBLISH_MULTI_SELECT_LIMIT);
+  const availableLimit = Math.min(matrixPublishCommonLimit(matrixPublishAvailabilityRows(selectedIds, source, platform)), publishBatchLimit(platform));
   const requestedCount = availableLimit
     ? Math.min(Math.max(Number($("matrixPublishCount")?.value || state.matrixPublish.perPersonaCount || 1), 1), availableLimit)
     : 1;
@@ -29936,9 +30002,20 @@ function matrixPublishCommonLimit(rows = []) {
   return counts.length ? Math.min(...counts) : 0;
 }
 
-function matrixPublishRequestedCount(rows = matrixPublishAvailabilityRows()) {
-  const perPersonaCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), PUBLISH_MULTI_SELECT_LIMIT);
+function matrixPublishRequestedCount(rows = matrixPublishAvailabilityRows(), platform = state.matrixPublish.platform) {
+  const perPersonaCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), publishBatchLimit(platform));
   return (rows || []).reduce((total, row) => total + Math.min(perPersonaCount, Number(row?.submitCount || 0)), 0);
+}
+
+async function ensureMatrixPublishSubmissionPolicies(rows = [], platform = state.matrixPublish.platform) {
+  const perPersonaCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), publishBatchLimit(platform));
+  for (const row of rows || []) {
+    const accountId = String(row?.account?.id || "").trim();
+    const requested = Math.min(perPersonaCount, Number(row?.submitCount || 0));
+    if (!accountId || !requested) continue;
+    if (!(await ensureDailyPublishCapacity(requested, { accountId, platform }))) return false;
+  }
+  return true;
 }
 
 function renderMatrixPublishPanel() {
@@ -29951,7 +30028,7 @@ function renderMatrixPublishPanel() {
   ensureMatrixDraftLoads(selectedIds);
   const platform = state.matrixPublish.platform || "threads";
   const availability = matrixPublishAvailabilityRows(selectedIds, source, platform);
-  const availableLimit = Math.min(matrixPublishCommonLimit(availability), PUBLISH_MULTI_SELECT_LIMIT);
+  const availableLimit = Math.min(matrixPublishCommonLimit(availability), publishBatchLimit(platform));
   const perCount = availableLimit
     ? Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), availableLimit)
     : 0;
@@ -30070,7 +30147,7 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
   const perPersonaCount = Math.min(
     Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1),
     Math.max(commonLimit, 1),
-    PUBLISH_MULTI_SELECT_LIMIT,
+    publishBatchLimit(platform),
   );
   state.matrixPublish.perPersonaCount = perPersonaCount;
   const lockParts = ["matrix_publish", source, platform, personaIds.join("_")];
@@ -30078,8 +30155,9 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
     showMsg(messageId, "矩阵任务正在提交，请等待当前操作完成。", false);
     return null;
   }
-  const requestedCount = matrixPublishRequestedCount(eligible);
+  const requestedCount = matrixPublishRequestedCount(eligible, platform);
   if (requestedCount > 0 && !(await ensureDailyPublishCapacity(requestedCount))) return null;
+  if (!(await ensureMatrixPublishSubmissionPolicies(eligible, platform))) return null;
   setActionLocked(lockParts, true);
   renderSimpleFlowModule("publishing");
   try {
@@ -30175,7 +30253,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
   ];
   const loginWaitSeconds = taskType === "open_login" ? 3600 : 180;
   let mediaPaths = [];
-  if (taskType === "publish_post" && !(await ensureDailyPublishCapacity(1))) return null;
+  if (taskType === "publish_post" && !(await ensureDailyPublishCapacity(1, { accountId, platform }))) return null;
   setActionLocked(lockParts, true);
   if (state.activeModule && ["publishing", "automation"].includes(state.activeModule)) renderSimpleFlowModule(state.activeModule);
   renderSocialAccounts();

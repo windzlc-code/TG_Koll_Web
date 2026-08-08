@@ -110,7 +110,10 @@ SOCIAL_TASK_REQUIRED_PLATFORM = {
 # Plan-only task type.  It is deliberately not a SOCIAL_TASK_TYPE: a normal
 # publish entry is expanded into real publish_post tasks before a worker sees it.
 AUTOMATION_PLAN_NORMAL_PUBLISH_TASK = "normal_publish"
-AUTOMATION_PLAN_NORMAL_PUBLISH_MAX_COUNT = 5
+PUBLISH_BATCH_LIMITS = {"threads": 2, "instagram": 1}
+PUBLISH_DEFAULT_COOLDOWN_SECONDS = 30 * 60
+PUBLISH_ESCALATED_COOLDOWN_SECONDS = 60 * 60
+AUTOMATION_PLAN_NORMAL_PUBLISH_MAX_COUNT = max(PUBLISH_BATCH_LIMITS.values())
 _ADMIN_BILLING_WAIVED_PAYLOAD_IDS: set[int] = set()
 _ADMIN_BILLING_WAIVED_PAYLOAD_IDS_LOCK = threading.Lock()
 _TRUSTED_BATCH_TASK_CONTEXTS: dict[int, dict[str, Any]] = {}
@@ -882,6 +885,11 @@ def _owner_is_admin(conn: Any, user_id: int) -> bool:
     return bool(row and int(row["is_admin"] or 0) == 1)
 
 
+def publish_batch_limit(platform: str) -> int:
+    """Return the non-bypassable per-account batch cap for a platform."""
+    return int(PUBLISH_BATCH_LIMITS.get(_normalize_platform(platform), 1))
+
+
 def _daily_publish_day(target_at: int | float | None = None) -> str:
     return _daily_publish_window(target_at)[2]
 
@@ -920,6 +928,113 @@ def _daily_publish_used_count(
         if _confirmed_published_url(result, row["platform"]):
             confirmed += 1
     return confirmed
+
+
+def _confirmed_publish_times_in_transaction(
+    conn: Any,
+    user_id: int,
+    account_id: str,
+    platform: str,
+    *,
+    before_at: int,
+) -> list[int]:
+    """Read only successful, externally confirmed publish completions.
+
+    A queued, failed, or merely submitted task must never influence the next
+    publish window.  The daily commitment timestamp is written only after the
+    publish result has been confirmed, with finished_at kept as compatibility
+    fallback for legacy successful rows.
+    """
+    rows = conn.execute(
+        """
+        SELECT platform, result_json,
+               COALESCE(NULLIF(daily_publish_committed_at, 0), NULLIF(finished_at, 0), created_at) AS published_at
+        FROM social_automation_tasks
+        WHERE user_id = ?
+          AND account_id = ?
+          AND platform = ?
+          AND task_type = 'publish_post'
+          AND status = 'success'
+          AND COALESCE(NULLIF(daily_publish_committed_at, 0), NULLIF(finished_at, 0), created_at) <= ?
+        ORDER BY COALESCE(NULLIF(daily_publish_committed_at, 0), NULLIF(finished_at, 0), created_at) DESC, id DESC
+        LIMIT 8
+        """,
+        (int(user_id), str(account_id), _normalize_platform(platform), int(before_at)),
+    ).fetchall()
+    result: list[int] = []
+    for row in rows:
+        try:
+            payload = json.loads(str(row["result_json"] or "{}"))
+        except (TypeError, ValueError):
+            payload = {}
+        if _confirmed_published_url(payload, row["platform"]):
+            result.append(int(row["published_at"] or 0))
+    return [item for item in result if item > 0]
+
+
+def _publish_cooldown_policy_in_transaction(
+    conn: Any,
+    user_id: int,
+    account_id: str,
+    platform: str,
+    *,
+    target_at: int | None = None,
+    admin_waived: bool | None = None,
+) -> dict[str, Any]:
+    """Calculate the next allowed time from real successful publishes only."""
+    now = _now()
+    effective_target = int(target_at or now)
+    waived = _owner_is_admin(conn, int(user_id)) if admin_waived is None else bool(admin_waived)
+    if waived:
+        return {
+            "waived": True,
+            "can_publish": True,
+            "cooldown_seconds": 0,
+            "remaining_seconds": 0,
+            "next_available_at": 0,
+            "last_published_at": 0,
+            "message": "",
+        }
+    published = _confirmed_publish_times_in_transaction(
+        conn,
+        user_id,
+        account_id,
+        platform,
+        before_at=effective_target,
+    )
+    if not published:
+        return {
+            "waived": False,
+            "can_publish": True,
+            "cooldown_seconds": PUBLISH_DEFAULT_COOLDOWN_SECONDS,
+            "remaining_seconds": 0,
+            "next_available_at": 0,
+            "last_published_at": 0,
+            "message": "",
+        }
+    last_published_at = int(published[0])
+    previous_gap = last_published_at - int(published[1]) if len(published) > 1 else PUBLISH_ESCALATED_COOLDOWN_SECONDS
+    cooldown_seconds = (
+        PUBLISH_ESCALATED_COOLDOWN_SECONDS
+        if PUBLISH_DEFAULT_COOLDOWN_SECONDS <= previous_gap < PUBLISH_ESCALATED_COOLDOWN_SECONDS
+        else PUBLISH_DEFAULT_COOLDOWN_SECONDS
+    )
+    next_available_at = last_published_at + cooldown_seconds
+    remaining_seconds = max(0, next_available_at - effective_target)
+    remaining_minutes = max(1, (remaining_seconds + 59) // 60) if remaining_seconds else 0
+    return {
+        "waived": False,
+        "can_publish": remaining_seconds == 0,
+        "cooldown_seconds": cooldown_seconds,
+        "remaining_seconds": remaining_seconds,
+        "next_available_at": next_available_at,
+        "last_published_at": last_published_at,
+        "message": (
+            f"该账号仍在发布间隔保护中，请于 {datetime.fromtimestamp(next_available_at, tz=BUSINESS_TIMEZONE).strftime('%H:%M')} 后再发布（约 {remaining_minutes} 分钟）。"
+            if remaining_seconds
+            else ""
+        ),
+    }
 
 
 def _daily_publish_capacity_count(
@@ -1177,14 +1292,15 @@ def _automation_plan_task_id(plan_id: str, cycle_index: int, sequence: int) -> s
     return f"plan_task_{digest}"
 
 
-def _automation_plan_normal_publish_count(payload: dict[str, Any]) -> int:
+def _automation_plan_normal_publish_count(payload: dict[str, Any], platform: str) -> int:
     raw_count = (payload or {}).get("publish_count")
     if isinstance(raw_count, bool) or not isinstance(raw_count, int):
         raise HTTPException(status_code=400, detail="普通任务的发布数量必须是整数")
-    if raw_count < 1 or raw_count > AUTOMATION_PLAN_NORMAL_PUBLISH_MAX_COUNT:
+    limit = publish_batch_limit(platform)
+    if raw_count < 1 or raw_count > limit:
         raise HTTPException(
             status_code=400,
-            detail=f"普通任务的发布数量必须在 1 到 {AUTOMATION_PLAN_NORMAL_PUBLISH_MAX_COUNT} 篇之间",
+            detail=f"普通任务的发布数量必须在 1 到 {limit} 篇之间",
         )
     unexpected = sorted(str(key) for key in (payload or {}) if str(key) != "publish_count")
     if unexpected:
@@ -1224,9 +1340,10 @@ def _expand_automation_plan_normal_publish_item(
     persona_id: str,
     plan_id: str,
     cycle_index: int,
+    platform: str,
 ) -> list[dict[str, Any]]:
     payload = dict(item.get("payload") or {})
-    publish_count = _automation_plan_normal_publish_count(payload)
+    publish_count = _automation_plan_normal_publish_count(payload, platform)
     item_id = str(item.get("id") or "").strip()
     archive = _load_persona_archive(persona_id) or {}
     posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
@@ -1272,6 +1389,7 @@ def _expand_automation_plan_normal_publish_item(
     for index, draft_payload in enumerate(drafts, start=1):
         expanded_item = dict(item)
         expanded_item["task_type"] = "publish_post"
+        expanded_item["reservation_minutes"] = int(item.get("reservation_minutes") or 0) + (index - 1) * 30
         expanded_item["payload"] = {
             **draft_payload,
             "publish_batch_id": batch_id,
@@ -1289,6 +1407,7 @@ def _expand_automation_plan_items(
     persona_id: str,
     plan_id: str,
     cycle_index: int,
+    platform: str,
 ) -> list[dict[str, Any]]:
     expanded: list[dict[str, Any]] = []
     for item in items:
@@ -1299,6 +1418,7 @@ def _expand_automation_plan_items(
                     persona_id=persona_id,
                     plan_id=plan_id,
                     cycle_index=cycle_index,
+                    platform=platform,
                 )
             )
         else:
@@ -1494,7 +1614,7 @@ def _validate_automation_plan_payload(
         task_payload = dict(item.payload or {})
         _reject_external_automation_plan_metadata(task_payload)
         if task_type == AUTOMATION_PLAN_NORMAL_PUBLISH_TASK:
-            task_payload = {"publish_count": _automation_plan_normal_publish_count(task_payload)}
+            task_payload = {"publish_count": _automation_plan_normal_publish_count(task_payload, platform)}
         else:
             _validate_user_task_media_paths(task_payload, user)
         if task_type == "publish_post" and not str(task_payload.get("content") or "").strip():
@@ -1637,6 +1757,7 @@ def _materialize_automation_plan(plan_id: str) -> dict[str, Any]:
                 persona_id=persona_id,
                 plan_id=clean_plan_id,
                 cycle_index=cycle_index,
+                platform=platform,
             )
             for sequence, item in enumerate(materialized_items, start=1):
                 task_id = _automation_plan_task_id(clean_plan_id, cycle_index, sequence)
@@ -2507,17 +2628,36 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_publish_policy(
         scheduled_at: str = "",
         requested_count: int = 0,
+        account_id: str = "",
+        platform: str = "",
         user: dict[str, Any] = Depends(get_current_user),
     ):
-        return {
+        user_id = _identity_user_id(user)
+        response = {
             "ok": True,
             "publish_policy": get_daily_publish_policy(
-                _identity_user_id(user),
+                user_id,
                 scheduled_at=scheduled_at,
                 requested_count=max(0, min(int(requested_count or 0), 100)),
                 admin_waived=_daily_publish_admin_waived(user),
             ),
         }
+        if str(account_id or "").strip():
+            account = _require_account_access(str(account_id), user)
+            account_platform = _normalize_platform(platform or str(account["platform"] or ""))
+            if account_platform != _normalize_platform(str(account["platform"] or "")):
+                raise HTTPException(status_code=400, detail="发布平台与账号平台不一致")
+            response["batch_limit"] = publish_batch_limit(account_platform)
+            with db() as conn:
+                response["cooldown_policy"] = _publish_cooldown_policy_in_transaction(
+                    conn,
+                    user_id,
+                    str(account_id),
+                    account_platform,
+                    target_at=_parse_schedule(scheduled_at) or _now(),
+                    admin_waived=_owner_is_admin(conn, user_id),
+                )
+        return response
 
     @app.post("/api/persona_dashboard/automation/tasks")
     def api_social_task_create(payload: SocialTaskPayload, user: dict[str, Any] = Depends(get_current_user)):
@@ -6047,6 +6187,39 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
             ).fetchone()
             if not owner:
                 raise HTTPException(status_code=409, detail="执行账号绑定的人设不属于当前账号")
+        if task_type == "publish_post":
+            sequence_total = _publish_sequence_value(task_payload.get("publish_sequence_total"))
+            sequence_index = _publish_sequence_value(task_payload.get("publish_sequence_index"))
+            sequence_targets = [
+                str(item or "").strip()
+                for item in (task_payload.get("publish_sequence_targets") or [])
+                if str(item or "").strip()
+            ]
+            platform_batch_limit = publish_batch_limit(platform)
+            if (
+                sequence_total > platform_batch_limit
+                or sequence_index > platform_batch_limit
+                or len(sequence_targets) > platform_batch_limit
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{platform.title()} 单个账号每批最多发布 {platform_batch_limit} 篇。",
+                )
+            if (
+                not _owner_is_admin(conn, owner_user_id)
+                and not str(batch_context.get("automation_plan_id") or "")
+                and scheduled_at <= now
+            ):
+                cooldown_policy = _publish_cooldown_policy_in_transaction(
+                    conn,
+                    owner_user_id,
+                    str(payload.account_id),
+                    platform,
+                    target_at=now,
+                    admin_waived=False,
+                )
+                if not cooldown_policy["can_publish"]:
+                    raise HTTPException(status_code=429, detail=cooldown_policy["message"])
         if platform == "threads" and task_type == "publish_post":
             archive_post_id = str(task_payload.get("archive_post_id") or "").strip()
             archive_post_source = str(task_payload.get("archive_post_source") or "").strip()
@@ -7468,6 +7641,44 @@ def _claim_next_task() -> dict[str, Any] | None:
                     continue
                 slot = None
                 if str(candidate["task_type"] or "") == "publish_post":
+                    if candidate_user_id not in admin_by_user:
+                        admin_by_user[candidate_user_id] = _owner_is_admin(conn, candidate_user_id)
+                    if not admin_by_user[candidate_user_id]:
+                        cooldown_policy = _publish_cooldown_policy_in_transaction(
+                            conn,
+                            candidate_user_id,
+                            str(candidate["account_id"] or ""),
+                            str(candidate["platform"] or ""),
+                            target_at=now,
+                            admin_waived=False,
+                        )
+                        if not cooldown_policy["can_publish"]:
+                            deferred_at = int(cooldown_policy["next_available_at"] or now + PUBLISH_DEFAULT_COOLDOWN_SECONDS)
+                            conn.execute(
+                                """
+                                UPDATE social_automation_tasks
+                                SET scheduled_at = ?, error = '', updated_at = ?
+                                WHERE id = ? AND status = 'queued'
+                                """,
+                                (deferred_at, now, str(candidate["id"] or "")),
+                            )
+                            conn.execute(
+                                """
+                                UPDATE social_daily_publish_slots
+                                SET quota_day = ?, state = 'planned', updated_at = ?
+                                WHERE task_id = ? AND state IN ('planned', 'reserved')
+                                """,
+                                (_daily_publish_day(deferred_at), now, str(candidate["id"] or "")),
+                            )
+                            _insert_log(
+                                conn,
+                                str(candidate["id"] or ""),
+                                "info",
+                                "publish_cooldown_deferred",
+                                cooldown_policy["message"],
+                                {"next_available_at": deferred_at},
+                            )
+                            continue
                     slot = _ensure_daily_publish_slot(conn, candidate, now=now)
                     slot_state = str(slot["state"] or "") if slot is not None else ""
                     slot_waived = bool(slot is not None and int(slot["waived"] or 0))

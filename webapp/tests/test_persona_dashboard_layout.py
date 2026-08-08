@@ -87,29 +87,36 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("function pdRenderDashboardPlatformTabs(data)", self.dashboard_script)
         self.assertNotIn('id="personaDashboardPlatformPickerTrigger"', self.dashboard_script)
         self.assertIn("function pdRenderDashboardContext(data)", self.dashboard_script)
-        self.assertIn("persona-dashboard-context-viewport", self.dashboard_script)
-        self.assertIn("persona-dashboard-context-track", self.dashboard_script)
-        self.assertIn("persona-dashboard-context-tab", self.dashboard_script)
+        self.assertIn("persona-dashboard-platform-switcher", self.dashboard_script)
+        self.assertIn("persona-dashboard-platform-viewport", self.dashboard_script)
+        self.assertIn("account-pool-platforms account-pool-platform-tabs persona-dashboard-platform-track", self.dashboard_script)
         self.assertIn("data-persona-dashboard-platform-option", self.dashboard_script)
-        self.assertNotIn("data-persona-dashboard-platform-step", self.dashboard_script)
+        self.assertIn("data-persona-dashboard-platform-step", self.dashboard_script)
         self.assertIn("pdPlatformIcon(platform)", self.dashboard_script)
         self.assertIn("platforms.map((platform) =>", self.dashboard_script)
+        self.assertIn('viewport.addEventListener("scroll"', self.dashboard_script)
+        self.assertIn('viewport.addEventListener("touchstart"', self.dashboard_script)
+        self.assertIn('["touchend", "touchcancel"].forEach', self.dashboard_script)
+        self.assertIn('viewport.addEventListener("scrollend"', self.dashboard_script)
+        self.assertIn("platformTouchActive", self.dashboard_script)
         self.assertIn("Math.round(viewport.scrollLeft / viewport.clientWidth)", self.dashboard_script)
+        self.assertNotIn("window.setTimeout(settlePlatform, 90)", self.dashboard_script)
         self.assertNotIn("pdBindThreads", self.dashboard_script)
         self.assertNotIn("pdUnbindThreads", self.dashboard_script)
         self.assertNotIn("persona-account-compact", self.dashboard_script)
         self.assertNotIn("personaDashboardAccountPlatform", self.dashboard_script)
         self.assertNotIn("persona-dashboard-platform-filter", self.styles)
         self.assertNotIn("persona-dashboard-top-controls", self.styles)
-        self.assertIn("persona-dashboard-context-viewport", self.styles)
-        self.assertIn("persona-dashboard-context-track", self.styles)
-        self.assertIn("persona-dashboard-context-tab", self.styles)
-        self.assertNotIn("persona-dashboard-platform-nav", self.styles)
+        self.assertIn("persona-dashboard-platform-viewport", self.styles)
+        self.assertIn("persona-dashboard-platform-track.account-pool-platform-tabs", self.styles)
+        self.assertIn("persona-dashboard-platform-nav", self.styles)
+        self.assertIn("grid-template-columns: 38px minmax(0, 1fr) 38px;", self.styles)
         self.assertIn("scroll-snap-type: x mandatory;", self.styles)
         self.assertIn("touch-action: pan-x pan-y;", self.styles)
-        self.assertIn("min-width: 100%;", self.styles)
-        self.assertIn('.persona-dashboard-context-tab[data-platform="threads"]', self.styles)
-        self.assertIn('.persona-dashboard-context-tab[data-platform="instagram"]', self.styles)
+        self.assertIn("border-top: 1px solid var(--line);", self.styles)
+        self.assertIn("border-bottom: 1px solid var(--line);", self.styles)
+        self.assertIn(".persona-dashboard-view .persona-dashboard-platform-nav {\n  border: 0;", self.styles)
+        self.assertNotIn("persona-dashboard-platform-title", self.styles)
         self.assertNotIn(".persona-dashboard-view .persona-dashboard-platform-menu", self.styles)
 
     def test_platform_tabs_filter_personas_by_the_selected_platform(self):
@@ -150,25 +157,26 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("function pdRenderDashboardContext(data)", self.dashboard_script)
         self.assertIn("pdPlatformIcon(platform)", self.dashboard_script)
         self.assertIn("pdPlatformLabel(platform)", self.dashboard_script)
-        self.assertIn(".persona-dashboard-context-logo,", self.styles)
+        self.assertIn(".account-pool-platform-tabs button > svg", self.styles)
         self.assertIn("svg.platform-brand-icon", self.styles)
 
         context_selector = ".persona-dashboard-view .persona-dashboard-context {"
         context_start = self.styles.index(context_selector)
         context_rule = self.styles[context_start:self.styles.index("}", context_start) + 1]
-        logo_selector = ".persona-dashboard-view .persona-dashboard-context-logo {"
-        logo_start = self.styles.index(logo_selector)
-        logo_rule = self.styles[logo_start:self.styles.index("}", logo_start) + 1]
-        logo_svg_selector = ".persona-dashboard-view .persona-dashboard-context-logo svg {"
+        logo_svg_selector = ".account-pool-platform-tabs button > svg {"
         logo_svg_start = self.styles.index(logo_svg_selector)
         logo_svg_rule = self.styles[logo_svg_start:self.styles.index("}", logo_svg_start) + 1]
 
         self.assertIn("width: 100%;", context_rule)
         self.assertIn("overflow: hidden;", context_rule)
-        self.assertIn("width: 24px;", logo_rule)
-        self.assertIn("height: 24px;", logo_rule)
-        self.assertIn("width: 24px;", logo_svg_rule)
-        self.assertIn("height: 24px;", logo_svg_rule)
+        self.assertIn("border: 0;", context_rule)
+        self.assertIn("border-top: 1px solid var(--line);", context_rule)
+        self.assertIn("border-bottom: 1px solid var(--line);", context_rule)
+        self.assertIn("border-radius: 0;", context_rule)
+        self.assertIn("box-shadow: none;", context_rule)
+        self.assertIn("background: var(--panel-solid);", context_rule)
+        self.assertIn("width: 18px;", logo_svg_rule)
+        self.assertIn("height: 18px;", logo_svg_rule)
 
     def test_dashboard_summary_stays_compact_on_mobile(self):
         summary_start = self.dashboard_script.index("function pdRenderSummary(visiblePersonas)")
@@ -243,6 +251,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("let programmaticScrollTimer = 0;", chart)
         self.assertIn("if (programmaticScrollTimer) return;", chart)
         self.assertIn("updateCurrentIndex(Number(nearest.dataset.personaHeatIndex || 0))", chart)
+        self.assertIn("const renderRevision = ++personaDashboardHeatRenderRevision;", chart)
+        self.assertIn("pdPersonaStableKey(persona, index) === personaDashboardPersonaKey", chart)
+        self.assertIn("if (renderRevision !== personaDashboardHeatRenderRevision) return next;", chart)
+        self.assertIn("personaDashboardPersonaKey = pdPersonaStableKey(items[next], next);", chart)
         self.assertIn("scroll-snap-type: x mandatory;", self.styles)
         self.assertIn('[data-platform="threads"] .persona-heat-platform-track i', self.styles)
         self.assertIn('[data-platform="instagram"] .persona-heat-platform-track i', self.styles)
@@ -1947,7 +1959,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
         self.assertIn("matrixPublishCommonLimit(matrixPublishAvailabilityRows(selectedIds, source, platform))", update)
         self.assertIn(
-            "const availableLimit = Math.min(matrixPublishCommonLimit(availability), PUBLISH_MULTI_SELECT_LIMIT);",
+            "const availableLimit = Math.min(matrixPublishCommonLimit(availability), publishBatchLimit(platform));",
             panel,
         )
         self.assertIn("const countOptions = availableLimit", panel)
