@@ -13782,7 +13782,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona(), options 
               <span class="publish-history-card-actions" aria-label="任务历史操作">
                 ${publishedUrl ? `<a class="publish-history-card-action" href="${esc(publishedUrl)}" target="_blank" rel="noopener" title="打开已发布推文" aria-label="打开已发布推文">${renderSourceLinkIcon()}</a>` : ""}
                 <button type="button" class="publish-history-card-action" data-publish-history-view="${esc(recordId)}" title="查看任务历史" aria-label="查看任务历史">${renderEyeIcon()}</button>
-                <button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>
+                <button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}</button>
               </span>
               ${renderPublishHistoryMetrics(record, "publish-history-card-metrics")}
             </div>

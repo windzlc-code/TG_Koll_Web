@@ -151,13 +151,13 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         mobile_action_start = CONSOLE_CSS.index(".publish-history-card-action {", mobile_history_start)
         mobile_action_end = CONSOLE_CSS.index("}", mobile_action_start)
         mobile_action_style = CONSOLE_CSS[mobile_action_start:mobile_action_end]
-        self.assertEqual(mobile_action_style.count("30px"), 4)
+        self.assertEqual(mobile_action_style.count("32px"), 4)
         mobile_requeue_start = CONSOLE_CSS.index(".publish-history-card-requeue {", mobile_action_end)
         mobile_requeue_end = CONSOLE_CSS.index("}", mobile_requeue_start)
         mobile_requeue_style = CONSOLE_CSS[mobile_requeue_start:mobile_requeue_end]
-        self.assertIn("width: auto;", mobile_requeue_style)
-        self.assertIn("min-width: 0;", mobile_requeue_style)
-        self.assertIn("padding: 0 7px;", mobile_requeue_style)
+        self.assertIn("width: 32px;", mobile_requeue_style)
+        self.assertIn("min-width: 32px;", mobile_requeue_style)
+        self.assertIn("padding: 0;", mobile_requeue_style)
         self.assertIn(
             ':is(.account-pool-card, .publish-history-card)[data-account-platform="threads"] .account-pool-card-platform',
             CONSOLE_CSS,

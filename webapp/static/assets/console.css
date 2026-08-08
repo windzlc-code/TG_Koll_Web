@@ -2750,7 +2750,24 @@ textarea:focus {
 }
 
 .automation-plan-task-control.is-empty {
-  grid-template-columns: minmax(0, 1fr) repeat(2, 30px);
+  grid-template-columns: minmax(0, 1fr) 30px;
+}
+
+.automation-plan-task-control.is-empty .automation-plan-task-value {
+  grid-column: 1;
+  grid-row: 1;
+  padding-right: 34px;
+}
+
+.automation-plan-task-control.is-empty .automation-plan-task-picker {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.automation-plan-task-control.is-empty .automation-plan-remove {
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .automation-plan-task-detail .ui-eye-icon {
@@ -2949,14 +2966,29 @@ textarea:focus {
 }
 
 .automation-plan-task-option {
+  appearance: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   min-height: 52px;
   padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  box-shadow: none;
   color: var(--ink);
   text-align: left;
+  transform: none;
+  transition: border-color var(--motion-fast), background var(--motion-fast), color var(--motion-fast);
+}
+
+.automation-plan-task-option:hover,
+.automation-plan-task-option:focus-visible {
+  border-color: var(--hover-border);
+  background: var(--soft);
+  box-shadow: none;
+  transform: none;
 }
 
 .automation-plan-task-option > span {
@@ -8429,10 +8461,10 @@ body.persona-touch-dragging .persona-list-card:active {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
-  min-height: 30px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -8455,8 +8487,8 @@ body.persona-touch-dragging .persona-list-card:active {
 .publish-history-source-link .ui-source-link-icon,
 .publish-history-requeue-button .ui-requeue-icon,
 .console-modal-actions .ui-requeue-icon {
-  width: 15px;
-  height: 15px;
+  width: 17px;
+  height: 17px;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
@@ -8465,17 +8497,13 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .publish-history-card-requeue {
-  width: auto;
-  min-width: 0;
-  gap: 4px;
-  padding: 0 7px;
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
 }
 
 .publish-history-card-requeue span {
-  display: inline;
-  white-space: nowrap;
-  font-size: 11px;
-  line-height: 1;
+  display: none;
 }
 
 .publish-history-card-platform {
@@ -23891,20 +23919,20 @@ body.console-page {
   }
 
   .publish-history-card-action {
-    width: 30px;
-    min-width: 30px;
-    height: 30px;
-    min-height: 30px;
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
   }
 
   .publish-history-card-requeue {
-    width: auto;
-    min-width: 0;
-    padding: 0 7px;
+    width: 32px;
+    min-width: 32px;
+    padding: 0;
   }
 
   .publish-history-card-requeue span {
-    display: inline;
+    display: none;
   }
 
   .publish-history-card .publish-post-card-index {
