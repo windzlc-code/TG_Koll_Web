@@ -106,6 +106,8 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
             selection,
         )
         self.assertIn("renderAccountPoolPlatformIcon(platform)", selection)
+        self.assertIn('data-account-platform="${esc(platform)}"', selection)
+        self.assertIn('<span>${esc(platformName)}</span>', selection)
         self.assertNotIn("renderMediaTypeBadge(mediaItems)", selection)
         self.assertNotIn("publish-history-card-media", selection)
         self.assertNotIn("<strong>${esc(publishHistoryRecordTitle", selection)
@@ -119,6 +121,34 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("-webkit-line-clamp: 2;", CONSOLE_CSS)
         self.assertIn(".publish-history-card-platform", CONSOLE_CSS)
         self.assertIn(".publish-history-card-requeue", CONSOLE_CSS)
+        mobile_history_start = CONSOLE_CSS.index(".publish-history-card {\n    content-visibility: auto;")
+        mobile_action_start = CONSOLE_CSS.index(".publish-history-card-action {", mobile_history_start)
+        mobile_action_end = CONSOLE_CSS.index("}", mobile_action_start)
+        mobile_action_style = CONSOLE_CSS[mobile_action_start:mobile_action_end]
+        self.assertEqual(mobile_action_style.count("var(--mobile-touch-target)"), 4)
+        mobile_requeue_start = CONSOLE_CSS.index(".publish-history-card-requeue {", mobile_action_end)
+        mobile_requeue_end = CONSOLE_CSS.index("}", mobile_requeue_start)
+        mobile_requeue_style = CONSOLE_CSS[mobile_requeue_start:mobile_requeue_end]
+        self.assertEqual(mobile_requeue_style.count("var(--mobile-touch-target)"), 2)
+        self.assertIn(
+            ':is(.account-pool-card, .publish-history-card)[data-account-platform="threads"] .account-pool-card-platform',
+            CONSOLE_CSS,
+        )
+        self.assertIn(
+            ':is(.account-pool-card, .publish-history-card)[data-account-platform="instagram"] .account-pool-card-platform',
+            CONSOLE_CSS,
+        )
+
+    def test_history_mobile_card_places_tweet_before_hot_metrics(self):
+        mobile_start = CONSOLE_CSS.index("@media (max-width: 760px)")
+        mobile = CONSOLE_CSS[mobile_start:]
+        snippet_start = mobile.index(".publish-history-card .publish-post-card-snippet {")
+        snippet_end = mobile.index("}", snippet_start)
+        metrics_start = mobile.index(".publish-history-card .publish-history-card-metrics {", snippet_start)
+        metrics_end = mobile.index("}", metrics_start)
+
+        self.assertIn("grid-row: 2;", mobile[snippet_start:snippet_end])
+        self.assertIn("grid-row: 4;", mobile[metrics_start:metrics_end])
 
     def test_history_detail_places_one_row_of_hot_metrics_before_the_post_content(self):
         detail = function_source("openPublishHistoryRecordModal", "requeuePublishHistoryRecord")

@@ -18381,8 +18381,7 @@ def _compact_publish_record(
     account_match_warning = ""
     if not account_matches_current:
         source_label = f"@{source_account_username}" if source_account_username else source_account_id
-        current_label = f"@{current_account_username}" if current_account_username else current_account_id
-        account_match_warning = f"该历史发布来自 {source_label}，当前人设绑定账号为 {current_label}。"
+        account_match_warning = f"历史账号：{source_label}"
     return {
         "id": record.get("id"),
         "archive_post_id": record.get("archivePostId") or record.get("archive_post_id"),

@@ -2478,6 +2478,31 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
     modal.id = modalId;
     modal.className = `console-modal${stack ? " console-modal-layer" : ""}`;
     modal.dataset.modalKey = String(modalKey || "");
+    const isDismissiveModalAction = (text = "") => /^(?:取消|关闭|放弃|返回|退出|稍后)/.test(String(text).trim());
+    const modalActionPriority = (action = {}) => {
+      if (action.dismissive || isDismissiveModalAction(action.text)) return 30;
+      if (action.primary || action.confirm) return 10;
+      return 20;
+    };
+    const modalActions = [
+      ...(showConfirm ? [{
+        kind: "confirm",
+        text: confirmText,
+        danger,
+        primary: !isDismissiveModalAction(confirmText),
+      }] : []),
+      ...(Array.isArray(extraActions) ? extraActions.map((action) => ({ ...action, kind: "value" })) : []),
+      ...(showCancel ? [{ kind: "cancel", text: cancelText, dismissive: true }] : []),
+    ].sort((left, right) => modalActionPriority(left) - modalActionPriority(right));
+    const modalActionsHtml = modalActions.map((action) => {
+      if (action.kind === "confirm") {
+        return `<button type="button" class="${action.danger ? "danger" : "primary"}" data-console-modal-confirm>${esc(action.text)}</button>`;
+      }
+      if (action.kind === "cancel") {
+        return `<button type="button" data-console-modal-cancel>${esc(action.text)}</button>`;
+      }
+      return `<button type="button" class="${action?.danger ? "danger" : (action?.primary ? "primary" : "")}" data-console-modal-value="${esc(action?.value || "")}">${action?.iconHtml || ""}${esc(action?.text || "")}</button>`;
+    }).join("");
     modal.__resolve = resolve;
     modal.innerHTML = `
       <div class="console-modal-backdrop" ${dismissOnBackdrop ? "data-console-modal-cancel" : ""}></div>
@@ -2504,12 +2529,7 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
             `).join("")}
           </div>
         ` : ""}
-        ${(showCancel || showConfirm || (Array.isArray(extraActions) && extraActions.length)) ? `
-          <div class="console-modal-actions">
-            ${showCancel ? `<button type="button" data-console-modal-cancel>${esc(cancelText)}</button>` : ""}
-            ${Array.isArray(extraActions) ? extraActions.map((action) => `<button type="button" class="${action?.danger ? "danger" : (action?.primary ? "primary" : "")}" data-console-modal-value="${esc(action?.value || "")}">${action?.iconHtml || ""}${esc(action?.text || "")}</button>`).join("") : ""}
-            ${showConfirm ? `<button type="button" class="${danger ? "danger" : "primary"}" data-console-modal-confirm>${esc(confirmText)}</button>` : ""}
-          </div>` : ""}
+        ${modalActionsHtml ? `<div class="console-modal-actions">${modalActionsHtml}</div>` : ""}
       </section>
     `;
     document.body.appendChild(modal);
@@ -6325,14 +6345,7 @@ function renderPersonaExecutionAccountBadge(persona) {
   const accountSyncPending = !state.socialDataLoadedAt && !hasExecutionAccount;
   const accountLabel = String(selectedAccount?.username || selectedAccount?.account_username || "").trim()
     || (accountSyncPending ? "账号同步中" : (selectedPlatform === fallbackDetails.platform ? fallbackDetails.accountLabel : "未绑定"));
-  const boundPlatforms = new Set(accounts
-    .map((account) => String(account?.platform || "").trim().toLowerCase())
-    .filter(Boolean));
-  if (fallbackDetails.hasExecutionAccount && fallbackDetails.platform) {
-    boundPlatforms.add(String(fallbackDetails.platform).trim().toLowerCase());
-  }
-  const platforms = accountPoolPlatforms.map(([platform]) => platform)
-    .filter((platform) => boundPlatforms.has(platform));
+  const platforms = accountPoolPlatforms.map(([platform]) => platform);
   const platformLogos = platforms.length
     ? `<span class="persona-execution-platform-logos" aria-label="已绑定平台">${platforms.map((item) => {
       const label = platformLabel(item);
@@ -13647,12 +13660,12 @@ function renderPublishHistorySelectionList(persona = selectedPersona(), options 
         const platformName = platformLabel(platform);
         const publishedAt = formatTime(publishHistoryRecordTime(record));
         return `
-          <article class="publish-post-card publish-history-card ${active ? "is-selected" : ""}" data-publish-history-card="${esc(recordId)}">
+          <article class="publish-post-card publish-history-card ${active ? "is-selected" : ""}" data-publish-history-card="${esc(recordId)}" data-account-platform="${esc(platform)}">
             <div class="publish-history-card-main">
               <span class="publish-post-card-index">${esc(displayIndex + 1)}</span>
               <span class="publish-post-card-copy">
                 <span class="publish-post-card-head">
-                  <span class="publish-history-card-platform" title="${esc(platformName)}" aria-label="${esc(platformName)}">${renderAccountPoolPlatformIcon(platform)}</span>
+                  <span class="publish-history-card-platform account-pool-card-platform" title="${esc(platformName)}" aria-label="${esc(platformName)}">${renderAccountPoolPlatformIcon(platform)}<span>${esc(platformName)}</span></span>
                   <time class="publish-history-card-time">${esc(publishedAt || "时间未知")}</time>
                 </span>
                 <span class="publish-post-card-snippet">${esc(String(record.content || record.caption || record.text || record.source_url || "").trim() || "该记录没有正文摘要。")}</span>
@@ -24110,9 +24123,9 @@ async function openPersonaGeneratedSelectionModal(persona, rows = []) {
     showConfirm: false,
     showClose: false,
     extraActions: [
-      { value: "discard", text: "放弃本次结果", danger: true },
       { value: "save", text: "保存草稿" },
       { value: "media", text: "生成配图", primary: true },
+      { value: "discard", text: "放弃本次结果", danger: true },
     ],
     modalKey: "persona-generated-selection",
     stack: true,
@@ -25471,6 +25484,7 @@ function pulseAccountPoolPlatformContent(root = $("accountGrid")) {
   window.requestAnimationFrame(() => {
     const content = root?.querySelector(".account-pool-content-window > .account-pool-content");
     if (!content) return;
+    if (!content.querySelector(".account-pool-card")) return;
     content.classList.remove("is-platform-refresh-pulse");
     void content.offsetWidth;
     content.classList.add("is-platform-refresh-pulse");
@@ -26618,8 +26632,8 @@ function accountProxyInlineCustomFormHtml(scope = "edit") {
       ${sharedProxyFieldsHtml("accountProxyCustom")}
     </div>
     <div class="account-proxy-inline-custom-actions">
-      <button type="button" class="account-inline-action" data-account-proxy-custom-cancel>取消</button>
       <button type="button" class="primary account-inline-action" data-account-proxy-custom-save>${renderNetworkIcon()}<span>检测并添加</span></button>
+      <button type="button" class="account-inline-action" data-account-proxy-custom-cancel>取消</button>
     </div>
   </section>`;
 }
@@ -26834,8 +26848,8 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
         ${accountProxyInlineCustomFormHtml("modal")}
       </div>
       <div class="console-modal-actions">
-        <button type="button" data-account-proxy-picker-cancel>取消</button>
         <button type="button" class="primary" data-account-proxy-picker-save="${esc(account.id)}">确认绑定</button>
+        <button type="button" data-account-proxy-picker-cancel>取消</button>
       </div>
     </section>`;
   document.body.appendChild(modal);
@@ -27046,8 +27060,8 @@ function createAccountTotpController(modal, account) {
           <input type="password" data-account-totp-secret placeholder="输入 Base32 或 otpauth://..." autocomplete="off" autocapitalize="off" spellcheck="false" />
         </label>
         <div class="account-totp-entry-actions">
-          ${configured ? `<button type="button" data-account-totp-update-cancel>取消</button>` : ""}
           <button type="button" class="primary account-inline-action" data-account-totp-submit>${configured ? renderReplaceIcon() : renderPlusIcon()}<span>${configured ? "更新 2FA" : "添加 2FA"}</span></button>
+          ${configured ? `<button type="button" data-account-totp-update-cancel>取消</button>` : ""}
         </div>
       </div>
       <p class="account-totp-message" data-account-totp-message hidden></p>`;
@@ -27379,8 +27393,8 @@ function openAccountPoolEditorModal(options) {
         ${renderAccountEditorForm(account, mode)}
       </div>
       <div class="console-modal-actions">
-        <button type="button" data-account-pool-editor-cancel>取消</button>
         <button type="button" class="primary" data-account-pool-editor-save>${editing ? "保存修改" : "保存账号"}</button>
+        <button type="button" data-account-pool-editor-cancel>取消</button>
       </div>
     </section>`;
   document.body.appendChild(modal);
@@ -28282,7 +28296,7 @@ function openProxyModal(proxyId = "") {
           ${sharedProxyFieldsHtml("proxyForm", proxy)}
         </div>
       </div>
-      <div class="console-modal-actions"><button type="button" data-proxy-modal-cancel>取消</button><button type="button" class="primary" data-proxy-modal-save="${esc(proxy?.id || "")}">保存代理</button></div>
+      <div class="console-modal-actions"><button type="button" class="primary" data-proxy-modal-save="${esc(proxy?.id || "")}">保存代理</button><button type="button" data-proxy-modal-cancel>取消</button></div>
     </section>`;
   document.body.appendChild(modal);
   const cachedResult = proxy?.last_check_result && typeof proxy.last_check_result === "object" ? proxy.last_check_result : null;

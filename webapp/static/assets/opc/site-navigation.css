@@ -630,6 +630,13 @@ body.site-mobile-menu-active {
   stroke-width: 1.8;
 }
 
+/* Keep the mobile navigation entry visually legible without changing its tap target. */
+.site-header .site-menu-toggle .site-menu-icon {
+  width: 24px;
+  height: 24px;
+  stroke-width: 2;
+}
+
 .site-mobile-menu-link-arrow {
   color: #9aa9a6;
 }

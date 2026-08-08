@@ -495,7 +495,7 @@
           <section class="console-modal-dialog video-speech-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="videoSpeechCandidateTitle">
             <div class="console-modal-head"><div><strong id="videoSpeechCandidateTitle">\u53e3\u64ad\u6587\u6848\u5019\u9009</strong><div class="small">\u5df2\u751f\u6210 ${candidates.length} \u6761\u4e0d\u540c\u5207\u5165\u89d2\u5ea6\u7684\u5b8c\u6574\u6587\u6848\uff0c\u8bf7\u9009\u62e9\u4e00\u6761\u4f7f\u7528\u3002</div></div><button type="button" class="console-modal-close" data-video-speech-cancel aria-label="\u5173\u95ed">&times;</button></div>
             <div class="console-modal-content"><div class="video-speech-candidate-grid">${cards()}</div></div>
-            <div class="console-modal-actions"><button type="button" data-video-speech-cancel>\u53d6\u6d88</button><button type="button" class="primary" data-video-speech-confirm>\u4f7f\u7528\u6b64\u6587\u6848</button></div>
+            <div class="console-modal-actions"><button type="button" class="primary" data-video-speech-confirm>\u4f7f\u7528\u6b64\u6587\u6848</button><button type="button" data-video-speech-cancel>\u53d6\u6d88</button></div>
           </section></div>`;
       };
       const finish = (value) => {
@@ -1410,7 +1410,7 @@
       <section class="console-modal-dialog" role="dialog" aria-modal="true" aria-label="${label}">
         <div class="console-modal-head"><div><strong>${label}</strong><div class="small">高清原图预览</div></div><button type="button" class="console-modal-close" data-video-image-close aria-label="关闭">&times;</button></div>
         <div class="console-modal-content"><img src="${url}" alt="${label}" referrerpolicy="no-referrer" style="display:block;max-width:100%;max-height:72vh;margin:auto;object-fit:contain"></div>
-        <div class="console-modal-actions"><button type="button" data-video-image-close>关闭</button><a class="primary" href="${url}" download target="_blank" rel="noopener">下载原图</a></div>
+        <div class="console-modal-actions"><a class="primary" href="${url}" download target="_blank" rel="noopener">下载原图</a><button type="button" data-video-image-close>关闭</button></div>
       </section>
     </div>`;
   }
@@ -1736,8 +1736,8 @@
           ${state.subtitleError ? `<div class="video-inline-error" role="alert">${escapeHtml(state.subtitleError)}</div>` : ""}
         </div>
         <div class="console-modal-actions">
-          <button type="button" data-video-subtitle-close ${state.subtitleSubmitting ? "disabled" : ""}>取消</button>
           <button type="button" class="primary" data-video-subtitle-confirm ${state.subtitleSubmitting ? "disabled" : ""}>${state.subtitleSubmitting ? "正在添加字幕…" : "确认添加字幕"}</button>
+          <button type="button" data-video-subtitle-close ${state.subtitleSubmitting ? "disabled" : ""}>取消</button>
         </div>
       </section>
     </div>`;

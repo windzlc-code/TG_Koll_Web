@@ -1135,6 +1135,14 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("account-pool-content-window", cards)
         self.assertIn("account-pool-content", cards)
         self.assertIn('function pulseAccountPoolPlatformContent(root = $("accountGrid"))', self.console_script)
+        pulse_start = self.console_script.index("function pulseAccountPoolPlatformContent(")
+        pulse_end = self.console_script.index("\nfunction waitForAccountPoolPlatformMotion", pulse_start)
+        pulse = self.console_script[pulse_start:pulse_end]
+        self.assertIn('content.querySelector(".account-pool-card")', pulse)
+        self.assertLess(
+            pulse.index('content.querySelector(".account-pool-card")'),
+            pulse.index('content.classList.add("is-platform-refresh-pulse")'),
+        )
         self.assertIn('content.classList.add("is-platform-refresh-pulse")', self.console_script)
         self.assertIn('content.classList.remove("is-platform-refresh-pulse")', self.console_script)
         settle_start = self.console_script.index("async function settleAccountPoolPlatformMotion(")

@@ -2696,7 +2696,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertFalse(row["account_match"]["matches_current"])
         self.assertEqual(row["account_match"]["source_handle"], "old_user")
         self.assertEqual(row["account_match"]["current_handle"], "current_user")
-        self.assertIn("@old_user", row["account_match"]["warning"])
+        self.assertEqual(row["account_match"]["warning"], "历史账号：@old_user")
 
     def test_instagram_publish_history_uses_bound_account_identity_for_mismatch(self):
         self._write_archives()
@@ -2727,7 +2727,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertFalse(row["account_match"]["matches_current"])
         self.assertEqual(row["account_match"]["current_account_id"], "instagram-current")
         self.assertEqual(row["account_match"]["current_handle"], "current.ig")
-        self.assertIn("@old.ig", row["account_match"]["warning"])
+        self.assertEqual(row["account_match"]["warning"], "历史账号：@old.ig")
 
     def test_overview_exposes_hot_metric_account_id_for_current_account_filtering(self):
         self._write_archives()

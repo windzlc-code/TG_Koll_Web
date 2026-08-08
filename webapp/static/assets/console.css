@@ -2179,11 +2179,19 @@ textarea:focus {
   display: grid;
   /* Match the row grid so the task heading starts at its input boundary. */
   grid-template-columns: minmax(0, 0.84fr) minmax(0, 1.16fr);
+  align-items: center;
   gap: 4px;
   padding: 0 6px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.automation-plan-table-head > span {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  line-height: 1;
 }
 
 .automation-plan-table-head > div,
@@ -2366,6 +2374,9 @@ textarea:focus {
   min-height: 30px;
   place-items: center;
   padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
   color: var(--ink);
 }
 
@@ -2401,7 +2412,6 @@ textarea:focus {
 }
 
 .automation-plan-task-detail,
-.automation-plan-task-picker,
 .automation-plan-remove {
   border: 0;
   background: transparent;
@@ -2423,8 +2433,6 @@ textarea:focus {
 
 .automation-plan-task-detail:hover,
 .automation-plan-task-detail:focus-visible,
-.automation-plan-task-picker:hover,
-.automation-plan-task-picker:focus-visible,
 .automation-plan-remove:hover,
 .automation-plan-remove:focus-visible {
   border: 0;
@@ -2443,16 +2451,20 @@ textarea:focus {
 
 .automation-plan-add {
   justify-self: center;
-  min-height: 32px;
-  padding: 3px 8px;
-  border: 0;
-  background: transparent;
+  min-height: 38px;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  color: var(--ink);
   box-shadow: none;
+  font-size: 15px;
+  font-weight: 800;
 }
 
 .automation-plan-add:hover,
 .automation-plan-add:focus-visible {
-  border: 0;
+  border-color: var(--ink);
   background: var(--soft);
   box-shadow: none;
 }
@@ -15328,7 +15340,7 @@ body.persona-media-sorting {
   line-height: 1;
 }
 
-/* Draft-exit confirmation offers only discard-and-exit or save. */
+/* Keep positive actions on the left and abandon actions on the right. */
 .console-modal[data-modal-key="persona-draft-edit-exit"] .console-modal-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -15346,11 +15358,11 @@ body.persona-media-sorting {
 }
 
 .console-modal[data-modal-key="persona-draft-edit-exit"] .console-modal-actions > [data-console-modal-value] {
-  grid-column: 1;
+  grid-column: 2;
 }
 
 .console-modal[data-modal-key="persona-draft-edit-exit"] .console-modal-actions > [data-console-modal-confirm] {
-  grid-column: 2;
+  grid-column: 1;
 }
 
 @media (max-width: 760px) {
@@ -23501,15 +23513,15 @@ body.console-page {
   }
 
   .publish-history-card-action {
-    width: 30px;
-    min-width: 30px;
-    height: 30px;
-    min-height: 30px;
+    width: var(--mobile-touch-target);
+    min-width: var(--mobile-touch-target);
+    height: var(--mobile-touch-target);
+    min-height: var(--mobile-touch-target);
   }
 
   .publish-history-card-requeue {
-    width: 30px;
-    min-width: 30px;
+    width: var(--mobile-touch-target);
+    min-width: var(--mobile-touch-target);
     padding: 0;
   }
 
@@ -23542,11 +23554,16 @@ body.console-page {
 
   .publish-history-card .publish-post-card-snippet {
     grid-column: 2 / -1;
-    grid-row: 3;
+    grid-row: 2;
   }
 
   .publish-history-card .publish-history-account-warning {
     grid-column: 2 / -1;
+    grid-row: 3;
+  }
+
+  .publish-history-card .publish-history-card-metrics {
+    grid-row: 4;
   }
 
   .publish-history-preview .publish-preview-card {
@@ -25262,7 +25279,11 @@ body.console-page {
     row-gap: 0;
     flex: 0 0 116px;
     min-width: 116px;
+    height: 44px;
     min-height: 44px;
+    max-height: 44px;
+    box-sizing: border-box;
+    border-width: 1px;
     padding: 6px 8px;
     scroll-snap-align: start;
     text-align: left;
@@ -26504,11 +26525,11 @@ body.console-page {
   color: inherit;
 }
 
-.console-page .account-pool-card[data-account-platform="threads"] .account-pool-card-platform {
+.console-page :is(.account-pool-card, .publish-history-card)[data-account-platform="threads"] .account-pool-card-platform {
   color: #000;
 }
 
-.console-page .account-pool-card[data-account-platform="instagram"] .account-pool-card-platform {
+.console-page :is(.account-pool-card, .publish-history-card)[data-account-platform="instagram"] .account-pool-card-platform {
   color: #c13584;
 }
 
@@ -26564,6 +26585,6 @@ body.console-page {
   border-color: #fff;
 }
 
-:root[data-theme="dark"] .console-page .account-pool-card[data-account-platform="threads"] .account-pool-card-platform {
+:root[data-theme="dark"] .console-page :is(.account-pool-card, .publish-history-card)[data-account-platform="threads"] .account-pool-card-platform {
   color: #fff;
 }

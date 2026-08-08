@@ -89,6 +89,17 @@ def test_draft_exit_confirmation_uses_a_compact_left_right_action_layout():
     assert 'console-modal-actions > [data-console-modal-cancel]' not in exit_modal_css[:exit_modal_css.index('@media (max-width: 760px)')]
     assert 'console-modal-actions > [data-console-modal-value]' in css
     assert 'console-modal-actions > [data-console-modal-confirm]' in css
+    assert 'data-console-modal-value] {\n  grid-column: 2;' in css
+    assert 'data-console-modal-confirm] {\n  grid-column: 1;' in css
+
+
+def test_console_modal_places_positive_actions_before_dismissals():
+    script = CONSOLE_JS.read_text(encoding="utf-8")
+
+    assert 'const isDismissiveModalAction = (text = "")' in script
+    assert 'if (action.dismissive || isDismissiveModalAction(action.text)) return 30;' in script
+    assert 'if (action.primary || action.confirm) return 10;' in script
+    assert '...(showCancel ? [{ kind: "cancel", text: cancelText, dismissive: true }] : []),' in script
 
 
 def test_draft_edit_save_uses_a_global_button_with_long_press_actions():
