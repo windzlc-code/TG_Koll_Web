@@ -761,7 +761,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("data-persona-generation-locked", sync)
         self.assertIn("button.disabled = true", sync)
         self.assertIn("renderPersonaGenerateComposeTabs(composeMode, {", panel)
-        self.assertIn("disabled: generationLocked", panel)
+        self.assertIn("disabled: generationControlsLocked", panel)
 
     def test_persona_generation_lock_has_event_guards_before_navigation_mutation(self):
         navigation = self._section(
@@ -1373,19 +1373,23 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("max-height: 208px;", self.styles)
         self.assertIn("overflow-y: auto;", self.styles)
 
-    def test_persona_hot_fetch_validates_keywords_before_tracking_controller(self):
+    def test_persona_hot_fetch_prepares_hidden_keywords_before_tracking_controller(self):
         fetch_source = self._function_source("fetchPersonaHotCandidates")
 
-        self.assertIn('showMsg("commandMsg", "请先生成或填写热点关键词。", false);', fetch_source)
+        self.assertIn("await preparePersonaHotKeywords(false)", fetch_source)
         self.assertIn("const controller = new AbortController();", fetch_source)
         self.assertLess(
             fetch_source.index('if (!keywords.length) {'),
             fetch_source.index("const controller = new AbortController();"),
         )
-        self.assertIn(
-            '先生成或填写关键词，再点击“按关键词抓取”获取 Threads / Instagram 热点候选。',
-            self.source,
-        )
+        self.assertIn('data-persona-fetch-hot', self.source)
+        self.assertIn('抓取热点', self.source)
+        self.assertNotIn('步骤 1：生成关键词', self.source)
+        self.assertNotIn('data-persona-hot-keywords', self.source)
+        self.assertNotIn('data-persona-prepare-hot-keywords', self.source)
+        self.assertNotIn('data-persona-fetch-hot-refresh', self.source)
+        self.assertNotIn('本次关键词', self.source)
+        self.assertNotIn('按关键词抓取', self.source)
 
     def test_persona_hot_workflow_cli_entrypoint_parses(self):
         npx = shutil.which("npx")
@@ -2534,6 +2538,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             function syncPersonaGenerateActionState() {{}}
             function syncPersonaDraftDirty() {{ return false; }}
             function normalizePersonaMediaGenerationForm() {{}}
+            function clearPersonaPostDirections() {{}}
             function clearUploadDropzoneState(inputId, stateKey) {{
               assert.equal(inputId, "personaPostMediaUploadFiles");
               uploadFiles.set(stateKey, []);

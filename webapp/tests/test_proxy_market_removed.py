@@ -51,7 +51,8 @@ class ProxyMarketRemovalTests(unittest.TestCase):
     def test_console_keeps_custom_proxy_and_adds_on_demand_system_pool(self):
         self.assertIn("data-system-proxy-pool-open", self.console_script)
         self.assertIn("data-proxy-add", self.console_script)
-        self.assertIn("<span>添加 IP</span>", self.console_script)
+        self.assertIn("<span>添加代理 IP</span>", self.console_script)
+        self.assertNotIn("<span>添加 IP</span>", self.console_script)
         self.assertIn("<span>自定义代理</span>", self.console_script)
         self.assertIn(
             'function openSystemProxyPoolModal({ accountId = "", selectedProxyId = "" } = {})',
@@ -69,6 +70,20 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertNotIn("openProxyMarketModal", self.console_script)
         self.assertNotIn("proxyMarketUnreadBadge", self.console_markup)
 
+    def test_shared_system_pool_keeps_the_limit_in_the_compact_header(self):
+        self.assertIn(
+            '<span class="system-proxy-pool-limit">只能免费领取 1 个</span>',
+            self.console_script,
+        )
+        self.assertIn(".system-proxy-pool-limit {", self.console_styles)
+        self.assertIn(
+            ".system-proxy-pool-modal .console-modal-head > div {\n  display: grid;\n  flex: 1 1 auto;",
+            self.console_styles,
+        )
+        self.assertIn("justify-content: space-between;", self.console_styles)
+        self.assertNotIn("system-proxy-pool-guide", self.console_script)
+        self.assertNotIn(".system-proxy-pool-guide", self.console_styles)
+
     def test_shared_system_pool_uses_the_legacy_embedded_market_dimensions(self):
         self.assertIn(
             "width: min(840px, calc(100vw - 32px));",
@@ -80,15 +95,40 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         )
         self.assertIn("max-height: min(70vh, 720px);", self.console_styles)
         self.assertIn(
-            ".system-proxy-pool-list {\n  display: grid;\n  grid-template-columns: repeat(3, minmax(0, 1fr));",
+            ".proxy-market-mini-grid {\n  display: grid;\n  grid-template-columns: repeat(3, minmax(0, 1fr));",
             self.console_styles,
         )
         self.assertIn(
-            ".system-proxy-pool-list {\n    grid-template-columns: repeat(2, minmax(0, 1fr));",
+            ".console-page .proxy-market-mini-grid {\n    grid-template-columns: minmax(0, 1fr);",
             self.console_styles,
         )
         self.assertNotIn("system-proxy-pool-actions", self.console_script)
         self.assertNotIn("data-system-proxy-pool-close>完成", self.console_script)
+
+    def test_shared_system_pool_reuses_the_legacy_market_card_pattern(self):
+        self.assertIn(
+            '<article class="proxy-market-mini-card" data-system-proxy-pool-card=',
+            self.console_script,
+        )
+        for class_name in (
+            "proxy-market-mini-card-head",
+            "proxy-market-mini-country",
+            "proxy-market-mini-stock",
+            "proxy-market-mini-location",
+            "proxy-market-mini-meta",
+        ):
+            self.assertIn(class_name, self.console_script)
+            self.assertIn(f".{class_name}", self.console_styles)
+        self.assertIn(
+            ".proxy-market-mini-card {\n  display: grid;\n  gap: 8px;\n  padding: 12px;",
+            self.console_styles,
+        )
+        self.assertIn(
+            ".proxy-market-mini-card {\n    gap: 7px;\n    padding: 10px;",
+            self.console_styles,
+        )
+        self.assertNotIn(".system-proxy-pool-card {", self.console_styles)
+        self.assertNotIn('class="system-proxy-pool-card', self.console_script)
 
     def test_backend_system_proxies_are_exposed_only_through_the_shared_pool(self):
         regular_list_route = self.social_api_source[

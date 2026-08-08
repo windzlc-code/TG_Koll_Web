@@ -488,9 +488,7 @@ const state = {
   personaPublishHistories: {},
   personaDashboardOverview: null,
   personaDashboardOverviewFetch: null,
-  personaDataTab: "hot",
   personaHistoryFilters: {
-    platform: "all",
     content: localStorage.getItem("personaDashboardPostTypeFilter") || "all",
     sort: localStorage.getItem("personaDashboardPostSort") || "hot_desc",
   },
@@ -681,7 +679,6 @@ function setSelectedPersonaId(personaId, { persist = true } = {}) {
   const changed = cleanId !== String(state.selectedPersonaId || "").trim();
   state.selectedPersonaId = cleanId;
   if (changed) {
-    state.personaDataTab = "hot";
     state.publishHistoryPreviewId = "";
   }
   if (!persist) return cleanId;
@@ -793,9 +790,7 @@ function clearTenantInMemoryState() {
   state.personaPublishWatchers = {};
   state.personaDashboardOverview = null;
   state.personaDashboardOverviewFetch = null;
-  state.personaDataTab = "hot";
   state.personaHistoryFilters = {
-    platform: "all",
     content: localStorage.getItem("personaDashboardPostTypeFilter") || "all",
     sort: localStorage.getItem("personaDashboardPostSort") || "hot_desc",
   };
@@ -3409,7 +3404,15 @@ function personaContentPlatform(persona = selectedPersona()) {
 
 function setPersonaContentPlatform(platform, persona = selectedPersona()) {
   const key = String(persona?.id || state.selectedPersonaId || "default");
-  state.personaContentPlatforms[key] = normalizePersonaContentPlatform(platform);
+  const nextPlatform = normalizePersonaContentPlatform(platform);
+  state.personaContentPlatforms[key] = nextPlatform;
+  state.personaAutomationPlatform = nextPlatform;
+  const preferredAccount = (state.socialAccounts || []).find(
+    (account) => String(account?.id || "") === String(state.preferredAccountId || ""),
+  );
+  if (preferredAccount && normalizePersonaContentPlatform(preferredAccount.platform) !== nextPlatform) {
+    state.preferredAccountId = "";
+  }
 }
 
 function personaPostContentPlatform(post = {}) {
@@ -3439,9 +3442,6 @@ function personaFavoritePosts(persona = selectedPersona()) {
 
 function renderPersonaContentPlatformRail(persona, { disabled = false } = {}) {
   const current = personaContentPlatform(persona);
-  const personaId = String(persona?.id || "");
-  const allDrafts = visiblePersonaDraftPosts(state.personaDraftPosts[personaId] || []);
-  const allFavorites = state.personaFavoritePosts[personaId] || [];
   return `
     <div class="persona-content-platform-rail">
       <div class="account-pool-platforms account-pool-platform-tabs persona-content-platform-tabs"
@@ -3449,8 +3449,6 @@ function renderPersonaContentPlatformRail(persona, { disabled = false } = {}) {
            aria-label="推文归档平台">
         ${accountPoolPlatforms.map(([platform, label]) => {
           const isActive = platform === current;
-          const draftCount = allDrafts.filter((post) => personaPostContentPlatform(post) === platform).length;
-          const favoriteCount = allFavorites.filter((post) => personaPostContentPlatform(post) === platform).length;
           return `
             <button type="button"
                     class="${isActive ? "is-active" : ""}"
@@ -3460,7 +3458,6 @@ function renderPersonaContentPlatformRail(persona, { disabled = false } = {}) {
                     ${disabled ? "disabled" : ""}>
               ${renderAccountPoolPlatformIcon(platform)}
               <strong>${esc(label)}</strong>
-              <small>草稿 ${draftCount} · 收藏 ${favoriteCount}</small>
             </button>
           `;
         }).join("")}
@@ -5033,7 +5030,11 @@ function renderPersonaHotMediaPreview(persona, candidate) {
   const hasStoredDraft = Array.isArray(form.hotMediaDraftsByCandidate?.[candidateId]);
   const storedDraft = personaHotMediaDraft(persona, candidate, { create: false });
   const mediaItems = hasStoredDraft ? storedDraft : personaHotCandidateMediaItems(candidate);
-  if (!mediaItems.length) return `<div class="empty-state">当前热点候选没有媒体。</div>`;
+  if (!mediaItems.length) return renderModuleEmptyState({
+    icon: "media",
+    title: "当前热点候选没有媒体",
+    detail: "可切换其他热点候选查看配图或视频",
+  });
   const previewRows = mediaItems.filter((item) => item?.previewUrl && !item?.unavailable);
   const previewGroupId = registerMediaPreviewGroup(previewRows);
   let previewIndex = 0;
@@ -6324,7 +6325,14 @@ function renderPersonaExecutionAccountBadge(persona) {
   const accountSyncPending = !state.socialDataLoadedAt && !hasExecutionAccount;
   const accountLabel = String(selectedAccount?.username || selectedAccount?.account_username || "").trim()
     || (accountSyncPending ? "账号同步中" : (selectedPlatform === fallbackDetails.platform ? fallbackDetails.accountLabel : "未绑定"));
-  const platforms = accountPoolPlatforms.map(([platform]) => platform);
+  const boundPlatforms = new Set(accounts
+    .map((account) => String(account?.platform || "").trim().toLowerCase())
+    .filter(Boolean));
+  if (fallbackDetails.hasExecutionAccount && fallbackDetails.platform) {
+    boundPlatforms.add(String(fallbackDetails.platform).trim().toLowerCase());
+  }
+  const platforms = accountPoolPlatforms.map(([platform]) => platform)
+    .filter((platform) => boundPlatforms.has(platform));
   const platformLogos = platforms.length
     ? `<span class="persona-execution-platform-logos" aria-label="已绑定平台">${platforms.map((item) => {
       const label = platformLabel(item);
@@ -7830,7 +7838,11 @@ function personaHistoryRows(persona, limit = 8) {
 
 function renderPersonaHistoryRows(rows, { hiddenCount = 0 } = {}) {
   if (!Array.isArray(rows) || !rows.length) {
-    return `<div class="empty-state">${hiddenCount > 0 ? `当前还没有正式任务历史；已过滤 ${hiddenCount} 条登录或预检记录。` : "当前还没有任务历史。"}</div>`;
+    return renderModuleEmptyState({
+      icon: "task",
+      title: "暂无任务历史",
+      detail: hiddenCount > 0 ? `已过滤 ${hiddenCount} 条登录或预检记录` : "执行任务后会在这里保留记录",
+    });
   }
   return `<div class="compact-list">${rows.map((row) => {
     const action = String(
@@ -8584,7 +8596,11 @@ function positionPersonaDraftMenu(menu) {
 
 function renderPersonaDraftRows(posts, source = personaPostSource(), allRows = posts) {
   const isFavoriteSource = source === "favorites";
-  if (!posts.length) return `<div class="empty-state">${isFavoriteSource ? "当前还没有收藏推文。可以在草稿里点击收藏，或从 Bot 同步已有收藏。" : "当前还没有推文草稿。先新建一条，再进入任务步骤。"}</div>`;
+  if (!posts.length) return renderModuleEmptyState({
+    icon: "content",
+    title: isFavoriteSource ? "暂无收藏推文" : "暂无推文草稿",
+    detail: isFavoriteSource ? "可从草稿收藏，或从 Bot 同步已有收藏" : "新建或生成一条推文后会显示在这里",
+  });
   const mode = personaDraftViewMode();
   const personaId = String(selectedPersona()?.id || "");
   const selectedIds = new Set(syncPersonaSelectedPostIds(selectedPersona(), source, allRows));
@@ -8613,7 +8629,6 @@ function renderPersonaDraftRows(posts, source = personaPostSource(), allRows = p
             data-persona-bulk-post-source="${esc(source)}"
             ${isChecked ? "checked" : ""}
           />
-          <span>勾选</span>
         </label>
         <strong>${esc(displayTitle)}</strong>
         ${renderMediaTypeBadge(mediaItems)}
@@ -8981,7 +8996,6 @@ function renderPersonaDraftTableRows(posts, personaId, allRows = posts) {
                   data-persona-bulk-post-source="${esc(source)}"
                   ${isChecked ? "checked" : ""}
                 />
-                <span>勾选</span>
               </label>
             </div>
             <div class="persona-draft-table-cell persona-draft-table-index" role="cell" data-mobile-label="序号">${esc(index + 1)}</div>
@@ -9006,16 +9020,16 @@ function renderPersonaPostBulkActions(persona, source, rows) {
   const cleanSource = source === "favorites" ? "favorites" : "posts";
   const selectedIds = syncPersonaSelectedPostIds(persona, cleanSource, rows);
   const selectedCount = selectedIds.length;
+  const allSelected = Boolean(rows.length) && selectedCount === rows.length;
+  const selectionAction = allSelected ? "clear" : "all";
+  const selectionLabel = allSelected ? "取消全选" : "全选";
   const actionLabel = cleanSource === "favorites" ? "批量移出" : "批量删除";
   return `
     <div class="persona-post-bulk-actions">
       <strong>已勾选 ${selectedCount} / ${rows.length}</strong>
       <div class="row-actions">
-        <button type="button" class="persona-post-bulk-icon-button" data-persona-post-bulk="all" data-persona-post-bulk-source="${esc(cleanSource)}" title="全选" aria-label="全选" ${rows.length ? "" : "disabled"}>
-          ${renderSelectAllIcon()}
-        </button>
-        <button type="button" class="persona-post-bulk-icon-button" data-persona-post-bulk="clear" data-persona-post-bulk-source="${esc(cleanSource)}" title="清空选择" aria-label="清空选择" ${selectedCount ? "" : "disabled"}>
-          ${renderClearSelectionIcon()}
+        <button type="button" class="persona-post-bulk-icon-button" data-persona-post-bulk="${selectionAction}" data-persona-post-bulk-source="${esc(cleanSource)}" title="${selectionLabel}" aria-label="${selectionLabel}" ${rows.length ? "" : "disabled"}>
+          ${allSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}
         </button>
         <button type="button" class="danger persona-post-bulk-icon-button" data-persona-post-bulk="delete" data-persona-post-bulk-source="${esc(cleanSource)}" title="${actionLabel}" aria-label="${actionLabel}" ${selectedCount ? "" : "disabled"}>
           ${renderTrashIcon()}
@@ -9088,6 +9102,9 @@ function renderPersonaMemoryOptions(persona, selectedIds = []) {
   const selected = new Set((selectedIds || [])
     .map((item) => String(item || ""))
     .filter((id) => rowIds.has(id)));
+  const allSelected = Boolean(safeRows.length) && selected.size === safeRows.length;
+  const selectionAction = allSelected ? "clear" : "all";
+  const selectionLabel = allSelected ? "取消全选" : "全选记忆";
   return `
     <div class="persona-memory-panel">
       <div class="persona-memory-toolbar">
@@ -9095,8 +9112,7 @@ function renderPersonaMemoryOptions(persona, selectedIds = []) {
         <div class="persona-memory-actions" aria-label="人设记忆操作">
           ${safeRows.length ? "" : '<span class="persona-memory-empty-hint">暂无可选记忆</span>'}
           <button type="button" class="unified-action-icon-button" data-persona-create-memory title="新建记忆" aria-label="新建记忆">${renderPlusIcon()}</button>
-          <button type="button" class="bulk-selection-icon-button" data-persona-memory-bulk="all" title="全选记忆" aria-label="全选记忆" ${safeRows.length ? "" : "disabled"}>${renderSelectAllIcon()}</button>
-          <button type="button" class="bulk-selection-icon-button" data-persona-memory-bulk="clear" title="清空选择" aria-label="清空选择" ${selected.size ? "" : "disabled"}>${renderClearSelectionIcon()}</button>
+          <button type="button" class="bulk-selection-icon-button" data-persona-memory-bulk="${selectionAction}" title="${selectionLabel}" aria-label="${selectionLabel}" ${safeRows.length ? "" : "disabled"}>${allSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}</button>
         </div>
       </div>
       ${safeRows.length ? `<div class="persona-memory-grid">
@@ -9140,8 +9156,17 @@ function syncPersonaMemorySelectionState() {
   if (countNode) {
     countNode.textContent = String(selectedCount);
   }
-  const clearButton = document.querySelector('[data-persona-memory-bulk="clear"]');
-  if (clearButton) clearButton.disabled = selectedCount === 0;
+  const toggleButton = document.querySelector("[data-persona-memory-bulk]");
+  const total = document.querySelectorAll("[data-persona-memory-id]").length;
+  const allSelected = Boolean(total) && selectedCount === total;
+  if (toggleButton) {
+    const label = allSelected ? "取消全选" : "全选记忆";
+    toggleButton.dataset.personaMemoryBulk = allSelected ? "clear" : "all";
+    toggleButton.title = label;
+    toggleButton.setAttribute("aria-label", label);
+    toggleButton.disabled = !total;
+    toggleButton.innerHTML = allSelected ? renderClearSelectionIcon() : renderSelectAllIcon();
+  }
 }
 
 function personaMemoryRows(persona = selectedPersona()) {
@@ -9171,7 +9196,11 @@ function isPublishHistoryPostRecord(record = {}) {
 }
 
 function personaPublishPreview(post) {
-  if (!post) return `<div class="empty-state">请先在“推文草稿”里创建并选中一条推文。</div>`;
+  if (!post) return renderModuleEmptyState({
+    icon: "content",
+    title: "请先选择一条推文",
+    detail: "在推文草稿中创建或选中内容后即可预览",
+  });
   const personaId = String(selectedPersona()?.id || "");
   const hotMeta = personaHotImportMeta(personaId, post.id);
   return `
@@ -9287,7 +9316,11 @@ function renderPersonaLinkPresetPager(pageInfo, totalItems) {
 
 function renderPersonaLinkPresetTable(profile, presets, selectedPresetId) {
   if (!presets.length) {
-    return `<div class="empty-state">暂无链接模板。左侧填写参数后新增。</div>`;
+    return renderModuleEmptyState({
+      icon: "content",
+      title: "暂无链接模板",
+      detail: "填写参数后可新增一个链接模板",
+    });
   }
   const activeId = String(profile?.active_link_preset_id || "").trim();
   const pageInfo = personaLinkPresetPage(presets.length);
@@ -9364,7 +9397,11 @@ function renderPersonaAccountPanel(persona, account, profile, step) {
               <p>${esc(`${platformLabel(item.platform || "")} · ${statusLabel(item.status || "")}`)}</p>
             </article>`).join("")}
         </div>
-      ` : `<div class="empty-state">当前人设还没有绑定浏览器执行账号。</div>`}
+      ` : renderModuleEmptyState({
+        icon: "browser",
+        title: "当前人设还没有绑定浏览器账号",
+        detail: "绑定账号后即可执行浏览器自动化任务",
+      })}
       <div class="row-actions">
         <button type="button" class="primary" data-open-unified-automation>进入账号管理</button>
       </div>
@@ -9757,10 +9794,6 @@ async function savePersonaProfileEdit() {
   showMsg("commandMsg", field === "name" ? "人设名称已保存。" : "人设简介已保存。", true);
 }
 
-function normalizePersonaDataTab(value) {
-  return value === "history" ? "history" : "hot";
-}
-
 function personaDashboardDetail(persona = selectedPersona()) {
   const personaId = String(persona?.id || "").trim();
   if (!personaId) return null;
@@ -9890,12 +9923,12 @@ function personaHistorySortValue(record = {}, sort = "hot_desc") {
 
 function personaFilteredHistoryRows(persona = selectedPersona()) {
   const filters = state.personaHistoryFilters || {};
-  const platform = String(filters.platform || "all").toLowerCase();
+  const platform = personaContentPlatform(persona);
   const content = String(filters.content || "all").toLowerCase();
   const sort = String(filters.sort || "hot_desc");
   const direction = sort.endsWith("_asc") ? 1 : -1;
   return personaMergedHistoryRows(persona).filter((record) => {
-    if (platform !== "all" && String(record.platform || "").toLowerCase() !== platform) return false;
+    if (normalizePersonaContentPlatform(record.platform) !== platform) return false;
     const parts = personaHistoryContentParts(record);
     if (content === "text") return parts.hasText;
     if (content === "image") return parts.imageCount > 0;
@@ -9909,48 +9942,79 @@ function personaFilteredHistoryRows(persona = selectedPersona()) {
   });
 }
 
-function renderPersonaDataTabs(activeTab) {
-  const active = normalizePersonaDataTab(activeTab);
-  return `<div class="persona-data-tabs" role="tablist" aria-label="人设数据切换">
-    <button type="button" role="tab" aria-selected="${active === "hot" ? "true" : "false"}" class="${active === "hot" ? "is-active" : ""}" data-persona-data-tab="hot">热点数据</button>
-    <button type="button" role="tab" aria-selected="${active === "history" ? "true" : "false"}" class="${active === "history" ? "is-active" : ""}" data-persona-data-tab="history">人设历史推文</button>
+function personaPlatformMetricSummary(persona = selectedPersona()) {
+  const platform = personaContentPlatform(persona);
+  const account = selectedPersonaAutomationAccount(persona, platform);
+  const normalizeUsername = (value) => String(value || "").trim().replace(/^@+/, "").toLowerCase();
+  const accountId = String(account?.id || "").trim();
+  const accountUsername = normalizeUsername(account?.username || account?.account_username || account?.login_username);
+  const detail = personaDashboardDetail(persona);
+  const platformRows = (detail?.hot_platforms || []).filter(
+    (row) => normalizePersonaContentPlatform(row?.platform) === platform,
+  );
+  const accountRows = account
+    ? platformRows.filter((row) => {
+        const rowAccountId = String(row?.account_id || row?.accountId || "").trim();
+        const rowUsername = normalizeUsername(row?.username || row?.account_username || row?.accountUsername);
+        if (accountId && rowAccountId) return rowAccountId === accountId;
+        return Boolean(accountUsername && rowUsername && rowUsername === accountUsername);
+      })
+    : [];
+  const metricRows = account ? accountRows : platformRows;
+  const sum = (key) => metricRows.reduce((total, row) => total + Number(row?.[key] || 0), 0);
+  const followers = metricRows.reduce((maximum, row) => Math.max(maximum, Number(row?.followers || 0)), 0);
+  const postViews = sum("post_views");
+  const recentViews = sum("recent_views");
+  const interactions = sum("likes") + sum("comments") + sum("shares") + sum("reposts");
+  const publishedRows = personaPublishHistoryRows(persona).filter((record) => {
+    if (normalizePersonaContentPlatform(record?.platform || record?.publishPlatform) !== platform) return false;
+    const recordAccountId = String(record?.account_id || record?.accountId || "").trim();
+    const recordUsername = normalizeUsername(record?.account_username || record?.accountUsername || record?.username);
+    if (accountId && recordAccountId) return recordAccountId === accountId;
+    if (accountUsername && recordUsername) return recordUsername === accountUsername;
+    return !account;
+  });
+  const metricPublished = metricRows.reduce(
+    (maximum, row) => Math.max(maximum, Number(row?.posts || row?.scanned_posts || 0)),
+    0,
+  );
+  return {
+    platform,
+    followers,
+    hot_views: postViews || recentViews,
+    interactions,
+    published: metricPublished || publishedRows.length,
+  };
+}
+
+function renderPersonaPlatformMetricStrip(persona = selectedPersona()) {
+  const summary = personaPlatformMetricSummary(persona);
+  const metrics = [
+    ["粉丝", summary.followers],
+    ["热点/浏览", summary.hot_views],
+    ["互动", summary.interactions],
+    ["发布", summary.published],
+  ];
+  return `<span class="persona-profile-platform-metrics" data-persona-platform-metrics="${esc(summary.platform)}" aria-label="${esc(`${platformLabel(summary.platform)} 当前账号数据`)}">
+    ${metrics.map(([label, value]) => `<span><small>${esc(label)}</small><strong>${esc(numberText(value))}</strong></span>`).join("")}
+  </span>`;
+}
+
+function renderPersonaPublishHistoryEmptyState() {
+  return `<div class="persona-history-empty-state">
+    ${renderFormListIcon()}
+    <div>
+      <strong>暂无已发布推文</strong>
+      <span>发布后将在这里展示</span>
+    </div>
   </div>`;
 }
 
-function renderPersonaHotDataContent(persona) {
-  const hot = persona?.hot || {};
-  const personaId = String(persona?.id || "");
-  const drafts = personaDraftPosts(persona);
-  const historyRows = personaPublishHistoryRows(persona);
-  const draftCount = Array.isArray(state.personaDraftPosts[personaId]) ? drafts.length : personaOverviewDraftCount(persona);
-  const accountCount = uniqueAccountOptions(personaAccounts(persona)).length || Math.max(0, Number(persona?.counts?.accounts || 0));
-  const profileStats = [
-    ["草稿", draftCount],
-    ["已发布", Number(persona?.counts?.published || historyRows.length || 0)],
-    ["账号", accountCount],
-  ];
-  const totalHotScore = Number(hot.hot_score || 0);
-  const hotStats = [
-    ["点赞", Number(hot.likes || 0)],
-    ["评论", Number(hot.comments || 0)],
-    ["分享", Number(hot.shares || 0)],
-    ["转发", Number(hot.reposts || 0)],
-  ];
-  return `<div class="persona-data-tab-panel" role="tabpanel" data-persona-data-panel="hot">
-    <aside class="persona-hot-summary-card persona-hot-summary-card--hot">
-      <div class="persona-hot-summary-head"><span>热点数据</span><strong>${persona?.hot ? "实时统计" : "暂无统计"}</strong></div>
-      <div class="persona-hot-summary-metrics persona-hot-summary-metrics--hot">
-        <div class="persona-hot-total-metric"><span>总热点</span><strong>${esc(numberText(totalHotScore))}</strong></div>
-        ${hotStats.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(numberText(value))}</strong></div>`).join("")}
-      </div>
-    </aside>
-    <aside class="persona-hot-summary-card persona-hot-summary-card--profile">
-      <div class="persona-hot-summary-head"><span>人设数据</span><strong>基础统计</strong></div>
-      <div class="persona-hot-summary-metrics persona-hot-summary-metrics--profile">
-        ${profileStats.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(numberText(value))}</strong></div>`).join("")}
-      </div>
-    </aside>
-  </div>`;
+function renderPublishHistoryRefreshContent(refreshing = false, refreshStatus = null) {
+  const label = refreshing
+    ? `刷新中 ${Number(refreshStatus?.progress || 0)}%`
+    : "刷新数据";
+  return `${renderRefreshIcon()}<span>${esc(label)}</span>`;
 }
 
 function renderPersonaHistoryFilters(rows = [], persona = selectedPersona()) {
@@ -9960,19 +10024,20 @@ function renderPersonaHistoryFilters(rows = [], persona = selectedPersona()) {
   const refreshStatus = refreshing ? state.publishHistoryRefreshStatus : null;
   return `<div class="persona-history-toolbar">
     <div class="persona-history-filters" aria-label="历史推文筛选">
-      <label><span>平台</span><select data-persona-history-filter="platform">
-        <option value="all" ${filters.platform === "all" ? "selected" : ""}>全部平台</option>
-        <option value="threads" ${filters.platform === "threads" ? "selected" : ""}>Threads</option>
-        <option value="instagram" ${filters.platform === "instagram" ? "selected" : ""}>Instagram</option>
-      </select></label>
-      <label><span>内容</span><select data-persona-history-filter="content">
+      <label class="persona-history-filter-trigger${filters.content !== "all" ? " is-active" : ""}" title="内容筛选">
+        <span class="sr-only">内容筛选</span>
+        <span class="persona-history-filter-icon">${renderPersonaHistoryContentFilterIcon()}</span>
+        <select data-persona-history-filter="content" aria-label="内容筛选">
         <option value="all" ${filters.content === "all" ? "selected" : ""}>全部内容</option>
         <option value="text" ${filters.content === "text" ? "selected" : ""}>有文字</option>
         <option value="image" ${filters.content === "image" ? "selected" : ""}>有图片</option>
         <option value="video" ${filters.content === "video" ? "selected" : ""}>有视频</option>
         <option value="media" ${filters.content === "media" ? "selected" : ""}>有媒体</option>
       </select></label>
-      <label><span>排序</span><select data-persona-history-filter="sort">
+      <label class="persona-history-filter-trigger${filters.sort !== "hot_desc" ? " is-active" : ""}" title="排序方式">
+        <span class="sr-only">排序方式</span>
+        <span class="persona-history-filter-icon">${renderPersonaHistorySortFilterIcon()}</span>
+        <select data-persona-history-filter="sort" aria-label="排序方式">
         <option value="hot_desc" ${filters.sort === "hot_desc" ? "selected" : ""}>热度最高</option>
         <option value="hot_asc" ${filters.sort === "hot_asc" ? "selected" : ""}>热度最低</option>
         <option value="time_desc" ${filters.sort === "time_desc" ? "selected" : ""}>发布时间最新</option>
@@ -9985,9 +10050,9 @@ function renderPersonaHistoryFilters(rows = [], persona = selectedPersona()) {
       </select></label>
     </div>
     <div class="persona-history-toolbar-actions">
-      <span class="persona-history-count">共 ${esc(numberText(rows.length))} 条</span>
-      <button type="button" class="persona-history-refresh" data-publish-history-refresh aria-busy="${refreshing ? "true" : "false"}" ${refreshing ? "disabled" : ""}>${refreshing ? `刷新中 ${esc(Number(refreshStatus?.progress || 0))}%` : "刷新热点数据"}</button>
+      <button type="button" class="persona-history-refresh" data-publish-history-refresh aria-busy="${refreshing ? "true" : "false"}" ${refreshing ? "disabled" : ""}>${renderPublishHistoryRefreshContent(refreshing, refreshStatus)}</button>
     </div>
+    <span class="persona-history-count">共 ${esc(numberText(rows.length))} 条</span>
   </div>`;
 }
 
@@ -9999,24 +10064,26 @@ function renderPersonaHistoryDataContent(persona) {
   const rows = personaFilteredHistoryRows(persona);
   const personaId = String(persona?.id || "");
   const loading = !hasDashboardData && Boolean(state.personaDashboardOverviewFetch);
-  return `<div class="persona-data-tab-panel persona-history-data-panel" role="tabpanel" data-persona-data-panel="history">
+  return `<div class="persona-history-data-panel">
     ${renderPersonaHistoryFilters(rows, persona)}
-    <div class="publish-history-note">汇总首页人设看板和任务历史；可按平台、内容类型与真实互动数据筛选排序。</div>
-    ${loading ? `<div class="persona-history-loading" role="status">正在同步完整人设历史推文...</div>` : ""}
-    ${renderPublishHistorySelectionList(persona, {
-      rows,
-      streamKey: `persona-data-history:${personaId}:${state.personaHistoryFilters.platform}:${state.personaHistoryFilters.content}:${state.personaHistoryFilters.sort}`,
-    })}
+    ${loading ? `<div class="persona-history-loading" role="status">正在同步完整人设发布推文...</div>` : (rows.length ? `
+      <div class="publish-history-note">汇总当前人设的已发布推文和真实互动数据；可按平台、内容类型与数据排序。</div>
+      ${renderPublishHistorySelectionList(persona, {
+        rows,
+        streamKey: `persona-data-history:${personaId}:${personaContentPlatform(persona)}:${state.personaHistoryFilters.content}:${state.personaHistoryFilters.sort}`,
+        streamTarget: "persona-detail",
+      })}
+    ` : renderPersonaPublishHistoryEmptyState())}
   </div>`;
 }
 
 function renderPersonaDataPanel(persona) {
-  const activeTab = normalizePersonaDataTab(state.personaDataTab);
-  state.personaDataTab = activeTab;
   return `
-    <section class="persona-profile-data-panel" aria-label="人设相关数据">
-      ${renderPersonaDataTabs(activeTab)}
-      ${activeTab === "history" ? renderPersonaHistoryDataContent(persona) : renderPersonaHotDataContent(persona)}
+    <section class="persona-profile-data-panel" aria-label="人设发布推文">
+      <div class="persona-profile-data-panel-head persona-published-posts-head">
+        <strong>人设发布推文</strong>
+      </div>
+      ${renderPersonaHistoryDataContent(persona)}
     </section>`;
 }
 
@@ -10086,6 +10153,7 @@ function renderPersonaProfileIdentity(persona, profile, {
         <span class="persona-profile-account-status persona-profile-header-account" aria-label="执行账号">${renderPersonaExecutionAccountBadge(persona)}</span>
         ${listToggle}
       </div>
+      <div class="persona-profile-header-divider" aria-hidden="true"></div>
       <div class="persona-profile-identity-avatar-row">
         <div class="persona-avatar-control">
           ${renderPersonaAvatar(persona, resolvedProfile, displayAvatar)}
@@ -10093,10 +10161,10 @@ function renderPersonaProfileIdentity(persona, profile, {
         </div>
         <div class="persona-profile-identity-content">
           <div class="persona-profile-name-block">
-            <span>人设名称</span>
             <div class="persona-profile-name-row">
               <strong>${esc(resolvedProfile?.name || persona?.name || "未命名人设")}</strong>
             </div>
+            ${renderPersonaPlatformMetricStrip(persona)}
             <div class="persona-profile-action-row">
               <button type="button" class="primary persona-profile-editor-launch" data-persona-open-profile-editor>${renderEditIcon()}<span>编辑人设档案</span></button>
               <button type="button" class="persona-profile-open-account" data-persona-open-account-homepage>${renderBrowserLaunchIcon()}<span>打开账号主页</span></button>
@@ -10120,13 +10188,13 @@ function renderPersonaContentOverview(persona, account, profile) {
     <div class="persona-profile-overview-layout">
       ${renderPersonaProfileIdentity(persona, profile)}
       <div class="persona-profile-overview-main">
-        ${renderPersonaDataPanel(persona)}
         <section class="persona-profile-account-panel" aria-label="账号设置">
-          <div class="persona-profile-data-panel-head">
+          <div class="persona-profile-data-panel-head persona-profile-account-panel-head">
             <strong>账号设置</strong>
           </div>
           ${renderPersonaAccountPanelV2(persona, account, profile, "binding")}
         </section>
+        ${renderPersonaDataPanel(persona)}
       </div>
     </div>`;
 }
@@ -10303,52 +10371,52 @@ function renderPersonaSettingsPanelV2(persona, account, profile, step) {
     </div>`;
 }
 
-function renderPersonaAccountPanelV2(persona, account, profile, step) {
-  const platform = selectedPersonaAutomationPlatform();
+function renderPersonaAccountPlatformContent(persona, platform = personaContentPlatform(persona)) {
   const accounts = personaAutomationAccounts(persona, platform);
   const selectedAccount = selectedPersonaAutomationAccount(persona, platform);
-  const platformOptions = personaAutomationPlatformOptions(persona);
-  const renderPlatformTab = (value) => {
-    const rows = personaAutomationAccounts(persona, value);
-    const isActive = platform === value;
-    return `<button type="button" class="${isActive ? "is-active" : ""}" data-persona-account-platform="${esc(value)}" role="tab" aria-selected="${isActive ? "true" : "false"}" aria-label="${esc(`${platformLabel(value)}，${rows.length} 个账号`)}">
-      ${renderAccountPoolPlatformIcon(value)}
-      <strong>${esc(platformLabel(value))}</strong>
-      <small>${esc(`${rows.length} 个账号`)}</small>
-    </button>`;
-  };
   const pickerAction = personaAccountPickerTriggerDisplay({ selectedAccount, accounts });
   const addAccountButton = `<button type="button" class="account-pool-add-button persona-account-add-button is-${esc(pickerAction.kind)}" data-persona-account-add data-persona-account-platform="${esc(platform)}" title="${esc(pickerAction.title)}" aria-label="${esc(pickerAction.title)}">
     <span aria-hidden="true">${pickerAction.icon}</span>
     <strong>${esc(pickerAction.label)}</strong>
   </button>`;
+  return `<div class="account-pool-content">
+    ${selectedAccount ? "" : `<div class="account-pool-add-row persona-account-action-row">${addAccountButton}</div>`}
+    <div class="account-pool-list">
+      ${accounts.length ? accounts.map((item) => renderAccountPoolCard(item, {
+        variant: "persona-settings",
+        personaAccountAction: String(item.id || "") === String(selectedAccount?.id || "")
+          ? { platform, title: pickerAction.title }
+          : null,
+      })).join("") : `<div class="account-pool-empty-state persona-account-empty-state" role="status">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="9" cy="8" r="3.25"></circle><path d="M3.75 19c.55-3.1 2.4-4.85 5.25-4.85s4.7 1.75 5.25 4.85M18.5 11.5v6M15.5 14.5h6"></path></svg>
+        <strong>暂无账号</strong>
+        <span>点击添加账号，开始配置当前平台</span>
+      </div>`}
+    </div>
+  </div>`;
+}
+
+function renderPersonaAccountPanelV2(persona, account, profile, step) {
+  const platform = personaContentPlatform(persona);
+  state.personaAutomationPlatform = platform;
+  const platformOptions = personaAutomationPlatformOptions(persona);
+  const renderPlatformTab = (value) => {
+    const isActive = platform === value;
+    return `<button type="button" class="${isActive ? "is-active" : ""}" data-persona-account-platform="${esc(value)}" role="tab" aria-selected="${isActive ? "true" : "false"}" aria-label="${esc(platformLabel(value))}">
+      ${renderAccountPoolPlatformIcon(value)}
+      <strong>${esc(platformLabel(value))}</strong>
+    </button>`;
+  };
   return `
     <div class="persona-account-pool-layout">
       <section class="account-pool-platform-panel persona-account-platform-panel">
-        <div class="account-pool-section-head">
-          <strong>平台</strong>
-        </div>
         <div class="account-pool-platforms account-pool-platform-tabs persona-account-platform-tabs" data-persona-account-platform-tabs role="tablist" aria-label="账号平台">
           ${platformOptions.map(renderPlatformTab).join("")}
         </div>
       </section>
       <section class="account-pool-account-panel persona-account-pool-panel">
-        <div class="account-pool-section-head persona-account-section-head">
-          <div class="persona-account-section-title">
-            <strong>账号</strong>
-            <span class="account-pool-selection-count">${esc(selectedAccount ? `当前：${accountDisplayName(selectedAccount)}` : "未绑定账号")}</span>
-          </div>
-        </div>
-        <div class="account-pool-add-row persona-account-action-row">${addAccountButton}</div>
-        <div class="account-pool-list">
-          ${accounts.length ? accounts.map((item) => renderAccountPoolCard(item, {
-            variant: "persona-settings",
-            active: String(item.id || "") === String(selectedAccount?.id || ""),
-          })).join("") : `<div class="account-pool-empty-state persona-account-empty-state" role="status">
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="9" cy="8" r="3.25"></circle><path d="M3.75 19c.55-3.1 2.4-4.85 5.25-4.85s4.7 1.75 5.25 4.85M18.5 11.5v6M15.5 14.5h6"></path></svg>
-            <strong>暂无账号</strong>
-            <span>点击添加账号，开始配置当前平台</span>
-          </div>`}
+        <div class="account-pool-content-window persona-account-content-window">
+          ${renderPersonaAccountPlatformContent(persona, platform)}
         </div>
       </section>
     </div>
@@ -10366,6 +10434,9 @@ function personaAccountPoolCandidates(platform = "", currentPersona = selectedPe
 
 function renderPersonaAccountBindingIcon(kind = "bind") {
   const mode = String(kind || "bind").trim().toLowerCase();
+  if (mode === "remove") {
+    return `<svg class="ui-action-icon persona-account-binding-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m18.8 12.3 1.7-1.7a5 5 0 0 0-7.1-7.1l-1.7 1.7"></path><path d="m5.2 11.7-1.7 1.7a5 5 0 0 0 7.1 7.1l1.7-1.7"></path><path d="M8 2v3M2 8h3M16 19v3M19 16h3"></path></svg>`;
+  }
   if (mode === "current") {
     return `<svg class="ui-action-icon persona-account-binding-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"></circle><path d="m8.4 12.2 2.35 2.35 4.9-5.1"></path></svg>`;
   }
@@ -10667,6 +10738,38 @@ function renderFormListIcon() {
   </svg>`;
 }
 
+function renderModuleEmptyState({
+  icon = "content",
+  title = "暂无内容",
+  detail = "",
+  className = "",
+  fill = false,
+  action = "",
+} = {}) {
+  const icons = {
+    account: renderMobileTaskIcon("accounts"),
+    browser: renderMobileTaskIcon("browser_list"),
+    billing: renderMobileTaskIcon("billing"),
+    content: renderFormListIcon(),
+    media: renderMediaCardViewIcon(),
+    network: renderMobileTaskIcon("proxies"),
+    persona: renderMobileTaskIcon("personas"),
+    settings: renderMobileTaskIcon("console_settings"),
+    social: renderMobileTaskIcon("social"),
+    task: renderMobileTaskIcon("tasks"),
+  };
+  const kind = icons[icon] ? icon : "content";
+  const extraClassName = String(className || "").trim();
+  return `<div class="empty-state empty-state--rich empty-state--${kind}${fill ? " empty-state--fill" : ""}${extraClassName ? ` ${esc(extraClassName)}` : ""}" role="status">
+    <span class="empty-state-icon" aria-hidden="true">${icons[icon] || icons.content}</span>
+    <div>
+      <strong>${esc(title)}</strong>
+      ${detail ? `<span>${esc(detail)}</span>` : ""}
+    </div>
+    ${action ? `<div class="empty-state-action">${action}</div>` : ""}
+  </div>`;
+}
+
 function renderZoomInIcon() {
   return `<svg class="ui-action-icon ui-zoom-in-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <circle cx="10.5" cy="10.5" r="5.75"></circle>
@@ -10706,6 +10809,19 @@ function renderRefreshIcon() {
     <path d="M3 3v5h5"></path>
     <path d="M3 12a9 9 0 0 0 15.17 6.49L21 16"></path>
     <path d="M16 16h5v5"></path>
+  </svg>`;
+}
+
+function renderPersonaHistoryContentFilterIcon() {
+  return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <rect x="4" y="3.5" width="16" height="17" rx="2.25"></rect>
+    <path d="M8 8h8M8 12h8M8 16h5"></path>
+  </svg>`;
+}
+
+function renderPersonaHistorySortFilterIcon() {
+  return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M7 5v14m0-14-3 3m3-3 3 3M17 19V5m0 14-3-3m3 3 3-3"></path>
   </svg>`;
 }
 
@@ -10950,7 +11066,11 @@ function renderTaskQueuePersonaSelector() {
       </div>
       <div class="persona-list-scroll">
         <div class="persona-list-stack">
-          ${state.personas.length ? state.personas.map((persona) => renderTaskQueuePersonaSelectorCard(persona)).join("") : `<div class="empty-state">当前还没有人设。</div>`}
+          ${state.personas.length ? state.personas.map((persona) => renderTaskQueuePersonaSelectorCard(persona)).join("") : renderModuleEmptyState({
+            icon: "persona",
+            title: "当前还没有人设",
+            detail: "新建人设后可在这里查看它的任务队列",
+          })}
         </div>
       </div>
       <div class="persona-inline-panel task-queue-persona-meta">
@@ -10993,7 +11113,11 @@ function renderTaskQueueView() {
         <button type="button" class="danger task-queue-delete-button unified-action-icon-button" data-delete-task="${esc(task.id)}" title="删除" aria-label="删除">${renderTrashIcon()}</button>
       </div>
     </article>
-  `).join("") : `<div class="empty-state">当前还没有通用任务。</div>`;
+  `).join("") : renderModuleEmptyState({
+    icon: "task",
+    title: "当前还没有通用任务",
+    detail: "任务开始执行后会显示在这里",
+  });
   const currentPanel = state.taskQueuePanel === "regular" ? "regular" : "persona";
   const panel = currentPanel === "regular"
     ? {
@@ -11030,9 +11154,17 @@ function renderTaskQueueView() {
                 <div class="task-table-head task-table-head--persona"><span>勾选</span><span>任务</span><span>平台</span><span>账号</span><span>时间</span><span>状态</span><span>操作</span></div>
                 ${renderPersonaQueueRows(personaTasks)}
               </div>`
-            : `<div class="empty-state">当前人设暂无自动化任务。</div>`
+            : renderModuleEmptyState({
+              icon: "task",
+              title: "当前人设暂无自动化任务",
+              detail: "创建任务后可在这里查看执行状态",
+            })
         )
-        : `<div class="empty-state">当前还没有选中的人设。</div>`,
+        : renderModuleEmptyState({
+          icon: "persona",
+          title: "当前还没有选中的人设",
+          detail: "选择一个人设后可查看它的自动化任务",
+        }),
       pager: personaPageInfo.mobile
         ? renderMobileTweetStreamFooter(personaPageInfo, "task-queue")
         : renderTaskQueuePager("persona", personaPageInfo),
@@ -11126,7 +11258,11 @@ function accountOptionTags() {
 }
 
 function renderAutomationPersonaTabs() {
-  if (!state.personas.length) return `<div class="empty-state">暂无人设，请先创建人设。</div>`;
+  if (!state.personas.length) return renderModuleEmptyState({
+    icon: "persona",
+    title: "暂无人设",
+    detail: "请先创建人设后再配置自动化任务",
+  });
   return `
     <div class="automation-tab-strip" aria-label="切换人设">
       ${state.personas.map((persona) => {
@@ -11219,7 +11355,11 @@ function renderUnifiedAutomationModule(options = null) {
     : (strategy?.payload || {});
   let operationPanel = "";
   if (!persona) {
-    operationPanel = `<div class="empty-state">请先创建并选择人设。</div>`;
+    operationPanel = renderModuleEmptyState({
+      icon: "persona",
+      title: "请先创建并选择人设",
+      detail: "选中人设后即可开始配置任务",
+    });
   } else if (currentStep === "binding") {
     operationPanel = `
       <div class="automation-operation-card">
@@ -12912,7 +13052,11 @@ function openAutomationPlanRunDetails(planId = "") {
     message: `${plan.mode === "loop" ? "循环" : "列表"}模式 · 第 ${Number(plan.cycle_index || 0)} 轮`,
     contentHtml: detailRows.length
       ? renderAutomationPlanDetailFormRows(detailRows, { runtime: tasks.length > 0 })
-      : `<div class="empty-state">计划正在准备任务列表，请稍后刷新查看。</div>`,
+      : renderModuleEmptyState({
+        icon: "task",
+        title: "计划正在准备任务列表",
+        detail: "请稍后刷新查看",
+      }),
     confirmText: "关闭",
     showCancel: false,
     modalKey: `automation-plan-run-details-${String(plan.id || "")}`,
@@ -12944,12 +13088,25 @@ function renderAutomationPlanRunRows(plan = {}) {
 function renderAutomationPlanHistory(persona = selectedPersona()) {
   const plans = automationPlansForPersona(persona);
   syncAutomationPlanSelection(persona);
-  if (state.automationPlansLoading && !plans.length) return `<div class="empty-state">正在读取自动化计划…</div>`;
+  if (state.automationPlansLoading && !plans.length) return renderModuleEmptyState({
+    icon: "task",
+    title: "正在读取自动化计划",
+    detail: "数据加载完成后会显示在这里",
+  });
   const errorHtml = state.automationPlansError
-    ? `<div class="empty-state automation-plan-error">自动化计划读取失败：${esc(state.automationPlansError)}</div>`
+    ? renderModuleEmptyState({
+      icon: "task",
+      title: "自动化计划读取失败",
+      detail: state.automationPlansError,
+      className: "automation-plan-error",
+    })
     : "";
   if (state.automationPlansError && !plans.length) return errorHtml;
-  if (!plans.length) return `<div class="empty-state">当前人设还没有自动化计划。</div>`;
+  if (!plans.length) return renderModuleEmptyState({
+    icon: "task",
+    title: "当前人设还没有自动化计划",
+    detail: "创建计划后可在这里统一查看执行进度",
+  });
   return `${errorHtml}<div class="automation-plan-history">${plans.map((plan) => `
     <article class="automation-plan-card">
       <div class="automation-plan-card-summary ${automationPlanCanDelete(plan) ? "is-selectable" : ""}">
@@ -13117,12 +13274,14 @@ function renderPublishSourceActions(persona = selectedPersona(), source = state.
   if (cleanSource === "custom") return "";
   const rows = publishSourceRows(persona, cleanSource);
   const selectedCount = syncPublishSelectedPostIds(persona, cleanSource, rows).length;
+  const allSelected = Boolean(rows.length) && selectedCount === rows.length;
+  const selectionAction = allSelected ? "clear" : "all";
+  const selectionLabel = allSelected ? "取消全选" : "全选";
   return `
     <div class="publish-source-actions">
       <span>已选 ${esc(selectedCount)} / ${esc(rows.length)}</span>
       <div>
-        <button type="button" class="bulk-selection-icon-button" data-publish-source-select="all" title="全选" aria-label="全选" ${rows.length ? "" : "disabled"}>${renderSelectAllIcon()}</button>
-        <button type="button" class="bulk-selection-icon-button" data-publish-source-select="clear" title="清空选择" aria-label="清空选择" ${selectedCount ? "" : "disabled"}>${renderClearSelectionIcon()}</button>
+        <button type="button" class="bulk-selection-icon-button" data-publish-source-select="${selectionAction}" title="${selectionLabel}" aria-label="${selectionLabel}" ${rows.length ? "" : "disabled"}>${allSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}</button>
       </div>
     </div>`;
 }
@@ -13148,7 +13307,11 @@ function renderPublishPostSelectionList(persona = selectedPersona(), source = st
   if (cleanSource === "custom") return "";
   const rows = publishSourceRows(persona, cleanSource);
   const selectedIds = new Set(syncPublishSelectedPostIds(persona, cleanSource, rows));
-  if (!rows.length) return `<div class="empty-state">当前还没有${cleanSource === "favorites" ? "收藏内容" : "草稿"}。</div>`;
+  if (!rows.length) return renderModuleEmptyState({
+    icon: "content",
+    title: cleanSource === "favorites" ? "暂无收藏内容" : "暂无草稿",
+    detail: "选择内容后会显示在这里",
+  });
   const personaId = String(persona?.id || "");
   const stream = mobileTweetStreamInfo(rows, `publish-source:${personaId}:${cleanSource}`, 10);
   return `
@@ -13469,7 +13632,7 @@ function renderPublishHistorySourceLink(url = "", { showUrl = false, compact = f
 
 function renderPublishHistorySelectionList(persona = selectedPersona(), options = {}) {
   const rows = Array.isArray(options.rows) ? options.rows : personaPublishHistoryRows(persona);
-  if (!rows.length) return `<div class="empty-state">当前人设还没有任务历史。</div>`;
+  if (!rows.length) return renderPersonaPublishHistoryEmptyState();
   const activeId = String(state.publishHistoryPreviewId || rows[0]?.id || "");
   const personaId = String(persona?.id || "");
   const stream = mobileTweetStreamInfo(rows, options.streamKey || `publish-history:${personaId}`, MOBILE_PUBLISH_HISTORY_BATCH_SIZE);
@@ -13509,7 +13672,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona(), options 
           </article>`;
       }).join("")}
     </div>
-    ${renderMobileTweetStreamFooter(stream, "publishing")}`;
+    ${renderMobileTweetStreamFooter(stream, options.streamTarget || "publishing")}`;
 }
 
 function renderPublishHistoryPreview(persona = selectedPersona()) {
@@ -13552,7 +13715,7 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
             ${renderPublishPreviewMedia(activeMediaItems)}
           </article>
         </div>
-      ` : `<div class="empty-state">当前人设还没有任务历史。</div>`}
+      ` : renderPersonaPublishHistoryEmptyState()}
     </section>`;
 }
 
@@ -13567,7 +13730,7 @@ function renderPublishHistoryPanel(persona = selectedPersona()) {
       <section class="publish-post-picker publish-history-picker">
         <div class="publish-panel-head">
           <div><strong>任务历史</strong><span>${esc(persona?.name || "当前人设")}</span></div>
-          <button type="button" data-publish-history-refresh class="primary" aria-busy="${refreshing ? "true" : "false"}" ${refreshing || !persona?.id ? "disabled" : ""}>${refreshing ? `刷新中 ${esc(Number(refreshStatus?.progress || 0))}%` : "刷新热点数据"}</button>
+          <button type="button" data-publish-history-refresh class="primary" aria-busy="${refreshing ? "true" : "false"}" ${refreshing || !persona?.id ? "disabled" : ""}>${renderPublishHistoryRefreshContent(refreshing, refreshStatus)}</button>
         </div>
         <div class="publish-history-note">这里只查看当前人设的已执行记录。系统每天自动同步一次；也可手动刷新真实互动数据。</div>
         <div class="publish-history-refresh-status" data-publish-history-refresh-status ${refreshStatus?.message ? "" : "hidden"}>${esc(refreshStatus?.message || "")}</div>
@@ -13585,7 +13748,7 @@ function syncPublishHistoryRefreshDom(persona = selectedPersona()) {
   if (button) {
     button.disabled = refreshing || !personaId;
     button.setAttribute("aria-busy", refreshing ? "true" : "false");
-    button.textContent = refreshing ? `刷新中 ${Number(refreshStatus?.progress || 0)}%` : "刷新热点数据";
+    button.innerHTML = renderPublishHistoryRefreshContent(refreshing, refreshStatus);
   }
   const status = document.querySelector("[data-publish-history-refresh-status]");
   if (status) {
@@ -13596,7 +13759,7 @@ function syncPublishHistoryRefreshDom(persona = selectedPersona()) {
 
 async function openPublishHistoryRecordModal(historyId = "", persona = selectedPersona()) {
   const cleanHistoryId = String(historyId || "").trim();
-  const availableRows = isPersonaWorkspaceModule() && state.personaDataTab === "history"
+  const availableRows = isPersonaWorkspaceModule()
     ? personaMergedHistoryRows(persona)
     : personaPublishHistoryRows(persona);
   const record = availableRows
@@ -13698,7 +13861,7 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
       };
       if (
         (state.activeModule === "publishing" && normalizedPublishMode(state.simpleBranches.publishing) === "publish_history")
-        || (isPersonaWorkspaceModule() && state.personaDataTab === "history")
+        || isPersonaWorkspaceModule()
       ) {
         syncPublishHistoryRefreshDom();
       }
@@ -13721,7 +13884,7 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
     if (state.activeModule === "publishing" && normalizedPublishMode(state.simpleBranches.publishing) === "publish_history") {
       renderSimpleFlowModule("publishing");
     }
-    if (isPersonaWorkspaceModule() && state.personaDataTab === "history") renderPersonaDetail();
+    if (isPersonaWorkspaceModule()) renderPersonaDetail();
     window.setTimeout(() => {
       if (state.publishHistoryRefreshTaskId || state.publishHistoryRefreshPersonaId !== cleanPersonaId) return;
       state.publishHistoryRefreshPersonaId = "";
@@ -13886,6 +14049,9 @@ function renderPublishPersonaSidebar(mode) {
   const current = normalizedPublishMode(mode);
   const isMatrix = current === "matrix_start";
   const selectedIds = isMatrix ? matrixPublishSelectedIds() : [String(state.selectedPersonaId || "")].filter(Boolean);
+  const matrixPersonaIds = isMatrix ? publishOrderedPersonaIds() : [];
+  const matrixAllSelected = Boolean(matrixPersonaIds.length)
+    && matrixPersonaIds.every((personaId) => selectedIds.includes(personaId));
   ensurePublishingPersonaSidebarContent(current);
   return `
     <aside id="publishPersonaSidebar" class="persona-list-shell publish-persona-shell persona-mobile-drawer" data-persona-mobile-sidebar aria-hidden="false">
@@ -13904,8 +14070,7 @@ function renderPublishPersonaSidebar(mode) {
         </div>
         ${isMatrix ? `
           <div class="publish-persona-toolbar">
-            <button type="button" class="bulk-selection-icon-button" data-matrix-select-all title="全选" aria-label="全选">${renderSelectAllIcon()}</button>
-            <button type="button" class="bulk-selection-icon-button" data-matrix-clear title="清空选择" aria-label="清空选择">${renderClearSelectionIcon()}</button>
+            <button type="button" class="bulk-selection-icon-button" data-matrix-selection="${matrixAllSelected ? "clear" : "all"}" title="${matrixAllSelected ? "取消全选" : "全选"}" aria-label="${matrixAllSelected ? "取消全选" : "全选"}" ${matrixPersonaIds.length ? "" : "disabled"}>${matrixAllSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}</button>
           </div>
         ` : ""}
       </div>
@@ -14187,13 +14352,10 @@ function renderSimpleFlowModule(moduleId) {
     setPublishMobileSelectionExpanded(dock, false);
   });
   if (moduleId === "publishing" && normalizedPublishMode(branch) === "matrix_start") {
-    document.querySelector("[data-matrix-select-all]")?.addEventListener("click", () => {
-      state.matrixPublish.personaIds = publishOrderedPersonaIds();
-      state.matrixPublish.initialized = true;
-      renderSimpleFlowModule("publishing");
-    });
-    document.querySelector("[data-matrix-clear]")?.addEventListener("click", () => {
-      state.matrixPublish.personaIds = [];
+    document.querySelector("[data-matrix-selection]")?.addEventListener("click", (event) => {
+      state.matrixPublish.personaIds = event.currentTarget.dataset.matrixSelection === "all"
+        ? publishOrderedPersonaIds()
+        : [];
       state.matrixPublish.initialized = true;
       renderSimpleFlowModule("publishing");
     });
@@ -16407,7 +16569,7 @@ async function loadPersonaDashboardOverview({ force = false } = {}) {
   const request = api("/api/persona_dashboard/overview")
     .then((data) => {
       state.personaDashboardOverview = data && Array.isArray(data.personas) ? data : { personas: [] };
-      if (isPersonaWorkspaceModule() && state.personaDataTab === "history") renderPersonaDetail();
+      if (isPersonaWorkspaceModule()) renderPersonaDetail();
       return state.personaDashboardOverview;
     })
     .finally(() => {
@@ -18020,7 +18182,10 @@ function renderPersonaPublishResult(task, logs = []) {
 }
 
 function renderSocialTaskResult(task, logs = [], emptyText = "提交后，这里会显示任务状态、截图和执行结果。") {
-  if (!task || !task.id) return `<div class="empty-state">${esc(emptyText)}</div>`;
+  if (!task || !task.id) return renderModuleEmptyState({
+    icon: "task",
+    title: emptyText,
+  });
   const result = task.result || {};
   const presentationStatus = socialTaskPresentationStatus(task);
   const waitsForManualLogin = socialTaskWaitsForManualLogin(task);
@@ -18054,7 +18219,11 @@ function renderSocialTaskResult(task, logs = [], emptyText = "提交后，这里
         ? (screenshotReason
           ? `<div class="publish-result-link is-unavailable"><div class="persona-media-frame persona-media-frame--empty"><strong>媒体不可预览</strong><small>${esc(screenshotReason)}</small></div></div>`
           : renderMediaPreviewButton(screenshotItem, screenshotGroupId, 0, { className: "publish-result-link", frameClass: "publish-result-image", caption: "任务截图" }))
-        : `<div class="empty-state">${terminal ? "当前任务没有返回截图。" : "执行中，截图生成后会显示在这里。"}</div>`}
+        : renderModuleEmptyState({
+          icon: "browser",
+          title: terminal ? "当前任务没有返回截图" : "正在等待任务截图",
+          detail: terminal ? "任务结束后可从日志确认执行结果" : "截图生成后会显示在这里",
+        })}
       ${recentLogs.length ? `<div class="compact-list">${recentLogs.map((log) => `
         <article class="compact-row compact-row-log">
           <strong>${esc(logStageLabel(log.stage, log.level))}</strong>
@@ -18152,7 +18321,10 @@ function collectTaskScreenshots(task = {}, logs = []) {
 
 function renderTaskScreenshotGallery(items = [], { emptyText = "当前任务还没有截图。" } = {}) {
   const rows = (Array.isArray(items) ? items : []).filter((item) => item?.previewUrl);
-  if (!rows.length) return `<div class="empty-state">${esc(emptyText)}</div>`;
+  if (!rows.length) return renderModuleEmptyState({
+    icon: "task",
+    title: emptyText,
+  });
   const groupId = registerMediaPreviewGroup(rows);
   return `
     <div class="task-screenshot-gallery">
@@ -18215,7 +18387,11 @@ function renderTaskDetailLogs(logs = [], { limit = 200, hideScreenshots = false,
               caption: "查看截图",
             }) : ""}
           </article>`;
-      }).join("") : `<div class="empty-state">暂无日志。</div>`}
+      }).join("") : renderModuleEmptyState({
+        icon: "task",
+        title: "暂无日志",
+        detail: "任务开始执行后会记录在这里",
+      })}
     </section>`;
 }
 
@@ -18285,7 +18461,11 @@ function updatePersonaPublishResultView(personaId) {
   if (String(personaId || "") !== currentPersonaId) return;
   const host = $("personaPublishResult");
   if (!host) return;
-  host.innerHTML = state.personaPublishResults[currentPersonaId] || `<div class="empty-state">提交后，这里会显示任务状态、截图和发布结果。</div>`;
+  host.innerHTML = state.personaPublishResults[currentPersonaId] || renderModuleEmptyState({
+    icon: "task",
+    title: "等待发布结果",
+    detail: "提交后，这里会显示任务状态、截图和发布结果",
+  });
 }
 
 function refreshAutomationWorkSurface() {
@@ -18317,7 +18497,11 @@ function updatePersonaAutomationResultView(accountId, step) {
   const host = $("personaAutomationResult");
   if (!host) return;
   host.innerHTML = state.personaAutomationResults[personaAutomationResultKey(accountId, step)]
-    || `<div class="empty-state">提交后，这里会显示任务状态、截图和执行日志。</div>`;
+    || renderModuleEmptyState({
+      icon: "task",
+      title: "等待任务结果",
+      detail: "提交后，这里会显示任务状态、截图和执行日志",
+    });
 }
 
 async function ensurePersonaAutomationResultLoaded(accountId, step) {
@@ -19455,7 +19639,6 @@ function personaPostGenerationConflictSelector() {
     "[data-persona-run-automation]",
     "[data-persona-run-media-task]",
     "[data-persona-fetch-hot]",
-    "[data-persona-fetch-hot-refresh]",
     "[data-persona-import-hot-drafts]",
   ].join(",");
 }
@@ -20250,12 +20433,12 @@ async function preparePersonaHotKeywords(refresh = false) {
   const persona = selectedPersona();
   if (!persona) {
     showMsg("commandMsg", "请先选择一个人设。", false);
-    return;
+    return [];
   }
   const lockParts = ["persona", persona.id, "hot_keywords"];
   if (isActionLocked(...lockParts)) {
-    showMsg("commandMsg", "热点关键词正在生成，请等待当前任务完成。", false);
-    return;
+    showMsg("commandMsg", "热点抓取正在准备，请等待当前任务完成。", false);
+    return [];
   }
   snapshotPersonaCurrentForm();
   const form = personaFormState(persona.id).generate;
@@ -20263,7 +20446,7 @@ async function preparePersonaHotKeywords(refresh = false) {
   setPersonaGenerateRunState(persona.id, {
     kind: "hot",
     status: "running",
-    message: refresh ? "正在重新生成热点关键词" : "正在生成热点关键词",
+    message: "正在准备热点抓取",
     error: "",
   });
   setActionLocked(lockParts, true);
@@ -20294,18 +20477,19 @@ async function preparePersonaHotKeywords(refresh = false) {
     setPersonaGenerateRunState(persona.id, {
       kind: "hot",
       status: keywords.length ? "success" : "error",
-      message: keywords.length ? `已生成 ${keywords.length} 个热点关键词，可编辑后抓取。` : "未生成可用热点关键词。",
-      error: keywords.length ? "" : ((Array.isArray(result.warnings) && result.warnings[0]) || "关键词生成失败"),
+      message: keywords.length ? "热点抓取准备完成" : "热点抓取准备失败",
+      error: keywords.length ? "" : ((Array.isArray(result.warnings) && result.warnings[0]) || "未能生成有效的抓取策略"),
     });
+    return keywords;
   } catch (error) {
     const detail = String(error?.detail || error?.message || "");
     setPersonaGenerateRunState(persona.id, {
       kind: "hot",
       status: "error",
-      message: "热点关键词生成失败",
+      message: "热点抓取准备失败",
       error: /<\s*(?:!doctype|html|head|body|title)\b|\b(?:502|503|504)\b|bad gateway|gateway timeout|service unavailable/i.test(detail)
-        ? "热点关键词服务暂时不可用，请稍后重试。"
-        : (detail || "关键词生成失败"),
+        ? "热点抓取准备服务暂时不可用，请稍后重试。"
+        : (detail || "热点抓取准备失败"),
     });
     throw error;
   } finally {
@@ -20324,7 +20508,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
     return;
   }
   const lockParts = ["persona", persona.id, "hot_candidates"];
-  if (isActionLocked(...lockParts)) {
+  if (isActionLocked(...lockParts) || isActionLocked("persona", persona.id, "hot_keywords")) {
     showMsg("commandMsg", "热点候选正在抓取，请等待当前抓取完成。", false);
     return;
   }
@@ -20335,9 +20519,15 @@ async function fetchPersonaHotCandidates(refresh = false) {
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
   form.hotFreshnessDays = normalizePersonaHotFreshnessDays(form.hotFreshnessDays);
   const hotState = state.personaHotCandidateResults[String(persona.id)] || {};
-  const keywords = parsePersonaHotKeywordText(personaHotKeywordText(form, hotState));
+  let keywords = parsePersonaHotKeywordText(personaHotKeywordText(form, hotState));
+  try {
+    const preparedKeywords = await preparePersonaHotKeywords(false);
+    if (preparedKeywords.length) keywords = parsePersonaHotKeywordText(formatPersonaHotKeywordText(preparedKeywords));
+  } catch (error) {
+    if (!keywords.length) throw error;
+  }
   if (!keywords.length) {
-    showMsg("commandMsg", "请先生成或填写热点关键词。", false);
+    showMsg("commandMsg", "热点抓取准备失败，请稍后重试。", false);
     return;
   }
   const controller = new AbortController();
@@ -22731,7 +22921,11 @@ function renderPersonaPostsViewTabs(drafts, historyRows, activeStep) {
 }
 
 function renderPersonaHotCandidatePreview(candidate) {
-  if (!candidate) return `<div class="empty-state">从左侧热点候选里选一条，这里会显示正文预览和来源。</div>`;
+  if (!candidate) return renderModuleEmptyState({
+    icon: "social",
+    title: "选择一条热点候选",
+    detail: "这里会显示正文预览和来源",
+  });
   const persona = selectedPersona();
   const candidateId = personaHotCandidateKey(candidate);
   return `
@@ -22756,8 +22950,9 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const hotState = state.personaHotCandidateResults[String(persona?.id || "").trim()] || {};
   const candidates = personaHotCandidates(persona);
   const selectedIds = new Set((form.hotSelectedIds || []).map((item) => String(item || "").trim()).filter(Boolean));
+  const allCandidatesSelected = Boolean(candidates.length)
+    && candidates.every((candidate) => selectedIds.has(personaHotCandidateKey(candidate)));
   const preview = personaHotPreviewCandidate(persona);
-  const keywords = Array.isArray(hotState.keywords) ? hotState.keywords : [];
   const warnings = Array.isArray(hotState.warnings) ? hotState.warnings : [];
   const cookieStatuses = Array.isArray(hotState.cookie_statuses) ? hotState.cookie_statuses : [];
   const hotBusy = isActionLocked("persona", persona?.id || "", "hot_candidates");
@@ -22769,8 +22964,6 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const hotMode = form.hotSearchMode;
   const hotFreshnessDays = form.hotFreshnessDays;
   const hotFreshnessMode = form.hotFreshnessMode === "custom" || hotFreshnessDays !== 7 ? "custom" : "default";
-  const keywordText = personaHotKeywordText(form, hotState);
-  const keywordCount = parsePersonaHotKeywordText(keywordText).length;
   const controlsBusy = hotBusy || keywordBusy;
   const hotFreshnessOptions = Array.from({ length: 16 }, (_, days) => ({
     days,
@@ -22810,23 +23003,14 @@ function renderPersonaHotCandidatePicker(persona, form) {
               : `<span class="persona-hot-freshness-default" aria-label="默认热点时限">默认</span>`}
           </label>
         </div>
-        <div class="persona-hot-keyword-panel">
-          <div class="persona-hot-step-title">
-            <strong>步骤 1：生成关键词</strong>
-            <small>${keywordCount ? `当前 ${keywordCount} 个，可手动编辑。` : "先生成关键词，也可以直接填写。"}</small>
-          </div>
-          <textarea rows="3" data-persona-hot-keywords placeholder="先生成关键词；也可以手动添加、删除，用 / 或换行分隔。" ${controlsBusy ? "disabled" : ""}>${esc(keywordText)}</textarea>
-          <button type="button" class="persona-hot-fetch-action" data-persona-prepare-hot-keywords="${keywordCount ? "refresh" : "prepare"}" ${controlsBusy ? "disabled" : ""}>${keywordBusy ? renderBusyButtonContent("正在生成关键词", true) : (keywordCount ? "重新生成关键词" : "生成关键词")}</button>
-        </div>
-        <button type="button" class="primary persona-hot-fetch-action" data-persona-fetch-hot ${hotBusy || !keywordCount ? "disabled" : ""}>${hotBusy ? renderBusyButtonContent("正在抓取热点", true, hotBusyStartedAt) : "按关键词抓取"}</button>
-        ${hotBusy
-          ? `<button type="button" class="persona-hot-fetch-action" data-persona-cancel-hot>取消抓取</button>`
-          : `<button type="button" class="persona-hot-fetch-action" data-persona-fetch-hot-refresh ${keywordCount ? "" : "disabled"}>按当前关键词刷新</button>`}
+        <button type="button" class="primary persona-hot-fetch-action" data-persona-hot-solo="${hotBusy ? "false" : "true"}" data-persona-fetch-hot ${controlsBusy ? "disabled" : ""}>${keywordBusy
+          ? renderBusyButtonContent("正在准备热点抓取", true)
+          : (hotBusy ? renderBusyButtonContent("正在抓取热点", true, hotBusyStartedAt) : "抓取热点")}</button>
+        ${hotBusy ? `<button type="button" class="persona-hot-fetch-action" data-persona-cancel-hot>取消抓取</button>` : ""}
       </div>
     </div>
-    ${(keywords.length || warnings.length || cookieStatuses.length) ? `
+    ${(warnings.length || cookieStatuses.length) ? `
       <div class="persona-inline-panel persona-inline-panel--nested">
-        ${keywords.length ? `<div class="persona-hot-status-row"><strong>本次关键词</strong><span>${esc(keywords.join(" / "))}</span></div>` : ""}
         <div class="persona-hot-status-row"><strong>抓取方式</strong><span>${esc(personaHotSearchModeLabel(hotState.search_mode || hotMode))}</span></div>
         <div class="persona-hot-status-row"><strong>热点时限</strong><span>${esc(personaHotFreshnessLabel(hotState.freshness_days ?? hotFreshnessDays))}</span></div>
         ${cookieStatuses.length ? `<div class="persona-hot-status-row"><strong>Cookie 状态</strong><span>${esc(cookieStatuses.map((item) => `${item.label || item.platform || "-"}：${item.message || item.health || "-"}`).join(" / "))}</span></div>` : ""}
@@ -22838,8 +23022,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
         <div class="persona-hot-toolbar">
           <strong>候选 ${candidates.length} 条</strong>
           <div class="row-actions">
-            <button type="button" class="bulk-selection-icon-button" data-persona-hot-bulk="all" title="全选" aria-label="全选">${renderSelectAllIcon()}</button>
-            <button type="button" class="bulk-selection-icon-button" data-persona-hot-bulk="clear" title="清空选择" aria-label="清空选择">${renderClearSelectionIcon()}</button>
+            <button type="button" class="bulk-selection-icon-button" data-persona-hot-bulk="${allCandidatesSelected ? "clear" : "all"}" title="${allCandidatesSelected ? "取消全选" : "全选"}" aria-label="${allCandidatesSelected ? "取消全选" : "全选"}">${allCandidatesSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}</button>
           </div>
         </div>
         <div class="persona-hot-grid">
@@ -22878,7 +23061,11 @@ function renderPersonaHotCandidatePicker(persona, form) {
         </div>
         ${renderPersonaHotCandidatePreview(preview)}
       </section>
-    </div>` : `<div class="empty-state">还没有热点候选。先生成或填写关键词，再点击“按关键词抓取”获取 Threads / Instagram 热点候选。</div>`}
+    </div>` : renderModuleEmptyState({
+      icon: "social",
+      title: "还没有热点候选",
+      detail: "点击抓取热点后，系统会按当前人设获取平台内容",
+    })}
   `;
 }
 
@@ -22992,7 +23179,11 @@ function renderPersonaMediaComposerPlaceholder(persona, mediaForm) {
         <div class="persona-media-operation-pane">
           ${operationMode === "replace"
             ? renderPersonaCompactMediaUpload(persona)
-            : `${renderPersonaPendingMediaInput(persona)}<div class="empty-state">先保存草稿，或生成推文后选择一篇，再使用 AI 生成配图。</div>`}
+            : `${renderPersonaPendingMediaInput(persona)}${renderModuleEmptyState({
+              icon: "media",
+              title: "先选择一条草稿",
+              detail: "保存或生成推文后，即可使用 AI 生成配图",
+            })}`}
         </div>
       </div>
     </section>`;
@@ -23008,7 +23199,11 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
           <div class="persona-media-operation-pane">
             ${operationMode === "replace"
               ? renderPersonaCompactMediaUpload(persona)
-              : `${renderPersonaPendingMediaInput(persona)}<div class="empty-state">先保存或生成一条草稿，再使用 AI 生成配图。</div>`}
+              : `${renderPersonaPendingMediaInput(persona)}${renderModuleEmptyState({
+                icon: "media",
+                title: "先准备一条草稿",
+                detail: "保存或生成推文后，即可使用 AI 生成配图",
+              })}`}
           </div>
         </div>
       </section>`;
@@ -23356,7 +23551,11 @@ function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, me
   const actionKind = taskState?.taskId ? "regenerate" : "generate";
   const runButton = `<button type="button" class="primary" data-persona-run-media-task data-persona-media-action="${actionKind}" aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (taskState?.taskId ? "重新生成" : "生成预览")}</button>`;
   if (!taskState?.taskId) return `
-    <div class="empty-state">提交生成任务后，这里会显示结果预览，并可直接添加至草稿。</div>
+    ${renderModuleEmptyState({
+      icon: "media",
+      title: "等待生成结果",
+      detail: "提交任务后，结果预览会显示在这里并可直接添加至草稿",
+    })}
     <div class="row-actions persona-media-task-actions">
       ${runButton}
     </div>
@@ -23377,7 +23576,11 @@ function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, me
         <span>${esc(formatTime(detail.finished_at || detail.updated_at || detail.created_at || ""))}</span>
       </article>
     </div>
-    ${items.length ? renderPersonaTaskMediaPreview(taskState, items) : `<div class="empty-state">${terminal ? "任务已结束，但还没有可预览的媒体结果。" : "任务执行中，结果返回后会自动显示在这里。"}</div>`}
+    ${items.length ? renderPersonaTaskMediaPreview(taskState, items) : renderModuleEmptyState({
+      icon: "media",
+      title: terminal ? "任务已结束，暂无可预览媒体" : "正在等待媒体结果",
+      detail: terminal ? "可从任务日志确认生成情况" : "结果返回后会自动显示在这里",
+    })}
     <div class="row-actions persona-media-task-actions">
       ${runButton}
       ${missingPersonaImage ? `<button type="button" class="primary" data-persona-open-image-settings="${esc(personaId)}">去生成人设图</button>` : ""}
@@ -23415,7 +23618,11 @@ function renderPersonaCreateWorkbench() {
         }).join("")}
       </div>
     `
-    : `<div class="empty-state">还没有提炼出关键词，请先填写名称和提示词。</div>`;
+    : renderModuleEmptyState({
+      icon: "content",
+      title: "还没有提炼出关键词",
+      detail: "填写名称和提示词后即可开始提炼",
+    });
   const resultMarkup = aiResult
     ? `
       <div class="persona-inline-panel persona-create-result is-flat">
@@ -23711,7 +23918,11 @@ function renderPersonaModule() {
             allowGroupEdit: !state.personaBulkMode,
             allowReorder: !state.personaBulkMode,
           })}
-        ` : `<div class="empty-state">当前还没有人设或分组，先点击“新建人设”或“创建分组”。</div>`}
+        ` : renderModuleEmptyState({
+          icon: "persona",
+          title: "当前还没有人设或分组",
+          detail: "点击新建人设或创建分组开始配置",
+        })}
       </aside>
     </div>
     <div class="persona-mobile-drawer-backdrop" data-persona-mobile-list-backdrop hidden></div>
@@ -24461,7 +24672,6 @@ function renderPersonaContentPanel(persona, account, profile, step) {
     draftForm.content = String(generateForm.prompt || "");
     generateForm.prompt = "";
   }
-  const hasGenerateContent = Boolean(String(draftForm.content || "").trim());
   const currentGenerateCount = Math.min(Math.max(Number(generateForm.count || generateDefaults.count), 1), PERSONA_GENERATE_MAX_COUNT);
   generateForm.count = currentGenerateCount;
   generateForm.targetWords = Math.min(Math.max(Number(generateForm.targetWords || generateDefaults.targetWords), 10), 2000);
@@ -24713,7 +24923,11 @@ function renderPersonaContentPanel(persona, account, profile, step) {
               `}
             </section>
           </div>
-        ` : `<div class="empty-state">当前还没有${sourceLabel}。先选择内容，再回来处理媒体。</div>`}
+        ` : renderModuleEmptyState({
+          icon: "media",
+          title: `当前还没有${sourceLabel}`,
+          detail: "先选择内容，再回来处理媒体",
+        })}
       </div>`;
   }
 
@@ -24794,7 +25008,11 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         <div class="row-actions">
           <button type="button" class="primary" data-persona-publish-submit ${dailyPublishActionAttrs()} ${(publishCanSubmit && selectedPost && !publishBusy) ? "" : "disabled"}>${dailyPublishIsLocked() ? "今日任务已锁定" : (publishWaitsForManualLogin ? "等待人工验证" : (publishBusy ? renderBusyButtonContent("任务执行中", true, publishBusyStartedAt) : "执行任务"))}</button>
         </div>
-        <div id="personaPublishResult">${publishResult || `<div class="empty-state">提交后，这里会显示任务状态、截图和执行结果。</div>`}</div>
+        <div id="personaPublishResult">${publishResult || renderModuleEmptyState({
+          icon: "task",
+          title: "等待执行结果",
+          detail: "提交后，这里会显示任务状态、截图和执行结果",
+        })}</div>
       </div>`;
   }
 
@@ -25221,7 +25439,7 @@ function selectAccountPoolPlatform(platform = "") {
   if (next === normalizeAccountPoolPlatform()) return;
   stageAccountPoolPlatformSelection(next);
   renderSocialAccounts();
-  pulseAccountPoolPlatformCards();
+  pulseAccountPoolPlatformContent();
 }
 
 function syncAccountPoolPlatformTabs(platform = state.accountPoolPlatform) {
@@ -25246,18 +25464,24 @@ let accountPoolPlatformTransitionPromise = null;
 let accountPoolActivePlatformMotion = null;
 let accountPoolPlatformSwipeSuppressClickUntil = 0;
 let accountPoolPlatformPulseTimer = 0;
+let accountPoolPlatformPulseTarget = null;
 let accountPoolPlatformQueuedTarget = "";
 
-function pulseAccountPoolPlatformCards() {
-  if (!window.matchMedia?.("(max-width: 760.98px)")?.matches) return;
+function pulseAccountPoolPlatformContent(root = $("accountGrid")) {
   if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return;
   window.clearTimeout(accountPoolPlatformPulseTimer);
+  accountPoolPlatformPulseTarget?.classList.remove("is-platform-refresh-pulse");
+  accountPoolPlatformPulseTarget = null;
   window.requestAnimationFrame(() => {
-    const cards = Array.from($("accountGrid")?.querySelectorAll(".account-pool-content .account-pool-card") || []);
-    if (!cards.length) return;
-    cards.forEach((card) => card.classList.add("is-platform-refresh-pulse"));
+    const content = root?.querySelector(".account-pool-content-window > .account-pool-content");
+    if (!content) return;
+    content.classList.remove("is-platform-refresh-pulse");
+    void content.offsetWidth;
+    content.classList.add("is-platform-refresh-pulse");
+    accountPoolPlatformPulseTarget = content;
     accountPoolPlatformPulseTimer = window.setTimeout(() => {
-      cards.forEach((card) => card.classList.remove("is-platform-refresh-pulse"));
+      content.classList.remove("is-platform-refresh-pulse");
+      if (accountPoolPlatformPulseTarget === content) accountPoolPlatformPulseTarget = null;
       accountPoolPlatformPulseTimer = 0;
     }, 760);
   });
@@ -25283,22 +25507,29 @@ function waitForAccountPoolPlatformMotion(node, timeoutMs = 320) {
 
 function createAccountPoolPlatformMotion(platform = "", direction = 0) {
   if (accountPoolActivePlatformMotion) return null;
-  const current = normalizeAccountPoolPlatform();
-  const next = normalizeAccountPoolPlatform(platform);
+  const options = arguments[2] && typeof arguments[2] === "object" ? arguments[2] : {};
+  const normalizePlatform = options.normalizePlatform || normalizeAccountPoolPlatform;
+  const platformEntries = Array.isArray(options.platformEntries) ? options.platformEntries : accountPoolPlatforms;
+  const current = normalizePlatform(typeof options.currentPlatform === "function" ? options.currentPlatform() : options.currentPlatform);
+  const next = normalizePlatform(platform);
   if (next === current) return null;
 
-  const currentIndex = accountPoolPlatforms.findIndex(([value]) => value === current);
-  const nextIndex = accountPoolPlatforms.findIndex(([value]) => value === next);
+  const currentIndex = platformEntries.findIndex(([value]) => value === current);
+  const nextIndex = platformEntries.findIndex(([value]) => value === next);
   const travelDirection = direction || (nextIndex >= currentIndex ? 1 : -1);
-  const currentPanel = $("accountGrid")?.querySelector(".account-pool-account-panel");
+  const currentPanel = options.currentPanel || $("accountGrid")?.querySelector(".account-pool-account-panel");
   const contentWindow = currentPanel?.querySelector(".account-pool-content-window");
   const currentContent = contentWindow?.querySelector(".account-pool-content");
   if (!currentPanel || !contentWindow || !currentContent) return null;
 
   const preview = document.createElement("div");
-  preview.innerHTML = renderAccountPoolCards(accountPoolAccounts(next), null, []);
+  preview.innerHTML = typeof options.renderIncomingContent === "function"
+    ? options.renderIncomingContent(next)
+    : renderAccountPoolCards(accountPoolAccounts(next), null, []);
   const incomingPanel = preview.firstElementChild;
-  const incomingContent = incomingPanel?.querySelector(".account-pool-content");
+  const incomingContent = incomingPanel?.matches?.(".account-pool-content")
+    ? incomingPanel
+    : incomingPanel?.querySelector(".account-pool-content");
   if (!incomingContent) return null;
   incomingContent.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
   incomingContent.classList.add("account-pool-content-drag-peer");
@@ -25334,6 +25565,8 @@ function createAccountPoolPlatformMotion(platform = "", direction = 0) {
     direction: travelDirection,
     width: contentWidth,
     apply,
+    commitSelection: options.commitSelection,
+    renderAfterCommit: options.renderAfterCommit,
     discarded: false,
   };
   accountPoolActivePlatformMotion = motion;
@@ -25363,7 +25596,10 @@ async function settleAccountPoolPlatformMotion(motion, commit = false) {
   if (!motion || motion.discarded) return;
   const { contentWindow, currentContent, incomingContent, direction, width, next } = motion;
   const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
-  if (commit) stageAccountPoolPlatformSelection(next);
+  if (commit) {
+    if (typeof motion.commitSelection === "function") motion.commitSelection(next);
+    else stageAccountPoolPlatformSelection(next);
+  }
   void currentContent.offsetWidth;
   void incomingContent.offsetWidth;
   contentWindow.classList.add("is-account-platform-settling");
@@ -25377,8 +25613,11 @@ async function settleAccountPoolPlatformMotion(motion, commit = false) {
   if (motion.discarded) return;
   clearAccountPoolPlatformMotion(motion);
   if (commit) {
-    renderSocialAccounts();
-    pulseAccountPoolPlatformCards();
+    if (typeof motion.renderAfterCommit === "function") motion.renderAfterCommit();
+    else {
+      renderSocialAccounts();
+      pulseAccountPoolPlatformContent();
+    }
   }
 }
 
@@ -25416,6 +25655,89 @@ async function transitionAccountPoolPlatform(platform = "", direction = 0) {
       const queuedIndex = accountPoolPlatforms.findIndex(([value]) => value === queuedTarget);
       const activeIndex = accountPoolPlatforms.findIndex(([value]) => value === normalizeAccountPoolPlatform());
       await transitionAccountPoolPlatform(queuedTarget, queuedIndex >= activeIndex ? 1 : -1);
+    }
+  }
+}
+
+let personaAccountPlatformTransitionPromise = null;
+let personaAccountPlatformQueuedTarget = "";
+
+function syncPersonaAccountPlatformTabs(platform = "") {
+  const next = normalizePersonaContentPlatform(platform);
+  document.querySelectorAll("[data-persona-account-platform-tabs] [data-persona-account-platform]").forEach((button) => {
+    const active = normalizePersonaContentPlatform(button.dataset.personaAccountPlatform) === next;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+}
+
+function stagePersonaAccountPlatformSelection(persona, platform = "") {
+  clearAccountPasswordRevealState();
+  setPersonaContentPlatform(platform, persona);
+  state.preferredAccountId = "";
+  syncPersonaAccountPlatformTabs(platform);
+}
+
+function renderPersonaAccountPlatformSelection() {
+  renderPersonaDetail();
+  renderConfirmSummary();
+  pulseAccountPoolPlatformContent($("personaDetail"));
+}
+
+function createPersonaAccountPlatformMotion(persona, platform = "", direction = 0) {
+  const next = normalizePersonaContentPlatform(platform);
+  const platforms = personaAutomationPlatformOptions(persona);
+  const currentPanel = $("personaDetail")?.querySelector(".persona-account-pool-panel");
+  return createAccountPoolPlatformMotion(next, direction, {
+    currentPlatform: () => personaContentPlatform(persona),
+    normalizePlatform: normalizePersonaContentPlatform,
+    platformEntries: platforms.map((value) => [value, platformLabel(value)]),
+    currentPanel,
+    renderIncomingContent: (target) => renderPersonaAccountPlatformContent(persona, target),
+    commitSelection: (target) => stagePersonaAccountPlatformSelection(persona, target),
+    renderAfterCommit: renderPersonaAccountPlatformSelection,
+  });
+}
+
+async function transitionPersonaAccountPlatform(platform = "", direction = 0) {
+  const persona = selectedPersona();
+  if (!persona) return;
+  const next = normalizePersonaContentPlatform(platform);
+  const current = personaContentPlatform(persona);
+  if (next === current) return;
+  if (personaAccountPlatformTransitionPromise || accountPoolActivePlatformMotion) {
+    personaAccountPlatformQueuedTarget = next;
+    return personaAccountPlatformTransitionPromise;
+  }
+
+  const shouldAnimate = window.matchMedia?.("(max-width: 760.98px)")?.matches
+    && !window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  if (!shouldAnimate) {
+    stagePersonaAccountPlatformSelection(persona, next);
+    renderPersonaAccountPlatformSelection();
+    return;
+  }
+  const motion = createPersonaAccountPlatformMotion(persona, next, direction);
+  if (!motion) {
+    stagePersonaAccountPlatformSelection(persona, next);
+    renderPersonaAccountPlatformSelection();
+    return;
+  }
+  const transition = settleAccountPoolPlatformMotion(motion, true);
+  personaAccountPlatformTransitionPromise = transition;
+  try {
+    await transition;
+  } finally {
+    if (personaAccountPlatformTransitionPromise === transition) {
+      personaAccountPlatformTransitionPromise = null;
+    }
+    const queuedTarget = personaAccountPlatformQueuedTarget;
+    personaAccountPlatformQueuedTarget = "";
+    if (queuedTarget && queuedTarget !== personaContentPlatform(persona)) {
+      const platforms = personaAutomationPlatformOptions(persona);
+      const queuedIndex = platforms.indexOf(queuedTarget);
+      const activeIndex = platforms.indexOf(personaContentPlatform(persona));
+      await transitionPersonaAccountPlatform(queuedTarget, queuedIndex >= activeIndex ? 1 : -1);
     }
   }
 }
@@ -25505,12 +25827,10 @@ function renderAccountPoolPlatformTabs() {
       </div>
       <div class="account-pool-platforms account-pool-platform-tabs" data-account-pool-platform-tabs role="tablist" aria-label="平台">
         ${accountPoolPlatforms.map(([value, label]) => {
-          const count = accountPoolAccounts(value).length;
           const isActive = active === value;
-          return `<button type="button" class="${isActive ? "is-active" : ""}" data-account-pool-platform="${esc(value)}" role="tab" aria-selected="${isActive ? "true" : "false"}" aria-label="${esc(`${label}，${count} 个账号`)}">
+          return `<button type="button" class="${isActive ? "is-active" : ""}" data-account-pool-platform="${esc(value)}" role="tab" aria-selected="${isActive ? "true" : "false"}" aria-label="${esc(label)}">
             ${renderAccountPoolPlatformIcon(value)}
             <strong>${esc(label)}</strong>
-            <small>${esc(`${count} 个账号`)}</small>
           </button>`;
         }).join("")}
       </div>
@@ -25619,7 +25939,7 @@ async function toggleAccountPasswordVisibility(button) {
   if (!nextVisible) delete state.accountPasswordValues[accountId];
 }
 
-function renderAccountPoolCardActions(account, { context = "pool" } = {}) {
+function renderAccountPoolCardActions(account, { context = "pool", personaAccountAction = null } = {}) {
   const accountId = String(account?.id || "");
   const proxyLabel = account?.proxy_id ? "切换代理" : "选择代理";
   const activeLoginTask = activeOpenLoginTaskForAccount(accountId);
@@ -25631,12 +25951,13 @@ function renderAccountPoolCardActions(account, { context = "pool" } = {}) {
     return `<button type="button" class="primary" ${attribute}="${esc(accountId)}" ${boundPersonaId ? "" : 'disabled title="请先绑定人设后再打开登录"'}>打开登录</button>`;
   };
   if (context === "persona-settings") {
+    const changeAction = personaAccountAction ? `<button type="button" class="persona-account-card-action persona-account-card-change" data-persona-account-add data-persona-account-platform="${esc(personaAccountAction.platform || "")}" title="${esc(personaAccountAction.title || "更换当前账号")}" aria-label="${esc(personaAccountAction.title || "更换当前账号")}">${renderPersonaAccountBindingIcon("replace")}<span>更换</span></button>` : "";
     return `<div class="row-actions persona-account-summary-actions">
       ${loginAction("data-persona-account-open-login")}
       <button type="button" data-persona-account-proxy="${esc(accountId)}">${proxyLabel}</button>
       <button type="button" data-persona-account-edit="${esc(accountId)}">编辑</button>
-      <button type="button" data-persona-account-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>移除</button>
-      <button type="button" class="danger" data-persona-account-delete="${esc(accountId)}">删除</button>
+      <button type="button" class="persona-account-card-action persona-account-card-unbind" data-persona-account-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>${renderPersonaAccountBindingIcon("remove")}<span>移除</span></button>
+      ${changeAction}
     </div>`;
   }
   return `<div class="row-actions">
@@ -25673,8 +25994,9 @@ function renderAccountPoolCardFields(account, { selectionControl = "", includeCo
   </span>`;
 }
 
-function renderAccountPoolCard(account, { variant = "pool", active = false, checked = false, persona = null } = {}) {
+function renderAccountPoolCard(account, { variant = "pool", active = false, checked = false, persona = null, personaAccountAction = null } = {}) {
   const accountId = String(account?.id || "");
+  const accountPlatform = normalizeAccountPoolPlatform(account?.platform || "threads");
   const isPersonaSettings = variant === "persona-settings";
   const boundPersona = persona || (account?.persona_id
     ? state.personas.find((item) => String(item?.id || "") === String(account.persona_id || ""))
@@ -25686,13 +26008,13 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
       <input type="checkbox" data-account-pool-check="${esc(accountId)}" ${checked ? "checked" : ""} />
       <span aria-hidden="true"></span>
     </label>`;
-  return `<article class="account-card account-pool-card ${isPersonaSettings ? "account-pool-card--persona" : ""} ${active ? "is-active" : ""} ${checked ? "is-checked" : ""}" ${accountCardTarget} role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
+  return `<article class="account-card account-pool-card ${isPersonaSettings ? "account-pool-card--persona" : ""} ${active ? "is-active" : ""} ${checked ? "is-checked" : ""}" data-account-platform="${esc(accountPlatform)}" ${accountCardTarget} role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
     ${renderAccountPoolCardFields(account, { selectionControl, includeCopyButton: !isPersonaSettings })}
     <strong class="account-pool-bound-persona ${boundPersona ? "is-bound" : "is-unbound"}" title="${esc(boundPersona ? `已绑定：${boundPersona.name || boundPersona.id}` : "未绑定人设")}">${esc(boundPersona ? `已绑定：${boundPersona.name || boundPersona.id}` : "未绑定人设")}</strong>
     <div class="account-card-meta">
       <span data-account-proxy-for="${esc(accountId)}">${esc(accountResidentialProxyLabel(account))}</span>
     </div>
-    ${renderAccountPoolCardActions(account, { context: isPersonaSettings ? "persona-settings" : "pool" })}
+    ${renderAccountPoolCardActions(account, { context: isPersonaSettings ? "persona-settings" : "pool", personaAccountAction })}
     ${isPersonaSettings ? "" : renderPersonaProfileListToggle("accountPoolPersonaSidebar")}
   </article>`;
 }
@@ -25702,6 +26024,9 @@ function renderAccountPoolCards(accounts, selectedAccount, selectedAccountIds = 
     ? new Set(accountPoolSelectedIds())
     : new Set(Array.from(selectedAccountIds || []).map((id) => String(id || "")));
   const selectedCount = selectedIds.size;
+  const allSelected = Boolean(accounts.length) && selectedCount === accounts.length;
+  const selectionAction = allSelected ? "clear" : "all";
+  const selectionLabel = allSelected ? "取消全选" : "全选账号";
   const addButton = `<button type="button" class="account-pool-add-button" data-account-pool-add>
     <span aria-hidden="true"></span>
     <strong>添加账号</strong>
@@ -25709,8 +26034,7 @@ function renderAccountPoolCards(accounts, selectedAccount, selectedAccountIds = 
   const editToolbar = `<div class="account-pool-edit-toolbar" role="toolbar" aria-label="账号编辑操作">
     <span class="account-pool-selection-count">${esc(selectedCount ? `已选 ${selectedCount} 个` : "未选择")}</span>
     <button type="button" data-account-pool-copy-selected title="复制账号卡" aria-label="复制账号卡" ${selectedCount ? "" : "disabled"}><span aria-hidden="true"></span></button>
-    <button type="button" class="bulk-selection-icon-button" data-account-pool-select-all title="全选账号" aria-label="全选账号" ${accounts.length ? "" : "disabled"}>${renderSelectAllIcon()}</button>
-    <button type="button" class="bulk-selection-icon-button" data-account-pool-clear-selected title="取消选择" aria-label="取消选择" ${selectedCount ? "" : "disabled"}>${renderClearSelectionIcon()}</button>
+    <button type="button" class="bulk-selection-icon-button" data-account-pool-selection="${selectionAction}" title="${selectionLabel}" aria-label="${selectionLabel}" ${accounts.length ? "" : "disabled"}>${allSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}</button>
     <button type="button" class="danger unified-action-icon-button" data-account-pool-delete-selected title="删除账号" aria-label="删除账号" ${selectedCount ? "" : "disabled"}>${renderTrashIcon()}</button>
   </div>`;
   if (!accounts.length) return `
@@ -26285,7 +26609,7 @@ function accountProxyCustomAddButtonHtml(scope = "modal") {
 
 function accountSystemProxyPoolButtonHtml() {
   return `<button type="button" class="account-system-proxy-pool-add" data-account-system-proxy-pool-open>
-    ${renderSystemProxyPoolIcon()}<span>添加 IP</span>
+    ${renderSystemProxyPoolIcon()}<span>添加代理 IP</span>
   </button>`;
 }
 
@@ -27346,9 +27670,39 @@ function renderAccountPool() {
 }
 
 function bindAccountPoolPlatformSwipe(host) {
+  const options = arguments[1] && typeof arguments[1] === "object" ? arguments[1] : {};
   const swipeSurface = host?.querySelector(".account-pool-body");
   const accountPanel = host?.querySelector(".account-pool-account-panel");
-  if (!swipeSurface || !accountPanel) return;
+  const resolvedSwipeSurface = options.swipeSurface || swipeSurface;
+  const resolvedAccountPanel = options.accountPanel || accountPanel;
+  const platformEntries = Array.isArray(options.platformEntries) ? options.platformEntries : accountPoolPlatforms;
+  const currentPlatform = typeof options.currentPlatform === "function"
+    ? options.currentPlatform
+    : normalizeAccountPoolPlatform;
+  const createMotion = typeof options.createMotion === "function"
+    ? options.createMotion
+    : createAccountPoolPlatformMotion;
+  const settleMotion = typeof options.settleMotion === "function"
+    ? options.settleMotion
+    : settleAccountPoolPlatformMotion;
+  const transitionIsActive = typeof options.transitionIsActive === "function"
+    ? options.transitionIsActive
+    : () => Boolean(accountPoolPlatformTransitionPromise);
+  const setTransition = typeof options.setTransition === "function"
+    ? options.setTransition
+    : (transition) => {
+      accountPoolPlatformTransitionPromise = transition;
+      void transition.finally(() => {
+        if (accountPoolPlatformTransitionPromise === transition) accountPoolPlatformTransitionPromise = null;
+      });
+    };
+  const suppressClickUntil = typeof options.suppressClickUntil === "function"
+    ? options.suppressClickUntil
+    : (value) => {
+      if (value !== undefined) accountPoolPlatformSwipeSuppressClickUntil = value;
+      return accountPoolPlatformSwipeSuppressClickUntil;
+    };
+  if (!resolvedSwipeSurface || !resolvedAccountPanel) return;
   let gesture = null;
   const moveWindowGesture = (event) => moveGesture(event);
   const finishWindowGesture = (event) => finishGesture(event, false);
@@ -27362,14 +27716,14 @@ function bindAccountPoolPlatformSwipe(host) {
     removeWindowGestureListeners();
     gesture = null;
   };
-  swipeSurface.addEventListener("click", (event) => {
-    if (Date.now() >= accountPoolPlatformSwipeSuppressClickUntil) return;
+  resolvedSwipeSurface.addEventListener("click", (event) => {
+    if (Date.now() >= suppressClickUntil()) return;
     event.preventDefault();
     event.stopImmediatePropagation();
   }, true);
-  swipeSurface.addEventListener("pointerdown", (event) => {
+  resolvedSwipeSurface.addEventListener("pointerdown", (event) => {
     if (event.pointerType !== "touch" || event.isPrimary === false) return;
-    if (accountPoolPlatformTransitionPromise) return;
+    if (transitionIsActive()) return;
     gesture = {
       pointerId: event.pointerId,
       x: Number(event.clientX || 0),
@@ -27396,14 +27750,14 @@ function bindAccountPoolPlatformSwipe(host) {
         abandonGesture();
         return;
       }
-      const currentIndex = accountPoolPlatforms.findIndex(([value]) => value === normalizeAccountPoolPlatform());
+      const currentIndex = platformEntries.findIndex(([value]) => value === currentPlatform());
       const direction = deltaX < 0 ? 1 : -1;
       const nextIndex = currentIndex + direction;
-      if (nextIndex < 0 || nextIndex >= accountPoolPlatforms.length) {
+      if (nextIndex < 0 || nextIndex >= platformEntries.length) {
         abandonGesture();
         return;
       }
-      gesture.motion = createAccountPoolPlatformMotion(accountPoolPlatforms[nextIndex][0], direction);
+      gesture.motion = createMotion(platformEntries[nextIndex][0], direction);
       if (!gesture.motion) {
         abandonGesture();
         return;
@@ -27435,15 +27789,10 @@ function bindAccountPoolPlatformSwipe(host) {
       || (Math.abs(currentGesture.deltaX) >= 24 && Math.abs(currentGesture.velocityX) >= 0.45)
     );
     if (Math.abs(currentGesture.deltaX) >= 7) {
-      accountPoolPlatformSwipeSuppressClickUntil = Date.now() + 350;
+      suppressClickUntil(Date.now() + 350);
     }
-    const transition = settleAccountPoolPlatformMotion(currentGesture.motion, commit);
-    accountPoolPlatformTransitionPromise = transition;
-    void transition.finally(() => {
-      if (accountPoolPlatformTransitionPromise === transition) {
-        accountPoolPlatformTransitionPromise = null;
-      }
-    });
+    const transition = settleMotion(currentGesture.motion, commit);
+    setTransition(transition);
   };
 }
 
@@ -27452,29 +27801,21 @@ function bindPersonaAccountPlatformSwipe(host) {
   const persona = selectedPersona();
   const platforms = persona ? personaAutomationPlatformOptions(persona) : [];
   if (!accountPanel || platforms.length < 2) return;
-  let gesture = null;
-  accountPanel.addEventListener("pointerdown", (event) => {
-    if (event.pointerType !== "touch" || event.isPrimary === false) return;
-    if (event.target.closest("button, input, select, textarea, a")) return;
-    gesture = { pointerId: event.pointerId, x: Number(event.clientX || 0), y: Number(event.clientY || 0) };
+  bindAccountPoolPlatformSwipe(host, {
+    swipeSurface: accountPanel,
+    accountPanel,
+    platformEntries: platforms.map((value) => [value, platformLabel(value)]),
+    currentPlatform: () => personaContentPlatform(persona),
+    createMotion: (next, direction) => createPersonaAccountPlatformMotion(persona, next, direction),
+    settleMotion: settleAccountPoolPlatformMotion,
+    transitionIsActive: () => Boolean(personaAccountPlatformTransitionPromise),
+    setTransition: (transition) => {
+      personaAccountPlatformTransitionPromise = transition;
+      void transition.finally(() => {
+        if (personaAccountPlatformTransitionPromise === transition) personaAccountPlatformTransitionPromise = null;
+      });
+    },
   });
-  const finishGesture = (event) => {
-    if (!gesture || event.pointerId !== gesture.pointerId) return;
-    const deltaX = Number(event.clientX || 0) - gesture.x;
-    const deltaY = Number(event.clientY || 0) - gesture.y;
-    gesture = null;
-    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY)) return;
-    const currentIndex = Math.max(0, platforms.indexOf(selectedPersonaAutomationPlatform()));
-    const nextIndex = Math.max(0, Math.min(platforms.length - 1, currentIndex + (deltaX < 0 ? 1 : -1)));
-    if (nextIndex === currentIndex) return;
-    clearAccountPasswordRevealState();
-    state.personaAutomationPlatform = platforms[nextIndex];
-    state.preferredAccountId = "";
-    renderPersonaDetail();
-    renderConfirmSummary();
-  };
-  accountPanel.addEventListener("pointerup", finishGesture);
-  accountPanel.addEventListener("pointercancel", () => { gesture = null; });
 }
 
 async function bindAccountPoolAccountToPersona(personaId = "") {
@@ -27655,7 +27996,7 @@ function renderProxyPool() {
       <div class="proxy-pool-head">
         <div><strong>代理 IP</strong><span>独立维护代理信息并查看账号绑定情况。</span></div>
         <div class="proxy-pool-head-actions">
-          <button type="button" class="system-proxy-pool-link" data-system-proxy-pool-open>${renderSystemProxyPoolIcon()}<span>添加 IP</span></button>
+          <button type="button" class="system-proxy-pool-link" data-system-proxy-pool-open>${renderSystemProxyPoolIcon()}<span>添加代理 IP</span></button>
           <button type="button" class="primary proxy-pool-add" data-proxy-add>${renderCustomProxyIcon()}<span>自定义代理</span></button>
         </div>
       </div>
@@ -27689,7 +28030,13 @@ function renderProxyPool() {
                 <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${proxyBoundAccountCount(proxy) ? "代理已绑定账号，不能删除" : "删除代理"}" aria-label="删除代理" ${proxyBoundAccountCount(proxy) ? "disabled" : ""}>${renderTrashIcon()}</button>
               </span>
             </div>`;
-          }).join("") : `<div class="empty-state proxy-pool-empty">暂无代理 IP，点击新增代理开始配置。</div>`}
+          }).join("") : renderModuleEmptyState({
+            icon: "network",
+            title: "暂无代理 IP",
+            detail: "点击新增代理开始配置",
+            className: "proxy-pool-empty",
+            fill: true,
+          })}
         </div>
       </div>
       <div class="proxy-card-grid" data-proxy-mobile-cards role="list" aria-label="代理 IP 列表">
@@ -27722,7 +28069,13 @@ function renderProxyPool() {
                 <div class="proxy-card-actions" role="group" aria-label="代理操作">${renderProxyMobileActions(proxy)}</div>
               </div>
             </article>`;
-          }).join("") : `<div class="empty-state proxy-pool-empty">暂无代理 IP，点击新增代理开始配置。</div>`}
+          }).join("") : renderModuleEmptyState({
+            icon: "network",
+            title: "暂无代理 IP",
+            detail: "点击新增代理开始配置",
+            className: "proxy-pool-empty",
+            fill: true,
+          })}
       </div>
       ${mobileStream.mobile ? renderMobileTweetStreamFooter(mobileStream, "proxy-pool") : `<div class="proxy-pager">
         <label>每页
@@ -27749,35 +28102,34 @@ function systemProxyPoolCardsHtml(data = {}) {
   const options = Array.isArray(data.options) ? data.options : [];
   const currentItemId = String(data.current?.market_item_id || "").trim();
   if (!options.length) {
-    return `<div class="empty-state system-proxy-pool-empty">
-      <strong>当前没有可领取的代理 IP</strong>
-      <span>公共代理池暂时没有空闲节点，请稍后再试。</span>
-    </div>`;
+    return renderModuleEmptyState({
+      icon: "network",
+      title: "当前没有可领取的代理 IP",
+      detail: "公共代理池暂时没有空闲节点，请稍后再试",
+      className: "system-proxy-pool-empty",
+      fill: true,
+    });
   }
   return options.map((proxy) => {
     const itemId = String(proxy.market_item_id || "").trim();
     const selected = Boolean(proxy.selected) || (itemId && itemId === currentItemId);
     const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
+    const country = String(proxy.country_code || proxy.country || "GL").trim().slice(0, 3).toUpperCase() || "GL";
+    const healthLabel = String(proxy.health_status || "healthy").toLowerCase() === "healthy" ? "检测可用" : "待检测";
     const actionText = selected ? "当前使用" : (currentItemId ? "切换使用" : "免费获取");
-    return `<article class="system-proxy-pool-card${selected ? " is-selected" : ""}" data-system-proxy-pool-card="${esc(itemId)}">
-      <div class="system-proxy-pool-card-head">
-        <div>
-          <span class="system-proxy-pool-card-kicker">公共代理池</span>
-          <strong>${esc(proxy.name || endpoint)}</strong>
-        </div>
-        <span class="status active">${selected ? "已获取" : "可领取"}</span>
+    return `<article class="proxy-market-mini-card" data-system-proxy-pool-card="${esc(itemId)}" ${selected ? 'aria-current="true"' : ""}>
+      <div class="proxy-market-mini-card-head">
+        <span class="proxy-market-mini-country">${esc(country)}</span>
+        <span class="proxy-market-mini-stock">${selected ? "已获取" : "可领取"}</span>
       </div>
-      <div class="system-proxy-pool-endpoint">
-        ${renderNetworkIcon()}
-        <span><strong>${esc(endpoint)}</strong><small>${esc(proxyProtocol(proxy))} · ${esc(systemProxyPoolLocation(proxy))}</small></span>
+      <strong>${esc(proxy.name || endpoint)}</strong>
+      <span class="proxy-market-mini-location">${esc(endpoint)} · ${esc(systemProxyPoolLocation(proxy))}</span>
+      <div class="proxy-market-mini-meta">
+        <span>${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
+        <span>${esc(proxyProtocol(proxy))}</span>
+        <strong>${esc(healthLabel)}</strong>
       </div>
-      <div class="system-proxy-pool-meta">
-        <span><small>IP 类型</small><strong>${esc(proxyIpTypeLabel(proxy.ip_type))}</strong></span>
-        <span><small>系统状态</small><strong>${esc(String(proxy.health_status || "healthy").toLowerCase() === "healthy" ? "检测可用" : "待检测")}</strong></span>
-        <span><small>已绑账号</small><strong>${Number(proxy.bound_account_count || 0)}</strong></span>
-      </div>
-      ${proxy.description ? `<p>${esc(proxy.description)}</p>` : ""}
-      <button type="button" class="${selected ? "" : "primary"}" data-system-proxy-select="${esc(itemId)}" ${selected ? "disabled" : ""}>${esc(actionText)}</button>
+      <button type="button" class="primary" data-system-proxy-select="${esc(itemId)}" ${selected ? "disabled" : ""}>${esc(actionText)}</button>
     </article>`;
   }).join("");
 }
@@ -27802,7 +28154,13 @@ async function refreshSystemProxyPoolModal(modal) {
     return data;
   } catch (error) {
     if (list) {
-      list.innerHTML = `<div class="empty-state system-proxy-pool-empty"><strong>公共代理池加载失败</strong><span>${esc(error.detail || error.message || "请稍后重试")}</span><button type="button" data-system-proxy-retry>重新加载</button></div>`;
+      list.innerHTML = renderModuleEmptyState({
+        icon: "network",
+        title: "公共代理池加载失败",
+        detail: error.detail || error.message || "请稍后重试",
+        className: "system-proxy-pool-empty",
+        action: '<button type="button" data-system-proxy-retry>重新加载</button>',
+      });
       list.setAttribute("aria-busy", "false");
     }
     return null;
@@ -27821,16 +28179,12 @@ function openSystemProxyPoolModal({ accountId = "", selectedProxyId = "" } = {})
     <div class="console-modal-backdrop" data-system-proxy-pool-close></div>
     <section class="console-modal-dialog system-proxy-pool-modal" role="dialog" aria-modal="true" aria-labelledby="systemProxyPoolTitle">
       <div class="console-modal-head">
-        <div><strong id="systemProxyPoolTitle">公共代理池</strong><p>选择尚未被其他用户获取的代理 IP。</p></div>
+        <div><strong id="systemProxyPoolTitle">公共代理池</strong><p><span>选择未被领取的代理 IP。</span><span class="system-proxy-pool-limit">只能免费领取 1 个</span></p></div>
         ${renderModalCloseButton("data-system-proxy-pool-close")}
       </div>
       <div class="console-modal-content system-proxy-pool-content">
-        <div class="system-proxy-pool-guide">
-          <div><strong>每个 Vecto 账号可免费获取 1 个</strong><span>只显示当前账号已获取和尚未被其他人选择的代理。</span></div>
-          <small>切换前需先解除现有社媒账号绑定；成功后原代理自动释放。</small>
-        </div>
         <div class="system-proxy-pool-notice" data-system-proxy-pool-notice aria-live="polite"></div>
-        <div class="system-proxy-pool-list" data-system-proxy-pool-list aria-busy="true">
+        <div class="proxy-market-mini-grid" data-system-proxy-pool-list aria-busy="true">
           <div class="system-proxy-pool-loading" role="status">正在加载公共代理池...</div>
         </div>
       </div>
@@ -29132,7 +29486,12 @@ function renderSocialTasks() {
         ${activeSocialAutomationTask(task) ? `<button type="button" data-social-cancel="${esc(task.id)}">取消</button>` : ""}
       </div>
     </article>
-  `).join("") : `<div class="empty-state">暂无浏览器自动化任务。</div>`;
+  `).join("") : renderModuleEmptyState({
+    icon: "browser",
+    title: "暂无浏览器自动化任务",
+    detail: "开始执行后，任务会显示在这里",
+    fill: true,
+  });
 }
 
 
@@ -30239,14 +30598,6 @@ function bindEvents() {
     if (handleUploadDropzoneAction(event)) return;
     const personaDataPanel = event.target.closest(".persona-profile-data-panel");
     if (personaDataPanel) {
-      const dataTab = event.target.closest("[data-persona-data-tab]");
-      if (dataTab) {
-        state.personaDataTab = normalizePersonaDataTab(dataTab.dataset.personaDataTab);
-        state.publishHistoryPreviewId = "";
-        if (state.personaDataTab === "history") loadPersonaDashboardOverview().catch(() => null);
-        renderPersonaDetail();
-        return;
-      }
       const historyCard = event.target.closest("[data-publish-history-card]");
       if (historyCard && !event.target.closest("[data-publish-history-view], [data-publish-history-requeue], a")) {
         state.publishHistoryPreviewId = String(historyCard.dataset.publishHistoryCard || "").trim();
@@ -30638,17 +30989,8 @@ function bindEvents() {
       }
       return;
     }
-    const hotKeywordButton = event.target.closest("[data-persona-prepare-hot-keywords]");
-    if (hotKeywordButton) {
-      preparePersonaHotKeywords(hotKeywordButton.dataset.personaPrepareHotKeywords === "refresh").catch(() => {});
-      return;
-    }
     if (event.target.closest("[data-persona-fetch-hot]")) {
       fetchPersonaHotCandidates(false).catch(() => {});
-      return;
-    }
-    if (event.target.closest("[data-persona-fetch-hot-refresh]")) {
-      fetchPersonaHotCandidates(true).catch(() => {});
       return;
     }
     if (event.target.closest("[data-persona-cancel-hot]")) {
@@ -31625,18 +31967,6 @@ function bindEvents() {
         .catch((error) => showMsg("commandMsg", error.detail || error.message || "解绑账号失败", false));
       return;
     }
-    const personaAccountDelete = event.target.closest("[data-persona-account-delete]");
-    if (personaAccountDelete) {
-      confirmDangerAction("确定删除这个执行账号吗？相关历史自动化记录也会一起删除。", {
-        title: "删除执行账号",
-        confirmText: "删除账号",
-      }).then((ok) => {
-        if (!ok) return;
-        deleteSocialAccountRecord(personaAccountDelete.dataset.personaAccountDelete || "", "commandMsg")
-          .catch((error) => showMsg("commandMsg", error.detail || error.message || "删除账号失败", false));
-      });
-      return;
-    }
     const personaAccountAdd = event.target.closest("[data-persona-account-add]");
     if (personaAccountAdd) {
       const persona = selectedPersona();
@@ -31645,18 +31975,20 @@ function bindEvents() {
         return;
       }
       const platform = String(personaAccountAdd.dataset.personaAccountPlatform || selectedPersonaAutomationPlatform()).trim().toLowerCase();
-      state.personaAutomationPlatform = platform === "instagram" ? "instagram" : "threads";
+      setPersonaContentPlatform(platform, persona);
       openPersonaAccountPoolPickerModal(persona, state.personaAutomationPlatform, personaAccountAdd)
         .catch((error) => showMsg("commandMsg", error.detail || error.message || "打开账号池失败", false));
       return;
     }
     const personaAccountPlatform = event.target.closest("[data-persona-account-platform]");
     if (personaAccountPlatform) {
-      clearAccountPasswordRevealState();
-      state.personaAutomationPlatform = String(personaAccountPlatform.dataset.personaAccountPlatform || "").trim().toLowerCase() === "instagram" ? "instagram" : "threads";
-      state.preferredAccountId = "";
-      renderPersonaDetail();
-      renderConfirmSummary();
+      const persona = selectedPersona();
+      const platforms = persona ? personaAutomationPlatformOptions(persona) : [];
+      const currentIndex = platforms.indexOf(personaContentPlatform(persona));
+      const nextPlatform = normalizePersonaContentPlatform(personaAccountPlatform.dataset.personaAccountPlatform);
+      const nextIndex = platforms.indexOf(nextPlatform);
+      transitionPersonaAccountPlatform(nextPlatform, nextIndex >= currentIndex ? 1 : -1)
+        .catch((error) => showMsg("commandMsg", error.detail || error.message || "切换账号平台失败", false));
       return;
     }
     const personaAccountOpenLogin = event.target.closest("[data-persona-account-open-login]");
@@ -31701,33 +32033,16 @@ function bindEvents() {
       renderActivePersonaListSurface();
     }
   });
-  $("moduleBody").addEventListener("input", (event) => {
-    if (event.target?.matches?.("[data-persona-hot-keywords]")) {
-      const persona = selectedPersona();
-      if (!persona) return;
-      personaFormState(persona.id).generate.hotKeywordText = String(event.target.value || "");
-      renderConfirmSummary();
-    }
-  });
   $("moduleBody").addEventListener("change", async (event) => {
     const historyFilter = event.target?.closest?.("[data-persona-history-filter]");
     if (historyFilter) {
       const key = String(historyFilter.dataset.personaHistoryFilter || "");
       const value = String(historyFilter.value || "");
-      if (["platform", "content", "sort"].includes(key)) state.personaHistoryFilters[key] = value;
+      if (["content", "sort"].includes(key)) state.personaHistoryFilters[key] = value;
       if (key === "content") localStorage.setItem("personaDashboardPostTypeFilter", value);
       if (key === "sort") localStorage.setItem("personaDashboardPostSort", value);
       state.publishHistoryPreviewId = "";
       renderPersonaDetail();
-      return;
-    }
-    if (event.target?.matches?.("[data-persona-hot-keywords]")) {
-      const persona = selectedPersona();
-      if (!persona) return;
-      const form = personaFormState(persona.id).generate;
-      form.hotKeywordText = formatPersonaHotKeywordText(parsePersonaHotKeywordText(event.target.value));
-      renderPersonaDetail();
-      renderConfirmSummary();
       return;
     }
     if (event.target?.matches?.("[data-account-pool-check]")) {
@@ -32216,15 +32531,13 @@ function bindEvents() {
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "复制账号字段失败", false));
       return;
     }
-    const accountSelectAll = event.target.closest("[data-account-pool-select-all]");
-    if (accountSelectAll) {
-      selectAllAccountPoolAccounts();
-      return;
-    }
-    const accountClearSelected = event.target.closest("[data-account-pool-clear-selected]");
-    if (accountClearSelected) {
-      clearAccountPoolAccountSelection();
-      renderSocialAccounts();
+    const accountSelection = event.target.closest("[data-account-pool-selection]");
+    if (accountSelection) {
+      if (accountSelection.dataset.accountPoolSelection === "all") selectAllAccountPoolAccounts();
+      else {
+        clearAccountPoolAccountSelection();
+        renderSocialAccounts();
+      }
       return;
     }
     const accountDeleteSelected = event.target.closest("[data-account-pool-delete-selected]");

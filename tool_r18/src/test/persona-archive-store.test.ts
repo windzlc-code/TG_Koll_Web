@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { updatePersonaArchiveThreadsHotMetrics } from "@/runtime/node/persona-archive-store";
+import { updatePersonaArchivePlatformHotMetrics, updatePersonaArchiveThreadsHotMetrics } from "@/runtime/node/persona-archive-store";
 
 const tempDirs: string[] = [];
 
@@ -26,6 +26,30 @@ afterEach(() => {
 });
 
 describe("persona archive hot metric store", () => {
+  it("stores Instagram metrics without mutating the legacy Threads binding", () => {
+    const dir = useArchiveStore([{
+      id: "persona-1",
+      name: "理发师",
+      content: "",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+      setup: { accountManagement: { threads: { handle: "current.threads" } } },
+      posts: [],
+    }]);
+
+    const result = updatePersonaArchivePlatformHotMetrics({
+      archiveId: "persona-1",
+      metricKey: "instagram:demo.user",
+      metric: { platform: "instagram", accountId: "ig-1", username: "demo.user", followers: 1200 },
+      updatedAt: "2026-08-08T08:00:00.000Z",
+    });
+
+    expect(result).toEqual({ ok: true });
+    const [archive] = readArchives(dir);
+    expect(archive.setup.accountManagement.threads.handle).toBe("current.threads");
+    expect(archive.setup.hotMetrics["instagram:demo.user"].accountId).toBe("ig-1");
+  });
+
   it("bootstraps the legacy Threads binding when only the account pool binding is known", () => {
     const dir = useArchiveStore([{
       id: "persona-1",

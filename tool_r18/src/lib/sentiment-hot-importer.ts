@@ -341,6 +341,26 @@ export type ThreadsProfileHotMetrics = {
   error?: string;
 };
 
+export type InstagramProfileHotMetrics = {
+  platform: "instagram";
+  username: string;
+  followers?: number;
+  following?: number;
+  posts?: number;
+  likes?: number;
+  comments?: number;
+  reposts?: number;
+  shares?: number;
+  views?: number;
+  scannedPosts?: number;
+  refreshedAt: string;
+  method: "browser" | "failed";
+  complete?: boolean;
+  scope?: "authenticated_full_profile" | "authenticated_profile_snapshot" | "failed";
+  postMetrics?: ThreadsProfilePostHotMetrics[];
+  error?: string;
+};
+
 function cleanText(value: unknown): string {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
@@ -6439,6 +6459,181 @@ export async function fetchThreadsProfileHotMetrics(usernameInput: string): Prom
   return buildThreadsProfileIncompleteMetrics(username, refreshedAt, "failed");
 }
 
+function instagramProfileMediaRows(user: any): any[] {
+  const edgeGroups = [
+    user?.edge_owner_to_timeline_media?.edges,
+    user?.edge_felix_video_timeline?.edges,
+    user?.timeline_media?.edges,
+    user?.feed?.edges,
+  ];
+  const rows = edgeGroups
+    .flatMap((group) => Array.isArray(group) ? group : [])
+    .map((edge: any) => edge?.node || edge?.media || edge)
+    .filter((row: any) => row && typeof row === "object");
+  const byId = new Map<string, any>();
+  for (const row of rows) {
+    const key = cleanText(row?.id || row?.pk || row?.shortcode || row?.code);
+    if (key && !byId.has(key)) byId.set(key, row);
+  }
+  return [...byId.values()];
+}
+
+function instagramProfileMetricNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (value == null || value === "") continue;
+    const number = Number(value);
+    if (Number.isFinite(number) && number >= 0) return number;
+  }
+  return undefined;
+}
+
+export function parseInstagramProfileHotMetricsPayload(args: {
+  payload: any;
+  username: string;
+  refreshedAt?: string;
+}): InstagramProfileHotMetrics {
+  const refreshedAt = args.refreshedAt || new Date().toISOString();
+  const requestedUsername = cleanText(args.username).replace(/^@+/, "");
+  const user = args.payload?.data?.user || args.payload?.user || args.payload?.data?.xdt_api__v1__users__web_profile_info?.user;
+  if (!user || typeof user !== "object") {
+    return {
+      platform: "instagram",
+      username: requestedUsername,
+      refreshedAt,
+      method: "failed",
+      complete: false,
+      scope: "failed",
+      error: "Instagram 未返回账号资料，请确认后台授权账号仍处于登录状态。",
+    };
+  }
+  const username = cleanText(user.username || requestedUsername).replace(/^@+/, "");
+  const mediaRows = instagramProfileMediaRows(user);
+  const postMetrics: ThreadsProfilePostHotMetrics[] = mediaRows.map((row: any) => {
+    const code = cleanText(row.shortcode || row.code);
+    const isVideo = Boolean(row.is_video || row.media_type === 2 || row.product_type === "clips");
+    const captionEdges = Array.isArray(row?.edge_media_to_caption?.edges) ? row.edge_media_to_caption.edges : [];
+    const caption = cleanText(row.caption?.text || row.caption || captionEdges[0]?.node?.text);
+    const sourceUrl = code
+      ? `https://www.instagram.com/${isVideo ? "reel" : "p"}/${code}/`
+      : cleanText(row.permalink || row.url);
+    return {
+      pk: cleanText(row.pk || row.id) || undefined,
+      code: code || undefined,
+      sourceUrl,
+      content: caption || undefined,
+      publishedAt: normalizeThreadsTimestamp(row.taken_at_timestamp || row.taken_at || row.device_timestamp),
+      likeCount: instagramProfileMetricNumber(row?.edge_media_preview_like?.count, row?.edge_liked_by?.count, row.like_count),
+      commentCount: instagramProfileMetricNumber(row?.edge_media_to_comment?.count, row.comment_count),
+      viewCount: instagramProfileMetricNumber(row.video_view_count, row.video_play_count, row.play_count, row.view_count),
+      capturedAt: refreshedAt,
+    };
+  }).filter((row) => Boolean(row.sourceUrl || row.pk));
+  const resolvedPostCount = instagramProfileMetricNumber(user?.edge_owner_to_timeline_media?.count, user.media_count, user.post_count);
+  const posts = resolvedPostCount ?? postMetrics.length;
+  const followers = instagramProfileMetricNumber(user?.edge_followed_by?.count, user.follower_count);
+  const following = instagramProfileMetricNumber(user?.edge_follow?.count, user.following_count);
+  const likes = postMetrics.length || posts === 0 ? postMetrics.reduce((sum, row) => sum + Number(row.likeCount || 0), 0) : undefined;
+  const comments = postMetrics.length || posts === 0 ? postMetrics.reduce((sum, row) => sum + Number(row.commentCount || 0), 0) : undefined;
+  const views = postMetrics.length || posts === 0 ? postMetrics.reduce((sum, row) => sum + Number(row.viewCount || 0), 0) : undefined;
+  const complete = resolvedPostCount !== undefined && (posts === 0 || postMetrics.length >= posts);
+  return {
+    platform: "instagram",
+    username,
+    followers,
+    following,
+    posts,
+    likes,
+    comments,
+    reposts: 0,
+    shares: 0,
+    views,
+    scannedPosts: postMetrics.length,
+    refreshedAt,
+    method: "browser",
+    complete,
+    scope: complete ? "authenticated_full_profile" : "authenticated_profile_snapshot",
+    postMetrics,
+    error: complete ? undefined : `Instagram 已读取 ${postMetrics.length} 条近期帖子；账号共 ${posts} 条帖子，本次互动数据为近期快照。`,
+  };
+}
+
+export async function fetchInstagramProfileHotMetrics(usernameInput: string): Promise<InstagramProfileHotMetrics> {
+  const username = cleanText(usernameInput).replace(/^@+/, "");
+  const refreshedAt = new Date().toISOString();
+  if (!username) {
+    return {
+      platform: "instagram",
+      username,
+      refreshedAt,
+      method: "failed",
+      complete: false,
+      scope: "failed",
+      error: "Instagram 账号未设置，无法刷新热点数据。",
+    };
+  }
+  const cookies = readSentimentBrowserAuthCookies("instagram");
+  if (!hasValidInstagramSessionCookie(cookies)) {
+    return {
+      platform: "instagram",
+      username,
+      refreshedAt,
+      method: "failed",
+      complete: false,
+      scope: "failed",
+      error: "Instagram 后台授权账号未登录或 Cookie 已失效。",
+    };
+  }
+  let browser: any = null;
+  try {
+    const playwright = await import("playwright");
+    browser = await playwright.chromium.launch(buildLocalChromiumLaunchOptions());
+    const context = await browser.newContext({
+      viewport: { width: 900, height: 1400 },
+      locale: "zh-TW",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    });
+    await addCookiesBestEffort(context, cookies);
+    const page = await context.newPage();
+    await page.goto(`https://www.instagram.com/${encodeURIComponent(username)}/`, {
+      waitUntil: "domcontentloaded",
+      timeout: 25_000,
+    });
+    const csrfToken = cleanText(cookies.find((cookie: any) => cleanText(cookie?.name).toLowerCase() === "csrftoken")?.value);
+    const response = await page.evaluate(async ({ targetUsername, csrf }: { targetUsername: string; csrf: string }) => {
+      const result = await fetch(`/api/v1/users/web_profile_info/?username=${encodeURIComponent(targetUsername)}`, {
+        method: "GET",
+        credentials: "include",
+        headers: {
+          accept: "*/*",
+          "x-ig-app-id": "936619743392459",
+          ...(csrf ? { "x-csrftoken": csrf } : {}),
+        },
+      });
+      return { status: result.status, text: await result.text() };
+    }, { targetUsername: username, csrf: csrfToken });
+    if (Number(response?.status || 0) < 200 || Number(response?.status || 0) >= 300) {
+      throw new Error(`Instagram 账号资料接口返回 ${Number(response?.status || 0) || "异常状态"}`);
+    }
+    return parseInstagramProfileHotMetricsPayload({
+      payload: safeJson(response?.text),
+      username,
+      refreshedAt,
+    });
+  } catch (error: any) {
+    return {
+      platform: "instagram",
+      username,
+      refreshedAt,
+      method: "failed",
+      complete: false,
+      scope: "failed",
+      error: error instanceof Error ? error.message : String(error || "Instagram 热点数据刷新失败。"),
+    };
+  } finally {
+    await browser?.close?.().catch?.(() => null);
+  }
+}
+
 function extractEngagementMetricsFromText(value: string): NonNullable<SentimentHotCandidate["engagement"]> {
   const text = String(value || "");
   const engagement: NonNullable<SentimentHotCandidate["engagement"]> = {};
@@ -7751,19 +7946,20 @@ function mergeBrowserAuthCookies(...groups: any[][]): any[] {
   return [...byKey.values()];
 }
 
-function readThreadsCookiesFromProfileDir(profileDir: unknown): any[] {
+function readPlatformCookiesFromProfileDir(profileDir: unknown, platform: "threads" | "instagram"): any[] {
   const cookieDbPath = path.join(cleanText(profileDir), "cookies.sqlite");
   if (!fs.existsSync(cookieDbPath)) return [];
   let cookieDb: any = null;
   try {
     cookieDb = new Database(cookieDbPath, { readonly: true, fileMustExist: true });
     const nowSeconds = Math.floor(Date.now() / 1000);
+    const hostPattern = platform === "instagram" ? "%instagram.%" : "%threads.%";
     const rows = cookieDb.prepare(`
       SELECT host, name, value, path, expiry, isSecure, isHttpOnly, sameSite
       FROM moz_cookies
-      WHERE lower(host) LIKE '%threads.%'
+      WHERE lower(host) LIKE ?
         AND (expiry = 0 OR expiry > ?)
-    `).all(nowSeconds);
+    `).all(hostPattern, nowSeconds);
     return rows.map((row: any) => ({
       name: String(row.name || ""),
       value: String(row.value || ""),
@@ -7779,6 +7975,14 @@ function readThreadsCookiesFromProfileDir(profileDir: unknown): any[] {
   } finally {
     cookieDb?.close?.();
   }
+}
+
+function readThreadsCookiesFromProfileDir(profileDir: unknown): any[] {
+  return readPlatformCookiesFromProfileDir(profileDir, "threads");
+}
+
+function readInstagramCookiesFromProfileDir(profileDir: unknown): any[] {
+  return readPlatformCookiesFromProfileDir(profileDir, "instagram");
 }
 
 function readManagedThreadsAccountCookies(): any[] {
@@ -7830,6 +8034,46 @@ function readManagedThreadsAccountCookies(): any[] {
   return bestCookies;
 }
 
+function readManagedInstagramAccountCookies(): any[] {
+  const preferredProfileDir = cleanText(process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR || process.env.INSTAGRAM_AUTH_PROFILE_DIR);
+  if (preferredProfileDir) {
+    const preferredCookies = readInstagramCookiesFromProfileDir(preferredProfileDir);
+    if (hasValidInstagramSessionCookie(preferredCookies)) return preferredCookies;
+  }
+  const dataDirs = [
+    cleanText(process.env.WEBAPP_DATA_DIR),
+    "/data/webapp_data",
+    path.resolve(process.cwd(), "webapp_data"),
+    path.resolve(process.cwd(), "..", "webapp_data"),
+  ].filter(Boolean);
+  for (const dataDir of [...new Set(dataDirs)]) {
+    const appDbPath = path.join(dataDir, "app.db");
+    if (!fs.existsSync(appDbPath)) continue;
+    let appDb: any = null;
+    try {
+      appDb = new Database(appDbPath, { readonly: true, fileMustExist: true });
+      const accounts = appDb.prepare(`
+        SELECT profile_dir
+        FROM social_accounts
+        WHERE lower(platform) = 'instagram'
+          AND lower(status) IN ('ready', 'active')
+          AND trim(profile_dir) <> ''
+        ORDER BY last_login_check_at DESC, updated_at DESC
+        LIMIT 8
+      `).all();
+      for (const account of accounts) {
+        const cookies = readInstagramCookiesFromProfileDir(account?.profile_dir);
+        if (hasValidInstagramSessionCookie(cookies)) return cookies;
+      }
+    } catch {
+      // Account-managed browser profiles are optional outside the web runtime.
+    } finally {
+      appDb?.close?.();
+    }
+  }
+  return [];
+}
+
 function expandThreadsAuthCookiesForBrowser(cookies: any[]): any[] {
   const mirrored = cookies
     .filter((cookie: any) => cookieDomainMatchesAny(cookie, ["threads.net", "threads.com"]))
@@ -7862,6 +8106,12 @@ function readSentimentBrowserAuthCookies(platform: SentimentHotPlatform) {
           sameSite,
         };
       });
+    if (platform === "instagram") {
+      const managedCookies = readManagedInstagramAccountCookies();
+      return hasValidInstagramSessionCookie(managedCookies)
+        ? mergeBrowserAuthCookies(managedCookies, cookies).slice(0, 120)
+        : mergeBrowserAuthCookies(cookies, managedCookies).slice(0, 120);
+    }
     if (platform !== "threads") return cookies;
     const managedCookies = readManagedThreadsAccountCookies();
     const mergedCookies = hasValidThreadsSessionCookie(managedCookies)

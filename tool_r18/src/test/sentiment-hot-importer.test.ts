@@ -32,6 +32,7 @@ import {
   isChineseSentimentCandidate,
   isUsableThreadsSearchGraphqlTemplate,
   parseInstagramAuthenticatedSearchPayload,
+  parseInstagramProfileHotMetricsPayload,
   parseInstagramReaderSearchMarkdownCandidates,
   matchThreadsBrowserProfilePublishedPost,
   parseThreadsBrowserPostDetailMetrics,
@@ -2529,6 +2530,70 @@ Instagram
 
     expect(parsed.posts).toEqual([]);
     expect(parsed.hasNextPage).toBe(false);
+  });
+
+  it("parses authenticated Instagram profile totals and recent post metrics", () => {
+    const refreshedAt = "2026-08-08T08:00:00.000Z";
+    const metrics = parseInstagramProfileHotMetricsPayload({
+      username: "demo.user",
+      refreshedAt,
+      payload: {
+        data: {
+          user: {
+            username: "demo.user",
+            edge_followed_by: { count: 1200 },
+            edge_follow: { count: 88 },
+            edge_owner_to_timeline_media: {
+              count: 2,
+              edges: [
+                { node: { id: "1", shortcode: "PostA", taken_at_timestamp: 1_786_000_000, edge_media_preview_like: { count: 30 }, edge_media_to_comment: { count: 4 } } },
+                { node: { id: "2", shortcode: "ReelB", is_video: true, video_view_count: 900, edge_media_preview_like: { count: 50 }, edge_media_to_comment: { count: 7 } } },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    expect(metrics).toMatchObject({
+      platform: "instagram",
+      username: "demo.user",
+      followers: 1200,
+      following: 88,
+      posts: 2,
+      likes: 80,
+      comments: 11,
+      views: 900,
+      scannedPosts: 2,
+      complete: true,
+      scope: "authenticated_full_profile",
+    });
+    expect(metrics.postMetrics?.map((row) => row.sourceUrl)).toEqual([
+      "https://www.instagram.com/p/PostA/",
+      "https://www.instagram.com/reel/ReelB/",
+    ]);
+  });
+
+  it("does not report zero Instagram interactions when the profile response omits post edges", () => {
+    const metrics = parseInstagramProfileHotMetricsPayload({
+      username: "partial.user",
+      payload: {
+        data: {
+          user: {
+            username: "partial.user",
+            follower_count: 90,
+            media_count: 12,
+          },
+        },
+      },
+    });
+
+    expect(metrics.followers).toBe(90);
+    expect(metrics.posts).toBe(12);
+    expect(metrics.likes).toBeUndefined();
+    expect(metrics.comments).toBeUndefined();
+    expect(metrics.complete).toBe(false);
+    expect(metrics.scope).toBe("authenticated_profile_snapshot");
   });
 
   it("skips reposted or quoted Threads GraphQL profile rows", () => {

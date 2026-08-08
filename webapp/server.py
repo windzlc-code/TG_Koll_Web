@@ -15413,16 +15413,13 @@ def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any
     archive = _find_persona_archive(archives, clean_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
-    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
-    account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
-    threads_account = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
-    current_threads_handle = _normalize_threads_username(threads_account.get("handle"))
+    current_accounts = _persona_bound_account_identities(clean_id, archive)
     publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
     rows = []
     for record in publish_history:
         if not _is_persona_publish_history_record(record):
             continue
-        compact = _compact_publish_record(record, _publish_history_hot_metrics(record, archive), current_threads_handle)
+        compact = _compact_publish_record(record, _publish_history_hot_metrics(record, archive), current_accounts)
         compact["media_items"] = _previewable_persona_media_items(
             compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
             archive_id=clean_id,
@@ -18240,10 +18237,84 @@ def _threads_username_from_published_url(value: Any) -> str:
     return _normalize_threads_username(match.group(1) if match else "")
 
 
+def _persona_bound_account_identities(
+    archive_id: str,
+    archive: dict[str, Any] | None = None,
+) -> dict[str, dict[str, str]]:
+    """Return the currently bound account identity for each supported platform."""
+    clean_archive_id = str(archive_id or "").strip()
+    identities: dict[str, dict[str, str]] = {}
+    if clean_archive_id:
+        with db() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, platform, username
+                FROM social_accounts
+                WHERE persona_id = ?
+                  AND lower(platform) IN ('threads', 'instagram')
+                ORDER BY updated_at DESC, created_at DESC
+                """,
+                (clean_archive_id,),
+            ).fetchall()
+        for row in rows:
+            platform = _normalize_persona_content_platform(row["platform"])
+            if platform in identities:
+                continue
+            identities[platform] = {
+                "account_id": str(row["id"] or "").strip(),
+                "username": str(row["username"] or "").strip().lstrip("@"),
+            }
+
+    # Older archives may only contain the legacy Threads binding. Keep it as a
+    # read-only identity fallback without overriding the current account pool.
+    setup = archive.get("setup") if isinstance(archive, dict) and isinstance(archive.get("setup"), dict) else {}
+    account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+    threads_account = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
+    legacy_threads_handle = _normalize_threads_username(threads_account.get("handle"))
+    if legacy_threads_handle and "threads" not in identities:
+        identities["threads"] = {"account_id": "", "username": legacy_threads_handle}
+    return identities
+
+
+def _publish_record_account_identity(record: dict[str, Any]) -> tuple[str, str, str]:
+    published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
+    source_meta = record.get("sourceMeta") if isinstance(record.get("sourceMeta"), dict) else {}
+    published_targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
+    target_sources: list[dict[str, Any]] = []
+    for target in published_targets:
+        if not isinstance(target, dict):
+            continue
+        target_sources.append(target)
+        target_meta = target.get("publishedMeta") if isinstance(target.get("publishedMeta"), dict) else {}
+        if target_meta:
+            target_sources.append(target_meta)
+    platform_sources = [record, published_meta, source_meta, *target_sources]
+    identity_sources = [published_meta, source_meta, *target_sources, record]
+
+    platform = _normalize_persona_content_platform(next((
+        source.get("platform")
+        for source in platform_sources
+        if str(source.get("platform") or "").strip()
+    ), "threads"))
+    account_id = next((
+        str(source.get("accountId") or source.get("account_id") or "").strip()
+        for source in identity_sources
+        if str(source.get("accountId") or source.get("account_id") or "").strip()
+    ), "")
+    account_username = next((
+        str(source.get("username") or source.get("accountUsername") or source.get("account_username") or "").strip().lstrip("@")
+        for source in identity_sources
+        if str(source.get("username") or source.get("accountUsername") or source.get("account_username") or "").strip()
+    ), "")
+    if platform == "threads" and not account_username:
+        account_username = _threads_username_from_published_url(_published_record_url(record))
+    return platform, account_id, account_username
+
+
 def _compact_publish_record(
     record: dict[str, Any],
     hot_metrics: dict[str, Any] | None = None,
-    current_threads_handle: str = "",
+    current_accounts: dict[str, dict[str, str]] | str | None = None,
 ) -> dict[str, Any]:
     published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
     source_meta = record.get("sourceMeta") if isinstance(record.get("sourceMeta"), dict) else {}
@@ -18291,20 +18362,33 @@ def _compact_publish_record(
             "scope": "published_snapshot",
         }
     source_url = _published_record_url(record)
-    source_threads_handle = _threads_username_from_published_url(source_url)
-    current_threads_handle = _normalize_threads_username(current_threads_handle)
-    account_matches_current = bool(
-        not source_threads_handle
-        or not current_threads_handle
-        or source_threads_handle.lower() == current_threads_handle.lower()
-    )
+    platform, source_account_id, source_account_username = _publish_record_account_identity(record)
+    if isinstance(current_accounts, str):
+        current_account_map = {
+            "threads": {"account_id": "", "username": _normalize_threads_username(current_accounts)}
+        }
+    else:
+        current_account_map = current_accounts if isinstance(current_accounts, dict) else {}
+    current_identity = current_account_map.get(platform) if isinstance(current_account_map.get(platform), dict) else {}
+    current_account_id = str(current_identity.get("account_id") or "").strip()
+    current_account_username = str(current_identity.get("username") or "").strip().lstrip("@")
+    if source_account_id and current_account_id:
+        account_matches_current = source_account_id == current_account_id
+    elif source_account_username and current_account_username:
+        account_matches_current = source_account_username.lower() == current_account_username.lower()
+    else:
+        account_matches_current = True
     account_match_warning = ""
-    if source_threads_handle and current_threads_handle and source_threads_handle.lower() != current_threads_handle.lower():
-        account_match_warning = f"该历史发布来自 @{source_threads_handle}，当前人设绑定账号为 @{current_threads_handle}。"
+    if not account_matches_current:
+        source_label = f"@{source_account_username}" if source_account_username else source_account_id
+        current_label = f"@{current_account_username}" if current_account_username else current_account_id
+        account_match_warning = f"该历史发布来自 {source_label}，当前人设绑定账号为 {current_label}。"
     return {
         "id": record.get("id"),
         "archive_post_id": record.get("archivePostId") or record.get("archive_post_id"),
-        "platform": record.get("platform"),
+        "platform": platform,
+        "account_id": source_account_id,
+        "account_username": source_account_username,
         "title": str(record.get("title") or "")[:120],
         "content": content[:220],
         "published_at": record.get("publishedAt") or record.get("published_at"),
@@ -18320,8 +18404,10 @@ def _compact_publish_record(
         "hot_metrics": resolved_hot_metrics,
         "account_match": {
             "matches_current": account_matches_current,
-            "source_handle": source_threads_handle,
-            "current_handle": current_threads_handle,
+            "source_account_id": source_account_id,
+            "current_account_id": current_account_id,
+            "source_handle": source_account_username,
+            "current_handle": current_account_username,
             "warning": account_match_warning,
         },
         "automation_task_type": automation_task_type,
@@ -18817,7 +18903,7 @@ def _persona_dashboard_refresh_worker(task_id: str, archive_id: str = "") -> Non
     with PERSONA_DASHBOARD_REFRESH_LOCK:
         PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
             "status": "running",
-            "message": "正在刷新 Threads 全量热点数据...",
+            "message": "正在刷新 Threads / Instagram 账号热点数据...",
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
     script = ROOT_DIR / "tool_r18" / "scripts" / "skills" / "persona-dashboard-refresh.ts"
@@ -18967,7 +19053,7 @@ def _persona_dashboard_refresh_worker_v2(
             "step": "准备刷新",
             "progress": 8,
             "scope": scope,
-            "message": "正在准备刷新 Threads 全量热点数据...",
+            "message": "正在准备刷新 Threads / Instagram 账号热点数据...",
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
     script = ROOT_DIR / "tool_r18" / "scripts" / "skills" / "persona-dashboard-refresh.ts"
@@ -19038,7 +19124,7 @@ def _persona_dashboard_refresh_worker_v2(
                     "progress": min(88, 25 + elapsed // 12),
                     "elapsed_seconds": elapsed,
                     "latest_output": latest_output,
-                    "message": f"正在刷新{scope}的 Threads 全量热点数据，已执行 {elapsed} 秒...",
+                    "message": f"正在刷新{scope}的 Threads / Instagram 账号热点数据，已执行 {elapsed} 秒...",
                 })
             time.sleep(2)
         proc.wait(timeout=10)
@@ -19299,6 +19385,7 @@ def _build_persona_dashboard_overview(
 
     for archive in archives:
         archive_id = str(archive.get("id") or "").strip()
+        current_accounts = _persona_bound_account_identities(archive_id, archive)
         setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
         posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
         platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else {}
@@ -19398,6 +19485,7 @@ def _build_persona_dashboard_overview(
                     post_metric_rows.append(compact)
             hot_platforms.append({
                 "platform": platform_name,
+                "account_id": str(metric_value.get("accountId") or metric_value.get("account_id") or "").strip(),
                 "username": metric_value.get("username"),
                 "followers": _number(metric_value.get("followers"), 0),
                 "following": _number(metric_value.get("following"), 0),
@@ -19489,7 +19577,8 @@ def _build_persona_dashboard_overview(
         queue_for_archive = (queue_stats.get("by_archive") or {}).get(archive_id, {})
         account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
         threads_account = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
-        threads_handle = _normalize_threads_username(threads_account.get("handle"))
+        threads_identity = current_accounts.get("threads") if isinstance(current_accounts.get("threads"), dict) else {}
+        threads_handle = _normalize_threads_username(threads_identity.get("username"))
         post_count = len(visible_posts)
         favorite_count = len(archive.get("favoritePosts") if isinstance(archive.get("favoritePosts"), list) else [])
         published_count = len(visible_publish_history)
@@ -19531,7 +19620,7 @@ def _build_persona_dashboard_overview(
             "hot_platforms": hot_platforms,
             "post_metrics": post_metric_rows[:80],
             "publish_history": [
-                _compact_publish_record(item, _publish_history_hot_metrics(item, archive), threads_handle)
+                _compact_publish_record(item, _publish_history_hot_metrics(item, archive), current_accounts)
                 for item in visible_publish_history[:20]
                 if isinstance(item, dict)
             ],

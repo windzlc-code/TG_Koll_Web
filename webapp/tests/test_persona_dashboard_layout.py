@@ -101,6 +101,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("persona-dashboard-top-controls", self.styles)
         self.assertIn("persona-dashboard-platform-trigger", self.styles)
         self.assertIn("persona-dashboard-platform-options", self.styles)
+        self.assertIn('[data-persona-dashboard-platform-option="threads"]', self.styles)
+        self.assertIn('[data-persona-dashboard-platform-option="instagram"]', self.styles)
         self.assertIn("grid-template-columns: minmax(0, 1fr);", self.styles)
         self.assertIn(".persona-dashboard-view .persona-dashboard-platform-menu", self.styles)
         self.assertIn("min-height: 50px;", self.styles)
@@ -168,8 +170,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.assertNotIn(removed_style, self.styles)
         self.assertIn('overview.style.display = "grid";', self.dashboard_script)
         self.assertIn('id="personaOverviewPane"', self.markup)
-        self.assertIn('data-persona-data-tab="history"', self.console_script)
-        self.assertIn("人设历史推文", self.console_script)
+        self.assertIn("人设发布推文", self.console_script)
+        self.assertIn("renderPersonaPlatformMetricStrip", self.console_script)
         self.assertIn("renderPublishHistorySelectionList", self.console_script)
 
     def test_platform_picker_closes_on_outside_click_and_filter_summary_is_not_rendered(self):
@@ -356,7 +358,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("function pdRenderPostGallery", self.dashboard_script)
 
     def test_generation_and_media_result_actions_use_clear_compact_labels(self):
-        self.assertIn('hasGenerateContent ? "AI 润色" : "AI 生成"', self.console_script)
+        self.assertIn('const directionButtonContent = directionState.keywords.length', self.console_script)
+        self.assertIn(': "AI 生成";', self.console_script)
         self.assertNotIn(">开始生成</button>", self.console_script)
         self.assertNotIn('"自动生成草稿"', self.console_script)
         self.assertNotIn('"AI 润色预览"', self.console_script)
@@ -820,20 +823,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-hot-metric-values > span {", mobile_styles)
         self.assertIn("flex-direction: column;", mobile_styles)
 
-    def test_mobile_persona_hot_detail_metrics_stay_in_one_row(self):
-        marker = "/* Persona statistics keep two clear rows and adapt each row without page overflow. */"
-        mobile_styles = self.styles[self.styles.index(marker):]
+    def test_mobile_persona_platform_metrics_stay_in_one_row(self):
+        metric_start = self.styles.index(".persona-profile-platform-metrics {")
+        metric_end = self.styles.index("}", metric_start)
+        metrics = self.styles[metric_start:metric_end]
 
-        self.assertIn(
-            ".persona-profile-data-panel .persona-hot-summary-metrics--hot {\n"
-            "    grid-template-columns: repeat(4, minmax(0, 1fr));",
-            mobile_styles,
-        )
-        self.assertIn(
-            ".persona-profile-data-panel .persona-hot-total-metric {\n"
-            "    grid-column: 1 / -1;",
-            mobile_styles,
-        )
+        self.assertIn("grid-template-columns: repeat(4, minmax(0, 1fr));", metrics)
+        self.assertIn("min-width: 0;", metrics)
 
     def test_second_mobile_dock_click_scrolls_active_view_to_top(self):
         handler_start = self.console_script.index(
@@ -901,16 +897,18 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-profile-base-head", mobile_styles)
         self.assertIn("display: none;", mobile_styles)
 
-    def test_persona_account_setting_keeps_status_beside_title_and_centers_add_action(self):
+    def test_persona_account_setting_keeps_only_tabs_cards_and_centered_add_action(self):
+        content_start = self.console_script.index("function renderPersonaAccountPlatformContent(")
         panel_start = self.console_script.index("function renderPersonaAccountPanelV2(")
         panel_end = self.console_script.index("\nfunction personaAccountPoolCandidates", panel_start)
-        panel = self.console_script[panel_start:panel_end]
+        panel = self.console_script[content_start:panel_end]
 
-        self.assertIn("persona-account-section-head", panel)
-        self.assertIn("persona-account-section-title", panel)
         self.assertIn("data-persona-account-platform-tabs", panel)
         self.assertIn("renderAccountPoolPlatformIcon(value)", panel)
         self.assertIn('role="tablist"', panel)
+        self.assertNotIn("<strong>平台</strong>", panel)
+        self.assertNotIn("account-pool-selection-count", panel)
+        self.assertNotIn("当前：", panel)
         self.assertIn("account-pool-empty-state persona-account-empty-state", panel)
         self.assertNotIn("切换账号池", panel)
         self.assertIn("account-pool-add-row persona-account-action-row", panel)
@@ -927,17 +925,24 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         account_add_handler = self.console_script[account_add_handler_start:account_add_handler_end]
         self.assertIn("openPersonaAccountPoolPickerModal", account_add_handler)
         self.assertNotIn("createPersonaAutomationAccount()", account_add_handler)
-        self.assertLess(
-            panel.index('class="persona-account-section-title"'),
-            panel.index("account-pool-selection-count"),
-        )
-        self.assertLess(
-            panel.index("persona-account-section-title"),
-            panel.index("persona-account-action-row"),
-        )
-        self.assertIn(".persona-account-pool-panel .persona-account-section-title", self.styles)
         self.assertIn(".persona-account-pool-panel .persona-account-action-row", self.styles)
         self.assertIn("justify-content: center;", self.styles)
+
+    def test_persona_account_setting_title_is_centered_and_divided(self):
+        overview_start = self.console_script.index("function renderPersonaContentOverview")
+        overview_end = self.console_script.index("\nfunction syncPersonaImagePromptState", overview_start)
+        overview = self.console_script[overview_start:overview_end]
+
+        self.assertIn("persona-profile-account-panel-head", overview)
+        self.assertIn(".persona-profile-account-panel > .persona-profile-account-panel-head {", self.styles)
+        title_styles = self.styles[
+            self.styles.index(".persona-profile-account-panel > .persona-profile-account-panel-head {"):
+            self.styles.index("}", self.styles.index(".persona-profile-account-panel > .persona-profile-account-panel-head {"))
+        ]
+        self.assertIn("flex-direction: row;", title_styles)
+        self.assertIn("align-items: center;", title_styles)
+        self.assertIn("justify-content: center;", title_styles)
+        self.assertIn("border-bottom: 1px solid var(--line);", title_styles)
 
     def test_persona_account_card_reuses_the_account_pool_card_layout(self):
         renderer_start = self.console_script.index("function renderAccountPoolCard(")
@@ -972,14 +977,55 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
     def test_persona_account_settings_reuses_the_mobile_platform_rail_and_swipe(self):
         self.assertIn("function bindPersonaAccountPlatformSwipe(host)", self.console_script)
         self.assertIn("personaAutomationPlatformOptions(persona)", self.console_script)
-        self.assertIn("state.personaAutomationPlatform = platforms[nextIndex];", self.console_script)
+        self.assertIn("function createPersonaAccountPlatformMotion(", self.console_script)
+        self.assertIn("function transitionPersonaAccountPlatform(", self.console_script)
+        self.assertIn("createAccountPoolPlatformMotion(next, direction, {", self.console_script)
+        persona_motion_start = self.console_script.index("function createPersonaAccountPlatformMotion(")
+        persona_motion_end = self.console_script.index("\nasync function transitionPersonaAccountPlatform", persona_motion_start)
+        persona_motion = self.console_script[persona_motion_start:persona_motion_end]
+        self.assertIn("return createAccountPoolPlatformMotion(next, direction, {", persona_motion)
+        self.assertNotIn('document.createElement("div")', persona_motion)
+        persona_swipe = self.console_script[
+            self.console_script.index("function bindPersonaAccountPlatformSwipe(host)"):
+            self.console_script.index("\nasync function bindAccountPoolAccountToPersona", self.console_script.index("function bindPersonaAccountPlatformSwipe(host)"))
+        ]
+        self.assertIn("bindAccountPoolPlatformSwipe(host, {", persona_swipe)
+        self.assertIn("createMotion: (next, direction)", persona_swipe)
+        self.assertIn("settleMotion: settleAccountPoolPlatformMotion", persona_swipe)
         self.assertIn('bindPersonaAccountPlatformSwipe($("personaDetail"));', self.console_script)
+        panel_start = self.console_script.index("function renderPersonaAccountPanelV2(")
+        panel_end = self.console_script.index("\nfunction personaAccountPoolCandidates", panel_start)
+        panel = self.console_script[panel_start:panel_end]
+        self.assertIn("account-pool-content-window persona-account-content-window", panel)
+        self.assertIn("renderPersonaAccountPlatformContent(persona, platform)", panel)
+        persona_content_start = self.console_script.index("function renderPersonaAccountPlatformContent(")
+        persona_content_end = self.console_script.index("\nfunction renderPersonaAccountPanelV2", persona_content_start)
+        persona_content = self.console_script[persona_content_start:persona_content_end]
+        self.assertNotIn("active:", persona_content)
+        self.assertNotIn("checked:", persona_content)
+        self.assertIn('pulseAccountPoolPlatformContent($("personaDetail"))', self.console_script)
 
         mobile_account_pool_styles = self.styles[self.styles.rindex("/* Account pool: platforms and accounts are separate functional modules. */"):]
         self.assertIn(".persona-account-platform-panel {", mobile_account_pool_styles)
         self.assertIn(".persona-account-platform-tabs {", mobile_account_pool_styles)
         self.assertIn("overflow-x: auto;", mobile_account_pool_styles)
         self.assertIn("scroll-snap-type: x proximity;", mobile_account_pool_styles)
+        persona_platform_styles = mobile_account_pool_styles[
+            mobile_account_pool_styles.index(".console-page .persona-profile-account-panel .persona-account-platform-panel {"):
+            mobile_account_pool_styles.index("}", mobile_account_pool_styles.index(".console-page .persona-profile-account-panel .persona-account-platform-panel {"))
+        ]
+        persona_layout_styles = mobile_account_pool_styles[
+            mobile_account_pool_styles.index(".console-page .persona-profile-account-panel .persona-account-pool-layout {"):
+            mobile_account_pool_styles.index("}", mobile_account_pool_styles.index(".console-page .persona-profile-account-panel .persona-account-pool-layout {"))
+        ]
+        persona_panel_styles = mobile_account_pool_styles[
+            mobile_account_pool_styles.index(".console-page .persona-profile-account-panel {"):
+            mobile_account_pool_styles.index("}", mobile_account_pool_styles.index(".console-page .persona-profile-account-panel {"))
+        ]
+        self.assertIn("gap: 8px;", persona_layout_styles)
+        self.assertIn("gap: 8px;", persona_panel_styles)
+        self.assertIn("border-bottom: 0;", persona_platform_styles)
+        self.assertNotIn("border-bottom: 1px solid var(--line);", persona_platform_styles)
 
     def test_mobile_account_add_uses_a_border_transition_without_icon_motion(self):
         self.assertIn("function startAccountPoolAddButtonMotion(button)", self.console_script)
@@ -1055,7 +1101,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("function transitionAccountPoolPlatform(platform = \"\", direction = 0)", self.console_script)
         self.assertIn("function createAccountPoolPlatformMotion(platform = \"\", direction = 0)", self.console_script)
         self.assertIn('const swipeSurface = host?.querySelector(".account-pool-body");', self.console_script)
-        self.assertIn('swipeSurface.addEventListener("pointerdown"', self.console_script)
+        self.assertIn('resolvedSwipeSurface.addEventListener("pointerdown"', self.console_script)
         self.assertIn('window.addEventListener("pointermove", moveWindowGesture', self.console_script)
         self.assertIn('window.removeEventListener("pointermove", moveWindowGesture, true);', self.console_script)
         self.assertNotIn('event.target.closest("button, input, select, textarea, a")', self.console_script[
@@ -1063,7 +1109,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script.index("\nfunction bindPersonaAccountPlatformSwipe(host)")
         ])
         self.assertIn("gesture.deltaX = gesture.motion.apply(deltaX);", self.console_script)
-        self.assertIn("settleAccountPoolPlatformMotion(currentGesture.motion, commit)", self.console_script)
+        self.assertIn("settleMotion(currentGesture.motion, commit)", self.console_script)
         self.assertIn("distanceThreshold", self.console_script)
         self.assertIn("Math.min(72, currentGesture.motion.width * 0.18)", self.console_script)
         self.assertNotIn('"lostpointercapture"', self.console_script[
@@ -1088,9 +1134,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("account-pool-account-panel-drag-peer", motion)
         self.assertIn("account-pool-content-window", cards)
         self.assertIn("account-pool-content", cards)
-        self.assertIn("function pulseAccountPoolPlatformCards()", self.console_script)
-        self.assertIn('card.classList.add("is-platform-refresh-pulse")', self.console_script)
-        self.assertIn('card.classList.remove("is-platform-refresh-pulse")', self.console_script)
+        self.assertIn('function pulseAccountPoolPlatformContent(root = $("accountGrid"))', self.console_script)
+        self.assertIn('content.classList.add("is-platform-refresh-pulse")', self.console_script)
+        self.assertIn('content.classList.remove("is-platform-refresh-pulse")', self.console_script)
         settle_start = self.console_script.index("async function settleAccountPoolPlatformMotion(")
         settle_end = self.console_script.index("\nasync function transitionAccountPoolPlatform", settle_start)
         settle = self.console_script[settle_start:settle_end]
@@ -1123,9 +1169,20 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".account-pool-body :is(button, input, select, textarea, a)", mobile_account_pool_styles)
         self.assertIn("touch-action: pan-y;", mobile_account_pool_styles)
         self.assertIn("@media (prefers-reduced-motion: reduce)", mobile_account_pool_styles)
-        self.assertIn("@keyframes accountPoolCardRefreshPulse", mobile_account_pool_styles)
-        self.assertIn("@keyframes accountPoolCardRefreshSweep", mobile_account_pool_styles)
-        self.assertIn(".account-pool-card.is-platform-refresh-pulse", mobile_account_pool_styles)
+        self.assertNotIn("@keyframes accountPoolCardRefreshPulse", mobile_account_pool_styles)
+        self.assertIn("@keyframes accountPoolContentRefreshSweep", mobile_account_pool_styles)
+        self.assertIn(".account-pool-content.is-platform-refresh-pulse", mobile_account_pool_styles)
+        pulse_styles = mobile_account_pool_styles[
+            mobile_account_pool_styles.index(".account-pool-content.is-platform-refresh-pulse::after"):
+            mobile_account_pool_styles.index("}", mobile_account_pool_styles.index(".account-pool-content.is-platform-refresh-pulse::after"))
+        ]
+        self.assertIn("inset: 0;", pulse_styles)
+        self.assertNotIn("mask", pulse_styles)
+        self.assertNotIn("var(--accent)", pulse_styles)
+        self.assertIn("rgba(255, 255, 255", pulse_styles)
+        self.assertIn("rgba(255, 255, 255, .82) 50%", pulse_styles)
+        self.assertIn("drop-shadow(0 0 12px rgba(255, 255, 255, .58))", pulse_styles)
+        self.assertIn("accountPoolContentRefreshSweep 960ms", pulse_styles)
         self.assertNotIn(".account-pool-account-panel.is-account-platform-drag-current", mobile_account_pool_styles)
         self.assertNotIn("@keyframes account-pool-platform", mobile_account_pool_styles)
         self.assertNotIn("will-change: transform, opacity;", mobile_account_pool_styles)
@@ -1668,6 +1725,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertLess(full_header.index("人设简介"), full_header.index("persona-profile-header-account"))
         self.assertLess(full_header.index("persona-profile-header-account"), full_header.index("${listToggle}"))
         self.assertNotIn("persona-profile-account-status", full_name_row)
+        self.assertNotIn("<span>人设名称</span>", full_identity)
+        self.assertLess(full_identity.index('class="persona-profile-name-row"'), full_identity.index("renderPersonaPlatformMetricStrip(persona)"))
+        self.assertIn('class="persona-profile-header-divider"', full_identity)
         self.assertIn("persona-profile-overview-shell", self.console_script)
         self.assertIn('sidebarId = "personaWorkspaceSidebar"', identity)
         self.assertIn("function setPersonaMobileSidebarOpen(open, sidebarId", self.console_script)
@@ -1686,6 +1746,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         self.assertIn(".persona-profile-identity-content {", self.styles)
         self.assertIn(".persona-profile-name-row {", self.styles)
+        self.assertIn(".persona-profile-header-divider {", self.styles)
+        self.assertIn("overflow-wrap: anywhere;", self.styles)
         self.assertIn(
             ".console-page .persona-detail .persona-avatar {\n"
             "    width: 88px;",
@@ -2262,11 +2324,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('accountSyncPending ? "is-loading" : "is-warning"', badge)
         self.assertIn('.persona-status-chip.is-loading {', self.styles)
 
-        active_logo_start = self.styles.index(".persona-execution-platform-logo.is-current")
-        active_logo_end = self.styles.index(".persona-execution-platform-logo svg", active_logo_start)
-        active_logo = self.styles[active_logo_start:active_logo_end]
-        self.assertIn("background: var(--brand-bg);", active_logo)
-        self.assertIn("color: var(--panel-solid);", active_logo)
+        self.assertIn('.persona-execution-platform-logo[data-persona-content-platform="threads"].is-current', self.styles)
+        self.assertIn('.persona-execution-platform-logo[data-persona-content-platform="instagram"].is-current', self.styles)
+        self.assertIn("--instagram-platform-gradient:", self.styles)
 
         mobile_identity_start = self.styles.rindex(".persona-profile-data-panel-head--identity {")
         mobile_identity_end = self.styles.index(".persona-profile-list-toggle {", mobile_identity_start)
@@ -2505,7 +2565,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('disabled title="${esc(lockReason)}"', compose_tabs)
         self.assertIn("renderPersonaGenerateComposeTabs(composeMode, {", content_panel)
         self.assertIn("editingDraft: isEditingDraft,", content_panel)
-        self.assertIn("disabled: generationLocked,", content_panel)
+        self.assertIn("disabled: generationControlsLocked,", content_panel)
         self.assertIn("persona-compose-lock-hint", content_panel)
         self.assertNotIn('data-persona-delete-post="${esc(draftForm.editingPostId)}"', content_panel)
         self.assertIn('if (editingPostId) {', compose_handler)
@@ -2523,13 +2583,12 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script.index("function renderPersonaPostBulkActions"):
             self.console_script.index("async function viewPersonaDraftPost")
         ]
-        self.assertIn('title="全选" aria-label="全选"', bulk_actions)
-        self.assertIn('data-persona-post-bulk="all"', bulk_actions)
-        self.assertIn('aria-label="全选" ${rows.length ? "" : "disabled"}', bulk_actions)
-        self.assertIn("${renderSelectAllIcon()}", bulk_actions)
-        self.assertIn("${renderClearSelectionIcon()}", bulk_actions)
-        self.assertIn('title="清空选择" aria-label="清空选择"', bulk_actions)
-        self.assertIn('aria-label="清空选择" ${selectedCount ? "" : "disabled"}', bulk_actions)
+        self.assertIn('const allSelected = Boolean(rows.length) && selectedCount === rows.length;', bulk_actions)
+        self.assertIn('const selectionAction = allSelected ? "clear" : "all";', bulk_actions)
+        self.assertIn('const selectionLabel = allSelected ? "取消全选" : "全选";', bulk_actions)
+        self.assertIn('data-persona-post-bulk="${selectionAction}"', bulk_actions)
+        self.assertIn('title="${selectionLabel}" aria-label="${selectionLabel}"', bulk_actions)
+        self.assertIn("${allSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}", bulk_actions)
         self.assertIn("${renderTrashIcon()}", bulk_actions)
         self.assertNotIn(">全选</button>", bulk_actions)
         self.assertNotIn(">清空</button>", bulk_actions)
@@ -2546,6 +2605,44 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("${renderClearSelectionIcon()}", self.console_script)
         self.assertIn('.persona-post-bulk-actions [data-persona-post-bulk="delete"] {', self.styles)
         self.assertIn(".persona-post-bulk-execute {", self.styles)
+        self.assertIn('.persona-post-bulk-toggle input[type="checkbox"] {', self.styles)
+        self.assertIn('accent-color: var(--ink);', self.styles)
+
+    def test_content_empty_states_use_the_shared_svg_empty_state_component(self):
+        draft_rows = self.console_script[
+            self.console_script.index("function renderPersonaDraftRows"):
+            self.console_script.index("function renderPersonaDraftTableRows")
+        ]
+        history_rows = self.console_script[
+            self.console_script.index("function renderPersonaHistoryRows"):
+            self.console_script.index("function renderPersonaDraftRows")
+        ]
+        publish_rows = self.console_script[
+            self.console_script.index("function renderPublishPostSelectionList"):
+            self.console_script.index("function renderPublishContentPreview")
+        ]
+
+        self.assertIn('renderModuleEmptyState({', draft_rows)
+        self.assertIn('title: isFavoriteSource ? "暂无收藏推文" : "暂无推文草稿"', draft_rows)
+        self.assertIn('icon: "task"', history_rows)
+        self.assertIn('icon: "content"', publish_rows)
+        self.assertIn("function renderModuleEmptyState", self.console_script)
+        self.assertIn('network: renderMobileTaskIcon("proxies")', self.console_script)
+        self.assertIn('browser: renderMobileTaskIcon("browser_list")', self.console_script)
+        self.assertIn(".empty-state--rich {", self.styles)
+        self.assertIn(".empty-state-icon > svg {", self.styles)
+        self.assertIn(".empty-state:not(.empty-state--rich)::before", self.styles)
+
+    def test_proxy_empty_states_use_the_network_icon_and_fill_available_space(self):
+        proxy_pool = self.console_script[
+            self.console_script.index("function renderProxyPool()"):
+            self.console_script.index("\nfunction proxyFormPayload", self.console_script.index("function renderProxyPool()"))
+        ]
+        self.assertIn('icon: "network"', proxy_pool)
+        self.assertIn('className: "proxy-pool-empty"', proxy_pool)
+        self.assertIn("fill: true", proxy_pool)
+        self.assertIn(".empty-state--fill {", self.styles)
+        self.assertIn(".empty-state--network .empty-state-icon", self.styles)
 
     def test_publish_task_source_tabs_put_drafts_first_without_duplicate_source_label(self):
         source_tabs = self.console_script[
@@ -3007,7 +3104,6 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             'data-persona-delete-memory="${esc(row.id)}">删除</button>',
             'data-persona-delete-preset-id="${esc(presetId)}">删除</button>',
             'data-persona-delete-image="${esc(item.id)}" ${!item.id ? "disabled" : ""}>删除</button>',
-            'data-persona-account-delete="${esc(accountId)}">删除</button>',
             'data-social-delete-account="${esc(accountId)}">删除</button>',
             'data-proxy-delete="${esc(proxy.id)}"',
         ):
@@ -3017,6 +3113,25 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("account-pool-delete-icon", self.console_script)
         self.assertIn(".persona-link-actions button.danger,", self.styles)
         self.assertIn(".proxy-card-actions button.danger {", self.styles)
+
+    def test_persona_account_settings_precedes_history_and_uses_inline_change_actions(self):
+        overview_start = self.console_script.index("function renderPersonaContentOverview")
+        overview_end = self.console_script.index("\nfunction syncPersonaImagePromptState", overview_start)
+        overview = self.console_script[overview_start:overview_end]
+        actions_start = self.console_script.index("function renderAccountPoolCardActions")
+        actions_end = self.console_script.index("\nfunction renderAccountPoolCardFields", actions_start)
+        actions = self.console_script[actions_start:actions_end]
+
+        self.assertLess(overview.index('aria-label="账号设置"'), overview.index("renderPersonaDataPanel(persona)"))
+        self.assertIn('data-persona-account-unbind="${esc(accountId)}"', actions)
+        self.assertIn("renderPersonaAccountBindingIcon(\"remove\")", actions)
+        self.assertIn("<span>移除</span>", actions)
+        self.assertIn("data-persona-account-add", actions)
+        self.assertIn("renderPersonaAccountBindingIcon(\"replace\")", actions)
+        self.assertIn("<span>更换</span>", actions)
+        self.assertLess(actions.index("<span>移除</span>"), actions.index("${changeAction}"))
+        self.assertNotIn("data-persona-account-delete", actions)
+        self.assertIn(".persona-account-card-action {", self.styles)
 
     def test_proxy_pool_uses_desktop_field_list_and_mobile_summary_cards(self):
         proxy_pool = self.console_script[
@@ -3367,6 +3482,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         table_rows = self.console_script[table_rows_start:table_rows_end]
         self.assertIn("syncPersonaSelectedPostIds(selectedPersona(), source, allRows)", draft_rows)
         self.assertIn("syncPersonaSelectedPostIds(selectedPersona(), source, allRows)", table_rows)
+        self.assertNotIn("<span>勾选</span>", draft_rows)
+        self.assertNotIn('${isChecked ? "checked" : ""}\n                />\n                <span>', table_rows)
+        self.assertIn('.persona-draft-card-head .persona-post-bulk-toggle {', self.styles)
+        self.assertIn('.persona-draft-card-actions {', self.styles)
+        self.assertIn('margin-right: -34px;', self.styles)
 
     def test_mobile_publish_sources_and_history_render_only_the_loaded_batch(self):
         source_start = self.console_script.index("function renderPublishPostSelectionList(")
@@ -3380,7 +3500,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('renderMobileTweetStreamFooter(stream, "publishing")', source_renderer)
         self.assertIn('mobileTweetStreamInfo(rows, options.streamKey || `publish-history:', history_renderer)
         self.assertIn("stream.items.map(", history_renderer)
-        self.assertIn('renderMobileTweetStreamFooter(stream, "publishing")', history_renderer)
+        self.assertIn('renderMobileTweetStreamFooter(stream, options.streamTarget || "publishing")', history_renderer)
 
     def test_mobile_publish_preview_does_not_build_hidden_tabs_for_every_selected_post(self):
         preview_start = self.console_script.index("function renderPublishContentPreview(")

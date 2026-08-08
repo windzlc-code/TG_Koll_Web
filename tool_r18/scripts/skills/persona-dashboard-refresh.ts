@@ -2,9 +2,9 @@ import "@/runtime/node/browser-shim";
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { fetchThreadsBrowserDetailMetricsBatch, fetchThreadsProfileHotMetrics, getLiveSentimentBrowserAuthProfileBinding, refreshSentimentBrowserCookiesForPlatform } from "@/lib/sentiment-hot-importer";
+import { fetchInstagramProfileHotMetrics, fetchThreadsBrowserDetailMetricsBatch, fetchThreadsProfileHotMetrics, getLiveSentimentBrowserAuthProfileBinding, refreshSentimentBrowserCookiesForPlatform } from "@/lib/sentiment-hot-importer";
 import { listPersonaArchives } from "@/lib/persona-archives";
-import { installNodePersonaArchiveBridge, updatePersonaArchiveThreadsHotMetrics } from "@/runtime/node/persona-archive-store";
+import { installNodePersonaArchiveBridge, updatePersonaArchivePlatformHotMetrics, updatePersonaArchiveThreadsHotMetrics } from "@/runtime/node/persona-archive-store";
 
 installNodePersonaArchiveBridge();
 
@@ -22,6 +22,19 @@ function normalizeThreadsUsername(value: unknown): string {
 
 function hotMetricKey(username: string): string {
   return `threads:${normalizeThreadsUsername(username).toLowerCase()}`;
+}
+
+function normalizeInstagramUsername(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .replace(/^https?:\/\/(?:www\.)?instagram\.com\//i, "")
+    .replace(/^@/, "")
+    .split(/[/?#\s]/)[0]
+    .trim();
+}
+
+function instagramHotMetricKey(username: string): string {
+  return `instagram:${normalizeInstagramUsername(username).toLowerCase()}`;
 }
 
 type PersonaThreadsAccountBinding = {
@@ -59,6 +72,7 @@ function resolveWebappDataDirs(): string[] {
 }
 
 let cachedThreadsAccountPool: PersonaThreadsAccountBinding[] | null = null;
+let cachedInstagramAccountPool: PersonaThreadsAccountBinding[] | null = null;
 
 function readThreadsAccountPool(): PersonaThreadsAccountBinding[] {
   if (cachedThreadsAccountPool) return cachedThreadsAccountPool;
@@ -97,6 +111,46 @@ function readThreadsAccountPool(): PersonaThreadsAccountBinding[] {
     if (out.length) break;
   }
   cachedThreadsAccountPool = out;
+  return out;
+}
+
+function readInstagramAccountPool(): PersonaThreadsAccountBinding[] {
+  if (cachedInstagramAccountPool) return cachedInstagramAccountPool;
+  const out: PersonaThreadsAccountBinding[] = [];
+  for (const dataDir of resolveWebappDataDirs()) {
+    const dbPath = path.join(dataDir, "app.db");
+    if (!fs.existsSync(dbPath)) continue;
+    let appDb: any = null;
+    try {
+      appDb = new Database(dbPath, { readonly: true, fileMustExist: true });
+      const rows = appDb.prepare(`
+        SELECT id, persona_id, username, profile_dir, status
+        FROM social_accounts
+        WHERE lower(platform) = 'instagram'
+          AND lower(status) IN ('ready', 'active')
+          AND trim(username) <> ''
+        ORDER BY last_login_check_at DESC, updated_at DESC, created_at DESC
+      `).all();
+      for (const row of rows) {
+        const username = normalizeInstagramUsername(row?.username);
+        if (!username) continue;
+        out.push({
+          username,
+          accountId: String(row?.id || "").trim() || undefined,
+          archiveId: String(row?.persona_id || "").trim() || undefined,
+          profileDir: String(row?.profile_dir || "").trim() || undefined,
+          status: String(row?.status || "").trim() || undefined,
+          source: "account_pool",
+        } as PersonaThreadsAccountBinding & { archiveId?: string });
+      }
+    } catch {
+      // Try the next known webapp data directory.
+    } finally {
+      appDb?.close?.();
+    }
+    if (out.length) break;
+  }
+  cachedInstagramAccountPool = out;
   return out;
 }
 
@@ -180,6 +234,13 @@ function collectThreadsRefreshTargets(archive: any): PersonaThreadsAccountBindin
     }
   }
   return [...out.values()];
+}
+
+function collectInstagramRefreshTargets(archive: any): PersonaThreadsAccountBinding[] {
+  const archiveId = String(archive?.id || "").trim();
+  return readInstagramAccountPool().filter(
+    (binding: PersonaThreadsAccountBinding & { archiveId?: string }) => String(binding.archiveId || "").trim() === archiveId,
+  );
 }
 
 function decodeXml(value: string): string {
@@ -489,7 +550,6 @@ async function main() {
     const refreshTargets = collectThreadsRefreshTargets(archive);
     if (!refreshTargets.length) {
       results.push({ archiveId: archive.id, name: archive.name, ok: false, skipped: true, message: "未绑定可用 Threads 账号，请先在账号池绑定并确认账号已登录。" });
-      continue;
     }
     for (const target of refreshTargets) {
       const username = normalizeThreadsUsername(target.username);
@@ -621,6 +681,101 @@ async function main() {
         });
       } catch (error: any) {
         results.push({ archiveId: archive.id, name: archive.name, username, ok: false, message: error instanceof Error ? error.message : String(error || "刷新失败") });
+      }
+    }
+
+    if (!useRssHub) {
+      const instagramTargets = collectInstagramRefreshTargets(archive);
+      if (!instagramTargets.length) {
+        results.push({ archiveId: archive.id, name: archive.name, platform: "instagram", ok: false, skipped: true, message: "未绑定可用 Instagram 账号，请先在账号池绑定并确认账号已登录。" });
+      }
+      for (const target of instagramTargets) {
+        const username = normalizeInstagramUsername(target.username);
+        if (!username) continue;
+        try {
+          const previousProfileDir = process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR;
+          let metrics: any;
+          try {
+            if (target.profileDir) {
+              process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR = target.profileDir;
+            } else {
+              delete process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR;
+            }
+            metrics = await fetchInstagramProfileHotMetrics(username);
+          } finally {
+            if (previousProfileDir) {
+              process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR = previousProfileDir;
+            } else {
+              delete process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR;
+            }
+          }
+          const usable = hasUsableMetrics(metrics);
+          if (!usable) {
+            results.push({
+              archiveId: archive.id,
+              name: archive.name,
+              platform: "instagram",
+              username,
+              ok: false,
+              message: metrics?.error || "Instagram 未读取到可用账号数据。",
+            });
+            continue;
+          }
+          const key = instagramHotMetricKey(username);
+          const previousMetrics = setup?.hotMetrics?.[key] || {};
+          const mergedPostMetrics = Array.isArray(metrics.postMetrics)
+            ? mergePostMetrics(previousMetrics, metrics.postMetrics)
+            : Array.isArray(previousMetrics.postMetrics) ? previousMetrics.postMetrics : [];
+          const totalViews = mergedPostMetrics.reduce(
+            (sum: number, post: any) => sum + (typeof post?.viewCount === "number" ? post.viewCount : 0),
+            0,
+          );
+          const nextMetric = {
+            ...previousMetrics,
+            platform: "instagram",
+            username: metrics.username || username,
+            accountId: target.accountId,
+            targetSource: target.source,
+            method: metrics.method,
+            ...(typeof metrics.followers === "number" ? { followers: metrics.followers } : {}),
+            ...(typeof metrics.following === "number" ? { following: metrics.following } : {}),
+            ...(typeof metrics.posts === "number" ? { posts: metrics.posts } : {}),
+            ...(typeof metrics.likes === "number" ? { likes: metrics.likes } : {}),
+            ...(typeof metrics.comments === "number" ? { comments: metrics.comments } : {}),
+            ...(typeof metrics.reposts === "number" ? { reposts: metrics.reposts } : {}),
+            ...(typeof metrics.shares === "number" ? { shares: metrics.shares } : {}),
+            views: totalViews || Number(metrics.views || 0),
+            scannedPosts: Number(metrics.scannedPosts || mergedPostMetrics.length),
+            postMetrics: mergedPostMetrics,
+            complete: metrics.complete === true,
+            scope: metrics.scope,
+            refreshedAt: metrics.refreshedAt,
+            error: metrics.error,
+          };
+          const saved = updatePersonaArchivePlatformHotMetrics({
+            archiveId: archive.id,
+            metricKey: key,
+            metric: nextMetric,
+            updatedAt: new Date().toISOString(),
+          });
+          if (!saved.ok) {
+            results.push({ archiveId: archive.id, name: archive.name, platform: "instagram", username, ok: false, skipped: true, message: "人设已不存在，本次 Instagram 结果未写入。" });
+            continue;
+          }
+          results.push({
+            archiveId: archive.id,
+            name: archive.name,
+            platform: "instagram",
+            username,
+            ok: true,
+            partial: metrics.complete !== true,
+            scannedPosts: Number(metrics.scannedPosts || 0),
+            postMetrics: Array.isArray(metrics.postMetrics) ? metrics.postMetrics.length : 0,
+            message: metrics.complete === true ? "Instagram 刷新完成" : metrics.error || "Instagram 近期数据已刷新。",
+          });
+        } catch (error: any) {
+          results.push({ archiveId: archive.id, name: archive.name, platform: "instagram", username, ok: false, message: error instanceof Error ? error.message : String(error || "Instagram 刷新失败") });
+        }
       }
     }
   }

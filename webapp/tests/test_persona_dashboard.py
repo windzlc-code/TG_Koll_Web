@@ -2698,6 +2698,50 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(row["account_match"]["current_handle"], "current_user")
         self.assertIn("@old_user", row["account_match"]["warning"])
 
+    def test_instagram_publish_history_uses_bound_account_identity_for_mismatch(self):
+        self._write_archives()
+        self._insert_social_account(
+            account_id="instagram-current",
+            persona_id="persona-1",
+            platform="instagram",
+            username="current.ig",
+        )
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        record = archives[0]["publishHistory"][0]
+        record["platform"] = "instagram"
+        record["publishedMeta"].update({
+            "platform": "instagram",
+            "accountId": "instagram-old",
+            "username": "old.ig",
+            "publishedUrl": "https://www.instagram.com/p/example/",
+        })
+        path.write_text(json.dumps(archives), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
+
+        self.assertEqual(resp.status_code, 200)
+        row = resp.json()["publish_history"][0]
+        self.assertEqual(row["account_id"], "instagram-old")
+        self.assertEqual(row["account_username"], "old.ig")
+        self.assertFalse(row["account_match"]["matches_current"])
+        self.assertEqual(row["account_match"]["current_account_id"], "instagram-current")
+        self.assertEqual(row["account_match"]["current_handle"], "current.ig")
+        self.assertIn("@old.ig", row["account_match"]["warning"])
+
+    def test_overview_exposes_hot_metric_account_id_for_current_account_filtering(self):
+        self._write_archives()
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        archives[0]["setup"]["hotMetrics"]["threads"]["accountId"] = "threads-current"
+        path.write_text(json.dumps(archives), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/overview")
+
+        self.assertEqual(resp.status_code, 200)
+        platform = resp.json()["personas"][0]["hot_platforms"][0]
+        self.assertEqual(platform["account_id"], "threads-current")
+
     def test_publish_history_requeue_persists_media_in_both_archive_sources_and_platform_queues(self):
         self._write_archives()
         primary_path = self.tool_runtime_dir / "persona_archives.json"

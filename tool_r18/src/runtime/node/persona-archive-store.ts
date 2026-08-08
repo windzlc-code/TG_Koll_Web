@@ -150,6 +150,37 @@ function normalizeThreadsHandle(value: unknown): string {
     .toLowerCase();
 }
 
+export function updatePersonaArchivePlatformHotMetrics(input: {
+  archiveId: string;
+  metricKey: string;
+  metric: Record<string, unknown>;
+  updatedAt: string;
+}): { ok: boolean; reason?: string } {
+  return withArchiveFileLock(() => {
+    const items = readAll();
+    const index = items.findIndex((item) => item.id === input.archiveId);
+    if (index < 0) return { ok: false, reason: "archive_missing" };
+    const archive = items[index];
+    const setup = archive.setup && typeof archive.setup === "object" ? archive.setup : {};
+    const hotMetrics = setup.hotMetrics && typeof setup.hotMetrics === "object"
+      ? setup.hotMetrics as Record<string, unknown>
+      : {};
+    items[index] = {
+      ...archive,
+      updatedAt: input.updatedAt,
+      setup: {
+        ...setup,
+        hotMetrics: {
+          ...hotMetrics,
+          [input.metricKey]: input.metric,
+        },
+      },
+    };
+    writeAllUnlocked(items);
+    return { ok: true };
+  });
+}
+
 export function updatePersonaArchiveThreadsHotMetrics(input: {
   archiveId: string;
   expectedHandle: string;

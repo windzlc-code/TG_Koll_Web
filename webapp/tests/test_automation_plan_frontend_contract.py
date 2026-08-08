@@ -20,7 +20,7 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         tabs = function_source("renderPublishModeTabs", "renderPublishHeaderRow")
         self.assertLess(tabs.index('["matrix_start", "矩阵任务"]'), tabs.index('["automation_tasks", "自动化任务"]'))
         self.assertNotIn('["publish_history", "任务历史"]', tabs)
-        self.assertIn("人设历史推文", CONSOLE_JS)
+        self.assertIn("人设发布推文", CONSOLE_JS)
         self.assertIn(
             ".publish-header-main > .publish-mode-tabs {\n"
             "    grid-template-columns: repeat(3, minmax(0, 1fr));",

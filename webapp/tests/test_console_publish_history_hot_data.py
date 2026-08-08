@@ -16,17 +16,31 @@ def function_source(name: str, next_name: str) -> str:
 
 
 class ConsolePublishHistoryHotDataTests(unittest.TestCase):
-    def test_persona_workspace_combines_hot_data_and_history_behind_two_tabs(self):
-        tabs = function_source("renderPersonaDataTabs", "renderPersonaHotDataContent")
+    def test_persona_workspace_moves_platform_metrics_into_identity_and_shows_published_posts(self):
+        metrics = function_source("personaPlatformMetricSummary", "renderPersonaPlatformMetricStrip")
         panel = function_source("renderPersonaDataPanel", "renderPersonaProfileIdentity")
+        identity = function_source("renderPersonaProfileIdentity", "renderPersonaContentOverview")
 
-        self.assertIn('data-persona-data-tab="hot"', tabs)
-        self.assertIn('data-persona-data-tab="history"', tabs)
-        self.assertIn("热点数据", tabs)
-        self.assertIn("人设历史推文", tabs)
-        self.assertIn('activeTab === "history"', panel)
-        self.assertIn('personaDataTab: "hot"', CONSOLE_JS)
-        self.assertIn(".persona-data-tabs {", CONSOLE_CSS)
+        self.assertIn("hot_platforms", metrics)
+        self.assertIn("followers", metrics)
+        self.assertIn("post_views", metrics)
+        self.assertIn("interactions", metrics)
+        self.assertIn("published", metrics)
+        self.assertIn("row?.account_id", metrics)
+        self.assertIn("const metricRows = account ? accountRows : platformRows;", metrics)
+        self.assertIn("const metricPublished = metricRows.reduce", metrics)
+        self.assertIn("published: metricPublished || publishedRows.length", metrics)
+        self.assertIn("return !account;", metrics)
+        self.assertIn("人设发布推文", panel)
+        self.assertIn("renderPersonaPlatformMetricStrip(persona)", identity)
+        self.assertIn("renderPersonaPublishHistoryEmptyState", CONSOLE_JS)
+        self.assertIn("暂无已发布推文", CONSOLE_JS)
+        self.assertIn("发布后将在这里展示", CONSOLE_JS)
+        self.assertNotIn('data-persona-data-tab="hot"', CONSOLE_JS)
+        self.assertNotIn('data-persona-data-tab="history"', CONSOLE_JS)
+        self.assertNotIn("人设历史推文", CONSOLE_JS)
+        self.assertIn(".persona-profile-platform-metrics {", CONSOLE_CSS)
+        self.assertIn(".persona-history-empty-state {", CONSOLE_CSS)
 
     def test_persona_history_merges_dashboard_metrics_with_real_task_history(self):
         merge = function_source("personaMergedHistoryRows", "personaHistoryContentParts")
@@ -38,14 +52,47 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("renderPublishHistorySelectionList(persona, {", history)
         self.assertIn("loadPersonaDashboardOverview()", history)
         self.assertIn('streamKey: `persona-data-history:', history)
+        self.assertIn('streamTarget: "persona-detail"', history)
+
+    def test_persona_history_mobile_stream_does_not_jump_to_publishing_module(self):
+        selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")
+        history = function_source("renderPersonaHistoryDataContent", "renderPersonaDataPanel")
+
+        self.assertIn('options.streamTarget || "publishing"', selection)
+        self.assertIn('streamTarget: "persona-detail"', history)
+        self.assertIn("rows.length ?", history)
+        self.assertIn("renderPersonaPublishHistoryEmptyState()", history)
+        self.assertIn(".persona-profile-platform-metrics small {", CONSOLE_CSS)
+        self.assertIn("font-size: 10px;", CONSOLE_CSS)
+        self.assertIn("font-size: 13px;", CONSOLE_CSS)
+        self.assertIn("font-weight: 500;", CONSOLE_CSS)
+
+    def test_platform_switch_updates_logo_metrics_and_account_settings_together(self):
+        linked = function_source("setPersonaContentPlatform", "personaPostContentPlatform")
+        account_handler = CONSOLE_JS[
+            CONSOLE_JS.index('const personaAccountPlatform = event.target.closest("[data-persona-account-platform]")'):
+            CONSOLE_JS.index('const personaAccountOpenLogin = event.target.closest("[data-persona-account-open-login]")')
+        ]
+        swipe = function_source("bindPersonaAccountPlatformSwipe", "bindAccountPoolAccountToPersona")
+
+        self.assertIn("state.personaAutomationPlatform = nextPlatform", linked)
+        self.assertIn("transitionPersonaAccountPlatform(", account_handler)
+        self.assertIn("bindAccountPoolPlatformSwipe(host, {", swipe)
+        self.assertIn("createPersonaAccountPlatformMotion(persona, next, direction)", swipe)
 
     def test_persona_history_reuses_dashboard_filters_and_keeps_archive_only_rows_read_only(self):
         filters = function_source("renderPersonaHistoryFilters", "renderPersonaHistoryDataContent")
+        history_rows = function_source("personaFilteredHistoryRows", "personaPlatformMetricSummary")
         selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")
 
-        self.assertIn('data-persona-history-filter="platform"', filters)
         self.assertIn('data-persona-history-filter="content"', filters)
         self.assertIn('data-persona-history-filter="sort"', filters)
+        self.assertNotIn('data-persona-history-filter="platform"', filters)
+        self.assertEqual(filters.count("persona-history-filter-trigger"), 2)
+        self.assertIn("renderPersonaHistoryContentFilterIcon()", filters)
+        self.assertIn("renderPersonaHistorySortFilterIcon()", filters)
+        self.assertIn("const platform = personaContentPlatform(persona);", history_rows)
+        self.assertNotIn("filters.platform", history_rows)
         self.assertIn('value="hot_desc"', filters)
         self.assertIn('value="time_desc"', filters)
         self.assertIn('record.__dashboard_metric_only ? ""', selection)
@@ -101,7 +148,10 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         for label in ("热度", "浏览", "点赞", "评论", "分享", "转发"):
             self.assertIn(label, metrics)
         self.assertIn("data-publish-history-refresh", panel)
-        self.assertIn("刷新热点数据", panel)
+        self.assertIn("renderPublishHistoryRefreshContent", panel)
+        refresh_content = function_source("renderPublishHistoryRefreshContent", "renderPersonaHistoryFilters")
+        self.assertIn("刷新数据", refresh_content)
+        self.assertIn("renderRefreshIcon()", refresh_content)
 
     def test_publish_history_renders_source_link_and_account_mismatch_notice(self):
         selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")
@@ -129,9 +179,11 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
 
     def test_refresh_progress_is_scoped_to_the_selected_persona(self):
         panel = function_source("renderPublishHistoryPanel", "syncPublishHistoryRefreshDom")
+        sync = function_source("syncPublishHistoryRefreshDom", "openPublishHistoryRecordModal")
         self.assertIn("publishHistoryRefreshPersonaId === personaId", panel)
         self.assertIn("ownsRefresh ? state.publishHistoryRefreshStatus : null", panel)
         self.assertIn("data-publish-history-refresh-status", panel)
+        self.assertIn("button.innerHTML = renderPublishHistoryRefreshContent", sync)
 
     def test_sidebar_items_have_theme_aware_dividers(self):
         self.assertIn(".console-page .module-accordion-item + .module-accordion-item", CONSOLE_CSS)
