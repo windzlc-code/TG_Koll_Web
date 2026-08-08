@@ -4989,14 +4989,14 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         social_automation_api._sync_successful_task_to_persona_archive(
             "task-draft-publish",
-            {"url": "https://threads.example/draft-sync-1"},
+            {"url": "https://www.threads.com/@threads_user/post/draft-sync-1"},
         )
 
         synced = json.loads(archives_path.read_text(encoding="utf-8"))[0]
         self.assertFalse(any(post.get("id") == "draft-sync-1" for post in synced["posts"]))
         self.assertFalse(any(post.get("id") == "draft-sync-1" for post in synced["platformPosts"]["threads"]))
         self.assertEqual(synced["publishHistory"][0]["archivePostId"], "draft-sync-1")
-        self.assertEqual(synced["publishHistory"][0]["publishedUrl"], "https://threads.example/draft-sync-1")
+        self.assertEqual(synced["publishHistory"][0]["publishedUrl"], "https://www.threads.com/@threads_user/post/draft-sync-1")
 
     def test_three_four_and_five_item_publish_batches_sync_each_success_without_cross_contamination(self):
         for publish_count in (3, 4, 5):
