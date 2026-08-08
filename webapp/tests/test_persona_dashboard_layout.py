@@ -2193,7 +2193,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             ".publish-history-preview .publish-history-metrics",
             self.styles,
         )
-        self.assertIn("grid-template-columns: repeat(6, minmax(0, 1fr));", self.styles)
+        self.assertIn("grid-template-columns: repeat(5, minmax(0, 1fr));", self.styles)
         self.assertIn('data-publish-history-view="${esc(recordId)}"', self.console_script)
         self.assertIn('data-publish-history-requeue="${esc(recordId)}"', self.console_script)
         self.assertIn("function openPublishHistoryRecordModal", self.console_script)
@@ -2201,9 +2201,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('{ value: "requeue", text: "重回草稿", iconHtml: renderRequeueIcon() }', self.console_script)
         self.assertIn("renderSourceLinkIcon()", self.console_script)
         self.assertIn(".publish-history-card-requeue", self.styles)
-        self.assertIn('title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>', self.console_script)
+        self.assertIn('title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}</button>', self.console_script)
         self.assertIn(".publish-history-card .publish-post-card-copy {\n    display: contents;", self.styles)
-        self.assertIn(".publish-history-card-requeue span {\n  display: inline-block;", self.styles)
+        self.assertIn(".publish-history-card-requeue span {\n  display: none;", self.styles)
         self.assertIn(".publish-history-card-main {\n    align-items: center;\n    padding: 5px 7px;", self.styles)
         self.assertIn(".publish-history-card .publish-post-card-head {\n    align-items: center;\n    flex-wrap: nowrap;", self.styles)
         self.assertIn(

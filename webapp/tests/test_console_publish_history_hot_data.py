@@ -97,18 +97,28 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn('value="time_desc"', filters)
         self.assertIn('record.__dashboard_metric_only ? ""', selection)
 
-    def test_history_list_preview_renders_all_six_hot_metrics_before_opening_detail(self):
+    def test_history_list_preview_uses_one_reach_metric_and_hides_compact_only_fields(self):
         selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")
+        metrics = function_source("publishHistoryMetricEntries", "formatPublishHistoryMetricUnit")
 
         self.assertIn(
             'renderPublishHistoryMetrics(record, "publish-history-card-metrics")',
             selection,
         )
+        self.assertIn("renderAccountPoolPlatformIcon(platform)", selection)
+        self.assertNotIn("renderMediaTypeBadge(mediaItems)", selection)
+        self.assertNotIn("publish-history-card-media", selection)
+        self.assertNotIn("<strong>${esc(publishHistoryRecordTitle", selection)
+        self.assertIn("热度 / 浏览", metrics)
+        self.assertNotIn('["浏览", source.views]', metrics)
         self.assertIn(".publish-history-card-metrics", CONSOLE_CSS)
         self.assertIn(
-            "grid-template-columns: repeat(6, minmax(0, 1fr));",
+            "grid-template-columns: repeat(5, minmax(0, 1fr));",
             CONSOLE_CSS,
         )
+        self.assertIn("-webkit-line-clamp: 2;", CONSOLE_CSS)
+        self.assertIn(".publish-history-card-platform", CONSOLE_CSS)
+        self.assertIn(".publish-history-card-requeue", CONSOLE_CSS)
 
     def test_history_detail_places_one_row_of_hot_metrics_before_the_post_content(self):
         detail = function_source("openPublishHistoryRecordModal", "requeuePublishHistoryRecord")
@@ -145,7 +155,7 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         panel = function_source("renderPublishHistoryPanel", "requeuePublishHistoryRecord")
 
         self.assertIn("hot_metrics", preview)
-        for label in ("热度", "浏览", "点赞", "评论", "分享", "转发"):
+        for label in ("热度 / 浏览", "点赞", "评论", "分享", "转发"):
             self.assertIn(label, metrics)
         self.assertIn("data-publish-history-refresh", panel)
         self.assertIn("renderPublishHistoryRefreshContent", panel)

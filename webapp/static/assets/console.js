@@ -13569,8 +13569,7 @@ function activePublishHistoryRecord(rows = []) {
 function publishHistoryMetricEntries(record = {}) {
   const source = record?.hot_metrics || record || {};
   return [
-    ["热度", source.hot_score],
-    ["浏览", source.views],
+    ["热度 / 浏览", source.views ?? source.hot_score],
     ["点赞", source.likes],
     ["评论", source.comments],
     ["分享", source.shares],
@@ -13643,32 +13642,29 @@ function renderPublishHistorySelectionList(persona = selectedPersona(), options 
         const fullIndex = rows.findIndex((item) => String(item?.id || "") === recordId);
         const displayIndex = fullIndex >= 0 ? fullIndex : index;
         const active = recordId === activeId;
-        const mediaItems = personaHistoryMediaItems(record);
         const publishedUrl = safeExternalHttpUrl(record.source_url || record.published_url || record.url || record.post_url);
         const platform = String(record.platform || record.publishPlatform || "").trim();
-        const status = String(record.status || "").trim();
-        const meta = [platform, status ? statusLabel(status) : "", formatTime(publishHistoryRecordTime(record))].filter(Boolean).join(" · ");
+        const platformName = platformLabel(platform);
+        const publishedAt = formatTime(publishHistoryRecordTime(record));
         return `
           <article class="publish-post-card publish-history-card ${active ? "is-selected" : ""}" data-publish-history-card="${esc(recordId)}">
             <div class="publish-history-card-main">
               <span class="publish-post-card-index">${esc(displayIndex + 1)}</span>
               <span class="publish-post-card-copy">
                 <span class="publish-post-card-head">
-                  <strong>${esc(publishHistoryRecordTitle(record, displayIndex))}</strong>
-                  ${renderMediaTypeBadge(mediaItems)}
+                  <span class="publish-history-card-platform" title="${esc(platformName)}" aria-label="${esc(platformName)}">${renderAccountPoolPlatformIcon(platform)}</span>
+                  <time class="publish-history-card-time">${esc(publishedAt || "时间未知")}</time>
                 </span>
-                <span class="publish-post-card-meta">${esc(meta || "任务记录")}</span>
                 <span class="publish-post-card-snippet">${esc(String(record.content || record.caption || record.text || record.source_url || "").trim() || "该记录没有正文摘要。")}</span>
                 ${renderPublishHistoryAccountWarning(record)}
               </span>
               <span class="publish-history-card-actions" aria-label="任务历史操作">
                 ${publishedUrl ? `<a class="publish-history-card-action" href="${esc(publishedUrl)}" target="_blank" rel="noopener" title="打开来源链接" aria-label="打开来源链接">${renderSourceLinkIcon()}</a>` : ""}
                 <button type="button" class="publish-history-card-action" data-publish-history-view="${esc(recordId)}" title="查看任务历史" aria-label="查看任务历史">${renderEyeIcon()}</button>
-                ${record.__dashboard_metric_only ? "" : `<button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>`}
+                ${record.__dashboard_metric_only ? "" : `<button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}</button>`}
               </span>
               ${renderPublishHistoryMetrics(record, "publish-history-card-metrics")}
             </div>
-            ${mediaItems.length ? `<div class="publish-post-card-media publish-history-card-media">${renderPublishPreviewMedia(mediaItems, { deferLoad: isMobileTweetStreamMode() })}</div>` : ""}
           </article>`;
       }).join("")}
     </div>

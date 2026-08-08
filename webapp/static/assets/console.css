@@ -8092,20 +8092,44 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .publish-history-card-requeue {
-  gap: 5px;
-  width: auto;
-  min-width: 82px;
-  padding: 0 8px;
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 800;
-  white-space: nowrap;
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
 }
 
 .publish-history-card-requeue span {
-  display: inline-block;
-  color: inherit;
-  line-height: 1;
+  display: none;
+}
+
+.publish-history-card-platform {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  color: var(--ink);
+}
+
+.publish-history-card-platform > svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.publish-history-card-platform > .platform-brand-icon {
+  fill: currentColor;
+  stroke: none;
+}
+
+.publish-history-card-time {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 .publish-history-account-warning {
@@ -14851,7 +14875,7 @@ body.persona-media-sorting {
 
 .publish-history-card .publish-history-card-metrics,
 .publish-history-modal-card .publish-history-metrics {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: clamp(2px, 0.7vw, 6px);
 }
 
@@ -20546,7 +20570,7 @@ body.console-page {
 
   .publish-history-card .publish-history-card-metrics,
   .publish-history-modal-card .publish-history-metrics {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 2px;
   }
 
@@ -23484,15 +23508,13 @@ body.console-page {
   }
 
   .publish-history-card-requeue {
-    min-width: 82px;
-    padding-inline: 7px;
+    width: 30px;
+    min-width: 30px;
+    padding: 0;
   }
 
   .publish-history-card-requeue span {
-    display: inline-block;
-    font-size: 11px;
-    line-height: 1;
-    white-space: nowrap;
+    display: none;
   }
 
   .publish-history-card .publish-post-card-index {
@@ -23546,7 +23568,7 @@ body.console-page {
   }
 
   .publish-history-preview .publish-history-metrics {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 4px;
   }
 
@@ -23636,11 +23658,14 @@ body.console-page {
   }
 
   .publish-history-card .publish-post-card-snippet {
-    display: block;
-    overflow: visible;
+    display: -webkit-box;
+    overflow: hidden;
     text-overflow: clip;
-    white-space: pre-wrap;
+    white-space: normal;
     overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
   }
 
   .persona-draft-card p {
