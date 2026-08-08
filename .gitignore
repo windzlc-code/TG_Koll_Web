@@ -52,6 +52,7 @@ tmp_*.png
 *-final.png
 *-verified.png
 account-*.png
+!webapp/static/assets/opc/account-avatar-mascot.png
 persona-*.png
 publish-*.png
 public-home-*.png

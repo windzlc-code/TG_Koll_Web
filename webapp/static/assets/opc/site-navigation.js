@@ -575,9 +575,14 @@
     node.textContent = "";
     if (avatarUrl) {
       const image = document.createElement("img");
-      image.src = avatarUrl;
       image.alt = "";
       if (className) image.className = className;
+      image.addEventListener("error", () => {
+        if (!node.contains(image)) return;
+        node.classList.remove("has-avatar");
+        node.innerHTML = accountIcon(className);
+      }, { once: true });
+      image.src = avatarUrl;
       node.appendChild(image);
       return;
     }

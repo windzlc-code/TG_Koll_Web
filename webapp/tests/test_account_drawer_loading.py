@@ -35,6 +35,10 @@ class AccountDrawerLoadingTests(unittest.TestCase):
         self.assertIn('.site-user-avatar.has-avatar {', STYLES)
         self.assertIn('node.classList.toggle("has-avatar", Boolean(avatarUrl));', NAVIGATION)
 
+    def test_avatar_renderer_falls_back_to_the_shared_account_icon_if_an_image_fails(self):
+        self.assertIn('image.addEventListener("error"', NAVIGATION)
+        self.assertIn('node.innerHTML = accountIcon(className);', NAVIGATION)
+
     def test_account_drawer_avatar_clips_uploaded_images_to_its_existing_circle(self):
         drawer_avatar = STYLES.split('.site-account-avatar {', 1)[1].split('}', 1)[0]
         self.assertIn('border-radius: 50%;', drawer_avatar)

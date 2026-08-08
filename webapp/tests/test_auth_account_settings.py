@@ -161,6 +161,9 @@ class AccountSettingsApiTests(unittest.TestCase):
             customer.get("/api/me").json()["avatar_url"],
             "/assets/opc/account-avatar-mascot.png",
         )
+        default_avatar = customer.get("/assets/opc/account-avatar-mascot.png")
+        self.assertEqual(default_avatar.status_code, 200, default_avatar.text)
+        self.assertEqual(default_avatar.headers["content-type"], "image/png")
 
         page = customer.get("/profile.html")
         self.assertEqual(page.status_code, 200, page.text)
