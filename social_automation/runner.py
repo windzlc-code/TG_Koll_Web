@@ -9355,17 +9355,9 @@ def _threads_dialog_post_button(page):
 def _click_threads_compose_opener(page, locator, logger: AutomationLogger) -> bool:
     if _human_click(page, locator, logger, "threads_publish_open"):
         return True
-    with contextlib.suppress(Exception):
-        clicked = locator.evaluate(
-            """node => {
-                const target = node.closest('a, button, [role="button"]') || node;
-                target.click();
-                return true;
-            }"""
-        )
-        if clicked:
-            logger.log("debug", "threads_publish_open", "Threads compose opener clicked with DOM fallback.", {})
-            return True
+    if _threads_dialog_compose_box(page) is not None:
+        logger.log("debug", "threads_publish_open", "Threads 编辑器已在点击超时后正常打开，未重复触发入口。", {})
+        return True
     return False
 
 
@@ -9903,7 +9895,8 @@ def _click_threads_active_dialog_post(page, logger: AutomationLogger, before_cli
         before_click()
     try:
         target = page.locator('[data-vecto-publish-target="1"]').first
-        _human_click(page, target, logger, "threads_publish_submit")
+        if not _human_click(page, target, logger, "threads_publish_submit"):
+            return False
         logger.log("debug", "threads_publish_submit", "已点击当前 Threads 弹窗内的发布按钮。", {})
         return True
     except Exception as exc:

@@ -3626,6 +3626,29 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         click_opener.assert_called_once()
         inline_lookup.assert_not_called()
 
+    def test_threads_compose_opener_does_not_click_twice_when_dialog_appears_after_timeout(self):
+        page = mock.Mock()
+        opener = mock.Mock()
+        compose = _Locator()
+        with (
+            mock.patch.object(runner, "_human_click", return_value=False),
+            mock.patch.object(runner, "_threads_dialog_compose_box", return_value=compose),
+        ):
+            clicked = runner._click_threads_compose_opener(page, opener, _Logger())
+
+        self.assertTrue(clicked)
+        opener.evaluate.assert_not_called()
+
+    def test_threads_active_submit_reports_a_blocked_click(self):
+        page = mock.Mock()
+        page.evaluate.return_value = True
+        target = mock.Mock()
+        page.locator.return_value.first = target
+        with mock.patch.object(runner, "_human_click", return_value=False):
+            clicked = runner._click_threads_active_dialog_post(page, _Logger())
+
+        self.assertFalse(clicked)
+
     def test_threads_publish_skips_duplicate_home_navigation_when_already_on_threads_home(self):
         permalink = "https://www.threads.net/@alice/post/NEW"
         page = _PageWithBackground("https://www.threads.net/")
