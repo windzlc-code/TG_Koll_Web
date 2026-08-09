@@ -2917,6 +2917,58 @@ async function loadRuntime() {
   return cfg;
 }
 
+let socialAutomationBrowserSettings = null;
+
+async function loadSocialAutomationPolicy() {
+  const [publishResponse, browserResponse] = await Promise.all([
+    api("/api/admin/social_publish_policy"),
+    api("/api/persona_dashboard/automation/browser_settings"),
+  ]);
+  const publishPolicy = publishResponse?.policy || publishResponse || {};
+  const browserSettings = browserResponse?.settings || browserResponse || {};
+  socialAutomationBrowserSettings = browserSettings;
+  if (el("rtSocialDailyPublishLimit")) {
+    el("rtSocialDailyPublishLimit").value = String(publishPolicy.limit || 15);
+  }
+  if (el("rtSocialGlobalConcurrency")) {
+    el("rtSocialGlobalConcurrency").value = String(browserSettings.max_concurrency || 3);
+  }
+  return { publishPolicy, browserSettings };
+}
+
+async function saveSocialAutomationPolicy() {
+  const dailyLimit = Number.parseInt(String(el("rtSocialDailyPublishLimit")?.value || ""), 10);
+  const globalConcurrency = Number.parseInt(String(el("rtSocialGlobalConcurrency")?.value || ""), 10);
+  if (!Number.isInteger(dailyLimit) || dailyLimit < 1 || dailyLimit > 200) {
+    throw new Error("普通用户每日发布上限必须是 1 到 200 之间的整数。");
+  }
+  if (!Number.isInteger(globalConcurrency) || globalConcurrency < 1 || globalConcurrency > 4) {
+    throw new Error("普通用户全局并发上限必须是 1 到 4 之间的整数。");
+  }
+  const currentBrowserSettings = socialAutomationBrowserSettings
+    || (await api("/api/persona_dashboard/automation/browser_settings"))?.settings
+    || {};
+  const [publishResponse, browserResponse] = await Promise.all([
+    api("/api/admin/social_publish_policy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit: dailyLimit }),
+    }),
+    api("/api/persona_dashboard/automation/browser_settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        standby_seconds: Number(currentBrowserSettings.standby_seconds || 0),
+        auto_close_seconds: Number(currentBrowserSettings.auto_close_seconds || 30),
+        max_concurrency: globalConcurrency,
+        text_input_mode: currentBrowserSettings.text_input_mode || "paste",
+      }),
+    }),
+  ]);
+  socialAutomationBrowserSettings = browserResponse?.settings || currentBrowserSettings;
+  return { publishResponse, browserResponse };
+}
+
 async function saveRuntime() {
   const payload = runtimeFormToPayload();
   const resp = await api("/api/admin/runtime_config", {
@@ -9592,6 +9644,20 @@ function bindActions() {
       setMsg("runtimeMsg", formatRuntimeConfigError("保存", err), false);
     }
   });
+  el("btnSaveSocialAutomationPolicy")?.addEventListener("click", async () => {
+    const button = el("btnSaveSocialAutomationPolicy");
+    setMsg("socialAutomationPolicyMsg", "");
+    if (button) button.disabled = true;
+    try {
+      await saveSocialAutomationPolicy();
+      await loadSocialAutomationPolicy();
+      setMsg("socialAutomationPolicyMsg", "社媒自动化保护参数已保存。", true);
+    } catch (error) {
+      setMsg("socialAutomationPolicyMsg", getErrorMessage(error), false);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  });
   el("rtGoogleLoginEnabled")?.addEventListener("change", syncRuntimeAuthProviderAvailability);
   el("btnRunBrowserCacheCleanup")?.addEventListener("click", () => void runBrowserCacheCleanupNow());
 
@@ -10433,6 +10499,13 @@ window.addEventListener("DOMContentLoaded", async () => {
     setMsg("runtimeMsg", "");
   } catch (err) {
     setMsg("runtimeMsg", formatRuntimeConfigError("读取", err), false);
+  }
+
+  try {
+    await loadSocialAutomationPolicy();
+    setMsg("socialAutomationPolicyMsg", "");
+  } catch (err) {
+    setMsg("socialAutomationPolicyMsg", getErrorMessage(err), false);
   }
 
   try {

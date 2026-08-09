@@ -218,6 +218,9 @@ DAILY_PUBLISH_LIMIT = 15
 DAILY_PUBLISH_POLICY_CONFIG_KEY = "social_publish_policy"
 DAILY_PUBLISH_LIMIT_MESSAGE = "每日最多发布 15 篇。超过 15 篇会有封号风险，系统已强制禁止继续发布。"
 SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT = 4
+SOCIAL_AUTOMATION_DEFAULT_GLOBAL_CONCURRENCY = 3
+SOCIAL_AUTOMATION_USER_CONCURRENCY_LIMIT = 2
+SOCIAL_AUTOMATION_CONCURRENCY_POLICY_VERSION = 1
 SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_FIRST_TASK = 768
 SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_ADDITIONAL_TASK = 1536
 SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_ADDITIONAL_TASK_WITH_SWAP = 512
@@ -480,7 +483,7 @@ class SocialTaskActionPayload(BaseModel):
 class LiveBrowserSettingsPayload(BaseModel):
     standby_seconds: int = Field(default=60, ge=0, le=3600)
     auto_close_seconds: int = Field(default=300, ge=10, le=86400)
-    max_concurrency: int = Field(default=2, ge=1, le=12)
+    max_concurrency: int = Field(default=SOCIAL_AUTOMATION_DEFAULT_GLOBAL_CONCURRENCY, ge=1, le=12)
     text_input_mode: str = Field(default="paste", max_length=20)
 
 
@@ -4115,12 +4118,7 @@ def get_live_browser_settings() -> dict[str, Any]:
     defaults = {
         "standby_seconds": _bounded_env_int("SOCIAL_AUTOMATION_LIVE_BROWSER_STANDBY_SECONDS", 60, 0, 3600),
         "auto_close_seconds": _bounded_env_int("SOCIAL_AUTOMATION_LIVE_BROWSER_AUTO_CLOSE_SECONDS", 300, 10, 86400),
-        "max_concurrency": _bounded_env_int(
-            "SOCIAL_AUTOMATION_WORKER_CONCURRENCY",
-            SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
-            1,
-            SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
-        ),
+        "max_concurrency": SOCIAL_AUTOMATION_DEFAULT_GLOBAL_CONCURRENCY,
         "text_input_mode": _normalize_text_input_mode(os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste")),
     }
     try:
@@ -4129,13 +4127,19 @@ def get_live_browser_settings() -> dict[str, Any]:
         if not row:
             return defaults
         raw = _loads(row["value_json"], {})
+        stored_policy_version = int(raw.get("concurrency_policy_version") or 0)
+        stored_concurrency = (
+            raw.get("max_concurrency", defaults["max_concurrency"])
+            if stored_policy_version >= SOCIAL_AUTOMATION_CONCURRENCY_POLICY_VERSION
+            else defaults["max_concurrency"]
+        )
         return {
             "standby_seconds": max(0, min(int(raw.get("standby_seconds", defaults["standby_seconds"])), 3600)),
             "auto_close_seconds": max(10, min(int(raw.get("auto_close_seconds", defaults["auto_close_seconds"])), 86400)),
             "max_concurrency": max(
                 1,
                 min(
-                    int(raw.get("max_concurrency", defaults["max_concurrency"])),
+                    int(stored_concurrency),
                     SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
                 ),
             ),
@@ -4172,7 +4176,17 @@ def set_live_browser_settings(payload: LiveBrowserSettingsPayload) -> dict[str, 
             VALUES (?, ?, ?)
             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
             """,
-            ("live_browser_settings", json.dumps(settings, ensure_ascii=False), now),
+            (
+                "live_browser_settings",
+                json.dumps(
+                    {
+                        **settings,
+                        "concurrency_policy_version": SOCIAL_AUTOMATION_CONCURRENCY_POLICY_VERSION,
+                    },
+                    ensure_ascii=False,
+                ),
+                now,
+            ),
         )
     with contextlib.suppress(Exception):
         _refresh_worker_state()
@@ -4186,14 +4200,20 @@ def _normalize_completion_policy(value: Any) -> str:
 
 
 def _default_user_browser_preferences() -> dict[str, Any]:
-    global_limit = int(get_live_browser_settings().get("max_concurrency") or 2)
+    global_limit = int(
+        get_live_browser_settings().get("max_concurrency")
+        or SOCIAL_AUTOMATION_DEFAULT_GLOBAL_CONCURRENCY
+    )
     return {
         "completion_policy": "immediate_close",
         "review_hold_seconds": 30,
         "standby_seconds": 0,
         "auto_close_seconds": 30,
         "manual_timeout_seconds": 900,
-        "requested_concurrency": max(1, min(2, global_limit)),
+        "requested_concurrency": max(
+            1,
+            min(SOCIAL_AUTOMATION_USER_CONCURRENCY_LIMIT, global_limit),
+        ),
         "text_input_mode": "paste",
         "auto_configured": False,
         "updated_at": 0,
@@ -4220,7 +4240,7 @@ def get_user_browser_preferences(user_id: int) -> dict[str, Any]:
                 1,
                 min(
                     int(row["requested_concurrency"] or 1),
-                    SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
+                    SOCIAL_AUTOMATION_USER_CONCURRENCY_LIMIT,
                 ),
             ),
             "text_input_mode": _normalize_text_input_mode(row["text_input_mode"]),
@@ -4250,7 +4270,14 @@ def effective_user_browser_preferences(preferences: dict[str, Any]) -> dict[str,
         "standby_seconds": standby_seconds if policy == "review_hold" else 0,
         "auto_close_seconds": auto_close_seconds if policy == "review_hold" else 10,
         "manual_timeout_seconds": max(300, min(int(preferences.get("manual_timeout_seconds") or 900), 1800)),
-        "requested_concurrency": max(1, min(int(preferences.get("requested_concurrency") or 1), global_limit)),
+        "requested_concurrency": max(
+            1,
+            min(
+                int(preferences.get("requested_concurrency") or 1),
+                SOCIAL_AUTOMATION_USER_CONCURRENCY_LIMIT,
+                global_limit,
+            ),
+        ),
         "text_input_mode": _normalize_text_input_mode(preferences.get("text_input_mode")),
         "global_max_concurrency": global_limit,
     }
@@ -4266,12 +4293,12 @@ def set_user_browser_preferences(
     if clean_user_id <= 0:
         raise HTTPException(status_code=401, detail="登录状态无效")
     requested_concurrency = int(payload.requested_concurrency)
-    if requested_concurrency > SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT:
+    if requested_concurrency > SOCIAL_AUTOMATION_USER_CONCURRENCY_LIMIT:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"当前服务器每位用户最多允许 "
-                f"{SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT} 个浏览器自动化并发任务，"
+                f"{SOCIAL_AUTOMATION_USER_CONCURRENCY_LIMIT} 个浏览器自动化并发任务，"
                 "请调低后再保存。"
             ),
         )
@@ -4294,7 +4321,7 @@ def set_user_browser_preferences(
         "manual_timeout_seconds": max(300, min(int(payload.manual_timeout_seconds), 1800)),
         "requested_concurrency": max(
             1,
-            min(requested_concurrency, SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT),
+            min(requested_concurrency, SOCIAL_AUTOMATION_USER_CONCURRENCY_LIMIT),
         ),
         "text_input_mode": _normalize_text_input_mode(payload.text_input_mode),
         "auto_configured": bool(auto_configured),
@@ -6887,7 +6914,7 @@ def run_social_automation_once() -> dict[str, Any] | None:
     with _WORKER_LOCK:
         _cleanup_worker_task_threads()
         active_slots = _social_worker_slots_in_use()
-        if active_slots >= _social_worker_max_concurrency():
+        if active_slots >= _social_worker_hard_concurrency():
             _refresh_worker_state()
             return None
         if _social_worker_launch_stagger_remaining_seconds() > 0:
@@ -6935,11 +6962,15 @@ def _social_worker_max_concurrency() -> int:
     except Exception:
         value = _bounded_env_int(
             "SOCIAL_AUTOMATION_WORKER_CONCURRENCY",
-            SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
+            SOCIAL_AUTOMATION_DEFAULT_GLOBAL_CONCURRENCY,
             1,
             SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
         )
     return max(1, min(value, SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT))
+
+
+def _social_worker_hard_concurrency() -> int:
+    return SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT
 
 
 def _social_worker_launch_stagger_seconds() -> int:
@@ -7213,7 +7244,7 @@ def _launch_available_social_tasks() -> int:
     with _WORKER_LOCK:
         while not _WORKER_STOP.is_set():
             active_slots = _social_worker_slots_in_use()
-            if active_slots >= _social_worker_max_concurrency():
+            if active_slots >= _social_worker_hard_concurrency():
                 break
             if _social_worker_launch_stagger_remaining_seconds() > 0:
                 break
@@ -7631,12 +7662,18 @@ def _claim_next_task() -> dict[str, Any] | None:
                 """
             ).fetchall()
         }
-        requested_by_user = {
-            int(item["user_id"] or 0): max(1, min(int(item["requested_concurrency"] or 1), global_concurrency))
-            for item in conn.execute(
-                "SELECT user_id, requested_concurrency FROM user_browser_settings"
-            ).fetchall()
-        }
+        normal_running_count = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) AS running_count
+                FROM social_automation_tasks t
+                JOIN users u ON u.id = t.user_id
+                WHERE t.status IN ('running', 'need_manual')
+                  AND COALESCE(u.is_admin, 0) = 0
+                """
+            ).fetchone()["running_count"]
+            or 0
+        )
         row = None
         publish_day = _daily_publish_day(now)
         publish_limit = get_daily_publish_limit(conn)
@@ -7688,14 +7725,20 @@ def _claim_next_task() -> dict[str, Any] | None:
                 if str(candidate["account_id"] or "") in active_account_ids:
                     continue
                 candidate_user_id = int(candidate["user_id"] or 0)
-                user_limit = requested_by_user.get(candidate_user_id, max(1, min(2, global_concurrency)))
-                if running_by_user.get(candidate_user_id, 0) >= user_limit:
-                    continue
+                if candidate_user_id not in admin_by_user:
+                    admin_by_user[candidate_user_id] = _owner_is_admin(conn, candidate_user_id)
+                candidate_is_admin = admin_by_user[candidate_user_id]
+                if not candidate_is_admin:
+                    if normal_running_count >= global_concurrency:
+                        continue
+                    if (
+                        running_by_user.get(candidate_user_id, 0)
+                        >= SOCIAL_AUTOMATION_USER_CONCURRENCY_LIMIT
+                    ):
+                        continue
                 slot = None
                 if str(candidate["task_type"] or "") == "publish_post":
-                    if candidate_user_id not in admin_by_user:
-                        admin_by_user[candidate_user_id] = _owner_is_admin(conn, candidate_user_id)
-                    if not admin_by_user[candidate_user_id]:
+                    if not candidate_is_admin:
                         cooldown_policy = _publish_cooldown_policy_in_transaction(
                             conn,
                             candidate_user_id,

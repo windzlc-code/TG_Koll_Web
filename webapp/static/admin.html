@@ -1782,6 +1782,24 @@
           </div>
 
           <div class="admin-config-card admin-runtime-panel admin-runtime-card-compact">
+            <div class="admin-config-card-title">社媒自动化保护</div>
+            <div class="small">统一控制普通用户的发布保护和浏览器任务并发；管理员任务不受业务并发限制，但仍受服务器硬安全上限保护。</div>
+            <div class="admin-cleanup-fields">
+              <label>普通用户每日发布上限
+                <input id="rtSocialDailyPublishLimit" type="number" min="1" max="200" step="1" value="15" inputmode="numeric">
+              </label>
+              <label>普通用户全局并发上限
+                <input id="rtSocialGlobalConcurrency" type="number" min="1" max="4" step="1" value="3" inputmode="numeric">
+              </label>
+            </div>
+            <div class="small">每个普通用户最多同时运行 2 个任务，超过后自动排队；此固定保护值不在个人设置中开放。</div>
+            <div class="admin-cleanup-actions">
+              <button id="btnSaveSocialAutomationPolicy" class="primary" type="button">保存社媒保护参数</button>
+            </div>
+            <div id="socialAutomationPolicyMsg" class="msg" role="status" aria-live="polite"></div>
+          </div>
+
+          <div class="admin-config-card admin-runtime-panel admin-runtime-card-compact">
             <div class="admin-config-card-title">磁盘自动清理</div>
             <div class="small">定时清理过期的生成产物（图片、视频、音频），防止磁盘被历史任务撑满。</div>
             <div class="admin-cleanup-section">

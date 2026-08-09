@@ -372,9 +372,6 @@ const state = {
   workspaceMenuOpen: true,
   videoWorkspaceMenuOpen: initialConsoleView === "video_workspace",
   currentUser: null,
-  socialPublishPolicy: { limit: 15 },
-  socialPublishPolicyLoaded: false,
-  socialPublishPolicySaving: false,
   setupStatus: null,
   billing: {
     catalog: null,
@@ -749,9 +746,6 @@ function clearTenantInMemoryState() {
   });
 
   state.currentUser = null;
-  state.socialPublishPolicy = { limit: 15 };
-  state.socialPublishPolicyLoaded = false;
-  state.socialPublishPolicySaving = false;
   state.setupStatus = null;
   state.billing = {
     summary: null,
@@ -17087,7 +17081,17 @@ function renderBrowserRecommendationCard() {
   const recommendation = state.browserRecommendation || {};
   const reasons = Array.isArray(recommendation.reasons) ? recommendation.reasons : [];
   const limits = recommendation.effective_limits || recommendation.effectiveLimits || recommendation.limits || {};
-  const limitEntries = limits && typeof limits === "object" ? Object.entries(limits) : [];
+  const hiddenConcurrencyLimits = new Set([
+    "requested_concurrency",
+    "recommended_concurrency",
+    "global_max_concurrency",
+    "effective_concurrency",
+    "max_concurrency",
+    "browser_concurrency",
+  ]);
+  const limitEntries = limits && typeof limits === "object"
+    ? Object.entries(limits).filter(([key]) => !hiddenConcurrencyLimits.has(key))
+    : [];
   const loading = state.browserRecommendationRefreshing || state.browserPolicyLoading;
   return `
     <article class="browser-recommendation-card" aria-busy="${loading ? "true" : "false"}">
@@ -17447,19 +17451,7 @@ function renderConsoleSettingsPage() {
   const standbyControl = browserDurationControlState("standby_seconds", preferences.standby_seconds, standbyPresets);
   const autoCloseControl = browserDurationControlState("auto_close_seconds", preferences.auto_close_seconds, autoClosePresets);
   const manualTimeoutControl = browserDurationControlState("manual_timeout_seconds", preferences.manual_timeout_seconds, manualTimeoutPresets);
-  const publishLimit = Math.min(Math.max(Number(state.socialPublishPolicy?.limit || state.dailyPublishPolicy?.limit || 15), 1), 200);
   const controlSettingsHtml = `
-      ${state.currentUser?.is_admin ? `
-      <section class="console-settings-group">
-        <div class="console-settings-group-head">
-          <strong>发布保护参数</strong>
-          <span>控制普通用户每日发布任务上限；管理员和代管操作仍按豁免策略处理。</span>
-        </div>
-        <div class="console-settings-grid">
-          <label class="console-setting-card"><span>每日发布上限</span><input id="settingsDailyPublishLimit" type="number" min="1" max="200" step="1" value="${esc(publishLimit)}" /><em>当前发布入口和后台执行队列都会使用这个值。</em></label>
-        </div>
-        <div class="row-actions"><button type="button" id="savePublishPolicySettings" class="primary" ${state.socialPublishPolicySaving ? "disabled" : ""}>${state.socialPublishPolicySaving ? "保存中..." : "保存发布上限"}</button></div>
-      </section>` : ""}
       <section class="console-settings-group console-settings-pagination-group">
         <div class="console-settings-group-head">
           <strong>列表与分页</strong>
@@ -17525,11 +17517,6 @@ function renderConsoleSettingsPage() {
             </div>
             <em>可自定义 5 到 30 分钟内的任意秒数。</em>
           </label>
-          <label class="console-setting-card">
-            <span>请求并发任务数</span>
-            <input id="settingsRequestedConcurrency" data-browser-preference-field type="number" min="1" max="12" step="1" value="${esc(preferences.requested_concurrency)}" />
-            <em>实际并发会受环境建议中的有效限制约束。</em>
-          </label>
           <div class="console-setting-card">
             <span>发布正文输入方式</span>
             <div class="automation-capsule-tabs console-input-mode-tabs" aria-label="发布正文输入方式">
@@ -17557,9 +17544,6 @@ function renderConsoleSettingsPage() {
     </div>
   `;
   if (activeSection === "console" && !state.browserPolicyLoaded && !state.browserPolicyLoading) loadBrowserPolicySettings();
-  if (activeSection === "console" && state.currentUser?.is_admin && !state.socialPublishPolicyLoaded) {
-    loadAdminSocialPublishPolicy();
-  }
   if (activeSection === "security" && !state.personalSecurity.loaded && !state.personalSecurity.loading) {
     loadPersonalSecuritySettings();
   }
@@ -17573,7 +17557,6 @@ function updateBrowserPreferencesDraft() {
     auto_close_seconds: browserDurationValue("settingsBrowserAutoCloseSeconds", "settingsBrowserAutoCloseCustomSeconds", current.auto_close_seconds),
     review_hold_seconds: Math.min(Number(browserDurationValue("settingsBrowserAutoCloseSeconds", "settingsBrowserAutoCloseCustomSeconds", current.auto_close_seconds)), 300),
     manual_timeout_seconds: browserDurationValue("settingsManualTimeoutSeconds", "settingsManualTimeoutCustomSeconds", current.manual_timeout_seconds),
-    requested_concurrency: $("settingsRequestedConcurrency")?.value ?? current.requested_concurrency,
   });
   state.browserPreferencesDirty = true;
   return state.browserPreferences;
@@ -17650,43 +17633,6 @@ async function saveConsoleSettingsPage() {
   renderConsoleSettingsPage();
   refreshConsoleSettingsDependents();
   showMsg("consoleSettingsMsg", "设置已保存。", true);
-}
-
-async function loadAdminSocialPublishPolicy({ force = false } = {}) {
-  if (!state.currentUser?.is_admin || (state.socialPublishPolicyLoaded && !force)) return;
-  try {
-    const result = await api("/api/admin/social_publish_policy");
-    state.socialPublishPolicy = result.policy || result || state.socialPublishPolicy;
-    state.socialPublishPolicyLoaded = true;
-  } catch (error) {
-    showMsg("consoleSettingsMsg", error.detail || error.message || "发布保护参数读取失败。", false);
-  } finally {
-    if (state.view === "console_settings" && $("consoleSettingsBody")) renderConsoleSettingsPage();
-  }
-}
-
-async function saveAdminSocialPublishPolicy() {
-  if (!state.currentUser?.is_admin || state.socialPublishPolicySaving) return;
-  const limit = Math.min(Math.max(Number.parseInt(String($("settingsDailyPublishLimit")?.value || ""), 10) || 15, 1), 200);
-  state.socialPublishPolicySaving = true;
-  renderConsoleSettingsPage();
-  try {
-    const result = await api("/api/admin/social_publish_policy", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limit }),
-    });
-    state.socialPublishPolicy = result.policy || { limit };
-    state.socialPublishPolicyLoaded = true;
-    const policyResult = await api("/api/persona_dashboard/automation/publish_policy?requested_count=0");
-    updateDailyPublishPolicy(policyResult?.publish_policy || policyResult, { notify: false, requestSeq: beginDailyPublishPolicyRequest(), force: true });
-    showMsg("consoleSettingsMsg", "发布上限已保存。", true);
-  } catch (error) {
-    showMsg("consoleSettingsMsg", error.detail || error.message || "发布上限保存失败。", false);
-  } finally {
-    state.socialPublishPolicySaving = false;
-    renderConsoleSettingsPage();
-  }
 }
 
 async function loadBrowserPolicySettings(options) {
@@ -33199,10 +33145,6 @@ function bindEvents() {
     }
     if (event.target.closest("[data-browser-auto-configure]")) {
       autoConfigureBrowserPreferences();
-      return;
-    }
-    if (event.target.closest("#savePublishPolicySettings")) {
-      saveAdminSocialPublishPolicy();
       return;
     }
     if (event.target.closest("#saveConsoleSettings")) saveConsoleSettingsPage();

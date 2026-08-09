@@ -68,6 +68,22 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         for label_id in ("governanceUsersRangeLabel", "governanceTasksRangeLabel"):
             self.assertIn(f'id="{label_id}"', self.html)
 
+    def test_social_automation_limits_are_managed_in_admin_runtime(self):
+        for element_id in (
+            "rtSocialDailyPublishLimit",
+            "rtSocialGlobalConcurrency",
+            "btnSaveSocialAutomationPolicy",
+            "socialAutomationPolicyMsg",
+        ):
+            self.assertIn(f'id="{element_id}"', self.html)
+        self.assertIn("每个普通用户最多同时运行 2 个任务", self.html)
+        load_policy = self._extract_js_function("loadSocialAutomationPolicy")
+        save_policy = self._extract_js_function("saveSocialAutomationPolicy")
+        self.assertIn('/api/admin/social_publish_policy', load_policy)
+        self.assertIn('/api/persona_dashboard/automation/browser_settings', load_policy)
+        self.assertIn('max_concurrency: globalConcurrency', save_policy)
+        self.assertIn('method: "PUT"', save_policy)
+
     def test_governance_kpis_are_shorter_without_shrinking_content(self):
         for element_id in (
             "govKpiConsumedTotal",

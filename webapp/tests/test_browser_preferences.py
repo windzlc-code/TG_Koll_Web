@@ -54,6 +54,61 @@ class BrowserPreferencesTests(unittest.TestCase):
             os.environ["APP_DB_PATH"] = self.old_db_path
         self.temp_dir.cleanup()
 
+    def _insert_scheduler_task(self, task_id, user_id, status, *, created_at, account_id=None):
+        clean_account_id = account_id or f"account-{task_id}"
+        with db_module.db() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO social_accounts(
+                  id, user_id, persona_id, platform, username, display_name,
+                  profile_dir, status, created_at, updated_at
+                ) VALUES (?, ?, 'persona-1', 'threads', ?, 'Scheduler Test', ?, 'ready', ?, ?)
+                """,
+                (
+                    clean_account_id,
+                    int(user_id),
+                    f"user-{user_id}-{task_id}",
+                    f"profiles/{clean_account_id}",
+                    created_at,
+                    created_at,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO social_automation_tasks(
+                  id, user_id, persona_id, account_id, platform, task_type, priority, status,
+                  scheduled_at, started_at, payload_json, result_json, error,
+                  retry_count, max_retries, created_by, created_at, updated_at
+                ) VALUES (?, ?, 'persona-1', ?, 'threads', 'browse_feed', 50, ?, 0, ?, '{}', '{}', '', 0, 0, 'web', ?, ?)
+                """,
+                (
+                    task_id,
+                    int(user_id),
+                    clean_account_id,
+                    status,
+                    created_at if status == "running" else 0,
+                    created_at,
+                    created_at,
+                ),
+            )
+
+    def _claim_without_recovery(self):
+        with (
+            mock.patch.object(social_automation_api, "_recover_orphaned_publish_confirmation_tasks"),
+            mock.patch.object(social_automation_api, "_recover_orphaned_manual_task"),
+            mock.patch.object(social_automation_api, "_recover_orphaned_running_tasks"),
+        ):
+            return social_automation_api._claim_next_task()
+
+    def test_default_global_concurrency_is_three(self):
+        with db_module.db() as conn:
+            conn.execute("DELETE FROM admin_config WHERE key = 'live_browser_settings'")
+
+        self.assertEqual(
+            social_automation_api.get_live_browser_settings()["max_concurrency"],
+            3,
+        )
+
     def test_preferences_are_isolated_and_clamped_by_global_limit(self):
         saved = social_automation_api.set_user_browser_preferences(
             1,
@@ -98,9 +153,9 @@ class BrowserPreferencesTests(unittest.TestCase):
                 auto_configured=False,
             )
         self.assertEqual(user_error.exception.status_code, 400)
-        self.assertIn("最多允许 4", str(user_error.exception.detail))
+        self.assertIn("最多允许 2", str(user_error.exception.detail))
 
-    def test_legacy_concurrency_above_server_limit_is_read_as_four(self):
+    def test_legacy_user_concurrency_is_capped_at_two(self):
         with db_module.db() as conn:
             conn.execute(
                 """
@@ -119,8 +174,59 @@ class BrowserPreferencesTests(unittest.TestCase):
                 """
             )
 
-        self.assertEqual(social_automation_api.get_live_browser_settings()["max_concurrency"], 4)
-        self.assertEqual(social_automation_api.get_user_browser_preferences(1)["requested_concurrency"], 4)
+        self.assertEqual(social_automation_api.get_live_browser_settings()["max_concurrency"], 3)
+        self.assertEqual(social_automation_api.get_user_browser_preferences(1)["requested_concurrency"], 2)
+
+    def test_scheduler_queues_third_task_for_same_customer(self):
+        social_automation_api.set_live_browser_settings(
+            social_automation_api.LiveBrowserSettingsPayload(
+                standby_seconds=0,
+                auto_close_seconds=30,
+                max_concurrency=3,
+                text_input_mode="paste",
+            )
+        )
+        self._insert_scheduler_task("user-a-running-1", 1, "running", created_at=101)
+        self._insert_scheduler_task("user-a-running-2", 1, "running", created_at=102)
+        self._insert_scheduler_task("user-a-queued", 1, "queued", created_at=103)
+        self._insert_scheduler_task("user-b-queued", 2, "queued", created_at=104)
+
+        claimed = self._claim_without_recovery()
+
+        self.assertEqual(claimed["id"], "user-b-queued")
+        with db_module.db() as conn:
+            queued_status = conn.execute(
+                "SELECT status FROM social_automation_tasks WHERE id = 'user-a-queued'"
+            ).fetchone()["status"]
+        self.assertEqual(queued_status, "queued")
+
+    def test_admin_bypasses_customer_global_concurrency(self):
+        with db_module.db() as conn:
+            conn.execute(
+                "INSERT INTO users(id, username, password_hash, is_admin, created_at, updated_at) VALUES (3, 'admin-a', 'x', 1, 100, 100)"
+            )
+        social_automation_api.set_live_browser_settings(
+            social_automation_api.LiveBrowserSettingsPayload(
+                standby_seconds=0,
+                auto_close_seconds=30,
+                max_concurrency=3,
+                text_input_mode="paste",
+            )
+        )
+        self._insert_scheduler_task("normal-running-1", 1, "running", created_at=101)
+        self._insert_scheduler_task("normal-running-2", 1, "running", created_at=102)
+        self._insert_scheduler_task("normal-running-3", 2, "running", created_at=103)
+        self._insert_scheduler_task("normal-queued", 2, "queued", created_at=104)
+        self._insert_scheduler_task("admin-queued", 3, "queued", created_at=105)
+
+        claimed = self._claim_without_recovery()
+
+        self.assertEqual(claimed["id"], "admin-queued")
+        with db_module.db() as conn:
+            normal_status = conn.execute(
+                "SELECT status FROM social_automation_tasks WHERE id = 'normal-queued'"
+            ).fetchone()["status"]
+        self.assertEqual(normal_status, "queued")
 
     def test_worker_resource_gate_blocks_new_browser_when_memory_is_low(self):
         with mock.patch.object(
@@ -281,6 +387,48 @@ class BrowserPreferencesTests(unittest.TestCase):
 
         self.assertEqual(launched, 2)
         self.assertEqual(started, ["task-1", "task-2"])
+
+    def test_worker_keeps_one_hard_slot_for_admin_bypass(self):
+        slots = iter([3, 4])
+        started = []
+        with (
+            mock.patch.object(
+                social_automation_api._WORKER_STOP,
+                "is_set",
+                return_value=False,
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_social_worker_slots_in_use",
+                side_effect=lambda: next(slots),
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_social_worker_launch_stagger_remaining_seconds",
+                return_value=0,
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_browser_worker_resource_admission",
+                return_value={"allow_launch": True},
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_claim_next_task",
+                return_value={"id": "admin-fourth-task"},
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_start_claimed_task_thread",
+                side_effect=lambda task: started.append(task["id"]),
+            ),
+            mock.patch.object(social_automation_api, "_record_social_worker_task_launch"),
+            mock.patch.object(social_automation_api, "_refresh_worker_state"),
+        ):
+            launched = social_automation_api._launch_available_social_tasks()
+
+        self.assertEqual(launched, 1)
+        self.assertEqual(started, ["admin-fourth-task"])
 
     def test_worker_launch_stagger_is_disabled_by_default(self):
         with mock.patch.dict(os.environ, {}, clear=False):

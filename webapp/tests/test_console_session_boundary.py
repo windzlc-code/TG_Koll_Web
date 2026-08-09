@@ -3738,14 +3738,17 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             "standby_seconds",
             "auto_close_seconds",
             "manual_timeout_seconds",
-            "requested_concurrency",
             "text_input_mode",
         ):
             self.assertIn(field, render)
+        self.assertNotIn("settingsRequestedConcurrency", render)
+        self.assertNotIn("发布保护参数", render)
+        self.assertNotIn("savePublishPolicySettings", self.source)
         self.assertIn("review_hold_seconds", self._function_source("normalizeBrowserPreferences"))
         self.assertIn("仅供检查，不提升速度", render)
         self.assertIn("resource_level", self._function_source("renderBrowserRecommendationCard"))
         self.assertIn("effective_limits", self._function_source("renderBrowserRecommendationCard"))
+        self.assertIn("hiddenConcurrencyLimits", self._function_source("renderBrowserRecommendationCard"))
         self.assertIn('api("/api/persona_dashboard/automation/browser_preferences", {', save)
         self.assertIn('method: "PUT"', save)
         self.assertIn('api("/api/persona_dashboard/automation/browser_preferences")', load)
