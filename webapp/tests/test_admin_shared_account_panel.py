@@ -39,6 +39,12 @@ class AdminSharedAccountPanelTests(unittest.TestCase):
         self.assertIn("color: #effff9;", style)
         self.assertIn("@media (min-width: 761px)", style)
         self.assertIn("color: #19394a;", style)
+        self.assertIn(
+            ":root .page-admin .admin-profile-menu .site-user {\n"
+            "  border-radius: 50%;\n"
+            "}",
+            style,
+        )
 
     def test_mobile_admin_action_group_selector_is_closed(self):
         style = (ROOT / "static" / "assets" / "style.css").read_text(encoding="utf-8")

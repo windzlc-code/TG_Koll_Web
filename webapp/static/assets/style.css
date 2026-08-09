@@ -9524,6 +9524,10 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   line-height: 0;
 }
 
+:root .page-admin .admin-profile-menu .site-user {
+  border-radius: 50%;
+}
+
 @media (min-width: 761px) {
   .page-admin .sidebar {
     z-index: 90;
