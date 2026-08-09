@@ -127,6 +127,11 @@ from .social_automation_api import (
     stop_social_automation_worker,
     wake_social_automation_worker,
 )
+from .proxy_ip_admin import (
+    ensure_proxy_market_health_monitor_started,
+    register_proxy_ip_admin_routes,
+    stop_proxy_market_health_monitor,
+)
 from .notifications import create_notification, register_notification_routes
 from .video_workbench import (
     cancel_video_remote_tasks,
@@ -20470,11 +20475,13 @@ def create_app() -> FastAPI:
     async def lifespan(_: FastAPI):
         _ensure_persona_dashboard_monitor_started()
         ensure_social_automation_worker_started()
+        ensure_proxy_market_health_monitor_started()
         _start_persona_hot_pool_worker()
         try:
             yield
         finally:
             stop_social_automation_worker()
+            stop_proxy_market_health_monitor()
             _stop_persona_hot_pool_worker()
 
     app = FastAPI(
@@ -20937,6 +20944,7 @@ def create_app() -> FastAPI:
         return _html_response_with_versions("batch.html")
 
     register_social_automation_routes(app)
+    register_proxy_ip_admin_routes(app)
     register_notification_routes(app)
     register_video_routes(app, server_video_route_dependencies(sys.modules[__name__]))
 

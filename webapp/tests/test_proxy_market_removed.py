@@ -19,6 +19,7 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         cls.admin_script = (STATIC_ROOT / "assets" / "admin.js").read_text(encoding="utf-8")
         cls.social_api_source = (WEBAPP_ROOT / "social_automation_api.py").read_text(encoding="utf-8")
         cls.system_proxy_pool_source = (WEBAPP_ROOT / "system_proxy_pool.py").read_text(encoding="utf-8")
+        cls.proxy_admin_source = (WEBAPP_ROOT / "proxy_ip_admin.py").read_text(encoding="utf-8")
         cls.db_source = (WEBAPP_ROOT / "db.py").read_text(encoding="utf-8")
 
     def test_standalone_market_assets_and_backend_module_are_removed(self):
@@ -27,13 +28,13 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertFalse((STATIC_ROOT / "assets" / "opc" / "proxy-market.css").exists())
         self.assertFalse((WEBAPP_ROOT / "proxy_market.py").exists())
 
-    def test_market_routes_navigation_and_admin_workspace_are_removed(self):
+    def test_public_market_routes_and_navigation_stay_removed(self):
         combined = "\n".join(
             (
                 self.server_source,
                 self.navigation_script,
-                self.admin_markup,
-                self.admin_script,
+                self.console_markup,
+                self.console_script,
             )
         )
         for fragment in (
@@ -41,12 +42,19 @@ class ProxyMarketRemovalTests(unittest.TestCase):
             "register_proxy_market_routes",
             'href="/proxy-market.html"',
             'data-site-nav-key="proxyMarket"',
-            'data-page="proxyMarket"',
-            'data-page-view="proxyMarket"',
-            "/api/admin/proxy-market/",
             "/api/proxy-market/",
         ):
             self.assertNotIn(fragment, combined)
+
+    def test_admin_proxy_inventory_workspace_is_retained(self):
+        self.assertIn('data-page="proxyMarket"', self.admin_markup)
+        self.assertIn('data-page-view="proxyMarket"', self.admin_markup)
+        self.assertIn("代理 IP 管理", self.admin_markup)
+        self.assertNotIn('href="/proxy-market.html"', self.admin_markup)
+        self.assertIn("/api/admin/proxy-market/items", self.admin_script)
+        self.assertIn("register_proxy_ip_admin_routes(app)", self.server_source)
+        self.assertIn('@app.get("/api/admin/proxy-market/items")', self.proxy_admin_source)
+        self.assertNotIn('@app.get("/api/proxy-market/catalog")', self.proxy_admin_source)
 
     def test_console_keeps_custom_proxy_and_adds_on_demand_system_pool(self):
         self.assertIn("data-system-proxy-pool-open", self.console_script)
