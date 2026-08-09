@@ -1093,7 +1093,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(control["live_browser_viewport_width"], 1600)
         self.assertEqual(control["live_browser_viewport_height"], 810)
 
-    def test_live_browser_geometry_matches_historical_framebuffer(self):
+    def test_live_browser_geometry_preserves_1080p_layout_on_larger_framebuffer(self):
         session = mock.Mock(width=1600, height=900)
 
         config = runner._live_browser_geometry_config(session)
@@ -1101,35 +1101,35 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(
             config,
             {
-                "screen.width": 1600,
-                "screen.height": 900,
-                "screen.availWidth": 1600,
-                "screen.availHeight": 839,
-                "window.innerWidth": 1600,
-                "window.innerHeight": 839,
-                "window.outerWidth": 1600,
-                "window.outerHeight": 900,
+                "screen.width": 1920,
+                "screen.height": 1080,
+                "screen.availWidth": 1920,
+                "screen.availHeight": 1019,
+                "window.innerWidth": 1920,
+                "window.innerHeight": 1019,
+                "window.outerWidth": 1920,
+                "window.outerHeight": 1080,
                 "window.screenX": 0,
                 "window.screenY": 0,
             },
         )
         self.assertEqual(
             runner._live_browser_viewport_size(session),
-            {"width": 1600, "height": 839},
+            {"width": 1920, "height": 1019},
         )
 
-    def test_live_browser_geometry_keeps_1600_layout_on_lightweight_720p_framebuffer(self):
+    def test_live_browser_geometry_keeps_1080p_layout_on_lightweight_360p_framebuffer(self):
         session = mock.Mock(spec=[])
 
         config = runner._live_browser_geometry_config(session)
 
-        self.assertEqual(config["screen.width"], 1600)
-        self.assertEqual(config["screen.height"], 900)
-        self.assertEqual(config["screen.availHeight"], 839)
-        self.assertEqual(config["window.innerWidth"], 1600)
-        self.assertEqual(config["window.innerHeight"], 839)
-        self.assertEqual(config["window.outerWidth"], 1600)
-        self.assertEqual(config["window.outerHeight"], 900)
+        self.assertEqual(config["screen.width"], 1920)
+        self.assertEqual(config["screen.height"], 1080)
+        self.assertEqual(config["screen.availHeight"], 1019)
+        self.assertEqual(config["window.innerWidth"], 1920)
+        self.assertEqual(config["window.innerHeight"], 1019)
+        self.assertEqual(config["window.outerWidth"], 1920)
+        self.assertEqual(config["window.outerHeight"], 1080)
 
     def test_threads_feed_text_with_challenge_word_is_not_verification(self):
         page = _ThreadsShellPage(

@@ -63,11 +63,11 @@ SUPPORTED_TASK_TYPES = {
 
 _CAMOUFOX_LAUNCH_LOCK = threading.Lock()
 _WARMUP_ACTION_HISTORY_LOCK = threading.Lock()
-_DEFAULT_LIVE_BROWSER_WIDTH = 1280
-_DEFAULT_LIVE_BROWSER_HEIGHT = 720
+_DEFAULT_LIVE_BROWSER_WIDTH = 640
+_DEFAULT_LIVE_BROWSER_HEIGHT = 360
 _DEFAULT_LIVE_BROWSER_CHROME_HEIGHT = 61
-_REFERENCE_LIVE_BROWSER_WIDTH = 1600
-_REFERENCE_LIVE_BROWSER_HEIGHT = 900
+_REFERENCE_LIVE_BROWSER_WIDTH = 1920
+_REFERENCE_LIVE_BROWSER_HEIGHT = 1080
 
 
 def _browser_disk_cache_preferences() -> dict[str, Any]:
@@ -250,14 +250,14 @@ class UnsupportedActionError(RuntimeError):
 
 def _live_browser_geometry_config(session: Any) -> dict[str, int]:
     physical_width = max(
-        1024,
+        320,
         _safe_int(
             getattr(session, "width", _DEFAULT_LIVE_BROWSER_WIDTH),
             _DEFAULT_LIVE_BROWSER_WIDTH,
         ),
     )
     physical_height = max(
-        640,
+        240,
         _safe_int(
             getattr(session, "height", _DEFAULT_LIVE_BROWSER_HEIGHT),
             _DEFAULT_LIVE_BROWSER_HEIGHT,
@@ -5178,6 +5178,7 @@ def _generate_warmup_search_keywords_with_ai(payload: dict[str, Any]) -> list[st
             "- 围绕同一主要内容主轴，从知识技能、具体场景、常见问题、工具对象、成果案例、行业见闻等不同子主题扩展，并覆盖不同搜索意图。\n"
             "- 至少 70% 必须属于主要内容主轴：分别生成 6 个主要内容主轴关键词和最多 2 个明确兴趣关键词；兴趣最多占 20%-30%，不足时宁可少给，不得用泛化内容补齐。\n"
             "- 兴趣扩展必须来自资料中明确、稳定的真实兴趣，并保持具体；不要把泛生活、泛作品或性格词当作兴趣关键词。\n"
+            "- 不得把“手工、手艺、创作”等泛兴趣自行具体化为资料中未明确出现的门类、材料、对象或技法；资料没有写木雕、皮具、编织等具体方向时，不得猜测或新增。\n"
             "- 各关键词必须覆盖不同搜索意图，禁止同义改写或只换无信息量前后缀；可能产生歧义时必须共享同一主轴限定词。\n"
             "- 优先可在 Threads 或 Instagram 搜索命中的自然短语。\n"
             "- 与“近期已用关键词”保持低重复；除非完全没有替代词，否则不得再次生成其中的词或近义改写。\n"

@@ -839,6 +839,8 @@ class WarmupChainParityTests(TestCase):
         self.assertIn("近期已用关键词", prompt)
         self.assertIn("Threads 或 Instagram", prompt)
         self.assertIn("禁止英文、拼音、数字年龄、语言风格词", prompt)
+        self.assertIn("不得猜测或新增", prompt)
+        self.assertIn("资料中未明确出现的门类、材料、对象或技法", prompt)
         self.assertIn('{"primary":["..."],"interests":["..."]}', prompt)
         self.assertEqual(request.call_args.kwargs["temperature"], 0.65)
         self.assertEqual(request.call_args.kwargs["max_output_tokens"], 240)
