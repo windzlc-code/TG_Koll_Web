@@ -137,7 +137,13 @@ class RunnerProxyRedactionTests(unittest.TestCase):
                 ),
                 mock.patch.object(manager, "_start_live_browser_session", return_value=None),
                 mock.patch.object(manager, "_enter_camoufox", side_effect=record_launch),
-                mock.patch.dict(os.environ, {"SOCIAL_AUTOMATION_DISK_CACHE_CAPACITY_MB": "128"}),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "SOCIAL_AUTOMATION_DISK_CACHE_CAPACITY_MB": "128",
+                        "SOCIAL_AUTOMATION_IMAGE_SURFACE_CACHE_MB": "256",
+                    },
+                ),
             ):
                 manager.__enter__()
 
@@ -147,6 +153,11 @@ class RunnerProxyRedactionTests(unittest.TestCase):
                 "browser.cache.disk.enable": True,
                 "browser.cache.disk.smart_size.enabled": False,
                 "browser.cache.disk.capacity": 128 * 1024,
+                "dom.ipc.processPrelaunch.enabled": False,
+                "dom.ipc.processCount": 2,
+                "dom.ipc.processCount.webIsolated": 1,
+                "image.mem.surfacecache.max_size_kb": 256 * 1024,
+                "layout.frame_rate": 30,
                 "network.prefetch-next": False,
                 "network.predictor.enabled": False,
             },

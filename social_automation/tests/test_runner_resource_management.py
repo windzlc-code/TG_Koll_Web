@@ -196,8 +196,39 @@ class RunnerResourceManagementTests(unittest.TestCase):
 
         self.assertFalse(enabled["network.prefetch-next"])
         self.assertFalse(enabled["network.predictor.enabled"])
+        self.assertFalse(enabled["dom.ipc.processPrelaunch.enabled"])
+        self.assertEqual(enabled["dom.ipc.processCount"], 2)
+        self.assertEqual(enabled["dom.ipc.processCount.webIsolated"], 1)
+        self.assertEqual(enabled["layout.frame_rate"], 30)
+        self.assertEqual(
+            enabled["image.mem.surfacecache.max_size_kb"],
+            64 * 1024,
+        )
         self.assertNotIn("network.prefetch-next", disabled)
         self.assertNotIn("network.predictor.enabled", disabled)
+        self.assertNotIn("dom.ipc.processPrelaunch.enabled", disabled)
+        self.assertNotIn("dom.ipc.processCount", disabled)
+        self.assertNotIn("dom.ipc.processCount.webIsolated", disabled)
+        self.assertNotIn("layout.frame_rate", disabled)
+        self.assertNotIn("image.mem.surfacecache.max_size_kb", disabled)
+
+    def test_image_surface_cache_cap_is_bounded_and_can_be_disabled(self):
+        with mock.patch.dict(
+            os.environ,
+            {"SOCIAL_AUTOMATION_IMAGE_SURFACE_CACHE_MB": "32"},
+        ):
+            bounded = runner._browser_runtime_preferences()
+        with mock.patch.dict(
+            os.environ,
+            {"SOCIAL_AUTOMATION_IMAGE_SURFACE_CACHE_MB": "0"},
+        ):
+            disabled = runner._browser_runtime_preferences()
+
+        self.assertEqual(
+            bounded["image.mem.surfacecache.max_size_kb"],
+            64 * 1024,
+        )
+        self.assertNotIn("image.mem.surfacecache.max_size_kb", disabled)
 
     def test_passive_media_guard_keeps_visible_media_behavior(self):
         normal = runner._warmup_media_guard_script(lightweight=False)
@@ -281,6 +312,28 @@ class RunnerResourceManagementTests(unittest.TestCase):
                 runner._lightweight_threads_warmup_requested(
                     task,
                     {"strategy_id": "tg_default"},
+                    "threads",
+                )
+            )
+            self.assertTrue(
+                runner._lightweight_threads_warmup_requested(
+                    task,
+                    {
+                        "strategy_id": "warmup_custom",
+                        "like_limit": 0,
+                        "max_comments": 0,
+                    },
+                    "threads",
+                )
+            )
+            self.assertFalse(
+                runner._lightweight_threads_warmup_requested(
+                    task,
+                    {
+                        "strategy_id": "warmup_custom",
+                        "like_limit": 1,
+                        "max_comments": 0,
+                    },
                     "threads",
                 )
             )

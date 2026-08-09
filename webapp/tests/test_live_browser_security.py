@@ -46,7 +46,7 @@ def test_live_browser_view_uses_stable_low_latency_decoder_settings():
     assert query["dynamic_quality_max"] == ["6"]
     assert query["video_time"] == ["4"]
     assert query["video_out_time"] == ["1"]
-    assert query["framerate"] == ["30"]
+    assert query["framerate"] == ["15"]
     assert query["compression"] == ["1"]
 
 
@@ -1437,6 +1437,39 @@ def test_starting_session_is_visible_before_kasmvnc_is_ready(tmp_path, monkeypat
     finally:
         live_browser._SESSIONS.clear()
         session_dir.rmdir()
+
+
+def test_live_browser_start_retries_one_transient_xvnc_failure():
+    expected = live_browser.LiveBrowserSession(
+        id="live-task-1",
+        task_id="task-1",
+        account_id="account-1",
+        account_username="tester",
+        platform="threads",
+        task_type="threads_warmup",
+        display=":91",
+        width=1280,
+        height=720,
+        vnc_port=6901,
+        web_port=6901,
+        started_at=100,
+    )
+
+    with (
+        mock.patch.object(
+            live_browser,
+            "_start_live_browser_session_once",
+            side_effect=[None, expected],
+        ) as start_once,
+        mock.patch.object(live_browser.time, "sleep"),
+    ):
+        session = live_browser.start_live_browser_session(
+            task={"id": "task-1", "task_type": "threads_warmup", "platform": "threads"},
+            account={"id": "account-1", "username": "tester", "platform": "threads"},
+        )
+
+    assert session is expected
+    assert start_once.call_count == 2
 
 
 def test_stale_x_lock_and_socket_are_released_before_display_reuse(tmp_path):

@@ -2908,6 +2908,7 @@ function statusLabel(status) {
     pending_login: "待登录",
     account_confirmation_required: "需确认关联账号",
     need_verification: "需验证",
+    risk_control: "封控验证",
     cookie_expired: "登录已过期",
     transient_error: "登录页面异常",
     disabled: "已禁用",
@@ -2936,7 +2937,7 @@ function statusLabel(status) {
 function statusTone(status) {
   const key = String(status || "").trim();
   if (["success", "ready", "standby"].includes(key)) return "success";
-  if (["failed", "error", "cookie_expired", "transient_error", "login_wait_timeout", "abnormal", "banned", "check_failed"].includes(key)) return "error";
+  if (["failed", "error", "cookie_expired", "transient_error", "login_wait_timeout", "abnormal", "risk_control", "banned", "check_failed"].includes(key)) return "error";
   if (["queued", "scheduled", "pending"].includes(key)) return "queued";
   if (["need_manual", "pending_login", "account_confirmation_required", "need_verification", "ready_unverified"].includes(key)) return "manual";
   if (["running", "checking", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "active";
@@ -2952,10 +2953,11 @@ function renderStatusText(status, { className = "" } = {}) {
 
 function accountEffectiveStatus(account = null) {
   if (!account) return "unknown";
-  const supplied = String(account.effective_status || "").trim().toLowerCase();
-  if (supplied) return supplied;
   const loginStatus = String(account.status || "unknown").trim().toLowerCase();
   const healthStatus = String(account.health_status || "unknown").trim().toLowerCase();
+  const supplied = String(account.effective_status || "").trim().toLowerCase();
+  if (loginStatus === "need_verification" && healthStatus === "abnormal") return "risk_control";
+  if (supplied) return supplied;
   const observedAt = Math.max(Number(account.last_login_check_at || 0), Number(account.health_checked_at || 0));
   const attemptedAt = Number(account.status_attempted_at || 0);
   const attemptError = String(account.status_attempt_error || "").trim();
@@ -2978,6 +2980,7 @@ function accountStatusDisplayLabel(status = "") {
   const key = String(status || "").trim().toLowerCase();
   if (["ready", "ready_unverified", "success", "standby"].includes(key)) return "已登录";
   if (["pending_login", "cookie_expired"].includes(key)) return "未登录";
+  if (key === "risk_control") return "封控验证";
   if (["need_verification", "account_confirmation_required"].includes(key)) return "需验证";
   if (["checking", "running", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "检测中";
   if (["transient_error", "check_failed", "failed", "error", "login_wait_timeout"].includes(key)) return "登录异常";
@@ -2991,7 +2994,7 @@ function accountStatusDisplayTone(status = "") {
   if (["ready", "ready_unverified", "success", "standby"].includes(key)) return "success";
   if (["checking", "running", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "active";
   if (["pending_login", "cookie_expired", "need_verification", "account_confirmation_required"].includes(key)) return "manual";
-  if (["transient_error", "check_failed", "failed", "error", "login_wait_timeout", "abnormal", "banned", "disabled"].includes(key)) return "error";
+  if (["transient_error", "check_failed", "failed", "error", "login_wait_timeout", "abnormal", "risk_control", "banned", "disabled"].includes(key)) return "error";
   return "muted";
 }
 
@@ -3012,6 +3015,7 @@ function accountStatusClassNames(status) {
   if (["ready", "ready_unverified", "success", "standby"].includes(key)) return "ready";
   if (["pending_login", "cookie_expired"].includes(key)) return "pending_login";
   if (["need_verification", "account_confirmation_required"].includes(key)) return "need_verification";
+  if (key === "risk_control") return "abnormal";
   if (["checking", "running", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "checking";
   if (["transient_error", "check_failed", "failed", "error", "login_wait_timeout"].includes(key)) return "transient_error";
   if (["disabled", "banned"].includes(key)) return "disabled";
@@ -4212,10 +4216,14 @@ function renderPersonaPostDirectionPicker(persona, generateForm, disabled = fals
   const directionState = personaPostDirectionState(persona.id, generateForm.composeMode);
   if (!directionState.keywords.length) return "";
   const selected = new Set(directionState.selectedKeywords);
+  const allSelected = directionState.keywords.every((keyword) => selected.has(keyword));
   return `<section class="persona-post-direction-panel" aria-label="推文生成方向">
     <div class="persona-post-direction-heading">
       <strong>选择推文方向</strong>
-      <span>可单选或多选</span>
+      <div class="persona-post-direction-tools">
+        <span>可单选或多选</span>
+        <button type="button" class="bulk-selection-icon-button" data-persona-post-direction-selection="${allSelected ? "clear" : "all"}" title="${allSelected ? "清空选择" : "全选"}" aria-label="${allSelected ? "清空选择" : "全选"}" ${disabled ? "disabled" : ""}>${allSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}</button>
+      </div>
     </div>
     <div class="persona-post-direction-tags">
       ${directionState.keywords.map((keyword) => {
@@ -20196,6 +20204,17 @@ async function resolvePersonaOrdinaryGeneratedCandidates(persona, taskId, genera
     showMsg("commandMsg", "本次生成候选已放弃。", true);
   }
   renderConfirmSummary();
+  if (selection.action === "media" && selectedPostId) {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const action = document.querySelector("[data-persona-run-media-task]");
+        const target = action?.closest(".persona-compose-media-side");
+        if (!target) return;
+        target.scrollIntoView({ block: "start", behavior: "smooth" });
+        action.focus({ preventScroll: true });
+      });
+    });
+  }
   return { action: selection.action, postId: finalizedPostId };
 }
 
@@ -31206,6 +31225,19 @@ function bindEvents() {
     }
     if (event.target.closest("[data-persona-generate-posts]")) {
       handlePersonaGeneratePrimaryAction().catch((error) => showMsg("commandMsg", error.detail || error.message || "生成推文失败", false));
+      return;
+    }
+    const postDirectionSelectionButton = event.target.closest("[data-persona-post-direction-selection]");
+    if (postDirectionSelectionButton) {
+      const persona = selectedPersona();
+      if (!persona) return;
+      const action = String(postDirectionSelectionButton.dataset.personaPostDirectionSelection || "").trim();
+      if (!["all", "clear"].includes(action)) return;
+      snapshotPersonaCurrentForm();
+      const form = personaFormState(persona.id);
+      const directionState = personaPostDirectionState(persona.id, form.generate.composeMode);
+      directionState.selectedKeywords = action === "all" ? directionState.keywords.slice() : [];
+      renderPersonaDetail();
       return;
     }
     const postDirectionButton = event.target.closest("[data-persona-post-direction-keyword]");

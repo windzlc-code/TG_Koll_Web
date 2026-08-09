@@ -10891,9 +10891,21 @@ body.persona-touch-dragging .persona-list-card:active {
   font-size: 14px;
 }
 
-.persona-post-direction-heading span {
+.persona-post-direction-tools {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.persona-post-direction-tools > span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.persona-post-direction-tools > button {
+  flex: 0 0 30px;
 }
 
 .persona-post-direction-tags {
@@ -10920,9 +10932,25 @@ body.persona-touch-dragging .persona-list-card:active {
   color: var(--accent-ink);
 }
 
+.persona-generate-ai-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
 .persona-generate-ai-action .ui-refresh-icon {
   width: 17px;
   height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.persona-generate-ai-action > span {
+  line-height: 1;
 }
 
 .persona-generate-actions .persona-generate-ai-action {
@@ -22353,6 +22381,10 @@ body.console-page {
 
 /* Final mobile density pass: keep the workspace readable without oversized controls. */
 @media (max-width: 760px) {
+  .console-page .persona-generate-actions .persona-generate-ai-action .task-button-busy > span {
+    display: none;
+  }
+
   .console-page .persona-post-direction-panel {
     gap: 8px;
     padding: 10px;

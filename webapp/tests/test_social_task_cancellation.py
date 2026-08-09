@@ -260,6 +260,7 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(effective({"status": "ready", "health_status": "alive"}), "ready")
         self.assertEqual(effective({"status": "ready", "health_status": "unknown"}), "ready_unverified")
         self.assertEqual(effective({"status": "ready", "health_status": "abnormal"}), "abnormal")
+        self.assertEqual(effective({"status": "need_verification", "health_status": "abnormal"}), "risk_control")
         self.assertEqual(effective({"status": "ready", "health_status": "banned"}), "banned")
         self.assertEqual(effective({"status": "cookie_expired", "health_status": "alive"}), "cookie_expired")
         self.assertEqual(effective({"status": "disabled", "health_status": "banned"}), "disabled")

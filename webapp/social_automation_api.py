@@ -220,6 +220,8 @@ DAILY_PUBLISH_LIMIT_MESSAGE = "每日最多发布 15 篇。超过 15 篇会有�
 SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT = 4
 SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_FIRST_TASK = 768
 SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_ADDITIONAL_TASK = 1536
+SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_ADDITIONAL_TASK_WITH_SWAP = 512
+SOCIAL_AUTOMATION_WORKER_LAUNCH_STAGGER_SECONDS = 0
 SOCIAL_ACCOUNT_TOTP_PERIOD_SECONDS = 30
 SOCIAL_ACCOUNT_TOTP_MIN_VALIDITY_SECONDS = 15
 SOCIAL_MEDIA_EXTENSIONS = {
@@ -267,6 +269,7 @@ _WORKER_LOCK = threading.Lock()
 _AUTOMATION_PLAN_LOCK = threading.RLock()
 _WORKER_TASK_THREADS: dict[str, threading.Thread] = {}
 _WORKER_TASK_THREADS_LOCK = threading.Lock()
+_WORKER_LAST_TASK_LAUNCH_MONOTONIC = 0.0
 _EXTERNAL_BROWSER_LEASES: set[str] = set()
 _EXTERNAL_BROWSER_LEASES_LOCK = threading.Lock()
 _IDLE_MEMORY_RELEASE_LOCK = threading.Lock()
@@ -6885,6 +6888,9 @@ def run_social_automation_once() -> dict[str, Any] | None:
         if active_slots >= _social_worker_max_concurrency():
             _refresh_worker_state()
             return None
+        if _social_worker_launch_stagger_remaining_seconds() > 0:
+            _refresh_worker_state()
+            return None
         if not _browser_worker_resource_admission(active_slots=active_slots)["allow_launch"]:
             _refresh_worker_state()
             return None
@@ -6893,6 +6899,7 @@ def run_social_automation_once() -> dict[str, Any] | None:
             _refresh_worker_state()
             return None
         _start_claimed_task_thread(task)
+        _record_social_worker_task_launch()
         _refresh_worker_state()
         return {"task_id": task["id"], "status": "started"}
 
@@ -6931,6 +6938,28 @@ def _social_worker_max_concurrency() -> int:
             SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT,
         )
     return max(1, min(value, SOCIAL_AUTOMATION_BROWSER_CONCURRENCY_LIMIT))
+
+
+def _social_worker_launch_stagger_seconds() -> int:
+    return _bounded_env_int(
+        "SOCIAL_AUTOMATION_WORKER_LAUNCH_STAGGER_SECONDS",
+        SOCIAL_AUTOMATION_WORKER_LAUNCH_STAGGER_SECONDS,
+        0,
+        300,
+    )
+
+
+def _social_worker_launch_stagger_remaining_seconds() -> float:
+    delay_seconds = _social_worker_launch_stagger_seconds()
+    if delay_seconds <= 0 or _WORKER_LAST_TASK_LAUNCH_MONOTONIC <= 0:
+        return 0.0
+    elapsed = max(0.0, time.monotonic() - _WORKER_LAST_TASK_LAUNCH_MONOTONIC)
+    return max(0.0, float(delay_seconds) - elapsed)
+
+
+def _record_social_worker_task_launch() -> None:
+    global _WORKER_LAST_TASK_LAUNCH_MONOTONIC
+    _WORKER_LAST_TASK_LAUNCH_MONOTONIC = time.monotonic()
 
 
 def _cleanup_worker_task_threads() -> None:
@@ -7124,7 +7153,23 @@ def _browser_worker_resource_admission(*, active_slots: int | None = None) -> di
         512,
         16384,
     )
-    required_mb = first_task_minimum_mb if slots_in_use <= 0 else additional_task_minimum_mb
+    swap_total_mb = int(memory.get("swap_total_mb") or 0)
+    swap_relaxed = bool(slots_in_use > 0 and swap_total_mb >= 2048)
+    additional_task_with_swap_minimum_mb = _bounded_env_int(
+        "SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_ADDITIONAL_TASK_WITH_SWAP",
+        SOCIAL_AUTOMATION_MIN_AVAILABLE_MB_ADDITIONAL_TASK_WITH_SWAP,
+        256,
+        16384,
+    )
+    required_mb = (
+        first_task_minimum_mb
+        if slots_in_use <= 0
+        else (
+            additional_task_with_swap_minimum_mb
+            if swap_relaxed
+            else additional_task_minimum_mb
+        )
+    )
     # Fail open only when neither host nor cgroup availability can be read.
     # A known cgroup with zero headroom is a hard no-launch condition.
     allow_launch = not available_known or available_mb >= required_mb
@@ -7135,6 +7180,8 @@ def _browser_worker_resource_admission(*, active_slots: int | None = None) -> di
         "memory_available_mb": available_mb,
         "required_available_mb": required_mb,
         "memory_available_known": available_known,
+        "swap_total_mb": swap_total_mb,
+        "swap_relaxed": swap_relaxed,
         "container_memory_mb": int(memory.get("container_memory_mb") or 0),
         "container_memory_headroom_mb": int(memory.get("container_memory_headroom_mb") or 0),
     }
@@ -7166,12 +7213,15 @@ def _launch_available_social_tasks() -> int:
             active_slots = _social_worker_slots_in_use()
             if active_slots >= _social_worker_max_concurrency():
                 break
+            if _social_worker_launch_stagger_remaining_seconds() > 0:
+                break
             if not _browser_worker_resource_admission(active_slots=active_slots)["allow_launch"]:
                 break
             task = _claim_next_task()
             if not task:
                 break
             _start_claimed_task_thread(task)
+            _record_social_worker_task_launch()
             launched += 1
         _refresh_worker_state()
     return launched
@@ -11071,6 +11121,8 @@ def _account_effective_status(row: Any) -> str:
         return "disabled"
     if health_status == "banned":
         return "banned"
+    if raw_status == "need_verification" and health_status == "abnormal":
+        return "risk_control"
     if raw_status != "ready":
         return raw_status or "unknown"
     if attempt_error and attempted_at >= observed_at:

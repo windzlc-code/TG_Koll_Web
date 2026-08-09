@@ -37,10 +37,13 @@ MAX_WARMUP_LIKES = 16
 MAX_WARMUP_COMMENTS = 6
 MAX_WARMUP_COMMENT_CHARS = 48
 DEFAULT_WARMUP_RESOURCE_COMPACTION_COOLDOWN_SECONDS = 90
-DEFAULT_BROWSER_DISK_CACHE_CAPACITY_MB = 128
+DEFAULT_BROWSER_DISK_CACHE_CAPACITY_MB = 64
 MIN_BROWSER_DISK_CACHE_CAPACITY_MB = 64
 MAX_BROWSER_DISK_CACHE_CAPACITY_MB = 1024
-DEFAULT_LIGHTWEIGHT_WARMUP_COMPACTION_COOLDOWN_SECONDS = 30
+DEFAULT_BROWSER_IMAGE_SURFACE_CACHE_MB = 64
+MIN_BROWSER_IMAGE_SURFACE_CACHE_MB = 64
+MAX_BROWSER_IMAGE_SURFACE_CACHE_MB = 1024
+DEFAULT_LIGHTWEIGHT_WARMUP_COMPACTION_COOLDOWN_SECONDS = 15
 SUPPORTED_TASK_TYPES = {
     "check_login",
     "open_login",
@@ -63,6 +66,8 @@ _WARMUP_ACTION_HISTORY_LOCK = threading.Lock()
 _DEFAULT_LIVE_BROWSER_WIDTH = 1280
 _DEFAULT_LIVE_BROWSER_HEIGHT = 720
 _DEFAULT_LIVE_BROWSER_CHROME_HEIGHT = 61
+_REFERENCE_LIVE_BROWSER_WIDTH = 1600
+_REFERENCE_LIVE_BROWSER_HEIGHT = 900
 
 
 def _browser_disk_cache_preferences() -> dict[str, Any]:
@@ -95,6 +100,26 @@ def _conservative_browser_resources_enabled() -> bool:
     ).strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _browser_image_surface_cache_mb() -> int:
+    try:
+        value = int(
+            str(
+                os.getenv(
+                    "SOCIAL_AUTOMATION_IMAGE_SURFACE_CACHE_MB",
+                    DEFAULT_BROWSER_IMAGE_SURFACE_CACHE_MB,
+                )
+            ).strip()
+        )
+    except (TypeError, ValueError):
+        value = DEFAULT_BROWSER_IMAGE_SURFACE_CACHE_MB
+    if value <= 0:
+        return 0
+    return max(
+        MIN_BROWSER_IMAGE_SURFACE_CACHE_MB,
+        min(value, MAX_BROWSER_IMAGE_SURFACE_CACHE_MB),
+    )
+
+
 def _browser_runtime_preferences() -> dict[str, Any]:
     """Reduce speculative background work without changing rendered content."""
     preferences = _browser_disk_cache_preferences()
@@ -102,10 +127,29 @@ def _browser_runtime_preferences() -> dict[str, Any]:
         return preferences
     preferences.update(
         {
+            # Avoid keeping an otherwise idle content process per browser.
+            # Firefox still creates the same isolated processes on demand.
+            "dom.ipc.processPrelaunch.enabled": False,
+            # Each automation profile drives one foreground social site. Two
+            # shared web processes plus one isolated-site process preserve
+            # Firefox separation while avoiding the default multi-tab pool in
+            # every one of four concurrent browser instances.
+            "dom.ipc.processCount": 2,
+            "dom.ipc.processCount.webIsolated": 1,
+            # Xvnc is a software display. Rendering the page at 30fps is ample
+            # for automation and a 15fps monitor while halving needless
+            # compositor work versus the default 60fps cadence.
+            "layout.frame_rate": 30,
             "network.prefetch-next": False,
             "network.predictor.enabled": False,
         }
     )
+    surface_cache_mb = _browser_image_surface_cache_mb()
+    if surface_cache_mb > 0:
+        # This is an eviction ceiling, not an eager allocation. Keep the cap
+        # conservative so visible Threads images and publish previews remain
+        # smooth while old decoded feed images cannot grow without bound.
+        preferences["image.mem.surfacecache.max_size_kb"] = surface_cache_mb * 1024
     return preferences
 
 
@@ -120,10 +164,16 @@ def _lightweight_threads_warmup_requested(
     ).strip().lower() not in {"0", "false", "no", "off"}
     if not enabled or not isinstance(task, dict) or not isinstance(payload, dict):
         return False
+    strategy_id = str(payload.get("strategy_id") or "").strip()
+    read_only_custom = bool(
+        strategy_id == "warmup_custom"
+        and _safe_int(payload.get("like_limit"), 0) <= 0
+        and _safe_int(payload.get("max_comments"), 0) <= 0
+    )
     return bool(
         str(task.get("task_type") or "").strip() == "threads_warmup"
         and str(platform or task.get("platform") or "").strip().lower() == "threads"
-        and str(payload.get("strategy_id") or "").strip() == "browse_only"
+        and (strategy_id == "browse_only" or read_only_custom)
     )
 
 
@@ -199,20 +249,27 @@ class UnsupportedActionError(RuntimeError):
 
 
 def _live_browser_geometry_config(session: Any) -> dict[str, int]:
-    width = max(
+    physical_width = max(
         1024,
         _safe_int(
             getattr(session, "width", _DEFAULT_LIVE_BROWSER_WIDTH),
             _DEFAULT_LIVE_BROWSER_WIDTH,
         ),
     )
-    height = max(
+    physical_height = max(
         640,
         _safe_int(
             getattr(session, "height", _DEFAULT_LIVE_BROWSER_HEIGHT),
             _DEFAULT_LIVE_BROWSER_HEIGHT,
         ),
     )
+    display_scale = min(
+        1.0,
+        physical_width / _REFERENCE_LIVE_BROWSER_WIDTH,
+        physical_height / _REFERENCE_LIVE_BROWSER_HEIGHT,
+    )
+    width = round(physical_width / display_scale)
+    height = round(physical_height / display_scale)
     chrome_height = _safe_int(
         os.getenv("SOCIAL_AUTOMATION_LIVE_BROWSER_CHROME_HEIGHT"),
         _DEFAULT_LIVE_BROWSER_CHROME_HEIGHT,
@@ -946,6 +1003,16 @@ class _BrowserContextManager:
             }
             kwargs["config"] = geometry_config
             kwargs["i_know_what_im_doing"] = True
+            display_scale = min(
+                float(getattr(self.live_session, "width", _DEFAULT_LIVE_BROWSER_WIDTH))
+                / geometry_config["window.outerWidth"],
+                float(getattr(self.live_session, "height", _DEFAULT_LIVE_BROWSER_HEIGHT))
+                / geometry_config["window.outerHeight"],
+            )
+            if display_scale < 0.999:
+                kwargs["firefox_user_prefs"]["layout.css.devPixelsPerPx"] = (
+                    f"{display_scale:.4f}".rstrip("0").rstrip(".")
+                )
             if self.context_control is not None:
                 self.context_control["live_browser_window_width"] = geometry_config["window.outerWidth"]
                 self.context_control["live_browser_window_height"] = geometry_config["window.outerHeight"]
@@ -2018,7 +2085,23 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
             "url": url,
         }
     if _is_verification_url(url):
-        return {"status": "need_verification", "reason": "Instagram 需要输入验证码。", "url": url}
+        challenge = _classify_verification_challenge(page)
+        challenge_type = str(challenge.get("type") or "")
+        risk_control = (
+            "/accounts/update_risky_contactpoint" in normalized_url
+            or challenge_type in {"email_code", "identity_challenge", "method_selection"}
+        )
+        return {
+            "status": "need_verification",
+            "reason": (
+                "Instagram 触发邮箱或身份安全验证，账号已进入封控验证状态。"
+                if risk_control
+                else "Instagram 需要输入验证码。"
+            ),
+            "url": url,
+            "challenge_type": challenge_type,
+            **({"health_status": "abnormal"} if risk_control else {}),
+        }
     invalid_markers = [
         "login information you entered is incorrect",
         "your password was incorrect",
@@ -2030,7 +2113,15 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
         return {"status": "invalid_credentials", "reason": "Instagram 提示保存的登录信息不正确。", "url": url}
     challenge_markers = _verification_text_markers()
     if any(marker in body_text for marker in challenge_markers):
-        return {"status": "need_verification", "reason": "检测到验证或安全挑战文案。"}
+        challenge = _classify_verification_challenge(page)
+        challenge_type = str(challenge.get("type") or "")
+        risk_control = challenge_type in {"email_code", "identity_challenge", "method_selection"}
+        return {
+            "status": "need_verification",
+            "reason": "检测到邮箱或身份安全验证。" if risk_control else "检测到验证或安全挑战文案。",
+            "challenge_type": challenge_type,
+            **({"health_status": "abnormal"} if risk_control else {}),
+        }
     post_login_interstitial = (
         "/accounts/onetap" in normalized_url
         or "save your login info?" in body_text
@@ -4151,24 +4242,53 @@ def _return_threads_feed_after_post(
     *,
     cancel_event: Any | None = None,
 ) -> None:
-    for _ in range(2):
-        url = str(page.url or "").lower()
-        if "/post/" not in url and "/media" not in url:
-            break
-        with contextlib.suppress(Exception):
-            page.keyboard.press("Escape")
-        _wait_for_cancellation(random.uniform(0.8, 1.8), cancel_event)
+    initial_url = str(page.url or "")
+    return_method = "page_back_control"
+    if "/post/" in initial_url.lower() or "/media" in initial_url.lower():
+        back_control = _first_visible_locator(
+            page,
+            (
+                '[role="button"]:has([aria-label*="back" i])',
+                'button:has([aria-label*="back" i])',
+                '[aria-label*="back" i]',
+                '[aria-label="返回"]',
+            ),
+        )
+        if back_control is not None and _human_click(
+            page,
+            back_control,
+            logger,
+            "threads_return_post_back_control",
+        ):
+            _wait_for_cancellation(random.uniform(0.8, 1.5), cancel_event)
+
+    current_url = str(page.url or "").lower()
+    if "/post/" in current_url or "/media" in current_url:
+        return_method = "browser_history"
         try:
             page.go_back(wait_until="domcontentloaded", timeout=12000)
         except Exception:
+            return_method = "alt_left"
             with contextlib.suppress(Exception):
                 page.keyboard.press("Alt+Left")
-        _wait_for_cancellation(random.uniform(2.5, 5.5), cancel_event)
+        _wait_for_cancellation(random.uniform(1.5, 3.0), cancel_event)
+
     final_url = str(page.url or "")
     if "/post/" in final_url.lower() or "/media" in final_url.lower():
         _goto(page, THREADS_HOME, logger, "threads_return_feed")
+        return_method = "home_fallback"
         final_url = str(page.url or "")
-    logger.log("info", "threads_return_feed", "已从打开的 Threads 帖子返回信息流。", {"url": final_url})
+    logger.log(
+        "info",
+        "threads_return_feed",
+        "已从打开的 Threads 帖子返回原浏览上下文。",
+        {
+            "initial_url": initial_url,
+            "url": final_url,
+            "method": return_method,
+            "preserved_context": return_method != "home_fallback",
+        },
+    )
 
 
 def _post_threads_warmup_comment(
@@ -4786,6 +4906,20 @@ _WARMUP_RELEVANCE_IGNORED_TERMS = {
     "搞笑", "生活日常", "生活方式", "职场趣事", "職場趣事", "日常吐槽",
 }
 
+# These words describe an intent or presentation style, but not a searchable
+# content domain by themselves.  A model may combine two or more of them into
+# a fluent-looking phrase such as ``手艺展示`` or ``店里聊天``.  Such phrases
+# are still ambiguous outside the prompt and must not drive browser searches.
+_WARMUP_GENERIC_KEYWORD_PARTS = (
+    "生活方式", "生活日常", "职场趣事", "日常吐槽", "手工活",
+    "店里", "门店", "店铺", "工作", "职业", "行业", "顾客", "客户",
+    "日常", "生活", "趣事", "吐槽", "互动", "聊天", "沟通", "交流",
+    "手艺", "手工", "作品", "成果", "案例", "经验", "心得", "技巧",
+    "知识", "问题", "建议", "见闻", "故事", "展示", "分享", "创作",
+    "制作", "过程", "工具", "对象", "内容", "场景", "话题", "活动",
+    "记录", "观察", "讨论", "方式", "趣闻", "手作", "小",
+)
+
 _WARMUP_RELEVANCE_BLOCKLIST = (
     "点击链接",
     "私信领取",
@@ -4871,6 +5005,51 @@ def _sanitize_warmup_search_keywords(values: Iterable[Any], *, limit: int = 5) -
         if len(cleaned) >= limit:
             break
     return cleaned
+
+
+def _is_generic_warmup_search_keyword(value: Any) -> bool:
+    """Return True when a keyword is composed only of non-domain intent words."""
+    normalized = _normalize_warmup_text(value).replace(" ", "")
+    if not normalized:
+        return True
+    reachable = {0}
+    for index in range(len(normalized)):
+        if index not in reachable:
+            continue
+        for part in _WARMUP_GENERIC_KEYWORD_PARTS:
+            if normalized.startswith(part, index):
+                reachable.add(index + len(part))
+    return len(normalized) in reachable
+
+
+def _keep_specific_warmup_search_keywords(
+    payload: dict[str, Any],
+    values: Iterable[Any],
+    *,
+    limit: int = 8,
+) -> list[str]:
+    """Drop model phrases that still make no sense without the persona prompt."""
+    candidates = _sanitize_warmup_search_keywords(values, limit=max(24, int(limit) * 3))
+    kept: list[str] = []
+    rejected = payload.setdefault("_warmup_rejected_generic_keywords", [])
+    if not isinstance(rejected, list):
+        rejected = []
+        payload["_warmup_rejected_generic_keywords"] = rejected
+    rejected_keys = {
+        _normalize_warmup_text(item).replace(" ", "")
+        for item in rejected
+    }
+    for candidate in candidates:
+        normalized = _normalize_warmup_text(candidate).replace(" ", "")
+        if _is_generic_warmup_search_keyword(candidate):
+            if normalized not in rejected_keys:
+                rejected.append(candidate)
+                rejected_keys.add(normalized)
+            continue
+        kept.append(candidate)
+        if len(kept) >= max(1, int(limit)):
+            break
+    return kept
 
 
 def _warmup_keyword_similarity(left: Any, right: Any) -> float:
@@ -4959,7 +5138,10 @@ def _generate_warmup_search_keywords_with_ai(payload: dict[str, Any]) -> list[st
     cached = payload.get("_warmup_generated_search_keywords")
     if isinstance(cached, list):
         payload.setdefault("_warmup_search_keyword_source", "cache")
-        return _select_diverse_warmup_keywords(cached, limit=8)
+        return _select_diverse_warmup_keywords(
+            _keep_specific_warmup_search_keywords(payload, cached, limit=8),
+            limit=8,
+        )
 
     host, api_key, models = _warmup_ai_settings()
     if not host or not api_key or not models:
@@ -4992,10 +5174,11 @@ def _generate_warmup_search_keywords_with_ai(payload: dict[str, Any]) -> list[st
             "要求：\n"
             "- 先在内部判断这个账号唯一的主要内容主轴，再生成关键词；优先级依次为明确身份/业务定位、长期内容领域、次要兴趣与性格描述。\n"
             "- 每个关键词单独拿出来时，都必须能明确关联到该主要内容主轴；不要抽取年龄、语言、语气、人格描述，也不要抽取泛生活描述。\n"
+            "- 不要求每个关键词机械重复职业名称或人设名称；关键词自身已有明确的领域动作、对象、工具或场景时可以直接使用。不得为了多样化而删除必要的领域限定词；手艺、作品、问题、心得、建议、展示、聊天、日常等宽泛子主题必须带有明确的主轴限定词。允许多个关键词重复同一主轴限定词，搜索意图通过具体子主题区分。\n"
             "- 围绕同一主要内容主轴，从知识技能、具体场景、常见问题、工具对象、成果案例、行业见闻等不同子主题扩展，并覆盖不同搜索意图。\n"
             "- 至少 70% 必须属于主要内容主轴：分别生成 6 个主要内容主轴关键词和最多 2 个明确兴趣关键词；兴趣最多占 20%-30%，不足时宁可少给，不得用泛化内容补齐。\n"
             "- 兴趣扩展必须来自资料中明确、稳定的真实兴趣，并保持具体；不要把泛生活、泛作品或性格词当作兴趣关键词。\n"
-            "- 各关键词必须覆盖不同搜索意图，禁止同义改写、只换前后缀或共享同一核心短语。\n"
+            "- 各关键词必须覆盖不同搜索意图，禁止同义改写或只换无信息量前后缀；可能产生歧义时必须共享同一主轴限定词。\n"
             "- 优先可在 Threads 或 Instagram 搜索命中的自然短语。\n"
             "- 与“近期已用关键词”保持低重复；除非完全没有替代词，否则不得再次生成其中的词或近义改写。\n"
             "- 必须全部是中文关键词，禁止英文、拼音、数字年龄、语言风格词。\n"
@@ -5013,6 +5196,9 @@ def _generate_warmup_search_keywords_with_ai(payload: dict[str, Any]) -> list[st
         "system_prompt": (
             "根据给定人设的完整资料识别唯一主要内容主轴，并主要围绕该主轴生成中文搜索关键词；"
             "每个关键词脱离上下文后仍须能明确关联到主要主轴。"
+            "不要求机械重复职业或人设名称；关键词自身已有明确领域语义时可直接使用。"
+            "不得为追求表面多样性而省略必要的领域限定词；宽泛子主题必须保留主轴限定词，"
+            "允许不同搜索意图重复同一主轴限定词。"
             "不要依赖固定职业表或硬编码模板。允许少量明确兴趣扩展，但主要主轴必须占至少七成，"
             "兴趣扩展不得超过三成，泛化描述不得成为搜索方向。"
             "各搜索意图彼此不同、低重复，避开近期已用词，并严格返回指定 JSON。"
@@ -5061,7 +5247,7 @@ def _generate_warmup_search_keywords_with_ai(payload: dict[str, Any]) -> list[st
             if not parsed:
                 parsed = re.split(r"[\n,，、;；]+", raw)
             generated = _select_diverse_warmup_keywords(
-                parsed,
+                _keep_specific_warmup_search_keywords(payload, parsed, limit=8),
                 limit=8,
             )
             if generated:
@@ -8346,20 +8532,19 @@ def _visible_first(page, selectors: list[str], timeout_ms: int = 1200):
     return None
 
 
-def _click_threads_instagram_entry_by_structure(
+def _find_threads_instagram_entry_by_structure(
     page,
-    logger: AutomationLogger,
     *,
     abort_if: Callable[[], bool] | None = None,
-) -> bool:
-    """Fallback for localized Threads login cards: wide control with an image/SVG."""
+):
+    """Return the visible Instagram-branded control anchoring a Threads login card."""
     try:
         candidates = page.locator('button:has(svg), a:has(svg), [role="button"]:has(svg), button:has(img), a:has(img), [role="button"]:has(img)')
         best = None
         best_score = -1.0
         for index in range(min(int(candidates.count()), 120)):
             if abort_if is not None and abort_if():
-                return False
+                return None
             candidate = candidates.nth(index)
             if not candidate.is_visible(timeout=300):
                 continue
@@ -8381,9 +8566,23 @@ def _click_threads_instagram_entry_by_structure(
             if score > best_score:
                 best = candidate
                 best_score = score
-        if best is not None and _human_click(
+        return best
+    except Exception:
+        return None
+
+
+def _click_threads_instagram_entry_by_structure(
+    page,
+    logger: AutomationLogger,
+    *,
+    abort_if: Callable[[], bool] | None = None,
+) -> bool:
+    """Fallback for localized Threads login cards: wide control with an image/SVG."""
+    try:
+        entry = _find_threads_instagram_entry_by_structure(page, abort_if=abort_if)
+        if entry is not None and _human_click(
             page,
-            best,
+            entry,
             logger,
             "threads_continue_instagram_structure",
             abort_if=abort_if,
@@ -8398,6 +8597,91 @@ def _click_threads_instagram_entry_by_structure(
     except Exception:
         pass
     return False
+
+
+def _click_threads_username_entry_by_structure(
+    page,
+    logger: AutomationLogger,
+    *,
+    abort_if: Callable[[], bool] | None = None,
+) -> bool:
+    """Click the secondary login control below the Instagram-branded card anchor."""
+    if abort_if is not None and abort_if():
+        return False
+    anchor = _find_threads_instagram_entry_by_structure(page, abort_if=abort_if)
+    if anchor is None:
+        return False
+    try:
+        marked = anchor.evaluate(
+            r"""anchor => {
+                const marker = 'data-vecto-threads-username-entry';
+                document.querySelectorAll(`[${marker}]`).forEach(node => node.removeAttribute(marker));
+                const anchorRect = anchor.getBoundingClientRect();
+                if (anchorRect.width <= 0 || anchorRect.height <= 0) return false;
+                const isVisible = (node, rect) => {
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0 && rect.height > 0
+                        && style.visibility !== 'hidden'
+                        && style.display !== 'none'
+                        && style.pointerEvents !== 'none';
+                };
+                const isInstagramBranded = (node) => Boolean(node.querySelector(
+                    '[aria-label*="instagram" i], [title*="instagram" i], img[alt*="instagram" i], img[src*="instagram" i]'
+                ));
+                let scope = anchor.parentElement;
+                let best = null;
+                let bestScore = Number.POSITIVE_INFINITY;
+                for (let depth = 0; scope && depth < 7; depth += 1, scope = scope.parentElement) {
+                    const controls = scope.querySelectorAll('button, a, [role="button"], [tabindex="0"]');
+                    for (const node of controls) {
+                        if (node === anchor || node.contains(anchor) || anchor.contains(node)) continue;
+                        if (node.disabled || node.getAttribute('aria-disabled') === 'true') continue;
+                        if (isInstagramBranded(node)) continue;
+                        const rect = node.getBoundingClientRect();
+                        if (!isVisible(node, rect)) continue;
+                        if (rect.width < 40 || rect.height < 16 || rect.height > 90) continue;
+                        const text = String(node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
+                        if (!text) continue;
+                        const gap = rect.top - anchorRect.bottom;
+                        if (gap < -2 || gap > 150) continue;
+                        const overlap = Math.max(0, Math.min(rect.right, anchorRect.right) - Math.max(rect.left, anchorRect.left));
+                        const overlapRatio = overlap / Math.max(1, Math.min(rect.width, anchorRect.width));
+                        const centerDelta = Math.abs((rect.left + rect.right - anchorRect.left - anchorRect.right) / 2);
+                        if (overlapRatio < 0.35 && centerDelta > Math.max(120, anchorRect.width * 0.45)) continue;
+                        const score = gap * 5 + centerDelta + depth * 3 + Math.abs(rect.width - anchorRect.width) * 0.05;
+                        if (score < bestScore) {
+                            best = node;
+                            bestScore = score;
+                        }
+                    }
+                    if (best) break;
+                }
+                if (!best) return false;
+                best.scrollIntoView({block: 'center', inline: 'center'});
+                best.setAttribute(marker, '1');
+                return true;
+            }"""
+        )
+        if not marked:
+            return False
+        target = page.locator('[data-vecto-threads-username-entry="1"]').first
+        if not _human_click(
+            page,
+            target,
+            logger,
+            "threads_login_username_structure",
+            abort_if=abort_if,
+        ):
+            return False
+        logger.log(
+            "info",
+            "threads_login_username_structure",
+            "Threads 用户名登录入口已通过登录卡结构和相对位置识别。",
+            {"evidence": "visual_structure", "url": _safe_navigation_url(page.url)},
+        )
+        return True
+    except Exception:
+        return False
 
 
 def _click_threads_instagram_login_entry(
@@ -9257,7 +9541,7 @@ def _auto_submit_login_form(
                     page.keyboard.press("Escape")
                 except Exception:
                     pass
-                if not _click_text_button(
+                username_entry_clicked = _click_text_button(
                     page,
                     logger,
                     [
@@ -9273,7 +9557,14 @@ def _auto_submit_login_form(
                     ],
                     "threads_login_username_instead",
                     abort_if=takeover_requested,
-                ):
+                )
+                if not username_entry_clicked:
+                    username_entry_clicked = _click_threads_username_entry_by_structure(
+                        page,
+                        logger,
+                        abort_if=takeover_requested,
+                    )
+                if not username_entry_clicked:
                     continue
                 _sleep_between(1.2, 2.2)
                 if _visible_first(page, native_username_selectors, 700) and _visible_first(page, native_password_selectors, 700):
@@ -9285,11 +9576,9 @@ def _auto_submit_login_form(
             if _manual_takeover_requested(context_control):
                 return False
             if not payload.get("_threads_official_handoff_attempted"):
-                official_handoff = _click_text_button(
+                official_handoff = _click_threads_instagram_login_entry(
                     page,
                     logger,
-                    ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
-                    "threads_login_official_handoff",
                     abort_if=takeover_requested,
                 )
                 if official_handoff:

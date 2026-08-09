@@ -52,6 +52,7 @@ _ORPHAN_CLEANUP_DONE = False
 _SIGKILL = getattr(signal, "SIGKILL", 9)
 DEFAULT_LIVE_BROWSER_WIDTH = 1280
 DEFAULT_LIVE_BROWSER_HEIGHT = 720
+DEFAULT_LIVE_BROWSER_START_ATTEMPTS = 2
 
 
 def live_browser_enabled() -> bool:
@@ -61,6 +62,44 @@ def live_browser_enabled() -> bool:
 
 
 def start_live_browser_session(
+    *,
+    task: dict[str, Any],
+    account: dict[str, Any],
+    logger: Any | None = None,
+) -> LiveBrowserSession | None:
+    try:
+        attempts = int(
+            str(
+                os.getenv(
+                    "SOCIAL_AUTOMATION_LIVE_BROWSER_START_ATTEMPTS",
+                    DEFAULT_LIVE_BROWSER_START_ATTEMPTS,
+                )
+            ).strip()
+        )
+    except (TypeError, ValueError):
+        attempts = DEFAULT_LIVE_BROWSER_START_ATTEMPTS
+    attempts = max(1, min(attempts, 3))
+    for attempt in range(1, attempts + 1):
+        session = _start_live_browser_session_once(
+            task=task,
+            account=account,
+            logger=logger,
+        )
+        if session is not None:
+            return session
+        if attempt < attempts:
+            _log(
+                logger,
+                "warn",
+                "live_browser_retry",
+                "KasmVNC 启动未就绪，正在重新分配显示并重试。",
+                {"attempt": attempt + 1, "max_attempts": attempts},
+            )
+            time.sleep(0.3)
+    return None
+
+
+def _start_live_browser_session_once(
     *,
     task: dict[str, Any],
     account: dict[str, Any],
@@ -390,7 +429,7 @@ def _session_public(session: LiveBrowserSession) -> dict[str, Any]:
             "video_scaling": 1,
             "max_video_resolution_x": 960,
             "max_video_resolution_y": 540,
-            "framerate": 30,
+            "framerate": 15,
             "compression": 1,
             "enable_webp": 0,
             "enable_webrtc": 0,
@@ -803,8 +842,14 @@ def _cleanup_orphaned_live_browser_processes_once(logger: Any | None = None) -> 
         _log(logger, "info", "live_browser_orphan_cleanup", "已清理上次遗留的实时浏览器进程", {"count": stopped})
 
 
-def _wait_for_live_browser_ready(session: LiveBrowserSession, *, timeout_seconds: float = 8.0) -> None:
+def _wait_for_live_browser_ready(
+    session: LiveBrowserSession,
+    *,
+    timeout_seconds: float = 8.0,
+    stable_seconds: float = 0.6,
+) -> None:
     deadline = time.time() + timeout_seconds
+    ready_since: float | None = None
     last_error = "KasmVNC 未在限定时间内就绪"
     display_num = str(session.display or "").lstrip(":")
     x_socket = Path(f"/tmp/.X11-unix/X{display_num}") if display_num.isdigit() else None
@@ -815,9 +860,16 @@ def _wait_for_live_browser_ready(session: LiveBrowserSession, *, timeout_seconds
         try:
             with socket.create_connection(("127.0.0.1", int(session.web_port)), timeout=0.35):
                 if _x_display_ready(session.display, x_socket):
-                    return
+                    now = time.monotonic()
+                    if ready_since is None:
+                        ready_since = now
+                    if now - ready_since >= max(0.0, float(stable_seconds)):
+                        return
+                else:
+                    ready_since = None
                 last_error = f"X11 display {session.display} 尚未就绪"
         except OSError as exc:
+            ready_since = None
             last_error = str(exc)
         time.sleep(0.2)
     raise RuntimeError(f"KasmVNC 端口或 X11 显示未就绪：{last_error}")

@@ -101,3 +101,37 @@ def test_two_stage_action_and_stale_response_behavior_in_browser():
         assert "内容已变化" in stale_result["message"]["message"]
         assert stale_result["message"]["ok"] is False
         browser.close()
+
+
+def test_direction_picker_switches_one_bulk_button_by_selection_state():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page()
+        page.set_content("<!doctype html><html><body></body></html>")
+        page.add_script_tag(path=str(CONSOLE_JS))
+
+        picker_state = page.evaluate(
+            """() => {
+              const state = { keywords: ["方向一", "方向二"], selectedKeywords: [] };
+              personaPostDirectionState = () => state;
+              const read = () => {
+                const host = document.createElement("div");
+                host.innerHTML = renderPersonaPostDirectionPicker({ id: "persona-1" }, { composeMode: "tweet" });
+                const button = host.querySelector("[data-persona-post-direction-selection]");
+                return {
+                  count: host.querySelectorAll("[data-persona-post-direction-selection]").length,
+                  action: button?.dataset.personaPostDirectionSelection || "",
+                  label: button?.getAttribute("aria-label") || "",
+                };
+              };
+              const empty = read();
+              state.selectedKeywords = state.keywords.slice();
+              return { empty, full: read() };
+            }"""
+        )
+        assert picker_state == {
+            "empty": {"count": 1, "action": "all", "label": "全选"},
+            "full": {"count": 1, "action": "clear", "label": "清空选择"},
+        }
+        browser.close()

@@ -1123,6 +1123,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.strictEqual(accountEffectiveStatus({{ status: "ready", health_status: "alive" }}), "ready");
             assert.strictEqual(accountEffectiveStatus({{ status: "ready", health_status: "unknown" }}), "ready_unverified");
             assert.strictEqual(accountEffectiveStatus({{ status: "ready", health_status: "abnormal" }}), "abnormal");
+            assert.strictEqual(accountEffectiveStatus({{ status: "need_verification", health_status: "abnormal" }}), "risk_control");
+            assert.strictEqual(accountEffectiveStatus({{ status: "need_verification", health_status: "abnormal", effective_status: "need_verification" }}), "risk_control");
             assert.strictEqual(accountEffectiveStatus({{ status: "ready", health_status: "banned" }}), "banned");
             assert.strictEqual(accountEffectiveStatus({{ status: "cookie_expired", health_status: "alive" }}), "cookie_expired");
             assert.strictEqual(accountEffectiveStatus({{ status: "disabled", health_status: "banned" }}), "disabled");

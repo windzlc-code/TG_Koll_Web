@@ -1118,18 +1118,18 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             {"width": 1600, "height": 839},
         )
 
-    def test_live_browser_geometry_defaults_to_lightweight_720p_framebuffer(self):
+    def test_live_browser_geometry_keeps_1600_layout_on_lightweight_720p_framebuffer(self):
         session = mock.Mock(spec=[])
 
         config = runner._live_browser_geometry_config(session)
 
-        self.assertEqual(config["screen.width"], 1280)
-        self.assertEqual(config["screen.height"], 720)
-        self.assertEqual(config["screen.availHeight"], 659)
-        self.assertEqual(config["window.innerWidth"], 1280)
-        self.assertEqual(config["window.innerHeight"], 659)
-        self.assertEqual(config["window.outerWidth"], 1280)
-        self.assertEqual(config["window.outerHeight"], 720)
+        self.assertEqual(config["screen.width"], 1600)
+        self.assertEqual(config["screen.height"], 900)
+        self.assertEqual(config["screen.availHeight"], 839)
+        self.assertEqual(config["window.innerWidth"], 1600)
+        self.assertEqual(config["window.innerHeight"], 839)
+        self.assertEqual(config["window.outerWidth"], 1600)
+        self.assertEqual(config["window.outerHeight"], 900)
 
     def test_threads_feed_text_with_challenge_word_is_not_verification(self):
         page = _ThreadsShellPage(
@@ -2292,6 +2292,59 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         submit.assert_called_once()
         self_heal.assert_not_called()
 
+    def test_auto_login_preserves_failed_page_after_submit_grace_expires(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/login"
+        context_control = {
+            "manual_takeover_event": threading.Event(),
+            "manual_takeover_ack_event": threading.Event(),
+        }
+
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(
+                runner,
+                "_detect_platform_login_state",
+                return_value={"status": "cookie_expired", "url": page.url},
+            ),
+            mock.patch.object(runner, "_auto_submit_login_form", return_value=True) as submit,
+            mock.patch.object(runner, "_verification_visible", return_value=False),
+            mock.patch.object(runner, "_self_heal_login_page") as self_heal,
+            mock.patch.object(runner, "_screenshot", return_value="failed-login.png"),
+            mock.patch.object(
+                runner,
+                "_wait_for_manual_login_completion",
+                return_value={"status": "need_manual"},
+            ) as wait_manual,
+            mock.patch.object(runner.time, "time", return_value=0),
+            mock.patch.object(runner.time, "monotonic", side_effect=[100, 131]),
+        ):
+            result = runner._run_open_login(
+                page,
+                {"id": "preserve-failed-login"},
+                {},
+                {
+                    "login_wait_seconds": 30,
+                    "auto_submit": True,
+                    "login_username": "saved-user",
+                    "login_password": "saved-password",
+                    "max_login_attempts": 1,
+                    "max_self_heal_attempts": 0,
+                    "submit_grace_seconds": 30,
+                },
+                Path("."),
+                _Logger(),
+                "threads",
+                context_control=context_control,
+            )
+
+        self.assertEqual(result["status"], "need_manual")
+        submit.assert_called_once()
+        self_heal.assert_not_called()
+        wait_manual.assert_called_once()
+        self.assertEqual(page.url, "https://www.threads.com/login")
+        self.assertTrue(context_control["manual_takeover_event"].is_set())
+
     def test_delayed_verification_is_detected_before_invalid_credentials_self_heal(self):
         page = mock.Mock()
         page.url = "https://www.instagram.com/challenge/"
@@ -2739,8 +2792,9 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             mock.patch.object(
                 runner,
                 "_click_text_button",
-                side_effect=[False, False, False, True],
+                side_effect=[False, False, False],
             ) as click,
+            mock.patch.object(runner, "_click_threads_instagram_login_entry", return_value=True) as handoff,
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner, "_screenshot", return_value="handoff.png"),
             mock.patch.object(runner, "_goto") as goto,
@@ -2752,10 +2806,11 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 _Logger(),
                 {"id": "threads-official-handoff-fallback"},
                 Path("."),
-            )
+        )
 
         self.assertTrue(submitted)
-        self.assertEqual(click.call_args_list[-1].args[3], "threads_login_official_handoff")
+        self.assertEqual(click.call_count, 3)
+        handoff.assert_called_once()
         self.assertTrue(payload["_threads_official_handoff_attempted"])
         goto.assert_not_called()
 
@@ -4463,6 +4518,24 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertEqual(observed_events, [False, False])
         control["manual_takeover_resolved_callback"].assert_called_once()
+
+    def test_instagram_risky_contactpoint_is_classified_as_abnormal_verification(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/accounts/update_risky_contactpoint/?challenge_context=redacted"
+
+        with (
+            mock.patch.object(runner, "_detect_platform_account_restriction", return_value=None),
+            mock.patch.object(
+                runner,
+                "_classify_verification_challenge",
+                return_value={"type": "identity_challenge"},
+            ),
+        ):
+            status = runner._detect_instagram_login_state(page)
+
+        self.assertEqual(status["status"], "need_verification")
+        self.assertEqual(status["health_status"], "abnormal")
+        self.assertEqual(status["challenge_type"], "identity_challenge")
 
 
 if __name__ == "__main__":

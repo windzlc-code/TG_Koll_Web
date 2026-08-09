@@ -500,6 +500,61 @@ class WarmupChainParityTests(TestCase):
         )
         goto.assert_not_called()
 
+    def test_threads_post_return_prefers_page_back_control_and_preserves_search(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/@barber/post/abc"
+
+        def click_page_back(*_args, **_kwargs):
+            page.url = "https://www.threads.com/search?q=%E5%89%AA%E5%8F%91%E5%B7%A5%E5%85%B7"
+            return True
+
+        with (
+            mock.patch.object(
+                runner,
+                "_first_visible_locator",
+                return_value=mock.Mock(),
+            ) as find_back,
+            mock.patch.object(
+                runner,
+                "_human_click",
+                side_effect=click_page_back,
+            ) as click_back,
+            mock.patch.object(runner, "_wait_for_cancellation"),
+            mock.patch.object(runner, "_goto") as goto,
+        ):
+            runner._return_threads_feed_after_post(page, _Logger())
+
+        find_back.assert_called_once()
+        click_back.assert_called_once()
+        page.go_back.assert_not_called()
+        page.keyboard.press.assert_not_called()
+        goto.assert_not_called()
+        self.assertIn("/search?", page.url)
+
+    def test_threads_post_return_uses_one_history_step_before_home_fallback(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/@barber/post/abc"
+
+        def history_back(*_args, **_kwargs):
+            page.url = "https://www.threads.com/search?q=%E7%90%86%E5%8F%91"
+
+        page.go_back.side_effect = history_back
+        with (
+            mock.patch.object(
+                runner,
+                "_first_visible_locator",
+                return_value=None,
+            ),
+            mock.patch.object(runner, "_wait_for_cancellation"),
+            mock.patch.object(runner, "_goto") as goto,
+        ):
+            runner._return_threads_feed_after_post(page, _Logger())
+
+        page.go_back.assert_called_once()
+        page.keyboard.press.assert_not_called()
+        goto.assert_not_called()
+        self.assertIn("/search?", page.url)
+
     def test_instagram_keyword_search_activates_suggestion_and_opens_result(self):
         page = mock.Mock()
         search_input = mock.Mock()
@@ -788,6 +843,115 @@ class WarmupChainParityTests(TestCase):
         self.assertEqual(request.call_args.kwargs["temperature"], 0.65)
         self.assertEqual(request.call_args.kwargs["max_output_tokens"], 240)
         self.assertEqual(keywords[:2], ["男士短发", "发型打理"])
+
+    def test_keyword_generation_rejects_vague_terms_without_persona_domain(self):
+        payload = {
+            "persona_name": "理发师",
+            "persona_context": "资深理发师兼手工爱好者，分享理发店日常和专业手艺。",
+            "persona_topics": ["搞笑", "生活日常", "理发", "手工"],
+        }
+        model_reply = {
+            "ok": True,
+            "raw_text": (
+                '{"primary":["理发吐槽","剪发问题","发型建议",'
+                '"顾客互动趣闻","店里聊天","手艺展示"],'
+                '"interests":["手工活","小手作"]}'
+            ),
+        }
+        with (
+            mock.patch.object(
+                runner,
+                "_warmup_ai_settings",
+                return_value=("https://llm.example", "key", ["model-a"]),
+            ),
+            mock.patch(
+                "get_gemini.request_gemini3_pro_raw_text",
+                return_value=model_reply,
+            ) as request,
+        ):
+            keywords = runner._generate_warmup_search_keywords_with_ai(payload)
+
+        self.assertEqual(
+            keywords,
+            ["理发吐槽", "剪发问题", "发型建议"],
+        )
+        self.assertEqual(
+            payload["_warmup_rejected_generic_keywords"],
+            ["顾客互动趣闻", "店里聊天", "手艺展示", "手工活", "小手作"],
+        )
+        prompt = request.call_args.kwargs["user_input"]
+        self.assertIn("不得为了多样化而删除必要的领域限定词", prompt)
+        self.assertIn("允许多个关键词重复同一主轴限定词", prompt)
+        self.assertIn("不要求每个关键词机械重复职业名称或人设名称", prompt)
+
+    def test_keyword_generation_keeps_specific_persona_qualified_craft_terms(self):
+        payload = {
+            "persona_name": "理发师",
+            "persona_context": "分享理发和发型手艺。",
+            "persona_topics": ["理发", "发型"],
+        }
+        model_reply = {
+            "ok": True,
+            "raw_text": (
+                '{"primary":["理发手艺展示","发型手艺展示","理发店聊天",'
+                '"理发顾客互动趣闻","发型手作"]}'
+            ),
+        }
+        with (
+            mock.patch.object(
+                runner,
+                "_warmup_ai_settings",
+                return_value=("https://llm.example", "key", ["model-a"]),
+            ),
+            mock.patch(
+                "get_gemini.request_gemini3_pro_raw_text",
+                return_value=model_reply,
+            ),
+        ):
+            keywords = runner._generate_warmup_search_keywords_with_ai(payload)
+
+        self.assertEqual(
+            keywords,
+            [
+                "理发手艺展示",
+                "发型手艺展示",
+                "理发店聊天",
+                "理发顾客互动趣闻",
+                "发型手作",
+            ],
+        )
+
+    def test_keyword_clarity_filter_is_reusable_for_an_unrelated_new_persona(self):
+        payload = {
+            "persona_name": "城市摄影师",
+            "persona_context": "记录城市建筑、街头光影和自然风光。",
+            "persona_topics": ["摄影", "城市建筑", "街头光影"],
+        }
+        model_reply = {
+            "ok": True,
+            "raw_text": (
+                '{"primary":["构图技巧","镜头选择","城市取景",'
+                '"作品展示","行业见闻"],"interests":[]}'
+            ),
+        }
+        with (
+            mock.patch.object(
+                runner,
+                "_warmup_ai_settings",
+                return_value=("https://llm.example", "key", ["model-a"]),
+            ),
+            mock.patch(
+                "get_gemini.request_gemini3_pro_raw_text",
+                return_value=model_reply,
+            ),
+        ):
+            keywords = runner._generate_warmup_search_keywords_with_ai(payload)
+
+        self.assertEqual(keywords, ["构图技巧", "镜头选择", "城市取景"])
+        self.assertEqual(
+            payload["_warmup_rejected_generic_keywords"],
+            ["作品展示", "行业见闻"],
+        )
 
     def test_keyword_history_guides_the_model_without_hard_rejecting_core_terms(self):
         payload = {

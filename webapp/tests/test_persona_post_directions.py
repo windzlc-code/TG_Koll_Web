@@ -105,6 +105,38 @@ def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     assert ".persona-post-direction-tag.is-selected" in styles
 
 
+def test_mobile_direction_picker_keeps_actions_aligned_and_reuses_selection_icons():
+    script = CONSOLE_JS.read_text(encoding="utf-8")
+    styles = CONSOLE_CSS.read_text(encoding="utf-8")
+
+    picker = script.split("function renderPersonaPostDirectionPicker", 1)[1].split(
+        "function persistPersonaHotImports", 1
+    )[0]
+
+    assert picker.count("data-persona-post-direction-selection=") == 1
+    assert 'data-persona-post-direction-selection="${allSelected ? "clear" : "all"}"' in picker
+    assert "renderSelectAllIcon()" in picker
+    assert "renderClearSelectionIcon()" in picker
+    assert "[data-persona-post-direction-selection]" in script
+    assert ".persona-post-direction-tools" in styles
+    assert ".persona-generate-ai-action .ui-refresh-icon" in styles
+    assert "stroke: currentColor" in styles
+    assert ".persona-generate-ai-action .task-button-busy > span" in styles
+
+
+def test_generated_post_media_action_scrolls_to_the_media_composer():
+    script = CONSOLE_JS.read_text(encoding="utf-8")
+    resolver = script.split("async function resolvePersonaOrdinaryGeneratedCandidates", 1)[1].split(
+        "function personaPostGenerationTaskStorageKey", 1
+    )[0]
+
+    assert 'selection.action === "media"' in resolver
+    assert resolver.count("window.requestAnimationFrame") == 2
+    assert 'document.querySelector("[data-persona-run-media-task]")' in resolver
+    assert 'action?.closest(".persona-compose-media-side")' in resolver
+    assert 'scrollIntoView({ block: "start", behavior: "smooth" })' in resolver
+
+
 def test_model_prompt_requires_ten_distinct_directions_and_input_decomposition():
     source = PERSONA_WORKFLOW.read_text(encoding="utf-8")
 

@@ -17,6 +17,10 @@ class BrowserPreferencesTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.old_db_path = os.environ.get("APP_DB_PATH")
+        self.old_worker_last_launch = (
+            social_automation_api._WORKER_LAST_TASK_LAUNCH_MONOTONIC
+        )
+        social_automation_api._WORKER_LAST_TASK_LAUNCH_MONOTONIC = 0.0
         os.environ["APP_DB_PATH"] = str(Path(self.temp_dir.name) / "app.db")
         db_module.init_db()
         with db_module.db() as conn:
@@ -39,6 +43,9 @@ class BrowserPreferencesTests(unittest.TestCase):
         )
 
     def tearDown(self):
+        social_automation_api._WORKER_LAST_TASK_LAUNCH_MONOTONIC = (
+            self.old_worker_last_launch
+        )
         with social_automation_api._EXTERNAL_BROWSER_LEASES_LOCK:
             social_automation_api._EXTERNAL_BROWSER_LEASES.clear()
         if self.old_db_path is None:
@@ -119,14 +126,169 @@ class BrowserPreferencesTests(unittest.TestCase):
         with mock.patch.object(
             social_automation_api,
             "_memory_environment",
-            return_value={"memory_total_mb": 3584, "memory_available_mb": 1300, "swap_total_mb": 4096},
+            return_value={"memory_total_mb": 3584, "memory_available_mb": 1300, "swap_total_mb": 0},
         ):
             blocked = social_automation_api._browser_worker_resource_admission(active_slots=1)
             first_task = social_automation_api._browser_worker_resource_admission(active_slots=0)
 
         self.assertFalse(blocked["allow_launch"])
         self.assertEqual(blocked["reason"], "low_memory")
+        self.assertEqual(blocked["required_available_mb"], 1536)
+        self.assertFalse(blocked["swap_relaxed"])
         self.assertTrue(first_task["allow_launch"])
+
+    def test_worker_resource_gate_uses_lower_additional_threshold_with_two_gb_swap(self):
+        with mock.patch.object(
+            social_automation_api,
+            "_memory_environment",
+            return_value={
+                "memory_total_mb": 3584,
+                "memory_available_mb": 700,
+                "swap_total_mb": 2048,
+            },
+        ):
+            admission = social_automation_api._browser_worker_resource_admission(
+                active_slots=1
+            )
+
+        self.assertTrue(admission["allow_launch"])
+        self.assertEqual(admission["required_available_mb"], 512)
+        self.assertEqual(admission["swap_total_mb"], 2048)
+        self.assertTrue(admission["swap_relaxed"])
+
+    def test_worker_resource_gate_keeps_original_threshold_below_two_gb_swap(self):
+        with mock.patch.object(
+            social_automation_api,
+            "_memory_environment",
+            return_value={
+                "memory_total_mb": 3584,
+                "memory_available_mb": 700,
+                "swap_total_mb": 2047,
+            },
+        ):
+            admission = social_automation_api._browser_worker_resource_admission(
+                active_slots=1
+            )
+
+        self.assertFalse(admission["allow_launch"])
+        self.assertEqual(admission["required_available_mb"], 1536)
+        self.assertFalse(admission["swap_relaxed"])
+
+    def test_worker_launches_queued_tasks_at_least_ten_seconds_apart(self):
+        clock = {"now": 100.0}
+        queued = iter([{"id": "task-1"}, {"id": "task-2"}])
+        started: list[str] = []
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"SOCIAL_AUTOMATION_WORKER_LAUNCH_STAGGER_SECONDS": "10"},
+            ),
+            mock.patch.object(
+                social_automation_api.time,
+                "monotonic",
+                side_effect=lambda: clock["now"],
+            ),
+            mock.patch.object(
+                social_automation_api._WORKER_STOP,
+                "is_set",
+                return_value=False,
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_social_worker_slots_in_use",
+                return_value=0,
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_social_worker_max_concurrency",
+                return_value=3,
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_browser_worker_resource_admission",
+                return_value={"allow_launch": True},
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_claim_next_task",
+                side_effect=lambda: next(queued, None),
+            ) as claim,
+            mock.patch.object(
+                social_automation_api,
+                "_start_claimed_task_thread",
+                side_effect=lambda task: started.append(str(task["id"])),
+            ),
+            mock.patch.object(social_automation_api, "_refresh_worker_state"),
+        ):
+            self.assertEqual(
+                social_automation_api._launch_available_social_tasks(), 1
+            )
+            clock["now"] = 109.999
+            self.assertEqual(
+                social_automation_api._launch_available_social_tasks(), 0
+            )
+            clock["now"] = 110.0
+            self.assertEqual(
+                social_automation_api._launch_available_social_tasks(), 1
+            )
+
+        self.assertEqual(started, ["task-1", "task-2"])
+        self.assertEqual(claim.call_count, 2)
+
+    def test_worker_launch_stagger_can_be_disabled(self):
+        queued = iter([{"id": "task-1"}, {"id": "task-2"}, None])
+        started: list[str] = []
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"SOCIAL_AUTOMATION_WORKER_LAUNCH_STAGGER_SECONDS": "0"},
+            ),
+            mock.patch.object(
+                social_automation_api._WORKER_STOP,
+                "is_set",
+                return_value=False,
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_social_worker_slots_in_use",
+                return_value=0,
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_social_worker_max_concurrency",
+                return_value=3,
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_browser_worker_resource_admission",
+                return_value={"allow_launch": True},
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_claim_next_task",
+                side_effect=lambda: next(queued),
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_start_claimed_task_thread",
+                side_effect=lambda task: started.append(str(task["id"])),
+            ),
+            mock.patch.object(social_automation_api, "_refresh_worker_state"),
+        ):
+            launched = social_automation_api._launch_available_social_tasks()
+
+        self.assertEqual(launched, 2)
+        self.assertEqual(started, ["task-1", "task-2"])
+
+    def test_worker_launch_stagger_is_disabled_by_default(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SOCIAL_AUTOMATION_WORKER_LAUNCH_STAGGER_SECONDS", None)
+            self.assertEqual(
+                social_automation_api._social_worker_launch_stagger_seconds(),
+                0,
+            )
 
     def test_cgroup_headroom_is_part_of_the_browser_admission_budget(self):
         with (
@@ -136,7 +298,7 @@ class BrowserPreferencesTests(unittest.TestCase):
                 return_value={
                     "memory_total_mb": 3584,
                     "memory_available_mb": 1800,
-                    "swap_total_mb": 4096,
+                    "swap_total_mb": 0,
                 },
             ),
             mock.patch.object(
