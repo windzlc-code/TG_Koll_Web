@@ -58,6 +58,7 @@ import {
   resolveSentimentHotModelQueryKeywords,
   resolveSentimentHotManualQueryKeywords,
   resolveSentimentHotStrategyTimeoutMs,
+  resolveSentimentHotDisplayHeatThreshold,
   resolveSentimentHotTextModelPreference,
   shouldTreatThreadsProfileAsLoginWall,
 } from "@/lib/sentiment-hot-importer";
@@ -544,7 +545,7 @@ describe("sentiment hot importer", () => {
       publishedAt: new Date().toISOString(),
       capturedAt: new Date().toISOString(),
     } as any;
-    const belowHeat = { ...shown, id: "below-heat", hotScore: 999 } as any;
+    const belowHeat = { ...shown, id: "below-heat", hotScore: 499 } as any;
     const belowLength = { ...shown, id: "below-length", content: "金融理財" } as any;
     rememberSentimentHotShown(archiveId, [shown]);
 
@@ -562,8 +563,8 @@ describe("sentiment hot importer", () => {
   });
 
   it("gives a live refresh enough time to obtain a model search strategy", () => {
-    expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(32_000);
-    expect(resolveSentimentHotStrategyTimeoutMs(false, 50_000)).toBe(30_000);
+    expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(8_000);
+    expect(resolveSentimentHotStrategyTimeoutMs(false, 50_000)).toBe(8_000);
     expect(resolveSentimentHotStrategyTimeoutMs(true, 5_000)).toBe(5_000);
   });
 
@@ -2012,7 +2013,7 @@ Demo post body
     expect(candidate.metrics).toMatchObject({ view_count: 99 });
   });
 
-  it("keeps the 1000 display threshold for every source", () => {
+  it("keeps the 1000 heat standard when it alone satisfies the requested result count", () => {
     const base = {
       platform: "threads",
       author: "demo",
@@ -2037,9 +2038,52 @@ Demo post body
         hotScore: 999,
         metrics: { source },
       })),
-    ] as any, 10, { keywords: ["醫療", "醫生", "醫院"] });
+    ] as any, 1, { keywords: ["醫療", "醫生", "醫院"] });
 
     expect(candidates.map((candidate) => candidate.id)).toEqual(["account-accepted"]);
+  });
+
+  it("keeps the 1000 heat standard first, then fills a short result set down to 500", () => {
+    const base = {
+      platform: "threads",
+      author: "demo",
+      media: [],
+      capturedAt: new Date().toISOString(),
+      publishedAt: new Date().toISOString(),
+      metrics: { source: "threads-reader-search" },
+    } as const;
+    const keyword = "热点";
+    const content = "热点内容完整展示并包含足够长度的中文说明，确保通过内容质量和语言筛选。";
+    const candidates = finalizeSentimentHotCandidatesForDisplay([
+      { ...base, id: "standard", author: "standard-author", sourceUrl: "https://www.threads.net/@demo/post/standard", content, hotScore: 1200 },
+      { ...base, id: "fallback-700", author: "fallback-author", sourceUrl: "https://www.threads.net/@demo/post/fallback-700", content: `${content} 补足候选，包含不同的实操建议与案例细节。`, hotScore: 700 },
+      { ...base, id: "floor-500", author: "floor-author", sourceUrl: "https://www.threads.net/@demo/post/floor-500", content: `${content} 最低候选，补充另一组不同的执行经验。`, hotScore: 500 },
+      { ...base, id: "below-floor", author: "below-author", sourceUrl: "https://www.threads.net/@demo/post/below-floor", content: `${content} 不展示，低于硬性下限。`, hotScore: 499 },
+    ] as any, 3, { keywords: [keyword] });
+
+    expect(resolveSentimentHotDisplayHeatThreshold([
+      { hotScore: 1200 }, { hotScore: 700 }, { hotScore: 500 }, { hotScore: 499 },
+    ] as any, 3)).toBe(500);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["standard", "fallback-700", "floor-500"]);
+  });
+
+  it("supplements after final deduplication instead of counting duplicate high-score candidates", () => {
+    const base = {
+      platform: "threads",
+      author: "demo",
+      media: [],
+      capturedAt: new Date().toISOString(),
+      publishedAt: new Date().toISOString(),
+      metrics: { source: "threads-reader-search" },
+    } as const;
+    const content = "热点内容完整展示并包含足够长度的中文说明，确保通过内容质量和语言筛选。";
+    const candidates = finalizeSentimentHotCandidatesForDisplay([
+      { ...base, id: "standard", sourceUrl: "https://www.threads.net/@demo/post/standard", content, hotScore: 1200 },
+      { ...base, id: "standard-copy", sourceUrl: "https://www.threads.net/@demo/post/standard-copy", content, hotScore: 1150 },
+      { ...base, id: "fallback", author: "fallback-author", sourceUrl: "https://www.threads.net/@demo/post/fallback", content: `${content} 补足另一组不同的执行经验。`, hotScore: 700 },
+    ] as any, 2, { keywords: ["热点"] });
+
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["standard", "fallback"]);
   });
 
   it("parses Instagram reader candidates as extra sentiment sources", () => {

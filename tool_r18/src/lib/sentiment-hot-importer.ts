@@ -40,9 +40,16 @@ import {
 const require = createRequire(import.meta.url);
 const Database = require("better-sqlite3");
 const MIN_SENTIMENT_HOT_SCORE = 1000;
+// 1000 remains the normal display standard.  Keep lower-score but otherwise
+// compliant public-page candidates until final selection so sparse personas
+// can be filled deliberately, never below this absolute floor.
+const MIN_SENTIMENT_HOT_SCORE_FLOOR = 500;
+const SENTIMENT_HOT_SCORE_FALLBACK_STEPS = [
+  MIN_SENTIMENT_HOT_SCORE,
+  MIN_SENTIMENT_HOT_SCORE_FLOOR,
+] as const;
 // High-heat results remain preferred. For a sparse niche, the browser may add
 // recent, topic-anchored posts with verified engagement fields behind them.
-const MIN_THREADS_SEARCH_PAGE_HOT_SCORE = MIN_SENTIMENT_HOT_SCORE;
 const MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT = 25;
 const SENTIMENT_HOT_CANDIDATE_POOL_TARGET = 400;
 const THREADS_SEARCH_CACHE_CANDIDATE_LIMIT = 2000;
@@ -76,9 +83,11 @@ const INSTAGRAM_KEYWORD_SEARCH_PAGE_QUERY_LIMIT = 10;
 const INSTAGRAM_AUTHENTICATED_QUERY_BATCH_SIZE = 2;
 const INSTAGRAM_DIRECT_TAG_API_QUERY_LIMIT = 0;
 const DEFAULT_REFRESH_FRESHNESS_DAYS = 7;
-const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 42_000;
-const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 105_000;
-const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 32_000;
+// Public Reader capture is a short interactive path.  Keep its full budget
+// below the API deadline so an abandoned upstream request never ties up work.
+const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 12_000;
+const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 28_000;
+const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 8_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
@@ -132,7 +141,7 @@ const sharedReaderResponseCoordinator = createReaderResponseCoordinator({
 
 export function resolveSentimentHotStrategyTimeoutMs(refresh: boolean, remainingMs: number): number {
   const availableMs = Number.isFinite(remainingMs) ? Math.max(1_000, remainingMs) : 1_000;
-  return Math.min(refresh ? SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS : 30_000, availableMs);
+  return Math.min(SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS, availableMs);
 }
 
 const SENTIMENT_HOT_GENERIC_QUERY_INTENTS = [
@@ -2172,7 +2181,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     : Promise.resolve([] as SentimentHotCandidate[]);
   const strategyTimeoutMs = resolveSentimentHotStrategyTimeoutMs(
     args.refresh === true,
-    remainingSentimentHotTotalBudgetMs(startedAt, 25_000),
+    remainingSentimentHotTotalBudgetMs(startedAt, 18_000),
   );
   const strategyResult = manualKeywords.length > 0
     ? (prefetchedStrategy || emptySentimentHotSearchStrategy())
@@ -2311,7 +2320,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         searchMode: strictFreshOnly ? searchMode : undefined,
         warnings,
       }),
-      Math.min(20_000, remainingSentimentHotTotalBudgetMs(startedAt, 8_000)),
+      Math.min(8_000, remainingSentimentHotTotalBudgetMs(startedAt, 6_000)),
       [],
     ).catch((error) => {
       warnings.push("Instagram reader 抓取失敗：" + (error instanceof Error ? error.message : String(error)));
@@ -2386,9 +2395,9 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       { archiveId: liveOnlyRefresh ? undefined : archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays },
     ).length;
     let mergedInstagramBeforeThreadsRound2 = false;
-    if (liveReadyCount < limit && instagramQueries.length > 0 && hasSentimentHotTotalBudget(startedAt, 30_000)) {
-      const instagramTimeoutMs = Math.min(38_000, remainingSentimentHotTotalBudgetMs(startedAt, 10_000));
-      if (instagramTimeoutMs >= 10_000) {
+    if (liveReadyCount < limit && instagramQueries.length > 0 && hasSentimentHotTotalBudget(startedAt, 6_000)) {
+      const instagramTimeoutMs = Math.min(8_000, remainingSentimentHotTotalBudgetMs(startedAt, 4_000));
+      if (instagramTimeoutMs >= 4_000) {
         const beforeInstagramCount = candidates.length;
         const readerCandidates = await measureSentimentStage(
           warnings,
@@ -2432,8 +2441,8 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       limit,
       { archiveId: liveOnlyRefresh ? undefined : archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays },
     ).length;
-    if (readyAfterInstagramCount < limit && hasSentimentHotTotalBudget(startedAt, 18_000)) {
-      const secondRoundTimeoutMs = Math.min(20_000, remainingSentimentHotTotalBudgetMs(startedAt, 18_000));
+    if (readyAfterInstagramCount < limit && hasSentimentHotTotalBudget(startedAt, 7_000)) {
+      const secondRoundTimeoutMs = Math.min(8_000, remainingSentimentHotTotalBudgetMs(startedAt, 4_000));
       if (secondRoundTimeoutMs >= 4_000) {
         const secondRoundBefore = candidates.length;
         const secondRoundCandidates = await measureSentimentStage(
@@ -2452,7 +2461,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
               ignoreHistory: liveOnlyRefresh,
               writeCache: !liveOnlyRefresh,
               searchMode,
-              deadlineAt: Date.now() + secondRoundTimeoutMs - 5_000,
+              deadlineAt: Date.now() + secondRoundTimeoutMs - 1_000,
               warnings,
             }),
             secondRoundTimeoutMs,
@@ -3154,12 +3163,10 @@ function buildDirectRelevanceNeedles(keywords: string[]): string[] {
 }
 
 function isUsefulHotCandidate(candidate: SentimentHotCandidate): boolean {
-  const source = sentimentCandidateSource(candidate);
-  const recentGraphqlSearch = source === "threads-account-search" && (candidate.metrics as any)?.recentSearch === true;
-  const minimum = source === "threads-search-page" || recentGraphqlSearch
-    ? MIN_THREADS_SEARCH_PAGE_HOT_SCORE
-    : MIN_SENTIMENT_HOT_SCORE;
-  return Number(candidate.hotScore || 0) >= minimum;
+  // The adaptive display rule is applied only after relevance, freshness and
+  // content-quality gates. Keep every otherwise-qualified candidate at the
+  // global hard floor so a short result set can be supplemented safely.
+  return Number(candidate.hotScore || 0) >= MIN_SENTIMENT_HOT_SCORE_FLOOR;
 }
 
 function sentimentCandidateSource(candidate: SentimentHotCandidate): string {
@@ -3245,6 +3252,16 @@ function compareSentimentHotPriority(a: SentimentHotCandidate, b: SentimentHotCa
     || sentimentHotHanCount(b.content) - sentimentHotHanCount(a.content);
 }
 
+export function resolveSentimentHotDisplayHeatThreshold(candidates: SentimentHotCandidate[], limit: number): number {
+  const requested = Math.max(1, Math.floor(limit || 1));
+  for (const threshold of SENTIMENT_HOT_SCORE_FALLBACK_STEPS) {
+    if (candidates.filter((candidate) => Number(candidate.hotScore || 0) >= threshold).length >= requested) {
+      return threshold;
+    }
+  }
+  return MIN_SENTIMENT_HOT_SCORE_FLOOR;
+}
+
 function candidateMeetsDisplayQuality(
   candidate: SentimentHotCandidate,
   keywords: string[] = [],
@@ -3272,7 +3289,7 @@ function candidateMeetsDisplayQuality(
   if (!candidateMatchesOperationalFreshness(normalized, freshnessDays)) return reject("freshness");
   if (!skipHeatGate && !isUsefulHotCandidate(normalized)) {
     const viewCount = Number(normalized.engagement?.viewCount ?? (normalized.metrics as any)?.view_count ?? 0);
-    return reject(viewCount >= MIN_SENTIMENT_HOT_SCORE ? "heat_interactions_only" : "heat");
+    return reject(viewCount >= MIN_SENTIMENT_HOT_SCORE_FLOOR ? "heat_interactions_only" : "heat");
   }
   if (sentimentHotHanCount(content) < minimumSentimentHotHanCountForCandidate()) return reject("content_length");
   if (isNoisyReaderCandidateContent(normalized, content)) return reject("reader_noise");
@@ -3316,9 +3333,10 @@ export function finalizeSentimentHotCandidatesForDisplay(candidates: SentimentHo
   const shownAtMap = options?.archiveId ? getSentimentHotShownAtMap(options.archiveId) : new Map<string, number>();
   const keywords = options?.keywords || [];
   const searchMode = normalizeSentimentHotSearchMode(options?.searchMode);
-  const sorted = candidates
+  const qualified = candidates
     .map((candidate) => candidateMeetsDisplayQuality(candidate, keywords, searchMode, options?.freshnessDays))
-    .filter((candidate): candidate is SentimentHotCandidate => Boolean(candidate))
+    .filter((candidate): candidate is SentimentHotCandidate => Boolean(candidate));
+  const sorted = qualified
     .sort((a, b) => {
       const priorityDelta = compareSentimentHotPriority(a, b);
       if (priorityDelta !== 0) return priorityDelta;
@@ -3332,14 +3350,21 @@ export function finalizeSentimentHotCandidatesForDisplay(candidates: SentimentHo
       }
       return 0;
     });
-  for (const candidate of sorted) {
-    const content = cleanSentimentCandidateContent(candidate.content || "");
-    if (!content) continue;
-    if (options?.excludeShown && getSentimentHotCandidateHistoryKeys({ ...candidate, content }).some((key) => shownHistoryKeys.has(key))) continue;
-    const keys = sentimentCandidateFinalDedupeKeys(candidate, content);
-    if (keys.some((key) => seenKeys.has(key))) continue;
-    keys.forEach((key) => seenKeys.add(key));
-    out.push({ ...candidate, content });
+  // Fill in discrete tiers so the standard remains 1000, while duplicate or
+  // previously shown high-score posts cannot prevent eligible lower-score
+  // public results from supplementing a short list.
+  for (const threshold of SENTIMENT_HOT_SCORE_FALLBACK_STEPS) {
+    for (const candidate of sorted) {
+      if (Number(candidate.hotScore || 0) < threshold) continue;
+      const content = cleanSentimentCandidateContent(candidate.content || "");
+      if (!content) continue;
+      if (options?.excludeShown && getSentimentHotCandidateHistoryKeys({ ...candidate, content }).some((key) => shownHistoryKeys.has(key))) continue;
+      const keys = sentimentCandidateFinalDedupeKeys(candidate, content);
+      if (keys.some((key) => seenKeys.has(key))) continue;
+      keys.forEach((key) => seenKeys.add(key));
+      out.push({ ...candidate, content });
+      if (out.length >= limit) break;
+    }
     if (out.length >= limit) break;
   }
   return out;
@@ -8299,7 +8324,7 @@ async function readCandidatesFromDatabase(args: { archiveId: string; keywords: s
         + Number(row.seen_count || 0)
         + relevance,
       );
-      if (hotScore < MIN_SENTIMENT_HOT_SCORE) continue;
+      if (hotScore < MIN_SENTIMENT_HOT_SCORE_FLOOR) continue;
       const candidate = {
         id,
         platform,

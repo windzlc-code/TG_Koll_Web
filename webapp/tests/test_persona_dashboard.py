@@ -3503,9 +3503,42 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertGreater(communicate_timeout, 44)
         self.assertLessEqual(communicate_timeout, 45)
 
+    def test_global_hot_pool_refresh_runs_one_short_lived_batch_for_all_personas(self):
+        self._write_archives()
+        expected = {"ok": True, "archiveCount": 1, "results": [{"archiveId": "persona-1", "candidateCount": 8}]}
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=expected) as run:
+            result = server._refresh_persona_hot_global_pool()
+
+        self.assertEqual(result, expected)
+        run.assert_called_once_with(
+            {
+                "action": "refresh-global-hot-pool",
+                "archiveIds": ["persona-1"],
+                "limit": 20,
+            },
+            timeout_seconds=900,
+        )
+
+    def test_global_hot_pool_batch_allows_daily_refresh_timeout(self):
+        process = mock.Mock()
+        process.communicate.return_value = ('{"ok": true, "archiveCount": 1, "results": []}', "")
+        process.returncode = 0
+
+        with mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"), \
+             mock.patch.object(server, "_tool_r18_node_command", return_value=["node", "persona-hot-workflow.ts"]), \
+             mock.patch.object(server.subprocess, "Popen", return_value=process):
+            result = server._run_persona_hot_workflow_cli(
+                {"action": "refresh-global-hot-pool", "archiveIds": ["persona-1"]},
+                timeout_seconds=900,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertGreater(process.communicate.call_args.kwargs["timeout"], 890)
+
     def test_persona_hot_workflow_only_reserves_browser_for_browser_actions(self):
-        self.assertTrue(server._persona_hot_workflow_uses_browser({"action": "fetch-hot-candidates"}))
-        self.assertTrue(server._persona_hot_workflow_uses_browser({"action": "refresh-hot-post"}))
+        self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "fetch-hot-candidates"}))
+        self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "refresh-hot-post"}))
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "pool-stats"}))
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "import-hot-candidates"}))
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "warm-hot-strategy"}))
@@ -3530,7 +3563,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         acquire_lease.assert_not_called()
         release_lease.assert_not_called()
 
-    def test_run_persona_hot_workflow_cli_terminates_live_process_before_releasing_lease(self):
+    def test_run_persona_hot_workflow_cli_terminates_live_process_without_browser_lease(self):
         process = mock.Mock(pid=1234)
         process.communicate.side_effect = RuntimeError("pipe read failed")
         process.poll.return_value = None
@@ -3557,8 +3590,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 )
 
         terminate.assert_any_call(process)
-        release.assert_called_once_with("lease-1")
-        self.assertEqual(events, ["terminate", "release"])
+        release.assert_not_called()
+        self.assertEqual(events, ["terminate"])
 
     def test_run_persona_hot_workflow_cli_cleans_up_after_timeout(self):
         process = mock.Mock(pid=1234)

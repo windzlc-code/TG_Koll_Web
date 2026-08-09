@@ -13958,10 +13958,10 @@ class _PersonaHotBackgroundDeferred(RuntimeError):
 
 
 def _persona_hot_workflow_uses_browser(payload: dict[str, Any]) -> bool:
-    return str(payload.get("action") or "").strip() in {
-        "fetch-hot-candidates",
-        "refresh-hot-post",
-    }
+    # Current public Reader capture has no authenticated browser dependency.
+    # Keep browser leases for no public hot-workflow action so publishing and
+    # account-login lanes are never delayed by candidate collection.
+    return False
 
 
 def _terminate_persona_hot_process(process: subprocess.Popen[str] | None) -> None:
@@ -14012,7 +14012,12 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
     global _PERSONA_HOT_BACKGROUND_PROCESS, _PERSONA_HOT_INTERACTIVE_PROCESS, _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID, _PERSONA_HOT_LAST_INTERACTIVE_AT
     _sync_tool_r18_api_config_for_persona_workflow()
     command = [*_tool_r18_node_command("scripts/skills/persona-hot-workflow.ts"), json.dumps(payload, ensure_ascii=True)]
-    timeout = min(max(30, int(timeout_seconds)), 120)
+    # The daily global candidate-pool batch is deliberately one short-lived
+    # process, but it may process every persona. Interactive requests retain
+    # the tighter two-minute ceiling.
+    action = str(payload.get("action") or "").strip()
+    max_timeout = 900 if action == "refresh-global-hot-pool" else 120
+    timeout = min(max(30, int(timeout_seconds)), max_timeout)
     deadline = time.monotonic() + timeout
     process: subprocess.Popen[str] | None = None
     acquired = False
@@ -14134,185 +14139,33 @@ def _cancel_persona_hot_workflow(archive_id: str) -> bool:
     return True
 
 
-def _warm_persona_hot_strategy_async(archive_id: str) -> None:
-    clean_id = str(archive_id or "").strip()
-    if not clean_id:
-        return
-    with _PERSONA_HOT_POOL_WORKER_LOCK:
-        _PERSONA_HOT_WARM_PENDING.add(clean_id)
-    _PERSONA_HOT_POOL_WAKE.set()
-
-
-_PERSONA_HOT_POOL_WORKER_THREAD: threading.Thread | None = None
-_PERSONA_HOT_POOL_WORKER_LOCK = threading.Lock()
-_PERSONA_HOT_POOL_STOP = threading.Event()
-_PERSONA_HOT_POOL_WAKE = threading.Event()
-_PERSONA_HOT_POOL_ATTEMPTS: dict[str, float] = {}
-_PERSONA_HOT_WARM_PENDING: set[str] = set()
-_PERSONA_HOT_POOL_REFILLING: set[str] = set()
-_PERSONA_HOT_POOL_COUNTS: dict[tuple[str, str], int] = {}
-_PERSONA_HOT_POOL_STRATEGY_READY: dict[str, bool] = {}
-_PERSONA_HOT_WARM_ATTEMPTS: dict[str, float] = {}
-_PERSONA_HOT_POOL_CURSOR = 0
-
-
-def _persona_hot_pool_worker_enabled() -> bool:
-    # Candidate-pool refills launch browser-backed scans. Keep the background
-    # worker opt-in so it cannot compete with account login and publishing.
-    return _to_bool(os.getenv("PERSONA_HOT_POOL_WORKER_ENABLED", "0"), False)
-
-
-def _persona_hot_pool_resources_available() -> bool:
-    try:
-        if hasattr(os, "getloadavg") and os.getloadavg()[0] > max(1.0, float(os.cpu_count() or 1) * 0.8):
-            return False
-        meminfo = Path("/proc/meminfo")
-        if meminfo.exists():
-            match = re.search(r"^MemAvailable:\s+(\d+)\s+kB", meminfo.read_text(encoding="utf-8"), re.MULTILINE)
-            if match and int(match.group(1)) < 768 * 1024:
-                return False
-    except Exception:
-        return False
-    return True
-
-
-def _persona_hot_pool_worker_loop() -> None:
-    global _PERSONA_HOT_POOL_CURSOR
-    low_watermark = max(10, _to_int(os.getenv("PERSONA_HOT_POOL_LOW_WATERMARK"), 60))
-    target_count = max(low_watermark, _to_int(os.getenv("PERSONA_HOT_POOL_TARGET_COUNT"), 100))
-    stats_batch_size = max(1, min(10, _to_int(os.getenv("PERSONA_HOT_POOL_STATS_BATCH_SIZE"), 10)))
-    interval_seconds = max(60, _to_int(os.getenv("PERSONA_HOT_POOL_INTERVAL_SECONDS"), 60))
-    idle_seconds = max(30, _to_int(os.getenv("PERSONA_HOT_POOL_IDLE_SECONDS"), 120))
-    cooldown_seconds = max(300, _to_int(os.getenv("PERSONA_HOT_POOL_COOLDOWN_SECONDS"), 900))
-    warm_cooldown_seconds = max(900, _to_int(os.getenv("PERSONA_HOT_WARM_COOLDOWN_SECONDS"), 3600))
-    while not _PERSONA_HOT_POOL_STOP.is_set():
-        _PERSONA_HOT_POOL_WAKE.wait(interval_seconds)
-        _PERSONA_HOT_POOL_WAKE.clear()
-        if _PERSONA_HOT_POOL_STOP.is_set():
-            break
-        try:
-            if not _persona_hot_pool_worker_enabled() or not _persona_hot_pool_resources_available():
-                continue
-            if time.time() - _PERSONA_HOT_LAST_INTERACTIVE_AT < idle_seconds:
-                continue
-            with _PERSONA_HOT_POOL_WORKER_LOCK:
-                pending_warm_id = next(iter(_PERSONA_HOT_WARM_PENDING), "")
-            if pending_warm_id:
-                try:
-                    _run_persona_hot_workflow_cli(
-                        {"action": "warm-hot-strategy", "archiveId": pending_warm_id},
-                        timeout_seconds=60,
-                        background=True,
-                    )
-                except _PersonaHotBackgroundDeferred:
-                    raise
-                except Exception:
-                    _PERSONA_HOT_WARM_ATTEMPTS[pending_warm_id] = time.time()
-                    with _PERSONA_HOT_POOL_WORKER_LOCK:
-                        _PERSONA_HOT_WARM_PENDING.discard(pending_warm_id)
-                    raise
-                else:
-                    _PERSONA_HOT_WARM_ATTEMPTS[pending_warm_id] = time.time()
-                    with _PERSONA_HOT_POOL_WORKER_LOCK:
-                        _PERSONA_HOT_WARM_PENDING.discard(pending_warm_id)
-                continue
-            archives, _ = _read_tool_r18_persona_archives()
-            archive_ids = [str(item.get("id") or "").strip() for item in archives if str(item.get("id") or "").strip()]
-            if not archive_ids:
-                continue
-            batch_size = min(stats_batch_size, len(archive_ids))
-            batch_ids = [archive_ids[(_PERSONA_HOT_POOL_CURSOR + offset) % len(archive_ids)] for offset in range(batch_size)]
-            _PERSONA_HOT_POOL_CURSOR = (_PERSONA_HOT_POOL_CURSOR + batch_size) % len(archive_ids)
-            stats_result = _run_persona_hot_workflow_cli(
-                {"action": "pool-stats", "archiveIds": batch_ids},
-                timeout_seconds=60,
-                background=True,
-            )
-            pool_rows = [
-                item for item in (stats_result.get("pools") if isinstance(stats_result.get("pools"), list) else [])
-                if isinstance(item, dict)
-            ]
-            pool_counts = {
-                (str(item.get("archiveId") or "").strip(), str(item.get("searchMode") or "strict").strip()): max(0, _to_int(item.get("readyCount"), 0))
-                for item in pool_rows
-            }
-            _PERSONA_HOT_POOL_COUNTS.update(pool_counts)
-            now = time.time()
-            strategy_missing_ids = {
-                str(item.get("archiveId") or "").strip()
-                for item in pool_rows
-                if item.get("strategyReady") is False and str(item.get("archiveId") or "").strip()
-            }
-            if strategy_missing_ids:
-                with _PERSONA_HOT_POOL_WORKER_LOCK:
-                    _PERSONA_HOT_WARM_PENDING.update(
-                        archive_id for archive_id in strategy_missing_ids
-                        if now - _PERSONA_HOT_WARM_ATTEMPTS.get(archive_id, 0.0) >= warm_cooldown_seconds
-                    )
-            for archive_id in batch_ids:
-                _PERSONA_HOT_POOL_STRATEGY_READY[archive_id] = archive_id not in strategy_missing_ids
-            candidates: list[tuple[int, int, float, str, str]] = []
-            for archive_id in archive_ids:
-                for search_mode in ("strict", "normal"):
-                    key = f"{archive_id}:{search_mode}"
-                    count_key = (archive_id, search_mode)
-                    if count_key not in _PERSONA_HOT_POOL_COUNTS:
-                        continue
-                    ready_count = _PERSONA_HOT_POOL_COUNTS[count_key]
-                    last_attempt = _PERSONA_HOT_POOL_ATTEMPTS.get(key, 0.0)
-                    if ready_count >= target_count:
-                        _PERSONA_HOT_POOL_REFILLING.discard(key)
-                        continue
-                    _PERSONA_HOT_POOL_REFILLING.add(key)
-                    if now - last_attempt >= cooldown_seconds:
-                        candidates.append((0 if ready_count < low_watermark else 1, ready_count, last_attempt, archive_id, search_mode))
-            if not candidates:
-                continue
-            _, _, _, archive_id, search_mode = min(candidates)
-            key = f"{archive_id}:{search_mode}"
-            _PERSONA_HOT_POOL_ATTEMPTS[key] = now
-            _run_persona_hot_workflow_cli({
-                "action": "fetch-hot-candidates",
-                "archiveId": archive_id,
-                "limit": 10,
-                "refresh": True,
-                "searchMode": search_mode,
-                "freshnessDays": 15,
-                "freshnessPolicy": "strict",
-                "recordShown": False,
-            }, timeout_seconds=120, background=True)
-        except _PersonaHotBackgroundDeferred:
-            continue
-        except Exception as exc:
-            print(f"[persona-hot-pool] background refill skipped: {exc}", flush=True)
-
-
-def _start_persona_hot_pool_worker() -> None:
-    global _PERSONA_HOT_POOL_WORKER_THREAD
-    if not _persona_hot_pool_worker_enabled():
-        return
-    with _PERSONA_HOT_POOL_WORKER_LOCK:
-        if _PERSONA_HOT_POOL_WORKER_THREAD is not None and _PERSONA_HOT_POOL_WORKER_THREAD.is_alive():
-            return
-        _PERSONA_HOT_POOL_STOP.clear()
-        _PERSONA_HOT_POOL_WAKE.clear()
-        thread = threading.Thread(target=_persona_hot_pool_worker_loop, name="persona-hot-pool-worker", daemon=True)
-        _PERSONA_HOT_POOL_WORKER_THREAD = thread
-        thread.start()
-        _PERSONA_HOT_POOL_WAKE.set()
-
-
-def _stop_persona_hot_pool_worker() -> None:
-    _PERSONA_HOT_POOL_STOP.set()
-    _PERSONA_HOT_POOL_WAKE.set()
-    with _PERSONA_HOT_PROCESS_LOCK:
-        process = _PERSONA_HOT_BACKGROUND_PROCESS
-    _terminate_persona_hot_process(process)
-
-
 def _persona_hot_raw_candidate_count(result: dict[str, Any]) -> int:
     candidates = result.get("candidates") if isinstance(result, dict) else []
     return len(candidates) if isinstance(candidates, list) else 0
+
+
+def _refresh_persona_hot_global_pool() -> dict[str, Any]:
+    """Populate every persona pool once after the scheduled global refresh.
+
+    This intentionally invokes a one-shot CLI process instead of a resident
+    pool worker. The process exits when the batch completes.
+    """
+    archives, _ = _read_tool_r18_persona_archives()
+    archive_ids = [
+        str(item.get("id") or "").strip()
+        for item in archives
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    ]
+    if not archive_ids:
+        return {"ok": True, "archiveCount": 0, "results": []}
+    return _run_persona_hot_workflow_cli(
+        {
+            "action": "refresh-global-hot-pool",
+            "archiveIds": archive_ids,
+            "limit": 20,
+        },
+        timeout_seconds=900,
+    )
 
 
 def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: int, cookie_rows: Any = None) -> list[str]:
@@ -14448,7 +14301,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "keywords": keywords,
             "recordShown": False,
         },
-        timeout_seconds=120,
+        timeout_seconds=32,
     )
 
     # Hot capture is public-page only. Never expose or infer account Cookie
@@ -15616,7 +15469,6 @@ def _create_persona_archive(payload: PersonaDashboardPersonaCreatePayload) -> di
     }
     archives.append(archive)
     _write_persona_archives_preserving_shape(path, raw, archives)
-    _warm_persona_hot_strategy_async(str(archive.get("id") or ""))
     return _build_persona_dashboard_profile(archive)
 
 
@@ -15652,7 +15504,6 @@ def _duplicate_persona_archive(archive_id: str) -> dict[str, Any]:
     }
     archives.append(duplicate)
     _write_persona_archives_preserving_shape(path, raw, archives)
-    _warm_persona_hot_strategy_async(str(duplicate.get("id") or ""))
     return {"ok": True, "profile": _build_persona_dashboard_profile(duplicate)}
 
 
@@ -15803,7 +15654,6 @@ def _persona_dashboard_create_persona_with_ai(payload: PersonaDashboardPersonaAi
     })
     archive_id = str(result.get("archiveId") or "").strip()
     if archive_id:
-        _warm_persona_hot_strategy_async(archive_id)
         _, _, archives = _persona_archive_source_for_write(archive_id)
         archive = _find_persona_archive(archives, archive_id)
         if archive:
@@ -19530,12 +19380,38 @@ def _persona_dashboard_refresh_worker_v2(
             except Exception:
                 parsed = {"raw": stdout[-4000:]}
         status = "success" if proc.returncode == 0 and isinstance(parsed, dict) and parsed.get("ok") else "failed"
+        hot_pool_result: dict[str, Any] | None = None
+        # Only the existing full, system-wide refresh replenishes candidates.
+        # Per-persona and per-user refreshes never start a follow-up pool job.
+        if status == "success" and not archive_id and archive_ids is None:
+            with PERSONA_DASHBOARD_REFRESH_LOCK:
+                PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
+                    "step": "补充全局热点候选池",
+                    "progress": 94,
+                    "message": "全量数据已刷新，正在按热度优先补充全局热点候选池…",
+                })
+            try:
+                hot_pool_result = _refresh_persona_hot_global_pool()
+            except HTTPException as exc:
+                hot_pool_result = {"ok": False, "error": str(exc.detail or "候选池补充失败")}
+            except Exception as exc:
+                logger.exception("global persona hot candidate pool refresh failed")
+                hot_pool_result = {"ok": False, "error": str(exc or "候选池补充失败")}
+            if isinstance(parsed, dict):
+                parsed["hotCandidatePool"] = hot_pool_result
+        refresh_message = "刷新完成，缓存数据已更新。"
+        if hot_pool_result is not None:
+            refresh_message = (
+                "刷新完成；全局热点候选池已按热度集中补充。"
+                if hot_pool_result.get("ok")
+                else "刷新完成；全局热点候选池补充未完成，将在下次全量刷新时重试。"
+            )
         with PERSONA_DASHBOARD_REFRESH_LOCK:
             PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
                 "status": status,
                 "step": "完成" if status == "success" else "失败",
                 "progress": 100,
-                "message": "刷新完成，缓存数据已更新。" if status == "success" else "刷新未完成，请查看结果提示。",
+                "message": refresh_message if status == "success" else "刷新未完成，请查看结果提示。",
                 "elapsed_seconds": int(time.time() - started),
                 "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "result": parsed,
@@ -19610,9 +19486,8 @@ def _persona_dashboard_monitor_interval_seconds() -> int:
 
 
 def _persona_dashboard_monitor_enabled() -> bool:
-    # Dashboard data refresh is a low-frequency (24-hour by default) task and
-    # remains enabled. High-frequency candidate-pool scans are controlled
-    # separately by PERSONA_HOT_POOL_WORKER_ENABLED.
+    # Dashboard data refresh is a low-frequency (24-hour by default) task.
+    # Its successful global run also performs the one-shot candidate batch.
     return str(os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
 
@@ -20496,13 +20371,11 @@ def create_app() -> FastAPI:
         _ensure_persona_dashboard_monitor_started()
         ensure_social_automation_worker_started()
         ensure_proxy_market_health_monitor_started()
-        _start_persona_hot_pool_worker()
         try:
             yield
         finally:
             stop_social_automation_worker()
             stop_proxy_market_health_monitor()
-            _stop_persona_hot_pool_worker()
 
     app = FastAPI(
         title="Workflow WebApp",
