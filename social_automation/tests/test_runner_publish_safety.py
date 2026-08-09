@@ -1118,6 +1118,19 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             {"width": 1600, "height": 839},
         )
 
+    def test_live_browser_geometry_defaults_to_lightweight_720p_framebuffer(self):
+        session = mock.Mock(spec=[])
+
+        config = runner._live_browser_geometry_config(session)
+
+        self.assertEqual(config["screen.width"], 1280)
+        self.assertEqual(config["screen.height"], 720)
+        self.assertEqual(config["screen.availHeight"], 659)
+        self.assertEqual(config["window.innerWidth"], 1280)
+        self.assertEqual(config["window.innerHeight"], 659)
+        self.assertEqual(config["window.outerWidth"], 1280)
+        self.assertEqual(config["window.outerHeight"], 720)
+
     def test_threads_feed_text_with_challenge_word_is_not_verification(self):
         page = _ThreadsShellPage(
             [{"name": "sessionid", "value": "active-session", "domain": ".threads.net"}],

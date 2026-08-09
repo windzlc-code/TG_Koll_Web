@@ -47,8 +47,11 @@ _SESSIONS: dict[str, LiveBrowserSession] = {}
 _CLOSE_CALLBACKS: dict[str, Callable[[], None]] = {}
 _LOCK = threading.Lock()
 _REGISTRY_LOCK = threading.RLock()
+_ORPHAN_CLEANUP_LOCK = threading.Lock()
 _ORPHAN_CLEANUP_DONE = False
 _SIGKILL = getattr(signal, "SIGKILL", 9)
+DEFAULT_LIVE_BROWSER_WIDTH = 1280
+DEFAULT_LIVE_BROWSER_HEIGHT = 720
 
 
 def live_browser_enabled() -> bool:
@@ -81,8 +84,14 @@ def start_live_browser_session(
         )
         return None
 
-    width = _safe_int(os.getenv("SOCIAL_AUTOMATION_LIVE_BROWSER_WIDTH"), 1600)
-    height = _safe_int(os.getenv("SOCIAL_AUTOMATION_LIVE_BROWSER_HEIGHT"), 900)
+    width = _safe_int(
+        os.getenv("SOCIAL_AUTOMATION_LIVE_BROWSER_WIDTH"),
+        DEFAULT_LIVE_BROWSER_WIDTH,
+    )
+    height = _safe_int(
+        os.getenv("SOCIAL_AUTOMATION_LIVE_BROWSER_HEIGHT"),
+        DEFAULT_LIVE_BROWSER_HEIGHT,
+    )
     task_id = str(task.get("id") or f"task_{int(time.time())}")
     account_id = str(account.get("id") or "")
     session_id = f"live_{task_id}"
@@ -114,6 +123,12 @@ def start_live_browser_session(
         _SESSIONS[session.id] = session
 
     try:
+        xvnc_env = dict(os.environ)
+        # DISPLAY is temporarily process-global while another Camoufox starts.
+        # Xvnc is the display server and must never inherit a browser client's
+        # display, otherwise another session's cleanup can mistake it for a
+        # descendant and terminate it.
+        xvnc_env.pop("DISPLAY", None)
         session.processes.append(
             subprocess.Popen(
                 [
@@ -135,6 +150,7 @@ def start_live_browser_session(
                     "-httpd",
                     str(kasm_www_dir),
                 ],
+                env=xvnc_env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -504,8 +520,8 @@ def _session_from_registry(row: dict[str, Any]) -> LiveBrowserSession | None:
         platform=str(row.get("platform") or ""),
         task_type=str(row.get("task_type") or ""),
         display=str(row.get("display") or ""),
-        width=_safe_int(row.get("width"), 1600),
-        height=_safe_int(row.get("height"), 900),
+        width=_safe_int(row.get("width"), DEFAULT_LIVE_BROWSER_WIDTH),
+        height=_safe_int(row.get("height"), DEFAULT_LIVE_BROWSER_HEIGHT),
         vnc_port=_safe_int(row.get("web_port") or row.get("vnc_port"), 0),
         web_port=_safe_int(row.get("web_port") or row.get("vnc_port"), 0),
         started_at=_safe_int(row.get("started_at"), int(time.time())),
@@ -707,13 +723,37 @@ def _allocate_display_number() -> int:
     used = {int(session.display.lstrip(":")) for session in _SESSIONS.values() if session.display.lstrip(":").isdigit()}
     running = _running_xvnc_displays()
     for display in range(90, 140):
-        socket_path = Path(f"/tmp/.X11-unix/X{display}")
-        if display not in used and socket_path.exists() and display not in running:
-            with contextlib.suppress(Exception):
-                socket_path.unlink()
-        if display not in used and display not in running and not socket_path.exists():
+        if display in used or display in running:
+            continue
+        if _release_stale_x_display_artifacts(display):
             return display
     raise RuntimeError("没有可用的 KasmVNC display")
+
+
+def _release_stale_x_display_artifacts(
+    display: int,
+    *,
+    temp_root: Path = Path("/tmp"),
+) -> bool:
+    """Remove abandoned X socket/lock pairs without touching a live Xvnc."""
+    clean_display = max(0, int(display))
+    display_name = f":{clean_display}"
+    socket_path = temp_root / ".X11-unix" / f"X{clean_display}"
+    lock_path = temp_root / f".X{clean_display}-lock"
+    if lock_path.exists():
+        try:
+            lock_pid = int(lock_path.read_text(encoding="ascii").strip())
+        except (OSError, UnicodeError, ValueError):
+            lock_pid = 0
+        if lock_pid > 0 and _is_expected_xvnc_process(
+            _read_process_identity(lock_pid),
+            display_name,
+        ):
+            return False
+    for artifact in (socket_path, lock_path):
+        with contextlib.suppress(OSError):
+            artifact.unlink()
+    return not socket_path.exists() and not lock_path.exists()
 
 
 def _running_xvnc_displays() -> set[int]:
@@ -738,6 +778,14 @@ def _allocate_tcp_port() -> int:
 
 
 def _cleanup_orphaned_live_browser_processes(logger: Any | None = None) -> None:
+    # Do not let a parallel task reserve a display until the previous-process
+    # registry sweep is fully complete. Otherwise the sweep can kill a newly
+    # started Xvnc that reused the same display number.
+    with _ORPHAN_CLEANUP_LOCK:
+        _cleanup_orphaned_live_browser_processes_once(logger)
+
+
+def _cleanup_orphaned_live_browser_processes_once(logger: Any | None = None) -> None:
     global _ORPHAN_CLEANUP_DONE
     with _LOCK:
         if _ORPHAN_CLEANUP_DONE or _SESSIONS:

@@ -60,6 +60,8 @@ SUPPORTED_TASK_TYPES = {
 
 _CAMOUFOX_LAUNCH_LOCK = threading.Lock()
 _WARMUP_ACTION_HISTORY_LOCK = threading.Lock()
+_DEFAULT_LIVE_BROWSER_WIDTH = 1280
+_DEFAULT_LIVE_BROWSER_HEIGHT = 720
 _DEFAULT_LIVE_BROWSER_CHROME_HEIGHT = 61
 
 
@@ -197,8 +199,20 @@ class UnsupportedActionError(RuntimeError):
 
 
 def _live_browser_geometry_config(session: Any) -> dict[str, int]:
-    width = max(1024, _safe_int(getattr(session, "width", 1600), 1600))
-    height = max(640, _safe_int(getattr(session, "height", 900), 900))
+    width = max(
+        1024,
+        _safe_int(
+            getattr(session, "width", _DEFAULT_LIVE_BROWSER_WIDTH),
+            _DEFAULT_LIVE_BROWSER_WIDTH,
+        ),
+    )
+    height = max(
+        640,
+        _safe_int(
+            getattr(session, "height", _DEFAULT_LIVE_BROWSER_HEIGHT),
+            _DEFAULT_LIVE_BROWSER_HEIGHT,
+        ),
+    )
     chrome_height = _safe_int(
         os.getenv("SOCIAL_AUTOMATION_LIVE_BROWSER_CHROME_HEIGHT"),
         _DEFAULT_LIVE_BROWSER_CHROME_HEIGHT,
@@ -920,8 +934,8 @@ class _BrowserContextManager:
         if self.live_session is not None:
             geometry_config = _live_browser_geometry_config(self.live_session)
             # Camoufox beta.28 randomizes both its screen fingerprint and inner
-            # viewport. Pin both to the real Xvnc framebuffer so the current
-            # build retains the same 1600x839 content area as beta.24.
+            # viewport. Pin both to the real Xvnc framebuffer so automation,
+            # remote monitoring, and the reported fingerprint share one frame.
             kwargs["window"] = (
                 geometry_config["window.outerWidth"],
                 geometry_config["window.outerHeight"],
@@ -1397,8 +1411,14 @@ def _first_page(context):
 def _sync_live_browser_viewport(page, context_control: dict[str, Any] | None, logger: AutomationLogger) -> None:
     if not isinstance(context_control, dict) or not context_control.get("live_browser_session_id"):
         return
-    width = _safe_int(context_control.get("live_browser_width"), 1600)
-    height = _safe_int(context_control.get("live_browser_height"), 900)
+    width = _safe_int(
+        context_control.get("live_browser_width"),
+        _DEFAULT_LIVE_BROWSER_WIDTH,
+    )
+    height = _safe_int(
+        context_control.get("live_browser_height"),
+        _DEFAULT_LIVE_BROWSER_HEIGHT,
+    )
     expected = {"width": max(1024, width), "height": max(640, height)}
     try:
         geometry = page.evaluate(
@@ -3126,8 +3146,14 @@ def _send_human_wheel(page, delta: int) -> str:
     xdotool = shutil.which("xdotool")
     if display and xdotool:
         viewport = page.viewport_size if isinstance(getattr(page, "viewport_size", None), dict) else {}
-        width = max(320, int(viewport.get("width") or 1600))
-        height = max(240, int(viewport.get("height") or 839))
+        width = max(320, int(viewport.get("width") or _DEFAULT_LIVE_BROWSER_WIDTH))
+        height = max(
+            240,
+            int(
+                viewport.get("height")
+                or (_DEFAULT_LIVE_BROWSER_HEIGHT - _DEFAULT_LIVE_BROWSER_CHROME_HEIGHT)
+            ),
+        )
         pointer_x = max(160, min(width - 80, width // 2))
         pointer_y = max(180, min(height - 80, height // 2))
         button = "5" if delta > 0 else "4"

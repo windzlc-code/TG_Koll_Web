@@ -1389,6 +1389,7 @@ def test_expired_registry_session_uses_process_stopping_cleanup():
 
 def test_starting_session_is_visible_before_kasmvnc_is_ready(tmp_path, monkeypatch):
     monkeypatch.setenv("SOCIAL_AUTOMATION_KASMVNC_WWW_DIR", str(tmp_path))
+    monkeypatch.setenv("DISPLAY", ":77")
     monkeypatch.delenv("SOCIAL_AUTOMATION_LIVE_BROWSER_WIDTH", raising=False)
     monkeypatch.delenv("SOCIAL_AUTOMATION_LIVE_BROWSER_HEIGHT", raising=False)
     session_dir = tmp_path / "session"
@@ -1430,11 +1431,51 @@ def test_starting_session_is_visible_before_kasmvnc_is_ready(tmp_path, monkeypat
         assert observed["status"] == "starting"
         assert saved_statuses == ["starting", "running"]
         assert session.status == "running"
-        assert (session.width, session.height) == (1600, 900)
-        assert "1600x900" in popen.call_args.args[0]
+        assert (session.width, session.height) == (1280, 720)
+        assert "1280x720" in popen.call_args.args[0]
+        assert "DISPLAY" not in popen.call_args.kwargs["env"]
     finally:
         live_browser._SESSIONS.clear()
         session_dir.rmdir()
+
+
+def test_stale_x_lock_and_socket_are_released_before_display_reuse(tmp_path):
+    socket_dir = tmp_path / ".X11-unix"
+    socket_dir.mkdir()
+    socket_path = socket_dir / "X92"
+    lock_path = tmp_path / ".X92-lock"
+    socket_path.write_text("stale", encoding="ascii")
+    lock_path.write_text("999999\n", encoding="ascii")
+
+    with mock.patch.object(live_browser, "_read_process_identity", return_value=None):
+        available = live_browser._release_stale_x_display_artifacts(
+            92,
+            temp_root=tmp_path,
+        )
+
+    assert available is True
+    assert not socket_path.exists()
+    assert not lock_path.exists()
+
+
+def test_active_x_lock_is_not_removed(tmp_path):
+    lock_path = tmp_path / ".X92-lock"
+    lock_path.write_text("4321\n", encoding="ascii")
+    identity = {
+        "pid": 4321,
+        "argv0": "/usr/bin/Xvnc",
+        "args": ["Xvnc", ":92", "-geometry", "1280x720"],
+        "executable": "/usr/bin/Xvnc",
+    }
+
+    with mock.patch.object(live_browser, "_read_process_identity", return_value=identity):
+        available = live_browser._release_stale_x_display_artifacts(
+            92,
+            temp_root=tmp_path,
+        )
+
+    assert available is False
+    assert lock_path.exists()
 
 
 def test_parallel_starts_reserve_distinct_displays_before_process_launch(tmp_path, monkeypatch):

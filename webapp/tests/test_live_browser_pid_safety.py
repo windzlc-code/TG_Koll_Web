@@ -1,4 +1,5 @@
 import signal
+import threading
 from unittest import mock
 
 import pytest
@@ -224,3 +225,42 @@ def test_startup_orphan_cleanup_with_no_registry_identity_never_scans_or_kills()
     send_signal.assert_not_called()
     remove_registry.assert_called_once_with(legacy.id)
     run.assert_not_called()
+
+
+def test_parallel_startup_waits_for_orphan_cleanup_to_finish():
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+    second_finished = threading.Event()
+    calls = []
+
+    def cleanup_once(_logger=None):
+        calls.append(threading.current_thread().name)
+        if len(calls) == 1:
+            cleanup_started.set()
+            assert release_cleanup.wait(timeout=2)
+
+    def run_cleanup():
+        live_browser._cleanup_orphaned_live_browser_processes()
+
+    def run_second_cleanup():
+        live_browser._cleanup_orphaned_live_browser_processes()
+        second_finished.set()
+
+    with mock.patch.object(
+        live_browser,
+        "_cleanup_orphaned_live_browser_processes_once",
+        side_effect=cleanup_once,
+    ):
+        first = threading.Thread(target=run_cleanup, name="cleanup-first")
+        second = threading.Thread(target=run_second_cleanup, name="cleanup-second")
+        first.start()
+        assert cleanup_started.wait(timeout=1)
+        second.start()
+        assert not second_finished.wait(timeout=0.05)
+        release_cleanup.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert calls == ["cleanup-first", "cleanup-second"]
