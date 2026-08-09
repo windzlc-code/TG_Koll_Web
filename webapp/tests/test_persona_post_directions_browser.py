@@ -6,6 +6,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 CONSOLE_JS = ROOT / "webapp" / "static" / "assets" / "console.js"
+CONSOLE_CSS = ROOT / "webapp" / "static" / "assets" / "console.css"
 
 
 def _launch_browser(playwright):
@@ -134,4 +135,34 @@ def test_direction_picker_switches_one_bulk_button_by_selection_state():
             "empty": {"count": 1, "action": "all", "label": "全选"},
             "full": {"count": 1, "action": "clear", "label": "清空选择"},
         }
+        browser.close()
+
+
+def test_generated_selection_actions_are_one_row_and_discard_is_right_aligned_on_mobile():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.set_content(
+            '''<!doctype html><html><body class="console-page">
+            <div class="console-modal" data-modal-key="persona-generated-selection">
+              <div class="console-modal-dialog">
+                <div class="console-modal-actions">
+                  <button type="button" class="primary" data-console-modal-value="media">生成配图</button>
+                  <button type="button" data-console-modal-value="save">保存草稿</button>
+                  <button type="button" class="danger" data-console-modal-value="discard">放弃本次结果</button>
+                </div>
+              </div>
+            </div></body></html>'''
+        )
+        page.add_style_tag(path=str(CONSOLE_CSS))
+
+        boxes = page.locator(".console-modal-actions > button").evaluate_all(
+            "buttons => buttons.map(button => ({ value: button.dataset.consoleModalValue, ...button.getBoundingClientRect().toJSON() }))"
+        )
+        by_value = {box["value"]: box for box in boxes}
+
+        assert max(box["top"] for box in boxes) - min(box["top"] for box in boxes) <= 1
+        assert by_value["discard"]["left"] - (by_value["save"]["left"] + by_value["save"]["width"]) >= 12
+        assert abs((by_value["discard"]["left"] + by_value["discard"]["width"]) - 372) <= 8
         browser.close()

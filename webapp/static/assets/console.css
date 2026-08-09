@@ -10535,12 +10535,21 @@ body.persona-touch-dragging .persona-list-card:active {
   }
 
   .console-modal[data-modal-key="persona-generated-selection"] .console-modal-actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 7px;
   }
 
-  .console-modal[data-modal-key="persona-generated-selection"] .console-modal-actions > [data-console-modal-cancel] {
-    grid-column: 1 / -1;
-    order: 3;
+  .console-modal[data-modal-key="persona-generated-selection"] .console-modal-actions > button {
+    width: auto;
+    min-width: 0;
+    flex: 0 1 auto;
+    white-space: nowrap;
+  }
+
+  .console-modal[data-modal-key="persona-generated-selection"] .console-modal-actions > [data-console-modal-value="discard"] {
+    margin-left: auto;
   }
 
   .persona-generated-selection-card {
@@ -24599,6 +24608,10 @@ body.console-page {
 }
 
 @media (max-width: 760px) {
+  .console-page .persona-compose-media-side {
+    scroll-margin-top: calc(var(--site-header-height) + 59px);
+  }
+
   .console-page .persona-media-task-actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;

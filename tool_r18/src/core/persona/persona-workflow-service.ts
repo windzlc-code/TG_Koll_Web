@@ -61,7 +61,9 @@ function buildTweetStyleInstruction(setup: any): string {
 
 function resolveActiveLinkEndingPreset(setup: any): { linkUrl: string; endingText: string } | null {
   const presets = Array.isArray(setup?.linkEndingPresets) ? setup.linkEndingPresets : [];
+  const hasExplicitActiveId = Object.prototype.hasOwnProperty.call(setup || {}, "activeLinkEndingPresetId");
   const activeId = String(setup?.activeLinkEndingPresetId || "").trim();
+  if (hasExplicitActiveId && !activeId) return null;
   const active = presets.find((preset: any) =>
     preset
     && preset.enabled !== false
@@ -72,6 +74,7 @@ function resolveActiveLinkEndingPreset(setup: any): { linkUrl: string; endingTex
     const endingText = String(active.endingText || "").trim();
     return linkUrl || endingText ? { linkUrl, endingText } : null;
   }
+  if (hasExplicitActiveId) return null;
   const legacyLinkUrl = String(setup?.tweetStyleLinkUrl || "").trim();
   const legacyEndingText = String(setup?.tweetStyleLinkText || "").trim();
   return legacyLinkUrl || legacyEndingText ? { linkUrl: legacyLinkUrl, endingText: legacyEndingText } : null;

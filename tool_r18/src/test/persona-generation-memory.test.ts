@@ -228,6 +228,43 @@ describe("persona generation memory", () => {
     expect(result.posts?.[0].content).toContain("https://example.com/more");
   });
 
+  it("does not append a stored link preset when the active preset is explicitly cleared", async () => {
+    const created = await runPersonaWorkflow({
+      action: "create",
+      name: "link disabled persona",
+      content: "a persona with a stored but inactive link preset",
+      setup: {
+        genres: ["daily"],
+        personaPersonality: "direct",
+        personaGender: "female",
+        personaStyle: "short posts",
+        totalEpisodes: 50,
+        targetMarket: "cn",
+        chineseScript: "traditional",
+        linkEndingPresets: [{
+          id: "old-local-link",
+          name: "old local link",
+          endingText: "read more",
+          linkUrl: "http://127.0.0.1:8001/console.html",
+          enabled: true,
+        }],
+        activeLinkEndingPresetId: "",
+        tweetStyleLinkText: "legacy ending",
+        tweetStyleLinkUrl: "http://127.0.0.1:8001/legacy.html",
+      },
+    } as any);
+
+    const result = await runPersonaWorkflow({
+      action: "generate-posts",
+      archiveId: created.archiveId,
+      count: 1,
+    });
+    const generationPrompt = prompts.at(-1) || "";
+
+    expect(generationPrompt).not.toContain("http://127.0.0.1:8001");
+    expect(result.posts?.[0].content).not.toContain("http://127.0.0.1:8001");
+  });
+
   it("splits long multi-post generation into smaller batches", () => {
     expect(planPersonaPostGenerationBatches(10, 80)).toEqual([5, 5]);
     expect(planPersonaPostGenerationBatches(10, 120)).toEqual([3, 3, 3, 1]);

@@ -16685,10 +16685,15 @@ async function loadSetupStatus() {
   }
 }
 
+function cancelScheduledPersonaDetailRender() {
+  if (state.personaDetailRenderTimer) clearTimeout(state.personaDetailRenderTimer);
+  state.personaDetailRenderTimer = 0;
+}
+
 function schedulePersonaDetailRender(personaId = "") {
   const key = String(personaId || "").trim();
   if (!isPersonaWorkspaceModule() || (key && key !== String(state.selectedPersonaId || ""))) return;
-  if (state.personaDetailRenderTimer) clearTimeout(state.personaDetailRenderTimer);
+  cancelScheduledPersonaDetailRender();
   state.personaDetailRenderTimer = setTimeout(() => {
     state.personaDetailRenderTimer = 0;
     if (isPersonaWorkspaceModule() && (!key || key === String(state.selectedPersonaId || ""))) {
@@ -20142,6 +20147,22 @@ async function applyPersonaGeneratedBatchTitles(personaId, posts = [], requested
   }
 }
 
+let pendingPersonaMediaScrollId = "";
+
+function scrollPersonaMediaComposerIntoView(personaId) {
+  if (String(pendingPersonaMediaScrollId) !== String(personaId || "")) return;
+  pendingPersonaMediaScrollId = "";
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      const action = document.querySelector("[data-persona-run-media-task]");
+      const target = action?.closest(".persona-compose-media-side");
+      if (!target) return;
+      target.scrollIntoView({ block: "start", behavior: "smooth" });
+      action.focus({ preventScroll: true });
+    });
+  });
+}
+
 async function resolvePersonaOrdinaryGeneratedCandidates(persona, taskId, generatedPosts = [], requestedTitle = "") {
   const rows = Array.isArray(generatedPosts) ? generatedPosts.filter((post) => String(post?.id || "").trim()) : [];
   const cleanTaskId = String(taskId || "").trim();
@@ -20193,6 +20214,7 @@ async function resolvePersonaOrdinaryGeneratedCandidates(persona, taskId, genera
     personaForm.media.contentMode = "draft";
     personaForm.media.focusPostId = finalizedPostId;
     state.personaPanels.content = "generate";
+    pendingPersonaMediaScrollId = String(persona.id || "");
     showMsg("commandMsg", "已保留所选草稿，可以继续生成配图。", true);
   } else if (selection.action === "save" && selectedPostId) {
     personaFormState(persona.id).media.focusPostId = "";
@@ -20204,17 +20226,6 @@ async function resolvePersonaOrdinaryGeneratedCandidates(persona, taskId, genera
     showMsg("commandMsg", "本次生成候选已放弃。", true);
   }
   renderConfirmSummary();
-  if (selection.action === "media" && selectedPostId) {
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        const action = document.querySelector("[data-persona-run-media-task]");
-        const target = action?.closest(".persona-compose-media-side");
-        if (!target) return;
-        target.scrollIntoView({ block: "start", behavior: "smooth" });
-        action.focus({ preventScroll: true });
-      });
-    });
-  }
   return { action: selection.action, postId: finalizedPostId };
 }
 
@@ -20494,7 +20505,11 @@ async function generatePersonaDraftPosts() {
     throw error;
   } finally {
     setActionLocked(lockParts, false);
-    if (isPersonaWorkspaceModule()) renderPersonaDetail();
+    if (isPersonaWorkspaceModule()) {
+      cancelScheduledPersonaDetailRender();
+      renderPersonaDetail();
+      scrollPersonaMediaComposerIntoView(persona.id);
+    }
   }
 }
 
@@ -20644,7 +20659,11 @@ function restorePersonaPostGenerationTasks(personaId = "") {
     })
     .finally(() => {
       setActionLocked(lockParts, false);
-      if (isPersonaWorkspaceModule()) renderPersonaDetail();
+      if (isPersonaWorkspaceModule()) {
+        cancelScheduledPersonaDetailRender();
+        renderPersonaDetail();
+        scrollPersonaMediaComposerIntoView(cleanPersonaId);
+      }
     });
 }
 

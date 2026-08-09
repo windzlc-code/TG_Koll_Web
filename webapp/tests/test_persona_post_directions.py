@@ -129,12 +129,30 @@ def test_generated_post_media_action_scrolls_to_the_media_composer():
     resolver = script.split("async function resolvePersonaOrdinaryGeneratedCandidates", 1)[1].split(
         "function personaPostGenerationTaskStorageKey", 1
     )[0]
+    generator = script.split("async function generatePersonaDraftPosts", 1)[1].split(
+        "async function completePersonaPostGenerationTask", 1
+    )[0]
 
     assert 'selection.action === "media"' in resolver
-    assert resolver.count("window.requestAnimationFrame") == 2
-    assert 'document.querySelector("[data-persona-run-media-task]")' in resolver
-    assert 'action?.closest(".persona-compose-media-side")' in resolver
-    assert 'scrollIntoView({ block: "start", behavior: "smooth" })' in resolver
+    assert "scrollPersonaMediaComposerIntoView" not in resolver
+    finalizer = generator.split("} finally {", 1)[1]
+    assert finalizer.index("cancelScheduledPersonaDetailRender();") < finalizer.index("renderPersonaDetail();")
+    assert finalizer.index("renderPersonaDetail();") < finalizer.index("scrollPersonaMediaComposerIntoView")
+    assert "scroll-margin-top: calc(var(--site-header-height) + 59px);" in CONSOLE_CSS.read_text(encoding="utf-8")
+
+
+def test_generated_selection_mobile_actions_stay_on_one_row_with_discard_at_right():
+    styles = CONSOLE_CSS.read_text(encoding="utf-8")
+    mobile_block = styles.split(
+        '.console-modal[data-modal-key="persona-generated-selection"] .console-modal-actions {',
+        1,
+    )[1].split(".persona-generated-selection-card {", 1)[0]
+
+    assert "display: flex;" in mobile_block
+    assert "flex-wrap: nowrap;" in mobile_block
+    assert '[data-console-modal-value="discard"]' in mobile_block
+    assert "margin-left: auto;" in mobile_block
+    assert "grid-template-columns: repeat(2" not in mobile_block
 
 
 def test_model_prompt_requires_ten_distinct_directions_and_input_decomposition():
