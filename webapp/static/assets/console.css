@@ -26899,28 +26899,32 @@ body.console-page {
   color: inherit;
 }
 
-/* Fade in only the newly selected dashboard platform; the carousel remains touch-driven. */
+/* Fade in only the newly selected dashboard platform; the carousel remains touch-driven.
+   Override the shared active-platform fill while the overlay fades in. */
 .console-page .persona-dashboard-view
 .persona-dashboard-platform-track.account-pool-platform-tabs
 > button.is-active.is-platform-fill-entering {
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  background: var(--panel-solid);
-  background-image: none;
+  background: var(--panel-solid) !important;
+  background-image: none !important;
   --persona-dashboard-platform-fill: var(--accent);
+  --persona-dashboard-platform-idle-color: var(--text);
 }
 
 .console-page .persona-dashboard-view
 .persona-dashboard-platform-track.account-pool-platform-tabs
 > button.is-active.is-platform-fill-entering[data-persona-dashboard-platform-option="threads"] {
   --persona-dashboard-platform-fill: #000;
+  --persona-dashboard-platform-idle-color: #000;
 }
 
 .console-page .persona-dashboard-view
 .persona-dashboard-platform-track.account-pool-platform-tabs
 > button.is-active.is-platform-fill-entering[data-persona-dashboard-platform-option="instagram"] {
   --persona-dashboard-platform-fill: var(--instagram-platform-gradient);
+  --persona-dashboard-platform-idle-color: #c13584;
 }
 
 .console-page .persona-dashboard-view .persona-dashboard-platform-track > button.is-platform-fill-entering::before {
@@ -26935,9 +26939,11 @@ body.console-page {
   pointer-events: none;
 }
 
-.console-page .persona-dashboard-view .persona-dashboard-platform-track > button.is-platform-fill-entering > :is(svg, strong) {
+.console-page .persona-dashboard-view .persona-dashboard-platform-track > button.is-active.is-platform-fill-entering > :is(svg, strong) {
   position: relative;
   z-index: 1;
+  color: var(--persona-dashboard-platform-idle-color);
+  animation: persona-dashboard-platform-foreground-fade 520ms ease-out both;
 }
 
 @keyframes persona-dashboard-platform-fill-fade {
@@ -26946,10 +26952,9 @@ body.console-page {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .console-page .persona-dashboard-view .persona-dashboard-platform-track > button.is-platform-fill-entering::before {
-    animation: none;
-    opacity: 1;
+@keyframes persona-dashboard-platform-foreground-fade {
+  to {
+    color: #fff;
   }
 }
 

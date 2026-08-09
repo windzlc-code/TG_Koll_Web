@@ -124,12 +124,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             "  position: relative;\n"
             "  isolation: isolate;\n"
             "  overflow: hidden;\n"
-            "  background: var(--panel-solid);\n"
-            "  background-image: none;",
+            "  background: var(--panel-solid) !important;\n"
+            "  background-image: none !important;",
             self.styles,
         )
         self.assertIn("opacity: 0;", self.styles)
         self.assertIn("520ms ease-out both", self.styles)
+        self.assertIn("persona-dashboard-platform-foreground-fade", self.styles)
         self.assertIn("@media (prefers-reduced-motion: reduce)", self.styles)
         self.assertNotIn("persona-dashboard-platform-title", self.styles)
         self.assertNotIn(".persona-dashboard-view .persona-dashboard-platform-menu", self.styles)
