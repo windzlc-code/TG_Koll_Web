@@ -178,6 +178,41 @@ class DailyPublishLimitTests(unittest.TestCase):
         self.assertIn("可查询链接", row[1])
         self.assertTrue(json.loads(row[2])["publish_verification_missing"])
 
+    def test_preview_only_publish_succeeds_without_link_and_releases_capacity(self):
+        task = self._create(self._payload())
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_automation_tasks SET status = 'running', started_at = ? WHERE id = ?",
+                (self.now, task["id"]),
+            )
+        result = {
+            "ok": True,
+            "preview_only": True,
+            "ready_to_submit": True,
+            "submitted": False,
+            "screenshot_path": "preview.png",
+        }
+        with (
+            mock.patch.object(social_automation_api, "_now", return_value=self.now),
+            mock.patch.object(social_automation_api, "_sync_successful_task_to_persona_archive") as sync_archive,
+        ):
+            completed = social_automation_api._finish_task(task["id"], "success", result, "")
+            policy = social_automation_api.get_daily_publish_policy(self.customer_id)
+
+        self.assertTrue(completed)
+        self.assertEqual(policy["used"], 0)
+        self.assertEqual(policy["capacity_used"], 0)
+        sync_archive.assert_not_called()
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT status, error, daily_publish_committed, result_json FROM social_automation_tasks WHERE id = ?",
+                (task["id"],),
+            ).fetchone()
+        self.assertEqual(row[0], "success")
+        self.assertEqual(row[1], "")
+        self.assertEqual(row[2], 0)
+        self.assertFalse(json.loads(row[3]).get("publish_verification_missing", False))
+
     def test_legacy_confirmed_slot_without_a_public_link_is_not_counted(self):
         task = self._create(self._payload())
         with sqlite3.connect(self.db_path) as conn:

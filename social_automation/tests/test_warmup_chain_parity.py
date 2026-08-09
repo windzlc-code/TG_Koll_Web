@@ -276,6 +276,8 @@ class WarmupChainParityTests(TestCase):
         page = mock.Mock()
         page.viewport_size = {"width": 1600, "height": 839}
         page.context._tg_live_display = ":91"
+        page.context._tg_live_width = 1280
+        page.context._tg_live_height = 720
         completed = mock.Mock(returncode=0)
 
         with (
@@ -289,6 +291,10 @@ class WarmupChainParityTests(TestCase):
         self.assertEqual(run.call_count, 2)
         self.assertEqual(run.call_args_list[0].kwargs["env"]["DISPLAY"], ":91")
         self.assertEqual(run.call_args_list[1].kwargs["env"]["DISPLAY"], ":91")
+        self.assertEqual(
+            run.call_args_list[0].args[0],
+            ["/usr/bin/xdotool", "mousemove", "--screen", "0", "640", "360"],
+        )
         page.mouse.wheel.assert_not_called()
 
     def test_human_wheel_falls_back_to_playwright_without_live_display(self):

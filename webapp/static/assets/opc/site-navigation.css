@@ -1578,6 +1578,20 @@ body.site-account-panel-active {
   border-radius: 50%;
 }
 
+.site-account-avatar-action {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.site-account-avatar-action:focus-visible {
+  outline: 2px solid #78b7c6;
+  outline-offset: 3px;
+}
+
 .site-account-identity {
   display: grid;
   min-width: 0;

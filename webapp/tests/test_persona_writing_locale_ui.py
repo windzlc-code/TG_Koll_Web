@@ -28,6 +28,11 @@ class PersonaWritingLocaleUiContractTests(unittest.TestCase):
         self.assertIn("overflow-y: auto;", self.styles)
         self.assertIn("max-height: min(58vh, 420px);", self.styles)
         self.assertIn(".persona-writing-locale-mobile", self.styles)
+        locale_cancel_css = self.styles.split(
+            '.console-modal[data-modal-key="persona-writing-locale-picker"] .console-modal-actions > [data-console-modal-cancel] {',
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("grid-column: 2;", locale_cancel_css)
 
     def test_locale_control_is_reused_by_new_generation_and_draft_ai_rewrite(self):
         panel_start = self.script.index("function renderPersonaContentPanel(")

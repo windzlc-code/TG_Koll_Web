@@ -154,10 +154,25 @@ class RunnerProxyRedactionTests(unittest.TestCase):
                 "browser.cache.disk.smart_size.enabled": False,
                 "browser.cache.disk.capacity": 128 * 1024,
                 "dom.ipc.processPrelaunch.enabled": False,
-                "dom.ipc.processCount": 2,
+                "dom.ipc.processCount": 1,
                 "dom.ipc.processCount.webIsolated": 1,
                 "image.mem.surfacecache.max_size_kb": 256 * 1024,
-                "layout.frame_rate": 30,
+                "layout.frame_rate": 15,
+                "browser.cache.memory.enable": True,
+                "browser.cache.memory.capacity": 8 * 1024,
+                "browser.cache.disk.max_chunks_memory_usage": 8 * 1024,
+                "browser.cache.disk.max_priority_chunks_memory_usage": 8 * 1024,
+                "browser.cache.disk.preload_chunk_count": 1,
+                "media.utility-process.enabled": False,
+                "media.sanity-test.disabled": True,
+                "media.memory_cache_max_size": 16 * 1024,
+                "media.memory_caches_combined_limit_kb": 32 * 1024,
+                "media.cache_size": 32 * 1024,
+                "media.video-queue.default-size": 3,
+                "media.autoplay.default": 5,
+                "media.preload.default": 1,
+                "image.animation_mode": "once",
+                "image.mem.surfacecache.min_expiration_ms": 15 * 1000,
                 "network.prefetch-next": False,
                 "network.predictor.enabled": False,
             },
@@ -170,14 +185,12 @@ class RunnerProxyRedactionTests(unittest.TestCase):
         class FakeCamoufox:
             def __init__(self, **kwargs):
                 self.expected_display = ":90" if kwargs["user_data_dir"].endswith("profile-a") else ":91"
+                self.launch_display = kwargs["env"]["DISPLAY"]
 
             def __enter__(self):
-                try:
-                    rendezvous.wait(timeout=0.05)
-                except threading.BrokenBarrierError:
-                    pass
+                rendezvous.wait(timeout=0.5)
                 time.sleep(0.01)
-                observed.append((self.expected_display, os.environ.get("DISPLAY")))
+                observed.append((self.expected_display, self.launch_display))
                 return object()
 
         original_display = os.environ.get("DISPLAY")

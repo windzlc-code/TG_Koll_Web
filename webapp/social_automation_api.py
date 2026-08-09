@@ -290,6 +290,8 @@ _WORKER_STATE: dict[str, Any] = {
 }
 _RUNNING_TASK_CONTROLS: dict[str, dict[str, Any]] = {}
 _RUNNING_TASK_CONTROLS_LOCK = threading.Lock()
+_MATRIX_HEAVY_PAGE_CAPACITY = 2
+_MATRIX_HEAVY_PAGE_SEMAPHORE = threading.BoundedSemaphore(_MATRIX_HEAVY_PAGE_CAPACITY)
 _WORKER_INSTANCE_ID = f"{os.getpid()}:{uuid.uuid4().hex}"
 _TASK_WORKER_LEASE_KEY = "_worker_lease"
 _PUBLISH_BATCH_RESERVATION_KEY = "_publish_batch_reservation"
@@ -8122,8 +8124,9 @@ def _finish_publish_batch_item(
     if not task_id or _is_task_cancelled(task_id):
         return False
     confirmed_url = _confirmed_published_url(result, task.get("platform"))
-    status = "success" if result.get("ok") and confirmed_url else "failed"
-    if result.get("ok") and not confirmed_url:
+    preview_only = _is_publish_preview_result(result)
+    status = "success" if result.get("ok") and (confirmed_url or preview_only) else "failed"
+    if result.get("ok") and not confirmed_url and not preview_only:
         result = {
             **result,
             "publish_verification_missing": True,
@@ -8484,6 +8487,12 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
     control["publish_confirmation_callback"] = lambda confirmation: _persist_publish_confirmation_context(
         str(control.get("current_task_id") or task_id),
         confirmation,
+    )
+    control["browser_start_barrier_callback"] = lambda: _wait_for_matrix_browser_start_barrier(control)
+    control["matrix_resource_phase_callback"] = lambda phase, action: _run_matrix_browser_resource_phase(
+        control,
+        phase,
+        action,
     )
     control["publish_submit_callback"] = lambda action: _run_publish_submit_guard(control, action)
     control["billing_submit_callback"] = lambda action: _run_billing_submit_guard(control, action)
@@ -9086,7 +9095,305 @@ def _is_task_cancelled(task_id: str) -> bool:
         return True
 
 
+def _wait_for_matrix_browser_start_barrier(control: dict[str, Any]) -> None:
+    task = control.get("task") if isinstance(control.get("task"), dict) else {}
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    batch_id = str(payload.get("matrix_publish_batch_id") or "").strip()
+    if not batch_id:
+        return
+    task_id = str(control.get("current_task_id") or task.get("id") or "")
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, status
+            FROM social_automation_tasks
+            WHERE task_type = 'publish_post'
+              AND json_extract(payload_json, '$.matrix_publish_batch_id') = ?
+            ORDER BY created_at, id
+            """,
+            (batch_id,),
+        ).fetchall()
+        task_ids = [str(row["id"] or "") for row in rows if str(row["id"] or "")]
+        if len(task_ids) <= 1:
+            return
+        _insert_log(
+            conn,
+            task_id,
+            "info",
+            "matrix_browser_start_ready",
+            "This matrix browser is ready and is waiting for the other browsers before page navigation.",
+            {"matrix_publish_batch_id": batch_id, "task_count": len(task_ids)},
+        )
+    control["_matrix_browser_start_ready"] = True
+    timeout_seconds = max(
+        5,
+        min(int(control.get("matrix_browser_start_barrier_timeout_seconds") or 30), 90),
+    )
+    poll_seconds = max(
+        0.05,
+        min(float(control.get("matrix_browser_start_barrier_poll_seconds") or 0.1), 1.0),
+    )
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        event = control.get("cancel_event")
+        if event is not None and event.is_set():
+            raise RuntimeError("Matrix publish was cancelled before every browser started.")
+        with db() as conn:
+            placeholders = ",".join("?" for _ in task_ids)
+            status_rows = conn.execute(
+                f"SELECT id, status FROM social_automation_tasks WHERE id IN ({placeholders})",
+                tuple(task_ids),
+            ).fetchall()
+        terminal = [
+            str(row["id"] or "")
+            for row in status_rows
+            if str(row["status"] or "") not in {"preparing", "queued", "running", "need_manual"}
+        ]
+        if terminal:
+            _signal_matrix_publish_runtime_stop(task_ids)
+            raise RuntimeError("A matrix publish route failed before every browser started.")
+        with _RUNNING_TASK_CONTROLS_LOCK:
+            ready_ids = [
+                current_id
+                for current_id in task_ids
+                if isinstance(_RUNNING_TASK_CONTROLS.get(current_id), dict)
+                and _RUNNING_TASK_CONTROLS[current_id].get("_matrix_browser_start_ready") is True
+            ]
+        if len(ready_ids) == len(task_ids):
+            release_index = task_ids.index(task_id) if task_id in task_ids else 0
+            stagger_seconds = max(
+                0.0,
+                min(
+                    float(control.get("matrix_browser_start_stagger_seconds") or 0.75),
+                    2.0,
+                ),
+            )
+            release_delay = release_index * stagger_seconds
+            if release_delay > 0:
+                if event is not None and hasattr(event, "wait"):
+                    if event.wait(release_delay):
+                        raise RuntimeError("Matrix publish was cancelled before page navigation.")
+                else:
+                    time.sleep(release_delay)
+            with db() as conn:
+                _insert_log(
+                    conn,
+                    task_id,
+                    "info",
+                    "matrix_browser_start_released",
+                    "Every matrix browser is ready; page navigation was released.",
+                    {
+                        "matrix_publish_batch_id": batch_id,
+                        "ready_count": len(ready_ids),
+                        "task_count": len(task_ids),
+                        "release_delay_seconds": round(release_delay, 2),
+                    },
+                )
+            return
+        if time.monotonic() >= deadline:
+            _signal_matrix_publish_runtime_stop(task_ids)
+            raise RuntimeError("Matrix browser start barrier timed out before page navigation.")
+        time.sleep(poll_seconds)
+
+
+def _run_matrix_browser_resource_phase(
+    control: dict[str, Any],
+    phase: str,
+    action: Callable[[], Any],
+) -> Any:
+    task = control.get("task") if isinstance(control.get("task"), dict) else {}
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    batch_id = str(payload.get("matrix_publish_batch_id") or "").strip()
+    if not batch_id:
+        return action()
+    task_id = str(control.get("current_task_id") or task.get("id") or "").strip()
+    clean_phase = str(phase or "browser_heavy_page").strip() or "browser_heavy_page"
+    started = time.monotonic()
+    acquired = _MATRIX_HEAVY_PAGE_SEMAPHORE.acquire(blocking=False)
+    if not acquired:
+        with db() as conn:
+            _insert_log(
+                conn,
+                task_id,
+                "info",
+                "matrix_resource_phase_wait",
+                "The browser task is waiting for a heavy-page resource slot.",
+                {"matrix_publish_batch_id": batch_id, "phase": clean_phase, "capacity": _MATRIX_HEAVY_PAGE_CAPACITY},
+            )
+        while not acquired:
+            event = control.get("cancel_event")
+            if event is not None and event.is_set():
+                raise RuntimeError("Matrix publish was cancelled while waiting for a browser resource slot.")
+            acquired = _MATRIX_HEAVY_PAGE_SEMAPHORE.acquire(timeout=0.25)
+    waited = max(0.0, time.monotonic() - started)
+    with db() as conn:
+        _insert_log(
+            conn,
+            task_id,
+            "info",
+            "matrix_resource_phase_acquired",
+            "The browser task acquired a heavy-page resource slot.",
+            {
+                "matrix_publish_batch_id": batch_id,
+                "phase": clean_phase,
+                "capacity": _MATRIX_HEAVY_PAGE_CAPACITY,
+                "wait_seconds": round(waited, 2),
+            },
+        )
+    try:
+        return action()
+    finally:
+        _MATRIX_HEAVY_PAGE_SEMAPHORE.release()
+        with db() as conn:
+            _insert_log(
+                conn,
+                task_id,
+                "info",
+                "matrix_resource_phase_released",
+                "The browser task released its heavy-page resource slot.",
+                {"matrix_publish_batch_id": batch_id, "phase": clean_phase, "capacity": _MATRIX_HEAVY_PAGE_CAPACITY},
+            )
+
+
+def _matrix_publish_submit_barrier_state(task_id: str) -> dict[str, Any]:
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        return {}
+    now = _now()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT status, payload_json FROM social_automation_tasks WHERE id = ?",
+            (clean_task_id,),
+        ).fetchone()
+        if row is None:
+            return {}
+        payload = _loads(row["payload_json"], {})
+        payload = dict(payload) if isinstance(payload, dict) else {}
+        batch_id = str(payload.get("matrix_publish_batch_id") or "").strip()
+        if not batch_id:
+            return {}
+        if str(row["status"] or "") not in {"running", "need_manual"}:
+            return {
+                "batch_id": batch_id,
+                "task_ids": [clean_task_id],
+                "terminal_task_ids": [clean_task_id],
+                "ready_task_ids": [],
+            }
+        if int(payload.get("_matrix_submit_ready_at") or 0) <= 0:
+            payload["_matrix_submit_ready_at"] = now
+            conn.execute(
+                "UPDATE social_automation_tasks SET payload_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(payload, ensure_ascii=False), now, clean_task_id),
+            )
+            _insert_log(
+                conn,
+                clean_task_id,
+                "info",
+                "matrix_publish_submit_ready",
+                "This browser reached the final publish button and is waiting for the other matrix browsers.",
+                {"matrix_publish_batch_id": batch_id},
+            )
+        rows = conn.execute(
+            """
+            SELECT id, status, payload_json
+            FROM social_automation_tasks
+            WHERE task_type = 'publish_post'
+              AND json_extract(payload_json, '$.matrix_publish_batch_id') = ?
+            ORDER BY created_at, id
+            """,
+            (batch_id,),
+        ).fetchall()
+    task_ids: list[str] = []
+    ready_task_ids: list[str] = []
+    terminal_task_ids: list[str] = []
+    for current in rows:
+        current_id = str(current["id"] or "")
+        current_status = str(current["status"] or "")
+        current_payload = _loads(current["payload_json"], {})
+        current_payload = current_payload if isinstance(current_payload, dict) else {}
+        task_ids.append(current_id)
+        if int(current_payload.get("_matrix_submit_ready_at") or 0) > 0:
+            ready_task_ids.append(current_id)
+        if current_status not in {"preparing", "queued", "running", "need_manual"}:
+            terminal_task_ids.append(current_id)
+    return {
+        "batch_id": batch_id,
+        "task_ids": task_ids,
+        "ready_task_ids": ready_task_ids,
+        "terminal_task_ids": terminal_task_ids,
+    }
+
+
+def _signal_matrix_publish_runtime_stop(task_ids: list[str]) -> None:
+    controls: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        for task_id in task_ids:
+            control = _RUNNING_TASK_CONTROLS.get(str(task_id or ""))
+            if not isinstance(control, dict) or id(control) in seen:
+                continue
+            seen.add(id(control))
+            controls.append(control)
+    for control in controls:
+        event = control.get("cancel_event")
+        if event is not None:
+            event.set()
+
+
+def _wait_for_matrix_publish_submit_barrier(control: dict[str, Any]) -> None:
+    task_id = str(control.get("current_task_id") or "")
+    first = _matrix_publish_submit_barrier_state(task_id)
+    batch_id = str(first.get("batch_id") or "")
+    if not batch_id:
+        return
+    timeout_seconds = max(
+        5,
+        min(
+            int(control.get("matrix_publish_submit_barrier_timeout_seconds") or 180),
+            300,
+        ),
+    )
+    poll_seconds = max(
+        0.05,
+        min(float(control.get("matrix_publish_submit_barrier_poll_seconds") or 0.25), 2.0),
+    )
+    deadline = time.monotonic() + timeout_seconds
+    state = first
+    while True:
+        event = control.get("cancel_event")
+        if event is not None and event.is_set():
+            raise RuntimeError("Matrix publish was cancelled before the submit barrier completed.")
+        task_ids = [str(value or "") for value in state.get("task_ids") or [] if str(value or "")]
+        terminal = [str(value or "") for value in state.get("terminal_task_ids") or [] if str(value or "")]
+        ready = [str(value or "") for value in state.get("ready_task_ids") or [] if str(value or "")]
+        if terminal:
+            _signal_matrix_publish_runtime_stop(task_ids)
+            raise RuntimeError("A matrix publish route failed before submit; every remaining route was stopped before clicking Post.")
+        if task_ids and len(ready) == len(task_ids):
+            with db() as conn:
+                _insert_log(
+                    conn,
+                    task_id,
+                    "info",
+                    "matrix_publish_submit_released",
+                    "Every matrix browser reached the final publish button; submit was released.",
+                    {
+                        "matrix_publish_batch_id": batch_id,
+                        "ready_count": len(ready),
+                        "task_count": len(task_ids),
+                    },
+                )
+            return
+        if time.monotonic() >= deadline:
+            _signal_matrix_publish_runtime_stop(task_ids)
+            raise RuntimeError("Matrix publish submit barrier timed out; no route was allowed to click Post.")
+        time.sleep(poll_seconds)
+        state = _matrix_publish_submit_barrier_state(task_id)
+
+
 def _run_publish_submit_guard(control: dict[str, Any], action: Callable[[], Any]) -> Any:
+    _wait_for_matrix_publish_submit_barrier(control)
     lock = control.get("publish_submit_lock")
     if lock is None:
         return action()
@@ -9453,11 +9760,14 @@ def _finish_task(
         if not task:
             return False
         task_type = str(task["task_type"] or "")
+        publish_preview = task_type == "publish_post" and _is_publish_preview_result(result)
+        if publish_preview:
+            sync_persona_archive = False
         if task_type == "publish_post" and status == "success":
             confirmed_url = _confirmed_published_url(result, task["platform"])
             if confirmed_url:
                 result = {**(result or {}), "published_url": confirmed_url}
-            else:
+            elif not publish_preview:
                 # Do not present a browser-side completion as a real publish
                 # when the runner did not confirm the resulting public link.
                 # A submitted attempt remains an unknown safety reservation,
@@ -9475,6 +9785,7 @@ def _finish_task(
             existing_committed
             or (
                 str(task["task_type"] or "") == "publish_post"
+                and not publish_preview
                 and (status == "success" or bool((result or {}).get("publish_submitted")))
             )
         )
@@ -9506,7 +9817,9 @@ def _finish_task(
             if current is not None and str(current["status"] or "") in {"failed", "cancelled"}:
                 _settle_or_release_task_billing_reservation(conn, current, now=now)
             return False
-        if str(task["task_type"] or "") == "publish_post":
+        if publish_preview:
+            _release_daily_publish_slot(conn, task_id, "preview_only_no_submit", now=now)
+        elif str(task["task_type"] or "") == "publish_post":
             _ensure_daily_publish_slot(conn, task, now=now)
             if status == "success":
                 _set_daily_publish_slot_state(
@@ -9542,7 +9855,9 @@ def _finish_task(
         credit_cost_units = 0
         free_image_count = 0
         if reservation_id and status != "need_manual":
-            if status == "success" or existing_committed or billing_committed_quantity > 0:
+            if publish_preview:
+                _release_task_billing_reservation(conn, task, now=now)
+            elif status == "success" or existing_committed or billing_committed_quantity > 0:
                 commercial_billing.settle_reservation(
                     conn,
                     reservation_id,
@@ -10072,6 +10387,16 @@ def _normalize_instagram_post_url(value: Any) -> str:
         if match:
             return f"https://www.instagram.com/{match.group(1).lower()}/{match.group(2)}/"
     return ""
+
+
+def _is_publish_preview_result(result: dict[str, Any] | None) -> bool:
+    payload = result if isinstance(result, dict) else {}
+    return bool(
+        payload.get("ok") is True
+        and payload.get("preview_only") is True
+        and payload.get("ready_to_submit") is True
+        and payload.get("submitted") is False
+    )
 
 
 def _confirmed_published_url(result: dict[str, Any] | None, platform: Any) -> str:

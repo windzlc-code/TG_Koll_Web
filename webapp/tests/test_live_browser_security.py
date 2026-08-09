@@ -1431,8 +1431,8 @@ def test_starting_session_is_visible_before_kasmvnc_is_ready(tmp_path, monkeypat
         assert observed["status"] == "starting"
         assert saved_statuses == ["starting", "running"]
         assert session.status == "running"
-        assert (session.width, session.height) == (640, 360)
-        assert "640x360" in popen.call_args.args[0]
+        assert (session.width, session.height) == (1280, 720)
+        assert "1280x720" in popen.call_args.args[0]
         assert "DISPLAY" not in popen.call_args.kwargs["env"]
     finally:
         live_browser._SESSIONS.clear()

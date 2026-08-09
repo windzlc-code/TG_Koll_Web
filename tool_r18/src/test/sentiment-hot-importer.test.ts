@@ -253,6 +253,25 @@ describe("sentiment hot importer", () => {
     }));
   });
 
+  it("separates hot-keyword strategy caches by configured platform tag keywords", () => {
+    const base = {
+      archive: {
+        id: "persona-tag-keywords",
+        name: "beauty creator",
+        content: "beauty routines",
+        setup: { genres: ["beauty"], trendTopics: ["skincare routine"] },
+      } as any,
+      prompt: "",
+      personaText: "persona: beauty creator",
+    };
+
+    expect(buildSentimentHotSearchStrategyCacheKey(base))
+      .not.toBe(buildSentimentHotSearchStrategyCacheKey({
+        ...base,
+        archive: { ...base.archive, setup: { ...base.archive.setup, trendTopics: ["makeup review"] } },
+      }));
+  });
+
   it("separates hot-keyword strategy caches by requested writing locale", () => {
     const base = {
       archive: { id: "persona-1", name: "hairdresser", content: "hair and beauty" },
@@ -901,7 +920,7 @@ describe("sentiment hot importer", () => {
     expect(getSentimentHotExcludedIds(archiveId).has("candidate-a")).toBe(true);
   });
 
-  it("keeps older high-heat candidates behind fresh candidates for gap filling", () => {
+  it("prioritizes heat before publish time for gap filling", () => {
     const content = "海外信貸市場最近整理信用卡週轉、銀行貸款、收入證明和負債比例，內容包含完整申請流程、利率比較、還款安排與風險提醒，適合金融人設改寫成實用推文。";
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
@@ -930,7 +949,7 @@ describe("sentiment hot importer", () => {
       },
     ] as any, 10, { keywords: ["海外信貸", "銀行貸款", "信用卡"] });
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["fresh-hot-30d", "old-hot"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["old-hot", "fresh-hot-30d"]);
   });
 
   it("filters candidates by the requested freshness window", () => {
@@ -977,7 +996,7 @@ describe("sentiment hot importer", () => {
     expect(candidates).toEqual([]);
   });
 
-  it("prioritizes a fresher unshown candidate over a hotter older candidate", () => {
+  it("prioritizes a hotter older candidate over a fresher lower-heat candidate", () => {
     const now = Date.now();
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
@@ -1011,7 +1030,52 @@ describe("sentiment hot importer", () => {
       searchMode: "normal",
     });
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["recent-lower-heat", "older-higher-heat"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["older-higher-heat", "recent-lower-heat"]);
+  });
+
+  it("uses publish time and then text length when candidate heat is equal", () => {
+    const now = Date.now();
+    const baseContent = "海外金融市場近期持續討論信用卡週轉、銀行信貸與貸款利率，完整比較收入證明、負債比例、還款期限與每月現金流，提醒申請前先確認審核條件和長期成本。";
+    const candidates = finalizeSentimentHotCandidatesForDisplay([
+      {
+        id: "older-long",
+        platform: "threads",
+        sourceUrl: "https://www.threads.net/@finance/post/older-long",
+        author: "finance",
+        content: `${baseContent} 這篇另外整理了銀行審核流程與風險提醒。`,
+        media: [],
+        hotScore: 5000,
+        metrics: {},
+        publishedAt: new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString(),
+        capturedAt: new Date(now).toISOString(),
+      },
+      {
+        id: "newer-short",
+        platform: "threads",
+        sourceUrl: "https://www.threads.net/@finance/post/newer-short",
+        author: "finance",
+        content: baseContent,
+        media: [],
+        hotScore: 5000,
+        metrics: {},
+        publishedAt: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+        capturedAt: new Date(now).toISOString(),
+      },
+      {
+        id: "newer-long",
+        platform: "threads",
+        sourceUrl: "https://www.threads.net/@finance/post/newer-long",
+        author: "finance",
+        content: `${baseContent} 同时补充实际案例、资料清单和风险提醒。`,
+        media: [],
+        hotScore: 5000,
+        metrics: {},
+        publishedAt: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+        capturedAt: new Date(now).toISOString(),
+      },
+    ] as any, 10, { keywords: ["海外金融", "银行信贷", "信用卡"], searchMode: "normal" });
+
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["newer-long", "newer-short", "older-long"]);
   });
 
   it("does not accept unrelated travel content from a weak fragment of a real-estate query", () => {

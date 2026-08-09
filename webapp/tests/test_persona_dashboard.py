@@ -3659,7 +3659,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             server._PERSONA_HOT_INTERACTIVE_PROCESS = previous_process
             server._PERSONA_HOT_INTERACTIVE_ARCHIVE_ID = previous_archive_id
 
-    def test_rsshub_dashboard_refresh_does_not_reserve_browser_slot(self):
+    def test_rsshub_dashboard_refresh_reserves_browser_slot_for_detail_backfill(self):
         task_id = "pdr_rsshub_test"
         process = mock.Mock()
         process.poll.return_value = 0
@@ -3671,7 +3671,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 "status": "queued",
             }
         try:
-            with mock.patch.object(server, "acquire_external_browser_lease") as acquire_lease, \
+            with mock.patch.object(server, "acquire_external_browser_lease", return_value="lease-rsshub") as acquire_lease, \
                  mock.patch.object(server, "release_external_browser_lease") as release_lease, \
                  mock.patch.object(server.subprocess, "Popen", return_value=process) as popen:
                 server._persona_dashboard_refresh_worker_v2(
@@ -3684,8 +3684,43 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 server.PERSONA_DASHBOARD_REFRESH_TASKS.pop(task_id, None)
 
         popen.assert_called_once()
-        acquire_lease.assert_not_called()
-        release_lease.assert_not_called()
+        acquire_lease.assert_called_once_with("persona-dashboard-refresh")
+        release_lease.assert_called_once_with("lease-rsshub")
+
+    def test_auto_dashboard_refresh_defers_to_matrix_browser_pressure(self):
+        task_id = "pdr_matrix_pressure_test"
+        process = mock.Mock()
+        process.poll.return_value = None
+        process.returncode = -15
+        with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+            server.PERSONA_DASHBOARD_REFRESH_TASKS[task_id] = {
+                "id": task_id,
+                "status": "queued",
+                "trigger": "auto_monitor",
+            }
+        try:
+            with mock.patch.object(server, "acquire_external_browser_lease", return_value="lease-rsshub"), \
+                 mock.patch.object(server, "release_external_browser_lease") as release_lease, \
+                 mock.patch.object(
+                     server,
+                     "_matrix_publish_browser_pressure_active",
+                     side_effect=[False, True],
+                 ), \
+                 mock.patch.object(server, "_terminate_persona_hot_process") as terminate, \
+                 mock.patch.object(server.subprocess, "Popen", return_value=process):
+                server._persona_dashboard_refresh_worker_v2(
+                    task_id,
+                    source="rsshub",
+                    archive_ids=[],
+                )
+        finally:
+            with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+                task = dict(server.PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id, {}))
+                server.PERSONA_DASHBOARD_REFRESH_TASKS.pop(task_id, None)
+
+        self.assertEqual(task.get("status"), "deferred")
+        terminate.assert_called_once_with(process)
+        release_lease.assert_called_once_with("lease-rsshub")
 
     def test_cancel_persona_hot_candidates_endpoint(self):
         self._write_archives()
@@ -3780,7 +3815,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
                     "limit": 6,
                     "freshness_days": 30,
                     "keywords": ["history", "teacher", "history"],
-                    "selected_memory_ids": ["mem-1"],
                 },
             )
 
@@ -3802,7 +3836,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["searchMode"], "strict")
         self.assertEqual(payload["freshnessDays"], 15)
         self.assertEqual(payload["keywords"], ["history", "teacher"])
-        self.assertEqual(payload["memorySummaries"], ["记忆一"])
+        self.assertNotIn("memorySummaries", payload)
         self.assertIs(payload["recordShown"], False)
         self.assertNotIn("forceLive", payload)
         self.assertNotIn("deferBackgroundRefresh", payload)
@@ -3831,7 +3865,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
                     prompt="prepare keywords",
                     search_mode="normal",
                     writing_locale="zh-CN",
-                    selected_memory_ids=["mem-1"],
                 ),
             )
 
@@ -3844,7 +3877,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["prompt"], "prepare keywords")
         self.assertEqual(payload["searchMode"], "normal")
         self.assertEqual(payload["writingLocale"], "zh-CN")
-        self.assertEqual(payload["memorySummaries"], ["memory one"])
+        self.assertNotIn("memorySummaries", payload)
 
     def test_hot_keyword_gateway_html_error_is_not_exposed(self):
         detail = server._normalize_persona_hot_workflow_error_detail(
@@ -3877,7 +3910,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             [item["url"] for item in media],
         )
 
-    def test_fetch_persona_hot_candidates_uses_default_memories_without_web_params(self):
+    def test_fetch_persona_hot_candidates_does_not_inject_memories(self):
         self._write_archives()
         (self.tool_runtime_dir / "persona_memory.json").write_text(json.dumps({
             "persona-1": [
@@ -3906,7 +3939,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["prompt"], "")
         self.assertFalse(payload["refresh"])
         self.assertEqual(payload["limit"], 10)
-        self.assertEqual(payload["memorySummaries"], [f"记忆{index}" for index in range(10, 2, -1)])
+        self.assertNotIn("memorySummaries", payload)
 
     def test_import_persona_hot_candidates_returns_hot_source_meta(self):
         self._write_archives()
@@ -4824,7 +4857,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(publish_resp.status_code, 200)
         self.assertEqual(mocked.call_args.args[0].max_retries, 0)
 
-    def test_publish_persona_post_rejects_batch_larger_than_five(self):
+    def test_publish_persona_post_rejects_batch_larger_than_platform_limit(self):
         self._write_archives()
         self._insert_social_account(account_id="acct-batch-limit", platform="threads", username="threads_user")
         create_resp = self.client.post(
@@ -4841,16 +4874,16 @@ class PersonaDashboardApiTests(unittest.TestCase):
                     "platform": "threads",
                     "publish_batch_id": "batch-too-large",
                     "publish_sequence_index": 1,
-                    "publish_sequence_total": 6,
-                    "publish_sequence_targets": [f"发布第{index}篇" for index in range(1, 7)],
+                    "publish_sequence_total": 3,
+                    "publish_sequence_targets": [f"发布第{index}篇" for index in range(1, 4)],
                 },
             )
 
         self.assertEqual(publish_resp.status_code, 400)
-        self.assertEqual(publish_resp.json()["detail"], "单次连续发布最多选择 5 篇。")
+        self.assertEqual(publish_resp.json()["detail"], "单次连续发布最多选择 2 篇。")
         mocked.assert_not_called()
 
-    def test_matrix_publish_rejects_more_than_five_posts_per_persona(self):
+    def test_matrix_publish_rejects_more_than_platform_limit_per_persona(self):
         self._write_archives()
 
         response = self.client.post(
@@ -4859,12 +4892,12 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 "persona_ids": ["persona-1"],
                 "source": "posts",
                 "platform": "threads",
-                "per_persona_count": 6,
+                "per_persona_count": 3,
             },
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["detail"], "每个人设单次连续发布最多选择 5 篇。")
+        self.assertEqual(response.json()["detail"], "Threads 单个账号每批最多发布 2 篇。")
 
     def test_publish_persona_post_reuses_active_task_for_same_draft(self):
         self._write_archives()
@@ -5367,18 +5400,22 @@ class PersonaDashboardApiTests(unittest.TestCase):
         archives_path.write_text(json.dumps(archives), encoding="utf-8")
         self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user")
 
-        resp = self.client.post(
-            "/api/persona_dashboard/automation/tasks",
-            json={
-                "persona_id": "persona-1",
-                "account_id": "acct-threads",
-                "platform": "threads",
-                "task_type": "threads_auto_reply",
-                "priority": 50,
-                "max_retries": 2,
-                "payload": {"strategy_id": "comment_recent_7d"},
-            },
-        )
+        with (
+            mock.patch.object(social_automation_api, "wake_social_automation_worker"),
+            mock.patch.object(social_automation_api, "run_social_automation_once"),
+        ):
+            resp = self.client.post(
+                "/api/persona_dashboard/automation/tasks",
+                json={
+                    "persona_id": "persona-1",
+                    "account_id": "acct-threads",
+                    "platform": "threads",
+                    "task_type": "threads_auto_reply",
+                    "priority": 50,
+                    "max_retries": 2,
+                    "payload": {"strategy_id": "comment_recent_7d"},
+                },
+            )
         self.assertEqual(resp.status_code, 200)
         payload = resp.json()["task"]["payload"]
         self.assertEqual(payload["threads_handle"], "history_teacher")

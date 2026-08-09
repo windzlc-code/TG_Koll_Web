@@ -2926,6 +2926,12 @@ function statusLabel(status) {
     threads_auto_reply: "Threads 自动回复",
     instagram_auto_reply: "Instagram 自动回复",
     browse_feed: "浏览动态",
+    browse_profile: "浏览主页",
+    comment_post: "评论帖子",
+    reply_comment: "回复评论",
+    like_post: "点赞帖子",
+    share_post: "分享帖子",
+    repost_post: "转发帖子",
     login_wait_timeout: "登录等待超时",
     browser_launch: "启动浏览器",
     prepare: "准备执行",
@@ -3774,7 +3780,7 @@ function personaFormState(personaId) {
   const key = String(personaId || "").trim();
   if (!key) {
     return {
-      generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", writingLocale: PERSONA_DEFAULT_WRITING_LOCALE, prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, postDirectionsByMode: { tweet: defaultPersonaPostDirectionState(), tweet_media: defaultPersonaPostDirectionState() }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotSearchMode: "strict", hotFreshnessMode: "default", hotFreshnessDays: 7, hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
+      generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", writingLocale: PERSONA_DEFAULT_WRITING_LOCALE, prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, postDirectionsByMode: { tweet: defaultPersonaPostDirectionState(), tweet_media: defaultPersonaPostDirectionState() }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotSearchMode: "strict", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
       draft: defaultPersonaDraftForm(),
       media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1", selectedImageId: "" },
@@ -3805,8 +3811,6 @@ function personaFormState(personaId) {
         hotPrompt: "",
         hotKeywordText: "",
         hotSearchMode: "strict",
-        hotFreshnessMode: "default",
-        hotFreshnessDays: 7,
         hotDeletedMediaByCandidate: {},
         hotEditedContentByCandidate: {},
         hotSelectedMediaIndexByCandidate: {},
@@ -4414,17 +4418,7 @@ function normalizePersonaHotSearchMode(value) {
 }
 
 function personaHotSearchModeLabel(value) {
-  return normalizePersonaHotSearchMode(value) === "normal" ? "普通" : "严格";
-}
-
-function normalizePersonaHotFreshnessDays(value) {
-  const days = Math.round(Number(value));
-  return Number.isFinite(days) ? Math.min(15, Math.max(0, days)) : 0;
-}
-
-function personaHotFreshnessLabel(value) {
-  const days = normalizePersonaHotFreshnessDays(value);
-  return days > 0 ? `${days} 天内` : "不限时间";
+  return normalizePersonaHotSearchMode(value) === "normal" ? "泛垂直" : "垂直";
 }
 
 function parsePersonaHotKeywordText(value) {
@@ -4478,11 +4472,7 @@ function personaHotCandidates(persona = selectedPersona()) {
       media_items: Array.isArray(row.media_items) ? row.media_items : [],
     });
   });
-  return [...deduped.values()].sort((left, right) => {
-    const scoreDiff = Number(right.score || 0) - Number(left.score || 0);
-    if (scoreDiff) return scoreDiff;
-    return timeValue(right.captured_at || right.published_at) - timeValue(left.captured_at || left.published_at);
-  });
+  return [...deduped.values()];
 }
 
 function personaHotPreviewCandidate(persona = selectedPersona()) {
@@ -5776,10 +5766,8 @@ function socialTaskToastTerminal(task) {
   return ["success", "failed", "cancelled", "need_manual"].includes(status);
 }
 
-function socialTaskUsesIndependentTerminalToast(task, status = socialTaskPresentationStatus(task)) {
-  const taskType = String(task?.task_type || "").trim();
-  return ["threads_warmup", "instagram_warmup"].includes(taskType)
-    && ["success", "failed", "cancelled", "need_manual"].includes(String(status || "").trim());
+function socialTaskUsesIndependentToast(task) {
+  return Boolean(String(task?.id || "").trim());
 }
 
 function clearDeliveredToastStates(toastKey) {
@@ -5935,7 +5923,7 @@ function syncSocialTaskToast(task, { force = false } = {}) {
     personaId: task?.persona_id || "",
     scheduled: waitingForSchedule,
     target: socialTaskToastTarget(task, status),
-    stack: socialTaskUsesIndependentTerminalToast(task, status),
+    stack: socialTaskUsesIndependentToast(task),
   });
   if (resolved.transition && resolved.nextTask) {
     if (activeTransition?.timer) window.clearTimeout(activeTransition.timer);
@@ -6193,10 +6181,37 @@ function taskQueuePersonaType(task) {
   return String(task?.task_type || "").trim();
 }
 
+function taskQueuePersonaTypeCatalog(rows = []) {
+  const catalog = [
+    "publish_post",
+    "check_login",
+    "open_login",
+    "browse_feed",
+    "browse_profile",
+    "threads_warmup",
+    "threads_auto_reply",
+    "instagram_warmup",
+    "instagram_auto_reply",
+    "comment_post",
+    "reply_comment",
+    "like_post",
+    "share_post",
+    "repost_post",
+  ];
+  const known = new Set(catalog);
+  (Array.isArray(rows) ? rows : []).map(taskQueuePersonaType).filter(Boolean).forEach((type) => {
+    if (!known.has(type)) {
+      known.add(type);
+      catalog.push(type);
+    }
+  });
+  return catalog;
+}
+
 function filterTaskQueuePersonaRows(rows = []) {
   const source = Array.isArray(rows) ? rows : [];
   let selectedType = String(state.taskQueuePersonaTypeFilter || "all");
-  if (selectedType !== "all" && !source.some((task) => taskQueuePersonaType(task) === selectedType)) {
+  if (selectedType !== "all" && !taskQueuePersonaTypeCatalog(source).includes(selectedType)) {
     selectedType = "all";
     state.taskQueuePersonaTypeFilter = "all";
   }
@@ -10174,37 +10189,69 @@ function renderPublishHistoryRefreshContent(refreshing = false, refreshStatus = 
   return `${renderRefreshIcon()}<span>${esc(label)}</span>`;
 }
 
+function positionPersonaHistoryFilterMenu(menu) {
+  if (!menu?.open) return;
+  const trigger = menu.querySelector("summary");
+  const options = menu.querySelector(".persona-history-filter-options");
+  if (!trigger || !options) return;
+  menu.classList.remove("opens-upward");
+  options.style.removeProperty("max-height");
+  const dock = document.querySelector(".mobile-task-dock");
+  const dockRect = dock && window.getComputedStyle(dock).display !== "none" ? dock.getBoundingClientRect() : null;
+  const toolbar = document.querySelector(".mobile-page-toolbar");
+  const toolbarRect = toolbar && window.getComputedStyle(toolbar).display !== "none" ? toolbar.getBoundingClientRect() : null;
+  const triggerRect = trigger.getBoundingClientRect();
+  const viewportBottom = dockRect?.top || window.innerHeight;
+  const viewportTop = toolbarRect && toolbarRect.bottom <= triggerRect.top ? Math.max(0, toolbarRect.bottom) : 0;
+  const availableBelow = Math.max(0, viewportBottom - triggerRect.bottom - 8);
+  const availableAbove = Math.max(0, triggerRect.top - viewportTop - 8);
+  const preferredHeight = Math.min(176, options.scrollHeight || 176);
+  const opensUpward = availableBelow < preferredHeight && availableAbove > availableBelow;
+  const availableHeight = opensUpward ? availableAbove : availableBelow;
+  options.style.maxHeight = `${Math.max(72, Math.min(176, Math.floor(availableHeight)))}px`;
+  menu.classList.toggle("opens-upward", opensUpward);
+}
+
 function renderPersonaHistoryFilters(rows = [], persona = selectedPersona()) {
   const filters = state.personaHistoryFilters || {};
   const personaId = String(persona?.id || "");
   const refreshing = Boolean(personaId && state.publishHistoryRefreshPersonaId === personaId && state.publishHistoryRefreshTaskId);
   const refreshStatus = refreshing ? state.publishHistoryRefreshStatus : null;
+  const contentOptions = [
+    ["all", "全部内容"],
+    ["text", "有文字"],
+    ["image", "有图片"],
+    ["video", "有视频"],
+    ["media", "有媒体"],
+  ];
+  const sortOptions = [
+    ["hot_desc", "热度最高"],
+    ["hot_asc", "热度最低"],
+    ["time_desc", "发布时间最新"],
+    ["time_asc", "发布时间最早"],
+    ["likes_desc", "点赞最多"],
+    ["comments_desc", "评论最多"],
+    ["reposts_desc", "转发最多"],
+    ["shares_desc", "分享最多"],
+    ["views_desc", "逐帖浏览最多"],
+  ];
+  const filterMenus = [
+    { key: "content", label: "内容筛选", icon: renderPersonaHistoryContentFilterIcon(), options: contentOptions },
+    { key: "sort", label: "排序方式", icon: renderPersonaHistorySortFilterIcon(), options: sortOptions },
+  ];
   return `<div class="persona-history-toolbar">
     <div class="persona-history-filters" aria-label="历史推文筛选">
-      <label class="persona-history-filter-trigger${filters.content !== "all" ? " is-active" : ""}" title="内容筛选">
-        <span class="sr-only">内容筛选</span>
-        <span class="persona-history-filter-icon">${renderPersonaHistoryContentFilterIcon()}</span>
-        <select data-persona-history-filter="content" aria-label="内容筛选">
-        <option value="all" ${filters.content === "all" ? "selected" : ""}>全部内容</option>
-        <option value="text" ${filters.content === "text" ? "selected" : ""}>有文字</option>
-        <option value="image" ${filters.content === "image" ? "selected" : ""}>有图片</option>
-        <option value="video" ${filters.content === "video" ? "selected" : ""}>有视频</option>
-        <option value="media" ${filters.content === "media" ? "selected" : ""}>有媒体</option>
-      </select></label>
-      <label class="persona-history-filter-trigger${filters.sort !== "hot_desc" ? " is-active" : ""}" title="排序方式">
-        <span class="sr-only">排序方式</span>
-        <span class="persona-history-filter-icon">${renderPersonaHistorySortFilterIcon()}</span>
-        <select data-persona-history-filter="sort" aria-label="排序方式">
-        <option value="hot_desc" ${filters.sort === "hot_desc" ? "selected" : ""}>热度最高</option>
-        <option value="hot_asc" ${filters.sort === "hot_asc" ? "selected" : ""}>热度最低</option>
-        <option value="time_desc" ${filters.sort === "time_desc" ? "selected" : ""}>发布时间最新</option>
-        <option value="time_asc" ${filters.sort === "time_asc" ? "selected" : ""}>发布时间最早</option>
-        <option value="likes_desc" ${filters.sort === "likes_desc" ? "selected" : ""}>点赞最多</option>
-        <option value="comments_desc" ${filters.sort === "comments_desc" ? "selected" : ""}>评论最多</option>
-        <option value="reposts_desc" ${filters.sort === "reposts_desc" ? "selected" : ""}>转发最多</option>
-        <option value="shares_desc" ${filters.sort === "shares_desc" ? "selected" : ""}>分享最多</option>
-        <option value="views_desc" ${filters.sort === "views_desc" ? "selected" : ""}>逐帖浏览最多</option>
-      </select></label>
+      ${filterMenus.map(({ key, label, icon, options }) => {
+        const defaultValue = key === "content" ? "all" : "hot_desc";
+        return `<details class="persona-history-filter-menu" data-console-dropdown data-persona-history-filter-menu>
+          <summary class="persona-history-filter-trigger${filters[key] !== defaultValue ? " is-active" : ""}" title="${label}" aria-label="${label}">
+            <span class="persona-history-filter-icon">${icon}</span>
+          </summary>
+          <div class="persona-history-filter-options" role="listbox" aria-label="${label}">
+            ${options.map(([value, optionLabel]) => `<button type="button" role="option" aria-selected="${filters[key] === value ? "true" : "false"}" class="${filters[key] === value ? "is-active" : ""}" data-persona-history-filter-option="${key}" data-value="${value}">${optionLabel}</button>`).join("")}
+          </div>
+        </details>`;
+      }).join("")}
     </div>
     <div class="persona-history-toolbar-actions">
       <button type="button" class="persona-history-refresh" data-publish-history-refresh aria-busy="${refreshing ? "true" : "false"}" ${refreshing ? "disabled" : ""}>${renderPublishHistoryRefreshContent(refreshing, refreshStatus)}</button>
@@ -11245,17 +11292,17 @@ function renderTaskQueuePersonaSelector() {
 }
 
 function renderTaskQueuePersonaTypeFilter(rows = []) {
-  const types = Array.from(new Set((Array.isArray(rows) ? rows : []).map(taskQueuePersonaType).filter(Boolean)));
   const selectedType = String(state.taskQueuePersonaTypeFilter || "all");
+  const options = [["all", "全部类型"], ...taskQueuePersonaTypeCatalog(rows).map((type) => [type, statusLabel(type)])];
   return `
-    <label class="persona-history-filter-trigger task-queue-type-filter ${selectedType !== "all" ? "is-active" : ""}" title="筛选日志类型">
-      <span class="sr-only">筛选日志类型</span>
-      <span class="persona-history-filter-icon">${renderTaskQueueFilterIcon()}</span>
-      <select data-task-queue-type-filter aria-label="筛选日志类型">
-        <option value="all" ${selectedType === "all" ? "selected" : ""}>全部类型</option>
-        ${types.map((type) => `<option value="${esc(type)}" ${selectedType === type ? "selected" : ""}>${esc(statusLabel(type))}</option>`).join("")}
-      </select>
-    </label>`;
+    <details class="persona-history-filter-menu task-queue-type-filter" data-console-dropdown data-task-queue-type-filter-menu>
+      <summary class="persona-history-filter-trigger ${selectedType !== "all" ? "is-active" : ""}" title="筛选日志类型" aria-label="筛选日志类型">
+        <span class="persona-history-filter-icon">${renderTaskQueueFilterIcon()}</span>
+      </summary>
+      <div class="persona-history-filter-options" role="listbox" aria-label="筛选日志类型">
+        ${options.map(([value, label]) => `<button type="button" role="option" aria-selected="${selectedType === value ? "true" : "false"}" class="${selectedType === value ? "is-active" : ""}" data-task-queue-type-filter-option data-value="${esc(value)}">${esc(label)}</button>`).join("")}
+      </div>
+    </details>`;
 }
 
 function renderTaskQueueView() {
@@ -11315,12 +11362,12 @@ function renderTaskQueueView() {
       title: "当前人设自动化队列",
       description: persona ? `这里统一查看「${persona.name || persona.id}」的浏览器自动化任务，不再单独放在人设页签里。` : "先在右侧点选一个人设，这里会同步显示对应自动化队列。",
       extraActions: `
+        ${persona ? renderTaskQueuePersonaTypeFilter(personaSourceRows) : ""}
         <button type="button" class="persona-mobile-list-toggle task-queue-persona-select-button" data-persona-mobile-list-toggle="taskQueuePersonaSidebar" aria-controls="taskQueuePersonaSidebar" aria-expanded="false" title="选择人设" aria-label="选择人设">
           <svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path>
           </svg>
-        </button>
-        ${persona ? renderTaskQueuePersonaTypeFilter(personaSourceRows) : ""}`,
+        </button>`,
       actions: `
         <div class="task-queue-actionbar">
           ${renderTaskQueueBulkControls("persona")}
@@ -20825,7 +20872,6 @@ async function preparePersonaHotKeywords(refresh = false) {
         writing_locale: PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.writingLocale || ""))
           ? String(form.writingLocale)
           : PERSONA_DEFAULT_WRITING_LOCALE,
-        selected_memory_ids: Array.isArray(form.selectedMemoryIds) ? form.selectedMemoryIds : [],
       }),
     }, 90000);
     const keywords = Array.isArray(result.keywords) ? result.keywords.map((item) => String(item || "").trim()).filter(Boolean) : [];
@@ -20880,7 +20926,6 @@ async function fetchPersonaHotCandidates(refresh = false) {
   const form = personaFormState(persona.id).generate;
   const previousCandidates = personaHotCandidates(persona);
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
-  form.hotFreshnessDays = normalizePersonaHotFreshnessDays(form.hotFreshnessDays);
   const hotState = state.personaHotCandidateResults[String(persona.id)] || {};
   let keywords = parsePersonaHotKeywordText(personaHotKeywordText(form, hotState));
   try {
@@ -20918,12 +20963,9 @@ async function fetchPersonaHotCandidates(refresh = false) {
         writing_locale: PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.writingLocale || ""))
           ? String(form.writingLocale)
           : PERSONA_DEFAULT_WRITING_LOCALE,
-        freshness_days: form.hotFreshnessDays,
+        freshness_days: 7,
         keywords,
-        // A positive freshness window is an explicit request for fresh-only
-        // candidates.  Keep the legacy path available when the user enters 0
-        // (unbounded freshness), which is also how older callers behaved.
-        freshness_policy: form.hotFreshnessDays > 0 ? "strict" : "legacy",
+        freshness_policy: "strict",
       }),
     }, 15000);
     const taskId = String(task?.id || "").trim();
@@ -20956,7 +20998,6 @@ async function fetchPersonaHotCandidates(refresh = false) {
       cookie_statuses: Array.isArray(result.cookie_statuses) ? result.cookie_statuses : [],
       warnings: Array.isArray(result.warnings) ? result.warnings : [],
       search_mode: normalizePersonaHotSearchMode(result.search_mode || form.hotSearchMode),
-      freshness_days: normalizePersonaHotFreshnessDays(result.freshness_days ?? form.hotFreshnessDays),
       fetched_at: new Date().toISOString(),
     };
     form.hotKeywordText = formatPersonaHotKeywordText(state.personaHotCandidateResults[String(persona.id)].keywords);
@@ -23313,24 +23354,15 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const keywordBusy = isActionLocked("persona", persona?.id || "", "hot_keywords");
   const hotBusyStartedAt = actionLockStartedAt("persona", persona?.id || "", "hot_candidates");
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode || hotState.search_mode);
-  const hasHotFreshnessMode = form.hotFreshnessMode === "custom" || form.hotFreshnessMode === "default";
-  form.hotFreshnessDays = normalizePersonaHotFreshnessDays(hasHotFreshnessMode ? form.hotFreshnessDays : (hotState.freshness_days ?? form.hotFreshnessDays));
   const hotMode = form.hotSearchMode;
-  const hotFreshnessDays = form.hotFreshnessDays;
-  const hotFreshnessMode = form.hotFreshnessMode === "custom" || hotFreshnessDays !== 7 ? "custom" : "default";
   const controlsBusy = hotBusy || keywordBusy;
-  const hotFreshnessOptions = Array.from({ length: 16 }, (_, days) => ({
-    days,
-    label: days === 0 ? "不限时间" : `${days} 天内`,
-  }));
-  form.hotFreshnessMode = hotFreshnessMode;
   return `
     <div class="persona-hot-filters">
       <div class="persona-hot-mode-row">
         <div class="automation-capsule-tabs persona-hot-mode-tabs" aria-label="热点抓取方式">
           ${[
-            ["normal", "普通"],
-            ["strict", "严格"],
+            ["normal", "泛垂直"],
+            ["strict", "垂直"],
           ].map(([value, label]) => `
             <button type="button" data-persona-hot-search-mode="${esc(value)}" class="${hotMode === value ? "is-active" : ""}" ${controlsBusy ? "disabled" : ""}>${esc(label)}</button>
           `).join("")}
@@ -23338,25 +23370,6 @@ function renderPersonaHotCandidatePicker(persona, form) {
         <small>${hotMode === "normal" ? "泛垂直：覆盖同领域宽泛热点" : "垂直：更贴合当前人设关键词"}</small>
       </div>
       <div class="row-actions persona-hot-fetch-toolbar">
-        <div class="persona-hot-time-window">
-          <span>热点时限</span>
-          <div class="automation-capsule-tabs persona-hot-freshness-tabs" aria-label="热点时限模式">
-            <button type="button" data-persona-hot-freshness-mode="default" class="${hotFreshnessMode === "default" ? "is-active" : ""}" ${controlsBusy ? "disabled" : ""}>保持默认</button>
-            <button type="button" data-persona-hot-freshness-mode="custom" class="${hotFreshnessMode === "custom" ? "is-active" : ""}" ${controlsBusy ? "disabled" : ""}>自定义</button>
-          </div>
-          <label class="persona-hot-freshness-control" title="${hotFreshnessMode === "custom" ? "选择热点时限" : "默认热点时限"}">
-            ${hotFreshnessMode === "custom"
-              ? (hotBusy
-                ? `<span class="persona-hot-freshness-default" aria-label="热点时限天数">${esc(personaHotFreshnessLabel(hotFreshnessDays))}</span>`
-                : `<details class="persona-hot-freshness-picker" data-console-dropdown data-persona-hot-freshness-picker>
-                    <summary aria-label="选择热点时限天数"><span>${esc(personaHotFreshnessLabel(hotFreshnessDays))}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></summary>
-                    <div class="persona-hot-freshness-menu" role="listbox" aria-label="热点时限天数">
-                      ${hotFreshnessOptions.map(({ days, label }) => `<button type="button" role="option" aria-selected="${days === hotFreshnessDays ? "true" : "false"}" data-persona-hot-freshness-option="${days}" class="${days === hotFreshnessDays ? "is-active" : ""}">${label}</button>`).join("")}
-                    </div>
-                  </details>`)
-              : `<span class="persona-hot-freshness-default" aria-label="默认热点时限">默认</span>`}
-          </label>
-        </div>
         <button type="button" class="primary persona-hot-fetch-action" data-persona-hot-solo="${hotBusy ? "false" : "true"}" data-persona-fetch-hot ${controlsBusy ? "disabled" : ""}>${keywordBusy
           ? renderBusyButtonContent("正在准备热点抓取", true)
           : (hotBusy ? renderBusyButtonContent("正在抓取热点", true, hotBusyStartedAt) : "抓取热点")}</button>
@@ -23366,7 +23379,6 @@ function renderPersonaHotCandidatePicker(persona, form) {
     ${(warnings.length || cookieStatuses.length) ? `
       <div class="persona-inline-panel persona-inline-panel--nested">
         <div class="persona-hot-status-row"><strong>抓取方式</strong><span>${esc(personaHotSearchModeLabel(hotState.search_mode || hotMode))}</span></div>
-        <div class="persona-hot-status-row"><strong>热点时限</strong><span>${esc(personaHotFreshnessLabel(hotState.freshness_days ?? hotFreshnessDays))}</span></div>
         ${cookieStatuses.length ? `<div class="persona-hot-status-row"><strong>Cookie 状态</strong><span>${esc(cookieStatuses.map((item) => `${item.label || item.platform || "-"}：${item.message || item.health || "-"}`).join(" / "))}</span></div>` : ""}
         ${warnings.length ? `<div class="persona-warning-inline">${warnings.map(esc).join(" / ")}</div>` : ""}
       </div>
@@ -30969,6 +30981,22 @@ function bindEvents() {
     if (handleUploadDropzoneAction(event)) return;
     const personaDataPanel = event.target.closest(".persona-profile-data-panel");
     if (personaDataPanel) {
+      const historyFilterMenu = event.target.closest("[data-persona-history-filter-menu]");
+      if (historyFilterMenu && event.target.closest("summary")) {
+        requestAnimationFrame(() => positionPersonaHistoryFilterMenu(historyFilterMenu));
+        return;
+      }
+      const historyFilterOption = event.target.closest("[data-persona-history-filter-option]");
+      if (historyFilterOption) {
+        const key = String(historyFilterOption.dataset.personaHistoryFilterOption || "");
+        const value = String(historyFilterOption.dataset.value || "");
+        if (["content", "sort"].includes(key)) state.personaHistoryFilters[key] = value;
+        if (key === "content") localStorage.setItem("personaDashboardPostTypeFilter", value);
+        if (key === "sort") localStorage.setItem("personaDashboardPostSort", value);
+        state.publishHistoryPreviewId = "";
+        renderPersonaDetail();
+        return;
+      }
       const historyCard = event.target.closest("[data-publish-history-card]");
       if (historyCard && !event.target.closest("[data-publish-history-view], [data-publish-history-requeue], a")) {
         state.publishHistoryPreviewId = String(historyCard.dataset.publishHistoryCard || "").trim();
@@ -31334,42 +31362,6 @@ function bindEvents() {
             `[data-persona-hot-search-mode="${CSS.escape(mode)}"]`
           ),
         });
-      }
-      return;
-    }
-    const hotFreshnessModeButton = event.target.closest("[data-persona-hot-freshness-mode]");
-    if (hotFreshnessModeButton) {
-      const persona = selectedPersona();
-      if (persona) {
-        const mode = hotFreshnessModeButton.dataset.personaHotFreshnessMode === "custom" ? "custom" : "default";
-        event.__vectoSegmentSlideHandled = true;
-        await slideSegmentedButtonBackground(hotFreshnessModeButton, {
-          commit: () => {
-            snapshotPersonaCurrentForm();
-            const form = personaFormState(persona.id).generate;
-            form.hotFreshnessMode = mode;
-            if (form.hotFreshnessMode === "default") form.hotFreshnessDays = 7;
-            else form.hotFreshnessDays = normalizePersonaHotFreshnessDays(form.hotFreshnessDays || 7);
-            renderPersonaDetail();
-            renderConfirmSummary();
-          },
-          resolveButton: () => document.querySelector(
-            `[data-persona-hot-freshness-mode="${CSS.escape(mode)}"]`
-          ),
-        });
-      }
-      return;
-    }
-    const hotFreshnessOption = event.target.closest("[data-persona-hot-freshness-option]");
-    if (hotFreshnessOption) {
-      const persona = selectedPersona();
-      if (persona) {
-        snapshotPersonaCurrentForm();
-        const form = personaFormState(persona.id).generate;
-        form.hotFreshnessMode = "custom";
-        form.hotFreshnessDays = normalizePersonaHotFreshnessDays(hotFreshnessOption.dataset.personaHotFreshnessOption);
-        renderPersonaDetail();
-        renderConfirmSummary();
       }
       return;
     }
@@ -32418,25 +32410,6 @@ function bindEvents() {
     }
   });
   $("moduleBody").addEventListener("change", async (event) => {
-    const taskQueueTypeFilter = event.target?.closest?.("[data-task-queue-type-filter]");
-    if (taskQueueTypeFilter) {
-      state.taskQueuePersonaTypeFilter = String(taskQueueTypeFilter.value || "all");
-      state.taskQueuePersonaPage = 1;
-      state.taskQueueSelectedPersonaIds.clear();
-      renderTaskQueueSurface();
-      return;
-    }
-    const historyFilter = event.target?.closest?.("[data-persona-history-filter]");
-    if (historyFilter) {
-      const key = String(historyFilter.dataset.personaHistoryFilter || "");
-      const value = String(historyFilter.value || "");
-      if (["content", "sort"].includes(key)) state.personaHistoryFilters[key] = value;
-      if (key === "content") localStorage.setItem("personaDashboardPostTypeFilter", value);
-      if (key === "sort") localStorage.setItem("personaDashboardPostSort", value);
-      state.publishHistoryPreviewId = "";
-      renderPersonaDetail();
-      return;
-    }
     if (event.target?.matches?.("[data-account-pool-check]")) {
       toggleAccountPoolAccount(event.target.dataset.accountPoolCheck || "");
       renderSocialAccounts();
@@ -32587,6 +32560,20 @@ function bindEvents() {
   if ($("refreshTasks")) $("refreshTasks").addEventListener("click", () => loadTasks().then(renderWorkspace));
   if ($("refreshSocialTasks")) $("refreshSocialTasks").addEventListener("click", () => loadSocial().then(renderWorkspace));
   $("taskTable").addEventListener("click", async (event) => {
+    const taskQueueTypeFilterMenu = event.target.closest("[data-task-queue-type-filter-menu]");
+    if (taskQueueTypeFilterMenu && event.target.closest("summary")) {
+      requestAnimationFrame(() => positionPersonaHistoryFilterMenu(taskQueueTypeFilterMenu));
+      return;
+    }
+    const taskQueueTypeFilterOption = event.target.closest("[data-task-queue-type-filter-option]");
+    if (taskQueueTypeFilterOption) {
+      taskQueueTypeFilterMenu?.removeAttribute("open");
+      state.taskQueuePersonaTypeFilter = String(taskQueueTypeFilterOption.dataset.value || "all");
+      state.taskQueuePersonaPage = 1;
+      state.taskQueueSelectedPersonaIds.clear();
+      renderTaskQueueSurface();
+      return;
+    }
     const personaMobileToggle = event.target.closest("[data-persona-mobile-list-toggle]");
     if (personaMobileToggle) {
       const sidebarId = personaMobileToggle.dataset.personaMobileListToggle || "";

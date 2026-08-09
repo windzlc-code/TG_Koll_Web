@@ -600,7 +600,7 @@
       </button>
       <div id="siteAccountPopover" class="site-account-popover" data-site-account-popover hidden role="dialog" aria-label="个人信息">
         <div class="site-account-summary">
-          <span class="site-account-avatar" aria-hidden="true" data-site-account-avatar>${accountIcon()}</span>
+          <button class="site-account-avatar site-account-avatar-action" type="button" aria-label="个人资料" title="个人资料" data-site-account-avatar data-site-open-settings>${accountIcon()}</button>
           <span class="site-account-identity">
             <strong data-site-account-name></strong>
             <span data-site-account-role></span>
@@ -1886,9 +1886,11 @@
         setAccountMenuOpen(menu, false);
         openAccountConsoleView("billing");
       });
-      menu.querySelector("[data-site-open-settings]")?.addEventListener("click", () => {
-        setAccountMenuOpen(menu, false);
-        openProfilePage();
+      menu.querySelectorAll("[data-site-open-settings]").forEach((button) => {
+        button.addEventListener("click", () => {
+          setAccountMenuOpen(menu, false);
+          openProfilePage();
+        });
       });
       menu.querySelector("[data-site-open-subscription]")?.addEventListener("click", () => {
         setAccountMenuOpen(menu, false);
@@ -2201,6 +2203,10 @@
     });
     document.querySelectorAll("[data-site-personal-controls]").forEach((node) => node.setAttribute("aria-label", labels.personalSettings));
     document.querySelectorAll("[data-site-account-popover]").forEach((node) => node.setAttribute("aria-label", labels.personalProfile));
+    document.querySelectorAll(".site-account-avatar-action").forEach((node) => {
+      node.title = labels.personalProfile;
+      node.setAttribute("aria-label", labels.personalProfile);
+    });
     document.querySelectorAll("[data-site-account-close]").forEach((node) => {
       node.title = labels.accountClose;
       node.setAttribute("aria-label", labels.accountClose);

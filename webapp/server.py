@@ -12295,7 +12295,6 @@ class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
     writing_locale: str = "zh-TW"
     freshness_days: int = 7
     freshness_policy: str = "legacy"
-    selected_memory_ids: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
 
 
@@ -14379,21 +14378,6 @@ def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: i
     return messages[:2]
 
 
-def _persona_hot_selected_memory_summaries(archive_id: str, selected_memory_ids: list[str] | None) -> list[str]:
-    memories = _list_selectable_persona_memories(archive_id)
-    summary_by_id = {
-        str(item.get("id") or "").strip(): str(item.get("summary") or "").strip()
-        for item in memories
-        if str(item.get("id") or "").strip() and str(item.get("summary") or "").strip()
-    }
-    selected_ids = [str(item or "").strip() for item in (selected_memory_ids or []) if str(item or "").strip()]
-    return (
-        [summary_by_id[memory_id] for memory_id in selected_ids if memory_id in summary_by_id]
-        if selected_ids
-        else [str(item.get("summary") or "").strip() for item in memories if str(item.get("summary") or "").strip()]
-    )[:8]
-
-
 def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
     if not isinstance(raw_keywords, list):
         return []
@@ -14423,7 +14407,6 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
             "refresh": bool(payload.refresh),
             "searchMode": search_mode,
             "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
-            "memorySummaries": _persona_hot_selected_memory_summaries(clean_id, payload.selected_memory_ids),
         },
         timeout_seconds=75,
     )
@@ -14447,7 +14430,6 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
 
-    selected_summaries = _persona_hot_selected_memory_summaries(clean_id, payload.selected_memory_ids)
     limit = min(max(_to_int(payload.limit, 10), 1), 20)
     search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
     freshness_days = min(max(_to_int(payload.freshness_days, 7), 0), 15)
@@ -14463,27 +14445,15 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
             "freshnessDays": freshness_days,
             "freshnessPolicy": "strict" if str(payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
-            "memorySummaries": selected_summaries,
             "keywords": keywords,
             "recordShown": False,
         },
         timeout_seconds=120,
     )
 
-    cookie_rows = []
-    for item in result.get("cookieStatuses") if isinstance(result.get("cookieStatuses"), list) else []:
-        if not isinstance(item, dict):
-            continue
-        cookie_rows.append({
-            "platform": str(item.get("platform") or "").strip(),
-            "label": _normalize_hot_workflow_text(item.get("label") or item.get("platform") or ""),
-            "message": _normalize_hot_workflow_text(item.get("message") or item.get("health") or ""),
-            "health": str(item.get("health") or "").strip(),
-            "valid_cookie_count": _to_int(item.get("validCookieCount") or item.get("valid_cookie_count"), 0),
-            "expired_cookie_count": _to_int(item.get("expiredCookieCount") or item.get("expired_cookie_count"), 0),
-            "has_required_session_cookie": item.get("hasRequiredSessionCookie") if "hasRequiredSessionCookie" in item else item.get("has_required_session_cookie"),
-            "recommended_action": str(item.get("recommendedAction") or item.get("recommended_action") or "").strip(),
-        })
+    # Hot capture is public-page only. Never expose or infer account Cookie
+    # health through this route, even if an older worker returns that field.
+    cookie_rows: list[dict[str, Any]] = []
 
     candidates = [
         normalized
@@ -19437,7 +19407,10 @@ def _persona_dashboard_refresh_worker_v2(
     stdout_file: Any | None = None
     stderr_file: Any | None = None
     refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "browser").strip().lower() or "browser"
-    needs_browser_lease = refresh_source == "browser"
+    # RSSHub collection also performs an authenticated browser detail backfill
+    # for published Threads URLs, so it must participate in the same browser
+    # admission control as the explicit browser source.
+    needs_browser_lease = refresh_source in {"browser", "rsshub"}
     scope = "单个人设" if archive_id else (
         f"当前账号的 {len(archive_ids)} 个人设"
         if archive_ids is not None
@@ -19487,6 +19460,14 @@ def _persona_dashboard_refresh_worker_v2(
                     "等待浏览器资源超过 5 分钟，本次刷新未启动，请稍后重试。"
                 )
         with PERSONA_DASHBOARD_REFRESH_LOCK:
+            refresh_trigger = str(
+                PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id, {}).get("trigger") or ""
+            )
+        if refresh_trigger == "auto_monitor" and _matrix_publish_browser_pressure_active():
+            raise _PersonaDashboardRefreshDeferred(
+                "Foreground matrix browser tasks are starting; the automatic dashboard refresh was deferred."
+            )
+        with PERSONA_DASHBOARD_REFRESH_LOCK:
             PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
                 "step": "启动采集脚本",
                 "progress": 18,
@@ -19508,6 +19489,12 @@ def _persona_dashboard_refresh_worker_v2(
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
         while proc.poll() is None:
+            with PERSONA_DASHBOARD_REFRESH_LOCK:
+                refresh_trigger = str(PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id, {}).get("trigger") or "")
+            if refresh_trigger == "auto_monitor" and _matrix_publish_browser_pressure_active():
+                raise _PersonaDashboardRefreshDeferred(
+                    "Foreground matrix browser tasks are starting; the automatic dashboard refresh was deferred."
+                )
             elapsed = int(time.time() - started)
             if elapsed > 900:
                 raise TimeoutError("刷新超时，已停止本次任务。")
@@ -19555,6 +19542,16 @@ def _persona_dashboard_refresh_worker_v2(
                 "stderr": stderr[-4000:],
                 "returncode": proc.returncode,
             })
+    except _PersonaDashboardRefreshDeferred as exc:
+        with PERSONA_DASHBOARD_REFRESH_LOCK:
+            PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
+                "status": "deferred",
+                "step": "等待前台浏览器任务",
+                "progress": 12,
+                "message": str(exc),
+                "elapsed_seconds": int(time.time() - started),
+                "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            })
     except Exception as exc:
         with PERSONA_DASHBOARD_REFRESH_LOCK:
             PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
@@ -19582,6 +19579,26 @@ def _persona_dashboard_refresh_worker_v2(
 def _persona_dashboard_refresh_is_running() -> bool:
     with PERSONA_DASHBOARD_REFRESH_LOCK:
         return any(str(task.get("status") or "") in {"queued", "running"} for task in PERSONA_DASHBOARD_REFRESH_TASKS.values())
+
+
+class _PersonaDashboardRefreshDeferred(RuntimeError):
+    pass
+
+
+def _matrix_publish_browser_pressure_active() -> bool:
+    try:
+        with db() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM social_automation_tasks
+                WHERE status IN ('queued', 'running', 'manual_required')
+                  AND COALESCE(json_extract(payload_json, '$.matrix_publish_batch_id'), '') != ''
+                """
+            ).fetchone()
+    except Exception:
+        return False
+    return int(dict(row or {}).get("count") or 0) > 0
 
 
 def _persona_dashboard_monitor_interval_seconds() -> int:
@@ -19668,6 +19685,7 @@ def _persona_dashboard_monitor_loop() -> None:
     if initial_delay > 0:
         time.sleep(initial_delay)
     while True:
+        next_delay = float(interval)
         if not _persona_dashboard_monitor_enabled():
             with PERSONA_DASHBOARD_MONITOR_LOCK:
                 PERSONA_DASHBOARD_MONITOR_STATE.update({
@@ -19697,6 +19715,8 @@ def _persona_dashboard_monitor_loop() -> None:
                     with PERSONA_DASHBOARD_REFRESH_LOCK:
                         current = dict(PERSONA_DASHBOARD_REFRESH_TASKS.get(str(task.get("id") or ""), {}))
                     if str(current.get("status") or "") not in {"queued", "running"}:
+                        if str(current.get("status") or "") == "deferred":
+                            next_delay = 5.0
                         with PERSONA_DASHBOARD_MONITOR_LOCK:
                             PERSONA_DASHBOARD_MONITOR_STATE.update({
                                 "status": str(current.get("status") or "idle"),
@@ -19728,7 +19748,7 @@ def _persona_dashboard_monitor_loop() -> None:
                     "interval_seconds": interval,
                     "last_message": str(exc),
                 })
-        time.sleep(interval)
+        time.sleep(next_delay)
 
 
 def _ensure_persona_dashboard_monitor_started() -> None:

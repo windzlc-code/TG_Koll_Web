@@ -44,9 +44,20 @@ class AccountDrawerLoadingTests(unittest.TestCase):
         self.assertIn('border-radius: 50%;', drawer_avatar)
         self.assertIn('overflow: hidden;', drawer_avatar)
 
+    def test_account_drawer_avatar_reuses_the_personal_profile_entry(self):
+        self.assertIn(
+            '<button class="site-account-avatar site-account-avatar-action" type="button"',
+            CONSOLE,
+        )
+        self.assertIn('data-site-account-avatar data-site-open-settings', CONSOLE)
+        self.assertIn('data-site-account-avatar data-site-open-settings>${accountIcon()}</button>', NAVIGATION)
+        self.assertIn('menu.querySelectorAll("[data-site-open-settings]").forEach((button) => {', NAVIGATION)
+        self.assertIn('.site-account-avatar-action {', STYLES)
+        self.assertIn('.site-account-avatar-action:focus-visible {', STYLES)
+
     def test_billing_metrics_use_one_svg_divided_information_board(self):
         self.assertEqual(CONSOLE.count('class="site-account-billing-icon"'), 6)
-        self.assertEqual(NAVIGATION.count('class="site-account-billing-icon"'), 6)
+        self.assertEqual(NAVIGATION.count('class="site-account-billing-icon"'), 7)
         self.assertIn('.site-account-billing-card:nth-child(2n)', STYLES)
         self.assertIn('.site-account-billing-card:nth-child(n + 3)', STYLES)
         self.assertIn('grid-template-columns: 20px minmax(0, 1fr);', STYLES)

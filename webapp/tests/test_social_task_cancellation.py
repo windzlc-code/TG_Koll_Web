@@ -1591,6 +1591,189 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(result, "clicked")
         self.assertEqual(observed, {"committed": 1, "slot_state": "armed"})
 
+    def test_matrix_publish_waits_until_every_browser_is_ready_before_submit(self):
+        batch_id = "matrix-submit-barrier-success"
+        payload = {"matrix_publish_batch_id": batch_id}
+        self._insert_task("matrix-ready-a", "running", payload=payload)
+        self._insert_task("matrix-ready-b", "running", payload=payload)
+        action_a = mock.Mock(return_value="clicked-a")
+        action_b = mock.Mock(return_value="clicked-b")
+        control_a = {
+            "cancel_event": threading.Event(),
+            "current_task_id": "matrix-ready-a",
+            "publish_submit_lock": threading.RLock(),
+            "matrix_publish_submit_barrier_timeout_seconds": 5,
+            "matrix_publish_submit_barrier_poll_seconds": 0.05,
+        }
+        control_b = {
+            "cancel_event": threading.Event(),
+            "current_task_id": "matrix-ready-b",
+            "publish_submit_lock": threading.RLock(),
+            "matrix_publish_submit_barrier_timeout_seconds": 5,
+            "matrix_publish_submit_barrier_poll_seconds": 0.05,
+        }
+        results = {}
+        first = threading.Thread(
+            target=lambda: results.setdefault(
+                "a", social_automation_api._run_publish_submit_guard(control_a, action_a)
+            )
+        )
+        first.start()
+        threading.Event().wait(0.15)
+        action_a.assert_not_called()
+
+        second = threading.Thread(
+            target=lambda: results.setdefault(
+                "b", social_automation_api._run_publish_submit_guard(control_b, action_b)
+            )
+        )
+        second.start()
+        first.join(timeout=5)
+        second.join(timeout=5)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(results, {"a": "clicked-a", "b": "clicked-b"})
+        action_a.assert_called_once()
+        action_b.assert_called_once()
+
+    def test_matrix_publish_waits_until_every_browser_is_started_before_navigation(self):
+        batch_id = "matrix-browser-start-success"
+        payload = {"matrix_publish_batch_id": batch_id}
+        self._insert_task("matrix-browser-a", "running", payload=payload)
+        self._insert_task("matrix-browser-b", "running", payload=payload)
+        control_a = {
+            "cancel_event": threading.Event(),
+            "current_task_id": "matrix-browser-a",
+            "task": {"id": "matrix-browser-a", "payload": payload},
+            "matrix_browser_start_barrier_timeout_seconds": 5,
+            "matrix_browser_start_barrier_poll_seconds": 0.05,
+        }
+        control_b = {
+            "cancel_event": threading.Event(),
+            "current_task_id": "matrix-browser-b",
+            "task": {"id": "matrix-browser-b", "payload": payload},
+            "matrix_browser_start_barrier_timeout_seconds": 5,
+            "matrix_browser_start_barrier_poll_seconds": 0.05,
+        }
+        first_released = threading.Event()
+        second_released = threading.Event()
+        with mock.patch.dict(
+            social_automation_api._RUNNING_TASK_CONTROLS,
+            {
+                "matrix-browser-a": control_a,
+                "matrix-browser-b": control_b,
+            },
+            clear=True,
+        ):
+            first = threading.Thread(
+                target=lambda: (
+                    social_automation_api._wait_for_matrix_browser_start_barrier(control_a),
+                    first_released.set(),
+                )
+            )
+            first.start()
+            threading.Event().wait(0.15)
+            self.assertFalse(first_released.is_set())
+
+            second = threading.Thread(
+                target=lambda: (
+                    social_automation_api._wait_for_matrix_browser_start_barrier(control_b),
+                    second_released.set(),
+                )
+            )
+            second.start()
+            first.join(timeout=5)
+            second.join(timeout=5)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertTrue(first_released.is_set())
+        self.assertTrue(second_released.is_set())
+
+    def test_matrix_resource_phase_runs_at_most_two_heavy_pages(self):
+        active = 0
+        peak = 0
+        guard = threading.Lock()
+        release = threading.Event()
+        entered = threading.Event()
+        results = []
+
+        def action(task_id):
+            nonlocal active, peak
+            with guard:
+                active += 1
+                peak = max(peak, active)
+                if active == 1:
+                    entered.set()
+            release.wait(2)
+            with guard:
+                active -= 1
+            return task_id
+
+        controls = [
+            {
+                "cancel_event": threading.Event(),
+                "current_task_id": f"matrix-heavy-{index}",
+                "task": {
+                    "id": f"matrix-heavy-{index}",
+                    "payload": {"matrix_publish_batch_id": "matrix-heavy-batch"},
+                },
+            }
+            for index in range(4)
+        ]
+        for control in controls:
+            self._insert_task(
+                control["current_task_id"],
+                "running",
+                payload=control["task"]["payload"],
+            )
+        semaphore = threading.BoundedSemaphore(2)
+        with mock.patch.object(social_automation_api, "_MATRIX_HEAVY_PAGE_SEMAPHORE", semaphore):
+            threads = [
+                threading.Thread(
+                    target=lambda control=control: results.append(
+                        social_automation_api._run_matrix_browser_resource_phase(
+                            control,
+                            "threads_profile_baseline",
+                            lambda control=control: action(control["current_task_id"]),
+                        )
+                    )
+                )
+                for control in controls
+            ]
+            for thread in threads:
+                thread.start()
+            self.assertTrue(entered.wait(1))
+            threading.Event().wait(0.15)
+            self.assertEqual(peak, 2)
+            release.set()
+            for thread in threads:
+                thread.join(timeout=3)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(peak, 2)
+        self.assertCountEqual(results, [f"matrix-heavy-{index}" for index in range(4)])
+
+    def test_matrix_publish_failure_stops_other_routes_before_submit(self):
+        batch_id = "matrix-submit-barrier-failure"
+        payload = {"matrix_publish_batch_id": batch_id}
+        self._insert_task("matrix-failed", "failed", payload=payload)
+        self._insert_task("matrix-waiting", "running", payload=payload)
+        action = mock.Mock()
+        control = {
+            "cancel_event": threading.Event(),
+            "current_task_id": "matrix-waiting",
+            "publish_submit_lock": threading.RLock(),
+            "matrix_publish_submit_barrier_timeout_seconds": 5,
+            "matrix_publish_submit_barrier_poll_seconds": 0.05,
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "matrix publish route failed"):
+            social_automation_api._run_publish_submit_guard(control, action)
+
+        action.assert_not_called()
+
     def test_failed_task_after_submission_arm_settles_instead_of_releasing_billing(self):
         task_id = "submit-unknown-billing"
         self._insert_task(task_id, "running")

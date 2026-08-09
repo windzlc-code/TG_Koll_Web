@@ -1426,42 +1426,38 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("left: 50%;", expanded_task)
         self.assertIn("transform: translate(-50%, -50%);", expanded_task)
 
-    def test_mobile_persona_hot_fetch_controls_use_two_clean_rows(self):
+    def test_mobile_persona_hot_fetch_uses_centered_scope_switch_and_hidden_default_freshness(self):
         mobile_toolbar = self._css_block(
             ".console-page .persona-detail .persona-hot-fetch-toolbar {"
         )
-        mobile_window = self._css_block(
-            ".console-page .persona-detail .persona-hot-time-window {"
-        )
-        mobile_freshness_tabs = self._css_block(
-            ".console-page .persona-detail .persona-hot-freshness-tabs {"
+        mobile_mode_tabs = self._css_block(
+            ".console-page .persona-detail .persona-hot-mode-tabs {"
         )
 
         self.assertIn('class="row-actions persona-hot-fetch-toolbar"', self.source)
         self.assertIn('class="primary persona-hot-fetch-action"', self.source)
         self.assertIn('class="persona-hot-fetch-action"', self.source)
-        self.assertIn('data-persona-hot-freshness-picker', self.source)
-        self.assertIn('data-persona-hot-freshness-option', self.source)
-        self.assertIn('const hotFreshnessOption = event.target.closest("[data-persona-hot-freshness-option]");', self.source)
-        self.assertIn('form.hotFreshnessDays = normalizePersonaHotFreshnessDays(hotFreshnessOption.dataset.personaHotFreshnessOption);', self.source)
-        self.assertNotIn('<input type="number" min="0" max="15"', self.source)
-        self.assertIn('class="persona-hot-freshness-default" aria-label="默认热点时限">默认</span>', self.source)
+        self.assertIn('["normal", "泛垂直"]', self.source)
+        self.assertIn('["strict", "垂直"]', self.source)
+        self.assertIn('hotSearchMode: "strict"', self.source)
+        self.assertNotIn('data-persona-hot-freshness-', self.source)
+        self.assertNotIn('热点时限', self.source)
+        self.assertIn('freshness_days: 7,', self.source)
+        self.assertIn('freshness_policy: "strict",', self.source)
+        self.assertIn('return [...deduped.values()];', self.source)
         self.assertNotIn("is-reserved", self.source)
         self.assertIn(
             "grid-template-columns: repeat(2, minmax(0, 1fr));",
             mobile_toolbar,
         )
-        self.assertIn("grid-column: 1 / -1;", mobile_window)
-        self.assertIn("grid-template-columns: auto minmax(0, 1fr) 92px;", mobile_window)
         self.assertIn(
             "grid-template-columns: repeat(2, minmax(0, 1fr));",
-            mobile_freshness_tabs,
+            mobile_mode_tabs,
         )
-        self.assertIn("grid-column: 3;", self.styles)
+        self.assertIn("width: 42%;", mobile_mode_tabs)
+        self.assertIn("max-width: 190px;", mobile_mode_tabs)
+        self.assertIn("border-radius: 8px;", mobile_mode_tabs)
         self.assertIn("min-height: 42px;", self.styles)
-        self.assertIn(".persona-hot-freshness-menu {", self.styles)
-        self.assertIn("max-height: 208px;", self.styles)
-        self.assertIn("overflow-y: auto;", self.styles)
 
     def test_persona_hot_fetch_prepares_hidden_keywords_before_tracking_controller(self):
         fetch_source = self._function_source("fetchPersonaHotCandidates")
@@ -1943,8 +1939,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             2,
         )
 
-    def test_warmup_terminal_toasts_use_independent_stack(self):
-        independent = self._function_source("socialTaskUsesIndependentTerminalToast")
+    def test_each_social_browser_task_uses_an_independent_toast_stack(self):
+        independent = self._function_source("socialTaskUsesIndependentToast")
         sync_toast = self._section("function syncSocialTaskToast(", "\nfunction syncSocialTaskToasts(")
         show_toast = self._section("function showToast", "function defaultToastTargetForMessage")
         create_toast = self._function_source("createToast")
@@ -1954,15 +1950,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const assert = require("node:assert/strict");
             {independent}
 
-            assert.equal(socialTaskUsesIndependentTerminalToast({{ task_type: "threads_warmup" }}, "success"), true);
-            assert.equal(socialTaskUsesIndependentTerminalToast({{ task_type: "instagram_warmup" }}, "failed"), true);
-            assert.equal(socialTaskUsesIndependentTerminalToast({{ task_type: "threads_warmup" }}, "running"), false);
-            assert.equal(socialTaskUsesIndependentTerminalToast({{ task_type: "publish_post" }}, "success"), false);
+            assert.equal(socialTaskUsesIndependentToast({{ id: "warmup-1", task_type: "threads_warmup" }}), true);
+            assert.equal(socialTaskUsesIndependentToast({{ id: "publish-1", task_type: "publish_post" }}), true);
+            assert.equal(socialTaskUsesIndependentToast({{ id: "publish-2", task_type: "publish_post" }}), true);
+            assert.equal(socialTaskUsesIndependentToast({{ task_type: "publish_post" }}), false);
             """
         )
         self._run_node(harness)
 
-        self.assertIn("stack: socialTaskUsesIndependentTerminalToast(task, status)", sync_toast)
+        self.assertIn("stack: socialTaskUsesIndependentToast(task)", sync_toast)
         self.assertIn("if (request.stack) return createToast(request);", show_toast)
         self.assertIn('toast.dataset.toastStacked = "true"', create_toast)
         self.assertIn('toast.dataset.toastStacked !== "true"', remove_toasts)
@@ -3662,7 +3658,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const assert = require("assert");
             const state = {{ taskQueuePersonaTypeFilter: "all" }};
             {self._function_source("taskQueuePersonaType")}
+            {self._function_source("taskQueuePersonaTypeCatalog")}
             {self._function_source("filterTaskQueuePersonaRows")}
+            {self._function_source("statusLabel")}
+            const esc = (value) => String(value);
+            const renderTaskQueueFilterIcon = () => "";
+            {self._function_source("renderTaskQueuePersonaTypeFilter")}
 
             const rows = [
               {{ id: "publish-1", task_type: "publish_post" }},
@@ -3671,23 +3672,60 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.deepStrictEqual(filterTaskQueuePersonaRows(rows).map((item) => item.id), ["publish-1", "login-1"]);
             state.taskQueuePersonaTypeFilter = "publish_post";
             assert.deepStrictEqual(filterTaskQueuePersonaRows(rows).map((item) => item.id), ["publish-1"]);
+            assert.deepStrictEqual(filterTaskQueuePersonaRows([]), []);
+            assert.strictEqual(state.taskQueuePersonaTypeFilter, "publish_post");
             state.taskQueuePersonaTypeFilter = "missing";
             assert.deepStrictEqual(filterTaskQueuePersonaRows(rows).map((item) => item.id), ["publish-1", "login-1"]);
             assert.strictEqual(state.taskQueuePersonaTypeFilter, "all");
+            const emptyMenu = renderTaskQueuePersonaTypeFilter([]);
+            [
+              "全部类型", "发布内容", "登录状态同步", "登录流程", "浏览动态", "浏览主页",
+              "Threads 养号", "Threads 自动回复", "Instagram 养号", "Instagram 自动回复",
+              "评论帖子", "回复评论", "点赞帖子", "分享帖子", "转发帖子",
+            ].forEach((label) => assert.match(emptyMenu, new RegExp(label)));
         """)
         self._run_node(harness)
+
+        catalog = self._function_source("taskQueuePersonaTypeCatalog")
+        for task_type in (
+            "publish_post",
+            "check_login",
+            "open_login",
+            "browse_feed",
+            "browse_profile",
+            "threads_warmup",
+            "threads_auto_reply",
+            "instagram_warmup",
+            "instagram_auto_reply",
+            "comment_post",
+            "reply_comment",
+            "like_post",
+            "share_post",
+            "repost_post",
+        ):
+            self.assertIn(f'"{task_type}"', catalog)
 
         queue_view = self._function_source("renderTaskQueueView")
         bind_events = self._function_source("bindEvents")
         self.assertIn("renderTaskQueuePersonaTypeFilter(personaSourceRows)", queue_view)
-        self.assertLess(queue_view.index("task-queue-persona-select-button"), queue_view.index("renderTaskQueuePersonaTypeFilter(personaSourceRows)"))
-        self.assertIn("data-task-queue-type-filter", self.source)
-        self.assertIn('state.taskQueuePersonaTypeFilter = String(taskQueueTypeFilter.value || "all")', bind_events)
+        self.assertLess(queue_view.index("renderTaskQueuePersonaTypeFilter(personaSourceRows)"), queue_view.index("task-queue-persona-select-button"))
+        self.assertIn("data-task-queue-type-filter-menu", self.source)
+        self.assertIn("data-task-queue-type-filter-option", self.source)
+        self.assertIn('state.taskQueuePersonaTypeFilter = String(taskQueueTypeFilterOption.dataset.value || "all")', bind_events)
+        task_table_click = bind_events.index('$("taskTable").addEventListener("click"')
+        self.assertGreater(bind_events.index("const taskQueueTypeFilterMenu", task_table_click), task_table_click)
+        self.assertGreater(bind_events.index("const taskQueueTypeFilterOption", task_table_click), task_table_click)
+        self.assertIn('taskQueueTypeFilterMenu?.removeAttribute("open")', bind_events)
         filter_css = self._css_block(".task-queue-type-filter")
         self.assertIn("width: 36px", filter_css)
         self.assertIn("height: 36px", filter_css)
         self.assertIn("margin: 0", filter_css)
         self.assertIn("z-index: 3", self._css_block(".task-queue-type-filter:focus-within"))
+        filter_options_css = self._css_block(".task-queue-type-filter .persona-history-filter-options")
+        self.assertIn("right: 0", filter_options_css)
+        self.assertIn("left: auto", filter_options_css)
+        self.assertIn("width: max-content", filter_options_css)
+        self.assertIn("max-width: min(220px, calc(100vw - 32px))", filter_options_css)
 
     def test_console_settings_use_user_browser_policy_endpoints_and_keep_pagination_local(self):
         render = self._function_source("renderConsoleSettingsPage")

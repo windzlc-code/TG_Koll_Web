@@ -40,9 +40,14 @@ DEFAULT_WARMUP_RESOURCE_COMPACTION_COOLDOWN_SECONDS = 90
 DEFAULT_BROWSER_DISK_CACHE_CAPACITY_MB = 64
 MIN_BROWSER_DISK_CACHE_CAPACITY_MB = 64
 MAX_BROWSER_DISK_CACHE_CAPACITY_MB = 1024
-DEFAULT_BROWSER_IMAGE_SURFACE_CACHE_MB = 64
-MIN_BROWSER_IMAGE_SURFACE_CACHE_MB = 64
+DEFAULT_BROWSER_IMAGE_SURFACE_CACHE_MB = 24
+MIN_BROWSER_IMAGE_SURFACE_CACHE_MB = 16
 MAX_BROWSER_IMAGE_SURFACE_CACHE_MB = 1024
+DEFAULT_BROWSER_MEMORY_CACHE_CAPACITY_MB = 8
+DEFAULT_BROWSER_DISK_CHUNK_MEMORY_MB = 8
+DEFAULT_BROWSER_MEDIA_MEMORY_CACHE_MB = 16
+DEFAULT_BROWSER_MEDIA_COMBINED_CACHE_MB = 32
+DEFAULT_BROWSER_MEDIA_DISK_CACHE_MB = 32
 DEFAULT_LIGHTWEIGHT_WARMUP_COMPACTION_COOLDOWN_SECONDS = 15
 SUPPORTED_TASK_TYPES = {
     "check_login",
@@ -61,10 +66,9 @@ SUPPORTED_TASK_TYPES = {
     "repost_post",
 }
 
-_CAMOUFOX_LAUNCH_LOCK = threading.Lock()
 _WARMUP_ACTION_HISTORY_LOCK = threading.Lock()
-_DEFAULT_LIVE_BROWSER_WIDTH = 640
-_DEFAULT_LIVE_BROWSER_HEIGHT = 360
+_DEFAULT_LIVE_BROWSER_WIDTH = 1280
+_DEFAULT_LIVE_BROWSER_HEIGHT = 720
 _DEFAULT_LIVE_BROWSER_CHROME_HEIGHT = 61
 _REFERENCE_LIVE_BROWSER_WIDTH = 1920
 _REFERENCE_LIVE_BROWSER_HEIGHT = 1080
@@ -130,16 +134,45 @@ def _browser_runtime_preferences() -> dict[str, Any]:
             # Avoid keeping an otherwise idle content process per browser.
             # Firefox still creates the same isolated processes on demand.
             "dom.ipc.processPrelaunch.enabled": False,
-            # Each automation profile drives one foreground social site. Two
-            # shared web processes plus one isolated-site process preserve
-            # Firefox separation while avoiding the default multi-tab pool in
-            # every one of four concurrent browser instances.
-            "dom.ipc.processCount": 2,
+            # Each automation profile drives one foreground social site. Keep
+            # one shared web process plus Firefox's isolated-site process; four
+            # independent browser profiles otherwise duplicate an idle second
+            # shared process and its JS/runtime heap.
+            "dom.ipc.processCount": 1,
             "dom.ipc.processCount.webIsolated": 1,
-            # Xvnc is a software display. Rendering the page at 30fps is ample
-            # for automation and a 15fps monitor while halving needless
-            # compositor work versus the default 60fps cadence.
-            "layout.frame_rate": 30,
+            # Xvnc and the live monitor are both capped at 15fps. Matching the
+            # page cadence avoids rendering frames that can never be displayed
+            # and leaves CPU time for four concurrent Firefox event loops.
+            "layout.frame_rate": 15,
+            # Keep current responses in the bounded disk cache and prevent the
+            # same Threads assets from building a large per-browser RAM cache.
+            "browser.cache.memory.enable": True,
+            "browser.cache.memory.capacity": DEFAULT_BROWSER_MEMORY_CACHE_CAPACITY_MB * 1024,
+            # Firefox otherwise permits two separate 40 MiB disk-cache chunk
+            # pools in every browser process. The persistent disk cache remains
+            # enabled; only its per-profile RAM staging buffers are bounded.
+            "browser.cache.disk.max_chunks_memory_usage": DEFAULT_BROWSER_DISK_CHUNK_MEMORY_MB * 1024,
+            "browser.cache.disk.max_priority_chunks_memory_usage": DEFAULT_BROWSER_DISK_CHUNK_MEMORY_MB * 1024,
+            "browser.cache.disk.preload_chunk_count": 1,
+            # Keep audio/video decoding in Firefox's sandboxed RDD process
+            # instead of also starting a separate utility decoder per profile.
+            # The startup sanity probe is unnecessary in this software-display
+            # environment; real media still starts RDD on demand.
+            "media.utility-process.enabled": False,
+            "media.sanity-test.disabled": True,
+            # Threads feeds can preload multiple videos even when automation
+            # only needs text and the composer. Keep media available on user
+            # interaction while bounding its per-profile buffers and queues.
+            "media.memory_cache_max_size": DEFAULT_BROWSER_MEDIA_MEMORY_CACHE_MB * 1024,
+            "media.memory_caches_combined_limit_kb": DEFAULT_BROWSER_MEDIA_COMBINED_CACHE_MB * 1024,
+            "media.cache_size": DEFAULT_BROWSER_MEDIA_DISK_CACHE_MB * 1024,
+            "media.video-queue.default-size": 3,
+            "media.autoplay.default": 5,
+            "media.preload.default": 1,
+            # Expire non-visible decoded surfaces sooner; visible feed images
+            # and manually opened media remain renderable.
+            "image.animation_mode": "once",
+            "image.mem.surfacecache.min_expiration_ms": 15 * 1000,
             "network.prefetch-next": False,
             "network.predictor.enabled": False,
         }
@@ -475,6 +508,20 @@ def _attempt_publish_login_repair(
     return initial_status
 
 
+def _wait_for_browser_start_barrier(
+    context_control: dict[str, Any] | None,
+    cancel_event: Any | None,
+) -> None:
+    callback = (
+        context_control.get("browser_start_barrier_callback")
+        if isinstance(context_control, dict)
+        else None
+    )
+    if callable(callback):
+        callback()
+        _raise_if_cancelled(cancel_event)
+
+
 def run_social_task(
     *,
     task: dict[str, Any],
@@ -513,6 +560,7 @@ def run_social_task(
         _import_initial_cookies(context, payload.get("initial_cookies"), platform, logger)
         _sync_live_browser_viewport(page, context_control, logger)
         page.set_default_timeout(int(os.getenv("SOCIAL_AUTOMATION_DEFAULT_TIMEOUT_MS", "30000")))
+        _wait_for_browser_start_barrier(context_control, cancel_event)
         if task_type == "open_login":
             return _run_open_login(page, task, account, payload, screenshot_dir, logger, platform, cancel_event, context_control)
         if task_type == "check_login":
@@ -748,6 +796,7 @@ def run_social_publish_batch(
         _import_initial_cookies(context, first_payload.get("initial_cookies"), platform, loggers[0])
         _sync_live_browser_viewport(page, context_control, loggers[0])
         page.set_default_timeout(int(os.getenv("SOCIAL_AUTOMATION_DEFAULT_TIMEOUT_MS", "30000")))
+        _wait_for_browser_start_barrier(context_control, cancel_event)
         for index, (task, logger) in enumerate(zip(tasks, loggers)):
             payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
             try:
@@ -1159,26 +1208,25 @@ class _BrowserContextManager:
         return True
 
     def _enter_camoufox(self, Camoufox: Any, kwargs: dict[str, Any]) -> None:
-        with _CAMOUFOX_LAUNCH_LOCK:
-            old_display = os.environ.get("DISPLAY")
-            if self.live_session is not None:
-                os.environ["DISPLAY"] = str(self.live_session.display)
-            try:
-                self.cm = Camoufox(**kwargs)
-                self.context = self.cm.__enter__()
-            finally:
-                if self.live_session is not None:
-                    if old_display is None:
-                        os.environ.pop("DISPLAY", None)
-                    else:
-                        os.environ["DISPLAY"] = old_display
+        launch_kwargs = dict(kwargs)
+        if self.live_session is not None:
+            # Camoufox passes this environment directly to the Firefox child.
+            # Keeping DISPLAY launch-local lets independent Xvnc sessions start
+            # concurrently without mutating the worker process environment.
+            launch_env = dict(os.environ)
+            launch_env.update(dict(launch_kwargs.get("env") or {}))
+            launch_env["DISPLAY"] = str(self.live_session.display)
+            launch_kwargs["env"] = launch_env
+        self.cm = Camoufox(**launch_kwargs)
+        self.context = self.cm.__enter__()
         if self.live_session is not None and self.context is not None:
             live_display = str(self.live_session.display)
-            # DISPLAY is process-global and must be restored after launch so
-            # concurrent browser sessions cannot overwrite one another. Keep
-            # the X display on the corresponding BrowserContext instead.
+            # Keep the X display on the corresponding BrowserContext for
+            # xdotool operations after the browser has started.
             with contextlib.suppress(Exception):
                 setattr(self.context, "_tg_live_display", live_display)
+                setattr(self.context, "_tg_live_width", int(self.live_session.width))
+                setattr(self.context, "_tg_live_height", int(self.live_session.height))
             if self.context_control is not None:
                 self.context_control["live_browser_display"] = live_display
         if self.context_control is not None:
@@ -1322,6 +1370,19 @@ def _run_billing_commit_action(
     callback = context_control.get("billing_submit_callback") if isinstance(context_control, dict) else None
     if callable(callback):
         return callback(action)
+    return action()
+
+
+def _run_matrix_resource_phase(
+    context_control: dict[str, Any] | None,
+    cancel_event: Any | None,
+    phase: str,
+    action: Callable[[], Any],
+) -> Any:
+    _raise_if_cancelled(cancel_event)
+    callback = context_control.get("matrix_resource_phase_callback") if isinstance(context_control, dict) else None
+    if callable(callback):
+        return callback(phase, action)
     return action()
 
 
@@ -1486,7 +1547,7 @@ def _sync_live_browser_viewport(page, context_control: dict[str, Any] | None, lo
         context_control.get("live_browser_height"),
         _DEFAULT_LIVE_BROWSER_HEIGHT,
     )
-    expected = {"width": max(1024, width), "height": max(640, height)}
+    expected = {"width": max(320, width), "height": max(240, height)}
     try:
         geometry = page.evaluate(
             """() => ({
@@ -1747,6 +1808,7 @@ def _screenshot(page, screenshot_dir: Path, task: dict[str, Any], stage: str, lo
         "login_verification_required",
         "login_invalid_credentials",
         "manual_login_timeout",
+        "publish_ready_no_submit",
         "publish_done",
         "publish_submitted_unconfirmed",
     }:
@@ -1776,6 +1838,7 @@ def _should_capture_screenshot(stage: str) -> bool:
         "login_wait_timeout",
         "manual_login_timeout",
         "login_complete",
+        "publish_ready_no_submit",
         "publish_done",
         "publish_submitted_unconfirmed",
         "failed",
@@ -1996,7 +2059,13 @@ def _check_platform_login(page, platform: str, logger: AutomationLogger) -> dict
 
 
 @contextlib.contextmanager
-def _temporary_background_page(page, logger: AutomationLogger, stage: str):
+def _temporary_background_page(
+    page,
+    logger: AutomationLogger,
+    stage: str,
+    *,
+    block_heavy_assets: bool = False,
+):
     background = page
     try:
         browser_context = getattr(page, "context", None)
@@ -2005,9 +2074,26 @@ def _temporary_background_page(page, logger: AutomationLogger, stage: str):
             candidate = new_page()
             if candidate is not None and candidate is not page:
                 background = candidate
+                if block_heavy_assets:
+                    route_page = getattr(background, "route", None)
+                    if callable(route_page):
+                        def handle_background_request(route) -> None:
+                            request = getattr(route, "request", None)
+                            resource_type = str(getattr(request, "resource_type", "") or "").lower()
+                            if resource_type in {"image", "media", "font"}:
+                                route.abort()
+                                return
+                            route.continue_()
+
+                        route_page("**/*", handle_background_request)
                 with contextlib.suppress(Exception):
                     page.bring_to_front()
-                logger.log("debug", stage, "Background browser page opened for a non-disruptive check.", {})
+                logger.log(
+                    "debug",
+                    stage,
+                    "Background browser page opened for a non-disruptive check.",
+                    {"heavy_assets_blocked": bool(block_heavy_assets)},
+                )
     except Exception as exc:
         background = page
         logger.log("debug", stage, "Background page unavailable; using the primary page.", {"error": str(exc)[:500]})
@@ -3237,10 +3323,15 @@ def _send_human_wheel(page, delta: int) -> str:
     xdotool = shutil.which("xdotool")
     if display and xdotool:
         viewport = page.viewport_size if isinstance(getattr(page, "viewport_size", None), dict) else {}
-        width = max(320, int(viewport.get("width") or _DEFAULT_LIVE_BROWSER_WIDTH))
+        width = max(
+            320,
+            _safe_int(getattr(page.context, "_tg_live_width", 0), 0)
+            or int(viewport.get("width") or _DEFAULT_LIVE_BROWSER_WIDTH),
+        )
         height = max(
             240,
-            int(
+            _safe_int(getattr(page.context, "_tg_live_height", 0), 0)
+            or int(
                 viewport.get("height")
                 or (_DEFAULT_LIVE_BROWSER_HEIGHT - _DEFAULT_LIVE_BROWSER_CHROME_HEIGHT)
             ),
@@ -9959,52 +10050,122 @@ def _dismiss_threads_compose_dialogs(page, logger: AutomationLogger) -> None:
         _sleep_between(0.5, 0.9)
 
 
-def _ensure_threads_compose_ready(page, logger: AutomationLogger):
+def _threads_sidebar_compose_opener(page):
+    selectors = [
+        'a[href]',
+        '[aria-label*="New thread" i]',
+        '[aria-label*="发帖" i]',
+        '[aria-label*="發文" i]',
+        '[aria-label*="新贴文" i]',
+        '[aria-label*="新貼文" i]',
+        '[aria-label*="新串文" i]',
+        '[aria-label*="撰写新" i]',
+        '[aria-label*="撰寫新" i]',
+        '[aria-label*="新規スレッド" i]',
+        '[aria-label*="새 스레드" i]',
+        'text="New thread"',
+        'text="新串文"',
+    ]
+    try:
+        viewport_width = float(page.evaluate("() => window.innerWidth") or 1920)
+    except Exception:
+        viewport_width = 1920.0
+    left_edge_limit = max(320.0, viewport_width * 0.35)
+    allowed_hosts = {"threads.net", "www.threads.net", "threads.com", "www.threads.com"}
+    best = None
+    best_center_x = float("inf")
+    for selector in selectors:
+        try:
+            group = page.locator(selector)
+            total = min(int(group.count()), 128 if selector == 'a[href]' else 16)
+        except Exception:
+            continue
+        for index in range(total):
+            try:
+                locator = group.nth(index)
+                if not locator.is_visible(timeout=500):
+                    continue
+                href = str(locator.get_attribute("href", timeout=500) or "").strip()
+                if not href:
+                    clickable = locator.locator(
+                        "xpath=ancestor-or-self::*[self::a or self::button or @role='button' or @role='link' or @tabindex='0'][1]"
+                    )
+                    if clickable.count() and clickable.is_visible(timeout=500):
+                        locator = clickable
+                        href = str(locator.get_attribute("href", timeout=500) or "").strip()
+                if href:
+                    parsed = urlparse(urljoin(str(getattr(page, "url", "") or THREADS_HOME), href))
+                    if str(parsed.hostname or "").lower() not in allowed_hosts:
+                        continue
+                    if str(parsed.path or "").rstrip("/") != "/new":
+                        continue
+                box = locator.bounding_box()
+                if not box:
+                    continue
+                center_x = float(box.get("x") or 0) + float(box.get("width") or 0) / 2
+                if center_x > left_edge_limit or center_x >= best_center_x:
+                    continue
+                best = locator
+                best_center_x = center_x
+            except Exception:
+                continue
+    return best
+
+
+def _ensure_threads_compose_ready(
+    page,
+    logger: AutomationLogger,
+    *,
+    _home_recovery_attempted: bool = False,
+):
     compose = _threads_dialog_compose_box(page)
     if compose is not None:
         return compose
-    openers = [
-        'a[href="/new"]',
-        'a[href*="/new"]',
-        '[aria-label*="New thread" i]',
-        '[role="button"][aria-label*="发帖" i]',
-        '[role="button"][aria-label*="發文" i]',
-        '[role="button"][aria-label*="新贴文" i]',
-        '[role="button"][aria-label*="新貼文" i]',
-        '[role="button"][aria-label*="新串文" i]',
-        '[role="button"][aria-label*="撰写新" i]',
-        '[role="button"][aria-label*="撰寫新" i]',
-        'button:has-text("Start a thread")',
-        '[role="button"]:has-text("Start a thread")',
-        'text="Start a thread"',
-        'text="New thread"',
-    ]
-    for selector in openers:
-        try:
-            loc = page.locator(selector).first
-            if loc.count() and loc.is_visible(timeout=2000):
-                _click_threads_compose_opener(page, loc, logger)
-                _sleep_between(0.8, 1.6)
-                compose = _threads_dialog_compose_box(page)
-                if compose is not None:
-                    return compose
-        except Exception:
-            continue
-    inline_compose = _threads_inline_compose_opener(page)
-    if inline_compose is not None:
-        if _click_threads_compose_opener(page, inline_compose, logger):
-            _sleep_between(0.8, 1.6)
-            compose = _threads_dialog_compose_box(page)
-            if compose is not None:
-                return compose
-    inline_compose = _threads_inline_compose_box(page)
-    if inline_compose is not None:
-        _human_click(page, inline_compose, logger, "threads_publish_open")
+    sidebar_opener = _threads_sidebar_compose_opener(page)
+    if sidebar_opener is not None:
+        _click_threads_compose_opener(page, sidebar_opener, logger)
         _sleep_between(0.8, 1.6)
         compose = _threads_dialog_compose_box(page)
         if compose is not None:
             return compose
-    raise RuntimeError("无法打开 Threads 发帖输入框。")
+    if not _home_recovery_attempted:
+        logger.log(
+            "warn",
+            "threads_publish_open_recovery",
+            "Threads home URL is open but the left sidebar composer entry is not rendered; reloading the home page once.",
+            {"url": _safe_navigation_url(getattr(page, "url", ""))},
+        )
+        _goto(page, THREADS_HOME, logger, "threads_publish_open_recovery")
+        return _ensure_threads_compose_ready(
+            page,
+            logger,
+            _home_recovery_attempted=True,
+        )
+    raise RuntimeError("无法通过 Threads 左侧栏打开发帖输入框。")
+
+
+def _focus_threads_compose(page, compose, logger: AutomationLogger):
+    current = compose
+    last_error = ""
+    for attempt in range(2):
+        try:
+            if _human_click(page, current, logger, "threads_publish_focus"):
+                return current
+            last_error = "compose click was not actionable"
+        except Exception as exc:
+            last_error = str(exc)
+        if attempt == 0:
+            logger.log(
+                "warn",
+                "threads_publish_focus_retry",
+                "Threads composer changed during page rendering; reacquiring the active dialog input once.",
+                {"error": last_error[:500]},
+            )
+            _sleep_between(0.35, 0.65)
+            current = _threads_dialog_compose_box(page)
+            if current is None:
+                current = _ensure_threads_compose_ready(page, logger)
+    raise RuntimeError(f"Threads 发帖输入框无法稳定聚焦：{last_error}")
 
 
 def _normalize_threads_post_permalink(value: Any) -> str:
@@ -10508,7 +10669,11 @@ def _capture_threads_publish_evidence(page, permalink: str, caption: str, screen
     return ""
 
 
-def _capture_threads_profile_baseline(page, profile_url: str, logger: AutomationLogger) -> set[str] | None:
+def _capture_threads_profile_baseline(
+    page,
+    profile_url: str,
+    logger: AutomationLogger,
+) -> set[str] | None:
     if not profile_url:
         return None
     last_error = ""
@@ -10808,9 +10973,28 @@ def _run_threads_publish_post(
     _ensure_threads_home_for_publish(page, logger)
     _dismiss_threads_compose_dialogs(page, logger)
     profile_url = _resolve_threads_profile_url(page, account)
-    with _temporary_background_page(page, logger, "threads_publish_baseline_background") as verification_page:
-        baseline_used_primary_page = verification_page is page
-        previous_permalinks = _capture_threads_profile_baseline(verification_page, profile_url, logger)
+    def capture_profile_baseline() -> tuple[bool, set[str] | None]:
+        with _temporary_background_page(
+            page,
+            logger,
+            "threads_publish_baseline_background",
+            block_heavy_assets=True,
+        ) as verification_page:
+            return (
+                verification_page is page,
+                _capture_threads_profile_baseline(
+                    verification_page,
+                    profile_url,
+                    logger,
+                ),
+            )
+
+    baseline_used_primary_page, previous_permalinks = _run_matrix_resource_phase(
+        context_control,
+        cancel_event,
+        "threads_profile_baseline",
+        capture_profile_baseline,
+    )
     session_permalinks = _threads_publish_session_permalinks(context_control)
     if previous_permalinks is None:
         if not session_permalinks:
@@ -10838,7 +11022,15 @@ def _run_threads_publish_post(
     _set_manual_takeover_waiting_for(context_control, "threads_composer_ready")
     try:
         compose = _ensure_threads_compose_ready(page, logger)
-    except Exception:
+    except Exception as exc:
+        shot = _screenshot(page, screenshot_dir, task, "failed", logger)
+        logger.log(
+            "error",
+            "threads_publish_compose_failed",
+            "Threads composer remained unavailable after the one-time home recovery.",
+            {"error": str(exc)[:500], "url": _safe_navigation_url(getattr(page, "url", ""))},
+            shot,
+        )
         raise
     manual_result = _pause_for_requested_threads_publish_takeover(
         page, task, payload, screenshot_dir, logger, account, profile_url,
@@ -10847,7 +11039,7 @@ def _run_threads_publish_post(
     if manual_result is not None:
         return manual_result
     _set_manual_takeover_waiting_for(context_control, "threads_text_ready")
-    _human_click(page, compose, logger, "threads_publish_focus")
+    compose = _focus_threads_compose(page, compose, logger)
     if caption:
         text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
         logger.log("info", "threads_publish_text_input", "正在填写 Threads 帖子正文。", {"mode": text_input_mode, "chars": len(caption)})
@@ -10902,6 +11094,35 @@ def _run_threads_publish_post(
     if manual_result is not None:
         return manual_result
     _set_manual_takeover_waiting_for(context_control, "threads_before_submit")
+    if payload.get("stop_before_publish_click") is True:
+        post_button = _threads_dialog_post_button(page) or _threads_post_button(page)
+        if post_button is None:
+            raise RuntimeError("Threads publish preview did not reach the final publish button.")
+        try:
+            if not post_button.is_visible() or (
+                hasattr(post_button, "is_enabled") and not post_button.is_enabled()
+            ):
+                raise RuntimeError("Threads final publish button is not actionable.")
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError("Unable to verify the final Threads publish button.") from exc
+        shot = _screenshot(page, screenshot_dir, task, "publish_ready_no_submit", logger)
+        logger.log(
+            "info",
+            "threads_publish_ready_no_submit",
+            "Threads composer reached the final publish button; submit was intentionally skipped.",
+            {"submitted": False, "ready_to_submit": True, "screenshot_path": shot},
+            shot,
+        )
+        return {
+            "ok": True,
+            "preview_only": True,
+            "submitted": False,
+            "ready_to_submit": True,
+            "url": str(page.url or ""),
+            "screenshot_path": shot,
+        }
     confirmation_state = {
         "phase": "confirm_only",
         "profile_url": profile_url,

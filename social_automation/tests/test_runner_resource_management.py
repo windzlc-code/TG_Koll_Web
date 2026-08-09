@@ -197,12 +197,19 @@ class RunnerResourceManagementTests(unittest.TestCase):
         self.assertFalse(enabled["network.prefetch-next"])
         self.assertFalse(enabled["network.predictor.enabled"])
         self.assertFalse(enabled["dom.ipc.processPrelaunch.enabled"])
-        self.assertEqual(enabled["dom.ipc.processCount"], 2)
+        self.assertEqual(enabled["dom.ipc.processCount"], 1)
         self.assertEqual(enabled["dom.ipc.processCount.webIsolated"], 1)
-        self.assertEqual(enabled["layout.frame_rate"], 30)
+        self.assertEqual(enabled["layout.frame_rate"], 15)
+        self.assertTrue(enabled["browser.cache.memory.enable"])
+        self.assertEqual(enabled["browser.cache.memory.capacity"], 8 * 1024)
+        self.assertEqual(enabled["browser.cache.disk.max_chunks_memory_usage"], 8 * 1024)
+        self.assertEqual(enabled["browser.cache.disk.max_priority_chunks_memory_usage"], 8 * 1024)
+        self.assertEqual(enabled["browser.cache.disk.preload_chunk_count"], 1)
+        self.assertFalse(enabled["media.utility-process.enabled"])
+        self.assertTrue(enabled["media.sanity-test.disabled"])
         self.assertEqual(
             enabled["image.mem.surfacecache.max_size_kb"],
-            64 * 1024,
+            24 * 1024,
         )
         self.assertNotIn("network.prefetch-next", disabled)
         self.assertNotIn("network.predictor.enabled", disabled)
@@ -210,6 +217,13 @@ class RunnerResourceManagementTests(unittest.TestCase):
         self.assertNotIn("dom.ipc.processCount", disabled)
         self.assertNotIn("dom.ipc.processCount.webIsolated", disabled)
         self.assertNotIn("layout.frame_rate", disabled)
+        self.assertNotIn("browser.cache.memory.enable", disabled)
+        self.assertNotIn("browser.cache.memory.capacity", disabled)
+        self.assertNotIn("browser.cache.disk.max_chunks_memory_usage", disabled)
+        self.assertNotIn("browser.cache.disk.max_priority_chunks_memory_usage", disabled)
+        self.assertNotIn("browser.cache.disk.preload_chunk_count", disabled)
+        self.assertNotIn("media.utility-process.enabled", disabled)
+        self.assertNotIn("media.sanity-test.disabled", disabled)
         self.assertNotIn("image.mem.surfacecache.max_size_kb", disabled)
 
     def test_image_surface_cache_cap_is_bounded_and_can_be_disabled(self):
@@ -226,7 +240,7 @@ class RunnerResourceManagementTests(unittest.TestCase):
 
         self.assertEqual(
             bounded["image.mem.surfacecache.max_size_kb"],
-            64 * 1024,
+            32 * 1024,
         )
         self.assertNotIn("image.mem.surfacecache.max_size_kb", disabled)
 

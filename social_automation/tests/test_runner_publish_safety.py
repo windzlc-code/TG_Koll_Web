@@ -1,4 +1,5 @@
 ﻿import unittest
+import contextlib
 import threading
 from pathlib import Path
 from unittest import mock
@@ -35,6 +36,10 @@ class _BackgroundPage:
         self.url = url
         self.closed = False
         self.reload = mock.Mock()
+        self.routes = []
+
+    def route(self, pattern, handler):
+        self.routes.append((pattern, handler))
 
     def close(self):
         self.closed = True
@@ -487,7 +492,11 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         manager = mock.MagicMock()
         manager.__enter__.return_value = context
         callback = mock.Mock()
-        control = {"account_login_status_callback": callback}
+        browser_start_barrier = mock.Mock()
+        control = {
+            "account_login_status_callback": callback,
+            "browser_start_barrier_callback": browser_start_barrier,
+        }
 
         with (
             mock.patch.object(runner, "_open_camoufox_context", return_value=manager),
@@ -507,6 +516,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
+        browser_start_barrier.assert_called_once_with()
         callback.assert_called_once_with("ready")
 
     def test_publish_batch_reuses_one_browser_context_for_four_posts(self):
@@ -932,9 +942,24 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         page = _PageWithBackground()
         logger = _Logger()
 
-        with runner._temporary_background_page(page, logger, "baseline_probe") as probe:
+        with runner._temporary_background_page(
+            page,
+            logger,
+            "baseline_probe",
+            block_heavy_assets=True,
+        ) as probe:
             self.assertIsNot(probe, page)
             self.assertEqual(len(page.context.pages), 1)
+            self.assertEqual(probe.routes[0][0], "**/*")
+            route_handler = probe.routes[0][1]
+            image_route = mock.Mock()
+            image_route.request.resource_type = "image"
+            route_handler(image_route)
+            image_route.abort.assert_called_once_with()
+            script_route = mock.Mock()
+            script_route.request.resource_type = "script"
+            route_handler(script_route)
+            script_route.continue_.assert_called_once_with()
 
         self.assertEqual(len(page.context.pages), 1)
         probe = page.context.pages[0]
@@ -1118,7 +1143,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             {"width": 1920, "height": 1019},
         )
 
-    def test_live_browser_geometry_keeps_1080p_layout_on_lightweight_360p_framebuffer(self):
+    def test_live_browser_geometry_keeps_1080p_layout_on_720p_framebuffer(self):
         session = mock.Mock(spec=[])
 
         config = runner._live_browser_geometry_config(session)
@@ -3632,6 +3657,81 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         submit.assert_not_called()
 
+    def test_threads_publish_runs_profile_baseline_inside_matrix_resource_phase(self):
+        page = _Page("https://www.threads.net/")
+        phases = []
+
+        def run_phase(phase, action):
+            phases.append(phase)
+            return action()
+
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_ensure_threads_home_for_publish"),
+            mock.patch.object(runner, "_resolve_threads_profile_url", return_value="https://www.threads.net/@alice"),
+            mock.patch.object(runner, "_temporary_background_page", return_value=contextlib.nullcontext(page)),
+            mock.patch.object(runner, "_capture_threads_profile_baseline", return_value=None),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "未点击发布按钮"):
+                runner._run_threads_publish_post(
+                    page,
+                    {"id": "matrix-baseline-task"},
+                    {"caption": "hello threads"},
+                    Path("."),
+                    _Logger(),
+                    {"username": "alice"},
+                    context_control={"matrix_resource_phase_callback": run_phase},
+                )
+
+        self.assertEqual(phases, ["threads_profile_baseline"])
+
+    def test_threads_publish_preview_stops_at_actionable_button_without_submit(self):
+        page = _Page("https://www.threads.net/")
+        compose = _Locator()
+        post_button = _Locator()
+        task = {"id": "publish-preview-task", "task_type": "publish_post"}
+        payload = {
+            "caption": "preview only",
+            "stop_before_publish_click": True,
+        }
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_ensure_threads_home_for_publish"),
+            mock.patch.object(runner, "_resolve_threads_profile_url", return_value="https://www.threads.net/@alice"),
+            mock.patch.object(runner, "_temporary_background_page") as background_page,
+            mock.patch.object(runner, "_capture_threads_profile_baseline", return_value=set()) as capture_baseline,
+            mock.patch.object(runner, "_pause_for_requested_threads_publish_takeover", return_value=None),
+            mock.patch.object(runner, "_ensure_threads_compose_ready", return_value=compose),
+            mock.patch.object(runner, "_human_click", return_value=True),
+            mock.patch.object(runner, "_clear_and_type"),
+            mock.patch.object(runner, "_threads_active_dialog_text", return_value="preview only"),
+            mock.patch.object(runner, "_threads_dialog_post_button", return_value=post_button),
+            mock.patch.object(runner, "_screenshot", return_value="preview.png"),
+            mock.patch.object(runner, "_run_publish_submit_action") as submit,
+        ):
+            result = runner._run_threads_publish_post(
+                page,
+                task,
+                payload,
+                Path("."),
+                _Logger(),
+                {"username": "alice"},
+                context_control={},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["preview_only"])
+        self.assertTrue(result["ready_to_submit"])
+        self.assertFalse(result["submitted"])
+        self.assertEqual(result["screenshot_path"], "preview.png")
+        capture_baseline.assert_called_once()
+        self.assertNotIn("skip", capture_baseline.call_args.kwargs)
+        background_page.assert_called_once()
+        self.assertIs(background_page.call_args.args[0], page)
+        self.assertEqual(background_page.call_args.args[2], "threads_publish_baseline_background")
+        self.assertTrue(background_page.call_args.kwargs["block_heavy_assets"])
+        submit.assert_not_called()
+
     def test_threads_profile_baseline_requires_two_stable_empty_reads(self):
         page = _Page("https://www.threads.net/@alice")
         with (
@@ -3681,10 +3781,9 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         opener = _Locator()
         compose = _Locator()
         page = mock.Mock()
-        page.locator.return_value = opener
         with (
             mock.patch.object(runner, "_threads_dialog_compose_box", side_effect=[None, compose]),
-            mock.patch.object(runner, "_threads_inline_compose_opener") as inline_lookup,
+            mock.patch.object(runner, "_threads_sidebar_compose_opener", return_value=opener) as sidebar_lookup,
             mock.patch.object(runner, "_click_threads_compose_opener", return_value=True) as click_opener,
             mock.patch.object(runner, "_sleep_between"),
         ):
@@ -3692,7 +3791,126 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertIs(result, compose)
         click_opener.assert_called_once()
-        inline_lookup.assert_not_called()
+        sidebar_lookup.assert_called_once_with(page)
+
+    def test_threads_compose_ready_skips_news_links_and_uses_sidebar_opener(self):
+        news_link = mock.Mock()
+        news_link.is_visible.return_value = True
+        news_link.get_attribute.return_value = "https://www.orientaldaily.com.my/news/wenhui/2026/08/09/839119"
+        news_link.bounding_box.return_value = {"x": 800, "y": 500, "width": 100, "height": 40}
+        sidebar_opener = mock.Mock()
+        sidebar_opener.is_visible.return_value = True
+        sidebar_opener.get_attribute.return_value = "https://www.threads.com/new"
+        sidebar_opener.bounding_box.return_value = {"x": 60, "y": 120, "width": 120, "height": 40}
+        anchors = mock.Mock()
+        anchors.count.return_value = 2
+        anchors.nth.side_effect = [news_link, sidebar_opener]
+        empty = mock.Mock()
+        empty.count.return_value = 0
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+        page.evaluate.return_value = 1920
+        page.locator.side_effect = lambda selector: anchors if selector == 'a[href]' else empty
+
+        result = runner._threads_sidebar_compose_opener(page)
+
+        self.assertIs(result, sidebar_opener)
+
+    def test_threads_sidebar_compose_opener_accepts_traditional_chinese_sidebar_text(self):
+        text_span = mock.Mock()
+        text_span.is_visible.return_value = True
+        text_span.get_attribute.return_value = None
+        text_span.bounding_box.return_value = {"x": 18, "y": 110, "width": 80, "height": 36}
+        sidebar_opener = mock.Mock()
+        sidebar_opener.count.return_value = 1
+        sidebar_opener.is_visible.return_value = True
+        sidebar_opener.get_attribute.return_value = None
+        sidebar_opener.bounding_box.return_value = {"x": 10, "y": 98, "width": 145, "height": 50}
+        text_span.locator.return_value = sidebar_opener
+        sidebar_group = mock.Mock()
+        sidebar_group.count.return_value = 1
+        sidebar_group.nth.return_value = text_span
+        empty = mock.Mock()
+        empty.count.return_value = 0
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+        page.evaluate.return_value = 1920
+        page.locator.side_effect = lambda selector: sidebar_group if selector == 'text="新串文"' else empty
+
+        result = runner._threads_sidebar_compose_opener(page)
+
+        self.assertIs(result, sidebar_opener)
+
+    def test_threads_compose_ready_does_not_use_inline_home_composer(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+        inline_opener = _Locator()
+        with (
+            mock.patch.object(runner, "_threads_dialog_compose_box", return_value=None),
+            mock.patch.object(runner, "_threads_sidebar_compose_opener", return_value=None),
+            mock.patch.object(runner, "_threads_inline_compose_opener", return_value=inline_opener),
+            mock.patch.object(runner, "_threads_inline_compose_box", return_value=inline_opener),
+            mock.patch.object(runner, "_click_threads_compose_opener") as click_opener,
+            mock.patch.object(runner, "_goto"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Threads"):
+                runner._ensure_threads_compose_ready(page, _Logger())
+
+        click_opener.assert_not_called()
+
+    def test_threads_compose_ready_reloads_stale_home_once_before_retry(self):
+        state = {"reloaded": False, "clicked": False}
+        hidden = _LoginStateLocator(visible=False)
+        opener = _Locator()
+        compose = _Locator()
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+
+        def recover(*_args, **_kwargs):
+            state["reloaded"] = True
+
+        def click(*_args, **_kwargs):
+            state["clicked"] = True
+            return True
+
+        with (
+            mock.patch.object(
+                runner,
+                "_threads_dialog_compose_box",
+                side_effect=lambda _page: compose if state["clicked"] else None,
+            ),
+            mock.patch.object(
+                runner,
+                "_threads_sidebar_compose_opener",
+                side_effect=lambda _page: opener if state["reloaded"] else None,
+            ),
+            mock.patch.object(runner, "_click_threads_compose_opener", side_effect=click) as click_opener,
+            mock.patch.object(runner, "_goto", side_effect=recover) as goto,
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            result = runner._ensure_threads_compose_ready(page, _Logger())
+
+        self.assertIs(result, compose)
+        goto.assert_called_once_with(
+            page,
+            runner.THREADS_HOME,
+            mock.ANY,
+            "threads_publish_open_recovery",
+        )
+        click_opener.assert_called_once()
+
+    def test_threads_compose_ready_recovery_does_not_loop(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+        with (
+            mock.patch.object(runner, "_threads_dialog_compose_box", return_value=None),
+            mock.patch.object(runner, "_threads_sidebar_compose_opener", return_value=None),
+            mock.patch.object(runner, "_goto") as goto,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Threads"):
+                runner._ensure_threads_compose_ready(page, _Logger())
+
+        goto.assert_called_once()
 
     def test_threads_compose_opener_does_not_click_twice_when_dialog_appears_after_timeout(self):
         page = mock.Mock()
@@ -3706,6 +3924,21 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertTrue(clicked)
         opener.evaluate.assert_not_called()
+
+    def test_threads_compose_focus_reacquires_after_stale_locator(self):
+        page = mock.Mock()
+        stale_compose = _Locator()
+        fresh_compose = _Locator()
+        with (
+            mock.patch.object(runner, "_human_click", side_effect=[TimeoutError("stale compose"), True]) as click,
+            mock.patch.object(runner, "_threads_dialog_compose_box", return_value=fresh_compose),
+            mock.patch.object(runner, "_ensure_threads_compose_ready") as reopen,
+        ):
+            result = runner._focus_threads_compose(page, stale_compose, _Logger())
+
+        self.assertIs(result, fresh_compose)
+        self.assertEqual([call.args[1] for call in click.call_args_list], [stale_compose, fresh_compose])
+        reopen.assert_not_called()
 
     def test_threads_active_submit_reports_a_blocked_click(self):
         page = mock.Mock()
