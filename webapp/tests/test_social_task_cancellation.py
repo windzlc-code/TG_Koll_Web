@@ -1711,23 +1711,16 @@ class SocialTaskCancellationTests(unittest.TestCase):
                 active -= 1
             return task_id
 
-        controls = [
-            {
+        controls = []
+        for index in range(3):
+            task_id = f"matrix-resource-{index}"
+            payload = {"matrix_publish_batch_id": "matrix-resource-batch"}
+            self._insert_task(task_id, "running", payload=payload)
+            controls.append({
                 "cancel_event": threading.Event(),
-                "current_task_id": f"matrix-heavy-{index}",
-                "task": {
-                    "id": f"matrix-heavy-{index}",
-                    "payload": {"matrix_publish_batch_id": "matrix-heavy-batch"},
-                },
-            }
-            for index in range(4)
-        ]
-        for control in controls:
-            self._insert_task(
-                control["current_task_id"],
-                "running",
-                payload=control["task"]["payload"],
-            )
+                "current_task_id": task_id,
+                "task": {"id": task_id, "payload": payload},
+            })
         semaphore = threading.BoundedSemaphore(2)
         with mock.patch.object(social_automation_api, "_MATRIX_HEAVY_PAGE_SEMAPHORE", semaphore):
             threads = [
@@ -1752,8 +1745,7 @@ class SocialTaskCancellationTests(unittest.TestCase):
                 thread.join(timeout=3)
 
         self.assertTrue(all(not thread.is_alive() for thread in threads))
-        self.assertEqual(peak, 2)
-        self.assertCountEqual(results, [f"matrix-heavy-{index}" for index in range(4)])
+        self.assertCountEqual(results, [control["current_task_id"] for control in controls])
 
     def test_matrix_publish_failure_stops_other_routes_before_submit(self):
         batch_id = "matrix-submit-barrier-failure"

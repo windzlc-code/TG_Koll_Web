@@ -9164,7 +9164,7 @@ def _wait_for_matrix_browser_start_barrier(control: dict[str, Any]) -> None:
             stagger_seconds = max(
                 0.0,
                 min(
-                    float(control.get("matrix_browser_start_stagger_seconds") or 0.75),
+                    float(control.get("matrix_browser_start_stagger_seconds") or 1.25),
                     2.0,
                 ),
             )

@@ -560,7 +560,13 @@ def run_social_task(
         _import_initial_cookies(context, payload.get("initial_cookies"), platform, logger)
         _sync_live_browser_viewport(page, context_control, logger)
         page.set_default_timeout(int(os.getenv("SOCIAL_AUTOMATION_DEFAULT_TIMEOUT_MS", "30000")))
-        _wait_for_browser_start_barrier(context_control, cancel_event)
+        defer_matrix_start = (
+            platform == "threads"
+            and task_type == "publish_post"
+            and bool(str(payload.get("matrix_publish_batch_id") or "").strip())
+        )
+        if not defer_matrix_start:
+            _wait_for_browser_start_barrier(context_control, cancel_event)
         if task_type == "open_login":
             return _run_open_login(page, task, account, payload, screenshot_dir, logger, platform, cancel_event, context_control)
         if task_type == "check_login":
@@ -2067,6 +2073,7 @@ def _temporary_background_page(
     block_heavy_assets: bool = False,
 ):
     background = page
+    route_handler = None
     try:
         browser_context = getattr(page, "context", None)
         new_page = getattr(browser_context, "new_page", None)
@@ -2074,18 +2081,6 @@ def _temporary_background_page(
             candidate = new_page()
             if candidate is not None and candidate is not page:
                 background = candidate
-                if block_heavy_assets:
-                    route_page = getattr(background, "route", None)
-                    if callable(route_page):
-                        def handle_background_request(route) -> None:
-                            request = getattr(route, "request", None)
-                            resource_type = str(getattr(request, "resource_type", "") or "").lower()
-                            if resource_type in {"image", "media", "font"}:
-                                route.abort()
-                                return
-                            route.continue_()
-
-                        route_page("**/*", handle_background_request)
                 with contextlib.suppress(Exception):
                     page.bring_to_front()
                 logger.log(
@@ -2094,12 +2089,28 @@ def _temporary_background_page(
                     "Background browser page opened for a non-disruptive check.",
                     {"heavy_assets_blocked": bool(block_heavy_assets)},
                 )
+        if block_heavy_assets:
+            route_page = getattr(background, "route", None)
+            if callable(route_page):
+                def handle_background_request(route) -> None:
+                    request = getattr(route, "request", None)
+                    resource_type = str(getattr(request, "resource_type", "") or "").lower()
+                    if resource_type in {"image", "media", "font", "stylesheet"}:
+                        route.abort()
+                        return
+                    route.continue_()
+
+                route_handler = handle_background_request
+                route_page("**/*", route_handler)
     except Exception as exc:
         background = page
         logger.log("debug", stage, "Background page unavailable; using the primary page.", {"error": str(exc)[:500]})
     try:
         yield background
     finally:
+        if route_handler is not None:
+            with contextlib.suppress(Exception):
+                background.unroute("**/*", route_handler)
         if background is not page:
             with contextlib.suppress(Exception):
                 background.close()
@@ -9859,6 +9870,19 @@ def _click_threads_compose_opener(page, locator, logger: AutomationLogger) -> bo
     if _threads_dialog_compose_box(page) is not None:
         logger.log("debug", "threads_publish_open", "Threads 编辑器已在点击超时后正常打开，未重复触发入口。", {})
         return True
+    try:
+        locator.evaluate("node => node.click()")
+        _sleep_between(0.8, 1.4)
+        if _threads_dialog_compose_box(page) is not None:
+            logger.log(
+                "info",
+                "threads_publish_open_dom_fallback",
+                "The validated Threads sidebar composer entry opened through its DOM click fallback.",
+                {},
+            )
+            return True
+    except Exception:
+        pass
     return False
 
 
@@ -10673,7 +10697,17 @@ def _capture_threads_profile_baseline(
     page,
     profile_url: str,
     logger: AutomationLogger,
+    *,
+    skip: bool = False,
 ) -> set[str] | None:
+    if skip:
+        logger.log(
+            "debug",
+            "threads_publish_preview_baseline_skipped",
+            "Preview-only publish test skipped permalink baseline because submit is disabled.",
+            {},
+        )
+        return set()
     if not profile_url:
         return None
     last_error = ""
@@ -10682,7 +10716,7 @@ def _capture_threads_profile_baseline(
     successful_reads = 0
     for attempt in range(3):
         try:
-            _goto(page, profile_url, logger, "threads_publish_baseline", timeout_ms=5000, networkidle_ms=1500)
+            _goto(page, profile_url, logger, "threads_publish_baseline", timeout_ms=12000, networkidle_ms=1500)
         except Exception as exc:
             last_error = str(exc)
         try:
@@ -10973,28 +11007,37 @@ def _run_threads_publish_post(
     _ensure_threads_home_for_publish(page, logger)
     _dismiss_threads_compose_dialogs(page, logger)
     profile_url = _resolve_threads_profile_url(page, account)
-    def capture_profile_baseline() -> tuple[bool, set[str] | None]:
-        with _temporary_background_page(
+    if payload.get("stop_before_publish_click") is True:
+        baseline_used_primary_page = False
+        previous_permalinks = _capture_threads_profile_baseline(
             page,
+            profile_url,
             logger,
-            "threads_publish_baseline_background",
-            block_heavy_assets=True,
-        ) as verification_page:
-            return (
-                verification_page is page,
-                _capture_threads_profile_baseline(
-                    verification_page,
-                    profile_url,
-                    logger,
-                ),
-            )
+            skip=True,
+        )
+    else:
+        def capture_profile_baseline() -> tuple[bool, set[str] | None]:
+            with _temporary_background_page(
+                page,
+                logger,
+                "threads_publish_baseline_background",
+                block_heavy_assets=True,
+            ) as verification_page:
+                return (
+                    verification_page is page,
+                    _capture_threads_profile_baseline(
+                        verification_page,
+                        profile_url,
+                        logger,
+                    ),
+                )
 
-    baseline_used_primary_page, previous_permalinks = _run_matrix_resource_phase(
-        context_control,
-        cancel_event,
-        "threads_profile_baseline",
-        capture_profile_baseline,
-    )
+        baseline_used_primary_page, previous_permalinks = _run_matrix_resource_phase(
+            context_control,
+            cancel_event,
+            "threads_profile_baseline",
+            capture_profile_baseline,
+        )
     session_permalinks = _threads_publish_session_permalinks(context_control)
     if previous_permalinks is None:
         if not session_permalinks:
@@ -11048,7 +11091,8 @@ def _run_threads_publish_post(
         dialog_text = _threads_active_dialog_text(page)
         if caption not in dialog_text:
             compose = _threads_dialog_compose_box(page) or compose
-            _clear_and_type(page, compose, caption, mode=text_input_mode, logger=logger, stage="threads_publish_text_input_retry")
+            retry_input_mode = "type" if text_input_mode == "paste" else text_input_mode
+            _clear_and_type(page, compose, caption, mode=retry_input_mode, logger=logger, stage="threads_publish_text_input_retry")
             _sleep_between(0.8, 1.4)
             dialog_text = _threads_active_dialog_text(page)
         if caption not in dialog_text:
