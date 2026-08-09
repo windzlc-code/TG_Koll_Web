@@ -40,6 +40,16 @@ class AdminSharedAccountPanelTests(unittest.TestCase):
         self.assertIn("@media (min-width: 761px)", style)
         self.assertIn("color: #19394a;", style)
 
+    def test_mobile_admin_action_group_selector_is_closed(self):
+        style = (ROOT / "static" / "assets" / "style.css").read_text(encoding="utf-8")
+        self.assertIn(
+            "    .admin-modal-actions,\n"
+            "    .persona-dashboard-action-buttons\n"
+            "  ) {\n"
+            "    gap: 8px;",
+            style,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

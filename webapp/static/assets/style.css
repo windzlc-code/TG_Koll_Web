@@ -9357,12 +9357,13 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 
   .page-admin :is(
     .admin-nav,
-.admin-sidebar-actions,
-.admin-public-links,
-.admin-page-actions,
-.admin-task-actions,
-.admin-modal-actions,
-.persona-dashboard-action-buttons {
+    .admin-sidebar-actions,
+    .admin-public-links,
+    .admin-page-actions,
+    .admin-task-actions,
+    .admin-modal-actions,
+    .persona-dashboard-action-buttons
+  ) {
     gap: 8px;
   }
 }
