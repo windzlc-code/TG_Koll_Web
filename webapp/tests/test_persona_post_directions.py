@@ -135,6 +135,12 @@ def test_generated_post_media_action_scrolls_to_the_media_composer():
 
     assert 'selection.action === "media"' in resolver
     assert "scrollPersonaMediaComposerIntoView" not in resolver
+    scroller = script.split("function scrollPersonaMediaComposerIntoView", 1)[1].split(
+        "async function resolvePersonaOrdinaryGeneratedCandidates", 1
+    )[0]
+    assert scroller.count("pendingPersonaMediaScrollId") >= 3
+    assert "selectedPersona()?.id" in scroller
+    assert scroller.index("selectedPersona()?.id") < scroller.index('document.querySelector("[data-persona-run-media-task]")')
     finalizer = generator.split("} finally {", 1)[1]
     assert finalizer.index("cancelScheduledPersonaDetailRender();") < finalizer.index("renderPersonaDetail();")
     assert finalizer.index("renderPersonaDetail();") < finalizer.index("scrollPersonaMediaComposerIntoView")

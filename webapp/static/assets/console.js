@@ -20150,10 +20150,13 @@ async function applyPersonaGeneratedBatchTitles(personaId, posts = [], requested
 let pendingPersonaMediaScrollId = "";
 
 function scrollPersonaMediaComposerIntoView(personaId) {
-  if (String(pendingPersonaMediaScrollId) !== String(personaId || "")) return;
-  pendingPersonaMediaScrollId = "";
+  const cleanPersonaId = String(personaId || "");
+  if (String(pendingPersonaMediaScrollId) !== cleanPersonaId) return;
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
+      if (String(pendingPersonaMediaScrollId) !== cleanPersonaId) return;
+      pendingPersonaMediaScrollId = "";
+      if (!isPersonaWorkspaceModule() || String(selectedPersona()?.id || "") !== cleanPersonaId) return;
       const action = document.querySelector("[data-persona-run-media-task]");
       const target = action?.closest(".persona-compose-media-side");
       if (!target) return;
@@ -20508,8 +20511,8 @@ async function generatePersonaDraftPosts() {
     if (isPersonaWorkspaceModule()) {
       cancelScheduledPersonaDetailRender();
       renderPersonaDetail();
-      scrollPersonaMediaComposerIntoView(persona.id);
     }
+    scrollPersonaMediaComposerIntoView(persona.id);
   }
 }
 
@@ -20662,8 +20665,8 @@ function restorePersonaPostGenerationTasks(personaId = "") {
       if (isPersonaWorkspaceModule()) {
         cancelScheduledPersonaDetailRender();
         renderPersonaDetail();
-        scrollPersonaMediaComposerIntoView(cleanPersonaId);
       }
+      scrollPersonaMediaComposerIntoView(cleanPersonaId);
     });
 }
 
