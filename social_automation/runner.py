@@ -40,9 +40,7 @@ DEFAULT_WARMUP_RESOURCE_COMPACTION_COOLDOWN_SECONDS = 90
 DEFAULT_BROWSER_DISK_CACHE_CAPACITY_MB = 128
 MIN_BROWSER_DISK_CACHE_CAPACITY_MB = 64
 MAX_BROWSER_DISK_CACHE_CAPACITY_MB = 1024
-DEFAULT_LIGHTWEIGHT_WARMUP_IMAGE_CACHE_MB = 128
-MIN_LIGHTWEIGHT_WARMUP_IMAGE_CACHE_MB = 64
-MAX_LIGHTWEIGHT_WARMUP_IMAGE_CACHE_MB = 512
+DEFAULT_LIGHTWEIGHT_WARMUP_COMPACTION_COOLDOWN_SECONDS = 30
 SUPPORTED_TASK_TYPES = {
     "check_login",
     "open_login",
@@ -89,61 +87,42 @@ def _browser_disk_cache_preferences() -> dict[str, Any]:
     }
 
 
-def _lightweight_threads_warmup_requested(
-    context_control: dict[str, Any] | None,
-) -> bool:
-    """Limit low-memory browser prefs to the conservative Threads browse task."""
-    enabled = str(
-        os.getenv("SOCIAL_AUTOMATION_LIGHTWEIGHT_THREADS_WARMUP", "1") or "1"
+def _conservative_browser_resources_enabled() -> bool:
+    return str(
+        os.getenv("SOCIAL_AUTOMATION_CONSERVATIVE_BROWSER_RESOURCES", "1") or "1"
     ).strip().lower() not in {"0", "false", "no", "off"}
-    if not enabled or not isinstance(context_control, dict):
-        return False
-    task = context_control.get("task")
-    if not isinstance(task, dict):
-        return False
-    payload = task.get("payload")
-    return bool(
-        str(task.get("task_type") or "").strip() == "threads_warmup"
-        and str(task.get("platform") or "").strip().lower() == "threads"
-        and isinstance(payload, dict)
-        and str(payload.get("strategy_id") or "").strip() == "browse_only"
-    )
 
 
-def _browser_firefox_user_preferences(
-    context_control: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Build task-scoped Firefox prefs without changing login or publish browsers."""
+def _browser_runtime_preferences() -> dict[str, Any]:
+    """Reduce speculative background work without changing rendered content."""
     preferences = _browser_disk_cache_preferences()
-    if not _lightweight_threads_warmup_requested(context_control):
+    if not _conservative_browser_resources_enabled():
         return preferences
-    try:
-        image_cache_mb = int(
-            str(
-                os.getenv(
-                    "SOCIAL_AUTOMATION_LIGHTWEIGHT_IMAGE_CACHE_MB",
-                    DEFAULT_LIGHTWEIGHT_WARMUP_IMAGE_CACHE_MB,
-                )
-            ).strip()
-        )
-    except (TypeError, ValueError):
-        image_cache_mb = DEFAULT_LIGHTWEIGHT_WARMUP_IMAGE_CACHE_MB
-    image_cache_mb = max(
-        MIN_LIGHTWEIGHT_WARMUP_IMAGE_CACHE_MB,
-        min(image_cache_mb, MAX_LIGHTWEIGHT_WARMUP_IMAGE_CACHE_MB),
-    )
     preferences.update(
         {
-            # Avoid keeping empty content processes ready for future tabs. This
-            # does not reduce the content processes required by the active page.
-            "dom.ipc.processPrelaunch.enabled": False,
-            "dom.ipc.processPrelaunch.fission.number": 0,
-            # Keep visible images intact while bounding decoded off-screen
-            # surfaces. Firefox expresses this preference in KiB.
-            "image.mem.surfacecache.max_size_kb": image_cache_mb * 1024,
+            "network.prefetch-next": False,
+            "network.predictor.enabled": False,
         }
     )
     return preferences
+
+
+def _lightweight_threads_warmup_requested(
+    task: dict[str, Any] | None,
+    payload: dict[str, Any] | None,
+    platform: str,
+) -> bool:
+    """Use media-light mode only for the conservative Threads browse task."""
+    enabled = str(
+        os.getenv("SOCIAL_AUTOMATION_LIGHTWEIGHT_THREADS_WARMUP", "1") or "1"
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    if not enabled or not isinstance(task, dict) or not isinstance(payload, dict):
+        return False
+    return bool(
+        str(task.get("task_type") or "").strip() == "threads_warmup"
+        and str(platform or task.get("platform") or "").strip().lower() == "threads"
+        and str(payload.get("strategy_id") or "").strip() == "browse_only"
+    )
 
 
 class AutomationLogger(Protocol):
@@ -458,8 +437,9 @@ def run_social_task(
     logger.log("info", "prepare", "自动化任务开始执行。", {"task_type": task_type, "platform": platform})
     _raise_if_cancelled(cancel_event)
     with _open_camoufox_context(account=account, proxy=proxy, logger=logger, context_control=context_control) as context:
-        _import_initial_cookies(context, payload.get("initial_cookies"), platform, logger)
         page = _first_page(context)
+        _install_automation_media_guard(page)
+        _import_initial_cookies(context, payload.get("initial_cookies"), platform, logger)
         _sync_live_browser_viewport(page, context_control, logger)
         page.set_default_timeout(int(os.getenv("SOCIAL_AUTOMATION_DEFAULT_TIMEOUT_MS", "30000")))
         if task_type == "open_login":
@@ -692,8 +672,9 @@ def run_social_publish_batch(
         logger=loggers[0],
         context_control=context_control,
     ) as context:
-        _import_initial_cookies(context, first_payload.get("initial_cookies"), platform, loggers[0])
         page = _first_page(context)
+        _install_automation_media_guard(page)
+        _import_initial_cookies(context, first_payload.get("initial_cookies"), platform, loggers[0])
         _sync_live_browser_viewport(page, context_control, loggers[0])
         page.set_default_timeout(int(os.getenv("SOCIAL_AUTOMATION_DEFAULT_TIMEOUT_MS", "30000")))
         for index, (task, logger) in enumerate(zip(tasks, loggers)):
@@ -934,9 +915,7 @@ class _BrowserContextManager:
             "user_data_dir": str(profile_dir),
             "headless": headless,
             "humanize": float(os.getenv("SOCIAL_AUTOMATION_HUMANIZE_MAX_SECONDS", "0.5")),
-            "firefox_user_prefs": _browser_firefox_user_preferences(
-                self.context_control
-            ),
+            "firefox_user_prefs": _browser_runtime_preferences(),
         }
         if self.live_session is not None:
             geometry_config = _live_browser_geometry_config(self.live_session)
@@ -5527,7 +5506,18 @@ _WARMUP_MEDIA_GUARD_SCRIPT = r"""
 (() => {
     if (window.__tgWarmupMediaGuardInstalled) return;
 
+    const lightweightMode = () => Boolean(window.__tgWarmupLightweightMediaMode);
+    const holdLightweightMedia = (media) => {
+        media.__tgWarmupResumeWhenVisible = false;
+        media.autoplay = false;
+        media.preload = "none";
+        if (typeof media.pause === "function" && !media.paused) {
+            media.pause();
+        }
+    };
+
     const restoreReleasedMedia = (media) => {
+        if (lightweightMode()) return;
         const released = media.__tgWarmupReleasedMedia;
         if (!released) return;
         media.__tgWarmupReleasedMedia = null;
@@ -5561,7 +5551,9 @@ _WARMUP_MEDIA_GUARD_SCRIPT = r"""
     const observer = new IntersectionObserver((entries) => {
         for (const entry of entries) {
             const media = entry.target;
-            if (!entry.isIntersecting && typeof media.pause === "function") {
+            if (lightweightMode()) {
+                holdLightweightMedia(media);
+            } else if (!entry.isIntersecting && typeof media.pause === "function") {
                 if (!media.paused) {
                     media.__tgWarmupResumeWhenVisible = true;
                     media.pause();
@@ -5587,11 +5579,16 @@ _WARMUP_MEDIA_GUARD_SCRIPT = r"""
             videos.push(...root.querySelectorAll("video"));
         }
         for (const video of videos) {
-            if (!video.getAttribute("preload") || video.preload === "auto") {
+            if (lightweightMode()) {
+                holdLightweightMedia(video);
+            } else if (!video.getAttribute("preload") || video.preload === "auto") {
                 video.preload = "metadata";
             }
             if (!observed.has(video)) {
                 observed.add(video);
+                video.addEventListener("play", () => {
+                    if (lightweightMode()) holdLightweightMedia(video);
+                }, true);
                 observer.observe(video);
             }
         }
@@ -5721,14 +5718,30 @@ def _warmup_resource_pressure(
     }
 
 
-def _install_warmup_media_guard(page) -> None:
-    with contextlib.suppress(Exception):
-        page.add_init_script(_WARMUP_MEDIA_GUARD_SCRIPT)
-    with contextlib.suppress(Exception):
-        page.evaluate(_WARMUP_MEDIA_GUARD_SCRIPT)
+def _warmup_media_guard_script(*, lightweight: bool) -> str:
+    mode = "true" if lightweight else "false"
+    return (
+        f"window.__tgWarmupLightweightMediaMode = {mode};\n"
+        + _WARMUP_MEDIA_GUARD_SCRIPT
+    )
 
 
-def _ensure_warmup_media_guard(page) -> None:
+def _install_automation_media_guard(page) -> None:
+    """Install the passive guard for login, publish, browse, and warmup pages."""
+    if not _conservative_browser_resources_enabled():
+        return
+    _install_warmup_media_guard(page, lightweight=False)
+
+
+def _install_warmup_media_guard(page, *, lightweight: bool = False) -> None:
+    script = _warmup_media_guard_script(lightweight=lightweight)
+    with contextlib.suppress(Exception):
+        page.add_init_script(script)
+    with contextlib.suppress(Exception):
+        page.evaluate(script)
+
+
+def _ensure_warmup_media_guard(page, *, lightweight: bool = False) -> None:
     """Verify the init script survived navigation and repair it in-place if needed."""
     installed = False
     with contextlib.suppress(Exception):
@@ -5736,7 +5749,7 @@ def _ensure_warmup_media_guard(page) -> None:
             page.evaluate("() => Boolean(window.__tgWarmupMediaGuardInstalled)")
         )
     if not installed:
-        _install_warmup_media_guard(page)
+        _install_warmup_media_guard(page, lightweight=lightweight)
 
 
 def _compact_warmup_page_in_place(
@@ -5834,6 +5847,7 @@ def _maybe_compact_warmup_page(
     platform: str,
     context_control: dict[str, Any] | None,
     last_compaction_at: float,
+    proactive: bool = False,
 ) -> dict[str, Any]:
     pressure = _warmup_resource_pressure(context_control)
     result = {
@@ -5842,20 +5856,30 @@ def _maybe_compact_warmup_page(
         "last_compaction_at": float(last_compaction_at),
         "deadline_extension_seconds": 0.0,
     }
-    if not pressure["should_compact"]:
+    if not pressure["should_compact"] and not proactive:
         return result
-    cooldown = _resource_env_int(
-        "SOCIAL_AUTOMATION_WARMUP_RESOURCE_COMPACTION_COOLDOWN_SECONDS",
-        DEFAULT_WARMUP_RESOURCE_COMPACTION_COOLDOWN_SECONDS,
-        30,
-        900,
-    )
+    if proactive:
+        cooldown = _resource_env_int(
+            "SOCIAL_AUTOMATION_LIGHTWEIGHT_WARMUP_COMPACTION_COOLDOWN_SECONDS",
+            DEFAULT_LIGHTWEIGHT_WARMUP_COMPACTION_COOLDOWN_SECONDS,
+            15,
+            300,
+        )
+    else:
+        cooldown = _resource_env_int(
+            "SOCIAL_AUTOMATION_WARMUP_RESOURCE_COMPACTION_COOLDOWN_SECONDS",
+            DEFAULT_WARMUP_RESOURCE_COMPACTION_COOLDOWN_SECONDS,
+            30,
+            900,
+        )
     started_at = time.monotonic()
     if last_compaction_at > 0 and started_at - last_compaction_at < cooldown:
         return result
     compacted = _compact_warmup_page_in_place(
         page,
-        pressure_level=pressure["level"],
+        pressure_level=(
+            pressure["level"] if pressure["level"] != "normal" else "soft"
+        ),
     )
     lock = (
         context_control.get("resource_metrics_lock")
@@ -5877,12 +5901,14 @@ def _maybe_compact_warmup_page(
                 _safe_int(metrics.get("released_media_buffers"), 0)
                 + _safe_int(compacted.get("released"), 0)
             )
-            metrics["last_compaction_pressure"] = pressure["level"]
+            metrics["last_compaction_pressure"] = (
+                pressure["level"] if pressure["level"] != "normal" else "proactive"
+            )
     logger.log(
         "warn" if pressure["level"] in {"hard", "emergency"} else "info",
         f"{platform}_warmup_resource_compaction",
         "已在当前画面内释放不可见媒体资源，任务继续执行。",
-        {"pressure": pressure, **compacted},
+        {"pressure": pressure, "proactive": bool(proactive), **compacted},
     )
     result["last_compaction_at"] = started_at
     return result
@@ -5941,9 +5967,14 @@ def _run_platform_warmup(
 
     stage = f"{clean_platform}_warmup"
     home_url = THREADS_HOME if clean_platform == "threads" else INSTAGRAM_HOME
-    _install_warmup_media_guard(page)
+    lightweight_media = _lightweight_threads_warmup_requested(
+        task,
+        payload,
+        clean_platform,
+    )
+    _install_warmup_media_guard(page, lightweight=lightweight_media)
     _goto(page, home_url, logger, stage)
-    _ensure_warmup_media_guard(page)
+    _ensure_warmup_media_guard(page, lightweight=lightweight_media)
     _guard_warmup_risk(
         page,
         clean_platform,
@@ -6098,6 +6129,7 @@ def _run_platform_warmup(
             platform=clean_platform,
             context_control=context_control,
             last_compaction_at=last_resource_compaction_at,
+            proactive=lightweight_media,
         )
         page = resource_management["page"]
         last_resource_compaction_at = float(

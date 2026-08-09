@@ -144,7 +144,7 @@ class RunnerResourceManagementTests(unittest.TestCase):
     def test_media_guard_is_installed_before_initial_warmup_navigation(self):
         source = inspect.getsource(runner._run_platform_warmup)
         self.assertLess(
-            source.index("_install_warmup_media_guard(page)"),
+            source.index("_install_warmup_media_guard(page, lightweight=lightweight_media)"),
             source.index("_goto(page, home_url"),
         )
         self.assertIn(
@@ -152,6 +152,8 @@ class RunnerResourceManagementTests(unittest.TestCase):
             runner._WARMUP_MEDIA_GUARD_SCRIPT,
         )
         self.assertIn("media.play()", runner._WARMUP_MEDIA_GUARD_SCRIPT)
+        self.assertIn("holdLightweightMedia", runner._WARMUP_MEDIA_GUARD_SCRIPT)
+        self.assertIn('media.preload = "none"', runner._WARMUP_MEDIA_GUARD_SCRIPT)
         self.assertTrue(
             runner._WARMUP_MEDIA_GUARD_SCRIPT.strip().startswith("(() => {")
         )
@@ -165,6 +167,46 @@ class RunnerResourceManagementTests(unittest.TestCase):
             runner._WARMUP_MEDIA_GUARD_SCRIPT.index(
                 "new MutationObserver"
             ),
+        )
+
+    def test_passive_media_guard_is_installed_for_single_and_batch_tasks(self):
+        single_source = inspect.getsource(runner.run_social_task)
+        batch_source = inspect.getsource(runner.run_social_publish_batch)
+
+        self.assertLess(
+            single_source.index("_install_automation_media_guard(page)"),
+            single_source.index("_import_initial_cookies("),
+        )
+        self.assertLess(
+            batch_source.index("_install_automation_media_guard(page)"),
+            batch_source.index("_import_initial_cookies("),
+        )
+
+    def test_conservative_browser_preferences_have_a_kill_switch(self):
+        with mock.patch.dict(
+            os.environ,
+            {"SOCIAL_AUTOMATION_CONSERVATIVE_BROWSER_RESOURCES": "1"},
+        ):
+            enabled = runner._browser_runtime_preferences()
+        with mock.patch.dict(
+            os.environ,
+            {"SOCIAL_AUTOMATION_CONSERVATIVE_BROWSER_RESOURCES": "0"},
+        ):
+            disabled = runner._browser_runtime_preferences()
+
+        self.assertFalse(enabled["network.prefetch-next"])
+        self.assertFalse(enabled["network.predictor.enabled"])
+        self.assertNotIn("network.prefetch-next", disabled)
+        self.assertNotIn("network.predictor.enabled", disabled)
+
+    def test_passive_media_guard_keeps_visible_media_behavior(self):
+        normal = runner._warmup_media_guard_script(lightweight=False)
+
+        self.assertIn("media.__tgWarmupResumeWhenVisible = true", normal)
+        self.assertIn("if (media.__tgWarmupResumeWhenVisible)", normal)
+        self.assertIn("media.play()", normal)
+        self.assertFalse(
+            normal.startswith("window.__tgWarmupLightweightMediaMode = true;")
         )
 
     def test_hard_compaction_unloads_only_offscreen_video_buffers(self):
@@ -210,8 +252,103 @@ class RunnerResourceManagementTests(unittest.TestCase):
         source = inspect.getsource(runner._run_platform_warmup)
         self.assertLess(
             source.index("_goto(page, home_url"),
-            source.index("_ensure_warmup_media_guard(page)"),
+            source.index("_ensure_warmup_media_guard(page, lightweight=lightweight_media)"),
         )
+
+    def test_lightweight_media_mode_is_limited_to_threads_browse_only(self):
+        task = {"task_type": "threads_warmup", "platform": "threads"}
+        payload = {"strategy_id": "browse_only"}
+
+        with mock.patch.dict(
+            os.environ,
+            {"SOCIAL_AUTOMATION_LIGHTWEIGHT_THREADS_WARMUP": "1"},
+        ):
+            self.assertTrue(
+                runner._lightweight_threads_warmup_requested(
+                    task,
+                    payload,
+                    "threads",
+                )
+            )
+            self.assertFalse(
+                runner._lightweight_threads_warmup_requested(
+                    {**task, "task_type": "publish_post"},
+                    payload,
+                    "threads",
+                )
+            )
+            self.assertFalse(
+                runner._lightweight_threads_warmup_requested(
+                    task,
+                    {"strategy_id": "tg_default"},
+                    "threads",
+                )
+            )
+            self.assertFalse(
+                runner._lightweight_threads_warmup_requested(
+                    {"task_type": "instagram_warmup", "platform": "instagram"},
+                    payload,
+                    "instagram",
+                )
+            )
+
+    def test_lightweight_media_mode_has_environment_kill_switch(self):
+        with mock.patch.dict(
+            os.environ,
+            {"SOCIAL_AUTOMATION_LIGHTWEIGHT_THREADS_WARMUP": "0"},
+        ):
+            self.assertFalse(
+                runner._lightweight_threads_warmup_requested(
+                    {"task_type": "threads_warmup", "platform": "threads"},
+                    {"strategy_id": "browse_only"},
+                    "threads",
+                )
+            )
+
+    def test_lightweight_guard_pauses_media_without_changing_normal_guard(self):
+        lightweight = runner._warmup_media_guard_script(lightweight=True)
+        normal = runner._warmup_media_guard_script(lightweight=False)
+
+        self.assertTrue(
+            lightweight.startswith(
+                "window.__tgWarmupLightweightMediaMode = true;"
+            )
+        )
+        self.assertTrue(
+            normal.startswith(
+                "window.__tgWarmupLightweightMediaMode = false;"
+            )
+        )
+        self.assertIn("holdLightweightMedia", lightweight)
+        self.assertIn("media.play()", normal)
+
+    def test_lightweight_warmup_compacts_proactively_at_normal_pressure(self):
+        control = {
+            "resource_snapshot_provider": lambda: {
+                "container_memory_mb": 900,
+                "memory_available_mb": 1800,
+            }
+        }
+        page = mock.Mock()
+        with (
+            mock.patch.object(
+                runner,
+                "_compact_warmup_page_in_place",
+                return_value={"paused": 1, "deferred": 1, "released": 1},
+            ) as compact,
+            mock.patch.object(runner.time, "monotonic", return_value=100.0),
+        ):
+            result = runner._maybe_compact_warmup_page(
+                page,
+                mock.Mock(),
+                platform="threads",
+                context_control=control,
+                last_compaction_at=0.0,
+                proactive=True,
+            )
+
+        self.assertEqual(result["pressure"]["level"], "normal")
+        compact.assert_called_once_with(page, pressure_level="soft")
 
     def test_resource_metric_reads_and_writes_share_the_configured_lock(self):
         class CountingLock:
