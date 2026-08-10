@@ -42,7 +42,7 @@ type PersonaThreadsAccountBinding = {
   accountId?: string;
   profileDir?: string;
   status?: string;
-  source?: "account_pool" | "legacy_binding" | "publish_history";
+  source?: "account_pool" | "legacy_binding";
 };
 
 function argValue(name: string): string {
@@ -212,28 +212,11 @@ function collectThreadsRefreshTargets(archive: any): PersonaThreadsAccountBindin
   const accounts = setup.accountManagement || {};
   const currentLegacyHandle = normalizeThreadsUsername(accounts?.threads?.handle);
   const accountPool = readThreadsAccountPool();
-  const byUsername = new Map(accountPool.map((item: any) => [normalizeThreadsUsername(item.username).toLowerCase(), item]));
-  const out = new Map<string, PersonaThreadsAccountBinding>();
-  const add = (binding: PersonaThreadsAccountBinding | null, source: PersonaThreadsAccountBinding["source"]) => {
-    const username = normalizeThreadsUsername(binding?.username);
-    if (!username) return;
-    const key = username.toLowerCase();
-    const existing = out.get(key) || {};
-    out.set(key, { ...existing, ...binding, username, source: existing.source || source });
-  };
-  for (const binding of accountPool as Array<PersonaThreadsAccountBinding & { archiveId?: string }>) {
-    if (String(binding.archiveId || "").trim() === String(archive?.id || "").trim()) add(binding, "account_pool");
-  }
-  add(currentLegacyHandle ? { username: currentLegacyHandle } : null, "legacy_binding");
-  for (const record of Array.isArray(archive?.publishHistory) ? archive.publishHistory : []) {
-    for (const url of publishedThreadsUrlsFromRecord(record)) {
-      const username = threadsHandleFromPostUrl(url);
-      if (!username) continue;
-      const pooled = byUsername.get(username.toLowerCase());
-      add({ ...(pooled || {}), username }, "publish_history");
-    }
-  }
-  return [...out.values()];
+  const currentBindings = (accountPool as Array<PersonaThreadsAccountBinding & { archiveId?: string }>)
+    .filter((binding) => String(binding.archiveId || "").trim() === String(archive?.id || "").trim())
+    .map((binding) => ({ ...binding, source: "account_pool" as const }));
+  if (currentBindings.length) return currentBindings;
+  return currentLegacyHandle ? [{ username: currentLegacyHandle, source: "legacy_binding" }] : [];
 }
 
 function collectInstagramRefreshTargets(archive: any): PersonaThreadsAccountBinding[] {
@@ -401,9 +384,14 @@ async function backfillPublishedThreadsPostMetrics(args: {
   const publishedUrls = publishedThreadsUrlsForHandle(args.archive, args.username);
   if (!publishedUrls.length) return args.postMetrics;
   const existingRows = Array.isArray(args.postMetrics) ? args.postMetrics : [];
-  const missingUrls = publishedUrls.filter((url) => !existingRows.some((post) => (
-    postMetricMatchesUrl(post, url) && typeof post?.viewCount === "number"
-  )));
+  const missingUrls = publishedUrls.filter((url) => !existingRows.some((post) => {
+    if (!postMetricMatchesUrl(post, url)) return false;
+    const postViewCount = Number(post?.viewCount || 0);
+    const postInteractions = [post?.likeCount, post?.commentCount, post?.repostCount, post?.shareCount]
+      .reduce((sum, value) => sum + Math.max(0, Number(value || 0)), 0);
+    return typeof post?.viewCount === "number"
+      && (postViewCount > 0 || postInteractions === 0);
+  }));
   if (!missingUrls.length) return existingRows;
   const previousProfileDir = process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
   try {
@@ -685,7 +673,6 @@ async function main() {
           metricKey: key,
           metric: nextMetric,
           authProfileKey: auth.profileKey,
-          allowAdditionalHandle: target.source === "publish_history",
           updatedAt,
         });
         if (!saved.ok) {

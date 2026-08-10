@@ -257,15 +257,36 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         metric_text = function_source("publishHistoryMetricText", "renderPublishHistoryMetrics")
 
         self.assertIn('source.views_available === false', entries)
-        self.assertIn('source.matched === true ? "不适用" : null', entries)
+        self.assertIn('viewUnavailable\n    ? null', entries)
+        self.assertNotIn('source.matched === true ? "不适用" : null', entries)
         self.assertIn('["浏览",', entries)
         self.assertNotIn('source.views ?? source.hot_score', entries)
         self.assertIn('value === null', metric_text)
-        self.assertIn('"未获取"', metric_text)
-        self.assertIn('typeof value === "string"', metric_text)
-        self.assertIn('"不适用"', metric_text)
+        self.assertIn('return "—"', metric_text)
+        self.assertNotIn('"未获取"', metric_text)
+        self.assertNotIn('"不适用"', metric_text)
+        rendered_metrics = function_source("renderPublishHistoryMetrics", "publishHistoryAccountWarning")
+        self.assertIn('value === null ? "—"', rendered_metrics)
+        self.assertNotIn('"未获取"', rendered_metrics)
         dashboard_record = function_source("personaHistoryDashboardMetricRecord", "personaHistoryIdentityKeys")
         self.assertIn("complete: row.view_available === true", dashboard_record)
+
+    def test_manual_refresh_only_targets_the_current_bound_threads_account(self):
+        start = REFRESH_SCRIPT.index("function collectThreadsRefreshTargets")
+        end = REFRESH_SCRIPT.index("function collectInstagramRefreshTargets", start)
+        targets = REFRESH_SCRIPT[start:end]
+
+        self.assertIn("binding.archiveId", targets)
+        self.assertIn("archive?.id", targets)
+        self.assertIn("if (currentBindings.length) return currentBindings;", targets)
+        self.assertNotIn("archive?.publishHistory", targets)
+        self.assertNotIn('"publish_history"', targets)
+        self.assertNotIn("allowAdditionalHandle", REFRESH_SCRIPT)
+
+        backfill_start = REFRESH_SCRIPT.index("async function backfillPublishedThreadsPostMetrics")
+        backfill_end = REFRESH_SCRIPT.index("async function fetchThreadsProfileHotMetricsViaRssHub", backfill_start)
+        backfill = REFRESH_SCRIPT[backfill_start:backfill_end]
+        self.assertIn("postViewCount > 0 || postInteractions === 0", backfill)
 
     def test_manual_hot_refresh_uses_authenticated_source_and_reloads_history(self):
         refresh = function_source("refreshPublishHistoryHotData", "publishGroupSelectionState")

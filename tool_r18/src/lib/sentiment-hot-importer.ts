@@ -6969,11 +6969,8 @@ export function parseThreadsBrowserPostDetailMetrics(args: {
     likeCount: sequence.likeCount,
     commentCount: sequence.commentCount,
     shareCount: sequence.repostCount,
-    // Threads omits the view label on a successfully loaded post while the
-    // count is still zero. A complete action row proves this is the post
-    // detail, so preserve that platform-reported zero instead of "unknown".
-    viewCount: typeof viewCount === "number" ? viewCount : 0,
   };
+  if (typeof viewCount === "number") engagement.viewCount = viewCount;
   if (rawSignals.length) engagement.rawSignals = rawSignals;
   const interactionHotScore = sequence.likeCount + sequence.commentCount + sequence.repostCount + sequence.sendCount;
   const hotScore = typeof viewCount === "number" ? viewCount : interactionHotScore;
@@ -6984,7 +6981,6 @@ export function parseThreadsBrowserPostDetailMetrics(args: {
       ...compactEngagementMetrics(engagement),
       repost_count: sequence.repostCount,
       send_count: sequence.sendCount,
-      view_count: typeof viewCount === "number" ? viewCount : 0,
     },
   };
 }

@@ -13830,7 +13830,7 @@ function publishHistoryMetricEntries(record = {}) {
     || source.views === undefined
     || (Number(source.views || 0) === 0 && interactions > 0);
   const views = viewUnavailable
-    ? (source.matched === true ? "不适用" : null)
+    ? null
     : source.views;
   return [
     ["浏览", views],
@@ -13848,10 +13848,10 @@ function formatPublishHistoryMetricUnit(number, divisor, suffix) {
 }
 
 function publishHistoryMetricText(value) {
-  if (value === null || value === undefined || value === "") return "未获取";
-  if (typeof value === "string") return value === "不适用" ? value : "未获取";
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "string") return "—";
   const number = Number(value || 0);
-  if (!Number.isFinite(number)) return "未获取";
+  if (!Number.isFinite(number)) return "—";
   const absolute = Math.abs(number);
   if (absolute >= 100000000) return formatPublishHistoryMetricUnit(number, 100000000, "亿");
   if (absolute >= 1000000) return formatPublishHistoryMetricUnit(number, 1000000, "m");
@@ -13864,7 +13864,7 @@ function renderPublishHistoryMetrics(record = {}, className = "") {
   return `
     <div class="publish-history-metrics ${esc(className)}">
       ${publishHistoryMetricEntries(record).map(([label, value]) => `
-        <span title="${esc(`${label}：${typeof value === "string" ? value : (value === null ? "未获取" : Number(value || 0).toLocaleString("zh-CN"))}`)}">
+        <span title="${esc(`${label}：${typeof value === "string" ? value : (value === null ? "—" : Number(value || 0).toLocaleString("zh-CN"))}`)}">
           <small>${esc(label)}</small>
           <strong>${esc(publishHistoryMetricText(value))}</strong>
         </span>

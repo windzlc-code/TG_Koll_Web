@@ -104,6 +104,44 @@ describe("persona archive hot metric store", () => {
     expect(archive.setup.hotMetrics).toBeUndefined();
   });
 
+  it("preserves historical Threads metrics while updating the current binding", () => {
+    const historicalMetric = {
+      username: "old.history.account",
+      complete: true,
+      postMetrics: [{ code: "DbOld", viewCount: 18 }],
+    };
+    const dir = useArchiveStore([{
+      id: "persona-1",
+      name: "理发师",
+      content: "",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+      setup: {
+        accountManagement: {
+          threads: { handle: "current.account" },
+        },
+        hotMetrics: {
+          "threads:old.history.account": historicalMetric,
+        },
+      },
+      posts: [],
+    }]);
+
+    const result = updatePersonaArchiveThreadsHotMetrics({
+      archiveId: "persona-1",
+      expectedHandle: "current.account",
+      metricKey: "threads:current.account",
+      metric: { username: "current.account", complete: true, postMetrics: [{ code: "DbNow", viewCount: 28 }] },
+      updatedAt: "2026-08-10T10:00:00.000Z",
+    });
+
+    expect(result).toEqual({ ok: true });
+    const [archive] = readArchives(dir);
+    expect(archive.setup.accountManagement.threads.handle).toBe("current.account");
+    expect(archive.setup.hotMetrics["threads:old.history.account"]).toEqual(historicalMetric);
+    expect(archive.setup.hotMetrics["threads:current.account"].postMetrics[0].code).toBe("DbNow");
+  });
+
   it("allows additional historical Threads handles without changing the current binding", () => {
     const dir = useArchiveStore([{
       id: "persona-1",
