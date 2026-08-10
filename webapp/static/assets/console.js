@@ -488,7 +488,7 @@ const state = {
   personaDashboardOverviewFetch: null,
   personaHistoryFilters: {
     content: localStorage.getItem("personaDashboardPostTypeFilter") || "all",
-    sort: localStorage.getItem("personaDashboardPostSort") || "time_desc",
+    sort: "time_desc",
   },
   personaPublishAccountIds: {},
   personaPublishResults: {},
@@ -788,7 +788,7 @@ function clearTenantInMemoryState() {
   state.personaDashboardOverviewFetch = null;
   state.personaHistoryFilters = {
     content: localStorage.getItem("personaDashboardPostTypeFilter") || "all",
-    sort: localStorage.getItem("personaDashboardPostSort") || "time_desc",
+    sort: "time_desc",
   };
   state.personaAutomationResults = {};
   state.personaAutomationWatchers = {};

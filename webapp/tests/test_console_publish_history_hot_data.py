@@ -139,10 +139,7 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertNotIn("Math.max", sorter)
         self.assertIn('const sort = String(filters.sort || "time_desc")', filtered)
         self.assertIn('const defaultValue = key === "content" ? "all" : "time_desc"', filters)
-        self.assertGreaterEqual(
-            CONSOLE_JS.count('localStorage.getItem("personaDashboardPostSort") || "time_desc"'),
-            2,
-        )
+        self.assertGreaterEqual(CONSOLE_JS.count('sort: "time_desc"'), 2)
 
     def test_history_list_preview_uses_one_reach_metric_and_hides_compact_only_fields(self):
         selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")
