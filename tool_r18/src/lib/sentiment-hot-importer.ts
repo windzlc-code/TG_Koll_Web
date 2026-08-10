@@ -6404,7 +6404,7 @@ export function parseInstagramProfileHotMetricsPayload(args: {
       publishedAt: normalizeThreadsTimestamp(row.taken_at_timestamp || row.taken_at || row.device_timestamp),
       likeCount: instagramProfileMetricNumber(row?.edge_media_preview_like?.count, row?.edge_liked_by?.count, row.like_count),
       commentCount: instagramProfileMetricNumber(row?.edge_media_to_comment?.count, row.comment_count),
-      viewCount: instagramProfileMetricNumber(row.video_view_count, row.video_play_count, row.play_count, row.view_count),
+      viewCount: instagramProfileMetricNumber(row.content_views_count, row.video_view_count, row.video_play_count, row.play_count, row.view_count),
       capturedAt: refreshedAt,
     };
   }).filter((row) => Boolean(row.sourceUrl || row.pk));
@@ -6414,7 +6414,10 @@ export function parseInstagramProfileHotMetricsPayload(args: {
   const following = instagramProfileMetricNumber(user?.edge_follow?.count, user.following_count);
   const likes = postMetrics.length || posts === 0 ? postMetrics.reduce((sum, row) => sum + Number(row.likeCount || 0), 0) : undefined;
   const comments = postMetrics.length || posts === 0 ? postMetrics.reduce((sum, row) => sum + Number(row.commentCount || 0), 0) : undefined;
-  const views = postMetrics.length || posts === 0 ? postMetrics.reduce((sum, row) => sum + Number(row.viewCount || 0), 0) : undefined;
+  const resolvedViewRows = postMetrics.filter((row) => typeof row.viewCount === "number");
+  const views = resolvedViewRows.length
+    ? resolvedViewRows.reduce((sum, row) => sum + Number(row.viewCount || 0), 0)
+    : posts === 0 ? 0 : undefined;
   const complete = resolvedPostCount !== undefined && (posts === 0 || postMetrics.length >= posts);
   return {
     platform: "instagram",
@@ -6508,11 +6511,17 @@ export async function fetchInstagramProfileHotMetrics(
         .filter((value) => Boolean(instagramPostCodeFromUrl(value))),
     )];
     const postMetrics = Array.isArray(profileMetrics.postMetrics) ? [...profileMetrics.postMetrics] : [];
-    const knownCodes = new Set(postMetrics.map((row) => cleanText(row.code).toLowerCase()).filter(Boolean));
+    const knownCodeIndexes = new Map(
+      postMetrics
+        .map((row, index) => [cleanText(row.code), index] as const)
+        .filter(([code]) => Boolean(code)),
+    );
     let targetLookupFailures = 0;
     for (const sourceUrl of publishedUrls) {
       const code = instagramPostCodeFromUrl(sourceUrl);
-      if (!code || knownCodes.has(code.toLowerCase())) continue;
+      if (!code) continue;
+      const existingIndex = knownCodeIndexes.get(code);
+      if (typeof existingIndex === "number" && typeof postMetrics[existingIndex]?.viewCount === "number") continue;
       const mediaPk = instagramMediaPkFromShortcode(code);
       if (!mediaPk) continue;
       try {
@@ -6548,8 +6557,12 @@ export async function fetchInstagramProfileHotMetrics(
           targetLookupFailures += 1;
           continue;
         }
-        postMetrics.push(row);
-        knownCodes.add(code.toLowerCase());
+        if (typeof existingIndex === "number") {
+          postMetrics[existingIndex] = { ...postMetrics[existingIndex], ...row };
+        } else {
+          postMetrics.push(row);
+          knownCodeIndexes.set(code, postMetrics.length - 1);
+        }
       } catch {
         targetLookupFailures += 1;
       }

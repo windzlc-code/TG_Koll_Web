@@ -344,10 +344,23 @@ function extractRssHubItems(xml: string, username: string, capturedAt: string): 
 }
 
 function normalizePostMergeKey(post: any): string {
-  const sourceUrl = String(post?.sourceUrl || post?.source_url || "").trim().toLowerCase();
-  if (sourceUrl) return sourceUrl.replace(/[?#].*$/, "");
-  const code = String(post?.code || "").trim().toLowerCase();
+  const sourceUrl = String(post?.sourceUrl || post?.source_url || "").trim();
+  const code = String(
+    post?.code
+    || sourceUrl.match(/\/(?:post|p|reel|tv)\/([^/?#]+)/i)?.[1]
+    || "",
+  ).trim();
   if (code) return `code:${code}`;
+  if (sourceUrl) {
+    const normalizedUrl = sourceUrl
+      .replace(/^https?:\/\/(?:www\.)?threads\.net/i, "https://threads.com")
+      .replace(/^https?:\/\/(?:www\.)?threads\.com/i, "https://threads.com")
+      .replace(/^(https:\/\/threads\.com\/@)([^/]+)(\/post\/)/i, (_match, prefix, username, suffix) => `${prefix}${String(username).toLowerCase()}${suffix}`)
+      .replace(/^https?:\/\/(?:www\.)?instagram\.com\/(?:[a-z0-9._]+\/)?(?:p|reel|tv)\/([^/?#]+)/i, "https://instagram.com/p/$1")
+      .replace(/[?#].*$/, "")
+      .replace(/\/+$/, "");
+    return `url:${normalizedUrl}`;
+  }
   const id = String(post?.id || post?.pk || "").trim().toLowerCase();
   if (id) return `id:${id}`;
   const content = String(post?.content || post?.originalContent || post?.text || "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -360,17 +373,39 @@ function postSortTime(post: any): number {
   return Number.isFinite(time) ? time : 0;
 }
 
+function mergeDefinedPostMetric(base: any, incoming: any): any {
+  return {
+    ...(base || {}),
+    ...Object.fromEntries(Object.entries(incoming || {}).filter(([, value]) => value !== undefined)),
+  };
+}
+
+function postViewResolved(post: any): boolean {
+  if (typeof post?.viewCount !== "number" || !Number.isFinite(post.viewCount)) return false;
+  if (post.viewCount > 0) return true;
+  return [post?.likeCount, post?.commentCount, post?.repostCount, post?.shareCount]
+    .every((value) => Math.max(0, Number(value || 0)) === 0);
+}
+
 function mergePostMetrics(previous: any, next: any[]): any[] {
   const previousRows = Array.isArray(previous?.postMetrics) ? previous.postMetrics : [];
   const merged = new Map<string, any>();
   for (const row of previousRows) {
     const key = normalizePostMergeKey(row);
-    if (key) merged.set(key, row);
+    if (!key) continue;
+    const existing = merged.get(key);
+    const existingTime = Date.parse(String(existing?.capturedAt || existing?.captured_at || ""));
+    const rowTime = Date.parse(String(row?.capturedAt || row?.captured_at || ""));
+    if (!existing || !Number.isFinite(existingTime) || !Number.isFinite(rowTime) || rowTime >= existingTime) {
+      merged.set(key, mergeDefinedPostMetric(existing, row));
+    } else {
+      merged.set(key, mergeDefinedPostMetric(row, existing));
+    }
   }
   for (const row of next) {
     const key = normalizePostMergeKey(row);
     if (!key) continue;
-    merged.set(key, { ...(merged.get(key) || {}), ...row });
+    merged.set(key, mergeDefinedPostMetric(merged.get(key), row));
   }
   return [...merged.values()]
     .sort((a, b) => postSortTime(b) - postSortTime(a))
@@ -401,10 +436,7 @@ async function backfillPublishedThreadsPostMetrics(args: {
   const missingUrls = publishedUrls.filter((url) => !existingRows.some((post) => {
     if (!postMetricMatchesUrl(post, url)) return false;
     const postViewCount = Number(post?.viewCount || 0);
-    const postInteractions = [post?.likeCount, post?.commentCount, post?.repostCount, post?.shareCount]
-      .reduce((sum, value) => sum + Math.max(0, Number(value || 0)), 0);
-    return typeof post?.viewCount === "number"
-      && (postViewCount > 0 || postInteractions === 0);
+    return postViewResolved(post) && postViewCount > 0;
   }));
   if (!missingUrls.length) return existingRows;
   const previousProfileDir = process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
@@ -630,7 +662,7 @@ async function main() {
           });
         }
         const mergedRows = Array.isArray(mergedPostMetrics) ? mergedPostMetrics : [];
-        const mergedResolvedViews = mergedRows.filter((post: any) => typeof post?.viewCount === "number").length;
+        const mergedResolvedViews = mergedRows.filter(postViewResolved).length;
         const mergedTotalViews = mergedRows.reduce((sum: number, post: any) => sum + (typeof post?.viewCount === "number" ? post.viewCount : 0), 0);
         const nextMetric = complete
           ? {
@@ -649,7 +681,9 @@ async function main() {
               comments: metrics.comments,
               reposts: metrics.reposts,
               shares: metrics.shares,
-              views: mergedResolvedViews > 0 ? mergedTotalViews : metrics.views,
+              views: mergedResolvedViews > 0
+                ? mergedTotalViews
+                : typeof metrics.views === "number" ? metrics.views : previousMetrics.views,
               viewResolvedPosts: mergedResolvedViews,
               viewMissingPosts: Math.max(0, mergedRows.length - mergedResolvedViews),
               scannedPosts: useRssHub ? mergedRows.length : Math.max(Number(metrics.scannedPosts || 0), mergedRows.length),
@@ -674,7 +708,9 @@ async function main() {
               scannedPosts: mergedRows.length ? Math.max(Number(metrics.scannedPosts || 0), mergedRows.length) : metrics.scannedPosts,
               ...(mergedRows.length ? {
                 postMetrics: mergedPostMetrics,
-                views: mergedResolvedViews > 0 ? mergedTotalViews : metrics.views,
+                views: mergedResolvedViews > 0
+                  ? mergedTotalViews
+                  : typeof metrics.views === "number" ? metrics.views : previousMetrics.views,
                 viewResolvedPosts: mergedResolvedViews,
                 viewMissingPosts: Math.max(0, mergedRows.length - mergedResolvedViews),
               } : {}),
@@ -779,6 +815,7 @@ async function main() {
             (sum: number, post: any) => sum + (typeof post?.viewCount === "number" ? post.viewCount : 0),
             0,
           );
+          const resolvedViewPosts = mergedPostMetrics.filter(postViewResolved).length;
           const nextMetric = {
             ...previousMetrics,
             platform: "instagram",
@@ -793,7 +830,11 @@ async function main() {
             ...(typeof metrics.comments === "number" ? { comments: metrics.comments } : {}),
             ...(typeof metrics.reposts === "number" ? { reposts: metrics.reposts } : {}),
             ...(typeof metrics.shares === "number" ? { shares: metrics.shares } : {}),
-            views: totalViews || Number(metrics.views || 0),
+            views: resolvedViewPosts > 0
+              ? totalViews
+              : typeof metrics.views === "number" ? metrics.views : previousMetrics.views,
+            viewResolvedPosts: resolvedViewPosts,
+            viewMissingPosts: Math.max(0, mergedPostMetrics.length - resolvedViewPosts),
             scannedPosts: Number(metrics.scannedPosts || mergedPostMetrics.length),
             postMetrics: mergedPostMetrics,
             complete: metrics.complete === true,

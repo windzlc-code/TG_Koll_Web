@@ -2687,7 +2687,7 @@ Instagram
             edge_owner_to_timeline_media: {
               count: 2,
               edges: [
-                { node: { id: "1", shortcode: "PostA", taken_at_timestamp: 1_786_000_000, edge_media_preview_like: { count: 30 }, edge_media_to_comment: { count: 4 } } },
+                { node: { id: "1", shortcode: "PostA", taken_at_timestamp: 1_786_000_000, content_views_count: 321, edge_media_preview_like: { count: 30 }, edge_media_to_comment: { count: 4 } } },
                 { node: { id: "2", shortcode: "ReelB", is_video: true, video_view_count: 900, edge_media_preview_like: { count: 50 }, edge_media_to_comment: { count: 7 } } },
               ],
             },
@@ -2704,7 +2704,7 @@ Instagram
       posts: 2,
       likes: 80,
       comments: 11,
-      views: 900,
+      views: 1221,
       scannedPosts: 2,
       complete: true,
       scope: "authenticated_full_profile",
@@ -2713,6 +2713,27 @@ Instagram
       "https://www.instagram.com/p/PostA/",
       "https://www.instagram.com/reel/ReelB/",
     ]);
+    expect(metrics.postMetrics?.map((row) => row.viewCount)).toEqual([321, 900]);
+  });
+
+  it("leaves Instagram aggregate views unavailable when no post exposes a view metric", () => {
+    const metrics = parseInstagramProfileHotMetricsPayload({
+      username: "photo.account",
+      payload: {
+        data: {
+          user: {
+            username: "photo.account",
+            edge_owner_to_timeline_media: {
+              count: 1,
+              edges: [{ node: { id: "1", shortcode: "PhotoA" } }],
+            },
+          },
+        },
+      },
+    });
+
+    expect(metrics.views).toBeUndefined();
+    expect(metrics.postMetrics?.[0].viewCount).toBeUndefined();
   });
 
   it("does not report zero Instagram interactions when the profile response omits post edges", () => {

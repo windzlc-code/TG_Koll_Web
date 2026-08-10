@@ -2988,11 +2988,13 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 "username": "current_user",
                 "complete": True,
                 "scope": "authenticated_full_profile",
+                "views": 300,
                 "postMetrics": [{
                     "sourceUrl": "https://www.threads.com/@current_user/post/missing-view",
                     "content": "post with interaction but no view field",
                     "likeCount": 8,
                     "commentCount": 2,
+                    "viewCount": 0,
                 }],
             },
         }
@@ -3004,6 +3006,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         row = resp.json()["personas"][0]["post_metrics"][0]
         self.assertEqual(row["view_count"], 0)
         self.assertFalse(row["view_available"])
+        self.assertEqual(resp.json()["personas"][0]["hot"]["post_views"], 300)
 
         matched = server._publish_history_hot_metrics({
             "platform": "threads",
@@ -3022,6 +3025,100 @@ class PersonaDashboardApiTests(unittest.TestCase):
         })
         self.assertEqual(inconsistent["view_count"], 0)
         self.assertFalse(inconsistent["view_available"])
+
+    def test_dashboard_dedup_preserves_known_metrics_and_shortcode_case(self):
+        rows = server._deduplicated_dashboard_post_metrics([
+            {
+                "sourceUrl": "https://www.threads.net/@owner/post/AbC",
+                "viewCount": 123,
+                "capturedAt": "2026-08-10T08:00:00Z",
+            },
+            {
+                "sourceUrl": "https://www.threads.com/@OWNER/post/AbC/",
+                "likeCount": 4,
+                "capturedAt": "2026-08-10T09:00:00Z",
+            },
+            {
+                "sourceUrl": "https://www.threads.com/@owner/post/aBc/",
+                "viewCount": 9,
+                "capturedAt": "2026-08-10T09:00:00Z",
+            },
+        ])
+
+        self.assertEqual(len(rows), 2)
+        merged = next(row for row in rows if row.get("likeCount") == 4)
+        self.assertEqual(merged["viewCount"], 123)
+
+    def test_overview_deduplicates_equivalent_threads_and_instagram_post_urls(self):
+        self._write_archives()
+        self._insert_social_account(
+            account_id="threads-current",
+            persona_id="persona-1",
+            platform="threads",
+            username="current_user",
+        )
+        self._insert_social_account(
+            account_id="instagram-current",
+            persona_id="persona-1",
+            platform="instagram",
+            username="current_user_ig",
+        )
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        archives[0]["setup"]["hotMetrics"] = {
+            "threads:current_user": {
+                "platform": "threads",
+                "accountId": "threads-current",
+                "username": "current_user",
+                "views": 8809,
+                "postMetrics": [
+                    {
+                        "sourceUrl": "https://www.threads.net/@current_user/post/SameCode",
+                        "code": "SameCode",
+                        "viewCount": 4400,
+                        "capturedAt": "2026-08-10T08:00:00Z",
+                    },
+                    {
+                        "sourceUrl": "https://www.threads.com/@current_user/post/SameCode/",
+                        "code": "SameCode",
+                        "viewCount": 4409,
+                        "capturedAt": "2026-08-10T09:00:00Z",
+                    },
+                ],
+            },
+            "instagram:current_user_ig": {
+                "platform": "instagram",
+                "accountId": "instagram-current",
+                "username": "current_user_ig",
+                "views": 1800,
+                "postMetrics": [
+                    {
+                        "sourceUrl": "https://www.instagram.com/reel/ReelCode/",
+                        "code": "ReelCode",
+                        "viewCount": 800,
+                        "capturedAt": "2026-08-10T08:00:00Z",
+                    },
+                    {
+                        "sourceUrl": "https://www.instagram.com/p/ReelCode/",
+                        "code": "ReelCode",
+                        "viewCount": 900,
+                        "capturedAt": "2026-08-10T09:00:00Z",
+                    },
+                ],
+            },
+        }
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/overview")
+
+        self.assertEqual(resp.status_code, 200)
+        persona = resp.json()["personas"][0]
+        self.assertEqual(persona["hot"]["post_views"], 5309)
+        self.assertEqual(len(persona["post_metrics"]), 2)
+        self.assertEqual(
+            sorted(row["view_count"] for row in persona["post_metrics"]),
+            [900, 4409],
+        )
 
     def test_publish_history_matches_equivalent_instagram_post_routes_by_shortcode(self):
         archive = {

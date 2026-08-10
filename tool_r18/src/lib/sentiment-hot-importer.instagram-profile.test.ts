@@ -37,4 +37,21 @@ describe("Instagram published post metric lookup", () => {
       viewCount: 456,
     }));
   });
+
+  it("does not turn a missing image-post view field into a real zero", () => {
+    const metric = parseInstagramPostHotMetricPayload({
+      sourceUrl: "https://www.instagram.com/p/ImagePost/",
+      refreshedAt: "2026-08-10T11:00:00.000Z",
+      payload: {
+        items: [{
+          pk: "123",
+          code: "ImagePost",
+          like_count: 2,
+          comment_count: 1,
+        }],
+      },
+    });
+
+    expect(metric?.viewCount).toBeUndefined();
+  });
 });

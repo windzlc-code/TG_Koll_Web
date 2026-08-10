@@ -18675,18 +18675,54 @@ def _normalized_dashboard_post_url(value: Any) -> str:
         host = host[4:]
     if host == "threads.net":
         host = "threads.com"
-    path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/").lower()
+    path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/")
     if host == "instagram.com":
         instagram_post = re.search(r"/(?:[a-z0-9._]+/)?(?:p|reel|tv)/([^/?#]+)$", path, re.I)
         if instagram_post:
-            path = f"/p/{instagram_post.group(1).lower()}"
+            path = f"/p/{instagram_post.group(1)}"
+    elif host == "threads.com":
+        threads_post = re.search(r"/@([^/]+)/post/([^/?#]+)$", path, re.I)
+        if threads_post:
+            path = f"/@{threads_post.group(1).lower()}/post/{threads_post.group(2)}"
     return f"{host}{path}" if host and path else ""
 
 
 def _dashboard_post_code(value: Any) -> str:
     normalized = _normalized_dashboard_post_url(value)
     match = re.search(r"/(?:post|p|reel|tv)/([^/?#]+)$", normalized, re.I)
-    return match.group(1).lower() if match else ""
+    return match.group(1) if match else ""
+
+
+def _deduplicated_dashboard_post_metrics(rows: Any) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        return []
+    selected: dict[str, dict[str, Any]] = {}
+    passthrough: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        urls, codes, content = _hot_metric_row_match_values(row)
+        row_id = str(row.get("pk") or row.get("id") or "").strip().lower()
+        if codes:
+            key = f"code:{sorted(codes)[0]}"
+        elif urls:
+            key = f"url:{sorted(urls)[0]}"
+        elif row_id:
+            key = f"id:{row_id}"
+        elif content:
+            key = f"content:{content[:180]}"
+        else:
+            passthrough.append(row)
+            continue
+        current = selected.get(key)
+        current_time = str((current or {}).get("capturedAt") or (current or {}).get("captured_at") or "")
+        row_time = str(row.get("capturedAt") or row.get("captured_at") or "")
+        row_values = {field: value for field, value in row.items() if value is not None}
+        if current is None or row_time >= current_time:
+            selected[key] = {**(current or {}), **row_values}
+        else:
+            selected[key] = {**row_values, **current}
+    return [*selected.values(), *passthrough]
 
 
 def _normalized_dashboard_post_content(value: Any) -> str:
@@ -18727,7 +18763,7 @@ def _publish_record_match_values(record: Any) -> tuple[set[str], set[str], str]:
                 if code:
                     codes.add(code)
         for key in ("code", "shortcode", "postCode", "post_code"):
-            code = str(source.get(key) or "").strip().lower()
+            code = str(source.get(key) or "").strip()
             if code:
                 codes.add(code)
     content = _normalized_dashboard_post_content(
@@ -18754,7 +18790,7 @@ def _hot_metric_row_match_values(row: Any) -> tuple[set[str], set[str], str]:
             if code:
                 codes.add(code)
     for key in ("code", "shortcode", "postCode", "post_code"):
-        code = str(row.get(key) or "").strip().lower()
+        code = str(row.get(key) or "").strip()
         if code:
             codes.add(code)
     content = _normalized_dashboard_post_content(
@@ -19697,7 +19733,7 @@ def _build_persona_dashboard_overview(
             if has_current_identity and not matches_current_account:
                 continue
             platform_counts[platform_name] = platform_counts.get(platform_name, 0) + 1
-            post_metrics = metric_value.get("postMetrics") if isinstance(metric_value.get("postMetrics"), list) else []
+            post_metrics = _deduplicated_dashboard_post_metrics(metric_value.get("postMetrics"))
             platform_likes = _number(metric_value.get("likes"), 0)
             platform_comments = _number(metric_value.get("comments"), 0)
             platform_shares = _number(metric_value.get("shares"), 0)
@@ -19714,11 +19750,17 @@ def _build_persona_dashboard_overview(
                 platform_shares = max(0, platform_shares - sum(_metric_value(row, "shareCount", "share_count", "send_count") for row in deleted_metric_rows))
                 platform_reposts = max(0, platform_reposts - sum(_metric_value(row, "repostCount", "repost_count") for row in deleted_metric_rows))
                 platform_post_views = max(0, platform_post_views - sum(_metric_value(row, "viewCount", "view_count") for row in deleted_metric_rows))
-            if not platform_post_views:
+            resolved_view_rows = [
+                row for row in post_metrics
+                if (
+                    _persona_dashboard_post_key(archive_id, row) not in deleted_post_keys
+                    and _source_view_available(row)
+                )
+            ]
+            if resolved_view_rows:
                 platform_post_views = sum(
                     _metric_value(row, "viewCount", "view_count")
-                    for row in post_metrics
-                    if isinstance(row, dict) and _persona_dashboard_post_key(archive_id, row) not in deleted_post_keys
+                    for row in resolved_view_rows
                 )
             platform_hot_score = _sum_numbers(platform_likes, platform_comments, platform_shares, platform_reposts, platform_post_views)
             persona_hot["likes"] += platform_likes
@@ -20058,7 +20100,7 @@ def _build_persona_dashboard_console_overview(
         for metric_value in hot_metrics_raw.values():
             if not isinstance(metric_value, dict):
                 continue
-            post_metrics = metric_value.get("postMetrics") if isinstance(metric_value.get("postMetrics"), list) else []
+            post_metrics = _deduplicated_dashboard_post_metrics(metric_value.get("postMetrics"))
             platform_likes = _number(metric_value.get("likes"), 0)
             platform_comments = _number(metric_value.get("comments"), 0)
             platform_shares = _number(metric_value.get("shares"), 0)
@@ -20074,11 +20116,17 @@ def _build_persona_dashboard_console_overview(
                 platform_shares = max(0, platform_shares - sum(_metric_value(row, "shareCount", "share_count", "send_count") for row in deleted_metric_rows))
                 platform_reposts = max(0, platform_reposts - sum(_metric_value(row, "repostCount", "repost_count") for row in deleted_metric_rows))
                 platform_post_views = max(0, platform_post_views - sum(_metric_value(row, "viewCount", "view_count") for row in deleted_metric_rows))
-            if not platform_post_views:
+            resolved_view_rows = [
+                row for row in post_metrics
+                if (
+                    _persona_dashboard_post_key(archive_id, row) not in deleted_post_keys
+                    and _source_view_available(row)
+                )
+            ]
+            if resolved_view_rows:
                 platform_post_views = sum(
                     _metric_value(row, "viewCount", "view_count")
-                    for row in post_metrics
-                    if isinstance(row, dict) and _persona_dashboard_post_key(archive_id, row) not in deleted_post_keys
+                    for row in resolved_view_rows
                 )
             persona_hot["likes"] += platform_likes
             persona_hot["comments"] += platform_comments
