@@ -20900,7 +20900,6 @@ async function fetchPersonaHotCandidates(refresh = false) {
           ? String(form.writingLocale)
           : PERSONA_DEFAULT_WRITING_LOCALE,
         freshness_days: 7,
-        keywords,
         freshness_policy: "strict",
       }),
     }, 15000);

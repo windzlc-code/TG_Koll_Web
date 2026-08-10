@@ -14271,6 +14271,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "freshnessPolicy": "strict" if str(payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
             "keywords": keywords,
             "recordShown": False,
+            "liveOnly": True,
         },
         timeout_seconds=32,
     )

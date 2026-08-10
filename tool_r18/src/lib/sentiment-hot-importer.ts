@@ -1658,7 +1658,7 @@ function readSentimentHotSearchStrategyCache(): Record<string, { at: string; str
 function readCachedSentimentHotSearchStrategy(cacheKey: string): SentimentHotSearchStrategy | null {
   const row = readSentimentHotSearchStrategyCache()[cacheKey];
   if (!row?.strategy || Date.now() - new Date(row.at).getTime() > SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_TTL_MS) return null;
-  return sentimentHotStrategyHasModelTerms(row.strategy) && sentimentHotStrategyUsesThreadsChinese(row.strategy) ? row.strategy : null;
+  return sentimentHotStrategyHasModelTerms(row.strategy) && (row.strategy.localDeterministic || sentimentHotStrategyUsesThreadsChinese(row.strategy)) ? row.strategy : null;
 }
 
 function readCachedSentimentHotSearchStrategyForArgs(args: {
@@ -1671,7 +1671,7 @@ function readCachedSentimentHotSearchStrategyForArgs(args: {
 }
 
 function writeCachedSentimentHotSearchStrategy(cacheKey: string, strategy: SentimentHotSearchStrategy) {
-  if (!sentimentHotStrategyHasModelTerms(strategy) || !sentimentHotStrategyUsesThreadsChinese(strategy)) return;
+  if (!sentimentHotStrategyHasModelTerms(strategy) || (!strategy.localDeterministic && !sentimentHotStrategyUsesThreadsChinese(strategy))) return;
   const written = withExclusiveJsonFileLock(SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE, () => {
     const state = readSentimentHotSearchStrategyCache();
     state[cacheKey] = { at: new Date().toISOString(), strategy };
@@ -1716,7 +1716,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
   useCache?: boolean;
 }): Promise<SentimentHotSearchStrategy> {
   const strategy = buildLocalSentimentHotSearchStrategy({ archive: args.archive, prompt: args.prompt });
-  if (sentimentHotStrategyHasModelTerms(strategy) && sentimentHotStrategyUsesThreadsChinese(strategy)) {
+  if (sentimentHotStrategyHasModelTerms(strategy) && (strategy.localDeterministic || sentimentHotStrategyUsesThreadsChinese(strategy))) {
     console.info(`[sentiment_hot_local_strategy] domain=${JSON.stringify(strategy.domainSummary)}`);
     const archive = args.archive || {};
     const personaText = [archive.content, JSON.stringify(archive.setup || {}), args.prompt].filter(Boolean).join("\n");
@@ -2103,9 +2103,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   // Keep the requested window as the priority, but allow a bounded recent
   // window up to 15 days when the live recent feed cannot supply ten unique
   // compliant posts. Historical/global backfill is still rejected below.
-  const operationalFreshnessDays = liveOnlyRefresh && strictFreshness && freshnessDays > 0
-    ? freshnessDays
-    : strictFreshness && freshnessDays > 0
+  const operationalFreshnessDays = strictFreshness && freshnessDays > 0
     ? Math.min(15, Math.max(freshnessDays, 15))
     : 0;
   // Strict tests enforce the publishedAt window, but may reuse a fresh
@@ -2210,17 +2208,21 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     : resolveSentimentHotModelQueryKeywords(strategyResult, searchMode);
   warnings.push(searchMode === "normal" ? "热点抓取模式：普通（泛垂直）。" : "热点抓取模式：严格（垂直收口）。");
   if (liveOnlyRefresh) warnings.push(manualKeywords.length > 0
-    ? "测试模式：仅统计本轮实时来源，不读取或写入候选缓存、数据库候选、共享候选和展示历史；搜索关键词使用本次提交的关键词。"
-    : "测试模式：仅统计本轮实时来源，不读取或写入候选缓存、数据库候选、共享候选和展示历史；搜索策略由本地规则生成。");
+    ? "实时抓取：仅使用本轮公开页来源，不读取或写入候选缓存、数据库候选、共享候选和展示历史；搜索关键词使用本次提交的关键词。"
+    : "实时抓取：仅使用本轮公开页来源，不读取或写入候选缓存、数据库候选、共享候选和展示历史；搜索策略由本地规则生成。");
   if (strictFreshness) {
     warnings.push(freshnessDays > 0 ? `热点新鲜度：近 ${freshnessDays} 天。` : "热点新鲜度：不限时间。");
   } else {
     warnings.push("正式抓取使用旧策略：实时来源优先，候选不足时允许缓存/历史候选轮换补足。");
   }
   if (strictFreshOnly) {
-    warnings.push(operationalFreshnessDays > freshnessDays
-      ? `已启用严格新鲜度：优先近 ${freshnessDays} 天，缺口允许扩展至近 ${operationalFreshnessDays} 天；仅使用实时/同人设新鲜缓存，不使用过期历史补充。`
-      : `已启用严格新鲜度：仅保留近 ${freshnessDays} 天内容，允许近 24 小时同人设缓存，不使用过期历史补充。`);
+    warnings.push(liveOnlyRefresh
+      ? (operationalFreshnessDays > freshnessDays
+        ? `已启用严格新鲜度：优先近 ${freshnessDays} 天，缺口允许扩展至近 ${operationalFreshnessDays} 天；仅使用本轮公开页候选。`
+        : `已启用严格新鲜度：仅保留近 ${freshnessDays} 天公开页候选。`)
+      : (operationalFreshnessDays > freshnessDays
+        ? `已启用严格新鲜度：优先近 ${freshnessDays} 天，缺口允许扩展至近 ${operationalFreshnessDays} 天；仅使用实时/同人设新鲜缓存，不使用过期历史补充。`
+        : `已启用严格新鲜度：仅保留近 ${freshnessDays} 天内容，允许近 24 小时同人设缓存，不使用过期历史补充。`));
   }
   const poolLimit = Math.max(limit * 40, SENTIMENT_HOT_CANDIDATE_POOL_TARGET);
   const semanticSourceTarget = hasModelStrategy
