@@ -3503,38 +3503,28 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertGreater(communicate_timeout, 44)
         self.assertLessEqual(communicate_timeout, 45)
 
-    def test_global_hot_pool_refresh_runs_one_short_lived_batch_for_all_personas(self):
-        self._write_archives()
-        expected = {"ok": True, "archiveCount": 1, "results": [{"archiveId": "persona-1", "candidateCount": 8}]}
-
-        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=expected) as run:
-            result = server._refresh_persona_hot_global_pool()
-
-        self.assertEqual(result, expected)
-        run.assert_called_once_with(
-            {
-                "action": "refresh-global-hot-pool",
-                "archiveIds": ["persona-1"],
-                "limit": 20,
-            },
-            timeout_seconds=900,
-        )
-
-    def test_global_hot_pool_batch_allows_daily_refresh_timeout(self):
+    def test_hot_candidate_workflow_timeout_is_capped_at_interactive_limit(self):
         process = mock.Mock()
-        process.communicate.return_value = ('{"ok": true, "archiveCount": 1, "results": []}', "")
+        process.communicate.return_value = ('{"ok": true, "candidates": []}', "")
         process.returncode = 0
 
         with mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"), \
              mock.patch.object(server, "_tool_r18_node_command", return_value=["node", "persona-hot-workflow.ts"]), \
              mock.patch.object(server.subprocess, "Popen", return_value=process):
             result = server._run_persona_hot_workflow_cli(
-                {"action": "refresh-global-hot-pool", "archiveIds": ["persona-1"]},
+                {"action": "fetch-hot-candidates", "archiveId": "persona-1"},
                 timeout_seconds=900,
             )
 
         self.assertTrue(result["ok"])
-        self.assertGreater(process.communicate.call_args.kwargs["timeout"], 890)
+        self.assertLessEqual(process.communicate.call_args.kwargs["timeout"], 120)
+
+    def test_full_dashboard_refresh_does_not_start_persona_hot_capture(self):
+        import inspect
+
+        worker_source = inspect.getsource(server._persona_dashboard_refresh_worker_v2)
+        self.assertNotIn("refresh-global-hot-pool", worker_source)
+        self.assertNotIn("_refresh_persona_hot_global_pool", worker_source)
 
     def test_persona_hot_workflow_only_reserves_browser_for_browser_actions(self):
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "fetch-hot-candidates"}))

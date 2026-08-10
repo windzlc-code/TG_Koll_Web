@@ -68,13 +68,7 @@ type PoolStatsInput = {
   archiveIds?: string[];
 };
 
-type RefreshGlobalHotPoolInput = {
-  action: "refresh-global-hot-pool";
-  archiveIds?: string[];
-  limit?: number;
-};
-
-type PersonaHotWorkflowInput = FetchHotCandidatesInput | PrepareHotKeywordsInput | ImportHotCandidatesInput | RefreshHotPostInput | WarmHotStrategyInput | PoolStatsInput | RefreshGlobalHotPoolInput;
+type PersonaHotWorkflowInput = FetchHotCandidatesInput | PrepareHotKeywordsInput | ImportHotCandidatesInput | RefreshHotPostInput | WarmHotStrategyInput | PoolStatsInput;
 
 function printJson(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -197,39 +191,6 @@ async function warmHotStrategy(input: WarmHotStrategyInput) {
   return { ok: await warmSentimentHotSearchStrategy(archive), archiveId: archive.id, archiveName: archive.name };
 }
 
-async function refreshGlobalHotPool(input: RefreshGlobalHotPoolInput) {
-  const requestedIds = new Set((input.archiveIds || []).map((id) => String(id || "").trim()).filter(Boolean));
-  const archives = (await listPersonaArchives()).filter((archive) => requestedIds.size === 0 || requestedIds.has(archive.id));
-  const limit = Math.max(1, Math.min(Number(input.limit || 20), 20));
-  const results: Array<{ archiveId: string; archiveName: string; candidateCount: number; error?: string }> = [];
-
-  // This is deliberately a one-shot batch. It runs only when the existing
-  // full dashboard refresh completes, then exits with this CLI process.
-  for (const archive of archives) {
-    try {
-      const result = await fetchSentimentHotCandidates({
-        archive,
-        keywords: [],
-        limit,
-        refresh: true,
-        searchMode: "strict",
-        freshnessDays: 15,
-        freshnessPolicy: "strict",
-        recordShown: false,
-      });
-      results.push({ archiveId: archive.id, archiveName: archive.name, candidateCount: result.candidates.length });
-    } catch (error) {
-      results.push({
-        archiveId: archive.id,
-        archiveName: archive.name,
-        candidateCount: 0,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-  return { ok: true, archiveCount: archives.length, results };
-}
-
 async function appendCandidateAsPost(archiveId: string, candidate: SentimentHotCandidate, index: number) {
   const downloadedMedia = await downloadCandidateMedia(candidate).catch(() => candidate.media || []);
   const mediaItems = downloadedMedia
@@ -346,9 +307,6 @@ async function main() {
     const archives = (await listPersonaArchives()).filter((archive) => requestedIds.size === 0 || requestedIds.has(archive.id));
     const pools = requestedIds.size > 0 && archives.length === 0 ? [] : listSentimentHotCandidatePoolStats(archives);
     await printJsonAndExit({ ok: true, pools });
-  }
-  if (input.action === "refresh-global-hot-pool") {
-    await printJsonAndExit(await refreshGlobalHotPool(input));
   }
   if (input.action === "import-hot-candidates") {
     await printJsonAndExit(await importHotCandidates(input));

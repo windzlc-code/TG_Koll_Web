@@ -14012,12 +14012,7 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
     global _PERSONA_HOT_BACKGROUND_PROCESS, _PERSONA_HOT_INTERACTIVE_PROCESS, _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID, _PERSONA_HOT_LAST_INTERACTIVE_AT
     _sync_tool_r18_api_config_for_persona_workflow()
     command = [*_tool_r18_node_command("scripts/skills/persona-hot-workflow.ts"), json.dumps(payload, ensure_ascii=True)]
-    # The daily global candidate-pool batch is deliberately one short-lived
-    # process, but it may process every persona. Interactive requests retain
-    # the tighter two-minute ceiling.
-    action = str(payload.get("action") or "").strip()
-    max_timeout = 900 if action == "refresh-global-hot-pool" else 120
-    timeout = min(max(30, int(timeout_seconds)), max_timeout)
+    timeout = min(max(30, int(timeout_seconds)), 120)
     deadline = time.monotonic() + timeout
     process: subprocess.Popen[str] | None = None
     acquired = False
@@ -14142,30 +14137,6 @@ def _cancel_persona_hot_workflow(archive_id: str) -> bool:
 def _persona_hot_raw_candidate_count(result: dict[str, Any]) -> int:
     candidates = result.get("candidates") if isinstance(result, dict) else []
     return len(candidates) if isinstance(candidates, list) else 0
-
-
-def _refresh_persona_hot_global_pool() -> dict[str, Any]:
-    """Populate every persona pool once after the scheduled global refresh.
-
-    This intentionally invokes a one-shot CLI process instead of a resident
-    pool worker. The process exits when the batch completes.
-    """
-    archives, _ = _read_tool_r18_persona_archives()
-    archive_ids = [
-        str(item.get("id") or "").strip()
-        for item in archives
-        if isinstance(item, dict) and str(item.get("id") or "").strip()
-    ]
-    if not archive_ids:
-        return {"ok": True, "archiveCount": 0, "results": []}
-    return _run_persona_hot_workflow_cli(
-        {
-            "action": "refresh-global-hot-pool",
-            "archiveIds": archive_ids,
-            "limit": 20,
-        },
-        timeout_seconds=900,
-    )
 
 
 def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: int, cookie_rows: Any = None) -> list[str]:
@@ -19380,32 +19351,7 @@ def _persona_dashboard_refresh_worker_v2(
             except Exception:
                 parsed = {"raw": stdout[-4000:]}
         status = "success" if proc.returncode == 0 and isinstance(parsed, dict) and parsed.get("ok") else "failed"
-        hot_pool_result: dict[str, Any] | None = None
-        # Only the existing full, system-wide refresh replenishes candidates.
-        # Per-persona and per-user refreshes never start a follow-up pool job.
-        if status == "success" and not archive_id and archive_ids is None:
-            with PERSONA_DASHBOARD_REFRESH_LOCK:
-                PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
-                    "step": "补充全局热点候选池",
-                    "progress": 94,
-                    "message": "全量数据已刷新，正在按热度优先补充全局热点候选池…",
-                })
-            try:
-                hot_pool_result = _refresh_persona_hot_global_pool()
-            except HTTPException as exc:
-                hot_pool_result = {"ok": False, "error": str(exc.detail or "候选池补充失败")}
-            except Exception as exc:
-                logger.exception("global persona hot candidate pool refresh failed")
-                hot_pool_result = {"ok": False, "error": str(exc or "候选池补充失败")}
-            if isinstance(parsed, dict):
-                parsed["hotCandidatePool"] = hot_pool_result
         refresh_message = "刷新完成，缓存数据已更新。"
-        if hot_pool_result is not None:
-            refresh_message = (
-                "刷新完成；全局热点候选池已按热度集中补充。"
-                if hot_pool_result.get("ok")
-                else "刷新完成；全局热点候选池补充未完成，将在下次全量刷新时重试。"
-            )
         with PERSONA_DASHBOARD_REFRESH_LOCK:
             PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
                 "status": status,
@@ -19487,7 +19433,7 @@ def _persona_dashboard_monitor_interval_seconds() -> int:
 
 def _persona_dashboard_monitor_enabled() -> bool:
     # Dashboard data refresh is a low-frequency (24-hour by default) task.
-    # Its successful global run also performs the one-shot candidate batch.
+    # It must not start a persona-level hot-capture workflow.
     return str(os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
 
