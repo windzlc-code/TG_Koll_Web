@@ -51,6 +51,7 @@ const SENTIMENT_HOT_SCORE_FALLBACK_STEPS = [
 // High-heat results remain preferred. For a sparse niche, the browser may add
 // recent, topic-anchored posts with verified engagement fields behind them.
 const MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT = 25;
+const MIN_PUBLIC_THREADS_HOT_HAN_COUNT = 10;
 const SENTIMENT_HOT_CANDIDATE_POOL_TARGET = 400;
 const THREADS_SEARCH_CACHE_CANDIDATE_LIMIT = 2000;
 const THREADS_SEARCH_CACHE_MAX_ROWS_PER_ARCHIVE = 40;
@@ -85,8 +86,8 @@ const INSTAGRAM_DIRECT_TAG_API_QUERY_LIMIT = 0;
 const DEFAULT_REFRESH_FRESHNESS_DAYS = 7;
 // Public Reader capture is a short interactive path.  Keep its full budget
 // below the API deadline so an abandoned upstream request never ties up work.
-const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 12_000;
-const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 28_000;
+const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 45_000;
+const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 60_000;
 const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 8_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
@@ -1110,6 +1111,7 @@ export function candidateMatchesRequestedFreshness(candidate: SentimentHotCandid
 }
 
 function candidateMatchesOperationalFreshness(candidate: SentimentHotCandidate, value: unknown): boolean {
+  if ((candidate.metrics as any)?.publicHotOverflowSupplement === true) return true;
   const freshnessDays = normalizeSentimentHotFreshnessDays(value);
   return freshnessDays <= 0 || candidateMatchesRequestedFreshness(candidate, freshnessDays);
 }
@@ -1167,6 +1169,22 @@ function localHotTopicAliases(value: unknown): string[] {
   });
 }
 
+function localHotPublicSearchAliases(value: unknown): string[] {
+  const text = cleanText(value);
+  if (!text) return [];
+  const aliases: string[] = [];
+  const add = (...items: string[]) => aliases.push(...items);
+  if (/(?:滴滴|司機|司机|乘客|載客|载客|出車|出车|打車|打车|網約車|网约车|計程車|出租车|出租車)/u.test(text)) add("打工人", "生活", "搞笑", "日常", "工作", "上班", "司机", "打车", "乘客", "开车", "汽车", "出车");
+  if (/(?:職場|职场|工作|上班|打工|社畜|辦公|办公|辦公室|办公室|同事|茶水間|茶水间)/u.test(text)) add("工作", "上班", "打工人", "職場", "职场");
+  if (/(?:汽車|汽车|買車|买车|車主|车主|開車|开车|修車|修车)/u.test(text)) add("汽车", "买车", "车主", "开车");
+  if (/(?:養生|养生|健康|中年|保健|生活)/u.test(text)) add("养生", "中年", "健康", "生活");
+  if (/(?:搞笑|吐槽|幽默|趣事|故事|日常)/u.test(text)) add("搞笑", "生活", "日常", "故事");
+  if (/(?:理髮|理发|髮型|发型|美髮|美发|造型)/u.test(text)) add("理发", "发型", "造型");
+  return [...new Set(aliases
+    .map((item) => normalizeSentimentSearchKeyword(item, { sourceText: text }))
+    .filter((item) => isConcreteSearchKeyword(item)))];
+}
+
 /**
  * Builds the public-hot-search strategy from the persona record itself.  This
  * deliberately does not read persona memories or call a paid text model: a
@@ -1205,20 +1223,33 @@ export function buildLocalSentimentHotSearchStrategy(args: {
     // platform-configured label rather than reading persona prose.
     ...localHotTopicAliases(value),
     ...localHotKeywordFragments(value),
+    ...localHotPublicSearchAliases(value),
   ]);
   const prioritized = [
     ...platformTopicFragments,
     archive.content,
     args.prompt,
   ].flatMap(localHotKeywordFragments);
+  const publicSearchAliases = [...new Set([
+    ...platformTopicValues,
+    archive.content,
+    args.prompt,
+  ].flatMap(localHotPublicSearchAliases))];
+  const defaultPublicDiscoveryTerms = ["工作", "上班", "打工人", "生活", "搞笑", "日常"];
+  const effectivePublicSearchAliases = [...new Set([
+    ...localHotPublicSearchAliases(sourceText),
+    ...publicSearchAliases,
+    ...defaultPublicDiscoveryTerms,
+  ])];
   const terms = [...new Set(prioritized
     .map((item) => normalizeSentimentSearchKeyword(item, { archiveName: cleanText(archive.name), sourceText }))
     .filter((item) => isConcreteSearchKeyword(item) && !isPersonaVisualArtifactKeyword(item, sourceText))
   )].slice(0, 12);
   if (!terms.length) return emptySentimentHotSearchStrategy();
 
+  const discoveryTerms = [...new Set([...effectivePublicSearchAliases, ...terms])];
   const primaryQueries = [...new Set([
-    ...terms,
+    ...discoveryTerms,
     ...terms.flatMap((term) => [
       `${term}避坑`,
       `${term}推荐`,
@@ -1229,17 +1260,18 @@ export function buildLocalSentimentHotSearchStrategy(args: {
   ].map((item) => normalizeSentimentSearchKeyword(item, { archiveName: cleanText(archive.name), sourceText }))
     .filter((item) => isConcreteSearchKeyword(item)))].slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
   const anchors = terms.slice(0, Math.max(1, Math.min(6, terms.length)));
-  const normalTerms = [...new Set([...terms, ...primaryQueries])].slice(0, SENTIMENT_HOT_NORMAL_KEYWORD_TARGET);
+  const discoveryAnchors = [...new Set([...effectivePublicSearchAliases, ...anchors])].slice(0, Math.max(1, Math.min(8, effectivePublicSearchAliases.length + anchors.length)));
+  const normalTerms = [...new Set([...discoveryTerms, ...primaryQueries])].slice(0, SENTIMENT_HOT_NORMAL_KEYWORD_TARGET);
   return {
     primaryQueries,
     broadQueries: normalTerms,
     ecosystemQueries: normalTerms,
-    requiredAnchorTerms: anchors,
+    requiredAnchorTerms: discoveryAnchors,
     normalAnchorTerms: anchors,
-    strictAcceptTerms: [...new Set([...anchors, ...primaryQueries])].slice(0, SENTIMENT_MODEL_KEYWORD_TARGET),
+    strictAcceptTerms: [...new Set([...discoveryAnchors, ...primaryQueries])].slice(0, SENTIMENT_MODEL_KEYWORD_TARGET),
     normalAcceptTerms: normalTerms,
     rejectTerms: [],
-    domainSummary: anchors.join("、"),
+    domainSummary: discoveryAnchors.join("、"),
     localDeterministic: true,
   };
 }
@@ -2195,12 +2227,13 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   if (strategyResult) {
     applyPersonaGuardToSentimentHotStrategy({ strategy: strategyResult });
   }
-  const hasModelStrategy = Boolean(strategyResult && sentimentHotStrategyHasModelTerms(strategyResult));
+  const hasUsableSearchStrategy = Boolean(strategyResult && sentimentHotStrategyHasModelTerms(strategyResult));
+  const hasModelStrategy = Boolean(strategyResult && !strategyResult.localDeterministic && sentimentHotStrategyHasModelTerms(strategyResult));
   const useModelStrategyForAcceptance = manualKeywords.length === 0 && hasModelStrategy && Boolean(strategyResult);
   const keywords = manualKeywords.length > 0
     ? manualKeywords
     : resolveSentimentHotModelStrategyKeywords(strategyResult, searchMode);
-  if (manualKeywords.length === 0 && !hasModelStrategy && !warnings.some((warning) => /关键词生成|搜索策略/.test(warning))) {
+  if (manualKeywords.length === 0 && !hasUsableSearchStrategy && !warnings.some((warning) => /关键词生成|搜索策略/.test(warning))) {
     warnings.push("热点关键词不可用，本次未执行抓取；请稍后重试。");
   }
   const queryKeywords = manualKeywords.length > 0
@@ -3191,9 +3224,16 @@ function hasMinimumSentimentHotContentLength(candidate: SentimentHotCandidate): 
   return sentimentHotHanCount(candidate.content) >= MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT;
 }
 
-function minimumSentimentHotHanCountForCandidate(): number {
-  // Every displayed candidate follows the same content-quality floor,
-  // regardless of whether it came from search, a supplement, or history.
+function minimumSentimentHotHanCountForCandidate(candidate: SentimentHotCandidate): number {
+  if (
+    sentimentCandidateSource(candidate) === "threads-search-page"
+    && (candidate.metrics as any)?.publicSearch === true
+    && Number(candidate.hotScore || 0) >= MIN_SENTIMENT_HOT_SCORE_FLOOR
+  ) {
+    // Public Threads search frequently returns high-engagement concise posts.
+    // Keep the heat hard floor, but do not drop valid short public hot posts.
+    return MIN_PUBLIC_THREADS_HOT_HAN_COUNT;
+  }
   return MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT;
 }
 
@@ -3293,7 +3333,7 @@ function candidateMeetsDisplayQuality(
     const viewCount = Number(normalized.engagement?.viewCount ?? (normalized.metrics as any)?.view_count ?? 0);
     return reject(viewCount >= MIN_SENTIMENT_HOT_SCORE_FLOOR ? "heat_interactions_only" : "heat");
   }
-  if (sentimentHotHanCount(content) < minimumSentimentHotHanCountForCandidate()) return reject("content_length");
+  if (sentimentHotHanCount(content) < minimumSentimentHotHanCountForCandidate(normalized)) return reject("content_length");
   if (isNoisyReaderCandidateContent(normalized, content)) return reject("reader_noise");
   const relevanceKeywords = keywords;
   if (relevanceKeywords.length > 0 && !candidateMatchesCurrentKeywords(normalized, relevanceKeywords, searchMode)) return reject("keyword_mismatch");
@@ -3553,21 +3593,25 @@ function candidateTouchesCurrentKeywords(candidate: SentimentHotCandidate, keywo
 }
 
 export function candidateMatchesCurrentKeywords(candidate: SentimentHotCandidate, keywords: string[], searchMode: SentimentHotSearchMode = "normal"): boolean {
-  const needles = buildRelevanceNeedlesForMode(keywords, searchMode);
+  const source = sentimentCandidateSource(candidate);
+  const publicQuery = source === "threads-search-page" ? cleanText((candidate.metrics as any)?.query) : "";
+  if (source === "threads-search-page" && publicQuery) return true;
+  const relevanceKeywords = publicQuery ? [publicQuery, ...keywords] : keywords;
+  const needles = buildRelevanceNeedlesForMode(relevanceKeywords, searchMode);
   if (needles.length === 0) return false;
-  const strongNeedles = buildStrongRelevanceNeedlesForMode(keywords, searchMode);
+  const strongNeedles = buildStrongRelevanceNeedlesForMode(relevanceKeywords, searchMode);
   const matchedCount = countMatchedNeedles(candidate, needles);
   const matchedStrongCount = countMatchedNeedles(candidate, strongNeedles);
   if (matchedCount <= 0) return false;
   // Threads' recent search results are already scoped by the exact query used
   // for this candidate. Requiring a second persona keyword drops valid fresh
   // posts because the page/API often exposes only one topic term.
-  if (searchMode === "normal" && (
-    sentimentCandidateSource(candidate) === "threads-search-page"
-    || (sentimentCandidateSource(candidate) === "threads-account-search" && (candidate.metrics as any)?.recentSearch === true)
-  )) return true;
+  if (
+    source === "threads-search-page"
+    || (source === "threads-account-search" && (candidate.metrics as any)?.recentSearch === true)
+  ) return true;
   if (searchMode === "normal") {
-    const directNeedles = buildDirectRelevanceNeedles(keywords);
+    const directNeedles = buildDirectRelevanceNeedles(relevanceKeywords);
     const directMatchedCount = countMatchedNeedles(candidate, directNeedles);
     const hasSpecificDirectMatch = directNeedles
       .filter((needle) => needle.length >= 3)
@@ -3609,13 +3653,19 @@ async function fetchThreadsSearchPageCandidates(args: {
     args.refresh === true || queryRound > 0,
   );
   if (queries.length === 0) return [];
+  const publicSeedQueries = baseQueries.filter((query) => {
+    const text = cleanText(query);
+    if (!text || text.length > 6) return false;
+    return !/(?:避坑|推荐|推薦|测评|測評|吐槽|真实|真實|故事|攻略|教程)/u.test(text);
+  });
+  const publicBrowserQueries = [...new Set([...publicSeedQueries, ...queries])].slice(0, THREADS_BROWSER_QUERY_LIMIT);
 
   const byId = new Map<string, SentimentHotCandidate>();
   const dedupeKeys = new Set<string>();
-  const addAll = (candidates: SentimentHotCandidate[]) => {
+  const addAll = (candidates: SentimentHotCandidate[], freshnessDays = args.freshnessDays) => {
     for (const candidate of candidates) {
-      if (args.freshnessDays && isHistoricalSupplementCandidate(candidate)) continue;
-      if (!candidateMatchesOperationalFreshness(candidate, args.freshnessDays)) continue;
+      if (freshnessDays && isHistoricalSupplementCandidate(candidate)) continue;
+      if (!candidateMatchesOperationalFreshness(candidate, freshnessDays)) continue;
       const key = sentimentCandidateDedupeKey(candidate);
       if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
       if (byId.has(candidate.id) || dedupeKeys.has(key)) continue;
@@ -3633,17 +3683,20 @@ async function fetchThreadsSearchPageCandidates(args: {
   // Threads search is readable without an account.  Run that public page first:
   // the reader mirror can return a CAPTCHA document even when Threads itself has
   // current results, and must not turn a healthy public source into a zero result.
-  const publicBrowserTimeoutMs = Math.min(10_000, sourceTimeoutMs);
+  const publicBrowserTimeoutMs = Math.min(SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS, sourceTimeoutMs);
+  const publicBrowserDeadlineAt = args.deadlineAt
+    ? Math.min(args.deadlineAt, Date.now() + publicBrowserTimeoutMs)
+    : Date.now() + publicBrowserTimeoutMs;
   const publicBrowserCandidates = await withSentimentTimeout(fetchThreadsBrowserSearchCandidates({
       archiveId: args.archiveId,
       keywords: args.keywords,
-      queries: queries.slice(0, THREADS_BROWSER_QUERY_LIMIT),
+      queries: publicBrowserQueries,
       limit: sourceLimit,
       excludeIds: excluded,
-      freshnessDays: args.freshnessDays,
+      freshnessDays: 0,
       ignoreHistory: args.ignoreHistory,
       searchMode: args.searchMode,
-      deadlineAt: args.deadlineAt,
+      deadlineAt: publicBrowserDeadlineAt,
       warnings: args.warnings,
       allowUnauthenticated: true,
       publicOnly: true,
@@ -3718,6 +3771,24 @@ async function fetchThreadsSearchPageCandidates(args: {
       true,
       args.searchMode,
     ));
+  }
+
+  if (
+    args.freshnessDays
+    && byId.size < args.limit
+    && publicBrowserCandidates.length > 0
+  ) {
+    const beforeRelaxedSupplement = byId.size;
+    addAll(publicBrowserCandidates.map((candidate) => ({
+      ...candidate,
+      metrics: {
+        ...(candidate.metrics || {}),
+        publicHotOverflowSupplement: true,
+      },
+    })), 0);
+    if (byId.size > beforeRelaxedSupplement) {
+      pushSentimentHotWarning(args.warnings || [], "近 15 天公开页候选不足，已使用同一批公开页高热候选补足。");
+    }
   }
 
   const sorted = sortSentimentHotCandidatePool([...byId.values()], args.keywords, args.limit, args.searchMode);
@@ -4089,9 +4160,10 @@ async function fetchThreadsBrowserSearchCandidates(args: {
     }
   };
   const considerCandidate = (candidate: SentimentHotCandidate, countRejection = true) => {
+    const relevanceKeywords = args.publicOnly ? [cleanText((candidate.metrics as any)?.query), ...args.keywords].filter(Boolean) : args.keywords;
     const normalized = candidateMeetsDisplayQuality(
       candidate,
-      args.keywords,
+      relevanceKeywords,
       args.searchMode,
       args.freshnessDays,
       countRejection ? stats.rejected : undefined,
@@ -4100,7 +4172,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
       if (
         !isUsefulHotCandidate(candidate)
         && detailRescueCandidates.size < THREADS_BROWSER_DETAIL_RESCUE_POOL_LIMIT
-        && candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays, undefined, true)
+        && candidateMeetsDisplayQuality(candidate, relevanceKeywords, args.searchMode, args.freshnessDays, undefined, true)
       ) {
         const dedupeKey = sentimentCandidateDedupeKey(candidate);
         if (!detailRescueCandidates.has(dedupeKey)) detailRescueCandidates.set(dedupeKey, candidate);
@@ -4169,9 +4241,9 @@ async function fetchThreadsBrowserSearchCandidates(args: {
         }
         await detailRescueRunning;
       };
-      const persistedTemplate = readPersistedThreadsSearchTemplate();
-      if (!recentThreadsSearchTemplate && persistedTemplate && threadsSearchTemplateMatchesQueries(persistedTemplate.template, args.queries)) recentThreadsSearchTemplate = persistedTemplate;
-      const cachedTemplate = recentThreadsSearchTemplate
+      const persistedTemplate = args.publicOnly ? null : readPersistedThreadsSearchTemplate();
+      if (!args.publicOnly && !recentThreadsSearchTemplate && persistedTemplate && threadsSearchTemplateMatchesQueries(persistedTemplate.template, args.queries)) recentThreadsSearchTemplate = persistedTemplate;
+      const cachedTemplate = !args.publicOnly && recentThreadsSearchTemplate
         && Date.now() - recentThreadsSearchTemplate.capturedAt <= THREADS_BROWSER_TEMPLATE_CACHE_TTL_MS
         && threadsSearchTemplateMatchesQueries(recentThreadsSearchTemplate.template, args.queries)
         ? recentThreadsSearchTemplate.template
@@ -4231,7 +4303,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           // Continue waiting for the next search request.
         }
       };
-      if (!template) page.on("request", captureTemplate);
+      if (!template && !args.publicOnly) page.on("request", captureTemplate);
       const bootstrapQueries = [...new Set(args.queries.slice(0, THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT).filter(Boolean))];
       const recentSearch = typeof args.recentSearch === "boolean" ? args.recentSearch : Number(args.freshnessDays || 0) > 0;
       const triggerThreadsManualSearch = async (searchPage: any, query: string) => {
@@ -4318,7 +4390,15 @@ async function fetchThreadsBrowserSearchCandidates(args: {
             for (const candidate of parsed) {
               if (excluded.has(candidate.id)) continue;
               if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
-              if (considerCandidate(candidate)) acceptedTotal += 1;
+              const searchCandidate = args.publicOnly ? {
+                ...candidate,
+                metrics: {
+                  ...(candidate.metrics || {}),
+                  source: "threads-search-page",
+                  publicSearch: true,
+                },
+              } : candidate;
+              if (considerCandidate(searchCandidate)) acceptedTotal += 1;
               if (results.length >= args.limit) break;
             }
             if (results.length >= args.limit) break;
@@ -4330,14 +4410,14 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           return parsedTotal;
         };
         const collectDomTextCandidates = async () => {
-          const bodyText = await searchPage.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+          const bodyText = await searchPage.locator("body").innerText({ timeout: args.publicOnly ? 500 : 2_000 }).catch(() => "");
           const postUrls = await searchPage.$$eval('a[href*="/post/"]', (anchors: any[]) => anchors
             .map((anchor) => String(anchor.href || anchor.getAttribute?.("href") || "").trim())
             .filter(Boolean)).catch(() => []);
           const domCandidates = parseThreadsSearchTextCandidates({
             text: bodyText,
             query,
-            keywords: args.keywords,
+            keywords: args.publicOnly ? [query, ...args.keywords] : args.keywords,
             limit: Math.max(0, args.limit - results.length),
             sourceUrl: String(searchPage.url?.() || buildThreadsSearchUrl(query, useRecentSearch)),
             sourceUrls: postUrls,
@@ -4365,15 +4445,23 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           for (const candidate of hydrated) {
             if (excluded.has(candidate.id)) continue;
             if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
-            considerCandidate(candidate);
+            considerCandidate(args.publicOnly ? {
+              ...candidate,
+              metrics: {
+                ...(candidate.metrics || {}),
+                source: "threads-search-page",
+                publicSearch: true,
+              },
+            } : candidate);
             if (results.length >= args.limit) break;
           }
           return hydrated.length;
         };
         try {
+          const publicGotoTimeoutMs = args.publicOnly ? 2_500 : 12_000;
           await searchPage.goto(buildThreadsSearchUrl(query, useRecentSearch), {
             waitUntil: "domcontentloaded",
-            timeout: Math.min(12_000, remainingSentimentDeadlineMs(args.deadlineAt, 12_000)),
+            timeout: Math.min(publicGotoTimeoutMs, remainingSentimentDeadlineMs(args.deadlineAt, publicGotoTimeoutMs)),
           }).catch(() => undefined);
           const currentUrl = String(searchPage.url?.() || "");
           if (/\/accounts\/suspended\/|checkpoint|login/i.test(currentUrl)) {
@@ -4383,7 +4471,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           }
           const cookieConsentButtons = searchPage.locator("button").filter({ hasText: /Cookie/i });
           if (await cookieConsentButtons.count().catch(() => 0)) await cookieConsentButtons.last().click().catch(() => undefined);
-          const publicSearchSettleMs = args.publicOnly ? 900 : 350;
+          const publicSearchSettleMs = args.publicOnly ? 150 : 350;
           await searchPage.waitForTimeout(Math.min(publicSearchSettleMs, remainingSentimentDeadlineMs(args.deadlineAt, publicSearchSettleMs))).catch(() => undefined);
           await collectGraphqlResponseCandidates();
           const initialHydrationCount = await collectHydrationCandidates();
@@ -4392,7 +4480,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           // away from the public result page and previously discarded the only
           // usable no-session candidates.
           const initialDomCount = await collectDomTextCandidates();
-          if (!template && initialDomCount === 0 && results.length < args.limit && await triggerThreadsManualSearch(searchPage, query)) {
+          if (!args.publicOnly && !template && initialDomCount === 0 && results.length < args.limit && await triggerThreadsManualSearch(searchPage, query)) {
             await collectGraphqlResponseCandidates();
             await collectHydrationCandidates();
           }
@@ -4422,11 +4510,12 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           // The unfiltered search page emits the reusable GraphQL request more
           // consistently. Parsed posts still pass the normal freshness checks,
           // and once captured the API payload includes real publication times.
-          await collectDomCandidates(page, bootstrapQuery, THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS, false);
+          stats.queries += 1;
+          await collectDomCandidates(page, bootstrapQuery, args.publicOnly ? 0 : THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS, args.publicOnly ? false : recentSearch);
         }
-        if (!threadsAuthBlocked && !template && results.length < args.limit) await rescueDetailCandidates();
+        if (!args.publicOnly && !threadsAuthBlocked && !template && results.length < args.limit) await rescueDetailCandidates();
       }
-      if (!cachedTemplate) page.off("request", captureTemplate);
+      if (!cachedTemplate && !args.publicOnly) page.off("request", captureTemplate);
 
       if (!threadsAuthBlocked && !template && results.length < args.limit) {
         const fallbackQueries = args.queries.slice(
@@ -4434,7 +4523,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           THREADS_BROWSER_QUERY_LIMIT,
         );
         const fallbackPageCount = Math.min(THREADS_BROWSER_PAGE_LIMIT - 1, fallbackQueries.length);
-        if (fallbackPageCount > 0 && (!args.deadlineAt || remainingSentimentDeadlineMs(args.deadlineAt, 0) >= 4_000)) {
+        if (fallbackPageCount > 0 && (!args.deadlineAt || remainingSentimentDeadlineMs(args.deadlineAt, 0) >= 2_500)) {
           const extraPages = await Promise.all(Array.from({ length: fallbackPageCount }, async () => {
             const extraPage = await context.newPage().catch(() => null);
             if (!extraPage) return null;
@@ -4446,13 +4535,13 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           await Promise.all(usableExtraPages.map(async (extraPage: any, pageIndex) => {
             for (let queryIndex = pageIndex; queryIndex < fallbackQueries.length && results.length < args.limit; queryIndex += usableExtraPages.length) {
               if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
-              await collectDomCandidates(extraPage, fallbackQueries[queryIndex], 3);
+              await collectDomCandidates(extraPage, fallbackQueries[queryIndex], args.publicOnly ? 0 : 3, args.publicOnly ? false : recentSearch);
             }
           }));
         }
       }
 
-      if (template) {
+      if (template && !args.publicOnly) {
         const shouldPageQueries = args.limit >= 10;
         const queries = args.queries.slice(0, THREADS_BROWSER_QUERY_LIMIT);
         const searchPages: any[] = [page];
