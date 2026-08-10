@@ -2179,7 +2179,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   warnings.push(searchMode === "normal" ? "热点抓取模式：普通（泛垂直）。" : "热点抓取模式：严格（垂直收口）。");
   if (liveOnlyRefresh) warnings.push(manualKeywords.length > 0
     ? "测试模式：仅统计本轮实时来源，不读取或写入候选缓存、数据库候选、共享候选和展示历史；搜索关键词使用本次提交的关键词。"
-    : "测试模式：仅统计本轮实时来源，不读取或写入候选缓存、数据库候选、共享候选和展示历史；搜索策略仍使用模型生成结果。");
+    : "测试模式：仅统计本轮实时来源，不读取或写入候选缓存、数据库候选、共享候选和展示历史；搜索策略由本地规则生成。");
   if (strictFreshness) {
     warnings.push(freshnessDays > 0 ? `热点新鲜度：近 ${freshnessDays} 天。` : "热点新鲜度：不限时间。");
   } else {
@@ -3596,8 +3596,27 @@ async function fetchThreadsSearchPageCandidates(args: {
     SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS,
     remainingSentimentDeadlineMs(args.deadlineAt, SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS),
   );
-  const readerInitialTimeoutMs = Math.min(8_000, sourceTimeoutMs);
-  const readerCandidates = await withSentimentTimeout(fetchThreadsReaderSearchCandidates({
+  // Threads search is readable without an account.  Run that public page first:
+  // the reader mirror can return a CAPTCHA document even when Threads itself has
+  // current results, and must not turn a healthy public source into a zero result.
+  const publicBrowserTimeoutMs = Math.min(10_000, sourceTimeoutMs);
+  const publicBrowserCandidates = await withSentimentTimeout(fetchThreadsBrowserSearchCandidates({
+      archiveId: args.archiveId,
+      keywords: args.keywords,
+      queries: queries.slice(0, THREADS_BROWSER_QUERY_LIMIT),
+      limit: sourceLimit,
+      excludeIds: excluded,
+      freshnessDays: args.freshnessDays,
+      ignoreHistory: args.ignoreHistory,
+      searchMode: args.searchMode,
+      deadlineAt: args.deadlineAt,
+      warnings: args.warnings,
+      allowUnauthenticated: true,
+    }).catch(() => []), publicBrowserTimeoutMs, []);
+  addAll(publicBrowserCandidates);
+
+  const readerInitialTimeoutMs = Math.min(6_000, remainingSentimentDeadlineMs(args.deadlineAt, 6_000));
+  const readerCandidates = byId.size >= args.limit ? [] : await withSentimentTimeout(fetchThreadsReaderSearchCandidates({
       archiveId: args.archiveId,
       keywords: args.keywords,
       queries: queries.slice(0, THREADS_READER_INITIAL_QUERY_LIMIT),
@@ -4001,15 +4020,18 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   searchMode?: SentimentHotSearchMode;
   warnings?: string[];
   recentSearch?: boolean;
+  /** Public Threads search must work without any account session. */
+  allowUnauthenticated?: boolean;
 }): Promise<SentimentHotCandidate[]> {
   const cookies = readSentimentBrowserAuthCookies("threads");
   const sessionCookieCount = cookies.filter((cookie: any) => String(cookie?.name || "").toLowerCase() === "sessionid" && String(cookie?.value || "").trim()).length;
-  if (!hasValidThreadsSessionCookie(cookies)) {
+  const hasSession = hasValidThreadsSessionCookie(cookies);
+  if (!hasSession && !args.allowUnauthenticated) {
     console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} sessionid=0 cookies=${cookies.length} status=skip_no_session`);
     return [];
   }
   const releaseBrowserSlot = await acquireSentimentBrowserWorkSlot();
-  console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} sessionid=${sessionCookieCount} cookies=${cookies.length} queries=${args.queries.length} leading=${JSON.stringify(args.queries.slice(0, 6))} status=start`);
+  console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} sessionid=${sessionCookieCount} cookies=${cookies.length} mode=${hasSession ? "authenticated" : "public"} queries=${args.queries.length} leading=${JSON.stringify(args.queries.slice(0, 6))} status=start`);
   const excluded = args.excludeIds || getSentimentHotRefreshExcludedIds(args.archiveId);
   const excludedHistoryKeys = new Set<string>();
   const results: SentimentHotCandidate[] = [];
@@ -4022,7 +4044,11 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   let threadsAuthBlocked = false;
   const markThreadsAuthBlocked = (reason: string) => {
     threadsAuthBlocked = true;
-    pushSentimentHotWarning(args.warnings || [], `Threads 授权账号状态异常（${reason}），请在后台重新授权或更换可用 Threads 账号。`);
+    if (hasSession) {
+      pushSentimentHotWarning(args.warnings || [], `Threads 授权账号状态异常（${reason}），请在后台重新授权或更换可用 Threads 账号。`);
+    } else {
+      pushSentimentHotWarning(args.warnings || [], `Threads 公开搜索暂时要求验证（${reason}），本轮未使用登录态，也未放宽热点筛选条件。`);
+    }
   };
   const considerCandidate = (candidate: SentimentHotCandidate, countRejection = true) => {
     const normalized = candidateMeetsDisplayQuality(
@@ -4059,7 +4085,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
         userAgent:
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
       });
-      await addCookiesBestEffort(context, cookies as any[]);
+      if (hasSession) await addCookiesBestEffort(context, cookies as any[]);
       const page = await context.newPage();
       let detailRescueRunning: Promise<void> | null = null;
       const rescueDetailCandidates = async () => {
@@ -4545,7 +4571,7 @@ async function fetchWithSharedReaderLimit(
         && value.status >= 200
         && value.status < 300
         && value.body.trim().length > 0
-        && !/<title>\s*(?:502|503|504)\b|bad gateway|gateway timeout|service unavailable|log into instagram|登入 Instagram|登录 Instagram|continue to instagram/i.test(value.body),
+        && !/<title>\s*(?:502|503|504)\b|bad gateway|gateway timeout|service unavailable|log into instagram|登入 Instagram|登录 Instagram|continue to instagram|requiring CAPTCHA|captcha/i.test(value.body),
     },
   );
   return {
