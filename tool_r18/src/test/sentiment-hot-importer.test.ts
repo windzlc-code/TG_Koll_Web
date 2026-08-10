@@ -88,6 +88,26 @@ describe("sentiment hot importer", () => {
     expect(strategy.primaryQueries.length).toBeGreaterThanOrEqual(5);
   });
 
+  it("adds deterministic aliases for compact platform topic labels without reading persona prose", () => {
+    const strategy = buildLocalSentimentHotSearchStrategy({
+      archive: {
+        name: "新建人设",
+        content: "这里只是人物简介，不应被拆成宽泛热点关键词。",
+        setup: {
+          trendTopics: ["金融投资", "股票交易"],
+        },
+      } as any,
+    });
+
+    expect(strategy.requiredAnchorTerms).toContain("金融投资");
+    expect(strategy.requiredAnchorTerms).toContain("金融");
+    expect(strategy.requiredAnchorTerms).toContain("投资");
+    expect(strategy.requiredAnchorTerms.slice(0, 2)).toEqual(["金融", "投资"]);
+    expect(strategy.primaryQueries).toContain("股票");
+    expect(strategy.primaryQueries).toContain("交易");
+    expect(strategy.primaryQueries).not.toContain("这里只");
+  });
+
   it("prioritizes dedicated hot keyword models before global defaults", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sentiment-hot-config-"));
     const configPath = path.join(dir, "api_config.json");

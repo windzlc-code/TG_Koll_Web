@@ -91,7 +91,7 @@ const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 8_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
-const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 27;
+const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 29;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 48;
@@ -1150,6 +1150,24 @@ function localHotKeywordFragments(value: unknown): string[] {
 }
 
 /**
+ * Platform topics are often compact compound labels (for example "金融投资").
+ * Threads' public search frequently indexes the constituent topic but not the
+ * full compound label, so retain the exact topic and add only its safe leading
+ * and, for four-character labels, trailing two-character aliases.  Do not run
+ * this against a persona's free-form profile text: that would turn prose into
+ * unrelated broad queries.
+ */
+function localHotTopicAliases(value: unknown): string[] {
+  return localHotKeywordFragments(value).flatMap((item) => {
+    const text = cleanText(item);
+    if (!/^[\u3400-\u9fff]{4,6}$/u.test(text)) return [];
+    const aliases = [text.slice(0, 2)];
+    if (text.length === 4) aliases.push(text.slice(2));
+    return aliases;
+  });
+}
+
+/**
  * Builds the public-hot-search strategy from the persona record itself.  This
  * deliberately does not read persona memories or call a paid text model: a
  * newly created persona must remain searchable when the upstream model has no
@@ -1171,13 +1189,25 @@ export function buildLocalSentimentHotSearchStrategy(args: {
     (setup as any).customTopic,
     args.prompt,
   ].flatMap((value) => Array.isArray(value) ? value : [value]).map(cleanText).filter(Boolean).join("\n");
-  const prioritized = [
+  const platformTopicValues = [
     ...(Array.isArray((setup as any).trendTopics) ? (setup as any).trendTopics : []),
     ...(Array.isArray((setup as any).genres) ? (setup as any).genres : []),
     ...(Array.isArray((setup as any).interests) ? (setup as any).interests : []),
     (setup as any).contentTheme,
     (setup as any).customTopic,
     (setup as any).personaType,
+  ];
+  const platformTopicFragments = platformTopicValues.flatMap((value) => [
+    // Search the concrete platform-label aliases first. A compact label such
+    // as "金融投资" is useful for acceptance, but Threads can return an empty
+    // public SERP for the compound phrase while "金融" and "投资" have live
+    // result cards. This stays deterministic and keeps discovery within the
+    // platform-configured label rather than reading persona prose.
+    ...localHotTopicAliases(value),
+    ...localHotKeywordFragments(value),
+  ]);
+  const prioritized = [
+    ...platformTopicFragments,
     archive.content,
     args.prompt,
   ].flatMap(localHotKeywordFragments);
@@ -1187,14 +1217,16 @@ export function buildLocalSentimentHotSearchStrategy(args: {
   )].slice(0, 12);
   if (!terms.length) return emptySentimentHotSearchStrategy();
 
-  const primaryQueries = [...new Set(terms.flatMap((term) => [
-    term,
-    `${term}避坑`,
-    `${term}推荐`,
-    `${term}测评`,
-    `${term}吐槽`,
-    `${term}真实体验`,
-  ]).map((item) => normalizeSentimentSearchKeyword(item, { archiveName: cleanText(archive.name), sourceText }))
+  const primaryQueries = [...new Set([
+    ...terms,
+    ...terms.flatMap((term) => [
+      `${term}避坑`,
+      `${term}推荐`,
+      `${term}测评`,
+      `${term}吐槽`,
+      `${term}真实体验`,
+    ]),
+  ].map((item) => normalizeSentimentSearchKeyword(item, { archiveName: cleanText(archive.name), sourceText }))
     .filter((item) => isConcreteSearchKeyword(item)))].slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
   const anchors = terms.slice(0, Math.max(1, Math.min(6, terms.length)));
   const normalTerms = [...new Set([...terms, ...primaryQueries])].slice(0, SENTIMENT_HOT_NORMAL_KEYWORD_TARGET);
@@ -4295,6 +4327,26 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           }
           return parsedTotal;
         };
+        const collectDomTextCandidates = async () => {
+          const bodyText = await searchPage.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+          const postUrls = await searchPage.$$eval('a[href*="/post/"]', (anchors: any[]) => anchors
+            .map((anchor) => String(anchor.href || anchor.getAttribute?.("href") || "").trim())
+            .filter(Boolean)).catch(() => []);
+          const domCandidates = parseThreadsSearchTextCandidates({
+            text: bodyText,
+            query,
+            keywords: args.keywords,
+            limit: Math.max(0, args.limit - results.length),
+            sourceUrl: String(searchPage.url?.() || buildThreadsSearchUrl(query, useRecentSearch)),
+            sourceUrls: postUrls,
+          });
+          for (const candidate of domCandidates) {
+            if (excluded.has(candidate.id)) continue;
+            considerCandidate(candidate);
+            if (results.length >= args.limit) break;
+          }
+          return domCandidates.length;
+        };
         searchPage.on("response", captureGraphqlResponse);
         const collectHydrationCandidates = async () => {
           const scripts = await searchPage.$$eval("script", (items: any[]) => items
@@ -4329,10 +4381,16 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           }
           const cookieConsentButtons = searchPage.locator("button").filter({ hasText: /Cookie/i });
           if (await cookieConsentButtons.count().catch(() => 0)) await cookieConsentButtons.last().click().catch(() => undefined);
-          await searchPage.waitForTimeout(Math.min(350, remainingSentimentDeadlineMs(args.deadlineAt, 350))).catch(() => undefined);
+          const publicSearchSettleMs = args.publicOnly ? 900 : 350;
+          await searchPage.waitForTimeout(Math.min(publicSearchSettleMs, remainingSentimentDeadlineMs(args.deadlineAt, publicSearchSettleMs))).catch(() => undefined);
           await collectGraphqlResponseCandidates();
           const initialHydrationCount = await collectHydrationCandidates();
-          if (!template && results.length < args.limit && await triggerThreadsManualSearch(searchPage, query)) {
+          // Public result cards are already present in the first response.  Parse
+          // them before trying the interactive search control, which navigates
+          // away from the public result page and previously discarded the only
+          // usable no-session candidates.
+          const initialDomCount = await collectDomTextCandidates();
+          if (!template && initialDomCount === 0 && results.length < args.limit && await triggerThreadsManualSearch(searchPage, query)) {
             await collectGraphqlResponseCandidates();
             await collectHydrationCandidates();
           }
@@ -4345,23 +4403,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           }
           if (initialHydrationCount === 0) await collectHydrationCandidates();
           await collectGraphqlResponseCandidates();
-          const bodyText = await searchPage.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
-          const postUrls = await searchPage.$$eval('a[href*="/post/"]', (anchors: any[]) => anchors
-            .map((anchor) => String(anchor.href || anchor.getAttribute?.("href") || "").trim())
-            .filter(Boolean)).catch(() => []);
-          const domCandidates = parseThreadsSearchTextCandidates({
-            text: bodyText,
-            query,
-            keywords: args.keywords,
-            limit: Math.max(0, args.limit - results.length),
-            sourceUrl: String(searchPage.url?.() || buildThreadsSearchUrl(query, useRecentSearch)),
-            sourceUrls: postUrls,
-          });
-          for (const candidate of domCandidates) {
-            if (excluded.has(candidate.id)) continue;
-            considerCandidate(candidate);
-            if (results.length >= args.limit) break;
-          }
+          await collectDomTextCandidates();
         } finally {
           searchPage.off("response", captureGraphqlResponse);
           await collectGraphqlResponseCandidates();
