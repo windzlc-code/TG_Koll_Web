@@ -2583,6 +2583,7 @@ Instagram
                         direct_reply_count: 68,
                         repost_count: 92,
                         reshare_count: 58,
+                        view_count: 4400,
                       },
                     },
                   }],
@@ -2607,6 +2608,7 @@ Instagram
       commentCount: 68,
       repostCount: 92,
       shareCount: 58,
+      viewCount: 4400,
     }]);
     expect(parsed.endCursor).toBe("cursor-1");
     expect(parsed.hasNextPage).toBe(true);

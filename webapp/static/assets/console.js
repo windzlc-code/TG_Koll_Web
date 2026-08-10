@@ -488,7 +488,7 @@ const state = {
   personaDashboardOverviewFetch: null,
   personaHistoryFilters: {
     content: localStorage.getItem("personaDashboardPostTypeFilter") || "all",
-    sort: localStorage.getItem("personaDashboardPostSort") || "hot_desc",
+    sort: localStorage.getItem("personaDashboardPostSort") || "time_desc",
   },
   personaPublishAccountIds: {},
   personaPublishResults: {},
@@ -788,7 +788,7 @@ function clearTenantInMemoryState() {
   state.personaDashboardOverviewFetch = null;
   state.personaHistoryFilters = {
     content: localStorage.getItem("personaDashboardPostTypeFilter") || "all",
-    sort: localStorage.getItem("personaDashboardPostSort") || "hot_desc",
+    sort: localStorage.getItem("personaDashboardPostSort") || "time_desc",
   };
   state.personaAutomationResults = {};
   state.personaAutomationWatchers = {};
@@ -3717,18 +3717,8 @@ function sortPersonaDraftPosts(posts) {
 
 function sortPersonaPublishHistory(rows) {
   return [...(Array.isArray(rows) ? rows : [])].sort((left, right) => {
-    const leftTime = Math.max(
-      timeValue(left?.published_at),
-      timeValue(left?.captured_at),
-      timeValue(left?.updated_at),
-      timeValue(left?.created_at),
-    );
-    const rightTime = Math.max(
-      timeValue(right?.published_at),
-      timeValue(right?.captured_at),
-      timeValue(right?.updated_at),
-      timeValue(right?.created_at),
-    );
+    const leftTime = timeValue(publishHistoryRecordTime(left));
+    const rightTime = timeValue(publishHistoryRecordTime(right));
     if (rightTime !== leftTime) return rightTime - leftTime;
     return String(right?.id || "").localeCompare(String(left?.id || ""));
   });
@@ -10091,7 +10081,7 @@ function personaFilteredHistoryRows(persona = selectedPersona()) {
   const filters = state.personaHistoryFilters || {};
   const platform = personaContentPlatform(persona);
   const content = String(filters.content || "all").toLowerCase();
-  const sort = String(filters.sort || "hot_desc");
+  const sort = String(filters.sort || "time_desc");
   const direction = sort.endsWith("_asc") ? 1 : -1;
   return personaMergedHistoryRows(persona).filter((record) => {
     if (normalizePersonaContentPlatform(record.platform) !== platform) return false;
@@ -10236,7 +10226,7 @@ function renderPersonaHistoryFilters(rows = [], persona = selectedPersona()) {
   return `<div class="persona-history-toolbar">
     <div class="persona-history-filters" aria-label="历史推文筛选">
       ${filterMenus.map(({ key, label, icon, options }) => {
-        const defaultValue = key === "content" ? "all" : "hot_desc";
+        const defaultValue = key === "content" ? "all" : "time_desc";
         return `<details class="persona-history-filter-menu" data-console-dropdown data-persona-history-filter-menu>
           <summary class="persona-history-filter-trigger${filters[key] !== defaultValue ? " is-active" : ""}" title="${label}" aria-label="${label}">
             <span class="persona-history-filter-icon">${icon}</span>

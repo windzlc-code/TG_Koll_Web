@@ -40,6 +40,7 @@ function instagramHotMetricKey(username: string): string {
 type PersonaThreadsAccountBinding = {
   username: string;
   accountId?: string;
+  archiveId?: string;
   profileDir?: string;
   status?: string;
   source?: "account_pool" | "legacy_binding";
@@ -112,6 +113,19 @@ function readThreadsAccountPool(): PersonaThreadsAccountBinding[] {
   }
   cachedThreadsAccountPool = out;
   return out;
+}
+
+function threadsAccountPoolBindingIsCurrent(archiveId: unknown, target: PersonaThreadsAccountBinding): boolean {
+  if (target.source !== "account_pool") return true;
+  cachedThreadsAccountPool = null;
+  const expectedArchiveId = String(archiveId || "").trim();
+  const expectedAccountId = String(target.accountId || "").trim();
+  const expectedUsername = normalizeThreadsUsername(target.username).toLowerCase();
+  return readThreadsAccountPool().some((binding) => (
+    String(binding.archiveId || "").trim() === expectedArchiveId
+    && (!expectedAccountId || String(binding.accountId || "").trim() === expectedAccountId)
+    && normalizeThreadsUsername(binding.username).toLowerCase() === expectedUsername
+  ));
 }
 
 function readInstagramAccountPool(): PersonaThreadsAccountBinding[] {
@@ -667,12 +681,24 @@ async function main() {
               error: metrics.error || (usable ? "本次只读取到局部资料，未覆盖为完整热点数据。" : "未读取到可用热点数据。"),
             };
         const updatedAt = new Date().toISOString();
+        if (!threadsAccountPoolBindingIsCurrent(archive.id, target)) {
+          results.push({
+            archiveId: archive.id,
+            name: archive.name,
+            username,
+            ok: false,
+            skipped: true,
+            message: "刷新期间 Threads 账号池绑定已变化，本次结果未写入。",
+          });
+          continue;
+        }
         const saved = updatePersonaArchiveThreadsHotMetrics({
           archiveId: archive.id,
           expectedHandle: username,
           metricKey: key,
           metric: nextMetric,
           authProfileKey: auth.profileKey,
+          replaceLegacyHandle: target.source === "account_pool",
           updatedAt,
         });
         if (!saved.ok) {

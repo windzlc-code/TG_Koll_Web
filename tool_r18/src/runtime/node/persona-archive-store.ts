@@ -188,6 +188,7 @@ export function updatePersonaArchiveThreadsHotMetrics(input: {
   metric: Record<string, unknown>;
   authProfileKey?: string;
   allowAdditionalHandle?: boolean;
+  replaceLegacyHandle?: boolean;
   updatedAt: string;
 }): { ok: boolean; reason?: string } {
   return withArchiveFileLock(() => {
@@ -204,7 +205,7 @@ export function updatePersonaArchiveThreadsHotMetrics(input: {
       : {};
     const currentHandle = normalizeThreadsHandle(threads.handle);
     const expectedHandle = normalizeThreadsHandle(input.expectedHandle);
-    if (currentHandle && currentHandle !== expectedHandle && !input.allowAdditionalHandle) {
+    if (currentHandle && currentHandle !== expectedHandle && !input.allowAdditionalHandle && !input.replaceLegacyHandle) {
       return { ok: false, reason: "threads_binding_changed" };
     }
     const hotMetrics = setup.hotMetrics && typeof setup.hotMetrics === "object"
@@ -219,7 +220,7 @@ export function updatePersonaArchiveThreadsHotMetrics(input: {
           ...accountManagement,
           threads: {
             ...threads,
-            handle: currentHandle || expectedHandle,
+            handle: input.replaceLegacyHandle ? expectedHandle : currentHandle || expectedHandle,
             authProfileKey: input.authProfileKey,
             authProfileBoundAt: input.updatedAt,
             updatedAt: input.updatedAt,

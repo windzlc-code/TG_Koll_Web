@@ -129,6 +129,21 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertNotIn('record.__dashboard_metric_only ? ""', selection)
         self.assertIn('data-publish-history-requeue="${esc(recordId)}"', selection)
 
+    def test_publish_history_defaults_to_published_time_and_refresh_cannot_reorder_it(self):
+        sorter = function_source("sortPersonaPublishHistory", "personaDraftOptionLabel")
+        filtered = function_source("personaFilteredHistoryRows", "personaPlatformMetricSummary")
+        filters = function_source("renderPersonaHistoryFilters", "renderPersonaHistoryDataContent")
+
+        self.assertIn("timeValue(publishHistoryRecordTime(left))", sorter)
+        self.assertIn("timeValue(publishHistoryRecordTime(right))", sorter)
+        self.assertNotIn("Math.max", sorter)
+        self.assertIn('const sort = String(filters.sort || "time_desc")', filtered)
+        self.assertIn('const defaultValue = key === "content" ? "all" : "time_desc"', filters)
+        self.assertGreaterEqual(
+            CONSOLE_JS.count('localStorage.getItem("personaDashboardPostSort") || "time_desc"'),
+            2,
+        )
+
     def test_history_list_preview_uses_one_reach_metric_and_hides_compact_only_fields(self):
         selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")
         metrics = function_source("publishHistoryMetricEntries", "formatPublishHistoryMetricUnit")
@@ -279,6 +294,8 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("binding.archiveId", targets)
         self.assertIn("archive?.id", targets)
         self.assertIn("if (currentBindings.length) return currentBindings;", targets)
+        self.assertIn("threadsAccountPoolBindingIsCurrent", REFRESH_SCRIPT)
+        self.assertIn('replaceLegacyHandle: target.source === "account_pool"', REFRESH_SCRIPT)
         self.assertNotIn("archive?.publishHistory", targets)
         self.assertNotIn('"publish_history"', targets)
         self.assertNotIn("allowAdditionalHandle", REFRESH_SCRIPT)

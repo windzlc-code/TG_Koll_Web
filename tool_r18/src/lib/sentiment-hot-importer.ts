@@ -5445,6 +5445,14 @@ export function parseThreadsGraphqlProfilePagePayload(args: {
         ?? post?.created_at
         ?? post?.caption?.created_at,
     );
+    const rawViewCount = [
+      post?.text_post_app_info?.view_count,
+      post?.text_post_app_info?.viewCount,
+      post?.view_count,
+      post?.viewCount,
+      post?.play_count,
+      post?.playCount,
+    ].find((value) => value !== null && value !== undefined && value !== "");
     if (!pk || !sourceUrl) continue;
     posts.push({
       pk,
@@ -5456,6 +5464,7 @@ export function parseThreadsGraphqlProfilePagePayload(args: {
       commentCount: Math.max(0, Number(post?.text_post_app_info?.direct_reply_count) || 0),
       repostCount: Math.max(0, Number(post?.text_post_app_info?.repost_count) || 0),
       shareCount: Math.max(0, Number(post?.text_post_app_info?.reshare_count) || 0),
+      ...(rawViewCount === undefined ? {} : { viewCount: Math.max(0, Number(rawViewCount) || 0) }),
     });
   }
   return {
@@ -6207,6 +6216,7 @@ export async function fetchThreadsProfileHotMetrics(usernameInput: string): Prom
         && parsed.scannedPosts > 0
         && Array.isArray((parsed as any).postMetrics)
         && (parsed as any).postMetrics.length >= parsed.scannedPosts
+        && Number((parsed as any).viewMissingPosts || 0) === 0
         && (parsed as any).profileReachedEnd === true;
       const visibleProfileComplete = !hasLoginSessionCookie
         && !attemptCookies.length
