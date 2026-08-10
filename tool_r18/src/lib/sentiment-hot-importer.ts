@@ -3612,6 +3612,7 @@ async function fetchThreadsSearchPageCandidates(args: {
       deadlineAt: args.deadlineAt,
       warnings: args.warnings,
       allowUnauthenticated: true,
+      publicOnly: true,
     }).catch(() => []), publicBrowserTimeoutMs, []);
   addAll(publicBrowserCandidates);
 
@@ -4022,16 +4023,19 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   recentSearch?: boolean;
   /** Public Threads search must work without any account session. */
   allowUnauthenticated?: boolean;
+  /** Do not attach a stored session to a public-hot-search request. */
+  publicOnly?: boolean;
 }): Promise<SentimentHotCandidate[]> {
   const cookies = readSentimentBrowserAuthCookies("threads");
   const sessionCookieCount = cookies.filter((cookie: any) => String(cookie?.name || "").toLowerCase() === "sessionid" && String(cookie?.value || "").trim()).length;
   const hasSession = hasValidThreadsSessionCookie(cookies);
-  if (!hasSession && !args.allowUnauthenticated) {
+  const useSession = hasSession && !args.publicOnly;
+  if (!useSession && !args.allowUnauthenticated) {
     console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} sessionid=0 cookies=${cookies.length} status=skip_no_session`);
     return [];
   }
   const releaseBrowserSlot = await acquireSentimentBrowserWorkSlot();
-  console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} sessionid=${sessionCookieCount} cookies=${cookies.length} mode=${hasSession ? "authenticated" : "public"} queries=${args.queries.length} leading=${JSON.stringify(args.queries.slice(0, 6))} status=start`);
+  console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} sessionid=${sessionCookieCount} cookies=${cookies.length} mode=${useSession ? "authenticated" : "public"} queries=${args.queries.length} leading=${JSON.stringify(args.queries.slice(0, 6))} status=start`);
   const excluded = args.excludeIds || getSentimentHotRefreshExcludedIds(args.archiveId);
   const excludedHistoryKeys = new Set<string>();
   const results: SentimentHotCandidate[] = [];
@@ -4044,7 +4048,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   let threadsAuthBlocked = false;
   const markThreadsAuthBlocked = (reason: string) => {
     threadsAuthBlocked = true;
-    if (hasSession) {
+    if (useSession) {
       pushSentimentHotWarning(args.warnings || [], `Threads 授权账号状态异常（${reason}），请在后台重新授权或更换可用 Threads 账号。`);
     } else {
       pushSentimentHotWarning(args.warnings || [], `Threads 公开搜索暂时要求验证（${reason}），本轮未使用登录态，也未放宽热点筛选条件。`);
@@ -4085,7 +4089,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
         userAgent:
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
       });
-      if (hasSession) await addCookiesBestEffort(context, cookies as any[]);
+      if (useSession) await addCookiesBestEffort(context, cookies as any[]);
       const page = await context.newPage();
       let detailRescueRunning: Promise<void> | null = null;
       const rescueDetailCandidates = async () => {
