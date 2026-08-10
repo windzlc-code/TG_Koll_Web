@@ -20,6 +20,7 @@ import {
   buildModelOrderedThreadsSearchQueries,
   buildSentimentHotSearchStrategyCacheKey,
   buildJinaReaderUrl,
+  buildLocalSentimentHotSearchStrategy,
   buildThreadsSearchUrl,
   candidateMatchesRequestedFreshness,
   candidateMatchesSentimentHotStrategyAnchors,
@@ -68,6 +69,25 @@ afterEach(() => {
 });
 
 describe("sentiment hot importer", () => {
+  it("builds local hot-search terms from platform tags before persona text", () => {
+    const strategy = buildLocalSentimentHotSearchStrategy({
+      archive: {
+        name: "阿伟",
+        content: "关注财经市场与投资经验，分享股票趋势和理财选择。",
+        setup: {
+          trendTopics: ["股票", "财经", "投资"],
+          genres: ["金融市场"],
+          interests: ["理财"],
+        },
+      } as any,
+    });
+
+    expect(strategy.localDeterministic).toBe(true);
+    expect(strategy.requiredAnchorTerms.slice(0, 3)).toEqual(["股票", "财经", "投资"]);
+    expect(strategy.primaryQueries).toContain("股票避坑");
+    expect(strategy.primaryQueries.length).toBeGreaterThanOrEqual(5);
+  });
+
   it("prioritizes dedicated hot keyword models before global defaults", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sentiment-hot-config-"));
     const configPath = path.join(dir, "api_config.json");

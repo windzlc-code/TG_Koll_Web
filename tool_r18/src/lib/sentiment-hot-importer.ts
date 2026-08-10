@@ -15,7 +15,7 @@ import {
   type ReaderResponseSnapshot,
 } from "@/lib/reader-response-coordinator";
 import { readRuntimeApiConfig } from "@/runtime/node/config";
-import { callTextUnderstandingModelWithFallback, extractText, getTextUnderstandingModelFallbacks, isTextModelFallbackError } from "@/lib/gemini-client";
+import { callTextUnderstandingModelWithFallback, extractText, isTextModelFallbackError } from "@/lib/gemini-client";
 import {
   buildSentimentCandidateId,
   getSentimentHotCandidateHistoryKeys,
@@ -289,7 +289,7 @@ export interface PrepareSentimentHotKeywordsResult {
   warnings: string[];
 }
 
-interface SentimentHotSearchStrategy {
+export interface SentimentHotSearchStrategy {
   primaryQueries: string[];
   broadQueries: string[];
   ecosystemQueries: string[];
@@ -300,6 +300,7 @@ interface SentimentHotSearchStrategy {
   rejectTerms: string[];
   domainSummary?: string;
   personaGuardTerms?: string[];
+  localDeterministic?: boolean;
 }
 
 export interface ThreadsBrowserProfilePublishedPostSnapshot {
@@ -1137,6 +1138,80 @@ function emptySentimentHotSearchStrategy(): SentimentHotSearchStrategy {
   };
 }
 
+function localHotKeywordFragments(value: unknown): string[] {
+  return cleanText(value)
+    .split(/[\n,，、。.!！?？；;：:/|（）()【】\[\]{}]+/u)
+    .flatMap((item) => {
+      const text = cleanText(item);
+      if (!text) return [];
+      const chunks = text.match(/[\u3400-\u9fff]{2,12}/gu) || [];
+      return [text, ...chunks];
+    });
+}
+
+/**
+ * Builds the public-hot-search strategy from the persona record itself.  This
+ * deliberately does not read persona memories or call a paid text model: a
+ * newly created persona must remain searchable when the upstream model has no
+ * available balance.
+ */
+export function buildLocalSentimentHotSearchStrategy(args: {
+  archive?: Partial<Pick<PersonaArchive, "name" | "content" | "setup">>;
+  prompt?: string;
+}): SentimentHotSearchStrategy {
+  const archive = args.archive || {};
+  const setup = archive.setup || {};
+  const sourceText = [
+    archive.content,
+    (setup as any).genres,
+    (setup as any).interests,
+    (setup as any).trendTopics,
+    (setup as any).personaType,
+    (setup as any).contentTheme,
+    (setup as any).customTopic,
+    args.prompt,
+  ].flatMap((value) => Array.isArray(value) ? value : [value]).map(cleanText).filter(Boolean).join("\n");
+  const prioritized = [
+    ...(Array.isArray((setup as any).trendTopics) ? (setup as any).trendTopics : []),
+    ...(Array.isArray((setup as any).genres) ? (setup as any).genres : []),
+    ...(Array.isArray((setup as any).interests) ? (setup as any).interests : []),
+    (setup as any).contentTheme,
+    (setup as any).customTopic,
+    (setup as any).personaType,
+    archive.content,
+    args.prompt,
+  ].flatMap(localHotKeywordFragments);
+  const terms = [...new Set(prioritized
+    .map((item) => normalizeSentimentSearchKeyword(item, { archiveName: cleanText(archive.name), sourceText }))
+    .filter((item) => isConcreteSearchKeyword(item) && !isPersonaVisualArtifactKeyword(item, sourceText))
+  )].slice(0, 12);
+  if (!terms.length) return emptySentimentHotSearchStrategy();
+
+  const primaryQueries = [...new Set(terms.flatMap((term) => [
+    term,
+    `${term}避坑`,
+    `${term}推荐`,
+    `${term}测评`,
+    `${term}吐槽`,
+    `${term}真实体验`,
+  ]).map((item) => normalizeSentimentSearchKeyword(item, { archiveName: cleanText(archive.name), sourceText }))
+    .filter((item) => isConcreteSearchKeyword(item)))].slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
+  const anchors = terms.slice(0, Math.max(1, Math.min(6, terms.length)));
+  const normalTerms = [...new Set([...terms, ...primaryQueries])].slice(0, SENTIMENT_HOT_NORMAL_KEYWORD_TARGET);
+  return {
+    primaryQueries,
+    broadQueries: normalTerms,
+    ecosystemQueries: normalTerms,
+    requiredAnchorTerms: anchors,
+    normalAnchorTerms: anchors,
+    strictAcceptTerms: [...new Set([...anchors, ...primaryQueries])].slice(0, SENTIMENT_MODEL_KEYWORD_TARGET),
+    normalAcceptTerms: normalTerms,
+    rejectTerms: [],
+    domainSummary: anchors.join("、"),
+    localDeterministic: true,
+  };
+}
+
 function isPersonaVisualArtifactKeyword(keyword: string, sourceText: string): boolean {
   const term = cleanText(keyword);
   if (!term) return false;
@@ -1199,10 +1274,11 @@ function parseSentimentHotSearchStrategy(text: string, args: { archiveName?: str
 }
 
 function sentimentHotStrategyHasModelTerms(strategy: SentimentHotSearchStrategy): boolean {
+  const minimumAnchors = strategy.localDeterministic ? 1 : 3;
   return Array.isArray(strategy.primaryQueries) && strategy.primaryQueries.length >= 5
-    && Array.isArray(strategy.requiredAnchorTerms) && strategy.requiredAnchorTerms.length >= 3
-    && Array.isArray(strategy.normalAnchorTerms) && strategy.normalAnchorTerms.length >= 3
-    && strategy.normalAnchorTerms.filter((term) => term.length >= 2).length >= 2
+    && Array.isArray(strategy.requiredAnchorTerms) && strategy.requiredAnchorTerms.length >= minimumAnchors
+    && Array.isArray(strategy.normalAnchorTerms) && strategy.normalAnchorTerms.length >= minimumAnchors
+    && strategy.normalAnchorTerms.filter((term) => term.length >= 2).length >= Math.min(2, minimumAnchors)
     && Array.isArray(strategy.strictAcceptTerms) && strategy.strictAcceptTerms.length >= 5
     && Array.isArray(strategy.normalAcceptTerms) && strategy.normalAcceptTerms.length >= 5
     && Boolean(cleanText(strategy.domainSummary));
@@ -1607,128 +1683,20 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
   timeoutMs?: number;
   useCache?: boolean;
 }): Promise<SentimentHotSearchStrategy> {
-  const archive = args.archive || {};
-  const setup = archive.setup || {};
-  const personaText = [
-    archive.name ? `人设名称：${archive.name}` : "",
-    archive.content ? `人设简介：${archive.content}` : "",
-    Array.isArray((setup as any).genres) && (setup as any).genres.length ? `内容领域：${(setup as any).genres.join("、")}` : "",
-    Array.isArray((setup as any).interests) && (setup as any).interests.length ? `兴趣参考：${(setup as any).interests.join("、")}` : "",
-    Array.isArray((setup as any).trendTopics) && (setup as any).trendTopics.length ? `平台标签关键词：${(setup as any).trendTopics.join("、")}` : "",
-    (setup as any).personaType ? `身份类型：${(setup as any).personaType}` : "",
-    (setup as any).contentTheme ? `内容主题：${(setup as any).contentTheme}` : "",
-    (setup as any).customTopic ? `补充主题：${(setup as any).customTopic}` : "",
-    ((setup as any).personality || (setup as any).personaPersonality) ? `性格与边界：${(setup as any).personality || (setup as any).personaPersonality}` : "",
-    (setup as any).personaStyle ? `表达风格：${(setup as any).personaStyle}` : "",
-    setup.tweetStyleProfile ? `推文风格：${setup.tweetStyleProfile}` : "",
-    setup.tweetStyleSample ? `推文样例：${setup.tweetStyleSample}` : "",
-    args.writingLocale ? `热点关键词书写语言：${args.writingLocale}` : "",
-    args.prompt ? `本次补充要求：${args.prompt}` : "",
-  ].filter(Boolean).join("\n");
-  if (!personaText.trim()) return emptySentimentHotSearchStrategy();
-  const chineseScript = cleanText((setup as any).chineseScript || (setup as any).script || (setup as any).locale).toLowerCase();
-  const targetMarket = cleanText((setup as any).targetMarket || (setup as any).market || (setup as any).region).toLowerCase();
-  const explicitWritingLocale = cleanText(args.writingLocale).toLowerCase();
-  const prefersTraditional = explicitWritingLocale === "zh-tw"
-    || (!explicitWritingLocale && /traditional|繁|tw|taiwan|hk|hong\s*kong|mo|macau|臺|台灣|香港|澳門/u.test(`${chineseScript} ${targetMarket}`)
-    && !/simplified|简|簡|cn|mainland|china|中国|中國/u.test(`${chineseScript} ${targetMarket}`));
-  const chineseSearchInstruction = prefersTraditional
-    ? "关键词必须使用繁體中文输出，禁止混入简体中文；专有名词除外。搜索词必须是平台上真实用户会直接搜索的高流量词。"
-    : "关键词必须使用简体中文输出，禁止混入繁體中文；专有名词除外。搜索词必须是平台上真实用户会直接搜索的高流量词。";
-  const cacheKey = buildSentimentHotSearchStrategyCacheKey({
-    archive,
-    prompt: args.prompt,
-    writingLocale: args.writingLocale,
-    personaText,
-  });
-  const cached = args.useCache === false ? null : readCachedSentimentHotSearchStrategyForArgs({
-    archive,
-    prompt: args.prompt,
-    writingLocale: args.writingLocale,
-  });
-  if (cached) return cached;
-
-  try {
-    const modelPreference = resolveSentimentHotTextModelPreference();
-    const totalTimeoutMs = Math.max(8_000, args.timeoutMs || 38_000);
-    const configuredModelCount = Math.max(1, getTextUnderstandingModelFallbacks(modelPreference).length);
-    const attemptTimeoutMs = ({ index }: { index: number }) => {
-      if (configuredModelCount <= 1) return totalTimeoutMs - 1_000;
-      if (index === 0) return Math.min(22_000, Math.max(8_000, totalTimeoutMs - 12_000));
-      return Math.min(12_000, Math.max(6_000, totalTimeoutMs - 22_000));
-    };
-    const result = await callTextUnderstandingModelWithFallback(
-      modelPreference,
-      [{
-        role: "user",
-        parts: [{
-          text: [
-            "你是 Threads / Instagram 热点搜索策略模型。你必须为任意新建人设生成可执行搜索策略，不依赖固定行业锚点。",
-            "只输出 JSON 对象，不要解释，不要 Markdown。",
-            "JSON 结构：",
-            "{\"primaryQueries\":[\"...\"],\"broadQueries\":[\"...\"],\"ecosystemQueries\":[\"...\"],\"requiredAnchorTerms\":[\"...\"],\"normalAnchorTerms\":[\"...\"],\"strictAcceptTerms\":[\"...\"],\"normalAcceptTerms\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
-            "所有列表字段必须是 JSON 数组，不能输出字符串、段落、逗号文本或 Markdown；否则本次抓取会判定为失败。",
-            "",
-            "字段数量：primaryQueries 10-14，broadQueries 12-16，ecosystemQueries 8-12，requiredAnchorTerms 4-6，normalAnchorTerms 4-6，strictAcceptTerms 8-12，normalAcceptTerms 10-16，rejectTerms 4-8。",
-            "先以人设名称中明确的职业、行业或主题作为严格主领域；简介里的具体对象、品牌、地区和擅长方向只能作为子主题，不能替代或过度收窄主领域。",
-            "平台标签关键词是已配置的搜索锚点：在不偏离主领域的前提下，优先把它们融入 primaryQueries、broadQueries 和正文接受词；不得用人设记忆替代或扩展搜索范围。",
-            "primaryQueries 必须优先产出近 7 天内更可能出现高互动内容的短搜索词：主领域实体词、热门场景词、翻车/避坑/对比/前后变化/价格争议/真实体验等平台用户会主动讨论的高热词；其余再覆盖简介里的细分专长，总计至少 6 类。",
-            "primaryQueries 前 8 个必须是普通用户会搜索和转发的高互动组合词，优先把主领域实体与翻车、避坑、前后对比、价格、推荐、真实体验、测评、吐槽、踩雷两两组合；不要用内部运营词、从业者自嗨词或难以形成高热度讨论的抽象词。",
-            "broadQueries 覆盖主领域品牌、产品、事件、受众问题、价格选择、使用经验和行业动态；必须避免只有内部从业者才会搜索的冷门话术。",
-            "ecosystemQueries 必须是直接父领域或相邻消费场景里的高热搜索词，但正文仍必须能用 requiredAnchorTerms/strictAcceptTerms 证明属于当前人设主领域，不能漂移到无关行业。",
-            "broadQueries 和 ecosystemQueries 必须包含 4-8 个主领域高互动的受众、社区或对象词；应根据当前人设自动推导，不能套用固定行业词。",
-            "strictAcceptTerms 是严格模式可接受正文信号，必须覆盖主领域实体、典型服务/产品、真实场景和用户痛点；normalAcceptTerms 可覆盖直接父领域但仍需能回到主领域。",
-            "requiredAnchorTerms 是正文必须命中的主领域实体词，应优先来自人设名称所表达的职业或行业，必须能排除同名或相邻领域；禁止营养、健康、经验、攻略、比较等泛词。",
-            "normalAnchorTerms 是普通模式可接受的直接父领域对象类别：每项 2-4 个汉字，第一项必须是最能唯一标识直接父领域的实体类别；禁止职业名、动作、抽象概念和细分产品组合，必须比 requiredAnchorTerms 宽一层但仍排除无关产业。",
-            "rejectTerms 必须针对当前关键词最容易误召回的其他行业、同名实体和相邻但不属于直接父领域的主题，不能排除主领域内容。",
-            "严格模式关键词数量不能少，只用主领域同义词和场景词收口；普通模式可扩展到直接父领域，但不能漂移到无关产业。",
-            "每个搜索词脱离上下文后仍应明确属于该领域。细分职业优先覆盖普通受众高频讨论的实体词、场景词、经验词、互动词和真实痛点，避免只有内部从业者才会搜索的低流量长短语。",
-            "不要把 3 个以上意图词硬拼成一句搜索词；primaryQueries 和 broadQueries 每项优先 2-8 个汉字，最多 12 个汉字，必要时用短词而不是长句。",
-            "避免把聊天、互动、日常、趣事、社区、客流、爱好、手工、穿搭、围裙、工具这类低流量或视觉词排在前面；只有当它们是该领域真实高热搜索对象时才可保留到靠后位置。",
-            chineseSearchInstruction,
-            "不要输出人格、语气、外貌、服饰、道具、姿势、图片视觉描述、自我介绍或推理过程；除非人设主领域本身就是服装/摄影/造型，否则这些都不是热点搜索词。",
-            "",
-            "当前人设资料：",
-            personaText,
-          ].join("\n"),
-        }],
-      }],
-      { temperature: 0.1, maxOutputTokens: 768, responseMimeType: "application/json" },
-      buildAbortSignalTimeout(totalTimeoutMs),
-      {
-        isUsableResponse: (data) => {
-          const candidate = parseSentimentHotSearchStrategy(extractText(data), {
-            archiveName: cleanText(archive.name),
-            sourceText: personaText,
-          });
-          return sentimentHotStrategyHasModelTerms(candidate)
-            && sentimentHotStrategyUsesThreadsChinese(candidate);
-        },
-        isRetryableError: isTextModelFallbackError,
-        attemptTimeoutMs,
-        onFallback: ({ from, to, error }) => {
-          console.info(`[sentiment_hot_model_fallback] from=${JSON.stringify(from)} to=${JSON.stringify(to)} error=${JSON.stringify(error)}`);
-        },
-      },
-    );
-    const strategy = parseSentimentHotSearchStrategy(extractText(result.data), {
-      archiveName: cleanText(archive.name),
-      sourceText: personaText,
-    });
-    if (sentimentHotStrategyHasModelTerms(strategy)) {
-      console.info(`[sentiment_hot_model_strategy] model=${JSON.stringify(result.model)} domain=${JSON.stringify(strategy.domainSummary)}`);
-      writeCachedSentimentHotSearchStrategy(cacheKey, strategy);
-      return strategy;
-    }
-    args.warnings.push("模型未返回符合规范的热点关键词，本次未执行抓取；请稍后重试。");
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    args.warnings.push(
-      /timeout|timed\s*out|abort|超时|超時/i.test(detail)
-        ? "热点关键词生成超时，本次未执行抓取；请稍后重试。"
-        : "热点关键词服务暂时不可用，本次未执行抓取；请稍后重试。",
-    );
+  const strategy = buildLocalSentimentHotSearchStrategy({ archive: args.archive, prompt: args.prompt });
+  if (sentimentHotStrategyHasModelTerms(strategy) && sentimentHotStrategyUsesThreadsChinese(strategy)) {
+    console.info(`[sentiment_hot_local_strategy] domain=${JSON.stringify(strategy.domainSummary)}`);
+    const archive = args.archive || {};
+    const personaText = [archive.content, JSON.stringify(archive.setup || {}), args.prompt].filter(Boolean).join("\n");
+    writeCachedSentimentHotSearchStrategy(buildSentimentHotSearchStrategyCacheKey({
+      archive,
+      prompt: args.prompt,
+      writingLocale: args.writingLocale,
+      personaText,
+    }), strategy);
+    return strategy;
   }
+  args.warnings.push("未找到可用于公开热点搜索的具体主题；请在人设档案或平台标签中补充领域、兴趣或主题关键词。");
   return emptySentimentHotSearchStrategy();
 }
 
