@@ -10,6 +10,7 @@ installNodePersonaArchiveBridge();
 
 const require = createRequire(import.meta.url);
 const Database = require("better-sqlite3");
+const METRIC_REFRESH_ATTEMPTS = 2;
 
 function normalizeThreadsUsername(value: unknown): string {
   return String(value || "")
@@ -571,11 +572,58 @@ function hasUsableMetrics(metrics: any): boolean {
 
 function isCompleteMetrics(metrics: any): boolean {
   const scannedPosts = Number(metrics?.scannedPosts || 0);
+  const refreshedAt = String(metrics?.refreshedAt || "").trim();
   return metrics?.complete === true
     && metrics?.scope === "authenticated_full_profile"
     && scannedPosts > 0
     && Array.isArray(metrics?.postMetrics)
-    && metrics.postMetrics.length >= scannedPosts;
+    && metrics.postMetrics.length >= scannedPosts
+    && Number.isFinite(Date.parse(refreshedAt));
+}
+
+async function retryIncompleteMetricFetch(
+  fetchMetric: () => Promise<any>,
+  isComplete: (metrics: any) => boolean,
+): Promise<{ metrics: any; attempts: number; complete: boolean }> {
+  let metrics: any = null;
+  let lastError = "";
+  for (let attempts = 1; attempts <= METRIC_REFRESH_ATTEMPTS; attempts += 1) {
+    try {
+      metrics = await fetchMetric();
+      if (isComplete(metrics)) return { metrics, attempts, complete: true };
+    } catch (error: any) {
+      lastError = error instanceof Error ? error.message : String(error || "刷新失败");
+    }
+    if (attempts < METRIC_REFRESH_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 350));
+  }
+  return {
+    metrics: metrics || { refreshedAt: new Date().toISOString(), error: lastError || "未取得完整数据快照。" },
+    attempts: METRIC_REFRESH_ATTEMPTS,
+    complete: false,
+  };
+}
+
+function mergeCompletedMetricSnapshots(previousMetrics: any, metric: any): any[] {
+  const byDay = new Map<string, any>();
+  for (const snapshot of (Array.isArray(previousMetrics?.snapshots) ? previousMetrics.snapshots : [])) {
+    const refreshedAt = String(snapshot?.refreshedAt || snapshot?.refreshed_at || "").trim();
+    if (Number.isFinite(Date.parse(refreshedAt))) byDay.set(refreshedAt.slice(0, 10), { ...snapshot, refreshedAt });
+  }
+  const refreshedAt = String(metric?.refreshedAt || "").trim();
+  if (Number.isFinite(Date.parse(refreshedAt))) {
+    byDay.set(refreshedAt.slice(0, 10), {
+      refreshedAt,
+      followers: Number(metric?.followers || 0),
+      likes: Number(metric?.likes || 0),
+      comments: Number(metric?.comments || 0),
+      shares: Number(metric?.shares || 0),
+      reposts: Number(metric?.reposts || 0),
+      views: Number(metric?.views || 0),
+    });
+  }
+  return [...byDay.values()]
+    .sort((left, right) => String(left.refreshedAt).localeCompare(String(right.refreshedAt)))
+    .slice(-1095);
 }
 
 function sentimentAuthStatusIsUsable(status: any): boolean {
@@ -628,15 +676,22 @@ async function main() {
       try {
         const previousProfileDir = process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
         let metrics: any;
+        let refreshAttempt: { metrics: any; attempts: number; complete: boolean };
         try {
           if (target.profileDir) {
             process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR = target.profileDir;
           } else {
             delete process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
           }
-          metrics = useRssHub
-            ? await fetchThreadsProfileHotMetricsViaRssHub(username)
-            : await fetchThreadsProfileHotMetrics(username);
+          refreshAttempt = await retryIncompleteMetricFetch(
+            () => useRssHub
+              ? fetchThreadsProfileHotMetricsViaRssHub(username)
+              : fetchThreadsProfileHotMetrics(username),
+            (candidate) => useRssHub
+              ? candidate?.complete === true && Number.isFinite(Date.parse(String(candidate?.refreshedAt || "")))
+              : isCompleteMetrics(candidate),
+          );
+          metrics = refreshAttempt.metrics;
         } finally {
           if (previousProfileDir) {
             process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR = previousProfileDir;
@@ -648,7 +703,7 @@ async function main() {
         const existingHotMetrics = setup.hotMetrics || {};
         const previousMetrics = existingHotMetrics[key] || {};
         const usable = hasUsableMetrics(metrics);
-        const complete = useRssHub ? metrics.complete === true : isCompleteMetrics(metrics);
+        const complete = refreshAttempt.complete;
         let mergedPostMetrics = Array.isArray(metrics.postMetrics)
           ? mergePostMetrics(previousMetrics, metrics.postMetrics)
           : Array.isArray(previousMetrics.postMetrics) ? previousMetrics.postMetrics : [];
@@ -691,6 +746,7 @@ async function main() {
               complete: true,
               scope: useRssHub ? "rsshub_feed_monitor" : "authenticated_full_profile",
               refreshedAt: metrics.refreshedAt,
+              attemptedAt: metrics.refreshedAt,
               error: undefined,
             }
           : {
@@ -703,7 +759,8 @@ async function main() {
               feedUrl: metrics.feedUrl,
               complete: false,
               scope: metrics.scope,
-              refreshedAt: metrics.refreshedAt,
+              refreshedAt: previousMetrics.refreshedAt,
+              attemptedAt: metrics.refreshedAt,
               posts: mergedRows.length ? Math.max(Number(metrics.posts || 0), mergedRows.length) : metrics.posts,
               scannedPosts: mergedRows.length ? Math.max(Number(metrics.scannedPosts || 0), mergedRows.length) : metrics.scannedPosts,
               ...(mergedRows.length ? {
@@ -716,6 +773,7 @@ async function main() {
               } : {}),
               error: metrics.error || (usable ? "本次只读取到局部资料，未覆盖为完整热点数据。" : "未读取到可用热点数据。"),
             };
+        if (complete) nextMetric.snapshots = mergeCompletedMetricSnapshots(previousMetrics, nextMetric);
         const updatedAt = new Date().toISOString();
         if (!threadsAccountPoolBindingIsCurrent(archive.id, target)) {
           results.push({
@@ -757,6 +815,7 @@ async function main() {
           ok: complete,
           partial: !complete,
           targetSource: target.source,
+          attempts: refreshAttempt.attempts,
           scannedPosts: metrics.scannedPosts || 0,
           postMetrics: Array.isArray(metrics.postMetrics) ? metrics.postMetrics.length : 0,
           message: complete ? "刷新完成" : nextMetric.error,
@@ -777,16 +836,21 @@ async function main() {
         try {
           const previousProfileDir = process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR;
           let metrics: any;
+          let refreshAttempt: { metrics: any; attempts: number; complete: boolean };
           try {
             if (target.profileDir) {
               process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR = target.profileDir;
             } else {
               delete process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR;
             }
-            metrics = await fetchInstagramProfileHotMetrics(
-              username,
-              publishedInstagramUrlsForTarget(archive, target),
+            refreshAttempt = await retryIncompleteMetricFetch(
+              () => fetchInstagramProfileHotMetrics(
+                username,
+                publishedInstagramUrlsForTarget(archive, target),
+              ),
+              isCompleteMetrics,
             );
+            metrics = refreshAttempt.metrics;
           } finally {
             if (previousProfileDir) {
               process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR = previousProfileDir;
@@ -816,6 +880,7 @@ async function main() {
             0,
           );
           const resolvedViewPosts = mergedPostMetrics.filter(postViewResolved).length;
+          const complete = refreshAttempt.complete;
           const nextMetric = {
             ...previousMetrics,
             platform: "instagram",
@@ -837,11 +902,13 @@ async function main() {
             viewMissingPosts: Math.max(0, mergedPostMetrics.length - resolvedViewPosts),
             scannedPosts: Number(metrics.scannedPosts || mergedPostMetrics.length),
             postMetrics: mergedPostMetrics,
-            complete: metrics.complete === true,
+            complete,
             scope: metrics.scope,
-            refreshedAt: metrics.refreshedAt,
+            refreshedAt: complete ? metrics.refreshedAt : previousMetrics.refreshedAt,
+            attemptedAt: metrics.refreshedAt,
             error: metrics.error,
           };
+          if (complete) nextMetric.snapshots = mergeCompletedMetricSnapshots(previousMetrics, nextMetric);
           const saved = updatePersonaArchivePlatformHotMetrics({
             archiveId: archive.id,
             metricKey: key,
@@ -857,8 +924,9 @@ async function main() {
             name: archive.name,
             platform: "instagram",
             username,
-            ok: true,
-            partial: metrics.complete !== true,
+            ok: complete,
+            partial: !complete,
+            attempts: refreshAttempt.attempts,
             scannedPosts: Number(metrics.scannedPosts || 0),
             postMetrics: Array.isArray(metrics.postMetrics) ? metrics.postMetrics.length : 0,
             message: metrics.complete === true ? "Instagram 刷新完成" : metrics.error || "Instagram 近期数据已刷新。",
@@ -870,8 +938,21 @@ async function main() {
     }
   }
 
+  // An unbound platform has no remote account to refresh.  Binding/save races
+  // always retain a username and therefore remain strict failures.
+  const requiredResults = results.filter((item) => !(item.skipped && !String(item.username || "").trim()));
+  const fullyRefreshed = requiredResults.length > 0 && requiredResults.every((item) => item.ok && !item.partial && !item.skipped);
+  const failed = requiredResults.filter((item) => !item.ok || item.partial || item.skipped);
+  const message = fullyRefreshed
+    ? `全量同步完成：${requiredResults.length} 个账号的数据与时间快照已更新。`
+    : (results.some((item) => item.ok)
+      ? `部分同步完成：${requiredResults.length - failed.length}/${requiredResults.length || 0} 个账号已更新；其余账号已局部重试一次。`
+      : `同步未完成：${failed.length}/${requiredResults.length || 0} 个账号未取得完整新快照。`);
   console.log(JSON.stringify({
     ok: results.some((item) => item.ok),
+    complete: fullyRefreshed,
+    status: fullyRefreshed ? "success" : (results.some((item) => item.ok) ? "partial" : "failed"),
+    message,
     refreshed: results.filter((item) => item.ok).length,
     partial: results.filter((item) => item.partial).length,
     skipped: results.filter((item) => item.skipped).length,

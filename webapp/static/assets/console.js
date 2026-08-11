@@ -614,6 +614,7 @@ const state = {
   socialTaskToastKeys: {},
   socialTaskToastBatches: {},
   socialTaskToastTransitions: {},
+  socialTaskIndependentToastIds: new Set(),
   suppressedSocialTaskPromptIds: new Set(),
   liveBrowserManualHandoffDismissed: new Set(),
   socialTaskPersonaRefreshSignatures: {},
@@ -849,6 +850,7 @@ function clearTenantInMemoryState() {
   state.socialTaskToastKeys = {};
   state.socialTaskToastBatches = {};
   state.socialTaskToastTransitions = {};
+  state.socialTaskIndependentToastIds = new Set();
   state.suppressedSocialTaskPromptIds = new Set();
   state.socialTaskPersonaRefreshSignatures = {};
   state.socialBrowserSessions = [];
@@ -2374,6 +2376,13 @@ function showToast(text, ok = true, options = {}) {
     const previousMessage = existingToast.querySelector(".toast-message-text")?.textContent || "";
     const presentationChanged = previousMessage !== message
       || String(existingToast.dataset.toastStatus || "") !== status;
+    if (request.stack) {
+      if (existingToast.classList.contains("is-leaving")) return existingToast;
+      updateToastInPlace(existingToast, request);
+      existingToast.dataset.toastStacked = "true";
+      if (presentationChanged) scheduleToastExpiry(existingToast);
+      return existingToast;
+    }
     const activeTaskStatuses = new Set(["queued", "running", "progress"]);
     const isActiveTaskRefresh = Boolean(options.taskId) && activeTaskStatuses.has(status);
     const isTaskRefresh = (!presentationChanged && Boolean(options.taskId)) || isActiveTaskRefresh;
@@ -5751,7 +5760,20 @@ function socialTaskToastTerminal(task) {
 }
 
 function socialTaskUsesIndependentToast(task) {
-  return Boolean(String(task?.id || "").trim());
+  const taskId = String(task?.id || "").trim();
+  if (!taskId) return false;
+  if (state.socialTaskIndependentToastIds.has(taskId)) return true;
+  const concurrentTaskIds = new Set((state.socialTasks || [])
+    .filter((candidate) => activeSocialAutomationTask(candidate)
+      && ["running", "need_manual"].includes(String(candidate?.status || "").trim()))
+    .map((candidate) => String(candidate?.id || "").trim())
+    .filter(Boolean));
+  if (["running", "need_manual"].includes(String(task?.status || "").trim())) {
+    concurrentTaskIds.add(taskId);
+  }
+  if (concurrentTaskIds.size < 2) return false;
+  concurrentTaskIds.forEach((id) => state.socialTaskIndependentToastIds.add(id));
+  return state.socialTaskIndependentToastIds.has(taskId);
 }
 
 function clearDeliveredToastStates(toastKey) {
@@ -14985,8 +15007,9 @@ function bindSimpleFlowInputs(moduleId) {
     document.querySelectorAll("[data-publish-history-card]").forEach((node) => {
       node.addEventListener("click", (event) => {
         if (event.target.closest("[data-publish-history-view], [data-publish-history-requeue], a")) return;
+        event.stopPropagation();
         state.publishHistoryPreviewId = String(node.dataset.publishHistoryCard || "").trim();
-        renderSimpleFlowModule("publishing");
+        if (!syncPublishHistorySelectionDom()) renderSimpleFlowModule("publishing");
       });
     });
     document.querySelectorAll("[data-publish-history-view]").forEach((node) => {
@@ -17126,6 +17149,22 @@ function syncPublishPreviewSelectionDom() {
   const content = $("simpleContent");
   if (content) content.value = String(activePost?.content || "");
   renderConfirmSummary();
+  return true;
+}
+
+function syncPublishHistorySelectionDom() {
+  const persona = selectedPersona();
+  if (!persona) return false;
+  const activeId = String(state.publishHistoryPreviewId || "").trim();
+  const cards = Array.from(document.querySelectorAll("[data-publish-history-card]"));
+  if (!cards.length) return false;
+  cards.forEach((card) => {
+    const active = String(card.dataset.publishHistoryCard || "") === activeId;
+    card.classList.toggle("is-selected", active);
+    card.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  const preview = document.querySelector(".publish-history-preview");
+  if (preview) preview.outerHTML = renderPublishHistoryPreview(persona);
   return true;
 }
 
@@ -26249,8 +26288,7 @@ function renderAccountPoolCardActions(account, { context = "pool", personaAccoun
     if (activeLoginTask?.id) {
       return `<button type="button" class="primary" ${attribute}="${esc(accountId)}" data-open-login-task-id="${esc(activeLoginTask.id)}">${renderBusyButtonContent("执行中", true, activeLoginTask.created_at || activeLoginTask.updated_at)}</button>`;
     }
-    const boundPersonaId = String(account?.persona_id || "").trim();
-    return `<button type="button" class="primary" ${attribute}="${esc(accountId)}" ${boundPersonaId ? "" : 'disabled title="请先绑定人设后再打开登录"'}>打开登录</button>`;
+    return `<button type="button" class="primary" ${attribute}="${esc(accountId)}">打开登录</button>`;
   };
   if (context === "persona-settings") {
     const changeAction = personaAccountAction ? `<button type="button" class="persona-account-card-action persona-account-card-change" data-persona-account-add data-persona-account-platform="${esc(personaAccountAction.platform || "")}" title="${esc(personaAccountAction.title || "更换当前账号")}" aria-label="${esc(personaAccountAction.title || "更换当前账号")}">${renderPersonaAccountBindingIcon("replace")}<span>更换</span></button>` : "";
@@ -30230,10 +30268,6 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
   }
   const selected = selectedSocialAccount(accountId);
   const platform = selected?.platform || $("socialPlatform")?.value || "threads";
-  if (taskType === "open_login" && !String(selected?.persona_id || personaId || "").trim()) {
-    showMsg(messageId, "请先绑定人设后再打开登录。", false);
-    return;
-  }
   const allowPublishTask = taskType === "publish_post" && state.activeModule === "publishing";
   if (!validateTaskForPlatform(taskType, platform, { includePublish: allowPublishTask })) {
     showMsg(messageId, `${platformLabel(platform)} 当前不支持「${statusLabel(taskType)}」，请切换到可执行任务类型。`, false);
@@ -30935,7 +30969,7 @@ function bindEvents() {
       const historyCard = event.target.closest("[data-publish-history-card]");
       if (historyCard && !event.target.closest("[data-publish-history-view], [data-publish-history-requeue], a")) {
         state.publishHistoryPreviewId = String(historyCard.dataset.publishHistoryCard || "").trim();
-        renderPersonaDetail();
+        if (!syncPublishHistorySelectionDom()) renderPersonaDetail();
         return;
       }
       const historyView = event.target.closest("[data-publish-history-view]");

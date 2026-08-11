@@ -11,6 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     XDG_CACHE_HOME=/data/webapp_data/cache \
     WEBAPP_DATA_DIR=/data/webapp_data \
     APP_RUNTIME_CONFIG_PATH=/data/webapp_data/runtime_config.json \
+    CRM_ENABLED=0 \
     COMMERCIAL_BILLING_ENABLED=1 \
     COMMERCIAL_BILLING_MIGRATE_LEGACY=1 \
     SESSION_COOKIE_SECURE=1 \
@@ -45,8 +46,16 @@ WORKDIR /app/tool_r18
 RUN npm ci \
     && npx playwright install chromium
 
+COPY modules/crm/frontend/package*.json /app/modules/crm/frontend/
+WORKDIR /app/modules/crm/frontend
+RUN npm ci
+
 WORKDIR /app
 COPY . /app
+WORKDIR /app/modules/crm/frontend
+RUN npm run check
+
+WORKDIR /app
 RUN chmod +x /app/docker/entrypoint.sh
 
 VOLUME ["/data"]

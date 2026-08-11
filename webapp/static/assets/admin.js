@@ -385,6 +385,7 @@ const ADMIN_PAGE_LABELS = {
   serviceAccounts: "服务账号",
   proxyMarket: "代理 IP",
   pricing: "套餐与客户额度",
+  crm: "CRM 模块",
   runtime: "系统配置",
   sentimentCookies: "舆情 Cookie",
   account: "账号设置",
@@ -579,6 +580,7 @@ function setActiveAdminPage(page, updateHash = true) {
   if (nextPage === "pricing") {
     void ensureBillingLoaded();
   }
+  if (nextPage === "crm") void loadCrmAdminModule();
   if (nextPage === "overview") void loadGovernanceDashboard();
   if (nextPage === "taxonomy") void loadTaxonomyWorkspace();
   if (nextPage === "audit") void loadAuditEvents();
@@ -622,6 +624,205 @@ function setMsg(id, message, ok = true) {
   if (!node) return;
   node.textContent = message || "";
   node.className = `msg ${ok ? "ok" : "err"}`;
+}
+
+function renderCrmHealth(payload) {
+  const node = el("crmHealthSummary");
+  if (!node) return;
+  const settings = payload?.settings || {};
+  const checks = payload?.checks || {};
+  const rows = [
+    ["综合状态", payload?.status || "unknown"],
+    ["环境硬开关", settings.hard_enabled ? "已启用" : "未启用"],
+    ["数据库", checks.database ? "正常" : "异常"],
+    ["CRM 数据结构", checks.database_schema ? "完整" : "缺表或版本异常"],
+    ["CRM 静态资源", checks.static_html && checks.static_assets ? "正常" : "异常"],
+    ["媒体目录", checks.media_writable ? "可写" : "不可写"],
+    ["磁盘", checks.disk_ok ? `${Number(checks.disk_free_bytes || 0).toLocaleString("zh-CN")} bytes 可用` : "空间不足"],
+    ["追踪签名密钥", checks.tracking_secret ? "已配置" : "未配置"],
+    ["社媒 Worker", checks.worker_adapter_registered ? "已注册" : "未注册"],
+    ["计费适配器", checks.billing_adapter_registered ? "已注册" : "未注册"],
+    ["调度器租约", checks.scheduler_lease ? "正常" : "未持有"],
+    ["全局开关", settings.enabled ? "已启用" : "未启用"],
+    ["维护模式", settings.maintenance ? "开启" : "关闭"],
+    ["紧急暂停", settings.emergency_pause ? "开启" : "关闭"],
+    ["待人工复核动作", Number(payload?.unknown_actions || 0).toLocaleString("zh-CN")],
+  ];
+  node.replaceChildren(...rows.map(([label, value]) => {
+    const row = document.createElement("div");
+    const strong = document.createElement("strong");
+    const span = document.createElement("span");
+    strong.textContent = label;
+    span.textContent = value;
+    row.append(strong, span);
+    return row;
+  }));
+}
+
+async function loadCrmImportStatus(userId = el("crmImportUserId")?.value) {
+  const targetId = Math.max(0, Number(userId || 0));
+  const query = targetId ? `?user_id=${encodeURIComponent(targetId)}` : "";
+  const payload = await api(`/api/admin/modules/crm/import-status${query}`);
+  const node = el("crmImportStatus");
+  if (node) node.textContent = JSON.stringify(payload?.items || [], null, 2);
+  return payload;
+}
+
+async function loadCrmAdminModule() {
+  try {
+    const [settings, health] = await Promise.all([
+      api("/api/admin/modules/crm"),
+      api("/api/admin/modules/crm/health"),
+    ]);
+    if (el("crmGlobalEnabled")) el("crmGlobalEnabled").checked = Boolean(settings?.enabled);
+    if (el("crmMaintenance")) el("crmMaintenance").checked = Boolean(settings?.maintenance);
+    if (el("crmEmergencyPause")) el("crmEmergencyPause").checked = Boolean(settings?.emergency_pause);
+    renderCrmHealth(health);
+    setMsg("crmGlobalMsg", settings?.hard_enabled ? "CRM 策略已同步。" : "环境硬开关 CRM_ENABLED 尚未启用。", Boolean(settings?.hard_enabled));
+    await loadCrmImportStatus();
+  } catch (err) {
+    setMsg("crmGlobalMsg", getErrorMessage(err), false);
+  }
+}
+
+async function saveCrmGlobalSettings(event) {
+  event.preventDefault();
+  const desired = {
+    enabled: Boolean(el("crmGlobalEnabled")?.checked),
+    maintenance: Boolean(el("crmMaintenance")?.checked),
+    emergency_pause: Boolean(el("crmEmergencyPause")?.checked),
+  };
+  let confirmed = false;
+  if (!desired.enabled || desired.maintenance || desired.emergency_pause) {
+    const decision = await requestAdminPublicAction({ title: "确认 CRM 策略暂停", message: "关闭模块、开启维护或紧急暂停会让后续 CRM 父流程按策略暂停。确认保存吗？", confirmLabel: "确认保存并暂停", tone: "danger" });
+    if (!decision.confirmed) return;
+    confirmed = true;
+  }
+  try {
+    const payload = await api("/api/admin/modules/crm", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...desired, confirmed }),
+    });
+    setMsg("crmGlobalMsg", `CRM 策略已保存；策略暂停流程 ${Number(payload?.paused_workflows || 0)} 个。`, true);
+    await loadCrmAdminModule();
+  } catch (err) {
+    setMsg("crmGlobalMsg", getErrorMessage(err), false);
+  }
+}
+
+let crmUserAccessLoadedId = 0;
+let crmUserAccessLoadedEnabled = false;
+
+function resetCrmUserAccessEditor() {
+  crmUserAccessLoadedId = 0;
+  crmUserAccessLoadedEnabled = false;
+  if (el("btnCrmUserAccessSave")) el("btnCrmUserAccessSave").disabled = true;
+  setMsg("crmUserAccessMsg", "请先读取该客户当前授权。", true);
+}
+
+async function loadCrmUserAccess() {
+  const userId = Math.max(0, Number(el("crmUserAccessId")?.value || 0));
+  if (!userId) return setMsg("crmUserAccessMsg", "请填写有效客户 ID。", false);
+  if (el("btnCrmUserAccessSave")) el("btnCrmUserAccessSave").disabled = true;
+  try {
+    const payload = await api(`/api/admin/users/${userId}/modules/crm`);
+    const enabled = Boolean(payload?.user_access ?? payload?.enabled);
+    crmUserAccessLoadedId = userId;
+    crmUserAccessLoadedEnabled = enabled;
+    if (el("crmUserAccessEnabled")) el("crmUserAccessEnabled").checked = enabled;
+    if (el("btnCrmUserAccessSave")) el("btnCrmUserAccessSave").disabled = false;
+    setMsg("crmUserAccessMsg", `已读取客户 ${userId}：CRM ${enabled ? "已授权" : "未授权"}。`, true);
+  } catch (err) {
+    crmUserAccessLoadedId = 0;
+    setMsg("crmUserAccessMsg", getErrorMessage(err), false);
+  }
+}
+
+async function saveCrmUserAccess(event) {
+  event.preventDefault();
+  const userId = Math.max(0, Number(el("crmUserAccessId")?.value || 0));
+  if (!userId) return setMsg("crmUserAccessMsg", "请填写有效客户 ID。", false);
+  if (userId !== crmUserAccessLoadedId) return setMsg("crmUserAccessMsg", "客户 ID 已变化，请重新读取当前授权后再保存。", false);
+  const enabled = Boolean(el("crmUserAccessEnabled")?.checked);
+  if (crmUserAccessLoadedEnabled && !enabled) {
+    const decision = await requestAdminPublicAction({
+      title: "回收 CRM 权限",
+      message: `回收客户 ${userId} 的 CRM 权限后，后续父流程会按策略暂停。确认继续吗？`,
+      confirmLabel: "确认回收权限",
+      tone: "danger",
+    });
+    if (!decision.confirmed) return;
+  }
+  try {
+    const payload = await api(`/api/admin/users/${userId}/modules/crm`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    crmUserAccessLoadedEnabled = Boolean(payload?.enabled);
+    if (el("crmUserAccessEnabled")) el("crmUserAccessEnabled").checked = crmUserAccessLoadedEnabled;
+    setMsg("crmUserAccessMsg", payload?.enabled ? "已授予 CRM 权限。" : "已回收 CRM 权限并暂停后续流程。", true);
+  } catch (err) {
+    setMsg("crmUserAccessMsg", getErrorMessage(err), false);
+  }
+}
+
+async function runCrmImportDryRun(event) {
+  event.preventDefault();
+  const userId = Math.max(0, Number(el("crmImportUserId")?.value || 0));
+  const source = String(el("crmImportSource")?.value || "").trim();
+  if (!userId || !source) return setMsg("crmImportMsg", "请填写目标客户 ID 和导入源文件名。", false);
+  try {
+    const payload = await api("/api/admin/modules/crm/import/dry-run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: userId, source }),
+    });
+    if (el("crmImportBatchId")) el("crmImportBatchId").value = payload?.id || "";
+    setMsg("crmImportMsg", `dry-run 完成：${payload?.id || "未返回批次 ID"}`, true);
+    await loadCrmImportStatus(userId);
+  } catch (err) {
+    setMsg("crmImportMsg", getErrorMessage(err), false);
+  }
+}
+
+async function activateCrmImport(event) {
+  event.preventDefault();
+  const userId = Math.max(0, Number(el("crmImportUserId")?.value || 0));
+  const batchId = String(el("crmImportBatchId")?.value || "").trim();
+  if (!userId || !batchId) return setMsg("crmImportMsg", "请填写目标客户 ID 和批次 ID。", false);
+  let status;
+  try { status = await loadCrmImportStatus(userId); } catch (err) { return setMsg("crmImportMsg", getErrorMessage(err), false); }
+  const batch = (status?.items || []).find((item) => String(item?.id || "") === batchId);
+  const blocking = batch?.report?.blocking_errors || [];
+  if (!batch || String(batch.status || "") !== "dry_run") return setMsg("crmImportMsg", "批次不存在或不是可激活的 dry-run 状态。", false);
+  if (blocking.length) return setMsg("crmImportMsg", `批次仍有 ${blocking.length} 个阻断错误，不能激活。`, false);
+  const decision = await requestAdminPublicAction({ title: "激活 CRM 历史数据", message: `将批次 ${batchId} 激活到客户 ${userId}。源哈希：${String(batch.source_sha256 || "未知").slice(0, 16)}…，确认继续吗？`, confirmLabel: "确认激活", tone: "danger" });
+  if (!decision.confirmed) return;
+  try {
+    const payload = await api("/api/admin/modules/crm/import/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: userId, batch_id: batchId, confirmed: true }),
+    });
+    setMsg("crmImportMsg", `导入批次 ${payload?.id || batchId} 已激活。`, true);
+    await loadCrmImportStatus(userId);
+  } catch (err) {
+    setMsg("crmImportMsg", getErrorMessage(err), false);
+  }
+}
+
+async function dismissCrmImport() {
+  const userId = Math.max(0, Number(el("crmImportUserId")?.value || 0));
+  const batchId = String(el("crmImportBatchId")?.value || "").trim();
+  if (!userId || !batchId) return setMsg("crmImportMsg", "请填写目标客户 ID 和批次 ID。", false);
+  const decision = await requestAdminPublicAction({ title: "废弃 CRM 导入批次", message: `将清理批次 ${batchId} 尚未激活的 staging 数据，并重新计算迁移锁。确认继续吗？`, confirmLabel: "确认废弃", tone: "danger" });
+  if (!decision.confirmed) return;
+  try {
+    await api(`/api/admin/modules/crm/import/${encodeURIComponent(batchId)}/dismiss`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: userId, confirmed: true }) });
+    setMsg("crmImportMsg", `批次 ${batchId} 已废弃，迁移状态已重算。`, true); await loadCrmImportStatus(userId); await loadCrmAdminModule();
+  } catch (err) { setMsg("crmImportMsg", getErrorMessage(err), false); }
 }
 
 function showAdminPublicPrompt({ title = "操作提示", message = "", ok = true, busy = false } = {}) {
@@ -1773,7 +1974,7 @@ const TASK_TYPE_LABELS = {
   persona_post_image: "推文生成配图",
   persona_post_generation: "AI 推文草稿生成",
 };
-const ADMIN_PAGES = new Set(["overview", "users", "taxonomy", "tasks", "audit", "security", "serviceAccounts", "proxyMarket", "pricing", "runtime", "sentimentCookies", "account"]);
+const ADMIN_PAGES = new Set(["overview", "users", "taxonomy", "tasks", "audit", "security", "serviceAccounts", "proxyMarket", "pricing", "crm", "runtime", "sentimentCookies", "account"]);
 const ADMIN_PAGE_ALIASES = {
   secOverview: "overview",
   secUsers: "users",
@@ -1784,6 +1985,7 @@ const ADMIN_PAGE_ALIASES = {
   secServiceAccounts: "serviceAccounts",
   secProxyMarket: "proxyMarket",
   secPricing: "pricing",
+  secCrm: "crm",
   secRuntime: "runtime",
   secSentimentCookies: "sentimentCookies",
   secAccount: "account",
@@ -9405,6 +9607,30 @@ function bindBillingActions() {
 
 function bindActions() {
   bindBillingActions();
+  el("btnCrmAdminRefresh")?.addEventListener("click", () => void loadCrmAdminModule());
+  el("crmGlobalSettingsForm")?.addEventListener("submit", saveCrmGlobalSettings);
+  el("btnCrmUserAccessLoad")?.addEventListener("click", () => void loadCrmUserAccess());
+  el("crmUserAccessId")?.addEventListener("input", resetCrmUserAccessEditor);
+  el("crmUserAccessForm")?.addEventListener("submit", saveCrmUserAccess);
+  el("crmImportDryRunForm")?.addEventListener("submit", runCrmImportDryRun);
+  el("crmImportActivateForm")?.addEventListener("submit", activateCrmImport);
+  el("btnCrmImportDismiss")?.addEventListener("click", () => void dismissCrmImport());
+  el("btnCrmEmergencyPause")?.addEventListener("click", async () => {
+    const decision = await requestAdminPublicAction({
+      title: "紧急暂停 CRM",
+      message: "当前提交中的单动作将按安全边界收尾，其余 CRM 父流程会暂停。确认继续吗？",
+      confirmLabel: "确认紧急暂停",
+      tone: "danger",
+    });
+    if (!decision.confirmed) return;
+    try {
+      const payload = await api("/api/admin/modules/crm/emergency-pause", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirmed: true }) });
+      setMsg("crmGlobalMsg", `已紧急暂停；暂停流程 ${Number(payload?.paused_workflows || 0)} 个。`, true);
+      await loadCrmAdminModule();
+    } catch (err) {
+      setMsg("crmGlobalMsg", getErrorMessage(err), false);
+    }
+  });
   bindModelTabs();
   bindTextModelContentTabs();
   bindRunningHubSlotTabs();

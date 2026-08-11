@@ -64,8 +64,6 @@ from .system_proxy_pool import (
     switch_system_proxy_in_transaction,
     system_proxy_item_id,
 )
-
-
 BUSINESS_TIMEZONE_NAME = "Asia/Shanghai"
 try:
     BUSINESS_TIMEZONE = ZoneInfo(BUSINESS_TIMEZONE_NAME)
@@ -85,6 +83,22 @@ def _parse_business_iso_timestamp(value: Any) -> int:
     return int(parsed.timestamp())
 
 
+INSTAGRAM_GROUP_READ_TASK_TYPES = {
+    "instagram_group_candidates_inspect",
+    "instagram_recent_conversations_inspect",
+    "instagram_conversation_controls_inspect",
+    "instagram_group_members_inspect",
+    "instagram_group_status_inspect",
+}
+INSTAGRAM_GROUP_WRITE_TASK_TYPES = {
+    "instagram_group_create",
+    "instagram_group_post",
+    "instagram_group_settings_update",
+    "instagram_group_members_add",
+}
+INSTAGRAM_GROUP_TASK_TYPES = INSTAGRAM_GROUP_READ_TASK_TYPES | INSTAGRAM_GROUP_WRITE_TASK_TYPES
+
+
 SOCIAL_TASK_TYPES = {
     "check_login",
     "open_login",
@@ -92,6 +106,8 @@ SOCIAL_TASK_TYPES = {
     "browse_profile",
     "instagram_warmup",
     "instagram_auto_reply",
+    "instagram_relationship_verify",
+    *INSTAGRAM_GROUP_TASK_TYPES,
     "threads_warmup",
     "threads_auto_reply",
     "publish_post",
@@ -104,6 +120,8 @@ SOCIAL_TASK_TYPES = {
 SOCIAL_TASK_REQUIRED_PLATFORM = {
     "instagram_warmup": "instagram",
     "instagram_auto_reply": "instagram",
+    "instagram_relationship_verify": "instagram",
+    **{task_type: "instagram" for task_type in INSTAGRAM_GROUP_TASK_TYPES},
     "threads_warmup": "threads",
     "threads_auto_reply": "threads",
 }
@@ -192,6 +210,8 @@ def social_task_billing_sku(platform: str, task_type: str, payload: dict[str, An
         "repost_post",
     }:
         return "threads_auto_reply_batch"
+    if clean_task_type in INSTAGRAM_GROUP_WRITE_TASK_TYPES:
+        return "crm_group_invite_batch"
     return ""
 
 
@@ -2508,8 +2528,6 @@ def register_social_automation_routes(app: FastAPI) -> None:
         user: dict[str, Any] = Depends(get_current_user),
     ):
         account = _require_account_access(account_id, user)
-        if not str(account["persona_id"] or "").strip():
-            raise HTTPException(status_code=409, detail="请先绑定人设后再打开登录")
         wait_seconds = max(3600, int(os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600")))
         body = payload if isinstance(payload, dict) else {}
         task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
@@ -2673,8 +2691,6 @@ def register_social_automation_routes(app: FastAPI) -> None:
         _reject_external_automation_plan_metadata(payload.payload)
         _validate_user_task_media_paths(payload.payload, user)
         if str(payload.task_type or "").strip() == "open_login":
-            if not str(account["persona_id"] or "").strip():
-                raise HTTPException(status_code=409, detail="请先绑定人设后再打开登录")
             if _open_login_auto_submit_mode(payload.payload) is not True:
                 raise HTTPException(status_code=409, detail="登录任务必须从自动模式启动；运行后可随时切换人工接管")
             task_payload = payload.payload if isinstance(payload.payload, dict) else {}
@@ -3179,7 +3195,7 @@ def _live_browser_task_input_allowed(row: Any) -> bool:
     if status == "need_manual":
         return True
     task_type = str(task.get("task_type") or "").strip()
-    if status != "running" or task_type not in {"open_login", "publish_post"}:
+    if status != "running" or task_type not in {"open_login", "publish_post", "direct_message"}:
         return False
     running_mode = _running_task_login_mode(str(task.get("id") or ""))
     if running_mode == "manual":
@@ -4756,7 +4772,7 @@ def request_live_browser_manual_takeover(session_id: str) -> dict[str, Any]:
         ).fetchone()
     status = str(row["status"] or "").strip().lower() if row else ""
     task_type = str(row["task_type"] or "").strip() if row else ""
-    if not row or status not in {"running", "need_manual"} or task_type not in {"open_login", "publish_post"}:
+    if not row or status not in {"running", "need_manual"} or task_type not in {"open_login", "publish_post", "direct_message"}:
         raise HTTPException(status_code=409, detail="当前浏览器任务不支持人工接管")
     already_manual = status == "need_manual" or bool(getattr(ack_event, "is_set", lambda: False)())
     timeout_event.clear()
@@ -5905,8 +5921,30 @@ def _deletable_account_ids(conn: Any, account_ids: list[str]) -> set[str]:
     return {account_id for account_id in clean_ids if account_id not in active_ids}
 
 
+def _task_outcome_requires_review(task: Any) -> bool:
+    if task is None:
+        return False
+    try:
+        item = dict(task)
+    except Exception:
+        return False
+    result = item.get("result") if isinstance(item.get("result"), dict) else _loads(item.get("result_json"), {})
+    if isinstance(result, dict) and (
+        bool(result.get("action_outcome_unknown")) or bool(result.get("publish_outcome_unknown"))
+    ):
+        return True
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else _loads(item.get("payload_json"), {})
+    return bool(
+        str((payload or {}).get("_crm_action_id") or "")
+        and str((payload or {}).get("_billing_submission_state") or "") in {"submitting", "submitted"}
+        and str(item.get("status") or "") in {"failed", "cancelled"}
+    )
+
+
 def _release_task_billing_reservation(conn: sqlite3.Connection, task: Any, *, now: int | None = None) -> bool:
     if task is None or "billing_reservation_id" not in task.keys():
+        return False
+    if _task_outcome_requires_review(task):
         return False
     reservation_id = str(task["billing_reservation_id"] or "").strip()
     if not reservation_id:
@@ -5945,6 +5983,8 @@ def _settle_or_release_task_billing_reservation(
     now: int | None = None,
 ) -> bool:
     if task is None or "billing_reservation_id" not in task.keys():
+        return False
+    if _task_outcome_requires_review(task):
         return False
     reservation_id = str(task["billing_reservation_id"] or "").strip()
     if not reservation_id:
@@ -6149,6 +6189,93 @@ def create_account_task(
     )
 
 
+def create_crm_relationship_task_in_transaction(
+    conn: sqlite3.Connection,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    """Queue a tenant-scoped, free, read-only relationship verification.
+
+    The caller owns the transaction and should wake the normal social worker
+    only after commit.  The task has zero retries; missing browser evidence is
+    persisted as ``unknown`` by the completion path.
+    """
+
+    if not conn.in_transaction:
+        raise RuntimeError("CRM relationship task adapter requires an active transaction")
+    user_id = int(request.get("user_id") or 0)
+    account_id = str(request.get("account_id") or "").strip()
+    if user_id <= 0 or not account_id:
+        raise HTTPException(status_code=422, detail="CRM relationship task requires user_id and account_id")
+    account = conn.execute(
+        "SELECT * FROM social_accounts WHERE id=? AND user_id=?",
+        (account_id, user_id),
+    ).fetchone()
+    if account is None:
+        raise HTTPException(status_code=404, detail="CRM social account not found")
+    if str(account["platform"] or "").strip().lower() != "instagram":
+        raise HTTPException(status_code=400, detail="relationship verification requires an Instagram account")
+    if str(account["status"] or "").strip().lower() == "disabled":
+        raise HTTPException(status_code=409, detail="CRM social account is disabled")
+    if str(account["health_status"] or "").strip().lower() == "banned":
+        raise HTTPException(status_code=409, detail="CRM social account is banned")
+    _require_active_owner_user(conn, user_id)
+    clean_payload = _validate_instagram_relationship_verify_payload(
+        dict(request.get("payload") or {}),
+        account=account,
+    )
+    if clean_payload.get("crm_relationship_verify") is not True:
+        raise HTTPException(status_code=422, detail="CRM relationship task requires trusted lead mapping")
+    for row in conn.execute(
+        """
+        SELECT id,payload_json FROM social_automation_tasks
+        WHERE user_id=? AND account_id=? AND task_type='instagram_relationship_verify'
+          AND status IN ('preparing','queued','running','need_manual')
+        ORDER BY created_at DESC LIMIT 20
+        """,
+        (user_id, account_id),
+    ).fetchall():
+        existing = _loads(row["payload_json"], {})
+        if (
+            isinstance(existing, dict)
+            and existing.get("target_usernames") == clean_payload["target_usernames"]
+            and existing.get("lead_ids") == clean_payload["lead_ids"]
+        ):
+            return {"social_task_id": str(row["id"]), "status": "queued", "reused": True}
+    now = _now()
+    task_id = _NEW_ID("social_task")
+    persona_id = str(account["persona_id"] or "").strip()
+    conn.execute(
+        """
+        INSERT INTO social_automation_tasks(
+          id,user_id,persona_id,account_id,platform,task_type,priority,status,
+          scheduled_at,payload_json,result_json,max_retries,billing_reservation_id,
+          created_by,created_at,updated_at
+        ) VALUES (?,?,?,?,?,'instagram_relationship_verify',?,'queued',?,?,'{}',0,'','crm',?,?)
+        """,
+        (
+            task_id,
+            user_id,
+            persona_id,
+            account_id,
+            "instagram",
+            max(1, min(int(request.get("priority") or 40), 100)),
+            now,
+            json.dumps(clean_payload, ensure_ascii=False),
+            now,
+            now,
+        ),
+    )
+    _insert_log(
+        conn,
+        task_id,
+        "info",
+        "crm_relationship_queued",
+        "CRM Instagram relationship verification added to the social automation queue",
+        {"target_count": len(clean_payload["target_usernames"]), "retryable": False},
+    )
+    return {"social_task_id": task_id, "status": "queued", "reused": False}
+
+
 def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool = False) -> dict[str, Any]:
     billing_admin_waived = bool(billing_admin_waived or _consume_admin_billing_waiver(payload))
     batch_context = _consume_trusted_batch_task(payload)
@@ -6186,6 +6313,27 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
                 status_code=400,
                 detail=f"任务类型 {task_type} 仅支持 {required_platform} 账号",
             )
+        if task_type == "instagram_relationship_verify":
+            task_payload = _validate_instagram_relationship_verify_payload(
+                task_payload,
+                account=account,
+            )
+        elif task_type in INSTAGRAM_GROUP_TASK_TYPES:
+            if task_payload.get("media_paths") not in (None, [], ()) or task_payload.get("mediaPath"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Instagram group media must be selected through the tenant-safe CRM media API",
+                )
+            try:
+                from .crm.instagram_groups import validate_task_payload as validate_instagram_group_task_payload
+
+                task_payload = validate_instagram_group_task_payload(
+                    task_type,
+                    task_payload,
+                    dict(account),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         proxy_id = str(account["proxy_id"] or "").strip()
         if proxy_id:
             proxy = conn.execute(
@@ -6206,8 +6354,6 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
         owner_user_id = int(account["user_id"] or 0)
         _require_active_owner_user(conn, owner_user_id)
         account_persona_id = str(account["persona_id"] or "").strip()
-        if task_type == "open_login" and not account_persona_id:
-            raise HTTPException(status_code=409, detail="请先绑定人设后再打开登录")
         requested_persona_id = str(payload.persona_id or "").strip()
         if requested_persona_id and requested_persona_id != account_persona_id:
             raise HTTPException(status_code=400, detail="任务人设必须与执行账号绑定的人设一致")
@@ -6400,7 +6546,7 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
                 initial_status,
                 scheduled_at,
                 json.dumps(task_payload, ensure_ascii=False),
-                0 if task_type in {"open_login", "publish_post"} else max(0, min(int(payload.max_retries or 0), 5)),
+                0 if task_type in {"open_login", "publish_post", "instagram_relationship_verify", *INSTAGRAM_GROUP_TASK_TYPES} else max(0, min(int(payload.max_retries or 0), 5)),
                 str((billing_reservation or {}).get("id") or ""),
                 1 if daily_publish_waived else 0,
                 str(batch_context.get("automation_plan_id") or ""),
@@ -6447,6 +6593,696 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
         row,
         billing_reservation_status=row_billing_statuses.get(str(row["billing_reservation_id"] or ""), ""),
     )
+
+
+# CRM creates its parent workflow, durable action ledger, billing reservation and
+# social child task in one SQLite transaction.  Keep this adapter intentionally
+# narrower than the public task creator: CRM may only enqueue actions for the
+# tenant that owns the selected account and it may not smuggle runtime secrets
+# into the durable payload.
+_CRM_ACTION_TASK_TYPES = {
+    "check_login",
+    "open_login",
+    "browse_feed",
+    "browse_profile",
+    "instagram_warmup",
+    "instagram_auto_reply",
+    "threads_warmup",
+    "threads_auto_reply",
+    "publish_post",
+    "comment_post",
+    "reply_comment",
+    "like_post",
+    "share_post",
+    "repost_post",
+    "direct_message",
+    *INSTAGRAM_GROUP_TASK_TYPES,
+}
+
+_CRM_ACTION_TO_SOCIAL_TASK = {
+    "account_check": "check_login",
+    "open_login": "open_login",
+    "collect_feed": "browse_feed",
+    "collect_profile": "browse_profile",
+    "public_comment": "comment_post",
+    "public_reply": "reply_comment",
+    "followup_reply": "reply_comment",
+    "nurture_reply": "reply_comment",
+    "like": "like_post",
+    "share": "share_post",
+    "repost": "repost_post",
+    "threads_group_invite_post": "publish_post",
+    "direct_message": "direct_message",
+    "instagram_group_candidates_inspect": "instagram_group_candidates_inspect",
+    "instagram_recent_conversations_inspect": "instagram_recent_conversations_inspect",
+    "instagram_conversation_controls_inspect": "instagram_conversation_controls_inspect",
+    "instagram_group_create": "instagram_group_create",
+    "instagram_group_post": "instagram_group_post",
+    "instagram_group_settings_update": "instagram_group_settings_update",
+    "instagram_group_members_add": "instagram_group_members_add",
+    "instagram_group_members_inspect": "instagram_group_members_inspect",
+    "instagram_group_status_inspect": "instagram_group_status_inspect",
+}
+
+
+def _relationship_username(value: Any) -> str:
+    username = str(value or "").strip().lstrip("@").lower()
+    if not username or len(username) > 80 or not re.fullmatch(r"[a-z0-9._]+", username):
+        return ""
+    return username
+
+
+def _validate_instagram_relationship_verify_payload(
+    payload: dict[str, Any],
+    *,
+    account: Any,
+) -> dict[str, Any]:
+    raw_targets = payload.get("target_usernames")
+    if raw_targets is None:
+        raw_targets = payload.get("targetUsernames")
+    if not isinstance(raw_targets, list):
+        raise HTTPException(status_code=422, detail="target_usernames must be a list")
+    targets: list[str] = []
+    for raw in raw_targets:
+        username = _relationship_username(raw)
+        if not username or username in targets:
+            raise HTTPException(status_code=422, detail="target_usernames must contain unique valid Instagram usernames")
+        targets.append(username)
+    if not 1 <= len(targets) <= 20:
+        raise HTTPException(status_code=422, detail="relationship verification accepts 1 to 20 targets")
+    account_username = _relationship_username(account["username"])
+    expected_username = _relationship_username(
+        payload.get("expected_username") or payload.get("expectedUsername") or account_username
+    )
+    if not account_username or expected_username != account_username:
+        raise HTTPException(status_code=409, detail="relationship verification sender does not match the selected account")
+    raw_lead_ids = payload.get("lead_ids")
+    lead_ids: list[str] = []
+    if raw_lead_ids is not None:
+        if not isinstance(raw_lead_ids, list) or len(raw_lead_ids) != len(targets):
+            raise HTTPException(status_code=422, detail="lead_ids must align with target_usernames")
+        lead_ids = [str(value or "").strip() for value in raw_lead_ids]
+        if any(not value for value in lead_ids) or len(set(lead_ids)) != len(lead_ids):
+            raise HTTPException(status_code=422, detail="lead_ids must contain unique non-empty values")
+    clean = {
+        "expected_username": expected_username,
+        "target_usernames": targets,
+        "read_only": True,
+    }
+    if lead_ids:
+        clean["lead_ids"] = lead_ids
+        clean["crm_relationship_verify"] = payload.get("crm_relationship_verify") is True
+    return clean
+
+
+def _crm_direct_message_recipient(action: dict[str, Any], payload: dict[str, Any]) -> str:
+    candidate = str(
+        payload.get("recipient_username")
+        or payload.get("target_username")
+        or payload.get("username")
+        or ""
+    ).strip()
+    if not candidate:
+        raw_target = str(action.get("target_key") or payload.get("target_url") or "").strip()
+        try:
+            parsed = urlparse(raw_target)
+            segments = [segment for segment in parsed.path.split("/") if segment]
+            hostname = str(parsed.hostname or "").lower()
+            if parsed.netloc:
+                if (hostname == "instagram.com" or hostname.endswith(".instagram.com")) and segments:
+                    candidate = segments[0]
+                elif (hostname in {"threads.net", "threads.com"} or hostname.endswith((".threads.net", ".threads.com"))) and segments:
+                    candidate = segments[0].lstrip("@")
+                else:
+                    candidate = ""
+            elif segments:
+                candidate = segments[0].lstrip("@")
+            elif raw_target and ":" in raw_target and "://" not in raw_target:
+                candidate = raw_target.rsplit(":", 1)[-1]
+            else:
+                candidate = raw_target
+        except Exception:
+            candidate = raw_target
+    candidate = candidate.strip().strip("/@")
+    if not re.fullmatch(r"[A-Za-z0-9._]{1,64}", candidate):
+        raise HTTPException(status_code=422, detail="CRM direct-message recipient username is invalid")
+    return candidate
+
+
+def _crm_direct_message_media_paths(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    payload: dict[str, Any],
+) -> list[str]:
+    # Never accept a durable client-provided server path.  CRM media is selected
+    # by tenant-owned database id and resolved inside the configured data root.
+    if payload.get("media_paths") not in (None, [], ()) or payload.get("media_path"):
+        raise HTTPException(status_code=400, detail="CRM direct-message media must be referenced by media_id")
+    media_id = str(payload.get("media_id") or "").strip()
+    media_ids = payload.get("media_ids")
+    if not media_id and isinstance(media_ids, list):
+        clean_ids = [str(item or "").strip() for item in media_ids if str(item or "").strip()]
+        if len(clean_ids) > 1:
+            raise HTTPException(status_code=422, detail="CRM direct-message supports at most one media attachment")
+        media_id = clean_ids[0] if clean_ids else ""
+    if not media_id:
+        return []
+    media = conn.execute(
+        "SELECT storage_path,mime_type FROM crm_media WHERE id=? AND user_id=? AND active=1",
+        (media_id, int(user_id)),
+    ).fetchone()
+    if media is None:
+        raise HTTPException(status_code=404, detail="CRM direct-message media was not found")
+    mime_type = str(media["mime_type"] or "").strip().lower()
+    if not mime_type.startswith("image/"):
+        raise HTTPException(status_code=415, detail="CRM direct-message attachment must be an image")
+    tenant_root = (_DATA_DIR / "crm_media" / str(int(user_id))).resolve()
+    source = (_DATA_DIR / str(media["storage_path"] or "")).resolve()
+    try:
+        source.relative_to(tenant_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="CRM direct-message media path is outside the tenant directory") from exc
+    if not source.is_file() or source.suffix.lower() not in SOCIAL_MEDIA_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="CRM direct-message media file is unavailable")
+    return [str(source)]
+
+
+def _crm_instagram_group_media_paths(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    payload: dict[str, Any],
+) -> list[str]:
+    """Resolve one tenant-owned CRM image without trusting a server path."""
+
+    if (
+        payload.get("media_paths") not in (None, [], ())
+        or payload.get("media_path")
+        or payload.get("mediaPath")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Instagram group media must be referenced by tenant-owned CRM media_id",
+        )
+    media_id = str(payload.get("media_id") or "").strip()
+    raw_ids = payload.get("media_ids")
+    if not media_id and isinstance(raw_ids, list):
+        clean_ids = [str(item or "").strip() for item in raw_ids if str(item or "").strip()]
+        if len(clean_ids) > 1:
+            raise HTTPException(status_code=422, detail="Instagram group actions accept at most one media attachment")
+        media_id = clean_ids[0] if clean_ids else ""
+    if not media_id:
+        return []
+    media = conn.execute(
+        "SELECT storage_path,mime_type FROM crm_media WHERE id=? AND user_id=? AND active=1",
+        (media_id, int(user_id)),
+    ).fetchone()
+    if media is None:
+        raise HTTPException(status_code=404, detail="Instagram group media was not found")
+    if not str(media["mime_type"] or "").strip().lower().startswith("image/"):
+        raise HTTPException(status_code=415, detail="Instagram group attachment must be an image")
+    tenant_root = (_DATA_DIR / "crm_media" / str(int(user_id))).resolve()
+    source = (_DATA_DIR / str(media["storage_path"] or "")).resolve()
+    try:
+        source.relative_to(tenant_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Instagram group media path is outside the tenant directory") from exc
+    if not source.is_file() or source.suffix.lower() not in SOCIAL_MEDIA_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="Instagram group media file is unavailable")
+    return [str(source)]
+
+
+def _validate_crm_direct_message_payload(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    account: Any,
+    action: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    content = str(action.get("content") or payload.get("content") or "").strip()
+    normalized = re.sub(r"\s+", "", content)
+    if len(normalized) < 6 or len(content) > 5000:
+        raise HTTPException(status_code=422, detail="CRM direct-message content must contain 6 to 5000 characters")
+    recipient = _crm_direct_message_recipient(action, payload)
+    sender = str(account["username"] or "").strip().lstrip("@").lower()
+    if sender and sender == recipient.lower():
+        raise HTTPException(status_code=409, detail="CRM direct-message recipient cannot be the sender account")
+    clean = dict(payload)
+    clean["recipient_username"] = recipient
+    clean["content"] = content
+    clean["message"] = content
+    media_paths = _crm_direct_message_media_paths(conn, user_id=user_id, payload=payload)
+    if media_paths:
+        clean["media_paths"] = media_paths
+    clean.pop("media_id", None)
+    clean.pop("media_ids", None)
+    return clean
+
+
+def _crm_workflow_batch_sku_is_covered(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    workflow_id: str,
+    step_id: str,
+    sku: str,
+) -> bool:
+    """Return whether an earlier step paid the approved workflow-batch SKU."""
+
+    current = conn.execute(
+        "SELECT sequence_no FROM crm_workflow_steps WHERE id=? AND workflow_id=? AND user_id=?",
+        (str(step_id), str(workflow_id), int(user_id)),
+    ).fetchone()
+    if current is None:
+        return False
+    rows = conn.execute(
+        """
+        SELECT step.payload_json, action.billing_reservation_id
+        FROM crm_workflow_steps step
+        JOIN crm_action_ledger action
+          ON action.step_id=step.id AND action.workflow_id=step.workflow_id AND action.user_id=step.user_id
+        WHERE step.workflow_id=? AND step.user_id=? AND step.sequence_no<?
+        ORDER BY step.sequence_no
+        """,
+        (str(workflow_id), int(user_id), int(current["sequence_no"])),
+    ).fetchall()
+    for row in rows:
+        action_payload = _loads(row["payload_json"], {})
+        if not isinstance(action_payload, dict) or str(action_payload.get("sku") or "") != str(sku):
+            continue
+        reservation_id = str(row["billing_reservation_id"] or "")
+        if not reservation_id:
+            continue
+        reservation = conn.execute(
+            "SELECT user_id,sku,status FROM billing_reservations WHERE id=?",
+            (reservation_id,),
+        ).fetchone()
+        if (
+            reservation is not None
+            and int(reservation["user_id"] or 0) == int(user_id)
+            and str(reservation["sku"] or "") == str(sku)
+            and str(reservation["status"] or "") in {"held", "waived", "settled"}
+        ):
+            return True
+    return False
+
+
+def create_crm_social_task_in_transaction(
+    conn: sqlite3.Connection,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    """Insert a CRM-owned social task using the caller's active transaction.
+
+    The CRM repository owns commit/rollback.  This function therefore never
+    opens a connection, commits, runs a browser, or wakes the worker.  The
+    normal worker poller observes the row after the parent transaction commits.
+    """
+
+    if not isinstance(request, dict):
+        raise HTTPException(status_code=422, detail="CRM social task request must be an object")
+    if not conn.in_transaction:
+        raise RuntimeError("CRM social task adapter requires an active database transaction")
+
+    action = request.get("action") if isinstance(request.get("action"), dict) else {}
+    from .crm.repository import action_spec
+
+    spec = action_spec(str(action.get("action_type") or ""))
+    user_id = int(request.get("user_id") or 0)
+    account_id = str(action.get("account_id") or "").strip()
+    action_type = str(spec["action_type"])
+    task_type = str(spec["task_type"])
+    if user_id <= 0 or not account_id:
+        raise HTTPException(status_code=422, detail="CRM social task requires user_id and account_id")
+    if task_type not in _CRM_ACTION_TASK_TYPES:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "crm_action_blocked",
+                "message": f"CRM action is not implemented by the Python social worker: {task_type or 'unknown'}",
+            },
+        )
+
+    account = conn.execute(
+        "SELECT * FROM social_accounts WHERE id = ? AND user_id = ?",
+        (account_id, user_id),
+    ).fetchone()
+    if account is None:
+        raise HTTPException(status_code=404, detail="CRM social account not found")
+    _require_active_owner_user(conn, user_id)
+    if str(account["status"] or "").strip().lower() == "disabled":
+        raise HTTPException(status_code=409, detail="CRM social account is disabled")
+    if (
+        str(account["health_status"] or "").strip().lower() == "banned"
+        and task_type not in {"check_login", "open_login"}
+    ):
+        raise HTTPException(status_code=409, detail="CRM social account is banned")
+    if task_type == "direct_message":
+        from .crm.account_rotation import require_sender_rotation_unlocked
+
+        require_sender_rotation_unlocked(
+            conn,
+            user_id=user_id,
+            account_id=account_id,
+        )
+
+    account_platform = _normalize_platform(str(account["platform"] or ""))
+    requested_platform = _normalize_platform(str(spec.get("platform") or action.get("platform") or account_platform))
+    action_payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
+    if task_type == "browse_profile":
+        raw_target = str(action.get("target_key") or action_payload.get("target_url") or "").strip()
+        hostname = str(urlparse(raw_target).hostname or "").lower()
+        target_platform = (
+            "instagram" if hostname == "instagram.com" or hostname.endswith(".instagram.com")
+            else "threads" if hostname in {"threads.net", "threads.com"} or hostname.endswith((".threads.net", ".threads.com"))
+            else ""
+        )
+        if target_platform:
+            requested_platform = target_platform
+    elif task_type == "browse_feed":
+        selected_platforms = action_payload.get("platforms")
+        if isinstance(selected_platforms, dict) and selected_platforms.get(account_platform) is not True:
+            raise HTTPException(status_code=400, detail="CRM collection account platform is not selected")
+        raw_payload_platform = str(action_payload.get("platform") or "").strip()
+        if raw_payload_platform:
+            requested_platform = _normalize_platform(raw_payload_platform)
+    if requested_platform != account_platform:
+        raise HTTPException(status_code=400, detail="CRM task platform does not match the selected account")
+    required_platform = SOCIAL_TASK_REQUIRED_PLATFORM.get(task_type)
+    if required_platform and required_platform != account_platform:
+        raise HTTPException(status_code=400, detail=f"CRM task {task_type} requires {required_platform}")
+
+    persona_id = str(account["persona_id"] or "").strip()
+
+    task_payload = action.get("payload")
+    task_payload = task_payload if isinstance(task_payload, dict) else {}
+    task_payload = dict(task_payload)
+    content = str(action.get("content") or "").strip()
+    target_key = str(action.get("target_key") or "").strip()
+    if content:
+        task_payload["content"] = content
+        if task_type == "comment_post":
+            task_payload["comment"] = content
+        elif task_type == "reply_comment":
+            task_payload["reply"] = content
+    # A later Instagram group step may have resolved its durable Direct URL
+    # from the verified create result.  Its ledger target remains a synthetic
+    # idempotency key and must never replace that platform URL.
+    if target_key and not (
+        task_type in INSTAGRAM_GROUP_TASK_TYPES
+        and str(task_payload.get("target_url") or task_payload.get("targetUrl") or "").strip()
+    ):
+        task_payload["target_url"] = target_key
+    if task_type == "direct_message":
+        task_payload = _validate_crm_direct_message_payload(
+            conn,
+            user_id=user_id,
+            account=account,
+            action=action,
+            payload=task_payload,
+        )
+    elif task_type == "publish_post":
+        # CRM Threads community posts may carry the image frozen from the
+        # selected tenant template.  Resolve the durable media id here; never
+        # accept a client/server filesystem path.
+        media_paths = _crm_instagram_group_media_paths(
+            conn,
+            user_id=user_id,
+            payload=task_payload,
+        )
+        task_payload.pop("media_id", None)
+        task_payload.pop("media_ids", None)
+        if media_paths:
+            task_payload["media_paths"] = media_paths
+    elif task_type in INSTAGRAM_GROUP_TASK_TYPES:
+        from .crm.instagram_groups import validate_task_payload as validate_instagram_group_task_payload
+
+        media_paths = _crm_instagram_group_media_paths(
+            conn,
+            user_id=user_id,
+            payload=task_payload,
+        )
+        task_payload.pop("media_id", None)
+        task_payload.pop("media_ids", None)
+        if media_paths:
+            task_payload["media_paths"] = media_paths
+        try:
+            task_payload = validate_instagram_group_task_payload(
+                task_type,
+                task_payload,
+                dict(account),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    forbidden_secret_keys = {
+        "password",
+        "login_password",
+        "cookie",
+        "cookies",
+        "session_token",
+        "access_token",
+    }
+    def contains_secret(value: Any) -> bool:
+        if isinstance(value, dict):
+            for raw_key, child in value.items():
+                key = str(raw_key or "").strip().lower().replace("-", "_")
+                if (
+                    key in forbidden_secret_keys
+                    or key in {"authorization", "refresh_token", "client_secret", "api_key"}
+                    or key.endswith("_password")
+                    or key.endswith("_token")
+                    or key.endswith("_secret")
+                ):
+                    return True
+                if contains_secret(child):
+                    return True
+        elif isinstance(value, (list, tuple)):
+            return any(contains_secret(child) for child in value)
+        return False
+
+    if contains_secret(task_payload):
+        raise HTTPException(status_code=400, detail="CRM durable task payload cannot contain login secrets")
+    if task_type == "open_login":
+        task_payload["auto_submit"] = False
+        task_payload["wait_for_manual"] = True
+    task_payload["_crm_workflow_id"] = str(request.get("workflow_id") or "")
+    task_payload["_crm_step_id"] = str(request.get("step_id") or "")
+    task_payload["_crm_action_id"] = str(request.get("action_id") or "")
+    task_payload["_crm_action_type"] = action_type
+    task_payload["_crm_idempotency_key"] = str(request.get("idempotency_key") or action.get("idempotency_key") or "")
+
+    if (
+        account_platform == "threads" and task_type in {"threads_warmup", "threads_auto_reply"}
+    ) or (
+        account_platform == "instagram" and task_type in {"instagram_warmup", "instagram_auto_reply"}
+    ):
+        task_payload = _enrich_threads_task_payload(persona_id, task_type, task_payload)
+
+    task_id = str(request.get("social_task_id") or request.get("task_id") or _NEW_ID("social_task")).strip()
+    existing = conn.execute("SELECT * FROM social_automation_tasks WHERE id = ?", (task_id,)).fetchone()
+    if existing is not None:
+        existing_payload = _loads(existing["payload_json"], {})
+        same_action = (
+            int(existing["user_id"] or 0) == user_id
+            and str(existing["account_id"] or "") == account_id
+            and str(existing["task_type"] or "") == task_type
+            and str(existing_payload.get("_crm_action_id") or "") == str(request.get("action_id") or "")
+        )
+        if not same_action:
+            raise HTTPException(status_code=409, detail="CRM social task idempotency conflict")
+        return {"social_task_id": task_id, "status": str(existing["status"] or "queued"), "reused": True}
+
+    scheduled_at = _parse_schedule(request.get("scheduled_at"))
+    now = _now()
+    reservation_id = str(
+        request.get("billing_reservation_id")
+        or request.get("reservation_id")
+        or action.get("billing_reservation_id")
+        or action.get("reservation_id")
+        or ""
+    ).strip()
+    requested_sku = str(spec.get("sku") or "")
+    if bool(spec.get("write")):
+        workflow = conn.execute(
+            "SELECT status,confirmation_json FROM crm_workflows WHERE id=? AND user_id=? AND active=1",
+            (str(request.get("workflow_id") or ""), int(user_id)),
+        ).fetchone()
+        confirmation = _loads(workflow["confirmation_json"], {}) if workflow is not None else {}
+        if (
+            workflow is None
+            or str(workflow["status"] or "") not in {"queued", "running"}
+            or not isinstance(confirmation, dict)
+            or int(confirmation.get("confirmed_by") or 0) <= 0
+        ):
+            raise HTTPException(status_code=409, detail="CRM write action requires persisted workflow confirmation")
+    if bool(spec.get("write")) and not reservation_id:
+        if not _crm_workflow_batch_sku_is_covered(
+            conn,
+            user_id=user_id,
+            workflow_id=str(request.get("workflow_id") or ""),
+            step_id=str(request.get("step_id") or ""),
+            sku=requested_sku,
+        ):
+            raise HTTPException(status_code=409, detail="CRM billed write action has no workflow-batch reservation")
+    if not bool(spec.get("write")) and reservation_id:
+        raise HTTPException(status_code=409, detail="CRM read action cannot use a billing reservation")
+    if reservation_id:
+        reservation = conn.execute(
+            "SELECT user_id, status, sku FROM billing_reservations WHERE id = ?",
+            (reservation_id,),
+        ).fetchone()
+        if (
+            reservation is None
+            or int(reservation["user_id"] or 0) != user_id
+            or str(reservation["status"] or "") not in {"held", "waived"}
+            or (requested_sku and str(reservation["sku"] or "") != requested_sku)
+        ):
+            raise HTTPException(status_code=409, detail="CRM billing reservation is invalid")
+
+    conn.execute(
+        """
+        INSERT INTO social_automation_tasks(
+          id, user_id, persona_id, account_id, platform, task_type, priority,
+          status, scheduled_at, payload_json, result_json, max_retries,
+          billing_reservation_id, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, '{}', ?, ?, 'crm', ?, ?)
+        """,
+        (
+            task_id,
+            user_id,
+            persona_id,
+            account_id,
+            account_platform,
+            task_type,
+            max(1, min(int(request.get("priority") or 50), 100)),
+            scheduled_at,
+            json.dumps(task_payload, ensure_ascii=False),
+            0 if task_type in {"open_login", "publish_post", "direct_message"} else max(0, min(int(request.get("max_retries") or 0), 5)),
+            reservation_id,
+            now,
+            now,
+        ),
+    )
+    _insert_log(
+        conn,
+        task_id,
+        "info",
+        "crm_queued",
+        "CRM action added to the social automation queue",
+        {
+            "task_type": task_type,
+            "crm_workflow_id": str(request.get("workflow_id") or ""),
+            "crm_action_id": str(request.get("action_id") or ""),
+        },
+    )
+    return {"social_task_id": task_id, "status": "queued", "reused": False}
+
+
+def cancel_crm_social_task_in_transaction(
+    conn: sqlite3.Connection,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    """Cancel an unsubmitted CRM child task in the caller's transaction."""
+
+    if not conn.in_transaction:
+        raise RuntimeError("CRM social task adapter requires an active database transaction")
+    user_id = int(request.get("user_id") or 0)
+    task_id = str(request.get("social_task_id") or "").strip()
+    action_id = str(request.get("action_id") or "").strip()
+    row = conn.execute(
+        "SELECT * FROM social_automation_tasks WHERE id = ? AND user_id = ?",
+        (task_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="CRM social child task not found")
+    payload = _loads(row["payload_json"], {})
+    if (
+        str(row["created_by"] or "") != "crm"
+        or str(payload.get("_crm_action_id") or "") != action_id
+    ):
+        raise HTTPException(status_code=409, detail="CRM social child task ownership mismatch")
+    if str(payload.get("_billing_submission_state") or "") in {"submitting", "submitted"}:
+        raise HTTPException(status_code=409, detail="CRM social child task requires evidence review")
+    now = _now()
+    changed = conn.execute(
+        """
+        UPDATE social_automation_tasks
+        SET status = 'cancelled', finished_at = ?, error = 'CRM workflow cancelled before submission', updated_at = ?
+        WHERE id = ? AND user_id = ? AND status IN ('preparing', 'queued', 'running', 'need_manual')
+        """,
+        (now, now, task_id, user_id),
+    ).rowcount
+    if changed:
+        _insert_log(
+            conn,
+            task_id,
+            "warn",
+            "crm_cancelled",
+            "CRM workflow cancelled this child task before platform submission",
+            {"workflow_id": str(request.get("workflow_id") or ""), "action_id": action_id},
+        )
+    observed = conn.execute(
+        "SELECT status,result_json,error FROM social_automation_tasks WHERE id=? AND user_id=?",
+        (task_id, user_id),
+    ).fetchone()
+    return {
+        "social_task_id": task_id,
+        "status": str(observed["status"] or "") if observed is not None else ("cancelled" if changed else str(row["status"] or "")),
+        "result": _loads(observed["result_json"], {}) if observed is not None else {},
+        "error": str(observed["error"] or "") if observed is not None else "",
+    }
+
+
+def _crm_task_policy_reason(conn: sqlite3.Connection, task: Any) -> str:
+    """Return a stable reason when a CRM child task must not submit new work."""
+
+    try:
+        item = dict(task)
+    except Exception:
+        return ""
+    if str(item.get("created_by") or "") != "crm":
+        return ""
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else _loads(item.get("payload_json"), {})
+    workflow_id = str((payload or {}).get("_crm_workflow_id") or "")
+    user_id = int(item.get("user_id") or 0)
+    try:
+        from .crm.service import effective_module_state
+
+        owner = conn.execute("SELECT is_admin FROM users WHERE id = ?", (user_id,)).fetchone()
+        state = effective_module_state(
+            conn,
+            user_id=user_id,
+            identity_is_admin=bool(owner and int(owner["is_admin"] or 0)),
+        )
+        if not state.get("effective"):
+            return ",".join(str(reason) for reason in state.get("reasons") or []) or "policy_disabled"
+    except Exception as exc:
+        return f"policy_check_failed:{type(exc).__name__}"
+    if workflow_id:
+        workflow = conn.execute(
+            "SELECT status FROM crm_workflows WHERE id = ? AND user_id = ? AND active = 1",
+            (workflow_id, user_id),
+        ).fetchone()
+        if workflow is None:
+            return "workflow_missing"
+        workflow_status = str(workflow["status"] or "")
+        if workflow_status not in {"queued", "running"}:
+            return f"workflow_{workflow_status or 'invalid'}"
+    if str(item.get("task_type") or "") == "direct_message":
+        try:
+            from .crm.account_rotation import get_sender_rotation_status
+
+            rotation = get_sender_rotation_status(
+                conn,
+                user_id=user_id,
+                account_id=str(item.get("account_id") or ""),
+            )
+            if rotation.get("locked"):
+                return "sender_rotation_locked"
+        except Exception as exc:
+            return f"rotation_check_failed:{type(exc).__name__}"
+    return ""
 
 
 def get_social_task(task_id: str) -> dict[str, Any]:
@@ -8285,6 +9121,11 @@ def _recover_orphaned_manual_task(now: int) -> None:
             elif int(row["updated_at"] or 0) >= recent_cutoff:
                 continue
             task_type = str(row["task_type"] or "")
+            crm_submission_state = str(payload.get("_billing_submission_state") or "")
+            crm_action_unknown = bool(
+                str(payload.get("_crm_action_id") or "")
+                and crm_submission_state in {"submitting", "submitted"}
+            )
             message = (
                 "登录任务的执行进程已断开且超过恢复时限，请重新打开登录。"
                 if task_type == "open_login"
@@ -8293,17 +9134,39 @@ def _recover_orphaned_manual_task(now: int) -> None:
             failed = conn.execute(
                 """
                 UPDATE social_automation_tasks
-                SET status = 'failed', finished_at = ?, error = ?, updated_at = ?
+                SET status = 'failed', finished_at = ?, result_json = ?, error = ?, updated_at = ?
                 WHERE id = ? AND status = 'need_manual'
                 """,
-                (now, message, now, task_id),
+                (
+                    now,
+                    json.dumps(
+                        {
+                            "manual_session_lost": True,
+                            "action_outcome_unknown": crm_action_unknown,
+                            "submission_state": crm_submission_state if crm_action_unknown else "",
+                            "retryable": False,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    message,
+                    now,
+                    task_id,
+                ),
             ).rowcount
             if failed:
                 if task_type == "publish_post":
                     _ensure_daily_publish_slot(conn, row, now=now)
                     _release_daily_publish_slot(conn, task_id, "manual_recovery_expired", now=now)
-                _release_task_billing_reservation(conn, row, now=now)
-                _insert_log(conn, task_id, "error", "manual_recovery_expired", message, {"task_type": task_type})
+                if not crm_action_unknown:
+                    _release_task_billing_reservation(conn, row, now=now)
+                _insert_log(
+                    conn,
+                    task_id,
+                    "error",
+                    "crm_action_unknown" if crm_action_unknown else "manual_recovery_expired",
+                    message,
+                    {"task_type": task_type},
+                )
 
 
 def _recover_orphaned_running_tasks(now: int) -> None:
@@ -8342,10 +9205,20 @@ def _recover_orphaned_running_tasks(now: int) -> None:
             ):
                 continue
             publish_committed = bool(int(row["daily_publish_committed"] or 0))
+            crm_submission_state = str(payload.get("_billing_submission_state") or "")
+            crm_action_unknown = bool(
+                str(payload.get("_crm_action_id") or "")
+                and crm_submission_state in {"submitting", "submitted"}
+            )
             result = {
                 "worker_lease_expired": True,
                 "retryable": False,
             }
+            if crm_action_unknown:
+                result.update({
+                    "action_outcome_unknown": True,
+                    "submission_state": crm_submission_state,
+                })
             if str(row["task_type"] or "") == "publish_post" and publish_committed:
                 result.update({
                     "publish_submitted": True,
@@ -8377,15 +9250,7 @@ def _recover_orphaned_running_tasks(now: int) -> None:
                 else:
                     _release_daily_publish_slot(conn, task_id, "worker_lease_expired", now=now)
             reservation_id = str(row["billing_reservation_id"] or "")
-            if reservation_id and publish_committed:
-                commercial_billing.settle_reservation(
-                    conn,
-                    reservation_id,
-                    actual_quantity=1,
-                    success=True,
-                    now=now,
-                )
-            else:
+            if not (publish_committed or crm_action_unknown):
                 _release_task_billing_reservation(conn, row, now=now)
             conn.execute(
                 """
@@ -8399,7 +9264,7 @@ def _recover_orphaned_running_tasks(now: int) -> None:
                 conn,
                 task_id,
                 "error",
-                "worker_lease_expired",
+                "crm_action_unknown" if crm_action_unknown else "worker_lease_expired",
                 message,
                 {"lease_owner": str(lease.get("owner") or "")},
             )
@@ -8678,6 +9543,16 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
         _discard_ephemeral_task_secrets(task_id)
         return
     with db() as conn:
+        crm_policy_reason = _crm_task_policy_reason(conn, task)
+    if crm_policy_reason:
+        _finish_task(
+            task_id,
+            "cancelled",
+            {"policy_paused": True, "policy_reason": crm_policy_reason, "retryable": False},
+            f"CRM policy stopped this child task before platform submission: {crm_policy_reason}",
+        )
+        return
+    with db() as conn:
         account_row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (task["account_id"],)).fetchone()
         if not account_row:
             raise RuntimeError("任务绑定账号不存在")
@@ -8854,8 +9729,9 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
     except AutoLoginFailedError as exc:
         if not _is_task_cancelled(str(task["id"])):
             publish_outcome_unknown = bool(getattr(exc, "publish_outcome_unknown", False))
+            action_outcome_unknown = bool(getattr(exc, "action_outcome_unknown", False))
             failure_result = {
-                "auto_login_failed": not publish_outcome_unknown,
+                "auto_login_failed": not (publish_outcome_unknown or action_outcome_unknown),
                 "screenshot_path": str(getattr(exc, "screenshot_path", "") or ""),
             }
             timeout_kind = str(getattr(exc, "timeout_kind", "") or "").strip()
@@ -8870,6 +9746,14 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
                 failure_result.update({
                     "publish_submitted": bool(getattr(exc, "publish_submitted", True)),
                     "publish_outcome_unknown": True,
+                    "browser_available": bool(getattr(exc, "browser_available", False)),
+                    "retryable": bool(getattr(exc, "retryable", False)),
+                })
+            if action_outcome_unknown:
+                failure_result.update({
+                    "action_submitted": bool(getattr(exc, "action_submitted", True)),
+                    "action_outcome_unknown": True,
+                    "submission_state": "submitted",
                     "browser_available": bool(getattr(exc, "browser_available", False)),
                     "retryable": bool(getattr(exc, "retryable", False)),
                 })
@@ -9481,6 +10365,7 @@ def _persist_billing_committed_quantity(task_id: str, quantity: int = 1) -> bool
         if existing_quantity >= committed_quantity:
             return True
         payload["_billing_committed_quantity"] = committed_quantity
+        payload["_billing_submission_state"] = "submitted"
         updated = conn.execute(
             """
             UPDATE social_automation_tasks
@@ -9501,11 +10386,52 @@ def _persist_billing_committed_quantity(task_id: str, quantity: int = 1) -> bool
         return bool(updated)
 
 
+def _arm_billing_submission(task_id: str) -> bool:
+    """Persist the irreversible-action boundary before clicking platform UI."""
+
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        return False
+    now = _now()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM social_automation_tasks WHERE id = ? AND status IN ('running', 'need_manual')",
+            (clean_task_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        if _crm_task_policy_reason(conn, row):
+            return False
+        payload = _loads(row["payload_json"], {})
+        if not isinstance(payload, dict):
+            payload = {}
+        if str(payload.get("_billing_submission_state") or "") in {"submitting", "submitted"}:
+            return True
+        payload["_billing_submission_state"] = "submitting"
+        updated = conn.execute(
+            "UPDATE social_automation_tasks SET payload_json = ?, updated_at = ? WHERE id = ? AND status IN ('running', 'need_manual')",
+            (json.dumps(payload, ensure_ascii=False), now, clean_task_id),
+        ).rowcount
+        if updated:
+            _insert_log(
+                conn,
+                clean_task_id,
+                "info",
+                "billing_action_armed",
+                "Irreversible platform action boundary persisted before submission",
+                {},
+            )
+        return bool(updated)
+
+
 def _run_billing_submit_guard(control: dict[str, Any], action: Callable[[], Any]) -> Any:
     lock = control.get("publish_submit_lock")
     if lock is None:
-        result = action()
         task_id = str(control.get("current_task_id") or "")
+        if not _arm_billing_submission(task_id):
+            raise RuntimeError("Interaction submission boundary could not be persisted")
+        result = action()
         if result is not False and not _persist_billing_committed_quantity(task_id, 1):
             raise RuntimeError("互动提交状态无法持久化，已停止继续执行。")
         return result
@@ -9514,6 +10440,8 @@ def _run_billing_submit_guard(control: dict[str, Any], action: Callable[[], Any]
         task_id = str(control.get("current_task_id") or "")
         if (event is not None and event.is_set()) or _is_task_cancelled(task_id):
             raise RuntimeError("社交自动化任务已取消。")
+        if not _arm_billing_submission(task_id):
+            raise RuntimeError("Interaction submission boundary could not be persisted")
         result = action()
         if result is not False and not _persist_billing_committed_quantity(task_id, 1):
             raise RuntimeError("互动提交状态无法持久化，已停止继续执行。")
@@ -9532,6 +10460,8 @@ def _arm_publish_submission(task_id: str) -> bool:
             (clean_task_id,),
         ).fetchone()
         if task is None:
+            return False
+        if _crm_task_policy_reason(conn, task):
             return False
         updated = conn.execute(
             """
@@ -9629,6 +10559,54 @@ def _persist_shutdown_task_state(task_id: str, *, deadline: float | None = None)
                     log_message="Publish was already submitted; only result confirmation will resume after restart.",
                 ):
                     return True
+                payload = _loads(row["payload_json"], {})
+                if not isinstance(payload, dict):
+                    payload = {}
+                crm_submission_state = str(payload.get("_billing_submission_state") or "")
+                action_may_have_submitted = bool(
+                    int(row["daily_publish_committed"] or 0)
+                    or (
+                        str(payload.get("_crm_action_id") or "")
+                        and crm_submission_state in {"submitting", "submitted"}
+                    )
+                )
+                if action_may_have_submitted:
+                    result = {
+                        "service_shutdown": True,
+                        "action_outcome_unknown": True,
+                        "publish_outcome_unknown": bool(int(row["daily_publish_committed"] or 0)),
+                        "submission_state": crm_submission_state,
+                        "retryable": False,
+                    }
+                    changed = conn.execute(
+                        """
+                        UPDATE social_automation_tasks
+                        SET status = 'failed', finished_at = ?, result_json = ?, error = ?,
+                            payload_json = ?, updated_at = ?
+                        WHERE id = ? AND status IN ('preparing', 'queued', 'running', 'need_manual')
+                        """,
+                        (
+                            now,
+                            json.dumps(result, ensure_ascii=False),
+                            "service shutdown after irreversible action boundary; evidence review required",
+                            json.dumps(_clear_runtime_claims(payload), ensure_ascii=False),
+                            now,
+                            task_id,
+                        ),
+                    ).rowcount
+                    if changed and str(row["task_type"] or "") == "publish_post":
+                        _ensure_daily_publish_slot(conn, row, now=now)
+                        _set_daily_publish_slot_state(conn, task_id, "unknown", now=now)
+                    if changed:
+                        _insert_log(
+                            conn,
+                            task_id,
+                            "warn",
+                            "crm_action_unknown",
+                            "Service stopped after the irreversible action boundary; automatic resend is disabled",
+                            result,
+                        )
+                    return bool(changed)
                 return bool(
                     cancel_social_tasks_in_transaction(
                         conn, [row], reason="service shutdown", now=now
@@ -9667,7 +10645,7 @@ def _force_stop_running_task(
         manager = control.get("manager") if control else None
     if cancel_event is not None:
         with contextlib.suppress(Exception):
-            cancel_event.set()
+            _signal_publish_cancellation(control)
     if context is not None:
         with contextlib.suppress(Exception):
             context.close()
@@ -9788,6 +10766,116 @@ def _task_elapsed_text(seconds: int | float) -> str:
     return f"{minutes:02d}:{seconds:02d}"
 
 
+def _persist_crm_relationship_evidence_in_transaction(
+    conn: sqlite3.Connection,
+    *,
+    task: Any,
+    payload: dict[str, Any],
+    result: dict[str, Any],
+    verified_at: int,
+) -> int:
+    if (
+        str(task["task_type"] or "") != "instagram_relationship_verify"
+        or payload.get("crm_relationship_verify") is not True
+    ):
+        return 0
+    user_id = int(task["user_id"] or 0)
+    account_id = str(task["account_id"] or "").strip()
+    targets = payload.get("target_usernames")
+    lead_ids = payload.get("lead_ids")
+    if (
+        user_id <= 0
+        or not account_id
+        or not isinstance(targets, list)
+        or not isinstance(lead_ids, list)
+        or not targets
+        or len(targets) != len(lead_ids)
+    ):
+        raise RuntimeError("CRM relationship task is missing its trusted target mapping")
+    account = conn.execute(
+        "SELECT 1 FROM social_accounts WHERE id=? AND user_id=? AND lower(platform)='instagram'",
+        (account_id, user_id),
+    ).fetchone()
+    if account is None:
+        raise RuntimeError("CRM relationship account no longer belongs to the tenant")
+    normalized_targets = [_relationship_username(value) for value in targets]
+    clean_lead_ids = [str(value or "").strip() for value in lead_ids]
+    if any(not value for value in normalized_targets) or any(not value for value in clean_lead_ids):
+        raise RuntimeError("CRM relationship target mapping is invalid")
+    placeholders = ",".join("?" for _ in clean_lead_ids)
+    tenant_leads = conn.execute(
+        f"SELECT id FROM crm_leads WHERE user_id=? AND active=1 AND id IN ({placeholders})",
+        (user_id, *clean_lead_ids),
+    ).fetchall()
+    if {str(row["id"]) for row in tenant_leads} != set(clean_lead_ids):
+        raise RuntimeError("CRM relationship target mapping crosses tenant boundaries")
+
+    from .crm.platform_extensions import relationship_rows_from_worker_evidence
+
+    lead_ids_by_username = dict(zip(normalized_targets, clean_lead_ids, strict=True))
+    proved_rows = relationship_rows_from_worker_evidence(
+        result,
+        account_id=account_id,
+        lead_ids_by_username=lead_ids_by_username,
+        verified_at=int(verified_at),
+    )
+    proved_by_lead_id = {str(row["lead_id"]): row for row in proved_rows}
+    raw_results = result.get("results") if isinstance(result.get("results"), list) else []
+    raw_by_username = {
+        _relationship_username(item.get("target_username") or item.get("targetUsername")): item
+        for item in raw_results
+        if isinstance(item, dict)
+        and _relationship_username(item.get("target_username") or item.get("targetUsername"))
+    }
+    written = 0
+    for username, lead_id in zip(normalized_targets, clean_lead_ids, strict=True):
+        proved = proved_by_lead_id.get(lead_id)
+        if proved is not None:
+            status = str(proved["status"])
+            evidence = dict(proved["evidence"])
+        else:
+            raw = raw_by_username.get(username, {})
+            status = "unknown"
+            evidence = {
+                "target_username": username,
+                "worker_evidence": False,
+                "reason_code": str(raw.get("reason_code") or "relationship_evidence_missing"),
+                "profile_found": raw.get("profile_found", raw.get("profileFound")),
+                "inspected_url": str(raw.get("inspected_url") or raw.get("inspectedUrl") or ""),
+                "screenshot_path": str(raw.get("screenshot_path") or raw.get("screenshotPath") or ""),
+            }
+        evidence["social_task_id"] = str(task["id"] or "")
+        evidence["retryable"] = False
+        conn.execute(
+            "UPDATE crm_relationships SET active=0,updated_at=? "
+            "WHERE user_id=? AND account_id=? AND lead_id=? AND active=1",
+            (int(verified_at), user_id, account_id, lead_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO crm_relationships(
+              id,user_id,lead_id,account_id,relationship_type,status,verified_at,
+              evidence_json,import_batch_id,active,legacy_id,legacy_payload_json,
+              schema_version,created_at,updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,'',1,'','{}',1,?,?)
+            """,
+            (
+                _NEW_ID("crm_relationship"),
+                user_id,
+                lead_id,
+                account_id,
+                "instagram_follow",
+                status,
+                int(verified_at),
+                json.dumps(evidence, ensure_ascii=False),
+                int(verified_at),
+                int(verified_at),
+            ),
+        )
+        written += 1
+    return written
+
+
 def _finish_task(
     task_id: str,
     status: str,
@@ -9803,6 +10891,23 @@ def _finish_task(
         if not task:
             return False
         task_type = str(task["task_type"] or "")
+        stored_payload = _loads(task["payload_json"], {})
+        if not isinstance(stored_payload, dict):
+            stored_payload = {}
+        crm_submission_state = str(stored_payload.get("_billing_submission_state") or "")
+        crm_action_unknown = bool(
+            status not in {"success", "need_manual"}
+            and str(stored_payload.get("_crm_action_id") or "")
+            and crm_submission_state in {"submitting", "submitted"}
+        )
+        if crm_action_unknown:
+            result = {
+                **(result or {}),
+                "action_outcome_unknown": True,
+                "submission_state": crm_submission_state,
+                "retryable": False,
+            }
+            error = error or "CRM platform action may have been submitted; evidence review is required"
         publish_preview = task_type == "publish_post" and _is_publish_preview_result(result)
         if publish_preview:
             sync_persona_archive = False
@@ -9822,6 +10927,94 @@ def _finish_task(
                 }
                 status = "failed"
                 error = "发布结果未返回可查询链接，未计入已发布数量或今日额度。"
+        if task_type == "instagram_relationship_verify" and status in {"success", "failed"}:
+            try:
+                persisted_count = _persist_crm_relationship_evidence_in_transaction(
+                    conn,
+                    task=task,
+                    payload=stored_payload,
+                    result=result or {},
+                    verified_at=now,
+                )
+                result = {**(result or {}), "crm_relationships_persisted": persisted_count}
+            except Exception as exc:
+                result = {
+                    **(result or {}),
+                    "crm_relationship_persist_failed": True,
+                    "retryable": False,
+                }
+                if status == "success":
+                    status = "failed"
+                    error = f"Relationship evidence could not be persisted: {str(exc)[:500]}"
+        if (
+            task_type in {"browse_feed", "browse_profile"}
+            and status == "success"
+            and str(stored_payload.get("_crm_action_type") or "") in {"collect_feed", "collect_profile"}
+        ):
+            projection_savepoint = "crm_collection_projection"
+            conn.execute(f"SAVEPOINT {projection_savepoint}")
+            try:
+                from .crm.result_persistence import persist_collection_result
+
+                collection = persist_collection_result(
+                    conn,
+                    task=dict(task),
+                    payload=stored_payload,
+                    result=result or {},
+                    persisted_at=now,
+                )
+                result = {**(result or {}), "crm_collection": collection}
+                if int(collection.get("collected") or 0) == 0:
+                    workflow_id = str(stored_payload.get("_crm_workflow_id") or "")
+                    step_id = str(stored_payload.get("_crm_step_id") or "")
+                    step = conn.execute(
+                        "SELECT sequence_no FROM crm_workflow_steps WHERE id=? AND workflow_id=? AND user_id=?",
+                        (step_id, workflow_id, int(task["user_id"])),
+                    ).fetchone()
+                    later = conn.execute(
+                        "SELECT 1 FROM crm_workflow_steps WHERE workflow_id=? AND user_id=? AND sequence_no>? LIMIT 1",
+                        (workflow_id, int(task["user_id"]), int(step["sequence_no"] or 0) if step else -1),
+                    ).fetchone()
+                    pool = conn.execute(
+                        "SELECT 1 FROM crm_pools WHERE user_id=? AND legacy_id=? AND active=1 LIMIT 1",
+                        (int(task["user_id"]), workflow_id),
+                    ).fetchone()
+                    if later is None and pool is None:
+                        status = "failed"
+                        error = "Collection completed with zero verified leads; no empty customer pool was created"
+                conn.execute(f"RELEASE SAVEPOINT {projection_savepoint}")
+            except Exception as exc:
+                with contextlib.suppress(sqlite3.Error):
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {projection_savepoint}")
+                    conn.execute(f"RELEASE SAVEPOINT {projection_savepoint}")
+                result = {**(result or {}), "crm_collection_persist_failed": True, "retryable": False}
+                status = "failed"
+                error = f"Collection results could not be persisted: {str(exc)[:500]}"
+        if task_type in INSTAGRAM_GROUP_TASK_TYPES and status == "success":
+            projection_savepoint = "crm_group_projection"
+            conn.execute(f"SAVEPOINT {projection_savepoint}")
+            try:
+                from .crm.result_persistence import persist_instagram_group_result
+
+                group_projection = persist_instagram_group_result(
+                    conn,
+                    task=dict(task),
+                    payload=stored_payload,
+                    result=result or {},
+                    persisted_at=now,
+                )
+                result = {**(result or {}), "crm_group": group_projection}
+                if task_type in INSTAGRAM_GROUP_WRITE_TASK_TYPES and not bool(group_projection.get("persisted")):
+                    status = "failed"
+                    error = "Verified Instagram group result could not be projected into CRM"
+                conn.execute(f"RELEASE SAVEPOINT {projection_savepoint}")
+            except Exception as exc:
+                with contextlib.suppress(sqlite3.Error):
+                    conn.execute(f"ROLLBACK TO SAVEPOINT {projection_savepoint}")
+                    conn.execute(f"RELEASE SAVEPOINT {projection_savepoint}")
+                result = {**(result or {}), "crm_group_persist_failed": True, "retryable": False}
+                status = "failed"
+                error = f"Instagram group result could not be persisted: {str(exc)[:500]}"
         result_json = json.dumps(result or {}, ensure_ascii=False)
         existing_committed = bool(int(task["daily_publish_committed"] or 0))
         publish_committed = bool(
@@ -9860,6 +11053,34 @@ def _finish_task(
             if current is not None and str(current["status"] or "") in {"failed", "cancelled"}:
                 _settle_or_release_task_billing_reservation(conn, current, now=now)
             return False
+        if task_type == "direct_message" and status in {"success", "failed"}:
+            from .crm.account_rotation import update_sender_rotation_status
+
+            rotation = update_sender_rotation_status(
+                conn,
+                user_id=int(task["user_id"]),
+                account_id=str(task["account_id"] or ""),
+                sent=status == "success" and bool((result or {}).get("verified")),
+                warning=str((result or {}).get("warning") or error or ""),
+                status=str((result or {}).get("status") or status),
+                recipient=str(
+                    (result or {}).get("recipient_username")
+                    or stored_payload.get("recipient_username")
+                    or ""
+                ),
+                logged_in_username=str((result or {}).get("logged_in_username") or ""),
+                inspected_url=str(
+                    (result or {}).get("inspected_url")
+                    or (result or {}).get("conversation_url")
+                    or ""
+                ),
+            )
+            result = {**(result or {}), "sender_rotation": rotation}
+            result_json = json.dumps(result, ensure_ascii=False)
+            conn.execute(
+                "UPDATE social_automation_tasks SET result_json = ? WHERE id = ?",
+                (result_json, task_id),
+            )
         if publish_preview:
             _release_daily_publish_slot(conn, task_id, "preview_only_no_submit", now=now)
         elif str(task["task_type"] or "") == "publish_post":
@@ -9888,7 +11109,9 @@ def _finish_task(
             clean_payload.pop("_publish_confirmation", None)
         if status != "need_manual":
             clean_payload = _clear_runtime_claims(clean_payload)
-            clean_payload.pop("_billing_committed_quantity", None)
+            if not crm_action_unknown:
+                clean_payload.pop("_billing_committed_quantity", None)
+                clean_payload.pop("_billing_submission_state", None)
         if clean_payload != original_payload:
             conn.execute(
                 "UPDATE social_automation_tasks SET payload_json = ? WHERE id = ?",
@@ -9897,7 +11120,7 @@ def _finish_task(
         reservation_id = str(task["billing_reservation_id"] or "") if "billing_reservation_id" in task.keys() else ""
         credit_cost_units = 0
         free_image_count = 0
-        if reservation_id and status != "need_manual":
+        if reservation_id and status != "need_manual" and not crm_action_unknown:
             if publish_preview:
                 _release_task_billing_reservation(conn, task, now=now)
             elif status == "success" or existing_committed or billing_committed_quantity > 0:
@@ -10196,6 +11419,16 @@ def _automation_action_label(task_type: str) -> str:
         "browse_profile": "网页自动化浏览主页",
         "instagram_warmup": "Instagram 网页自动化养号",
         "instagram_auto_reply": "Instagram 网页自动化按人设自动回复",
+        "instagram_relationship_verify": "Instagram 关注关系验证",
+        "instagram_group_candidates_inspect": "Instagram 群组候选人检查",
+        "instagram_recent_conversations_inspect": "Instagram 最近会话检查",
+        "instagram_conversation_controls_inspect": "Instagram 会话控件检查",
+        "instagram_group_create": "Instagram Direct 创建群聊",
+        "instagram_group_post": "Instagram Direct 群组发布",
+        "instagram_group_settings_update": "Instagram Direct 更新群设置",
+        "instagram_group_members_add": "Instagram Direct 添加群成员",
+        "instagram_group_members_inspect": "Instagram Direct 群成员复核",
+        "instagram_group_status_inspect": "Instagram Direct 群状态检查",
         "threads_warmup": "Threads 网页自动化养号",
         "threads_auto_reply": "Threads 网页自动化按人设自动回复",
         "check_login": "网页自动化登录检查",

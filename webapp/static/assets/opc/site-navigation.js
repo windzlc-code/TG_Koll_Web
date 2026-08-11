@@ -63,6 +63,7 @@
       pricing: "订阅方案",
       difference: "服务差异",
       console: "控制台",
+      crm: "CRM 工作台",
       adminConsole: "运营后台",
       aboutVecto: "了解 Vecto",
       login: "登录",
@@ -164,6 +165,7 @@
       pricing: "訂閱方案",
       difference: "服務差異",
       console: "控制台",
+      crm: "CRM 工作台",
       adminConsole: "營運後台",
       aboutVecto: "了解 Vecto",
       login: "登入",
@@ -341,6 +343,7 @@
       "/about-vecto.html",
       "/subscription.html",
       "/pricing.html",
+      "/crm.html",
     ].includes(url.pathname);
     if (workspaceUserId && preservesWorkspace) {
       url.searchParams.set("admin_workspace_user_id", workspaceUserId);
@@ -370,7 +373,7 @@
 
   function publicPagePreservesAdminWorkspace() {
     const page = document.querySelector("[data-site-header]")?.dataset.sitePage || "";
-    return ["home", "aboutVecto", "pricing"].includes(page)
+    return ["home", "aboutVecto", "pricing", "crm"].includes(page)
       || (window.location.pathname === "/admin-profile.html" && Boolean(storedAdminWorkspaceUserId()));
   }
 
@@ -395,6 +398,46 @@
         link.setAttribute("href", adminConsoleTarget("", workspaceUserId));
       });
     });
+  }
+
+  function syncCrmEntryTargets() {
+    const adminSessionMeta = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
+    const adminContext = adminSessionMeta || currentSessionMode === "admin" || hasAdminConsoleContext();
+    const workspaceUserId = adminContext ? storedAdminWorkspaceUserId() : "";
+    const params = new URLSearchParams();
+    if (adminContext) params.set("admin_console", "1");
+    if (workspaceUserId) params.set("admin_workspace_user_id", workspaceUserId);
+    const target = `/crm.html${params.size ? `?${params}` : ""}`;
+    document.querySelectorAll("[data-crm-entry]").forEach((link) => {
+      link.setAttribute("href", target);
+      if (link.dataset.siteCrmBoundaryReady === "true") return;
+      link.dataset.siteCrmBoundaryReady = "true";
+      link.addEventListener("click", () => {
+        if (!adminContext) return;
+        markAdminConsoleContext();
+        if (workspaceUserId) writeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY, workspaceUserId);
+      });
+    });
+  }
+
+  async function syncCrmEntryVisibility() {
+    const entries = [...document.querySelectorAll("[data-crm-entry]")];
+    if (!entries.length) return;
+    const adminIdentity = currentSessionMode === "admin"
+      && Boolean(currentAccount?.is_admin || currentAccount?.acting_admin);
+    if (!adminIdentity) {
+      entries.forEach((entry) => { entry.hidden = true; });
+      return;
+    }
+    try {
+      const payload = await fetchAccountJson("/api/crm/v1/bootstrap");
+      const allowed = Boolean(payload?.module?.effective);
+      entries.forEach((entry) => { entry.hidden = !allowed; });
+    } catch (error) {
+      if (Number(error?.status || 0) === 403) {
+        entries.forEach((entry) => { entry.hidden = true; });
+      }
+    }
   }
 
   function syncPublicAdminEntry() {
@@ -471,18 +514,38 @@
 
   function navLink({ key, href, current, className = "" }) {
     const busy = key === "console" ? " data-console-entry" : "";
+    const crmEntry = key === "crm" ? " data-crm-entry" : "";
+    const initiallyHidden = key === "crm" ? " hidden" : "";
     const register = key === "guest" ? " data-open-register" : "";
     const active = current === key ? ' aria-current="page"' : "";
     const classAttribute = className ? ` class="${className}"` : "";
-    return `<a${classAttribute} data-site-nav-key="${key}" href="${href}"${active}${busy}${register}><span data-site-copy="${key}"></span></a>`;
+    return `<a${classAttribute} data-site-nav-key="${key}" href="${href}"${active}${busy}${crmEntry}${register}${initiallyHidden}><span data-site-copy="${key}"></span></a>`;
   }
 
   function navigationLinks(page, current) {
     return [
       navLink({ key: "solution", href: navHref(page, "#solution"), current }),
       navLink({ key: "console", href: "/console.html", current }),
+      navLink({ key: "crm", href: "/crm.html", current }),
       navLink({ key: "aboutVecto", href: "/about-vecto.html", current }),
     ].join("");
+  }
+
+  function installCrmDesktopEntry(header, current) {
+    const nav = header?.querySelector(":scope > .site-nav");
+    if (!nav) return null;
+    let entry = nav.querySelector('[data-site-nav-key="crm"]');
+    if (!entry) {
+      const template = document.createElement("template");
+      template.innerHTML = navLink({ key: "crm", href: "/crm.html", current }).trim();
+      entry = template.content.firstElementChild;
+      const consoleEntry = nav.querySelector('[data-site-nav-key="console"]');
+      if (consoleEntry) consoleEntry.after(entry);
+      else nav.appendChild(entry);
+    }
+    if (current === "crm") entry.setAttribute("aria-current", "page");
+    else entry.removeAttribute("aria-current");
+    return entry;
   }
 
   function languageIcon() {
@@ -550,6 +613,7 @@
       solution: '<path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path d="m18.5 16 .7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"></path>',
       pricing: '<rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M4 9h16M8 14h3"></path><path d="m16 12 .7 1.4 1.6.2-1.2 1.1.3 1.6-1.4-.8-1.4.8.3-1.6-1.2-1.1 1.6-.2z"></path>',
       console: '<rect x="4" y="4" width="6" height="6" rx="1"></rect><rect x="14" y="4" width="6" height="6" rx="1"></rect><rect x="4" y="14" width="6" height="6" rx="1"></rect><path d="M15 17h5M17.5 14.5v5"></path>',
+      crm: '<path d="M5 4h14v16H5z"></path><path d="M8 8h8M8 12h5M8 16h3"></path><circle cx="17" cy="16" r="2.5"></circle>',
       aboutVecto: '<circle cx="12" cy="12" r="8"></circle><path d="M12 10v5M12 7h.01"></path>',
     };
     return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[key] || paths.solution}</svg>`;
@@ -659,13 +723,16 @@
       { group: "mobileExplore", key: "aboutVecto", href: "/about-vecto.html" },
       { group: "mobileServices", key: "pricing", href: "/subscription.html" },
       { group: "mobileWorkspace", key: "console", href: "/console.html" },
+      { group: "mobileWorkspace", key: "crm", href: "/crm.html" },
     ].map(({ group, key, href }, index, items) => {
       const active = current === key ? ' aria-current="page"' : "";
       const consoleEntry = key === "console" ? " data-console-entry" : "";
+      const crmEntry = key === "crm" ? " data-crm-entry" : "";
+      const initiallyHidden = key === "crm" ? " hidden" : "";
       const groupLabel = index === 0 || items[index - 1].group !== group
         ? `<span class="site-mobile-menu-group-label" data-site-copy="${group}"></span>`
         : "";
-      return `${groupLabel}<a class="site-mobile-menu-link" data-site-nav-key="${key}" href="${href}"${active}${consoleEntry}><span class="site-mobile-menu-link-icon">${mobileMenuItemIcon(key)}</span><span data-site-copy="${key}"></span></a>`;
+      return `${groupLabel}<a class="site-mobile-menu-link" data-site-nav-key="${key}" href="${href}"${active}${consoleEntry}${crmEntry}${initiallyHidden}><span class="site-mobile-menu-link-icon">${mobileMenuItemIcon(key)}</span><span data-site-copy="${key}"></span></a>`;
     }).join("");
   }
 
@@ -1088,6 +1155,7 @@
     });
     renderAccountBilling();
     syncConsoleEntryTargets();
+    syncCrmEntryTargets();
     syncPublicAdminEntry();
   }
 
@@ -1116,11 +1184,13 @@
     }
     syncAccount();
     if (currentAccount && currentSessionMode !== "guest") {
+      void syncCrmEntryVisibility();
       void loadAccountBilling();
       startNotificationPolling();
       void loadNotifications();
       void showPendingGoogleAuthFeedback();
     } else {
+      void syncCrmEntryVisibility();
       stopNotificationPolling();
       renderNotifications();
     }
@@ -2156,15 +2226,16 @@
   function mount(header) {
     if (!header || header.dataset.siteReady === "true") return header;
     const page = header.dataset.sitePage || "home";
-    const mode = header.dataset.siteMode || (page === "console" ? "authenticated" : "public");
+    const mode = header.dataset.siteMode || (["console", "crm"].includes(page) ? "authenticated" : "public");
     const resolvedMode = mode === "public" ? page : mode;
-    const current = ["pricing", "console", "aboutVecto"].includes(page) ? page : "";
+    const current = ["pricing", "console", "crm", "aboutVecto"].includes(page) ? page : "";
 
     if (mode === "public" && !header.dataset.siteAuthState) header.dataset.siteAuthState = "pending";
 
     if (!header.querySelector(".brand")) {
       header.innerHTML = fallbackMarkup(page, resolvedMode, current);
     }
+    installCrmDesktopEntry(header, current);
     installMobileMenu(header, page, current);
     installLanguageControls(header);
     if (mode === "authenticated") {

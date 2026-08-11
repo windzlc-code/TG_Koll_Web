@@ -17,7 +17,7 @@ html {
   padding: 9px 12px;
   color: #071314;
   background: #ffffff;
-  border: 2px solid #0a817f;
+  border: 2px solid #4b6478;
   border-radius: 6px;
   font-size: 14px;
   font-weight: 800;
@@ -27,7 +27,7 @@ html {
 }
 
 .site-skip-link:focus-visible {
-  outline: 3px solid rgba(119, 216, 195, 0.72);
+  outline: 3px solid rgba(75, 100, 120, 0.72);
   outline-offset: 2px;
   transform: translateY(0);
 }
@@ -148,6 +148,13 @@ html {
   transition: color 160ms ease;
 }
 
+/* CRM is an administrator-only module. Author-level navigation display
+   rules must never override the HTML hidden state used while identity and
+   module policy are being resolved. */
+[data-crm-entry][hidden] {
+  display: none !important;
+}
+
 .site-nav a::before {
   position: absolute;
   top: 50%;
@@ -179,6 +186,10 @@ html {
   flex-basis: 98px;
 }
 
+.site-nav > a[data-site-nav-key="crm"] {
+  flex-basis: 96px;
+}
+
 .site-nav a[aria-current="page"] {
   color: #ffffff;
 }
@@ -199,7 +210,7 @@ html {
 .site-header button:focus-visible,
 .site-menu-toggle:focus-visible,
 .site-mobile-menu-panel a:focus-visible {
-  outline: 2px solid #77d8c3;
+  outline: 2px solid #d7e0e7;
   outline-offset: 3px;
 }
 
@@ -209,7 +220,7 @@ html {
   bottom: -9px;
   left: 0;
   height: 2px;
-  background: #77d8c3;
+  background: #d7e0e7;
   border-radius: 2px;
   content: "";
 }
@@ -442,7 +453,7 @@ html {
 .site-language-popover button.is-active {
   color: #ffffff;
   background: #244657;
-  border-color: rgba(119, 216, 195, 0.48);
+  border-color: rgba(215, 224, 231, 0.48);
 }
 
 .site-subscription-link {
@@ -458,9 +469,9 @@ html {
 }
 
 .site-subscription-link[aria-current="page"] {
-  color: #77d8c3;
-  background: rgba(119, 216, 195, 0.18);
-  border-color: #77d8c3;
+  color: #d7e0e7;
+  background: rgba(215, 224, 231, 0.16);
+  border-color: #d7e0e7;
 }
 
 .site-language-state {
@@ -617,8 +628,8 @@ body.site-mobile-menu-active {
 
 .site-mobile-menu-close:hover,
 .site-mobile-menu-close:focus-visible {
-  color: #087f72;
-  background: #e8f0ef;
+  color: #253746;
+  background: #e8edf2;
 }
 
 .site-mobile-menu-close svg {
@@ -743,8 +754,8 @@ body.site-mobile-menu-active {
 
 .site-header .header-action {
   padding: 0 15px;
-  color: #041210;
-  background: #e8fff4;
+  color: #253746;
+  background: #e8edf2;
   border: 1px solid rgba(255, 255, 255, 0.35);
   text-decoration: none;
 }
@@ -779,8 +790,8 @@ body.site-mobile-menu-active {
   max-width: 40px;
   padding: 0;
   color: rgba(255, 255, 255, 0.8);
-  background: rgba(119, 216, 195, 0.1);
-  border: 1px solid rgba(119, 216, 195, 0.36);
+  background: rgba(215, 224, 231, 0.1);
+  border: 1px solid rgba(215, 224, 231, 0.36);
   border-radius: 50%;
   cursor: pointer;
 }
@@ -826,9 +837,9 @@ body.site-mobile-menu-active {
 .site-user:hover,
 .site-account-menu.is-open .site-user {
   color: #ffffff;
-  background: rgba(119, 216, 195, 0.2);
-  border-color: #77d8c3;
-  box-shadow: 0 0 0 4px rgba(119, 216, 195, 0.12);
+  background: rgba(215, 224, 231, 0.16);
+  border-color: #d7e0e7;
+  box-shadow: 0 0 0 4px rgba(215, 224, 231, 0.1);
 }
 
 .site-user .site-user-chevron {
@@ -1313,9 +1324,9 @@ body.site-mobile-menu-active {
   place-items: center;
   width: 46px;
   height: 46px;
-  color: var(--teal-dark, #087071);
-  background: #eef9f6;
-  border: 1px solid #cbe3dc;
+  color: var(--public-cool-dark, #253746);
+  background: #e8edf2;
+  border: 1px solid #b9c2cc;
   border-radius: 50%;
 }
 
@@ -1402,8 +1413,8 @@ body.site-mobile-menu-active {
 
 .site-auth-feedback-confirm:hover,
 .site-auth-feedback-confirm:focus-visible {
-  background: var(--teal-dark, #087071);
-  border-color: var(--teal-dark, #087071);
+  background: var(--public-cool-dark, #253746);
+  border-color: var(--public-cool-dark, #253746);
 }
 
 .site-auth-feedback.is-form .site-auth-feedback-dialog {
@@ -1457,7 +1468,7 @@ body.site-mobile-menu-active {
 
 .site-auth-feedback-form input:focus {
   outline: 3px solid rgba(8, 127, 114, .12);
-  border-color: var(--teal-dark, #087071);
+  border-color: var(--public-cool-dark, #253746);
 }
 
 .site-auth-feedback-form-action {
@@ -1474,8 +1485,8 @@ body.site-mobile-menu-active {
 }
 
 .site-auth-feedback-form-action.is-primary {
-  background: var(--teal-dark, #087071);
-  border-color: var(--teal-dark, #087071);
+  background: var(--public-cool-dark, #253746);
+  border-color: var(--public-cool-dark, #253746);
 }
 
 .site-auth-feedback-form-action:disabled {
@@ -1491,7 +1502,7 @@ body.site-mobile-menu-active {
 }
 
 .site-auth-feedback-form-status.is-error { color: #b63838; }
-.site-auth-feedback-form-status.is-success { color: #14745e; }
+.site-auth-feedback-form-status.is-success { color: #356b91; }
 
 .site-auth-feedback-actions {
   grid-column: 1 / -1;
@@ -1572,9 +1583,9 @@ body.site-account-panel-active {
   width: 40px;
   height: 40px;
   overflow: hidden;
-  color: #087f72;
-  background: #eff9f6;
-  border: 1px solid #c9e9df;
+  color: #253746;
+  background: #e8edf2;
+  border: 1px solid #b9c2cc;
   border-radius: 50%;
 }
 
@@ -1645,9 +1656,9 @@ body.site-account-panel-active {
 
 .site-account-close:hover,
 .site-account-close:focus-visible {
-  color: #122422;
-  background: #eff6f4;
-  border-color: #c8d7d4;
+  color: #253746;
+  background: #e8edf2;
+  border-color: #b9c2cc;
 }
 
 .site-account-close svg {
@@ -1717,9 +1728,9 @@ body.site-account-panel-active {
   max-width: 100%;
   padding: 4px 8px;
   overflow: hidden;
-  color: #087f72;
-  background: #eff9f6;
-  border: 1px solid #c9e9df;
+  color: #253746;
+  background: #e8edf2;
+  border: 1px solid #b9c2cc;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 800;
@@ -1745,7 +1756,7 @@ body.site-account-panel-active {
 }
 
 .site-account-billing-state {
-  color: #628274;
+  color: #4b6478;
   font-size: 10px;
   font-weight: 750;
 }
@@ -1910,9 +1921,9 @@ body.site-account-panel-active {
 }
 
 .site-account-preference:hover {
-  color: #087f72;
-  background: #eaf7f3;
-  border-color: #b7dfd5;
+  color: #253746;
+  background: #e8edf2;
+  border-color: #b9c2cc;
 }
 
 .site-account-preference-icon {
@@ -1920,7 +1931,7 @@ body.site-account-panel-active {
   place-items: center;
   width: 20px;
   height: 20px;
-  color: #087f72;
+  color: #253746;
 }
 
 .site-account-preference-icon svg {
@@ -2347,7 +2358,7 @@ body.site-account-panel-active {
   .site-skip-link {
     min-height: 44px;
     touch-action: manipulation;
-    -webkit-tap-highlight-color: rgba(35, 134, 111, 0.16);
+    -webkit-tap-highlight-color: transparent;
   }
 
   .site-header :is(

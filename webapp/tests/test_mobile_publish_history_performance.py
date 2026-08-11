@@ -4,6 +4,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 CONSOLE_JS = (ROOT / "webapp" / "static" / "assets" / "console.js").read_text(encoding="utf-8")
+CONSOLE_CSS = (ROOT / "webapp" / "static" / "assets" / "console.css").read_text(encoding="utf-8")
 
 
 def function_source(name: str, next_name: str) -> str:
@@ -35,6 +36,23 @@ class MobilePublishHistoryPerformanceTests(unittest.TestCase):
 
         self.assertIn('publishMode !== "publish_history"', renderer)
         self.assertLess(renderer.index("const publishMode = normalizedPublishMode(branch);"), renderer.index("loadPersonaDraftPosts"))
+
+    def test_history_card_selection_updates_existing_cards_without_rebuilding_the_persona_workspace(self):
+        sync = function_source("syncPublishHistorySelectionDom", "renderPersonalSettingsIcon")
+
+        self.assertIn('document.querySelectorAll("[data-publish-history-card]")', sync)
+        self.assertIn('card.classList.toggle("is-selected", active)', sync)
+        self.assertIn('preview.outerHTML = renderPublishHistoryPreview(persona)', sync)
+        self.assertIn('if (!syncPublishHistorySelectionDom()) renderPersonaDetail();', CONSOLE_JS)
+        self.assertIn('if (!syncPublishHistorySelectionDom()) renderSimpleFlowModule("publishing");', CONSOLE_JS)
+
+    def test_mobile_history_selection_uses_a_subtle_touch_state(self):
+        mobile_history_css = CONSOLE_CSS[CONSOLE_CSS.index(".publish-history-card {"):]
+
+        self.assertIn("-webkit-tap-highlight-color: transparent;", mobile_history_css)
+        self.assertIn(".publish-history-card.is-selected", mobile_history_css)
+        self.assertIn("var(--accent) 2.5%", mobile_history_css)
+        self.assertNotIn(".publish-history-card.is-selected {\n    border-color: var(--accent);", mobile_history_css)
 
 
 if __name__ == "__main__":

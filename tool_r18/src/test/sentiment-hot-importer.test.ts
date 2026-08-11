@@ -20,7 +20,6 @@ import {
   buildModelOrderedThreadsSearchQueries,
   buildSentimentHotSearchStrategyCacheKey,
   buildJinaReaderUrl,
-  buildLocalSentimentHotSearchStrategy,
   buildThreadsSearchUrl,
   candidateMatchesRequestedFreshness,
   candidateMatchesSentimentHotStrategyAnchors,
@@ -69,45 +68,6 @@ afterEach(() => {
 });
 
 describe("sentiment hot importer", () => {
-  it("builds local hot-search terms from platform tags before persona text", () => {
-    const strategy = buildLocalSentimentHotSearchStrategy({
-      archive: {
-        name: "阿伟",
-        content: "关注财经市场与投资经验，分享股票趋势和理财选择。",
-        setup: {
-          trendTopics: ["股票", "财经", "投资"],
-          genres: ["金融市场"],
-          interests: ["理财"],
-        },
-      } as any,
-    });
-
-    expect(strategy.localDeterministic).toBe(true);
-    expect(strategy.requiredAnchorTerms.slice(0, 3)).toEqual(["股票", "财经", "投资"]);
-    expect(strategy.primaryQueries).toContain("股票避坑");
-    expect(strategy.primaryQueries.length).toBeGreaterThanOrEqual(5);
-  });
-
-  it("adds deterministic aliases for compact platform topic labels without reading persona prose", () => {
-    const strategy = buildLocalSentimentHotSearchStrategy({
-      archive: {
-        name: "新建人设",
-        content: "这里只是人物简介，不应被拆成宽泛热点关键词。",
-        setup: {
-          trendTopics: ["金融投资", "股票交易"],
-        },
-      } as any,
-    });
-
-    expect(strategy.requiredAnchorTerms).toContain("金融投资");
-    expect(strategy.requiredAnchorTerms).toContain("金融");
-    expect(strategy.requiredAnchorTerms).toContain("投资");
-    expect(strategy.requiredAnchorTerms.slice(0, 2)).toEqual(["金融", "投资"]);
-    expect(strategy.primaryQueries).toContain("股票");
-    expect(strategy.primaryQueries).toContain("交易");
-    expect(strategy.primaryQueries).not.toContain("这里只");
-  });
-
   it("prioritizes dedicated hot keyword models before global defaults", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sentiment-hot-config-"));
     const configPath = path.join(dir, "api_config.json");
@@ -1826,7 +1786,6 @@ tea\u8336\u6587\u5316\u65e5\u5e38\u5206\u4eab\u8207\u6162\u751f\u6d3b\u9ad4\u9a5
 
   it("parses Threads account-search GraphQL posts with real engagement totals", () => {
     const candidates = parseThreadsGraphqlSearchPayload({
-      freshnessFallbackAt: "2026-07-17T09:00:00.000Z",
       query: "醫療",
       keywords: ["醫療", "醫生", "醫院"],
       payload: {
@@ -1838,6 +1797,7 @@ tea\u8336\u6587\u5316\u65e5\u5e38\u5206\u4eab\u8207\u6162\u751f\u6d3b\u9ad4\u9a5
                   post: {
                     pk: "3925594288747063183",
                     code: "DZ1ABCxyz",
+                    taken_at: 1784278800,
                     canonical_url: "https://www.threads.com/@demo_doctor/post/DZ1ABCxyz",
                     user: { username: "demo_doctor" },
                     caption: {
@@ -2149,6 +2109,24 @@ Title: Instagram
     expect(candidates[0].engagement?.likeCount).toBe(1100);
     expect(candidates[0].engagement?.commentCount).toBe(82);
     expect(candidates[0].media.map((item) => item.url)).toEqual(["https://cdn.example.com/ig-a.jpg"]);
+  });
+
+  it("derives the original Instagram publication time from a public shortcode", () => {
+    const candidates = parseInstagramReaderSearchMarkdownCandidates({
+      query: "\u6c7d\u8f66",
+      keywords: ["\u6c7d\u8f66"],
+      sourceUrl: "https://www.instagram.com/explore/tags/car/",
+      text: `
+Title: Instagram
+[car.demo](http://www.instagram.com/car.demo/)
+[View post](http://www.instagram.com/p/DbdDxdkzbnq/)
+\u6c7d\u8f66\u7ef4\u4fee\u548c\u8f66\u8f86\u4fdd\u517b\u7684\u771f\u5b9e\u4f53\u9a8c\u5206\u4eab\uff0c\u8bb0\u5f55\u8fd9\u6b21\u5904\u7406\u6545\u969c\u7684\u8fc7\u7a0b\u548c\u6210\u672c\u3002 1.2K likes
+`,
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].publishedAt).toBe("2026-07-31T10:33:17.218Z");
+    expect((candidates[0].metrics as any).publishedAtSource).toBe("instagram_shortcode_snowflake");
   });
 
   it("parses authenticated Instagram posts with their original published time", () => {

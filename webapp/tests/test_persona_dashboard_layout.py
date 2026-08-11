@@ -158,8 +158,56 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("当前平台发布归档", summary)
         self.assertIn("const selectedPlatform = pdPlatformFilter();", charts)
         self.assertIn("data.charts.platform_trend[selectedPlatform]", charts)
-        self.assertIn("const platforms = (persona.hot_platforms || []).filter", charts)
+        self.assertIn("(persona.hot_platforms || []).filter((item) =>", charts)
         self.assertIn('pdRenderPersonaHeatCarousel("personaHotRankChart"', self.dashboard_script)
+
+    def test_dashboard_removes_data_quality_and_queue_donuts_and_keeps_platform_labels_persistent(self):
+        dashboard_start = self.markup.index(
+            '<section class="view persona-dashboard-view" data-panel="persona_dashboard">'
+        )
+        dashboard = self.markup[dashboard_start:]
+        render_start = self.dashboard_script.index("function pdRenderDashboard()")
+        render_end = self.dashboard_script.index("\nfunction pdSetMsg", render_start)
+        render = self.dashboard_script[render_start:render_end]
+        donut_start = self.dashboard_script.index("function pdRenderDonutChart")
+        donut_end = self.dashboard_script.index("\nfunction pdAggregateTrendRows", donut_start)
+        donut = self.dashboard_script[donut_start:donut_end]
+
+        self.assertNotIn('id="personaCoverageChart"', dashboard)
+        self.assertNotIn('id="personaTaskStatusChart"', dashboard)
+        self.assertLess(dashboard.index('id="personaPlatformChart"'), dashboard.index('id="personaEngagementChart"'))
+        self.assertLess(dashboard.index('id="personaEngagementChart"'), dashboard.index('id="personaTrendChart"'))
+        self.assertNotIn('personaCoverageChart', render)
+        self.assertNotIn('personaTaskStatusChart', render)
+        self.assertIn('platformLegend: ["", "threads", "instagram"]', render)
+        self.assertIn("options.platformLegend", donut)
+        self.assertIn('Object.prototype.hasOwnProperty.call(row, "platform")', donut)
+        self.assertIn('data-platform="${pdEscape(platform || "all")}"', donut)
+        self.assertIn('is-active', donut)
+        self.assertIn('is-muted', donut)
+        self.assertIn('.persona-donut-legend .is-platform.is-muted', self.styles)
+        self.assertIn('.persona-donut-legend .is-platform.is-active', self.styles)
+
+    def test_dashboard_platform_legend_keeps_a_fixed_width_and_removes_metric_note(self):
+        dashboard_start = self.markup.index(
+            '<section class="view persona-dashboard-view" data-panel="persona_dashboard">'
+        )
+        dashboard = self.markup[dashboard_start:]
+
+        self.assertNotIn('persona-dashboard-note', dashboard)
+        self.assertIn(
+            '.persona-dashboard-view .persona-donut-legend {\n'
+            '  width: 100%;\n'
+            '  justify-self: stretch;',
+            self.styles,
+        )
+        self.assertIn(
+            '.persona-dashboard-view .persona-donut-legend .is-platform b {\n'
+            '  min-width: 5ch;\n'
+            '  text-align: right;\n'
+            '  font-variant-numeric: tabular-nums;',
+            self.styles,
+        )
 
     def test_dashboard_uses_followers_for_the_first_kpi(self):
         self.assertIn("function pdPersonaFollowers", self.dashboard_script)
@@ -274,6 +322,71 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("scroll-snap-type: x mandatory;", self.styles)
         self.assertIn('[data-platform="threads"] .persona-heat-platform-track i', self.styles)
         self.assertIn('[data-platform="instagram"] .persona-heat-platform-track i', self.styles)
+
+    def test_persona_heat_uses_compact_persona_tabs_between_the_paging_buttons(self):
+        chart_start = self.dashboard_script.index("function pdRenderPersonaHeatCarousel(hostId, personas, platforms)")
+        chart_end = self.dashboard_script.index("\nfunction pdRenderDonutChart", chart_start)
+        chart = self.dashboard_script[chart_start:chart_end]
+
+        self.assertIn('class="persona-heat-persona-tabs"', chart)
+        self.assertIn('data-persona-heat-tab="${index}"', chart)
+        self.assertIn('pdEl("personaHeatPersonaCount")', chart)
+        self.assertIn('count.innerHTML = `<b>${next + 1}</b> / ${items.length}`;', chart)
+        self.assertIn('id="personaHeatPersonaCount"', self.markup)
+        self.assertIn('role="tablist"', chart)
+        self.assertLess(
+            chart.index('data-persona-heat-step="-1"'),
+            chart.index('class="persona-heat-persona-tabs"'),
+        )
+        self.assertLess(
+            chart.index('class="persona-heat-persona-tabs"'),
+            chart.index('data-persona-heat-step="1"'),
+        )
+        self.assertIn('button.classList.toggle("is-active", tabIndex === next);', chart)
+        self.assertIn('renderPersonaCount(next);', chart)
+        self.assertIn('const scrollToIndex = (index, behavior = "smooth") => {', chart)
+        self.assertIn('button.addEventListener("click", () => scrollToIndex(', chart)
+        self.assertIn('.persona-dashboard-view .persona-heat-persona-tabs {', self.styles)
+        self.assertIn('border-bottom: 1px solid var(--line);', self.styles)
+        self.assertIn('grid-template-columns: 22px minmax(0, 1fr) 22px;', self.styles)
+        self.assertIn('gap: 4px;', self.styles)
+        self.assertIn('min-width: 0;', self.styles)
+        self.assertIn('background: var(--panel-solid);', self.styles)
+        self.assertIn('background-image: var(--vecto-action-static-gradient);', self.styles)
+        self.assertIn('border-color: var(--vecto-action-border);', self.styles)
+        self.assertIn('color: var(--vecto-action-ink);', self.styles)
+        tab_selector = '.persona-dashboard-view .persona-heat-persona-tabs > button {'
+        tab_start = self.styles.index(tab_selector)
+        tab_rule = self.styles[tab_start:self.styles.index("}", tab_start) + 1]
+        self.assertIn('padding: 0 6px;', tab_rule)
+        self.assertIn('border: 1px solid var(--line);', tab_rule)
+        self.assertIn('border-radius: 3px;', tab_rule)
+        self.assertNotIn('max-width:', tab_rule)
+        self.assertNotIn('text-overflow:', tab_rule)
+
+    def test_persona_heat_header_uses_compact_title_and_description(self):
+        title_selector = '.persona-dashboard-view .persona-trend-panel .persona-chart-head h3 {'
+        title_start = self.styles.index(title_selector)
+        title_rule = self.styles[title_start:self.styles.index("}", title_start) + 1]
+        description_selector = '.persona-dashboard-view .persona-trend-panel .persona-chart-head .small {'
+        description_start = self.styles.index(description_selector)
+        description_rule = self.styles[description_start:self.styles.index("}", description_start) + 1]
+
+        self.assertIn('font-size: 16px;', title_rule)
+        self.assertIn('font-size: 11px;', description_rule)
+
+    def test_donut_values_are_positioned_above_the_circle_center(self):
+        donut_selector = ".persona-dashboard-view .persona-donut > div {"
+        donut_start = self.styles.index(donut_selector)
+        donut_rule = self.styles[donut_start:self.styles.index("}", donut_start) + 1]
+        value_selector = ".persona-dashboard-view .persona-donut > div > strong {"
+        value_start = self.styles.index(value_selector)
+        value_rule = self.styles[value_start:self.styles.index("}", value_start) + 1]
+
+        self.assertIn("position: relative;", donut_rule)
+        self.assertIn("position: absolute;", value_rule)
+        self.assertIn("top: calc(50% - 12px);", value_rule)
+        self.assertIn("transform: translateY(-50%);", value_rule)
 
     def test_persona_heat_always_includes_a_platform_total_bar(self):
         chart_start = self.dashboard_script.index("function pdRenderPersonaHeatCarousel(hostId, personas, platforms)")
@@ -2364,7 +2477,12 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('class="ui-refresh-icon"', self.markup)
         self.assertIn('id="personaDashboardSyncStatus"', self.markup)
         self.assertIn('label.textContent = "数据刷新";', self.dashboard_script)
-        self.assertIn("border: 0;", self.styles)
+        refresh_selector = ".persona-dashboard-toolbar-refresh {"
+        refresh_start = self.styles.index(refresh_selector)
+        refresh_rule = self.styles[refresh_start:self.styles.index("}", refresh_start) + 1]
+        self.assertIn("padding: 4px 8px;", refresh_rule)
+        self.assertIn("box-sizing: border-box;", refresh_rule)
+        self.assertIn("border: 1px solid var(--line);", refresh_rule)
         self.assertIn(".persona-dashboard-toolbar-refresh span {\n  display: inline;", self.styles)
         self.assertNotIn("刷新显示", self.markup)
         self.assertIn(

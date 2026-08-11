@@ -15,7 +15,14 @@ fi
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${WEBAPP_DATA_DIR:-/data/webapp_data}/cache}"
 export TZ="Asia/Shanghai"
 export WEBAPP_TIMEZONE="Asia/Shanghai"
-mkdir -p "${WEBAPP_DATA_DIR:-/data/webapp_data}" "${TOOL_R18_RUNTIME_DIR:-/data/tool_r18_runtime}" "$XDG_CACHE_HOME"
+mkdir -p \
+    "${WEBAPP_DATA_DIR:-/data/webapp_data}" \
+    "${WEBAPP_DATA_DIR:-/data/webapp_data}/crm_imports" \
+    "${WEBAPP_DATA_DIR:-/data/webapp_data}/crm_media" \
+    "${WEBAPP_DATA_DIR:-/data/webapp_data}/crm_evidence" \
+    "${WEBAPP_DATA_DIR:-/data/webapp_data}/crm_logs" \
+    "${TOOL_R18_RUNTIME_DIR:-/data/tool_r18_runtime}" \
+    "$XDG_CACHE_HOME"
 export TOOL_R18_UPLOAD_HOST_DIR="${TOOL_R18_UPLOAD_HOST_DIR:-${WEBAPP_DATA_DIR:-/data/webapp_data}/tool_r18_uploads}"
 export TOOL_R18_PUBLIC_URL="${TOOL_R18_PUBLIC_URL:-http://47.243.99.2:8001}"
 export COMMERCIAL_BILLING_ENABLED="${COMMERCIAL_BILLING_ENABLED:-1}"

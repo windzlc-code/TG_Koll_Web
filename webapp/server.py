@@ -127,6 +127,15 @@ from .social_automation_api import (
     stop_social_automation_worker,
     wake_social_automation_worker,
 )
+from .crm import install_crm
+from .crm.service import effective_module_state
+from .crm_integration import (
+    crm_billing_adapter,
+    crm_post_commit_callback,
+    crm_social_task_adapter,
+    ensure_crm_runtime_started,
+    stop_crm_runtime,
+)
 from .proxy_ip_admin import (
     ensure_proxy_market_health_monitor_started,
     register_proxy_ip_admin_routes,
@@ -5650,7 +5659,7 @@ def _html_response_with_versions(filename: str, replacements: dict[str, str] | N
         '<script>document.documentElement.dataset.theme="light";'
         'try{localStorage.setItem("wk-console-theme","light")}catch{}</script>'
     )
-    if "</head>" in html:
+    if "</head>" in html and 'href="/assets/fixed-light.css' not in html:
         html = html.replace(
             "</head>",
             f"  {fixed_theme_stylesheet}\n  {fixed_theme_bootstrap}\n</head>",
@@ -19387,14 +19396,16 @@ def _persona_dashboard_refresh_worker_v2(
                 parsed = json.loads(stdout[stdout.find("{"):])
             except Exception:
                 parsed = {"raw": stdout[-4000:]}
-        status = "success" if proc.returncode == 0 and isinstance(parsed, dict) and parsed.get("ok") else "failed"
-        refresh_message = "刷新完成，缓存数据已更新。"
+        partial = proc.returncode == 0 and isinstance(parsed, dict) and parsed.get("status") == "partial"
+        status = "partial" if partial else ("success" if proc.returncode == 0 and isinstance(parsed, dict) and parsed.get("ok") else "failed")
+        parsed_message = str(parsed.get("message") or "").strip() if isinstance(parsed, dict) else ""
+        refresh_message = parsed_message or "刷新完成，缓存数据与趋势快照已更新。"
         with PERSONA_DASHBOARD_REFRESH_LOCK:
             PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
                 "status": status,
-                "step": "完成" if status == "success" else "失败",
+                "step": "完成" if status == "success" else ("部分完成" if status == "partial" else "失败"),
                 "progress": 100,
-                "message": refresh_message if status == "success" else "刷新未完成，请查看结果提示。",
+                "message": refresh_message if status in {"success", "partial"} else (parsed_message or "刷新未完成，请查看结果提示。"),
                 "elapsed_seconds": int(time.time() - started),
                 "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "result": parsed,
@@ -19656,6 +19667,37 @@ def _build_persona_dashboard_overview(
             "hot_score": 0,
             "snapshot_count": 0,
         }
+
+    def _record_metric_snapshot(platform_name: str, snapshot: dict[str, Any], fallback_hot_score: int) -> None:
+        """Add one confirmed account snapshot to the global and platform trend buckets."""
+        nonlocal latest_update
+        snapshot_at = str(snapshot.get("refreshedAt") or snapshot.get("refreshed_at") or "").strip()
+        snapshot_day = _date_key(snapshot_at)
+        if not snapshot_day:
+            return
+        likes = _number(snapshot.get("likes"), 0)
+        comments = _number(snapshot.get("comments"), 0)
+        shares = _number(snapshot.get("shares"), 0)
+        reposts = _number(snapshot.get("reposts"), 0)
+        post_views = _number(snapshot.get("postViews") or snapshot.get("post_views") or snapshot.get("views"), 0)
+        hot_score = _number(
+            snapshot.get("hotScore") if snapshot.get("hotScore") is not None else snapshot.get("hot_score"),
+            _sum_numbers(likes, comments, shares, reposts, post_views) if fallback_hot_score is None else fallback_hot_score,
+        )
+        followers = _number(snapshot.get("followers"), 0)
+        for bucket in (
+            daily.setdefault(snapshot_day, _new_trend_bucket()),
+            platform_daily.setdefault(platform_name, {}).setdefault(snapshot_day, _new_trend_bucket()),
+        ):
+            bucket["likes"] += likes
+            bucket["comments"] += comments
+            bucket["shares"] += shares
+            bucket["reposts"] += reposts
+            bucket["post_views"] += post_views
+            bucket["followers"] += followers
+            bucket["hot_score"] += hot_score
+            bucket["snapshot_count"] += 1
+        latest_update = max(latest_update, snapshot_at)
     personas: list[dict[str, Any]] = []
     totals = {
         "posts": 0,
@@ -19774,19 +19816,22 @@ def _build_persona_dashboard_overview(
             persona_hot["scanned_posts"] += _number(metric_value.get("scannedPosts") or metric_value.get("posts"), 0)
             persona_hot["view_resolved_posts"] += _number(metric_value.get("viewResolvedPosts"), 0)
             persona_hot["view_missing_posts"] += _number(metric_value.get("viewMissingPosts"), 0)
-            snapshot_at = str(metric_value.get("refreshedAt") or metric_value.get("lightRefreshedAt") or "").strip()
-            snapshot_day = _date_key(snapshot_at)
-            if snapshot_day:
-                followers = _number(metric_value.get("followers"), 0)
-                bucket = daily.setdefault(snapshot_day, _new_trend_bucket())
-                bucket["followers"] += followers
-                bucket["hot_score"] += platform_hot_score
-                bucket["snapshot_count"] += 1
-                platform_bucket = platform_daily.setdefault(platform_name, {}).setdefault(snapshot_day, _new_trend_bucket())
-                platform_bucket["followers"] += followers
-                platform_bucket["hot_score"] += platform_hot_score
-                platform_bucket["snapshot_count"] += 1
-                latest_update = max(latest_update, snapshot_at)
+            metric_snapshots = metric_value.get("snapshots") if isinstance(metric_value.get("snapshots"), list) else []
+            confirmed_snapshots = [snapshot for snapshot in metric_snapshots if isinstance(snapshot, dict) and _date_key(snapshot.get("refreshedAt") or snapshot.get("refreshed_at"))]
+            if confirmed_snapshots:
+                for snapshot in confirmed_snapshots:
+                    _record_metric_snapshot(platform_name, snapshot, None)
+            else:
+                _record_metric_snapshot(platform_name, {
+                    "refreshedAt": metric_value.get("refreshedAt") or metric_value.get("lightRefreshedAt"),
+                    "followers": metric_value.get("followers"),
+                    "likes": platform_likes,
+                    "comments": platform_comments,
+                    "shares": platform_shares,
+                    "reposts": platform_reposts,
+                    "views": platform_post_views,
+                    "hotScore": platform_hot_score,
+                }, platform_hot_score)
             if metric_value.get("complete") is True:
                 totals["complete_hot_metrics"] += 1
             else:
@@ -20365,10 +20410,12 @@ def create_app() -> FastAPI:
     async def lifespan(_: FastAPI):
         _ensure_persona_dashboard_monitor_started()
         ensure_social_automation_worker_started()
+        ensure_crm_runtime_started()
         ensure_proxy_market_health_monitor_started()
         try:
             yield
         finally:
+            stop_crm_runtime()
             stop_social_automation_worker()
             stop_proxy_market_health_monitor()
 
@@ -20755,6 +20802,67 @@ def create_app() -> FastAPI:
         )
         return response
 
+    @app.get("/crm.html", include_in_schema=False)
+    def page_crm(
+        request: Request,
+        manage_user_id: int = 0,
+        admin_workspace_user_id: int = 0,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
+    ) -> Response:
+        if manage_user_id > 0 and admin_workspace_user_id > 0 and manage_user_id != admin_workspace_user_id:
+            raise HTTPException(status_code=400, detail="conflicting admin workspace user ids")
+        workspace_user_id = int(manage_user_id or admin_workspace_user_id or 0)
+        admin_console = request_uses_admin_session(request, workspace_user_id or None)
+        selected_token = admin_session_token if admin_console else session_token
+        try:
+            user = _get_session_user_allowing_password_change(
+                selected_token,
+                expected_admin_session=admin_console,
+            )
+        except HTTPException:
+            return_url = str(request.url.path or "/crm.html")
+            if request.url.query:
+                return_url = f"{return_url}?{request.url.query}"
+            location = (
+                f"/admin?return_url={quote(return_url, safe='')}"
+                if admin_console
+                else _public_login_location(return_url)
+            )
+            return RedirectResponse(url=location, status_code=302)
+        if int(user.get("must_change_password") or 0) == 1:
+            marker = "admin_console=1&" if admin_console else ""
+            return RedirectResponse(
+                url=f"/change-password.html?{marker}return_url={quote('/crm.html', safe='')}",
+                status_code=302,
+            )
+        if admin_console:
+            if not _is_admin(user):
+                return RedirectResponse(url="/admin", status_code=302)
+            if workspace_user_id > 0:
+                user = resolve_admin_workspace_user(user, workspace_user_id)
+        elif _is_admin(user):
+            return RedirectResponse(url="/crm.html?admin_console=1", status_code=302)
+        elif workspace_user_id > 0:
+            raise HTTPException(status_code=403, detail="administrator workspace access required")
+        else:
+            raise HTTPException(status_code=403, detail="administrator access required")
+
+        target_user_id = _workspace_user_id(user)
+        # Authenticated users must be able to load the shell so bootstrap can
+        # render the localized maintenance / permission state.  Every CRM data
+        # and write API remains fail-closed in _require_effective().
+        return _html_response_with_versions(
+            "crm.html",
+            replacements={
+                "__FIXED_LIGHT_CSS_VERSION__": _asset_version("assets", "fixed-light.css"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
+                "__ADMIN_WORKSPACE_USER_ID__": str(target_user_id) if _is_admin_workspace(user) else "",
+                "__ADMIN_CONSOLE_SESSION__": "1" if admin_console else "",
+            },
+        )
+
     @app.get("/admin.html", include_in_schema=False)
     def page_admin(
         request: Request,
@@ -20832,6 +20940,76 @@ def create_app() -> FastAPI:
         return _html_response_with_versions("batch.html")
 
     register_social_automation_routes(app)
+
+    def _crm_llm_provider(_tenant, request_payload: dict[str, Any]) -> dict[str, Any]:
+        """Run CRM AI operations through the existing TG LLM configuration."""
+
+        with db() as conn:
+            runtime = _get_runtime_config(conn)
+        locale = str(request_payload.get("locale") or "zh-Hans")
+        operation = str(request_payload.get("operation") or "crm_demand_analysis").strip()
+        default_system_prompt = "\n".join(
+            (
+                "You analyze social CRM demand and return JSON only.",
+                f"Output language locale: {locale}.",
+                "Required keys: title, intent, need, pain, signal, channel, segments, scenarios, keywordGroups, keywords.",
+                "segments and scenarios must be non-empty arrays; provide 12 to 24 useful keywords.",
+                "keywordGroups is an array of objects with name and keywords. Do not invent platform measurements.",
+            )
+        )
+        system_prompt = str(request_payload.get("systemPrompt") or default_system_prompt).strip()
+        model_input = {
+            key: value
+            for key, value in request_payload.items()
+            if key not in {"systemPrompt", "userPrompt"}
+        }
+        user_prompt = str(
+            request_payload.get("userPrompt")
+            or request_payload.get("text")
+            or "Return the requested CRM JSON object."
+        ).strip()
+        user_input = f"{user_prompt}\n\nInput JSON:\n{json.dumps(model_input, ensure_ascii=False)}"[:16_000]
+        result, selected, _attempts = _request_llm_json_with_fallback(
+            source=runtime,
+            user_input=user_input,
+            system_prompt=system_prompt,
+            parameters="",
+            allow_builtin=True,
+            retry_count=1,
+            request_label=f"CRM {operation}",
+        )
+        parsed = result.get("parsed") if isinstance(result, dict) else None
+        if not isinstance(parsed, dict):
+            raise RuntimeError(f"CRM {operation} returned no JSON object")
+        return {**parsed, "model": str(selected.get("model") or "configured-llm")}
+
+    def _crm_live_search_executor(request_payload: dict[str, Any]) -> dict[str, Any]:
+        """Use TG's existing live persona-hot browser lane without history fill."""
+
+        if (
+            request_payload.get("refresh") is not True
+            or request_payload.get("recordShown") is not False
+            or request_payload.get("liveOnly") is not True
+        ):
+            raise RuntimeError("CRM live search requires refresh/liveOnly and recordShown=false")
+        result = _run_persona_hot_workflow_cli(dict(request_payload), timeout_seconds=120)
+        if not isinstance(result, dict):
+            raise RuntimeError("CRM live search returned no result object")
+        return {
+            **result,
+            "liveOnly": True,
+            "historyFallback": False,
+            "sourceKind": "live_platform",
+        }
+
+    install_crm(
+        app,
+        billing_adapter=crm_billing_adapter,
+        social_task_adapter=crm_social_task_adapter,
+        post_commit_callback=crm_post_commit_callback,
+        llm_provider=_crm_llm_provider,
+        live_search_executor=_crm_live_search_executor,
+    )
     register_proxy_ip_admin_routes(app)
     register_notification_routes(app)
     register_video_routes(app, server_video_route_dependencies(sys.modules[__name__]))
@@ -24005,8 +24183,8 @@ def create_app() -> FastAPI:
     @app.post("/api/persona_dashboard/refresh")
     def api_persona_dashboard_refresh(payload: PersonaDashboardRefreshPayload, user: dict[str, Any] = Depends(get_current_user)):
         archive_ids = _persona_dashboard_refresh_archive_ids(payload.archive_id, user)
-        requested_source = str(payload.source or "").strip().lower()
-        if requested_source not in {"", "rsshub", "browser"}:
+        requested_source = str(payload.source or "browser").strip().lower() or "browser"
+        if requested_source not in {"rsshub", "browser"}:
             raise HTTPException(status_code=400, detail="刷新来源仅支持 rsshub 或 browser。")
         task = _start_persona_dashboard_refresh(
             payload.archive_id,

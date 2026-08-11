@@ -49,6 +49,17 @@ DEFAULT_BROWSER_MEDIA_MEMORY_CACHE_MB = 16
 DEFAULT_BROWSER_MEDIA_COMBINED_CACHE_MB = 32
 DEFAULT_BROWSER_MEDIA_DISK_CACHE_MB = 32
 DEFAULT_LIGHTWEIGHT_WARMUP_COMPACTION_COOLDOWN_SECONDS = 15
+INSTAGRAM_GROUP_TASK_TYPES = {
+    "instagram_group_candidates_inspect",
+    "instagram_recent_conversations_inspect",
+    "instagram_conversation_controls_inspect",
+    "instagram_group_create",
+    "instagram_group_post",
+    "instagram_group_settings_update",
+    "instagram_group_members_add",
+    "instagram_group_members_inspect",
+    "instagram_group_status_inspect",
+}
 SUPPORTED_TASK_TYPES = {
     "check_login",
     "open_login",
@@ -56,6 +67,8 @@ SUPPORTED_TASK_TYPES = {
     "browse_profile",
     "instagram_warmup",
     "instagram_auto_reply",
+    "instagram_relationship_verify",
+    *INSTAGRAM_GROUP_TASK_TYPES,
     "threads_warmup",
     "threads_auto_reply",
     "publish_post",
@@ -64,6 +77,7 @@ SUPPORTED_TASK_TYPES = {
     "like_post",
     "share_post",
     "repost_post",
+    "direct_message",
 }
 
 _WARMUP_ACTION_HISTORY_LOCK = threading.Lock()
@@ -262,6 +276,23 @@ class PublishOutcomeUnknownError(AutoLoginFailedError):
         super().__init__(message, "ready", screenshot_path)
         self.publish_submitted = True
         self.publish_outcome_unknown = True
+        self.browser_available = False
+        self.retryable = False
+
+
+class ActionOutcomeUnknownError(AutoLoginFailedError):
+    """An irreversible non-publish action was submitted but is not confirmed.
+
+    CRM must never retry this condition automatically.  The server-side
+    submission guard has already persisted ``submitting``/``submitted`` before
+    this exception is raised, so reconciliation can move the action ledger to
+    ``unknown`` and retain the billing reservation for evidence review.
+    """
+
+    def __init__(self, message: str, screenshot_path: str = ""):
+        super().__init__(message, "ready", screenshot_path)
+        self.action_submitted = True
+        self.action_outcome_unknown = True
         self.browser_available = False
         self.retryable = False
 
@@ -540,9 +571,13 @@ def run_social_task(
         raise UnsupportedActionError(f"不支持的平台：{platform}")
     if platform == "instagram" and task_type in {"threads_warmup", "threads_auto_reply"}:
         raise UnsupportedActionError(f"{task_type} 需要使用 Threads 账号。")
-    if platform == "threads" and task_type in {"instagram_warmup", "instagram_auto_reply"}:
+    if platform == "threads" and task_type in {"instagram_warmup", "instagram_auto_reply", "instagram_relationship_verify", *INSTAGRAM_GROUP_TASK_TYPES}:
         raise UnsupportedActionError(f"{task_type} 需要使用 Instagram 账号。")
-    if platform == "threads" and task_type not in {"open_login", "check_login", "browse_feed", "threads_warmup", "threads_auto_reply", "publish_post"}:
+    if platform == "threads" and task_type not in {
+        "open_login", "check_login", "browse_feed", "browse_profile",
+        "threads_warmup", "threads_auto_reply", "publish_post", "direct_message",
+        "comment_post", "reply_comment", "like_post", "share_post", "repost_post",
+    }:
         raise UnsupportedActionError(f"{task_type} 尚未支持 Threads Web 自动化。")
     if platform == "instagram" and task_type == "repost_post":
         raise UnsupportedActionError("Instagram Web 不提供真正的转发动作，请改用 share_post/复制链接。")
@@ -712,7 +747,14 @@ def run_social_task(
             )
         if task_type == "browse_profile":
             _raise_if_cancelled(cancel_event)
-            return _run_browse_profile(page, task, payload, screenshot_dir, logger)
+            return _run_browse_profile(
+                page,
+                task,
+                payload,
+                screenshot_dir,
+                logger,
+                platform=platform,
+            )
         if task_type == "comment_post":
             _raise_if_cancelled(cancel_event)
             return _run_comment_post(
@@ -735,6 +777,51 @@ def run_social_task(
                 cancel_event=cancel_event,
                 context_control=context_control,
             )
+        if task_type == "instagram_relationship_verify":
+            _raise_if_cancelled(cancel_event)
+            return _run_instagram_relationship_verify(
+                page,
+                task,
+                account,
+                payload,
+                screenshot_dir,
+                logger,
+                cancel_event=cancel_event,
+            )
+        if task_type in INSTAGRAM_GROUP_TASK_TYPES:
+            from webapp.crm.instagram_groups import run_instagram_group_task
+
+            return run_instagram_group_task(
+                page=page,
+                task=task,
+                account=account,
+                payload=payload,
+                screenshot_dir=screenshot_dir,
+                logger=logger,
+                navigate=_goto,
+                screenshot=_screenshot,
+                submission_guard=lambda action: _run_billing_commit_action(
+                    context_control,
+                    cancel_event,
+                    action,
+                ),
+                unknown_error_factory=lambda message, shot: ActionOutcomeUnknownError(message, shot),
+                manual_error_factory=lambda message, status, shot: NeedManualError(message, status, shot),
+                cancel_check=lambda: _raise_if_cancelled(cancel_event),
+            )
+        if task_type == "direct_message":
+            _raise_if_cancelled(cancel_event)
+            return _run_direct_message(
+                page,
+                task,
+                account,
+                payload,
+                screenshot_dir,
+                logger,
+                platform=platform,
+                cancel_event=cancel_event,
+                context_control=context_control,
+            )
         if task_type == "like_post":
             _raise_if_cancelled(cancel_event)
             return _run_like_post(
@@ -749,6 +836,17 @@ def run_social_task(
         if task_type == "share_post":
             _raise_if_cancelled(cancel_event)
             return _run_share_post(
+                page,
+                task,
+                payload,
+                screenshot_dir,
+                logger,
+                cancel_event=cancel_event,
+                context_control=context_control,
+            )
+        if task_type == "repost_post":
+            _raise_if_cancelled(cancel_event)
+            return _run_repost_post(
                 page,
                 task,
                 payload,
@@ -3754,6 +3852,294 @@ def _guard_warmup_risk(
     )
 
 
+def _collection_username(value: Any) -> str:
+    username = str(value or "").strip().strip("/@").lower()
+    if not username or len(username) > 80:
+        return ""
+    if not re.fullmatch(r"[a-z0-9._]+", username):
+        return ""
+    return username
+
+
+def _collection_platform_url(value: Any, platform: str, *, profile: bool = False) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if platform == "threads":
+        if profile:
+            return _normalize_threads_profile_url(raw)
+        post_url = _normalize_threads_post_permalink(raw)
+        if post_url:
+            return post_url
+        parsed = urlparse(raw)
+        host = str(parsed.hostname or "").lower()
+        if parsed.scheme == "https" and host in {"threads.net", "www.threads.net", "threads.com", "www.threads.com"}:
+            return parsed._replace(query="", fragment="").geturl()
+        return ""
+    if profile:
+        return _normalize_instagram_profile_url(raw)
+    post_url = _normalize_instagram_post_permalink(raw)
+    if post_url:
+        return post_url
+    parsed = urlparse(raw)
+    host = str(parsed.hostname or "").lower()
+    if parsed.scheme == "https" and host in {"instagram.com", "www.instagram.com"}:
+        return parsed._replace(query="", fragment="").geturl()
+    return ""
+
+
+def _normalize_collection_dom_result(
+    raw: Any,
+    *,
+    platform: str,
+    source_url: str,
+    limit: int,
+) -> dict[str, Any]:
+    def nonnegative_int(value: Any) -> int:
+        try:
+            return max(int(value or 0), 0)
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    result = raw if isinstance(raw, dict) else {}
+    safe_page_url = _collection_platform_url(result.get("page_url") or source_url, platform)
+    rows = result.get("candidates") if isinstance(result.get("candidates"), list) else []
+    items: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for candidate in rows:
+        if not isinstance(candidate, dict) or candidate.get("dom_confirmed") is not True:
+            continue
+        username = _collection_username(candidate.get("username"))
+        if not username:
+            continue
+        profile_url = _collection_platform_url(candidate.get("profile_url"), platform, profile=True)
+        if not profile_url:
+            continue
+        profile_username = _collection_username(urlparse(profile_url).path.strip("/").lstrip("@"))
+        if profile_username != username:
+            continue
+        candidate_source = _collection_platform_url(candidate.get("source_url"), platform) or safe_page_url
+        identity = (platform, username)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        metrics = candidate.get("metrics") if isinstance(candidate.get("metrics"), dict) else {}
+        normalized_metrics: dict[str, int] = {}
+        for key in ("like_count", "reply_count", "repost_count", "quote_count"):
+            try:
+                normalized_metrics[key] = max(0, min(int(metrics.get(key) or 0), 2_147_483_647))
+            except (TypeError, ValueError, OverflowError):
+                normalized_metrics[key] = 0
+        evidence = candidate.get("evidence") if isinstance(candidate.get("evidence"), dict) else {}
+        items.append(
+            {
+                "platform": platform,
+                "username": username,
+                "display_name": str(candidate.get("display_name") or "").strip()[:160],
+                "profile_url": profile_url,
+                "source_url": candidate_source,
+                "text": str(candidate.get("text") or "").strip()[:3_000],
+                "tags": ["source:visible_dom", f"channel:{platform}"],
+                **normalized_metrics,
+                "evidence": {
+                    "dom_confirmed": True,
+                    "container": str(evidence.get("container") or "").strip()[:80],
+                    "profile_href": profile_url,
+                    "post_href": _collection_platform_url(evidence.get("post_href"), platform),
+                    "has_time": bool(evidence.get("has_time")),
+                    "visible_text_sample": str(evidence.get("visible_text_sample") or "").strip()[:500],
+                },
+            }
+        )
+        if len(items) >= limit:
+            break
+    reason = ""
+    if not items:
+        reason = str(result.get("empty_reason") or "no_dom_verified_profiles").strip()[:240]
+    return {
+        "items": items,
+        "collected": len(items),
+        "collection_status": "collected" if items else "empty",
+        "collection_reason": reason,
+        "dom_evidence": {
+            "page_url": safe_page_url,
+            "title": str(result.get("title") or "").strip()[:240],
+            "semantic_containers": nonnegative_int(result.get("semantic_containers")),
+            "visible_text_length": nonnegative_int(result.get("visible_text_length")),
+        },
+    }
+
+
+def _extract_visible_collection_items(
+    page,
+    *,
+    platform: str,
+    surface: str,
+    limit: int,
+) -> dict[str, Any]:
+    raw = page.evaluate(
+        r"""({ platform, surface, limit }) => {
+          const compact = (value) => String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+          const absolute = (href) => {
+            try { return new URL(href, window.location.href).href; } catch (_) { return ''; }
+          };
+          const reservedInstagram = new Set([
+            'accounts', 'direct', 'explore', 'reels', 'stories', 'about', 'legal', 'privacy',
+            'terms', 'developer', 'web', 'api', 'p', 'reel'
+          ]);
+          const identityFromProfile = (href) => {
+            try {
+              const parsed = new URL(href, window.location.href);
+              const host = parsed.hostname.toLowerCase();
+              const parts = parsed.pathname.split('/').filter(Boolean);
+              if (platform === 'threads') {
+                if (!['threads.net', 'www.threads.net', 'threads.com', 'www.threads.com'].includes(host)) return null;
+                if (parts.length !== 1 || !parts[0].startsWith('@')) return null;
+                const username = parts[0].slice(1).toLowerCase();
+                return /^[a-z0-9._]{1,80}$/.test(username) ? { username, url: absolute(parsed.href) } : null;
+              }
+              if (!['instagram.com', 'www.instagram.com'].includes(host)) return null;
+              if (parts.length !== 1) return null;
+              const username = parts[0].toLowerCase();
+              if (reservedInstagram.has(username) || !/^[a-z0-9._]{1,80}$/.test(username)) return null;
+              return { username, url: absolute(parsed.href) };
+            } catch (_) { return null; }
+          };
+          const postUrl = (container) => {
+            const links = Array.from(container.querySelectorAll('a[href]'));
+            for (const link of links) {
+              const href = absolute(link.getAttribute('href') || link.href || '');
+              try {
+                const parsed = new URL(href);
+                if (platform === 'threads' && /\/@[^/]+\/(?:post|t)\/[^/?#]+/i.test(parsed.pathname)) return href;
+                if (platform === 'instagram' && /^\/(?:p|reel)\/[^/?#]+\/?$/i.test(parsed.pathname)) return href;
+              } catch (_) {}
+            }
+            return '';
+          };
+          const parseCount = (value) => {
+            const raw = compact(value).replace(/,/g, '').toLowerCase();
+            const match = raw.match(/(\d+(?:\.\d+)?)/);
+            if (!match) return null;
+            let multiplier = 1;
+            if (/\d(?:\.\d+)?(?:k|\u5343)\b/i.test(raw)) multiplier = 1000;
+            else if (/\d(?:\.\d+)?(?:m|\u4e07|\u842c)\b/i.test(raw)) multiplier = /[\u4e07\u842c]/.test(raw) ? 10000 : 1000000;
+            return Math.max(0, Math.round(Number(match[1]) * multiplier));
+          };
+          const metricsFrom = (container) => {
+            const metrics = { like_count: 0, reply_count: 0, repost_count: 0, quote_count: 0 };
+            for (const node of Array.from(container.querySelectorAll('[aria-label], [title]'))) {
+              const label = compact(`${node.getAttribute('aria-label') || ''} ${node.getAttribute('title') || ''}`);
+              const count = parseCount(label);
+              if (count == null) continue;
+              if (/like|\u8d5e|\u8b9a/i.test(label)) metrics.like_count = Math.max(metrics.like_count, count);
+              if (/reply|comment|\u56de\u590d|\u56de\u8986|\u7559\u8a00|\u8bc4\u8bba|\u8a55\u8ad6/i.test(label)) metrics.reply_count = Math.max(metrics.reply_count, count);
+              if (/repost|share|\u8f6c\u53d1|\u8f49\u767c|\u5206\u4eab/i.test(label)) metrics.repost_count = Math.max(metrics.repost_count, count);
+              if (/quote|\u5f15\u7528/i.test(label)) metrics.quote_count = Math.max(metrics.quote_count, count);
+            }
+            return metrics;
+          };
+          const containers = Array.from(document.querySelectorAll('article, [role="article"], [data-pressable-container]'));
+          const rows = [];
+          const seen = new Set();
+          for (const container of containers) {
+            const text = compact(container.innerText || container.textContent || '');
+            const source = postUrl(container);
+            const hasTime = Boolean(container.querySelector('time'));
+            if (!source && !hasTime) continue;
+            const profiles = Array.from(container.querySelectorAll('a[href]'))
+              .map((node) => ({ node, identity: identityFromProfile(node.getAttribute('href') || node.href || '') }))
+              .filter((entry) => entry.identity);
+            if (!profiles.length) continue;
+            const entry = profiles[0];
+            const identity = entry.identity;
+            if (seen.has(identity.username)) continue;
+            const linkText = compact(entry.node.innerText || entry.node.textContent || entry.node.getAttribute('aria-label') || '');
+            const displayName = linkText && linkText.toLowerCase().replace(/^@/, '') !== identity.username ? linkText : '';
+            seen.add(identity.username);
+            rows.push({
+              platform,
+              username: identity.username,
+              display_name: displayName,
+              profile_url: identity.url,
+              source_url: source || window.location.href,
+              text: text.slice(0, 3000),
+              metrics: metricsFrom(container),
+              dom_confirmed: true,
+              evidence: {
+                container: compact(`${container.tagName || ''}${container.getAttribute('role') ? `[role=${container.getAttribute('role')}]` : ''}`),
+                profile_href: identity.url,
+                post_href: source,
+                has_time: hasTime,
+                visible_text_sample: text.slice(0, 500),
+              },
+            });
+            if (rows.length >= limit) break;
+          }
+
+          if (surface === 'profile' && rows.length === 0) {
+            const currentIdentity = identityFromProfile(window.location.href);
+            if (currentIdentity) {
+              const main = document.querySelector('main') || document.querySelector('[role="main"]') || document.body;
+              const visible = compact(main && (main.innerText || main.textContent || ''));
+              const matchingAnchor = Array.from(document.querySelectorAll('a[href]')).find((node) => {
+                const identity = identityFromProfile(node.getAttribute('href') || node.href || '');
+                return identity && identity.username === currentIdentity.username;
+              });
+              const handleVisible = visible.toLowerCase().split(/\s+/).some((part) =>
+                part.replace(/^@/, '').replace(/^[^a-z0-9._]+|[^a-z0-9._]+$/g, '') === currentIdentity.username
+              );
+              if (matchingAnchor || handleVisible) {
+                const headings = Array.from(document.querySelectorAll('main h1, main h2, header h1, header h2'))
+                  .map((node) => compact(node.innerText || node.textContent || ''))
+                  .filter(Boolean);
+                rows.push({
+                  platform,
+                  username: currentIdentity.username,
+                  display_name: headings.find((value) => value.toLowerCase().replace(/^@/, '') !== currentIdentity.username) || '',
+                  profile_url: currentIdentity.url,
+                  source_url: window.location.href,
+                  text: visible.slice(0, 3000),
+                  metrics: { like_count: 0, reply_count: 0, repost_count: 0, quote_count: 0 },
+                  dom_confirmed: true,
+                  evidence: {
+                    container: main === document.body ? 'body' : 'main',
+                    profile_href: matchingAnchor ? absolute(matchingAnchor.getAttribute('href') || matchingAnchor.href || '') : currentIdentity.url,
+                    post_href: '',
+                    has_time: false,
+                    visible_text_sample: visible.slice(0, 500),
+                  },
+                });
+              }
+            }
+          }
+
+          const bodyText = compact(document.body && (document.body.innerText || document.body.textContent || ''));
+          const loginWall = /log in|sign up|\u767b\u5f55|\u767b\u5165|\u8a3b\u518a|\u6ce8\u518c/i.test(bodyText) && rows.length === 0;
+          let emptyReason = '';
+          if (!rows.length && loginWall) emptyReason = 'platform_login_wall_visible';
+          else if (!rows.length && surface === 'profile') emptyReason = 'profile_identity_not_visible_in_dom';
+          else if (!rows.length && containers.length === 0) emptyReason = 'no_semantic_post_containers';
+          else if (!rows.length) emptyReason = 'no_dom_verified_profile_links';
+          return {
+            page_url: window.location.href,
+            title: document.title || '',
+            semantic_containers: containers.length,
+            visible_text_length: bodyText.length,
+            empty_reason: emptyReason,
+            candidates: rows,
+          };
+        }""",
+        {"platform": platform, "surface": surface, "limit": limit},
+    )
+    return _normalize_collection_dom_result(
+        raw,
+        platform=platform,
+        source_url=str(getattr(page, "url", "") or ""),
+        limit=limit,
+    )
+
+
 def _run_browse_feed(
     page,
     task,
@@ -3765,9 +4151,39 @@ def _run_browse_feed(
 ) -> dict[str, Any]:
     home_url = THREADS_HOME if platform == "threads" else INSTAGRAM_HOME
     _goto(page, home_url, logger, "browse_feed")
+    query = " ".join(str(payload.get("query") or "").split()).strip()
+    surface = "feed"
+    search_driver = ""
+    if query:
+        # CRM persona collection is a directed search, not a generic home-feed
+        # scrape.  Reuse the same visible platform search interaction as the
+        # warm-up worker so the query is actually submitted through the UI and
+        # the collected evidence belongs to the resulting search surface.
+        search_driver = _search_warmup_interest_surface(
+            page,
+            platform,
+            query,
+            logger,
+        )
+        surface = f"search:{query}"
     _warmup_scroll(page, logger, int(payload.get("scroll_times") or 2))
+    limit = max(1, min(int(payload.get("limit") or 50), 200))
+    collection = _extract_visible_collection_items(
+        page,
+        platform=platform,
+        surface=surface,
+        limit=limit,
+    )
     shot = _screenshot(page, screenshot_dir, task, "browse_feed", logger)
-    return {"ok": True, "url": page.url, "screenshot_path": shot}
+    return {
+        "ok": True,
+        "url": _safe_navigation_url(page.url),
+        "platform": platform,
+        "query": query,
+        "search_driver": search_driver,
+        "screenshot_path": shot,
+        **collection,
+    }
 
 
 def _dispatch_browse_feed(
@@ -8551,17 +8967,301 @@ def _run_instagram_auto_reply(
     )
 
 
-def _run_browse_profile(page, task, payload, screenshot_dir, logger) -> dict[str, Any]:
+def _run_browse_profile(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    platform: str = "instagram",
+) -> dict[str, Any]:
     target_url = str(payload.get("target_url") or "").strip()
-    username = str(payload.get("username") or "").strip().strip("/")
+    username = _collection_username(payload.get("username"))
     if not target_url and username:
-        target_url = f"{INSTAGRAM_HOME}{username}/"
+        target_url = (
+            f"https://www.threads.net/@{quote(username, safe='._')}"
+            if platform == "threads"
+            else f"{INSTAGRAM_HOME}{quote(username, safe='._')}/"
+        )
     if not target_url:
         raise ValueError("浏览主页任务需要 target_url 或 username。")
     _goto(page, target_url, logger, "browse_profile")
     _warmup_scroll(page, logger, int(payload.get("scroll_times") or 2))
+    limit = max(1, min(int(payload.get("limit") or 50), 200))
+    collection = _extract_visible_collection_items(
+        page,
+        platform=platform,
+        surface="profile",
+        limit=limit,
+    )
     shot = _screenshot(page, screenshot_dir, task, "browse_profile", logger)
-    return {"ok": True, "url": page.url, "screenshot_path": shot}
+    return {
+        "ok": True,
+        "url": _safe_navigation_url(page.url),
+        "platform": platform,
+        "screenshot_path": shot,
+        **collection,
+    }
+
+
+def _relationship_username(value: Any) -> str:
+    username = str(value or "").strip().lstrip("@").lower()
+    if not username or len(username) > 80:
+        return ""
+    if any(character not in "abcdefghijklmnopqrstuvwxyz0123456789._" for character in username):
+        return ""
+    return username
+
+
+def _inspect_instagram_relationship_page(page) -> dict[str, Any]:
+    """Read explicit follow markers without inferring from an incomplete page."""
+
+    inspected = page.evaluate(
+        r"""
+        () => {
+          const compact = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+          const bodyText = compact(document.body && document.body.innerText);
+          const controls = [...document.querySelectorAll('button, [role="button"]')]
+            .map((node) => compact(node.textContent || node.getAttribute('aria-label') || ''))
+            .filter(Boolean)
+            .slice(0, 500);
+          const exact = (patterns) => controls.find((text) => patterns.some((pattern) => pattern.test(text))) || '';
+          const followingText = exact([
+            /^Following$/i, /^Following\s*v$/i, /^\u6b63\u5728\u95dc\u6ce8$/, /^\u6b63\u5728\u5173\u6ce8$/,
+            /^\u5df2\u95dc\u6ce8$/, /^\u5df2\u5173\u6ce8$/, /^\u8ffd\u8e64\u4e2d$/
+          ]);
+          const requestedText = exact([/^Requested$/i, /^\u5df2\u8acb\u6c42$/, /^\u5df2\u8bf7\u6c42$/]);
+          const followText = exact([/^Follow$/i, /^\u95dc\u6ce8$/, /^\u5173\u6ce8$/, /^\u8ffd\u8e64$/]);
+          const followsYouMatch = bodyText.match(/(?:^|\s)(Follows you|\u95dc\u6ce8\u4e86\u4f60|\u5173\u6ce8\u4e86\u4f60|\u8ffd\u8e64\u4f60)(?:\s|$)/i);
+          const unavailable = /Sorry, this page isn't available|Page isn't available|User not found|\u627e\u4e0d\u5230\u9801\u9762|\u627e\u4e0d\u5230\u9875\u9762|\u7528\u6236\u4e0d\u5b58\u5728|\u7528\u6237\u4e0d\u5b58\u5728/i.test(bodyText);
+          const loginWall = /\/accounts\/login/i.test(location.pathname) ||
+            (/Log in|\u767b\u5165|\u767b\u5f55/i.test(bodyText) && /Sign up|\u8a3b\u518a|\u6ce8\u518c/i.test(bodyText));
+          const profileSurface = Boolean(document.querySelector('header')) &&
+            (/followers|following|\u7c89\u7d72|\u7c89\u4e1d|\u95dc\u6ce8|\u5173\u6ce8/i.test(bodyText) || Boolean(followingText || requestedText || followText));
+          return {
+            senderFollowing: Boolean(followingText),
+            senderRequested: Boolean(requestedText),
+            senderNotFollowing: Boolean(followText),
+            followsSender: Boolean(followsYouMatch),
+            followingEvidence: followingText,
+            requestedEvidence: requestedText,
+            notFollowingEvidence: followText,
+            followsSenderEvidence: followsYouMatch ? followsYouMatch[1] : '',
+            unavailable,
+            loginWall,
+            profileSurface,
+          };
+        }
+        """
+    )
+    return dict(inspected) if isinstance(inspected, dict) else {}
+
+
+def _run_instagram_relationship_verify(
+    page,
+    task,
+    account,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    cancel_event: Any | None = None,
+) -> dict[str, Any]:
+    expected_username = _relationship_username(
+        payload.get("expected_username") or payload.get("expectedUsername") or account.get("username")
+    )
+    account_username = _relationship_username(account.get("username"))
+    if not expected_username or expected_username != account_username:
+        raise ValueError("Instagram relationship verification sender does not match the selected account.")
+    raw_targets = payload.get("target_usernames")
+    if raw_targets is None:
+        raw_targets = payload.get("targetUsernames")
+    if not isinstance(raw_targets, list):
+        raise ValueError("Instagram relationship verification requires target_usernames.")
+    targets: list[str] = []
+    for value in raw_targets:
+        username = _relationship_username(value)
+        if username and username not in targets:
+            targets.append(username)
+    if not targets or len(targets) > 20 or len(targets) != len(raw_targets):
+        raise ValueError("Instagram relationship verification requires 1 to 20 unique valid usernames.")
+
+    results: list[dict[str, Any]] = []
+    last_screenshot = ""
+    for index, target_username in enumerate(targets, start=1):
+        _raise_if_cancelled(cancel_event)
+        profile_url = f"{INSTAGRAM_HOME}{quote(target_username, safe='._')}/"
+        try:
+            _goto(page, profile_url, logger, f"instagram_relationship_open_{index}")
+            time.sleep(1.0)
+            inspected = _inspect_instagram_relationship_page(page)
+            last_screenshot = _screenshot(
+                page,
+                screenshot_dir,
+                task,
+                f"instagram_relationship_{index}_{target_username}",
+                logger,
+            )
+            inspected_url = str(page.url or "")
+            if inspected.get("loginWall"):
+                raise NeedManualError(
+                    "Instagram login expired while verifying relationships.",
+                    "cookie_expired",
+                    last_screenshot,
+                )
+            parsed_url = urlparse(inspected_url)
+            inspected_profile = _relationship_username(
+                (parsed_url.path or "").strip("/").split("/", 1)[0]
+            )
+            navigation_matches = (
+                parsed_url.scheme == "https"
+                and (parsed_url.hostname or "").lower() in {"instagram.com", "www.instagram.com"}
+                and inspected_profile == target_username
+            )
+            if not navigation_matches:
+                result = {
+                    "target_username": target_username,
+                    "profile_found": None,
+                    "sender_follows": None,
+                    "follows_sender": None,
+                    "status": "unknown",
+                    "reason_code": "profile_navigation_mismatch",
+                    "inspected_url": inspected_url,
+                    "screenshot_path": last_screenshot,
+                }
+            elif inspected.get("unavailable"):
+                result = {
+                    "target_username": target_username,
+                    "profile_found": False,
+                    "sender_follows": None,
+                    "follows_sender": None,
+                    "status": "unknown",
+                    "reason_code": "profile_unavailable",
+                    "inspected_url": inspected_url,
+                    "screenshot_path": last_screenshot,
+                }
+            elif not inspected.get("profileSurface"):
+                result = {
+                    "target_username": target_username,
+                    "profile_found": None,
+                    "sender_follows": None,
+                    "follows_sender": None,
+                    "status": "unknown",
+                    "reason_code": "profile_evidence_incomplete",
+                    "inspected_url": inspected_url,
+                    "screenshot_path": last_screenshot,
+                }
+            elif inspected.get("senderRequested"):
+                result = {
+                    "target_username": target_username,
+                    "profile_found": True,
+                    "sender_follows": None,
+                    "follows_sender": bool(inspected.get("followsSender")),
+                    "status": "unknown",
+                    "reason_code": "follow_request_pending",
+                    "inspected_url": inspected_url,
+                    "screenshot_path": last_screenshot,
+                    "evidence": {
+                        "requested": str(inspected.get("requestedEvidence") or ""),
+                        "follows_sender": str(inspected.get("followsSenderEvidence") or ""),
+                    },
+                }
+            else:
+                sender_follows: bool | None
+                if inspected.get("senderFollowing"):
+                    sender_follows = True
+                elif inspected.get("senderNotFollowing"):
+                    sender_follows = False
+                else:
+                    sender_follows = None
+                follows_sender = bool(inspected.get("followsSender"))
+                if sender_follows is None:
+                    status = "unknown"
+                    reason_code = "sender_follow_evidence_incomplete"
+                elif sender_follows and follows_sender:
+                    status = "mutual"
+                    reason_code = ""
+                elif sender_follows:
+                    status = "sender_follows"
+                    reason_code = ""
+                elif follows_sender:
+                    status = "follows_sender"
+                    reason_code = ""
+                else:
+                    status = "none"
+                    reason_code = ""
+                result = {
+                    "target_username": target_username,
+                    "profile_found": True,
+                    "sender_follows": sender_follows,
+                    "follows_sender": follows_sender,
+                    "status": status,
+                    "reason_code": reason_code,
+                    "inspected_url": inspected_url,
+                    "screenshot_path": last_screenshot,
+                    "evidence": {
+                        "sender_follows": str(inspected.get("followingEvidence") or inspected.get("notFollowingEvidence") or ""),
+                        "follows_sender": str(inspected.get("followsSenderEvidence") or ""),
+                    },
+                }
+            results.append(result)
+            logger.log(
+                "info" if result["status"] != "unknown" else "warn",
+                "instagram_relationship_evidence",
+                "Instagram relationship evidence inspected.",
+                {
+                    "target_username": target_username,
+                    "status": result["status"],
+                    "reason_code": result.get("reason_code") or "",
+                    "inspected_url": inspected_url,
+                },
+                last_screenshot,
+            )
+        except NeedManualError:
+            raise
+        except Exception as exc:
+            last_screenshot = _screenshot(
+                page,
+                screenshot_dir,
+                task,
+                f"instagram_relationship_unknown_{index}_{target_username}",
+                logger,
+            )
+            results.append(
+                {
+                    "target_username": target_username,
+                    "profile_found": None,
+                    "sender_follows": None,
+                    "follows_sender": None,
+                    "status": "unknown",
+                    "reason_code": "inspection_failed",
+                    "error": str(exc)[:500],
+                    "inspected_url": str(page.url or ""),
+                    "screenshot_path": last_screenshot,
+                }
+            )
+            logger.log(
+                "warn",
+                "instagram_relationship_unknown",
+                "Instagram relationship could not be proved; the target remains unknown.",
+                {"target_username": target_username, "error": str(exc)[:500]},
+                last_screenshot,
+            )
+
+    verified_count = sum(1 for item in results if item["status"] != "unknown")
+    unknown_count = len(results) - verified_count
+    return {
+        "ok": True,
+        "read_only": True,
+        "expected_username": expected_username,
+        "total": len(results),
+        "verified_count": verified_count,
+        "unknown_count": unknown_count,
+        "results": results,
+        "retryable": False,
+        "screenshot_path": last_screenshot,
+    }
 
 
 def _click_text_button(
@@ -11815,6 +12515,103 @@ def _target_url(payload: dict[str, Any]) -> str:
     return url
 
 
+def _public_action_platform(page) -> str:
+    host = str(urlparse(str(getattr(page, "url", "") or "")).hostname or "").lower()
+    return "threads" if host.endswith(("threads.net", "threads.com")) else "instagram"
+
+
+def _public_exact_text_count(page, text: str) -> int:
+    """Count exact, visible platform text while excluding open composers."""
+
+    return _threads_exact_text_count(page, text)
+
+
+def _verify_public_text_after_reload(
+    page,
+    task,
+    *,
+    target_url: str,
+    text: str,
+    screenshot_dir,
+    logger,
+    stage: str,
+    cancel_event: Any | None,
+) -> dict[str, Any]:
+    _raise_if_cancelled(cancel_event)
+    # A composer echo is useful diagnostic evidence, but only an exact match
+    # after a fresh navigation is authoritative enough to settle CRM billing.
+    echoed_before_reload = _public_exact_text_count(page, text) > 0
+    _goto(page, target_url, logger, f"{stage}_verify_reload")
+    _warmup_scroll(page, logger, 1)
+    _raise_if_cancelled(cancel_event)
+    visible_count = _public_exact_text_count(page, text)
+    shot = _screenshot(page, screenshot_dir, task, f"{stage}_verified" if visible_count else f"{stage}_unknown", logger)
+    evidence = {
+        "submitted": True,
+        "verified": visible_count > 0,
+        "platform_visible": visible_count > 0,
+        "confirmation_source": "exact_text_after_reload" if visible_count else "",
+        "verified_after_reload": True,
+        "echoed_before_reload": echoed_before_reload,
+        "visible_match_count": visible_count,
+        "content_hash": hashlib.sha256(str(text).encode("utf-8")).hexdigest(),
+        "inspected_url": str(getattr(page, "url", "") or target_url),
+        "screenshot_path": shot,
+    }
+    if visible_count <= 0:
+        raise ActionOutcomeUnknownError(
+            "The public interaction was submitted but its exact text was not visible after reload; automatic retry is disabled.",
+            shot,
+        )
+    return evidence
+
+
+def _visible_action_state(page, labels: Iterable[str]) -> bool:
+    for label in labels:
+        for selector in (
+            f'[aria-label="{label}"]',
+            f'[aria-label*="{label}" i]',
+            f'button:has-text("{label}")',
+            f'[role="button"]:has-text("{label}")',
+        ):
+            with contextlib.suppress(Exception):
+                locator = page.locator(selector).first
+                if locator.count() and locator.is_visible(timeout=1200):
+                    return True
+    return False
+
+
+def _verify_toggle_after_reload(
+    page,
+    task,
+    *,
+    target_url: str,
+    labels: Iterable[str],
+    screenshot_dir,
+    logger,
+    stage: str,
+    cancel_event: Any | None,
+) -> dict[str, Any]:
+    _raise_if_cancelled(cancel_event)
+    _goto(page, target_url, logger, f"{stage}_verify_reload")
+    _raise_if_cancelled(cancel_event)
+    visible = _visible_action_state(page, labels)
+    shot = _screenshot(page, screenshot_dir, task, f"{stage}_verified" if visible else f"{stage}_unknown", logger)
+    if not visible:
+        raise ActionOutcomeUnknownError(
+            f"The {stage.replace('_', ' ')} action was submitted but its platform state was not confirmed after reload.",
+            shot,
+        )
+    return {
+        "submitted": True,
+        "verified": True,
+        "platform_visible": True,
+        "confirmation_source": "platform_toggle_after_reload",
+        "inspected_url": str(getattr(page, "url", "") or target_url),
+        "screenshot_path": shot,
+    }
+
+
 def _run_comment_post(
     page,
     task,
@@ -11828,21 +12625,30 @@ def _run_comment_post(
     comment = str(payload.get("comment") or payload.get("text") or "").strip()
     if not comment:
         raise ValueError("评论任务需要填写评论内容。")
-    _goto(page, _target_url(payload), logger, "comment_open")
+    target_url = _target_url(payload)
+    _goto(page, target_url, logger, "comment_open")
     box = page.locator('textarea[aria-label*="Add a comment"], textarea, [contenteditable="true"]').last
     box.wait_for(state="visible", timeout=30000)
     _human_click(page, box, logger, "comment_focus")
     _human_type(page, comment)
+    platform = _public_action_platform(page)
     submitted = _run_billing_commit_action(
         context_control,
         cancel_event,
-        lambda: _click_text_button(page, logger, ["Post"], "comment_submit"),
+        lambda: (
+            _click_threads_reply_submit(page, box, logger, "comment_submit")
+            if platform == "threads"
+            else _click_text_button(page, logger, ["Post", "发布", "發佈"], "comment_submit")
+        ),
     )
     if not submitted:
         raise RuntimeError("未找到评论发布按钮。")
     _sleep_between(2.0, 4.0)
-    shot = _screenshot(page, screenshot_dir, task, "comment_done", logger)
-    return {"ok": True, "url": page.url, "screenshot_path": shot}
+    evidence = _verify_public_text_after_reload(
+        page, task, target_url=target_url, text=comment, screenshot_dir=screenshot_dir,
+        logger=logger, stage="comment", cancel_event=cancel_event,
+    )
+    return {"ok": True, "url": page.url, **evidence}
 
 
 def _run_reply_comment(
@@ -11859,7 +12665,8 @@ def _run_reply_comment(
     target_text = str(payload.get("target_text") or "").strip()
     if not reply:
         raise ValueError("回复任务需要填写回复/评论内容。")
-    _goto(page, _target_url(payload), logger, "reply_open")
+    target_url = _target_url(payload)
+    _goto(page, target_url, logger, "reply_open")
     _warmup_scroll(page, logger, 1)
     if target_text:
         try:
@@ -11872,16 +12679,484 @@ def _run_reply_comment(
     box.wait_for(state="visible", timeout=30000)
     _human_click(page, box, logger, "reply_focus")
     _human_type(page, reply)
+    platform = _public_action_platform(page)
     submitted = _run_billing_commit_action(
         context_control,
         cancel_event,
-        lambda: _click_text_button(page, logger, ["Post"], "reply_submit"),
+        lambda: (
+            _click_threads_reply_submit(page, box, logger, "reply_submit")
+            if platform == "threads"
+            else _click_text_button(page, logger, ["Post", "发布", "發佈"], "reply_submit")
+        ),
     )
     if not submitted:
         raise RuntimeError("未找到回复发布按钮。")
     _sleep_between(2.0, 4.0)
-    shot = _screenshot(page, screenshot_dir, task, "reply_done", logger)
-    return {"ok": True, "url": page.url, "screenshot_path": shot}
+    evidence = _verify_public_text_after_reload(
+        page, task, target_url=target_url, text=reply, screenshot_dir=screenshot_dir,
+        logger=logger, stage="reply", cancel_event=cancel_event,
+    )
+    return {"ok": True, "url": page.url, **evidence}
+
+
+_DIRECT_MESSAGE_COMPOSER_SELECTORS = (
+    '[data-lexical-editor="true"][role="textbox"][contenteditable="true"]',
+    '[role="textbox"][contenteditable="true"][aria-placeholder*="Message" i]',
+    '[role="textbox"][contenteditable="true"][aria-label*="Message" i]',
+    '[role="textbox"][contenteditable="true"][aria-placeholder*="訊息"]',
+    '[role="textbox"][contenteditable="true"][aria-placeholder*="消息"]',
+    'textarea[placeholder*="Message" i]',
+    'textarea[aria-label*="Message" i]',
+    'textarea[placeholder*="訊息"]',
+    'textarea[placeholder*="消息"]',
+    'textarea[aria-label*="訊息"]',
+    'textarea[aria-label*="消息"]',
+    'div[role="textbox"][contenteditable="true"]',
+)
+
+
+def _direct_message_recipient(payload: dict[str, Any]) -> str:
+    candidate = str(
+        payload.get("recipient_username")
+        or payload.get("target_username")
+        or payload.get("username")
+        or ""
+    ).strip()
+    if not candidate:
+        raw_target = str(payload.get("target_url") or "").strip()
+        try:
+            parsed = urlparse(raw_target)
+            segments = [segment for segment in parsed.path.split("/") if segment]
+            hostname = str(parsed.hostname or "").lower()
+            if parsed.netloc:
+                if (hostname == "instagram.com" or hostname.endswith(".instagram.com")) and segments:
+                    candidate = segments[0]
+                elif (hostname in {"threads.net", "threads.com"} or hostname.endswith((".threads.net", ".threads.com"))) and segments:
+                    candidate = segments[0].lstrip("@")
+                else:
+                    candidate = ""
+            elif segments:
+                candidate = segments[0].lstrip("@")
+            elif raw_target and ":" in raw_target and "://" not in raw_target:
+                candidate = raw_target.rsplit(":", 1)[-1]
+            else:
+                candidate = raw_target
+        except Exception:
+            candidate = raw_target
+    candidate = candidate.strip().strip("/@")
+    if not re.fullmatch(r"[A-Za-z0-9._]{1,64}", candidate):
+        raise ValueError("Direct-message recipient username is invalid.")
+    return candidate
+
+
+def _direct_message_composer(page, timeout_ms: int = 1200):
+    for selector in _DIRECT_MESSAGE_COMPOSER_SELECTORS:
+        try:
+            locator = page.locator(selector).last
+            if locator.count() and locator.is_visible(timeout=timeout_ms):
+                return locator
+        except Exception:
+            continue
+    return None
+
+
+def _direct_message_normalized(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "").replace("\u00a0", " ")).lower()
+
+
+def _direct_message_logged_in_username(page, platform: str, expected_username: str) -> str:
+    expected = str(expected_username or "").strip().lstrip("@").lower()
+    if not expected:
+        return ""
+    expected_path = f"/@{expected}" if platform == "threads" else f"/{expected}/"
+    try:
+        verified = page.evaluate(
+            r"""({ expectedPath, platform }) => {
+                const normalizePath = (value) => {
+                    try { return new URL(value, window.location.origin).pathname.toLowerCase(); }
+                    catch { return String(value || '').toLowerCase(); }
+                };
+                const candidates = Array.from(document.querySelectorAll(
+                    'nav a[href], header a[href], a[aria-label*="Profile" i][href], a[aria-label*="個人檔案"][href], a[aria-label*="个人资料"][href]'
+                ));
+                return candidates.some((node) => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') return false;
+                    const path = normalizePath(node.getAttribute('href'));
+                    return platform === 'threads'
+                        ? path === expectedPath || path === `${expectedPath}/`
+                        : path === expectedPath;
+                });
+            }""",
+            {"expectedPath": expected_path, "platform": platform},
+        )
+    except Exception:
+        verified = False
+    return expected if verified is True else ""
+
+
+def _direct_message_conversation_evidence(
+    page,
+    message: str,
+    recipient: str,
+) -> dict[str, Any]:
+    needle = _direct_message_normalized(message)[:96]
+    if len(needle) < 6:
+        return {
+            "message_visible": False,
+            "delivered": False,
+            "read": False,
+            "replied": False,
+            "attachment_visible": False,
+            "status_text": "",
+        }
+    try:
+        raw = page.evaluate(
+            r"""({ needle, recipient }) => {
+                const normalize = (value) => String(value || '')
+                    .toLowerCase().replace(/\u00a0/g, ' ').replace(/\s+/g, '');
+                const visible = (node) => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0 && rect.height > 0
+                        && style.display !== 'none' && style.visibility !== 'hidden';
+                };
+                const candidates = Array.from(document.querySelectorAll('div, span, p'))
+                    .filter(visible)
+                    .filter((node) => !node.closest('[contenteditable="true"], textarea, [role="textbox"]'))
+                    .filter((node) => {
+                        const text = normalize(node.textContent);
+                        return text.includes(needle) && text.length <= Math.max(needle.length * 5, 800);
+                    })
+                    .sort((left, right) => String(left.textContent || '').length - String(right.textContent || '').length);
+                const messageNode = candidates[0];
+                if (!messageNode) return {
+                    message_visible: false, delivered: false, read: false,
+                    replied: false, attachment_visible: false, status_text: '',
+                    recipient_visible: false, outgoing_hint: false,
+                };
+                let scope = messageNode;
+                let statusText = String(messageNode.textContent || '');
+                let attachmentVisible = false;
+                for (let depth = 0; depth < 7 && scope.parentElement; depth += 1) {
+                    const parent = scope.parentElement;
+                    const parentText = String(parent.innerText || parent.textContent || '');
+                    if (parentText.length > 2400) break;
+                    scope = parent;
+                    statusText = parentText;
+                    attachmentVisible = attachmentVisible || Array.from(scope.querySelectorAll('img, video'))
+                        .some((media) => {
+                            const rect = media.getBoundingClientRect();
+                            const style = window.getComputedStyle(media);
+                            return rect.width >= 60 && rect.height >= 40
+                                && style.display !== 'none' && style.visibility !== 'hidden';
+                        });
+                }
+                const compact = statusText.replace(/\s+/g, ' ').trim().slice(0, 700);
+                const lowered = compact.toLowerCase();
+                const rect = messageNode.getBoundingClientRect();
+                const outgoingHint = rect.left + rect.width / 2 >= window.innerWidth * 0.45
+                    || /(?:sent|you:|you sent|已傳送|已发送|你傳送|你发送)/i.test(compact);
+                const target = normalize(recipient).replace(/^@/, '');
+                const pageText = normalize(document.body && document.body.innerText);
+                return {
+                    message_visible: true,
+                    delivered: /(?:delivered|已送達|已送达)/i.test(lowered),
+                    read: /(?:seen|read|已讀|已读|看過|看过)/i.test(lowered),
+                    replied: false,
+                    attachment_visible: attachmentVisible,
+                    status_text: compact,
+                    recipient_visible: Boolean(target && pageText.includes(target)),
+                    outgoing_hint: outgoingHint,
+                };
+            }""",
+            {"needle": needle, "recipient": recipient},
+        )
+    except Exception:
+        raw = {}
+    evidence = dict(raw) if isinstance(raw, dict) else {}
+    return {
+        "message_visible": evidence.get("message_visible") is True,
+        "delivered": evidence.get("delivered") is True,
+        "read": evidence.get("read") is True,
+        "replied": evidence.get("replied") is True,
+        "attachment_visible": evidence.get("attachment_visible") is True,
+        "recipient_visible": evidence.get("recipient_visible") is True,
+        "outgoing_hint": evidence.get("outgoing_hint") is True,
+        "status_text": str(evidence.get("status_text") or "")[:700],
+        "checked_at": int(time.time()),
+    }
+
+
+def _fill_direct_message_composer(
+    page,
+    message: str,
+    logger: AutomationLogger,
+    *,
+    cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> bool:
+    composer = _direct_message_composer(page, timeout_ms=2500)
+    if composer is None:
+        return False
+    _raise_if_cancelled(cancel_event)
+    if not _human_click(
+        page,
+        composer,
+        logger,
+        "direct_message_focus",
+        abort_if=lambda: _manual_takeover_requested(context_control),
+    ):
+        return False
+    try:
+        composer.fill(message, timeout=5000)
+    except Exception:
+        with contextlib.suppress(Exception):
+            page.keyboard.press("Control+A")
+        _type_text(
+            page,
+            message,
+            min_delay=0.02,
+            max_delay=0.06,
+            logger=logger,
+            stage="direct_message_text",
+            abort_if=lambda: _manual_takeover_requested(context_control),
+        )
+    return _direct_message_composer(page, timeout_ms=800) is not None
+
+
+def _attach_direct_message_media(page, media_path: str) -> bool:
+    clean_path = str(media_path or "").strip()
+    if not clean_path:
+        return True
+    source = Path(clean_path).resolve()
+    if not source.is_file():
+        return False
+    for selector in ('input[type="file"][accept*="image" i]', 'input[type="file"]'):
+        try:
+            inputs = page.locator(selector)
+            for index in range(min(int(inputs.count()), 12) - 1, -1, -1):
+                try:
+                    inputs.nth(index).set_input_files(str(source), timeout=10000)
+                    return True
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return False
+
+
+def _open_direct_message_conversation(
+    page,
+    platform: str,
+    recipient: str,
+    logger: AutomationLogger,
+    *,
+    cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    profile_url = (
+        f"https://www.instagram.com/{quote(recipient)}/"
+        if platform == "instagram"
+        else f"https://www.threads.net/@{quote(recipient)}"
+    )
+    _goto(page, profile_url, logger, "direct_message_profile")
+    _raise_if_cancelled(cancel_event)
+    clicked = _click_text_button(
+        page,
+        logger,
+        ["Message", "Send message", "訊息", "私訊", "消息", "发消息", "傳送訊息"],
+        "direct_message_open",
+        abort_if=lambda: _manual_takeover_requested(context_control),
+    )
+    if clicked and _wait_interruptibly(1.5, cancel_event, context_control):
+        if _direct_message_composer(page, timeout_ms=3000) is not None:
+            return {"opened": True, "recipient_verified": True, "method": "profile", "profile_url": profile_url}
+
+    inbox_url = (
+        "https://www.instagram.com/direct/inbox/"
+        if platform == "instagram"
+        else "https://www.threads.net/messages"
+    )
+    _goto(page, inbox_url, logger, "direct_message_inbox")
+    opened_new = _click_text_button(
+        page,
+        logger,
+        ["New message", "Compose", "新訊息", "新增訊息", "新消息", "撰寫"],
+        "direct_message_new",
+        abort_if=lambda: _manual_takeover_requested(context_control),
+    )
+    if not opened_new or not _wait_interruptibly(0.8, cancel_event, context_control):
+        return {"opened": False, "recipient_verified": False, "method": "", "profile_url": profile_url}
+    search = _visible_first(
+        page,
+        [
+            'input[placeholder*="Search" i]',
+            'input[aria-label*="Search" i]',
+            'input[placeholder*="搜尋"]',
+            'input[placeholder*="搜索"]',
+            'input[type="text"]',
+        ],
+        timeout_ms=3000,
+    )
+    if search is None:
+        return {"opened": False, "recipient_verified": False, "method": "", "profile_url": profile_url}
+    _human_click(page, search, logger, "direct_message_recipient_search")
+    try:
+        search.fill(recipient, timeout=5000)
+    except Exception:
+        _type_text(page, recipient, min_delay=0.03, max_delay=0.07)
+    if not _wait_interruptibly(1.2, cancel_event, context_control):
+        return {"opened": False, "recipient_verified": False, "method": "", "profile_url": profile_url}
+    target = None
+    for locator in (
+        page.get_by_text(recipient, exact=True).first,
+        page.get_by_text(f"@{recipient}", exact=True).first,
+        page.locator(f'[role="option"]:has-text("{recipient}")').first,
+        page.locator(f'[role="button"]:has-text("{recipient}")').first,
+    ):
+        try:
+            if locator.count() and locator.is_visible(timeout=1200):
+                target = locator
+                break
+        except Exception:
+            continue
+    if target is None or not _human_click(page, target, logger, "direct_message_recipient_select"):
+        return {"opened": False, "recipient_verified": False, "method": "", "profile_url": profile_url}
+    _click_text_button(
+        page,
+        logger,
+        ["Next", "Chat", "下一步", "聊天", "完成"],
+        "direct_message_recipient_next",
+        abort_if=lambda: _manual_takeover_requested(context_control),
+    )
+    if not _wait_interruptibly(1.5, cancel_event, context_control):
+        return {"opened": False, "recipient_verified": False, "method": "", "profile_url": profile_url}
+    return {
+        "opened": _direct_message_composer(page, timeout_ms=3000) is not None,
+        "recipient_verified": True,
+        "method": "inbox_search",
+        "profile_url": profile_url,
+    }
+
+
+def _run_direct_message(
+    page,
+    task,
+    account,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    platform: str,
+    cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    message = str(payload.get("content") or payload.get("message") or payload.get("text") or "").strip()
+    if len(_direct_message_normalized(message)) < 6 or len(message) > 5000:
+        raise ValueError("Direct-message content must contain 6 to 5000 characters.")
+    recipient = _direct_message_recipient(payload)
+    sender = str(account.get("username") or "").strip().lstrip("@").lower()
+    if sender and recipient.lower() == sender:
+        raise ValueError("Direct-message recipient cannot be the sender account.")
+    media_paths = [
+        str(item or "").strip()
+        for item in (payload.get("media_paths") or [])
+        if str(item or "").strip()
+    ]
+    if len(media_paths) > 1:
+        raise ValueError("Direct-message tasks currently support at most one media attachment.")
+    logged_in_username = _direct_message_logged_in_username(page, platform, sender)
+
+    opened = _open_direct_message_conversation(
+        page,
+        platform,
+        recipient,
+        logger,
+        cancel_event=cancel_event,
+        context_control=context_control,
+    )
+    if not opened.get("opened") or not opened.get("recipient_verified"):
+        shot = _screenshot(page, screenshot_dir, task, "direct_message_recipient_unavailable", logger)
+        return {
+            "ok": False,
+            "sent": False,
+            "status": "recipient_unavailable",
+            "warning": "The target account could not be opened in a verified message conversation.",
+            "recipient_username": recipient,
+            "logged_in_username": logged_in_username,
+            "inspected_url": str(page.url or ""),
+            "screenshot_path": shot,
+        }
+    if media_paths and not _attach_direct_message_media(page, media_paths[0]):
+        shot = _screenshot(page, screenshot_dir, task, "direct_message_media_unavailable", logger)
+        raise RuntimeError(f"The CRM media attachment could not be added before submission. Evidence: {shot}")
+    if not _fill_direct_message_composer(
+        page,
+        message,
+        logger,
+        cancel_event=cancel_event,
+        context_control=context_control,
+    ):
+        shot = _screenshot(page, screenshot_dir, task, "direct_message_composer_unavailable", logger)
+        return {
+            "ok": False,
+            "sent": False,
+            "status": "composer_unavailable",
+            "warning": "The verified conversation did not expose a usable message composer.",
+            "recipient_username": recipient,
+            "logged_in_username": logged_in_username,
+            "inspected_url": str(page.url or ""),
+            "screenshot_path": shot,
+        }
+
+    def submit() -> bool:
+        if _click_text_button(
+            page,
+            logger,
+            ["Send", "傳送", "发送", "發送", "送出"],
+            "direct_message_submit",
+            abort_if=lambda: _manual_takeover_requested(context_control),
+        ):
+            return True
+        page.keyboard.press("Enter")
+        return True
+
+    _run_billing_commit_action(context_control, cancel_event, submit)
+    evidence: dict[str, Any] = {}
+    for attempt in range(8):
+        if not _wait_interruptibly(0.6 if attempt == 0 else 0.9, cancel_event, context_control):
+            break
+        evidence = _direct_message_conversation_evidence(page, message, recipient)
+        attachment_confirmed = not media_paths or evidence.get("attachment_visible") is True
+        if evidence.get("message_visible") is True and attachment_confirmed:
+            shot = _screenshot(page, screenshot_dir, task, "direct_message_confirmed", logger)
+            return {
+                "ok": True,
+                "sent": True,
+                "submitted": True,
+                "verified": True,
+                "recipient_username": recipient,
+                "logged_in_username": logged_in_username,
+                "platform": platform,
+                "conversation_url": str(page.url or ""),
+                "open_method": str(opened.get("method") or ""),
+                "delivery_evidence": evidence,
+                "screenshot_path": shot,
+            }
+    shot = _screenshot(page, screenshot_dir, task, "direct_message_submitted_unconfirmed", logger)
+    logger.log(
+        "warn",
+        "direct_message_submitted_unconfirmed",
+        "The private message was submitted but no matching outgoing bubble was confirmed; automatic resend is disabled.",
+        {"recipient_username": recipient, "platform": platform, "evidence": evidence},
+        shot,
+    )
+    raise ActionOutcomeUnknownError(
+        "Private-message submission is unconfirmed; review platform evidence before any retry.",
+        shot,
+    )
 
 
 def _run_like_post(
@@ -11894,12 +13169,17 @@ def _run_like_post(
     cancel_event: Any | None = None,
     context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    _goto(page, _target_url(payload), logger, "like_open")
+    target_url = _target_url(payload)
+    _goto(page, target_url, logger, "like_open")
     unlike = page.locator('[aria-label="Unlike"]').first
     try:
         if unlike.count() and unlike.is_visible(timeout=3000):
             shot = _screenshot(page, screenshot_dir, task, "already_liked", logger)
-            return {"ok": True, "already_liked": True, "url": page.url, "screenshot_path": shot}
+            return {
+                "ok": True, "already_liked": True, "submitted": False, "verified": True,
+                "platform_visible": True, "confirmation_source": "platform_toggle_existing",
+                "url": page.url, "inspected_url": page.url, "screenshot_path": shot,
+            }
     except Exception:
         pass
     like = page.locator('[aria-label="Like"]').first
@@ -11911,11 +13191,16 @@ def _run_like_post(
         lambda: _human_click(page, like, logger, "like_click"),
     )
     _sleep_between(1.0, 2.0)
-    shot = _screenshot(page, screenshot_dir, task, "like_done", logger)
-    return {"ok": True, "liked": True, "url": page.url, "screenshot_path": shot}
+    evidence = _verify_toggle_after_reload(
+        page, task, target_url=target_url,
+        labels=("Unlike", "Remove like", "取消赞", "取消讚"),
+        screenshot_dir=screenshot_dir, logger=logger, stage="like",
+        cancel_event=cancel_event,
+    )
+    return {"ok": True, "liked": True, "url": page.url, **evidence}
 
 
-def _run_share_post(
+def _run_share_post_legacy(
     page,
     task,
     payload,
@@ -11937,3 +13222,66 @@ def _run_share_post(
     )
     shot = _screenshot(page, screenshot_dir, task, "share_done", logger)
     return {"ok": True, "copied_link": copied, "url": page.url, "screenshot_path": shot}
+
+
+def _run_share_post(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    raise UnsupportedActionError(
+        "CRM share requires an explicit platform destination; Copy link is not a share write and cannot be billed as confirmed."
+    )
+
+
+def _run_repost_post(
+    page,
+    task,
+    payload,
+    screenshot_dir,
+    logger,
+    *,
+    cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    target_url = _target_url(payload)
+    _goto(page, target_url, logger, "repost_open")
+    if _visible_action_state(page, ("Undo repost", "Remove repost", "取消转发", "取消轉發")):
+        shot = _screenshot(page, screenshot_dir, task, "repost_existing", logger)
+        return {
+            "ok": True, "already_reposted": True, "submitted": False, "verified": True,
+            "platform_visible": True, "confirmation_source": "platform_toggle_existing",
+            "url": page.url, "inspected_url": page.url, "screenshot_path": shot,
+        }
+
+    def submit_repost() -> bool:
+        opened = _click_text_button(page, logger, ["Repost", "转发", "轉發"], "repost_open_menu")
+        if not opened:
+            return False
+        _sleep_between(0.3, 0.7)
+        menu = page.locator(
+            '[role="menuitem"]:has-text("Repost"), [role="menu"] [role="button"]:has-text("Repost"), '
+            '[role="menuitem"]:has-text("转发"), [role="menuitem"]:has-text("轉發")'
+        ).first
+        with contextlib.suppress(Exception):
+            if menu.count() and menu.is_visible(timeout=1500):
+                return bool(_human_click(page, menu, logger, "repost_submit"))
+        # Some Threads builds perform the repost on the first, guarded click.
+        return True
+
+    submitted = bool(_run_billing_commit_action(context_control, cancel_event, submit_repost))
+    if not submitted:
+        raise RuntimeError("The Threads repost control was not available.")
+    _sleep_between(1.0, 2.0)
+    evidence = _verify_toggle_after_reload(
+        page, task, target_url=target_url,
+        labels=("Undo repost", "Remove repost", "取消转发", "取消轉發"),
+        screenshot_dir=screenshot_dir, logger=logger, stage="repost",
+        cancel_event=cancel_event,
+    )
+    return {"ok": True, "reposted": True, "url": page.url, **evidence}

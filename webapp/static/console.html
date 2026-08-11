@@ -325,7 +325,7 @@
                   <div id="personaDashboardSummary" class="persona-kpi-grid"></div>
                   <div class="persona-chart-grid">
                     <div class="persona-chart-panel persona-chart-panel-wide persona-trend-panel">
-                      <div class="persona-chart-head"><h3>人设热度</h3><span class="small">左右滑动查看单个人设的总热度与平台热度</span></div>
+                      <div class="persona-chart-head persona-heat-chart-head"><div><h3>人设热度</h3><span class="small">左右滑动查看单个人设的总热度与平台热度</span></div><span id="personaHeatPersonaCount" class="persona-heat-persona-count" aria-live="polite"></span></div>
                       <div id="personaHotRankChart" class="persona-chart"></div>
                     </div>
                     <div class="persona-chart-panel">
@@ -333,23 +333,14 @@
                       <div id="personaPlatformChart" class="persona-chart"></div>
                     </div>
                     <div class="persona-chart-panel">
-                      <div class="persona-chart-head"><h3>热点覆盖</h3><span class="small">完整、部分、暂无数据</span></div>
-                      <div id="personaCoverageChart" class="persona-chart"></div>
+                      <div class="persona-chart-head"><h3>互动构成</h3><span class="small">不含浏览量</span></div>
+                      <div id="personaEngagementChart" class="persona-chart"></div>
                     </div>
                     <div class="persona-chart-panel persona-chart-panel-wide">
                       <div class="persona-chart-head"><h3>流量走势</h3><span class="small">按日、月或年查看发布、互动与逐帖浏览</span></div>
                       <div id="personaTrendChart" class="persona-chart persona-chart-tall"></div>
                     </div>
-                    <div class="persona-chart-panel">
-                      <div class="persona-chart-head"><h3>互动构成</h3><span class="small">不含浏览量</span></div>
-                      <div id="personaEngagementChart" class="persona-chart"></div>
-                    </div>
-                    <div class="persona-chart-panel">
-                      <div class="persona-chart-head"><h3>任务状态</h3><span class="small">发布队列缓存</span></div>
-                      <div id="personaTaskStatusChart" class="persona-chart"></div>
-                    </div>
                   </div>
-                  <div class="persona-dashboard-note"><strong>指标说明：</strong>账号主页浏览是账号主页级数据；逐帖浏览合计是单条帖子数据，两者分开展示，不合并。</div>
                 </div>
                 <div id="personaDashboardEmpty" class="task-empty" style="display:none">
                   <div class="task-empty-title">暂无人设数据</div>

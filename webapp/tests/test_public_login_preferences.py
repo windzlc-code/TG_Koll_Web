@@ -442,7 +442,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('[data-site-home-label]', self.site_nav_script)
         self.assertIn('[data-site-nav-key="aboutVecto"]', self.site_nav_script)
         self.assertIn('"/about-vecto.html",', self.site_nav_script)
-        self.assertIn('["home", "aboutVecto", "pricing"].includes(page)', self.site_nav_script)
+        self.assertIn('["home", "aboutVecto", "pricing", "crm"].includes(page)', self.site_nav_script)
         self.assertIn('url.searchParams.delete("admin_workspace_user_id")', self.site_nav_script)
         self.assertIn("function adminWorkspacePageUrl(value)", self.console_js)
         self.assertNotIn('data-proxy-market-open', self.console_js)

@@ -481,8 +481,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("activeOpenLoginTaskForAccount(accountId)", actions)
         self.assertIn('data-open-login-task-id="${esc(activeLoginTask.id)}"', actions)
         self.assertIn('renderBusyButtonContent("执行中"', actions)
-        self.assertIn('title="请先绑定人设后再打开登录"', actions)
-        self.assertIn("请先绑定人设后再打开登录。", create_task)
+        self.assertIn('class="primary" ${attribute}="${esc(accountId)}">打开登录</button>', actions)
+        self.assertNotIn("请先绑定人设后再打开登录", actions)
+        self.assertNotIn("请先绑定人设后再打开登录", create_task)
         self.assertGreaterEqual(self.source.count("openLiveBrowserTaskView(activeTask.id)"), 3)
 
     def test_open_login_browser_exit_refreshes_the_terminal_task_state(self):
@@ -1939,7 +1940,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             2,
         )
 
-    def test_each_social_browser_task_uses_an_independent_toast_stack(self):
+    def test_only_concurrent_social_browser_tasks_use_independent_toast_stack(self):
         independent = self._function_source("socialTaskUsesIndependentToast")
         sync_toast = self._section("function syncSocialTaskToast(", "\nfunction syncSocialTaskToasts(")
         show_toast = self._section("function showToast", "function defaultToastTargetForMessage")
@@ -1948,17 +1949,48 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         harness = textwrap.dedent(
             f"""
             const assert = require("node:assert/strict");
+            const state = {{
+              socialTasks: [],
+              socialTaskIndependentToastIds: new Set(),
+            }};
+            function activeSocialAutomationTask(task) {{
+              return ["running", "need_manual"].includes(String(task?.status || ""));
+            }}
             {independent}
 
-            assert.equal(socialTaskUsesIndependentToast({{ id: "warmup-1", task_type: "threads_warmup" }}), true);
-            assert.equal(socialTaskUsesIndependentToast({{ id: "publish-1", task_type: "publish_post" }}), true);
-            assert.equal(socialTaskUsesIndependentToast({{ id: "publish-2", task_type: "publish_post" }}), true);
+            const first = {{ id: "warmup-1", task_type: "threads_warmup", status: "running" }};
+            const second = {{ id: "publish-1", task_type: "publish_post", status: "queued" }};
+            state.socialTasks = [first];
+            assert.equal(socialTaskUsesIndependentToast(first), false);
+            assert.equal(socialTaskUsesIndependentToast({{
+              id: "single-cancelled",
+              task_type: "publish_post",
+              status: "cancelled",
+            }}), false);
+
+            state.socialTasks = [first, second];
+            assert.equal(socialTaskUsesIndependentToast(first), false);
+            assert.equal(socialTaskUsesIndependentToast(second), false);
+
+            second.status = "running";
+            assert.equal(socialTaskUsesIndependentToast(first), true);
+            assert.equal(socialTaskUsesIndependentToast(second), true);
+
+            first.status = "success";
+            second.status = "success";
+            assert.equal(socialTaskUsesIndependentToast(first), true);
+            assert.equal(socialTaskUsesIndependentToast(second), true);
             assert.equal(socialTaskUsesIndependentToast({{ task_type: "publish_post" }}), false);
             """
         )
         self._run_node(harness)
 
         self.assertIn("stack: socialTaskUsesIndependentToast(task)", sync_toast)
+        self.assertIn("if (existingToast && !toastReplacementInProgress)", show_toast)
+        self.assertLess(
+            show_toast.index("if (request.stack)"),
+            show_toast.index("const isTaskRefresh"),
+        )
         self.assertIn("if (request.stack) return createToast(request);", show_toast)
         self.assertIn('toast.dataset.toastStacked = "true"', create_toast)
         self.assertIn('toast.dataset.toastStacked !== "true"', remove_toasts)

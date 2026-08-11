@@ -15,7 +15,7 @@ import {
   type ReaderResponseSnapshot,
 } from "@/lib/reader-response-coordinator";
 import { readRuntimeApiConfig } from "@/runtime/node/config";
-import { callTextUnderstandingModelWithFallback, extractText, isTextModelFallbackError } from "@/lib/gemini-client";
+import { callTextUnderstandingModelWithFallback, extractText, getTextUnderstandingModelFallbacks, isTextModelFallbackError } from "@/lib/gemini-client";
 import {
   buildSentimentCandidateId,
   getSentimentHotCandidateHistoryKeys,
@@ -62,6 +62,12 @@ const THREADS_BROWSER_QUERY_LIMIT = 12;
 const THREADS_BROWSER_QUERY_BATCH_SIZE = 3;
 const THREADS_BROWSER_PAGE_LIMIT = 2;
 const THREADS_BROWSER_BOOTSTRAP_QUERY_LIMIT = 3;
+// The anonymous public browser is only a fast fallback for the Reader.  When
+// Threads exposes no search payload, keeping Chromium alive for the full
+// source-stage budget delays the usable public Reader path without producing
+// candidates.  Bound that probe so the complete interactive search remains
+// within the UI budget.
+const THREADS_PUBLIC_BROWSER_TIMEOUT_MS = 8_000;
 // Threads can render the search page first and emit its GraphQL request a few
 // seconds later. Keep the capture listener alive long enough to observe that
 // request before falling back to DOM-only parsing.
@@ -77,7 +83,10 @@ const SENTIMENT_HOT_KEYWORD_MODEL = "xai/grok-4.3, xai/grok-4.5";
 const THREADS_READER_INITIAL_QUERY_LIMIT = 24;
 const THREADS_READER_TOTAL_QUERY_LIMIT = 48;
 const THREADS_READER_QUERY_BATCH_SIZE = 8;
-const INSTAGRAM_READER_QUERY_LIMIT = 48;
+// The public Instagram stage has an eight-second UI budget. Four focused
+// queries fit the shared Reader concurrency window and still leave time for
+// their parsed results to be consumed by this request.
+const INSTAGRAM_READER_QUERY_LIMIT = 4;
 const INSTAGRAM_AUTHENTICATED_QUERY_LIMIT = 16;
 const INSTAGRAM_GRAPHQL_PAGE_QUERY_LIMIT = 10;
 const INSTAGRAM_KEYWORD_SEARCH_PAGE_QUERY_LIMIT = 10;
@@ -86,8 +95,11 @@ const INSTAGRAM_DIRECT_TAG_API_QUERY_LIMIT = 0;
 const DEFAULT_REFRESH_FRESHNESS_DAYS = 7;
 // Public Reader capture is a short interactive path.  Keep its full budget
 // below the API deadline so an abandoned upstream request never ties up work.
-const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 45_000;
-const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 60_000;
+// A manual hot capture is an interactive operation.  Keep the entire public
+// page collection bounded to the UI promise instead of letting a slow source
+// monopolise Chromium after the caller has already timed out.
+const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 30_000;
+const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 30_000;
 const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 8_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
@@ -221,12 +233,30 @@ export function boundedBrowserPageConcurrency(requested = 2): number {
 let sentimentBrowserWorkActive = 0;
 const sentimentBrowserWorkQueue: Array<() => void> = [];
 
-export async function acquireSentimentBrowserWorkSlot(): Promise<() => void> {
+/**
+ * Acquires one bounded browser slot.  A timed-out public search must be
+ * removed from the queue, otherwise its orphaned waiter can start Chromium
+ * after the caller has already returned and delay the next interactive run.
+ */
+export async function acquireSentimentBrowserWorkSlot(options: { timeoutMs?: number } = {}): Promise<() => void> {
   const maxActive = boundedBrowserPageConcurrency(2);
   if (sentimentBrowserWorkActive >= maxActive) {
-    await new Promise<void>((resolve) => {
-      sentimentBrowserWorkQueue.push(resolve);
+    const timeoutMs = Math.max(0, Math.floor(Number(options.timeoutMs) || 0));
+    const acquired = await new Promise<boolean>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const waiter = () => {
+        if (timer) clearTimeout(timer);
+        resolve(true);
+      };
+      sentimentBrowserWorkQueue.push(waiter);
+      if (timeoutMs <= 0) return;
+      timer = setTimeout(() => {
+        const index = sentimentBrowserWorkQueue.indexOf(waiter);
+        if (index >= 0) sentimentBrowserWorkQueue.splice(index, 1);
+        resolve(false);
+      }, timeoutMs);
     });
+    if (!acquired) throw new Error("sentiment_browser_slot_timeout");
   }
   sentimentBrowserWorkActive += 1;
   let released = false;
@@ -301,7 +331,6 @@ export interface SentimentHotSearchStrategy {
   rejectTerms: string[];
   domainSummary?: string;
   personaGuardTerms?: string[];
-  localDeterministic?: boolean;
 }
 
 export interface ThreadsBrowserProfilePublishedPostSnapshot {
@@ -1111,7 +1140,6 @@ export function candidateMatchesRequestedFreshness(candidate: SentimentHotCandid
 }
 
 function candidateMatchesOperationalFreshness(candidate: SentimentHotCandidate, value: unknown): boolean {
-  if ((candidate.metrics as any)?.publicHotOverflowSupplement === true) return true;
   const freshnessDays = normalizeSentimentHotFreshnessDays(value);
   return freshnessDays <= 0 || candidateMatchesRequestedFreshness(candidate, freshnessDays);
 }
@@ -1137,142 +1165,6 @@ function emptySentimentHotSearchStrategy(): SentimentHotSearchStrategy {
     strictAcceptTerms: [],
     normalAcceptTerms: [],
     rejectTerms: [],
-  };
-}
-
-function localHotKeywordFragments(value: unknown): string[] {
-  return cleanText(value)
-    .split(/[\n,，、。.!！?？；;：:/|（）()【】\[\]{}]+/u)
-    .flatMap((item) => {
-      const text = cleanText(item);
-      if (!text) return [];
-      const chunks = text.match(/[\u3400-\u9fff]{2,12}/gu) || [];
-      return [text, ...chunks];
-    });
-}
-
-/**
- * Platform topics are often compact compound labels (for example "金融投资").
- * Threads' public search frequently indexes the constituent topic but not the
- * full compound label, so retain the exact topic and add only its safe leading
- * and, for four-character labels, trailing two-character aliases.  Do not run
- * this against a persona's free-form profile text: that would turn prose into
- * unrelated broad queries.
- */
-function localHotTopicAliases(value: unknown): string[] {
-  return localHotKeywordFragments(value).flatMap((item) => {
-    const text = cleanText(item);
-    if (!/^[\u3400-\u9fff]{4,6}$/u.test(text)) return [];
-    const aliases = [text.slice(0, 2)];
-    if (text.length === 4) aliases.push(text.slice(2));
-    return aliases;
-  });
-}
-
-function localHotPublicSearchAliases(value: unknown): string[] {
-  const text = cleanText(value);
-  if (!text) return [];
-  const aliases: string[] = [];
-  const add = (...items: string[]) => aliases.push(...items);
-  if (/(?:滴滴|司機|司机|乘客|載客|载客|出車|出车|打車|打车|網約車|网约车|計程車|出租车|出租車)/u.test(text)) add("打工人", "生活", "搞笑", "日常", "工作", "上班", "司机", "打车", "乘客", "开车", "汽车", "出车");
-  if (/(?:職場|职场|工作|上班|打工|社畜|辦公|办公|辦公室|办公室|同事|茶水間|茶水间)/u.test(text)) add("工作", "上班", "打工人", "職場", "职场");
-  if (/(?:汽車|汽车|買車|买车|車主|车主|開車|开车|修車|修车)/u.test(text)) add("汽车", "买车", "车主", "开车");
-  if (/(?:養生|养生|健康|中年|保健|生活)/u.test(text)) add("养生", "中年", "健康", "生活");
-  if (/(?:搞笑|吐槽|幽默|趣事|故事|日常)/u.test(text)) add("搞笑", "生活", "日常", "故事");
-  if (/(?:理髮|理发|髮型|发型|美髮|美发|造型)/u.test(text)) add("理发", "发型", "造型");
-  return [...new Set(aliases
-    .map((item) => normalizeSentimentSearchKeyword(item, { sourceText: text }))
-    .filter((item) => isConcreteSearchKeyword(item)))];
-}
-
-/**
- * Builds the public-hot-search strategy from the persona record itself.  This
- * deliberately does not read persona memories or call a paid text model: a
- * newly created persona must remain searchable when the upstream model has no
- * available balance.
- */
-export function buildLocalSentimentHotSearchStrategy(args: {
-  archive?: Partial<Pick<PersonaArchive, "name" | "content" | "setup">>;
-  prompt?: string;
-}): SentimentHotSearchStrategy {
-  const archive = args.archive || {};
-  const setup = archive.setup || {};
-  const sourceText = [
-    archive.content,
-    (setup as any).genres,
-    (setup as any).interests,
-    (setup as any).trendTopics,
-    (setup as any).personaType,
-    (setup as any).contentTheme,
-    (setup as any).customTopic,
-    args.prompt,
-  ].flatMap((value) => Array.isArray(value) ? value : [value]).map(cleanText).filter(Boolean).join("\n");
-  const platformTopicValues = [
-    ...(Array.isArray((setup as any).trendTopics) ? (setup as any).trendTopics : []),
-    ...(Array.isArray((setup as any).genres) ? (setup as any).genres : []),
-    ...(Array.isArray((setup as any).interests) ? (setup as any).interests : []),
-    (setup as any).contentTheme,
-    (setup as any).customTopic,
-    (setup as any).personaType,
-  ];
-  const platformTopicFragments = platformTopicValues.flatMap((value) => [
-    // Search the concrete platform-label aliases first. A compact label such
-    // as "金融投资" is useful for acceptance, but Threads can return an empty
-    // public SERP for the compound phrase while "金融" and "投资" have live
-    // result cards. This stays deterministic and keeps discovery within the
-    // platform-configured label rather than reading persona prose.
-    ...localHotTopicAliases(value),
-    ...localHotKeywordFragments(value),
-    ...localHotPublicSearchAliases(value),
-  ]);
-  const prioritized = [
-    ...platformTopicFragments,
-    archive.content,
-    args.prompt,
-  ].flatMap(localHotKeywordFragments);
-  const publicSearchAliases = [...new Set([
-    ...platformTopicValues,
-    archive.content,
-    args.prompt,
-  ].flatMap(localHotPublicSearchAliases))];
-  const defaultPublicDiscoveryTerms = ["工作", "上班", "打工人", "生活", "搞笑", "日常"];
-  const effectivePublicSearchAliases = [...new Set([
-    ...localHotPublicSearchAliases(sourceText),
-    ...publicSearchAliases,
-    ...defaultPublicDiscoveryTerms,
-  ])];
-  const terms = [...new Set(prioritized
-    .map((item) => normalizeSentimentSearchKeyword(item, { archiveName: cleanText(archive.name), sourceText }))
-    .filter((item) => isConcreteSearchKeyword(item) && !isPersonaVisualArtifactKeyword(item, sourceText))
-  )].slice(0, 12);
-  if (!terms.length) return emptySentimentHotSearchStrategy();
-
-  const discoveryTerms = [...new Set([...effectivePublicSearchAliases, ...terms])];
-  const primaryQueries = [...new Set([
-    ...discoveryTerms,
-    ...terms.flatMap((term) => [
-      `${term}避坑`,
-      `${term}推荐`,
-      `${term}测评`,
-      `${term}吐槽`,
-      `${term}真实体验`,
-    ]),
-  ].map((item) => normalizeSentimentSearchKeyword(item, { archiveName: cleanText(archive.name), sourceText }))
-    .filter((item) => isConcreteSearchKeyword(item)))].slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
-  const anchors = terms.slice(0, Math.max(1, Math.min(6, terms.length)));
-  const discoveryAnchors = [...new Set([...effectivePublicSearchAliases, ...anchors])].slice(0, Math.max(1, Math.min(8, effectivePublicSearchAliases.length + anchors.length)));
-  const normalTerms = [...new Set([...discoveryTerms, ...primaryQueries])].slice(0, SENTIMENT_HOT_NORMAL_KEYWORD_TARGET);
-  return {
-    primaryQueries,
-    broadQueries: normalTerms,
-    ecosystemQueries: normalTerms,
-    requiredAnchorTerms: discoveryAnchors,
-    normalAnchorTerms: anchors,
-    strictAcceptTerms: [...new Set([...discoveryAnchors, ...primaryQueries])].slice(0, SENTIMENT_MODEL_KEYWORD_TARGET),
-    normalAcceptTerms: normalTerms,
-    rejectTerms: [],
-    domainSummary: discoveryAnchors.join("、"),
-    localDeterministic: true,
   };
 }
 
@@ -1338,11 +1230,10 @@ function parseSentimentHotSearchStrategy(text: string, args: { archiveName?: str
 }
 
 function sentimentHotStrategyHasModelTerms(strategy: SentimentHotSearchStrategy): boolean {
-  const minimumAnchors = strategy.localDeterministic ? 1 : 3;
   return Array.isArray(strategy.primaryQueries) && strategy.primaryQueries.length >= 5
-    && Array.isArray(strategy.requiredAnchorTerms) && strategy.requiredAnchorTerms.length >= minimumAnchors
-    && Array.isArray(strategy.normalAnchorTerms) && strategy.normalAnchorTerms.length >= minimumAnchors
-    && strategy.normalAnchorTerms.filter((term) => term.length >= 2).length >= Math.min(2, minimumAnchors)
+    && Array.isArray(strategy.requiredAnchorTerms) && strategy.requiredAnchorTerms.length >= 3
+    && Array.isArray(strategy.normalAnchorTerms) && strategy.normalAnchorTerms.length >= 3
+    && strategy.normalAnchorTerms.filter((term) => term.length >= 2).length >= 2
     && Array.isArray(strategy.strictAcceptTerms) && strategy.strictAcceptTerms.length >= 5
     && Array.isArray(strategy.normalAcceptTerms) && strategy.normalAcceptTerms.length >= 5
     && Boolean(cleanText(strategy.domainSummary));
@@ -1690,7 +1581,7 @@ function readSentimentHotSearchStrategyCache(): Record<string, { at: string; str
 function readCachedSentimentHotSearchStrategy(cacheKey: string): SentimentHotSearchStrategy | null {
   const row = readSentimentHotSearchStrategyCache()[cacheKey];
   if (!row?.strategy || Date.now() - new Date(row.at).getTime() > SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_TTL_MS) return null;
-  return sentimentHotStrategyHasModelTerms(row.strategy) && (row.strategy.localDeterministic || sentimentHotStrategyUsesThreadsChinese(row.strategy)) ? row.strategy : null;
+  return sentimentHotStrategyHasModelTerms(row.strategy) && sentimentHotStrategyUsesThreadsChinese(row.strategy) ? row.strategy : null;
 }
 
 function readCachedSentimentHotSearchStrategyForArgs(args: {
@@ -1703,7 +1594,7 @@ function readCachedSentimentHotSearchStrategyForArgs(args: {
 }
 
 function writeCachedSentimentHotSearchStrategy(cacheKey: string, strategy: SentimentHotSearchStrategy) {
-  if (!sentimentHotStrategyHasModelTerms(strategy) || (!strategy.localDeterministic && !sentimentHotStrategyUsesThreadsChinese(strategy))) return;
+  if (!sentimentHotStrategyHasModelTerms(strategy) || !sentimentHotStrategyUsesThreadsChinese(strategy)) return;
   const written = withExclusiveJsonFileLock(SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE, () => {
     const state = readSentimentHotSearchStrategyCache();
     state[cacheKey] = { at: new Date().toISOString(), strategy };
@@ -1747,20 +1638,128 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
   timeoutMs?: number;
   useCache?: boolean;
 }): Promise<SentimentHotSearchStrategy> {
-  const strategy = buildLocalSentimentHotSearchStrategy({ archive: args.archive, prompt: args.prompt });
-  if (sentimentHotStrategyHasModelTerms(strategy) && (strategy.localDeterministic || sentimentHotStrategyUsesThreadsChinese(strategy))) {
-    console.info(`[sentiment_hot_local_strategy] domain=${JSON.stringify(strategy.domainSummary)}`);
-    const archive = args.archive || {};
-    const personaText = [archive.content, JSON.stringify(archive.setup || {}), args.prompt].filter(Boolean).join("\n");
-    writeCachedSentimentHotSearchStrategy(buildSentimentHotSearchStrategyCacheKey({
-      archive,
-      prompt: args.prompt,
-      writingLocale: args.writingLocale,
-      personaText,
-    }), strategy);
-    return strategy;
+  const archive = args.archive || {};
+  const setup = archive.setup || {};
+  const personaText = [
+    archive.name ? `人设名称：${archive.name}` : "",
+    archive.content ? `人设简介：${archive.content}` : "",
+    Array.isArray((setup as any).genres) && (setup as any).genres.length ? `内容领域：${(setup as any).genres.join("、")}` : "",
+    Array.isArray((setup as any).interests) && (setup as any).interests.length ? `兴趣参考：${(setup as any).interests.join("、")}` : "",
+    Array.isArray((setup as any).trendTopics) && (setup as any).trendTopics.length ? `平台标签关键词：${(setup as any).trendTopics.join("、")}` : "",
+    (setup as any).personaType ? `身份类型：${(setup as any).personaType}` : "",
+    (setup as any).contentTheme ? `内容主题：${(setup as any).contentTheme}` : "",
+    (setup as any).customTopic ? `补充主题：${(setup as any).customTopic}` : "",
+    ((setup as any).personality || (setup as any).personaPersonality) ? `性格与边界：${(setup as any).personality || (setup as any).personaPersonality}` : "",
+    (setup as any).personaStyle ? `表达风格：${(setup as any).personaStyle}` : "",
+    setup.tweetStyleProfile ? `推文风格：${setup.tweetStyleProfile}` : "",
+    setup.tweetStyleSample ? `推文样例：${setup.tweetStyleSample}` : "",
+    args.writingLocale ? `热点关键词书写语言：${args.writingLocale}` : "",
+    args.prompt ? `本次补充要求：${args.prompt}` : "",
+  ].filter(Boolean).join("\n");
+  if (!personaText.trim()) return emptySentimentHotSearchStrategy();
+  const chineseScript = cleanText((setup as any).chineseScript || (setup as any).script || (setup as any).locale).toLowerCase();
+  const targetMarket = cleanText((setup as any).targetMarket || (setup as any).market || (setup as any).region).toLowerCase();
+  const explicitWritingLocale = cleanText(args.writingLocale).toLowerCase();
+  const prefersTraditional = explicitWritingLocale === "zh-tw"
+    || (!explicitWritingLocale && /traditional|繁|tw|taiwan|hk|hong\s*kong|mo|macau|臺|台灣|香港|澳門/u.test(`${chineseScript} ${targetMarket}`)
+    && !/simplified|简|簡|cn|mainland|china|中国|中國/u.test(`${chineseScript} ${targetMarket}`));
+  const chineseSearchInstruction = prefersTraditional
+    ? "关键词必须使用繁體中文输出，禁止混入简体中文；专有名词除外。搜索词必须是平台上真实用户会直接搜索的高流量词。"
+    : "关键词必须使用简体中文输出，禁止混入繁體中文；专有名词除外。搜索词必须是平台上真实用户会直接搜索的高流量词。";
+  const cacheKey = buildSentimentHotSearchStrategyCacheKey({
+    archive,
+    prompt: args.prompt,
+    writingLocale: args.writingLocale,
+    personaText,
+  });
+  const cached = args.useCache === false ? null : readCachedSentimentHotSearchStrategyForArgs({
+    archive,
+    prompt: args.prompt,
+    writingLocale: args.writingLocale,
+  });
+  if (cached) return cached;
+
+  try {
+    const modelPreference = resolveSentimentHotTextModelPreference();
+    const totalTimeoutMs = Math.max(8_000, args.timeoutMs || 38_000);
+    const configuredModelCount = Math.max(1, getTextUnderstandingModelFallbacks(modelPreference).length);
+    const attemptTimeoutMs = ({ index }: { index: number }) => {
+      if (configuredModelCount <= 1) return totalTimeoutMs - 1_000;
+      if (index === 0) return Math.min(22_000, Math.max(8_000, totalTimeoutMs - 12_000));
+      return Math.min(12_000, Math.max(6_000, totalTimeoutMs - 22_000));
+    };
+    const result = await callTextUnderstandingModelWithFallback(
+      modelPreference,
+      [{
+        role: "user",
+        parts: [{
+          text: [
+            "你是 Threads / Instagram 热点搜索策略模型。你必须为任意新建人设生成可执行搜索策略，不依赖固定行业锚点。",
+            "只输出 JSON 对象，不要解释，不要 Markdown。",
+            "JSON 结构：",
+            "{\"primaryQueries\":[\"...\"],\"broadQueries\":[\"...\"],\"ecosystemQueries\":[\"...\"],\"requiredAnchorTerms\":[\"...\"],\"normalAnchorTerms\":[\"...\"],\"strictAcceptTerms\":[\"...\"],\"normalAcceptTerms\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
+            "所有列表字段必须是 JSON 数组，不能输出字符串、段落、逗号文本或 Markdown；否则本次抓取会判定为失败。",
+            "",
+            "字段数量：primaryQueries 10-14，broadQueries 12-16，ecosystemQueries 8-12，requiredAnchorTerms 4-6，normalAnchorTerms 4-6，strictAcceptTerms 8-12，normalAcceptTerms 10-16，rejectTerms 4-8。",
+            "先以人设名称中明确的职业、行业或主题作为严格主领域；简介里的具体对象、品牌、地区和擅长方向只能作为子主题，不能替代或过度收窄主领域。",
+            "平台标签关键词是已配置的搜索锚点：在不偏离主领域的前提下，优先把它们融入 primaryQueries、broadQueries 和正文接受词；不得用人设记忆替代或扩展搜索范围。",
+            "primaryQueries 必须优先产出近 7 天内更可能出现高互动内容的短搜索词：主领域实体词、热门场景词、翻车/避坑/对比/前后变化/价格争议/真实体验等平台用户会主动讨论的高热词；其余再覆盖简介里的细分专长，总计至少 6 类。",
+            "primaryQueries 前 8 个必须是普通用户会搜索和转发的高互动组合词，优先把主领域实体与翻车、避坑、前后对比、价格、推荐、真实体验、测评、吐槽、踩雷两两组合；不要用内部运营词、从业者自嗨词或难以形成高热度讨论的抽象词。",
+            "broadQueries 覆盖主领域品牌、产品、事件、受众问题、价格选择、使用经验和行业动态；必须避免只有内部从业者才会搜索的冷门话术。",
+            "ecosystemQueries 必须是直接父领域或相邻消费场景里的高热搜索词，但正文仍必须能用 requiredAnchorTerms/strictAcceptTerms 证明属于当前人设主领域，不能漂移到无关行业。",
+            "broadQueries 和 ecosystemQueries 必须包含 4-8 个主领域高互动的受众、社区或对象词；应根据当前人设自动推导，不能套用固定行业词。",
+            "strictAcceptTerms 是严格模式可接受正文信号，必须覆盖主领域实体、典型服务/产品、真实场景和用户痛点；normalAcceptTerms 可覆盖直接父领域但仍需能回到主领域。",
+            "requiredAnchorTerms 是正文必须命中的主领域实体词，应优先来自人设名称所表达的职业或行业，必须能排除同名或相邻领域；禁止营养、健康、经验、攻略、比较等泛词。",
+            "normalAnchorTerms 是普通模式可接受的直接父领域对象类别：每项 2-4 个汉字，第一项必须是最能唯一标识直接父领域的实体类别；禁止职业名、动作、抽象概念和细分产品组合，必须比 requiredAnchorTerms 宽一层但仍排除无关产业。",
+            "rejectTerms 必须针对当前关键词最容易误召回的其他行业、同名实体和相邻但不属于直接父领域的主题，不能排除主领域内容。",
+            "严格模式关键词数量不能少，只用主领域同义词和场景词收口；普通模式可扩展到直接父领域，但不能漂移到无关产业。",
+            "每个搜索词脱离上下文后仍应明确属于该领域。细分职业优先覆盖普通受众高频讨论的实体词、场景词、经验词、互动词和真实痛点，避免只有内部从业者才会搜索的低流量长短语。",
+            "不要把 3 个以上意图词硬拼成一句搜索词；primaryQueries 和 broadQueries 每项优先 2-8 个汉字，最多 12 个汉字，必要时用短词而不是长句。",
+            "避免把聊天、互动、日常、趣事、社区、客流、爱好、手工、穿搭、围裙、工具这类低流量或视觉词排在前面；只有当它们是该领域真实高热搜索对象时才可保留到靠后位置。",
+            chineseSearchInstruction,
+            "不要输出人格、语气、外貌、服饰、道具、姿势、图片视觉描述、自我介绍或推理过程；除非人设主领域本身就是服装/摄影/造型，否则这些都不是热点搜索词。",
+            "",
+            "当前人设资料：",
+            personaText,
+          ].join("\n"),
+        }],
+      }],
+      { temperature: 0.1, maxOutputTokens: 768, responseMimeType: "application/json" },
+      buildAbortSignalTimeout(totalTimeoutMs),
+      {
+        isUsableResponse: (data) => {
+          const candidate = parseSentimentHotSearchStrategy(extractText(data), {
+            archiveName: cleanText(archive.name),
+            sourceText: personaText,
+          });
+          return sentimentHotStrategyHasModelTerms(candidate)
+            && sentimentHotStrategyUsesThreadsChinese(candidate);
+        },
+        isRetryableError: isTextModelFallbackError,
+        attemptTimeoutMs,
+        onFallback: ({ from, to, error }) => {
+          console.info(`[sentiment_hot_model_fallback] from=${JSON.stringify(from)} to=${JSON.stringify(to)} error=${JSON.stringify(error)}`);
+        },
+      },
+    );
+    const strategy = parseSentimentHotSearchStrategy(extractText(result.data), {
+      archiveName: cleanText(archive.name),
+      sourceText: personaText,
+    });
+    if (sentimentHotStrategyHasModelTerms(strategy)) {
+      console.info(`[sentiment_hot_model_strategy] model=${JSON.stringify(result.model)} domain=${JSON.stringify(strategy.domainSummary)}`);
+      writeCachedSentimentHotSearchStrategy(cacheKey, strategy);
+      return strategy;
+    }
+    args.warnings.push("模型未返回符合规范的热点关键词，本次未执行抓取；请稍后重试。");
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    args.warnings.push(
+      /timeout|timed\s*out|abort|超时|超時/i.test(detail)
+        ? "热点关键词生成超时，本次未执行抓取；请稍后重试。"
+        : "热点关键词服务暂时不可用，本次未执行抓取；请稍后重试。",
+    );
   }
-  args.warnings.push("未找到可用于公开热点搜索的具体主题；请在人设档案或平台标签中补充领域、兴趣或主题关键词。");
   return emptySentimentHotSearchStrategy();
 }
 
@@ -2132,11 +2131,11 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   );
   const strictFreshness = freshnessPolicy === "strict";
   const liveOnlyRefresh = args.liveOnly === true;
-  // Keep the requested window as the priority, but allow a bounded recent
-  // window up to 15 days when the live recent feed cannot supply ten unique
-  // compliant posts. Historical/global backfill is still rejected below.
+  // A strict request means exactly the selected publication-time window.
+  // Never widen it to fill a sparse result set: that would turn a "7 days"
+  // request into older content without the user asking for it.
   const operationalFreshnessDays = strictFreshness && freshnessDays > 0
-    ? Math.min(15, Math.max(freshnessDays, 15))
+    ? freshnessDays
     : 0;
   // Strict tests enforce the publishedAt window, but may reuse a fresh
   // same-persona cache row from the last 24 hours. This keeps tests reliable
@@ -2228,7 +2227,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     applyPersonaGuardToSentimentHotStrategy({ strategy: strategyResult });
   }
   const hasUsableSearchStrategy = Boolean(strategyResult && sentimentHotStrategyHasModelTerms(strategyResult));
-  const hasModelStrategy = Boolean(strategyResult && !strategyResult.localDeterministic && sentimentHotStrategyHasModelTerms(strategyResult));
+  const hasModelStrategy = Boolean(strategyResult && sentimentHotStrategyHasModelTerms(strategyResult));
   const useModelStrategyForAcceptance = manualKeywords.length === 0 && hasModelStrategy && Boolean(strategyResult);
   const keywords = manualKeywords.length > 0
     ? manualKeywords
@@ -2242,7 +2241,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   warnings.push(searchMode === "normal" ? "热点抓取模式：普通（泛垂直）。" : "热点抓取模式：严格（垂直收口）。");
   if (liveOnlyRefresh) warnings.push(manualKeywords.length > 0
     ? "实时抓取：仅使用本轮公开页来源，不读取或写入候选缓存、数据库候选、共享候选和展示历史；搜索关键词使用本次提交的关键词。"
-    : "实时抓取：仅使用本轮公开页来源，不读取或写入候选缓存、数据库候选、共享候选和展示历史；搜索策略由本地规则生成。");
+    : "实时抓取：仅使用本轮公开页来源，不读取或写入候选缓存、数据库候选、共享候选和展示历史；搜索策略由上游模型生成。");
   if (strictFreshness) {
     warnings.push(freshnessDays > 0 ? `热点新鲜度：近 ${freshnessDays} 天。` : "热点新鲜度：不限时间。");
   } else {
@@ -3683,7 +3682,7 @@ async function fetchThreadsSearchPageCandidates(args: {
   // Threads search is readable without an account.  Run that public page first:
   // the reader mirror can return a CAPTCHA document even when Threads itself has
   // current results, and must not turn a healthy public source into a zero result.
-  const publicBrowserTimeoutMs = Math.min(SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS, sourceTimeoutMs);
+  const publicBrowserTimeoutMs = Math.min(THREADS_PUBLIC_BROWSER_TIMEOUT_MS, sourceTimeoutMs);
   const publicBrowserDeadlineAt = args.deadlineAt
     ? Math.min(args.deadlineAt, Date.now() + publicBrowserTimeoutMs)
     : Date.now() + publicBrowserTimeoutMs;
@@ -3693,7 +3692,7 @@ async function fetchThreadsSearchPageCandidates(args: {
       queries: publicBrowserQueries,
       limit: sourceLimit,
       excludeIds: excluded,
-      freshnessDays: 0,
+      freshnessDays: args.freshnessDays,
       ignoreHistory: args.ignoreHistory,
       searchMode: args.searchMode,
       deadlineAt: publicBrowserDeadlineAt,
@@ -3771,24 +3770,6 @@ async function fetchThreadsSearchPageCandidates(args: {
       true,
       args.searchMode,
     ));
-  }
-
-  if (
-    args.freshnessDays
-    && byId.size < args.limit
-    && publicBrowserCandidates.length > 0
-  ) {
-    const beforeRelaxedSupplement = byId.size;
-    addAll(publicBrowserCandidates.map((candidate) => ({
-      ...candidate,
-      metrics: {
-        ...(candidate.metrics || {}),
-        publicHotOverflowSupplement: true,
-      },
-    })), 0);
-    if (byId.size > beforeRelaxedSupplement) {
-      pushSentimentHotWarning(args.warnings || [], "近 15 天公开页候选不足，已使用同一批公开页高热候选补足。");
-    }
   }
 
   const sorted = sortSentimentHotCandidatePool([...byId.values()], args.keywords, args.limit, args.searchMode);
@@ -3931,7 +3912,6 @@ export function parseThreadsGraphqlSearchPayload(args: {
   payload: any;
   query: string;
   keywords?: string[];
-  freshnessFallbackAt?: string;
 }): SentimentHotCandidate[] {
   const out: SentimentHotCandidate[] = [];
   const byId = new Set<string>();
@@ -3976,11 +3956,11 @@ export function parseThreadsGraphqlSearchPayload(args: {
           };
           if (typeof viewCount === "number") engagement.viewCount = viewCount;
           const hotScore = realSentimentHotScore(engagement);
+          // A current search position is not a publication timestamp. Only use
+          // the timestamp present in the public post payload for freshness.
           const publishedAt = normalizeThreadsTimestamp(
             value?.taken_at ?? value?.taken_at_timestamp ?? value?.created_at ?? value?.caption?.created_at,
-          ) || (args.freshnessFallbackAt && Number.isFinite(Date.parse(args.freshnessFallbackAt))
-            ? new Date(args.freshnessFallbackAt).toISOString()
-            : undefined);
+          );
           out.push({
             id,
             platform: "threads",
@@ -3999,7 +3979,6 @@ export function parseThreadsGraphqlSearchPayload(args: {
               reshare_count: reshareCount,
               share_count: reshareCount,
               ...(typeof viewCount === "number" ? { view_count: viewCount } : {}),
-              ...(args.freshnessFallbackAt ? { recentSearch: true } : {}),
               realEngagementTotal: hotScore,
             },
             engagement,
@@ -4021,7 +4000,6 @@ export function parseThreadsSearchHydrationPayloads(args: {
   scripts: string[];
   query: string;
   keywords?: string[];
-  freshnessFallbackAt?: string;
 }): SentimentHotCandidate[] {
   const byId = new Map<string, SentimentHotCandidate>();
   for (const raw of args.scripts || []) {
@@ -4139,7 +4117,21 @@ async function fetchThreadsBrowserSearchCandidates(args: {
     console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} sessionid=0 cookies=${cookies.length} status=skip_no_session`);
     return [];
   }
-  const releaseBrowserSlot = await acquireSentimentBrowserWorkSlot();
+  const slotTimeoutMs = Math.min(
+    args.publicOnly ? THREADS_PUBLIC_BROWSER_TIMEOUT_MS : SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS,
+    remainingSentimentDeadlineMs(args.deadlineAt, args.publicOnly ? THREADS_PUBLIC_BROWSER_TIMEOUT_MS : SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS),
+  );
+  if (args.deadlineAt && slotTimeoutMs <= 0) return [];
+  let releaseBrowserSlot: () => void;
+  try {
+    releaseBrowserSlot = await acquireSentimentBrowserWorkSlot({ timeoutMs: slotTimeoutMs });
+  } catch (error) {
+    if (String(error).includes("sentiment_browser_slot_timeout")) {
+      console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=skip_slot_timeout`);
+      return [];
+    }
+    throw error;
+  }
   console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} sessionid=${sessionCookieCount} cookies=${cookies.length} mode=${useSession ? "authenticated" : "public"} queries=${args.queries.length} leading=${JSON.stringify(args.queries.slice(0, 6))} status=start`);
   const excluded = args.excludeIds || getSentimentHotRefreshExcludedIds(args.archiveId);
   const excludedHistoryKeys = new Set<string>();
@@ -4151,6 +4143,14 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   const templateStats = { seen: 0, noVariables: 0, apiNonSearch: 0, noSearchMarker: 0, captured: 0 };
   const capturedGraphqlPayloadKeys = new Set<string>();
   let threadsAuthBlocked = false;
+  let browser: any = null;
+  let browserDeadlineTimer: NodeJS.Timeout | undefined;
+  if (args.deadlineAt) {
+    browserDeadlineTimer = setTimeout(() => {
+      console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=deadline_reached`);
+      void browser?.close().catch(() => undefined);
+    }, Math.max(1, args.deadlineAt - Date.now()));
+  }
   const markThreadsAuthBlocked = (reason: string) => {
     threadsAuthBlocked = true;
     if (useSession) {
@@ -4188,7 +4188,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   };
   try {
     const { chromium } = await import("playwright");
-    const browser = await chromium.launch(buildLocalChromiumLaunchOptions());
+    browser = await chromium.launch(buildLocalChromiumLaunchOptions());
     try {
       const context = await browser.newContext({
         locale: "zh-TW",
@@ -4380,12 +4380,11 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           let acceptedTotal = 0;
           for (const payload of payloads) {
             if (!payload) continue;
-            const parsed = parseThreadsGraphqlSearchPayload({
-              payload,
-              query,
-              keywords: args.keywords,
-              freshnessFallbackAt: useRecentSearch ? new Date().toISOString() : undefined,
-            });
+          const parsed = parseThreadsGraphqlSearchPayload({
+            payload,
+            query,
+            keywords: args.keywords,
+          });
             parsedTotal += parsed.length;
             for (const candidate of parsed) {
               if (excluded.has(candidate.id)) continue;
@@ -4439,7 +4438,6 @@ async function fetchThreadsBrowserSearchCandidates(args: {
             scripts,
             query,
             keywords: args.keywords,
-            freshnessFallbackAt: useRecentSearch ? new Date().toISOString() : undefined,
           });
           stats.hydration += hydrated.length;
           for (const candidate of hydrated) {
@@ -4511,7 +4509,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           // consistently. Parsed posts still pass the normal freshness checks,
           // and once captured the API payload includes real publication times.
           stats.queries += 1;
-          await collectDomCandidates(page, bootstrapQuery, args.publicOnly ? 0 : THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS, args.publicOnly ? false : recentSearch);
+          await collectDomCandidates(page, bootstrapQuery, args.publicOnly ? 0 : THREADS_BROWSER_TEMPLATE_WAIT_ATTEMPTS, recentSearch);
         }
         if (!args.publicOnly && !threadsAuthBlocked && !template && results.length < args.limit) await rescueDetailCandidates();
       }
@@ -4535,7 +4533,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
           await Promise.all(usableExtraPages.map(async (extraPage: any, pageIndex) => {
             for (let queryIndex = pageIndex; queryIndex < fallbackQueries.length && results.length < args.limit; queryIndex += usableExtraPages.length) {
               if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
-              await collectDomCandidates(extraPage, fallbackQueries[queryIndex], args.publicOnly ? 0 : 3, args.publicOnly ? false : recentSearch);
+              await collectDomCandidates(extraPage, fallbackQueries[queryIndex], args.publicOnly ? 0 : 3, recentSearch);
             }
           }));
         }
@@ -4591,7 +4589,6 @@ async function fetchThreadsBrowserSearchCandidates(args: {
                 payload: item.payload,
                 query: item.query,
                 keywords: args.keywords,
-                freshnessFallbackAt: recentSearch ? new Date().toISOString() : undefined,
               });
               stats.graphql += parsed.length;
               let accepted = 0;
@@ -4608,7 +4605,6 @@ async function fetchThreadsBrowserSearchCandidates(args: {
                   payload: item.nextPayload,
                   query: item.query,
                   keywords: args.keywords,
-                  freshnessFallbackAt: recentSearch ? new Date().toISOString() : undefined,
                 });
                 stats.graphql += nextParsed.length;
                 let nextAccepted = 0;
@@ -4642,6 +4638,7 @@ async function fetchThreadsBrowserSearchCandidates(args: {
     console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=error message=${JSON.stringify(error instanceof Error ? error.message : String(error))}`);
     // Playwright is optional; reader/cache/database paths still keep the Telegram flow alive.
   } finally {
+    if (browserDeadlineTimer) clearTimeout(browserDeadlineTimer);
     releaseBrowserSlot();
   }
   console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} status=done total=${results.length} pages=${stats.pages} queries=${stats.queries} graphql=${stats.graphql} hydration=${stats.hydration} accepted=${stats.accepted} rejected=${JSON.stringify(stats.rejected)}`);
@@ -4682,6 +4679,9 @@ async function fetchWithSharedReaderLimit(
     requestHeaders.set("pragma", "no-cache");
   }
   const cacheKey = JSON.stringify({
+    // Reader entries written before login-wall responses became non-cacheable
+    // must not be reused by the live public-source path.
+    schema: "reader-response-v2",
     url: readerUrl,
     method: String(init.method || "GET").toUpperCase(),
     accept: requestHeaders.get("accept") || "",
@@ -5168,10 +5168,13 @@ async function fetchInstagramReaderSearchCandidates(args: {
   const searches = await Promise.all(
     args.queries.map(async (query) => {
       const normalizedQuery = cleanText(query).replace(/^#/, "");
-      const targets = [
-        hasHan(normalizedQuery) ? `https://www.instagram.com/explore/tags/${encodeURIComponent(normalizedQuery)}/` : "",
-        `https://www.instagram.com/explore/search/keyword/?q=${encodeURIComponent(normalizedQuery)}`,
-      ].filter(Boolean);
+      // Chinese tag pages expose post links and engagement snippets. The
+      // keyword-search page adds no useful public result here, while doubling
+      // requests and causing the bounded live stage to time out. Keep it only
+      // for non-Han terms, where it is the applicable public endpoint.
+      const targets = hasHan(normalizedQuery)
+        ? [`https://www.instagram.com/explore/tags/${encodeURIComponent(normalizedQuery)}/`]
+        : [`https://www.instagram.com/explore/search/keyword/?q=${encodeURIComponent(normalizedQuery)}`];
       plannedRequests += targets.length;
       const texts: Array<{ query: string; targetUrl: string; text: string }> = [];
       for (const targetUrl of targets) {
@@ -5182,7 +5185,12 @@ async function fetchInstagramReaderSearchCandidates(args: {
               accept: "text/plain, text/markdown, */*",
               "cache-control": "max-age=300",
             },
-          }, 8_000, args.refresh ? "blocking-refresh" : "swr");
+          // A forced Reader refresh adds a cache-busting query parameter to
+          // the Instagram public URL. Instagram can answer that artificial
+          // URL with a login-wall document even when the canonical public tag
+          // page is readable. Bypass only this app cache for an explicit
+          // refresh, while preserving the canonical public URL.
+          }, 8_000, args.refresh ? "bypass" : "swr");
           if (!response.ok) {
             failedResponses += 1;
             if (response.status === 429) rateLimitedResponses += 1;
@@ -6778,9 +6786,14 @@ function extractInstagramEngagementMetricsFromText(value: string): NonNullable<S
   const likeCount = parseMetricNumberLoose(text.match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*(?:likes?|讚|赞|喜歡|喜欢)/i)?.[1]);
   const commentCount = parseMetricNumberLoose(text.match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*(?:comments?|留言|評論|评论)/i)?.[1]);
   const viewCount = parseMetricNumberLoose(text.match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*(?:views?|plays?|觀看|观看|播放|瀏覽|浏览)/i)?.[1]);
+  const rawSignals = [...text.matchAll(/\]\(https?:\/\/www\.instagram\.com\/[A-Za-z0-9._]+\/?\)\s+(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)(?=\s+[\u3400-\u9fff#\uD800-\uDBFF])/g)]
+    .map((match) => parseMetricNumberLoose(match[1]))
+    .filter((item): item is number => typeof item === "number" && item > 0)
+    .slice(0, 4);
   if (typeof likeCount === "number") engagement.likeCount = likeCount;
   if (typeof commentCount === "number") engagement.commentCount = commentCount;
   if (typeof viewCount === "number") engagement.viewCount = viewCount;
+  if (rawSignals.length) engagement.rawSignals = rawSignals;
   return engagement;
 }
 
@@ -7549,6 +7562,31 @@ export function parseThreadsReaderSearchMarkdownCandidates(args: {
   return out;
 }
 
+const INSTAGRAM_SHORTCODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const INSTAGRAM_SNOWFLAKE_EPOCH_MS = 1_314_220_021_721n;
+const INSTAGRAM_SNOWFLAKE_TIMESTAMP_SHIFT = 23n;
+
+/**
+ * Instagram's public post shortcode embeds the media snowflake.  Decode only
+ * the original creation timestamp from the canonical URL; never substitute
+ * capture time when a public source omits a visible date.
+ */
+function publishedAtFromInstagramShortcode(sourceUrl: string): string | undefined {
+  const shortcode = String(sourceUrl || "").match(/instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/i)?.[1];
+  if (!shortcode) return undefined;
+  let mediaId = 0n;
+  for (const character of shortcode) {
+    const index = INSTAGRAM_SHORTCODE_ALPHABET.indexOf(character);
+    if (index < 0) return undefined;
+    mediaId = mediaId * 64n + BigInt(index);
+  }
+  const timestampMs = Number((mediaId >> INSTAGRAM_SNOWFLAKE_TIMESTAMP_SHIFT) + INSTAGRAM_SNOWFLAKE_EPOCH_MS);
+  if (!Number.isSafeInteger(timestampMs)) return undefined;
+  const earliestTimestampMs = Date.UTC(2010, 0, 1);
+  if (timestampMs < earliestTimestampMs || timestampMs > Date.now() + 24 * 60 * 60 * 1000) return undefined;
+  return new Date(timestampMs).toISOString();
+}
+
 export function parseInstagramReaderSearchMarkdownCandidates(args: {
   text: string;
   query: string;
@@ -7561,7 +7599,11 @@ export function parseInstagramReaderSearchMarkdownCandidates(args: {
   const needleSource = [args.query, ...(args.keywords || [])].filter(Boolean);
   const needles = buildRelevanceNeedles(needleSource);
   const out: SentimentHotCandidate[] = [];
-  const postMatches = [...text.matchAll(/https:\/\/www\.instagram\.com\/(?:p|reel|tv)\/[A-Za-z0-9_-]+\/?/g)];
+  // Reader serializes Instagram's canonical links as `http://` on public tag
+  // pages even though the browser-facing URL is https.  Accept both forms so
+  // those public results are not silently dropped before their shortcode can
+  // supply the verifiable publish time.
+  const postMatches = [...text.matchAll(/https?:\/\/(?:www\.)?instagram\.com\/(?:p|reel|tv)\/[A-Za-z0-9_-]+\/?/g)];
   const seenUrls = new Set<string>();
   for (const match of postMatches) {
     const sourceUrl = match[0].replace(/[)\].,]+$/g, "");
@@ -7569,7 +7611,7 @@ export function parseInstagramReaderSearchMarkdownCandidates(args: {
     seenUrls.add(sourceUrl);
     const matchIndex = match.index || 0;
     const block = text.slice(Math.max(0, matchIndex - 900), Math.min(text.length, matchIndex + 1400));
-    const authorMatches = [...block.matchAll(/\[([^\]\n@][^\]\n]{1,80})]\(https:\/\/www\.instagram\.com\/([^/)#?]+)\/?\)/g)]
+    const authorMatches = [...block.matchAll(/\[([^\]\n@][^\]\n]{1,80})]\(https?:\/\/www\.instagram\.com\/([^/)#?]+)\/?\)/g)]
       .filter((item) => isLikelyInstagramAuthor(item[2]));
     const author = cleanText(authorMatches.at(-1)?.[1] || authorMatches.at(-1)?.[2] || "Instagram");
     const content = cleanThreadsReaderContent(block
@@ -7578,7 +7620,7 @@ export function parseInstagramReaderSearchMarkdownCandidates(args: {
       .replace(/https?:\/\/(?:[^/\s]+\.)?(?:cdninstagram|scontent|fbcdn)[^\s)]+/gi, " ")
       .replace(/https?:\/\/\S+/g, " ")
       .replace(/[A-Za-z0-9_./?&=%:-]{60,}/g, " ")
-      .replace(/https:\/\/www\.instagram\.com\/(?:p|reel|tv)\/[A-Za-z0-9_-]+\/?/g, " ")
+      .replace(/https?:\/\/www\.instagram\.com\/(?:p|reel|tv)\/[A-Za-z0-9_-]+\/?/g, " ")
       .replace(/(?:Log in|Sign up|Explore|Search|Instagram)\s*/gi, " "));
     if (isLowQualitySentimentContent(content)) continue;
     if (!isChineseSentimentCandidate(content)) continue;
@@ -7591,6 +7633,7 @@ export function parseInstagramReaderSearchMarkdownCandidates(args: {
       extractEngagementMetricsFromText(block),
     );
     const media = extractThreadsMediaFromMarkdown(block, 12);
+    const publishedAt = publishedAtFromInstagramShortcode(sourceUrl);
     const id = buildSentimentCandidateId({ platform: "instagram", sourceUrl, content });
     out.push({
       id,
@@ -7605,9 +7648,11 @@ export function parseInstagramReaderSearchMarkdownCandidates(args: {
         query: args.query,
         matchedKeywords: matchedNeedles,
         mediaCount: media.length,
+        ...(publishedAt ? { publishedAtSource: "instagram_shortcode_snowflake" } : {}),
         ...compactEngagementMetrics(engagement),
       },
       engagement,
+      ...(publishedAt ? { publishedAt } : {}),
       capturedAt: new Date().toISOString(),
       warnings: [],
     });

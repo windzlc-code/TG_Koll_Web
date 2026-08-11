@@ -789,6 +789,308 @@ def _ensure_email_delivery_governance_schema(conn: sqlite3.Connection) -> None:
     )
 
 
+def ensure_crm_schema(conn: sqlite3.Connection) -> None:
+    """Create the native, tenant-scoped CRM schema.
+
+    CRM migrations intentionally use CREATE IF NOT EXISTS so startup remains
+    safe on both a fresh database and an existing persistent volume.
+    """
+    statements = (
+        """
+        CREATE TABLE IF NOT EXISTS user_module_access (
+          user_id INTEGER NOT NULL,
+          module_key TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+          granted_by INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY(user_id, module_key),
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_workflows (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          workflow_type TEXT NOT NULL,
+          title TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL CHECK(status IN (
+            'draft','awaiting_confirmation','queued','running','manual_required',
+            'paused_by_user','paused_by_policy','completed','failed','cancelled'
+          )),
+          input_json TEXT NOT NULL DEFAULT '{}',
+          result_json TEXT NOT NULL DEFAULT '{}',
+          confirmation_json TEXT NOT NULL DEFAULT '{}',
+          error_code TEXT NOT NULL DEFAULT '',
+          error_detail TEXT NOT NULL DEFAULT '',
+          billing_reservation_id TEXT NOT NULL DEFAULT '',
+          idempotency_key TEXT NOT NULL DEFAULT '',
+          schedule_id TEXT NOT NULL DEFAULT '',
+          scheduled_at INTEGER NOT NULL DEFAULT 0,
+          started_at INTEGER NOT NULL DEFAULT 0,
+          finished_at INTEGER NOT NULL DEFAULT 0,
+          import_batch_id TEXT NOT NULL DEFAULT '',
+          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+          legacy_id TEXT NOT NULL DEFAULT '',
+          legacy_payload_json TEXT NOT NULL DEFAULT '{}',
+          schema_version INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_workflow_steps (
+          id TEXT PRIMARY KEY,
+          workflow_id TEXT NOT NULL,
+          user_id INTEGER NOT NULL,
+          step_type TEXT NOT NULL,
+          sequence_no INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'queued',
+          social_task_id TEXT NOT NULL DEFAULT '',
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          result_json TEXT NOT NULL DEFAULT '{}',
+          error_code TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY(workflow_id) REFERENCES crm_workflows(id) ON DELETE CASCADE,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_action_ledger (
+          id TEXT PRIMARY KEY,
+          workflow_id TEXT NOT NULL,
+          step_id TEXT NOT NULL DEFAULT '',
+          user_id INTEGER NOT NULL,
+          account_id TEXT NOT NULL DEFAULT '',
+          action_type TEXT NOT NULL,
+          target_key TEXT NOT NULL,
+          content_hash TEXT NOT NULL DEFAULT '',
+          idempotency_key TEXT NOT NULL,
+          state TEXT NOT NULL CHECK(state IN (
+            'planned','reserved','submitting','submitted','confirmed','unknown','failed','skipped'
+          )),
+          billing_reservation_id TEXT NOT NULL DEFAULT '',
+          evidence_json TEXT NOT NULL DEFAULT '{}',
+          error_code TEXT NOT NULL DEFAULT '',
+          submitted_at INTEGER NOT NULL DEFAULT 0,
+          confirmed_at INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY(workflow_id) REFERENCES crm_workflows(id) ON DELETE CASCADE,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_pools (
+          id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '[]',
+          snapshot_json TEXT NOT NULL DEFAULT '{}', import_batch_id TEXT NOT NULL DEFAULT '',
+          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)), legacy_id TEXT NOT NULL DEFAULT '',
+          legacy_payload_json TEXT NOT NULL DEFAULT '{}', schema_version INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_leads (
+          id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, platform TEXT NOT NULL DEFAULT 'threads',
+          platform_user_key TEXT NOT NULL DEFAULT '', username TEXT NOT NULL DEFAULT '',
+          display_name TEXT NOT NULL DEFAULT '', stage TEXT NOT NULL DEFAULT 'new',
+          score REAL NOT NULL DEFAULT 0, tags_json TEXT NOT NULL DEFAULT '[]',
+          profile_json TEXT NOT NULL DEFAULT '{}', import_batch_id TEXT NOT NULL DEFAULT '',
+          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)), legacy_id TEXT NOT NULL DEFAULT '',
+          legacy_payload_json TEXT NOT NULL DEFAULT '{}', schema_version INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_pool_members (
+          user_id INTEGER NOT NULL, pool_id TEXT NOT NULL, lead_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active', source TEXT NOT NULL DEFAULT '',
+          import_batch_id TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          PRIMARY KEY(pool_id, lead_id),
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT,
+          FOREIGN KEY(pool_id) REFERENCES crm_pools(id) ON DELETE CASCADE,
+          FOREIGN KEY(lead_id) REFERENCES crm_leads(id) ON DELETE CASCADE
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_events (
+          id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, lead_id TEXT NOT NULL DEFAULT '',
+          workflow_id TEXT NOT NULL DEFAULT '', event_type TEXT NOT NULL,
+          occurred_at INTEGER NOT NULL DEFAULT 0, payload_json TEXT NOT NULL DEFAULT '{}',
+          import_batch_id TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          legacy_id TEXT NOT NULL DEFAULT '', legacy_payload_json TEXT NOT NULL DEFAULT '{}',
+          schema_version INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_hotspots (
+          id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, platform TEXT NOT NULL DEFAULT 'threads',
+          source_url TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '', content TEXT NOT NULL DEFAULT '',
+          metrics_json TEXT NOT NULL DEFAULT '{}', captured_at INTEGER NOT NULL DEFAULT 0,
+          import_batch_id TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          legacy_id TEXT NOT NULL DEFAULT '', legacy_payload_json TEXT NOT NULL DEFAULT '{}',
+          schema_version INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_relationships (
+          id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, lead_id TEXT NOT NULL DEFAULT '',
+          account_id TEXT NOT NULL DEFAULT '', relationship_type TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'unknown', verified_at INTEGER NOT NULL DEFAULT 0,
+          evidence_json TEXT NOT NULL DEFAULT '{}', import_batch_id TEXT NOT NULL DEFAULT '',
+          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)), legacy_id TEXT NOT NULL DEFAULT '',
+          legacy_payload_json TEXT NOT NULL DEFAULT '{}', schema_version INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_templates (
+          id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, name TEXT NOT NULL,
+          template_type TEXT NOT NULL DEFAULT 'message', locale TEXT NOT NULL DEFAULT 'zh-Hans',
+          content TEXT NOT NULL DEFAULT '', media_ids_json TEXT NOT NULL DEFAULT '[]',
+          is_default INTEGER NOT NULL DEFAULT 0 CHECK(is_default IN (0,1)),
+          import_batch_id TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          legacy_id TEXT NOT NULL DEFAULT '', legacy_payload_json TEXT NOT NULL DEFAULT '{}',
+          schema_version INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_media (
+          id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, storage_path TEXT NOT NULL,
+          sha256 TEXT NOT NULL, mime_type TEXT NOT NULL DEFAULT '', size_bytes INTEGER NOT NULL DEFAULT 0,
+          original_name TEXT NOT NULL DEFAULT '', import_batch_id TEXT NOT NULL DEFAULT '',
+          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)), legacy_id TEXT NOT NULL DEFAULT '',
+          legacy_payload_json TEXT NOT NULL DEFAULT '{}', schema_version INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_schedules (
+          id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, workflow_type TEXT NOT NULL,
+          cron_expression TEXT NOT NULL DEFAULT '', timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)), next_run_at INTEGER NOT NULL DEFAULT 0,
+          last_run_at INTEGER NOT NULL DEFAULT 0, payload_json TEXT NOT NULL DEFAULT '{}',
+          import_batch_id TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          legacy_id TEXT NOT NULL DEFAULT '', legacy_payload_json TEXT NOT NULL DEFAULT '{}',
+          schema_version INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_groups (
+          id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, platform TEXT NOT NULL DEFAULT 'instagram',
+          name TEXT NOT NULL DEFAULT '', platform_group_key TEXT NOT NULL DEFAULT '',
+          members_json TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'draft',
+          import_batch_id TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          legacy_id TEXT NOT NULL DEFAULT '', legacy_payload_json TEXT NOT NULL DEFAULT '{}',
+          schema_version INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_destinations (
+          id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '',
+          url TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+          import_batch_id TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          legacy_id TEXT NOT NULL DEFAULT '', legacy_payload_json TEXT NOT NULL DEFAULT '{}',
+          schema_version INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_tracking_events (
+          id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, campaign_id TEXT NOT NULL DEFAULT '',
+          lead_id TEXT NOT NULL DEFAULT '', destination_id TEXT NOT NULL,
+          visitor_hash TEXT NOT NULL, token_version INTEGER NOT NULL DEFAULT 1,
+          occurred_at INTEGER NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}',
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT,
+          FOREIGN KEY(destination_id) REFERENCES crm_destinations(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_import_batches (
+          id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, source_path TEXT NOT NULL,
+          source_sha256 TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('dry_run','staged','active','failed')),
+          counts_json TEXT NOT NULL DEFAULT '{}', report_json TEXT NOT NULL DEFAULT '{}',
+          created_by INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          activated_at INTEGER NOT NULL DEFAULT 0,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_legacy_id_map (
+          import_batch_id TEXT NOT NULL, user_id INTEGER NOT NULL, entity_type TEXT NOT NULL,
+          legacy_id TEXT NOT NULL, entity_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+          PRIMARY KEY(import_batch_id, entity_type, legacy_id),
+          FOREIGN KEY(import_batch_id) REFERENCES crm_import_batches(id) ON DELETE CASCADE,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS crm_scheduler_leases (
+          lease_key TEXT PRIMARY KEY, owner_id TEXT NOT NULL DEFAULT '',
+          expires_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0
+        )
+        """,
+    )
+    for statement in statements:
+        conn.execute(statement)
+
+    # Existing persistent volumes predate the native schedule ownership link.
+    # Keep this startup migration additive and idempotent.
+    workflow_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(crm_workflows)").fetchall()
+    }
+    if "schedule_id" not in workflow_columns:
+        conn.execute(
+            "ALTER TABLE crm_workflows ADD COLUMN schedule_id TEXT NOT NULL DEFAULT ''"
+        )
+
+    # The visitor hash already includes a UTC-day bucket. Include campaign and
+    # lead in the unique key so one visitor can legitimately follow different
+    # tenant-owned campaign links on the same day while replaying one token is
+    # still deduplicated.
+    conn.execute("DROP INDEX IF EXISTS idx_crm_tracking_daily_visitor")
+    indexes = (
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_workflows_idempotency ON crm_workflows(user_id, idempotency_key) WHERE idempotency_key <> ''",
+        "CREATE INDEX IF NOT EXISTS idx_crm_workflows_list ON crm_workflows(user_id, active, updated_at DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_crm_workflows_schedule ON crm_workflows(status, scheduled_at, updated_at)",
+        "CREATE INDEX IF NOT EXISTS idx_crm_workflows_schedule_owner ON crm_workflows(user_id, schedule_id, active, status)",
+        "CREATE INDEX IF NOT EXISTS idx_crm_steps_workflow ON crm_workflow_steps(user_id, workflow_id, sequence_no)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_action_idempotency ON crm_action_ledger(user_id, idempotency_key)",
+        "CREATE INDEX IF NOT EXISTS idx_crm_action_target ON crm_action_ledger(user_id, action_type, target_key, content_hash, state)",
+        "CREATE INDEX IF NOT EXISTS idx_crm_action_state ON crm_action_ledger(user_id, state, updated_at)",
+        "CREATE INDEX IF NOT EXISTS idx_crm_pools_list ON crm_pools(user_id, active, updated_at DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_crm_leads_list ON crm_leads(user_id, active, updated_at DESC, id DESC)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_leads_platform_identity ON crm_leads(user_id, platform, platform_user_key) WHERE platform_user_key <> '' AND active = 1",
+        "CREATE INDEX IF NOT EXISTS idx_crm_pool_members_lead ON crm_pool_members(user_id, lead_id, active)",
+        "CREATE INDEX IF NOT EXISTS idx_crm_events_list ON crm_events(user_id, active, occurred_at DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_crm_hotspots_list ON crm_hotspots(user_id, active, updated_at DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_crm_relationships_list ON crm_relationships(user_id, active, updated_at DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_crm_templates_list ON crm_templates(user_id, active, updated_at DESC, id DESC)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_media_hash ON crm_media(user_id, sha256) WHERE active = 1",
+        "CREATE INDEX IF NOT EXISTS idx_crm_schedules_due ON crm_schedules(enabled, active, next_run_at)",
+        "CREATE INDEX IF NOT EXISTS idx_crm_groups_list ON crm_groups(user_id, active, updated_at DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_crm_destinations_list ON crm_destinations(user_id, active, updated_at DESC, id DESC)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_tracking_daily_visitor ON crm_tracking_events(user_id, campaign_id, lead_id, destination_id, visitor_hash)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_import_hash ON crm_import_batches(user_id, source_sha256)",
+    )
+    for statement in indexes:
+        conn.execute(statement)
+
+
 def init_db() -> None:
     os.makedirs(os.path.dirname(get_db_path()), exist_ok=True)
     with db() as conn:
@@ -1555,6 +1857,7 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_group_owners_user ON persona_group_owners(user_id, group_id)")
         _ensure_commercial_billing_schema(conn)
         _ensure_email_delivery_governance_schema(conn)
+        ensure_crm_schema(conn)
         conn.execute(
             """
             UPDATE social_automation_tasks

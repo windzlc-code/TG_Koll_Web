@@ -501,6 +501,7 @@
           <button type="button" data-page="serviceAccounts">服务账号</button>
           <button type="button" data-page="proxyMarket">代理 IP</button>
           <button type="button" data-page="pricing">套餐与客户额度</button>
+          <button type="button" data-page="crm">CRM 模块</button>
           <button type="button" data-page="runtime">系统配置</button>
           <button type="button" data-page="sentimentCookies">舆情 Cookie</button>
         </nav>
@@ -1558,6 +1559,63 @@
             </div>
           </details>
           <div id="billingWorkspaceMsg" class="msg" role="status" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <section class="card section admin-page-view" id="secCrm" data-page-view="crm">
+        <div class="section-head admin-governance-head">
+          <div>
+            <h3>CRM 模块管理</h3>
+            <p>控制全局开放、维护与紧急暂停；管理用户授权、导入批次和运行健康。</p>
+          </div>
+          <button class="btn ghost" id="btnCrmAdminRefresh" type="button">刷新状态</button>
+        </div>
+        <div class="admin-config-grid">
+          <section class="admin-config-card" aria-labelledby="crmGlobalSettingsTitle">
+            <h4 id="crmGlobalSettingsTitle">全局策略</h4>
+            <p class="meta">环境硬开关 CRM_ENABLED 必须启用，后台开关才会生效。</p>
+            <form id="crmGlobalSettingsForm" class="form-grid" novalidate>
+              <label class="switch"><input id="crmGlobalEnabled" type="checkbox"><span>全局启用 CRM</span></label>
+              <label class="switch"><input id="crmMaintenance" type="checkbox"><span>维护模式</span></label>
+              <label class="switch"><input id="crmEmergencyPause" type="checkbox"><span>紧急暂停</span></label>
+              <div class="row">
+                <button class="btn primary" type="submit">保存 CRM 策略</button>
+                <button class="btn danger" id="btnCrmEmergencyPause" type="button">立即紧急暂停</button>
+              </div>
+            </form>
+            <div class="msg" id="crmGlobalMsg" role="status" aria-live="polite"></div>
+          </section>
+          <section class="admin-config-card" aria-labelledby="crmHealthTitle">
+            <h4 id="crmHealthTitle">服务健康</h4>
+            <div id="crmHealthSummary" class="admin-health-list" aria-live="polite">尚未读取</div>
+          </section>
+          <section class="admin-config-card" aria-labelledby="crmUserAccessTitle">
+            <h4 id="crmUserAccessTitle">用户模块授权</h4>
+            <form id="crmUserAccessForm" class="form-grid" novalidate>
+              <label>客户 ID<input id="crmUserAccessId" type="number" min="1" required></label>
+              <label class="switch"><input id="crmUserAccessEnabled" type="checkbox"><span>允许管理员代管该客户 CRM 工作区</span></label>
+              <div class="row">
+                <button class="btn ghost" id="btnCrmUserAccessLoad" type="button">读取当前授权</button>
+                <button class="btn primary" id="btnCrmUserAccessSave" type="submit" disabled>保存用户授权</button>
+              </div>
+            </form>
+            <div class="msg" id="crmUserAccessMsg" role="status" aria-live="polite"></div>
+          </section>
+          <section class="admin-config-card" aria-labelledby="crmImportTitle">
+            <h4 id="crmImportTitle">历史数据导入</h4>
+            <p class="meta">文件必须先上传到持久卷的 crm_imports 目录；先 dry-run，再激活批次。</p>
+            <form id="crmImportDryRunForm" class="form-grid" novalidate>
+              <label>目标客户 ID<input id="crmImportUserId" type="number" min="1" required></label>
+              <label>导入源文件名<input id="crmImportSource" type="text" placeholder="crm-state.json" required></label>
+              <button class="btn primary" type="submit">执行 dry-run</button>
+            </form>
+            <form id="crmImportActivateForm" class="form-grid" novalidate>
+              <label>批次 ID<input id="crmImportBatchId" type="text" required></label>
+              <div class="row"><button class="btn ghost" type="submit">激活已校验批次</button><button class="btn danger" id="btnCrmImportDismiss" type="button">废弃待处理批次</button></div>
+            </form>
+            <div class="msg" id="crmImportMsg" role="status" aria-live="polite"></div>
+            <pre id="crmImportStatus" class="code-box" aria-live="polite">尚无导入报告</pre>
+          </section>
         </div>
       </section>
 

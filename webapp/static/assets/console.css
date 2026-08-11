@@ -1184,7 +1184,6 @@ button.primary,
 .persona-dashboard-view .persona-dashboard-hero,
 .persona-dashboard-view .persona-dashboard-filters,
 .persona-dashboard-view .persona-chart-panel,
-.persona-dashboard-view .persona-dashboard-note,
 .persona-dashboard-view .persona-workbench-panel {
   border-color: var(--line);
   background: var(--panel);
@@ -1423,6 +1422,31 @@ button.primary,
   color: #fff;
 }
 
+.persona-dashboard-view .persona-donut-legend .is-platform.is-muted {
+  color: var(--muted);
+  opacity: 0.48;
+}
+
+.persona-dashboard-view .persona-donut-legend .is-platform.is-active {
+  opacity: 1;
+  font-weight: 800;
+}
+
+.persona-dashboard-view .persona-donut-legend .is-platform.is-active[data-platform="all"] {
+  color: var(--ink);
+}
+
+.persona-dashboard-view .persona-donut-legend {
+  width: 100%;
+  justify-self: stretch;
+}
+
+.persona-dashboard-view .persona-donut-legend .is-platform b {
+  min-width: 5ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .persona-dashboard-view :is(.persona-dashboard-platform-nav, .persona-heat-carousel-actions button):disabled {
   opacity: 0.35;
   cursor: default;
@@ -1442,7 +1466,26 @@ button.primary,
 }
 
 .persona-dashboard-view .persona-donut > div {
+  position: relative;
+  display: block;
   background: var(--panel-solid);
+}
+
+.persona-dashboard-view .persona-donut > div > strong {
+  position: absolute;
+  inset-inline: 0;
+  top: calc(50% - 12px);
+  text-align: center;
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+.persona-dashboard-view .persona-donut > div > span {
+  position: absolute;
+  inset-inline: 0;
+  top: calc(50% + 7px);
+  text-align: center;
+  line-height: 1;
 }
 
 .persona-dashboard-view .persona-line-chart text {
@@ -1462,24 +1505,101 @@ button.primary,
 }
 
 .persona-dashboard-view .persona-heat-carousel-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  display: block;
   margin-bottom: 8px;
   color: var(--muted);
   font-size: 12px;
 }
 
+.persona-dashboard-view .persona-heat-chart-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.persona-dashboard-view .persona-heat-chart-head > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.persona-dashboard-view .persona-heat-chart-head .small {
+  max-width: none;
+  text-align: left;
+}
+
+.persona-dashboard-view .persona-heat-chart-head .persona-heat-persona-count {
+  padding-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.persona-dashboard-view .persona-heat-chart-head .persona-heat-persona-count b {
+  color: var(--ink);
+}
+
 .persona-dashboard-view .persona-heat-carousel-actions {
-  display: inline-flex;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 22px;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
 }
 
 .persona-dashboard-view .persona-heat-carousel-actions button {
-  width: 32px;
-  height: 32px;
-  min-height: 32px;
+  width: 22px;
+  height: 22px;
+  min-height: 22px !important;
+}
+
+.persona-dashboard-view .persona-heat-carousel-actions button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.persona-dashboard-view .persona-heat-persona-tabs {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  background: transparent;
+  scrollbar-width: none;
+}
+
+.persona-dashboard-view .persona-heat-persona-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.persona-dashboard-view .persona-heat-persona-tabs > button {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
+  height: 20px;
+  min-height: 20px !important;
+  padding: 0 6px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel-solid);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.persona-dashboard-view .persona-heat-persona-tabs > button.is-active {
+  border-color: var(--vecto-action-border);
+  background-color: #071112;
+  background-image: var(--vecto-action-static-gradient);
+  background-size: 100% 100%;
+  background-position: 50% 0;
+  background-repeat: no-repeat;
+  color: var(--vecto-action-ink);
 }
 
 .persona-dashboard-view .persona-heat-carousel {
@@ -1654,10 +1774,15 @@ button.primary,
 }
 
 .persona-dashboard-view .persona-trend-panel .persona-chart-head h3 {
-  font-size: 19px;
+  font-size: 16px;
 }
 
-.persona-dashboard-view .persona-trend-panel .persona-chart-head .small,
+  .persona-dashboard-view .persona-trend-panel .persona-chart-head .small {
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
 .persona-dashboard-view .persona-line-chart text {
   font-size: 13px;
   font-weight: 650;
@@ -1830,13 +1955,6 @@ button.primary,
   stroke-dasharray: 2 9;
 }
 
-.persona-dashboard-view .persona-dashboard-note {
-  padding: 10px 12px;
-  border-color: var(--line);
-  background: var(--soft);
-  box-shadow: none;
-}
-
 @media (max-width: 1480px) {
   .persona-dashboard-view .persona-person-layout {
     grid-template-columns: 1fr;
@@ -2002,10 +2120,13 @@ button.primary,
   }
 
   .persona-dashboard-view .persona-trend-panel .persona-chart-head h3 {
-    font-size: 18px;
+    font-size: 15px;
   }
 
-  .persona-dashboard-view .persona-trend-panel .persona-chart-head .small,
+.persona-dashboard-view .persona-trend-panel .persona-chart-head .small {
+    font-size: 10px;
+  }
+
   .persona-dashboard-view .persona-line-chart text {
     font-size: 13px;
   }
@@ -3767,11 +3888,15 @@ textarea:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 28px;
   min-width: 28px;
-  height: 24px;
-  border: 1px solid var(--line);
+  height: 28px;
+  min-height: 28px;
+  box-sizing: border-box;
+  border: 1px solid var(--status-muted-ink);
   border-radius: 999px;
-  color: var(--muted);
+  background: var(--status-muted-ink);
+  color: var(--accent-ink);
   font-size: 12px;
   font-weight: 900;
 }
@@ -8352,6 +8477,8 @@ body.persona-touch-dragging .persona-list-card:active {
   align-items: center;
   flex-wrap: nowrap;
   gap: 4px;
+  transform: scale(0.84);
+  transform-origin: center right;
 }
 
 .publish-history-card-actions {
@@ -8367,19 +8494,24 @@ body.persona-touch-dragging .persona-list-card:active {
   height: 32px;
   min-height: 32px;
   padding: 0;
-  border: 1px solid var(--line);
+  border: 1px solid var(--status-muted-ink);
   border-radius: 6px;
-  background: var(--panel-solid);
-  color: var(--muted);
+  background: var(--status-muted-ink);
+  color: var(--accent-ink);
   box-shadow: none;
   text-decoration: none;
 }
 
 .publish-history-card-action:hover,
 .publish-history-card-action:focus-visible {
-  border-color: var(--accent);
-  color: var(--accent-dark);
+  border-color: var(--accent-dark);
+  color: var(--accent-ink);
   outline: none;
+}
+
+.publish-history-card-action[data-publish-history-view] {
+  border-color: var(--accent-dark);
+  background: var(--accent-dark);
 }
 
 .publish-history-card-action .ui-eye-icon,
@@ -8404,6 +8536,9 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 4px;
   flex: 0 0 auto;
   white-space: nowrap;
+  border-color: var(--status-muted-ink);
+  background: var(--status-muted-ink);
+  color: var(--accent-ink);
 }
 
 .publish-history-card-requeue span {
@@ -21027,7 +21162,7 @@ body.console-page {
   ) {
     min-height: var(--mobile-touch-target);
     touch-action: manipulation;
-    -webkit-tap-highlight-color: rgba(35, 134, 111, 0.16);
+    -webkit-tap-highlight-color: transparent;
   }
 
   .console-page :is(
@@ -23144,9 +23279,10 @@ body.console-page {
   min-width: 0;
   height: 32px;
   min-height: 32px;
-  padding: 4px 6px;
+  padding: 4px 8px;
   gap: 4px;
-  border: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
   border-radius: 8px;
   background: linear-gradient(90deg, color-mix(in srgb, var(--soft) 80%, transparent) var(--sync-progress), var(--panel-solid) var(--sync-progress));
   color: var(--ink);
@@ -23839,6 +23975,13 @@ body.console-page {
   .publish-history-card {
     content-visibility: auto;
     contain-intrinsic-size: auto 560px;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .publish-history-card.is-selected {
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+    background: color-mix(in srgb, var(--accent) 2.5%, var(--panel-solid));
+    box-shadow: none;
   }
 
   .publish-history-preview {
@@ -26760,15 +26903,7 @@ body.console-page {
   }
 }
 
-.persona-history-data-panel .publish-history-card-main {
-  grid-template-columns: 28px minmax(0, 1fr) auto;
-}
 
-.persona-history-data-panel .publish-history-card-actions {
-  grid-column: 3;
-  grid-row: 1;
-  justify-content: flex-end;
-}
 
 @media (max-width: 760px) {
   .persona-history-toolbar {

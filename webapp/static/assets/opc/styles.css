@@ -2367,7 +2367,7 @@ body.modal-open {
   ) {
     min-height: 44px;
     touch-action: manipulation;
-    -webkit-tap-highlight-color: rgba(75, 100, 120, 0.16);
+    -webkit-tap-highlight-color: transparent;
   }
 
   .auth-close,

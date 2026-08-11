@@ -52,7 +52,7 @@ class AboutVectoFrontendContractTests(unittest.TestCase):
             "data-open-login",
         ):
             self.assertIn(control, self.about_markup)
-        self.assertIn('["pricing", "console", "aboutVecto"].includes(page)', self.navigation_script)
+        self.assertIn('["pricing", "console", "crm", "aboutVecto"].includes(page)', self.navigation_script)
         for heading in (
             "六個階段，把內容投入沉澱成營運資產",
             "七個產品模組，支撐內容與帳號日常營運",

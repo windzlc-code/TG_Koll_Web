@@ -774,6 +774,44 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(rows["2026-07-31"]["snapshot_count"], 1)
         self.assertGreater(rows["2026-07-31"]["hot_score"], 0)
 
+    def test_overview_keeps_completed_metric_snapshots_as_distinct_trend_days(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        hot_metric = archives[0]["setup"]["hotMetrics"]["threads"]
+        hot_metric["snapshots"] = [
+            {
+                "refreshedAt": "2026-07-30T08:00:00Z",
+                "followers": 41,
+                "likes": 4,
+                "comments": 2,
+                "shares": 1,
+                "reposts": 3,
+                "views": 90,
+            },
+            {
+                "refreshedAt": "2026-07-31T08:00:00Z",
+                "followers": 42,
+                "likes": 8,
+                "comments": 3,
+                "shares": 2,
+                "reposts": 4,
+                "views": 120,
+            },
+        ]
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        response = self.client.get("/api/persona_dashboard/overview")
+
+        self.assertEqual(response.status_code, 200)
+        rows = {row["date"]: row for row in response.json()["charts"]["platform_trend"]["threads"]}
+        self.assertEqual(rows["2026-07-30"]["followers"], 41)
+        self.assertEqual(rows["2026-07-30"]["likes"], 4)
+        self.assertEqual(rows["2026-07-30"]["post_views"], 90)
+        self.assertEqual(rows["2026-07-31"]["followers"], 42)
+        self.assertEqual(rows["2026-07-31"]["likes"], 8)
+        self.assertEqual(rows["2026-07-31"]["post_views"], 120)
+
     def test_overview_attributes_multi_platform_publish_targets_to_each_platform(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"
@@ -1648,6 +1686,37 @@ class PersonaDashboardApiTests(unittest.TestCase):
             resp = self.client.post("/api/persona_dashboard/refresh", json={"archive_id": "persona-1"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["id"], "pdr_test")
+
+    def test_public_full_refresh_forces_browser_source(self):
+        self._write_archives()
+        with mock.patch.object(
+            server,
+            "_start_persona_dashboard_refresh",
+            return_value={"id": "pdr_all", "status": "queued", "message": "queued"},
+        ) as start:
+            response = self.client.post("/api/persona_dashboard/refresh", json={"archive_id": ""})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(start.call_args.kwargs["source"], "browser")
+
+    def test_full_refresh_requires_every_target_and_keeps_stale_timestamp_on_partial_data(self):
+        script = (server.ROOT_DIR / "tool_r18" / "scripts" / "skills" / "persona-dashboard-refresh.ts").read_text(encoding="utf-8")
+
+        self.assertIn("const fullyRefreshed = requiredResults.length > 0 && requiredResults.every((item) => item.ok && !item.partial && !item.skipped);", script)
+        self.assertIn("refreshedAt: previousMetrics.refreshedAt,", script)
+        self.assertIn("attemptedAt: metrics.refreshedAt", script)
+        self.assertIn("const complete = refreshAttempt.complete;", script)
+
+    def test_refresh_retries_only_incomplete_accounts_and_reports_partial_completion(self):
+        script = (server.ROOT_DIR / "tool_r18" / "scripts" / "skills" / "persona-dashboard-refresh.ts").read_text(encoding="utf-8")
+        server_source = Path(server.__file__).read_text(encoding="utf-8")
+        v2_worker = server_source[server_source.index("def _persona_dashboard_refresh_worker_v2"):]
+
+        self.assertIn("const METRIC_REFRESH_ATTEMPTS = 2;", script)
+        self.assertIn("async function retryIncompleteMetricFetch", script)
+        self.assertIn("attempts: refreshAttempt.attempts", script)
+        self.assertIn('status: fullyRefreshed ? "success" : (results.some((item) => item.ok) ? "partial" : "failed")', script)
+        self.assertIn('parsed.get("status") == "partial"', v2_worker)
 
     def test_create_persona_requires_auth_and_persists_archive(self):
         resp = self.client.post(

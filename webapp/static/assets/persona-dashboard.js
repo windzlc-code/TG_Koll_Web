@@ -358,8 +358,6 @@ function pdBuildFilteredCharts(visiblePersonas, data) {
   const selectedPlatform = pdPlatformFilter();
   const platformDistribution = {};
   const engagement = { likes: 0, comments: 0, shares: 0, reposts: 0 };
-  const taskStatus = {};
-  const coverage = { complete: 0, partial_or_unknown: 0, none: 0 };
 
   visiblePersonas.forEach((persona) => {
     const hot = pdPersonaHot(persona);
@@ -378,23 +376,11 @@ function pdBuildFilteredCharts(visiblePersonas, data) {
         && (!selectedPlatform || String(platform || "").trim().toLowerCase() === selectedPlatform)
       ) platformDistribution[platform] = (platformDistribution[platform] || 0) + count;
     });
-    const platforms = (persona.hot_platforms || []).filter((item) => (
-      pdIsWebVisiblePlatform(item.platform)
-      && (!selectedPlatform || String(item.platform || "").trim().toLowerCase() === selectedPlatform)
-    ));
-    if (!platforms.length) coverage.none += 1;
-    else if (platforms.some((item) => item.complete)) coverage.complete += 1;
-    else coverage.partial_or_unknown += 1;
-    Object.entries((persona.queue && persona.queue.by_status) || {}).forEach(([status, count]) => {
-      taskStatus[status] = (taskStatus[status] || 0) + Number(count || 0);
-    });
   });
 
   return {
     platform_distribution: platformDistribution,
     engagement_mix: engagement,
-    task_status_distribution: taskStatus,
-    hot_coverage: coverage,
     trend: pdFilterTrend(
       selectedPlatform
         ? ((data.charts && data.charts.platform_trend && data.charts.platform_trend[selectedPlatform]) || [])
@@ -438,13 +424,20 @@ function pdRenderPersonaHeatCarousel(hostId, personas, platforms) {
     ...platformRows.map((platform) => Number(pdPersonaHot(persona, platform).hot_score || 0)),
   ]);
   const max = Math.max(1, ...metricRows);
+  const renderPersonaCount = (next) => {
+    const count = pdEl("personaHeatPersonaCount");
+    if (count) count.innerHTML = `<b>${next + 1}</b> / ${items.length}`;
+  };
+  renderPersonaCount(personaDashboardPersonaIndex);
   host.innerHTML = `
     <div class="persona-heat-carousel-toolbar">
-      <span><b data-persona-heat-current>${personaDashboardPersonaIndex + 1}</b> / ${items.length}</span>
       <div class="persona-heat-carousel-actions">
         <button type="button" data-persona-heat-step="-1" aria-label="上一个人设" ${personaDashboardPersonaIndex === 0 ? "disabled" : ""}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
         </button>
+        <div class="persona-heat-persona-tabs" role="tablist" aria-label="人设切换">
+          ${items.map((persona, index) => `<button type="button" role="tab" data-persona-heat-tab="${index}" aria-selected="${index === personaDashboardPersonaIndex ? "true" : "false"}" class="${index === personaDashboardPersonaIndex ? "is-active" : ""}" title="${pdEscape(persona.name || "未命名人设")}">${pdEscape(persona.name || "未命名人设")}</button>`).join("")}
+        </div>
         <button type="button" data-persona-heat-step="1" aria-label="下一个人设" ${personaDashboardPersonaIndex === items.length - 1 ? "disabled" : ""}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
         </button>
@@ -485,8 +478,13 @@ function pdRenderPersonaHeatCarousel(hostId, personas, platforms) {
     if (renderRevision !== personaDashboardHeatRenderRevision) return next;
     personaDashboardPersonaIndex = next;
     personaDashboardPersonaKey = pdPersonaStableKey(items[next], next);
-    const current = host.querySelector("[data-persona-heat-current]");
-    if (current) current.textContent = String(next + 1);
+    renderPersonaCount(next);
+    host.querySelectorAll("[data-persona-heat-tab]").forEach((button) => {
+      const tabIndex = Number(button.dataset.personaHeatTab || 0);
+      button.classList.toggle("is-active", tabIndex === next);
+      button.setAttribute("aria-selected", tabIndex === next ? "true" : "false");
+      if (tabIndex === next) button.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
     host.querySelectorAll("[data-persona-heat-step]").forEach((button) => {
       const step = Number(button.dataset.personaHeatStep || 0);
       button.disabled = (step < 0 && next === 0) || (step > 0 && next === items.length - 1);
@@ -508,6 +506,9 @@ function pdRenderPersonaHeatCarousel(hostId, personas, platforms) {
   };
   host.querySelectorAll("[data-persona-heat-step]").forEach((button) => {
     button.addEventListener("click", () => scrollToIndex(personaDashboardPersonaIndex + Number(button.dataset.personaHeatStep || 0)));
+  });
+  host.querySelectorAll("[data-persona-heat-tab]").forEach((button) => {
+    button.addEventListener("click", () => scrollToIndex(Number(button.dataset.personaHeatTab || 0)));
   });
   let scrollFrame = 0;
   carousel?.addEventListener("scroll", () => {
@@ -547,15 +548,31 @@ function pdRenderDonutChart(hostId, entries, options = {}) {
     cursor += size;
     return `${colors[index]} ${start}% ${cursor}%`;
   }).join(", ");
+  const selectedPlatform = pdPlatformFilter();
+  const legendRows = Array.isArray(options.platformLegend)
+    ? options.platformLegend.map((platform) => {
+      const cleanPlatform = String(platform || "").trim().toLowerCase();
+      const matching = rows.find((row) => String(row.label || "").trim().toLowerCase() === cleanPlatform);
+      return {
+        label: cleanPlatform ? pdPlatformLabel(cleanPlatform) : "全部平台",
+        value: cleanPlatform ? Number(matching?.value || 0) : total,
+        platform: cleanPlatform,
+      };
+    })
+    : rows;
   host.innerHTML = `
     <div class="persona-donut-wrap">
       <div class="persona-donut" style="background: conic-gradient(${segments})">
         <div><strong>${pdNumber(total)}</strong><span>总计</span></div>
       </div>
       <div class="persona-donut-legend">
-        ${rows.map((row, index) => `
-          <div class="${options.platformColors ? "is-platform" : ""}"${options.platformColors ? ` data-platform="${pdEscape(String(row.label || "").trim().toLowerCase())}"` : ""}>${options.platformColors ? `${pdPlatformIcon(row.label)}<em>${pdEscape(pdPlatformLabel(row.label))}</em>` : `<span style="background:${colors[index]}"></span><em>${pdEscape(row.label)}</em>`}<b>${pdEscape(pdNumber(row.value))}</b></div>
-        `).join("")}
+        ${legendRows.map((row, index) => {
+      const platform = Object.prototype.hasOwnProperty.call(row, "platform")
+        ? String(row.platform || "").trim().toLowerCase()
+        : String(row.label || "").trim().toLowerCase();
+          const active = !platform ? !selectedPlatform : selectedPlatform === platform;
+          return `<div class="${options.platformColors ? `is-platform ${active ? "is-active" : "is-muted"}` : ""}"${options.platformColors ? ` data-platform="${pdEscape(platform || "all")}"` : ""}>${options.platformColors ? `${pdPlatformIcon(platform)}<em>${pdEscape(pdPlatformLabel(platform))}</em>` : `<span style="background:${colors[index]}"></span><em>${pdEscape(row.label)}</em>`}<b>${pdEscape(pdNumber(row.value))}</b></div>`;
+        }).join("")}
       </div>
     </div>
   `;
@@ -722,11 +739,12 @@ function pdRenderDashboard() {
   const charts = pdBuildFilteredCharts(visible, data);
   pdRenderSummary(visible);
   pdRenderPersonaHeatCarousel("personaHotRankChart", visible, pdDashboardPlatforms(data));
-  pdRenderDonutChart("personaPlatformChart", charts.platform_distribution, { platformColors: true });
-  pdRenderDonutChart("personaCoverageChart", charts.hot_coverage);
+  pdRenderDonutChart("personaPlatformChart", charts.platform_distribution, {
+    platformColors: true,
+    platformLegend: ["", "threads", "instagram"],
+  });
   pdRenderTrendChart("personaTrendChart", charts.trend);
   pdRenderDonutChart("personaEngagementChart", charts.engagement_mix);
-  pdRenderDonutChart("personaTaskStatusChart", charts.task_status_distribution);
   if (overview) overview.style.display = "grid";
   empty.style.display = visible.length ? "none" : "block";
 }
@@ -745,17 +763,19 @@ function pdSetRefreshControlState(status = "idle", progress = 0) {
   const normalized = String(status || "idle").trim().toLowerCase();
   const active = normalized === "queued" || normalized === "running";
   const done = normalized === "done" || normalized === "success" || normalized === "completed";
+  const partial = normalized === "partial";
   const failed = normalized === "failed" || normalized === "error";
   const value = Math.max(0, Math.min(100, Number(progress) || 0));
   button.disabled = active;
   button.classList.toggle("is-loading", active);
   button.classList.toggle("is-complete", done);
+  button.classList.toggle("is-partial", partial);
   button.classList.toggle("is-failed", failed);
   button.dataset.progress = String(value);
   button.style.setProperty("--sync-progress", `${value}%`);
   button.setAttribute("aria-busy", active ? "true" : "false");
   if (label) label.textContent = "数据刷新";
-  const title = active ? `同步中 ${value}%` : (done ? "同步完成" : (failed ? "同步失败，点击重试" : "同步全部数据"));
+  const title = active ? `同步中 ${value}%` : (done ? "同步完成" : (partial ? "部分完成，失败账号已局部重试" : (failed ? "同步失败，点击重试" : "同步全部数据")));
   button.title = title;
   button.setAttribute("aria-label", title);
 }
@@ -831,7 +851,7 @@ async function pdStartRefresh() {
     pdSetMsg("");
     const task = await pdApi("/api/persona_dashboard/refresh", {
       method: "POST",
-      body: { archive_id: "" },
+      body: { archive_id: "", source: "browser" },
     });
     personaDashboardRefreshTask = task.id;
     pdSetRefreshControlState("queued", Number(task.progress || 0));
@@ -849,7 +869,11 @@ async function pdPollRefresh(taskId) {
     const progress = Number(task.progress || 0);
     pdSetRefreshControlState(task.status, progress);
     const running = ["queued", "running"].includes(String(task.status));
-    if (task.status === "failed") pdSetMsg("同步失败", "err");
+    if (task.status === "failed" || task.status === "partial") {
+      const resultType = task.status === "partial" ? "ok" : "err";
+      pdSetMsg(task.status === "partial" ? "部分同步完成" : "同步失败", resultType);
+      if (task.message) pdSetMsg(String(task.message), resultType);
+    }
     else pdSetMsg("");
     if (running) {
       window.setTimeout(() => pdPollRefresh(taskId), 2500);
@@ -857,8 +881,10 @@ async function pdPollRefresh(taskId) {
     }
     personaDashboardRefreshTask = "";
     await pdLoadDashboard();
-    if (task.status === "failed") {
-      pdSetMsg("同步失败，请稍后重试。", "err");
+    if (task.status === "failed" || task.status === "partial") {
+      const resultType = task.status === "partial" ? "ok" : "err";
+      pdSetMsg(task.status === "partial" ? "部分同步完成" : "同步失败，请稍后重试。", resultType);
+      if (task.message) pdSetMsg(String(task.message), resultType);
     } else {
       pdSetMsg("");
     }
