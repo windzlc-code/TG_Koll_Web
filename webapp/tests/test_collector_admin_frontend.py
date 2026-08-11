@@ -41,7 +41,7 @@ def test_collector_javascript_uses_only_existing_read_endpoints_for_summaries() 
         "/api/auth/me",
         "/api/health",
         "/api/admin/modules/crm/health",
-        "/api/collector/overview",
+        "/api/admin/collector/overview",
         "/api/persona_dashboard/automation/overview",
         "/api/admin/sentiment/browser_auth/profiles",
     ):

@@ -366,7 +366,7 @@
     const [healthResult, crmResult, collectorResult, overviewResult, profileResult] = await Promise.all([
       safeRequest("/api/health"),
       safeRequest("/api/admin/modules/crm/health"),
-      safeRequest("/api/collector/overview"),
+      safeRequest("/api/admin/collector/overview"),
       safeRequest("/api/persona_dashboard/automation/overview"),
       safeRequest("/api/admin/sentiment/browser_auth/profiles"),
     ]);

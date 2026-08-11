@@ -50,7 +50,7 @@ class CollectorApiTests(unittest.TestCase):
 
     def test_overview_returns_only_safe_account_projection(self) -> None:
         with patch("webapp.collector_api._collector_pool", return_value=_Pool()):
-            response = self.client.get("/api/collector/overview")
+            response = self.client.get("/api/admin/collector/overview")
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["summary"]["account_count"], 1)
@@ -61,7 +61,7 @@ class CollectorApiTests(unittest.TestCase):
     def test_state_update_uses_safe_projection(self) -> None:
         with patch("webapp.collector_api._collector_pool", return_value=_Pool()):
             response = self.client.patch(
-                "/api/collector/accounts/colacct_safe/state",
+                "/api/admin/collector/accounts/colacct_safe/state",
                 json={"status": "disabled", "health_status": "operator_disabled"},
             )
         self.assertEqual(response.status_code, 200)

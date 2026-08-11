@@ -29,7 +29,7 @@ def _collector_pool() -> CollectorAccountPool | None:
 def create_collector_router() -> APIRouter:
     router = APIRouter(tags=["collector"])
 
-    @router.get("/api/collector/overview")
+    @router.get("/api/admin/collector/overview")
     def overview(_admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
         pool = _collector_pool()
         if pool is None:
@@ -53,7 +53,7 @@ def create_collector_router() -> APIRouter:
             "accounts": accounts,
         }
 
-    @router.patch("/api/collector/accounts/{account_id}/state")
+    @router.patch("/api/admin/collector/accounts/{account_id}/state")
     def patch_account_state(
         account_id: str,
         payload: dict[str, Any] = Body(...),
