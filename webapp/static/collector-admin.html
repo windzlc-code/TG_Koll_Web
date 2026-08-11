@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN" data-collector-page="dashboard" data-deployment-role="__DEPLOYMENT_ROLE__">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b1014" />
+    <title>采集运营中心 · Vecto</title>
+    <link rel="stylesheet" href="/assets/collector-admin.css?v=__COLLECTOR_CSS_VERSION__" />
+    <script defer src="/assets/collector-admin.js?v=__COLLECTOR_JS_VERSION__"></script>
+  </head>
+  <body class="collector-dashboard-page">
+    <div class="collector-noise" aria-hidden="true"></div>
+    <header class="collector-topbar">
+      <a class="collector-brand" href="/collector-admin.html" aria-label="采集运营中心首页">
+        <span class="collector-brand-mark">V</span>
+        <span><strong>VECTO</strong><small>CAPTURE OPERATIONS</small></span>
+      </a>
+      <div class="collector-node-identity">
+        <span class="collector-live-pulse" aria-hidden="true"></span>
+        <div><small>NODE ROLE</small><strong>管理员采集节点</strong></div>
+      </div>
+      <div class="collector-top-actions">
+        <span id="collectorClock" class="collector-clock">--:--:-- CST</span>
+        <span id="collectorOperator" class="collector-operator">正在校验…</span>
+        <button id="collectorRefreshAll" class="collector-icon-button" type="button" title="刷新全部摘要" aria-label="刷新全部摘要">↻</button>
+        <button id="collectorLogout" class="collector-text-button" type="button">退出节点</button>
+      </div>
+    </header>
+
+    <div class="collector-layout">
+      <aside class="collector-sidebar">
+        <p class="collector-sidebar-label">CONTROL INDEX</p>
+        <nav aria-label="采集运营导航">
+          <button class="is-active" type="button" data-collector-view="overview"><b>01</b><span>节点总览</span></button>
+          <button type="button" data-collector-view="crm"><b>02</b><span>CRM 中心</span></button>
+          <button type="button" data-collector-view="hot"><b>03</b><span>热点抓取</span></button>
+          <button type="button" data-collector-view="accounts"><b>04</b><span>采集账号池</span></button>
+          <button type="button" data-collector-view="cookies"><b>05</b><span>Cookie 状态</span></button>
+          <button type="button" data-collector-view="proxies"><b>06</b><span>代理资源</span></button>
+          <button type="button" data-collector-view="tasks"><b>07</b><span>任务队列</span></button>
+          <button type="button" data-collector-view="system"><b>08</b><span>系统边界</span></button>
+        </nav>
+        <div class="collector-side-rule">
+          <span>BOUNDARY / LOCKED</span>
+          <p>本节点只管理管理员采集资源，不承载用户产品数据。</p>
+        </div>
+      </aside>
+
+      <main class="collector-main">
+        <div id="collectorNotice" class="collector-global-notice" hidden role="status" aria-live="polite"></div>
+
+        <section class="collector-view is-active" data-collector-panel="overview">
+          <header class="collector-page-heading">
+            <div><p>OLD NODE / OPERATIONS</p><h1>采集节点总览</h1></div>
+            <div class="collector-heading-stamp"><small>AUTHORITY</small><strong>ADMIN CAPTURE ONLY</strong></div>
+          </header>
+
+          <div class="collector-boundary-map" aria-label="服务器职责边界">
+            <div class="collector-boundary-node is-old">
+              <span>旧机 · 当前节点</span>
+              <strong>采集执行与管理员账号池</strong>
+              <p>完整 CRM、完整热点抓取、Cookie、代理、任务证据</p>
+            </div>
+            <div class="collector-boundary-flow"><i></i><span>签名任务 / 结果回传</span></div>
+            <div class="collector-boundary-node is-new">
+              <span>新机 · 用户产品站</span>
+              <strong>用户数据与内容生产</strong>
+              <p>用户自有账号、人设全量刷新、生成、发布与展示</p>
+            </div>
+          </div>
+
+          <div class="collector-metric-grid">
+            <article><span>采集账号</span><strong id="metricAccounts">—</strong><small id="metricAccountsHint">等待读取账号池</small></article>
+            <article><span>可用会话</span><strong id="metricReadyAccounts">—</strong><small>不包含用户自有账号</small></article>
+            <article><span>进行中任务</span><strong id="metricActiveTasks">—</strong><small>抓取与 CRM 执行队列</small></article>
+            <article><span>Cookie 配置</span><strong id="metricCookieProfiles">—</strong><small>仅显示健康摘要</small></article>
+          </div>
+
+          <div class="collector-overview-grid">
+            <article class="collector-panel collector-module-panel">
+              <div class="collector-panel-index">CORE MODULE / A</div>
+              <span class="collector-module-tag is-preserved">完整保留</span>
+              <h2>CRM 模块</h2>
+              <p>从实时搜索、客户池、关系验证到任务证据，继续作为管理员采集工作流运行。</p>
+              <div id="overviewCrmStatus" class="collector-inline-status"><i></i><span>正在检查 CRM…</span></div>
+              <button type="button" class="collector-link-button" data-collector-view-jump="crm">查看 CRM 状态 <b>↗</b></button>
+            </article>
+            <article class="collector-panel collector-module-panel">
+              <div class="collector-panel-index">CORE MODULE / B</div>
+              <span class="collector-module-tag is-preserved">完整保留</span>
+              <h2>热点抓取模块</h2>
+              <p>执行热点候选搜索、公开指标刷新，并将经过边界过滤的结果返回新机。</p>
+              <div id="overviewHotStatus" class="collector-inline-status"><i></i><span>正在检查抓取配置…</span></div>
+              <button type="button" class="collector-link-button" data-collector-view-jump="hot">查看抓取能力 <b>↗</b></button>
+            </article>
+            <article class="collector-panel collector-module-panel is-boundary">
+              <div class="collector-panel-index">BOUNDARY / NEW NODE</div>
+              <span class="collector-module-tag is-remote">新机执行</span>
+              <h2>人设全量刷新</h2>
+              <p>本节点不运行人设全量刷新，不保存完整用户人设。新机按钮仅在需要抓取时触发旧机能力。</p>
+              <div class="collector-inline-status is-locked"><i></i><span>边界已锁定</span></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="collector-view" data-collector-panel="crm">
+          <header class="collector-page-heading"><div><p>MODULE / CRM</p><h1>CRM 采集中心</h1></div><span class="collector-module-tag is-preserved">完整保留</span></header>
+          <div class="collector-action-banner">
+            <div><strong>完整 CRM 工作台继续保留</strong><p>业务资源、搜索、客户池、任务、证据与分析均由现有 CRM 页面承载。</p></div>
+            <a class="collector-primary-link" href="/crm.html">打开 CRM 工作台 <span>↗</span></a>
+          </div>
+          <div id="collectorCrmChecks" class="collector-check-grid" aria-live="polite"></div>
+        </section>
+
+        <section class="collector-view" data-collector-panel="hot">
+          <header class="collector-page-heading"><div><p>MODULE / HOT CAPTURE</p><h1>热点抓取</h1></div><span class="collector-module-tag is-preserved">完整保留</span></header>
+          <div class="collector-capability-grid">
+            <article><small>CAP-01</small><strong>热点候选抓取</strong><code>persona.hot_candidates.v1</code><p>接收新机最小人设快照，返回候选结果。</p></article>
+            <article><small>CAP-02</small><strong>帖子指标刷新</strong><code>persona.hot_post_metrics.v1</code><p>只读取公开指标，不修改用户内容。</p></article>
+            <article><small>CAP-03</small><strong>CRM 实时搜索</strong><code>crm.threads_live_search.v1</code><p>为 CRM 返回实时平台数据与证据。</p></article>
+          </div>
+          <div class="collector-panel collector-hot-summary">
+            <div><div class="collector-panel-index">AUTH PROFILES</div><h2>抓取登录态摘要</h2></div>
+            <div id="collectorHotProfiles" class="collector-mini-list">正在读取…</div>
+            <button type="button" class="collector-secondary-button" data-collector-view-jump="cookies">检查 Cookie 状态</button>
+          </div>
+          <div class="collector-boundary-warning"><strong>不在旧机执行</strong><span>人设全量刷新、内容生成、用户账号发布与用户数据展示。</span></div>
+        </section>
+
+        <section class="collector-view" data-collector-panel="accounts">
+          <header class="collector-page-heading"><div><p>RESOURCE / COLLECTOR ACCOUNTS</p><h1>管理员采集账号池</h1></div><a class="collector-secondary-link" href="/admin-console.html">进入完整账号管理 ↗</a></header>
+          <p class="collector-section-note">这里只显示安全摘要，不读取或展示账号密码、Cookie 内容、TOTP 密钥。</p>
+          <div class="collector-table-wrap">
+            <table><thead><tr><th>平台 / 账号</th><th>会话状态</th><th>代理绑定</th><th>TOTP</th><th>最近更新</th></tr></thead><tbody id="collectorAccountsBody"><tr><td colspan="5">正在读取采集账号池…</td></tr></tbody></table>
+          </div>
+        </section>
+
+        <section class="collector-view" data-collector-panel="cookies">
+          <header class="collector-page-heading"><div><p>RESOURCE / AUTH STATE</p><h1>Cookie 状态</h1></div><a class="collector-secondary-link" href="/admin.html#sentimentCookies">进入 Cookie 管理 ↗</a></header>
+          <p class="collector-section-note">仅显示平台、健康状态、Cookie 数量和检测时间，不在页面暴露 Cookie 名称或值。</p>
+          <div id="collectorCookieCards" class="collector-resource-grid"><p>正在读取 Cookie 配置…</p></div>
+        </section>
+
+        <section class="collector-view" data-collector-panel="proxies">
+          <header class="collector-page-heading"><div><p>RESOURCE / NETWORK</p><h1>代理资源</h1></div><a class="collector-secondary-link" href="/admin-console.html">进入完整代理管理 ↗</a></header>
+          <p class="collector-section-note">代理密码不会进入此摘要页。账号执行前仍由服务端完成归属和健康校验。</p>
+          <div class="collector-table-wrap">
+            <table><thead><tr><th>代理名称</th><th>协议</th><th>区域</th><th>健康状态</th><th>最近检测</th></tr></thead><tbody id="collectorProxiesBody"><tr><td colspan="5">正在读取代理资源…</td></tr></tbody></table>
+          </div>
+        </section>
+
+        <section class="collector-view" data-collector-panel="tasks">
+          <header class="collector-page-heading"><div><p>QUEUE / EXECUTION</p><h1>任务队列</h1></div><button id="collectorRefreshTasks" class="collector-secondary-button" type="button">刷新队列</button></header>
+          <div class="collector-table-wrap">
+            <table><thead><tr><th>任务类型</th><th>平台 / 账号</th><th>状态</th><th>创建时间</th><th>任务编号</th></tr></thead><tbody id="collectorTasksBody"><tr><td colspan="5">正在读取任务队列…</td></tr></tbody></table>
+          </div>
+        </section>
+
+        <section class="collector-view" data-collector-panel="system">
+          <header class="collector-page-heading"><div><p>SYSTEM / BOUNDARY</p><h1>系统状态与边界</h1></div><span id="collectorSystemBadge" class="collector-system-badge">CHECKING</span></header>
+          <div id="collectorSystemChecks" class="collector-check-grid"></div>
+          <div class="collector-responsibility-matrix">
+            <div><span>旧机负责</span><strong>管理员采集账号池</strong><strong>完整 CRM</strong><strong>完整热点抓取</strong><strong>Cookie / 代理 / 任务证据</strong></div>
+            <div><span>新机负责</span><strong>用户自有账号</strong><strong>人设全量刷新</strong><strong>内容生成与发布</strong><strong>用户数据展示与商业功能</strong></div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

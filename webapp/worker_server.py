@@ -28,6 +28,9 @@ from .remote_fetch_protocol import (
     validate_idempotency_key,
     verify_request,
 )
+from .collector_accounts import CollectorAccountPool, NoCollectorAccountAvailableError
+from .collector_db import get_collector_db_path
+from .collector_vault import CollectorVault
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -38,6 +41,29 @@ ALLOWED_CAPABILITIES = {
 }
 TERMINAL_STATES = {"success", "failed", "cancelled"}
 _SAFE_JOB_ID = re.compile(r"job_[0-9a-f]{24}")
+
+
+def _truthy_environment(name: str) -> bool:
+    return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _collector_platform(payload: Mapping[str, Any]) -> str:
+    explicit = str(payload.get("platform") or "").strip().lower()
+    if explicit in {"threads", "instagram"}:
+        return explicit
+    post_snapshot = payload.get("postSnapshot")
+    source_meta = post_snapshot.get("sourceMeta") if isinstance(post_snapshot, Mapping) else None
+    nested = str(source_meta.get("platform") or "").strip().lower() if isinstance(source_meta, Mapping) else ""
+    return nested if nested in {"threads", "instagram"} else "threads"
+
+
+def _configured_collector_pool() -> CollectorAccountPool | None:
+    configured_path = str(os.getenv("COLLECTOR_DB_PATH", "") or "").strip()
+    required = _truthy_environment("TG_COLLECTOR_POOL_REQUIRED")
+    if not configured_path and not required:
+        return None
+    vault = CollectorVault()
+    return CollectorAccountPool(configured_path or get_collector_db_path(), vault)
 
 
 @dataclass(frozen=True)
@@ -409,41 +435,113 @@ def run_tool_r18_job(
     *,
     timeout_seconds: int = 120,
 ) -> dict[str, Any]:
+    runtime_payload = dict(payload)
+    capability = str(runtime_payload.pop("_workerCapability", "") or "").strip()
+    for private_field in (
+        "accountId", "account_id", "senderUsername", "sender_username",
+        "userId", "user_id", "loginUsername", "login_username",
+        "loginPassword", "login_password", "cookies", "password",
+        "access_token", "totp", "profileDir", "profile_dir", "proxyId", "proxy_id",
+    ):
+        runtime_payload.pop(private_field, None)
+    collector_pool = _configured_collector_pool()
+    if _truthy_environment("TG_COLLECTOR_POOL_REQUIRED") and collector_pool is None:
+        raise RuntimeError("collector account pool is required but unavailable")
+    holder = f"runtime_{uuid.uuid4().hex}"
+    lease: dict[str, Any] | None = None
+    runtime_environment = os.environ.copy()
+    if collector_pool is not None:
+        if not capability:
+            raise RuntimeError("collector capability is missing")
+        try:
+            lease = collector_pool.acquire(
+                capability=capability,
+                platform=_collector_platform(runtime_payload),
+                holder=holder,
+                lease_seconds=max(60, min(int(timeout_seconds) + 30, 3600)),
+            )
+        except NoCollectorAccountAvailableError as exc:
+            raise RuntimeError("no healthy collector account is currently available") from exc
+
+        def apply_profile(runtime_profile: dict[str, str]) -> None:
+            profile_dir = str(runtime_profile["profile_dir"])
+            platform = str(runtime_profile["platform"])
+            if platform == "instagram":
+                runtime_environment["PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR"] = profile_dir
+                runtime_environment["INSTAGRAM_AUTH_PROFILE_DIR"] = profile_dir
+            else:
+                runtime_environment["PERSONA_DASHBOARD_THREADS_PROFILE_DIR"] = profile_dir
+                runtime_environment["THREADS_AUTH_PROFILE_DIR"] = profile_dir
+            runtime_environment["TG_COLLECTOR_PROFILE_REQUIRED"] = "1"
+
+        try:
+            collector_pool.use_runtime_profile(
+                str(lease["lease_id"]),
+                holder=holder,
+                consumer=apply_profile,
+            )
+        except Exception:
+            with contextlib.suppress(Exception):
+                collector_pool.release(
+                    str(lease["lease_id"]),
+                    holder=holder,
+                    succeeded=False,
+                    error_code="collector_profile_unavailable",
+                )
+            raise
+
     command = [
         "node",
         "--import",
         "tsx",
         "scripts/skills/persona-hot-workflow.ts",
-        json.dumps(payload, ensure_ascii=True),
+        json.dumps(runtime_payload, ensure_ascii=True),
     ]
-    process = subprocess.Popen(
-        command,
-        cwd=str(ROOT_DIR / "tool_r18"),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        start_new_session=os.name != "nt",
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
-    )
-    deadline = time.monotonic() + max(30, min(int(timeout_seconds), 180))
-    while process.poll() is None:
-        if cancel_event.wait(0.2):
-            _terminate_process(process)
-            raise RuntimeError("worker job cancelled")
-        if time.monotonic() >= deadline:
-            _terminate_process(process)
-            raise TimeoutError("worker job timed out")
-    stdout, stderr = process.communicate()
-    parsed = _parse_json_output(stdout)
-    if process.returncode != 0:
-        detail = str((parsed or {}).get("error") or stderr or stdout or "worker failed").strip()
-        raise RuntimeError(detail[:1000])
-    if not isinstance(parsed, dict):
-        raise RuntimeError("worker returned invalid JSON")
-    if parsed.get("ok") is False:
-        raise RuntimeError(str(parsed.get("error") or "worker failed")[:1000])
-    return parsed
+    succeeded = False
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(ROOT_DIR / "tool_r18"),
+            env=runtime_environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+        )
+        deadline = time.monotonic() + max(30, min(int(timeout_seconds), 180))
+        while process.poll() is None:
+            if cancel_event.wait(0.2):
+                _terminate_process(process)
+                raise RuntimeError("worker job cancelled")
+            if time.monotonic() >= deadline:
+                _terminate_process(process)
+                raise TimeoutError("worker job timed out")
+        stdout, stderr = process.communicate()
+        parsed = _parse_json_output(stdout)
+        if process.returncode != 0:
+            detail = str((parsed or {}).get("error") or stderr or stdout or "worker failed").strip()
+            raise RuntimeError(detail[:1000])
+        if not isinstance(parsed, dict):
+            raise RuntimeError("worker returned invalid JSON")
+        if parsed.get("ok") is False:
+            raise RuntimeError(str(parsed.get("error") or "worker failed")[:1000])
+        succeeded = True
+        return parsed
+    finally:
+        if collector_pool is not None and lease is not None:
+            with contextlib.suppress(Exception):
+                collector_pool.release(
+                    str(lease["lease_id"]),
+                    holder=holder,
+                    succeeded=succeeded,
+                    error_code="worker_execution_failed",
+                    success_cooldown_seconds=2,
+                    failure_cooldown_seconds=30,
+                    failure_threshold=3,
+                    circuit_seconds=300,
+                )
 
 
 class WorkerRuntime:
@@ -560,9 +658,28 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
             raise ProtocolError("post metric refresh must be output-only")
         if not isinstance(post_snapshot, dict) or str(post_snapshot.get("id") or "").strip() != post_id:
             raise ProtocolError("current persona post snapshot is required")
-    normalized.pop("cookies", None)
-    normalized.pop("password", None)
-    normalized.pop("access_token", None)
+    for private_field in (
+        "accountId",
+        "account_id",
+        "senderUsername",
+        "sender_username",
+        "userId",
+        "user_id",
+        "loginUsername",
+        "login_username",
+        "loginPassword",
+        "login_password",
+        "cookies",
+        "password",
+        "access_token",
+        "totp",
+        "profileDir",
+        "profile_dir",
+        "proxyId",
+        "proxy_id",
+    ):
+        normalized.pop(private_field, None)
+    normalized["_workerCapability"] = capability
     return capability, unit_id, normalized
 
 

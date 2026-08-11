@@ -8,6 +8,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from webapp.remote_fetch_protocol import (
     ProtocolError,
@@ -21,6 +22,7 @@ from webapp.worker_server import (
     WorkerSettings,
     _validate_envelope,
     create_worker_app,
+    run_tool_r18_job,
 )
 
 
@@ -283,12 +285,21 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                     "liveOnly": True,
                     "recordShown": False,
                     "cookies": ["must-not-cross-control-boundary"],
+                    "accountId": "new-host-account",
+                    "senderUsername": "new-host-user",
+                    "user_id": 42,
+                    "profile_dir": "/new-host/private-profile",
                 },
             }
         )
         self.assertEqual(capability, "persona.hot_candidates.v1")
         self.assertEqual(unit_id, "archive_12345678")
         self.assertNotIn("cookies", payload)
+        self.assertNotIn("accountId", payload)
+        self.assertNotIn("senderUsername", payload)
+        self.assertNotIn("user_id", payload)
+        self.assertNotIn("profile_dir", payload)
+        self.assertEqual(payload["_workerCapability"], "persona.hot_candidates.v1")
         with self.assertRaises(ProtocolError):
             _validate_envelope(
                 {
@@ -297,6 +308,65 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                     "payload": {"liveOnly": False, "recordShown": False},
                 }
             )
+
+    def test_runtime_uses_only_the_leased_collector_profile(self) -> None:
+        class FakePool:
+            def __init__(self):
+                self.released = []
+
+            def acquire(self, **kwargs):
+                self.acquire_args = kwargs
+                return {"lease_id": "collease_12345678", "account": {"id": "colacct_hidden"}}
+
+            def use_runtime_profile(self, _lease_id, *, holder, consumer):
+                self.holder = holder
+                return consumer({"platform": "threads", "profile_dir": "/collector/profiles/one"})
+
+            def release(self, lease_id, **kwargs):
+                self.released.append((lease_id, kwargs))
+
+        class FakeProcess:
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+            def communicate(self):
+                return '{"ok":true,"candidates":[]}', ""
+
+        pool = FakePool()
+        observed = {}
+
+        def popen(command, **kwargs):
+            observed["command"] = command
+            observed["env"] = kwargs["env"]
+            return FakeProcess()
+
+        with (
+            patch("webapp.worker_server._configured_collector_pool", return_value=pool),
+            patch("webapp.worker_server.subprocess.Popen", side_effect=popen),
+        ):
+            result = run_tool_r18_job(
+                {
+                    "_workerCapability": "persona.hot_candidates.v1",
+                    "action": "fetch-hot-candidates",
+                    "platform": "threads",
+                    "accountId": "must-not-reach-node",
+                },
+                threading.Event(),
+            )
+
+        self.assertTrue(result["ok"])
+        sent = json.loads(observed["command"][-1])
+        self.assertNotIn("_workerCapability", sent)
+        self.assertNotIn("accountId", sent)
+        self.assertEqual(
+            observed["env"]["PERSONA_DASHBOARD_THREADS_PROFILE_DIR"],
+            "/collector/profiles/one",
+        )
+        self.assertEqual(observed["env"]["TG_COLLECTOR_PROFILE_REQUIRED"], "1")
+        self.assertEqual(pool.acquire_args["capability"], "persona.hot_candidates.v1")
+        self.assertTrue(pool.released[0][1]["succeeded"])
 
     def test_capability_requires_current_snapshot_and_hides_unimplemented_dashboard(self) -> None:
         with self.assertRaisesRegex(ProtocolError, "archive snapshot"):

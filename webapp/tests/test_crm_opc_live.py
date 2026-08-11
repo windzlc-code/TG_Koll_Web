@@ -150,6 +150,57 @@ class CRMOPCLiveAdapterTests(unittest.TestCase):
         self.assertTrue(observed["liveOnly"])
         self.assertFalse(observed["recordShown"])
 
+    def test_collector_search_uses_ephemeral_snapshot_without_tenant_account_identity(self):
+        observed = {}
+
+        def executor(request):
+            observed.update(request)
+            return self._live_result()
+
+        with db_module.db() as conn:
+            result = search_threads_live(
+                conn,
+                TenantContext(999_999, locale="zh-Hans", request_id="req-collector-1"),
+                {
+                    "query": "AI 营销",
+                    "accountId": "threads-foreign",
+                    "senderUsername": "must-not-leave-new-host",
+                    "user_id": 999_999,
+                    "cookies": [{"name": "sessionid", "value": "secret"}],
+                    "password": "secret",
+                    "totp": "secret",
+                },
+                executor=executor,
+                collector_mode=True,
+            )
+
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["source"]["accountScope"], "collector_pool")
+        self.assertNotIn("accountId", result)
+        self.assertNotIn("senderUsername", result)
+        self.assertNotIn("accountId", result["source"])
+        for forbidden in (
+            "accountId",
+            "account_id",
+            "senderUsername",
+            "sender_username",
+            "user_id",
+            "userId",
+            "cookies",
+            "password",
+            "totp",
+        ):
+            self.assertNotIn(forbidden, observed)
+        self.assertEqual(observed["accountScope"], "collector_pool")
+        self.assertTrue(observed["archiveId"].startswith("crm-search-"))
+        self.assertEqual(observed["archiveSnapshot"]["id"], observed["archiveId"])
+        self.assertEqual(observed["archiveSnapshot"]["content"], "AI 营销")
+        self.assertEqual(observed["archiveSnapshot"]["posts"], [])
+        self.assertEqual(
+            set(observed["archiveSnapshot"]),
+            {"id", "name", "content", "setup", "posts"},
+        )
+
     def test_hotspot_search_preserves_legacy_shape_and_engagement_sort(self):
         with db_module.db() as conn:
             result = search_hotspots_live(

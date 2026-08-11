@@ -499,6 +499,7 @@ def create_crm_router(
     llm_provider: Provider | None = None,
     hotspot_search_provider: Provider | None = None,
     live_search_executor: LiveSearchExecutor | None = None,
+    collector_live_search: bool = False,
 ) -> APIRouter:
     router = APIRouter(tags=["crm"])
 
@@ -775,7 +776,13 @@ def create_crm_router(
             _request_id(request),
         )
         with db() as conn:
-            return search_hotspots_live(conn, tenant, payload, executor=live_search_executor)
+            return search_hotspots_live(
+                conn,
+                tenant,
+                payload,
+                executor=live_search_executor,
+                collector_mode=collector_live_search,
+            )
 
     @router.post("/api/crm/v1/threads/search")
     def threads_search(
@@ -790,6 +797,7 @@ def create_crm_router(
                 TenantContext(target_id, str(payload.get("locale") or "zh-Hans"), _request_id(request)),
                 payload,
                 executor=live_search_executor,
+                collector_mode=collector_live_search,
             )
 
     @router.post("/api/crm/v1/opc/history/query")
@@ -2221,6 +2229,7 @@ def install_crm(
     llm_provider: Provider | None = None,
     hotspot_search_provider: Provider | None = None,
     live_search_executor: LiveSearchExecutor | None = None,
+    collector_live_search: bool = False,
 ) -> None:
     data_dir = Path(str(os.getenv("WEBAPP_DATA_DIR", "webapp_data") or "webapp_data")).resolve()
     (data_dir / "crm_media").mkdir(parents=True, exist_ok=True)
@@ -2234,5 +2243,6 @@ def install_crm(
             llm_provider=llm_provider,
             hotspot_search_provider=hotspot_search_provider,
             live_search_executor=live_search_executor,
+            collector_live_search=collector_live_search,
         )
     )

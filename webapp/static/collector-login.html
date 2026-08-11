@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN" data-collector-page="login" data-deployment-role="__DEPLOYMENT_ROLE__">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b1014" />
+    <title>管理员采集节点 · Vecto</title>
+    <link rel="stylesheet" href="/assets/collector-admin.css?v=__COLLECTOR_CSS_VERSION__" />
+    <script defer src="/assets/collector-admin.js?v=__COLLECTOR_JS_VERSION__"></script>
+  </head>
+  <body class="collector-login-page">
+    <div class="collector-noise" aria-hidden="true"></div>
+    <main class="collector-login-shell">
+      <section class="collector-login-brief" aria-labelledby="collector-login-title">
+        <div class="collector-node-mark" aria-hidden="true">
+          <span>V</span><i></i>
+        </div>
+        <p class="collector-kicker">VECTO / CAPTURE OPERATIONS</p>
+        <h1 id="collector-login-title">管理员<br />采集节点</h1>
+        <p class="collector-login-lead">
+          独立于用户产品站的内部执行中心。负责管理员采集账号池、CRM 与热点数据抓取。
+        </p>
+        <div class="collector-boundary-tape">
+          <strong>边界锁定</strong>
+          <span>用户账号与人设全量刷新留在新机</span>
+        </div>
+        <dl class="collector-login-facts">
+          <div><dt>节点角色</dt><dd>管理员采集执行</dd></div>
+          <div><dt>保留模块</dt><dd>CRM / 热点抓取</dd></div>
+          <div><dt>访问等级</dt><dd>ADMIN ONLY</dd></div>
+        </dl>
+      </section>
+
+      <section class="collector-login-panel" aria-label="管理员登录">
+        <div class="collector-panel-index">NODE AUTH / 01</div>
+        <div class="collector-login-status"><i></i><span>等待管理员身份校验</span></div>
+        <h2>进入采集运营中心</h2>
+        <p>此入口不接受普通用户账号。所有登录与关键操作均进入审计记录。</p>
+
+        <form id="collectorLoginForm" class="collector-login-form" novalidate>
+          <label>
+            <span>管理员账号</span>
+            <input id="collectorUsername" name="username" autocomplete="username" maxlength="160" required />
+          </label>
+          <label>
+            <span>密码</span>
+            <input id="collectorPassword" name="password" type="password" autocomplete="current-password" maxlength="256" required />
+          </label>
+          <label>
+            <span>动态验证码 <small>已启用 MFA 时填写</small></span>
+            <input id="collectorMfaCode" name="mfa_code" inputmode="numeric" autocomplete="one-time-code" maxlength="32" />
+          </label>
+          <label class="collector-check-row">
+            <input id="collectorRemember" name="remember_me" type="checkbox" />
+            <span>在受信任的管理设备上保持登录</span>
+          </label>
+          <button class="collector-primary-button" type="submit">
+            <span>验证并进入节点</span><b aria-hidden="true">→</b>
+          </button>
+          <div id="collectorLoginMessage" class="collector-form-message" role="status" aria-live="polite"></div>
+        </form>
+
+        <footer>
+          <span>OLD NODE</span>
+          <span>INTERNAL CONTROL PLANE</span>
+        </footer>
+      </section>
+    </main>
+  </body>
+</html>

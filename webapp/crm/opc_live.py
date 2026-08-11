@@ -36,6 +36,8 @@ HISTORY_SOURCE_KIND = "tenant_database_history"
 
 LiveSearchExecutor = Callable[[dict[str, Any]], Mapping[str, Any]]
 
+COLLECTOR_ACCOUNT_SCOPE = "collector_pool"
+
 
 def _clean(value: Any, maximum: int) -> str:
     return str(value or "").replace("\x00", "").strip()[:maximum]
@@ -145,6 +147,40 @@ def _tenant_threads_account(
     return account
 
 
+def _collector_search_archive(
+    tenant: TenantContext,
+    *,
+    query: str,
+) -> tuple[str, dict[str, Any]]:
+    """Build an ephemeral search context without tenant/account identity.
+
+    The old-host collector only needs enough persona-shaped context to reuse the
+    hot-search strategy.  The digest deliberately excludes ``tenant.user_id``;
+    account selection and credential ownership belong exclusively to the
+    collector host.
+    """
+
+    request_id = _clean(tenant.request_id, 160)
+    locale = _clean(tenant.locale, 40)
+    digest = hashlib.sha256(
+        f"{request_id}\x00{query}\x00{time.time_ns()}".encode("utf-8")
+    ).hexdigest()[:24]
+    archive_id = f"crm-search-{digest}"
+    setup: dict[str, Any] = {
+        "customTopic": query,
+        "trendTopics": [query],
+    }
+    if locale:
+        setup["locale"] = locale
+    return archive_id, {
+        "id": archive_id,
+        "name": "CRM live search",
+        "content": query,
+        "setup": setup,
+        "posts": [],
+    }
+
+
 def _normalize_live_row(row: Mapping[str, Any], *, query: str) -> dict[str, Any] | None:
     source_url = _threads_url(
         row.get("sourceUrl")
@@ -248,12 +284,14 @@ def search_threads_live(
     payload: Mapping[str, Any],
     *,
     executor: LiveSearchExecutor | None,
+    collector_mode: bool = False,
 ) -> dict[str, Any]:
     """Run a tenant-scoped Threads query through TG's existing live executor.
 
     The function never returns cached OPC history as a live result.  An empty
     attested live search is returned as an empty list rather than fabricated or
-    history-backed posts.
+    history-backed posts.  ``collector_mode`` keeps tenant ownership on this
+    host while delegating capture-account selection to the remote collector.
     """
 
     query = _clean(payload.get("query") or payload.get("search"), 300)
@@ -266,11 +304,17 @@ def search_threads_live(
             status_code=409,
             details={"reason": "live_executor_unconfigured"},
         )
-    account = _tenant_threads_account(
-        conn,
-        tenant,
-        payload.get("accountId") or payload.get("account_id"),
-    )
+    account: dict[str, Any] | None = None
+    if collector_mode:
+        archive_id, archive_snapshot = _collector_search_archive(tenant, query=query)
+    else:
+        account = _tenant_threads_account(
+            conn,
+            tenant,
+            payload.get("accountId") or payload.get("account_id"),
+        )
+        archive_id = _clean(account.get("persona_id"), 160)
+        archive_snapshot = None
     limit = _integer(payload.get("limit"), default=30, minimum=3, maximum=MAX_HOTSPOT_RESULTS)
     scroll_rounds = _integer(
         payload.get("scrollRounds") or payload.get("scroll_rounds"),
@@ -288,9 +332,7 @@ def search_threads_live(
         "action": "fetch-hot-candidates",
         "operation": "crm_threads_live_search",
         "schemaVersion": THREADS_SEARCH_SCHEMA,
-        "archiveId": _clean(account.get("persona_id"), 160),
-        "accountId": str(account["id"]),
-        "senderUsername": _clean(account.get("username"), 120).lstrip("@"),
+        "archiveId": archive_id,
         "query": query,
         "prompt": query,
         "keywords": [query],
@@ -307,6 +349,13 @@ def search_threads_live(
         "liveOnly": True,
         "requestId": tenant.request_id,
     }
+    if collector_mode:
+        request["archiveSnapshot"] = archive_snapshot
+        request["accountScope"] = COLLECTOR_ACCOUNT_SCOPE
+    else:
+        assert account is not None
+        request["accountId"] = str(account["id"])
+        request["senderUsername"] = _clean(account.get("username"), 120).lstrip("@")
     try:
         raw = executor(dict(request))
         if inspect.isawaitable(raw):
@@ -366,12 +415,10 @@ def search_threads_live(
             warning_items.append(capacity_warning)
     search_url = f"https://www.threads.com/search?q={quote_plus(query)}"
     executed_at = _iso_now()
-    return {
+    response = {
         "schemaVersion": THREADS_SEARCH_SCHEMA,
         "query": query,
         "platform": "threads",
-        "accountId": str(account["id"]),
-        "senderUsername": request["senderUsername"],
         "data": rows,
         "count": len(rows),
         "limit": limit,
@@ -386,7 +433,6 @@ def search_threads_live(
             "provider": provider,
             "executorMaxResults": executor_max_results,
             "executedAt": executed_at,
-            "accountId": str(account["id"]),
         },
         "request": {
             "scrollRounds": scroll_rounds,
@@ -396,6 +442,14 @@ def search_threads_live(
             "recordShown": False,
         },
     }
+    if collector_mode:
+        response["source"]["accountScope"] = COLLECTOR_ACCOUNT_SCOPE
+    else:
+        assert account is not None
+        response["accountId"] = str(account["id"])
+        response["senderUsername"] = str(request["senderUsername"])
+        response["source"]["accountId"] = str(account["id"])
+    return response
 
 
 def search_hotspots_live(
@@ -404,6 +458,7 @@ def search_hotspots_live(
     payload: Mapping[str, Any],
     *,
     executor: LiveSearchExecutor | None,
+    collector_mode: bool = False,
 ) -> dict[str, Any]:
     """Preserve the legacy hotspot response while using only live Threads rows."""
 
@@ -416,7 +471,13 @@ def search_hotspots_live(
         for key in ("accountId", "account_id", "delayMs", "searchMode", "freshnessDays"):
             if key in payload:
                 merged[key] = payload[key]
-        result = search_threads_live(conn, tenant, merged, executor=executor)
+        result = search_threads_live(
+            conn,
+            tenant,
+            merged,
+            executor=executor,
+            collector_mode=collector_mode,
+        )
         captured.update(result)
         return result
 

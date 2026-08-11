@@ -236,6 +236,89 @@ class RemoteFetchControlTests(unittest.TestCase):
                     self.assertTrue(client.calls[-1]["unit_id"].startswith("unit_"))
         self.assertEqual(server._PERSONA_HOT_REMOTE_JOB_IDS, {})
 
+    def test_remote_crm_payload_is_allowlisted_and_contains_only_ephemeral_snapshot(self) -> None:
+        client = _FakeRemoteFetchClient()
+        payload = {
+            "action": "fetch-hot-candidates",
+            "operation": "crm_threads_live_search",
+            "archiveId": "crm-search-safe1234",
+            "archiveSnapshot": {
+                "id": "crm-search-safe1234",
+                "name": "CRM live search",
+                "content": "AI marketing",
+                "setup": {
+                    "customTopic": "AI marketing",
+                    "trendTopics": ["AI marketing"],
+                    "locale": "zh-Hans",
+                    "accountManagement": {"password": "must-not-leak"},
+                    "api_token": "must-not-leak",
+                },
+                "accountManagement": {"totp": "must-not-leak"},
+                "posts": [{"accountId": "must-not-leak"}],
+            },
+            "accountId": "tenant-account",
+            "account_id": "tenant-account",
+            "senderUsername": "tenant-sender",
+            "sender_username": "tenant-sender",
+            "user_id": 42,
+            "userId": 42,
+            "cookies": [{"name": "sessionid", "value": "must-not-leak"}],
+            "password": "must-not-leak",
+            "totp": "must-not-leak",
+            "query": "AI marketing",
+            "prompt": "AI marketing",
+            "keywords": ["AI marketing"],
+            "platform": "threads",
+            "liveOnly": True,
+            "recordShown": False,
+        }
+        with (
+            patch.object(server, "configured_remote_fetch_client", return_value=client),
+            patch.dict(os.environ, {"TG_REMOTE_FETCH_MODE": "remote_required"}),
+        ):
+            server._run_remote_persona_hot_workflow(payload, timeout_seconds=60)
+
+        sent = client.calls[-1]["payload"]
+        serialized = json.dumps(sent, ensure_ascii=False)
+        for forbidden in (
+            "accountId",
+            "account_id",
+            "senderUsername",
+            "sender_username",
+            "user_id",
+            "userId",
+            "cookies",
+            "password",
+            "totp",
+            "accountManagement",
+            "api_token",
+            "must-not-leak",
+        ):
+            self.assertNotIn(forbidden, serialized)
+        self.assertEqual(sent["archiveSnapshot"], {
+            "id": "crm-search-safe1234",
+            "name": "CRM live search",
+            "content": "AI marketing",
+            "setup": {
+                "customTopic": "AI marketing",
+                "trendTopics": ["AI marketing"],
+                "locale": "zh-Hans",
+            },
+            "posts": [],
+        })
+
+    def test_crm_collector_mode_defaults_only_for_remote_required_and_can_be_overridden(self) -> None:
+        with patch.dict(os.environ, {"TG_REMOTE_FETCH_MODE": "local"}, clear=True):
+            self.assertFalse(server._crm_collector_live_search_enabled())
+        with patch.dict(os.environ, {"TG_REMOTE_FETCH_MODE": "remote_required"}, clear=True):
+            self.assertTrue(server._crm_collector_live_search_enabled())
+        with patch.dict(
+            os.environ,
+            {"TG_REMOTE_FETCH_MODE": "remote_required", "TG_CRM_COLLECTOR_MODE": "false"},
+            clear=True,
+        ):
+            self.assertFalse(server._crm_collector_live_search_enabled())
+
     def test_non_capture_keyword_generation_stays_on_new_server(self) -> None:
         client = _FakeRemoteFetchClient()
         with (

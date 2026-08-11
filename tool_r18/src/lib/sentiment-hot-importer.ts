@@ -8140,6 +8140,9 @@ function readManagedThreadsAccountCookies(): any[] {
     const preferredCookies = readThreadsCookiesFromProfileDir(preferredProfileDir);
     if (hasValidThreadsSessionCookie(preferredCookies)) return preferredCookies;
   }
+  if (/^(?:1|true|yes|on)$/i.test(cleanText(process.env.TG_COLLECTOR_PROFILE_REQUIRED))) {
+    return [];
+  }
   const dataDirs = [
     cleanText(process.env.WEBAPP_DATA_DIR),
     "/data/webapp_data",
@@ -8188,6 +8191,9 @@ function readManagedInstagramAccountCookies(): any[] {
   if (preferredProfileDir) {
     const preferredCookies = readInstagramCookiesFromProfileDir(preferredProfileDir);
     if (hasValidInstagramSessionCookie(preferredCookies)) return preferredCookies;
+  }
+  if (/^(?:1|true|yes|on)$/i.test(cleanText(process.env.TG_COLLECTOR_PROFILE_REQUIRED))) {
+    return [];
   }
   const dataDirs = [
     cleanText(process.env.WEBAPP_DATA_DIR),

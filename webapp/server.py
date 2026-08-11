@@ -61,6 +61,8 @@ from .auth import (
     verify_password,
 )
 from .db import db, get_admin_config, init_db, set_admin_config
+from .deployment import deployment_boundary, is_collector_deployment
+from .collector_api import register_collector_routes
 from .auth_email import (
     VERIFICATION_RESEND_SECONDS,
     VERIFICATION_TTL_SECONDS,
@@ -4488,6 +4490,7 @@ def _extract_download_paths(output_data: dict[str, Any]) -> list[str]:
     if not isinstance(output_data, dict):
         return []
     candidates: list[Any] = [
+        output_data.get("preview_paths"),
         output_data.get("download_paths"),
         output_data.get("image_paths"),
         output_data.get("video_paths"),
@@ -4559,6 +4562,64 @@ def _task_output_media_path(task_id: str, index: int, user: dict[str, Any]) -> P
     if not path.is_file():
         raise HTTPException(status_code=404, detail="任务媒体文件不存在。")
     return path
+
+
+def _resolve_persona_post_image_edit_source(
+    value: Any,
+    *,
+    user: dict[str, Any],
+    archive_id: str,
+    post_id: str,
+) -> tuple[dict[str, Any], str, str]:
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=400, detail="媒体修改缺少有效的源图片。")
+    task_id = str(value.get("task_id") or value.get("taskId") or "").strip()
+    media_index_raw = value.get("media_index") if "media_index" in value else value.get("mediaIndex")
+    if not task_id or isinstance(media_index_raw, bool):
+        raise HTTPException(status_code=400, detail="媒体修改缺少有效的源图片。")
+    try:
+        media_index = int(media_index_raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="媒体修改的源图片序号无效。") from exc
+    if media_index < 0:
+        raise HTTPException(status_code=400, detail="媒体修改的源图片序号无效。")
+
+    with db() as conn:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="媒体修改的源任务不存在。")
+    source_task = dict(row)
+    _ensure_user_can_access_task(user, source_task)
+    if str(source_task.get("type") or "").strip() != "persona_post_image":
+        raise HTTPException(status_code=400, detail="媒体修改只能使用已生成的推文配图。")
+    if str(source_task.get("status") or "").strip().lower() != "success":
+        raise HTTPException(status_code=409, detail="媒体修改的源图片任务尚未成功完成。")
+    source_input = _json_loads(source_task.get("input_json"), {})
+    if not isinstance(source_input, dict):
+        source_input = {}
+    if (
+        str(source_input.get("related_persona_id") or "").strip() != str(archive_id or "").strip()
+        or str(source_input.get("related_post_id") or "").strip() != str(post_id or "").strip()
+    ):
+        raise HTTPException(status_code=403, detail="媒体修改的源图片不属于当前人设和草稿。")
+    source_output = _json_loads(source_task.get("output_json"), {})
+    source_paths = _extract_download_paths(source_output if isinstance(source_output, dict) else {})
+    if media_index >= len(source_paths):
+        raise HTTPException(status_code=400, detail="媒体修改的源图片不存在，请刷新后重试。")
+    source_path = Path(source_paths[media_index]).expanduser().resolve()
+    if (
+        not source_path.is_file()
+        or source_path.suffix.lower() not in IMAGE_EXTS
+        or not _is_allowed_dashboard_media_path(source_path)
+    ):
+        raise HTTPException(status_code=400, detail="媒体修改的源文件不是可用图片。")
+    source_ratio = str((source_output if isinstance(source_output, dict) else {}).get("aspect_ratio") or "").strip()
+    if source_ratio not in _PERSONA_POST_IMAGE_ASPECT_RATIOS:
+        source_ratio = ""
+    return {
+        "task_id": task_id,
+        "media_index": media_index,
+    }, str(source_path), source_ratio
 
 
 def _serve_task_output_media(task_id: str, index: int, user: dict[str, Any]) -> FileResponse:
@@ -5693,6 +5754,8 @@ def _public_login_location(return_url: str = "/console.html") -> str:
 
 def _public_admin_login_location(return_url: str = "/admin") -> str:
     candidate = _role_safe_return_url(return_url, "/admin", admin=True)
+    if is_collector_deployment():
+        return f"/collector-login.html?return_url={quote(candidate, safe='')}"
     return f"/?login=1&return_url={quote(candidate, safe='')}"
 
 
@@ -10656,6 +10719,21 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     source_content = generation_content or str(post.get("content") or "").strip()
     if not source_content and not prompt:
         raise RuntimeError("推文配图缺少用于生成的正文或提示词。")
+    reference_image_path = str(payload.get("_reference_image_path") or "").strip()
+    edit_source_copy = ""
+    if reference_image_path:
+        source_path = Path(reference_image_path).expanduser().resolve()
+        if (
+            not source_path.is_file()
+            or source_path.suffix.lower() not in IMAGE_EXTS
+            or not _is_allowed_dashboard_media_path(source_path)
+        ):
+            raise RuntimeError("媒体修改的源图片已失效，请重新选择。")
+        edit_media_dir = _persona_task_media_dir(task_id)
+        edit_media_dir.mkdir(parents=True, exist_ok=True)
+        source_copy = edit_media_dir / f"persona_post_source{source_path.suffix.lower() or '.png'}"
+        shutil.copy2(source_path, source_copy)
+        edit_source_copy = str(source_copy)
     archive_load_ms = round((time.perf_counter() - started_at) * 1000, 1)
     aspect_started_at = time.perf_counter()
     try:
@@ -10674,6 +10752,7 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         "customPrompt": prompt or None,
         "aspectRatio": aspect_ratio,
         "mode": "auto",
+        "referenceImageUrl": edit_source_copy or None,
         "referenceSheetUrl": _persona_reference_image_input_for_cli(archive) or None,
         "generateReferenceSheet": False,
         "dryRun": False,
@@ -10683,6 +10762,7 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     config_sync_ms = round((time.perf_counter() - config_started_at) * 1000, 1)
     command = ["node", "--import", "tsx", "scripts/skills/generate-persona-images.ts", json.dumps(cli_payload, ensure_ascii=False)]
     media_base_url = f"/api/tasks/{quote(str(task_id).strip(), safe='')}/media"
+    media_index_offset = 1 if edit_source_copy else 0
 
     def generate_image(index: int) -> tuple[int, str, str, dict[str, Any]]:
         provider_started_at = time.perf_counter()
@@ -10722,7 +10802,7 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
             "persist_ms": persist_ms,
             "provider": data.get("timings") if isinstance(data.get("timings"), dict) else {},
         }
-        return index, saved_path, f"{media_base_url}/{index - 1}", timing_item
+        return index, saved_path, f"{media_base_url}/{media_index_offset + index - 1}", timing_item
 
     provider_wall_started_at = time.perf_counter()
     try:
@@ -10767,10 +10847,13 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         "ok": True,
         "message": "推文配图生成完成",
         "download_path": image_paths[0],
+        "preview_paths": [edit_source_copy, *image_paths] if edit_source_copy else image_paths,
         "image_paths": image_paths,
         "image_url": image_urls[0],
         "image_urls": image_urls,
         "image_count": len(image_paths),
+        "image_edit_mode": bool(edit_source_copy),
+        "edit_source": payload.get("edit_source") if edit_source_copy else None,
         "aspect_ratio": aspect_ratio,
         "aspect_ratio_selection": aspect_ratio_selection,
         "timings": compatible_timings,
@@ -14141,6 +14224,29 @@ _REMOTE_FETCH_SAFE_SETUP_FIELDS = frozenset({
     "region",
 })
 
+_REMOTE_CRM_FETCH_FIELDS = frozenset({
+    "action",
+    "operation",
+    "schemaVersion",
+    "archiveId",
+    "query",
+    "prompt",
+    "keywords",
+    "platform",
+    "limit",
+    "scrollRounds",
+    "delayMs",
+    "browserMode",
+    "searchMode",
+    "freshnessDays",
+    "freshnessPolicy",
+    "refresh",
+    "recordShown",
+    "liveOnly",
+    "writingLocale",
+    "accountScope",
+})
+
 
 def _remote_fetch_safe_setup_value(value: Any) -> Any:
     if value is None or isinstance(value, (str, bool, int, float)):
@@ -14148,6 +14254,65 @@ def _remote_fetch_safe_setup_value(value: Any) -> Any:
     if isinstance(value, list) and all(isinstance(item, str) for item in value):
         return list(value)
     return None
+
+
+def _remote_fetch_safe_archive_value(value: Any, archive_id: str) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    clean_id = str(archive_id or "").strip()
+    if not clean_id or str(value.get("id") or "").strip() != clean_id:
+        return None
+    raw_setup = value.get("setup") if isinstance(value.get("setup"), dict) else {}
+    safe_setup = {
+        key: safe_value
+        for key in _REMOTE_FETCH_SAFE_SETUP_FIELDS
+        if key in raw_setup
+        and (safe_value := _remote_fetch_safe_setup_value(raw_setup.get(key))) is not None
+    }
+    return {
+        "id": clean_id,
+        "name": str(value.get("name") or "")[:200],
+        "content": str(value.get("content") or "")[:4_000],
+        "setup": safe_setup,
+        "posts": [],
+    }
+
+
+def _remote_fetch_crm_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the complete allowlist for an old-host CRM collector request."""
+
+    archive_id = str(payload.get("archiveId") or "").strip()
+    remote_payload: dict[str, Any] = {}
+    for key in _REMOTE_CRM_FETCH_FIELDS:
+        value = payload.get(key)
+        if isinstance(value, (str, bool, int, float)):
+            remote_payload[key] = value
+        elif key == "keywords" and isinstance(value, list):
+            remote_payload[key] = [
+                str(item)[:300]
+                for item in value[:20]
+                if isinstance(item, str) and str(item).strip()
+            ]
+    snapshot = _remote_fetch_safe_archive_value(payload.get("archiveSnapshot"), archive_id)
+    if snapshot is None and archive_id:
+        query = str(payload.get("query") or payload.get("prompt") or "")[:300]
+        snapshot = {
+            "id": archive_id,
+            "name": "CRM live search",
+            "content": query,
+            "setup": {"customTopic": query, "trendTopics": [query]} if query else {},
+            "posts": [],
+        }
+    if snapshot is not None:
+        remote_payload["archiveSnapshot"] = snapshot
+    return remote_payload
+
+
+def _crm_collector_live_search_enabled() -> bool:
+    explicit = str(os.getenv("TG_CRM_COLLECTOR_MODE") or "").strip().lower()
+    if explicit:
+        return explicit in {"1", "true", "yes", "on", "collector", "remote"}
+    return configured_remote_fetch_mode() == "remote_required"
 
 
 def _remote_fetch_archive_snapshot(archive_id: str) -> dict[str, Any] | None:
@@ -14158,24 +14323,15 @@ def _remote_fetch_archive_snapshot(archive_id: str) -> dict[str, Any] | None:
     archive = _find_persona_archive(archives, clean_id)
     if not isinstance(archive, dict):
         return None
-    raw_setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
-    safe_setup = {
-        key: safe_value
-        for key in _REMOTE_FETCH_SAFE_SETUP_FIELDS
-        if key in raw_setup
-        and (safe_value := _remote_fetch_safe_setup_value(raw_setup.get(key))) is not None
-    }
     # Capture only needs these business fields and a small allowlisted setup.
     # Never copy account management, tokens, metrics, drafts, or publish history.
-    return {
-        "id": clean_id,
-        "name": str(archive.get("name") or ""),
-        "content": str(archive.get("content") or ""),
-        "createdAt": str(archive.get("createdAt") or ""),
-        "updatedAt": str(archive.get("updatedAt") or ""),
-        "setup": safe_setup,
-        "posts": [],
-    }
+    safe_archive = _remote_fetch_safe_archive_value(archive, clean_id)
+    if safe_archive is not None:
+        safe_archive["name"] = str(archive.get("name") or "")
+        safe_archive["content"] = str(archive.get("content") or "")
+        safe_archive["createdAt"] = str(archive.get("createdAt") or "")
+        safe_archive["updatedAt"] = str(archive.get("updatedAt") or "")
+    return safe_archive
 
 
 def _remote_fetch_post_snapshot(archive_id: str, post_id: str) -> dict[str, Any] | None:
@@ -14243,10 +14399,13 @@ def _run_remote_persona_hot_workflow(
     if not capability:
         return None
     archive_id = str(payload.get("archiveId") or "").strip()
-    remote_payload = dict(payload)
-    archive_snapshot = _remote_fetch_archive_snapshot(archive_id)
-    if archive_snapshot is not None:
-        remote_payload["archiveSnapshot"] = archive_snapshot
+    if capability == "crm.threads_live_search.v1":
+        remote_payload = _remote_fetch_crm_payload(payload)
+    else:
+        remote_payload = dict(payload)
+        archive_snapshot = _remote_fetch_archive_snapshot(archive_id)
+        if archive_snapshot is not None:
+            remote_payload["archiveSnapshot"] = archive_snapshot
     if capability == "persona.hot_post_metrics.v1":
         post_snapshot = _remote_fetch_post_snapshot(
             archive_id,
@@ -14255,14 +14414,16 @@ def _run_remote_persona_hot_workflow(
         if post_snapshot is not None:
             remote_payload["postSnapshot"] = post_snapshot
         remote_payload["outputOnly"] = True
+    unit_descriptor = {
+        "capability": capability,
+        "archiveId": archive_id,
+        "query": str(payload.get("query") or payload.get("prompt") or ""),
+    }
+    if capability != "crm.threads_live_search.v1":
+        unit_descriptor["accountId"] = str(payload.get("accountId") or "")
     unit_digest = hashlib.sha256(
         json.dumps(
-            {
-                "capability": capability,
-                "archiveId": archive_id,
-                "accountId": str(payload.get("accountId") or ""),
-                "query": str(payload.get("query") or payload.get("prompt") or ""),
-            },
+            unit_descriptor,
             ensure_ascii=True,
             sort_keys=True,
             separators=(",", ":"),
@@ -20872,6 +21033,7 @@ VIDEO_WORKBENCH_INTEGRATION = inject_video_workbench(sys.modules[__name__])
 
 
 def create_app() -> FastAPI:
+    boundary = deployment_boundary()
     _ensure_dirs()
     init_db()
     configure_social_automation(data_dir=DATA_DIR, new_id=_new_id)
@@ -20907,6 +21069,32 @@ def create_app() -> FastAPI:
         openapi_url=None,
     )
     app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+    @app.middleware("http")
+    async def enforce_deployment_boundary(request: Request, call_next):
+        path = str(request.url.path or "/")
+        if boundary.blocks(path):
+            if path.startswith("/api/"):
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "detail": "endpoint is not available on the collector deployment",
+                        "code": "collector_boundary",
+                    },
+                    headers={"X-Vecto-Deployment-Role": boundary.role},
+                )
+            return HTMLResponse(
+                status_code=404,
+                content=(
+                    "<!doctype html><meta charset='utf-8'><title>采集节点</title>"
+                    "<main><h1>此入口未在采集节点开放</h1>"
+                    "<p><a href='/collector-admin.html'>返回采集运营中心</a></p></main>"
+                ),
+                headers={"X-Vecto-Deployment-Role": boundary.role},
+            )
+        response = await call_next(request)
+        response.headers["X-Vecto-Deployment-Role"] = boundary.role
+        return response
 
     @app.exception_handler(commercial_billing.BillingError)
     async def commercial_billing_error_handler(_request: Request, exc: commercial_billing.BillingError):
@@ -21030,6 +21218,16 @@ def create_app() -> FastAPI:
 
     app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
 
+    @app.get("/api/deployment", include_in_schema=False)
+    def api_deployment_role() -> dict[str, Any]:
+        return {
+            "role": boundary.role,
+            "collector": boundary.collector,
+            "persona_full_refresh_execution": "application",
+            "crm_capture_execution": "collector" if boundary.collector else "remote_collector",
+            "hot_capture_execution": "collector" if boundary.collector else "remote_collector",
+        }
+
     @app.get("/tool_r18_uploads/{file_path:path}", include_in_schema=False)
     def tool_r18_upload(file_path: str, _user: dict[str, Any] = Depends(require_admin)) -> FileResponse:
         root = TOOL_R18_UPLOAD_ROOT.resolve()
@@ -21040,6 +21238,15 @@ def create_app() -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     def root() -> HTMLResponse:
+        if boundary.collector:
+            return _html_response_with_versions(
+                "collector-login.html",
+                replacements={
+                    "__COLLECTOR_CSS_VERSION__": _asset_version("assets", "collector-admin.css"),
+                    "__COLLECTOR_JS_VERSION__": _asset_version("assets", "collector-admin.js"),
+                    "__DEPLOYMENT_ROLE__": boundary.role,
+                },
+            )
         return _html_response_with_versions(
             "index.html",
             replacements={
@@ -21054,6 +21261,11 @@ def create_app() -> FastAPI:
 
     @app.get("/login.html", include_in_schema=False)
     def page_login(return_url: str = "/console.html") -> RedirectResponse:
+        if boundary.collector:
+            return RedirectResponse(
+                url=f"/collector-login.html?return_url={quote(_role_safe_return_url(return_url, '/admin', admin=True), safe='')}",
+                status_code=302,
+            )
         return RedirectResponse(url=_public_login_location(return_url), status_code=302)
 
     @app.get("/change-password.html", include_in_schema=False)
@@ -21095,6 +21307,15 @@ def create_app() -> FastAPI:
 
     @app.get("/index.html", include_in_schema=False)
     def page_index() -> HTMLResponse:
+        if boundary.collector:
+            return _html_response_with_versions(
+                "collector-login.html",
+                replacements={
+                    "__COLLECTOR_CSS_VERSION__": _asset_version("assets", "collector-admin.css"),
+                    "__COLLECTOR_JS_VERSION__": _asset_version("assets", "collector-admin.js"),
+                    "__DEPLOYMENT_ROLE__": boundary.role,
+                },
+            )
         return _html_response_with_versions(
             "index.html",
             replacements={
@@ -21342,6 +21563,51 @@ def create_app() -> FastAPI:
             },
         )
 
+    @app.get("/collector-login.html", include_in_schema=False)
+    def page_collector_login() -> Response:
+        if not boundary.collector:
+            return RedirectResponse(url="/", status_code=302)
+        return _html_response_with_versions(
+            "collector-login.html",
+            replacements={
+                "__COLLECTOR_CSS_VERSION__": _asset_version("assets", "collector-admin.css"),
+                "__COLLECTOR_JS_VERSION__": _asset_version("assets", "collector-admin.js"),
+                "__DEPLOYMENT_ROLE__": boundary.role,
+            },
+        )
+
+    @app.get("/collector-admin.html", include_in_schema=False)
+    def page_collector_admin(
+        admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
+    ) -> Response:
+        if not boundary.collector:
+            return RedirectResponse(url="/admin", status_code=302)
+        try:
+            user = _get_session_user_allowing_password_change(
+                admin_session_token,
+                expected_admin_session=True,
+            )
+        except HTTPException:
+            return RedirectResponse(
+                url="/collector-login.html?return_url=%2Fcollector-admin.html",
+                status_code=302,
+            )
+        if not _is_admin(user):
+            return RedirectResponse(url="/collector-login.html", status_code=302)
+        if int(user.get("must_change_password") or 0) == 1:
+            return RedirectResponse(
+                url="/change-password.html?admin_console=1&return_url=%2Fcollector-admin.html",
+                status_code=302,
+            )
+        return _html_response_with_versions(
+            "collector-admin.html",
+            replacements={
+                "__COLLECTOR_CSS_VERSION__": _asset_version("assets", "collector-admin.css"),
+                "__COLLECTOR_JS_VERSION__": _asset_version("assets", "collector-admin.js"),
+                "__DEPLOYMENT_ROLE__": boundary.role,
+            },
+        )
+
     @app.get("/admin.html", include_in_schema=False)
     def page_admin(
         request: Request,
@@ -21369,6 +21635,7 @@ def create_app() -> FastAPI:
                 "__ADMIN_JS_VERSION__": _asset_version("assets", "admin.js"),
                 "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
                 "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
+                "__DEPLOYMENT_ROLE__": boundary.role,
             },
         )
         return response
@@ -21391,7 +21658,7 @@ def create_app() -> FastAPI:
         requested_return_url = request.query_params.get("return_url")
         return_target = _role_safe_return_url(
             requested_return_url,
-            "/admin.html#admin-overview",
+            "/collector-admin.html" if boundary.collector else "/admin.html#admin-overview",
             admin=True,
         )
         if int(user.get("must_change_password") or 0) == 1:
@@ -21488,8 +21755,11 @@ def create_app() -> FastAPI:
         post_commit_callback=crm_post_commit_callback,
         llm_provider=_crm_llm_provider,
         live_search_executor=_crm_live_search_executor,
+        collector_live_search=_crm_collector_live_search_enabled(),
     )
     register_proxy_ip_admin_routes(app)
+    if boundary.collector:
+        register_collector_routes(app)
     register_notification_routes(app)
     register_video_routes(app, server_video_route_dependencies(sys.modules[__name__]))
 
@@ -25465,6 +25735,9 @@ def create_app() -> FastAPI:
 
         try:
             payload: dict[str, Any] = dict(params)
+            payload.pop("_reference_image_path", None)
+            payload.pop("reference_image_path", None)
+            payload.pop("referenceImageUrl", None)
             payload["related_persona_id"] = str(payload.get("related_persona_id") or "").strip()
             payload["related_post_id"] = str(payload.get("related_post_id") or "").strip()
             payload["prompt"] = str(payload.get("custom_prompt") or payload.get("prompt") or payload.get("prompt_text") or payload.get("message") or "").strip()
@@ -25489,6 +25762,38 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not payload["related_persona_id"] or not payload["related_post_id"]:
                 raise HTTPException(status_code=400, detail="推文配图需要关联人设 ID 和草稿 ID")
+
+            requested_edit_source = payload.get("edit_source")
+            image_edit_mode = _to_bool(payload.get("image_edit_mode"), False) or isinstance(requested_edit_source, dict)
+            trusted_edit_source: dict[str, Any] | None = None
+            trusted_reference_path = ""
+            source_aspect_ratio = ""
+            if isinstance(requested_edit_source, dict):
+                if images:
+                    raise HTTPException(status_code=400, detail="媒体修改每次只能选择一张源图片。")
+                trusted_edit_source, trusted_reference_path, source_aspect_ratio = _resolve_persona_post_image_edit_source(
+                    requested_edit_source,
+                    user=user,
+                    archive_id=payload["related_persona_id"],
+                    post_id=payload["related_post_id"],
+                )
+            elif image_edit_mode:
+                if len(images) != 1 or len(saved) != 1:
+                    raise HTTPException(status_code=400, detail="媒体修改每次只能上传一张源图片。")
+                trusted_reference_path = str(images[0].get("path") or "").strip()
+                trusted_edit_source = {"kind": "upload", "name": str(images[0].get("name") or "")[:200]}
+            if image_edit_mode:
+                if not trusted_reference_path:
+                    raise HTTPException(status_code=400, detail="媒体修改缺少有效的源图片。")
+                payload["image_count"] = 1
+                payload["image_edit_mode"] = True
+                payload["edit_source"] = trusted_edit_source
+                payload["_reference_image_path"] = trusted_reference_path
+                if payload.get("aspect_ratio") == "auto" and source_aspect_ratio:
+                    payload["aspect_ratio"] = source_aspect_ratio
+            else:
+                payload["image_edit_mode"] = False
+                payload.pop("edit_source", None)
         except HTTPException:
             _delete_task_artifacts(task_id)
             raise
