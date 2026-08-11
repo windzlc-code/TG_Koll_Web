@@ -30,11 +30,16 @@
   }
 
   async function requestJson(url, options = {}) {
+    const { headers: requestHeaders = {}, ...requestOptions } = options;
     const response = await fetch(url, {
       credentials: "same-origin",
       cache: "no-store",
-      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-      ...options,
+      ...requestOptions,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Admin-Console": "1",
+        ...requestHeaders,
+      },
     });
     let payload = {};
     try {

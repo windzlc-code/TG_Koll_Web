@@ -49,6 +49,8 @@ def test_collector_javascript_uses_only_existing_read_endpoints_for_summaries() 
 
     assert 'requestJson("/api/auth/admin-login"' in script
     assert 'requestJson("/api/auth/logout"' in script
+    assert '"X-Admin-Console": "1"' in script
+    assert 'href="/crm.html?admin_console=1"' in read_static("collector-admin.html")
     assert "Promise.all" in script
     assert "safeRequest" in script
 
