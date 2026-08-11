@@ -318,6 +318,7 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "runninghub_personal_api_key": "",
     "runninghub_enterprise_api_key": "",
     "digital_human_oral_hot_topic_mode": "strong",
+    "persona_hot_fetch_cooldown_minutes": 0,
     "video_image_model_priority_order": "gpt image 2, nano banana 2, nano banana pro",
     "video_create_audio_app_id": "",
     "video_create_video_app_id": "",
@@ -5298,6 +5299,10 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     merged["runninghub_api_key"] = personal_runninghub_key or enterprise_runninghub_key
     hot_topic_mode = str(current.get("digital_human_oral_hot_topic_mode") or "strong").strip().lower()
     merged["digital_human_oral_hot_topic_mode"] = hot_topic_mode if hot_topic_mode in {"off", "soft", "strong"} else "strong"
+    merged["persona_hot_fetch_cooldown_minutes"] = min(
+        max(_to_int(merged.get("persona_hot_fetch_cooldown_minutes"), 0), 0),
+        1440,
+    )
     video_image_models = [
         model
         for model in parse_model_list(current.get("video_image_model_priority_order"))
@@ -11852,6 +11857,7 @@ class UserProfilePayload(BaseModel):
 
 class SocialPublishPolicyPayload(BaseModel):
     limit: int = Field(default=15, ge=1, le=200)
+    hot_fetch_cooldown_minutes: int | None = Field(default=None, ge=0, le=1440)
 
 
 class EmailDeliveryPolicyPayload(BaseModel):
@@ -13964,10 +13970,12 @@ PERSONA_HOT_CANDIDATE_TASKS_LOCK = threading.Lock()
 
 def _persona_hot_fetch_cooldown_seconds() -> int:
     try:
-        configured = int(str(os.getenv("PERSONA_HOT_USER_COOLDOWN_SECONDS", "600") or "600").strip())
-    except (TypeError, ValueError):
-        configured = 600
-    return min(max(configured, 1), 86400)
+        with db() as conn:
+            runtime = _get_runtime_config(conn)
+        minutes = _to_int(runtime.get("persona_hot_fetch_cooldown_minutes"), 0)
+    except (RuntimeConfigFileError, OSError, TypeError, ValueError):
+        minutes = 0
+    return min(max(minutes, 0), 1440) * 60
 
 
 def _persona_hot_fetch_cooldown_bypassed(user: dict[str, Any]) -> bool:
@@ -13977,9 +13985,10 @@ def _persona_hot_fetch_cooldown_bypassed(user: dict[str, Any]) -> bool:
 def _persona_hot_fetch_cooldown_state(user: dict[str, Any]) -> dict[str, Any]:
     user_id = _workspace_user_id(user)
     bypassed = _persona_hot_fetch_cooldown_bypassed(user)
+    cooldown_seconds = _persona_hot_fetch_cooldown_seconds()
     now = _now_ts()
     next_allowed_at = 0
-    if not bypassed:
+    if not bypassed and cooldown_seconds > 0:
         with db() as conn:
             row = conn.execute(
                 "SELECT next_allowed_at FROM persona_hot_fetch_cooldowns WHERE user_id = ?",
@@ -13989,7 +13998,7 @@ def _persona_hot_fetch_cooldown_state(user: dict[str, Any]) -> dict[str, Any]:
     return {
         "active": not bypassed and next_allowed_at > now,
         "bypassed": bypassed,
-        "cooldown_seconds": _persona_hot_fetch_cooldown_seconds(),
+        "cooldown_seconds": cooldown_seconds,
         "remaining_seconds": max(0, next_allowed_at - now),
         "next_allowed_at": next_allowed_at,
     }
@@ -14010,8 +14019,9 @@ def _require_persona_hot_fetch_ready(user: dict[str, Any]) -> dict[str, Any]:
 def _activate_persona_hot_fetch_cooldown(user_id: int, *, bypassed: bool) -> dict[str, Any]:
     now = _now_ts()
     seconds = _persona_hot_fetch_cooldown_seconds()
-    next_allowed_at = 0 if bypassed else now + seconds
-    if not bypassed:
+    enabled = not bypassed and seconds > 0
+    next_allowed_at = now + seconds if enabled else 0
+    if enabled:
         with db() as conn:
             conn.execute(
                 """
@@ -14024,11 +14034,14 @@ def _activate_persona_hot_fetch_cooldown(user_id: int, *, bypassed: bool) -> dic
                 """,
                 (max(0, int(user_id or 0)), next_allowed_at, now, now),
             )
+    elif not bypassed:
+        with db() as conn:
+            conn.execute("DELETE FROM persona_hot_fetch_cooldowns WHERE user_id = ?", (max(0, int(user_id or 0)),))
     return {
-        "active": not bypassed,
+        "active": enabled,
         "bypassed": bypassed,
         "cooldown_seconds": seconds,
-        "remaining_seconds": seconds if not bypassed else 0,
+        "remaining_seconds": seconds if enabled else 0,
         "next_allowed_at": next_allowed_at,
     }
 
@@ -25628,7 +25641,13 @@ def create_app() -> FastAPI:
 
     @app.get("/api/admin/social_publish_policy")
     def api_admin_get_social_publish_policy(user: dict[str, Any] = Depends(require_admin)):
-        return {"ok": True, "policy": {"limit": get_daily_publish_limit()}}
+        return {
+            "ok": True,
+            "policy": {
+                "limit": get_daily_publish_limit(),
+                "hot_fetch_cooldown_minutes": _persona_hot_fetch_cooldown_seconds() // 60,
+            },
+        }
 
     @app.put("/api/admin/social_publish_policy")
     def api_admin_set_social_publish_policy(
@@ -25637,8 +25656,22 @@ def create_app() -> FastAPI:
         user: dict[str, Any] = Depends(require_admin),
     ):
         _require_same_origin(request)
-        before = {"limit": get_daily_publish_limit()}
+        before = {
+            "limit": get_daily_publish_limit(),
+            "hot_fetch_cooldown_minutes": _persona_hot_fetch_cooldown_seconds() // 60,
+        }
         policy = set_daily_publish_limit(payload.limit)
+        cooldown_minutes = before["hot_fetch_cooldown_minutes"]
+        if payload.hot_fetch_cooldown_minutes is not None:
+            cooldown_minutes = int(payload.hot_fetch_cooldown_minutes)
+            try:
+                with db() as conn:
+                    runtime = _get_runtime_config(conn)
+                runtime["persona_hot_fetch_cooldown_minutes"] = cooldown_minutes
+                _write_runtime_config_file(runtime)
+            except RuntimeConfigFileError as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+        policy["hot_fetch_cooldown_minutes"] = cooldown_minutes
         with db() as conn:
             governance.record_audit(
                 conn,

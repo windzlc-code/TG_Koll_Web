@@ -3135,17 +3135,24 @@ async function loadSocialAutomationPolicy() {
   if (el("rtSocialGlobalConcurrency")) {
     el("rtSocialGlobalConcurrency").value = String(browserSettings.max_concurrency || 3);
   }
+  if (el("rtPersonaHotFetchCooldownMinutes")) {
+    el("rtPersonaHotFetchCooldownMinutes").value = String(publishPolicy.hot_fetch_cooldown_minutes ?? 0);
+  }
   return { publishPolicy, browserSettings };
 }
 
 async function saveSocialAutomationPolicy() {
   const dailyLimit = Number.parseInt(String(el("rtSocialDailyPublishLimit")?.value || ""), 10);
   const globalConcurrency = Number.parseInt(String(el("rtSocialGlobalConcurrency")?.value || ""), 10);
+  const hotFetchCooldownMinutes = Number.parseInt(String(el("rtPersonaHotFetchCooldownMinutes")?.value || ""), 10);
   if (!Number.isInteger(dailyLimit) || dailyLimit < 1 || dailyLimit > 200) {
     throw new Error("普通用户每日发布上限必须是 1 到 200 之间的整数。");
   }
   if (!Number.isInteger(globalConcurrency) || globalConcurrency < 1 || globalConcurrency > 4) {
     throw new Error("普通用户全局并发上限必须是 1 到 4 之间的整数。");
+  }
+  if (!Number.isInteger(hotFetchCooldownMinutes) || hotFetchCooldownMinutes < 0 || hotFetchCooldownMinutes > 1440) {
+    throw new Error("热点抓取冷却必须是 0 到 1440 之间的整数分钟。");
   }
   const currentBrowserSettings = socialAutomationBrowserSettings
     || (await api("/api/persona_dashboard/automation/browser_settings"))?.settings
@@ -3154,7 +3161,10 @@ async function saveSocialAutomationPolicy() {
     api("/api/admin/social_publish_policy", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limit: dailyLimit }),
+      body: JSON.stringify({
+        limit: dailyLimit,
+        hot_fetch_cooldown_minutes: hotFetchCooldownMinutes,
+      }),
     }),
     api("/api/persona_dashboard/automation/browser_settings", {
       method: "PUT",

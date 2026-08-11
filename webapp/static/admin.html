@@ -1849,8 +1849,11 @@
               <label>普通用户全局并发上限
                 <input id="rtSocialGlobalConcurrency" type="number" min="1" max="4" step="1" value="3" inputmode="numeric">
               </label>
+              <label>热点抓取冷却（分钟）
+                <input id="rtPersonaHotFetchCooldownMinutes" type="number" min="0" max="1440" step="1" value="0" inputmode="numeric">
+              </label>
             </div>
-            <div class="small">每个普通用户最多同时运行 2 个任务，超过后自动排队；此固定保护值不在个人设置中开放。</div>
+            <div class="small">冷却时间填 0 表示关闭；管理员热点抓取不受冷却限制。每个普通用户最多同时运行 2 个任务，超过后自动排队。</div>
             <div class="admin-cleanup-actions">
               <button id="btnSaveSocialAutomationPolicy" class="primary" type="button">保存社媒保护参数</button>
             </div>

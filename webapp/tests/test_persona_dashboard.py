@@ -3981,19 +3981,37 @@ class PersonaDashboardApiTests(unittest.TestCase):
         admin_user = {"id": 1, "is_admin": 1}
         self.assertFalse(server._persona_hot_fetch_cooldown_state(regular_user)["active"])
 
-        activated = server._activate_persona_hot_fetch_cooldown(user_id, bypassed=False)
-        self.assertTrue(activated["active"])
-        self.assertGreater(activated["remaining_seconds"], 0)
-        state = server._persona_hot_fetch_cooldown_state(regular_user)
-        self.assertTrue(state["active"])
-        self.assertGreater(state["remaining_seconds"], 0)
-        with self.assertRaises(server.HTTPException) as blocked:
-            server._require_persona_hot_fetch_ready(regular_user)
-        self.assertEqual(blocked.exception.status_code, 429)
+        with mock.patch.object(server, "_persona_hot_fetch_cooldown_seconds", return_value=180):
+            activated = server._activate_persona_hot_fetch_cooldown(user_id, bypassed=False)
+            self.assertTrue(activated["active"])
+            self.assertEqual(activated["remaining_seconds"], 180)
+            state = server._persona_hot_fetch_cooldown_state(regular_user)
+            self.assertTrue(state["active"])
+            self.assertGreater(state["remaining_seconds"], 0)
+            with self.assertRaises(server.HTTPException) as blocked:
+                server._require_persona_hot_fetch_ready(regular_user)
+            self.assertEqual(blocked.exception.status_code, 429)
 
         admin_state = server._persona_hot_fetch_cooldown_state(admin_user)
         self.assertTrue(admin_state["bypassed"])
         self.assertFalse(admin_state["active"])
+
+    def test_persona_hot_cooldown_defaults_to_zero_and_can_be_configured(self):
+        with server.db() as conn:
+            runtime = server._get_runtime_config(conn)
+        self.assertEqual(runtime["persona_hot_fetch_cooldown_minutes"], 0)
+        self.assertEqual(server._persona_hot_fetch_cooldown_seconds(), 0)
+
+        runtime["persona_hot_fetch_cooldown_minutes"] = 3
+        server._write_runtime_config_file(runtime)
+        self.assertEqual(server._persona_hot_fetch_cooldown_seconds(), 180)
+
+    def test_zero_persona_hot_cooldown_does_not_block_regular_user(self):
+        user_id = 987654
+        with mock.patch.object(server, "_persona_hot_fetch_cooldown_seconds", return_value=0):
+            activated = server._activate_persona_hot_fetch_cooldown(user_id, bypassed=False)
+            self.assertFalse(activated["active"])
+            self.assertEqual(activated["remaining_seconds"], 0)
 
     def test_console_passes_prepared_keywords_to_hot_candidate_task(self):
         source = (Path(server.__file__).parent / "static" / "assets" / "console.js").read_text(encoding="utf-8")

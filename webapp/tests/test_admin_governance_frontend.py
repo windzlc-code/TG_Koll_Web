@@ -72,6 +72,7 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         for element_id in (
             "rtSocialDailyPublishLimit",
             "rtSocialGlobalConcurrency",
+            "rtPersonaHotFetchCooldownMinutes",
             "btnSaveSocialAutomationPolicy",
             "socialAutomationPolicyMsg",
         ):
@@ -82,6 +83,7 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('/api/admin/social_publish_policy', load_policy)
         self.assertIn('/api/persona_dashboard/automation/browser_settings', load_policy)
         self.assertIn('max_concurrency: globalConcurrency', save_policy)
+        self.assertIn('hot_fetch_cooldown_minutes: hotFetchCooldownMinutes', save_policy)
         self.assertIn('method: "PUT"', save_policy)
 
     def test_governance_kpis_are_shorter_without_shrinking_content(self):

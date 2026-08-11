@@ -328,11 +328,13 @@ class AccountGovernanceTests(unittest.TestCase):
         updated = admin.put(
             "/api/admin/social_publish_policy",
             headers=self.ORIGIN_HEADERS,
-            json={"limit": 7},
+            json={"limit": 7, "hot_fetch_cooldown_minutes": 3},
         )
         self.assertEqual(updated.status_code, 200, updated.text)
         self.assertEqual(updated.json()["policy"]["limit"], 7)
+        self.assertEqual(updated.json()["policy"]["hot_fetch_cooldown_minutes"], 3)
         self.assertEqual(admin.get("/api/admin/social_publish_policy").json()["policy"]["limit"], 7)
+        self.assertEqual(admin.get("/api/admin/social_publish_policy").json()["policy"]["hot_fetch_cooldown_minutes"], 3)
         with db_module.db() as conn:
             audit = conn.execute(
                 "SELECT action, risk_level, before_json, after_json FROM audit_events "
