@@ -361,14 +361,17 @@ run_worker() {
     -e "TG_FETCH_WORKER_DB=$job_mount"
     -e TG_FETCH_WORKER_AUTOCREATE=0
     -e "TOOL_R18_RUNTIME_DIR=$execution_runtime_path"
-    -e "TOOL_R18_SENTIMENT_CONFIG_PATH=/worker-runtime/$runtime_release_rel/tool_r18_runtime/sentiment-opinx/sentiment-config.json"
+    # Both runtime paths deliberately resolve through the execution-runtime
+    # symlinks. A later versioned runtime sync can then atomically move
+    # /worker-runtime/current without recreating this container.
+    -e "TOOL_R18_SENTIMENT_CONFIG_PATH=$execution_runtime_path/sentiment-opinx/sentiment-config.json"
     -e TG_FETCH_WORKER_KEYS_FILE=/data/internal/remote-fetch-keys.json
   )
-  if [[ -f "$runtime_root/$runtime_release_rel/profiles/threads/current/cookies.sqlite" ]]; then
-    args+=(-e "PERSONA_DASHBOARD_THREADS_PROFILE_DIR=/worker-runtime/$runtime_release_rel/profiles/threads/current")
+  if [[ -f "$runtime_root/current/profiles/threads/current/cookies.sqlite" ]]; then
+    args+=(-e "PERSONA_DASHBOARD_THREADS_PROFILE_DIR=/worker-runtime/current/profiles/threads/current")
   fi
-  if [[ -f "$runtime_root/$runtime_release_rel/profiles/instagram/current/cookies.sqlite" ]]; then
-    args+=(-e "PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR=/worker-runtime/$runtime_release_rel/profiles/instagram/current")
+  if [[ -f "$runtime_root/current/profiles/instagram/current/cookies.sqlite" ]]; then
+    args+=(-e "PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR=/worker-runtime/current/profiles/instagram/current")
   fi
   args+=("$image" webapp.worker_server:create_worker_app --factory --host 0.0.0.0 --port 8092)
   podman "${args[@]}"
@@ -401,7 +404,11 @@ runtime_release_rel="$(readlink "$runtime_root/current")"
 [[ "$runtime_release_rel" =~ ^releases/[A-Za-z0-9][A-Za-z0-9._-]{7,79}$ ]] ||
   die "runtime current does not point to a safe versioned release"
 runtime_snapshot_host="$runtime_root/$runtime_release_rel/tool_r18_runtime"
-runtime_snapshot_container="/worker-runtime/$runtime_release_rel/tool_r18_runtime"
+# Keep the host-side pinned path for deployment validation, but make the
+# container-side execution links follow the atomically switched current
+# pointer. This is what allows sync_capture_worker_runtime.sh to take effect
+# on the already-running worker.
+runtime_snapshot_container="/worker-runtime/current/tool_r18_runtime"
 [[ -d "$runtime_snapshot_host" ]] || die "pinned runtime snapshot is missing"
 [[ -f "$data_root/internal/remote-fetch-keys.json" ]] || die "worker key file is missing"
 [[ -d "$deps_root" ]] || die "worker node_modules mount is missing"
@@ -454,7 +461,7 @@ podman run -d --name "$candidate" --restart=no \
   -e TG_FETCH_WORKER_DB=/data/remote_fetch_worker/jobs.db \
   -e TG_FETCH_WORKER_KEYS_FILE=/data/internal/remote-fetch-keys.json \
   -e TOOL_R18_RUNTIME_DIR=/execution-runtime \
-  -e "TOOL_R18_SENTIMENT_CONFIG_PATH=$runtime_snapshot_container/sentiment-opinx/sentiment-config.json" \
+  -e "TOOL_R18_SENTIMENT_CONFIG_PATH=/execution-runtime/sentiment-opinx/sentiment-config.json" \
   "$image" webapp.worker_server:create_worker_app --factory --host 0.0.0.0 --port 8092 >/dev/null
 if ! wait_health "$candidate_port" || \
    ! hmac_canary "$candidate" release >/dev/null || \

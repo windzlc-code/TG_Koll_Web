@@ -360,6 +360,43 @@ print("signed-capabilities-ok")
 PY
 }
 
+active_runtime_canary() {
+  podman exec -i "$container" node - <<'JS'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const activeRoot = process.env.TOOL_R18_RUNTIME_DIR;
+const activeConfig = process.env.TOOL_R18_SENTIMENT_CONFIG_PATH;
+if (!activeRoot || !activeConfig) process.exit(2);
+
+const currentRoot = "/worker-runtime/current/tool_r18_runtime";
+const activeArchives = path.join(activeRoot, "persona_archives.json");
+const currentArchives = path.join(currentRoot, "persona_archives.json");
+if (fs.realpathSync(activeArchives) !== fs.realpathSync(currentArchives)) process.exit(3);
+if (
+  fs.realpathSync(activeConfig) !==
+  fs.realpathSync(path.join(currentRoot, "sentiment-opinx", "sentiment-config.json"))
+) process.exit(4);
+
+const archives = JSON.parse(fs.readFileSync(activeArchives, "utf8"));
+const cache = JSON.parse(fs.readFileSync(path.join(activeRoot, "persona_archives_cache.json"), "utf8"));
+const groups = JSON.parse(fs.readFileSync(path.join(activeRoot, "persona_groups.json"), "utf8"));
+const memory = JSON.parse(fs.readFileSync(path.join(activeRoot, "persona_memory.json"), "utf8"));
+if (!Array.isArray(archives) || archives.length || Object.keys(cache).length || Object.keys(groups).length || Object.keys(memory).length) {
+  process.exit(5);
+}
+
+const config = JSON.parse(fs.readFileSync(activeConfig, "utf8"));
+const profiles = config?.sentimentSearch?.browserFallback?.profiles || [];
+for (const profile of profiles) {
+  const identities = [profile?.key, profile?.platform, profile?.sourceKey]
+    .map((value) => String(value || "").trim().toLowerCase());
+  if (!identities.some((value) => value === "threads" || value === "instagram")) process.exit(6);
+}
+process.stdout.write("active-runtime-current-ok\n");
+JS
+}
+
 snapshot_canary() {
   local image="$1"
   podman run --rm --restart=no -i \
@@ -480,7 +517,10 @@ next_link="$runtime_root/.current-${snapshot_id}"
 ln -s "releases/$snapshot_id" "$next_link"
 mv -Tf "$next_link" "$runtime_root/current"
 
-if ! snapshot_canary "$image" >/dev/null || ! health_canary || ! hmac_canary >/dev/null; then
+if ! snapshot_canary "$image" >/dev/null || \
+   ! health_canary || \
+   ! hmac_canary >/dev/null || \
+   ! active_runtime_canary >/dev/null; then
   if [[ -n "$previous_target" ]]; then
     rollback_link="$runtime_root/.rollback-${snapshot_id}"
     ln -s "$previous_target" "$rollback_link"
