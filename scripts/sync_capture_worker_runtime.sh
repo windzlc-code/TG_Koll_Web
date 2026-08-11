@@ -402,7 +402,7 @@ snapshot_canary() {
   podman run --rm --restart=no -i \
     --entrypoint /opt/venv/bin/python \
     -v "$runtime_root:/worker-runtime:ro" \
-    "$image" - <<'PY'
+    "$image" - 9>&- <<'PY'
 import hashlib, json, pathlib, sqlite3
 
 root = pathlib.Path("/worker-runtime/current")

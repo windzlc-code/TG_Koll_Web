@@ -374,7 +374,9 @@ run_worker() {
     args+=(-e "PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR=/worker-runtime/current/profiles/instagram/current")
   fi
   args+=("$image" webapp.worker_server:create_worker_app --factory --host 0.0.0.0 --port 8092)
-  podman "${args[@]}"
+  # Do not let conmon inherit the deployment flock for the lifetime of the
+  # production container; only this deployment shell should own fd 9.
+  podman "${args[@]}" 9>&-
 }
 
 rollback_container() {
@@ -462,7 +464,8 @@ podman run -d --name "$candidate" --restart=no \
   -e TG_FETCH_WORKER_KEYS_FILE=/data/internal/remote-fetch-keys.json \
   -e TOOL_R18_RUNTIME_DIR=/execution-runtime \
   -e "TOOL_R18_SENTIMENT_CONFIG_PATH=/execution-runtime/sentiment-opinx/sentiment-config.json" \
-  "$image" webapp.worker_server:create_worker_app --factory --host 0.0.0.0 --port 8092 >/dev/null
+  "$image" webapp.worker_server:create_worker_app --factory --host 0.0.0.0 --port 8092 \
+  9>&- >/dev/null
 if ! wait_health "$candidate_port" || \
    ! hmac_canary "$candidate" release >/dev/null || \
    ! execution_runtime_canary "$candidate" /execution-runtime "$runtime_snapshot_container" >/dev/null; then
