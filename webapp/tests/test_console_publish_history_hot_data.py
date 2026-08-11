@@ -16,6 +16,32 @@ def function_source(name: str, next_name: str) -> str:
 
 
 class ConsolePublishHistoryHotDataTests(unittest.TestCase):
+    def test_post_order_badges_share_the_scaled_mobile_size(self):
+        publish_index = CONSOLE_CSS[
+            CONSOLE_CSS.index(".publish-post-card-index {"):
+            CONSOLE_CSS.index(".publish-post-card-copy span", CONSOLE_CSS.index(".publish-post-card-index {"))
+        ]
+        generated_index = CONSOLE_CSS[
+            CONSOLE_CSS.index(".persona-generated-selection-index,"):
+            CONSOLE_CSS.index(".persona-generated-selection-index {", CONSOLE_CSS.index(".persona-generated-selection-index,"))
+        ]
+
+        for style in (publish_index, generated_index):
+            self.assertIn("width: 19px;", style)
+            self.assertIn("min-width: 19px;", style)
+            self.assertIn("height: 19px;", style)
+            self.assertIn("min-height: 19px;", style)
+            self.assertIn("font-size: 9px;", style)
+
+    def test_active_publish_entry_tab_has_distinct_type_scale(self):
+        selector = ".console-page .shared-underline-tabs > button.is-active,"
+        start = CONSOLE_CSS.index(selector)
+        end = CONSOLE_CSS.index(".console-page .shared-underline-tabs > button.is-active::after", start)
+        active_style = CONSOLE_CSS[start:end]
+
+        self.assertIn("font-size: 16px;", active_style)
+        self.assertIn("font-weight: 900;", active_style)
+
     def test_publish_sequence_syncs_each_success_without_shortening_later_task_deadlines(self):
         watcher = function_source("watchPersonaPublishTaskSequence", "loadPersonaDraftPosts")
         loop_start = watcher.index("for (const taskId of ids)")

@@ -8080,6 +8080,8 @@ async function applyProxyMarketSmartInput({ quiet = false } = {}) {
     && (
       currentDisplayName === `${previousHost} 静态住宅代理`
       || currentDisplayName === `${normalizeProxyMarketCountry(previousCountry)?.label || previousCountry}静态住宅代理`
+      || currentDisplayName === `${previousHost} 代理IP`
+      || currentDisplayName === `${normalizeProxyMarketCountry(previousCountry)?.label || previousCountry}代理IP`
     )
   );
   const fieldMap = {
@@ -8126,8 +8128,8 @@ async function applyProxyMarketSmartInput({ quiet = false } = {}) {
       || normalizeProxyMarketCountry(parsed.country || el("proxyMarketCountry")?.value)?.label
       || "";
     el("proxyMarketDisplayName").value = countryLabel
-      ? `${countryLabel}静态住宅代理`
-      : `${host} 静态住宅代理`;
+      ? `${countryLabel}代理IP`
+      : `${host} 代理IP`;
     applied.push("display_name");
   }
   if (!applied.length) {

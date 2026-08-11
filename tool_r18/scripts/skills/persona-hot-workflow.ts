@@ -1,6 +1,9 @@
 import "@/runtime/node/browser-shim";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { installNodePersonaArchiveBridge } from "@/runtime/node/persona-archive-store";
 import { appendCustomPersonaArchivePost, listPersonaArchives, loadPersonaArchive, updatePersonaArchivePostDraft } from "@/lib/persona-archives";
+import type { PersonaArchive, PersonaArchivePost } from "@/core/archives/persona-archive-domain";
 import {
   cleanSentimentCandidateContent,
   downloadCandidateMedia,
@@ -34,6 +37,8 @@ type FetchHotCandidatesInput = {
   liveOnly?: boolean;
   memorySummaries?: string[];
   keywords?: string[];
+  /** Authoritative control-plane snapshot. When present, never read the worker's archive copy. */
+  archiveSnapshot?: PersonaArchive;
 };
 
 type PrepareHotKeywordsInput = {
@@ -44,6 +49,8 @@ type PrepareHotKeywordsInput = {
   searchMode?: "normal" | "strict";
   writingLocale?: string;
   memorySummaries?: string[];
+  /** Authoritative control-plane snapshot. When present, never read the worker's archive copy. */
+  archiveSnapshot?: PersonaArchive;
 };
 
 type ImportHotCandidatesInput = {
@@ -56,6 +63,12 @@ type RefreshHotPostInput = {
   action: "refresh-hot-post";
   archiveId: string;
   postId: string;
+  archiveSnapshot?: PersonaArchive;
+  postSnapshot?: PersonaArchivePost;
+  /** Worker mode returns a patch for the control plane and never persists locally. */
+  outputOnly?: boolean;
+  worker?: boolean;
+  executionMode?: "local" | "worker";
 };
 
 type WarmHotStrategyInput = {
@@ -124,8 +137,27 @@ function normalizeCandidate(input: Partial<SentimentHotCandidate>, index = 0): S
   };
 }
 
-async function fetchHotCandidates(input: FetchHotCandidatesInput) {
-  const archive = await loadPersonaArchive(String(input.archiveId || "").trim());
+function resolveArchiveSnapshot(input: { archiveId: string; archiveSnapshot?: PersonaArchive }): PersonaArchive | undefined {
+  if (input.archiveSnapshot === undefined || input.archiveSnapshot === null) return undefined;
+  if (typeof input.archiveSnapshot !== "object" || Array.isArray(input.archiveSnapshot)) {
+    throw new Error("archiveSnapshot must be an object.");
+  }
+  const archiveId = String(input.archiveId || "").trim();
+  const snapshotId = String(input.archiveSnapshot.id || "").trim();
+  if (!archiveId || snapshotId !== archiveId) {
+    throw new Error("archiveSnapshot does not match archiveId.");
+  }
+  return input.archiveSnapshot;
+}
+
+async function resolvePersonaArchive(input: { archiveId: string; archiveSnapshot?: PersonaArchive }): Promise<PersonaArchive | null> {
+  const snapshot = resolveArchiveSnapshot(input);
+  if (snapshot) return snapshot;
+  return loadPersonaArchive(String(input.archiveId || "").trim());
+}
+
+export async function fetchHotCandidates(input: FetchHotCandidatesInput) {
+  const archive = await resolvePersonaArchive(input);
   if (!archive) throw new Error("人设不存在。");
   const memorySummaries = Array.isArray(input.memorySummaries)
     ? input.memorySummaries.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8)
@@ -145,7 +177,7 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     freshnessPolicy: input.freshnessPolicy === "strict" ? "strict" : "legacy",
     recordShown: input.recordShown !== false,
     liveOnly: input.liveOnly === true,
-  });
+  } as Parameters<typeof fetchSentimentHotCandidates>[0]);
   return {
     ok: true,
     archiveId: archive.id,
@@ -161,8 +193,8 @@ async function fetchHotCandidates(input: FetchHotCandidatesInput) {
   };
 }
 
-async function prepareHotKeywords(input: PrepareHotKeywordsInput) {
-  const archive = await loadPersonaArchive(String(input.archiveId || "").trim());
+export async function prepareHotKeywords(input: PrepareHotKeywordsInput) {
+  const archive = await resolvePersonaArchive(input);
   if (!archive) throw new Error("人设不存在。");
   const memorySummaries = Array.isArray(input.memorySummaries)
     ? input.memorySummaries.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8)
@@ -174,7 +206,7 @@ async function prepareHotKeywords(input: PrepareHotKeywordsInput) {
     searchMode: input.searchMode === "normal" ? "normal" : "strict",
     writingLocale: String(input.writingLocale || "").trim() || undefined,
     refresh: input.refresh === true,
-  });
+  } as Parameters<typeof prepareSentimentHotKeywords>[0]);
   return {
     ok: true,
     archiveId: archive.id,
@@ -256,12 +288,27 @@ async function importHotCandidates(input: ImportHotCandidatesInput) {
   };
 }
 
-async function refreshHotPost(input: RefreshHotPostInput) {
+function resolvePostSnapshot(input: RefreshHotPostInput, archive: PersonaArchive | null): PersonaArchivePost | undefined {
+  if (input.postSnapshot !== undefined && input.postSnapshot !== null) {
+    if (typeof input.postSnapshot !== "object" || Array.isArray(input.postSnapshot)) {
+      throw new Error("postSnapshot must be an object.");
+    }
+    if (String(input.postSnapshot.id || "").trim() !== String(input.postId || "").trim()) {
+      throw new Error("postSnapshot does not match postId.");
+    }
+    return input.postSnapshot;
+  }
+  return archive?.posts?.find((item) => String(item.id || "") === String(input.postId || "").trim());
+}
+
+export async function refreshHotPost(input: RefreshHotPostInput) {
   const archiveId = String(input.archiveId || "").trim();
   const postId = String(input.postId || "").trim();
-  const archive = await loadPersonaArchive(archiveId);
+  const archiveSnapshot = resolveArchiveSnapshot(input);
+  const archive = archiveSnapshot
+    || (input.postSnapshot ? ({ id: archiveId, posts: [input.postSnapshot] } as PersonaArchive) : await loadPersonaArchive(archiveId));
   if (!archive) throw new Error("人设不存在。");
-  const post = archive.posts.find((item) => String(item.id || "") === postId);
+  const post = resolvePostSnapshot(input, archive);
   if (!post) throw new Error("草稿不存在。");
   const sourceMeta = post.sourceMeta;
   if (sourceMeta?.source !== "sentiment_hot_import" || !String(sourceMeta.sourceUrl || "").trim()) {
@@ -275,14 +322,27 @@ async function refreshHotPost(input: RefreshHotPostInput) {
     existingHotScore: sourceMeta.hotScore,
   });
   if (!refreshed.ok) throw new Error(refreshed.message);
-  const updated = await updatePersonaArchivePostDraft(archiveId, postId, {
-    sourceMetaPatch: {
-      hotScore: refreshed.hotScore,
-      metrics: { ...(sourceMeta.metrics || {}), ...(refreshed.metrics || {}) },
-      engagement: { ...(sourceMeta.engagement || {}), ...(refreshed.engagement || {}) },
-      capturedAt: new Date().toISOString(),
-    },
-  });
+  const sourceMetaPatch = {
+    hotScore: refreshed.hotScore,
+    metrics: { ...(sourceMeta.metrics || {}), ...(refreshed.metrics || {}) },
+    engagement: { ...(sourceMeta.engagement || {}), ...(refreshed.engagement || {}) },
+    capturedAt: new Date().toISOString(),
+  };
+  const outputOnly = input.outputOnly === true
+    || input.worker === true
+    || input.executionMode === "worker"
+    || Boolean(input.archiveSnapshot)
+    || Boolean(input.postSnapshot);
+  if (outputOnly) {
+    return {
+      ok: true,
+      archiveId,
+      postId,
+      outputOnly: true,
+      metricsPatch: { sourceMetaPatch },
+    };
+  }
+  const updated = await updatePersonaArchivePostDraft(archiveId, postId, { sourceMetaPatch });
   if (!updated) throw new Error("热点数据已抓取，但草稿保存失败。");
   return { ok: true, archiveId, post: updated };
 }
@@ -317,6 +377,10 @@ async function main() {
   await printJsonAndExit({ ok: false, error: "unsupported action" }, 1);
 }
 
-main().catch((error) => {
-  void printJsonAndExit({ ok: false, error: error instanceof Error ? error.message : String(error) }, 1);
-});
+const entryPath = String(process.argv[1] || "").trim();
+const isMainModule = Boolean(entryPath) && import.meta.url === pathToFileURL(path.resolve(entryPath)).href;
+if (isMainModule) {
+  main().catch((error) => {
+    void printJsonAndExit({ ok: false, error: error instanceof Error ? error.message : String(error) }, 1);
+  });
+}

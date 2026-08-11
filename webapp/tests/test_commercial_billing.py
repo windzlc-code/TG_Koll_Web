@@ -193,6 +193,70 @@ class CommercialBillingTests(unittest.TestCase):
         )
         self.assertEqual(len([item for item in versions if item["status"] == "active"]), 1)
 
+    def test_v10_social_content_rates_upgrade_active_and_existing_draft_once(self):
+        removed_skus = {"tweet_generation", "hot_tweet_fetch"}
+        with db_module.db() as conn:
+            active_row = conn.execute(
+                "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+            ).fetchone()
+            self.assertIsNotNone(active_row)
+            catalog = json.loads(str(active_row["catalog_json"]))
+            catalog["actions"] = [
+                item for item in catalog["actions"]
+                if str(item.get("sku") or "") not in removed_skus
+            ]
+            stripped_json = json.dumps(catalog, ensure_ascii=False, separators=(",", ":"))
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (stripped_json, str(active_row["id"])),
+            )
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES ('catalog_v10_draft', ?, 'draft', ?, 0, 0, 100, 0)
+                """,
+                (next_version, stripped_json),
+            )
+            conn.execute(
+                "DELETE FROM admin_config WHERE key = 'commercial_billing_catalog_v10_social_content_rates'"
+            )
+            versions_before = int(
+                conn.execute("SELECT COUNT(*) AS count FROM billing_catalog_versions").fetchone()["count"]
+            )
+
+        db_module.init_db()
+        with db_module.db() as conn:
+            active = commercial_billing.get_active_catalog(conn)
+            draft_row = conn.execute(
+                "SELECT catalog_json FROM billing_catalog_versions WHERE id = 'catalog_v10_draft'"
+            ).fetchone()
+            draft = json.loads(str(draft_row["catalog_json"]))
+            marker = json.loads(str(conn.execute(
+                "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v10_social_content_rates'"
+            ).fetchone()["value_json"]))
+            versions_after = int(
+                conn.execute("SELECT COUNT(*) AS count FROM billing_catalog_versions").fetchone()["count"]
+            )
+
+        for catalog_value in (active, draft):
+            actions = {str(item.get("sku") or ""): item for item in catalog_value["actions"]}
+            self.assertEqual(actions["tweet_generation"]["points"], 0.5)
+            self.assertEqual(actions["hot_tweet_fetch"]["points"], 0.5)
+        self.assertEqual(marker["updated_drafts"], 1)
+        self.assertEqual(versions_after, versions_before + 1)
+
+        db_module.init_db()
+        with db_module.db() as conn:
+            self.assertEqual(
+                int(conn.execute("SELECT COUNT(*) AS count FROM billing_catalog_versions").fetchone()["count"]),
+                versions_after,
+            )
+
     def test_subscription_entitlements_match_the_complete_pdf_catalog(self):
         plans = {item["sku"]: item for item in commercial_billing.DEFAULT_CATALOG["subscriptions"]}
         personal = plans["vanguard_personal_quarterly"]

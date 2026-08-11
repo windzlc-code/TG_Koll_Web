@@ -12444,6 +12444,34 @@ function normalizedPublishMode(mode) {
   return "publish_now";
 }
 
+function renderUnderlineTabGroup({
+  className = "",
+  id = "",
+  ariaLabel = "",
+  dataAttribute = "",
+  tabs = [],
+  before = "",
+  disabled = false,
+  disabledTitle = "",
+} = {}) {
+  const safeDataAttribute = /^data-[a-z0-9-]+$/.test(dataAttribute) ? dataAttribute : "";
+  const classes = ["shared-underline-tabs", className].filter(Boolean).join(" ");
+  return `<div
+    class="${esc(classes)}"
+    ${id ? `id="${esc(id)}"` : ""}
+    data-segment-indicator="underline"
+    aria-label="${esc(ariaLabel)}"
+  >${before}${tabs.map(({ value, label, active }) => `
+    <button
+      type="button"
+      class="${active ? "is-active" : ""}"
+      ${safeDataAttribute ? `${safeDataAttribute}="${esc(value)}"` : ""}
+      aria-pressed="${active ? "true" : "false"}"
+      ${disabled ? `disabled aria-disabled="true"${disabledTitle ? ` title="${esc(disabledTitle)}"` : ""}` : ""}
+    >${esc(label)}</button>
+  `).join("")}</div>`;
+}
+
 function renderPublishModeTabs(mode) {
   const current = normalizedPublishMode(mode);
   const modes = [
@@ -12451,18 +12479,13 @@ function renderPublishModeTabs(mode) {
     ["matrix_start", "矩阵任务"],
     ["automation_tasks", "自动化任务"],
   ];
-  return `
-    <div class="publish-mode-tabs" aria-label="任务方式">
-      <input id="simplePublishMode" type="hidden" value="${esc(current)}" />
-      ${modes.map(([value, label]) => `
-        <button
-          type="button"
-          class="${current === value ? "is-active" : ""}"
-          data-simple-publish-mode="${esc(value)}"
-          aria-pressed="${current === value ? "true" : "false"}"
-        >${esc(label)}</button>
-      `).join("")}
-    </div>`;
+  return renderUnderlineTabGroup({
+    className: "publish-mode-tabs",
+    ariaLabel: "任务方式",
+    dataAttribute: "data-simple-publish-mode",
+    before: `<input id="simplePublishMode" type="hidden" value="${esc(current)}" />`,
+    tabs: modes.map(([value, label]) => ({ value, label, active: current === value })),
+  });
 }
 
 function renderPublishHeaderRow(mode, account) {
@@ -13529,7 +13552,7 @@ function activePublishPreviewPost(posts = []) {
 function renderPublishContentSourceTabs(source = state.publishContentSource) {
   const current = normalizePublishContentSource(source);
   return `
-    <div class="publish-mode-tabs publish-source-tabs" aria-label="任务来源">
+    <div class="automation-capsule-tabs publish-source-tabs" aria-label="任务来源">
       ${[
         ["posts", "草稿"],
         ["favorites", "收藏"],
@@ -23285,14 +23308,19 @@ function renderPersonaStepTabs(groupKey, profile) {
       ["posts", "草稿库"],
       ["favorites", "收藏"],
     ];
-    return `<div class="persona-content-tabs persona-publish-content-tabs account-browser-tabs" id="personaStepTabs" aria-label="内容切换">${tabs.map(([value, label]) => `
-      <button
-        type="button"
-        class="${(value === "generate" ? step === "generate" : step === "posts" && postSource === value) ? "is-active" : ""}"
-        data-persona-content-tab="${esc(value)}"
-        ${generationLocked ? 'disabled aria-disabled="true" title="AI 正在生成推文，完成后可切换"' : ""}
-    >${esc(label)}</button>
-  `).join("")}</div>`;
+    return renderUnderlineTabGroup({
+      className: "publish-mode-tabs",
+      id: "personaStepTabs",
+      ariaLabel: "内容切换",
+      dataAttribute: "data-persona-content-tab",
+      disabled: generationLocked,
+      disabledTitle: "AI 正在生成推文，完成后可切换",
+      tabs: tabs.map(([value, label]) => ({
+        value,
+        label,
+        active: value === "generate" ? step === "generate" : step === "posts" && postSource === value,
+      })),
+    });
   }
   if (groupKey === "settings") {
     return "";
@@ -26621,7 +26649,9 @@ function applyProxyDetectionAutofill(prefix = "", result = null, payload = {}) {
   const exitIp = String(result.exit_ip || response.ip || "").trim();
   const label = [country, location, exitIp].filter(Boolean).join(" · ");
   if (!label) return;
-  nameInput.value = `[静态住宅] ${label}`;
+  const hasResidentialProof = String(result.residential_status || "").toLowerCase() === "verified"
+    && String(result.network_type || "").toLowerCase() === "static_residential";
+  nameInput.value = `${hasResidentialProof ? "[静态住宅]" : "[代理IP]"} ${label}`;
   payload.name = nameInput.value;
 }
 
@@ -26697,7 +26727,7 @@ function renderAccountEditorForm(account = null, mode = "create") {
     </div>
     ${renderAccountIdentityFields(account, mode)}
     ${renderAccountTotpSection(account, mode)}
-    ${renderAccountProxyPickerPanel(account)}
+    ${renderAccountProxyPickerPanel(account, mode)}
   </div>`;
 }
 
@@ -27009,7 +27039,8 @@ function setAccountProxyInlineMode(container, mode = "") {
   const normalized = ["options", "custom"].includes(mode) ? mode : "";
   const options = container.querySelector("[data-account-proxy-inline-options]");
   const custom = container.querySelector("[data-account-proxy-inline-custom]");
-  if (options) options.hidden = normalized !== "options";
+  const effectiveMode = normalized || (options?.dataset.accountProxyDefaultVisible === "true" ? "options" : "");
+  if (options) options.hidden = effectiveMode !== "options";
   if (custom) custom.hidden = normalized !== "custom";
   container.querySelectorAll("[data-account-proxy-inline-toggle]").forEach((button) => {
     button.setAttribute("aria-expanded", normalized === "options" ? "true" : "false");
@@ -27313,17 +27344,18 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
   });
 }
 
-function renderAccountProxyPickerPanel(account = null) {
+function renderAccountProxyPickerPanel(account = null, mode = "create") {
+  const creating = mode === "create";
   const proxyId = String(account?.proxy_id || "").trim();
   return `<section class="account-residential-proxy account-proxy-picker-panel">
     <div class="account-residential-proxy-head">
       <div class="account-proxy-inline-summary"><strong>代理 IP</strong><span data-account-proxy-selection-summary>${esc(proxyId ? accountResidentialProxyLabel(account) : "未使用代理 IP")}</span></div>
       <div class="account-proxy-inline-head-actions">
-        <button type="button" data-account-proxy-inline-toggle aria-expanded="false">${proxyId ? "切换代理" : "选择代理"}</button>
+        ${creating ? "" : `<button type="button" data-account-proxy-inline-toggle aria-expanded="false">${proxyId ? "切换代理" : "选择代理"}</button>`}
         ${accountProxyCustomAddButtonHtml("edit")}
       </div>
     </div>
-    <div class="account-proxy-inline-options" data-account-proxy-inline-options hidden>
+    <div class="account-proxy-inline-options" data-account-proxy-inline-options ${creating ? 'data-account-proxy-default-visible="true"' : "hidden"}>
       ${accountProxyOptionCardsHtml(proxyId, { scope: "edit" })}
     </div>
     ${accountProxyInlineCustomFormHtml("edit")}
@@ -30356,7 +30388,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         target_url: targetUrl,
         post_url: targetUrl,
         username: taskType === "browse_profile" ? targetUrl : "",
-        auto_submit: taskType === "open_login" ? Boolean(selected?.login_password_configured) : undefined,
+        auto_submit: taskType === "open_login" ? true : undefined,
         media_paths: mediaPaths,
         target_urls: splitLines(targetUrls),
         login_wait_seconds: loginWaitSeconds,
@@ -30413,7 +30445,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       target_url: targetUrl,
       post_url: targetUrl,
       username: taskType === "browse_profile" ? targetUrl : "",
-      auto_submit: taskType === "open_login" ? Boolean(selected?.login_password_configured) : undefined,
+      auto_submit: taskType === "open_login" ? true : undefined,
       media_paths: mediaPaths,
       target_urls: splitLines(targetUrls),
       login_wait_seconds: loginWaitSeconds,
@@ -30528,6 +30560,7 @@ async function openPersonalConsoleView(view) {
 }
 
 const SEGMENTED_BACKGROUND_BUTTON_SELECTOR = [
+  ".shared-underline-tabs > button",
   ".automation-capsule-tabs > button",
   ".publish-mode-tabs > button",
   ".publish-time-tabs > button",
@@ -30570,14 +30603,19 @@ async function slideSegmentedButtonBackground(button, options = {}) {
   const currentIndex = Array.from(group.children).indexOf(current);
   const targetIndex = Array.from(group.children).indexOf(button);
   const activeStyle = getComputedStyle(current);
-  const inactiveColor = getComputedStyle(button).color;
+  const inactiveStyle = getComputedStyle(button);
+  const animateTypography = group.classList.contains("shared-underline-tabs");
   const slideStyle = {
     background: activeStyle.background,
     border: activeStyle.borderColor,
     radius: activeStyle.borderRadius,
     shadow: activeStyle.boxShadow,
     activeColor: activeStyle.color,
-    inactiveColor,
+    inactiveColor: inactiveStyle.color,
+    activeFontSize: activeStyle.fontSize,
+    activeFontWeight: activeStyle.fontWeight,
+    inactiveFontSize: inactiveStyle.fontSize,
+    inactiveFontWeight: inactiveStyle.fontWeight,
   };
   if (commit) {
     commit();
@@ -30622,6 +30660,18 @@ async function slideSegmentedButtonBackground(button, options = {}) {
   group.classList.add("is-segment-background-sliding");
   current.classList.add("is-segment-slide-from");
   button.classList.add("is-segment-slide-to");
+  const typographyAnimations = animateTypography && typeof current.animate === "function"
+    ? [
+      current.animate([
+        { fontSize: slideStyle.activeFontSize, fontWeight: slideStyle.activeFontWeight },
+        { fontSize: slideStyle.inactiveFontSize, fontWeight: slideStyle.inactiveFontWeight },
+      ], { duration: 180, easing: "cubic-bezier(.2, .72, .2, 1)" }),
+      button.animate([
+        { fontSize: slideStyle.inactiveFontSize, fontWeight: slideStyle.inactiveFontWeight },
+        { fontSize: slideStyle.activeFontSize, fontWeight: slideStyle.activeFontWeight },
+      ], { duration: 180, easing: "cubic-bezier(.2, .72, .2, 1)" }),
+    ]
+    : [];
   void group.offsetWidth;
 
   const slide = new Promise((resolve) => {
@@ -30656,6 +30706,7 @@ async function slideSegmentedButtonBackground(button, options = {}) {
   try {
     await completion;
   } finally {
+    typographyAnimations.forEach((animation) => animation.cancel());
     if (segmentedBackgroundSlides.get(group) === completion) segmentedBackgroundSlides.delete(group);
   }
 }

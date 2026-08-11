@@ -2526,22 +2526,40 @@ textarea:focus {
   transition: background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
 }
 
-.publish-mode-tabs button.is-active {
-  color: #ffffff;
-  background: #071112;
-  border-color: #071112;
+.console-page .shared-underline-tabs {
+  position: relative;
+  overflow: visible;
+}
+
+.console-page .shared-underline-tabs > button {
+  overflow: visible !important;
+}
+
+.console-page .shared-underline-tabs > button.is-active,
+.console-page .shared-underline-tabs > button.is-active:hover,
+.console-page .shared-underline-tabs > button.is-active:focus-visible,
+.console-page .shared-underline-tabs > button.is-active:active {
+  position: relative;
+  color: #243b53;
+  border-color: transparent;
+  background: transparent;
+  font-size: 16px;
+  font-weight: 900;
   box-shadow: none;
   text-shadow: none;
+  transform: none;
   animation: none;
 }
 
-.publish-mode-tabs button.is-active:hover,
-.publish-mode-tabs button.is-active:focus-visible,
-.publish-mode-tabs button.is-active:active {
-  color: #ffffff;
-  border-color: #071112;
-  box-shadow: none;
-  transform: none;
+.console-page .shared-underline-tabs > button.is-active::after {
+  position: absolute;
+  right: 0;
+  bottom: -4px;
+  left: 0;
+  height: 3px;
+  border-radius: 0;
+  background: #243b53;
+  content: "";
 }
 
 .automation-plan-panel {
@@ -3649,6 +3667,14 @@ textarea:focus {
   overflow: hidden;
 }
 
+/* Task sources use the shared capsule component, but always have three peers. */
+.console-page .automation-capsule-tabs.publish-source-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: min(100%, 360px);
+  overflow: visible;
+}
+
 .publish-source-tabs button {
   display: inline-flex;
   align-items: center;
@@ -3888,16 +3914,16 @@ textarea:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
+  width: 19px;
+  min-width: 19px;
+  height: 19px;
+  min-height: 19px;
   box-sizing: border-box;
   border: 1px solid var(--status-muted-ink);
   border-radius: 999px;
   background: var(--status-muted-ink);
   color: var(--accent-ink);
-  font-size: 12px;
+  font-size: 9px;
   font-weight: 900;
 }
 
@@ -10558,11 +10584,13 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-generated-selection-index,
 .persona-generated-selection-mark {
   display: grid;
-  width: 24px;
-  height: 24px;
+  width: 19px;
+  min-width: 19px;
+  height: 19px;
+  min-height: 19px;
   place-items: center;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 9px;
   font-weight: 850;
 }
 
@@ -11922,14 +11950,6 @@ body.persona-touch-dragging .persona-list-card:active {
   border-radius: 6px;
   background: transparent;
   color: var(--ink);
-  box-shadow: none;
-}
-
-.persona-content-tabs.persona-publish-content-tabs button.is-active,
-.persona-content-tabs.persona-publish-content-tabs.account-browser-tabs button.is-active {
-  border-color: #071112;
-  background: #071112;
-  color: #fff;
   box-shadow: none;
 }
 
@@ -20399,9 +20419,9 @@ body.live-browser-modal-open {
   }
 
   .publish-mode-tabs,
-  .automation-capsule-tabs {
+  .automation-capsule-tabs:not(.publish-source-tabs) {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     width: 100%;
     max-width: none;
     gap: 3px;
@@ -20411,7 +20431,7 @@ body.live-browser-modal-open {
   }
 
   .publish-mode-tabs button,
-  .automation-capsule-tabs button {
+  .automation-capsule-tabs:not(.publish-source-tabs) button {
     min-width: 0;
     min-height: 34px;
     padding: 5px 7px;
@@ -20927,7 +20947,6 @@ body.console-page {
   .sidebar-bottom-actions a.is-click-highlight,
   .module-trigger.is-active,
   .module-trigger.is-click-highlight,
-  .publish-mode-tabs button.is-active,
   .persona-group-tabs button.is-active,
   .persona-keyword-grid button.is-active,
   .persona-quick-actions button.is-active:not(.danger),
@@ -20971,7 +20990,6 @@ body.console-page {
   .sidebar-bottom-actions a.is-click-highlight,
   .module-trigger.is-active,
   .module-trigger.is-click-highlight,
-  .publish-mode-tabs button.is-active,
   .persona-group-tabs button.is-active,
   .persona-keyword-grid button.is-active,
   .persona-quick-actions button.is-active:not(.danger),
@@ -21002,7 +21020,6 @@ body.console-page {
 .console-page :is(.console-shell, .console-modal) :is(
   button.primary:not(.danger),
   .chip-button.primary:not(.danger),
-  .publish-mode-tabs button.is-active,
   .persona-group-tabs button.is-active,
   .persona-keyword-grid button.is-active,
   .persona-quick-actions button.is-active:not(.danger),
@@ -22841,6 +22858,11 @@ body.console-page {
     font-size: 13px;
   }
 
+  .console-page .persona-detail .persona-content-tabs.persona-publish-content-tabs button.is-active {
+    font-size: 16px;
+    font-weight: 900;
+  }
+
   .console-page .persona-detail .persona-content-tabs {
     gap: var(--mobile-control-gap);
   }
@@ -23816,7 +23838,7 @@ body.console-page {
     width: 100%;
   }
 
-  .publish-header-main > .publish-mode-tabs button {
+  .publish-mode-tabs button {
     min-width: 0;
     padding-inline: 5px;
     white-space: normal;
@@ -25950,7 +25972,7 @@ body.console-page {
   }
 
   .console-page .persona-detail .persona-content-tabs.persona-publish-content-tabs button[type="button"].is-active {
-    background: #071112;
+    background: transparent;
   }
 }
 
@@ -26134,6 +26156,26 @@ body.console-page {
 .console-page .is-segment-background-sliding > button.is-segment-slide-to {
   color: var(--segment-slide-active-color) !important;
   transition: color 180ms cubic-bezier(.2, .72, .2, 1) !important;
+}
+
+.console-page .shared-underline-tabs.is-segment-background-sliding::before {
+  top: auto;
+  bottom: 0;
+  width: calc(var(--segment-slide-width) - 2px);
+  height: 3px;
+  border: 0;
+  border-radius: 0;
+  background: #243b53;
+  box-shadow: none;
+  transform: translate3d(calc(var(--segment-slide-x) + 1px), 0, 0);
+  will-change: transform, width;
+  transition:
+    transform 180ms cubic-bezier(.2, .72, .2, 1),
+    width 180ms cubic-bezier(.2, .72, .2, 1);
+}
+
+.console-page .shared-underline-tabs.is-segment-background-sliding > button.is-active::after {
+  opacity: 0;
 }
 
 /* Billing command center */

@@ -437,7 +437,9 @@ async function backfillPublishedThreadsPostMetrics(args: {
   const missingUrls = publishedUrls.filter((url) => !existingRows.some((post) => {
     if (!postMetricMatchesUrl(post, url)) return false;
     const postViewCount = Number(post?.viewCount || 0);
-    return postViewResolved(post) && postViewCount > 0;
+    const postInteractions = [post?.likeCount, post?.commentCount, post?.repostCount, post?.shareCount]
+      .reduce((sum, value) => sum + Math.max(0, Number(value || 0)), 0);
+    return postViewResolved(post) && (postViewCount > 0 || postInteractions === 0);
   }));
   if (!missingUrls.length) return existingRows;
   const previousProfileDir = process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;

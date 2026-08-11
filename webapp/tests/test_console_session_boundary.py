@@ -417,8 +417,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("button:has(> .task-button-busy)", self.styles)
         self.assertIn("animation: none !important", self.styles)
         self.assertNotIn("vecto-publish-button-sheen", self.styles)
-        active_rule = self.styles.split(".publish-mode-tabs button.is-active {", 1)[1].split("}", 1)[0]
-        self.assertIn("#071112", active_rule)
+        active_rule = self.styles.split(
+            ".console-page .shared-underline-tabs > button.is-active,", 1
+        )[1].split("::after", 1)[0]
+        self.assertIn("transparent", active_rule)
+        self.assertIn("#243b53", active_rule)
         self.assertIn("box-shadow: none", active_rule)
         self.assertIn("animation: none", active_rule)
         self.assertIn('aria-busy="${busy ? "true" : "false"}"', self.source)
@@ -2083,10 +2086,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("!state.currentUser?.is_admin", preflight)
         self.assertIn("return { ready: true, issues: [] }", preflight)
 
-    def test_open_login_uses_saved_credentials_and_expired_toasts_are_not_revived(self):
+    def test_open_login_always_starts_in_automatic_mode_and_expired_toasts_are_not_revived(self):
         create_task = self._function_source("createSocialTask")
         toast = self._section("function showToast", "function defaultToastTargetForMessage")
-        self.assertIn('auto_submit: taskType === "open_login" ? Boolean(selected?.login_password_configured) : undefined', create_task)
+        self.assertIn('auto_submit: taskType === "open_login" ? true : undefined', create_task)
         self.assertIn("refreshLiveBrowserSessionsSoon", create_task)
         self.assertIn('existingToast.classList.contains("is-leaving")', toast)
         refresh_start = toast.index("if (isTaskRefresh)")
@@ -3270,7 +3273,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("modal.dataset.selectedProxyId = selectedProxyId", modal)
         self.assertIn("modal.dataset.originalProxyId = selectedProxyId", modal)
         self.assertIn("renderAccountEditorForm(account, mode)", modal)
-        self.assertIn("renderAccountProxyPickerPanel(account)", editor)
+        self.assertIn("renderAccountProxyPickerPanel(account, mode)", editor)
         self.assertIn('event.target.closest("[data-account-proxy-choice]")', modal)
         self.assertNotIn('accountResidentialProxyFormHtml("accountPoolEdit"', modal)
         self.assertIn('clearAccountPasswordReveal(accountId, "pool-edit")', modal)
@@ -3296,7 +3299,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
         self.assertIn("renderAccountIdentityFields(account, mode)", editor)
         self.assertIn("renderAccountTotpSection(account, mode)", editor)
-        self.assertIn("renderAccountProxyPickerPanel(account)", editor)
+        self.assertIn("renderAccountProxyPickerPanel(account, mode)", editor)
         self.assertIn("data-account-totp-create-stage", self._function_source("renderAccountTotpSection"))
         self.assertIn("<span>2FA 密钥</span>", self._function_source("renderAccountTotpSection"))
         self.assertIn("2FA 未配置", self._function_source("renderAccountTotpSection"))
@@ -3402,6 +3405,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("openProxyModal", editor_modal)
         self.assertIn('accountProxyCustomAddButtonHtml("edit")', picker_panel)
         self.assertIn('accountProxyInlineCustomFormHtml("edit")', picker_panel)
+        self.assertIn('const creating = mode === "create"', picker_panel)
+        self.assertIn('data-account-proxy-default-visible="true"', picker_panel)
         self.assertIn('testProxyConfiguration(payload, "", "accountProxyCustomCheckResult"', inline_save)
         self.assertIn('"Idempotency-Key": requestId', inline_save)
         self.assertIn("setAccountProxyCustomBusy(container, true)", inline_save)
@@ -4103,9 +4108,20 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               assert.strictEqual(result.detected_proxy_type, "socks5");
               assert.strictEqual(payload.proxy_type, "socks5");
               assert.strictEqual(fields.proxyFormProtocol.value, "socks5");
-              assert.strictEqual(fields.proxyFormName.value, "[静态住宅] ES · Zaragoza · 194.143.193.241");
+              assert.strictEqual(fields.proxyFormName.value, "[代理IP] ES · Zaragoza · 194.143.193.241");
               assert.strictEqual(payload.name, fields.proxyFormName.value);
               assert.strictEqual(rendered, result);
+              fields.proxyFormName.value = "";
+              const verifiedPayload = {{ proxy_type: "socks5", host: "194.143.193.241", port: 8022, name: "" }};
+              applyProxyDetectionAutofill("proxyForm", {{
+                ok: true,
+                detected_proxy_type: "socks5",
+                residential_status: "verified",
+                network_type: "static_residential",
+                exit_ip: "194.143.193.241",
+                response: {{ country_code: "ES", city: "Zaragoza" }},
+              }}, verifiedPayload);
+              assert.strictEqual(fields.proxyFormName.value, "[静态住宅] ES · Zaragoza · 194.143.193.241");
             }})().catch((error) => {{
               console.error(error);
               process.exitCode = 1;

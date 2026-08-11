@@ -943,11 +943,12 @@
   box-shadow: none;
 }
 
-:root[data-theme="light"] .console-page .persona-content-tabs.persona-publish-content-tabs button.is-active {
-  border-color: var(--vecto-action-border);
-  background-color: #101820;
-  background-image: var(--vecto-action-static-gradient);
-  color: var(--vecto-action-ink);
+:root[data-theme="light"] .console-page .shared-underline-tabs > button.is-active {
+  border-color: transparent;
+  background: transparent;
+  background-image: none;
+  color: #243b53;
+  font-weight: 900;
   box-shadow: none;
 }
 
@@ -1202,10 +1203,10 @@
     .persona-draft-view-toggle,
     .persona-compose-toggle,
     .persona-source-toggle,
-    .account-browser-tabs,
-    .account-pool-platforms,
-    .automation-capsule-tabs
-  ) button {
+  .account-browser-tabs,
+  .account-pool-platforms,
+  .automation-capsule-tabs
+) button:not(.is-active) {
     padding-inline: 8px;
     font-size: 13px;
   }
@@ -1836,8 +1837,11 @@
     box-shadow: none;
   }
 
-  /* Keep the always-visible task mode switch visually anchored above that canvas. */
-  :root[data-theme="light"] .console-page .module-panel.is-publishing-module .publish-mode-tabs {
+  /* Keep the task and content mode switches visually anchored above the mobile canvas. */
+  :root[data-theme="light"] .console-page :is(
+    .module-panel.is-publishing-module,
+    .persona-detail.persona-detail--content
+  ) .publish-mode-tabs {
     background: var(--public-paper);
   }
 

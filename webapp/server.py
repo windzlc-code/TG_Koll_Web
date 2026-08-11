@@ -142,6 +142,11 @@ from .proxy_ip_admin import (
     stop_proxy_market_health_monitor,
 )
 from .notifications import create_notification, register_notification_routes
+from .remote_fetch_client import (
+    RemoteFetchError,
+    configured_client as configured_remote_fetch_client,
+    configured_mode as configured_remote_fetch_mode,
+)
 from .video_workbench import (
     cancel_video_remote_tasks,
     inject_video_workbench,
@@ -2202,6 +2207,7 @@ def _resume_pending_tasks() -> None:
             WHERE reservation.status = 'held'
               AND (
                 reservation.ref_type IN ('persona_post_generation', 'persona_image_generation')
+                OR reservation.ref_type = 'persona_hot_fetch_async'
                 OR (reservation.ref_type = 'normal_task' AND task.id IS NULL)
                 OR (
                   reservation.ref_type = 'social_task'
@@ -11461,7 +11467,7 @@ def _normal_task_billing_spec(task_type: str, payload: dict[str, Any]) -> tuple[
     if typ == "get_gemini":
         return "basic_text_post", 1, False
     if typ == "persona_post_generation":
-        return "basic_text_post", min(max(_to_int(payload.get("count"), 1), 1), 5), False
+        return "tweet_generation", min(max(_to_int(payload.get("count"), 1), 1), 5), False
     return None
 
 
@@ -11665,7 +11671,7 @@ def _enqueue_persona_post_generation_task(
             user_id=user_id,
             ref_type="normal_task",
             ref_id=task_id,
-            sku="basic_text_post",
+            sku="tweet_generation",
             quantity=min(max(_to_int(payload.get("count"), 1), 1), 5),
             admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
             idempotency_key=f"persona-post-generation:{user_id}:{key_digest}",
@@ -13964,8 +13970,10 @@ _PERSONA_HOT_BACKGROUND_PROCESS: subprocess.Popen[str] | None = None
 _PERSONA_HOT_INTERACTIVE_PROCESS: subprocess.Popen[str] | None = None
 _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID = ""
 _PERSONA_HOT_LAST_INTERACTIVE_AT = 0.0
+_PERSONA_HOT_REMOTE_JOB_IDS: dict[tuple[str, str, str, str], str] = {}
 PERSONA_HOT_CANDIDATE_TASKS: dict[str, dict[str, Any]] = {}
 PERSONA_HOT_CANDIDATE_TASKS_LOCK = threading.Lock()
+PERSONA_HOT_CANDIDATE_START_LOCK = threading.Lock()
 
 
 def _persona_hot_fetch_cooldown_seconds() -> int:
@@ -14101,11 +14109,208 @@ def _normalize_persona_hot_workflow_error_detail(value: Any, *, action: str = ""
     return "热点关键词生成失败，请稍后重试。" if action == "prepare-hot-keywords" else "热点任务执行失败，请稍后重试。"
 
 
+def _remote_fetch_capability(payload: dict[str, Any]) -> str:
+    action = str(payload.get("action") or "").strip()
+    operation = str(payload.get("operation") or "").strip()
+    if action == "fetch-hot-candidates" and operation == "crm_threads_live_search":
+        return "crm.threads_live_search.v1"
+    if action == "fetch-hot-candidates":
+        return "persona.hot_candidates.v1"
+    if action == "refresh-hot-post":
+        return "persona.hot_post_metrics.v1"
+    return ""
+
+
+_REMOTE_FETCH_SAFE_SETUP_FIELDS = frozenset({
+    "genres",
+    "interests",
+    "trendTopics",
+    "personaType",
+    "personality",
+    "personaPersonality",
+    "personaStyle",
+    "contentTheme",
+    "customTopic",
+    "tweetStyleProfile",
+    "tweetStyleSample",
+    "chineseScript",
+    "script",
+    "locale",
+    "targetMarket",
+    "market",
+    "region",
+})
+
+
+def _remote_fetch_safe_setup_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return list(value)
+    return None
+
+
+def _remote_fetch_archive_snapshot(archive_id: str) -> dict[str, Any] | None:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        return None
+    archives, _raw = _read_tool_r18_persona_archives()
+    archive = _find_persona_archive(archives, clean_id)
+    if not isinstance(archive, dict):
+        return None
+    raw_setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    safe_setup = {
+        key: safe_value
+        for key in _REMOTE_FETCH_SAFE_SETUP_FIELDS
+        if key in raw_setup
+        and (safe_value := _remote_fetch_safe_setup_value(raw_setup.get(key))) is not None
+    }
+    # Capture only needs these business fields and a small allowlisted setup.
+    # Never copy account management, tokens, metrics, drafts, or publish history.
+    return {
+        "id": clean_id,
+        "name": str(archive.get("name") or ""),
+        "content": str(archive.get("content") or ""),
+        "createdAt": str(archive.get("createdAt") or ""),
+        "updatedAt": str(archive.get("updatedAt") or ""),
+        "setup": safe_setup,
+        "posts": [],
+    }
+
+
+def _remote_fetch_post_snapshot(archive_id: str, post_id: str) -> dict[str, Any] | None:
+    clean_post_id = str(post_id or "").strip()
+    if not clean_post_id:
+        return None
+    post = next(
+        (
+            post
+            for post in _list_persona_archive_posts(str(archive_id or "").strip())
+            if str(post.get("id") or "").strip() == clean_post_id
+        ),
+        None,
+    )
+    if not isinstance(post, dict):
+        return None
+    source_meta = post.get("sourceMeta") if isinstance(post.get("sourceMeta"), dict) else {}
+    allowed_source_meta: dict[str, Any] = {}
+    for key in ("source", "sourceUrl", "platform"):
+        if isinstance(source_meta.get(key), str):
+            allowed_source_meta[key] = str(source_meta[key])
+    if isinstance(source_meta.get("hotScore"), (int, float)):
+        allowed_source_meta["hotScore"] = source_meta["hotScore"]
+    metric_fields = {
+        "likeCount", "commentCount", "viewCount", "shareCount", "repostCount", "quoteCount",
+        "mediaCount", "like_count", "comment_count", "view_count", "share_count", "repost_count",
+        "quote_count", "send_count",
+    }
+    for key in ("engagement", "metrics"):
+        raw_metrics = source_meta.get(key) if isinstance(source_meta.get(key), dict) else {}
+        safe_metrics = {
+            field: raw_metrics[field]
+            for field in metric_fields
+            if field in raw_metrics and isinstance(raw_metrics[field], (bool, int, float))
+        }
+        if safe_metrics:
+            allowed_source_meta[key] = safe_metrics
+    raw_media = source_meta.get("mediaItems") if isinstance(source_meta.get("mediaItems"), list) else []
+    safe_media = [
+        {
+            field: item[field]
+            for field in ("type", "url", "localPath", "warning")
+            if field in item and isinstance(item[field], str)
+        }
+        for item in raw_media
+        if isinstance(item, dict)
+    ]
+    if safe_media:
+        allowed_source_meta["mediaItems"] = safe_media
+    return {"id": clean_post_id, "sourceMeta": allowed_source_meta}
+
+
+def _run_remote_persona_hot_workflow(
+    payload: dict[str, Any],
+    *,
+    timeout_seconds: int,
+) -> dict[str, Any] | None:
+    mode = configured_remote_fetch_mode()
+    capability = _remote_fetch_capability(payload)
+    client = configured_remote_fetch_client()
+    if client is None:
+        if mode == "remote_required" and capability:
+            raise HTTPException(status_code=503, detail="远程抓取 worker 尚未连接，未回退本机执行。")
+        return None
+    if not capability:
+        return None
+    archive_id = str(payload.get("archiveId") or "").strip()
+    remote_payload = dict(payload)
+    archive_snapshot = _remote_fetch_archive_snapshot(archive_id)
+    if archive_snapshot is not None:
+        remote_payload["archiveSnapshot"] = archive_snapshot
+    if capability == "persona.hot_post_metrics.v1":
+        post_snapshot = _remote_fetch_post_snapshot(
+            archive_id,
+            str(payload.get("postId") or ""),
+        )
+        if post_snapshot is not None:
+            remote_payload["postSnapshot"] = post_snapshot
+        remote_payload["outputOnly"] = True
+    unit_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "capability": capability,
+                "archiveId": archive_id,
+                "accountId": str(payload.get("accountId") or ""),
+                "query": str(payload.get("query") or payload.get("prompt") or ""),
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:24]
+    unit_id = f"unit_{unit_digest}"
+    idempotency_key = f"capture:{uuid.uuid4().hex}"
+    remote_job_key = (archive_id, capability, str(payload.get("postId") or unit_id), idempotency_key)
+    remote_job: dict[str, str] = {"id": ""}
+
+    def remember(job_id: str) -> None:
+        remote_job["id"] = str(job_id)
+        if not archive_id:
+            return
+        with _PERSONA_HOT_PROCESS_LOCK:
+            _PERSONA_HOT_REMOTE_JOB_IDS[remote_job_key] = str(job_id)
+
+    try:
+        return client.execute(
+            capability=capability,
+            unit_id=unit_id,
+            payload=remote_payload,
+            idempotency_key=idempotency_key,
+            timeout_seconds=timeout_seconds,
+            on_job_created=remember,
+        )
+    except RemoteFetchError as exc:
+        raise HTTPException(
+            status_code=max(400, min(int(exc.status_code), 504)),
+            detail=_normalize_persona_hot_workflow_error_detail(
+                str(exc), action=str(payload.get("action") or "")
+            ),
+        ) from exc
+    finally:
+        if archive_id:
+            with _PERSONA_HOT_PROCESS_LOCK:
+                if _PERSONA_HOT_REMOTE_JOB_IDS.get(remote_job_key) == remote_job["id"]:
+                    _PERSONA_HOT_REMOTE_JOB_IDS.pop(remote_job_key, None)
+
+
 def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int = 180, *, background: bool = False) -> dict[str, Any]:
     global _PERSONA_HOT_BACKGROUND_PROCESS, _PERSONA_HOT_INTERACTIVE_PROCESS, _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID, _PERSONA_HOT_LAST_INTERACTIVE_AT
     _sync_tool_r18_api_config_for_persona_workflow()
-    command = [*_tool_r18_node_command("scripts/skills/persona-hot-workflow.ts"), json.dumps(payload, ensure_ascii=True)]
     timeout = min(max(30, int(timeout_seconds)), 120)
+    remote_result = _run_remote_persona_hot_workflow(payload, timeout_seconds=timeout)
+    if remote_result is not None:
+        return remote_result
+    command = [*_tool_r18_node_command("scripts/skills/persona-hot-workflow.ts"), json.dumps(payload, ensure_ascii=True)]
     deadline = time.monotonic() + timeout
     process: subprocess.Popen[str] | None = None
     acquired = False
@@ -14213,14 +14418,42 @@ def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int 
     return data
 
 
-def _cancel_persona_hot_workflow(archive_id: str) -> bool:
+def _cancel_persona_hot_workflow(
+    archive_id: str,
+    capability: str = "persona.hot_candidates.v1",
+) -> bool:
     clean_id = str(archive_id or "").strip()
+    clean_capability = str(capability or "").strip()
     with _PERSONA_HOT_PROCESS_LOCK:
+        remote_job_ids = list(dict.fromkeys(
+            job_id
+            for (job_archive_id, job_capability, _unit_id, _request_id), job_id
+            in _PERSONA_HOT_REMOTE_JOB_IDS.items()
+            if job_archive_id == clean_id and job_capability == clean_capability
+        ))
         process = (
             _PERSONA_HOT_INTERACTIVE_PROCESS
             if clean_id and _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID == clean_id
             else None
         )
+    remote_cancelled = False
+    if remote_job_ids:
+        client = configured_remote_fetch_client()
+        if client is not None:
+            for remote_job_id in remote_job_ids:
+                with contextlib.suppress(Exception):
+                    client.cancel(remote_job_id)
+                    remote_cancelled = True
+                    with _PERSONA_HOT_PROCESS_LOCK:
+                        for job_key, current_job_id in list(_PERSONA_HOT_REMOTE_JOB_IDS.items()):
+                            if (
+                                current_job_id == remote_job_id
+                                and job_key[0] == clean_id
+                                and job_key[1] == clean_capability
+                            ):
+                                _PERSONA_HOT_REMOTE_JOB_IDS.pop(job_key, None)
+    if remote_cancelled:
+        return True
     if process is None or isinstance(process.poll(), int):
         return False
     _terminate_persona_hot_process(process)
@@ -14398,6 +14631,26 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
     }
 
 
+def _finalize_persona_hot_candidate_reservation(
+    task: dict[str, Any],
+    *,
+    success: bool,
+) -> dict[str, Any]:
+    reservation_id = str(task.get("billing_reservation_id") or "").strip()
+    if not reservation_id:
+        return {}
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if success:
+            return commercial_billing.settle_reservation(
+                conn,
+                reservation_id,
+                actual_quantity=1,
+                success=True,
+            )
+        return commercial_billing.release_reservation(conn, reservation_id)
+
+
 def _persona_hot_candidate_task_worker(
     task_id: str,
     archive_id: str,
@@ -14419,10 +14672,12 @@ def _persona_hot_candidate_task_worker(
         with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
             task = PERSONA_HOT_CANDIDATE_TASKS.get(task_id)
             if task and task.get("status") != "cancelled":
+                billing = _finalize_persona_hot_candidate_reservation(task, success=False)
                 task.update({
                     "status": "failed",
                     "error": str(exc.detail or "热点候选抓取失败。"),
                     "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "billing": billing,
                 })
         return
     except Exception as exc:
@@ -14430,10 +14685,12 @@ def _persona_hot_candidate_task_worker(
         with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
             task = PERSONA_HOT_CANDIDATE_TASKS.get(task_id)
             if task and task.get("status") != "cancelled":
+                billing = _finalize_persona_hot_candidate_reservation(task, success=False)
                 task.update({
                     "status": "failed",
                     "error": str(exc or "热点候选抓取失败。"),
                     "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "billing": billing,
                 })
         return
 
@@ -14441,17 +14698,20 @@ def _persona_hot_candidate_task_worker(
         task = PERSONA_HOT_CANDIDATE_TASKS.get(task_id)
         if not task or task.get("status") == "cancelled":
             return
-    result["cooldown"] = _activate_persona_hot_fetch_cooldown(
-        user_id,
-        bypassed=cooldown_bypassed,
-    )
     with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
         task = PERSONA_HOT_CANDIDATE_TASKS.get(task_id)
         if task and task.get("status") != "cancelled":
+            result["cooldown"] = _activate_persona_hot_fetch_cooldown(
+                user_id,
+                bypassed=cooldown_bypassed,
+            )
+            billing = _finalize_persona_hot_candidate_reservation(task, success=True)
+            result["billing"] = billing
             task.update({
                 "status": "success",
                 "result": result,
                 "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "billing": billing,
             })
 
 
@@ -14461,6 +14721,8 @@ def _start_persona_hot_candidate_task(
     user_id: int,
     *,
     cooldown_bypassed: bool = False,
+    task_id: str = "",
+    billing_reservation_id: str = "",
 ) -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     owner_user_id = max(0, int(user_id or 0))
@@ -14487,13 +14749,14 @@ def _start_persona_hot_candidate_task(
             for stale_task_id in completed[:50]:
                 PERSONA_HOT_CANDIDATE_TASKS.pop(stale_task_id, None)
 
-        task_id = f"phc_{uuid.uuid4().hex[:16]}"
+        task_id = str(task_id or f"phc_{uuid.uuid4().hex[:16]}").strip()
         task = {
             "id": task_id,
             "user_id": owner_user_id,
             "archive_id": clean_archive_id,
             "status": "queued",
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "billing_reservation_id": str(billing_reservation_id or "").strip(),
         }
         PERSONA_HOT_CANDIDATE_TASKS[task_id] = task
 
@@ -14503,8 +14766,59 @@ def _start_persona_hot_candidate_task(
         name=f"persona-hot-{task_id}",
         daemon=True,
     )
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+            failed_task = PERSONA_HOT_CANDIDATE_TASKS.pop(task_id, None)
+            if failed_task:
+                _finalize_persona_hot_candidate_reservation(failed_task, success=False)
+        raise
     return dict(task)
+
+
+def _start_billable_persona_hot_candidate_task(
+    archive_id: str,
+    payload: PersonaDashboardHotCandidatesFetchPayload,
+    user: dict[str, Any],
+    *,
+    cooldown_bypassed: bool = False,
+) -> dict[str, Any]:
+    clean_archive_id = str(archive_id or "").strip()
+    owner_user_id = _workspace_user_id(user)
+    with PERSONA_HOT_CANDIDATE_START_LOCK:
+        with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+            active = next((
+                task
+                for task in PERSONA_HOT_CANDIDATE_TASKS.values()
+                if int(task.get("user_id") or 0) == owner_user_id
+                and str(task.get("archive_id") or "") == clean_archive_id
+                and str(task.get("status") or "") in {"queued", "running"}
+            ), None)
+            if active:
+                return dict(active)
+
+        task_id = f"phc_{uuid.uuid4().hex[:16]}"
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            reservation = commercial_billing.reserve_charge(
+                conn,
+                user_id=owner_user_id,
+                ref_type="persona_hot_fetch_async",
+                ref_id=task_id,
+                sku="hot_tweet_fetch",
+                quantity=1,
+                admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
+                idempotency_key=f"persona-hot-fetch:{task_id}",
+            )
+        return _start_persona_hot_candidate_task(
+            clean_archive_id,
+            payload,
+            owner_user_id,
+            cooldown_bypassed=cooldown_bypassed,
+            task_id=task_id,
+            billing_reservation_id=str(reservation.get("id") or ""),
+        )
 
 
 def _cancel_persona_hot_candidate_tasks(archive_id: str, user_id: int) -> bool:
@@ -14518,9 +14832,11 @@ def _cancel_persona_hot_candidate_tasks(archive_id: str, user_id: int) -> bool:
                 and str(task.get("archive_id") or "") == clean_archive_id
                 and str(task.get("status") or "") in {"queued", "running"}
             ):
+                billing = _finalize_persona_hot_candidate_reservation(task, success=False)
                 task.update({
                     "status": "cancelled",
                     "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "billing": billing,
                 })
                 cancelled = True
     return cancelled
@@ -14576,6 +14892,67 @@ def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHot
     }
 
 
+def _apply_remote_persona_hot_metrics_patch_unlocked(
+    archive_id: str,
+    post_id: str,
+    raw_patch: Any,
+) -> dict[str, Any]:
+    patch = raw_patch if isinstance(raw_patch, dict) else {}
+    source_patch = patch.get("sourceMetaPatch")
+    if not isinstance(source_patch, dict):
+        raise HTTPException(status_code=500, detail="远程热点指标返回格式无效。")
+    path, raw, archives = _persona_archive_source_for_write(archive_id)
+    archive = _find_persona_archive(archives, archive_id)
+    if not isinstance(archive, dict):
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    post = next(
+        (
+            item
+            for item in (archive.get("posts") if isinstance(archive.get("posts"), list) else [])
+            if isinstance(item, dict) and str(item.get("id") or "").strip() == post_id
+        ),
+        None,
+    )
+    if not isinstance(post, dict):
+        raise HTTPException(status_code=404, detail="草稿不存在。")
+    source_meta = post.get("sourceMeta") if isinstance(post.get("sourceMeta"), dict) else {}
+    if source_meta.get("source") != "sentiment_hot_import" or not str(source_meta.get("sourceUrl") or "").strip():
+        raise HTTPException(status_code=409, detail="当前草稿不是可刷新的热点导入草稿。")
+    next_source_meta = dict(source_meta)
+    if "hotScore" in source_patch:
+        next_source_meta["hotScore"] = source_patch.get("hotScore")
+    for field in ("metrics", "engagement"):
+        incoming = source_patch.get(field)
+        if isinstance(incoming, dict):
+            existing = next_source_meta.get(field)
+            next_source_meta[field] = {
+                **(existing if isinstance(existing, dict) else {}),
+                **incoming,
+            }
+    captured_at = str(source_patch.get("capturedAt") or "").strip()
+    if captured_at:
+        next_source_meta["capturedAt"] = captured_at
+    post["sourceMeta"] = next_source_meta
+    post["updatedAt"] = _persona_dashboard_iso_now()
+    _write_persona_archives_preserving_shape_unlocked(path, raw, archives)
+    return copy.deepcopy(post)
+
+
+def _apply_remote_persona_hot_metrics_patch(
+    archive_id: str,
+    post_id: str,
+    raw_patch: Any,
+) -> dict[str, Any]:
+    with _persona_archive_file_lock():
+        # Re-read only after acquiring the cross-process archive lock so a
+        # completed TS refresh cannot be overwritten by this metrics patch.
+        return _apply_remote_persona_hot_metrics_patch_unlocked(
+            archive_id,
+            post_id,
+            raw_patch,
+        )
+
+
 def _refresh_persona_hot_post(archive_id: str, post_id: str) -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
@@ -14590,6 +14967,12 @@ def _refresh_persona_hot_post(archive_id: str, post_id: str) -> dict[str, Any]:
         timeout_seconds=180,
     )
     post = result.get("post") if isinstance(result.get("post"), dict) else None
+    if post is None and result.get("outputOnly") is True:
+        post = _apply_remote_persona_hot_metrics_patch(
+            clean_archive_id,
+            clean_post_id,
+            result.get("metricsPatch"),
+        )
     if not post:
         raise HTTPException(status_code=500, detail="热点数据已刷新，但未返回草稿数据。")
     return {"ok": True, "post": _compact_persona_archive_post(post)}
@@ -23961,7 +24344,13 @@ def create_app() -> FastAPI:
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates")
     def api_persona_dashboard_fetch_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, user: dict[str, Any] = Depends(require_persona_owner)):
         cooldown = _require_persona_hot_fetch_ready(user)
-        result = _fetch_persona_hot_candidates(archive_id, payload)
+        result = _run_billable_operation(
+            user,
+            ref_type="persona_hot_fetch",
+            sku="hot_tweet_fetch",
+            quantity=1,
+            operation=lambda: _fetch_persona_hot_candidates(archive_id, payload),
+        )
         result["cooldown"] = _activate_persona_hot_fetch_cooldown(
             _workspace_user_id(user),
             bypassed=bool(cooldown["bypassed"]),
@@ -23975,10 +24364,10 @@ def create_app() -> FastAPI:
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/tasks")
     def api_persona_dashboard_start_hot_candidates_task(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, user: dict[str, Any] = Depends(require_persona_owner)):
         cooldown = _require_persona_hot_fetch_ready(user)
-        return _start_persona_hot_candidate_task(
+        return _start_billable_persona_hot_candidate_task(
             archive_id,
             payload,
-            _workspace_user_id(user),
+            user,
             cooldown_bypassed=bool(cooldown["bypassed"]),
         )
 

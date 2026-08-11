@@ -125,6 +125,8 @@ DEFAULT_CATALOG: dict[str, Any] = {
         {"sku": "instagram_text_publish", "name": "Instagram 纯文字推文发布", "points": 0, "unit": "次", "implemented": True},
         {"sku": "complete_image_post", "name": "基础完整图文贴文（文案、1 张基础 AI 图及发布）", "points": 2.5, "unit": "篇", "implemented": True},
         {"sku": "basic_text_post", "name": "AI 文本处理步骤", "points": 0.3, "unit": "步", "implemented": True, "public": False},
+        {"sku": "tweet_generation", "name": "AI 推文生成", "points": 0.5, "unit": "篇", "implemented": True},
+        {"sku": "hot_tweet_fetch", "name": "热点推文抓取", "points": 0.5, "unit": "次", "implemented": True},
         {"sku": "ai_image", "name": "单独生成或追加 AI 图片", "points": 2, "unit": "张", "implemented": True},
         {"sku": "oral_video_second", "name": "数字人口播视频", "points": 0.5, "unit": "秒", "implemented": True},
         {"sku": "threads_auto_reply_batch", "name": "批量评论 / Quote 转发互动任务", "points": 5, "unit": "批次", "implemented": True},
@@ -196,6 +198,11 @@ CRM_ACTION_SKUS = {
     "crm_group_invite_batch",
 }
 
+SOCIAL_CONTENT_ACTION_SKUS = {
+    "tweet_generation",
+    "hot_tweet_fetch",
+}
+
 
 def _with_video_action_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
     """Add video-workbench SKUs without overwriting administrator prices."""
@@ -247,6 +254,28 @@ def _with_crm_action_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
         current.update(desired)
         current["points"] = preserved_points
         current["implemented"] = True
+    result["actions"] = actions
+    return result
+
+
+def _with_social_content_action_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
+    """Apply the fixed public rate for tweet generation and hot-tweet fetches."""
+    result = _loads(_dumps(catalog), {})
+    actions = list(result.get("actions") or []) if isinstance(result, dict) else []
+    action_by_sku = {
+        str(item.get("sku") or ""): item
+        for item in actions
+        if isinstance(item, dict) and str(item.get("sku") or "")
+    }
+    for desired in DEFAULT_CATALOG["actions"]:
+        sku = str(desired.get("sku") or "")
+        if sku not in SOCIAL_CONTENT_ACTION_SKUS:
+            continue
+        current = action_by_sku.get(sku)
+        if current is None:
+            actions.append(dict(desired))
+        else:
+            current.update(desired)
     result["actions"] = actions
     return result
 
@@ -710,6 +739,51 @@ def bootstrap_billing(conn: sqlite3.Connection, *, now: int | None = None) -> No
             updated_drafts += 1
         conn.execute(
             "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v9_crm_actions', ?, ?)",
+            (_dumps({"completed_at": current, "changed": changed, "updated_drafts": updated_drafts}), current),
+        )
+
+    social_content_rates_migration = conn.execute(
+        "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v10_social_content_rates'"
+    ).fetchone()
+    if social_content_rates_migration is None:
+        active_row = conn.execute(
+            "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+        ).fetchone()
+        active_catalog = _loads(active_row["catalog_json"], {}) if active_row else {}
+        upgraded_catalog = _with_social_content_action_catalog(active_catalog) if active_row else active_catalog
+        changed = bool(active_row) and upgraded_catalog != active_catalog
+        if changed and active_row is not None:
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            validate_catalog(upgraded_catalog)
+            conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'active'")
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES (?, ?, 'active', ?, ?, 0, ?, ?)
+                """,
+                (_id("catalog"), next_version, _dumps(upgraded_catalog), current, current, current),
+            )
+        updated_drafts = 0
+        draft_rows = conn.execute(
+            "SELECT id, catalog_json FROM billing_catalog_versions WHERE status = 'draft'"
+        ).fetchall()
+        for draft_row in draft_rows:
+            draft_catalog = _loads(draft_row["catalog_json"], {})
+            upgraded_draft = _with_social_content_action_catalog(draft_catalog)
+            if upgraded_draft == draft_catalog:
+                continue
+            validate_catalog(upgraded_draft)
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (_dumps(upgraded_draft), str(draft_row["id"])),
+            )
+            updated_drafts += 1
+        conn.execute(
+            "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v10_social_content_rates', ?, ?)",
             (_dumps({"completed_at": current, "changed": changed, "updated_drafts": updated_drafts}), current),
         )
 

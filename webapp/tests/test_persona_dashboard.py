@@ -1718,6 +1718,26 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn('status: fullyRefreshed ? "success" : (results.some((item) => item.ok) ? "partial" : "failed")', script)
         self.assertIn('parsed.get("status") == "partial"', v2_worker)
 
+    def test_tweet_generation_and_hot_fetch_use_half_point_billing_skus(self):
+        actions = {
+            str(item.get("sku") or ""): item
+            for item in server.commercial_billing.DEFAULT_CATALOG["actions"]
+        }
+        source = Path(server.__file__).read_text(encoding="utf-8")
+
+        self.assertEqual(actions["tweet_generation"]["points"], 0.5)
+        self.assertEqual(actions["hot_tweet_fetch"]["points"], 0.5)
+        with server.db() as conn:
+            self.assertEqual(server.commercial_billing.action_rate_units(conn, "tweet_generation")[0], 50)
+            self.assertEqual(server.commercial_billing.action_rate_units(conn, "hot_tweet_fetch")[0], 50)
+        self.assertIn('sku="tweet_generation"', source)
+        task_route = source[
+            source.index("def api_persona_dashboard_start_hot_candidates_task"):
+            source.index('@app.get("/api/persona_dashboard/personas/{archive_id}/hot_candidates/cooldown")')
+        ]
+        self.assertIn("_start_billable_persona_hot_candidate_task(", task_route)
+        self.assertIn('sku="hot_tweet_fetch"', source[source.index("def _start_billable_persona_hot_candidate_task"):])
+
     def test_create_persona_requires_auth_and_persists_archive(self):
         resp = self.client.post(
             "/api/persona_dashboard/personas",
@@ -3965,6 +3985,190 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(status.get("result", {}).get("candidates", [])[0]["id"], "hot-1")
         self.assertTrue(status.get("result", {}).get("cooldown", {}).get("bypassed"))
 
+    def _wait_for_hot_candidate_task_status(self, task_id, expected_status):
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            with server.PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+                task = dict(server.PERSONA_HOT_CANDIDATE_TASKS.get(task_id, {}))
+            if task.get("status") == expected_status:
+                return task
+            time.sleep(0.01)
+        self.fail(f"task {task_id} did not reach {expected_status}: {task}")
+
+    def test_async_hot_candidate_success_settles_only_after_worker_success(self):
+        self._write_archives()
+        release_worker = threading.Event()
+        reserve_result = {"id": "hold-hot-success", "status": "held"}
+        settle_result = {"id": "hold-hot-success", "status": "settled"}
+        with server.PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+            server.PERSONA_HOT_CANDIDATE_TASKS.clear()
+
+        def successful_fetch(*_args, **_kwargs):
+            release_worker.wait(timeout=1)
+            return {"ok": True, "candidates": []}
+
+        with (
+            mock.patch.object(server, "_fetch_persona_hot_candidates", side_effect=successful_fetch),
+            mock.patch.object(server.commercial_billing, "reserve_charge", return_value=reserve_result) as reserve,
+            mock.patch.object(server.commercial_billing, "settle_reservation", return_value=settle_result) as settle,
+            mock.patch.object(server.commercial_billing, "release_reservation") as release,
+        ):
+            response = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates/tasks",
+                json={"refresh": True, "limit": 10},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            task_id = response.json()["id"]
+            reserve.assert_called_once()
+            settle.assert_not_called()
+            release.assert_not_called()
+            release_worker.set()
+            task = self._wait_for_hot_candidate_task_status(task_id, "success")
+
+        settle.assert_called_once()
+        release.assert_not_called()
+        self.assertEqual(task["billing"]["status"], "settled")
+
+    def test_async_hot_candidate_failure_releases_reservation(self):
+        self._write_archives()
+        with server.PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+            server.PERSONA_HOT_CANDIDATE_TASKS.clear()
+        with (
+            mock.patch.object(server, "_fetch_persona_hot_candidates", side_effect=RuntimeError("capture failed")),
+            mock.patch.object(server.commercial_billing, "reserve_charge", return_value={"id": "hold-hot-fail"}),
+            mock.patch.object(server.commercial_billing, "settle_reservation") as settle,
+            mock.patch.object(
+                server.commercial_billing,
+                "release_reservation",
+                return_value={"id": "hold-hot-fail", "status": "released"},
+            ) as release,
+        ):
+            response = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates/tasks",
+                json={"refresh": True, "limit": 10},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            task = self._wait_for_hot_candidate_task_status(response.json()["id"], "failed")
+
+        settle.assert_not_called()
+        release.assert_called_once()
+        self.assertEqual(task["billing"]["status"], "released")
+
+    def test_async_hot_candidate_cancel_releases_reservation(self):
+        self._write_archives()
+        release_worker = threading.Event()
+        with server.PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+            server.PERSONA_HOT_CANDIDATE_TASKS.clear()
+
+        def blocked_fetch(*_args, **_kwargs):
+            release_worker.wait(timeout=1)
+            return {"ok": True, "candidates": []}
+
+        with (
+            mock.patch.object(server, "_fetch_persona_hot_candidates", side_effect=blocked_fetch),
+            mock.patch.object(server.commercial_billing, "reserve_charge", return_value={"id": "hold-hot-cancel"}),
+            mock.patch.object(server.commercial_billing, "settle_reservation") as settle,
+            mock.patch.object(
+                server.commercial_billing,
+                "release_reservation",
+                return_value={"id": "hold-hot-cancel", "status": "released"},
+            ) as release,
+        ):
+            response = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates/tasks",
+                json={"refresh": True, "limit": 10},
+            )
+            task_id = response.json()["id"]
+            self.assertTrue(server._cancel_persona_hot_candidate_tasks("persona-1", 1))
+            task = self._wait_for_hot_candidate_task_status(task_id, "cancelled")
+            release_worker.set()
+
+        settle.assert_not_called()
+        release.assert_called_once()
+        self.assertEqual(task["billing"]["status"], "released")
+
+    def test_async_hot_candidate_reuses_active_task_without_second_reservation(self):
+        self._write_archives()
+        release_worker = threading.Event()
+        with server.PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+            server.PERSONA_HOT_CANDIDATE_TASKS.clear()
+
+        def blocked_fetch(*_args, **_kwargs):
+            release_worker.wait(timeout=1)
+            return {"ok": True, "candidates": []}
+
+        with (
+            mock.patch.object(server, "_fetch_persona_hot_candidates", side_effect=blocked_fetch),
+            mock.patch.object(server.commercial_billing, "reserve_charge", return_value={"id": "hold-hot-active"}) as reserve,
+            mock.patch.object(server.commercial_billing, "settle_reservation", return_value={"status": "settled"}),
+        ):
+            first = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates/tasks",
+                json={"refresh": True, "limit": 10},
+            )
+            second = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates/tasks",
+                json={"refresh": True, "limit": 10},
+            )
+            self.assertEqual(first.status_code, 200, first.text)
+            self.assertEqual(second.status_code, 200, second.text)
+            self.assertEqual(first.json()["id"], second.json()["id"])
+            reserve.assert_called_once()
+            release_worker.set()
+            self._wait_for_hot_candidate_task_status(first.json()["id"], "success")
+
+    def test_startup_releases_only_orphaned_async_hot_candidate_holds(self):
+        with server.db() as conn:
+            for reservation_id, ref_type, status in (
+                ("hold-hot-orphan", "persona_hot_fetch_async", "held"),
+                ("settled-hot", "persona_hot_fetch_async", "settled"),
+                ("waived-hot", "persona_hot_fetch_async", "waived"),
+                ("hold-unrelated", "other_operation", "held"),
+            ):
+                conn.execute(
+                    """
+                    INSERT INTO billing_reservations(
+                      id,user_id,ref_type,ref_id,sku,status,idempotency_key,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        reservation_id,
+                        1,
+                        ref_type,
+                        reservation_id,
+                        "hot_tweet_fetch",
+                        status,
+                        f"test:{reservation_id}",
+                        100,
+                        100,
+                    ),
+                )
+
+        server._resume_pending_tasks()
+        with server.db() as conn:
+            statuses = {
+                str(row["id"]): str(row["status"])
+                for row in conn.execute(
+                    "SELECT id,status FROM billing_reservations WHERE id IN (?,?,?,?)",
+                    ("hold-hot-orphan", "settled-hot", "waived-hot", "hold-unrelated"),
+                )
+            }
+
+        self.assertEqual(statuses["hold-hot-orphan"], "released")
+        self.assertEqual(statuses["settled-hot"], "settled")
+        self.assertEqual(statuses["waived-hot"], "waived")
+        self.assertEqual(statuses["hold-unrelated"], "held")
+
+    def test_resolved_zero_view_zero_interactions_skips_detail_backfill(self):
+        source = (server.ROOT_DIR / "tool_r18" / "scripts" / "skills" / "persona-dashboard-refresh.ts").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("const postInteractions = [post?.likeCount, post?.commentCount, post?.repostCount, post?.shareCount]", source)
+        self.assertIn(
+            "postViewResolved(post) && (postViewCount > 0 || postInteractions === 0)",
+            source,
+        )
+
     def test_persona_hot_cooldown_limits_regular_users_and_bypasses_admin(self):
         now = int(time.time())
         with server.db() as conn:
@@ -4821,7 +5025,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 "SELECT credit_units FROM billing_wallets WHERE user_id = ?",
                 (user_id,),
             ).fetchone()["credit_units"])
-            unit_rate = int(server.commercial_billing.action_rate_units(conn, "basic_text_post")[0])
+            unit_rate = int(server.commercial_billing.action_rate_units(conn, "tweet_generation")[0])
 
         customer = TestClient(self.app)
         try:
