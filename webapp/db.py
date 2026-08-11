@@ -1147,6 +1147,17 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS persona_hot_fetch_cooldowns (
+              user_id INTEGER PRIMARY KEY,
+              next_allowed_at INTEGER NOT NULL DEFAULT 0,
+              completed_at INTEGER NOT NULL DEFAULT 0,
+              updated_at INTEGER NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS username_reservations (
               username TEXT PRIMARY KEY COLLATE NOCASE,
               user_id INTEGER NOT NULL,

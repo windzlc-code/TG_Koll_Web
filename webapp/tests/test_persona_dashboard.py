@@ -3963,6 +3963,45 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         self.assertEqual(status.get("status"), "success")
         self.assertEqual(status.get("result", {}).get("candidates", [])[0]["id"], "hot-1")
+        self.assertTrue(status.get("result", {}).get("cooldown", {}).get("bypassed"))
+
+    def test_persona_hot_cooldown_limits_regular_users_and_bypasses_admin(self):
+        now = int(time.time())
+        with server.db() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO users(username, password_hash, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                ("hot-cooldown-user", "not-used", now, now),
+            )
+            user_id = int(cursor.lastrowid)
+
+        regular_user = {"id": user_id, "is_admin": 0}
+        admin_user = {"id": 1, "is_admin": 1}
+        self.assertFalse(server._persona_hot_fetch_cooldown_state(regular_user)["active"])
+
+        activated = server._activate_persona_hot_fetch_cooldown(user_id, bypassed=False)
+        self.assertTrue(activated["active"])
+        self.assertGreater(activated["remaining_seconds"], 0)
+        state = server._persona_hot_fetch_cooldown_state(regular_user)
+        self.assertTrue(state["active"])
+        self.assertGreater(state["remaining_seconds"], 0)
+        with self.assertRaises(server.HTTPException) as blocked:
+            server._require_persona_hot_fetch_ready(regular_user)
+        self.assertEqual(blocked.exception.status_code, 429)
+
+        admin_state = server._persona_hot_fetch_cooldown_state(admin_user)
+        self.assertTrue(admin_state["bypassed"])
+        self.assertFalse(admin_state["active"])
+
+    def test_console_passes_prepared_keywords_to_hot_candidate_task(self):
+        source = (Path(server.__file__).parent / "static" / "assets" / "console.js").read_text(encoding="utf-8")
+        start = source.index("async function fetchPersonaHotCandidates")
+        end = source.index("async function cancelPersonaHotCandidates", start)
+        fetch_source = source[start:end]
+        self.assertIn("keywords,", fetch_source)
+        self.assertIn("/hot_candidates/cooldown", fetch_source)
 
     def test_fetch_persona_hot_candidates_calls_hot_workflow_cli(self):
         self._write_archives()

@@ -20,6 +20,7 @@ import {
   buildModelOrderedThreadsSearchQueries,
   buildSentimentHotSearchStrategyCacheKey,
   buildJinaReaderUrl,
+  buildThreadsReaderSearchUrl,
   buildThreadsSearchUrl,
   candidateMatchesRequestedFreshness,
   candidateMatchesSentimentHotStrategyAnchors,
@@ -139,6 +140,13 @@ describe("sentiment hot importer", () => {
     expect(buildJinaReaderUrl("https://www.threads.com/search?q=tea")).toBe(
       "https://r.jina.ai/http://www.threads.com/search?q=tea",
     );
+  });
+
+  it("keeps the Threads reader on the public result page unless recent mode is explicit", () => {
+    expect(buildThreadsReaderSearchUrl("理发")).toBe(
+      "https://www.threads.com/search?q=%E7%90%86%E5%8F%91",
+    );
+    expect(buildThreadsReaderSearchUrl("理发", true)).toContain("filter=recent");
   });
 
   it("uses Threads recent search only for freshness-scoped fetches", () => {
@@ -691,6 +699,28 @@ describe("sentiment hot importer", () => {
       keywords: ["刺青 cosplay", "cosplay"],
       searchMode: "strict",
     }).map((item) => item.id)).toEqual(["cosplay-strict"]);
+  });
+
+  it("rejects unrelated recommendation cards returned by public Threads search", () => {
+    const base = {
+      id: "public-search-card",
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@demo/post/public-search-card",
+      author: "demo",
+      media: [],
+      hotScore: 1200,
+      metrics: { source: "threads-search-page", query: "理发店" },
+      capturedAt: new Date().toISOString(),
+    };
+
+    expect(candidateMatchesCurrentKeywords({
+      ...base,
+      content: "韩国商品现货到店，今天开放订购并提供完整说明。",
+    } as any, ["理发师", "剪发"], "strict")).toBe(false);
+    expect(candidateMatchesCurrentKeywords({
+      ...base,
+      content: "理发店分享剪发与染发设计案例，整理顾客常见需求。",
+    } as any, ["理发师", "剪发"], "strict")).toBe(true);
   });
 
   it("does not treat a generic live-stream word as strict persona relevance", () => {
@@ -1782,6 +1812,57 @@ tea\u8336\u6587\u5316\u65e5\u5e38\u5206\u4eab\u8207\u6162\u751f\u6d3b\u9ad4\u9a5
     expect(candidates).toHaveLength(1);
     expect(candidates[0].publishedAt).toBeDefined();
     expect(Date.now() - Date.parse(candidates[0].publishedAt || "")).toBeLessThan(3 * 24 * 60 * 60 * 1000);
+  });
+
+  it("parses current Threads reader media cards and derives their real publish time", () => {
+    const candidates = parseThreadsReaderSearchMarkdownCandidates({
+      query: "理发店",
+      keywords: ["理发店", "理发", "剪发"],
+      sourceUrl: "https://www.threads.com/search?q=%E7%90%86%E5%8F%91%E5%BA%97",
+      text: `
+Search • Threads
+
+[![Image 1: demo_barber's profile picture](https://cdn.example.com/avatar.jpg)](http://www.threads.com/@demo_barber)
+今天理发店分享一组短发剪发与染发设计，整理适合夏季的发型建议和护理重点。
+Translate
+[![Image 2](https://cdn.example.com/post.jpg)](http://www.threads.com/@demo_barber/post/Db1_1vjk4_j/media)
+699
+77
+4
+308
+`,
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].sourceUrl).toBe("http://www.threads.com/@demo_barber/post/Db1_1vjk4_j");
+    expect(candidates[0].publishedAt).toBe("2026-08-10T02:59:55.936Z");
+    expect(candidates[0].metrics.publishedAtSource).toBe("threads_shortcode_snowflake");
+    expect(candidates[0].metrics.raw_engagement_signals).toEqual([699, 77, 4, 308]);
+    expect(candidates[0].hotScore).toBe(1088);
+  });
+
+  it("keeps concise public Threads posts when verified heat stays above the hard floor", () => {
+    const candidates = parseThreadsReaderSearchMarkdownCandidates({
+      query: "\u526a\u9aee",
+      keywords: ["\u526a\u9aee", "\u9aee\u578b"],
+      sourceUrl: "https://www.threads.com/search?q=%E5%89%AA%E9%AB%AE",
+      text: `
+Search Threads
+
+[![Image 1: demo_barber's profile picture](https://cdn.example.com/avatar.jpg)](https://www.threads.com/@demo_barber)
+\u9019\u7a2e\u9aee\u578b\u771f\u7684\u526a\u5f97\u51fa\u4f86\u55ce\ud83d\ude02
+Sorry, we're having trouble playing this video.
+[![Image 2](https://cdn.example.com/post.jpg)](https://www.threads.com/@demo_barber/post/Db1_1vjk4_j/media)
+155
+51
+12
+540
+`,
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].hotScore).toBe(758);
+    expect(candidates[0].content).toBe("\u9019\u7a2e\u9aee\u578b\u771f\u7684\u526a\u5f97\u51fa\u4f86\u55ce\ud83d\ude02");
   });
 
   it("parses Threads account-search GraphQL posts with real engagement totals", () => {

@@ -5538,8 +5538,22 @@ function syncActionElapsedTimers() {
     node.textContent = `耗时 ${elapsed}`;
     node.setAttribute("aria-label", `任务耗时 ${elapsed}`);
   });
+  document.querySelectorAll("[data-hot-cooldown-until]").forEach((node) => {
+    const until = Number(node.dataset.hotCooldownUntil || 0) * 1000;
+    const remaining = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+    if (remaining > 0) {
+      const minutes = Math.floor(remaining / 60);
+      const seconds = String(remaining % 60).padStart(2, "0");
+      node.textContent = `冷却中 ${minutes}:${seconds}`;
+      node.disabled = true;
+    } else {
+      node.textContent = "抓取热点";
+      node.disabled = false;
+      node.removeAttribute("data-hot-cooldown-until");
+    }
+  });
   const hasActiveTimer = Boolean(document.querySelector(
-    "[data-action-elapsed], [data-live-browser-task-elapsed][data-live-browser-task-running='true']"
+    "[data-action-elapsed], [data-live-browser-task-elapsed][data-live-browser-task-running='true'], [data-hot-cooldown-until]"
   ));
   if (!hasActiveTimer && actionElapsedTimer) {
     window.clearInterval(actionElapsedTimer);
@@ -20901,8 +20915,23 @@ async function fetchPersonaHotCandidates(refresh = false) {
   const form = personaFormState(persona.id).generate;
   const previousCandidates = personaHotCandidates(persona);
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
-  const hotState = state.personaHotCandidateResults[String(persona.id)] || {};
+  let hotState = state.personaHotCandidateResults[String(persona.id)] || {};
   let keywords = parsePersonaHotKeywordText(personaHotKeywordText(form, hotState));
+  const cooldown = await apiWithTimeout(
+    `/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates/cooldown`,
+    {},
+    10000,
+  );
+  hotState = {
+    ...hotState,
+    cooldown: cooldown && typeof cooldown === "object" ? cooldown : {},
+  };
+  state.personaHotCandidateResults[String(persona.id)] = hotState;
+  if (Boolean(cooldown?.active) && Number(cooldown?.remaining_seconds || 0) > 0) {
+    showMsg("commandMsg", `热点抓取冷却中，请在 ${Number(cooldown.remaining_seconds)} 秒后重试。`, false);
+    renderPersonaDetail();
+    return;
+  }
   try {
     const preparedKeywords = await preparePersonaHotKeywords(false);
     if (preparedKeywords.length) keywords = parsePersonaHotKeywordText(formatPersonaHotKeywordText(preparedKeywords));
@@ -20934,6 +20963,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
       body: JSON.stringify({
         refresh: Boolean(refresh),
         limit: 10,
+        keywords,
         search_mode: form.hotSearchMode,
         writing_locale: PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.writingLocale || ""))
           ? String(form.writingLocale)
@@ -20972,6 +21002,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
       cookie_statuses: Array.isArray(result.cookie_statuses) ? result.cookie_statuses : [],
       warnings: Array.isArray(result.warnings) ? result.warnings : [],
       search_mode: normalizePersonaHotSearchMode(result.search_mode || form.hotSearchMode),
+      cooldown: result.cooldown && typeof result.cooldown === "object" ? result.cooldown : {},
       fetched_at: new Date().toISOString(),
     };
     form.hotKeywordText = formatPersonaHotKeywordText(state.personaHotCandidateResults[String(persona.id)].keywords);
@@ -23327,9 +23358,14 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const hotBusy = isActionLocked("persona", persona?.id || "", "hot_candidates");
   const keywordBusy = isActionLocked("persona", persona?.id || "", "hot_keywords");
   const hotBusyStartedAt = actionLockStartedAt("persona", persona?.id || "", "hot_candidates");
+  const cooldown = hotState.cooldown && typeof hotState.cooldown === "object" ? hotState.cooldown : {};
+  const cooldownUntil = Number(cooldown.next_allowed_at || 0);
+  const cooldownRemaining = Math.max(0, Math.ceil(cooldownUntil - (Date.now() / 1000)));
+  const cooling = !Boolean(cooldown.bypassed) && cooldownRemaining > 0;
+  if (cooling) scheduleActionElapsedSync();
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode || hotState.search_mode);
   const hotMode = form.hotSearchMode;
-  const controlsBusy = hotBusy || keywordBusy;
+  const controlsBusy = hotBusy || keywordBusy || cooling;
   return `
     <div class="persona-hot-filters">
       <div class="persona-hot-mode-row">
@@ -23344,9 +23380,9 @@ function renderPersonaHotCandidatePicker(persona, form) {
         <small>${hotMode === "normal" ? "泛垂直：覆盖同领域宽泛热点" : "垂直：更贴合当前人设关键词"}</small>
       </div>
       <div class="row-actions persona-hot-fetch-toolbar">
-        <button type="button" class="primary persona-hot-fetch-action" data-persona-hot-solo="${hotBusy ? "false" : "true"}" data-persona-fetch-hot ${controlsBusy ? "disabled" : ""}>${keywordBusy
+        <button type="button" class="primary persona-hot-fetch-action" data-persona-hot-solo="${hotBusy ? "false" : "true"}" data-persona-fetch-hot ${cooling ? `data-hot-cooldown-until="${esc(cooldownUntil)}"` : ""} ${controlsBusy ? "disabled" : ""}>${keywordBusy
           ? renderBusyButtonContent("正在准备热点抓取", true)
-          : (hotBusy ? renderBusyButtonContent("正在抓取热点", true, hotBusyStartedAt) : "抓取热点")}</button>
+          : (hotBusy ? renderBusyButtonContent("正在抓取热点", true, hotBusyStartedAt) : (cooling ? `冷却中 ${Math.floor(cooldownRemaining / 60)}:${String(cooldownRemaining % 60).padStart(2, "0")}` : "抓取热点"))}</button>
         ${hotBusy ? `<button type="button" class="persona-hot-fetch-action" data-persona-cancel-hot>取消抓取</button>` : ""}
       </div>
     </div>

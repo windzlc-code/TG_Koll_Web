@@ -13962,6 +13962,77 @@ PERSONA_HOT_CANDIDATE_TASKS: dict[str, dict[str, Any]] = {}
 PERSONA_HOT_CANDIDATE_TASKS_LOCK = threading.Lock()
 
 
+def _persona_hot_fetch_cooldown_seconds() -> int:
+    try:
+        configured = int(str(os.getenv("PERSONA_HOT_USER_COOLDOWN_SECONDS", "600") or "600").strip())
+    except (TypeError, ValueError):
+        configured = 600
+    return min(max(configured, 1), 86400)
+
+
+def _persona_hot_fetch_cooldown_bypassed(user: dict[str, Any]) -> bool:
+    return _is_admin(user) or _is_admin_workspace(user)
+
+
+def _persona_hot_fetch_cooldown_state(user: dict[str, Any]) -> dict[str, Any]:
+    user_id = _workspace_user_id(user)
+    bypassed = _persona_hot_fetch_cooldown_bypassed(user)
+    now = _now_ts()
+    next_allowed_at = 0
+    if not bypassed:
+        with db() as conn:
+            row = conn.execute(
+                "SELECT next_allowed_at FROM persona_hot_fetch_cooldowns WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        next_allowed_at = max(0, int(row["next_allowed_at"] or 0)) if row else 0
+    return {
+        "active": not bypassed and next_allowed_at > now,
+        "bypassed": bypassed,
+        "cooldown_seconds": _persona_hot_fetch_cooldown_seconds(),
+        "remaining_seconds": max(0, next_allowed_at - now),
+        "next_allowed_at": next_allowed_at,
+    }
+
+
+def _require_persona_hot_fetch_ready(user: dict[str, Any]) -> dict[str, Any]:
+    cooldown = _persona_hot_fetch_cooldown_state(user)
+    if cooldown["active"]:
+        remaining = int(cooldown["remaining_seconds"] or 0)
+        raise HTTPException(
+            status_code=429,
+            detail=f"热点抓取冷却中，请在 {remaining} 秒后重试。",
+            headers={"Retry-After": str(max(1, remaining))},
+        )
+    return cooldown
+
+
+def _activate_persona_hot_fetch_cooldown(user_id: int, *, bypassed: bool) -> dict[str, Any]:
+    now = _now_ts()
+    seconds = _persona_hot_fetch_cooldown_seconds()
+    next_allowed_at = 0 if bypassed else now + seconds
+    if not bypassed:
+        with db() as conn:
+            conn.execute(
+                """
+                INSERT INTO persona_hot_fetch_cooldowns(user_id, next_allowed_at, completed_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                  next_allowed_at = excluded.next_allowed_at,
+                  completed_at = excluded.completed_at,
+                  updated_at = excluded.updated_at
+                """,
+                (max(0, int(user_id or 0)), next_allowed_at, now, now),
+            )
+    return {
+        "active": not bypassed,
+        "bypassed": bypassed,
+        "cooldown_seconds": seconds,
+        "remaining_seconds": seconds if not bypassed else 0,
+        "next_allowed_at": next_allowed_at,
+    }
+
+
 class _PersonaHotBackgroundDeferred(RuntimeError):
     pass
 
@@ -14318,6 +14389,8 @@ def _persona_hot_candidate_task_worker(
     task_id: str,
     archive_id: str,
     payload: PersonaDashboardHotCandidatesFetchPayload,
+    user_id: int,
+    cooldown_bypassed: bool,
 ) -> None:
     with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
         task = PERSONA_HOT_CANDIDATE_TASKS.get(task_id)
@@ -14353,6 +14426,14 @@ def _persona_hot_candidate_task_worker(
 
     with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
         task = PERSONA_HOT_CANDIDATE_TASKS.get(task_id)
+        if not task or task.get("status") == "cancelled":
+            return
+    result["cooldown"] = _activate_persona_hot_fetch_cooldown(
+        user_id,
+        bypassed=cooldown_bypassed,
+    )
+    with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+        task = PERSONA_HOT_CANDIDATE_TASKS.get(task_id)
         if task and task.get("status") != "cancelled":
             task.update({
                 "status": "success",
@@ -14365,6 +14446,8 @@ def _start_persona_hot_candidate_task(
     archive_id: str,
     payload: PersonaDashboardHotCandidatesFetchPayload,
     user_id: int,
+    *,
+    cooldown_bypassed: bool = False,
 ) -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     owner_user_id = max(0, int(user_id or 0))
@@ -14403,7 +14486,7 @@ def _start_persona_hot_candidate_task(
 
     thread = threading.Thread(
         target=_persona_hot_candidate_task_worker,
-        args=(task_id, clean_archive_id, copy.deepcopy(payload)),
+        args=(task_id, clean_archive_id, copy.deepcopy(payload), owner_user_id, cooldown_bypassed),
         name=f"persona-hot-{task_id}",
         daemon=True,
     )
@@ -23863,16 +23946,32 @@ def create_app() -> FastAPI:
         return result
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates")
-    def api_persona_dashboard_fetch_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
-        return _fetch_persona_hot_candidates(archive_id, payload)
+    def api_persona_dashboard_fetch_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, user: dict[str, Any] = Depends(require_persona_owner)):
+        cooldown = _require_persona_hot_fetch_ready(user)
+        result = _fetch_persona_hot_candidates(archive_id, payload)
+        result["cooldown"] = _activate_persona_hot_fetch_cooldown(
+            _workspace_user_id(user),
+            bypassed=bool(cooldown["bypassed"]),
+        )
+        return result
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_keywords")
     def api_persona_dashboard_prepare_hot_keywords(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _prepare_persona_hot_keywords(archive_id, payload)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/tasks")
-    def api_persona_dashboard_start_hot_candidates_task(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
-        return _start_persona_hot_candidate_task(archive_id, payload, _workspace_user_id(_user))
+    def api_persona_dashboard_start_hot_candidates_task(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, user: dict[str, Any] = Depends(require_persona_owner)):
+        cooldown = _require_persona_hot_fetch_ready(user)
+        return _start_persona_hot_candidate_task(
+            archive_id,
+            payload,
+            _workspace_user_id(user),
+            cooldown_bypassed=bool(cooldown["bypassed"]),
+        )
+
+    @app.get("/api/persona_dashboard/personas/{archive_id}/hot_candidates/cooldown")
+    def api_persona_dashboard_hot_candidates_cooldown(archive_id: str, user: dict[str, Any] = Depends(require_persona_owner)):
+        return _persona_hot_fetch_cooldown_state(user)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/hot_candidates/tasks/{task_id}")
     def api_persona_dashboard_hot_candidates_task_status(archive_id: str, task_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
