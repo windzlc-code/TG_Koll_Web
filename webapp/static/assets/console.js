@@ -24768,7 +24768,9 @@ function activeTransientWorkspaceState() {
       clear: () => clearPersonaGenerateRunState(generatePreview.persona.id),
     };
   }
-  const draftComposer = activePersonaDraftComposerTransientState();
+  const draftComposer = currentPersonaDraftEditPersonaId()
+    ? null
+    : activePersonaDraftComposerTransientState();
   if (draftComposer) {
     return {
       kind: "persona_draft_composer",
