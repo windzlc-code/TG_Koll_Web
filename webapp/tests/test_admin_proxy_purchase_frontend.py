@@ -11,6 +11,7 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         cls.markup = (STATIC_ROOT / "admin.html").read_text(encoding="utf-8")
         cls.script = (STATIC_ROOT / "assets" / "admin.js").read_text(encoding="utf-8")
         cls.styles = (STATIC_ROOT / "assets" / "style.css").read_text(encoding="utf-8")
+        cls.fixed_light_styles = (STATIC_ROOT / "assets" / "fixed-light.css").read_text(encoding="utf-8")
 
     def _function(self, name: str, next_name: str) -> str:
         start = self.script.index(f"function {name}")
@@ -42,6 +43,8 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertNotIn("proxyProviderCredentialTotp", panel)
         self.assertNotIn("proxyProviderAccountCurrency", panel)
         self.assertNotIn("proxyProviderCredentialState", panel)
+        self.assertNotIn("proxyProviderCredentialReason", panel)
+        self.assertNotIn("变更原因", panel)
         self.assertNotIn("保存需要管理员密码与 MFA", panel)
 
     def test_runtime_provider_is_a_parallel_tab_and_all_panels_share_purchase_visual_language(self):
@@ -55,6 +58,9 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertIn(".page-admin .admin-runtime-provider-shell", self.styles)
         self.assertIn("linear-gradient(105deg, #237fb2 0 8%, #155f96 24%, #123f69 56%, #102c47 100%)", self.styles)
         self.assertIn(".admin-runtime-provider-shell .admin-model-tab-panel", self.styles)
+        self.assertIn(".admin-runtime-provider-shell.admin-config-card", self.fixed_light_styles)
+        self.assertIn("linear-gradient(105deg, #237fb2 0 8%, #155f96 24%, #123f69 56%, #102c47 100%)", self.fixed_light_styles)
+        self.assertIn(".admin-model-tab-panel.admin-runtime-block", self.fixed_light_styles)
 
     def test_provider_field_sync_stays_with_purchase_workspace(self):
         proxy_start = self.markup.index('id="secProxyMarket"')
@@ -81,6 +87,8 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertIn("clearProxyProviderCredentialInputs();", save)
         self.assertNotIn("testProxyProviderCredentials({ useInputs: false })", save)
         self.assertNotIn('el("proxyPurchasePlanId")', save)
+        self.assertNotIn("proxyProviderCredentialReason", save)
+        self.assertNotIn("reason,", save)
 
     def test_healthy_status_does_not_keep_header_chips_visible(self):
         self.assertNotIn('id="proxyPurchaseCredentialStatus"', self.markup)

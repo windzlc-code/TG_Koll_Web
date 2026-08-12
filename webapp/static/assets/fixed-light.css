@@ -1930,6 +1930,41 @@
   box-shadow: none;
 }
 
+/* Preserve the procurement gradient after the generic opaque admin-card rules. */
+:root[data-theme="light"] .page-admin .admin-runtime-provider-shell.admin-config-card {
+  color: #f7fbff;
+  background: linear-gradient(105deg, #237fb2 0 8%, #155f96 24%, #123f69 56%, #102c47 100%);
+  border-color: transparent;
+}
+
+:root[data-theme="light"] .page-admin .admin-runtime-provider-shell .admin-model-tabs {
+  background: rgba(4, 28, 52, 0.3);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+:root[data-theme="light"] .page-admin .admin-runtime-provider-shell .admin-model-tab {
+  color: #dcecf6;
+  background: transparent;
+  border-color: transparent;
+}
+
+:root[data-theme="light"] .page-admin .admin-runtime-provider-shell .admin-model-tab:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+:root[data-theme="light"] .page-admin .admin-runtime-provider-shell .admin-model-tab.is-active {
+  color: #123f69;
+  background: #ffffff;
+  border-color: rgba(255, 255, 255, 0.72);
+}
+
+:root[data-theme="light"] .page-admin .admin-runtime-provider-shell .admin-model-tab-panel.admin-runtime-block {
+  color: #17202a;
+  background: rgba(255, 255, 255, 0.97);
+  border-color: transparent;
+}
+
 :root[data-theme="light"] .page-admin .admin-governance-kpi {
   background: #ffffff;
   box-shadow: none;

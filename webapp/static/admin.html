@@ -367,7 +367,7 @@
     .proxy-provider-api-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
     .proxy-provider-api-head h4 { margin: 0 0 4px; font-size: 15px; }
     .proxy-provider-api-head p { margin: 0; color: #51677c; font-size: 12px; }
-    .proxy-provider-credential-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .proxy-provider-credential-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
     .proxy-provider-credential-form label { min-width: 0; margin: 0; }
     .proxy-provider-credential-form label > span { display: block; margin-bottom: 5px; }
     .proxy-provider-credential-form .proxy-provider-credential-actions { grid-column: 1 / -1; display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
@@ -427,7 +427,8 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
 
-      .proxy-purchase-config-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .proxy-purchase-config-form,
+      .proxy-provider-credential-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .proxy-provider-field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .proxy-purchase-order-resolution { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
@@ -2032,7 +2033,6 @@
                       <label><span>API Key</span><input id="proxyProviderApiKey" type="password" autocomplete="new-password" maxlength="512" placeholder="输入 API Key"></label>
                       <label><span>API Secret（私钥）</span><input id="proxyProviderApiSecret" type="password" autocomplete="new-password" maxlength="512" placeholder="输入 API Secret"></label>
                       <label><span>Webhook Secret（可选）</span><input id="proxyProviderWebhookSecret" type="password" autocomplete="new-password" maxlength="512" placeholder="配置后用于回调验签"></label>
-                      <label><span>变更原因</span><input id="proxyProviderCredentialReason" minlength="3" maxlength="500" placeholder="例如：首次配置或轮换凭据"></label>
                       <div class="proxy-provider-credential-actions">
                         <p class="proxy-provider-secret-note">保存后系统会自动验证凭据并同步公开产品字段；再次进入时只显示配置状态，不显示原始密钥。</p>
                         <button id="btnSaveProxyProviderCredentials" type="submit" class="primary">保存并自动验证</button>

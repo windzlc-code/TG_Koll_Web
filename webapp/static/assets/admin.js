@@ -8990,11 +8990,6 @@ async function testProxyProviderCredentials({ useInputs = true } = {}) {
 async function saveProxyProviderCredentials() {
   const form = el("proxyProviderCredentialForm");
   if (!form?.reportValidity()) return false;
-  const reason = String(el("proxyProviderCredentialReason")?.value || "").trim();
-  if (reason.length < 3) {
-    setMsg("proxyProviderCredentialMsg", "请填写至少 3 个字符的变更原因", false);
-    return false;
-  }
   form.setAttribute("aria-busy", "true");
   setMsg("proxyProviderCredentialMsg", "正在加密保存供应商凭据...");
   try {
@@ -9005,11 +9000,9 @@ async function saveProxyProviderCredentials() {
         api_key: String(el("proxyProviderApiKey")?.value || "").trim(),
         api_secret: String(el("proxyProviderApiSecret")?.value || "").trim(),
         webhook_secret: String(el("proxyProviderWebhookSecret")?.value || "").trim(),
-        reason,
       }),
     });
     renderProxyProviderCredentialStatus(saved || {});
-    if (el("proxyProviderCredentialReason")) el("proxyProviderCredentialReason").value = "";
     await loadProxyPurchaseProviderOptions({
       serviceId: "static-residential-ipv4",
       planId: "",

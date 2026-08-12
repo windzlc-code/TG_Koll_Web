@@ -221,7 +221,6 @@ class ProxyPurchaseApiTests(unittest.TestCase):
                 json={
                     "api_key": "test-api-key",
                     "api_secret": "test-api-secret",
-                    "reason": "initial provider setup",
                 },
             )
         self.assertEqual(response.status_code, 200, response.text)
@@ -246,6 +245,7 @@ class ProxyPurchaseApiTests(unittest.TestCase):
         self.assertEqual(
             self.audit_calls[-1]["action"], "proxy_purchase.provider_credentials_update"
         )
+        self.assertEqual(self.audit_calls[-1]["reason"], "管理员更新供应商凭据")
 
     def test_admin_provider_credentials_rejects_client_owned_provider_currency_and_status(self):
         response = self.client.put(

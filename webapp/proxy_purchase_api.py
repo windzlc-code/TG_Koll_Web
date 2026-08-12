@@ -67,7 +67,7 @@ class ProxyProviderCredentialPayload(_StrictModel):
     api_key: str = Field(default="", max_length=512)
     api_secret: str = Field(default="", max_length=512)
     webhook_secret: str = Field(default="", max_length=512)
-    reason: str = Field(min_length=3, max_length=500)
+    reason: str = Field(default="管理员更新供应商凭据", min_length=3, max_length=500)
 
 
 class ProxyProviderCredentialTestPayload(_StrictModel):
