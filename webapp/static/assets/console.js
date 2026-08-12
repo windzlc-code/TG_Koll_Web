@@ -27620,21 +27620,23 @@ function accountProxyPurchaseEmbeddedHtml() {
     <form class="account-proxy-purchase-form" data-account-proxy-purchase-form novalidate>
       <div class="account-proxy-purchase-alert" data-account-proxy-purchase-alert role="alert" aria-live="assertive" hidden></div>
       <section class="account-proxy-purchase-product" aria-label="固定代理规格">
-        <div><span>代理产品</span><strong data-account-proxy-product-name>静态住宅代理 · 1 个 · 1 个月</strong></div>
+        <div><span>代理产品</span><strong data-account-proxy-product-name>静态住宅代理 IP · 1 个 · 1 个月</strong></div>
+        <small>独享固定 IP，购买后自动加入你的代理列表。</small>
       </section>
       <label class="account-proxy-purchase-field">
         <span>购买地区</span>
         <select data-account-proxy-purchase-country required disabled>
           <option value="">正在加载可购买地区...</option>
         </select>
+        <small>可购买地区与库存由供应商实时同步。</small>
       </label>
       <label class="account-proxy-purchase-renewal">
-        <span><strong>自动续费</strong></span>
+        <span><strong>自动续费</strong><small>到期前自动检查算力点余额，余额充足时自动续费；余额不足不会扣款，可随时关闭。</small></span>
         <input type="checkbox" data-account-proxy-purchase-renewal>
         <i aria-hidden="true"></i>
       </label>
       <button class="account-proxy-purchase-submit" type="submit" data-account-proxy-purchase-submit disabled>
-        <span data-account-proxy-purchase-submit-text>确认购买</span><b aria-hidden="true">→</b>
+        <span data-account-proxy-purchase-submit-text>确认购买</span>
       </button>
       <section class="account-proxy-purchase-status" data-account-proxy-purchase-status aria-live="polite" hidden>
         <span aria-hidden="true"></span><div><strong data-account-proxy-order-title>订单已受理</strong><p data-account-proxy-order-message></p></div>
@@ -27646,8 +27648,8 @@ function accountProxyPurchaseEmbeddedHtml() {
 function accountProxyPurchaseDialogHtml() {
   return `<section class="console-modal-dialog account-proxy-purchase-modal" role="dialog" aria-modal="true" aria-labelledby="accountProxyPurchaseTitle">
     <div class="console-modal-head account-proxy-purchase-modal-head">
-      <button type="button" class="account-proxy-purchase-back" data-account-proxy-purchase-back aria-label="返回代理列表">← <span>返回代理列表</span></button>
-      <div><strong id="accountProxyPurchaseTitle">购买专属代理 IP</strong><p>选择地区后确认购买</p></div>
+      <button type="button" class="account-proxy-purchase-back" data-account-proxy-purchase-back title="返回代理列表" aria-label="返回代理列表"><span class="ui-arrow-icon ui-arrow-icon--left" aria-hidden="true"></span></button>
+      <div><strong id="accountProxyPurchaseTitle">购买专属代理 IP</strong><p>选择购买地区与续费方式，购买成功后自动加入代理列表</p></div>
       ${renderModalCloseButton("data-account-proxy-purchase-close")}
     </div>
     <div class="console-modal-content account-proxy-purchase-modal-content">
@@ -27768,7 +27770,7 @@ function accountProxyPurchaseRenderOptions(view, payload) {
     });
   }
   const serviceNames = {
-    "static-residential-ipv4": "静态住宅代理",
+    "static-residential-ipv4": "静态住宅代理 IP",
     "static-datacenter-ipv4": "数据中心 IPv4 代理",
     "datacenter-ipv4": "数据中心 IPv4 代理",
     "rotating-residential": "动态住宅代理",

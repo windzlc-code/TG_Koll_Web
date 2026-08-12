@@ -74,11 +74,6 @@
     if (label) byId("buyButtonText").textContent = label;
   }
 
-  function formatPoints(value) {
-    const number = Number(value);
-    return Number.isFinite(number) ? new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(number) : "—";
-  }
-
   function countryDisplayName(region = {}) {
     const code = String(region?.code || region?.country || "").trim().toUpperCase();
     if (code === "TW") return "中国台湾";
@@ -115,9 +110,8 @@
       option.textContent = countryDisplayName(region);
       if (option.value) select.append(option);
     });
-    byId("cashBalance").textContent = formatPoints(payload?.cash_backed_points);
     const serviceNames = {
-      "static-residential-ipv4": "静态住宅代理",
+      "static-residential-ipv4": "静态住宅代理 IP",
       "datacenter-ipv4": "数据中心代理",
       "rotating-residential": "动态住宅代理",
       "rotating-mobile": "动态移动代理",
@@ -139,11 +133,9 @@
     if (!ready) setAlert("代理采购当前尚未开放，请联系管理员完成供应商与定价配置。");
   }
 
-  function clearQuote(message = "选择地区后获取实时报价") {
+  function clearQuote() {
     state.quote = null;
-    byId("quotePoints").textContent = "—";
-    byId("quoteMeta").textContent = message;
-    byId("buyButtonText").textContent = "等待实时报价";
+    byId("buyButtonText").textContent = "确认购买";
     byId("buyButton").disabled = true;
   }
 
@@ -152,7 +144,7 @@
     const requestSeq = ++state.quoteSeq;
     setAlert("");
     if (!country) { clearQuote(); return; }
-    clearQuote("正在获取供应商实时报价...");
+    clearQuote();
     byId("country").disabled = true;
     try {
       const payload = await api("/api/proxy-purchases/quotes", {
@@ -165,21 +157,13 @@
       if (!quote?.id) throw { detail: "供应商没有返回有效报价" };
       state.quote = quote;
       ensurePendingRequest(quote);
-      byId("quotePoints").textContent = formatPoints(quote.charge_points);
-      const rawExpiry = quote.expires_at;
-      const expiry = new Date(typeof rawExpiry === "number" || /^\d+(?:\.\d+)?$/.test(String(rawExpiry || ""))
-        ? Number(rawExpiry) * 1000
-        : rawExpiry);
-      const expiryText = Number.isNaN(expiry.getTime()) ? "短时间内有效" : `${expiry.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 前有效`;
-      const periodMonths = Number(quote?.period?.value || quote?.period || 1);
-      byId("quoteMeta").textContent = `${countryDisplayName({ code: quote.country, name: quote.country_name })} · ${Number.isFinite(periodMonths) ? periodMonths : 1} 个月 · 数量 ${quote.quantity || 1} · ${expiryText}`;
       const affordable = hasEnoughCashBackedBalance(quote);
-      byId("buyButtonText").textContent = affordable ? "确认并使用算力点购买" : "现金背书点余额不足";
+      byId("buyButtonText").textContent = "确认购买";
       byId("buyButton").disabled = !affordable;
       if (!affordable) setAlert("当前现金背书点不足以购买该代理；免费赠送点不能用于供应商采购。");
     } catch (error) {
       if (requestSeq !== state.quoteSeq) return;
-      clearQuote("报价获取失败");
+      clearQuote();
       setAlert(errorMessage(error, "无法获取实时报价"));
     } finally {
       if (requestSeq === state.quoteSeq) byId("country").disabled = !state.options?.configured;

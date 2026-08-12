@@ -87,21 +87,9 @@ h2 { margin: 0; font-size: 21px; }
 .renewal-row input:checked + i::after { transform: translateX(21px); }
 .renewal-row input:focus-visible + i { outline: 3px solid rgba(85,198,215,.28); }
 
-.quote-panel { display: grid; grid-template-columns: 1.1fr .9fr; gap: 10px 24px; padding: 20px; color: #fff; border-radius: 11px; background: linear-gradient(105deg, #176fa9 0 14%, #104b7d 34%, #102c47 85%); }
-.quote-panel > div { display: grid; align-content: start; }
-.quote-panel span { color: #c7dce9; font-size: 11px; }
-.quote-panel strong { margin-top: 4px; font-size: 30px; line-height: 1; font-variant-numeric: tabular-nums; }
-.quote-panel > div > small { color: #b5d9e6; }
-.quote-panel .balance { padding-left: 20px; border-left: 1px solid rgba(255,255,255,.2); }
-.quote-panel .balance strong { font-size: 20px; }
-.quote-panel p { grid-column: 1 / -1; margin: 3px 0 0; color: #b5cbd9; font-size: 11px; }
-
-.buy-button { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 52px; margin-top: 16px; padding: 0 17px; color: #fff; border: 0; border-radius: 8px; background: var(--navy); font-weight: 700; cursor: pointer; }
+.buy-button { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 56px; margin-top: 20px; padding: 0 17px; color: #fff; border: 0; border-radius: 8px; background: var(--navy); font-size: 16px; font-weight: 800; cursor: pointer; }
 .buy-button:not(:disabled):hover { background: #174d78; }
 .buy-button:disabled { color: #778796; background: #d9e1e8; cursor: not-allowed; }
-.buy-button.busy i { animation: nudge .7s ease-in-out infinite alternate; }
-@keyframes nudge { to { transform: translateX(5px); } }
-
 .order-status { display: flex; gap: 14px; align-items: center; margin-top: 20px; padding: 14px; border: 1px solid #99cec5; border-radius: 9px; background: #f0fbf8; }
 .order-status-copy { min-width: 0; flex: 1 1 auto; }
 .order-status p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
@@ -173,7 +161,6 @@ h2 { margin: 0; font-size: 21px; }
   .is-embedded-proxy-purchase .field select { height: 46px; }
   .is-embedded-proxy-purchase .mapped-order-specs { margin-top: 12px; }
   .is-embedded-proxy-purchase .renewal-row { margin: 18px 0; }
-  .is-embedded-proxy-purchase .quote-panel { padding: 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

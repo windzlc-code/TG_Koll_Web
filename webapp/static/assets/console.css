@@ -17296,15 +17296,22 @@ body.persona-media-sorting {
 }
 
 .account-proxy-purchase-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 34px;
-  padding-inline: 10px;
+  display: grid;
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  place-items: center;
   color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-solid);
+}
+
+.account-proxy-purchase-back:hover,
+.account-proxy-purchase-back:focus-visible {
+  color: var(--accent-dark);
+  border-color: var(--accent);
 }
 
 .account-proxy-purchase-modal-content {
@@ -17437,20 +17444,29 @@ body.persona-media-sorting {
 .account-proxy-purchase-submit {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   width: 100%;
-  min-height: 44px;
+  height: 52px;
+  min-height: 52px;
   padding: 0 16px;
   color: #fff;
   border: 0;
   border-radius: 8px;
   background: #223a4c;
+  font-size: 16px;
   font-weight: 850;
 }
 
 .account-proxy-purchase-submit:not(:disabled) { cursor: pointer; }
 .account-proxy-purchase-submit:disabled { opacity: .55; }
-.account-proxy-purchase-submit b { font-size: 18px; }
+
+/* Keep the purchase CTA larger than the global compact mobile button rule. */
+@media (max-width: 760px) {
+  .console-page .account-proxy-purchase-submit {
+    height: 52px;
+    min-height: 52px !important;
+  }
+}
 
 .account-proxy-purchase-status {
   display: grid;
@@ -17487,7 +17503,6 @@ body.persona-media-sorting {
 @media (max-width: 640px) {
   .console-modal-dialog.account-proxy-purchase-modal { max-height: calc(100dvh - 12px); }
   .account-proxy-purchase-modal-head { grid-template-columns: auto minmax(0, 1fr) auto; padding: 10px; }
-  .account-proxy-purchase-back span { display: none; }
   .account-proxy-purchase-embedded { max-height: calc(100dvh - 72px); }
   .account-proxy-purchase-form { padding: 12px; }
 }

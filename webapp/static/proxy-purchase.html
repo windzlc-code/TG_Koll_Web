@@ -36,10 +36,10 @@
         <section class="mapped-product" aria-label="供应商产品配置">
           <div class="mapped-product-title">
             <span>供应商映射产品</span>
-            <strong id="productName">静态住宅代理</strong>
+            <strong id="productName">静态住宅代理 IP</strong>
           </div>
           <strong class="mapped-product-plan" id="productIpVersion">标准 IPv4</strong>
-          <small>产品与套餐由后台按 Proxy-Cheap Setup 配置锁定。</small>
+          <small>独享固定 IP，购买后自动加入你的代理列表。</small>
         </section>
 
         <form id="purchaseForm" novalidate>
@@ -48,7 +48,7 @@
             <select id="country" name="country" required disabled>
               <option value="">正在加载可售地区...</option>
             </select>
-            <small>地区与供应商当前库存实时同步</small>
+            <small>可购买地区与库存由供应商实时同步。</small>
           </label>
 
           <dl class="mapped-order-specs" aria-label="锁定订单参数">
@@ -58,19 +58,13 @@
           </dl>
 
           <label class="renewal-row" for="autoRenew">
-            <span><strong>平台托管自动续费</strong><small>到期前先检查现金背书点余额，足够时才续费</small></span>
+            <span><strong>自动续费</strong><small>到期前自动检查算力点余额，余额充足时自动续费；余额不足不会扣款，可随时关闭。</small></span>
             <input id="autoRenew" name="autoRenew" type="checkbox">
             <i aria-hidden="true"></i>
           </label>
 
-          <div class="quote-panel" aria-live="polite">
-            <div><span>本次应付</span><strong id="quotePoints">—</strong><small>算力点</small></div>
-            <div class="balance"><span>现金背书点余额</span><strong id="cashBalance">—</strong></div>
-            <p id="quoteMeta">选择地区后获取实时报价</p>
-          </div>
-
           <button id="buyButton" class="buy-button" type="submit" disabled>
-            <span id="buyButtonText">等待实时报价</span><i aria-hidden="true">→</i>
+            <span id="buyButtonText">确认购买</span>
           </button>
         </form>
 
