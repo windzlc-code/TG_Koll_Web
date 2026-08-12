@@ -7085,14 +7085,6 @@ body.persona-touch-dragging .persona-list-card:active {
   stroke-linejoin: round;
 }
 
-.persona-hot-replacement-actions {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: flex;
-  gap: 4px;
-}
-
 .persona-hot-replacement-item > small {
   overflow: hidden;
   color: var(--muted);
@@ -7202,115 +7194,6 @@ body.persona-touch-dragging .persona-list-card:active {
   .persona-hot-editor-copy textarea {
     min-height: 150px;
   }
-}
-
-.persona-hot-media-item.is-selected {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--panel-solid));
-}
-
-.persona-hot-media-item.has-replacement::before {
-  content: "已替换";
-  position: absolute;
-  left: 8px;
-  bottom: 25px;
-  z-index: 2;
-  padding: 3px 6px;
-  border-radius: 5px;
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-size: 10px;
-  font-weight: 800;
-  pointer-events: none;
-}
-
-.persona-hot-media-item.is-deleted .persona-media-frame {
-  opacity: .34;
-  filter: grayscale(1);
-}
-
-.persona-hot-media-item.is-deleted::after {
-  content: "已移除";
-  position: absolute;
-  inset: 50% auto auto 50%;
-  z-index: 2;
-  padding: 4px 7px;
-  border-radius: 6px;
-  background: var(--danger);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 800;
-  pointer-events: none;
-  transform: translate(-50%, -50%);
-}
-
-.persona-hot-media-actions {
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  z-index: 3;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.persona-hot-media-action {
-  display: inline-grid;
-  place-items: center;
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
-  min-height: 30px;
-  padding: 0;
-  border-color: rgba(255, 255, 255, .82);
-  border-radius: 6px;
-  background: rgba(20, 23, 28, .82);
-  color: #fff;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, .2);
-}
-
-.persona-hot-media-action:hover,
-.persona-hot-media-action:focus-visible {
-  border-color: #fff;
-  background: var(--accent);
-  color: #fff;
-}
-
-.persona-hot-media-action.is-remove:hover,
-.persona-hot-media-action.is-remove:focus-visible {
-  background: var(--danger);
-}
-
-.persona-hot-media-action.is-view {
-  background: rgba(20, 23, 28, .78);
-}
-
-.persona-hot-media-action.is-replace {
-  background: color-mix(in srgb, var(--accent) 82%, #111);
-}
-
-.persona-hot-media-action.is-restore {
-  background: var(--accent);
-}
-
-.persona-hot-media-action .ui-trash-icon,
-.persona-hot-media-action .ui-eye-icon,
-.persona-hot-media-action .ui-replace-icon,
-.persona-hot-media-action .ui-undo-icon {
-  width: 20px;
-  height: 20px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.25;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.persona-hot-replacement-actions .persona-hot-media-action {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
 }
 
 .persona-toggle-chip {
@@ -7711,7 +7594,7 @@ body.persona-touch-dragging .persona-list-card:active {
   }
 
   input:not([type="checkbox"]):not([type="radio"]),
-  select,
+  select:not([data-account-proxy-filter]),
   textarea {
     min-height: 44px;
     font-size: 16px;
@@ -8518,7 +8401,7 @@ body.persona-touch-dragging .persona-list-card:active {
   width: 32px;
   min-width: 32px;
   height: 32px;
-  min-height: 32px;
+  min-height: 34px;
   padding: 0;
   border: 1px solid var(--status-muted-ink);
   border-radius: 6px;
@@ -10118,54 +10001,391 @@ body.persona-touch-dragging .persona-list-card:active {
   min-width: 0;
 }
 
-.persona-task-media-card {
+.persona-public-media-card,
+.account-proxy-purchase-placeholder,
+.persona-media-prompt-field.is-image-editing {
+  --media-edit-flow-deep: color-mix(in srgb, var(--accent-dark) 24%, #06366f);
+  --media-edit-flow-blue: color-mix(in srgb, var(--accent-dark) 18%, #0b65b1);
+  --media-edit-flow-cyan: color-mix(in srgb, var(--accent) 22%, #12c9e6);
+  --media-edit-flow-bright: color-mix(in srgb, var(--accent) 10%, #a8f5ff);
+  --media-edit-flow-navy: #243b53;
+}
+
+.persona-public-media-card {
   position: relative;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   gap: 6px;
   padding: 6px;
-  border: 1px solid var(--line);
+  box-sizing: border-box;
+  border: 2px solid transparent;
   border-radius: var(--radius);
-  background: var(--panel-solid);
+  background:
+    linear-gradient(var(--panel-solid), var(--panel-solid)) padding-box,
+    linear-gradient(var(--line), var(--line)) border-box;
 }
 
-.persona-task-media-card.is-selected {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+.persona-public-media-card.is-selected:not(.is-modify-source) {
+  background:
+    linear-gradient(var(--panel-solid), var(--panel-solid)) padding-box,
+    linear-gradient(var(--accent), var(--accent)) border-box;
+  box-shadow: none;
 }
 
-.persona-task-media-card .persona-media-card {
+.persona-public-media-card.is-modify-source {
+  background:
+    linear-gradient(var(--panel-solid), var(--panel-solid)) padding-box,
+    linear-gradient(
+      90deg,
+      var(--media-edit-flow-deep) 0%,
+      var(--media-edit-flow-deep) 34%,
+      var(--media-edit-flow-blue) 49%,
+      var(--media-edit-flow-cyan) 64%,
+      var(--media-edit-flow-bright) 72%,
+      var(--media-edit-flow-blue) 82%,
+      var(--media-edit-flow-deep) 100%
+    ) border-box;
+  background-size: 100% 100%, 200% 100%;
+  background-repeat: no-repeat, repeat-x;
+  background-position: 0 0, 0 0;
+  box-shadow: none;
+  animation: personaMediaEditBorderFlow 2.8s linear infinite;
+}
+
+.persona-public-media-preview-shell,
+.persona-public-media-preview-shell .persona-media-card {
+  position: relative;
   min-width: 0;
 }
 
-.persona-task-media-select {
+.persona-media-grid.persona-task-media-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.upload-thumbnail-grid.persona-public-media-upload-grid {
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+.persona-media-preview-surface {
+  min-width: 0;
+  min-height: 210px;
+}
+
+.persona-media-preview-surface .upload-zone--embedded-preview {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.persona-media-preview-surface .upload-zone--embedded-preview:not(.has-files) {
+  min-height: 0;
+}
+
+.persona-media-preview-surface.has-upload-preview .persona-media-task-result-preview {
+  display: none;
+}
+
+.persona-media-preview-surface .persona-media-task-result-preview {
+  min-width: 0;
+}
+
+.persona-media-task-result-preview .empty-state-action {
+  order: -1;
+  display: flex;
+  justify-content: center;
+  justify-self: stretch;
+  width: 100%;
+  margin-top: 0;
+}
+
+.persona-media-task-result-preview .empty-state-action .upload-zone-mobile-picker {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
-  min-height: 34px;
-  gap: 6px;
-  padding: 4px 8px;
+  width: auto;
+  min-width: 0;
+  margin: 0;
 }
 
-.persona-task-media-select .ui-action-icon {
+.persona-media-preview-surface .persona-media-task-actions {
+  margin-top: 10px;
+}
+
+.persona-upload-media-card .file-preview-frame {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+}
+
+.console-page :is(.console-shell, .console-modal) .persona-public-media-select,
+.persona-public-media-select {
+  position: absolute;
+  z-index: 5;
+  top: 8px;
+  left: 8px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  color: var(--ink);
+  border: 1px solid color-mix(in srgb, var(--ink) 26%, var(--line));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--panel-solid) 94%, transparent);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
+.persona-public-media-select[aria-pressed="true"] {
+  color: var(--panel-solid);
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.persona-public-media-select .persona-media-selection-icon {
   display: block;
   width: 16px;
   height: 16px;
   margin: 0;
-}
-
-.persona-task-media-select .ui-action-icon rect,
-.persona-task-media-select .ui-action-icon path {
   fill: none;
   stroke: currentColor;
-  stroke-width: 2;
+  stroke-width: 2.2;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-.persona-task-media-select[aria-pressed="false"] .ui-action-icon path {
-  opacity: 0;
+.persona-public-media-order {
+  position: absolute;
+  z-index: 5;
+  bottom: 8px;
+  left: 8px;
+  display: grid;
+  place-items: center;
+  width: 26px !important;
+  min-width: 26px !important;
+  max-width: 26px;
+  height: 26px !important;
+  min-height: 26px !important;
+  max-height: 26px;
+  padding: 0;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 950;
+  line-height: 1;
+  border: 2px solid var(--accent);
+  border-radius: 50% !important;
+  background: var(--panel-solid);
+}
+
+.persona-public-media-footer {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  gap: 6px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-solid) 90%, var(--soft));
+}
+
+.persona-public-media-card-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.console-page :is(.console-shell, .console-modal) .persona-public-media-card-actions > button,
+.console-page :is(.console-shell, .console-modal) .persona-public-media-edit-menu > summary {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-solid);
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.console-page :is(.console-shell, .console-modal) .persona-public-media-card-actions > button:hover,
+.console-page :is(.console-shell, .console-modal) .persona-public-media-card-actions > button:focus-visible,
+.console-page :is(.console-shell, .console-modal) .persona-public-media-edit-menu > summary:hover,
+.console-page :is(.console-shell, .console-modal) .persona-public-media-edit-menu > summary:focus-visible,
+.console-page :is(.console-shell, .console-modal) .persona-public-media-edit-menu[open] > summary,
+.console-page :is(.console-shell, .console-modal) .persona-public-media-card-actions > button.is-active {
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  background: var(--accent);
+  transform: translateY(-1px);
+}
+
+.persona-public-media-card-actions :is(.ui-action-icon, .ui-eye-icon, .ui-replace-icon, .ui-trash-icon),
+.persona-public-media-edit-popover :is(.ui-action-icon, .ui-eye-icon, .ui-replace-icon, .ui-trash-icon) {
+  display: block;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.persona-public-media-edit-menu {
+  position: relative;
+}
+
+.persona-public-media-edit-menu > summary {
+  list-style: none;
+}
+
+.persona-public-media-edit-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.persona-public-media-edit-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 7px);
+  z-index: 20;
+  display: grid;
+  width: 116px;
+  gap: 3px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-solid);
+  box-shadow: var(--panel-shadow);
+}
+
+.console-page :is(.console-shell, .console-modal) .persona-public-media-edit-popover button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 34px;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+}
+
+.console-page :is(.console-shell, .console-modal) .persona-public-media-edit-popover button:hover,
+.console-page :is(.console-shell, .console-modal) .persona-public-media-edit-popover button:focus-visible {
+  background: var(--soft);
+}
+
+.persona-media-prompt-field {
+  display: grid;
+  gap: 7px;
+}
+
+.persona-media-prompt-label {
+  padding-inline: 4px;
+  font-weight: 760;
+}
+
+.persona-media-prompt-input-shell {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  border-radius: var(--radius);
+}
+
+.persona-media-prompt-input-shell textarea {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+}
+
+.persona-media-prompt-field.is-image-editing {
+  position: relative;
+  isolation: isolate;
+}
+
+.persona-media-prompt-field.is-image-editing > :not(.sr-only) {
+  position: relative;
+  z-index: 1;
+}
+
+.persona-media-prompt-field.is-image-editing .persona-media-prompt-label {
+  display: block;
+  max-width: 100%;
+  margin-top: 0;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  animation: none;
+}
+
+.persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  padding: 2px;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(
+      90deg,
+      var(--media-edit-flow-deep) 0%,
+      var(--media-edit-flow-deep) 34%,
+      var(--media-edit-flow-blue) 49%,
+      var(--media-edit-flow-cyan) 64%,
+      var(--media-edit-flow-bright) 72%,
+      var(--media-edit-flow-blue) 82%,
+      var(--media-edit-flow-deep) 100%
+    );
+  background-size: 200% 100%;
+  background-repeat: repeat-x;
+  background-position: 0 0;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: personaMediaPromptBorderFlow 2.8s linear infinite;
+}
+
+.persona-media-prompt-field.is-image-editing textarea:focus {
+  box-shadow: none;
+}
+
+:root[data-theme="light"] .console-page .persona-media-operation-pane .persona-media-prompt-field.is-image-editing textarea:focus {
+  box-shadow: none;
+}
+
+@keyframes personaMediaEditBorderFlow {
+  to { background-position: 0 0, 200% 0; }
+}
+
+@keyframes personaMediaPromptBorderFlow {
+  to { background-position: 200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .persona-public-media-card.is-modify-source,
+  .account-proxy-purchase-placeholder,
+  .persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {
+    animation: none;
+  }
 }
 
 .persona-inline-panel.is-menu-open {
@@ -12779,7 +12999,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-unified-media-editor .persona-edit-media-grid {
   width: 100%;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .persona-media-empty-picker {
@@ -12899,56 +13119,6 @@ body.persona-touch-dragging .persona-list-card:active {
   transition: border-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
 }
 
-.persona-edit-media-card.is-selected {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--panel-solid));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
-}
-
-.console-page .console-shell .persona-detail button.persona-media-card-select,
-.persona-media-card-select {
-  position: absolute;
-  z-index: 5;
-  top: 8px;
-  left: 8px;
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
-  display: grid;
-  place-items: center;
-  box-sizing: border-box;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, var(--ink) 26%, var(--line));
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--panel-solid) 94%, transparent);
-  color: var(--ink);
-  line-height: 0;
-  cursor: pointer;
-  box-shadow: 0 2px 6px rgba(15, 23, 42, .1);
-  appearance: none;
-}
-
-.console-page .console-shell .persona-detail button.persona-media-card-select .persona-media-selection-icon,
-.persona-media-card-select .persona-media-selection-icon {
-  display: block;
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.console-page .console-shell .persona-detail button.persona-media-card-select[aria-pressed="true"],
-.persona-media-card-select[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--panel-solid);
-}
-
 .persona-edit-media-card.is-media-drop-target {
   border-color: var(--accent);
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent);
@@ -13005,69 +13175,8 @@ body.persona-touch-dragging .persona-list-card:active {
   min-width: 0;
 }
 
-.persona-edit-media-actions {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 4;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
 .persona-media-add-tile {
   min-height: 140px;
-}
-
-.persona-edit-media-actions .persona-hot-media-action {
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
-  min-height: 30px;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, var(--ink) 18%, var(--line));
-  background: color-mix(in srgb, var(--panel-solid) 96%, transparent);
-  color: var(--ink);
-  box-shadow: 0 2px 6px rgba(15, 23, 42, .12);
-}
-
-.persona-edit-media-actions .persona-hot-media-action:hover,
-.persona-edit-media-actions .persona-hot-media-action:focus-visible {
-  border-color: var(--ink);
-  background: var(--panel-solid);
-  color: var(--ink);
-}
-
-.persona-edit-media-actions .persona-hot-media-action.is-replace {
-  background: color-mix(in srgb, var(--panel-solid) 96%, transparent);
-  color: var(--ink);
-}
-
-.persona-edit-media-actions .persona-hot-media-action.is-remove {
-  background: color-mix(in srgb, var(--panel-solid) 96%, transparent);
-  color: var(--danger);
-}
-
-.persona-edit-media-actions .persona-hot-media-action.is-remove:hover,
-.persona-edit-media-actions .persona-hot-media-action.is-remove:focus-visible {
-  border-color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 8%, var(--panel-solid));
-  color: var(--danger);
-}
-
-.persona-edit-media-actions :is(
-  .ui-media-card-view-icon,
-  .ui-media-card-edit-icon,
-  .ui-trash-icon
-) {
-  display: block;
-  width: 20px;
-  height: 20px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.25;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .persona-edit-media-card .persona-edit-media-preview {
@@ -13087,6 +13196,27 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-edit-media-card .persona-media-frame--empty {
   min-height: 0;
+}
+
+.persona-edit-media-card.persona-public-media-card {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  padding: 6px;
+}
+
+.persona-public-media-card button.persona-public-media-order {
+  cursor: grab;
+}
+
+.persona-public-media-add-tile {
+  min-height: 0;
+  align-self: stretch;
+  margin-top: 0;
+  border-radius: var(--radius);
+}
+
+.console-page :is(.console-shell, .console-modal) label.persona-public-media-add-tile {
+  margin-top: 0;
 }
 
 .persona-media-drag-ghost {
@@ -13460,28 +13590,11 @@ body.persona-media-sorting {
   }
 
   .persona-unified-media-editor .persona-edit-media-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .persona-media-upload-actions button {
     width: 100%;
-  }
-
-  .persona-edit-media-actions .persona-hot-media-action {
-    width: 32px;
-    min-width: 32px;
-    height: 32px;
-    min-height: 32px;
-  }
-
-  .console-page .console-shell .persona-detail button.persona-media-card-select,
-  .persona-media-card-select {
-    top: 8px;
-    left: 8px;
-    width: 32px;
-    min-width: 32px;
-    height: 32px;
-    min-height: 32px;
   }
 
 }
@@ -16526,9 +16639,6 @@ body.persona-media-sorting {
     align-items: flex-start;
   }
 
-  .account-proxy-inline-custom-actions > button {
-    flex: 1 1 0;
-  }
 }
 
 .account-residential-proxy {
@@ -16575,64 +16685,16 @@ body.persona-media-sorting {
 .account-proxy-picker-toolbar,
 .account-proxy-inline-toolbar {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
   margin-bottom: 10px;
 }
 
 .account-proxy-picker-toolbar p {
   margin: 0;
-}
-
-.account-proxy-picker-toolbar-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-}
-
-@media (max-width: 480px) {
-  .account-proxy-picker-toolbar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .account-proxy-picker-toolbar-actions {
-    width: 100%;
-  }
-
-  .account-proxy-picker-toolbar-actions > button {
-    flex: 1 1 0;
-    min-width: 0;
-  }
-}
-
-.account-proxy-custom-add,
-.account-system-proxy-pool-add {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  min-height: 34px;
-  padding: 0 10px;
-  border-radius: 8px;
-  line-height: 1;
-}
-
-.account-proxy-custom-add .ui-action-icon,
-.account-system-proxy-pool-add .ui-action-icon,
-.account-system-proxy-pool-add svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  flex: 1 1 100%;
 }
 
 .account-proxy-picker-panel .account-residential-proxy-head button {
@@ -16652,124 +16714,409 @@ body.persona-media-sorting {
   display: none;
 }
 
-.account-proxy-inline-custom {
-  display: grid;
-  gap: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-}
 
-.account-proxy-inline-custom[hidden] {
-  display: none;
-}
-
-.account-proxy-inline-custom-head > div {
-  display: grid;
-  gap: 3px;
-}
-
-.account-proxy-inline-custom-head strong {
-  color: var(--ink);
-  font-size: 14px;
-}
-
-.account-proxy-inline-custom-head span {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.account-proxy-inline-custom-actions {
+.account-proxy-picker-controls,
+.account-proxy-picker-filters {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 8px;
-}
-
-.account-proxy-options {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr));
-  gap: 10px;
-  align-items: stretch;
-}
-
-.account-proxy-option {
-  position: relative;
-  display: grid;
-  align-content: start;
-  gap: 4px;
   min-width: 0;
-  min-height: 118px;
-  padding: 13px 42px 13px 13px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--ink);
-  text-align: left;
+}
+
+.account-proxy-picker-controls {
+  width: 100%;
+  align-items: center;
+}
+
+.account-proxy-picker-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 142px) 36px;
+  flex: 0 1 auto;
+  align-items: center;
+}
+
+.account-proxy-region-filter {
+  display: block;
+  min-width: 0;
+  margin: 0;
+}
+
+.account-proxy-picker-filters label {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+}
+
+.account-proxy-picker-filters select {
+  min-width: 0;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 10px;
+  box-sizing: border-box;
+}
+
+.account-proxy-picker-filters select:focus {
   box-shadow: none;
 }
 
-.account-proxy-option:hover {
-  border-color: var(--ink);
-  background: var(--soft);
+.account-proxy-filter-menu {
+  position: relative;
+  width: 36px;
+  height: 36px;
 }
 
-.account-proxy-option.is-selected {
-  border-color: var(--ink);
-  outline: 2px solid var(--ink);
-  outline-offset: -2px;
-  background: var(--soft);
+.account-proxy-filter-menu > summary {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  list-style: none;
+  cursor: pointer;
+  box-sizing: border-box;
 }
 
-.account-proxy-option strong,
-.account-proxy-option span,
-.account-proxy-option small {
-  min-width: 0;
-  overflow-wrap: anywhere;
+.account-proxy-filter-menu > summary::-webkit-details-marker {
+  display: none;
 }
 
-.account-proxy-option strong {
-  font-size: 14px;
-  line-height: 1.3;
+.account-proxy-filter-menu > summary .ui-action-icon {
+  display: block;
+  flex: 0 0 17px;
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-.account-proxy-option span {
+.account-proxy-filter-menu[open] > summary,
+.account-proxy-filter-menu > summary:hover,
+.account-proxy-filter-menu > summary:focus-visible {
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.account-proxy-filter-menu-options {
+  position: absolute;
+  z-index: 24;
+  top: calc(100% + 7px);
+  left: 0;
+  display: grid;
+  width: min(136px, calc(100vw - 72px));
+  max-height: 132px;
+  gap: 2px;
+  padding: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-solid);
+  box-shadow: none;
+}
+
+.account-proxy-filter-menu-options button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 9px;
+  color: var(--ink);
   font-size: 12px;
-  font-weight: 780;
+  text-align: left;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
 }
 
-.account-proxy-option small {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.35;
+.account-proxy-filter-menu-options button:hover,
+.account-proxy-filter-menu-options button:focus-visible,
+.account-proxy-filter-menu-options button.is-active {
+  color: var(--accent-ink);
+  background: var(--soft);
 }
 
-.account-proxy-option-check {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 20px;
-  height: 20px;
-  border: 2px solid var(--line-strong, var(--line));
+.account-proxy-purchase-placeholder {
+  --account-proxy-flow-highlight: #337bb1;
+  --account-proxy-flow-cyan: #1963a2;
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  min-height: 56px;
+  gap: 9px;
+  margin: 2px 0 12px;
+  padding: 6px 10px;
+  box-sizing: border-box;
+  color: #f5fbfb;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  background: linear-gradient(
+    100deg,
+    var(--account-proxy-flow-highlight) 0%,
+    var(--account-proxy-flow-cyan) 4%,
+    var(--media-edit-flow-blue) 20%,
+    var(--media-edit-flow-deep) 68%,
+    var(--media-edit-flow-navy) 100%
+  ) border-box;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  animation: none;
+  will-change: auto;
+}
+
+.account-proxy-purchase-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  color: #fff;
+  border: 1px solid color-mix(in srgb, #fff 62%, transparent);
   border-radius: 50%;
-  background: var(--surface);
+  background: color-mix(in srgb, var(--media-edit-flow-deep) 58%, transparent);
 }
 
-.account-proxy-option.is-selected .account-proxy-option-check {
-  border-color: var(--ink);
-  background: var(--ink);
+.account-proxy-purchase-icon .ui-action-icon {
+  width: 16px;
+  height: 16px;
 }
 
-.account-proxy-option.is-selected .account-proxy-option-check::after {
-  content: "";
-  position: absolute;
-  left: 6px;
-  top: 2px;
-  width: 5px;
-  height: 10px;
-  border: solid var(--surface);
-  border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
+.account-proxy-purchase-placeholder > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.account-proxy-purchase-placeholder strong {
+  font-size: 13px;
+}
+
+.account-proxy-purchase-placeholder span:not(.account-proxy-purchase-icon) {
+  color: color-mix(in srgb, #fff 72%, var(--accent));
+  font-size: 11px;
+}
+
+.account-proxy-purchase-placeholder button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  min-height: 30px;
+  margin-left: auto;
+  color: #fff;
+  border: 1px solid var(--media-edit-flow-blue);
+  background: var(--media-edit-flow-blue);
+  background-image: none;
+}
+
+.account-proxy-purchase-placeholder button:is(:hover, :focus-visible, :active) {
+  color: #fff;
+  border-color: var(--media-edit-flow-blue);
+  background: var(--media-edit-flow-blue);
+  background-image: none;
+}
+
+.account-proxy-purchase-placeholder button .ui-action-icon,
+.account-proxy-clear .ui-no-proxy-icon {
+  display: block;
+  flex: 0 0 15px;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+
+.account-proxy-picker-controls .account-proxy-clear,
+.account-proxy-filter-menu > summary,
+.account-proxy-filter-menu-options button,
+.account-proxy-purchase-placeholder button,
+.proxy-market-mini-card > button {
+  appearance: none;
+  box-shadow: none;
+  transform: none;
+  transition: border-color var(--motion-fast), background var(--motion-fast), color var(--motion-fast);
+}
+
+.account-proxy-picker-controls .account-proxy-clear:hover,
+.account-proxy-picker-controls .account-proxy-clear:focus-visible,
+.account-proxy-picker-controls .account-proxy-clear:active,
+.account-proxy-filter-menu > summary:hover,
+.account-proxy-filter-menu > summary:focus-visible,
+.account-proxy-filter-menu-options button:hover,
+.account-proxy-filter-menu-options button:focus-visible,
+.account-proxy-filter-menu-options button:active,
+.account-proxy-purchase-placeholder button:hover,
+.account-proxy-purchase-placeholder button:focus-visible,
+.account-proxy-purchase-placeholder button:active,
+.proxy-market-mini-card > button:hover,
+.proxy-market-mini-card > button:focus-visible,
+.proxy-market-mini-card > button:active {
+  box-shadow: none;
+  transform: none;
+}
+
+@media (max-width: 640px) {
+  .account-proxy-picker-controls {
+    gap: 6px;
+  }
+
+  .account-proxy-region-filter {
+    width: 142px;
+  }
+
+  .account-proxy-options.proxy-market-mini-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .account-proxy-options .proxy-market-mini-card {
+    gap: 7px;
+    padding: 10px;
+    min-height: 176px;
+  }
+}
+
+.proxy-market-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.proxy-market-mini-card,
+.proxy-market-mini-loading,
+.proxy-market-mini-empty {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+}
+
+.proxy-market-mini-card {
+  display: grid;
+  grid-template-rows: auto auto minmax(18px, auto) auto 34px;
+  min-height: 176px;
+  gap: 8px;
+  padding: 11px;
+  border-color: var(--line);
+  background: var(--panel-solid);
+}
+
+.proxy-market-mini-card-head,
+.proxy-market-mini-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.proxy-market-mini-country,
+.proxy-market-mini-stock {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.proxy-market-mini-country {
+  color: var(--ink);
+  background: var(--soft);
+}
+
+.proxy-market-mini-stock {
+  color: #0b6957;
+  background: #ddf7ef;
+}
+
+.proxy-market-mini-card > strong,
+.proxy-market-mini-location {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proxy-market-mini-card > strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.proxy-market-mini-location,
+.proxy-market-mini-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.proxy-market-mini-meta {
+  align-items: flex-end;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.proxy-market-mini-meta strong {
+  margin-left: auto;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.proxy-market-mini-card > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+}
+
+.proxy-market-mini-card > button .ui-network-icon {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.account-proxy-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 10px;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  background: var(--panel-solid);
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+
+.account-proxy-clear .ui-no-proxy-icon,
+.account-proxy-purchase-placeholder :is(.ui-network-icon, .ui-shopping-bag-icon) {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#consoleModal :is(.account-proxy-picker-modal, .account-proxy-picker-panel) .proxy-market-mini-card > button.primary {
+  background-color: var(--accent);
+  background-image: none;
 }
 
 .account-proxy-enable {
@@ -16874,54 +17221,6 @@ body.persona-media-sorting {
   color: var(--muted);
   font-size: 12px;
   font-weight: 750;
-}
-
-.proxy-pool-add {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  flex: 0 0 auto;
-}
-
-.proxy-pool-head-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
-.system-proxy-pool-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 36px;
-  padding: 0 11px;
-  color: var(--ink);
-  background: var(--panel-solid);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  font-size: 12px;
-  font-weight: 850;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.system-proxy-pool-link:hover,
-.system-proxy-pool-link:focus-visible {
-  color: var(--ink);
-  border-color: var(--ink);
-  background: var(--soft);
-  box-shadow: none;
-}
-
-.system-proxy-pool-link svg {
-  width: 17px;
-  height: 17px;
-}
-
-.proxy-pool-add svg {
-  width: 17px;
-  height: 17px;
 }
 
 .proxy-card-grid {
@@ -17347,192 +17646,6 @@ body.persona-media-sorting {
 .proxy-edit-modal-content {
   max-height: min(68vh, 720px);
   overflow-y: auto;
-}
-
-.system-proxy-pool-modal {
-  width: min(840px, calc(100vw - 32px));
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.system-proxy-pool-modal .console-modal-head > div {
-  display: grid;
-  flex: 1 1 auto;
-  gap: 2px;
-  min-width: 0;
-}
-
-.system-proxy-pool-modal .console-modal-head p {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.system-proxy-pool-modal .console-modal-head p > span:first-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.system-proxy-pool-limit {
-  flex: 0 0 auto;
-  color: var(--ink);
-  font-weight: 850;
-  letter-spacing: 0;
-  text-transform: none;
-  white-space: nowrap;
-}
-
-.system-proxy-pool-content {
-  min-height: 0;
-  max-height: min(70vh, 720px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.system-proxy-pool-notice:empty {
-  display: none;
-}
-
-.system-proxy-pool-notice {
-  padding: 9px 11px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--soft);
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 760;
-}
-
-.system-proxy-pool-notice.is-success {
-  border-color: #9bd8bf;
-  background: #edf9f3;
-  color: #176d4d;
-}
-
-.system-proxy-pool-notice.is-error {
-  border-color: color-mix(in srgb, var(--danger) 48%, var(--line));
-  background: color-mix(in srgb, var(--danger) 7%, var(--panel-solid));
-  color: var(--danger);
-}
-
-.proxy-market-mini-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-[data-system-proxy-pool-list][aria-busy="true"] {
-  min-height: 180px;
-}
-
-.system-proxy-pool-loading {
-  grid-column: 1 / -1;
-  display: grid;
-  place-items: center;
-  min-height: 180px;
-  border: 1px dashed var(--line);
-  border-radius: 10px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 760;
-}
-
-.proxy-market-mini-card,
-.proxy-market-mini-loading,
-.proxy-market-mini-empty {
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel-solid);
-}
-
-.proxy-market-mini-card {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-}
-
-.proxy-market-mini-card-head,
-.proxy-market-mini-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.proxy-market-mini-country,
-.proxy-market-mini-stock {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 850;
-}
-
-.proxy-market-mini-country {
-  color: var(--ink);
-  background: var(--soft);
-}
-
-.proxy-market-mini-stock {
-  color: #0b6957;
-  background: #ddf7ef;
-}
-
-.proxy-market-mini-card > strong {
-  overflow: hidden;
-  color: var(--ink);
-  font-size: 14px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.proxy-market-mini-location {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.proxy-market-mini-meta {
-  align-items: flex-end;
-  flex-wrap: wrap;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.proxy-market-mini-meta strong {
-  margin-left: auto;
-  color: var(--ink);
-  font-size: 13px;
-}
-
-.proxy-market-mini-card > button {
-  width: 100%;
-  min-height: 34px;
-}
-
-.system-proxy-pool-empty {
-  grid-column: 1 / -1;
-}
-
-.system-proxy-pool-empty strong {
-  color: var(--ink);
-}
-
-.system-proxy-pool-empty span {
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .proxy-form-grid {
@@ -20251,7 +20364,7 @@ body.live-browser-modal-open {
   }
 
   input:not([type="checkbox"]):not([type="radio"]):not(.account-inline-password-input),
-  select,
+  select:not([data-account-proxy-filter]),
   textarea,
   .console-modal-dialog input:not(.account-inline-password-input) {
     min-height: 38px;
@@ -20511,31 +20624,6 @@ body.live-browser-modal-open {
 
   .proxy-pool-head strong {
     font-size: 16px;
-  }
-
-  .proxy-pool-add {
-    min-height: 34px;
-    padding: 5px 9px;
-    font-size: 13px;
-  }
-
-  .system-proxy-pool-modal {
-    width: 100%;
-    height: auto;
-  }
-
-  .system-proxy-pool-content {
-    padding-right: 2px;
-  }
-
-  .console-page .proxy-market-mini-grid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 8px;
-  }
-
-  .console-page .proxy-market-mini-card {
-    gap: 7px;
-    padding: 10px;
   }
 
   .proxy-pager {
@@ -21169,7 +21257,7 @@ body.console-page {
   }
 
   .console-page :is(
-    button:not(.account-password-toggle):not(.account-pool-card-copy-button):not(.live-browser-expand-button),
+    button:not(.account-password-toggle):not(.account-pool-card-copy-button):not(.live-browser-expand-button):not(.account-proxy-clear),
     .button,
     .chip-button,
     a[role="button"],
@@ -21233,7 +21321,6 @@ body.console-page {
   .automation-capsule-tabs button,
   .task-queue-actionbar > button,
   .task-queue-bulk-controls button,
-  .proxy-pool-add,
   .proxy-pager select,
   .live-browser-head-actions button {
     min-height: var(--mobile-touch-target);
@@ -22776,21 +22863,16 @@ body.console-page {
     border-radius: 999px;
   }
 
-  .console-page .persona-detail :is(.file-chip-order, .persona-edit-media-order) {
+  .console-page .persona-detail :is(
+    .file-chip-order:not(.persona-public-media-order),
+    .persona-edit-media-order:not(.persona-public-media-order)
+  ) {
     width: 32px;
     min-width: 32px;
     height: 32px;
     min-height: 32px;
     padding: 0;
     border-radius: 50%;
-  }
-
-  .console-page .persona-detail .persona-edit-media-actions .persona-hot-media-action {
-    width: 32px;
-    min-width: 32px;
-    height: 32px;
-    min-height: 32px;
-    padding: 0;
   }
 
   .console-page .persona-detail h3,
@@ -23203,7 +23285,6 @@ body.console-page {
     .task-queue-bulk-controls,
     .task-queue-pager,
     .proxy-pager,
-    .proxy-pool-head-actions,
     .account-browser-toolbar,
     .account-pool-edit-toolbar,
     .live-browser-head-actions,
@@ -24671,8 +24752,7 @@ body.console-page {
 /* Density rules above add text-button padding. Keep icon-only controls
    centered at every breakpoint. */
 .console-page .console-shell :is(
-  .persona-memory-actions > button,
-  .persona-hot-media-action
+  .persona-memory-actions > button
 ) {
   display: inline-grid;
   place-items: center;
@@ -24681,32 +24761,28 @@ body.console-page {
 }
 
 .console-page .console-shell :is(
-  .persona-memory-actions > button,
-  .persona-hot-media-action
+  .persona-memory-actions > button
 ) svg {
   display: block;
   margin: 0;
 }
 
-/* Media-card controls use one geometry on desktop and mobile. Keep this
-   after density rules so responsive button defaults cannot change shape. */
-.console-page .console-shell .persona-detail button.persona-media-card-select,
-.console-page .console-shell .persona-detail button.persona-edit-media-order {
-  width: 24px;
-  min-width: 24px;
-  height: 24px;
-  min-height: 24px;
+.console-page :is(.console-shell, .console-modal) button.persona-public-media-select {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px !important;
+  max-height: 28px;
+  aspect-ratio: 1;
   padding: 0;
-  border-radius: 50%;
+  border-radius: 50% !important;
+  line-height: 0;
 }
 
-.console-page .console-shell .persona-detail .persona-edit-media-actions button.persona-hot-media-action {
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  min-height: 32px;
-  padding: 0;
-  border-radius: 6px;
+.console-page :is(.console-shell, .console-modal) button.persona-public-media-select[aria-pressed="true"] {
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  background: var(--accent);
 }
 
 @media (max-width: 760px) {
@@ -24723,18 +24799,10 @@ body.console-page {
     grid-column: 1 / -1;
   }
 
-  .console-page .persona-task-media-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .console-page .persona-task-media-card {
-    padding: 5px;
-  }
 }
 
 @media (max-width: 360px) {
-  .console-page .persona-media-task-actions,
-  .console-page .persona-task-media-grid {
+  .console-page .persona-media-task-actions {
     grid-template-columns: minmax(0, 1fr);
   }
 }

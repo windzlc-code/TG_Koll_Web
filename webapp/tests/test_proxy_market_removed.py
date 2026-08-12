@@ -29,14 +29,12 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertFalse((WEBAPP_ROOT / "proxy_market.py").exists())
 
     def test_public_market_routes_and_navigation_stay_removed(self):
-        combined = "\n".join(
-            (
-                self.server_source,
-                self.navigation_script,
-                self.console_markup,
-                self.console_script,
-            )
-        )
+        combined = "\n".join((
+            self.server_source,
+            self.navigation_script,
+            self.console_markup,
+            self.console_script,
+        ))
         for fragment in (
             '@app.get("/proxy-market.html"',
             "register_proxy_market_routes",
@@ -49,94 +47,126 @@ class ProxyMarketRemovalTests(unittest.TestCase):
     def test_admin_proxy_inventory_workspace_is_retained(self):
         self.assertIn('data-page="proxyMarket"', self.admin_markup)
         self.assertIn('data-page-view="proxyMarket"', self.admin_markup)
-        self.assertIn("代理 IP 管理", self.admin_markup)
-        self.assertNotIn('href="/proxy-market.html"', self.admin_markup)
         self.assertIn("/api/admin/proxy-market/items", self.admin_script)
         self.assertIn("register_proxy_ip_admin_routes(app)", self.server_source)
         self.assertIn('@app.get("/api/admin/proxy-market/items")', self.proxy_admin_source)
         self.assertNotIn('@app.get("/api/proxy-market/catalog")', self.proxy_admin_source)
 
-    def test_console_keeps_custom_proxy_and_adds_on_demand_system_pool(self):
-        self.assertIn("data-system-proxy-pool-open", self.console_script)
-        self.assertIn("data-proxy-add", self.console_script)
-        self.assertIn("<span>添加代理 IP</span>", self.console_script)
-        self.assertNotIn("<span>添加 IP</span>", self.console_script)
-        self.assertIn("<span>自定义代理</span>", self.console_script)
-        self.assertIn(
-            'function openSystemProxyPoolModal({ accountId = "", selectedProxyId = "" } = {})',
-            self.console_script,
-        )
-        self.assertIn(
-            '"/api/persona_dashboard/automation/system-proxy-pool"',
-            self.console_script,
-        )
+    def test_console_selects_directly_from_the_shared_pool_without_add_entrypoints(self):
+        self.assertIn('"/api/persona_dashboard/automation/system-proxy-pool"', self.console_script)
+        self.assertIn('"/api/persona_dashboard/automation/system-proxy-pool/select"', self.console_script)
+        self.assertIn("function accountProxyPoolFiltersHtml()", self.console_script)
+        self.assertIn('data-account-proxy-filter="country"', self.console_script)
+        self.assertIn("account-proxy-filter-menu", self.console_script)
+        self.assertIn("data-account-proxy-purchase-placeholder", self.console_script)
+        self.assertIn('data-account-proxy-sort-option="time_desc"', self.console_script)
+        self.assertIn('data-account-proxy-sort-option="time_asc"', self.console_script)
+        self.assertIn('data-account-proxy-sort-option="name_asc"', self.console_script)
+        self.assertIn('data-account-proxy-sort-option="name_desc"', self.console_script)
+        self.assertIn('data-account-proxy-sort-option="country_asc"', self.console_script)
+        self.assertIn('data-account-proxy-sort-option="health_first"', self.console_script)
+        self.assertNotIn('data-account-proxy-filter="isp"', self.console_script)
+        self.assertNotIn('data-account-proxy-filter="ip_type"', self.console_script)
+        self.assertNotIn('data-account-proxy-filter="availability"', self.console_script)
+        self.assertIn("data-account-proxy-market-choice", self.console_script)
+        self.assertIn("data-account-proxy-picker-open", self.console_script)
+        self.assertIn("function claimAccountProxyPoolOption", self.console_script)
+        self.assertIn("function systemProxyPoolLocation", self.console_script)
         self.assertIn("function openProxyModal(proxyId = \"\")", self.console_script)
-        self.assertNotIn("data-system-proxy-custom-add", self.console_script)
-        self.assertIn("data-account-system-proxy-pool-open", self.console_script)
-        self.assertIn(".system-proxy-pool-link {", self.console_styles)
-        self.assertIn(".account-system-proxy-pool-add {", self.console_styles)
+        self.assertIn(".account-proxy-picker-filters {", self.console_styles)
+        self.assertIn(".account-proxy-purchase-placeholder {", self.console_styles)
+        self.assertIn(".proxy-market-mini-card {", self.console_styles)
+        for fragment in (
+            "data-system-proxy-pool-open",
+            "data-proxy-add",
+            "data-account-proxy-custom-add",
+            "data-account-system-proxy-pool-open",
+            "function openSystemProxyPoolModal",
+            "function saveAccountInlineCustomProxy",
+            "system-proxy-pool-link",
+            "account-system-proxy-pool-add",
+        ):
+            self.assertNotIn(fragment, self.console_script)
+            self.assertNotIn(fragment, self.console_styles)
         self.assertNotIn("openProxyMarketModal", self.console_script)
         self.assertNotIn("proxyMarketUnreadBadge", self.console_markup)
 
-    def test_shared_system_pool_keeps_the_limit_in_the_compact_header(self):
-        self.assertIn(
-            '<span class="system-proxy-pool-limit">只能免费领取 1 个</span>',
-            self.console_script,
-        )
-        self.assertIn(".system-proxy-pool-limit {", self.console_styles)
-        self.assertIn(
-            ".system-proxy-pool-modal .console-modal-head > div {\n  display: grid;\n  flex: 1 1 auto;",
-            self.console_styles,
-        )
-        self.assertIn("justify-content: space-between;", self.console_styles)
-        self.assertNotIn("system-proxy-pool-guide", self.console_script)
-        self.assertNotIn(".system-proxy-pool-guide", self.console_styles)
+    def test_account_proxy_picker_keeps_only_compact_region_filter_and_sort_menu(self):
+        filters = self.console_script[
+            self.console_script.index("function accountProxyPoolFiltersHtml()"):
+            self.console_script.index("function accountProxyPurchasePlaceholderHtml()")
+        ]
+        options = self.console_script[
+            self.console_script.index("function accountProxyOptionCardsHtml"):
+            self.console_script.index("function updateAccountProxyChoice")
+        ]
 
-    def test_shared_system_pool_uses_the_legacy_embedded_market_dimensions(self):
-        self.assertIn(
-            "width: min(840px, calc(100vw - 32px));",
-            self.console_styles,
+        self.assertIn('data-account-proxy-filter="country"', filters)
+        self.assertIn('aria-label="地区"', filters)
+        self.assertIn('data-account-proxy-sort-option="time_desc"', filters)
+        self.assertIn('data-account-proxy-sort-option="time_asc"', filters)
+        self.assertIn('data-account-proxy-sort-option="name_asc"', filters)
+        self.assertIn('data-account-proxy-sort-option="name_desc"', filters)
+        self.assertIn('data-account-proxy-sort-option="country_asc"', filters)
+        self.assertIn('data-account-proxy-sort-option="health_first"', filters)
+        self.assertNotIn('data-account-proxy-filter="query"', filters)
+        self.assertNotIn('data-account-proxy-filter="isp"', filters)
+        self.assertNotIn('data-account-proxy-filter="ip_type"', filters)
+        self.assertIn("accountProxyPoolSortOptions", options)
+        self.assertIn("renderNoProxyIcon()", self.console_script)
+        self.assertIn("renderNetworkIcon()}<span>${esc(action)}</span>", options)
+        self.assertIn("renderShoppingBagIcon()", self.console_script)
+        self.assertIn('<span class="account-proxy-purchase-icon">${renderShoppingBagIcon()}</span>', self.console_script)
+        self.assertIn('${renderShoppingBagIcon()}<span>点击购买</span>', self.console_script)
+        self.assertIn("点击购买", self.console_script)
+        self.assertNotIn("accountProxyOptionBorderFlow", self.console_styles)
+        self.assertIn(".account-proxy-purchase-placeholder {", self.console_styles)
+        self.assertIn("--account-proxy-flow-highlight: #337bb1;", self.console_styles)
+        self.assertIn("--account-proxy-flow-cyan: #1963a2;", self.console_styles)
+        self.assertIn("var(--account-proxy-flow-highlight) 0%,", self.console_styles)
+        self.assertIn("var(--account-proxy-flow-cyan) 4%,", self.console_styles)
+        self.assertIn("var(--media-edit-flow-blue) 20%,", self.console_styles)
+        self.assertIn("var(--media-edit-flow-deep) 68%,", self.console_styles)
+        self.assertIn("--media-edit-flow-navy: #243b53;", self.console_styles)
+        self.assertIn("var(--media-edit-flow-navy) 100%", self.console_styles)
+        self.assertIn("min-height: 56px;\n  gap: 9px;\n  margin: 2px 0 12px;\n  padding: 6px 10px;\n  box-sizing: border-box;", self.console_styles)
+        self.assertIn("animation: none;\n  will-change: auto;", self.console_styles)
+        self.assertNotIn("@keyframes accountProxyPurchaseFlow", self.console_styles)
+        self.assertIn(".account-proxy-picker-controls {\n  width: 100%;\n  align-items: center;", self.console_styles)
+        self.assertIn(".account-proxy-picker-filters {\n  display: grid;\n  grid-template-columns: minmax(0, 142px) 36px;", self.console_styles)
+        self.assertIn(".account-proxy-picker-filters label {\n  display: grid;\n  min-width: 0;\n  margin: 0;", self.console_styles)
+        self.assertNotIn(".account-proxy-filter-menu-options label", self.console_styles)
+        self.assertIn(".account-proxy-filter-menu-options {\n  position: absolute;\n  z-index: 24;\n  top: calc(100% + 7px);\n  left: 0;", self.console_styles)
+        self.assertNotIn(".account-proxy-picker-filter-toolbar:has(.account-proxy-filter-menu[open])", self.console_styles)
+        self.assertIn("width: min(136px, calc(100vw - 72px));\n  max-height: 132px;", self.console_styles)
+        self.assertIn("overflow-y: auto;\n  overscroll-behavior: contain;\n  scrollbar-gutter: stable;", self.console_styles)
+        self.assertIn(".account-proxy-clear {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n  flex: 0 0 auto;\n  height: 36px;\n  min-height: 36px;", self.console_styles)
+        self.assertIn("${accountProxyPoolFiltersHtml()}<button type=\"button\" class=\"account-proxy-clear\"", self.console_script)
+        self.assertIn("appearance: none;\n  box-shadow: none;\n  transform: none;", self.console_styles)
+        self.assertIn("border: 1px solid var(--line);", self.console_styles)
+        self.assertIn("var(--media-edit-flow-cyan) 64%", self.console_styles)
+        self.assertIn("color: #fff;\n  border: 1px solid color-mix(in srgb, #fff 62%, transparent);", self.console_styles)
+        self.assertIn("border: 1px solid var(--media-edit-flow-blue);", self.console_styles)
+        self.assertIn("background: var(--media-edit-flow-blue);", self.console_styles)
+        picker = self.console_script[
+            self.console_script.index("function openAccountProxyPickerModal"):
+            self.console_script.index("function renderAccountProxyPickerPanel")
+        ]
+        self.assertNotIn('<div class="console-modal-actions">', picker)
+        self.assertNotIn("data-account-proxy-picker-save", picker)
+        self.assertIn("commitAccountProxyPickerSelection", picker)
+        self.assertLess(
+            picker.index("${accountProxyPurchasePlaceholderHtml()}"),
+            picker.index("${accountProxyPoolFiltersHtml()}"),
         )
-        self.assertIn(
-            ".system-proxy-pool-modal {\n  width: min(840px, calc(100vw - 32px));\n  grid-template-rows: auto minmax(0, 1fr);",
-            self.console_styles,
+        panel = self.console_script[
+            self.console_script.index("function renderAccountProxyPickerPanel"):
+            self.console_script.index("function renderAccountTotpSection")
+        ]
+        self.assertLess(
+            panel.index("${accountProxyPurchasePlaceholderHtml()}"),
+            panel.index("${accountProxyPoolFiltersHtml()}"),
         )
-        self.assertIn("max-height: min(70vh, 720px);", self.console_styles)
-        self.assertIn(
-            ".proxy-market-mini-grid {\n  display: grid;\n  grid-template-columns: repeat(3, minmax(0, 1fr));",
-            self.console_styles,
-        )
-        self.assertIn(
-            ".console-page .proxy-market-mini-grid {\n    grid-template-columns: minmax(0, 1fr);",
-            self.console_styles,
-        )
-        self.assertNotIn("system-proxy-pool-actions", self.console_script)
-        self.assertNotIn("data-system-proxy-pool-close>完成", self.console_script)
-
-    def test_shared_system_pool_reuses_the_legacy_market_card_pattern(self):
-        self.assertIn(
-            '<article class="proxy-market-mini-card" data-system-proxy-pool-card=',
-            self.console_script,
-        )
-        for class_name in (
-            "proxy-market-mini-card-head",
-            "proxy-market-mini-country",
-            "proxy-market-mini-stock",
-            "proxy-market-mini-location",
-            "proxy-market-mini-meta",
-        ):
-            self.assertIn(class_name, self.console_script)
-            self.assertIn(f".{class_name}", self.console_styles)
-        self.assertIn(
-            ".proxy-market-mini-card {\n  display: grid;\n  gap: 8px;\n  padding: 12px;",
-            self.console_styles,
-        )
-        self.assertIn(
-            ".proxy-market-mini-card {\n    gap: 7px;\n    padding: 10px;",
-            self.console_styles,
-        )
-        self.assertNotIn(".system-proxy-pool-card {", self.console_styles)
-        self.assertNotIn('class="system-proxy-pool-card', self.console_script)
 
     def test_backend_system_proxies_are_exposed_only_through_the_shared_pool(self):
         regular_list_route = self.social_api_source[

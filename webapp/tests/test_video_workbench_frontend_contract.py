@@ -186,7 +186,7 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertIn(replace_path, self.console_js)
         self.assertIn(replace_path, self.profile_html)
         self.assertIn('return renderReplaceIcon("ui-action-icon persona-account-binding-icon")', self.console_js)
-        self.assertIn('return renderReplaceIcon("ui-media-card-edit-icon")', self.console_js)
+        self.assertIn('<span aria-hidden="true">${renderReplaceIcon()}</span><span>替换</span>', self.console_js)
         self.assertNotIn("M20 7h-8a5 5 0 0 0-5 5", self.console_js)
         self.assertNotIn("M19.5 7.5A8 8", self.console_js)
         self.assertNotIn("M14.5 4.5 19.5 9.5", self.profile_html)

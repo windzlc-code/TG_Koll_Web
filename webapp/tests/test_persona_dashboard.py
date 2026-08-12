@@ -2297,6 +2297,99 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["image_count"], 3)
         self.assertEqual(captured["payload"]["aspect_ratio"], "1:1")
 
+    def test_task_submit_accepts_one_owned_persona_post_image_as_edit_source(self):
+        self._write_archives()
+        source_task_id = "task-persona-post-edit-source"
+        server._create_task_record(
+            source_task_id,
+            self._admin_user_id(),
+            "persona_post_image",
+            {
+                "related_persona_id": "persona-1",
+                "related_post_id": "post-1",
+                "generation_content": "source",
+            },
+        )
+        with server.db() as conn:
+            conn.execute(
+                "UPDATE tasks SET status = 'success', output_json = ? WHERE id = ?",
+                (
+                    server._json_dumps({
+                        "image_paths": [str(self.draft_media_path)],
+                        "image_count": 1,
+                        "aspect_ratio": "4:3",
+                    }),
+                    source_task_id,
+                ),
+            )
+        captured = {}
+
+        def fake_enqueue(task_id, user_id, task_type, payload):
+            captured["payload"] = payload
+
+        with mock.patch.object(server, "_enqueue_task", side_effect=fake_enqueue):
+            resp = self.client.post(
+                "/api/tasks/submit",
+                data={
+                    "task_type": "persona_post_image",
+                    "params_json": json.dumps({
+                        "related_persona_id": "persona-1",
+                        "related_post_id": "post-1",
+                        "prompt": "只把背景改成深蓝色，人物保持不变",
+                        "generation_content": "source",
+                        "image_count": 4,
+                        "aspect_ratio": "auto",
+                        "image_edit_mode": True,
+                        "edit_source": {"task_id": source_task_id, "media_index": 0},
+                        "_reference_image_path": "C:/attacker/forged.png",
+                    }, ensure_ascii=False),
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        payload = captured["payload"]
+        self.assertEqual(payload["image_count"], 1)
+        self.assertEqual(payload["aspect_ratio"], "4:3")
+        self.assertTrue(payload["image_edit_mode"])
+        self.assertEqual(payload["edit_source"], {"task_id": source_task_id, "media_index": 0})
+        self.assertEqual(Path(payload["_reference_image_path"]).resolve(), self.draft_media_path.resolve())
+
+    def test_task_submit_rejects_edit_source_from_another_post(self):
+        self._write_archives()
+        source_task_id = "task-persona-post-wrong-edit-source"
+        server._create_task_record(
+            source_task_id,
+            self._admin_user_id(),
+            "persona_post_image",
+            {
+                "related_persona_id": "persona-1",
+                "related_post_id": "another-post",
+                "generation_content": "source",
+            },
+        )
+        with server.db() as conn:
+            conn.execute(
+                "UPDATE tasks SET status = 'success', output_json = ? WHERE id = ?",
+                (server._json_dumps({"image_paths": [str(self.draft_media_path)]}), source_task_id),
+            )
+
+        resp = self.client.post(
+            "/api/tasks/submit",
+            data={
+                "task_type": "persona_post_image",
+                "params_json": json.dumps({
+                    "related_persona_id": "persona-1",
+                    "related_post_id": "post-1",
+                    "prompt": "局部修改",
+                    "image_edit_mode": True,
+                    "edit_source": {"task_id": source_task_id, "media_index": 0},
+                }, ensure_ascii=False),
+            },
+        )
+
+        self.assertEqual(resp.status_code, 403, resp.text)
+        self.assertIn("不属于当前人设和草稿", resp.text)
+
     def test_task_submit_accepts_auto_persona_post_image_ratio(self):
         self._write_archives()
         captured = {}
@@ -2603,6 +2696,50 @@ class PersonaDashboardApiTests(unittest.TestCase):
         saved_path = Path(result["image_paths"][0])
         self.assertTrue(saved_path.is_file())
         self.assertEqual(saved_path.read_bytes(), self.draft_media_path.read_bytes())
+
+    def test_persona_post_image_runner_uses_explicit_edit_source_and_bills_only_new_image(self):
+        self._write_archives()
+        task_id = "task-persona-post-image-edit"
+        payload = {
+            "related_persona_id": "persona-1",
+            "related_post_id": "post-1",
+            "prompt": "只把背景改成深蓝色",
+            "generation_content": "保留人物和构图",
+            "image_count": 1,
+            "aspect_ratio": "4:3",
+            "image_edit_mode": True,
+            "edit_source": {"task_id": "source-task", "media_index": 0},
+            "_reference_image_path": str(self.draft_media_path),
+        }
+        completed = mock.Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "ok": True,
+                "imageResult": {
+                    "url": "data:image/png;base64," + base64.b64encode(self.draft_media_path.read_bytes()).decode("ascii"),
+                    "mode": "closed-person",
+                },
+            }, ensure_ascii=False),
+            stderr="",
+        )
+
+        with (
+            mock.patch.object(server, "_resolve_persona_post_image_aspect_ratio", return_value=("4:3", {"mode": "manual"})),
+            mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"),
+            mock.patch.object(server.subprocess, "run", return_value=completed) as run_mock,
+        ):
+            result = server._run_persona_post_image_task(task_id, payload)
+
+        cli_payload = json.loads(run_mock.call_args.args[0][-1])
+        source_copy = Path(cli_payload["referenceImageUrl"])
+        self.assertTrue(source_copy.is_file())
+        self.assertEqual(source_copy.resolve(), self.draft_media_path.resolve())
+        self.assertEqual(source_copy.read_bytes(), self.draft_media_path.read_bytes())
+        self.assertTrue(result["image_edit_mode"])
+        self.assertEqual(len(result["image_paths"]), 1)
+        self.assertEqual(Path(server._extract_download_paths(result)[0]).resolve(), Path(result["image_paths"][0]).resolve())
+        self.assertEqual(len(server._task_output_media_items(task_id, result)), 1)
+        self.assertEqual(server._billing_actual_image_quantity(result), 1)
 
     def test_persona_post_image_runner_generates_requested_images_concurrently(self):
         self._write_archives()

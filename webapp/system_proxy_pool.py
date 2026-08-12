@@ -213,6 +213,8 @@ def list_system_proxy_pool_options(
                 "available": not selected,
                 "bound_account_count": int(item.get("bound_account_count") or 0),
                 "claimed_at": int(item.get("claimed_at") or 0),
+                "published_at": int(item.get("published_at") or 0),
+                "updated_at": int(item.get("updated_at") or 0),
             }
         )
     return options

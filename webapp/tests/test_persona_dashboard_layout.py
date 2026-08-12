@@ -609,13 +609,14 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn(">开始生成</button>", self.console_script)
         self.assertNotIn('"自动生成草稿"', self.console_script)
         self.assertNotIn('"AI 润色预览"', self.console_script)
+        self.assertIn('modifying ? "重生成图片"', self.console_script)
         self.assertIn('taskState?.taskId ? "重新生成" : "生成预览"', self.console_script)
         self.assertIn(">添加至草稿</button>", self.console_script)
         self.assertIn(">替换</button>", self.console_script)
         self.assertNotIn(">覆盖全部媒体</button>", self.console_script)
         self.assertIn("persona-media-task-actions", self.console_script)
         self.assertIn(
-            "renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt })",
+            "renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt, addMediaInputId: mediaUploadInputId })",
             self.console_script,
         )
         self.assertIn(
@@ -630,18 +631,20 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
     def test_generated_preview_queue_survives_media_generation_and_supports_media_selection(self):
         self.assertIn("personaGeneratedPreviews: {}", self.console_script)
         self.assertIn("function consumePersonaGeneratedPreviewPost(persona, postId)", self.console_script)
-        self.assertIn("function renderPersonaTaskMediaPreview(taskState, items = [])", self.console_script)
-        self.assertIn('data-persona-task-media-select="${esc(sourceIndex)}"', self.console_script)
-        self.assertIn("media_indexes: selectedMediaIndexes", self.console_script)
+        self.assertIn("function renderPersonaTaskMediaPreview(taskState, items = personaTaskMediaItems(taskState))", self.console_script)
+        self.assertIn('data-persona-task-media-select="${esc(mediaKey)}"', self.console_script)
+        self.assertIn("media_indexes: [Number(item.sourceIndex)]", self.console_script)
+        self.assertIn('data-persona-task-media-modify="${esc(mediaKey)}"', self.console_script)
+        self.assertIn('data-persona-task-media-replace="${esc(mediaKey)}"', self.console_script)
+        self.assertIn('data-persona-task-media-delete="${esc(mediaKey)}"', self.console_script)
         self.assertNotIn("data-persona-generated-media", self.console_script)
         self.assertIn(
-            '${items.length && status === "success" ? `',
+            '${items.length && hasSuccessfulResult ? `',
             self.console_script,
         )
-        self.assertIn(".persona-task-media-card.is-selected", self.styles)
+        self.assertIn(".persona-public-media-card.is-selected", self.styles)
         self.assertIn(
-            ".persona-task-media-select .ui-action-icon rect,\n"
-            ".persona-task-media-select .ui-action-icon path",
+            ".persona-public-media-select .persona-media-selection-icon",
             self.styles,
         )
         self.assertIn("stroke: currentColor;", self.styles)
@@ -2620,11 +2623,12 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script.index('if (panel === "posts")'):
             self.console_script.index('if (panel === "history")')
         ]
-        self.assertIn('class="persona-content-tabs persona-publish-content-tabs account-browser-tabs"', tabs)
+        self.assertIn('return renderUnderlineTabGroup({', tabs)
+        self.assertIn('className: "publish-mode-tabs"', tabs)
         self.assertIn('["generate", "新建推文"]', tabs)
         self.assertIn('["posts", "草稿库"]', tabs)
         self.assertIn('["favorites", "收藏"]', tabs)
-        self.assertIn('data-persona-content-tab=', tabs)
+        self.assertIn('dataAttribute: "data-persona-content-tab"', tabs)
         self.assertIn('classList.toggle("persona-detail--content", groupKey === "content")', self.console_script)
         self.assertNotIn('persona-source-toggle', posts_panel)
         self.assertNotIn('data-persona-open-new-draft', posts_panel)
@@ -2633,8 +2637,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('${renderPersonaPostBulkActions(persona, postSource, sourceRows)}', posts_panel)
         self.assertNotIn('sourceRows.length ? renderPersonaPostBulkActions', posts_panel)
         self.assertIn('const contentTabButton = event.target.closest("[data-persona-content-tab]");', self.console_script)
-        self.assertIn('.persona-content-tabs {\n  width: min(100%, 420px);', self.styles)
-        self.assertIn(".persona-content-tabs button {\n  min-height: 34px;\n  padding: 0 18px;", self.styles)
+        self.assertIn('.publish-mode-tabs {', self.styles)
+        self.assertIn('.publish-mode-tabs button {', self.styles)
         self.assertIn("position: sticky;", self.styles)
         self.assertIn('.persona-content-tabs.account-browser-tabs button {\n  font-weight: inherit;', self.styles)
         self.assertIn('.console-page .persona-content-tabs {\n    grid-template-columns: repeat(3, minmax(0, 1fr));', self.styles)
@@ -2744,6 +2748,15 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('window.addEventListener("beforeunload"', self.console_script)
         self.assertIn('gap: var(--mobile-control-gap);', self.styles)
         self.assertIn('min-height: var(--mobile-touch-target);', self.styles)
+
+    def test_new_tweet_composer_does_not_add_a_second_leave_confirmation_modal(self):
+        transient = self.console_script[
+            self.console_script.index("function activeTransientWorkspaceState"):
+            self.console_script.index("async function confirmLeaveTransientWorkspaceState")
+        ]
+
+        self.assertNotIn('kind: "persona_draft_composer"', transient)
+        self.assertNotIn('title: "离开当前推文输入？"', transient)
 
     def test_generated_titles_are_only_written_from_manual_input_without_numbering(self):
         generated_titles = self.console_script[
@@ -2943,17 +2956,14 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         render_end = self.console_script.index("\nfunction renderPersonaPostsViewTabs", render_start)
         renderer = self.console_script[render_start:render_end]
 
-        self.assertIn("persona-publish-content-tabs", renderer)
+        self.assertIn('className: "publish-mode-tabs"', renderer)
         self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr));", self.styles)
-        self.assertIn(".persona-content-tabs.persona-publish-content-tabs button", self.styles)
+        self.assertIn(".publish-mode-tabs button", self.styles)
         self.assertIn("border-radius: 6px;", self.styles)
         self.assertIn("border: 1px solid var(--line);", self.styles)
         self.assertIn("background: var(--panel-solid);", self.styles)
         self.assertIn("background: #071112;", self.styles)
-        self.assertIn(
-            ".persona-detail .persona-content-tabs.persona-publish-content-tabs button[type=\"button\"]",
-            self.styles,
-        )
+        self.assertIn(".publish-mode-tabs button", self.styles)
 
     def test_segmented_controls_use_a_simple_sliding_background_without_click_highlight(self):
         interaction_start = self.styles.index("/* Segmented controls keep their existing state behavior")
@@ -3194,7 +3204,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("scheduleMobileTaskDockSlideMetrics", dock_state)
         self.assertIn("const groupRect = group.getBoundingClientRect();", slider)
         self.assertIn("const activeStyle = getComputedStyle(current);", slider)
-        self.assertIn("const inactiveColor = getComputedStyle(button).color;", slider)
+        self.assertIn("const inactiveStyle = getComputedStyle(button);", slider)
+        self.assertIn("inactiveColor: inactiveStyle.color", slider)
 
     def test_mobile_task_dock_defers_real_navigation_one_frame_without_removing_page_slide(self):
         helper = self.console_script[
@@ -3348,10 +3359,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('<path d="M6 6l1 14h10l1-14"></path>', self.console_script)
         self.assertNotIn('<path d="M6 6l1 15h10l1-15"></path>', self.console_script)
         self.assertIn(
-            ".persona-memory-actions > button,\n"
-            "  .persona-hot-media-action",
+            ".persona-public-media-card-actions :is(.ui-action-icon, .ui-eye-icon, .ui-replace-icon, .ui-trash-icon)",
             self.styles,
         )
+        self.assertNotIn(".persona-hot-media-action", self.styles)
         self.assertIn("place-items: center;\n  padding: 0;\n  line-height: 0;", self.styles)
 
     def test_editor_and_persona_menu_deletes_use_red_text_actions(self):
@@ -3496,7 +3507,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(submit)
         body = submit.group("body")
-        guard = "if (!(await ensurePersonaReferenceImageForMediaTask(persona))) return;"
+        guard = "if (!modifyItem && !(await ensurePersonaReferenceImageForMediaTask(persona))) return;"
         self.assertIn(guard, body)
         self.assertLess(body.index(guard), body.index("snapshotPersonaCurrentForm();"))
         self.assertLess(body.index(guard), body.index('api("/api/tasks/submit"'))
@@ -3505,10 +3516,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("function renderPersonaMediaContentModeTabs", self.console_script)
         self.assertNotIn("personaMediaManualContent", self.console_script)
         self.assertIn("function normalizePersonaMediaGenerationForm", self.console_script)
-        self.assertIn("<select id=\"personaMediaImageCount\">", self.console_script)
+        self.assertIn("<select id=\"personaMediaImageCount\"", self.console_script)
         self.assertIn("[1, 2, 3, 4]", self.console_script)
         self.assertNotIn('"AI 润色预览"', self.console_script)
-        self.assertIn('taskState?.taskId ? "重新生成" : "生成预览"', self.console_script)
+        self.assertIn('modifying ? "重生成图片"', self.console_script)
         self.assertIn("content_source_mode: \"draft\"", self.console_script)
         self.assertNotIn("contentMode === \"manual\"", self.console_script)
         self.assertNotIn("manual_content:", self.console_script)
@@ -3526,6 +3537,138 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             "Math.min(Math.max(Number.isFinite(value) ? Math.round(value) : 1, 1), 8)",
             self.console_script,
         )
+
+    def test_media_result_cards_support_single_image_editing_and_compact_edit_menu(self):
+        self.assertIn("function personaTaskMediaModifyItem", self.console_script)
+        self.assertIn("function renderPersonaPublicMediaEditMenu", self.console_script)
+        self.assertNotIn("function renderPersonaTaskMediaEditMenu", self.console_script)
+        self.assertIn("图片局部修改提示词（第 ${displayIndex + 1} 张）", self.console_script)
+        self.assertIn("每次只能修改一张", self.console_script)
+        self.assertIn("image_edit_mode: Boolean(modifyItem)", self.console_script)
+        self.assertIn("edit_source: modifyItem && !modifyItem.replacementFile", self.console_script)
+        self.assertIn("previousResults", self.console_script)
+        self.assertIn("const attachedKeys = [];", self.console_script)
+        self.assertIn("已保留未完成项，可直接重试", self.console_script)
+        self.assertIn("function renderPersonaPublicMediaSelectionButton", self.console_script)
+        self.assertIn("function renderPersonaPublicMediaFooter", self.console_script)
+        self.assertGreaterEqual(self.console_script.count("renderPersonaPublicMediaFooter(index,"), 2)
+        self.assertIn("persona-public-media-footer", self.console_script)
+        self.assertIn("persona-public-media-card-actions", self.console_script)
+        self.assertIn("persona-public-media-edit-popover", self.console_script)
+        self.assertIn(
+            ".persona-media-grid.persona-task-media-grid {\n  grid-template-columns: repeat(2, minmax(0, 1fr));",
+            self.styles,
+        )
+        self.assertIn(
+            ".persona-unified-media-editor .persona-edit-media-grid {\n  width: 100%;\n  grid-template-columns: repeat(2, minmax(0, 1fr));",
+            self.styles,
+        )
+        self.assertIn(".persona-media-prompt-field.is-image-editing", self.styles)
+        self.assertIn(".persona-media-prompt-label {\n  padding-inline: 4px;", self.styles)
+        self.assertIn("padding: 2px;", self.styles)
+        self.assertIn("@keyframes personaMediaEditBorderFlow", self.styles)
+        self.assertNotIn(".persona-media-prompt-field.is-image-editing::before", self.styles)
+        prompt_state = self.styles.split(
+            ".persona-media-prompt-field.is-image-editing {",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertNotIn("--media-edit-flow-gap", prompt_state)
+        self.assertNotIn("margin:", prompt_state)
+        self.assertNotIn("persona-media-edit-source-note", self.console_script)
+        self.assertIn('<span class="sr-only">已选择 1 张图片作为图生图基础', self.console_script)
+        self.assertIn("background: var(--accent);", self.styles)
+        self.assertIn("var(--accent-dark)", self.styles)
+        self.assertIn(".persona-public-media-card.is-selected:not(.is-modify-source)", self.styles)
+        self.assertIn(".persona-public-media-card.is-modify-source", self.styles)
+        self.assertIn("animation: none;", self.styles)
+        self.assertIn("#06366f", self.styles)
+        self.assertIn("#12c9e6", self.styles)
+        self.assertIn("var(--media-edit-flow-deep) 34%", self.styles)
+        modify_card = self.styles.split(".persona-public-media-card.is-modify-source {", 1)[1].split("}", 1)[0]
+        self.assertIn("box-shadow: none;", modify_card)
+        self.assertIn("background-size: 100% 100%, 200% 100%;", modify_card)
+        prompt_border = self.styles.split(".persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {", 1)[1].split("}", 1)[0]
+        self.assertIn("padding: 2px;", prompt_border)
+        self.assertIn("background-size: 200% 100%;", prompt_border)
+        self.assertIn("background-repeat: repeat-x;", prompt_border)
+        self.assertNotIn("drop-shadow", prompt_border)
+        self.assertIn("to { background-position: 0 0, 200% 0; }", self.styles)
+        self.assertNotIn("var(--accent-2) 38%, #72d9ee", self.styles)
+        self.assertNotIn("linear-gradient(145deg, #0d65c4, #063a79)", self.styles)
+        normal_selected = self.styles.split(
+            ".persona-public-media-card.is-selected:not(.is-modify-source) {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("box-shadow: none;", normal_selected)
+        self.assertNotIn("z-index:", modify_card)
+        self.assertNotIn(".console-page .persona-task-media-card {\n    padding: 5px;", self.styles)
+        self.assertIn(
+            ".console-page :is(.console-shell, .console-modal) label.persona-public-media-add-tile {\n  margin-top: 0;",
+            self.styles,
+        )
+        self.assertIn(
+            ".console-page :is(.console-shell, .console-modal) button.persona-public-media-select {",
+            self.styles,
+        )
+        self.assertIn("min-height: 28px !important;\n  max-height: 28px;\n  aspect-ratio: 1;", self.styles)
+        self.assertIn("border-radius: 50% !important;", self.styles)
+
+    def test_image_edit_selection_reuses_stable_media_scroll_helper(self):
+        modifier = self.console_script.split("function setPersonaTaskMediaModifySource", 1)[1].split(
+            "function choosePersonaTaskMediaReplacement", 1
+        )[0]
+        self.assertIn('pendingPersonaMediaScrollId = String(persona.id || "");', modifier)
+        self.assertIn(
+            "scrollPersonaMediaComposerIntoView(persona.id, { focusEditPrompt: true });",
+            modifier,
+        )
+        self.assertNotIn("scrollIntoView", modifier)
+
+    def test_ai_generation_upload_reuses_horizontal_image_only_dropzone(self):
+        self.assertNotIn('data-persona-media-ai-edit="${esc(index)}"', self.console_script)
+        self.assertNotIn("function personaMediaItemToImageFile", self.console_script)
+        self.assertNotIn("function openPersonaPostMediaInAiEditor", self.console_script)
+        self.assertNotIn("function addPersonaTaskPreviewImages(fileList)", self.console_script)
+        self.assertNotIn("data-persona-task-media-upload", self.console_script)
+        self.assertNotIn("local-media-upload-", self.console_script)
+        self.assertNotIn("appendedResults", self.console_script)
+        self.assertNotIn("function renderPersonaPublicMediaAddTile(inputId", self.console_script)
+        self.assertGreaterEqual(self.console_script.count('renderUploadDropzone("personaMediaTaskFiles"'), 2)
+        self.assertGreaterEqual(self.console_script.count('label: "添加媒体"'), 2)
+        self.assertGreaterEqual(self.console_script.count('accept: "image/*"'), 4)
+        self.assertIn('class="account-pool-add-button upload-zone-mobile-picker"', self.console_script)
+        self.assertGreaterEqual(self.console_script.count("publicMediaCards: true"), 4)
+        self.assertIn('class="persona-public-media-card persona-upload-media-card', self.console_script)
+        self.assertIn('input.matches("[data-public-media-cards]")', self.console_script)
+        compact_upload = self.console_script.split("function renderPersonaCompactMediaUpload", 1)[1].split(
+            "function renderPersonaPendingMediaInput", 1
+        )[0]
+        self.assertIn("data-public-media-cards", compact_upload)
+        self.assertIn('.upload-thumbnail-grid.persona-public-media-upload-grid {', self.styles)
+        self.assertNotIn("persona-task-media-add-tile", self.console_script)
+        self.assertNotIn(".persona-task-media-add-tile", self.styles)
+        self.assertNotIn("renderPersonaTaskMediaPreview(null, [])", self.console_script)
+        task_modify_line = next(
+            line for line in self.console_script.splitlines()
+            if "data-persona-task-media-modify" in line and "<button" in line
+        )
+        self.assertIn("${renderPlusIcon()}</button>", task_modify_line)
+        self.assertNotIn("${renderReplaceIcon()}</button>", task_modify_line)
+        self.assertIn('renderUploadDropzone("personaMediaEditSourceFile"', self.console_script)
+        self.assertIn('accept: "image/*"', self.console_script)
+        self.assertIn("imageEditSource: true", self.console_script)
+        self.assertIn("files = imageFiles.slice(-1);", self.console_script)
+        self.assertIn("const files = modifyItem ? [] : mediaUploadState.files;", self.console_script)
+
+    def test_media_task_result_does_not_render_internal_status_log_card(self):
+        result_renderer = self.console_script.split("function renderPersonaMediaTaskResult", 1)[1].split(
+            "function renderPersonaCreateWorkbench", 1
+        )[0]
+        self.assertNotIn("compact-row-log", result_renderer)
+        self.assertNotIn("statusLabel(status)", result_renderer)
+        self.assertIn("renderPersonaTaskMediaPreview(taskState, items)", result_renderer)
+        self.assertIn('title: "等待生成结果"', result_renderer)
+        self.assertIn('icon: "media"', result_renderer)
+        self.assertIn("action: renderUploadAddMediaButton(addMediaInputId)", result_renderer)
 
     def test_media_task_selection_keeps_image_nodes_and_draft_edit_reuses_media_editor(self):
         task_handler_start = self.console_script.index(

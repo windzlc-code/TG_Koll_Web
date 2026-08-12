@@ -1904,6 +1904,7 @@ function uploadDropzoneStateKey(inputOrId) {
   const scopedPersonaInputs = new Set([
     "personaPostMediaUploadFiles",
     "personaMediaTaskFiles",
+    "personaMediaEditSourceFile",
     "personaPublishFiles",
   ]);
   if (!scopedPersonaInputs.has(inputId)) return inputId;
@@ -8319,6 +8320,7 @@ function clonePersonaDraftMediaItem(item = {}) {
     unavailable: Boolean(item?.unavailable),
     reason: String(item?.reason || "").trim(),
     pending: Boolean(item?.pending),
+    file: item?.file instanceof File ? item.file : null,
   };
 }
 
@@ -10975,7 +10977,7 @@ function renderModuleEmptyState({
     browser: renderMobileTaskIcon("browser_list"),
     billing: renderMobileTaskIcon("billing"),
     content: renderFormListIcon(),
-    media: renderMediaCardViewIcon(),
+    media: renderEyeIcon(),
     network: renderMobileTaskIcon("proxies"),
     persona: renderMobileTaskIcon("personas"),
     settings: renderMobileTaskIcon("console_settings"),
@@ -11090,19 +11092,16 @@ function renderNetworkIcon() {
   </svg>`;
 }
 
-function renderSystemProxyPoolIcon() {
-  return `<svg class="ui-action-icon ui-system-proxy-pool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M4 10.5h16v9H4z"></path>
-    <path d="M3 10.5 5 5h14l2 5.5"></path>
-    <path d="M4 10.5c0 1.55 1.12 2.5 2.5 2.5s2.5-.95 2.5-2.5c0 1.55 1.12 2.5 2.5 2.5s2.5-.95 2.5-2.5c0 1.55 1.12 2.5 2.5 2.5s2.5-.95 2.5-2.5"></path>
-    <path d="M8 19.5v-4h4v4"></path>
+function renderShoppingBagIcon() {
+  return `<svg class="ui-action-icon ui-shopping-bag-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5 8.5h14l-1 11H6l-1-11Z"></path>
+    <path d="M9 9V6.5a3 3 0 0 1 6 0V9"></path>
   </svg>`;
 }
 
-function renderCustomProxyIcon() {
-  return `<svg class="ui-action-icon ui-custom-proxy-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M4 7h16M4 12h16M4 17h16"></path>
-    <circle cx="8" cy="7" r="1.5"></circle><circle cx="15" cy="12" r="1.5"></circle><circle cx="11" cy="17" r="1.5"></circle>
+function renderNoProxyIcon() {
+  return `<svg class="ui-action-icon ui-no-proxy-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <circle cx="12" cy="12" r="8.5"></circle><path d="m6 6 12 12"></path>
   </svg>`;
 }
 
@@ -11193,17 +11192,6 @@ function renderReplaceIcon(extraClass = "") {
     <path d="M20 16a7 7 0 0 1-12 3l-2-2"></path>
     <path d="M6 21v-4h4"></path>
   </svg>`;
-}
-
-function renderMediaCardViewIcon() {
-  return `<svg class="ui-media-card-view-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <path d="M2.8 12s3.4-5.2 9.2-5.2 9.2 5.2 9.2 5.2-3.4 5.2-9.2 5.2S2.8 12 2.8 12Z"></path>
-    <circle cx="12" cy="12" r="2.5"></circle>
-  </svg>`;
-}
-
-function renderMediaCardEditIcon() {
-  return renderReplaceIcon("ui-media-card-edit-icon");
 }
 
 function renderUndoIcon() {
@@ -11732,25 +11720,34 @@ function renderUnifiedAutomationModule(options = null) {
     </div>`;
 }
 
+function renderUploadAddMediaButton(id) {
+  const inputId = String(id || "").trim();
+  if (!inputId) return "";
+  return `<label class="account-pool-add-button upload-zone-mobile-picker" for="${esc(inputId)}" title="添加媒体" aria-label="添加媒体">
+    <span aria-hidden="true"></span>
+    <strong>添加媒体</strong>
+  </label>`;
+}
+
 function renderUploadDropzone(id, {
   label = "上传媒体",
   accept = "image/*,video/*",
   hint = "拖动文件到这里，或点击选择文件。",
   multiple = true,
+  imageEditSource = false,
+  publicMediaCards = false,
+  embeddedPreview = false,
 } = {}) {
   queueMicrotask(() => restoreUploadDropzoneFiles(id));
   const stateKey = uploadDropzoneStateKey(id);
   return `
-    <div class="upload-zone" data-upload-dropzone>
-      <input class="upload-zone-input" id="${esc(id)}" data-upload-state-key="${esc(stateKey)}" type="file" ${multiple ? "multiple" : ""} accept="${esc(accept)}" />
-      <label class="upload-zone-picker" for="${esc(id)}">
+    <div class="upload-zone ${embeddedPreview ? "upload-zone--embedded-preview" : ""}" data-upload-dropzone>
+      <input class="upload-zone-input" id="${esc(id)}" data-upload-state-key="${esc(stateKey)}" type="file" ${multiple ? "multiple" : ""} accept="${esc(accept)}" ${imageEditSource ? "data-persona-image-edit-source" : ""} ${publicMediaCards ? "data-public-media-cards" : ""} />
+      ${embeddedPreview ? "" : `<label class="upload-zone-picker" for="${esc(id)}">
         <strong>${esc(label)}</strong>
         <p>${esc(hint || "拖动文件到这里，或点击选择文件。")}</p>
       </label>
-      <label class="account-pool-add-button upload-zone-mobile-picker" for="${esc(id)}" title="添加媒体" aria-label="添加媒体">
-        <span aria-hidden="true"></span>
-        <strong>添加媒体</strong>
-      </label>
+      ${renderUploadAddMediaButton(id)}`}
       <div class="file-strip" data-upload-file-list="${esc(id)}" hidden></div>
     </div>`;
 }
@@ -11875,6 +11872,22 @@ function removeUploadDropzoneFiles(input, indexes) {
       .filter(Boolean),
   );
   const remaining = files.filter((_, index) => !removals.has(index));
+  const customModifySource = personaAiUploadSelectionControlsModify(input)
+    ? personaCustomMediaModifyItem()?.replacementFile
+    : null;
+  const removedModifySource = Boolean(
+    customModifySource
+    && files.some((file, index) => removals.has(index)
+      && uploadFileSignature(file) === uploadFileSignature(customModifySource))
+  );
+  if (removedModifySource) {
+    const persona = selectedPersona();
+    const form = persona ? personaFormState(persona.id).media : null;
+    if (String(form?.customModifySource?.previewUrl || "").startsWith("blob:")) {
+      URL.revokeObjectURL(form.customModifySource.previewUrl);
+    }
+    if (form) delete form.customModifySource;
+  }
   uploadSelectedIndexes.set(
     input,
     new Set(remaining.map((file, index) => (selectedFiles.has(file) ? index : -1)).filter((index) => index >= 0)),
@@ -11882,6 +11895,10 @@ function removeUploadDropzoneFiles(input, indexes) {
   assignUploadDropzoneFiles(input, remaining);
   syncUploadDropzone(input);
   input.dispatchEvent(new Event("input", { bubbles: true }));
+  if (removedModifySource) {
+    renderPersonaDetail();
+    renderConfirmSummary();
+  }
 }
 
 function reorderUploadDropzoneFiles(input, fromIndex, toIndex) {
@@ -11922,6 +11939,10 @@ function editUploadDropzoneFile(input, index) {
   picker.addEventListener("change", () => {
     const replacement = picker.files?.[0];
     if (!replacement) return;
+    if (input.matches?.("[data-persona-image-edit-source]") && fileKind(replacement) !== "image") {
+      showMsg("commandMsg", "AI 编辑源只支持图片。", false);
+      return;
+    }
     const nextFiles = [...currentFiles];
     nextFiles[currentIndex] = replacement;
     assignUploadDropzoneFiles(input, nextFiles);
@@ -11945,21 +11966,34 @@ function renderPersonaMediaSelectionIcon(selected) {
   </svg>`;
 }
 
-function renderMediaOrderHandle(index, kind = "upload") {
+function renderMediaOrderHandle(index) {
   const order = Math.max(0, Number(index) || 0) + 1;
-  const persona = kind === "persona";
-  const className = persona ? "persona-edit-media-order" : "file-chip-order";
-  const dataAttribute = persona ? "data-persona-media-drag-handle" : "data-upload-sort-handle";
   return `
     <button
       type="button"
-      class="${className}"
-      ${dataAttribute}="${esc(index)}"
+      class="file-chip-order"
+      data-upload-sort-handle="${esc(index)}"
       title="拖动调整第 ${esc(order)} 个媒体的顺序"
       aria-label="第 ${esc(order)} 个媒体，拖动调整顺序"
     >
       <span class="media-order-number">${esc(order)}</span>
     </button>`;
+}
+
+function personaDraftMediaTargetIsEditing(persona = selectedPersona()) {
+  const { source, post } = personaMediaTargetPost(persona);
+  if (!persona || !post) return false;
+  const draft = personaFormState(persona.id).draft || {};
+  return String(draft.editingPostId || "").trim() === String(post.id || "").trim()
+    && (draft.editingSource === "favorites" ? "favorites" : "posts") === (source === "favorites" ? "favorites" : "posts");
+}
+
+function personaAiUploadSelectionControlsModify(input) {
+  return Boolean(
+    input?.id === "personaMediaTaskFiles"
+    && input.matches?.("[data-public-media-cards]")
+    && personaDraftMediaTargetIsEditing()
+  );
 }
 
 function clearUploadPreviewResources(input, { deferRevoke = false } = {}) {
@@ -11987,12 +12021,23 @@ function syncUploadDropzone(input) {
   const stateKey = uploadDropzoneStateKey(input);
   if (stateKey) uploadFilesById.set(stateKey, files);
   zone.classList.toggle("has-files", files.length > 0);
+  const previewSurface = zone.closest("[data-persona-media-preview-surface]");
+  if (previewSurface) previewSurface.classList.toggle("has-upload-preview", files.length > 0);
   host.hidden = !files.length;
   const selectedIndexes = new Set(
     Array.from(uploadSelectedIndexes.get(input) || [])
       .map((index) => Number(index))
       .filter((index) => Number.isInteger(index) && index >= 0 && index < files.length),
   );
+  const selectionControlsModify = personaAiUploadSelectionControlsModify(input);
+  if (selectionControlsModify) {
+    const activeFile = personaCustomMediaModifyItem()?.replacementFile;
+    selectedIndexes.clear();
+    const activeIndex = activeFile
+      ? files.findIndex((file) => uploadFileSignature(file) === uploadFileSignature(activeFile))
+      : -1;
+    if (activeIndex >= 0) selectedIndexes.add(activeIndex);
+  }
   uploadSelectedIndexes.set(input, selectedIndexes);
   if (!files.length) {
     host.replaceChildren();
@@ -12021,17 +12066,8 @@ function syncUploadDropzone(input) {
   })));
   if (previewGroupId) uploadPreviewGroupIds.set(input, previewGroupId);
   host.classList.add("has-preview");
-  host.innerHTML = `
-    <div class="upload-selection-toolbar">
-      <button type="button" class="upload-select-all bulk-selection-icon-button" data-upload-select-all="${esc(input.id)}" title="${selectedIndexes.size === files.length ? "取消全选" : "全选"}" aria-label="${selectedIndexes.size === files.length ? "取消全选" : "全选"}">
-        ${selectedIndexes.size === files.length ? renderClearSelectionIcon() : renderSelectAllIcon()}
-      </button>
-      <span class="upload-selection-count">已选 ${esc(selectedIndexes.size)} / ${esc(files.length)}</span>
-      <button type="button" class="upload-delete-selected unified-action-icon-button" data-upload-delete-selected="${esc(input.id)}" title="删除所选" aria-label="删除所选" ${selectedIndexes.size ? "" : "hidden"}>
-        ${renderTrashIcon()}
-      </button>
-    </div>
-    <div class="upload-thumbnail-grid">${previewRows.map(({ file, index, type, typeLabel, url }) => {
+  const publicMediaCards = input.matches("[data-public-media-cards]");
+  const renderUploadPreviewCard = ({ file, index, type, typeLabel, url }) => {
     let preview = `<div class="file-preview-frame file-preview-frame--empty">${esc(typeLabel)}</div>`;
     if (url) {
       preview = type === "image"
@@ -12040,6 +12076,50 @@ function syncUploadDropzone(input) {
     }
     const isSelected = selectedIndexes.has(index);
     const previewIndex = previewIndexByFileIndex.get(index);
+    if (publicMediaCards) {
+      const taskState = (() => {
+        const persona = selectedPersona();
+        const { post } = personaMediaTargetPost(persona);
+        return persona && post ? personaMediaTaskState(persona.id, post.id) : null;
+      })();
+      const customModifyItem = personaCustomMediaModifyItem(taskState);
+      const isModifySource = Boolean(
+        type === "image"
+        && (
+          (input.matches("[data-persona-image-edit-source]") && personaTaskMediaModifyItem(taskState))
+          || (
+            customModifyItem?.replacementFile
+            && uploadFileSignature(customModifyItem.replacementFile) === uploadFileSignature(file)
+          )
+        )
+      );
+      const actions = `
+        ${previewGroupId && Number.isInteger(previewIndex) ? `
+          <button type="button" data-media-preview-group="${esc(previewGroupId)}" data-media-preview-index="${esc(previewIndex)}" aria-label="查看 ${esc(file.name)}" title="查看">
+            ${renderEyeIcon()}
+          </button>` : ""}
+        ${type === "image" && !selectionControlsModify ? `<button type="button" class="${isModifySource ? "is-active" : ""}" data-upload-media-modify="${esc(index)}" title="${isModifySource ? "取消媒体修改" : "媒体修改"}" aria-label="${isModifySource ? "取消" : "选择"}第 ${esc(index + 1)} 张图片进行媒体修改" aria-pressed="${isModifySource ? "true" : "false"}">${renderPlusIcon()}</button>` : ""}
+        ${renderPersonaPublicMediaEditMenu({
+          displayIndex: index,
+          replaceAttribute: `data-upload-edit-index="${esc(index)}"`,
+          deleteAttribute: `data-upload-remove-index="${esc(index)}"`,
+        })}
+      `;
+      return `
+        <article class="persona-public-media-card persona-upload-media-card ${isSelected ? "is-selected" : ""} ${isModifySource ? "is-modify-source" : ""}" data-upload-sort-card="${esc(index)}" draggable="false">
+          <div class="persona-public-media-preview-shell">
+            ${renderPersonaPublicMediaSelectionButton({
+              selected: isSelected,
+              displayIndex: index,
+              dataAttribute: `data-upload-select-index="${esc(index)}"`,
+            })}
+            ${renderPersonaPublicMediaOrder(index, { draggable: true, dragKind: "upload" })}
+            ${preview}
+          </div>
+          ${renderPersonaPublicMediaFooter(index, actions)}
+        </article>
+      `;
+    }
     return `
       <article class="file-chip file-chip--preview ${isSelected ? "is-selected" : ""}" data-upload-sort-card="${esc(index)}" draggable="false">
         ${renderMediaOrderHandle(index)}
@@ -12061,8 +12141,24 @@ function syncUploadDropzone(input) {
         </div>
       </article>
     `;
-  }).join("")}
-      <label class="upload-add-media" for="${esc(input.id)}" title="继续添加媒体" aria-label="继续添加媒体">
+  };
+  host.innerHTML = `
+    ${publicMediaCards ? renderPersonaPublicMediaSelectionToolbar({
+      selectedCount: selectedIndexes.size,
+      totalCount: files.length,
+      selectAllAttribute: `data-upload-select-all="${esc(input.id)}"`,
+      deleteAttribute: `data-upload-delete-selected="${esc(input.id)}"`,
+    }) : `<div class="upload-selection-toolbar">
+      <button type="button" class="upload-select-all bulk-selection-icon-button" data-upload-select-all="${esc(input.id)}" title="${selectedIndexes.size === files.length ? "取消全选" : "全选"}" aria-label="${selectedIndexes.size === files.length ? "取消全选" : "全选"}">
+        ${selectedIndexes.size === files.length ? renderClearSelectionIcon() : renderSelectAllIcon()}
+      </button>
+      <span class="upload-selection-count">已选 ${esc(selectedIndexes.size)} / ${esc(files.length)}</span>
+      <button type="button" class="upload-delete-selected unified-action-icon-button" data-upload-delete-selected="${esc(input.id)}" title="删除所选" aria-label="删除所选" ${selectedIndexes.size ? "" : "hidden"}>
+        ${renderTrashIcon()}
+      </button>
+    </div>`}
+    <div class="upload-thumbnail-grid ${publicMediaCards ? "persona-public-media-upload-grid" : ""}">${previewRows.map(renderUploadPreviewCard).join("")}
+      <label class="upload-add-media ${publicMediaCards ? "persona-public-media-add-tile" : ""}" for="${esc(input.id)}" title="继续添加媒体" aria-label="继续添加媒体">
         ${renderPlusIcon()}
       </label>
     </div>`;
@@ -12087,7 +12183,15 @@ function syncUploadDropzoneSelectionState(input) {
   const count = host.querySelector(".upload-selection-count");
   if (count) count.textContent = `已选 ${selected.size} / ${files.length}`;
   const deleteSelected = host.querySelector("[data-upload-delete-selected]");
-  if (deleteSelected) deleteSelected.hidden = selected.size === 0;
+  if (deleteSelected) {
+    if (input.matches("[data-public-media-cards]")) {
+      deleteSelected.hidden = false;
+      deleteSelected.disabled = selected.size === 0;
+      deleteSelected.setAttribute("aria-disabled", selected.size ? "false" : "true");
+    } else {
+      deleteSelected.hidden = selected.size === 0;
+    }
+  }
   host.querySelectorAll("[data-upload-sort-card]").forEach((card) => {
     const index = Number(card.dataset.uploadSortCard);
     const isSelected = selected.has(index);
@@ -12099,12 +12203,22 @@ function syncUploadDropzoneSelectionState(input) {
     button.setAttribute("aria-label", `${isSelected ? "取消选择" : "选择"} ${fileName}`.trim());
     const icon = button.querySelector(".file-chip-select-checkbox");
     if (icon) icon.innerHTML = renderUploadSelectionIcon(isSelected);
+    else if (button.classList.contains("persona-public-media-select")) {
+      button.innerHTML = renderPersonaMediaSelectionIcon(isSelected);
+    }
   });
 }
 
 function appendUploadDropzoneFiles(input, incomingFiles, { notify = false } = {}) {
   if (!input || !incomingFiles) return;
-  const files = Array.from(incomingFiles || []).filter(Boolean);
+  let files = Array.from(incomingFiles || []).filter(Boolean);
+  if (input.matches?.("[data-persona-image-edit-source]")) {
+    const imageFiles = files.filter((file) => fileKind(file) === "image");
+    if (imageFiles.length !== files.length) {
+      showMsg("commandMsg", "AI 编辑源只支持图片，其他文件已忽略。", false);
+    }
+    files = imageFiles.slice(-1);
+  }
   if (!files.length) return;
   mergeUploadDropzoneFiles(input, files);
   syncUploadDropzone(input);
@@ -12128,6 +12242,11 @@ function toggleUploadDropzoneSelection(trigger, rawIndex) {
   const index = Number(rawIndex);
   const files = currentUploadDropzoneFiles(input);
   if (!input || !Number.isInteger(index) || index < 0 || index >= files.length) return false;
+  if (personaAiUploadSelectionControlsModify(input)) {
+    setPersonaCustomMediaModifySource({ input, index, scrollToComposer: false })
+      .catch((error) => showMsg("commandMsg", error.detail || error.message || "图片无法进入媒体修改", false));
+    return true;
+  }
   const selected = new Set(uploadSelectedIndexes.get(input) || []);
   if (selected.has(index)) selected.delete(index);
   else selected.add(index);
@@ -12168,7 +12287,7 @@ function handleUploadDropzoneAction(event) {
   if (
     selectUploadCard
     && !event.target.closest("button, a, input, label, [role=\"button\"]")
-    && !event.target.closest(".file-chip-actions, [data-upload-sort-handle]")
+    && !event.target.closest(".file-chip-actions, .persona-public-media-card-actions, [data-upload-sort-handle]")
   ) {
     toggleUploadDropzoneSelection(selectUploadCard, selectUploadCard.dataset.uploadSortCard);
     return true;
@@ -12178,6 +12297,10 @@ function handleUploadDropzoneAction(event) {
     const input = selectAllUploadFiles.closest("[data-upload-dropzone]")?.querySelector(".upload-zone-input");
     if (!input) return true;
     const files = currentUploadDropzoneFiles(input);
+    if (personaAiUploadSelectionControlsModify(input)) {
+      if (files.length) toggleUploadDropzoneSelection(selectAllUploadFiles, 0);
+      return true;
+    }
     const selected = new Set(uploadSelectedIndexes.get(input) || []);
     uploadSelectedIndexes.set(
       input,
@@ -12293,7 +12416,7 @@ function cleanupUploadPointerDrag() {
 function handleUploadSortPointerDown(event) {
   if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
   const explicitHandle = event.target?.closest?.("[data-upload-sort-handle]");
-  const blockedInteractive = event.target?.closest?.(".file-chip-select, .file-chip-actions");
+  const blockedInteractive = event.target?.closest?.(".file-chip-select, .file-chip-actions, .persona-public-media-select, .persona-public-media-card-actions");
   const card = explicitHandle?.closest?.("[data-upload-sort-card]")
     || (event.pointerType === "mouse" && !blockedInteractive
       ? event.target?.closest?.("[data-upload-sort-card]")
@@ -20208,20 +20331,38 @@ async function applyPersonaGeneratedBatchTitles(personaId, posts = [], requested
 
 let pendingPersonaMediaScrollId = "";
 
-function scrollPersonaMediaComposerIntoView(personaId) {
+function scrollPersonaMediaComposerIntoView(personaId, { focusEditPrompt = false } = {}) {
   const cleanPersonaId = String(personaId || "");
   if (String(pendingPersonaMediaScrollId) !== cleanPersonaId) return;
   window.requestAnimationFrame(() => {
-    window.requestAnimationFrame(() => {
-      if (String(pendingPersonaMediaScrollId) !== cleanPersonaId) return;
-      pendingPersonaMediaScrollId = "";
-      if (!isPersonaWorkspaceModule() || String(selectedPersona()?.id || "") !== cleanPersonaId) return;
-      const action = document.querySelector("[data-persona-run-media-task]");
-      const target = action?.closest(".persona-compose-media-side");
-      if (!target) return;
-      target.scrollIntoView({ block: "start", behavior: "smooth" });
-      action.focus({ preventScroll: true });
-    });
+    if (String(pendingPersonaMediaScrollId) !== cleanPersonaId) return;
+    pendingPersonaMediaScrollId = "";
+    if (!isPersonaWorkspaceModule() || String(selectedPersona()?.id || "") !== cleanPersonaId) return;
+    const action = document.querySelector("[data-persona-run-media-task]");
+    const composer = action?.closest(".persona-compose-media-side");
+    if (!composer) return;
+    const editPrompt = focusEditPrompt
+      ? composer.querySelector(".persona-media-prompt-field.is-image-editing")
+      : null;
+    const target = editPrompt || composer;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    const focusTarget = editPrompt?.querySelector("textarea") || action;
+    focusTarget.focus({ preventScroll: true });
+    const targetRect = target.getBoundingClientRect();
+    const headerBottom = document.querySelector("[data-site-header]")?.getBoundingClientRect().bottom || 0;
+    const lowerObstructions = [
+      document.querySelector("[data-persona-draft-save-dock]")?.getBoundingClientRect().top,
+      document.querySelector(".mobile-task-dock")?.getBoundingClientRect().top,
+    ].filter((value) => Number.isFinite(value) && value > 0 && value < window.innerHeight);
+    const viewportTop = headerBottom + 12;
+    const viewportBottom = Math.min(window.innerHeight, ...lowerObstructions) - 12;
+    const fullyVisible = targetRect.top >= viewportTop && targetRect.bottom <= viewportBottom;
+    if (!fullyVisible) {
+      target.scrollIntoView({
+        block: editPrompt ? "center" : "start",
+        behavior: reduceMotion ? "auto" : "smooth",
+      });
+    }
   });
 }
 
@@ -21897,6 +22038,7 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
   const taskTitle = taskMeta[String(detail.type || state.personaMediaTasks[key]?.taskType || "persona_post_image")]?.title || statusLabel(detail.type || "") || "生成任务";
   const taskType = String(detail.type || previousTaskState.taskType || "persona_post_image").trim();
   state.personaMediaTasks[key] = {
+    ...previousTaskState,
     taskId,
     taskType,
     status,
@@ -22043,6 +22185,9 @@ async function submitPersonaMediaTask() {
     return;
   }
   const form = personaFormState(persona.id).media;
+  const currentTaskState = personaMediaTaskState(persona.id, post.id);
+  const currentTaskItems = currentTaskState ? personaTaskMediaItems(currentTaskState) : [];
+  let modifyItem = personaTaskMediaModifyItem(currentTaskState, currentTaskItems);
   const allowedTaskTypes = personaMediaTaskOptions(profile, personaFormState(persona.id).generate).map(([value]) => value);
   const taskType = allowedTaskTypes.includes(String(form.taskType || ""))
     ? String(form.taskType || "")
@@ -22064,10 +22209,15 @@ async function submitPersonaMediaTask() {
     submitButton.innerHTML = renderBusyButtonContent("配图任务执行中", true, submittedAt);
   }
   try {
-    if (!(await ensurePersonaReferenceImageForMediaTask(persona))) return;
+    if (!modifyItem && !(await ensurePersonaReferenceImageForMediaTask(persona))) return;
     snapshotPersonaCurrentForm();
     const mediaUploadState = captureUploadDropzoneState("personaMediaTaskFiles");
-    const files = mediaUploadState.files;
+    const editSourceUploadState = captureUploadDropzoneState("personaMediaEditSourceFile");
+    const uploadedEditSource = modifyItem
+      ? editSourceUploadState.files.find((file) => fileKind(file) === "image") || null
+      : null;
+    if (uploadedEditSource) modifyItem = { ...modifyItem, replacementFile: uploadedEditSource };
+    const files = modifyItem ? [] : mediaUploadState.files;
     const imageCount = files.filter((file) => fileKind(file) === "image").length;
     const minImages = Number(taskMeta[taskType]?.minImages || 0);
     if (imageCount < minImages) {
@@ -22078,7 +22228,13 @@ async function submitPersonaMediaTask() {
     normalizePersonaMediaGenerationForm(form);
     const generationContent = draftSourceText;
     const prompt = String(form.prompt || "").trim();
-    const desiredImageCount = Math.min(Math.max(Number(form.imageCount || state.personaMediaImageCountDefault || storedPersonaMediaImageCount() || 1), 1), 4);
+    if (modifyItem && !prompt) {
+      showMsg("commandMsg", "请输入对选中图片的局部修改要求。", false);
+      return;
+    }
+    const desiredImageCount = modifyItem
+      ? 1
+      : Math.min(Math.max(Number(form.imageCount || state.personaMediaImageCountDefault || storedPersonaMediaImageCount() || 1), 1), 4);
     form.imageCount = desiredImageCount;
     if (taskType === "persona_post_image" && !generationContent && !prompt) {
       showMsg("commandMsg", "当前草稿没有正文，请补充提示词后再生成。", false);
@@ -22100,11 +22256,19 @@ async function submitPersonaMediaTask() {
       related_post_id: String(post.id || "").trim(),
       draft_source_text: draftSourceText,
       aspect_ratio: taskType === "persona_post_image" ? String(form.aspectRatio || "auto") : undefined,
+      image_edit_mode: Boolean(modifyItem),
+      edit_source: modifyItem && !modifyItem.replacementFile ? {
+        task_id: String(modifyItem.taskId || "").trim(),
+        media_index: Number(modifyItem.sourceIndex),
+      } : undefined,
     });
     const body = new FormData();
     body.append("task_type", taskType);
     body.append("params_json", JSON.stringify(params));
     files.forEach((file) => body.append("files", file, file.name));
+    if (modifyItem?.replacementFile) {
+      body.append("files", modifyItem.replacementFile, modifyItem.replacementFile.name || "image-edit-source");
+    }
     setPersonaGenerateRunState(persona.id, {
       kind: "media",
       status: "running",
@@ -22113,12 +22277,24 @@ async function submitPersonaMediaTask() {
     });
     const result = await api("/api/tasks/submit", { method: "POST", body });
     clearUploadDropzoneState("personaMediaTaskFiles", mediaUploadState.stateKey);
+    clearUploadDropzoneState("personaMediaEditSourceFile", editSourceUploadState.stateKey);
+    delete form.customModifySource;
     const key = personaMediaTaskKey(persona.id, post.id);
+    const previousResults = currentTaskState
+      ? personaTaskMediaBatches(currentTaskState).filter((batch) => taskOutputMediaItems(batch.detail || {}, batch.taskId).length > 0)
+      : [];
     state.personaMediaTasks[key] = {
       taskId: String(result.id || "").trim(),
       taskType,
       status: "queued",
       startedAt: submittedAt,
+      previousResults,
+      removedMediaKeys: Array.isArray(currentTaskState?.removedMediaKeys) ? currentTaskState.removedMediaKeys.slice() : [],
+      replacementMediaByKey: currentTaskState?.replacementMediaByKey && typeof currentTaskState.replacementMediaByKey === "object"
+        ? { ...currentTaskState.replacementMediaByKey }
+        : {},
+      modifyMediaKey: "",
+      selectedMediaKeys: null,
       selectedMediaIndexes: null,
       detail: {
         id: String(result.id || "").trim(),
@@ -22170,22 +22346,51 @@ async function attachPersonaTaskMediaToPost() {
     showMsg("commandMsg", "当前还没有可回写的媒体任务结果。", false);
     return;
   }
-  const taskItems = taskOutputMediaItems(taskState.detail || {});
-  const selectedMediaIndexes = selectedPersonaTaskMediaIndexes(taskState, taskItems);
-  if (!selectedMediaIndexes.length) {
+  const taskItems = personaTaskMediaItems(taskState);
+  const selectedMediaKeys = new Set(selectedPersonaTaskMediaKeys(taskState, taskItems));
+  const selectedItems = taskItems.filter((item) => selectedMediaKeys.has(personaTaskMediaKey(item)));
+  if (!selectedItems.length) {
     showMsg("commandMsg", "请先选择至少一张要添加到草稿的图片。", false);
     return;
   }
   showMsg("commandMsg", "正在把任务结果写回草稿媒体...", true);
-  await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/posts/${encodeURIComponent(post.id)}/media/from_task`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      task_id: taskState.taskId,
-      replace_existing: false,
-      media_indexes: selectedMediaIndexes,
-    }),
-  });
+  const attachedKeys = [];
+  try {
+    for (const item of selectedItems) {
+      if (item.replacementFile) {
+        await savePersonaPostMediaFiles({
+          persona,
+          postId: post.id,
+          source: "posts",
+          files: [item.replacementFile],
+          replaceExisting: false,
+        });
+      } else {
+        await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/posts/${encodeURIComponent(post.id)}/media/from_task`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            task_id: item.taskId,
+            replace_existing: false,
+            media_indexes: [Number(item.sourceIndex)],
+          }),
+        });
+      }
+      attachedKeys.push(personaTaskMediaKey(item));
+    }
+  } catch (error) {
+    if (attachedKeys.length) {
+      const removed = new Set(Array.isArray(taskState.removedMediaKeys) ? taskState.removedMediaKeys : []);
+      attachedKeys.forEach((key) => removed.add(key));
+      taskState.removedMediaKeys = Array.from(removed);
+      taskState.selectedMediaKeys = selectedPersonaTaskMediaKeys(taskState, personaTaskMediaItems(taskState));
+      const message = `已成功添加 ${attachedKeys.length} 张，剩余图片添加失败；已保留未完成项，可直接重试。`;
+      if (error && typeof error === "object") error.detail = message;
+      renderPersonaDetail();
+      renderConfirmSummary();
+    }
+    throw error;
+  }
   clearPersonaMediaPrompt(persona.id);
   await loadPersonaDraftPosts(persona.id, { force: true });
   delete state.personaMediaTasks[personaMediaTaskKey(persona.id, post.id)];
@@ -22201,6 +22406,164 @@ async function attachPersonaTaskMediaToPost() {
   renderPersonaDetail();
   renderConfirmSummary();
   showMsg("commandMsg", "任务结果已添加至草稿。", true);
+}
+
+function setPersonaTaskMediaModifySource(mediaKey) {
+  const persona = selectedPersona();
+  const { post } = personaMediaTargetPost(persona);
+  const taskState = persona && post ? personaMediaTaskState(persona.id, post.id) : null;
+  if (!persona || !post || !taskState) return;
+  const cleanKey = String(mediaKey || "").trim();
+  const item = personaTaskMediaItems(taskState).find((row) => personaTaskMediaKey(row) === cleanKey);
+  if (!item || item.type !== "image") {
+    showMsg("commandMsg", "媒体修改当前只支持图片。", false);
+    return;
+  }
+  const nextKey = String(taskState.modifyMediaKey || "") === cleanKey ? "" : cleanKey;
+  taskState.modifyMediaKey = nextKey;
+  delete personaFormState(persona.id).media.customModifySource;
+  clearUploadDropzoneState("personaMediaEditSourceFile");
+  const form = personaFormState(persona.id).media;
+  form.imageCount = 1;
+  form.prompt = "";
+  if (nextKey) pendingPersonaMediaScrollId = String(persona.id || "");
+  renderPersonaDetail();
+  renderConfirmSummary();
+  if (nextKey) scrollPersonaMediaComposerIntoView(persona.id, { focusEditPrompt: true });
+}
+
+async function personaCustomMediaFile(item, fallbackName = "custom-media-image") {
+  if (item?.file instanceof File && fileKind(item.file) === "image") return item.file;
+  const sourceUrl = adminWorkspaceUrl(item?.originalUrl || item?.previewUrl || item?.url || "");
+  if (!sourceUrl) throw new Error("当前图片源已失效，无法进入媒体修改。");
+  const response = await fetch(sourceUrl, { credentials: "same-origin" });
+  if (!response.ok) throw new Error("当前图片加载失败，无法进入媒体修改。");
+  const blob = await response.blob();
+  if (!String(blob.type || "").startsWith("image/")) throw new Error("媒体修改当前只支持图片。");
+  const sourceName = String(item?.label || fallbackName || "custom-media-image").trim();
+  const extension = String(blob.type || "image/png").split("/")[1]?.replace("jpeg", "jpg") || "png";
+  const fileName = /\.[a-z0-9]{2,5}$/i.test(sourceName) ? sourceName : `${sourceName}.${extension}`;
+  return new File([blob], fileName, { type: blob.type || "image/png", lastModified: Date.now() });
+}
+
+async function setPersonaCustomMediaModifySource({ item = null, input = null, index = 0, scrollToComposer = true } = {}) {
+  const persona = selectedPersona();
+  const { source, post } = personaMediaTargetPost(persona);
+  if (!persona || !post) {
+    showMsg("commandMsg", "请先选中一条草稿。", false);
+    return;
+  }
+  let file = input ? currentUploadDropzoneFiles(input)[Number(index)] : null;
+  if (!file && item) file = await personaCustomMediaFile(item, `media-${Number(index) + 1}`);
+  if (!file || fileKind(file) !== "image") {
+    showMsg("commandMsg", "媒体修改当前只支持图片。", false);
+    return;
+  }
+  snapshotPersonaCurrentForm();
+  const form = personaFormState(persona.id).media;
+  const current = form.customModifySource;
+  const sameSource = current?.file && uploadFileSignature(current.file) === uploadFileSignature(file);
+  if (sameSource) delete form.customModifySource;
+  else {
+    const previewUrl = URL.createObjectURL(file);
+    if (String(current?.previewUrl || "").startsWith("blob:")) URL.revokeObjectURL(current.previewUrl);
+    form.customModifySource = {
+      file,
+      previewUrl,
+      inputId: String(input?.id || ""),
+      source: source === "favorites" ? "favorites" : "posts",
+      postId: String(post.id || ""),
+    };
+    form.operationMode = "generate";
+    form.imageCount = 1;
+    form.prompt = "";
+  }
+  const taskState = personaMediaTaskState(persona.id, post.id);
+  if (taskState) taskState.modifyMediaKey = "";
+  const editSourceStateKey = uploadDropzoneStateKey("personaMediaEditSourceFile");
+  if (editSourceStateKey) {
+    uploadFilesById.set(editSourceStateKey, sameSource || input?.id === "personaMediaTaskFiles" ? [] : [file]);
+  }
+  if (!sameSource && scrollToComposer) pendingPersonaMediaScrollId = String(persona.id || "");
+  renderPersonaDetail();
+  renderConfirmSummary();
+  if (!sameSource && scrollToComposer) scrollPersonaMediaComposerIntoView(persona.id, { focusEditPrompt: true });
+}
+
+function applyPersonaImageEditSourceReplacement(input) {
+  const file = currentUploadDropzoneFiles(input).find((row) => fileKind(row) === "image");
+  const persona = selectedPersona();
+  const { post } = personaMediaTargetPost(persona);
+  const taskState = persona && post ? personaMediaTaskState(persona.id, post.id) : null;
+  if (!file || !persona || !post) return false;
+  const taskKey = String(taskState?.modifyMediaKey || "").trim();
+  const stateKey = uploadDropzoneStateKey(input);
+  if (taskKey) {
+    const replacements = taskState.replacementMediaByKey && typeof taskState.replacementMediaByKey === "object"
+      ? taskState.replacementMediaByKey
+      : {};
+    const previous = replacements[taskKey];
+    if (String(previous?.previewUrl || "").startsWith("blob:")) URL.revokeObjectURL(previous.previewUrl);
+    replacements[taskKey] = { file, previewUrl: URL.createObjectURL(file) };
+    taskState.replacementMediaByKey = replacements;
+    if (stateKey) uploadFilesById.set(stateKey, []);
+  } else {
+    const form = personaFormState(persona.id).media;
+    if (!form.customModifySource) return false;
+    if (String(form.customModifySource.previewUrl || "").startsWith("blob:")) URL.revokeObjectURL(form.customModifySource.previewUrl);
+    form.customModifySource = { ...form.customModifySource, file, previewUrl: URL.createObjectURL(file) };
+    if (stateKey) uploadFilesById.set(stateKey, [file]);
+  }
+  renderPersonaDetail();
+  renderConfirmSummary();
+  showMsg("commandMsg", "已用新图片替换任务预览，可继续输入修改要求。", true);
+  return true;
+}
+
+function choosePersonaTaskMediaReplacement(mediaKey) {
+  const persona = selectedPersona();
+  const { post } = personaMediaTargetPost(persona);
+  const taskState = persona && post ? personaMediaTaskState(persona.id, post.id) : null;
+  const cleanKey = String(mediaKey || "").trim();
+  if (!taskState || !personaTaskMediaItems(taskState).some((item) => personaTaskMediaKey(item) === cleanKey)) return;
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/*";
+  input.addEventListener("change", () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const replacements = taskState.replacementMediaByKey && typeof taskState.replacementMediaByKey === "object"
+      ? taskState.replacementMediaByKey
+      : {};
+    const previous = replacements[cleanKey];
+    if (String(previous?.previewUrl || "").startsWith("blob:")) URL.revokeObjectURL(previous.previewUrl);
+    replacements[cleanKey] = { file, previewUrl: URL.createObjectURL(file) };
+    taskState.replacementMediaByKey = replacements;
+    renderPersonaDetail();
+    renderConfirmSummary();
+    showMsg("commandMsg", "图片已替换；保存到草稿或继续进行媒体修改。", true);
+  }, { once: true });
+  input.click();
+}
+
+function removePersonaTaskMediaResult(mediaKey) {
+  const persona = selectedPersona();
+  const { post } = personaMediaTargetPost(persona);
+  const taskState = persona && post ? personaMediaTaskState(persona.id, post.id) : null;
+  const cleanKey = String(mediaKey || "").trim();
+  if (!taskState || !cleanKey) return;
+  const removed = new Set(Array.isArray(taskState.removedMediaKeys) ? taskState.removedMediaKeys : []);
+  removed.add(cleanKey);
+  taskState.removedMediaKeys = Array.from(removed);
+  if (Array.isArray(taskState.selectedMediaKeys)) {
+    taskState.selectedMediaKeys = taskState.selectedMediaKeys.filter((key) => String(key) !== cleanKey);
+  }
+  if (String(taskState.modifyMediaKey || "") === cleanKey) taskState.modifyMediaKey = "";
+  const replacement = taskState.replacementMediaByKey?.[cleanKey];
+  if (String(replacement?.previewUrl || "").startsWith("blob:")) URL.revokeObjectURL(replacement.previewUrl);
+  if (taskState.replacementMediaByKey) delete taskState.replacementMediaByKey[cleanKey];
+  renderPersonaDetail();
+  renderConfirmSummary();
 }
 
 async function savePersonaPostMediaFiles({
@@ -22541,7 +22904,7 @@ function handlePersonaMediaPointerDown(event) {
     || event.target.closest?.(".persona-edit-media-card[data-persona-media-card-index]");
   const sortGrid = source?.closest?.("[data-persona-media-sort-grid]");
   const blockedInteractive = event.target.closest?.(
-    ".persona-media-card-select, .persona-edit-media-actions, input, label, a",
+    ".persona-public-media-select, .persona-public-media-card-actions, input, label, a",
   );
   if (!source || !sortGrid || (!explicitHandle && (event.pointerType !== "mouse" || blockedInteractive))) return;
   const fromIndex = Number.parseInt(String(source.dataset.personaMediaCardIndex || ""), 10);
@@ -23547,6 +23910,7 @@ function renderPersonaCompactMediaUpload(persona, post = null) {
         type="file"
         multiple
         accept="image/*,video/*"
+        data-public-media-cards
         ${directUpload ? "data-persona-direct-media-input" : `data-upload-state-key="${esc(pendingStateKey)}"`}
       />
       <label
@@ -23569,6 +23933,7 @@ function renderPersonaPendingMediaInput(persona) {
     type="file"
     multiple
     accept="image/*,video/*"
+    data-public-media-cards
     data-upload-state-key="${esc(personaComposePendingMediaStateKey(persona))}"
     hidden
   />`;
@@ -23619,13 +23984,16 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
   mediaForm.taskType = currentTaskType;
   normalizePersonaMediaGenerationForm(mediaForm);
   const referenceContent = personaDraftReferenceContent(persona, post, isFavoriteMedia ? "favorites" : "posts").trim();
-  const mediaMeta = taskMeta[currentTaskType] || taskMeta.persona_post_image;
   const showAspectRatio = currentTaskType === "persona_post_image";
   const showVideoOptions = false;
-  const uploadAccept = "image/*";
-  const showSourceUpload = Number(mediaMeta.minImages || 0) > 0;
   const mediaBusy = !isFavoriteMedia && post && (isActionLocked("media_task", persona.id, post.id, currentTaskType) || personaMediaTaskIsActive(persona.id, post.id, currentTaskType));
   const mediaBusyStartedAt = personaMediaTaskStartedAt(persona.id, post?.id || "", currentTaskType);
+  const mediaTaskState = personaMediaTaskState(persona.id, post.id);
+  const mediaModifyItem = personaTaskMediaModifyItem(mediaTaskState);
+  const mediaModifyActive = Boolean(mediaModifyItem);
+  const mediaEditSourceUploadActive = mediaModifyActive && mediaModifyItem?.inputId !== "personaMediaTaskFiles";
+  const aiUploadSelectsModify = personaDraftMediaTargetIsEditing(persona);
+  const mediaUploadInputId = mediaEditSourceUploadActive ? "personaMediaEditSourceFile" : "personaMediaTaskFiles";
   return `
     <section class="persona-compose-media-side persona-production-section">
       <div class="persona-inline-panel persona-inline-panel--nested">
@@ -23650,7 +24018,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
           <div class="persona-media-operation-pane">
             <div class="form-grid persona-detail-controls persona-media-generation-controls">
               <label>生成张数
-                <select id="personaMediaImageCount">
+                <select id="personaMediaImageCount" ${mediaModifyActive ? "disabled title=\"局部修改每次只生成 1 张图片\"" : ""}>
                   ${[1, 2, 3, 4].map((count) => `<option value="${count}" ${count === Number(mediaForm.imageCount) ? "selected" : ""}>${count} 张</option>`).join("")}
                 </select>
               </label>
@@ -23674,17 +24042,26 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
                 <input id="personaMediaDuration" type="number" min="2" max="15" value="${esc(mediaForm.duration || 2)}" />
               </label>` : ""}
             </div>
-            <label>补充提示词（可选）
-              <textarea id="personaMediaTaskPrompt" rows="5" placeholder="留空按当前推文生成；填写内容仅作为配图补充要求。">${esc(mediaForm.prompt || "")}</textarea>
-            </label>
-            ${showSourceUpload ? renderUploadDropzone("personaMediaTaskFiles", {
-              label: "上传素材",
-              accept: uploadAccept,
-              hint: mediaMeta.files || "拖动任务需要的素材到这里，或点击选择。",
-            }) : ""}
-            <div class="persona-inline-panel persona-inline-panel--nested">
+            ${renderPersonaMediaPromptField(mediaForm, mediaTaskState)}
+            <div class="persona-inline-panel persona-inline-panel--nested persona-media-preview-surface" data-persona-media-preview-surface>
               <strong>任务结果预览</strong>
-              ${renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt })}
+              ${mediaEditSourceUploadActive ? renderUploadDropzone("personaMediaEditSourceFile", {
+                label: "上传替换编辑图片",
+                accept: "image/*",
+                hint: "可用一张自定义图片替换当前编辑源；仅支持图片。",
+                multiple: false,
+                imageEditSource: true,
+                publicMediaCards: true,
+                embeddedPreview: true,
+              }) : renderUploadDropzone("personaMediaTaskFiles", {
+                label: "添加媒体",
+                accept: "image/*",
+                hint: "仅支持图片；可作为 AI 生成的参考素材。",
+                multiple: !aiUploadSelectsModify,
+                publicMediaCards: true,
+                embeddedPreview: true,
+              })}
+              ${renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt, addMediaInputId: mediaUploadInputId })}
             </div>
           </div>
         `}
@@ -23692,7 +24069,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
     </section>`;
 }
 
-function taskOutputMediaItems(detail = {}) {
+function taskOutputMediaItems(detail = {}, taskId = "") {
   const rows = Array.isArray(detail?.media_items) ? detail.media_items : [];
   return rows.map((item, sourceIndex) => {
     const previewUrl = String(item?.preview_url || item?.url || "").trim();
@@ -23706,45 +24083,209 @@ function taskOutputMediaItems(detail = {}) {
       type: guessMediaType(previewUrl, item?.type || ""),
       label: String(item?.label || item?.type || "").trim() || mediaKindLabel(guessMediaType(previewUrl, item?.type || "")),
       sourceIndex,
+      taskId: String(taskId || detail?.id || "").trim(),
     };
   }).filter(Boolean);
 }
 
-function selectedPersonaTaskMediaIndexes(taskState, items = []) {
-  const validIndexes = (Array.isArray(items) ? items : [])
-    .map((item) => Number(item?.sourceIndex))
-    .filter((index) => Number.isInteger(index) && index >= 0);
-  if (!Array.isArray(taskState?.selectedMediaIndexes)) return validIndexes;
-  const valid = new Set(validIndexes);
-  return taskState.selectedMediaIndexes
-    .map((index) => Number(index))
-    .filter((index) => valid.has(index));
+function personaTaskMediaKey(item = {}) {
+  const taskId = String(item?.taskId || "").trim();
+  const sourceIndex = Number(item?.sourceIndex);
+  return taskId && Number.isInteger(sourceIndex) && sourceIndex >= 0
+    ? `${taskId}:${sourceIndex}`
+    : "";
 }
 
-function renderPersonaTaskMediaPreview(taskState, items = []) {
+function personaTaskMediaBatches(taskState = {}) {
+  const batches = Array.isArray(taskState?.previousResults)
+    ? taskState.previousResults.filter((batch) => batch && typeof batch === "object")
+    : [];
+  const currentTaskId = String(taskState?.taskId || taskState?.detail?.id || "").trim();
+  if (currentTaskId && taskState?.detail && typeof taskState.detail === "object") {
+    batches.push({ taskId: currentTaskId, detail: taskState.detail });
+  }
+  const seen = new Set();
+  return batches.filter((batch) => {
+    const taskId = String(batch?.taskId || batch?.detail?.id || "").trim();
+    if (!taskId || seen.has(taskId)) return false;
+    seen.add(taskId);
+    return true;
+  });
+}
+
+function personaTaskMediaItems(taskState = {}) {
+  const removed = new Set(Array.isArray(taskState?.removedMediaKeys) ? taskState.removedMediaKeys : []);
+  const replacements = taskState?.replacementMediaByKey && typeof taskState.replacementMediaByKey === "object"
+    ? taskState.replacementMediaByKey
+    : {};
+  return personaTaskMediaBatches(taskState).flatMap((batch) => (
+    taskOutputMediaItems(batch.detail || {}, batch.taskId).map((item) => {
+      const mediaKey = personaTaskMediaKey(item);
+      const replacement = replacements[mediaKey];
+      if (!replacement?.file || !replacement?.previewUrl) return { ...item, mediaKey };
+      return {
+        ...item,
+        url: replacement.previewUrl,
+        previewUrl: replacement.previewUrl,
+        originalUrl: replacement.previewUrl,
+        thumbnailUrl: replacement.previewUrl,
+        type: guessMediaType(replacement.file.name, replacement.file.type || "image"),
+        label: replacement.file.name || item.label,
+        replacementFile: replacement.file,
+        mediaKey,
+      };
+    })
+  )).filter((item) => item.mediaKey && !removed.has(item.mediaKey));
+}
+
+function selectedPersonaTaskMediaKeys(taskState, items = []) {
+  const rows = Array.isArray(items) ? items : [];
+  const validKeys = rows.map(personaTaskMediaKey).filter(Boolean);
+  const valid = new Set(validKeys);
+  if (Array.isArray(taskState?.selectedMediaKeys)) {
+    return taskState.selectedMediaKeys.map(String).filter((key) => valid.has(key));
+  }
+  if (Array.isArray(taskState?.selectedMediaIndexes) && personaTaskMediaBatches(taskState).length <= 1) {
+    const legacyIndexes = new Set(taskState.selectedMediaIndexes.map(Number));
+    return rows
+      .filter((item) => legacyIndexes.has(Number(item.sourceIndex)))
+      .map(personaTaskMediaKey)
+      .filter(Boolean);
+  }
+  return validKeys;
+}
+
+function personaTaskMediaModifyItem(taskState, items = personaTaskMediaItems(taskState)) {
+  const mediaKey = String(taskState?.modifyMediaKey || "").trim();
+  const taskItem = (Array.isArray(items) ? items : []).find((item) => personaTaskMediaKey(item) === mediaKey) || null;
+  return taskItem || personaCustomMediaModifyItem(taskState);
+}
+
+function personaCustomMediaModifyItem(taskState = null) {
+  const persona = selectedPersona();
+  const { source, post } = personaMediaTargetPost(persona);
+  const customSource = persona ? personaFormState(persona.id).media?.customModifySource : null;
+  if (
+    !persona
+    || !post
+    || !customSource?.file
+    || fileKind(customSource.file) !== "image"
+    || String(customSource.postId || "") !== String(post.id || "")
+    || String(customSource.source || "posts") !== String(source || "posts")
+  ) return null;
+  return {
+    type: "image",
+    label: customSource.file.name || "自定义编辑图片",
+    replacementFile: customSource.file,
+    sourceIndex: 0,
+    customSource: true,
+    inputId: String(customSource.inputId || ""),
+  };
+}
+
+function renderPersonaPublicMediaSelectionButton({ selected = false, displayIndex = 0, dataAttribute = "" } = {}) {
+  return `<button
+    type="button"
+    class="persona-public-media-select"
+    ${dataAttribute}
+    aria-pressed="${selected ? "true" : "false"}"
+    aria-label="${selected ? "取消选择" : "选择"}第 ${displayIndex + 1} 个媒体"
+  >${renderPersonaMediaSelectionIcon(selected)}</button>`;
+}
+
+function renderPersonaPublicMediaSelectionToolbar({
+  selectedCount = 0,
+  totalCount = 0,
+  selectAllAttribute = "",
+  deleteAttribute = "",
+} = {}) {
+  const selected = Math.max(0, Number(selectedCount) || 0);
+  const total = Math.max(0, Number(totalCount) || 0);
+  const allSelected = total > 0 && selected === total;
+  return `<div class="upload-selection-toolbar persona-media-selection-toolbar ${allSelected ? "is-all-selected" : ""}">
+    <button type="button" class="upload-select-all bulk-selection-icon-button" ${selectAllAttribute} title="${allSelected ? "取消全选" : "全选"}" aria-label="${allSelected ? "取消全选" : "全选"}">
+      ${allSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}
+    </button>
+    <span class="upload-selection-count">已选 ${esc(selected)} / ${esc(total)}</span>
+    <button type="button" class="upload-delete-selected unified-action-icon-button" ${deleteAttribute} title="删除所选" aria-label="删除所选" ${selected ? "" : "disabled"}>
+      ${renderTrashIcon()}
+    </button>
+  </div>`;
+}
+
+function renderPersonaPublicMediaOrder(displayIndex, { draggable = false, dragKind = "persona" } = {}) {
+  const order = Math.max(0, Number(displayIndex) || 0) + 1;
+  if (draggable) {
+    const dataAttribute = dragKind === "upload" ? "data-upload-sort-handle" : "data-persona-media-drag-handle";
+    return `<button
+      type="button"
+      class="persona-public-media-order"
+      ${dataAttribute}="${esc(displayIndex)}"
+      title="拖动调整第 ${esc(order)} 个媒体的顺序"
+      aria-label="第 ${esc(order)} 个媒体，拖动调整顺序"
+    ><span class="media-order-number">${esc(order)}</span></button>`;
+  }
+  return `<span class="persona-public-media-order" aria-label="第 ${order} 个媒体"><span class="media-order-number">${esc(order)}</span></span>`;
+}
+
+function renderPersonaPublicMediaEditMenu({ displayIndex = 0, replaceAttribute = "", deleteAttribute = "" } = {}) {
+  return `<details class="persona-public-media-edit-menu" data-console-dropdown>
+    <summary title="编辑媒体" aria-label="编辑第 ${displayIndex + 1} 个媒体">${renderEditIcon()}</summary>
+    <div class="persona-public-media-edit-popover">
+      <button type="button" ${replaceAttribute}>
+        <span aria-hidden="true">${renderReplaceIcon()}</span><span>替换</span>
+      </button>
+      <button type="button" class="danger" ${deleteAttribute}>
+        <span aria-hidden="true">${renderTrashIcon()}</span><span>删除</span>
+      </button>
+    </div>
+  </details>`;
+}
+
+function renderPersonaPublicMediaFooter(displayIndex, actions = "") {
+  return `<div class="persona-public-media-footer">
+    <div class="persona-public-media-card-actions" aria-label="第 ${displayIndex + 1} 个媒体操作">
+      ${actions}
+    </div>
+  </div>`;
+}
+
+function renderPersonaTaskMediaPreview(taskState, items = personaTaskMediaItems(taskState)) {
   const rows = Array.isArray(items) ? items : [];
   if (!rows.length) return "";
-  const selected = new Set(selectedPersonaTaskMediaIndexes(taskState, rows));
+  const selected = new Set(selectedPersonaTaskMediaKeys(taskState, rows));
+  const modifyMediaKey = String(taskState?.modifyMediaKey || "").trim();
   const groupId = registerMediaPreviewGroup(rows);
-  return `<div class="persona-media-grid persona-task-media-grid" role="listbox" aria-label="选择要添加到草稿的图片">
+  return `<div class="persona-media-grid persona-task-media-grid" role="list" aria-label="选择要添加到草稿的图片">
     ${rows.map((item, index) => {
-      const sourceIndex = Number(item.sourceIndex);
-      const isSelected = selected.has(sourceIndex);
+      const mediaKey = personaTaskMediaKey(item);
+      const isSelected = selected.has(mediaKey);
+      const isModifySource = modifyMediaKey === mediaKey;
       return `
-        <div class="persona-task-media-card ${isSelected ? "is-selected" : ""}" data-persona-task-media-display-index="${esc(index)}" role="option" aria-selected="${isSelected ? "true" : "false"}">
-          ${renderMediaPreviewButton(item, groupId, index, {
-            className: "persona-media-card",
-            frameClass: "persona-media-frame",
-          })}
-          <button
-            type="button"
-            class="persona-task-media-select"
-            data-persona-task-media-select="${esc(sourceIndex)}"
-            aria-pressed="${isSelected ? "true" : "false"}"
-          >
-            ${renderSelectAllIcon()}
-            <span>第 ${esc(index + 1)} 张</span>
-          </button>
+        <div class="persona-public-media-card persona-task-media-card ${isSelected ? "is-selected" : ""} ${isModifySource ? "is-modify-source" : ""}" data-persona-task-media-display-index="${esc(index)}" data-persona-task-media-key="${esc(mediaKey)}" role="listitem">
+          <div class="persona-public-media-preview-shell">
+            ${renderPersonaPublicMediaSelectionButton({
+              selected: isSelected,
+              displayIndex: index,
+              dataAttribute: `data-persona-task-media-select="${esc(mediaKey)}"`,
+            })}
+            ${renderPersonaPublicMediaOrder(index)}
+            ${renderMediaPreviewButton(item, groupId, index, {
+              className: "persona-media-card",
+              frameClass: "persona-media-frame",
+              showCaption: false,
+              interactive: false,
+            })}
+          </div>
+          ${renderPersonaPublicMediaFooter(index, `
+              <button type="button" data-media-preview-group="${esc(groupId)}" data-media-preview-index="${esc(index)}" title="查看" aria-label="查看第 ${esc(index + 1)} 张图片">${renderEyeIcon()}</button>
+              <button type="button" class="${isModifySource ? "is-active" : ""}" data-persona-task-media-modify="${esc(mediaKey)}" title="${isModifySource ? "取消媒体修改" : "添加为图生图基础"}" aria-label="${isModifySource ? "取消" : "选择"}第 ${esc(index + 1)} 张图片进行媒体修改" aria-pressed="${isModifySource ? "true" : "false"}">${renderPlusIcon()}</button>
+              ${renderPersonaPublicMediaEditMenu({
+                displayIndex: index,
+                replaceAttribute: `data-persona-task-media-replace="${esc(mediaKey)}"`,
+                deleteAttribute: `data-persona-task-media-delete="${esc(mediaKey)}"`,
+              })}
+          `)}
         </div>
       `;
     }).join("")}
@@ -23752,21 +24293,40 @@ function renderPersonaTaskMediaPreview(taskState, items = []) {
 }
 
 function syncPersonaTaskMediaSelectionState(taskState, items = [], root = document) {
-  const selected = new Set(selectedPersonaTaskMediaIndexes(taskState, items));
+  const selected = new Set(selectedPersonaTaskMediaKeys(taskState, items));
   root.querySelectorAll("[data-persona-task-media-select]").forEach((button) => {
-    const sourceIndex = Number(button.dataset.personaTaskMediaSelect);
-    const isSelected = selected.has(sourceIndex);
+    const mediaKey = String(button.dataset.personaTaskMediaSelect || "");
+    const isSelected = selected.has(mediaKey);
     const card = button.closest(".persona-task-media-card");
     const displayIndex = Number(card?.dataset.personaTaskMediaDisplayIndex || 0);
     button.setAttribute("aria-pressed", isSelected ? "true" : "false");
-    button.innerHTML = `${renderSelectAllIcon()}<span>第 ${displayIndex + 1} 张</span>`;
+    button.innerHTML = renderPersonaMediaSelectionIcon(isSelected);
+    button.setAttribute("aria-label", `${isSelected ? "取消选择" : "选择"}第 ${displayIndex + 1} 个媒体`);
     if (card) {
       card.classList.toggle("is-selected", isSelected);
-      card.setAttribute("aria-selected", isSelected ? "true" : "false");
     }
   });
   const attachButton = root.querySelector("[data-persona-attach-task-media]");
   if (attachButton) attachButton.disabled = selected.size === 0;
+}
+
+function renderPersonaMediaPromptField(mediaForm, taskState = null) {
+  const items = taskState ? personaTaskMediaItems(taskState) : [];
+  const modifyItem = personaTaskMediaModifyItem(taskState, items);
+  const modifyIndex = modifyItem ? items.indexOf(modifyItem) : -1;
+  const editing = Boolean(modifyItem);
+  const displayIndex = modifyIndex >= 0 ? modifyIndex : 0;
+  const label = editing ? `图片局部修改提示词（第 ${displayIndex + 1} 张）` : "补充提示词（可选）";
+  const placeholder = editing
+    ? "请输入对选中图片的局部修改要求；未提及的区域、人物身份和画面细节将尽量保持不变。"
+    : "留空按当前推文生成；填写内容仅作为配图补充要求。";
+  return `<label class="persona-media-prompt-field ${editing ? "is-image-editing" : ""}">
+    <span class="persona-media-prompt-label">${esc(label)}</span>
+    ${editing ? `<span class="sr-only">已选择 1 张图片作为图生图基础，每次只能修改一张。</span>` : ""}
+    <span class="persona-media-prompt-input-shell">
+      <textarea id="personaMediaTaskPrompt" rows="5" placeholder="${esc(placeholder)}">${esc(mediaForm?.prompt || "")}</textarea>
+    </span>
+  </label>`;
 }
 
 function renderPersonaEditableMediaGrid(items, options = {}) {
@@ -23780,7 +24340,6 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
   const hotMode = options.mode === "hot";
   const hotCandidateId = String(options.candidateId || "").trim();
   const selectedIndexes = personaMediaBulkSelection(personaId, source, postId, rows.length);
-  const allSelected = rows.length > 0 && selectedIndexes.size === rows.length;
   const inputId = hotMode ? `personaHotMediaUploadFiles-${hotCandidateId}` : "personaPostMediaUploadFiles";
   return `<div
     class="persona-unified-media-editor upload-zone ${rows.length ? "has-files" : ""} ${hotMode ? "persona-hot-unified-media-editor" : ""}"
@@ -23799,15 +24358,12 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
       accept="image/*,video/*"
       ${hotMode ? "data-persona-hot-editor-media-input" : "data-persona-direct-media-input"}
     />
-    ${rows.length ? `<div class="upload-selection-toolbar persona-media-selection-toolbar ${allSelected ? "is-all-selected" : ""}">
-      <button type="button" class="upload-select-all bulk-selection-icon-button" data-persona-media-select-all title="${allSelected ? "取消全选" : "全选"}" aria-label="${allSelected ? "取消全选" : "全选"}">
-        ${allSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}
-      </button>
-      <span class="upload-selection-count">已选 ${esc(selectedIndexes.size)} / ${esc(rows.length)}</span>
-      <button type="button" class="upload-delete-selected unified-action-icon-button" ${hotMode ? "data-persona-hot-media-delete-selected" : "data-persona-media-delete-selected"} title="删除所选" aria-label="删除所选" ${selectedIndexes.size ? "" : "disabled"}>
-        ${renderTrashIcon()}
-      </button>
-    </div>` : ""}
+    ${rows.length ? renderPersonaPublicMediaSelectionToolbar({
+      selectedCount: selectedIndexes.size,
+      totalCount: rows.length,
+      selectAllAttribute: "data-persona-media-select-all",
+      deleteAttribute: hotMode ? "data-persona-hot-media-delete-selected" : "data-persona-media-delete-selected",
+    }) : ""}
     <div
       class="persona-edit-media-grid"
       data-persona-media-sort-grid
@@ -23816,58 +24372,56 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
     >${rows.map((item, index) => {
     const itemPreviewIndex = item?.previewUrl && !item?.unavailable ? previewIndex++ : -1;
     const isSelected = selectedIndexes.has(index);
-    return `
-    <div class="persona-edit-media-card ${isSelected ? "is-selected" : ""}" data-persona-media-card-index="${esc(index)}" role="listitem" draggable="false">
-      <button
-        type="button"
-        class="persona-media-card-select"
-        data-persona-media-select-index="${esc(index)}"
-        aria-pressed="${isSelected ? "true" : "false"}"
-        aria-label="${isSelected ? "取消选择" : "选择"}第 ${index + 1} 个媒体"
-      >
-        ${renderPersonaMediaSelectionIcon(isSelected)}
-      </button>
-      ${renderMediaOrderHandle(index, "persona")}
-      ${item.unavailable || !item.previewUrl ? `
-        <div class="persona-media-frame persona-media-frame--empty">
-          <strong>媒体不可预览</strong>
-          <small>${esc(item.reason || "原始文件已失效")}</small>
-        </div>
-      ` : `
-        ${renderMediaPreviewButton(item, groupId, itemPreviewIndex, {
-          className: "persona-edit-media-preview",
-          frameClass: "persona-media-frame",
-          caption: mediaKindLabel(item.type),
-          interactive: false,
-        })}
-      `}
-      <div class="persona-edit-media-actions">
-        ${itemPreviewIndex >= 0 ? `<button
-          type="button"
-          class="persona-hot-media-action is-view"
-          data-media-preview-group="${esc(groupId)}"
-          data-media-preview-index="${esc(itemPreviewIndex)}"
-          title="查看媒体"
-          aria-label="查看第 ${index + 1} 个媒体"
-        >${renderMediaCardViewIcon()}</button>` : ""}
-        <button
-          type="button"
-          class="persona-hot-media-action is-replace"
-          ${hotMode ? `data-persona-hot-editor-media-replace="${esc(index)}"` : `data-persona-edit-post-media="${esc(index)}"`}
-          title="编辑媒体"
-          aria-label="编辑第 ${index + 1} 个媒体"
-        >${renderMediaCardEditIcon()}</button>
-        <button
-          type="button"
-          class="persona-hot-media-action is-remove"
-          ${hotMode ? `data-persona-hot-editor-media-delete="${esc(index)}"` : `data-persona-delete-post-media="${esc(index)}"`}
-          title="删除媒体"
-          aria-label="删除第 ${index + 1} 个媒体"
-        >${renderTrashIcon()}</button>
+    const preview = item.unavailable || !item.previewUrl ? `
+      <div class="persona-media-frame persona-media-frame--empty">
+        <strong>媒体不可预览</strong>
+        <small>${esc(item.reason || "原始文件已失效")}</small>
       </div>
-    </div>
-  `;}).join("")}
-      <label class="upload-add-media persona-media-add-tile" for="${esc(inputId)}" title="选择媒体" aria-label="选择媒体">
+    ` : renderMediaPreviewButton(item, groupId, itemPreviewIndex, {
+      className: "persona-edit-media-preview",
+      frameClass: "persona-media-frame",
+      showCaption: false,
+      interactive: false,
+    });
+    const actions = `
+      ${itemPreviewIndex >= 0 ? `<button
+        type="button"
+        data-media-preview-group="${esc(groupId)}"
+        data-media-preview-index="${esc(itemPreviewIndex)}"
+        title="查看媒体"
+        aria-label="查看第 ${index + 1} 个媒体"
+      >${renderEyeIcon()}</button>` : ""}
+      ${!hotMode && item.type === "image" && !item.unavailable ? `<button
+        type="button"
+        data-persona-post-media-modify="${esc(index)}"
+        title="媒体修改"
+        aria-label="选择第 ${esc(index + 1)} 张图片进行媒体修改"
+      >${renderPlusIcon()}</button>` : ""}
+      ${renderPersonaPublicMediaEditMenu({
+        displayIndex: index,
+        replaceAttribute: hotMode
+          ? `data-persona-hot-editor-media-replace="${esc(index)}"`
+          : `data-persona-edit-post-media="${esc(index)}"`,
+        deleteAttribute: hotMode
+          ? `data-persona-hot-editor-media-delete="${esc(index)}"`
+          : `data-persona-delete-post-media="${esc(index)}"`,
+      })}
+    `;
+    return `
+      <div class="persona-public-media-card persona-edit-media-card ${isSelected ? "is-selected" : ""}" data-persona-media-card-index="${esc(index)}" role="listitem" draggable="false">
+        <div class="persona-public-media-preview-shell">
+          ${renderPersonaPublicMediaSelectionButton({
+            selected: isSelected,
+            displayIndex: index,
+            dataAttribute: `data-persona-media-select-index="${esc(index)}"`,
+          })}
+          ${renderPersonaPublicMediaOrder(index, { draggable: true })}
+          ${preview}
+        </div>
+        ${renderPersonaPublicMediaFooter(index, actions)}
+      </div>
+    `;}).join("")}
+      <label class="upload-add-media persona-media-add-tile persona-public-media-add-tile" for="${esc(inputId)}" title="选择媒体" aria-label="选择媒体">
         ${renderPlusIcon()}
       </label>
     </div>
@@ -23950,45 +24504,48 @@ function renderPersonaImageLibraryGrid(library, selectedImageId = "") {
   }).join("")}${renderPersonaImageUploadPlaceholderCard()}</div>`;
 }
 
-function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, mediaBusyStartedAt = 0 } = {}) {
+function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, mediaBusyStartedAt = 0, addMediaInputId = "" } = {}) {
   const taskState = personaMediaTaskState(personaId, postId);
+  const items = taskState ? personaTaskMediaItems(taskState) : [];
+  const modifying = Boolean(personaTaskMediaModifyItem(taskState, items));
   const actionKind = taskState?.taskId ? "regenerate" : "generate";
-  const runButton = `<button type="button" class="primary" data-persona-run-media-task data-persona-media-action="${actionKind}" aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (taskState?.taskId ? "重新生成" : "生成预览")}</button>`;
+  const runButton = `<button type="button" class="primary" data-persona-run-media-task data-persona-media-action="${actionKind}" aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (modifying ? "重生成图片" : (taskState?.taskId ? "重新生成" : "生成预览"))}</button>`;
   if (!taskState?.taskId) return `
-    ${renderModuleEmptyState({
-      icon: "media",
-      title: "等待生成结果",
-      detail: "提交任务后，结果预览会显示在这里并可直接添加至草稿",
-    })}
+    <div class="persona-media-task-result-preview">
+      ${renderModuleEmptyState({
+        icon: "media",
+        title: "等待生成结果",
+        detail: "提交任务后，结果预览会显示在这里并可直接添加至草稿",
+        action: renderUploadAddMediaButton(addMediaInputId),
+      })}
+    </div>
     <div class="row-actions persona-media-task-actions">
       ${runButton}
     </div>
   `;
   const detail = taskState.detail || {};
-  const items = taskOutputMediaItems(detail);
   const status = String(detail.status || taskState.status || "queued").trim();
   const terminal = ["success", "failed", "cancelled"].includes(status);
   const canCancel = activeTaskStatus(status);
-  const selectedMediaIndexes = selectedPersonaTaskMediaIndexes(taskState, items);
-  const canAttach = status === "success" && selectedMediaIndexes.length > 0;
+  const selectedMediaKeys = selectedPersonaTaskMediaKeys(taskState, items);
+  const hasSuccessfulResult = personaTaskMediaBatches(taskState).some((batch) => String(batch?.detail?.status || "").trim() === "success");
+  const canAttach = hasSuccessfulResult && selectedMediaKeys.length > 0;
   const missingPersonaImage = /人设图/.test(String(detail.error || "")) && !items.length;
   return `
-    <div class="compact-list">
-      <article class="compact-row compact-row-log">
-        <strong>${esc(taskMeta[String(detail.type || taskState.taskType || "persona_post_image")]?.title || "媒体任务")}</strong>
-        <p>${esc(statusLabel(status))} · ${esc(taskState.taskId)}</p>
-        <span>${esc(formatTime(detail.finished_at || detail.updated_at || detail.created_at || ""))}</span>
-      </article>
+    <div class="persona-media-task-result-preview">
+      ${items.length ? "" : renderModuleEmptyState({
+        icon: "media",
+        title: terminal ? "任务已结束，暂无可预览媒体" : "正在等待媒体结果",
+        detail: terminal ? "可从任务日志确认生成情况" : "结果返回后会自动显示在这里",
+        action: renderUploadAddMediaButton(addMediaInputId),
+      })}
+      ${renderPersonaTaskMediaPreview(taskState, items)}
+      ${items.length ? renderUploadAddMediaButton(addMediaInputId) : ""}
     </div>
-    ${items.length ? renderPersonaTaskMediaPreview(taskState, items) : renderModuleEmptyState({
-      icon: "media",
-      title: terminal ? "任务已结束，暂无可预览媒体" : "正在等待媒体结果",
-      detail: terminal ? "可从任务日志确认生成情况" : "结果返回后会自动显示在这里",
-    })}
     <div class="row-actions persona-media-task-actions">
       ${runButton}
       ${missingPersonaImage ? `<button type="button" class="primary" data-persona-open-image-settings="${esc(personaId)}">去生成人设图</button>` : ""}
-      ${items.length && status === "success" ? `
+      ${items.length && hasSuccessfulResult ? `
         <button type="button" class="primary" data-persona-attach-task-media="add" ${canAttach ? "" : "disabled"}>添加至草稿</button>
       ` : ""}
       ${canCancel ? `<button type="button" class="danger" data-persona-cancel-media-task="${esc(taskState.taskId)}">停止任务</button>` : ""}
@@ -24576,9 +25133,9 @@ function activeMediaTaskResultPreview(persona = selectedPersona()) {
   if (!post) return null;
   const taskState = personaMediaTaskState(persona.id, post.id);
   if (!taskState?.taskId) return null;
-  const status = String(taskState.detail?.status || taskState.status || "").trim();
-  if (status !== "success") return null;
-  const items = taskOutputMediaItems(taskState.detail || {});
+  const hasSuccess = personaTaskMediaBatches(taskState).some((batch) => String(batch?.detail?.status || "").trim() === "success");
+  if (!hasSuccess) return null;
+  const items = personaTaskMediaItems(taskState);
   return items.length ? { persona, post, taskState, items } : null;
 }
 
@@ -24766,21 +25323,6 @@ function activeTransientWorkspaceState() {
       confirmText: "退出并继续",
       cancelText: "留在预览",
       clear: () => clearPersonaGenerateRunState(generatePreview.persona.id),
-    };
-  }
-  const draftComposer = currentPersonaDraftEditPersonaId()
-    ? null
-    : activePersonaDraftComposerTransientState();
-  if (draftComposer) {
-    return {
-      kind: "persona_draft_composer",
-      title: "离开当前推文输入？",
-      message: `当前 ${draftComposer.platform === "instagram" ? "Instagram" : "Threads"} 输入区还有未保存内容。确定离开后会清空标题、正文和待上传媒体。`,
-      confirmText: "清空并离开",
-      cancelText: "继续编辑",
-      guardKey: draftComposer.guardKey,
-      danger: true,
-      clear: () => resetPersonaNewDraftComposer(draftComposer.persona.id),
     };
   }
   const mediaTaskResult = activeMediaTaskResultPreview();
@@ -25237,13 +25779,16 @@ function renderPersonaContentPanel(persona, account, profile, step) {
       : String(mediaTaskOptions[0]?.[0] || "persona_post_image");
     mediaForm.taskType = currentTaskType;
     normalizePersonaMediaGenerationForm(mediaForm);
-    const mediaMeta = taskMeta[currentTaskType] || taskMeta.persona_post_image;
     const showAspectRatio = currentTaskType === "persona_post_image";
     const showVideoOptions = false;
-    const uploadAccept = "image/*";
-    const showSourceUpload = Number(mediaMeta.minImages || 0) > 0;
     const mediaBusy = post && (isActionLocked("media_task", persona.id, post.id, currentTaskType) || personaMediaTaskIsActive(persona.id, post.id, currentTaskType));
     const mediaBusyStartedAt = post ? personaMediaTaskStartedAt(persona.id, post.id, currentTaskType) : 0;
+    const mediaTaskState = post ? personaMediaTaskState(persona.id, post.id) : null;
+    const mediaModifyItem = personaTaskMediaModifyItem(mediaTaskState);
+    const mediaModifyActive = Boolean(mediaModifyItem);
+    const mediaEditSourceUploadActive = mediaModifyActive && mediaModifyItem?.inputId !== "personaMediaTaskFiles";
+    const aiUploadSelectsModify = personaDraftMediaTargetIsEditing(persona);
+    const mediaUploadInputId = mediaEditSourceUploadActive ? "personaMediaEditSourceFile" : "personaMediaTaskFiles";
     return `
       <div class="persona-inline-panel">
         <div class="persona-head-copy">
@@ -25289,7 +25834,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                 <strong>生成媒体</strong>
                 <div class="form-grid persona-detail-controls">
                   <label>生成张数
-                    <select id="personaMediaImageCount">
+                    <select id="personaMediaImageCount" ${mediaModifyActive ? "disabled title=\"局部修改每次只生成 1 张图片\"" : ""}>
                       ${[1, 2, 3, 4].map((count) => `<option value="${count}" ${count === Number(mediaForm.imageCount) ? "selected" : ""}>${count} 张</option>`).join("")}
                     </select>
                   </label>
@@ -25313,18 +25858,27 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                     <input id="personaMediaDuration" type="number" min="2" max="15" value="${esc(mediaForm.duration || 2)}" />
                   </label>` : ""}
                 </div>
-                <label>补充提示词（可选）
-                  <textarea id="personaMediaTaskPrompt" rows="5" placeholder="留空按当前推文生成；填写后按提示词润色生成。">${esc(mediaForm.prompt || "")}</textarea>
-                </label>
-                ${showSourceUpload ? renderUploadDropzone("personaMediaTaskFiles", {
-                  label: "上传素材",
-                  accept: uploadAccept,
-                  hint: mediaMeta.files || "拖动任务需要的素材到这里，或点击选择。",
-                }) : ""}
+                ${renderPersonaMediaPromptField(mediaForm, mediaTaskState)}
               </div>
-              <div class="persona-inline-panel persona-inline-panel--nested">
+              <div class="persona-inline-panel persona-inline-panel--nested persona-media-preview-surface" data-persona-media-preview-surface>
                 <strong>任务结果预览</strong>
-                ${renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt })}
+                ${mediaEditSourceUploadActive ? renderUploadDropzone("personaMediaEditSourceFile", {
+                  label: "上传替换编辑图片",
+                  accept: "image/*",
+                  hint: "可用一张自定义图片替换当前编辑源；仅支持图片。",
+                  multiple: false,
+                  imageEditSource: true,
+                  publicMediaCards: true,
+                  embeddedPreview: true,
+                }) : renderUploadDropzone("personaMediaTaskFiles", {
+                  label: "添加媒体",
+                  accept: "image/*",
+                  hint: "仅支持图片；可作为 AI 生成的参考素材。",
+                  multiple: !aiUploadSelectsModify,
+                  publicMediaCards: true,
+                  embeddedPreview: true,
+                })}
+                ${renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt, addMediaInputId: mediaUploadInputId })}
               </div>
               `}
             </section>
@@ -26977,117 +27531,137 @@ function accountProxyBindingChanged(originalProxyId = "", selectedProxyId = "") 
   return String(originalProxyId || "").trim() !== String(selectedProxyId || "").trim();
 }
 
-function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal" } = {}) {
-  const selectedId = String(selectedProxyId || "").trim();
-  const rows = proxyPoolRows();
-  const option = (proxy = null) => {
-    const proxyId = String(proxy?.id || "").trim();
-    const selected = proxyId === selectedId;
-    const eligibility = accountProxyEligibility(proxy);
-    const endpoint = proxy
-      ? [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "未填写地址"
-      : "账号将直接连接网络";
-    const location = proxy
-      ? [String(proxy.country || "").trim(), String(proxy.city || proxy.region || "").trim()].filter(Boolean).join(" · ") || "位置待识别"
-      : "随时可以重新选择代理 IP";
-    const exitIp = proxy ? proxyExitIp(proxy) : "";
-    const title = proxy ? String(proxy.name || (exitIp !== "-" ? exitIp : "") || endpoint).trim() : "不使用代理";
-    const detail = proxy
-      ? `${proxyProtocol(proxy)} · ${eligibility.eligible ? "可使用" : `不可选：${eligibility.reason}`} · 已绑 ${proxyBoundAccountCount(proxy)} 个账号`
-      : "清除当前账号的代理绑定";
-    return `<button type="button" class="account-proxy-option ${selected ? "is-selected" : ""}" data-account-proxy-choice="${esc(proxyId)}" data-account-proxy-choice-scope="${esc(scope)}" aria-pressed="${selected ? "true" : "false"}" ${eligibility.eligible ? "" : "disabled aria-disabled=\"true\""}>
-      <span class="account-proxy-option-check" aria-hidden="true"></span>
-      <strong>${esc(title)}</strong>
-      <span>${esc(endpoint)}</span>
-      <small>${esc(location)}</small>
-      <small>${esc(detail)}</small>
-    </button>`;
-  };
-  return `<div class="account-proxy-options" data-account-proxy-options role="group" aria-label="选择代理 IP">
-    ${option(null)}
-    ${rows.map((proxy) => option(proxy)).join("")}
+function systemProxyPoolLocation(proxy = {}) {
+  return [proxy.country, proxy.region, proxy.city]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" · ") || "待识别";
+}
+
+function accountProxyPoolFiltersHtml() {
+  return `<div class="account-proxy-picker-filters" data-account-proxy-filters>
+    <label class="account-proxy-region-filter"><select data-account-proxy-filter="country" aria-label="地区" title="地区"><option value="">全部地区</option></select></label>
+    <details class="account-proxy-filter-menu" data-console-dropdown>
+      <summary title="排序" aria-label="排序">${renderTaskQueueFilterIcon()}</summary>
+      <div class="account-proxy-filter-menu-options" role="listbox" aria-label="排序">
+        <button type="button" role="option" data-account-proxy-sort-option="time_desc" aria-selected="true">最新加入</button>
+        <button type="button" role="option" data-account-proxy-sort-option="time_asc" aria-selected="false">最早加入</button>
+        <button type="button" role="option" data-account-proxy-sort-option="name_asc" aria-selected="false">名称 A - Z</button>
+        <button type="button" role="option" data-account-proxy-sort-option="name_desc" aria-selected="false">名称 Z - A</button>
+        <button type="button" role="option" data-account-proxy-sort-option="country_asc" aria-selected="false">地区 A - Z</button>
+        <button type="button" role="option" data-account-proxy-sort-option="health_first" aria-selected="false">可用优先</button>
+      </div>
+    </details>
   </div>`;
 }
 
-function accountProxyCustomAddButtonHtml(scope = "modal") {
-  return `<button type="button" class="account-proxy-custom-add" data-account-proxy-custom-add data-account-proxy-choice-scope="${esc(scope)}" aria-expanded="false">
-    ${renderPlusIcon()}<span>添加自定义代理</span>
-  </button>`;
-}
-
-function accountSystemProxyPoolButtonHtml() {
-  return `<button type="button" class="account-system-proxy-pool-add" data-account-system-proxy-pool-open>
-    ${renderSystemProxyPoolIcon()}<span>添加代理 IP</span>
-  </button>`;
-}
-
-function accountProxyInlineCustomFormHtml(scope = "edit") {
-  return `<section class="account-proxy-inline-custom" data-account-proxy-inline-custom data-account-proxy-choice-scope="${esc(scope)}" hidden>
-    <div class="account-proxy-inline-custom-head">
-      <div><strong>添加自定义代理</strong><span>填写后先进行真实网络检测，通过后保存并自动选中。</span></div>
-    </div>
-    <div class="proxy-form-grid">
-      ${sharedProxyFieldsHtml("accountProxyCustom")}
-    </div>
-    <div class="account-proxy-inline-custom-actions">
-      <button type="button" class="primary account-inline-action" data-account-proxy-custom-save>${renderNetworkIcon()}<span>检测并添加</span></button>
-      <button type="button" class="account-inline-action" data-account-proxy-custom-cancel>取消</button>
-    </div>
+function accountProxyPurchasePlaceholderHtml() {
+  return `<section class="account-proxy-purchase-placeholder" aria-label="购买代理 IP">
+    <span class="account-proxy-purchase-icon">${renderShoppingBagIcon()}</span>
+    <div><strong>购买专属代理 IP</strong><span>自费购买后将自动加入你的可选代理列表</span></div>
+    <button type="button" data-account-proxy-purchase-placeholder>${renderShoppingBagIcon()}<span>点击购买</span></button>
   </section>`;
 }
 
-function setAccountProxyInlineMode(container, mode = "") {
-  if (!container) return;
-  const normalized = ["options", "custom"].includes(mode) ? mode : "";
-  const options = container.querySelector("[data-account-proxy-inline-options]");
-  const custom = container.querySelector("[data-account-proxy-inline-custom]");
-  const effectiveMode = normalized || (options?.dataset.accountProxyDefaultVisible === "true" ? "options" : "");
-  if (options) options.hidden = effectiveMode !== "options";
-  if (custom) custom.hidden = normalized !== "custom";
-  container.querySelectorAll("[data-account-proxy-inline-toggle]").forEach((button) => {
-    button.setAttribute("aria-expanded", normalized === "options" ? "true" : "false");
-  });
-  container.querySelectorAll("[data-account-proxy-custom-add]").forEach((button) => {
-    button.setAttribute("aria-expanded", normalized === "custom" ? "true" : "false");
-  });
-  if (normalized === "custom") container.querySelector("#accountProxyCustomProtocol")?.focus();
+function accountProxyPickerFilters(modal) {
+  return {
+    ...Object.fromEntries(Array.from(modal?.querySelectorAll("[data-account-proxy-filter]") || []).map((control) => [
+    String(control.dataset.accountProxyFilter || ""),
+    String(control.value || "").trim(),
+    ])),
+    sort: String(modal?.dataset.accountProxySort || "time_desc"),
+  };
 }
 
-function accountProxyCustomIsBusy(container) {
-  return container?.querySelector("[data-account-proxy-inline-custom]")?.dataset.proxyCustomBusy === "true";
+function accountProxyPoolFilterOptions(modal, poolData = {}) {
+  const options = Array.isArray(poolData.options) ? poolData.options : [];
+  const select = (name, values, label) => {
+    const control = modal?.querySelector(`[data-account-proxy-filter="${name}"]`);
+    if (!control) return;
+    const selected = String(control.value || "");
+    control.innerHTML = `<option value="">${esc(label)}</option>${values.map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join("")}`;
+    control.value = values.includes(selected) ? selected : "";
+  };
+  select("country", [...new Set(options.map((item) => String(item.country || "").trim()).filter(Boolean))].sort(), "全部地区");
 }
 
-function accountProxyCustomIsOpen(container) {
-  const form = container?.querySelector("[data-account-proxy-inline-custom]");
-  return Boolean(form && !form.hidden);
+function accountProxyPoolMatches(proxy = {}, filters = {}) {
+  const country = String(filters.country || "").trim();
+  if (country && String(proxy.country || "").trim() !== country) return false;
+  return true;
 }
 
-function setAccountProxyCustomBusy(container, busy = false) {
-  const form = container?.querySelector("[data-account-proxy-inline-custom]");
-  if (!form) return;
-  form.dataset.proxyCustomBusy = busy ? "true" : "false";
-  form.setAttribute("aria-busy", busy ? "true" : "false");
-  form.querySelectorAll("input, select, textarea, button").forEach((control) => {
-    if (busy) {
-      control.dataset.proxyCustomWasDisabled = control.disabled ? "true" : "false";
-      control.disabled = true;
-      return;
+function accountProxyPoolSortOptions(options = [], sort = "time_desc") {
+  const direction = String(sort || "time_desc");
+  return [...options].sort((left, right) => {
+    const leftName = String(left?.name || left?.host || "").localeCompare(String(right?.name || right?.host || ""), "zh-Hans-CN");
+    if (direction === "name_asc") return leftName;
+    if (direction === "name_desc") return -leftName;
+    if (direction === "country_asc") {
+      const countryOrder = String(left?.country || "").localeCompare(String(right?.country || ""), "zh-Hans-CN");
+      return countryOrder || leftName;
     }
-    control.disabled = control.dataset.proxyCustomWasDisabled === "true";
-    delete control.dataset.proxyCustomWasDisabled;
+    if (direction === "health_first") {
+      const leftHealthy = String(left?.health_status || "healthy").toLowerCase() === "healthy" ? 0 : 1;
+      const rightHealthy = String(right?.health_status || "healthy").toLowerCase() === "healthy" ? 0 : 1;
+      return leftHealthy - rightHealthy || leftName;
+    }
+    const leftTime = Number(left?.published_at || left?.updated_at || left?.claimed_at || 0);
+    const rightTime = Number(right?.published_at || right?.updated_at || right?.claimed_at || 0);
+    return direction === "time_asc" ? leftTime - rightTime : rightTime - leftTime;
   });
 }
 
-function accountProxyCustomBusyMessage() {
-  showMsg("socialMsg", "代理正在检测和保存，请等待当前操作完成。", false);
+function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", poolData = {}, filters = {} } = {}) {
+  const selectedId = String(selectedProxyId || "").trim();
+  const marketOptions = accountProxyPoolSortOptions(
+    (Array.isArray(poolData.options) ? poolData.options : []).filter((proxy) => accountProxyPoolMatches(proxy, filters)),
+    filters.sort,
+  );
+  const marketOption = (proxy) => {
+    const itemId = String(proxy.market_item_id || "").trim();
+    const proxyId = String(proxy.social_proxy_id || "").trim();
+    const selected = proxyId && proxyId === selectedId;
+    const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "未填写地址";
+    const country = String(proxy.country_code || proxy.country || "GL").trim().slice(0, 3).toUpperCase() || "GL";
+    const healthLabel = String(proxy.health_status || "healthy").toLowerCase() === "healthy" ? "检测可用" : "待检测";
+    const action = selected ? "当前使用" : (proxy.selected ? "切换使用" : "选择使用");
+    return `<article class="proxy-market-mini-card" data-account-proxy-card="${esc(itemId)}" ${selected ? 'aria-current="true"' : ""}>
+      <div class="proxy-market-mini-card-head">
+        <span class="proxy-market-mini-country">${esc(country)}</span>
+        <span class="proxy-market-mini-stock">${selected ? "已获取" : "可领取"}</span>
+      </div>
+      <strong>${esc(proxy.name || endpoint)}</strong>
+      <span class="proxy-market-mini-location">${esc(endpoint)} · ${esc(systemProxyPoolLocation(proxy))}</span>
+      <div class="proxy-market-mini-meta">
+        <span>${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
+        <span>${esc(proxyProtocol(proxy))}</span>
+        <strong>${esc(healthLabel)}</strong>
+      </div>
+      <button type="button" class="primary" data-account-proxy-market-choice="${esc(itemId)}" data-account-proxy-choice-scope="${esc(scope)}" ${selected ? "disabled" : ""}>${renderNetworkIcon()}<span>${esc(action)}</span></button>
+    </article>`;
+  };
+  const empty = renderModuleEmptyState({
+    icon: "network",
+    title: "没有符合筛选条件的代理 IP",
+    detail: "请调整筛选条件后重试",
+    className: "system-proxy-pool-empty",
+  });
+  return `<div class="account-proxy-options proxy-market-mini-grid" data-account-proxy-options data-account-proxy-choice-scope="${esc(scope)}" role="group" aria-label="选择代理 IP">
+    ${marketOptions.length ? marketOptions.map(marketOption).join("") : empty}
+  </div>`;
 }
 
-function selectNewCustomProxy(modal, proxy = null, scope = "modal") {
-  const proxyId = String(proxy?.id || "").trim();
-  if (!modal?.isConnected || !proxyId || !accountProxyEligibility(proxy).eligible) return;
-  const options = modal.querySelector("[data-account-proxy-options]");
-  if (options) options.outerHTML = accountProxyOptionCardsHtml(proxyId, { scope });
-  updateAccountProxyChoice(modal, proxyId);
+function setAccountProxyPoolSort(modal, sort = "time_desc") {
+  if (!modal) return;
+  const nextSort = ["time_desc", "time_asc", "name_asc", "name_desc", "country_asc", "health_first"].includes(String(sort || "")) ? String(sort) : "time_desc";
+  modal.dataset.accountProxySort = nextSort;
+  modal.querySelectorAll("[data-account-proxy-sort-option]").forEach((option) => {
+    const selected = String(option.dataset.accountProxySortOption || "") === nextSort;
+    option.setAttribute("aria-selected", selected ? "true" : "false");
+    option.classList.toggle("is-active", selected);
+  });
+  refreshAccountProxyPickerOptions(modal);
 }
 
 function updateAccountProxyChoice(modal, proxyId = "") {
@@ -27096,12 +27670,16 @@ function updateAccountProxyChoice(modal, proxyId = "") {
   const proxy = socialProxyById(selectedId);
   if (selectedId && !accountProxyEligibility(proxy).eligible) return false;
   modal.dataset.selectedProxyId = selectedId;
-  if (Object.hasOwn(modal.dataset, "originalProxyId")) {
-    modal.dataset.accountProxyDirty = accountProxyBindingChanged(modal.dataset.originalProxyId || "", selectedId) ? "true" : "false";
-  }
+  const selectedMarketItemId = String(proxy?.market_item_id || "").trim();
+  modal.querySelectorAll("[data-account-proxy-card]").forEach((card) => {
+    const selected = selectedMarketItemId
+      && String(card.dataset.accountProxyCard || "").trim() === selectedMarketItemId;
+    card.toggleAttribute("aria-current", Boolean(selected));
+    const button = card.querySelector("[data-account-proxy-market-choice]");
+    if (button) button.disabled = Boolean(selected);
+  });
   modal.querySelectorAll("[data-account-proxy-choice]").forEach((button) => {
     const selected = String(button.dataset.accountProxyChoice || "").trim() === selectedId;
-    button.classList.toggle("is-selected", selected);
     button.setAttribute("aria-pressed", selected ? "true" : "false");
   });
   const summary = modal.querySelector("[data-account-proxy-selection-summary]");
@@ -27110,6 +27688,70 @@ function updateAccountProxyChoice(modal, proxyId = "") {
     summary.textContent = proxy ? `已选择：${proxy.name || (exitIp !== "-" ? exitIp : "") || proxy.host}` : "已选择：不使用代理";
   }
   return true;
+}
+
+function refreshAccountProxyPickerOptions(modal) {
+  if (!modal?.isConnected) return;
+  const options = modal.querySelector("[data-account-proxy-options]");
+  if (!options) return;
+  const scope = options.dataset.accountProxyChoiceScope || "modal";
+  options.outerHTML = accountProxyOptionCardsHtml(modal.dataset.selectedProxyId || "", {
+    scope,
+    poolData: modal.__accountProxyPoolData || {},
+    filters: accountProxyPickerFilters(modal),
+  });
+}
+
+async function loadAccountProxyPickerPool(modal) {
+  if (!modal?.isConnected) return null;
+  const options = modal.querySelector("[data-account-proxy-options]");
+  if (options) options.setAttribute("aria-busy", "true");
+  try {
+    const data = await api("/api/persona_dashboard/automation/system-proxy-pool");
+    if (!modal.isConnected) return data;
+    modal.__accountProxyPoolData = data || {};
+    accountProxyPoolFilterOptions(modal, data || {});
+    refreshAccountProxyPickerOptions(modal);
+    return data;
+  } catch (error) {
+    if (options?.isConnected) {
+      options.innerHTML = renderModuleEmptyState({ icon: "network", title: "公共代理池加载失败", detail: error.detail || error.message || "请稍后重试" });
+      options.removeAttribute("aria-busy");
+    }
+    return null;
+  }
+}
+
+async function claimAccountProxyPoolOption(modal, itemId = "") {
+  const cleanItemId = String(itemId || "").trim();
+  if (!modal?.isConnected || !cleanItemId || modal.dataset.accountProxyClaiming === "true") return false;
+  modal.dataset.accountProxyClaiming = "true";
+  modal.querySelectorAll("[data-account-proxy-market-choice]").forEach((button) => { button.disabled = true; });
+  try {
+    const result = await api("/api/persona_dashboard/automation/system-proxy-pool/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        item_id: cleanItemId,
+        expected_current_item_id: String(modal.__accountProxyPoolData?.current?.market_item_id || ""),
+        client_request_id: `account-proxy:${globalThis.crypto?.randomUUID?.() || Date.now()}`,
+      }),
+    });
+    await fetchSocialDataShared({ force: true });
+    if (!modal.isConnected) return false;
+    const claimedProxyId = String(result?.proxy?.id || "").trim();
+    updateAccountProxyChoice(modal, claimedProxyId);
+    await loadAccountProxyPickerPool(modal);
+    return claimedProxyId;
+  } catch (error) {
+    showMsg("socialMsg", error.detail || error.message || "选择公共代理失败", false);
+    return false;
+  } finally {
+    if (modal.isConnected) {
+      delete modal.dataset.accountProxyClaiming;
+      modal.querySelectorAll("[data-account-proxy-market-choice]").forEach((button) => { button.disabled = button.classList.contains("is-selected"); });
+    }
+  }
 }
 
 async function reconcileAccountProxyBindingConflict(modal, accountId = "", error = null) {
@@ -27121,11 +27763,9 @@ async function reconcileAccountProxyBindingConflict(modal, accountId = "", error
   const originalProxyId = String(modal.dataset.originalProxyId || "").trim();
   const latestProxyId = String(latestAccount.proxy_id || "").trim();
   if (!accountProxyBindingChanged(originalProxyId, latestProxyId)) return false;
-  const scope = modal.querySelector("[data-account-proxy-choice]")?.dataset.accountProxyChoiceScope || "modal";
-  const options = modal.querySelector("[data-account-proxy-options]");
-  if (options) options.outerHTML = accountProxyOptionCardsHtml(latestProxyId, { scope });
   modal.dataset.originalProxyId = latestProxyId;
   updateAccountProxyChoice(modal, latestProxyId);
+  refreshAccountProxyPickerOptions(modal);
   const summary = modal.querySelector("[data-account-proxy-selection-summary]");
   if (summary) summary.textContent = "代理绑定已在其他页面更新，请重新选择。";
   return true;
@@ -27150,62 +27790,26 @@ async function saveAccountProxyBinding(accountId = "", proxyId = "", expectedPro
   return true;
 }
 
-const accountProxyCustomRequestState = new WeakMap();
-
-async function saveAccountInlineCustomProxy(container, button, scope = "edit") {
-  if (!container || !button || accountProxyCustomIsBusy(container)) return false;
-  const payload = sharedProxyPayload("accountProxyCustom");
-  if (!payload) return false;
-  const customForm = container.querySelector("[data-account-proxy-inline-custom]");
-  const requestOwner = customForm || container;
-  const payloadFingerprint = JSON.stringify(payload);
-  let requestState = accountProxyCustomRequestState.get(requestOwner);
-  if (!requestState || requestState.payloadFingerprint !== payloadFingerprint) {
-    requestState = {
-      payloadFingerprint,
-      requestId: globalThis.crypto?.randomUUID?.()
-        || `proxy-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    };
-    accountProxyCustomRequestState.set(requestOwner, requestState);
-  }
-  const requestId = String(requestState.requestId || "");
-  setAccountProxyCustomBusy(container, true);
+async function commitAccountProxyPickerSelection(modal, accountId = "", proxyId = "") {
+  const cleanAccountId = String(accountId || "").trim();
+  const selectedProxyId = String(proxyId || "").trim();
+  if (!modal?.isConnected || !cleanAccountId) return false;
+  const expectedProxyId = String(modal.dataset.originalProxyId || "").trim();
+  const actionButtons = Array.from(modal.querySelectorAll("[data-account-proxy-market-choice], [data-account-proxy-choice]"));
+  actionButtons.forEach((button) => { button.disabled = true; });
   try {
-    const preflight = await testProxyConfiguration(payload, "", "accountProxyCustomCheckResult", "accountProxyCustom");
-    if (!preflight.ok) {
-      showMsg("socialMsg", preflight.error || "代理检测未通过，配置尚未保存。", false);
-      return false;
+    if (accountProxyBindingChanged(expectedProxyId, selectedProxyId)) {
+      const saved = await saveAccountProxyBinding(cleanAccountId, selectedProxyId, expectedProxyId);
+      if (saved === false) return false;
     }
-    if (!container.isConnected) return false;
-    const data = await api("/api/persona_dashboard/automation/proxies", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Idempotency-Key": requestId,
-      },
-      body: JSON.stringify(payload),
-    });
-    const savedId = String(data?.proxy?.id || "").trim();
-    if (!savedId) throw new Error("代理已保存，但未返回代理 ID");
-    if (!container.isConnected) return false;
-    const checked = await api(`/api/persona_dashboard/automation/proxies/${encodeURIComponent(savedId)}/check`, { method: "POST" });
-    await refreshProxyPool();
-    if (!container.isConnected) return false;
-    const savedProxy = socialProxyById(savedId) || checked?.proxy || data?.proxy || null;
-    if (!checked?.proxy?.last_check_result?.ok || !accountProxyEligibility(savedProxy).eligible) {
-      showMsg("socialMsg", "自定义代理已保存，但实时检测未通过，暂不能绑定账号。", false);
-      return false;
-    }
-    selectNewCustomProxy(container, savedProxy, scope);
-    accountProxyCustomRequestState.delete(requestOwner);
-    setAccountProxyInlineMode(container, "options");
-    showMsg("socialMsg", "自定义代理已添加并选中，保存账号后完成绑定。", true);
+    modal.remove();
     return true;
   } catch (error) {
-    showMsg("socialMsg", error.detail || error.message || "添加自定义代理失败", false);
+    const reconciled = await reconcileAccountProxyBindingConflict(modal, cleanAccountId, error);
+    showMsg("socialMsg", reconciled ? "代理绑定已更新，请重新选择。" : (error.detail || error.message || "代理绑定失败"), false);
     return false;
   } finally {
-    if (container.isConnected) setAccountProxyCustomBusy(container, false);
+    if (modal.isConnected) actionButtons.forEach((button) => { button.disabled = false; });
   }
 }
 
@@ -27225,142 +27829,92 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
   modal.className = "console-modal";
   modal.dataset.selectedProxyId = selectedProxyId;
   modal.dataset.originalProxyId = originalProxyId;
-  modal.dataset.accountProxyDirty = selectedProxyId !== originalProxyId ? "true" : "false";
   modal.innerHTML = `
     <div class="console-modal-backdrop" data-account-proxy-picker-cancel></div>
     <section class="console-modal-dialog account-proxy-picker-modal" role="dialog" aria-modal="true" aria-labelledby="accountProxyPickerTitle">
       <div class="console-modal-head">
-        <div><strong id="accountProxyPickerTitle">选择代理 IP</strong><p>${esc(accountDisplayName(account))} · 一个账号同时只绑定一个代理</p></div>
+        <div><strong id="accountProxyPickerTitle">选择代理</strong><p>${esc(accountDisplayName(account))} · 选择或购买要绑定的代理 IP</p></div>
         ${renderModalCloseButton("data-account-proxy-picker-cancel")}
       </div>
       <div class="console-modal-content">
         <div class="account-proxy-picker-toolbar">
           <p data-account-proxy-selection-summary>${account.proxy_id ? `当前绑定：${esc(accountResidentialProxyLabel(account))}` : "当前未使用代理 IP"}</p>
-          <div class="account-proxy-picker-toolbar-actions">
-            ${accountSystemProxyPoolButtonHtml()}
-            ${accountProxyCustomAddButtonHtml("modal")}
-          </div>
         </div>
-        <div data-account-proxy-inline-options>
-          ${accountProxyOptionCardsHtml(selectedProxyId, { scope: "modal" })}
+        ${accountProxyPurchasePlaceholderHtml()}
+        <div class="account-proxy-picker-toolbar account-proxy-picker-filter-toolbar">
+          <div class="account-proxy-picker-controls">${accountProxyPoolFiltersHtml()}<button type="button" class="account-proxy-clear" data-account-proxy-choice="" data-account-proxy-choice-scope="modal" aria-pressed="${selectedProxyId ? "false" : "true"}">${renderNoProxyIcon()}<span>不使用代理</span></button></div>
         </div>
-        ${accountProxyInlineCustomFormHtml("modal")}
-      </div>
-      <div class="console-modal-actions">
-        <button type="button" class="primary" data-account-proxy-picker-save="${esc(account.id)}">确认绑定</button>
-        <button type="button" data-account-proxy-picker-cancel>取消</button>
+        ${accountProxyOptionCardsHtml(selectedProxyId, { scope: "modal" })}
       </div>
     </section>`;
   document.body.appendChild(modal);
   if (selectedProxyId !== originalProxyId) updateAccountProxyChoice(modal, selectedProxyId);
   const close = () => {
-    if (accountProxyCustomIsBusy(modal)) {
-      accountProxyCustomBusyMessage();
-      return false;
-    }
     modal.remove();
     return true;
   };
-  modal.addEventListener("click", (event) => {
-    const systemPoolOpen = event.target.closest("[data-account-system-proxy-pool-open]");
-    if (systemPoolOpen) {
-      if (accountProxyCustomIsBusy(modal)) {
-        accountProxyCustomBusyMessage();
-        return;
+  modal.addEventListener("click", async (event) => {
+    const sortOption = event.target.closest("[data-account-proxy-sort-option]");
+    if (sortOption) {
+      setAccountProxyPoolSort(modal, sortOption.dataset.accountProxySortOption || "time_desc");
+      sortOption.closest("details")?.removeAttribute("open");
+      return;
+    }
+    const marketChoice = event.target.closest("[data-account-proxy-market-choice]");
+    if (marketChoice && !marketChoice.disabled) {
+      const claimedProxyId = await claimAccountProxyPoolOption(modal, marketChoice.dataset.accountProxyMarketChoice || "");
+      if (claimedProxyId && marketChoice.dataset.accountProxyChoiceScope === "modal") {
+        await commitAccountProxyPickerSelection(modal, account.id, claimedProxyId);
       }
-      openSystemProxyPoolModal({ accountId: account.id, selectedProxyId: modal.dataset.selectedProxyId || "" });
       return;
     }
-    const customAdd = event.target.closest("[data-account-proxy-custom-add]");
-    if (customAdd) {
-      if (accountProxyCustomIsBusy(modal)) {
-        accountProxyCustomBusyMessage();
-        return;
-      }
-      const expanded = customAdd.getAttribute("aria-expanded") === "true";
-      setAccountProxyInlineMode(modal, expanded ? "options" : "custom");
-      return;
-    }
-    if (event.target.closest("[data-account-proxy-custom-cancel]")) {
-      if (accountProxyCustomIsBusy(modal)) {
-        accountProxyCustomBusyMessage();
-        return;
-      }
-      setAccountProxyInlineMode(modal, "options");
-      return;
-    }
-    const customTest = event.target.closest('[data-proxy-inline-test="accountProxyCustom"]');
-    if (customTest) {
-      if (accountProxyCustomIsBusy(modal)) return;
-      setAccountProxyCustomBusy(modal, true);
-      testProxyForm("accountProxyCustom")
-        .catch((error) => showMsg("socialMsg", error.detail || error.message || "代理检测失败", false))
-        .finally(() => {
-          if (modal.isConnected) setAccountProxyCustomBusy(modal, false);
-        });
-      return;
-    }
-    const customSave = event.target.closest("[data-account-proxy-custom-save]");
-    if (customSave) {
-      void saveAccountInlineCustomProxy(modal, customSave, "modal");
+    if (event.target.closest("[data-account-proxy-purchase-placeholder]")) {
+      showMsg("socialMsg", "购买代理 IP 功能即将上线，后续购买的代理会自动显示在这里。", true);
       return;
     }
     const choice = event.target.closest("[data-account-proxy-choice]");
     if (choice) {
       if (choice.disabled) return;
-      updateAccountProxyChoice(modal, choice.dataset.accountProxyChoice || "");
+      const proxyId = choice.dataset.accountProxyChoice || "";
+      updateAccountProxyChoice(modal, proxyId);
+      refreshAccountProxyPickerOptions(modal);
+      if (choice.dataset.accountProxyChoiceScope === "modal") {
+        await commitAccountProxyPickerSelection(modal, account.id, proxyId);
+      }
       return;
     }
     if (event.target.closest("[data-account-proxy-picker-cancel]")) {
       close();
       return;
     }
-    const save = event.target.closest("[data-account-proxy-picker-save]");
-    if (!save) return;
-    if (accountProxyCustomIsOpen(modal)) {
-      showMsg("socialMsg", "请先完成自定义代理添加，或点击取消收起该表单。", false);
-      return;
-    }
-    if (modal.dataset.accountProxyDirty !== "true") {
-      close();
-      return;
-    }
-    save.disabled = true;
-    saveAccountProxyBinding(
-      save.dataset.accountProxyPickerSave || "",
-      modal.dataset.selectedProxyId || "",
-      modal.dataset.originalProxyId || "",
-    )
-      .then((saved) => {
-        if (saved !== false) close();
-        else save.disabled = false;
-      })
-      .catch(async (error) => {
-        save.disabled = false;
-        const reconciled = await reconcileAccountProxyBindingConflict(modal, save.dataset.accountProxyPickerSave || "", error);
-        showMsg("socialMsg", reconciled ? "代理绑定已更新，请重新选择。" : (error.detail || error.message || "代理绑定失败"), false);
-      });
   });
   modal.addEventListener("keydown", (event) => {
     if (event.key === "Escape") close();
   });
+  modal.addEventListener("input", (event) => {
+    if (event.target.closest("[data-account-proxy-filter]")) refreshAccountProxyPickerOptions(modal);
+  });
+  modal.addEventListener("change", (event) => {
+    if (event.target.closest("[data-account-proxy-filter]")) refreshAccountProxyPickerOptions(modal);
+  });
+  void loadAccountProxyPickerPool(modal);
 }
 
 function renderAccountProxyPickerPanel(account = null, mode = "create") {
-  const creating = mode === "create";
-  const proxyId = String(account?.proxy_id || "").trim();
+  const proxyId = String(account?.proxy_id || (mode === "create" ? accountPoolDraftValue("proxy_id") : "")).trim();
+  const selectedProxy = socialProxyById(proxyId);
   return `<section class="account-residential-proxy account-proxy-picker-panel">
     <div class="account-residential-proxy-head">
-      <div class="account-proxy-inline-summary"><strong>代理 IP</strong><span data-account-proxy-selection-summary>${esc(proxyId ? accountResidentialProxyLabel(account) : "未使用代理 IP")}</span></div>
-      <div class="account-proxy-inline-head-actions">
-        ${creating ? "" : `<button type="button" data-account-proxy-inline-toggle aria-expanded="false">${proxyId ? "切换代理" : "选择代理"}</button>`}
-        ${accountProxyCustomAddButtonHtml("edit")}
-      </div>
+      <div class="account-proxy-inline-summary"><strong>代理 IP</strong><span data-account-proxy-selection-summary>${esc(proxyId ? accountResidentialProxyLabel(account || selectedProxy) : "未使用代理 IP")}</span></div>
+      <div class="account-proxy-inline-head-actions"><button type="button" data-account-proxy-picker-open aria-expanded="false">${proxyId ? "切换代理" : "选择代理"}</button></div>
     </div>
-    <div class="account-proxy-inline-options" data-account-proxy-inline-options ${creating ? 'data-account-proxy-default-visible="true"' : "hidden"}>
+    <div class="account-proxy-inline-options" data-account-proxy-inline-options hidden>
+      ${accountProxyPurchasePlaceholderHtml()}
+      <div class="account-proxy-picker-toolbar account-proxy-picker-filter-toolbar">
+        <div class="account-proxy-picker-controls">${accountProxyPoolFiltersHtml()}<button type="button" class="account-proxy-clear" data-account-proxy-choice="" data-account-proxy-choice-scope="edit" aria-pressed="${proxyId ? "false" : "true"}">${renderNoProxyIcon()}<span>不使用代理</span></button></div>
+      </div>
       ${accountProxyOptionCardsHtml(proxyId, { scope: "edit" })}
     </div>
-    ${accountProxyInlineCustomFormHtml("edit")}
   </section>`;
 }
 
@@ -27776,7 +28330,6 @@ function openAccountPoolEditorModal(options) {
   modal.className = "console-modal";
   modal.dataset.selectedProxyId = selectedProxyId;
   modal.dataset.originalProxyId = selectedProxyId;
-  modal.dataset.accountProxyDirty = "false";
   modal.dataset.accountEditorMode = mode;
   modal.dataset.accountEditorId = accountId;
   modal.innerHTML = `
@@ -27806,10 +28359,6 @@ function openAccountPoolEditorModal(options) {
     else resetAccountPoolCreateForm();
   };
   const close = () => {
-    if (accountProxyCustomIsBusy(modal)) {
-      accountProxyCustomBusyMessage();
-      return false;
-    }
     modal.__cleanup();
     modal.remove();
     return true;
@@ -27883,62 +28432,39 @@ function openAccountPoolEditorModal(options) {
       close();
       return;
     }
-    const toggle = event.target.closest("[data-account-proxy-inline-toggle]");
-    if (toggle) {
-      if (accountProxyCustomIsBusy(modal)) {
-        accountProxyCustomBusyMessage();
-        return;
-      }
-      const expanded = toggle.getAttribute("aria-expanded") === "true";
-      setAccountProxyInlineMode(modal, expanded ? "" : "options");
+    const pickerOpen = event.target.closest("[data-account-proxy-picker-open]");
+    if (pickerOpen) {
+      const options = modal.querySelector("[data-account-proxy-inline-options]");
+      const expanded = !options?.hidden;
+      if (options) options.hidden = expanded;
+      pickerOpen.setAttribute("aria-expanded", expanded ? "false" : "true");
+      if (!expanded) void loadAccountProxyPickerPool(modal);
       return;
     }
-    const customAdd = event.target.closest("[data-account-proxy-custom-add]");
-    if (customAdd) {
-      if (accountProxyCustomIsBusy(modal)) {
-        accountProxyCustomBusyMessage();
-        return;
-      }
-      const expanded = customAdd.getAttribute("aria-expanded") === "true";
-      setAccountProxyInlineMode(modal, expanded ? "" : "custom");
+    const sortOption = event.target.closest("[data-account-proxy-sort-option]");
+    if (sortOption) {
+      setAccountProxyPoolSort(modal, sortOption.dataset.accountProxySortOption || "time_desc");
+      sortOption.closest("details")?.removeAttribute("open");
       return;
     }
-    if (event.target.closest("[data-account-proxy-custom-cancel]")) {
-      if (accountProxyCustomIsBusy(modal)) {
-        accountProxyCustomBusyMessage();
-        return;
-      }
-      setAccountProxyInlineMode(modal, "");
+    const marketChoice = event.target.closest("[data-account-proxy-market-choice]");
+    if (marketChoice && !marketChoice.disabled) {
+      void claimAccountProxyPoolOption(modal, marketChoice.dataset.accountProxyMarketChoice || "");
       return;
     }
-    const customTest = event.target.closest('[data-proxy-inline-test="accountProxyCustom"]');
-    if (customTest) {
-      if (accountProxyCustomIsBusy(modal)) return;
-      setAccountProxyCustomBusy(modal, true);
-      testProxyForm("accountProxyCustom")
-        .catch((error) => showMsg("socialMsg", error.detail || error.message || "代理检测失败", false))
-        .finally(() => {
-          if (modal.isConnected) setAccountProxyCustomBusy(modal, false);
-        });
-      return;
-    }
-    const customSave = event.target.closest("[data-account-proxy-custom-save]");
-    if (customSave) {
-      void saveAccountInlineCustomProxy(modal, customSave, "edit");
+    if (event.target.closest("[data-account-proxy-purchase-placeholder]")) {
+      showMsg("socialMsg", "购买代理 IP 功能即将上线，后续购买的代理会自动显示在这里。", true);
       return;
     }
     const choice = event.target.closest("[data-account-proxy-choice]");
     if (choice) {
       if (choice.disabled) return;
       updateAccountProxyChoice(modal, choice.dataset.accountProxyChoice || "");
+      refreshAccountProxyPickerOptions(modal);
       return;
     }
     const saveButton = event.target.closest("[data-account-pool-editor-save]");
     if (!saveButton) return;
-    if (accountProxyCustomIsOpen(modal)) {
-      showMsg("socialMsg", "请先完成自定义代理添加，或点击取消收起该表单。", false);
-      return;
-    }
     saveButton.disabled = true;
     const saveRequest = editing
       ? saveAccountPoolEditForm(accountId)
@@ -27963,8 +28489,12 @@ function openAccountPoolEditorModal(options) {
   });
   modal.addEventListener("input", (event) => {
     if (!editing) syncAccountPoolCreateDraftFromForm();
+    if (event.target.closest("[data-account-proxy-filter]")) refreshAccountProxyPickerOptions(modal);
     const passwordInput = event.target.closest?.("[data-account-password-input]");
     if (editing && passwordInput) passwordInput.dataset.passwordDirty = "true";
+  });
+  modal.addEventListener("change", (event) => {
+    if (event.target.closest("[data-account-proxy-filter]")) refreshAccountProxyPickerOptions(modal);
   });
   modal.addEventListener("keydown", (event) => {
     if (event.key === "Escape") close();
@@ -28405,10 +28935,6 @@ function renderProxyPool() {
     <section class="proxy-pool-panel">
       <div class="proxy-pool-head">
         <div><strong>代理 IP</strong><span>独立维护代理信息并查看账号绑定情况。</span></div>
-        <div class="proxy-pool-head-actions">
-          <button type="button" class="system-proxy-pool-link" data-system-proxy-pool-open>${renderSystemProxyPoolIcon()}<span>添加代理 IP</span></button>
-          <button type="button" class="primary proxy-pool-add" data-proxy-add>${renderCustomProxyIcon()}<span>自定义代理</span></button>
-        </div>
       </div>
       <div class="proxy-table-wrap" data-proxy-desktop-list>
         <div class="proxy-table" role="table" aria-label="代理 IP 列表">
@@ -28443,7 +28969,7 @@ function renderProxyPool() {
           }).join("") : renderModuleEmptyState({
             icon: "network",
             title: "暂无代理 IP",
-            detail: "点击新增代理开始配置",
+            detail: "请在账号的“选择代理”中从公共代理池绑定 IP",
             className: "proxy-pool-empty",
             fill: true,
           })}
@@ -28482,7 +29008,7 @@ function renderProxyPool() {
           }).join("") : renderModuleEmptyState({
             icon: "network",
             title: "暂无代理 IP",
-            detail: "点击新增代理开始配置",
+            detail: "请在账号的“选择代理”中从公共代理池绑定 IP",
             className: "proxy-pool-empty",
             fill: true,
           })}
@@ -28499,174 +29025,6 @@ function renderProxyPool() {
       </div>`}
     </section>`;
   if (mobileStream.mobile) bindMobileTweetStreamObservers();
-}
-
-function systemProxyPoolLocation(proxy = {}) {
-  return [proxy.country, proxy.region, proxy.city]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean)
-    .join(" · ") || "待识别";
-}
-
-function systemProxyPoolCardsHtml(data = {}) {
-  const options = Array.isArray(data.options) ? data.options : [];
-  const currentItemId = String(data.current?.market_item_id || "").trim();
-  if (!options.length) {
-    return renderModuleEmptyState({
-      icon: "network",
-      title: "当前没有可领取的代理 IP",
-      detail: "公共代理池暂时没有空闲节点，请稍后再试",
-      className: "system-proxy-pool-empty",
-      fill: true,
-    });
-  }
-  return options.map((proxy) => {
-    const itemId = String(proxy.market_item_id || "").trim();
-    const selected = Boolean(proxy.selected) || (itemId && itemId === currentItemId);
-    const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
-    const country = String(proxy.country_code || proxy.country || "GL").trim().slice(0, 3).toUpperCase() || "GL";
-    const healthLabel = String(proxy.health_status || "healthy").toLowerCase() === "healthy" ? "检测可用" : "待检测";
-    const actionText = selected ? "当前使用" : (currentItemId ? "切换使用" : "免费获取");
-    return `<article class="proxy-market-mini-card" data-system-proxy-pool-card="${esc(itemId)}" ${selected ? 'aria-current="true"' : ""}>
-      <div class="proxy-market-mini-card-head">
-        <span class="proxy-market-mini-country">${esc(country)}</span>
-        <span class="proxy-market-mini-stock">${selected ? "已获取" : "可领取"}</span>
-      </div>
-      <strong>${esc(proxy.name || endpoint)}</strong>
-      <span class="proxy-market-mini-location">${esc(endpoint)} · ${esc(systemProxyPoolLocation(proxy))}</span>
-      <div class="proxy-market-mini-meta">
-        <span>${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
-        <span>${esc(proxyProtocol(proxy))}</span>
-        <strong>${esc(healthLabel)}</strong>
-      </div>
-      <button type="button" class="primary" data-system-proxy-select="${esc(itemId)}" ${selected ? "disabled" : ""}>${esc(actionText)}</button>
-    </article>`;
-  }).join("");
-}
-
-async function refreshSystemProxyPoolModal(modal) {
-  if (!modal?.isConnected) return null;
-  const list = modal.querySelector("[data-system-proxy-pool-list]");
-  const notice = modal.querySelector("[data-system-proxy-pool-notice]");
-  if (list) list.setAttribute("aria-busy", "true");
-  if (notice) {
-    notice.textContent = "";
-    notice.className = "system-proxy-pool-notice";
-  }
-  try {
-    const data = await api("/api/persona_dashboard/automation/system-proxy-pool");
-    if (!modal.isConnected) return data;
-    modal.dataset.currentSystemProxyItemId = String(data.current?.market_item_id || "");
-    if (list) {
-      list.innerHTML = systemProxyPoolCardsHtml(data);
-      list.setAttribute("aria-busy", "false");
-    }
-    return data;
-  } catch (error) {
-    if (list) {
-      list.innerHTML = renderModuleEmptyState({
-        icon: "network",
-        title: "公共代理池加载失败",
-        detail: error.detail || error.message || "请稍后重试",
-        className: "system-proxy-pool-empty",
-        action: '<button type="button" data-system-proxy-retry>重新加载</button>',
-      });
-      list.setAttribute("aria-busy", "false");
-    }
-    return null;
-  }
-}
-
-function openSystemProxyPoolModal({ accountId = "", selectedProxyId = "" } = {}) {
-  const returnAccountId = String(accountId || "").trim();
-  const returnSelectedProxyId = String(selectedProxyId || "").trim();
-  closeConsoleModal(null);
-  const modal = document.createElement("div");
-  modal.id = "consoleModal";
-  modal.className = "console-modal";
-  modal.dataset.modalKey = "system-proxy-pool";
-  modal.innerHTML = `
-    <div class="console-modal-backdrop" data-system-proxy-pool-close></div>
-    <section class="console-modal-dialog system-proxy-pool-modal" role="dialog" aria-modal="true" aria-labelledby="systemProxyPoolTitle">
-      <div class="console-modal-head">
-        <div><strong id="systemProxyPoolTitle">公共代理池</strong><p><span>选择未被领取的代理 IP。</span><span class="system-proxy-pool-limit">只能免费领取 1 个</span></p></div>
-        ${renderModalCloseButton("data-system-proxy-pool-close")}
-      </div>
-      <div class="console-modal-content system-proxy-pool-content">
-        <div class="system-proxy-pool-notice" data-system-proxy-pool-notice aria-live="polite"></div>
-        <div class="proxy-market-mini-grid" data-system-proxy-pool-list aria-busy="true">
-          <div class="system-proxy-pool-loading" role="status">正在加载公共代理池...</div>
-        </div>
-      </div>
-    </section>`;
-  document.body.appendChild(modal);
-  markConsoleDynamicUi(modal);
-  translateConsoleLanguage(modal, currentLanguage());
-  modal.querySelector(".console-modal-close")?.focus();
-  const close = (returnToAccountPicker = true) => {
-    closeConsoleModal(null, modal);
-    if (returnToAccountPicker && returnAccountId) {
-      openAccountProxyPickerModal(returnAccountId, returnSelectedProxyId);
-    }
-  };
-  modal.addEventListener("click", async (event) => {
-    if (event.target.closest("[data-system-proxy-pool-close]")) {
-      close();
-      return;
-    }
-    if (event.target.closest("[data-system-proxy-retry]")) {
-      await refreshSystemProxyPoolModal(modal);
-      return;
-    }
-    const select = event.target.closest("[data-system-proxy-select]");
-    if (!select || select.disabled) return;
-    const itemId = String(select.dataset.systemProxySelect || "").trim();
-    if (!itemId) return;
-    const notice = modal.querySelector("[data-system-proxy-pool-notice]");
-    select.disabled = true;
-    select.setAttribute("aria-busy", "true");
-    if (notice) {
-      notice.textContent = modal.dataset.currentSystemProxyItemId ? "正在切换代理 IP..." : "正在获取代理 IP...";
-      notice.className = "system-proxy-pool-notice is-working";
-    }
-    try {
-      const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      const result = await api("/api/persona_dashboard/automation/system-proxy-pool/select", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          item_id: itemId,
-          expected_current_item_id: String(modal.dataset.currentSystemProxyItemId || ""),
-          client_request_id: `system-proxy:${requestId}`,
-        }),
-      });
-      await loadSocial();
-      if (!modal.isConnected) return;
-      const claimedProxyId = String(result?.proxy?.id || "").trim();
-      if (returnAccountId && claimedProxyId) {
-        close(false);
-        openAccountProxyPickerModal(returnAccountId, claimedProxyId);
-        return;
-      }
-      await refreshSystemProxyPoolModal(modal);
-      if (notice) {
-        notice.textContent = result.replaced_proxy ? "代理 IP 已切换，原代理已经释放。" : "代理 IP 已获取。";
-        notice.className = "system-proxy-pool-notice is-success";
-      }
-    } catch (error) {
-      if (!modal.isConnected) return;
-      select.disabled = false;
-      select.removeAttribute("aria-busy");
-      if (notice) {
-        notice.textContent = error.detail || error.message || "代理 IP 获取失败";
-        notice.className = "system-proxy-pool-notice is-error";
-      }
-    }
-  });
-  modal.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") close();
-  });
-  void refreshSystemProxyPoolModal(modal);
 }
 
 function proxyFormPayload(proxy = null) {
@@ -30949,6 +31307,7 @@ function bindEvents() {
       if (uploadSyntheticChangeInputs.has(input)) return;
       uploadSelectedIndexes.set(input, new Set());
       appendUploadDropzoneFiles(input, input.files);
+      if (input.matches("[data-persona-image-edit-source]")) applyPersonaImageEditSourceReplacement(input);
     }
   }, true);
   document.addEventListener("dragenter", handleUploadDragEnter, true);
@@ -31616,19 +31975,52 @@ function bindEvents() {
       submitPersonaMediaTask().catch(() => {});
       return;
     }
+    const postMediaModify = event.target.closest("[data-persona-post-media-modify]");
+    if (postMediaModify) {
+      const persona = selectedPersona();
+      const { source, post } = personaMediaTargetPost(persona);
+      const items = persona && post ? personaDraftMediaPreviewItems(persona, source, post) : [];
+      const item = items[Number(postMediaModify.dataset.personaPostMediaModify)];
+      setPersonaCustomMediaModifySource({ item, index: Number(postMediaModify.dataset.personaPostMediaModify) })
+        .catch((error) => showMsg("commandMsg", error.detail || error.message || "图片无法进入媒体修改", false));
+      return;
+    }
+    const uploadMediaModify = event.target.closest("[data-upload-media-modify]");
+    if (uploadMediaModify) {
+      const input = uploadMediaModify.closest("[data-upload-dropzone]")?.querySelector(".upload-zone-input");
+      setPersonaCustomMediaModifySource({ input, index: Number(uploadMediaModify.dataset.uploadMediaModify) })
+        .catch((error) => showMsg("commandMsg", error.detail || error.message || "图片无法进入媒体修改", false));
+      return;
+    }
+    const taskMediaModify = event.target.closest("[data-persona-task-media-modify]");
+    if (taskMediaModify) {
+      setPersonaTaskMediaModifySource(taskMediaModify.dataset.personaTaskMediaModify || "");
+      return;
+    }
+    const taskMediaReplace = event.target.closest("[data-persona-task-media-replace]");
+    if (taskMediaReplace) {
+      choosePersonaTaskMediaReplacement(taskMediaReplace.dataset.personaTaskMediaReplace || "");
+      return;
+    }
+    const taskMediaDelete = event.target.closest("[data-persona-task-media-delete]");
+    if (taskMediaDelete) {
+      removePersonaTaskMediaResult(taskMediaDelete.dataset.personaTaskMediaDelete || "");
+      return;
+    }
     const taskMediaSelect = event.target.closest("[data-persona-task-media-select]");
     if (taskMediaSelect) {
       const persona = selectedPersona();
       const { post } = personaMediaTargetPost(persona);
       const taskState = persona && post ? personaMediaTaskState(persona.id, post.id) : null;
       if (!persona || !post || !taskState) return;
-      const items = taskOutputMediaItems(taskState.detail || {});
-      const sourceIndex = Number(taskMediaSelect.dataset.personaTaskMediaSelect);
-      if (!Number.isInteger(sourceIndex)) return;
-      const selected = new Set(selectedPersonaTaskMediaIndexes(taskState, items));
-      if (selected.has(sourceIndex)) selected.delete(sourceIndex);
-      else selected.add(sourceIndex);
-      taskState.selectedMediaIndexes = Array.from(selected).sort((a, b) => a - b);
+      const items = personaTaskMediaItems(taskState);
+      const mediaKey = String(taskMediaSelect.dataset.personaTaskMediaSelect || "").trim();
+      if (!mediaKey) return;
+      const selected = new Set(selectedPersonaTaskMediaKeys(taskState, items));
+      if (selected.has(mediaKey)) selected.delete(mediaKey);
+      else selected.add(mediaKey);
+      taskState.selectedMediaKeys = Array.from(selected);
+      taskState.selectedMediaIndexes = null;
       syncPersonaTaskMediaSelectionState(
         taskState,
         items,
@@ -31651,7 +32043,7 @@ function bindEvents() {
     if (
       personaMediaCard
       && !event.target.closest("button, a, input, label, [role=\"button\"]")
-      && !event.target.closest(".persona-edit-media-actions, [data-persona-media-drag-handle]")
+      && !event.target.closest(".persona-public-media-card-actions, [data-persona-media-drag-handle]")
     ) {
       togglePersonaMediaBulkSelection(personaMediaCard, personaMediaCard.dataset.personaMediaCardIndex);
       return;
@@ -32854,14 +33246,6 @@ function bindEvents() {
       event.stopPropagation();
       toggleAccountPasswordVisibility(accountPasswordToggle)
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "读取登录密码失败", false));
-      return;
-    }
-    if (event.target.closest("[data-system-proxy-pool-open]")) {
-      openSystemProxyPoolModal();
-      return;
-    }
-    if (event.target.closest("[data-proxy-add]")) {
-      openProxyModal();
       return;
     }
     const proxyView = event.target.closest("[data-proxy-view]");

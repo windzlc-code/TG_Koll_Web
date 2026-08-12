@@ -14,9 +14,9 @@ class MediaUploadComponentContractTests(unittest.TestCase):
 
     def test_upload_component_keeps_multi_file_input_and_thumbnail_grid(self):
         self.assertIn('type="file" ${multiple ? "multiple" : ""}', self.script)
-        self.assertIn('class="upload-thumbnail-grid"', self.script)
-        self.assertIn('class="file-preview-frame"', self.script)
-        self.assertIn('class="upload-add-media"', self.script)
+        self.assertIn('class="upload-thumbnail-grid ${publicMediaCards ?', self.script)
+        self.assertIn('class="file-preview-frame', self.script)
+        self.assertIn('class="upload-add-media ${publicMediaCards ?', self.script)
         self.assertIn('alt=""', self.script)
         self.assertIn('zone.classList.toggle("has-files", files.length > 0);', self.script)
         self.assertIn("appendUploadDropzoneFiles(input, input.files);", self.script)
@@ -103,7 +103,7 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('typeof event?.composedPath === "function"', self.script)
 
     def test_upload_dropzone_does_not_restore_the_blocking_input_overlay(self):
-        self.assertIn('<div class="upload-zone" data-upload-dropzone>', self.script)
+        self.assertIn('data-upload-dropzone>', self.script)
         self.assertNotIn('<label class="upload-zone" data-upload-dropzone>', self.script)
         input_styles = self.styles.split(".upload-zone-input {", 1)[1].split("}", 1)[0]
         self.assertIn("width: 1px;", input_styles)
@@ -276,14 +276,19 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('["replace", "自定义上传"]', self.script)
         self.assertIn('["generate", "AI 生成"]', self.script)
         self.assertIn('aria-label="配图模式"', self.script)
-        self.assertIn("function renderMediaCardViewIcon()", self.script)
-        self.assertIn("function renderMediaCardEditIcon()", self.script)
+        self.assertIn("function renderEyeIcon()", self.script)
+        self.assertIn("function renderReplaceIcon(", self.script)
+        self.assertIn("function renderEditIcon()", self.script)
+        self.assertIn("function renderPlusIcon()", self.script)
         self.assertIn("function renderTrashIcon()", self.script)
-        self.assertIn("${renderMediaCardViewIcon()}</button>", self.script)
-        self.assertIn("${renderMediaCardEditIcon()}</button>", self.script)
-        self.assertIn("${renderTrashIcon()}</button>", self.script)
-        self.assertIn(".ui-media-card-view-icon", self.styles)
-        self.assertIn(".ui-media-card-edit-icon", self.styles)
+        self.assertIn("${renderEyeIcon()}</button>", self.script)
+        self.assertIn("${renderPlusIcon()}</button>", self.script)
+        self.assertIn("${renderEditIcon()}</summary>", self.script)
+        self.assertIn("${renderTrashIcon()}</span>", self.script)
+        self.assertNotIn("function renderMediaCardViewIcon()", self.script)
+        self.assertNotIn("function renderMediaCardEditIcon()", self.script)
+        self.assertIn(".ui-eye-icon", self.styles)
+        self.assertIn(".ui-replace-icon", self.styles)
         self.assertIn(".ui-trash-icon", self.styles)
 
     def test_compose_media_upload_mode_uses_one_compact_plus_picker(self):
@@ -313,6 +318,8 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("width: 100%;", upload_trigger_styles)
 
     def test_persona_media_bulk_selection_keeps_actions_visible_and_count_centered(self):
+        self.assertIn("function renderPersonaPublicMediaSelectionToolbar", self.script)
+        self.assertGreaterEqual(self.script.count("renderPersonaPublicMediaSelectionToolbar({"), 2)
         self.assertIn("data-persona-media-select-index", self.script)
         self.assertIn("data-persona-media-select-all", self.script)
         self.assertIn('persona-media-selection-toolbar ${allSelected ? "is-all-selected" : ""}', self.script)
@@ -341,8 +348,15 @@ class MediaUploadComponentContractTests(unittest.TestCase):
 
     def test_persona_media_cards_have_order_badges_and_pointer_reordering(self):
         self.assertIn("data-persona-media-sort-grid", self.script)
-        self.assertIn('const dataAttribute = persona ? "data-persona-media-drag-handle"', self.script)
-        self.assertIn('${renderMediaOrderHandle(index, "persona")}', self.script)
+        public_order = self.script.split("function renderPersonaPublicMediaOrder", 1)[1].split(
+            "function renderPersonaPublicMediaEditMenu", 1
+        )[0]
+        self.assertIn('dragKind === "upload" ? "data-upload-sort-handle"', public_order)
+        self.assertIn('class="persona-public-media-order"', public_order)
+        self.assertNotIn("renderMediaOrderHandle", public_order)
+        self.assertIn('${renderPersonaPublicMediaOrder(index, { draggable: true })}', self.script)
+        self.assertIn('${renderPersonaPublicMediaOrder(index, { draggable: true, dragKind: "upload" })}', self.script)
+        self.assertIn('<span class="media-order-number">${esc(order)}</span>', self.script)
         self.assertIn('data-persona-media-card-index="${esc(index)}"', self.script)
         self.assertIn("function handlePersonaMediaPointerDown(event)", self.script)
         self.assertIn("function handlePersonaMediaPointerMove(event)", self.script)
@@ -359,11 +373,11 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("touch-action: none;", self.styles)
         self.assertIn(".persona-media-drag-ghost {", self.styles)
         self.assertIn(
-            ".persona-unified-media-editor .persona-edit-media-grid {\n  width: 100%;\n  grid-template-columns: repeat(3, minmax(0, 1fr));",
+            ".persona-unified-media-editor .persona-edit-media-grid {\n  width: 100%;\n  grid-template-columns: repeat(2, minmax(0, 1fr));",
             self.styles,
         )
         self.assertIn(
-            ".persona-unified-media-editor .persona-edit-media-grid {\n    grid-template-columns: repeat(3, minmax(0, 1fr));",
+            ".persona-unified-media-editor .persona-edit-media-grid {\n    grid-template-columns: repeat(2, minmax(0, 1fr));",
             self.styles,
         )
         self.assertIn("border: 2px solid var(--accent);", self.styles)
@@ -375,16 +389,181 @@ class MediaUploadComponentContractTests(unittest.TestCase):
     def test_persona_media_card_controls_use_scoped_icons_and_single_selection_ring(self):
         self.assertIn("function renderPersonaMediaSelectionIcon(selected)", self.script)
         self.assertIn('if (!selected) return "";', self.script)
-        self.assertIn("function renderMediaCardViewIcon()", self.script)
+        self.assertIn("function renderEyeIcon()", self.script)
         self.assertIn('<circle cx="12" cy="12" r="2.5"></circle>', self.script)
-        self.assertIn("function renderMediaCardEditIcon()", self.script)
-        self.assertIn('class="ui-media-card-edit-icon"', self.script)
+        self.assertIn("function renderReplaceIcon(", self.script)
+        self.assertIn("function renderEditIcon()", self.script)
+        self.assertIn("function renderPlusIcon()", self.script)
+        self.assertNotIn("ui-media-card-view-icon", self.script)
+        self.assertNotIn("ui-media-card-edit-icon", self.script)
         self.assertIn("function renderTrashIcon()", self.script)
-        self.assertIn("button.persona-media-card-select .persona-media-selection-icon", self.styles)
+        self.assertIn(".persona-public-media-select .persona-media-selection-icon", self.styles)
         self.assertIn("width: 17px;\n  height: 17px;", self.styles)
-        self.assertIn("background: color-mix(in srgb, var(--panel-solid) 96%, transparent);", self.styles)
-        self.assertIn("button.persona-media-card-select,\n.console-page .console-shell .persona-detail button.persona-edit-media-order", self.styles)
+        self.assertIn("background: color-mix(in srgb, var(--panel-solid) 94%, transparent);", self.styles)
+        order_rule = self.styles.split(".persona-public-media-order {", 1)[1].split("}", 1)[0]
+        self.assertIn("width: 26px !important;", order_rule)
+        self.assertIn("height: 26px !important;", order_rule)
+        self.assertIn("border-radius: 50% !important;", order_rule)
+        self.assertIn("button.persona-public-media-select {", self.styles)
+        self.assertIn('button.persona-public-media-select[aria-pressed="true"]', self.styles)
         self.assertIn("border-radius: 50%;", self.styles)
+
+    def test_ai_generation_reuses_horizontal_image_upload_without_preview_tile(self):
+        self.assertNotIn('data-persona-media-ai-edit="${esc(index)}"', self.script)
+        self.assertNotIn("function openPersonaPostMediaInAiEditor", self.script)
+        self.assertNotIn("function personaMediaItemToImageFile", self.script)
+        self.assertNotIn("function addPersonaTaskPreviewImages(fileList)", self.script)
+        self.assertNotIn("data-persona-task-media-upload", self.script)
+        self.assertNotIn("local-media-upload-", self.script)
+        self.assertNotIn("appendedResults", self.script)
+        self.assertNotIn("renderPersonaTaskMediaPreview(null, [])", self.script)
+        self.assertNotIn("function renderPersonaPublicMediaAddTile(inputId", self.script)
+        self.assertGreaterEqual(self.script.count('renderUploadDropzone("personaMediaTaskFiles"'), 2)
+        self.assertGreaterEqual(self.script.count('label: "添加媒体"'), 2)
+        self.assertGreaterEqual(self.script.count('hint: "仅支持图片；可作为 AI 生成的参考素材。"'), 2)
+        self.assertIn('class="account-pool-add-button upload-zone-mobile-picker"', self.script)
+        self.assertIn("const mediaUploadState = captureUploadDropzoneState(\"personaMediaTaskFiles\");", self.script)
+        self.assertIn('files.forEach((file) => body.append("files", file, file.name));', self.script)
+        self.assertNotIn("persona-task-media-add-tile", self.script)
+        self.assertIn("${renderPlusIcon()}", self.script)
+        self.assertNotIn(".persona-task-media-add-tile {", self.styles)
+        self.assertIn(".persona-public-media-add-tile {", self.styles)
+        public_add_tile = self.styles.split(".persona-public-media-add-tile {", 1)[1].split("}", 1)[0]
+        self.assertIn("min-height: 0;", public_add_tile)
+        self.assertNotIn("height: 100%;", public_add_tile)
+        self.assertNotIn("aspect-ratio: auto;", public_add_tile)
+        self.assertGreaterEqual(self.script.count('renderUploadDropzone("personaMediaEditSourceFile"'), 2)
+        self.assertGreaterEqual(self.script.count('accept: "image/*"'), 2)
+        self.assertGreaterEqual(self.script.count("imageEditSource: true"), 2)
+        self.assertGreaterEqual(self.script.count("publicMediaCards: true"), 4)
+        self.assertIn('publicMediaCards ? "data-public-media-cards" : ""', self.script)
+        self.assertIn('input.matches("[data-public-media-cards]")', self.script)
+        self.assertIn('class="persona-public-media-card persona-upload-media-card', self.script)
+        self.assertIn('renderPersonaPublicMediaFooter(index, actions)', self.script)
+        self.assertIn('class="upload-thumbnail-grid ${publicMediaCards ? "persona-public-media-upload-grid" : ""}', self.script)
+        self.assertIn('.upload-thumbnail-grid.persona-public-media-upload-grid {', self.styles)
+        compact_upload = self.script.split("function renderPersonaCompactMediaUpload", 1)[1].split(
+            "function renderPersonaPendingMediaInput", 1
+        )[0]
+        pending_upload = self.script.split("function renderPersonaPendingMediaInput", 1)[1].split(
+            "function renderPersonaMediaComposerPlaceholder", 1
+        )[0]
+        self.assertIn("data-public-media-cards", compact_upload)
+        self.assertIn("data-public-media-cards", pending_upload)
+        self.assertIn('input.matches?.("[data-persona-image-edit-source]")', self.script)
+        self.assertIn("files = imageFiles.slice(-1);", self.script)
+        self.assertIn("const files = modifyItem ? [] : mediaUploadState.files;", self.script)
+
+    def test_ai_upload_lives_inside_task_preview_and_replaces_only_preview_content(self):
+        inline = self.script.split("function renderPersonaInlineMediaComposer", 1)[1].split(
+            "function taskOutputMediaItems", 1
+        )[0]
+        self.assertIn('data-persona-media-preview-surface', inline)
+        self.assertLess(inline.index("任务结果预览"), inline.index('renderUploadDropzone("personaMediaTaskFiles"'))
+        self.assertGreaterEqual(self.script.count("embeddedPreview: true"), 4)
+        self.assertIn('class="persona-media-task-result-preview"', self.script)
+        self.assertIn('previewSurface.classList.toggle("has-upload-preview", files.length > 0);', self.script)
+        self.assertIn(
+            ".persona-media-preview-surface.has-upload-preview .persona-media-task-result-preview",
+            self.styles,
+        )
+
+        result_renderer = self.script.split("function renderPersonaMediaTaskResult", 1)[1].split(
+            "function renderPersonaCreateWorkbench", 1
+        )[0]
+        self.assertIn('title: "等待生成结果"', result_renderer)
+        self.assertIn(
+            'detail: "提交任务后，结果预览会显示在这里并可直接添加至草稿"',
+            result_renderer,
+        )
+        self.assertIn('action: renderUploadAddMediaButton(addMediaInputId)', result_renderer)
+        self.assertNotIn('renderPersonaTaskMediaPreview(taskState, [], { addMediaInputId })', result_renderer)
+        self.assertIn(
+            ".persona-media-task-result-preview .empty-state-action",
+            self.styles,
+        )
+
+    def test_image_edit_flow_uses_textarea_box_and_preserves_label_fill(self):
+        self.assertIn(
+            ".persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {",
+            self.styles,
+        )
+        self.assertNotIn(
+            ".persona-media-prompt-field.is-image-editing::before {",
+            self.styles,
+        )
+        label_rule = self.styles.split(
+            ".persona-media-prompt-field.is-image-editing .persona-media-prompt-label {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("color: var(--ink);", label_rule)
+        self.assertIn("-webkit-text-fill-color: currentColor;", label_rule)
+        self.assertNotIn("color: transparent", label_rule)
+        self.assertNotIn("background-clip: text", label_rule)
+
+        border_rule = self.styles.split(
+            ".persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("padding: 2px;", border_rule)
+        self.assertIn("border-radius: inherit;", border_rule)
+        self.assertIn("pointer-events: none;", border_rule)
+        self.assertIn("mask-composite: exclude;", border_rule)
+        self.assertIn('<span class="persona-media-prompt-input-shell">', self.script)
+        self.assertIn(
+            ':root[data-theme="light"] .console-page .persona-media-operation-pane .persona-media-prompt-field.is-image-editing textarea:focus {',
+            self.styles,
+        )
+
+    def test_edit_draft_ai_upload_selection_is_the_media_modify_state(self):
+        upload_renderer = self.script.split("function syncUploadDropzone", 1)[1].split(
+            "function syncUploadDropzoneSelectionState", 1
+        )[0]
+        editable_renderer = self.script.split("function renderPersonaEditableMediaGrid", 1)[1].split(
+            "function renderPersonaImageLibraryPreview", 1
+        )[0]
+        self.assertIn("personaAiUploadSelectionControlsModify(input)", upload_renderer)
+        self.assertIn("selectedIndexes.clear();", upload_renderer)
+        self.assertIn('type === "image" && !selectionControlsModify', upload_renderer)
+        self.assertIn('data-upload-media-modify="${esc(index)}"', upload_renderer)
+        self.assertIn('data-persona-post-media-modify="${esc(index)}"', editable_renderer)
+        self.assertIn('item.type === "image"', editable_renderer)
+        self.assertIn("function setPersonaCustomMediaModifySource", self.script)
+        self.assertIn("function personaCustomMediaModifyItem", self.script)
+        self.assertIn('image_edit_mode: Boolean(modifyItem)', self.script)
+        self.assertIn('data-persona-post-media-modify]', self.script)
+        selection_toggle = self.script.split("function toggleUploadDropzoneSelection", 1)[1].split(
+            "function handleUploadDropzoneAction", 1
+        )[0]
+        self.assertIn("personaAiUploadSelectionControlsModify(input)", selection_toggle)
+        self.assertIn(
+            "setPersonaCustomMediaModifySource({ input, index, scrollToComposer: false })",
+            selection_toggle,
+        )
+        self.assertIn('mediaModifyItem?.inputId !== "personaMediaTaskFiles"', self.script)
+        self.assertIn('data-upload-media-modify]', self.script)
+
+    def test_public_media_edit_menu_reuses_outside_click_dropdown_behavior(self):
+        menu_renderer = self.script.split("function renderPersonaPublicMediaEditMenu", 1)[1].split(
+            "function renderPersonaPublicMediaFooter", 1
+        )[0]
+        self.assertIn("data-console-dropdown", menu_renderer)
+        self.assertIn('closeConsoleDropdowns(event.target.closest("[data-console-dropdown]"));', self.script)
+        self.assertIn(".persona-public-media-edit-menu[open] > summary", self.styles)
+
+    def test_hot_editor_and_standard_upload_share_public_media_cards(self):
+        renderer = self.script.split("function renderPersonaEditableMediaGrid", 1)[1].split(
+            "function renderPersonaImageLibraryPreview", 1
+        )[0]
+        self.assertEqual(renderer.count('class="persona-public-media-card persona-edit-media-card'), 1)
+        self.assertIn('replaceAttribute: hotMode', renderer)
+        self.assertIn('data-persona-hot-editor-media-replace', renderer)
+        self.assertIn('data-persona-hot-editor-media-delete', renderer)
+        self.assertIn('renderPersonaPublicMediaFooter(index, actions)', renderer)
+        self.assertNotIn("persona-media-card-select", renderer)
+        self.assertNotIn("persona-edit-media-actions", renderer)
+        self.assertNotIn("persona-hot-media-action", renderer)
+        self.assertNotIn(".persona-media-card-select", self.styles)
+        self.assertNotIn(".persona-edit-media-actions", self.styles)
+        self.assertNotIn(".persona-hot-media-action", self.styles)
 
     def test_persona_media_card_surface_selects_and_only_eye_opens_preview(self):
         self.assertIn('interactive: false,', self.script)
@@ -393,7 +572,7 @@ class MediaUploadComponentContractTests(unittest.TestCase):
 
     def test_new_upload_media_cards_support_edit_and_cross_device_reordering(self):
         self.assertIn('data-upload-sort-card="${esc(index)}"', self.script)
-        self.assertIn('const dataAttribute = persona ? "data-persona-media-drag-handle" : "data-upload-sort-handle"', self.script)
+        self.assertIn('dragKind === "upload" ? "data-upload-sort-handle" : "data-persona-media-drag-handle"', self.script)
         self.assertIn("${renderMediaOrderHandle(index)}", self.script)
         self.assertIn('data-upload-edit-index="${esc(index)}"', self.script)
         self.assertIn("function reorderUploadDropzoneFiles(input, fromIndex, toIndex)", self.script)
@@ -446,8 +625,8 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("syncUploadDropzoneSelectionState(input);", self.script)
         self.assertIn('const selectUploadCard = event.target.closest("[data-upload-sort-card]");', self.script)
         self.assertIn('event.target.closest("button, a, input, label, [role=\\"button\\"]")', self.script)
-        self.assertIn('event.target.closest(".file-chip-actions, [data-upload-sort-handle]")', self.script)
-        persona_select_styles = self.styles.split(".persona-media-card-select {", 1)[1].split("}", 1)[0]
+        self.assertIn('event.target.closest(".file-chip-actions, .persona-public-media-card-actions, [data-upload-sort-handle]")', self.script)
+        persona_select_styles = self.styles.split(".persona-public-media-select {", 1)[1].split("}", 1)[0]
         self.assertIn("top: 8px;", persona_select_styles)
         self.assertIn("left: 8px;", persona_select_styles)
         self.assertIn("width: 28px;", persona_select_styles)
@@ -469,7 +648,7 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             "function handleUploadSortPointerMove",
             1,
         )[0]
-        self.assertIn('event.target?.closest?.(".file-chip-select, .file-chip-actions")', pointer_down)
+        self.assertIn('event.target?.closest?.(".file-chip-select, .file-chip-actions, .persona-public-media-select, .persona-public-media-card-actions")', pointer_down)
         self.assertIn("const captureTarget = explicitHandle || card;", pointer_down)
         self.assertNotIn("setPointerCapture", pointer_down)
         pointer_move = self.script.split("function handleUploadSortPointerMove(event)", 1)[1].split(
@@ -486,7 +665,10 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             1,
         )[0]
         self.assertIn('event.target.closest?.(".persona-edit-media-card[data-persona-media-card-index]")', persona_pointer_down)
-        self.assertIn(".persona-media-card-select, .persona-edit-media-actions, input, label, a", persona_pointer_down)
+        self.assertIn(
+            ".persona-public-media-select, .persona-public-media-card-actions, input, label, a",
+            persona_pointer_down,
+        )
         self.assertIn('event.pointerType !== "mouse" || blockedInteractive', persona_pointer_down)
 
 

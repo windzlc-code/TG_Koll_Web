@@ -4490,7 +4490,6 @@ def _extract_download_paths(output_data: dict[str, Any]) -> list[str]:
     if not isinstance(output_data, dict):
         return []
     candidates: list[Any] = [
-        output_data.get("preview_paths"),
         output_data.get("download_paths"),
         output_data.get("image_paths"),
         output_data.get("video_paths"),
@@ -10720,7 +10719,7 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     if not source_content and not prompt:
         raise RuntimeError("推文配图缺少用于生成的正文或提示词。")
     reference_image_path = str(payload.get("_reference_image_path") or "").strip()
-    edit_source_copy = ""
+    edit_reference_path = ""
     if reference_image_path:
         source_path = Path(reference_image_path).expanduser().resolve()
         if (
@@ -10729,11 +10728,7 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
             or not _is_allowed_dashboard_media_path(source_path)
         ):
             raise RuntimeError("媒体修改的源图片已失效，请重新选择。")
-        edit_media_dir = _persona_task_media_dir(task_id)
-        edit_media_dir.mkdir(parents=True, exist_ok=True)
-        source_copy = edit_media_dir / f"persona_post_source{source_path.suffix.lower() or '.png'}"
-        shutil.copy2(source_path, source_copy)
-        edit_source_copy = str(source_copy)
+        edit_reference_path = str(source_path)
     archive_load_ms = round((time.perf_counter() - started_at) * 1000, 1)
     aspect_started_at = time.perf_counter()
     try:
@@ -10752,7 +10747,7 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         "customPrompt": prompt or None,
         "aspectRatio": aspect_ratio,
         "mode": "auto",
-        "referenceImageUrl": edit_source_copy or None,
+        "referenceImageUrl": edit_reference_path or None,
         "referenceSheetUrl": _persona_reference_image_input_for_cli(archive) or None,
         "generateReferenceSheet": False,
         "dryRun": False,
@@ -10762,7 +10757,6 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     config_sync_ms = round((time.perf_counter() - config_started_at) * 1000, 1)
     command = ["node", "--import", "tsx", "scripts/skills/generate-persona-images.ts", json.dumps(cli_payload, ensure_ascii=False)]
     media_base_url = f"/api/tasks/{quote(str(task_id).strip(), safe='')}/media"
-    media_index_offset = 1 if edit_source_copy else 0
 
     def generate_image(index: int) -> tuple[int, str, str, dict[str, Any]]:
         provider_started_at = time.perf_counter()
@@ -10802,7 +10796,7 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
             "persist_ms": persist_ms,
             "provider": data.get("timings") if isinstance(data.get("timings"), dict) else {},
         }
-        return index, saved_path, f"{media_base_url}/{media_index_offset + index - 1}", timing_item
+        return index, saved_path, f"{media_base_url}/{index - 1}", timing_item
 
     provider_wall_started_at = time.perf_counter()
     try:
@@ -10847,13 +10841,12 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         "ok": True,
         "message": "推文配图生成完成",
         "download_path": image_paths[0],
-        "preview_paths": [edit_source_copy, *image_paths] if edit_source_copy else image_paths,
         "image_paths": image_paths,
         "image_url": image_urls[0],
         "image_urls": image_urls,
         "image_count": len(image_paths),
-        "image_edit_mode": bool(edit_source_copy),
-        "edit_source": payload.get("edit_source") if edit_source_copy else None,
+        "image_edit_mode": bool(edit_reference_path),
+        "edit_source": payload.get("edit_source") if edit_reference_path else None,
         "aspect_ratio": aspect_ratio,
         "aspect_ratio_selection": aspect_ratio_selection,
         "timings": compatible_timings,
@@ -25762,6 +25755,11 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not payload["related_persona_id"] or not payload["related_post_id"]:
                 raise HTTPException(status_code=400, detail="推文配图需要关联人设 ID 和草稿 ID")
+            _require_persona_task_owner(
+                typ,
+                payload,
+                _workspace_user_id(user),
+            )
 
             requested_edit_source = payload.get("edit_source")
             image_edit_mode = _to_bool(payload.get("image_edit_mode"), False) or isinstance(requested_edit_source, dict)
