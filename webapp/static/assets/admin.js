@@ -1956,6 +1956,7 @@ const adminState = {
   proxyMarketLoadingPromise: null,
   proxyPurchaseConfig: null,
   proxyPurchaseProviderOptions: null,
+  proxyProviderCredentialStatus: null,
   proxyPurchaseOrders: [],
   customerGroupRows: [],
   customerTagRows: [],
@@ -8668,10 +8669,66 @@ function renderProxyPurchaseConfig(payload = {}) {
     if (control && value !== "") control.value = String(value);
   });
   if (Object.prototype.hasOwnProperty.call(payload || {}, "credential_status")) {
-    const credential = payload?.credential_status;
-    const credentialReady = credential === true || credential?.configured === true || credential?.ready === true;
-    setText("proxyPurchaseCredentialStatus", `凭据状态：${credentialReady ? "已配置" : "未配置"}`);
+    renderProxyProviderCredentialStatus(payload?.credential_status || {});
   }
+}
+
+function renderProxyProviderCredentialStatus(status = {}) {
+  adminState.proxyProviderCredentialStatus = status;
+  const configured = status?.configured === true;
+  const verified = status?.verified === true;
+  const label = verified ? "已验证" : configured ? "已保存，待验证" : "未配置";
+  setText("proxyPurchaseCredentialStatus", `凭据状态：${label}`);
+  if (el("proxyProviderCredentialState")) el("proxyProviderCredentialState").value = label;
+  if (status?.last_sync_at) setText("proxyPurchaseLastSync", `同步：${formatBillingTime(status.last_sync_at)}`);
+}
+
+async function loadProxyProviderCredentialStatus() {
+  const payload = await api("/api/admin/proxy-purchases/provider-credentials");
+  renderProxyProviderCredentialStatus(payload || {});
+  return payload;
+}
+
+function proxyProviderSetupValueSummary(value) {
+  if (Array.isArray(value)) return `${value.length} 项`;
+  if (value && typeof value === "object") return `${Object.keys(value).length} 组`;
+  if (typeof value === "boolean") return value ? "支持" : "不支持";
+  if (value === undefined || value === null || value === "") return "—";
+  return String(value);
+}
+
+function renderProxyProviderFieldMap(payload = {}) {
+  const grid = el("proxyProviderFieldGrid");
+  if (!grid) return;
+  const setup = payload?.setup && typeof payload.setup === "object" ? payload.setup : {};
+  const rows = [
+    ["公开产品", Array.isArray(payload?.services) ? `${payload.services.length} 项` : "0 项"],
+    ["可售地区", proxyProviderSetupValueSummary(setup.countries || setup.regions)],
+    ["ISP", proxyProviderSetupValueSummary(setup.isps || setup.isp)],
+    ["套餐包", proxyProviderSetupValueSummary(setup.packages || setup.package)],
+    ["周期", proxyProviderSetupValueSummary(setup.periods || setup.period)],
+    ["协议", proxyProviderSetupValueSummary(setup.protocols || setup.protocol)],
+    ["认证", proxyProviderSetupValueSummary(setup.authentications || setup.authentication || setup.auth)],
+    ["供应商字段", Object.keys(setup).sort().join("、") || "—"],
+  ];
+  grid.replaceChildren();
+  rows.forEach(([label, value]) => {
+    const item = document.createElement("div");
+    item.className = "proxy-provider-field-item";
+    const title = document.createElement("strong");
+    title.textContent = label;
+    const content = document.createElement("span");
+    content.textContent = value;
+    content.title = value;
+    item.append(title, content);
+    grid.appendChild(item);
+  });
+  setText(
+    "proxyProviderFieldRevision",
+    payload?.revision
+      ? `版本 ${payload.revision} · ${payload?.last_sync_at ? formatBillingTime(payload.last_sync_at) : "刚刚"}`
+      : `实时读取 · ${payload?.last_sync_at ? formatBillingTime(payload.last_sync_at) : "刚刚"}`,
+  );
 }
 
 function proxyPurchaseServiceLabel(service = {}) {
@@ -8704,6 +8761,9 @@ function renderProxyPurchaseProviderOptions(payload = {}) {
     }
   });
   setProxyPurchaseSelectOptions("proxyPurchasePlanId", plans, { emptyLabel: "使用产品默认套餐" });
+  if (!String(adminState.proxyPurchaseConfig?.plan_id || "") && payload?.selected_plan_id && el("proxyPurchasePlanId")) {
+    el("proxyPurchasePlanId").value = String(payload.selected_plan_id);
+  }
 
   const setup = payload?.setup || {};
   const rawCountries = setup.countries || setup.regions || payload?.regions || [];
@@ -8729,7 +8789,12 @@ function renderProxyPurchaseProviderOptions(payload = {}) {
   setProxyPurchaseSelectOptions("proxyPurchaseDefaultAuthentication", normalizeSetupChoices(setup.authentications || setup.authentication || setup.auth), { emptyLabel: "使用供应商默认值" });
   setText("proxyPurchaseBalance", `供应商余额：${payload?.balance === undefined || payload?.balance === null ? "—" : `${Number(payload.balance).toLocaleString("zh-CN", { maximumFractionDigits: 4 })} USD`}`);
   setText("proxyPurchaseLastSync", `同步：${payload?.last_sync_at ? formatBillingTime(payload.last_sync_at) : "刚刚"}`);
+  renderProxyProviderFieldMap(payload);
+  const selectedProviderPlan = String(el("proxyPurchasePlanId")?.value || "");
   renderProxyPurchaseConfig({ config: adminState.proxyPurchaseConfig || {} });
+  if (!String(adminState.proxyPurchaseConfig?.plan_id || "") && selectedProviderPlan && el("proxyPurchasePlanId")) {
+    el("proxyPurchasePlanId").value = selectedProviderPlan;
+  }
   renderProxyPurchaseIsps(String(el("proxyPurchaseDefaultCountry")?.value || ""));
 }
 
@@ -8752,20 +8817,96 @@ async function loadProxyPurchaseConfig() {
   return payload;
 }
 
-async function loadProxyPurchaseProviderOptions({ serviceId, planId } = {}) {
+async function loadProxyPurchaseProviderOptions({ serviceId, planId, persist = false } = {}) {
   setMsg("proxyPurchaseConfigMsg", "正在同步供应商公开产品与选项...");
   try {
     const selectedService = String(serviceId || el("proxyPurchaseServiceId")?.value || "static-residential-ipv4");
     const selectedPlan = String(planId === undefined ? el("proxyPurchasePlanId")?.value || "" : planId);
     const query = new URLSearchParams({ service_id: selectedService });
     if (selectedPlan) query.set("plan_id", selectedPlan);
-    const payload = await api(`/api/admin/proxy-purchases/provider-options?${query.toString()}`);
+    const payload = await api(`/api/admin/proxy-purchases/provider-options${persist ? "/sync" : ""}?${query.toString()}`, {
+      method: persist ? "POST" : "GET",
+    });
     renderProxyPurchaseProviderOptions(payload || {});
     setMsg("proxyPurchaseConfigMsg", "供应商选项已同步", true);
     return payload;
   } catch (error) {
     setMsg("proxyPurchaseConfigMsg", `供应商同步失败：${getErrorMessage(error)}`, false);
     throw error;
+  }
+}
+
+function clearProxyProviderCredentialInputs() {
+  ["proxyProviderApiKey", "proxyProviderApiSecret", "proxyProviderWebhookSecret", "proxyProviderCredentialPassword", "proxyProviderCredentialTotp"].forEach((id) => {
+    if (el(id)) el(id).value = "";
+  });
+}
+
+async function testProxyProviderCredentials({ useInputs = true } = {}) {
+  const apiKey = useInputs ? String(el("proxyProviderApiKey")?.value || "").trim() : "";
+  const apiSecret = useInputs ? String(el("proxyProviderApiSecret")?.value || "").trim() : "";
+  setMsg("proxyProviderCredentialMsg", "正在从服务端验证供应商鉴权与公开字段...");
+  const payload = await api("/api/admin/proxy-purchases/provider-credentials/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      provider: "proxycheap",
+      api_key: apiKey,
+      api_secret: apiSecret,
+      service_id: "static-residential-ipv4",
+      plan_id: String(el("proxyPurchasePlanId")?.value || ""),
+    }),
+  });
+  await loadProxyProviderCredentialStatus();
+  setMsg(
+    "proxyProviderCredentialMsg",
+    `连接成功：发现 ${Number(payload?.service_count || 0)} 个公开产品${payload?.balance ? `，余额 ${payload.balance} USD` : ""}`,
+    true,
+  );
+  return payload;
+}
+
+async function saveProxyProviderCredentials() {
+  const form = el("proxyProviderCredentialForm");
+  if (!form?.reportValidity()) return false;
+  const reason = String(el("proxyProviderCredentialReason")?.value || "").trim();
+  const adminPassword = String(el("proxyProviderCredentialPassword")?.value || "");
+  const totpCode = String(el("proxyProviderCredentialTotp")?.value || "").trim();
+  if (reason.length < 3 || !adminPassword || !totpCode) {
+    setMsg("proxyProviderCredentialMsg", "请填写变更原因、管理员密码与 MFA 验证码", false);
+    return false;
+  }
+  form.setAttribute("aria-busy", "true");
+  setMsg("proxyProviderCredentialMsg", "正在加密保存供应商凭据...");
+  try {
+    await api("/api/admin/proxy-purchases/provider-credentials", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: "proxycheap",
+        api_key: String(el("proxyProviderApiKey")?.value || "").trim(),
+        api_secret: String(el("proxyProviderApiSecret")?.value || "").trim(),
+        webhook_secret: String(el("proxyProviderWebhookSecret")?.value || "").trim(),
+        account_currency: String(el("proxyProviderAccountCurrency")?.value || "USD"),
+        reason,
+        admin_password: adminPassword,
+        totp_code: totpCode,
+      }),
+    });
+    clearProxyProviderCredentialInputs();
+    if (el("proxyProviderCredentialReason")) el("proxyProviderCredentialReason").value = "";
+    await testProxyProviderCredentials({ useInputs: false });
+    await loadProxyPurchaseProviderOptions({
+      serviceId: "static-residential-ipv4",
+      planId: String(el("proxyPurchasePlanId")?.value || ""),
+      persist: true,
+    });
+    setMsg("proxyProviderCredentialMsg", "凭据已加密保存，连接测试和供应商字段同步均已完成", true);
+    return true;
+  } finally {
+    form.removeAttribute("aria-busy");
+    if (el("proxyProviderCredentialPassword")) el("proxyProviderCredentialPassword").value = "";
+    if (el("proxyProviderCredentialTotp")) el("proxyProviderCredentialTotp").value = "";
   }
 }
 
@@ -8979,6 +9120,7 @@ async function loadProxyMarketWorkspace() {
     loadProxyMarketItems(),
     loadProxyMarketAllocations(),
     loadProxyMarketSettings(),
+    loadProxyProviderCredentialStatus(),
     loadProxyPurchaseConfig().then(() => loadProxyPurchaseProviderOptions({
       serviceId: "static-residential-ipv4",
       planId: String(el("proxyPurchasePlanId")?.value || ""),
@@ -10077,7 +10219,18 @@ function bindActions() {
     }
   });
   el("btnRefreshProxyPurchaseProvider")?.addEventListener("click", async () => {
-    try { await loadProxyPurchaseProviderOptions(); } catch {}
+    try { await loadProxyPurchaseProviderOptions({ persist: true }); } catch {}
+  });
+  el("proxyProviderCredentialForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try { await saveProxyProviderCredentials(); } catch (error) {
+      setMsg("proxyProviderCredentialMsg", getErrorMessage(error), false);
+    }
+  });
+  el("btnTestProxyProviderCredentials")?.addEventListener("click", async () => {
+    try { await testProxyProviderCredentials({ useInputs: true }); } catch (error) {
+      setMsg("proxyProviderCredentialMsg", getErrorMessage(error), false);
+    }
   });
   el("proxyPurchaseServiceId")?.addEventListener("change", async () => {
     if (el("proxyPurchasePlanId")) el("proxyPurchasePlanId").value = "";

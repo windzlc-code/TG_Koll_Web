@@ -23,9 +23,11 @@ from webapp.proxy_purchases import (
     admin_resolve_order,
     set_order_renewal,
     process_webhook_events,
+    purchase_options,
     sync_active_assets,
 )
 from webapp.proxy_market_credentials import resolve_market_proxy_credentials
+from webapp.system_proxy_pool import list_system_proxy_pool_options
 
 
 class _UnknownProvider(MockProxyProvider):
@@ -146,6 +148,12 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
         self.assertEqual(tuple(social), ("provider_purchase", "owned", ""))
         self.assertEqual(resolved["username"], "mock-user")
         self.assertEqual(resolved["password"], "mock-password")
+        with app_db.db() as conn:
+            selectable = list_system_proxy_pool_options(conn, owner_user_id=self.user_id)
+        owned = [row for row in selectable if row["ownership_type"] == "owned"]
+        self.assertEqual(len(owned), 1)
+        self.assertEqual(owned[0]["social_proxy_id"], stored["id"])
+        self.assertTrue(owned[0]["available"])
 
     def test_unknown_execute_holds_points_and_never_retries(self):
         provider = _UnknownProvider()
@@ -238,6 +246,52 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
             with self.assertRaises(ProxyPurchaseError) as caught:
                 publish_config(conn, draft["id"], actor_user_id=self.user_id, provider=CountryIspProvider())
         self.assertEqual(caught.exception.code, "PROVIDER_ISP_UNAVAILABLE")
+
+    def test_user_country_resolves_a_compatible_isp_and_hides_empty_inventory(self):
+        class CountryIspProvider(MockProxyProvider):
+            def __init__(self):
+                super().__init__()
+                self.last_configuration = None
+
+            def get_setup(self, service_id, *, plan_id=""):
+                return {
+                    "countries": [
+                        {"code": "US", "name": "United States"},
+                        {"code": "GB", "name": "United Kingdom"},
+                    ],
+                    "isps": {"US": [{"id": "isp-us", "label": "US Carrier"}], "GB": []},
+                    "periods": [{"unit": "months", "value": 1}],
+                }
+
+            def quote(self, service_id, configuration):
+                self.last_configuration = dict(configuration)
+                return super().quote(service_id, configuration)
+
+        provider = CountryIspProvider()
+        with app_db.db() as conn:
+            options = purchase_options(conn, user_id=self.user_id, provider=provider)
+            quote = create_quote(
+                conn,
+                user_id=self.user_id,
+                country="US",
+                auto_renew=False,
+                provider=provider,
+                now=1_700_000_100,
+            )
+            with self.assertRaises(ProxyPurchaseError) as caught:
+                create_quote(
+                    conn,
+                    user_id=self.user_id,
+                    country="GB",
+                    auto_renew=False,
+                    provider=provider,
+                    now=1_700_000_101,
+                )
+        self.assertEqual([item["code"] for item in options["regions"]], ["US"])
+        self.assertTrue(options["isp_managed"])
+        self.assertEqual(provider.last_configuration["ispId"], "isp-us")
+        self.assertEqual(quote["country"], "US")
+        self.assertEqual(caught.exception.code, "INVALID_COUNTRY")
 
     def test_supplier_order_id_survives_local_settlement_crash_and_reconciles(self):
         provider = MockProxyProvider()

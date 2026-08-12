@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import proxy_purchases
+from . import proxy_provider_credentials
 from .db import db
 from .proxy_providers import ProxyProviderError
 
@@ -62,6 +63,23 @@ class ProxyPurchasePublishPayload(_StrictModel):
     totp_code: str = Field(min_length=1, max_length=64)
 
 
+class ProxyProviderCredentialPayload(ProxyPurchasePublishPayload):
+    provider: Literal["proxycheap"] = "proxycheap"
+    api_key: str = Field(default="", max_length=512)
+    api_secret: str = Field(default="", max_length=512)
+    webhook_secret: str = Field(default="", max_length=512)
+    account_currency: Literal["USD"] = "USD"
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class ProxyProviderCredentialTestPayload(_StrictModel):
+    provider: Literal["proxycheap"] = "proxycheap"
+    api_key: str = Field(default="", max_length=512)
+    api_secret: str = Field(default="", max_length=512)
+    service_id: str = Field(default="static-residential-ipv4", min_length=1, max_length=160)
+    plan_id: str = Field(default="", max_length=160)
+
+
 class ProxyPurchaseAdminActionPayload(ProxyPurchasePublishPayload):
     reason: str = Field(min_length=3, max_length=500)
 
@@ -98,13 +116,24 @@ def register_proxy_purchase_routes(
     admin_dependency: Callable[..., dict[str, Any]],
     admin_step_up: Callable[..., None],
     audit_callback: Callable[..., Any] | None = None,
+    same_origin_guard: Callable[[Request], None] | None = None,
 ) -> None:
+    def guard_write(request: Request) -> None:
+        if same_origin_guard is not None:
+            same_origin_guard(request)
+
     @app.exception_handler(proxy_purchases.ProxyPurchaseError)
     async def proxy_purchase_error_handler(_request: Request, exc: proxy_purchases.ProxyPurchaseError):
         return _error_response(exc)
 
     @app.exception_handler(ProxyProviderError)
     async def proxy_provider_error_handler(_request: Request, exc: ProxyProviderError):
+        return _error_response(exc)
+
+    @app.exception_handler(proxy_provider_credentials.ProviderCredentialError)
+    async def proxy_provider_credential_error_handler(
+        _request: Request, exc: proxy_provider_credentials.ProviderCredentialError
+    ):
         return _error_response(exc)
 
     @app.get("/api/proxy-purchases/options")
@@ -115,8 +144,10 @@ def register_proxy_purchase_routes(
     @app.post("/api/proxy-purchases/quotes")
     def api_proxy_purchase_quote(
         payload: ProxyQuotePayload,
+        request: Request,
         user: dict[str, Any] = Depends(current_user_dependency),
     ):
+        guard_write(request)
         with db() as conn:
             quote = proxy_purchases.create_quote(
                 conn,
@@ -129,9 +160,11 @@ def register_proxy_purchase_routes(
     @app.post("/api/proxy-purchases/orders")
     def api_proxy_purchase_order(
         payload: ProxyOrderPayload,
+        request: Request,
         idempotency_header: str = Header(default="", alias="Idempotency-Key"),
         user: dict[str, Any] = Depends(current_user_dependency),
     ):
+        guard_write(request)
         body_key = str(payload.idempotency_key or "").strip()
         header_key = str(idempotency_header or "").strip()
         if header_key and header_key != body_key:
@@ -184,8 +217,10 @@ def register_proxy_purchase_routes(
     def api_proxy_purchase_renewal(
         order_id: str,
         payload: ProxyRenewalPayload,
+        request: Request,
         user: dict[str, Any] = Depends(current_user_dependency),
     ):
+        guard_write(request)
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
             order = proxy_purchases.set_order_renewal(
@@ -200,22 +235,121 @@ def register_proxy_purchase_routes(
     def api_admin_proxy_purchase_config(_admin: dict[str, Any] = Depends(admin_dependency)):
         with db() as conn:
             config = proxy_purchases.get_config(conn, include_draft=True)
-        provider = proxy_purchases.provider_from_environment()
-        configured, purchasing = proxy_purchases._provider_ready(provider)
+            credential_status = proxy_provider_credentials.credential_status(conn)
+            if credential_status["configured"]:
+                configured = True
+                purchasing = False
+                if credential_status["verified"]:
+                    provider = proxy_purchases.provider_from_environment(conn)
+                    _, provider_purchasing = proxy_purchases._provider_ready(provider)
+                    purchasing = bool(provider_purchasing and config.get("live_purchasing_enabled"))
+            else:
+                provider = proxy_purchases.provider_from_environment(conn)
+                configured, purchasing = proxy_purchases._provider_ready(provider)
         return {
             "ok": True,
             "config": config,
             "credential_status": {
+                **credential_status,
                 "configured": configured,
                 "live_purchasing_enabled": purchasing,
             },
         }
 
+    @app.get("/api/admin/proxy-purchases/provider-credentials")
+    def api_admin_proxy_provider_credentials(_admin: dict[str, Any] = Depends(admin_dependency)):
+        with db() as conn:
+            status = proxy_provider_credentials.credential_status(conn)
+        return JSONResponse(
+            content={"ok": True, **status},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.put("/api/admin/proxy-purchases/provider-credentials")
+    def api_admin_proxy_provider_credentials_save(
+        payload: ProxyProviderCredentialPayload,
+        request: Request,
+        admin: dict[str, Any] = Depends(admin_dependency),
+    ):
+        guard_write(request)
+        with db() as conn:
+            admin_step_up(
+                conn,
+                admin,
+                admin_password=payload.admin_password,
+                totp_code=payload.totp_code,
+            )
+            before = proxy_provider_credentials.credential_status(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            status = proxy_provider_credentials.save_credentials(
+                conn,
+                api_key=payload.api_key,
+                api_secret=payload.api_secret,
+                webhook_secret=payload.webhook_secret,
+                account_currency=payload.account_currency,
+                actor_user_id=int(admin.get("id") or 0),
+            )
+            conn.commit()
+            proxy_provider_credentials.verify_credentials(
+                conn,
+                service_id=str(proxy_purchases.get_config(conn, include_draft=True).get("service_id") or "static-residential-ipv4"),
+                plan_id=str(proxy_purchases.get_config(conn, include_draft=True).get("plan_id") or ""),
+                activate_staged=True,
+            )
+            status = proxy_provider_credentials.credential_status(conn)
+            if audit_callback is not None:
+                audit_callback(
+                    conn,
+                    actor_user_id=int(admin.get("id") or 0),
+                    action="proxy_purchase.provider_credentials_update",
+                    resource_type="proxy_provider_credentials",
+                    resource_id=payload.provider,
+                    reason=payload.reason,
+                    before=before,
+                    after={
+                        **status,
+                        "api_key_changed": bool(payload.api_key.strip()),
+                        "api_secret_changed": bool(payload.api_secret.strip()),
+                        "webhook_secret_changed": bool(payload.webhook_secret.strip()),
+                    },
+                    outcome="success",
+                    risk_level="critical",
+                )
+        return JSONResponse(
+            content={"ok": True, **status},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/admin/proxy-purchases/provider-credentials/test")
+    def api_admin_proxy_provider_credentials_test(
+        payload: ProxyProviderCredentialTestPayload,
+        request: Request,
+        _admin: dict[str, Any] = Depends(admin_dependency),
+    ):
+        guard_write(request)
+        with db() as conn:
+            result = proxy_provider_credentials.verify_credentials(
+                conn,
+                api_key=payload.api_key,
+                api_secret=payload.api_secret,
+                service_id=payload.service_id,
+                plan_id=payload.plan_id,
+            )
+        safe_result = {key: value for key, value in result.items() if key not in {"setup", "balance"}}
+        balance = proxy_purchases._balance_usd(result.get("balance"))
+        safe_result["balance"] = str(balance) if balance is not None else ""
+        return JSONResponse(
+            content=safe_result,
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.put("/api/admin/proxy-purchases/config")
     def api_admin_proxy_purchase_config_save(
         payload: ProxyPurchaseConfigPayload,
+        request: Request,
         admin: dict[str, Any] = Depends(admin_dependency),
     ):
+        guard_write(request)
         data = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -229,8 +363,10 @@ def register_proxy_purchase_routes(
     @app.post("/api/admin/proxy-purchases/config/publish")
     def api_admin_proxy_purchase_config_publish(
         payload: ProxyPurchasePublishPayload,
+        request: Request,
         admin: dict[str, Any] = Depends(admin_dependency),
     ):
+        guard_write(request)
         with db() as conn:
             draft = conn.execute(
                 "SELECT id FROM proxy_purchase_config_versions WHERE status = 'draft' "
@@ -246,7 +382,7 @@ def register_proxy_purchase_routes(
                 admin_password=payload.admin_password,
                 totp_code=payload.totp_code,
             )
-            provider = proxy_purchases.provider_from_environment()
+            provider = proxy_purchases.provider_from_environment(conn)
             # publish_config validates provider setup before its first write,
             # so the network calls do not hold SQLite's write lock.
             config = proxy_purchases.publish_config(
@@ -273,6 +409,24 @@ def register_proxy_purchase_routes(
                 ),
             }
 
+    @app.post("/api/admin/proxy-purchases/provider-options/sync")
+    def api_admin_proxy_purchase_provider_options_sync(
+        request: Request,
+        service_id: str = Query(default="static-residential-ipv4", min_length=1, max_length=160),
+        plan_id: str = Query(default="", max_length=160),
+        _admin: dict[str, Any] = Depends(admin_dependency),
+    ):
+        guard_write(request)
+        with db() as conn:
+            return {
+                "ok": True,
+                **proxy_purchases.sync_provider_options(
+                    conn,
+                    service_id=str(service_id),
+                    plan_id=str(plan_id),
+                ),
+            }
+
     @app.get("/api/admin/proxy-purchases/orders")
     def api_admin_proxy_purchase_orders(_admin: dict[str, Any] = Depends(admin_dependency)):
         with db() as conn:
@@ -282,8 +436,10 @@ def register_proxy_purchase_routes(
     def api_admin_proxy_purchase_reconcile(
         order_id: str,
         payload: ProxyPurchaseAdminActionPayload,
+        request: Request,
         admin: dict[str, Any] = Depends(admin_dependency),
     ):
+        guard_write(request)
         pending_error: Exception | None = None
         with db() as conn:
             admin_step_up(
@@ -323,8 +479,10 @@ def register_proxy_purchase_routes(
     def api_admin_proxy_purchase_resolve(
         order_id: str,
         payload: ProxyPurchaseAdminResolutionPayload,
+        request: Request,
         admin: dict[str, Any] = Depends(admin_dependency),
     ):
+        guard_write(request)
         if payload.action == "reconcile":
             return api_admin_proxy_purchase_reconcile(order_id, payload, admin)
         if payload.action == "bind" and not payload.provider_order_id.strip():
@@ -374,8 +532,10 @@ def register_proxy_purchase_routes(
     def api_admin_proxy_purchase_renewal_resolve(
         order_id: str,
         payload: ProxyPurchaseAdminRenewalResolutionPayload,
+        request: Request,
         admin: dict[str, Any] = Depends(admin_dependency),
     ):
+        guard_write(request)
         pending_error: Exception | None = None
         with db() as conn:
             admin_step_up(

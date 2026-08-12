@@ -14,6 +14,7 @@ from webapp import commercial_billing
 from webapp import db as app_db
 from webapp import proxy_purchases
 from webapp import proxy_purchase_api
+from webapp import proxy_provider_credentials
 from webapp.proxy_purchase_api import register_proxy_purchase_routes
 
 
@@ -123,6 +124,12 @@ class ProxyPurchaseApiTests(unittest.TestCase):
         self.assertEqual(options.status_code, 200)
         self.assertTrue(options.json()["configured"])
         self.assertEqual(options.json()["cash_backed_points"], 1000)
+        self.assertEqual(options.json()["service_id"], "static-residential-ipv4")
+        self.assertEqual(options.json()["plan_id"], "standard")
+        self.assertEqual(options.json()["quantity"], 1)
+        self.assertEqual(options.json()["ip_version"], "IPv4")
+        self.assertEqual(options.json()["authentication_type"], "USERNAME_PASSWORD")
+        self.assertFalse(options.json()["isp_managed"])
 
         quote_response = self.client.post(
             "/api/proxy-purchases/quotes",
@@ -190,6 +197,54 @@ class ProxyPurchaseApiTests(unittest.TestCase):
         options.assert_called_once()
         self.assertEqual(options.call_args.kwargs["service_id"], "static-residential-ipv4")
         self.assertEqual(options.call_args.kwargs["plan_id"], "plan-a")
+
+    def test_admin_provider_credentials_are_encrypted_write_only_and_audited(self):
+        with (
+            mock.patch.object(proxy_provider_credentials.ProxyCheapProvider, "list_services", return_value={"services": []}),
+            mock.patch.object(proxy_provider_credentials.ProxyCheapProvider, "get_setup", return_value={"countries": []}),
+            mock.patch.object(proxy_provider_credentials.ProxyCheapProvider, "get_balance", return_value={"balance": "10"}),
+        ):
+            response = self.client.put(
+                "/api/admin/proxy-purchases/provider-credentials",
+                json={
+                    "provider": "proxycheap",
+                    "api_key": "test-api-key",
+                    "api_secret": "test-api-secret",
+                    "reason": "initial provider setup",
+                    "admin_password": "test-password",
+                    "totp_code": "123456",
+                },
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload["configured"])
+        self.assertNotIn("api_key", payload)
+        self.assertNotIn("api_secret", payload)
+        with app_db.db() as conn:
+            row = conn.execute(
+                "SELECT owner_user_id,api_key_ciphertext,api_secret_ciphertext "
+                "FROM proxy_provider_credential_versions "
+                "WHERE provider_key='proxycheap' AND status='active'"
+            ).fetchone()
+            self.assertEqual(int(row["owner_user_id"]), self.admin_id)
+            self.assertNotIn("test-api-key", str(row["api_key_ciphertext"]))
+            self.assertNotIn("test-api-secret", str(row["api_secret_ciphertext"]))
+            self.assertEqual(
+                proxy_provider_credentials.load_credentials(conn),
+                ("test-api-key", "test-api-secret"),
+            )
+        self.assertEqual(self.step_up_calls[-1], ("test-password", "123456"))
+        self.assertEqual(
+            self.audit_calls[-1]["action"], "proxy_purchase.provider_credentials_update"
+        )
+
+    def test_admin_provider_credential_status_never_returns_secret_material(self):
+        response = self.client.get("/api/admin/proxy-purchases/provider-credentials")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("cache-control"), "no-store")
+        serialized = response.text.lower()
+        self.assertNotIn("ciphertext", serialized)
+        self.assertNotIn("test-api-secret", serialized)
 
     def test_admin_resolution_requires_mfa_and_records_audit(self):
         missing = self.client.post(

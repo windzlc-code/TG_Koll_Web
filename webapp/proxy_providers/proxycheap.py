@@ -100,6 +100,7 @@ class ProxyCheapProvider:
         *,
         api_key: str | None = None,
         api_secret: str | None = None,
+        account_currency: str | None = None,
         session: requests.Session | None = None,
         purchases_enabled: bool | None = None,
         timeout: tuple[float, float] | None = None,
@@ -107,6 +108,7 @@ class ProxyCheapProvider:
     ) -> None:
         self._api_key = str(api_key if api_key is not None else os.getenv("PROXYCHEAP_API_KEY", "")).strip()
         self._api_secret = str(api_secret if api_secret is not None else os.getenv("PROXYCHEAP_API_SECRET", "")).strip()
+        self._configured_account_currency = str(account_currency or "").strip().upper()
         self._session = session or requests.Session()
         self._purchases_enabled = (
             _truthy(os.getenv("PROXYCHEAP_PURCHASES_ENABLED"))
@@ -134,7 +136,9 @@ class ProxyCheapProvider:
         return _truthy(os.getenv("PROXYCHEAP_EXECUTE_SAFE_RECONCILIATION"))
 
     def _account_currency(self) -> str:
-        currency = str(os.getenv("PROXYCHEAP_ACCOUNT_CURRENCY", "")).strip().upper()
+        currency = self._configured_account_currency or str(
+            os.getenv("PROXYCHEAP_ACCOUNT_CURRENCY", "")
+        ).strip().upper()
         if currency != "USD":
             raise ProxyProviderConfigurationError(
                 "PROXYCHEAP_ACCOUNT_CURRENCY must be explicitly configured as USD"
@@ -249,7 +253,7 @@ class ProxyCheapProvider:
             "planId",
             "country",
             "region",
-            "isp",
+            "ispId",
             "package",
             "protocol",
             "proxyProtocol",

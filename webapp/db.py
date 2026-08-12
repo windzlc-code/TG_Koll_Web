@@ -735,6 +735,39 @@ def _ensure_proxy_purchase_schema(conn: sqlite3.Connection) -> None:
           FOREIGN KEY(user_id) REFERENCES users(id)
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS proxy_provider_credential_versions (
+          id TEXT PRIMARY KEY,
+          provider_key TEXT NOT NULL,
+          owner_user_id INTEGER NOT NULL,
+          api_key_ciphertext TEXT NOT NULL DEFAULT '',
+          api_secret_ciphertext TEXT NOT NULL DEFAULT '',
+          webhook_secret_ciphertext TEXT NOT NULL DEFAULT '',
+          account_currency TEXT NOT NULL DEFAULT 'USD',
+          api_key_fingerprint TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL CHECK(status IN ('staged','active','retired')),
+          verified_at INTEGER NOT NULL DEFAULT 0,
+          activated_at INTEGER NOT NULL DEFAULT 0,
+          retired_at INTEGER NOT NULL DEFAULT 0,
+          last_sync_at INTEGER NOT NULL DEFAULT 0,
+          last_error_code TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          updated_by INTEGER NOT NULL DEFAULT 0,
+          FOREIGN KEY(owner_user_id) REFERENCES users(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS proxy_provider_option_snapshots (
+          provider_key TEXT NOT NULL,
+          service_id TEXT NOT NULL,
+          plan_id TEXT NOT NULL DEFAULT '',
+          revision TEXT NOT NULL,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          synced_at INTEGER NOT NULL,
+          PRIMARY KEY(provider_key, service_id, plan_id)
+        )
+        """,
     )
     for statement in statements:
         conn.execute(statement)
@@ -757,6 +790,9 @@ def _ensure_proxy_purchase_schema(conn: sqlite3.Connection) -> None:
             "attempt_count": "INTEGER NOT NULL DEFAULT 0",
             "next_attempt_at": "INTEGER NOT NULL DEFAULT 0",
             "last_error": "TEXT NOT NULL DEFAULT ''",
+        },
+        "proxy_provider_credential_versions": {
+            "account_currency": "TEXT NOT NULL DEFAULT 'USD'",
         },
     }
     for table, columns in additive_columns.items():
@@ -787,6 +823,18 @@ def _ensure_proxy_purchase_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_proxy_purchase_orders_provider "
         "ON proxy_purchase_orders(provider_key, provider_order_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proxy_provider_snapshots_sync "
+        "ON proxy_provider_option_snapshots(provider_key, synced_at DESC)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_provider_credentials_active "
+        "ON proxy_provider_credential_versions(provider_key) WHERE status='active'"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_provider_credentials_staged "
+        "ON proxy_provider_credential_versions(provider_key) WHERE status='staged'"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_proxy_purchase_orders_status "
@@ -2213,6 +2261,7 @@ def init_db() -> None:
             "ON social_accounts(user_id, persona_id, platform, username COLLATE NOCASE)"
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_accounts_user ON social_accounts(user_id, updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_social_accounts_user_proxy ON social_accounts(user_id, proxy_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_proxies_user ON social_proxies(user_id, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_social_tasks_user ON social_automation_tasks(user_id, created_at)")
         conn.execute("DROP INDEX IF EXISTS idx_social_tasks_daily_publish")

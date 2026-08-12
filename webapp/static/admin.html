@@ -362,6 +362,32 @@
     .proxy-purchase-provider-health { display: flex; flex-wrap: wrap; gap: 8px; }
     .proxy-purchase-provider-health span { padding: 6px 9px; border: 1px solid rgba(255,255,255,.22); border-radius: 6px; background: rgba(4,28,52,.25); font-size: 12px; }
 
+    .proxy-provider-api-panel {
+      position: relative;
+      z-index: 1;
+      margin-top: 14px;
+      padding: 16px;
+      color: var(--ink, #17202a);
+      border-radius: 10px;
+      background: rgba(255,255,255,.97);
+    }
+    .proxy-provider-api-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+    .proxy-provider-api-head h4 { margin: 0 0 4px; font-size: 15px; }
+    .proxy-provider-api-head p { margin: 0; color: #51677c; font-size: 12px; }
+    .proxy-provider-credential-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .proxy-provider-credential-form label { min-width: 0; margin: 0; }
+    .proxy-provider-credential-form label > span { display: block; margin-bottom: 5px; }
+    .proxy-provider-credential-form .proxy-provider-credential-actions { grid-column: 1 / -1; display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
+    .proxy-provider-credential-actions button { width: auto; }
+    .proxy-provider-secret-note { flex: 1 1 300px; margin: 0; color: #51677c; font-size: 11px; }
+    .proxy-provider-field-map { margin-top: 14px; padding-top: 14px; border-top: 1px solid #d6e0e8; }
+    .proxy-provider-field-map-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+    .proxy-provider-field-map-head h4 { margin: 0; font-size: 14px; }
+    .proxy-provider-field-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .proxy-provider-field-item { min-width: 0; padding: 9px 10px; border: 1px solid #dbe3ea; border-radius: 7px; background: #f7fafc; }
+    .proxy-provider-field-item strong { display: block; margin-bottom: 3px; font-size: 11px; color: #51677c; }
+    .proxy-provider-field-item span { display: block; overflow: hidden; color: #17202a; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+
     .proxy-purchase-config-form {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -405,6 +431,7 @@
       }
 
       .proxy-purchase-config-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .proxy-provider-field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .proxy-purchase-order-resolution { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
       .proxy-market-admin-form .span-4 {
@@ -435,8 +462,12 @@
       }
 
       .proxy-purchase-config-form,
+      .proxy-provider-credential-form,
       .proxy-purchase-mfa,
       .proxy-purchase-order-resolution { grid-template-columns: 1fr; }
+
+      .proxy-provider-credential-form .proxy-provider-credential-actions { grid-column: auto; }
+      .proxy-provider-field-grid { grid-template-columns: 1fr; }
 
       .proxy-purchase-config-form .span-2,
       .proxy-purchase-mfa-note { grid-column: auto; }
@@ -1078,6 +1109,39 @@
               <span id="proxyPurchaseBalance">供应商余额：—</span>
               <span id="proxyPurchaseLastSync">同步：—</span>
             </div>
+          </div>
+
+          <div class="proxy-provider-api-panel" aria-labelledby="proxyProviderApiTitle">
+            <div class="proxy-provider-api-head">
+              <div>
+                <h4 id="proxyProviderApiTitle">第三方代理 API 设置</h4>
+                <p>API Key 与 API Secret 仅加密保存在服务端；页面不会回显已保存内容，留空表示保留原值。</p>
+              </div>
+              <button id="btnTestProxyProviderCredentials" type="button" class="ghost">测试连接</button>
+            </div>
+            <form id="proxyProviderCredentialForm" class="proxy-provider-credential-form" novalidate>
+              <label><span>供应商</span><input value="Proxy-Cheap" disabled></label>
+              <label><span>结算币种（需与供应商账户一致）</span><select id="proxyProviderAccountCurrency"><option value="USD">USD</option></select></label>
+              <label><span>凭据状态</span><input id="proxyProviderCredentialState" value="读取中" readonly></label>
+              <label><span>API Key</span><input id="proxyProviderApiKey" type="password" autocomplete="new-password" maxlength="512" placeholder="留空保留已保存的 Key"></label>
+              <label><span>API Secret（私钥）</span><input id="proxyProviderApiSecret" type="password" autocomplete="new-password" maxlength="512" placeholder="留空保留已保存的 Secret"></label>
+              <label><span>Webhook Secret（可选）</span><input id="proxyProviderWebhookSecret" type="password" autocomplete="new-password" maxlength="512" placeholder="留空保留；配置后用于回调验签"></label>
+              <label><span>变更原因</span><input id="proxyProviderCredentialReason" minlength="3" maxlength="500" placeholder="例如：首次配置或轮换凭据"></label>
+              <label><span>管理员密码</span><input id="proxyProviderCredentialPassword" type="password" autocomplete="current-password"></label>
+              <label><span>MFA 验证码</span><input id="proxyProviderCredentialTotp" autocomplete="one-time-code" maxlength="64"></label>
+              <div class="proxy-provider-credential-actions">
+                <p class="proxy-provider-secret-note">保存需要管理员密码与 MFA；保存后系统会立即用服务端凭据重新测试并同步公开产品字段。</p>
+                <button id="btnSaveProxyProviderCredentials" type="submit" class="primary">安全保存并验证</button>
+              </div>
+            </form>
+            <div class="proxy-provider-field-map" aria-live="polite">
+              <div class="proxy-provider-field-map-head">
+                <h4>供应商字段同步</h4>
+                <span class="small" id="proxyProviderFieldRevision">尚未同步</span>
+              </div>
+              <div id="proxyProviderFieldGrid" class="proxy-provider-field-grid"><div class="proxy-provider-field-item"><strong>状态</strong><span>等待连接供应商</span></div></div>
+            </div>
+            <div id="proxyProviderCredentialMsg" class="msg" role="status" aria-live="polite"></div>
           </div>
 
           <form id="proxyPurchaseConfigForm" class="proxy-purchase-config-form" novalidate>

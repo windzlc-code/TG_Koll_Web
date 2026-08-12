@@ -14,6 +14,7 @@ from decimal import Decimal, InvalidOperation, ROUND_CEILING
 from typing import Any, Mapping
 
 from . import commercial_billing
+from . import proxy_provider_credentials
 from .proxy_market_credentials import encrypt_market_credentials
 from .proxy_providers import (
     MockProxyProvider,
@@ -343,7 +344,7 @@ def _validate_provider_config(provider: ProxyProvider, config: Mapping[str, Any]
             raise ProxyPurchaseError("PROVIDER_ISP_UNAVAILABLE", "Configured ISP is unavailable", 409)
 
 
-def provider_from_environment() -> ProxyProvider:
+def provider_from_environment(conn: sqlite3.Connection | None = None) -> ProxyProvider:
     if str(os.getenv("PROXY_PURCHASE_PROVIDER", "proxycheap")).strip().lower() == "mock":
         unit_price = str(os.getenv("PROXY_PURCHASE_MOCK_PRICE_USD", "4.00"))
         with _MOCK_PROVIDER_LOCK:
@@ -352,6 +353,8 @@ def provider_from_environment() -> ProxyProvider:
                 provider = MockProxyProvider(unit_price_usd=unit_price)
                 _MOCK_PROVIDERS[unit_price] = provider
             return provider
+    if conn is not None:
+        return proxy_provider_credentials.provider(conn)
     return ProxyCheapProvider()
 
 
@@ -364,16 +367,66 @@ def _provider_ready(provider: ProxyProvider) -> tuple[bool, bool]:
     return configured, purchasing
 
 
-def _configuration(config: Mapping[str, Any], country: str, period_months: int) -> dict[str, Any]:
+def _setup_data(setup: Mapping[str, Any]) -> Mapping[str, Any]:
+    data = setup.get("data")
+    return data if isinstance(data, Mapping) else setup
+
+
+def _country_isp_items(setup: Mapping[str, Any], country: str) -> list[dict[str, Any]]:
+    raw_isps = _setup_data(setup).get("isps")
+    if not isinstance(raw_isps, Mapping):
+        return []
+    items = raw_isps.get(str(country or "").strip().upper(), [])
+    return [dict(item) for item in items if isinstance(item, Mapping)] if isinstance(items, list) else []
+
+
+def _orderable_regions(setup: Mapping[str, Any], service_id: str) -> list[dict[str, str]]:
+    regions = _region_items(setup)
+    raw_isps = _setup_data(setup).get("isps")
+    if str(service_id or "") == "static-residential-ipv4" and isinstance(raw_isps, Mapping):
+        return [item for item in regions if _country_isp_items(setup, item["code"])]
+    return regions
+
+
+def _configuration(
+    config: Mapping[str, Any],
+    country: str,
+    period_months: int,
+    *,
+    setup: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     result = dict(config.get("default_parameters") or {})
+    clean_country = str(country or "").strip().upper()
+    configured_country = str(result.get("country") or "").strip().upper()
     result.update(
         {
             "planId": str(config.get("plan_id") or ""),
-            "country": str(country or "").strip().upper(),
+            "country": clean_country,
             "quantity": 1,
             "period": {"unit": "months", "value": int(period_months)},
         }
     )
+    service_id = str(config.get("service_id") or "")
+    if setup is not None and service_id == "static-residential-ipv4":
+        isps = _country_isp_items(setup, clean_country)
+        if isps:
+            available = {
+                str(item.get("id") or item.get("value") or item.get("code") or ""): item
+                for item in isps
+            }
+            per_country = result.pop("isp_by_country", {})
+            mapped_isp = per_country.get(clean_country) if isinstance(per_country, Mapping) else ""
+            configured_isp = str(result.get("isp") or result.get("ispId") or "")
+            preferred = str(mapped_isp or (configured_isp if configured_country == clean_country else ""))
+            result["ispId"] = preferred if preferred in available else next(iter(available))
+            result.pop("isp", None)
+        else:
+            result.pop("isp", None)
+            result.pop("ispId", None)
+            result.pop("isp_by_country", None)
+        if configured_country != clean_country:
+            result.pop("region", None)
+            result.pop("city", None)
     return result
 
 
@@ -412,16 +465,17 @@ def _region_items(setup: Mapping[str, Any]) -> list[dict[str, str]]:
 def purchase_options(
     conn: sqlite3.Connection, *, user_id: int, provider: ProxyProvider | None = None
 ) -> dict[str, Any]:
-    provider = provider or provider_from_environment()
+    provider = provider or provider_from_environment(conn)
     config = get_config(conn)
     configured, purchasing = _provider_ready(provider)
     regions: list[dict[str, str]] = []
+    setup: Mapping[str, Any] = {}
     if bool(config.get("enabled")) and configured:
-        regions = _region_items(
-            provider.get_setup(str(config["service_id"]), plan_id=str(config.get("plan_id") or ""))
-        )
+        setup = provider.get_setup(str(config["service_id"]), plan_id=str(config.get("plan_id") or ""))
+        regions = _orderable_regions(setup, str(config.get("service_id") or ""))
     wallet = commercial_billing.ensure_wallet(conn, int(user_id))
     cash_units = int(wallet.get("cash_backed_credit_units") or 0)
+    defaults = dict(config.get("default_parameters") or {})
     return {
         "provider": "proxycheap",
         "configured": configured and config.get("status") == "active" and bool(config.get("enabled")),
@@ -432,6 +486,19 @@ def purchase_options(
         "cash_backed_credit_units": cash_units,
         "cash_backed_points": cash_units / POINT_SCALE,
         "currency": "USD",
+        "service_id": str(config.get("service_id") or ""),
+        "plan_id": str(config.get("plan_id") or ""),
+        "quantity": 1,
+        "ip_version": str(defaults.get("ipVersion") or "IPv4"),
+        "proxy_protocol": str(defaults.get("proxyProtocol") or defaults.get("protocol") or "HTTP"),
+        "authentication_type": str(
+            defaults.get("authenticationType") or defaults.get("authentication") or "USERNAME_PASSWORD"
+        ),
+        "is_unused_proxy": bool(defaults.get("isUnusedProxy", False)),
+        "isp_managed": bool(
+            str(config.get("service_id") or "") == "static-residential-ipv4"
+            and isinstance(_setup_data(setup).get("isps"), Mapping)
+        ),
         "default_period": {"unit": "months", "value": int(config["default_period_months"])},
     }
 
@@ -447,17 +514,20 @@ def create_quote(
     now: int | None = None,
 ) -> dict[str, Any]:
     current = int(now or _now())
-    provider = provider or provider_from_environment()
+    provider = provider or provider_from_environment(conn)
     config = get_config(conn)
     if config.get("status") != "active" or not bool(config.get("enabled")):
         raise ProxyPurchaseError("PURCHASES_DISABLED", "Proxy purchases are not configured", 503)
     clean_country = str(country or "").strip().upper()
     months = int(period_months or config["default_period_months"])
     setup = provider.get_setup(str(config["service_id"]), plan_id=str(config.get("plan_id") or ""))
-    countries = {item["code"]: item["name"] for item in _region_items(setup)}
+    countries = {
+        item["code"]: item["name"]
+        for item in _orderable_regions(setup, str(config.get("service_id") or ""))
+    }
     if clean_country not in countries:
         raise ProxyPurchaseError("INVALID_COUNTRY", "The selected region is not currently orderable", 422)
-    request = _configuration(config, clean_country, months)
+    request = _configuration(config, clean_country, months, setup=setup)
     quoted = provider.quote(str(config["service_id"]), request)
     if quoted.currency != "USD":
         raise ProxyPurchaseError("UNSUPPORTED_CURRENCY", "Only USD provider quotes are supported", 409)
@@ -581,7 +651,7 @@ def create_order(
         raise ProxyPurchaseError("QUOTE_NOT_FOUND", "Quote was not found", 404)
     if str(quote_row["status"]) != "open" or int(quote_row["expires_at"]) <= current:
         raise ProxyPurchaseError("QUOTE_EXPIRED", "Quote has expired; request a new quote", 409)
-    provider = provider or provider_from_environment()
+    provider = provider or provider_from_environment(conn)
     if not bool(getattr(provider, "safe_reconciliation_enabled", isinstance(provider, MockProxyProvider))):
         raise ProxyPurchaseError(
             "SAFE_RECONCILIATION_NOT_CONFIRMED",
@@ -765,7 +835,9 @@ def _proxy_list(payload: Any) -> list[dict[str, Any]]:
 
 def _proxy_field(proxy: Mapping[str, Any], *keys: str) -> Any:
     containers: list[Mapping[str, Any]] = [proxy]
-    for container_key in ("connection", "credentials", "authentication", "location", "proxy", "data"):
+    for container_key in (
+        "connection", "credentials", "authentication", "location", "metadata", "proxy", "data"
+    ):
         nested = proxy.get(container_key)
         if isinstance(nested, Mapping):
             containers.append(nested)
@@ -809,7 +881,11 @@ def _deliver_owned_proxy(
         str(_proxy_field(proxy, "username", "user", "login")),
         str(_proxy_field(proxy, "password", "pass")),
     )
-    country = str(_proxy_field(proxy, "country", "countryCode")).upper()
+    request_record = _loads(order.get("request_json"), {})
+    country = str(
+        _proxy_field(proxy, "country", "countryCode") or request_record.get("country") or ""
+    ).upper()
+    isp_name = str(_proxy_field(proxy, "isp", "ispName"))
     expires_at = _parse_timestamp(_proxy_field(proxy, "expiresAt", "expires_at", "expirationDate"))
     explicit_protocol = str(_proxy_field(proxy, "protocol", "proxyType", "type") or "").lower()
     if "socks" in explicit_protocol:
@@ -856,7 +932,7 @@ def _deliver_owned_proxy(
             country,
             str(_proxy_field(proxy, "region", "state")),
             str(_proxy_field(proxy, "city")),
-            str(_proxy_field(proxy, "isp")),
+            isp_name,
             "static_residential",
             "Owned provider purchase",
             "[]",
@@ -898,7 +974,7 @@ def _deliver_owned_proxy(
             country,
             str(_proxy_field(proxy, "region", "state")),
             str(_proxy_field(proxy, "city")),
-            str(_proxy_field(proxy, "isp")),
+            isp_name,
             "provider_purchase",
             "static_residential",
             "owned",
@@ -950,7 +1026,7 @@ def reconcile_order(
     if not provider_order_id:
         # There is no safe provider-side lookup key after an unknown Execute outcome.
         return _public_order(row)
-    provider = provider or provider_from_environment()
+    provider = provider or provider_from_environment(conn)
     details = provider.get_order(provider_order_id)
     proxies = _proxy_list(provider.get_order_proxies(provider_order_id))
     active = next((item for item in proxies if _status(item) in _ACTIVE_STATUSES), None)
@@ -1197,7 +1273,7 @@ def process_due_renewals(
     now: int | None = None,
 ) -> list[dict[str, Any]]:
     current = int(now or _now())
-    provider = provider or provider_from_environment()
+    provider = provider or provider_from_environment(conn)
     results: list[dict[str, Any]] = []
     missing = conn.execute(
         "SELECT * FROM proxy_renewal_schedules WHERE enabled=1 AND status='missing_expiry' AND next_attempt_at<=? "
@@ -1383,7 +1459,7 @@ def admin_resolve_renewal(
     now: int | None = None,
 ) -> dict[str, Any]:
     current = int(now or _now())
-    provider = provider or provider_from_environment()
+    provider = provider or provider_from_environment(conn)
     schedule_row = conn.execute("SELECT * FROM proxy_renewal_schedules WHERE order_id=?", (str(order_id),)).fetchone()
     if schedule_row is None:
         raise ProxyPurchaseError("RENEWAL_NOT_FOUND", "Renewal schedule was not found", 404)
@@ -1456,8 +1532,18 @@ def record_webhook(
         or len(str(signature)) > 256
     ):
         raise ProxyPurchaseError("INVALID_WEBHOOK_HEADERS", "Webhook headers are invalid", 400)
-    if not verify_webhook_signature(
-        raw_body, event_name=event_name, event_id=event_id, signature=signature, secret=secret
+    candidate_secrets = [str(secret)] if secret is not None else proxy_provider_credentials.webhook_secrets(conn)
+    if not candidate_secrets:
+        candidate_secrets = [str(os.getenv("PROXYCHEAP_WEBHOOK_SECRET", ""))]
+    if not any(
+        verify_webhook_signature(
+            raw_body,
+            event_name=event_name,
+            event_id=event_id,
+            signature=signature,
+            secret=candidate,
+        )
+        for candidate in candidate_secrets
     ):
         raise ProxyPurchaseError("INVALID_WEBHOOK_SIGNATURE", "Webhook signature is invalid", 401)
     try:
@@ -1471,10 +1557,15 @@ def record_webhook(
     order_id = str(payload.get("orderId") or (payload.get("data") or {}).get("orderId") or "")
     def redact(value: Any) -> Any:
         if isinstance(value, Mapping):
-            return {
-                str(key): ("[REDACTED]" if str(key).lower() in {"password", "secret", "token", "username"} else redact(item))
-                for key, item in value.items()
-            }
+            result: dict[str, Any] = {}
+            for key, item in value.items():
+                normalized = "".join(char for char in str(key).lower() if char.isalnum())
+                sensitive = any(
+                    marker in normalized
+                    for marker in ("password", "secret", "token", "apikey", "username", "credential")
+                )
+                result[str(key)] = "[REDACTED]" if sensitive else redact(item)
+            return result
         if isinstance(value, list):
             return [redact(item) for item in value]
         return value
@@ -1492,7 +1583,7 @@ def process_webhook_events(
     conn: sqlite3.Connection, *, limit: int = 50, provider: ProxyProvider | None = None, now: int | None = None
 ) -> list[str]:
     current = int(now or _now())
-    provider = provider or provider_from_environment()
+    provider = provider or provider_from_environment(conn)
     ids = conn.execute(
         "SELECT id FROM proxy_purchase_events WHERE processing_status IN ('pending','retry') AND next_attempt_at<=? "
         "ORDER BY created_at LIMIT ?", (current, min(max(int(limit), 1), 200))
@@ -1542,7 +1633,7 @@ def sync_active_assets(
     conn: sqlite3.Connection, *, limit: int = 20, provider: ProxyProvider | None = None, now: int | None = None
 ) -> list[str]:
     current = int(now or _now())
-    provider = provider or provider_from_environment()
+    provider = provider or provider_from_environment(conn)
     rows = conn.execute(
         "SELECT * FROM proxy_purchase_orders WHERE status='active' AND provider_proxy_id<>'' "
         "AND last_synced_at<=? ORDER BY last_synced_at LIMIT ?",
@@ -1613,7 +1704,7 @@ def provider_options(
     conn: sqlite3.Connection, *, provider: ProxyProvider | None = None,
     service_id: str = "", plan_id: str = ""
 ) -> dict[str, Any]:
-    provider = provider or provider_from_environment()
+    provider = provider or provider_from_environment(conn)
     configured, purchasing = _provider_ready(provider)
     current = _now()
     config = get_config(conn)
@@ -1632,7 +1723,11 @@ def provider_options(
         selected_service = str(service_id or config["service_id"])
         if selected_service != "static-residential-ipv4":
             raise ProxyPurchaseError("UNSUPPORTED_SERVICE", "Only static-residential-ipv4 is supported", 409)
-        setup = provider.get_setup(selected_service, plan_id=str(plan_id or config.get("plan_id") or ""))
+        selected_plan = proxy_provider_credentials.resolve_plan_id(
+            result["services"], selected_service, str(plan_id or config.get("plan_id") or "")
+        )
+        setup = provider.get_setup(selected_service, plan_id=selected_plan)
+        result["selected_plan_id"] = selected_plan
         result["setup"] = (
             dict(setup["data"]) if isinstance(setup.get("data"), Mapping) else setup
         )
@@ -1643,6 +1738,32 @@ def provider_options(
     return result
 
 
+def sync_provider_options(
+    conn: sqlite3.Connection,
+    *,
+    service_id: str = "",
+    plan_id: str = "",
+) -> dict[str, Any]:
+    provider = proxy_provider_credentials.provider(conn, require_verified=True)
+    result = provider_options(
+        conn,
+        provider=provider,
+        service_id=str(service_id or ""),
+        plan_id=str(plan_id or ""),
+    )
+    selected_service = str(service_id or get_config(conn)["service_id"])
+    selected_plan = str(result.get("selected_plan_id") or plan_id or get_config(conn).get("plan_id") or "")
+    revision = proxy_provider_credentials.store_option_snapshot(
+        conn,
+        service_id=selected_service,
+        plan_id=selected_plan,
+        payload=result,
+        synced_at=int(result.get("last_sync_at") or _now()),
+    )
+    result["revision"] = revision
+    return result
+
+
 def reconcile_due_orders(
     conn: sqlite3.Connection,
     *,
@@ -1650,7 +1771,7 @@ def reconcile_due_orders(
     provider: ProxyProvider | None = None,
     now: int | None = None,
 ) -> list[dict[str, Any]]:
-    provider = provider or provider_from_environment()
+    provider = provider or provider_from_environment(conn)
     rows = conn.execute(
         "SELECT id FROM proxy_purchase_orders WHERE provider_order_id<>'' AND status IN ('provisioning','provider_unknown') "
         "AND next_attempt_at<=? ORDER BY last_synced_at ASC LIMIT ?",

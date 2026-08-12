@@ -21795,6 +21795,7 @@ def create_app() -> FastAPI:
         admin_dependency=require_admin,
         admin_step_up=_require_admin_step_up,
         audit_callback=governance.record_audit,
+        same_origin_guard=_require_same_origin,
     )
     if boundary.collector:
         register_collector_routes(app)
