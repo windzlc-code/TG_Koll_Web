@@ -26,6 +26,25 @@ describe("persona-trend-intel-node", () => {
     expect(topics).toEqual(["超商甜點", "夜市", "美食"]);
   });
 
+  it("prioritizes the current post direction and persona core over broad genre labels", () => {
+    const topics = buildPersonaTrendTopics({
+      genres: ["搞笑", "生活日常"],
+      targetMarket: "cn_tw",
+      trendTopics: ["搞笑", "生活日常"],
+      contentTheme: "髮型護理",
+      interests: ["剪髮", "染髮"],
+    } as any, "理髮師", {
+      userInput: "第一次剪短髮，想知道怎麼跟理髮師溝通",
+      selectedDirections: ["夏季短髮溝通"],
+    });
+
+    expect(topics[0]).toBe("夏季短髮溝通");
+    expect(topics[1]).toBe("第一次剪短髮");
+    expect(topics).toContain("想知道怎麼跟理髮師溝通");
+    expect(topics).not.toContain("搞笑");
+    expect(topics).not.toContain("生活日常");
+  });
+
   it("builds recent Taiwan news searches around the persona topic and preferred publishers", () => {
     const queries = buildPreferredNewsQueries("房地產", {
       label: "台灣",

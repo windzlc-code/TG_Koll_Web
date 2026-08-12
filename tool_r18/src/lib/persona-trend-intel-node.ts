@@ -14,6 +14,12 @@ export type LocaleInfo = {
   socialTerms: string;
 };
 
+export type PersonaTrendTopicContext = {
+  userInput?: string;
+  selectedDirections?: string[];
+  selectedMemorySummaries?: string[];
+};
+
 const CACHE_FILE = "persona-trend-intel-cache.json";
 const TREND_CACHE_TTL_MS = 20 * 60 * 1000;
 const TAIWAN_PREFERRED_NEWS_DOMAINS = [
@@ -70,6 +76,31 @@ function normalizeTopic(value: string): string {
     .trim();
 }
 
+const GENERIC_TREND_TOPICS = new Set([
+  "搞笑",
+  "生活",
+  "日常",
+  "生活日常",
+  "日常生活",
+  "分享",
+  "生活分享",
+  "內容",
+  "内容",
+  "生活觀察",
+  "生活观察",
+]);
+
+function topicCandidates(values: unknown[]): string[] {
+  return values
+    .flatMap((value) => String(value || "").split(/[\n，,、；;|/]+/))
+    .map((value) => normalizeTopic(value))
+    .filter((value) => value.length >= 2 && value.length <= 24);
+}
+
+function topicIsGeneric(value: string): boolean {
+  return GENERIC_TREND_TOPICS.has(normalizeTopic(value).replace(/\s+/g, ""));
+}
+
 function htmlDecode(value: string): string {
   return value
     .replace(/<!\[CDATA\[(.*?)\]\]>/gs, "$1")
@@ -100,15 +131,26 @@ function pickLocale(setup: DramaSetup): LocaleInfo {
   return { label: "台灣", hl: "zh-TW", gl: "TW", ceid: "TW:zh-Hant", suffix: "台灣 最新", socialTerms: "Threads Dcard PTT 台灣討論" };
 }
 
-export function buildPersonaTrendTopics(setup: DramaSetup, personaName?: string): string[] {
+export function buildPersonaTrendTopics(
+  setup: DramaSetup,
+  personaName?: string,
+  context: PersonaTrendTopicContext = {},
+): string[] {
   const setupAny = setup as any;
-  const topics = [
+  const prioritized = topicCandidates([
+    ...(Array.isArray(context.selectedDirections) ? context.selectedDirections : []),
+    context.userInput,
+    setupAny.contentTheme,
+    ...(Array.isArray(setupAny.interests) ? setupAny.interests : []),
+    setupAny.customTopic,
     ...(Array.isArray(setupAny.trendTopics) ? setupAny.trendTopics : []),
     ...(Array.isArray(setup.genres) ? setup.genres : []),
+    ...(Array.isArray(context.selectedMemorySummaries) ? context.selectedMemorySummaries : []),
+    setupAny.personaDescription,
     personaName || "",
-  ]
-    .map((topic) => normalizeTopic(String(topic || "")))
-    .filter((topic) => topic.length >= 2);
+  ]);
+  const hasSpecificTopic = prioritized.some((topic) => !topicIsGeneric(topic));
+  const topics = hasSpecificTopic ? prioritized.filter((topic) => !topicIsGeneric(topic)) : prioritized;
   return Array.from(new Set(topics)).slice(0, 3);
 }
 
@@ -347,10 +389,10 @@ export async function fetchPersonaTrendIntelForNode(
   setup: DramaSetup,
   personaId?: string,
   personaName?: string,
-  options: { bypassCache?: boolean; timeoutMs?: number } = {},
+  options: { bypassCache?: boolean; timeoutMs?: number; topicContext?: PersonaTrendTopicContext } = {},
 ): Promise<string> {
   const locale = pickLocale(setup);
-  const topics = buildPersonaTrendTopics(setup, personaName);
+  const topics = buildPersonaTrendTopics(setup, personaName, options.topicContext);
   const cacheKey = `${todayKey()}_${personaId || "anonymous"}_${hashShort(JSON.stringify({ topics, locale }))}`;
   const cache = readCache();
   if (!options.bypassCache && cacheEntryIsFresh(cache[cacheKey])) return cache[cacheKey].text;

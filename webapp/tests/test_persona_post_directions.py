@@ -89,6 +89,30 @@ def test_selected_directions_are_highest_topic_priority_without_losing_locale():
     assert "Do not merely list or explain the keywords" in instruction
 
 
+def test_generate_posts_passes_clean_trend_topic_context_to_the_node_workflow(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(server, "_list_persona_archive_posts", lambda *_args, **_kwargs: [])
+
+    def fake_workflow(payload):
+        captured.update(payload)
+        return {"postIds": [], "posts": []}
+
+    monkeypatch.setattr(server, "_run_persona_workflow_cli", fake_workflow)
+    payload = server.PersonaDashboardGeneratePostsPayload(
+        prompt="第一次剪短发怎么沟通",
+        selected_directions=["夏季短发沟通", "发型护理"],
+        selected_memory_summaries=["客人上次剪了层次短发"],
+    )
+
+    server._generate_persona_archive_posts("persona-1", payload)
+
+    assert captured["trendTopicContext"] == {
+        "userInput": "第一次剪短发怎么沟通",
+        "selectedDirections": ["夏季短发沟通", "发型护理"],
+        "selectedMemorySummaries": ["客人上次剪了层次短发"],
+    }
+
+
 def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     script = CONSOLE_JS.read_text(encoding="utf-8")
     styles = CONSOLE_CSS.read_text(encoding="utf-8")

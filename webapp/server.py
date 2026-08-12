@@ -15231,6 +15231,11 @@ def _generate_persona_archive_posts(
         "customInstruction": _build_persona_generate_instruction(payload),
         "selectedMemoryEntryIds": [str(item or "").strip() for item in (payload.selected_memory_ids or []) if str(item or "").strip()],
         "selectedMemorySummaries": [str(item or "").strip() for item in (payload.selected_memory_summaries or []) if str(item or "").strip()],
+        "trendTopicContext": {
+            "userInput": str(payload.prompt or "").strip(),
+            "selectedDirections": [str(item or "").strip() for item in (payload.selected_directions or []) if str(item or "").strip()][:10],
+            "selectedMemorySummaries": [str(item or "").strip() for item in (payload.selected_memory_summaries or []) if str(item or "").strip()][:10],
+        },
         "textModelBranch": "free",
     })
     post_ids = {
