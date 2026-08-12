@@ -1447,7 +1447,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('hotSearchMode: "strict"', self.source)
         self.assertNotIn('data-persona-hot-freshness-', self.source)
         self.assertNotIn('热点时限', self.source)
-        self.assertIn('freshness_days: 7,', self.source)
+        self.assertIn('freshness_days: 0,', self.source)
         self.assertIn('freshness_policy: "strict",', self.source)
         self.assertIn('return [...deduped.values()];', self.source)
         self.assertNotIn("is-reserved", self.source)
@@ -3465,6 +3465,25 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             """
         )
         self._run_node(harness)
+
+    def test_proxy_purchase_uses_independent_dialog_and_restores_origin(self):
+        markup = self._function_source("accountProxyPurchaseDialogHtml")
+        open_view = self._function_source("openAccountProxyPurchaseView")
+        close_view = self._function_source("closeAccountProxyPurchaseView")
+        render_options = self._function_source("accountProxyPurchaseRenderOptions")
+
+        self.assertIn("account-proxy-purchase-modal", markup)
+        self.assertIn("data-account-proxy-purchase-back", markup)
+        self.assertIn("data-account-proxy-purchase-close", markup)
+        self.assertIn("购买专属代理 IP", markup)
+        self.assertIn("sourceDialog.hidden = true", open_view)
+        self.assertIn("modal.appendChild(purchaseDialog)", open_view)
+        self.assertNotIn("window.open", open_view)
+        self.assertNotIn("host.innerHTML = accountProxyPurchaseEmbeddedHtml()", open_view)
+        self.assertIn("view.purchaseDialog.remove()", close_view)
+        self.assertIn("view.sourceDialog.hidden = false", close_view)
+        self.assertIn("sync.hidden = ready", render_options)
+        self.assertIn(".account-proxy-purchase-modal", self.styles)
 
     def test_totp_code_card_uses_stable_svg_ring_and_millisecond_clock(self):
         controller = self._function_source("createAccountTotpController")

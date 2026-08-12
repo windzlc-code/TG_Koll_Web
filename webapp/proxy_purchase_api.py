@@ -63,21 +63,16 @@ class ProxyPurchasePublishPayload(_StrictModel):
     totp_code: str = Field(min_length=1, max_length=64)
 
 
-class ProxyProviderCredentialPayload(ProxyPurchasePublishPayload):
-    provider: Literal["proxycheap"] = "proxycheap"
+class ProxyProviderCredentialPayload(_StrictModel):
     api_key: str = Field(default="", max_length=512)
     api_secret: str = Field(default="", max_length=512)
     webhook_secret: str = Field(default="", max_length=512)
-    account_currency: Literal["USD"] = "USD"
     reason: str = Field(min_length=3, max_length=500)
 
 
 class ProxyProviderCredentialTestPayload(_StrictModel):
-    provider: Literal["proxycheap"] = "proxycheap"
     api_key: str = Field(default="", max_length=512)
     api_secret: str = Field(default="", max_length=512)
-    service_id: str = Field(default="static-residential-ipv4", min_length=1, max_length=160)
-    plan_id: str = Field(default="", max_length=160)
 
 
 class ProxyPurchaseAdminActionPayload(ProxyPurchasePublishPayload):
@@ -273,12 +268,6 @@ def register_proxy_purchase_routes(
     ):
         guard_write(request)
         with db() as conn:
-            admin_step_up(
-                conn,
-                admin,
-                admin_password=payload.admin_password,
-                totp_code=payload.totp_code,
-            )
             before = proxy_provider_credentials.credential_status(conn)
             conn.execute("BEGIN IMMEDIATE")
             status = proxy_provider_credentials.save_credentials(
@@ -286,7 +275,7 @@ def register_proxy_purchase_routes(
                 api_key=payload.api_key,
                 api_secret=payload.api_secret,
                 webhook_secret=payload.webhook_secret,
-                account_currency=payload.account_currency,
+                account_currency="USD",
                 actor_user_id=int(admin.get("id") or 0),
             )
             conn.commit()
@@ -303,7 +292,7 @@ def register_proxy_purchase_routes(
                     actor_user_id=int(admin.get("id") or 0),
                     action="proxy_purchase.provider_credentials_update",
                     resource_type="proxy_provider_credentials",
-                    resource_id=payload.provider,
+                    resource_id="proxycheap",
                     reason=payload.reason,
                     before=before,
                     after={
@@ -328,12 +317,13 @@ def register_proxy_purchase_routes(
     ):
         guard_write(request)
         with db() as conn:
+            config = proxy_purchases.get_config(conn, include_draft=True)
             result = proxy_provider_credentials.verify_credentials(
                 conn,
                 api_key=payload.api_key,
                 api_secret=payload.api_secret,
-                service_id=payload.service_id,
-                plan_id=payload.plan_id,
+                service_id=str(config.get("service_id") or "static-residential-ipv4"),
+                plan_id=str(config.get("plan_id") or ""),
             )
         safe_result = {key: value for key, value in result.items() if key not in {"setup", "balance"}}
         balance = proxy_purchases._balance_usd(result.get("balance"))

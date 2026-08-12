@@ -359,8 +359,8 @@
     .proxy-purchase-admin-hero .proxy-market-admin-band-head { position: relative; z-index: 1; margin-bottom: 16px; }
     .proxy-purchase-admin-hero h3 { color: #fff; }
     .proxy-purchase-admin-hero .small { color: #c5dbe9; }
-    .proxy-purchase-provider-health { display: flex; flex-wrap: wrap; gap: 8px; }
-    .proxy-purchase-provider-health span { padding: 6px 9px; border: 1px solid rgba(255,255,255,.22); border-radius: 6px; background: rgba(4,28,52,.25); font-size: 12px; }
+    .proxy-purchase-readiness { margin-top: 10px; padding: 9px 11px; border: 1px solid rgba(255,255,255,.32); border-radius: 7px; background: rgba(4,28,52,.32); color: #f7fbff; font-size: 12px; }
+    .proxy-purchase-readiness[hidden] { display: none; }
 
     .proxy-provider-api-panel {
       position: relative;
@@ -371,6 +371,14 @@
       border-radius: 10px;
       background: rgba(255,255,255,.97);
     }
+    .proxy-provider-api-panel > summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; cursor: pointer; list-style: none; }
+    .proxy-provider-api-panel > summary::-webkit-details-marker { display: none; }
+    .proxy-provider-api-panel > summary::after { content: "+"; flex: 0 0 auto; color: #155f96; font-size: 22px; line-height: 1; }
+    .proxy-provider-api-panel[open] > summary::after { content: "−"; }
+    .proxy-provider-api-panel > summary h4 { margin: 0 0 4px; font-size: 15px; }
+    .proxy-provider-api-panel > summary p { margin: 0; color: #51677c; font-size: 12px; }
+    .proxy-provider-api-body { margin-top: 14px; padding-top: 14px; border-top: 1px solid #d6e0e8; }
+    .proxy-provider-credential-summary { color: #51677c; font-size: 12px; white-space: nowrap; }
     .proxy-provider-api-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
     .proxy-provider-api-head h4 { margin: 0 0 4px; font-size: 15px; }
     .proxy-provider-api-head p { margin: 0; color: #51677c; font-size: 12px; }
@@ -381,8 +389,11 @@
     .proxy-provider-credential-actions button { width: auto; }
     .proxy-provider-secret-note { flex: 1 1 300px; margin: 0; color: #51677c; font-size: 11px; }
     .proxy-provider-field-map { margin-top: 14px; padding-top: 14px; border-top: 1px solid #d6e0e8; }
-    .proxy-provider-field-map-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+    .proxy-provider-field-map > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; list-style: none; }
+    .proxy-provider-field-map > summary::-webkit-details-marker { display: none; }
+    .proxy-provider-field-map-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .proxy-provider-field-map-head h4 { margin: 0; font-size: 14px; }
+    .proxy-provider-field-map[open] .proxy-provider-field-grid { margin-top: 9px; }
     .proxy-provider-field-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
     .proxy-provider-field-item { min-width: 0; padding: 9px 10px; border: 1px solid #dbe3ea; border-radius: 7px; background: #f7fafc; }
     .proxy-provider-field-item strong { display: block; margin-bottom: 3px; font-size: 11px; color: #51677c; }
@@ -1104,45 +1115,42 @@
               <h3>Proxy-Cheap 供应商采购</h3>
               <div class="small">映射供应商公开 API 选项；用户端仅显示地区、托管续费与算力点报价。</div>
             </div>
-            <div class="proxy-purchase-provider-health" aria-label="供应商状态">
-              <span id="proxyPurchaseCredentialStatus">凭据状态：读取中</span>
-              <span id="proxyPurchaseBalance">供应商余额：—</span>
-              <span id="proxyPurchaseLastSync">同步：—</span>
-            </div>
           </div>
+          <div id="proxyPurchaseReadiness" class="proxy-purchase-readiness" role="status" aria-live="polite">正在读取采购状态...</div>
 
-          <div class="proxy-provider-api-panel" aria-labelledby="proxyProviderApiTitle">
-            <div class="proxy-provider-api-head">
+          <details class="proxy-provider-api-panel" id="proxyProviderApiDetails" aria-labelledby="proxyProviderApiTitle">
+            <summary>
               <div>
                 <h4 id="proxyProviderApiTitle">第三方代理 API 设置</h4>
-                <p>API Key 与 API Secret 仅加密保存在服务端；页面不会回显已保存内容，留空表示保留原值。</p>
+                <p>Proxy-Cheap · USD · 数量 1；供应商、币种和状态由服务端自动识别。</p>
               </div>
-              <button id="btnTestProxyProviderCredentials" type="button" class="ghost">测试连接</button>
+              <span id="proxyProviderCredentialSummary" class="proxy-provider-credential-summary">自动检测中</span>
+            </summary>
+            <div class="proxy-provider-api-body">
+              <div class="proxy-provider-api-head">
+                <p>API Key 与 API Secret 仅加密保存在服务端；留空表示保留已保存内容。</p>
+                <button id="btnTestProxyProviderCredentials" type="button" class="ghost">测试连接</button>
+              </div>
+              <form id="proxyProviderCredentialForm" class="proxy-provider-credential-form" novalidate>
+                <label><span>API Key</span><input id="proxyProviderApiKey" type="password" autocomplete="new-password" maxlength="512" placeholder="留空保留已保存的 Key"></label>
+                <label><span>API Secret（私钥）</span><input id="proxyProviderApiSecret" type="password" autocomplete="new-password" maxlength="512" placeholder="留空保留已保存的 Secret"></label>
+                <label><span>Webhook Secret（可选）</span><input id="proxyProviderWebhookSecret" type="password" autocomplete="new-password" maxlength="512" placeholder="留空保留；配置后用于回调验签"></label>
+                <label><span>变更原因</span><input id="proxyProviderCredentialReason" minlength="3" maxlength="500" placeholder="例如：首次配置或轮换凭据"></label>
+                <div class="proxy-provider-credential-actions">
+                  <p class="proxy-provider-secret-note">管理员登录态与同源校验通过后即可保存；系统会自动验证凭据并同步公开产品字段。</p>
+                  <button id="btnSaveProxyProviderCredentials" type="submit" class="primary">保存并自动验证</button>
+                </div>
+              </form>
+              <details class="proxy-provider-field-map" id="proxyProviderFieldDetails" aria-live="polite">
+                <summary class="proxy-provider-field-map-head">
+                  <h4>供应商字段同步详情</h4>
+                  <span class="small" id="proxyProviderFieldRevision">尚未同步</span>
+                </summary>
+                <div id="proxyProviderFieldGrid" class="proxy-provider-field-grid"><div class="proxy-provider-field-item"><strong>状态</strong><span>等待连接供应商</span></div></div>
+              </details>
+              <div id="proxyProviderCredentialMsg" class="msg" role="status" aria-live="polite"></div>
             </div>
-            <form id="proxyProviderCredentialForm" class="proxy-provider-credential-form" novalidate>
-              <label><span>供应商</span><input value="Proxy-Cheap" disabled></label>
-              <label><span>结算币种（需与供应商账户一致）</span><select id="proxyProviderAccountCurrency"><option value="USD">USD</option></select></label>
-              <label><span>凭据状态</span><input id="proxyProviderCredentialState" value="读取中" readonly></label>
-              <label><span>API Key</span><input id="proxyProviderApiKey" type="password" autocomplete="new-password" maxlength="512" placeholder="留空保留已保存的 Key"></label>
-              <label><span>API Secret（私钥）</span><input id="proxyProviderApiSecret" type="password" autocomplete="new-password" maxlength="512" placeholder="留空保留已保存的 Secret"></label>
-              <label><span>Webhook Secret（可选）</span><input id="proxyProviderWebhookSecret" type="password" autocomplete="new-password" maxlength="512" placeholder="留空保留；配置后用于回调验签"></label>
-              <label><span>变更原因</span><input id="proxyProviderCredentialReason" minlength="3" maxlength="500" placeholder="例如：首次配置或轮换凭据"></label>
-              <label><span>管理员密码</span><input id="proxyProviderCredentialPassword" type="password" autocomplete="current-password"></label>
-              <label><span>MFA 验证码</span><input id="proxyProviderCredentialTotp" autocomplete="one-time-code" maxlength="64"></label>
-              <div class="proxy-provider-credential-actions">
-                <p class="proxy-provider-secret-note">保存需要管理员密码与 MFA；保存后系统会立即用服务端凭据重新测试并同步公开产品字段。</p>
-                <button id="btnSaveProxyProviderCredentials" type="submit" class="primary">安全保存并验证</button>
-              </div>
-            </form>
-            <div class="proxy-provider-field-map" aria-live="polite">
-              <div class="proxy-provider-field-map-head">
-                <h4>供应商字段同步</h4>
-                <span class="small" id="proxyProviderFieldRevision">尚未同步</span>
-              </div>
-              <div id="proxyProviderFieldGrid" class="proxy-provider-field-grid"><div class="proxy-provider-field-item"><strong>状态</strong><span>等待连接供应商</span></div></div>
-            </div>
-            <div id="proxyProviderCredentialMsg" class="msg" role="status" aria-live="polite"></div>
-          </div>
+          </details>
 
           <form id="proxyPurchaseConfigForm" class="proxy-purchase-config-form" novalidate>
             <label><span>默认产品（首版固定）</span><select id="proxyPurchaseServiceId" required disabled><option value="static-residential-ipv4">静态住宅 IPv4</option></select></label>
@@ -1150,7 +1158,6 @@
             <label><span>默认地区</span><select id="proxyPurchaseDefaultCountry"><option value="">使用首个可售地区</option></select></label>
             <label><span>默认周期（月）</span><select id="proxyPurchaseDefaultPeriod"><option value="1">1</option></select></label>
 
-            <label><span>数量</span><input value="1" disabled aria-label="数量固定为一"></label>
             <label><span>ISP</span><select id="proxyPurchaseDefaultIsp"><option value="">自动选择</option></select></label>
             <label><span>代理套餐包</span><select id="proxyPurchaseDefaultPackage"><option value="">自动选择</option></select></label>
             <label><span>连接协议</span><select id="proxyPurchaseDefaultProtocol"><option value="">使用供应商默认值</option></select></label>
@@ -1163,7 +1170,6 @@
             <label><span>成本安全垫（USD）</span><input id="proxyPurchaseSafetyBufferUsd" type="number" min="0" step="0.01" value="0" required></label>
             <label><span>最低利润（USD）</span><input id="proxyPurchaseMinProfitUsd" type="number" min="0" step="0.01" value="0" required></label>
             <label><span>用户购买</span><select id="proxyPurchaseEnabled"><option value="false">关闭</option><option value="true">开放</option></select></label>
-            <label><span>供应商</span><input value="Proxy-Cheap（自动识别）" disabled></label>
 
             <div class="proxy-purchase-config-actions">
               <div class="proxy-purchase-mfa">

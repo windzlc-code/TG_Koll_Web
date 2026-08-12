@@ -209,6 +209,38 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.styles,
         )
 
+    def test_distribution_charts_use_stacked_rows_with_metrics_left_and_donuts_right(self):
+        dashboard_start = self.markup.index(
+            '<section class="view persona-dashboard-view" data-panel="persona_dashboard">'
+        )
+        dashboard = self.markup[dashboard_start:]
+        stack_start = dashboard.index('<div class="persona-distribution-stack">')
+        stack_end = dashboard.index('<div class="persona-chart-panel persona-chart-panel-wide">', stack_start)
+        stack = dashboard[stack_start:stack_end]
+
+        self.assertEqual(stack.count('class="persona-chart-panel persona-distribution-panel"'), 2)
+        self.assertLess(stack.index('id="personaPlatformChart"'), stack.index('id="personaEngagementChart"'))
+        self.assertIn(".persona-dashboard-view .persona-distribution-panel + .persona-distribution-panel {", self.styles)
+        self.assertIn("border-top: 1px solid var(--line);", self.styles)
+        legend_rule = re.search(
+            r"\.persona-dashboard-view \.persona-distribution-panel \.persona-donut-legend\s*\{([^}]*)\}",
+            self.styles,
+        )
+        self.assertIsNotNone(legend_rule)
+        self.assertIn("order: 1;", legend_rule.group(1))
+        self.assertIn(
+            ".persona-dashboard-view .persona-distribution-panel .persona-donut {\n  order: 2;",
+            self.styles,
+        )
+        self.assertIn(
+            ".persona-dashboard-view .persona-chart-panel.persona-distribution-panel {\n"
+            "    gap: 4px;\n"
+            "    padding: 9px;",
+            self.styles,
+        )
+        self.assertIn(".persona-dashboard-view .persona-distribution-panel .persona-chart-placeholder {", self.styles)
+        self.assertIn("min-height: 78px;", self.styles)
+
     def test_dashboard_uses_followers_for_the_first_kpi(self):
         self.assertIn("function pdPersonaFollowers", self.dashboard_script)
         self.assertIn("summary.follower_count += pdPersonaFollowers(persona, selectedPlatform);", self.dashboard_script)

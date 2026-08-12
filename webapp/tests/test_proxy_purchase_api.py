@@ -207,12 +207,9 @@ class ProxyPurchaseApiTests(unittest.TestCase):
             response = self.client.put(
                 "/api/admin/proxy-purchases/provider-credentials",
                 json={
-                    "provider": "proxycheap",
                     "api_key": "test-api-key",
                     "api_secret": "test-api-secret",
                     "reason": "initial provider setup",
-                    "admin_password": "test-password",
-                    "totp_code": "123456",
                 },
             )
         self.assertEqual(response.status_code, 200, response.text)
@@ -233,10 +230,57 @@ class ProxyPurchaseApiTests(unittest.TestCase):
                 proxy_provider_credentials.load_credentials(conn),
                 ("test-api-key", "test-api-secret"),
             )
-        self.assertEqual(self.step_up_calls[-1], ("test-password", "123456"))
+        self.assertEqual(self.step_up_calls, [])
         self.assertEqual(
             self.audit_calls[-1]["action"], "proxy_purchase.provider_credentials_update"
         )
+
+    def test_admin_provider_credentials_rejects_client_owned_provider_currency_and_status(self):
+        response = self.client.put(
+            "/api/admin/proxy-purchases/provider-credentials",
+            json={
+                "provider": "proxycheap",
+                "account_currency": "USD",
+                "status": "active",
+                "api_key": "test-api-key",
+                "api_secret": "test-api-secret",
+                "reason": "attempt field override",
+                "admin_password": "test-password",
+                "totp_code": "123456",
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+        rejected = {str(item["loc"][-1]) for item in response.json()["detail"]}
+        self.assertTrue(
+            {"provider", "account_currency", "status", "admin_password", "totp_code"}.issubset(rejected)
+        )
+        self.assertEqual(self.step_up_calls, [])
+
+    def test_admin_provider_connection_test_uses_server_selected_provider_and_product(self):
+        verified = {
+            "ok": True,
+            "provider": "proxycheap",
+            "saved_credentials_verified": False,
+            "service_count": 1,
+            "selected_plan_id": "standard",
+            "balance": {"currency": "USD", "balance": "10"},
+            "setup": {},
+            "verified_at": 1_700_000_100,
+        }
+        with mock.patch.object(
+            proxy_provider_credentials,
+            "verify_credentials",
+            return_value=verified,
+        ) as verify:
+            response = self.client.post(
+                "/api/admin/proxy-purchases/provider-credentials/test",
+                json={"api_key": "test-api-key", "api_secret": "test-api-secret"},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(verify.call_args.kwargs["service_id"], "static-residential-ipv4")
+        self.assertEqual(verify.call_args.kwargs["plan_id"], "standard")
+        self.assertNotIn("provider", verify.call_args.kwargs)
+        self.assertEqual(self.step_up_calls, [])
 
     def test_admin_provider_credential_status_never_returns_secret_material(self):
         response = self.client.get("/api/admin/proxy-purchases/provider-credentials")
