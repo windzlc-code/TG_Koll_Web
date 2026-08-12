@@ -2565,7 +2565,10 @@ def register_social_automation_routes(app: FastAPI) -> None:
         owner_user_id = _identity_user_id(user)
         with db() as conn:
             options = list_system_proxy_pool_options(conn, owner_user_id=owner_user_id)
-        current = next((option for option in options if bool(option.get("selected"))), None)
+        current = next((
+            option for option in options
+            if bool(option.get("selected")) and str(option.get("ownership_type") or "shared") != "owned"
+        ), None)
         return {
             "ok": True,
             "claim_limit": 1,

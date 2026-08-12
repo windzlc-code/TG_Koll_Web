@@ -30,6 +30,7 @@ import {
   ensureSentimentHotPlatformContributions,
   finalizeSentimentHotCandidatesForDisplay,
   isObviouslyLowQualitySentimentHotCandidate,
+  isCacheableSentimentReaderResponse,
   isChineseSentimentCandidate,
   isUsableThreadsSearchGraphqlTemplate,
   parseInstagramAuthenticatedSearchPayload,
@@ -40,6 +41,7 @@ import {
   parseThreadsBrowserProfilePublishedPosts,
   parseThreadsGraphqlSearchPayload,
   parseThreadsSearchHydrationPayloads,
+  parseThreadsSearchCardCandidates,
   parseThreadsGraphqlSearchPageInfo,
   parseThreadsGraphqlProfilePagePayload,
   normalizeThreadsRelativeTime,
@@ -62,6 +64,7 @@ import {
   resolveSentimentHotDisplayHeatThreshold,
   resolveSentimentHotTextModelPreference,
   shouldTreatThreadsProfileAsLoginWall,
+  shouldUseThreadsSearchGraphqlTemplate,
 } from "@/lib/sentiment-hot-importer";
 
 afterEach(() => {
@@ -115,6 +118,19 @@ describe("sentiment hot importer", () => {
     releaseThird();
   });
 
+  it("keeps collector account searches on the verified DOM path instead of stale GraphQL templates", () => {
+    expect(shouldUseThreadsSearchGraphqlTemplate({
+      publicOnly: false,
+      authenticated: true,
+      collectorProfileRequired: true,
+    })).toBe(false);
+    expect(shouldUseThreadsSearchGraphqlTemplate({
+      publicOnly: false,
+      authenticated: true,
+      collectorProfileRequired: false,
+    })).toBe(true);
+  });
+
   it("queues browser processes when server limit is configured as one", async () => {
     const previous = process.env.SENTIMENT_BROWSER_PAGE_CONCURRENCY;
     process.env.SENTIMENT_BROWSER_PAGE_CONCURRENCY = "1";
@@ -147,6 +163,21 @@ describe("sentiment hot importer", () => {
       "https://www.threads.com/search?q=%E7%90%86%E5%8F%91",
     );
     expect(buildThreadsReaderSearchUrl("理发", true)).toContain("filter=recent");
+  });
+
+  it("does not cache a Threads Reader login-only page", () => {
+    expect(isCacheableSentimentReaderResponse({
+      ok: true,
+      status: 200,
+      headers: {},
+      body: "Title: Search • Threads\n\nLog in for more threads about this topic.",
+    })).toBe(false);
+    expect(isCacheableSentimentReaderResponse({
+      ok: true,
+      status: 200,
+      headers: {},
+      body: "Title: Search • Threads\n\n[author](http://www.threads.com/@author/post/abc)\n真实热点正文\n1.2K\n88",
+    })).toBe(true);
   });
 
   it("uses Threads recent search only for freshness-scoped fetches", () => {
@@ -290,6 +321,17 @@ describe("sentiment hot importer", () => {
 
     expect(buildSentimentHotSearchStrategyCacheKey({ ...base, writingLocale: "zh-CN" }))
       .not.toBe(buildSentimentHotSearchStrategyCacheKey({ ...base, writingLocale: "zh-TW" }));
+  });
+
+  it("ignores free-form user supplements in hot-keyword strategy cache identity", () => {
+    const base = {
+      archive: { id: "persona-1", name: "hairdresser", content: "hair and beauty" },
+      personaText: "persona: hairdresser",
+      writingLocale: "zh-CN",
+    };
+
+    expect(buildSentimentHotSearchStrategyCacheKey({ ...base, prompt: "临时追一个明星话题" }))
+      .toBe(buildSentimentHotSearchStrategyCacheKey({ ...base, prompt: "另一个临时要求" }));
   });
 
   it("keeps model search phrases intact instead of spending queries on generic fragments", () => {
@@ -489,6 +531,18 @@ describe("sentiment hot importer", () => {
     expect(queries).toContain("男士发型");
     expect(queries).toContain("理发店趣事");
     expect(queries.indexOf("理发店趣事")).toBeLessThan(queries.indexOf("染发烫发价格踩雷"));
+  });
+
+  it("preserves an explicit high-volume core term as the first normal search query", () => {
+    const queries = resolveSentimentHotManualQueryKeywords(
+      ["地震", "台湾地震", "防灾"],
+      null,
+      "normal",
+    );
+
+    expect(queries.slice(0, 3)).toEqual(["地震", "台湾地震", "防灾"]);
+    expect(buildModelOrderedThreadsSearchQueries(queries).slice(0, 3))
+      .toEqual(["地震", "台湾地震", "防灾"]);
   });
 
   it("keeps Instagram search aligned with Threads query keyword order", () => {
@@ -1554,7 +1608,7 @@ describe("sentiment hot importer", () => {
     expect(candidates.map((candidate) => candidate.id)).toEqual(["at-25"]);
   });
 
-  it("applies the same content floor to Threads search candidates", () => {
+  it("keeps concise authenticated Threads search posts above the hard heat floor", () => {
     const candidates = finalizeSentimentHotCandidatesForDisplay([{
       id: "short-threads-search",
       platform: "threads",
@@ -1567,7 +1621,7 @@ describe("sentiment hot importer", () => {
       capturedAt: new Date().toISOString(),
     }] as any, 10);
 
-    expect(candidates).toEqual([]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["short-threads-search"]);
   });
 
   it("rejects marked recent fallbacks when they are still below the heat gate", () => {
@@ -2037,6 +2091,43 @@ Demo post body
     expect(candidate.hotScore).toBe(186_000);
   });
 
+  it("keeps authenticated detail rescue browser-only when the public Reader is disabled", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("public Reader must not run during authenticated detail rescue");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const [candidate] = await enrichThreadsCandidateDetails([{
+      id: "browser-only-rescue",
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@demo/post/browser-only-rescue",
+      author: "demo",
+      content: "这是一条需要使用当前登录态浏览器补全浏览量的中文热点候选内容。",
+      media: [],
+      hotScore: 80,
+      metrics: { source: "threads-account-search", query: "地震" },
+      engagement: { likeCount: 60, commentCount: 10, shareCount: 10 },
+      capturedAt: new Date().toISOString(),
+    }], { force: true, includeReader: false });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(candidate.hotScore).toBe(80);
+  });
+
+  it("accepts an authenticated normal-search card that exactly matches a two-character query", () => {
+    expect(candidateMatchesCurrentKeywords({
+      id: "short-query-match",
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@demo/post/short-query-match",
+      author: "demo",
+      content: "台湾地震发生后许多民众讨论摇晃过程、余震风险与实际感受。",
+      media: [],
+      hotScore: 800,
+      metrics: { source: "threads-account-search", query: "地震", recentSearch: false, matchedKeywords: ["地震"] },
+      capturedAt: new Date().toISOString(),
+    } as any, ["地震", "防灾"], "normal")).toBe(true);
+  });
+
   it("keeps a detail-enriched post hidden when its body remains below the content floor", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(
       "## [Thread 12K views](https://www.threads.com/@tea/post/detail-rescue)",
@@ -2094,7 +2185,7 @@ Demo post body
     expect(candidate.metrics).toMatchObject({ view_count: 99 });
   });
 
-  it("keeps the 1000 heat standard when it alone satisfies the requested result count", () => {
+  it("sorts all candidates at or above the 500 heat floor from high to low", () => {
     const base = {
       platform: "threads",
       author: "demo",
@@ -2124,7 +2215,7 @@ Demo post body
     expect(candidates.map((candidate) => candidate.id)).toEqual(["account-accepted"]);
   });
 
-  it("keeps the 1000 heat standard first, then fills a short result set down to 500", () => {
+  it("keeps the explicit 500 heat floor and rejects everything below it", () => {
     const base = {
       platform: "threads",
       author: "demo",
@@ -2599,6 +2690,34 @@ bunundoc
     expect(candidates[0].content).toContain("醫療");
     expect(candidates[0].content).not.toContain("翻譯");
     expect(candidates[0].sourceUrl).toBe("https://www.threads.net/@mls_muttering/post/medical-report");
+  });
+
+  it("parses the current Threads search-card DOM using its canonical post link", () => {
+    const candidates = parseThreadsSearchCardCandidates({
+      query: "台股",
+      keywords: ["台股", "股票投資"],
+      cards: [{
+        sourceUrl: "https://www.threads.com/@demo/post/current-card/media",
+        text: [
+          "demo",
+          "台股",
+          "50分鐘",
+          "今天整理台股盤勢、股票投資風險與成交量變化，提醒大家不要追高並做好資金控管。",
+          "1",
+          "/",
+          "2",
+          "570",
+          "22",
+          "1",
+          "7",
+        ].join("\n"),
+      }],
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].sourceUrl).toBe("https://www.threads.com/@demo/post/current-card");
+    expect(candidates[0].content).toContain("台股盤勢");
+    expect(candidates[0].hotScore).toBe(603);
   });
 
   it("keeps rendered reaction counts when Threads UI labels and relative age are present", () => {

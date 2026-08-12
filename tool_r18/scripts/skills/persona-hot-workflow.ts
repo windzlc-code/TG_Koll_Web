@@ -8,6 +8,7 @@ import {
   cleanSentimentCandidateContent,
   downloadCandidateMedia,
   fetchSentimentHotCandidates,
+  getSentimentHotGlobalPoolStat,
   listSentimentHotCandidatePoolStats,
   prepareSentimentHotKeywords,
   refreshSentimentSourceMetrics,
@@ -35,6 +36,7 @@ type FetchHotCandidatesInput = {
   recordShown?: boolean;
   /** Test-only mode: count only candidates returned by this live search run. */
   liveOnly?: boolean;
+  sourcePolicy?: "reader_first" | "reader_only" | "authenticated_only";
   memorySummaries?: string[];
   keywords?: string[];
   /** Authoritative control-plane snapshot. When present, never read the worker's archive copy. */
@@ -177,6 +179,7 @@ export async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     freshnessPolicy: input.freshnessPolicy === "strict" ? "strict" : "legacy",
     recordShown: input.recordShown !== false,
     liveOnly: input.liveOnly === true,
+    sourcePolicy: input.sourcePolicy,
   } as Parameters<typeof fetchSentimentHotCandidates>[0]);
   return {
     ok: true,
@@ -366,7 +369,7 @@ async function main() {
     const requestedIds = new Set((input.archiveIds || []).map((id) => String(id || "").trim()).filter(Boolean));
     const archives = (await listPersonaArchives()).filter((archive) => requestedIds.size === 0 || requestedIds.has(archive.id));
     const pools = requestedIds.size > 0 && archives.length === 0 ? [] : listSentimentHotCandidatePoolStats(archives);
-    await printJsonAndExit({ ok: true, pools });
+    await printJsonAndExit({ ok: true, pools, globalPool: getSentimentHotGlobalPoolStat() });
   }
   if (input.action === "import-hot-candidates") {
     await printJsonAndExit(await importHotCandidates(input));

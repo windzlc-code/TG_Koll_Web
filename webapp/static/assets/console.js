@@ -14754,7 +14754,7 @@ function renderSimpleFlowModule(moduleId) {
   const publishSelectionA11yAttrs = publishSelectionItems.length
     ? `aria-controls="publishMobileSelectionStrip" aria-expanded="${publishSelectionExpanded ? "true" : "false"}"`
     : "";
-  const actionHtml = moduleId === "automation" || ["automation_tasks", "publish_history"].includes(publishModeForAction) ? "" : `<div class="command-actions ${moduleId === "publishing" ? `publish-command-actions${publishSelectionExpanded ? " is-selection-expanded" : ""}` : ""}">${moduleId === "publishing" ? renderPublishMobileSelectionStrip(selectedPersona(), publishModeForAction, publishSelectionExpanded) : ""}${moduleId === "publishing" && publishSelectionItems.length ? `<button id="clearPublishMobileSelectionEdit" type="button" class="publish-mobile-selection-clear" title="清空选择" aria-label="清空选择" aria-hidden="${publishSelectionExpanded ? "false" : "true"}">${renderClearSelectionIcon()}</button>` : ""}<button id="executeSimpleFlow" type="button" class="primary" aria-busy="${actionBusy ? "true" : "false"}" ${publishSelectionA11yAttrs} ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${(state.simpleFlowPending || actionBlocked) ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(moduleId === "publishing" ? "任务执行中" : `${actionLabel}中`, true, actionBusyStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && !mobilePublishingTaskPending && dailyPublishIsLocked() ? "今日任务已锁定" : esc(actionLabel)))}${publishSelectionBadge}</button>${moduleId === "publishing" && publishSelectionItems.length ? `<button id="cancelPublishMobileSelectionEdit" type="button" class="publish-mobile-selection-cancel" aria-hidden="${publishSelectionExpanded ? "false" : "true"}">取消</button>` : ""}</div>`;
+  const actionHtml = moduleId === "automation" || ["automation_tasks", "publish_history"].includes(publishModeForAction) ? "" : `<div class="command-actions ${moduleId === "publishing" ? `publish-command-actions${publishSelectionExpanded ? " is-selection-expanded" : ""}` : ""}">${moduleId === "publishing" ? renderPublishMobileSelectionStrip(selectedPersona(), publishModeForAction, publishSelectionExpanded) : ""}${moduleId === "publishing" && publishSelectionItems.length ? `<button id="clearPublishMobileSelectionEdit" type="button" class="publish-mobile-selection-clear" title="清空选择" aria-label="清空选择" aria-hidden="${publishSelectionExpanded ? "false" : "true"}">${renderClearSelectionIcon()}</button>` : ""}<button id="executeSimpleFlow" type="button" class="primary${moduleId === "publishing" ? " persona-gradient-outline-action" : ""}" aria-busy="${actionBusy ? "true" : "false"}" ${publishSelectionA11yAttrs} ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${(state.simpleFlowPending || actionBlocked) ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(moduleId === "publishing" ? "任务执行中" : `${actionLabel}中`, true, actionBusyStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && !mobilePublishingTaskPending && dailyPublishIsLocked() ? "今日任务已锁定" : esc(actionLabel)))}${publishSelectionBadge}</button>${moduleId === "publishing" && publishSelectionItems.length ? `<button id="cancelPublishMobileSelectionEdit" type="button" class="publish-mobile-selection-cancel" aria-hidden="${publishSelectionExpanded ? "false" : "true"}">取消</button>` : ""}</div>`;
   $("moduleBody").innerHTML = `
     ${body}
     ${actionHtml}
@@ -21132,7 +21132,10 @@ async function fetchPersonaHotCandidates(refresh = false) {
         writing_locale: PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.writingLocale || ""))
           ? String(form.writingLocale)
           : PERSONA_DEFAULT_WRITING_LOCALE,
-        freshness_days: 7,
+        // Keep the source live and the 500 heat floor strict, but do not
+        // discard otherwise qualified real posts solely because they are
+        // older than seven days. The earlier ten-result path was age-unbounded.
+        freshness_days: 0,
         freshness_policy: "strict",
       }),
     }, 15000);
@@ -25760,7 +25763,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
               <button type="button" class="unified-action-icon-button" data-persona-exit-draft-edit title="退出编辑" aria-label="退出编辑">${renderCloseIcon()}</button>
             </div>
             <button type="button" class="publish-mobile-selection-cancel persona-draft-save-cancel" data-persona-cancel-draft-edit aria-hidden="true">取消</button>
-            <button type="button" class="primary persona-draft-global-save-button" data-persona-create-post aria-expanded="false">保存修改</button>
+            <button type="button" class="primary persona-draft-global-save-button persona-gradient-outline-action" data-persona-create-post aria-expanded="false">保存修改</button>
           </div>
         ` : ""}
       </div>`;
@@ -25966,7 +25969,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         ${personaPublishPreview(selectedPost)}
         ${renderUploadDropzone("personaPublishFiles", { label: "任务素材", hint: publishHint || "拖动图片或视频到这里，或点击选择。" })}
         <div class="row-actions">
-          <button type="button" class="primary" data-persona-publish-submit ${dailyPublishActionAttrs()} ${(publishCanSubmit && selectedPost && !publishBusy) ? "" : "disabled"}>${dailyPublishIsLocked() ? "今日任务已锁定" : (publishWaitsForManualLogin ? "等待人工验证" : (publishBusy ? renderBusyButtonContent("任务执行中", true, publishBusyStartedAt) : "执行任务"))}</button>
+          <button type="button" class="primary persona-gradient-outline-action" data-persona-publish-submit ${dailyPublishActionAttrs()} ${(publishCanSubmit && selectedPost && !publishBusy) ? "" : "disabled"}>${dailyPublishIsLocked() ? "今日任务已锁定" : (publishWaitsForManualLogin ? "等待人工验证" : (publishBusy ? renderBusyButtonContent("任务执行中", true, publishBusyStartedAt) : "执行任务"))}</button>
         </div>
         <div id="personaPublishResult">${publishResult || renderModuleEmptyState({
           icon: "task",
@@ -27531,8 +27534,66 @@ function accountProxyBindingChanged(originalProxyId = "", selectedProxyId = "") 
   return String(originalProxyId || "").trim() !== String(selectedProxyId || "").trim();
 }
 
+const ACCOUNT_PROXY_ISO_COUNTRY_CODES = `
+  AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ
+  CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR
+  GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP
+  KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT
+  MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW
+  SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG
+  UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW
+`.trim().split(/\s+/);
+
+function accountProxyCountryKey(value = "") {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function buildAccountProxyCountryNames() {
+  const names = new Map();
+  let chineseNames = null;
+  let englishNames = null;
+  try {
+    chineseNames = new Intl.DisplayNames(["zh-CN"], { type: "region" });
+    englishNames = new Intl.DisplayNames(["en"], { type: "region" });
+  } catch (_) {
+    // The explicit aliases below keep the currently supported regions localized.
+  }
+  ACCOUNT_PROXY_ISO_COUNTRY_CODES.forEach((code) => {
+    const chinese = code === "TW" ? "中国台湾" : String(chineseNames?.of(code) || code);
+    const entry = { code, label: chinese };
+    [code, chinese, englishNames?.of(code)].filter(Boolean).forEach((name) => names.set(accountProxyCountryKey(name), entry));
+  });
+  [
+    [["spain", "esp", "españa", "西班牙"], "ES", "西班牙"],
+    [["taiwan", "tw", "台湾", "台灣", "中国台湾", "中國台灣"], "TW", "中国台湾"],
+    [["united states", "united states of america", "usa", "us", "美国", "美國"], "US", "美国"],
+  ].forEach(([aliases, code, label]) => aliases.forEach((alias) => names.set(accountProxyCountryKey(alias), { code, label })));
+  return names;
+}
+
+const ACCOUNT_PROXY_COUNTRY_NAMES = buildAccountProxyCountryNames();
+
+function accountProxyCountry(proxyOrCountry = {}, countryCode = "") {
+  const proxy = proxyOrCountry && typeof proxyOrCountry === "object" ? proxyOrCountry : {};
+  const rawCountry = proxyOrCountry && typeof proxyOrCountry === "object"
+    ? String(proxy.country || "").trim()
+    : String(proxyOrCountry || "").trim();
+  const rawCode = proxyOrCountry && typeof proxyOrCountry === "object"
+    ? String(proxy.country_code || "").trim()
+    : String(countryCode || "").trim();
+  return ACCOUNT_PROXY_COUNTRY_NAMES.get(accountProxyCountryKey(rawCode))
+    || ACCOUNT_PROXY_COUNTRY_NAMES.get(accountProxyCountryKey(rawCountry))
+    || { code: rawCode.toUpperCase() || rawCountry.slice(0, 3).toUpperCase() || "GL", label: rawCountry || rawCode || "待识别" };
+}
+
 function systemProxyPoolLocation(proxy = {}) {
-  return [proxy.country, proxy.region, proxy.city]
+  return [accountProxyCountry(proxy).label, proxy.region, proxy.city]
     .map((value) => String(value || "").trim())
     .filter(Boolean)
     .join(" · ") || "待识别";
@@ -27563,27 +27624,462 @@ function accountProxyPurchasePlaceholderHtml() {
   </section>`;
 }
 
-function openProxyPurchaseWindow() {
-  const purchaseUrl = "/proxy-purchase";
-  const purchaseWindow = window.open("about:blank", "_blank");
-  if (purchaseWindow) {
-    purchaseWindow.opener = null;
-    purchaseWindow.location.replace(purchaseUrl);
+function accountProxyPurchaseEmbeddedHtml() {
+  return `<section class="account-proxy-purchase-embedded" data-account-proxy-purchase-view aria-label="专属代理 IP 购买">
+    <div class="account-proxy-purchase-embedded-head">
+      <button type="button" data-account-proxy-purchase-back aria-label="返回代理列表">← <span>返回代理列表</span></button>
+      <span data-account-proxy-purchase-sync>正在同步</span>
+    </div>
+    <form class="account-proxy-purchase-form" data-account-proxy-purchase-form novalidate>
+      <div class="account-proxy-purchase-alert" data-account-proxy-purchase-alert role="alert" aria-live="assertive" hidden></div>
+      <section class="account-proxy-purchase-product" aria-label="固定代理规格">
+        <div><span>代理产品</span><strong data-account-proxy-product-name>静态住宅代理</strong></div>
+        <small>产品和套餐由平台固定配置，用户只需选择地区。</small>
+      </section>
+      <label class="account-proxy-purchase-field">
+        <span>代理地区</span>
+        <select data-account-proxy-purchase-country required disabled>
+          <option value="">正在加载可购买地区...</option>
+        </select>
+        <small>地区和库存来自供应商当前可购买选项</small>
+      </label>
+      <dl class="account-proxy-purchase-specs" aria-label="订单规格">
+        <div><dt>IP 类型</dt><dd data-account-proxy-product-ip>标准 IPv4</dd></div>
+        <div><dt>ISP</dt><dd data-account-proxy-product-isp>按地区自动匹配</dd></div>
+        <div><dt>数量</dt><dd data-account-proxy-product-quantity>1 个</dd></div>
+        <div><dt>周期</dt><dd data-account-proxy-product-period>1 个月</dd></div>
+      </dl>
+      <label class="account-proxy-purchase-renewal">
+        <span><strong>平台托管自动续费</strong><small>到期前检查现金背书点余额，余额足够时才续费</small></span>
+        <input type="checkbox" data-account-proxy-purchase-renewal>
+        <i aria-hidden="true"></i>
+      </label>
+      <section class="account-proxy-purchase-quote" aria-live="polite">
+        <div><span>本次应付</span><strong data-account-proxy-quote-points>—</strong><small>算力点</small></div>
+        <div><span>现金背书点余额</span><strong data-account-proxy-cash-balance>—</strong></div>
+        <p data-account-proxy-quote-meta>选择地区后获取实时价格</p>
+      </section>
+      <button class="account-proxy-purchase-submit" type="submit" data-account-proxy-purchase-submit disabled>
+        <span data-account-proxy-purchase-submit-text>等待实时报价</span><b aria-hidden="true">→</b>
+      </button>
+      <section class="account-proxy-purchase-status" data-account-proxy-purchase-status aria-live="polite" hidden>
+        <span aria-hidden="true"></span><div><strong data-account-proxy-order-title>订单已受理</strong><p data-account-proxy-order-message></p></div>
+      </section>
+    </form>
+  </section>`;
+}
+
+const ACCOUNT_PROXY_PURCHASE_PENDING_KEY = "vecto.proxyPurchase.pending.v1";
+
+function accountProxyPurchaseErrorMessage(error = {}, fallback = "请求失败，请稍后重试") {
+  const detail = error?.detail;
+  if (Array.isArray(detail)) return detail.map((item) => item?.msg || String(item)).join("；");
+  if (detail && typeof detail === "object") return String(detail.message || detail.detail || fallback);
+  return String(detail || error?.message || fallback);
+}
+
+function accountProxyPurchasePendingRead() {
+  try {
+    const pending = JSON.parse(sessionStorage.getItem(ACCOUNT_PROXY_PURCHASE_PENDING_KEY) || "null");
+    return pending?.quoteId && pending?.idempotencyKey ? pending : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function accountProxyPurchasePendingWrite(pending = {}) {
+  try { sessionStorage.setItem(ACCOUNT_PROXY_PURCHASE_PENDING_KEY, JSON.stringify(pending)); } catch (_) {}
+  return pending;
+}
+
+function accountProxyPurchasePendingClear() {
+  try { sessionStorage.removeItem(ACCOUNT_PROXY_PURCHASE_PENDING_KEY); } catch (_) {}
+}
+
+function accountProxyPurchasePendingEnsure(quote = {}) {
+  const existing = accountProxyPurchasePendingRead();
+  if (existing?.quoteId === quote?.id) return existing;
+  return accountProxyPurchasePendingWrite({
+    quoteId: String(quote?.id || ""),
+    idempotencyKey: globalThis.crypto?.randomUUID?.() || `proxy-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    createdAt: Date.now(),
+    submitted: false,
+  });
+}
+
+function accountProxyPurchaseElement(view, selector) {
+  return view?.host?.querySelector(`[data-account-proxy-purchase-view] ${selector}`) || null;
+}
+
+function accountProxyPurchaseAlert(view, message = "") {
+  const node = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-alert]");
+  if (!node) return;
+  node.textContent = String(message || "");
+  node.hidden = !message;
+}
+
+function accountProxyPurchaseFormatPoints(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(number) : "—";
+}
+
+function accountProxyPurchaseCountryLabel(region = {}) {
+  const code = String(region?.code || region?.country || "").trim().toUpperCase();
+  if (code === "TW") return "中国台湾";
+  return accountProxyCountry(String(region?.name || code), code).label;
+}
+
+function accountProxyPurchaseAffordable(view, quote = view?.quote) {
+  const balanceUnits = Number(view?.options?.cash_backed_credit_units);
+  const chargeUnits = Number(quote?.charge_units);
+  if (Number.isFinite(balanceUnits) && Number.isFinite(chargeUnits)) return balanceUnits >= chargeUnits;
+  const balancePoints = Number(view?.options?.cash_backed_points);
+  const chargePoints = Number(quote?.charge_points);
+  return !Number.isFinite(balancePoints) || !Number.isFinite(chargePoints) || balancePoints >= chargePoints;
+}
+
+function accountProxyPurchaseSetBusy(view, busy, label = "") {
+  view.busy = Boolean(busy);
+  const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
+  const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
+  const renewal = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-renewal]");
+  if (submit) submit.disabled = view.busy || !view.quote || !accountProxyPurchaseAffordable(view);
+  if (select) select.disabled = view.busy || !view.options?.configured || !view.options?.live_purchasing_enabled;
+  if (renewal) renewal.disabled = view.busy;
+  if (label) {
+    const text = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit-text]");
+    if (text) text.textContent = label;
+  }
+}
+
+function accountProxyPurchaseClearQuote(view, message = "选择地区后获取实时价格") {
+  view.quote = null;
+  const points = accountProxyPurchaseElement(view, "[data-account-proxy-quote-points]");
+  const meta = accountProxyPurchaseElement(view, "[data-account-proxy-quote-meta]");
+  const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
+  const text = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit-text]");
+  if (points) points.textContent = "—";
+  if (meta) meta.textContent = message;
+  if (text) text.textContent = "等待实时报价";
+  if (submit) submit.disabled = true;
+}
+
+function accountProxyPurchaseRenderOptions(view, payload = {}) {
+  view.options = payload;
+  const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
+  const regions = Array.isArray(payload?.regions) ? payload.regions : [];
+  if (select) {
+    select.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = regions.length ? "请选择代理地区" : "暂无可购买地区";
+    select.append(placeholder);
+    regions.forEach((region) => {
+      const option = document.createElement("option");
+      option.value = String(region?.code || "").trim().toUpperCase();
+      option.textContent = accountProxyPurchaseCountryLabel(region);
+      if (option.value) select.append(option);
+    });
+  }
+  const serviceNames = {
+    "static-residential-ipv4": "静态住宅代理",
+    "static-datacenter-ipv4": "数据中心 IPv4 代理",
+    "datacenter-ipv4": "数据中心 IPv4 代理",
+    "rotating-residential": "动态住宅代理",
+    "rotating-mobile": "动态移动代理",
+  };
+  const serviceId = String(payload?.service_id || "static-residential-ipv4");
+  const periodMonths = Math.max(1, Number(payload?.default_period?.value || 1));
+  const mappings = [
+    ["[data-account-proxy-product-name]", serviceNames[serviceId] || "专属代理 IP"],
+    ["[data-account-proxy-product-ip]", `${payload?.is_unused_proxy ? "全新" : "标准"} ${String(payload?.ip_version || "IPv4")}`],
+    ["[data-account-proxy-product-isp]", payload?.isp_managed ? "按地区自动匹配" : "供应商自动匹配"],
+    ["[data-account-proxy-product-quantity]", `${Math.max(1, Number(payload?.quantity || 1))} 个`],
+    ["[data-account-proxy-product-period]", `${periodMonths} 个月`],
+    ["[data-account-proxy-cash-balance]", accountProxyPurchaseFormatPoints(payload?.cash_backed_points)],
+  ];
+  mappings.forEach(([selector, value]) => {
+    const node = accountProxyPurchaseElement(view, selector);
+    if (node) node.textContent = value;
+  });
+  const ready = Boolean(payload?.configured && payload?.live_purchasing_enabled && regions.length);
+  if (select) select.disabled = !ready;
+  const sync = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-sync]");
+  if (sync) {
+    sync.textContent = ready ? "实时价格已连接" : "当前不可购买";
+    sync.dataset.tone = ready ? "success" : "error";
+  }
+  if (!ready) {
+    accountProxyPurchaseAlert(view, "代理购买服务尚未开放，请联系管理员完成供应商和价格配置。");
+  }
+}
+
+async function accountProxyPurchaseRefreshQuote(view) {
+  const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
+  const renewal = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-renewal]");
+  const country = String(select?.value || "").trim().toUpperCase();
+  const requestSeq = ++view.quoteSeq;
+  accountProxyPurchaseAlert(view, "");
+  if (!country) {
+    accountProxyPurchaseClearQuote(view);
+    return;
+  }
+  accountProxyPurchaseClearQuote(view, "正在获取供应商实时价格...");
+  if (select) select.disabled = true;
+  try {
+    const payload = await api("/api/proxy-purchases/quotes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ country, auto_renew: Boolean(renewal?.checked) }),
+    });
+    if (view.closed || requestSeq !== view.quoteSeq) return;
+    const quote = payload?.quote;
+    if (!quote?.id) throw { detail: "供应商没有返回有效报价" };
+    view.quote = quote;
+    accountProxyPurchasePendingEnsure(quote);
+    const points = accountProxyPurchaseElement(view, "[data-account-proxy-quote-points]");
+    if (points) points.textContent = accountProxyPurchaseFormatPoints(quote.charge_points);
+    const rawExpiry = quote.expires_at;
+    const expiry = new Date(typeof rawExpiry === "number" || /^\d+(?:\.\d+)?$/.test(String(rawExpiry || ""))
+      ? Number(rawExpiry) * 1000
+      : rawExpiry);
+    const expiryText = Number.isNaN(expiry.getTime()) ? "短时间内有效" : `${expiry.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 前有效`;
+    const region = { code: quote.country || country, name: quote.country_name || "" };
+    const periodMonths = Math.max(1, Number(quote?.period?.value || quote?.period || 1));
+    const meta = accountProxyPurchaseElement(view, "[data-account-proxy-quote-meta]");
+    if (meta) meta.textContent = `${accountProxyPurchaseCountryLabel(region)} · ${periodMonths} 个月 · 数量 ${quote.quantity || 1} · ${expiryText}`;
+    const affordable = accountProxyPurchaseAffordable(view, quote);
+    const submitText = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit-text]");
+    const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
+    if (submitText) submitText.textContent = affordable ? "确认并使用算力点购买" : "现金背书点余额不足";
+    if (submit) submit.disabled = !affordable;
+    if (!affordable) accountProxyPurchaseAlert(view, "现金背书点余额不足；免费赠送点不能用于供应商采购。");
+  } catch (error) {
+    if (view.closed || requestSeq !== view.quoteSeq) return;
+    accountProxyPurchaseClearQuote(view, "实时报价获取失败");
+    accountProxyPurchaseAlert(view, accountProxyPurchaseErrorMessage(error, "无法获取实时报价"));
+  } finally {
+    if (!view.closed && requestSeq === view.quoteSeq && select) {
+      select.disabled = !view.options?.configured || !view.options?.live_purchasing_enabled;
+    }
+  }
+}
+
+function accountProxyPurchaseSchedulePoll(view) {
+  window.clearTimeout(view.pollTimer);
+  const delay = Math.min(3000 * (2 ** view.pollAttempt), 60000);
+  view.pollAttempt = Math.min(view.pollAttempt + 1, 6);
+  view.pollTimer = window.setTimeout(() => accountProxyPurchasePollOrder(view), document.hidden ? Math.max(delay, 30000) : delay);
+}
+
+function accountProxyPurchaseRenderOrder(view, order = {}) {
+  if (!order?.id || view.closed) return;
+  view.order = order;
+  const panel = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-status]");
+  const title = accountProxyPurchaseElement(view, "[data-account-proxy-order-title]");
+  const message = accountProxyPurchaseElement(view, "[data-account-proxy-order-message]");
+  const status = String(order.status || "pending").toLowerCase();
+  const complete = ["active", "completed", "settled", "success"].includes(status);
+  const failed = ["failed", "cancelled", "canceled", "released", "refunded"].includes(status);
+  const manual = status === "provider_unknown_no_reference"
+    || (status === "provider_unknown" && !order.provider_order_id)
+    || String(order.error_code || "").toLowerCase() === "provider_unknown_no_reference";
+  if (panel) {
+    panel.hidden = false;
+    panel.dataset.tone = complete ? "success" : failed ? "error" : manual ? "warning" : "pending";
+  }
+  if (title) title.textContent = complete
+    ? "购买成功，代理已加入列表"
+    : failed ? "订单未能完成" : manual ? "订单正在人工核验" : "订单已受理，正在配置";
+  if (message) message.textContent = String(order.message || (complete
+    ? "返回代理列表后即可选择使用。"
+    : failed ? "预占算力点将根据订单结果自动释放。"
+      : manual ? "请勿重复购买，管理员核验后会更新结果。" : "配置完成后会自动更新，无需重复提交。"));
+  if (complete || failed) {
+    accountProxyPurchasePendingClear();
+    window.clearTimeout(view.pollTimer);
+    view.quote = null;
+    accountProxyPurchaseSetBusy(view, false, complete ? "购买已完成" : "请重新获取报价");
+    const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
+    if (submit) submit.disabled = true;
+    if (complete) {
+      const sync = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-sync]");
+      if (sync) {
+        sync.textContent = "购买成功 · 已加入列表";
+        sync.dataset.tone = "success";
+      }
+      void fetchSocialDataShared({ force: true });
+    }
+    return;
+  }
+  accountProxyPurchaseSetBusy(view, true, manual ? "订单人工核验中" : "订单处理中，请勿重复提交");
+  if (!manual) accountProxyPurchaseSchedulePoll(view);
+}
+
+async function accountProxyPurchasePollOrder(view) {
+  if (!view?.order?.id || view.closed) return;
+  try {
+    const payload = await api(`/api/proxy-purchases/orders/${encodeURIComponent(view.order.id)}`);
+    accountProxyPurchaseRenderOrder(view, payload?.order);
+  } catch (error) {
+    const message = accountProxyPurchaseElement(view, "[data-account-proxy-order-message]");
+    if (message) message.textContent = `状态暂时无法刷新：${accountProxyPurchaseErrorMessage(error)}。系统稍后继续重试。`;
+    accountProxyPurchaseSchedulePoll(view);
+  }
+}
+
+async function accountProxyPurchaseCreateOrder(pending = {}) {
+  return api("/api/proxy-purchases/orders", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": pending.idempotencyKey },
+    body: JSON.stringify({ quote_id: pending.quoteId, idempotency_key: pending.idempotencyKey }),
+  });
+}
+
+async function accountProxyPurchaseRecover(view, pending = {}, { replayIfMissing = true } = {}) {
+  accountProxyPurchaseSetBusy(view, true, "正在恢复上次购买结果...");
+  try {
+    const payload = await api(`/api/proxy-purchases/orders/recover?idempotency_key=${encodeURIComponent(pending.idempotencyKey)}`);
+    accountProxyPurchaseRenderOrder(view, payload?.order);
+  } catch (error) {
+    if (Number(error?.status) !== 404 || !replayIfMissing) throw error;
+    const payload = await accountProxyPurchaseCreateOrder(pending);
+    accountProxyPurchaseRenderOrder(view, payload?.order);
+  }
+}
+
+async function accountProxyPurchaseSubmit(view, event) {
+  event.preventDefault();
+  if (view.busy || !view.quote?.id || !accountProxyPurchaseAffordable(view)) return;
+  accountProxyPurchaseAlert(view, "");
+  accountProxyPurchaseSetBusy(view, true, "正在安全预占算力点...");
+  const pending = accountProxyPurchasePendingWrite({ ...accountProxyPurchasePendingEnsure(view.quote), submitted: true });
+  try {
+    const payload = await accountProxyPurchaseCreateOrder(pending);
+    accountProxyPurchaseRenderOrder(view, payload?.order);
+  } catch (error) {
+    const uncertain = error instanceof TypeError || Number(error?.status) >= 500 || !Number.isFinite(Number(error?.status));
+    if (uncertain) {
+      try {
+        await accountProxyPurchaseRecover(view, pending, { replayIfMissing: true });
+        return;
+      } catch (recoveryError) {
+        accountProxyPurchaseSetBusy(view, true, "订单结果待恢复");
+        accountProxyPurchaseAlert(view, `${accountProxyPurchaseErrorMessage(recoveryError, "暂时无法确认订单结果")}。请求已安全保留，请勿重复购买。`);
+        return;
+      }
+    }
+    accountProxyPurchasePendingClear();
+    view.quote = null;
+    accountProxyPurchaseSetBusy(view, false, "请重新获取报价");
+    accountProxyPurchaseAlert(view, accountProxyPurchaseErrorMessage(error, "订单创建失败"));
+  }
+}
+
+async function loadAccountProxyPurchaseForm(modal) {
+  const view = modal?.__accountProxyPurchaseView;
+  const section = view?.host?.querySelector("[data-account-proxy-purchase-view]");
+  if (!view || !section || view.loading) return false;
+  view.loading = true;
+  const sync = section.querySelector("[data-account-proxy-purchase-sync]");
+  if (sync) {
+    sync.textContent = "正在同步";
+    delete sync.dataset.tone;
+  }
+  accountProxyPurchaseAlert(view, "");
+  try {
+    const payload = await api("/api/proxy-purchases/options", { cache: "no-store" });
+    if (modal.__accountProxyPurchaseView !== view || !section.isConnected) return false;
+    accountProxyPurchaseRenderOptions(view, payload);
+    const pending = accountProxyPurchasePendingRead();
+    if (pending?.submitted) {
+      try {
+        await accountProxyPurchaseRecover(view, pending, { replayIfMissing: true });
+      } catch (error) {
+        if (Number(error?.status) >= 400 && Number(error?.status) < 500) accountProxyPurchasePendingClear();
+        accountProxyPurchaseSetBusy(view, false, "重新选择地区报价");
+        accountProxyPurchaseAlert(view, accountProxyPurchaseErrorMessage(error, "上次购买结果无法恢复，请重新获取报价"));
+      }
+    } else if (pending) {
+      accountProxyPurchasePendingClear();
+    }
     return true;
+  } catch (error) {
+    if (modal.__accountProxyPurchaseView !== view || !section.isConnected) return false;
+    accountProxyPurchaseAlert(view, accountProxyPurchaseErrorMessage(error, "代理购买服务加载失败"));
+    if (sync) {
+      sync.textContent = Number(error?.status || 0) === 404 ? "版本未同步" : "连接失败";
+      sync.dataset.tone = "error";
+    }
+    return false;
+  } finally {
+    view.loading = false;
   }
-  const message = "浏览器阻止了购买页面，请允许弹出窗口或点击此处继续。";
-  showMsg("socialMsg", message, false);
-  const socialMsg = document.getElementById("socialMsg");
-  if (socialMsg) {
-    const link = document.createElement("a");
-    link.href = purchaseUrl;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    link.textContent = "打开代理购买页面";
-    link.className = "proxy-purchase-fallback-link";
-    socialMsg.append(document.createTextNode(" "), link);
+}
+
+function closeAccountProxyPurchaseView(modal, { restore = true } = {}) {
+  const view = modal?.__accountProxyPurchaseView;
+  if (!view) return false;
+  view.closed = true;
+  window.clearTimeout(view.pollTimer);
+  if (restore && view.host?.isConnected) {
+    view.host.innerHTML = view.previousHtml;
+    const title = modal.querySelector("#accountProxyPickerTitle");
+    const subtitle = title?.parentElement?.querySelector("p");
+    if (title && view.previousTitle) title.textContent = view.previousTitle;
+    if (subtitle && view.previousSubtitle !== null) subtitle.textContent = view.previousSubtitle;
+    accountProxyPoolFilterOptions(modal, modal.__accountProxyPoolData || {});
+    refreshAccountProxyPickerOptions(modal);
+    void fetchSocialDataShared({ force: true }).then(() => loadAccountProxyPickerPool(modal));
   }
-  return false;
+  if (modal.__cleanup === view.cleanupWrapper) modal.__cleanup = view.previousCleanup;
+  delete modal.__accountProxyPurchaseView;
+  return true;
+}
+
+function openAccountProxyPurchaseView(modal, trigger = null) {
+  if (!modal?.isConnected || modal.__accountProxyPurchaseView) return false;
+  const host = trigger?.closest(".account-proxy-inline-options")
+    || modal.querySelector(".account-proxy-picker-modal .console-modal-content");
+  if (!host) return false;
+  const title = modal.querySelector("#accountProxyPickerTitle");
+  const subtitle = title?.parentElement?.querySelector("p") || null;
+  const previousCleanup = modal.__cleanup;
+  const view = {
+    host,
+    previousHtml: host.innerHTML,
+    previousTitle: title?.textContent || "",
+    previousSubtitle: subtitle?.textContent ?? null,
+    previousCleanup,
+    options: null,
+    quote: null,
+    order: null,
+    quoteSeq: 0,
+    pollTimer: 0,
+    pollAttempt: 0,
+    busy: false,
+    loading: false,
+    closed: false,
+    cleanupWrapper: null,
+  };
+  view.cleanupWrapper = () => {
+    view.closed = true;
+    window.clearTimeout(view.pollTimer);
+    previousCleanup?.();
+  };
+  modal.__accountProxyPurchaseView = view;
+  modal.__cleanup = view.cleanupWrapper;
+  host.innerHTML = accountProxyPurchaseEmbeddedHtml();
+  if (title) title.textContent = "购买专属代理 IP";
+  if (subtitle) subtitle.textContent = "供应商库存与报价实时同步，付款直接扣除现金背书算力点";
+  const form = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-form]");
+  const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
+  const renewal = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-renewal]");
+  form?.addEventListener("submit", (event) => { void accountProxyPurchaseSubmit(view, event); });
+  select?.addEventListener("change", () => { void accountProxyPurchaseRefreshQuote(view); });
+  renewal?.addEventListener("change", () => { void accountProxyPurchaseRefreshQuote(view); });
+  void loadAccountProxyPurchaseForm(modal);
+  return true;
 }
 
 function accountProxyPickerFilters(modal) {
@@ -27602,10 +28098,13 @@ function accountProxyPoolFilterOptions(modal, poolData = {}) {
     const control = modal?.querySelector(`[data-account-proxy-filter="${name}"]`);
     if (!control) return;
     const selected = String(control.value || "");
-    control.innerHTML = `<option value="">${esc(label)}</option>${values.map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join("")}`;
-    control.value = values.includes(selected) ? selected : "";
+    control.innerHTML = `<option value="">${esc(label)}</option>${values.map((value) => `<option value="${esc(value.value)}">${esc(value.label)}</option>`).join("")}`;
+    control.value = values.some((value) => value.value === selected) ? selected : "";
   };
-  select("country", [...new Set(options.map((item) => String(item.country || "").trim()).filter(Boolean))].sort(), "全部地区");
+  const countries = [...new Set(options.map((item) => String(item.country || item.country_code || "").trim()).filter(Boolean))]
+    .map((value) => ({ value, label: accountProxyCountry(value).label }))
+    .sort((left, right) => left.label.localeCompare(right.label, "zh-Hans-CN"));
+  select("country", countries, "全部地区");
 }
 
 function accountProxyPoolMatches(proxy = {}, filters = {}) {
@@ -27621,7 +28120,7 @@ function accountProxyPoolSortOptions(options = [], sort = "time_desc") {
     if (direction === "name_asc") return leftName;
     if (direction === "name_desc") return -leftName;
     if (direction === "country_asc") {
-      const countryOrder = String(left?.country || "").localeCompare(String(right?.country || ""), "zh-Hans-CN");
+      const countryOrder = accountProxyCountry(left).label.localeCompare(accountProxyCountry(right).label, "zh-Hans-CN");
       return countryOrder || leftName;
     }
     if (direction === "health_first") {
@@ -27646,16 +28145,27 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", po
     const proxyId = String(proxy.social_proxy_id || "").trim();
     const selected = proxyId && proxyId === selectedId;
     const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "未填写地址";
-    const country = String(proxy.country_code || proxy.country || "GL").trim().slice(0, 3).toUpperCase() || "GL";
+    const country = accountProxyCountry(proxy).code;
     const healthLabel = String(proxy.health_status || "healthy").toLowerCase() === "healthy" ? "检测可用" : "待检测";
-    const action = selected ? "当前使用" : (proxy.selected ? "切换使用" : "选择使用");
+    const action = selected ? "当前使用" : "选择使用";
+    const boundCount = Math.max(0, Number(proxy.bound_account_count) || 0);
+    const usageTone = boundCount >= 4 ? "danger" : (boundCount >= 3 ? "warning" : (boundCount === 2 ? "notice" : (boundCount === 1 ? "safe" : "idle")));
+    const riskHint = boundCount >= 4
+      ? `已超出建议上限，${boundCount} 个账号共用的关联风险较高，但仍可继续选择`
+      : boundCount === 3
+        ? "已达到 3 个账号的建议上限，但仍可继续选择"
+        : "";
+    const usageHint = riskHint || `${boundCount}/3 个账号正在使用`;
+    const ownershipType = String(proxy.ownership_type || "shared").toLowerCase();
+    const stockLabel = ownershipType === "owned" ? "已购买" : (proxyId ? "已获取" : "可领取");
     return `<article class="proxy-market-mini-card" data-account-proxy-card="${esc(itemId)}" ${selected ? 'aria-current="true"' : ""}>
       <div class="proxy-market-mini-card-head">
         <span class="proxy-market-mini-country">${esc(country)}</span>
-        <span class="proxy-market-mini-stock">${selected ? "已获取" : "可领取"}</span>
+        <span class="proxy-market-mini-card-badges"><span class="proxy-market-mini-usage" data-tone="${esc(usageTone)}" title="${esc(usageHint)}">${boundCount}/3</span><span class="proxy-market-mini-stock">${esc(stockLabel)}</span></span>
       </div>
       <strong>${esc(proxy.name || endpoint)}</strong>
       <span class="proxy-market-mini-location">${esc(endpoint)} · ${esc(systemProxyPoolLocation(proxy))}</span>
+      <span class="proxy-market-mini-risk" data-tone="${esc(usageTone)}">${esc(riskHint)}</span>
       <div class="proxy-market-mini-meta">
         <span>${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
         <span>${esc(proxyProtocol(proxy))}</span>
@@ -27748,6 +28258,32 @@ async function loadAccountProxyPickerPool(modal) {
 async function claimAccountProxyPoolOption(modal, itemId = "") {
   const cleanItemId = String(itemId || "").trim();
   if (!modal?.isConnected || !cleanItemId || modal.dataset.accountProxyClaiming === "true") return false;
+  const existingOption = (Array.isArray(modal.__accountProxyPoolData?.options) ? modal.__accountProxyPoolData.options : [])
+    .find((option) => String(option?.market_item_id || "").trim() === cleanItemId);
+  const existingProxyId = String(existingOption?.social_proxy_id || "").trim();
+  if (existingProxyId) {
+    modal.dataset.accountProxyClaiming = "true";
+    modal.querySelectorAll("[data-account-proxy-market-choice]").forEach((button) => { button.disabled = true; });
+    try {
+      if (String(existingOption?.ownership_type || "").toLowerCase() === "owned"
+        && (!Number(existingOption?.last_check_at) || String(existingOption?.health_status || "pending") !== "healthy")) {
+        const checked = await api(`/api/persona_dashboard/automation/proxies/${encodeURIComponent(existingProxyId)}/check`, { method: "POST" });
+        if (!checked?.check_ok) throw { detail: "已购代理尚未通过真实网络检测，请稍后重试或在代理 IP 页面检查配置。" };
+        await fetchSocialDataShared({ force: true });
+        await loadAccountProxyPickerPool(modal);
+      }
+      updateAccountProxyChoice(modal, existingProxyId);
+      return existingProxyId;
+    } catch (error) {
+      showMsg("socialMsg", error.detail || error.message || "已购代理检测失败", false);
+      return false;
+    } finally {
+      if (modal.isConnected) {
+        delete modal.dataset.accountProxyClaiming;
+        modal.querySelectorAll("[data-account-proxy-market-choice]").forEach((button) => { button.disabled = false; });
+      }
+    }
+  }
   modal.dataset.accountProxyClaiming = "true";
   modal.querySelectorAll("[data-account-proxy-market-choice]").forEach((button) => { button.disabled = true; });
   try {
@@ -27873,6 +28409,7 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
   document.body.appendChild(modal);
   if (selectedProxyId !== originalProxyId) updateAccountProxyChoice(modal, selectedProxyId);
   const close = () => {
+    closeAccountProxyPurchaseView(modal, { restore: false });
     modal.remove();
     return true;
   };
@@ -27891,8 +28428,17 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
       }
       return;
     }
-    if (event.target.closest("[data-account-proxy-purchase-placeholder]")) {
-      openProxyPurchaseWindow();
+    const purchaseTrigger = event.target.closest("[data-account-proxy-purchase-placeholder]");
+    if (purchaseTrigger) {
+      openAccountProxyPurchaseView(modal, purchaseTrigger);
+      return;
+    }
+    if (event.target.closest("[data-account-proxy-purchase-back]")) {
+      closeAccountProxyPurchaseView(modal);
+      return;
+    }
+    if (event.target.closest("[data-account-proxy-purchase-retry]")) {
+      void loadAccountProxyPurchaseForm(modal);
       return;
     }
     const choice = event.target.closest("[data-account-proxy-choice]");
@@ -28475,8 +29021,17 @@ function openAccountPoolEditorModal(options) {
       void claimAccountProxyPoolOption(modal, marketChoice.dataset.accountProxyMarketChoice || "");
       return;
     }
-    if (event.target.closest("[data-account-proxy-purchase-placeholder]")) {
-      openProxyPurchaseWindow();
+    const purchaseTrigger = event.target.closest("[data-account-proxy-purchase-placeholder]");
+    if (purchaseTrigger) {
+      openAccountProxyPurchaseView(modal, purchaseTrigger);
+      return;
+    }
+    if (event.target.closest("[data-account-proxy-purchase-back]")) {
+      closeAccountProxyPurchaseView(modal);
+      return;
+    }
+    if (event.target.closest("[data-account-proxy-purchase-retry]")) {
+      void loadAccountProxyPurchaseForm(modal);
       return;
     }
     const choice = event.target.closest("[data-account-proxy-choice]");

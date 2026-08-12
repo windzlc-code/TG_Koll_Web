@@ -3581,17 +3581,32 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-public-media-card.is-selected:not(.is-modify-source)", self.styles)
         self.assertIn(".persona-public-media-card.is-modify-source", self.styles)
         self.assertIn("animation: none;", self.styles)
-        self.assertIn("#06366f", self.styles)
+        self.assertIn("#326f8e", self.styles)
+        self.assertIn("#2b83ad", self.styles)
         self.assertIn("#12c9e6", self.styles)
-        self.assertIn("var(--media-edit-flow-deep) 34%", self.styles)
+        self.assertIn("var(--media-edit-flow-deep) 26%", self.styles)
+        self.assertIn("var(--media-edit-flow-cyan) 82%", self.styles)
         modify_card = self.styles.split(".persona-public-media-card.is-modify-source {", 1)[1].split("}", 1)[0]
         self.assertIn("box-shadow: none;", modify_card)
+        self.assertIn("var(--media-edit-flow-gradient) border-box;", modify_card)
         self.assertIn("background-size: 100% 100%, 200% 100%;", modify_card)
-        prompt_border = self.styles.split(".persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {", 1)[1].split("}", 1)[0]
+        prompt_border = self.styles.split(
+            ".persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {",
+            1,
+        )[1].split("}", 1)[0]
         self.assertIn("padding: 2px;", prompt_border)
         self.assertIn("background-size: 200% 100%;", prompt_border)
         self.assertIn("background-repeat: repeat-x;", prompt_border)
+        self.assertIn("background: var(--media-edit-flow-gradient);", prompt_border)
         self.assertNotIn("drop-shadow", prompt_border)
+        self.assertNotIn("animation:", prompt_border)
+        self.assertIn(
+            ".persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {\n"
+            "  animation: personaMediaPromptBorderFlow 2.8s linear infinite;",
+            self.styles,
+        )
+        self.assertNotIn("persona-static-flow-action", self.styles)
+        self.assertNotIn("persona-static-flow-action", self.console_script)
         self.assertIn("to { background-position: 0 0, 200% 0; }", self.styles)
         self.assertNotIn("var(--accent-2) 38%, #72d9ee", self.styles)
         self.assertNotIn("linear-gradient(145deg, #0d65c4, #063a79)", self.styles)

@@ -33,6 +33,15 @@
 
         <div id="pageAlert" class="page-alert" role="alert" aria-live="assertive" hidden></div>
 
+        <section class="mapped-product" aria-label="供应商产品配置">
+          <div class="mapped-product-title">
+            <span>供应商映射产品</span>
+            <strong id="productName">静态住宅代理</strong>
+          </div>
+          <strong class="mapped-product-plan" id="productIpVersion">标准 IPv4</strong>
+          <small>产品与套餐由后台按 Proxy-Cheap Setup 配置锁定。</small>
+        </section>
+
         <form id="purchaseForm" novalidate>
           <label class="field">
             <span>代理地区</span>
@@ -41,6 +50,12 @@
             </select>
             <small>地区与供应商当前库存实时同步</small>
           </label>
+
+          <dl class="mapped-order-specs" aria-label="锁定订单参数">
+            <div><dt>ISP</dt><dd id="productIsp">按地区自动匹配</dd></div>
+            <div><dt>数量</dt><dd id="productQuantity">1 个</dd></div>
+            <div><dt>周期</dt><dd id="productPeriod">1 个月</dd></div>
+          </dl>
 
           <label class="renewal-row" for="autoRenew">
             <span><strong>平台托管自动续费</strong><small>到期前先检查现金背书点余额，足够时才续费</small></span>

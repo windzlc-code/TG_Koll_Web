@@ -14633,7 +14633,8 @@ def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: i
         if _normalize_hot_workflow_text(item)
     ]
     warning_text = " ".join(normalized).lower()
-    keyword_failure = "热点关键词" in warning_text or "热点搜索策略" in warning_text
+    keyword_fallback_active = "已切换精简人设主题策略" in warning_text
+    keyword_failure = ("热点关键词" in warning_text or "热点搜索策略" in warning_text) and not keyword_fallback_active
     keyword_timed_out = keyword_failure and any(token in warning_text for token in ("超时", "timeout", "timed out"))
     keyword_invalid = keyword_failure and any(token in warning_text for token in (
         "未返回符合规范", "未返回可用", "策略不可用", "关键词不可用",
@@ -14749,20 +14750,28 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "archiveId": clean_id,
             "prompt": str(payload.prompt or "").strip(),
             "refresh": bool(payload.refresh),
-            "limit": limit,
+            # Ask the old host for an overscan batch. It persists the complete
+            # qualified pool; this endpoint still returns only the requested
+            # display count below.
+            "limit": min(20, max(limit + 2, 12)),
             "searchMode": search_mode,
             "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
             "freshnessDays": freshness_days,
             "freshnessPolicy": "strict" if str(payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
             "keywords": keywords,
             "recordShown": False,
-            "liveOnly": True,
+            # The old collector owns both persona/global pools. Pool-backed
+            # requests read and replenish there; the new application only
+            # triggers the job and renders the returned candidates.
+            "liveOnly": False,
         },
-        timeout_seconds=32,
+        # A healthy account normally returns within 20-30 seconds. Keep enough
+        # headroom for the worker's single sparse-result account rotation.
+        timeout_seconds=65,
     )
 
-    # Hot capture is public-page only. Never expose or infer account Cookie
-    # health through this route, even if an older worker returns that field.
+    # Collector-account health is an old-host implementation detail. Never
+    # expose or infer account Cookie state through the product-facing route.
     cookie_rows: list[dict[str, Any]] = []
 
     candidates = [
@@ -14772,7 +14781,9 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             for item in (result.get("candidates") if isinstance(result.get("candidates"), list) else [])
         )
         if normalized
-    ][:limit]
+    ]
+    candidates.sort(key=lambda item: _number(item.get("hot_score"), 0), reverse=True)
+    candidates = candidates[:limit]
     return {
         "ok": True,
         "archive_name": str(result.get("archiveName") or result.get("archive_name") or "").strip(),

@@ -97,6 +97,9 @@ boundary=(
   webapp/__init__.py
   webapp/worker_server.py
   webapp/remote_fetch_protocol.py
+  webapp/collector_accounts.py
+  webapp/collector_db.py
+  webapp/collector_vault.py
   tool_r18/src
   tool_r18/scripts/skills/persona-hot-workflow.ts
   tool_r18/vendor/opinx-sentiment
@@ -366,6 +369,13 @@ run_worker() {
     # /worker-runtime/current without recreating this container.
     -e "TOOL_R18_SENTIMENT_CONFIG_PATH=$execution_runtime_path/sentiment-opinx/sentiment-config.json"
     -e TG_FETCH_WORKER_KEYS_FILE=/data/internal/remote-fetch-keys.json
+    -e COLLECTOR_DB_PATH=/collector/collector.db
+    -e COLLECTOR_VAULT_KEY_FILE=/collector/collector_vault.key
+    -e TG_COLLECTOR_POOL_REQUIRED=1
+    -e TG_HOT_POOL_REFILL_SECONDS=21600
+    -e TG_HOT_DISABLE_KEYWORD_MODEL=1
+    -e TG_HOT_READER_INCLUDE_INSTAGRAM=0
+    -v /opt/tg-koll-collector-admin-data/collector:/collector:rw
   )
   if [[ -f "$runtime_root/current/profiles/threads/current/cookies.sqlite" ]]; then
     args+=(-e "PERSONA_DASHBOARD_THREADS_PROFILE_DIR=/worker-runtime/current/profiles/threads/current")
@@ -414,6 +424,17 @@ runtime_snapshot_container="/worker-runtime/current/tool_r18_runtime"
 [[ -d "$runtime_snapshot_host" ]] || die "pinned runtime snapshot is missing"
 [[ -f "$data_root/internal/remote-fetch-keys.json" ]] || die "worker key file is missing"
 [[ -d "$deps_root" ]] || die "worker node_modules mount is missing"
+
+# Candidate pools belong to the old collector and must survive code/runtime
+# releases. Only the authoritative persona/config files follow the versioned
+# snapshot; candidate shards, Reader cache and scheduler state remain here.
+stable_hot_runtime="$data_root/collector-hot-runtime"
+install -d -m 700 "$stable_hot_runtime/sentiment-opinx"
+for relative in persona_archives.json persona_archives_cache.json persona_groups.json persona_memory.json; do
+  ln -sfn "$runtime_snapshot_container/$relative" "$stable_hot_runtime/$relative"
+done
+ln -sfn "$runtime_snapshot_container/sentiment-opinx/sentiment-config.json" \
+  "$stable_hot_runtime/sentiment-opinx/sentiment-config.json"
 
 if tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
   die "unsafe archive member"
@@ -485,14 +506,14 @@ podman rename "$container" "$rollback"
 
 production_execution_container="/data/execution-runtime-releases/$release_id/tool_r18_runtime"
 if ! run_worker "$container" "$release_dir" "$image" 8092 \
-  /data/remote_fetch_worker/jobs.db "$production_execution_container" "$runtime_release_rel" >/dev/null; then
+  /data/remote_fetch_worker/jobs.db /data/collector-hot-runtime "$runtime_release_rel" >/dev/null; then
   rollback_container
   die "new worker failed to start; previous container restored"
 fi
 
 if ! wait_health 8092 || \
    ! hmac_canary "$container" release >/dev/null || \
-   ! execution_runtime_canary "$container" "$production_execution_container" "$runtime_snapshot_container" >/dev/null; then
+   ! execution_runtime_canary "$container" /data/collector-hot-runtime "$runtime_snapshot_container" >/dev/null; then
   podman logs --tail 100 "$container" >&2 || true
   rollback_container
   die "new worker failed health/HMAC canary; previous container restored"

@@ -5,7 +5,7 @@ import tls from "node:tls";
 import { resolveRuntimeFile } from "@/runtime/node/data-dir";
 import type { DramaSetup } from "@/types/drama";
 
-type LocaleInfo = {
+export type LocaleInfo = {
   label: string;
   hl: string;
   gl: string;
@@ -15,6 +15,24 @@ type LocaleInfo = {
 };
 
 const CACHE_FILE = "persona-trend-intel-cache.json";
+const TREND_CACHE_TTL_MS = 20 * 60 * 1000;
+const TAIWAN_PREFERRED_NEWS_DOMAINS = [
+  "money.udn.com",
+  "finance.ettoday.net",
+  "house.ettoday.net",
+  "chinatimes.com",
+  "ctee.com.tw",
+  "news.housefun.com.tw",
+  "home.housetube.tw",
+  "urbanrenewal.wealth.com.tw",
+  "businessinsider.tw",
+  "news.pts.org.tw",
+  "estate.ltn.com.tw",
+  "moneyweekly.com.tw",
+  "bella.tw",
+  "94m.com.tw",
+  "miaoli.gov.tw",
+] as const;
 const SHANGHAI_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Shanghai",
   year: "numeric",
@@ -101,12 +119,69 @@ function readCache(): Record<string, { updatedAt: string; text: string }> {
 
 function writeCache(cache: Record<string, { updatedAt: string; text: string }>) {
   try {
-    const today = todayKey();
-    const cleaned = Object.fromEntries(Object.entries(cache).filter(([, value]) => value.updatedAt?.startsWith(today)));
+    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+    const cleaned = Object.fromEntries(Object.entries(cache).filter(([, value]) => {
+      const updatedAt = Date.parse(value.updatedAt || "");
+      return Number.isFinite(updatedAt) && updatedAt >= cutoff;
+    }));
     fs.writeFileSync(resolveRuntimeFile(CACHE_FILE), JSON.stringify(cleaned, null, 2), "utf8");
   } catch {
     // Cache failure should never block post generation.
   }
+}
+
+function cacheEntryIsFresh(entry: { updatedAt: string; text: string } | undefined): boolean {
+  if (!entry?.text) return false;
+  const updatedAt = Date.parse(entry.updatedAt || "");
+  return Number.isFinite(updatedAt) && Date.now() - updatedAt < TREND_CACHE_TTL_MS;
+}
+
+function uniqueHeadlines(rows: string[]): string[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = row.replace(/[\s，。；;：:、\-_/（）()]/g, "").toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function topicMatchNeedles(topics: string[]): string[] {
+  const needles = topics.flatMap((topic) => {
+    const clean = normalizeTopic(topic).replace(/\s+/g, "");
+    if (!clean) return [];
+    const parts = clean.split(/[|,/，、；;：:\s]+/).filter((part) => part.length >= 2);
+    const semanticAliases: Record<string, string[]> = {
+      房市: ["房地產", "不動產", "住宅", "房價", "買房", "租屋", "都更", "建案", "建商", "地產"],
+      不動產: ["房市", "房地產", "住宅", "房價", "土地", "租屋", "都更", "建案", "建商", "地產"],
+      房地產: ["房市", "不動產", "住宅", "房價", "土地", "租屋", "都更", "建案", "建商", "地產"],
+      財經: ["金融", "經濟", "股市", "薪資", "利率", "央行", "投資", "產業"],
+    };
+    const aliases = Object.entries(semanticAliases)
+      .filter(([key]) => clean.includes(key))
+      .flatMap(([, values]) => values);
+    if (clean.length <= 4) return [clean, ...parts, ...aliases];
+    const trigrams = Array.from({ length: Math.max(0, clean.length - 2) }, (_, index) => clean.slice(index, index + 3));
+    return [clean, ...parts, ...aliases, ...trigrams];
+  });
+  return Array.from(new Set(needles.map((needle) => needle.toLowerCase()).filter(Boolean)));
+}
+
+export function headlineMatchesPersonaTopics(headline: string, topics: string[]): boolean {
+  const normalizedHeadline = String(headline || "").replace(/\s+/g, "").toLowerCase();
+  if (!normalizedHeadline) return false;
+  const needles = topicMatchNeedles(topics);
+  return needles.some((needle) => normalizedHeadline.includes(needle));
+}
+
+export function buildPreferredNewsQueries(topic: string, locale: LocaleInfo): string[] {
+  const cleanTopic = normalizeTopic(topic);
+  if (!cleanTopic || locale.label !== "台灣") return [];
+  const groups = [
+    TAIWAN_PREFERRED_NEWS_DOMAINS.slice(0, 7),
+    TAIWAN_PREFERRED_NEWS_DOMAINS.slice(7),
+  ];
+  return groups.map((domains) => `${cleanTopic} (${domains.map((domain) => `site:${domain}`).join(" OR ")}) when:7d`);
 }
 
 async function fetchGoogleNewsRss(query: string, locale: LocaleInfo, timeoutMs: number): Promise<string[]> {
@@ -192,7 +267,7 @@ async function fetchTextViaProxy(url: URL, timeoutMs: number): Promise<string> {
       socket.write(`CONNECT ${url.hostname}:443 HTTP/1.1\r\nHost: ${url.hostname}:443\r\n${auth}\r\n`);
     });
 
-    socket.once("error", () => finish(""));
+    socket.on("error", () => finish(""));
     socket.once("data", (chunk) => {
       const head = chunk.toString("latin1");
       if (!/^HTTP\/1\.[01] 200\b/.test(head)) {
@@ -221,7 +296,7 @@ async function fetchTextViaProxy(url: URL, timeoutMs: number): Promise<string> {
       secure.on("data", (part) => {
         data += part;
       });
-      secure.once("error", () => finish(""));
+      secure.on("error", () => finish(""));
       secure.once("end", () => {
         const bodyIndex = data.indexOf("\r\n\r\n");
         const header = bodyIndex >= 0 ? data.slice(0, bodyIndex) : "";
@@ -253,29 +328,41 @@ export async function fetchPersonaTrendIntelForNode(
   const topics = buildPersonaTrendTopics(setup, personaName);
   const cacheKey = `${todayKey()}_${personaId || "anonymous"}_${hashShort(JSON.stringify({ topics, locale }))}`;
   const cache = readCache();
-  if (!options.bypassCache && cache[cacheKey]?.text) return cache[cacheKey].text;
+  if (!options.bypassCache && cacheEntryIsFresh(cache[cacheKey])) return cache[cacheKey].text;
 
   const timeoutMs = Math.max(2500, options.timeoutMs || 5500);
   const targetTopics = topics.length ? topics.slice(0, 2) : ["生活"];
-  const newsQueries = targetTopics.map((topic) => `${topic} ${locale.suffix}`);
+  const preferredNewsQueries = targetTopics.flatMap((topic) => buildPreferredNewsQueries(topic, locale));
+  const fallbackNewsQueries = targetTopics.map((topic) => `${topic} ${locale.suffix} when:7d`);
   const socialQueries = targetTopics.map((topic) => `${topic} ${locale.socialTerms}`);
 
-  const [newsResults, socialResults] = await Promise.all([
-    Promise.all(newsQueries.map((query) => fetchGoogleNewsRss(query, locale, timeoutMs))),
+  const [preferredNewsResults, fallbackNewsResults, socialResults] = await Promise.all([
+    Promise.all(preferredNewsQueries.map((query) => fetchGoogleNewsRss(query, locale, timeoutMs))),
+    Promise.all(fallbackNewsQueries.map((query) => fetchGoogleNewsRss(query, locale, timeoutMs))),
     Promise.all(socialQueries.map((query) => fetchGoogleNewsRss(query, locale, timeoutMs))),
   ]);
 
-  const news = newsResults.flat().slice(0, 6);
-  const social = socialResults.flat().slice(0, 6);
+  const preferredNews = uniqueHeadlines(preferredNewsResults.flat())
+    .filter((headline) => headlineMatchesPersonaTopics(headline, targetTopics))
+    .slice(0, 6);
+  const fallbackNews = uniqueHeadlines(fallbackNewsResults.flat())
+    .filter((headline) => headlineMatchesPersonaTopics(headline, targetTopics))
+    .slice(0, 6);
+  const news = uniqueHeadlines([...preferredNews, ...fallbackNews]).slice(0, 8);
+  const social = uniqueHeadlines(socialResults.flat())
+    .filter((headline) => headlineMatchesPersonaTopics(headline, targetTopics))
+    .slice(0, 6);
+  const fetchedAt = new Date().toISOString();
   const text = news.length || social.length
     ? [
-        `【新聞與趨勢】\n${news.length ? news.map((item) => `- ${item}`).join("\n") : "- 未取得可靠新聞結果"}`,
+        `【即時新聞熱點｜${fetchedAt}】\n${news.length ? news.map((item) => `- ${item}`).join("\n") : "- 未取得可靠新聞結果"}`,
+        `【指定台灣新聞來源命中】\n- ${preferredNews.length} 則；其餘結果僅在指定來源不足時補充`,
         `【社媒討論】\n${social.length ? social.map((item) => `- ${item}`).join("\n") : "- 未取得可靠社群結果"}`,
-        `【地區熱梗 / 網路語料】\n- 地區：${locale.label}\n- 話題種子：${targetTopics.join("、")}\n- 生成時要用真人口吻吸收熱點，不要直接複述新聞標題`,
+        `【使用規則】\n- 地區：${locale.label}\n- 人設話題種子：${targetTopics.join("、")}\n- 只採用與人設或使用者本次主題高度相關的熱點；無關時不要硬套\n- 吸收事件事實、受眾痛點與討論角度，改寫為人設本人的自然觀察，禁止照抄標題或捏造細節`,
       ].join("\n\n")
     : buildFallbackIntel(targetTopics, locale);
 
-  cache[cacheKey] = { updatedAt: todayKey(), text };
+  cache[cacheKey] = { updatedAt: new Date().toISOString(), text };
   writeCache(cache);
   return text;
 }

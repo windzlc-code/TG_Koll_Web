@@ -2,6 +2,8 @@
   "use strict";
 
   const PENDING_STORAGE_KEY = "vecto.proxyPurchase.pending.v1";
+  const embedded = new URLSearchParams(window.location.search).get("embedded") === "1";
+  if (embedded) document.documentElement.classList.add("is-embedded-proxy-purchase");
   const state = { options: null, quote: null, order: null, quoteSeq: 0, polling: 0, pollAttempt: 0, busy: false };
   const byId = (id) => document.getElementById(id);
 
@@ -77,6 +79,18 @@
     return Number.isFinite(number) ? new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(number) : "—";
   }
 
+  function countryDisplayName(region = {}) {
+    const code = String(region?.code || region?.country || "").trim().toUpperCase();
+    if (code === "TW") return "中国台湾";
+    if (/^[A-Z]{2}$/.test(code) && typeof Intl.DisplayNames === "function") {
+      try {
+        const label = new Intl.DisplayNames(["zh-CN"], { type: "region" }).of(code);
+        if (label && label.toUpperCase() !== code) return label;
+      } catch (_) {}
+    }
+    return String(region?.name || code || "未知地区");
+  }
+
   function hasEnoughCashBackedBalance(quote = state.quote) {
     const balanceUnits = Number(state.options?.cash_backed_credit_units);
     const chargeUnits = Number(quote?.charge_units);
@@ -98,12 +112,27 @@
     regions.forEach((region) => {
       const option = document.createElement("option");
       option.value = String(region?.code || "");
-      option.textContent = String(region?.name || region?.code || "未知地区");
+      option.textContent = countryDisplayName(region);
       if (option.value) select.append(option);
     });
     byId("cashBalance").textContent = formatPoints(payload?.cash_backed_points);
+    const serviceNames = {
+      "static-residential-ipv4": "静态住宅代理",
+      "datacenter-ipv4": "数据中心代理",
+      "rotating-residential": "动态住宅代理",
+      "rotating-mobile": "动态移动代理",
+    };
+    const serviceId = String(payload?.service_id || "static-residential-ipv4");
+    const periodMonths = Math.max(1, Number(payload?.default_period?.value || 1));
+    byId("productName").textContent = serviceNames[serviceId] || "专属代理 IP";
+    byId("productIpVersion").textContent = `${payload?.is_unused_proxy ? "全新" : "标准"} ${String(payload?.ip_version || "IPv4")}`;
+    byId("productIsp").textContent = payload?.isp_managed ? "后台指定 ISP" : "按地区自动匹配";
+    byId("productQuantity").textContent = `${Math.max(1, Number(payload?.quantity || 1))} 个`;
+    byId("productPeriod").textContent = `${periodMonths} 个月`;
     const ready = Boolean(payload?.configured && payload?.live_purchasing_enabled && regions.length);
-    const provider = String(payload?.provider || "Proxy-Cheap");
+    const provider = String(payload?.provider || "Proxy-Cheap").toLowerCase() === "proxycheap"
+      ? "Proxy-Cheap"
+      : String(payload?.provider || "供应商");
     byId("providerState").textContent = ready ? `${provider} 已连接` : "采购服务尚未开放";
     byId("providerState").classList.toggle("ready", ready);
     select.disabled = !ready;
@@ -143,7 +172,7 @@
         : rawExpiry);
       const expiryText = Number.isNaN(expiry.getTime()) ? "短时间内有效" : `${expiry.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 前有效`;
       const periodMonths = Number(quote?.period?.value || quote?.period || 1);
-      byId("quoteMeta").textContent = `${quote.country_name || quote.country} · ${Number.isFinite(periodMonths) ? periodMonths : 1} 个月 · 数量 ${quote.quantity || 1} · ${expiryText}`;
+      byId("quoteMeta").textContent = `${countryDisplayName({ code: quote.country, name: quote.country_name })} · ${Number.isFinite(periodMonths) ? periodMonths : 1} 个月 · 数量 ${quote.quantity || 1} · ${expiryText}`;
       const affordable = hasEnoughCashBackedBalance(quote);
       byId("buyButtonText").textContent = affordable ? "确认并使用算力点购买" : "现金背书点余额不足";
       byId("buyButton").disabled = !affordable;
@@ -196,6 +225,9 @@
       state.quote = null;
       setBusy(false, complete ? "购买已完成" : "重新获取报价");
       byId("buyButton").disabled = true;
+      if (complete && embedded && window.parent !== window) {
+        window.parent.postMessage({ type: "vecto:proxy-purchase-complete", orderId: String(order.id) }, window.location.origin);
+      }
       return;
     }
     setBusy(true, manual ? "订单人工核验中" : "订单处理中，请勿重复提交");

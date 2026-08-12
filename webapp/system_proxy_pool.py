@@ -144,11 +144,11 @@ def list_system_proxy_pool_options(
     *,
     owner_user_id: int,
 ) -> list[dict[str, Any]]:
-    """Return the user's current system proxy and currently unclaimed choices.
+    """Return the user's owned proxies, current shared proxy, and unclaimed choices.
 
     Occupied proxies belonging to other users are intentionally omitted. This
-    keeps the shared pool useful for selection without exposing other users'
-    allocations in the normal proxy list or in the selector.
+    keeps the selector useful without exposing other users' allocations or
+    treating a purchased asset as a releasable shared-pool allocation.
     """
 
     owner_id = int(owner_user_id or 0)
@@ -159,37 +159,70 @@ def list_system_proxy_pool_options(
     rows = conn.execute(
         """
         SELECT item.*, allocation.user_id AS allocation_user_id,
-               allocation.social_proxy_id, allocation.claimed_at,
+               COALESCE(allocation.social_proxy_id, owned_proxy.id) AS social_proxy_id,
+               allocation.claimed_at,
+               owned_proxy.status AS owned_proxy_status,
+               owned_proxy.country AS owned_proxy_country,
+               owned_proxy.region AS owned_proxy_region,
+               owned_proxy.city AS owned_proxy_city,
+               owned_proxy.isp AS owned_proxy_isp,
+               owned_proxy.last_check_at AS owned_proxy_last_check_at,
+               owned_proxy.last_check_result AS owned_proxy_last_check_result,
                (
                  SELECT COUNT(*)
                  FROM social_accounts account
-                 WHERE account.proxy_id = allocation.social_proxy_id
+                 WHERE account.user_id = ?
+                   AND account.proxy_id = COALESCE(allocation.social_proxy_id, owned_proxy.id)
                ) AS bound_account_count
         FROM proxy_market_items item
         LEFT JOIN proxy_market_allocations allocation
           ON allocation.item_id = item.id AND allocation.status = 'active'
-        WHERE allocation.id IS NULL OR allocation.user_id = ?
-        ORDER BY CASE WHEN allocation.user_id = ? THEN 0 ELSE 1 END,
+        LEFT JOIN social_proxies owned_proxy
+         ON item.ownership_type = 'owned'
+         AND owned_proxy.market_item_id = item.id
+         AND owned_proxy.user_id = ?
+         AND owned_proxy.status IN ('active', 'failed', 'pending')
+        WHERE (
+          item.ownership_type = 'owned'
+          AND item.owner_user_id = ?
+          AND owned_proxy.id IS NOT NULL
+          AND item.status NOT IN ('retired', 'expired')
+        ) OR (
+          COALESCE(item.ownership_type, 'shared') <> 'owned'
+          AND (allocation.id IS NULL OR allocation.user_id = ?)
+        )
+        ORDER BY CASE
+                   WHEN item.ownership_type = 'owned' THEN 0
+                   WHEN allocation.user_id = ? THEN 1
+                   ELSE 2
+                 END,
                  item.published_at DESC, item.updated_at DESC, item.id ASC
         """,
-        (owner_id, owner_id),
+        (owner_id, owner_id, owner_id, owner_id, owner_id),
     ).fetchall()
     options: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
+        ownership_type = str(item.get("ownership_type") or "shared").strip().lower()
+        owned = ownership_type == "owned" and int(item.get("owner_user_id") or 0) == owner_id
         selected = int(item.get("allocation_user_id") or 0) == owner_id
-        if not selected:
+        if not selected and not owned:
             if str(item.get("status") or "") != "active":
                 continue
             if not _fresh_and_healthy(item, now=now, max_age_seconds=max_age):
                 continue
-        check_result = str(item.get("last_check_result_json") or "{}")
+        check_result = str((item.get("owned_proxy_last_check_result") if owned else item.get("last_check_result_json")) or "{}")
         try:
             parsed_check = json.loads(check_result)
         except (TypeError, ValueError, json.JSONDecodeError):
             parsed_check = {}
         if not isinstance(parsed_check, dict):
             parsed_check = {}
+        response = parsed_check.get("response") if isinstance(parsed_check.get("response"), dict) else {}
+        country = str((item.get("owned_proxy_country") if owned else item.get("country")) or "")
+        region = str((item.get("owned_proxy_region") if owned else item.get("region")) or "")
+        city = str((item.get("owned_proxy_city") if owned else item.get("city")) or "")
+        isp = str((item.get("owned_proxy_isp") if owned else item.get("isp")) or "")
         options.append(
             {
                 "id": f"{SYSTEM_PROXY_OPTION_PREFIX}{str(item.get('id') or '')}",
@@ -199,18 +232,24 @@ def list_system_proxy_pool_options(
                 "proxy_type": str(item.get("proxy_type") or "socks5"),
                 "host": str(item.get("host") or ""),
                 "port": int(item.get("port") or 0),
-                "country": str(item.get("country") or ""),
-                "region": str(item.get("region") or ""),
-                "city": str(item.get("city") or ""),
-                "isp": str(item.get("isp") or ""),
+                "country": country,
+                "country_code": str(response.get("country_code") or (country if len(country) == 2 else "")).upper(),
+                "region": region,
+                "city": city,
+                "isp": isp,
                 "ip_type": str(item.get("ip_type") or "static_residential"),
                 "description": str(item.get("description") or ""),
                 "expires_at": int(item.get("expires_at") or 0),
-                "health_status": str(item.get("health_status") or "pending"),
-                "last_check_at": int(item.get("last_check_at") or 0),
+                "health_status": (
+                    "healthy"
+                    if str(item.get("owned_proxy_status") or "") == "active" and bool(parsed_check.get("ok"))
+                    else "pending"
+                ) if owned else str(item.get("health_status") or "pending"),
+                "last_check_at": int((item.get("owned_proxy_last_check_at") if owned else item.get("last_check_at")) or 0),
                 "exit_ip": str(parsed_check.get("exit_ip") or parsed_check.get("ip") or ""),
                 "selected": selected,
-                "available": not selected,
+                "available": owned or not selected,
+                "ownership_type": "owned" if owned else "shared",
                 "bound_account_count": int(item.get("bound_account_count") or 0),
                 "claimed_at": int(item.get("claimed_at") or 0),
                 "published_at": int(item.get("published_at") or 0),

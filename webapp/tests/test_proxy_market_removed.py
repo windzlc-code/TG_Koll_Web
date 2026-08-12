@@ -14,6 +14,8 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         cls.console_markup = (STATIC_ROOT / "console.html").read_text(encoding="utf-8")
         cls.console_script = (STATIC_ROOT / "assets" / "console.js").read_text(encoding="utf-8")
         cls.console_styles = (STATIC_ROOT / "assets" / "console.css").read_text(encoding="utf-8")
+        cls.purchase_script = (STATIC_ROOT / "assets" / "proxy-purchase.js").read_text(encoding="utf-8")
+        cls.purchase_styles = (STATIC_ROOT / "assets" / "proxy-purchase.css").read_text(encoding="utf-8")
         cls.navigation_script = (STATIC_ROOT / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
         cls.admin_markup = (STATIC_ROOT / "admin.html").read_text(encoding="utf-8")
         cls.admin_script = (STATIC_ROOT / "assets" / "admin.js").read_text(encoding="utf-8")
@@ -123,14 +125,23 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn(".account-proxy-purchase-placeholder {", self.console_styles)
         self.assertIn("--account-proxy-flow-highlight: #337bb1;", self.console_styles)
         self.assertIn("--account-proxy-flow-cyan: #1963a2;", self.console_styles)
+        self.assertIn("--account-proxy-flow-blue: color-mix(in srgb, var(--accent-dark) 18%, #0b65b1);", self.console_styles)
+        self.assertIn("--account-proxy-flow-deep: color-mix(in srgb, var(--accent-dark) 24%, #06366f);", self.console_styles)
+        self.assertIn("--account-proxy-flow-navy: #243b53;", self.console_styles)
         self.assertIn("var(--account-proxy-flow-highlight) 0%,", self.console_styles)
         self.assertIn("var(--account-proxy-flow-cyan) 4%,", self.console_styles)
-        self.assertIn("var(--media-edit-flow-blue) 20%,", self.console_styles)
-        self.assertIn("var(--media-edit-flow-deep) 68%,", self.console_styles)
-        self.assertIn("--media-edit-flow-navy: #243b53;", self.console_styles)
-        self.assertIn("var(--media-edit-flow-navy) 100%", self.console_styles)
+        self.assertIn("var(--account-proxy-flow-blue) 20%,", self.console_styles)
+        self.assertIn("var(--account-proxy-flow-deep) 68%,", self.console_styles)
+        self.assertIn("var(--account-proxy-flow-navy) 100%", self.console_styles)
+        proxy_rule = self.console_styles.split(".account-proxy-purchase-placeholder {", 1)[1].split("}", 1)[0]
+        self.assertNotIn("--media-edit-flow-", proxy_rule)
         self.assertIn("min-height: 56px;\n  gap: 9px;\n  margin: 2px 0 12px;\n  padding: 6px 10px;\n  box-sizing: border-box;", self.console_styles)
         self.assertIn("animation: none;\n  will-change: auto;", self.console_styles)
+        self.assertIn(".account-proxy-purchase-placeholder > div > span {", self.console_styles)
+        self.assertNotIn(
+            ".account-proxy-purchase-placeholder span:not(.account-proxy-purchase-icon) {",
+            self.console_styles,
+        )
         self.assertNotIn("@keyframes accountProxyPurchaseFlow", self.console_styles)
         self.assertIn(".account-proxy-picker-controls {\n  width: 100%;\n  align-items: center;", self.console_styles)
         self.assertIn(".account-proxy-picker-filters {\n  display: grid;\n  grid-template-columns: minmax(0, 142px) 36px;", self.console_styles)
@@ -144,10 +155,10 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn("${accountProxyPoolFiltersHtml()}<button type=\"button\" class=\"account-proxy-clear\"", self.console_script)
         self.assertIn("appearance: none;\n  box-shadow: none;\n  transform: none;", self.console_styles)
         self.assertIn("border: 1px solid var(--line);", self.console_styles)
-        self.assertIn("var(--media-edit-flow-cyan) 64%", self.console_styles)
+        self.assertIn("var(--account-proxy-flow-deep) 68%", self.console_styles)
         self.assertIn("color: #fff;\n  border: 1px solid color-mix(in srgb, #fff 62%, transparent);", self.console_styles)
-        self.assertIn("border: 1px solid var(--media-edit-flow-blue);", self.console_styles)
-        self.assertIn("background: var(--media-edit-flow-blue);", self.console_styles)
+        self.assertIn("border: 1px solid var(--account-proxy-flow-blue);", self.console_styles)
+        self.assertIn("background: var(--account-proxy-flow-blue);", self.console_styles)
         picker = self.console_script[
             self.console_script.index("function openAccountProxyPickerModal"):
             self.console_script.index("function renderAccountProxyPickerPanel")
@@ -167,6 +178,47 @@ class ProxyMarketRemovalTests(unittest.TestCase):
             panel.index("${accountProxyPurchasePlaceholderHtml()}"),
             panel.index("${accountProxyPoolFiltersHtml()}"),
         )
+
+    def test_account_proxy_picker_localizes_regions_and_renders_native_purchase_flow(self):
+        self.assertIn("function accountProxyCountry(", self.console_script)
+        self.assertIn('new Intl.DisplayNames(["zh-CN"], { type: "region" })', self.console_script)
+        self.assertIn('"Spain"'.lower(), self.console_script.lower())
+        self.assertIn('"中国台湾"', self.console_script)
+        self.assertNotIn("function openProxyPurchaseWindow", self.console_script)
+        self.assertIn("function openAccountProxyPurchaseView", self.console_script)
+        purchase_view = self.console_script[
+            self.console_script.index("function accountProxyPurchaseEmbeddedHtml"):
+            self.console_script.index("function accountProxyPickerFilters")
+        ]
+        self.assertIn('class="account-proxy-purchase-form"', purchase_view)
+        self.assertIn('data-account-proxy-purchase-country', purchase_view)
+        self.assertIn('data-account-proxy-purchase-renewal', purchase_view)
+        self.assertIn('data-account-proxy-quote-points', purchase_view)
+        self.assertIn('data-account-proxy-purchase-submit', purchase_view)
+        self.assertIn('data-account-proxy-purchase-status', purchase_view)
+        self.assertNotIn("<iframe", purchase_view)
+        self.assertNotIn('/proxy-purchase?embedded=1', purchase_view)
+        self.assertIn('await api("/api/proxy-purchases/options", { cache: "no-store" })', self.console_script)
+        self.assertIn('api("/api/proxy-purchases/quotes"', purchase_view)
+        self.assertIn('api("/api/proxy-purchases/orders"', purchase_view)
+        self.assertIn('/api/proxy-purchases/orders/recover', purchase_view)
+        self.assertNotIn('window.addEventListener("message"', purchase_view)
+        self.assertIn('const action = selected ? "当前使用" : "选择使用";', self.console_script)
+        self.assertNotIn('"切换使用"', self.console_script)
+        self.assertIn('class="proxy-market-mini-usage"', self.console_script)
+        self.assertIn('${boundCount}/3', self.console_script)
+        self.assertIn('data-tone="danger"', self.console_styles)
+        self.assertIn('.account-proxy-purchase-embedded {', self.console_styles)
+        self.assertIn('.account-proxy-purchase-form {', self.console_styles)
+        self.assertNotIn('.account-proxy-purchase-embedded iframe', self.console_styles)
+        self.assertIn('new URLSearchParams(window.location.search).get("embedded") === "1"', self.purchase_script)
+        self.assertIn('window.parent.postMessage({ type: "vecto:proxy-purchase-complete"', self.purchase_script)
+        self.assertIn('new Intl.DisplayNames(["zh-CN"], { type: "region" })', self.purchase_script)
+        self.assertIn('.is-embedded-proxy-purchase .purchase-intro', self.purchase_styles)
+        self.assertIn('id="productName"', (STATIC_ROOT / "proxy-purchase.html").read_text(encoding="utf-8"))
+        self.assertIn('class="mapped-order-specs"', (STATIC_ROOT / "proxy-purchase.html").read_text(encoding="utf-8"))
+        self.assertIn("productQuantity", self.purchase_script)
+        self.assertIn(".mapped-order-specs {", self.purchase_styles)
 
     def test_backend_system_proxies_are_exposed_only_through_the_shared_pool(self):
         regular_list_route = self.social_api_source[

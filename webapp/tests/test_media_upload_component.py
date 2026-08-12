@@ -484,8 +484,9 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         )
 
     def test_image_edit_flow_uses_textarea_box_and_preserves_label_fill(self):
+        shared_border_selector = ".persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {"
         self.assertIn(
-            ".persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {",
+            shared_border_selector,
             self.styles,
         )
         self.assertNotIn(
@@ -500,13 +501,71 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertNotIn("color: transparent", label_rule)
         self.assertNotIn("background-clip: text", label_rule)
 
-        border_rule = self.styles.split(
-            ".persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {", 1
-        )[1].split("}", 1)[0]
+        border_rule = self.styles.split(shared_border_selector, 1)[1].split("}", 1)[0]
         self.assertIn("padding: 2px;", border_rule)
         self.assertIn("border-radius: inherit;", border_rule)
         self.assertIn("pointer-events: none;", border_rule)
         self.assertIn("mask-composite: exclude;", border_rule)
+        self.assertNotIn("animation:", border_rule)
+        self.assertNotIn("persona-static-flow-action", self.script)
+        self.assertNotIn("persona-static-flow-action", self.styles)
+        self.assertIn(
+            'class="primary persona-draft-global-save-button persona-gradient-outline-action"',
+            self.script,
+        )
+        self.assertIn(
+            'class="primary persona-gradient-outline-action" data-persona-publish-submit',
+            self.script,
+        )
+        self.assertIn(
+            'class="primary${moduleId === "publishing" ? " persona-gradient-outline-action" : ""}"',
+            self.script,
+        )
+        flow_tokens = self.styles.split(
+            ".persona-public-media-card,\n"
+            ".persona-media-prompt-field.is-image-editing,\n"
+            ".persona-gradient-outline-action {",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("--media-edit-flow-deep: color-mix(in srgb, var(--accent-dark) 8%, #326f8e);", flow_tokens)
+        self.assertIn("--media-edit-flow-blue: color-mix(in srgb, var(--accent-dark) 10%, #2b83ad);", flow_tokens)
+        self.assertIn("var(--media-edit-flow-deep) 26%", flow_tokens)
+        self.assertIn("var(--media-edit-flow-blue) 46%", flow_tokens)
+        self.assertIn("var(--media-edit-flow-cyan) 62%", flow_tokens)
+        self.assertIn("var(--media-edit-flow-bright) 72%", flow_tokens)
+        self.assertIn("var(--media-edit-flow-cyan) 82%", flow_tokens)
+        self.assertIn("var(--media-edit-flow-blue) 92%", flow_tokens)
+        self.assertIn("background: var(--media-edit-flow-gradient);", border_rule)
+        self.assertIn("background-size: 200% 100%;", border_rule)
+        self.assertIn("background-repeat: repeat-x;", border_rule)
+        self.assertIn("background-position: 0 0;", border_rule)
+        prompt_animation_rule = self.styles.split(
+            ".persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {",
+            2,
+        )[2].split("}", 1)[0]
+        self.assertIn("animation: personaMediaPromptBorderFlow 2.8s linear infinite;", prompt_animation_rule)
+        action_border_selector = (
+            ':root[data-theme="light"] body.console-page :is(.console-shell, .console-modal) '
+            'button.primary.persona-gradient-outline-action:not([aria-busy="true"]),\n'
+            ':root[data-theme="dark"] body.console-page :is(.console-shell, .console-modal) '
+            'button.primary.persona-gradient-outline-action:not([aria-busy="true"]) {'
+        )
+        action_border = self.styles.split(
+            action_border_selector,
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("border-width: 2px;", action_border)
+        self.assertIn("border-style: solid;", action_border)
+        self.assertIn("border-color: transparent !important;", action_border)
+        self.assertIn("background-color: #071112 !important;", action_border)
+        self.assertIn("background-image:", action_border)
+        self.assertIn("var(--vecto-action-static-gradient),", action_border)
+        self.assertIn("var(--media-edit-flow-gradient) !important;", action_border)
+        self.assertIn("background-origin: padding-box, border-box;", action_border)
+        self.assertIn("background-clip: padding-box, border-box;", action_border)
+        self.assertIn("background-size: 100% 100%, 100% 100%;", action_border)
+        self.assertIn("animation: none;", action_border)
+        self.assertNotIn("::before", action_border)
         self.assertIn('<span class="persona-media-prompt-input-shell">', self.script)
         self.assertIn(
             ':root[data-theme="light"] .console-page .persona-media-operation-pane .persona-media-prompt-field.is-image-editing textarea:focus {',

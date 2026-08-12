@@ -413,7 +413,12 @@ class CollectorAccountPool:
                   AND account.cooldown_until <= ?
                   AND account.circuit_open_until <= ?
                   AND lease.account_id IS NULL
-                ORDER BY account.last_selected_at ASC, account.last_success_at ASC, account.id ASC
+                ORDER BY
+                  CASE WHEN account.health_status = 'healthy' THEN 0 ELSE 1 END ASC,
+                  account.consecutive_failures ASC,
+                  account.last_selected_at ASC,
+                  account.last_success_at ASC,
+                  account.id ASC
                 LIMIT 1
                 """,
                 (clean_capability, clean_pool, clean_platform, timestamp, timestamp),

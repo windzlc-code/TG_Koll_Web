@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -175,6 +176,15 @@ class JobStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_fetch_nonces_expiry
                   ON fetch_nonces(expires_at);
+                CREATE TABLE IF NOT EXISTS fetch_pool_targets (
+                  archive_id TEXT PRIMARY KEY,
+                  payload_json TEXT NOT NULL,
+                  next_run_at INTEGER NOT NULL,
+                  last_run_at INTEGER NOT NULL DEFAULT 0,
+                  updated_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_fetch_pool_targets_due
+                  ON fetch_pool_targets(next_run_at, archive_id);
                 """
             )
             connection.execute(
@@ -286,7 +296,79 @@ class JobStore:
                 ),
             )
             row = connection.execute("SELECT * FROM fetch_jobs WHERE id=?", (job_id,)).fetchone()
+            if capability == "persona.hot_candidates.v1":
+                archive_id = str(payload.get("archiveId") or "").strip()
+                snapshot = payload.get("archiveSnapshot")
+                if archive_id and isinstance(snapshot, dict) and str(snapshot.get("id") or "").strip() == archive_id:
+                    refill_payload = dict(payload)
+                    refill_payload.update({
+                        "refresh": False,
+                        "recordShown": False,
+                        "liveOnly": False,
+                        "limit": 20,
+                        "_workerCapability": capability,
+                        "_poolRefill": True,
+                    })
+                    interval = max(3600, int(os.getenv("TG_HOT_POOL_REFILL_SECONDS", "21600") or 21600))
+                    connection.execute(
+                        """
+                        INSERT INTO fetch_pool_targets(archive_id,payload_json,next_run_at,last_run_at,updated_at)
+                        VALUES(?,?,?,0,?)
+                        ON CONFLICT(archive_id) DO UPDATE SET
+                          payload_json=excluded.payload_json,
+                          next_run_at=MIN(fetch_pool_targets.next_run_at, excluded.next_run_at),
+                          updated_at=excluded.updated_at
+                        """,
+                        (archive_id, json.dumps(refill_payload, ensure_ascii=False, separators=(",", ":")), now + interval, now),
+                    )
             return self.public(row), True
+
+    def enqueue_due_pool_refill(self, *, now: int | None = None) -> bool:
+        timestamp = int(now or time.time())
+        interval = max(3600, int(os.getenv("TG_HOT_POOL_REFILL_SECONDS", "21600") or 21600))
+        with self._lock, self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            target = connection.execute(
+                "SELECT * FROM fetch_pool_targets WHERE next_run_at <= ? ORDER BY next_run_at,archive_id LIMIT 1",
+                (timestamp,),
+            ).fetchone()
+            if target is None:
+                return False
+            archive_id = str(target["archive_id"])
+            active = connection.execute(
+                "SELECT 1 FROM fetch_jobs WHERE capability='persona.hot_candidates.v1' AND unit_id=? AND status IN ('queued','running') LIMIT 1",
+                (f"pool_{hashlib.sha256(archive_id.encode('utf-8')).hexdigest()[:24]}",),
+            ).fetchone()
+            next_run = timestamp + interval
+            connection.execute(
+                "UPDATE fetch_pool_targets SET next_run_at=?,last_run_at=?,updated_at=? WHERE archive_id=?",
+                (next_run, timestamp, timestamp, archive_id),
+            )
+            if active is not None:
+                return False
+            payload = json.loads(str(target["payload_json"] or "{}"))
+            unit_id = f"pool_{hashlib.sha256(archive_id.encode('utf-8')).hexdigest()[:24]}"
+            idempotency_key = f"pool:{hashlib.sha256(f'{archive_id}:{timestamp // interval}'.encode('utf-8')).hexdigest()[:24]}"
+            job_id = f"job_{uuid.uuid4().hex[:24]}"
+            connection.execute(
+                """
+                INSERT INTO fetch_jobs(
+                  id,idempotency_key,request_hash,capability,unit_id,payload_json,
+                  status,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,'queued',?,?)
+                """,
+                (
+                    job_id,
+                    idempotency_key,
+                    request_hash(canonical_json_bytes(payload)),
+                    "persona.hot_candidates.v1",
+                    unit_id,
+                    json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            return True
 
     def get(self, job_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
@@ -429,14 +511,16 @@ def _terminate_process(process: subprocess.Popen[str]) -> None:
             process.kill()
 
 
-def run_tool_r18_job(
+def _run_tool_r18_job_once(
     payload: dict[str, Any],
     cancel_event: threading.Event,
     *,
     timeout_seconds: int = 120,
+    use_collector_profile: bool = True,
 ) -> dict[str, Any]:
     runtime_payload = dict(payload)
     capability = str(runtime_payload.pop("_workerCapability", "") or "").strip()
+    background_refill = bool(runtime_payload.pop("_poolRefill", False))
     for private_field in (
         "accountId", "account_id", "senderUsername", "sender_username",
         "userId", "user_id", "loginUsername", "login_username",
@@ -445,12 +529,12 @@ def run_tool_r18_job(
     ):
         runtime_payload.pop(private_field, None)
     collector_pool = _configured_collector_pool()
-    if _truthy_environment("TG_COLLECTOR_POOL_REQUIRED") and collector_pool is None:
+    if use_collector_profile and _truthy_environment("TG_COLLECTOR_POOL_REQUIRED") and collector_pool is None:
         raise RuntimeError("collector account pool is required but unavailable")
     holder = f"runtime_{uuid.uuid4().hex}"
     lease: dict[str, Any] | None = None
     runtime_environment = os.environ.copy()
-    if collector_pool is not None:
+    if collector_pool is not None and use_collector_profile:
         if not capability:
             raise RuntimeError("collector capability is missing")
         try:
@@ -498,6 +582,7 @@ def run_tool_r18_job(
         json.dumps(runtime_payload, ensure_ascii=True),
     ]
     succeeded = False
+    release_error_code = "worker_execution_failed"
     try:
         process = subprocess.Popen(
             command,
@@ -527,7 +612,15 @@ def run_tool_r18_job(
             raise RuntimeError("worker returned invalid JSON")
         if parsed.get("ok") is False:
             raise RuntimeError(str(parsed.get("error") or "worker failed")[:1000])
-        succeeded = True
+        candidate_rows = parsed.get("candidates") if isinstance(parsed.get("candidates"), list) else []
+        requested_limit = max(1, min(int(runtime_payload.get("limit") or 10), 20))
+        sparse_collector_result = (
+            capability in {"persona.hot_candidates.v1", "crm.threads_live_search.v1"}
+            and len(candidate_rows) < min(requested_limit, 3)
+        )
+        succeeded = not sparse_collector_result
+        if sparse_collector_result:
+            release_error_code = "collector_sparse_result"
         return parsed
     finally:
         if collector_pool is not None and lease is not None:
@@ -536,12 +629,89 @@ def run_tool_r18_job(
                     str(lease["lease_id"]),
                     holder=holder,
                     succeeded=succeeded,
-                    error_code="worker_execution_failed",
-                    success_cooldown_seconds=2,
-                    failure_cooldown_seconds=30,
-                    failure_threshold=3,
-                    circuit_seconds=300,
+                    error_code=release_error_code,
+                    success_cooldown_seconds=1800 if background_refill else 2,
+                    failure_cooldown_seconds=(600 if background_refill else 2) if release_error_code == "collector_sparse_result" else 30,
+                    failure_threshold=100 if release_error_code == "collector_sparse_result" else 3,
+                    circuit_seconds=0 if release_error_code == "collector_sparse_result" else 300,
                 )
+
+
+def _merge_collector_candidate_results(
+    first: dict[str, Any],
+    second: dict[str, Any],
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    merged = dict(second if len(second.get("candidates") or []) > len(first.get("candidates") or []) else first)
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for result in (first, second):
+        for candidate in result.get("candidates") if isinstance(result.get("candidates"), list) else []:
+            if not isinstance(candidate, dict):
+                continue
+            key = str(candidate.get("id") or candidate.get("candidateId") or candidate.get("sourceUrl") or "").strip()
+            if not key:
+                key = json.dumps(candidate, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(candidate)
+    candidates.sort(key=lambda item: float(item.get("hotScore") or item.get("hot_score") or 0), reverse=True)
+    merged["candidates"] = candidates[:limit]
+    warnings: list[str] = []
+    for result in (first, second):
+        for warning in result.get("warnings") if isinstance(result.get("warnings"), list) else []:
+            text = str(warning or "").strip()
+            if text and text not in warnings:
+                warnings.append(text)
+    warnings.append("公开 Reader / 旧机候选池不足，已使用一个账号池登录态补充本轮结果。")
+    merged["warnings"] = warnings
+    return merged
+
+
+def run_tool_r18_job(
+    payload: dict[str, Any],
+    cancel_event: threading.Event,
+    *,
+    timeout_seconds: int = 120,
+) -> dict[str, Any]:
+    capability = str(payload.get("_workerCapability") or "").strip()
+    if capability not in {"persona.hot_candidates.v1", "crm.threads_live_search.v1"}:
+        return _run_tool_r18_job_once(payload, cancel_event, timeout_seconds=timeout_seconds)
+
+    reader_payload = {**payload, "sourcePolicy": "reader_only"}
+    try:
+        first = _run_tool_r18_job_once(
+            reader_payload,
+            cancel_event,
+            timeout_seconds=timeout_seconds,
+            use_collector_profile=False,
+        )
+    except Exception as exc:
+        first = {
+            "ok": True,
+            "candidates": [],
+            "warnings": [f"公开 Reader 本轮不可用，已转账号池登录态补充：{str(exc)[:300]}"],
+        }
+    candidates = first.get("candidates") if isinstance(first.get("candidates"), list) else []
+    requested_limit = max(1, min(int(payload.get("limit") or 10), 20))
+    if (
+        len(candidates) >= requested_limit
+        or cancel_event.is_set()
+    ):
+        warnings = first.setdefault("warnings", [])
+        if isinstance(warnings, list):
+            warnings.append("公开 Reader / 旧机候选池已满足本轮需求，未租用登录态账号。")
+        return first
+    authenticated_payload = {**payload, "sourcePolicy": "authenticated_only"}
+    second = _run_tool_r18_job_once(
+        authenticated_payload,
+        cancel_event,
+        timeout_seconds=timeout_seconds,
+        use_collector_profile=True,
+    )
+    return _merge_collector_candidate_results(first, second, limit=requested_limit)
 
 
 class WorkerRuntime:
@@ -590,6 +760,9 @@ class WorkerRuntime:
 
     def _loop(self) -> None:
         while not self.stop_event.is_set():
+            with contextlib.suppress(Exception):
+                if self.store.enqueue_due_pool_refill():
+                    self.wake_event.set()
             claimed = self.store.claim_next()
             if claimed is None:
                 self.wake_event.wait(1.0)
@@ -641,8 +814,13 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
         raise ProtocolError("worker action does not match capability")
     normalized["action"] = action
     if action == "fetch-hot-candidates":
-        if normalized.get("liveOnly") is not True or normalized.get("recordShown") is not False:
-            raise ProtocolError("live fetch must set liveOnly=true and recordShown=false")
+        if normalized.get("recordShown") is not False:
+            raise ProtocolError("remote fetch must set recordShown=false")
+        if capability == "persona.hot_candidates.v1" and normalized.get("liveOnly") is not False:
+            raise ProtocolError("persona hot fetch must use the old-host candidate pool")
+        if capability == "crm.threads_live_search.v1" and normalized.get("liveOnly") is not True:
+            raise ProtocolError("CRM live search must remain live-only")
+        normalized.pop("sourcePolicy", None)
     if capability in {
         "crm.threads_live_search.v1",
         "persona.hot_candidates.v1",

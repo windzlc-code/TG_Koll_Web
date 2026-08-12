@@ -643,6 +643,28 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             social_api.delete_social_proxy(proxy["id"])
         self.assertEqual(missing_error.exception.status_code, 404)
 
+    def test_same_proxy_can_bind_four_accounts_and_reports_non_blocking_usage_count(self):
+        proxy = social_api.create_social_proxy(
+            social_api.SocialProxyPayload(host="shared-four.example", port=1080)
+        )
+        self._mark_proxy_verified(proxy["id"])
+        account_ids = []
+        for index in range(4):
+            account = social_api.create_social_account(
+                social_api.SocialAccountPayload(
+                    platform="threads",
+                    username=f"shared-proxy-{index}",
+                    profile_dir=str(self.root / "profiles" / f"shared-proxy-{index}"),
+                    proxy_id=proxy["id"],
+                )
+            )
+            account_ids.append(account["id"])
+        with social_api.db() as conn:
+            rows = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy["id"],)).fetchall()
+            listed = social_api._proxy_public_rows(conn, rows)
+        self.assertEqual(listed[0]["bound_account_count"], 4)
+        self.assertEqual(set(listed[0]["bound_account_ids"]), set(account_ids))
+
     def test_proxy_switch_is_blocked_for_every_active_task_status(self):
         for status in ("preparing", "queued", "running", "need_manual"):
             with self.subTest(status=status):

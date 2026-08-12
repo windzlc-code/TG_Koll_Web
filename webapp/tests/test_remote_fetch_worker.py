@@ -116,6 +116,34 @@ class RemoteFetchStoreTests(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             self.submit(digest="b" * 64)
 
+    def test_persona_target_is_registered_for_old_host_low_frequency_refill(self) -> None:
+        now = int(time.time())
+        self.store.submit(
+            idempotency_key="capture:pool-target:1234",
+            request_digest="c" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="archive_pool_target",
+            payload={
+                "action": "fetch-hot-candidates",
+                "archiveId": "archive_pool_target",
+                "archiveSnapshot": {"id": "archive_pool_target", "posts": []},
+                "liveOnly": False,
+                "recordShown": False,
+                "limit": 10,
+            },
+        )
+        original = self.store.claim_next()
+        self.assertIsNotNone(original)
+        self.store.finish(original[0]["id"], status="success", result={"ok": True})
+        self.assertFalse(self.store.enqueue_due_pool_refill(now=now))
+        self.assertTrue(self.store.enqueue_due_pool_refill(now=now + 21601))
+        queued = self.store.claim_next()
+        self.assertIsNotNone(queued)
+        _job, payload = queued
+        self.assertTrue(payload["_poolRefill"])
+        self.assertFalse(payload["liveOnly"])
+        self.assertEqual(payload["limit"], 20)
+
     def test_nonce_replay_is_persistently_rejected(self) -> None:
         now = int(time.time())
         self.store.use_nonce("capture-v1", "nonce_abcdefghijklmnop", now=now, ttl_seconds=120)
@@ -274,7 +302,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
             Path(str(settings.database_path) + "-wal").unlink(missing_ok=True)
             Path(str(settings.database_path) + "-shm").unlink(missing_ok=True)
 
-    def test_capability_enforces_live_only_and_removes_secrets(self) -> None:
+    def test_capability_routes_persona_through_old_host_pool_and_removes_secrets(self) -> None:
         capability, unit_id, payload = _validate_envelope(
             {
                 "capability": "persona.hot_candidates.v1",
@@ -282,7 +310,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                 "payload": {
                     "archiveId": "archive_12345678",
                     "archiveSnapshot": {"id": "archive_12345678", "posts": []},
-                    "liveOnly": True,
+                    "liveOnly": False,
                     "recordShown": False,
                     "cookies": ["must-not-cross-control-boundary"],
                     "accountId": "new-host-account",
@@ -305,7 +333,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                 {
                     "capability": "persona.hot_candidates.v1",
                     "unit_id": "archive_12345678",
-                    "payload": {"liveOnly": False, "recordShown": False},
+                    "payload": {"liveOnly": True, "recordShown": False},
                 }
             )
 
@@ -328,19 +356,27 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         class FakeProcess:
             returncode = 0
 
+            def __init__(self, body):
+                self.body = body
+
             def poll(self):
                 return 0
 
             def communicate(self):
-                return '{"ok":true,"candidates":[]}', ""
+                return json.dumps(self.body), ""
 
         pool = FakePool()
         observed = {}
 
+        responses = [
+            {"ok": True, "candidates": []},
+            {"ok": True, "candidates": [{"id": "candidate-1", "hotScore": 800}]},
+        ]
+
         def popen(command, **kwargs):
             observed["command"] = command
             observed["env"] = kwargs["env"]
-            return FakeProcess()
+            return FakeProcess(responses.pop(0))
 
         with (
             patch("webapp.worker_server._configured_collector_pool", return_value=pool),
@@ -351,6 +387,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                     "_workerCapability": "persona.hot_candidates.v1",
                     "action": "fetch-hot-candidates",
                     "platform": "threads",
+                    "limit": 1,
                     "accountId": "must-not-reach-node",
                 },
                 threading.Event(),
@@ -366,6 +403,100 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         )
         self.assertEqual(observed["env"]["TG_COLLECTOR_PROFILE_REQUIRED"], "1")
         self.assertEqual(pool.acquire_args["capability"], "persona.hot_candidates.v1")
+        self.assertTrue(pool.released[0][1]["succeeded"])
+
+    def test_runtime_does_not_lease_account_when_reader_pool_is_sufficient(self) -> None:
+        class FakePool:
+            def acquire(self, **_kwargs):
+                raise AssertionError("reader-only pass must not lease an account")
+
+        class FakeProcess:
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+            def communicate(self):
+                return json.dumps({
+                    "ok": True,
+                    "candidates": [
+                        {"id": "reader-1", "hotScore": 900},
+                        {"id": "reader-2", "hotScore": 800},
+                    ],
+                }), ""
+
+        with (
+            patch("webapp.worker_server._configured_collector_pool", return_value=FakePool()),
+            patch("webapp.worker_server.subprocess.Popen", return_value=FakeProcess()) as popen,
+        ):
+            result = run_tool_r18_job(
+                {
+                    "_workerCapability": "persona.hot_candidates.v1",
+                    "action": "fetch-hot-candidates",
+                    "platform": "threads",
+                    "limit": 2,
+                },
+                threading.Event(),
+            )
+
+        self.assertEqual([row["id"] for row in result["candidates"]], ["reader-1", "reader-2"])
+        sent = json.loads(popen.call_args.args[0][-1])
+        self.assertEqual(sent["sourcePolicy"], "reader_only")
+
+    def test_runtime_rotates_collector_account_when_first_result_is_sparse(self) -> None:
+        class FakePool:
+            def __init__(self):
+                self.acquired = 0
+                self.released = []
+
+            def acquire(self, **_kwargs):
+                self.acquired += 1
+                return {"lease_id": f"collease_{self.acquired:08d}", "account": {"id": "hidden"}}
+
+            def use_runtime_profile(self, _lease_id, *, holder, consumer):
+                return consumer({"platform": "threads", "profile_dir": f"/collector/profiles/{self.acquired}"})
+
+            def release(self, lease_id, **kwargs):
+                self.released.append((lease_id, kwargs))
+
+        class FakeProcess:
+            returncode = 0
+
+            def __init__(self, body):
+                self.body = body
+
+            def poll(self):
+                return 0
+
+            def communicate(self):
+                return json.dumps(self.body), ""
+
+        pool = FakePool()
+        responses = [
+            {"ok": True, "candidates": [{"id": "one", "hotScore": 600}]},
+            {"ok": True, "candidates": [
+                {"id": "one", "hotScore": 600},
+                {"id": "two", "hotScore": 900},
+                {"id": "three", "hotScore": 700},
+            ]},
+        ]
+        with (
+            patch("webapp.worker_server._configured_collector_pool", return_value=pool),
+            patch("webapp.worker_server.subprocess.Popen", side_effect=lambda *_args, **_kwargs: FakeProcess(responses.pop(0))),
+        ):
+            result = run_tool_r18_job(
+                {
+                    "_workerCapability": "persona.hot_candidates.v1",
+                    "action": "fetch-hot-candidates",
+                    "platform": "threads",
+                    "limit": 10,
+                },
+                threading.Event(),
+            )
+
+        self.assertEqual(pool.acquired, 1)
+        self.assertEqual([item["id"] for item in result["candidates"]], ["two", "three", "one"])
+        self.assertEqual(len(pool.released), 1)
         self.assertTrue(pool.released[0][1]["succeeded"])
 
     def test_capability_requires_current_snapshot_and_hides_unimplemented_dashboard(self) -> None:
