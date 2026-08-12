@@ -10,6 +10,7 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
     def setUpClass(cls):
         cls.markup = (STATIC_ROOT / "admin.html").read_text(encoding="utf-8")
         cls.script = (STATIC_ROOT / "assets" / "admin.js").read_text(encoding="utf-8")
+        cls.styles = (STATIC_ROOT / "assets" / "style.css").read_text(encoding="utf-8")
 
     def _function(self, name: str, next_name: str) -> str:
         start = self.script.index(f"function {name}")
@@ -24,11 +25,12 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         proxy_end = self.markup.index('id="secPricing"', proxy_start)
         proxy_panel = self.markup[proxy_start:proxy_end]
         panel_start = self.markup.index('id="proxyProviderApiDetails"')
-        panel_end = self.markup.index('</details>', panel_start) + len('</details>')
-        panel = self.markup[panel_start:panel_end]
-        self.assertIn("<details", self.markup[self.markup.rfind("<", 0, panel_start):panel_start + 80])
+        panel = runtime_panel[panel_start - runtime_start:]
         self.assertIn('id="proxyProviderApiDetails"', runtime_panel)
         self.assertNotIn('id="proxyProviderApiDetails"', proxy_panel)
+        self.assertIn('data-model-tab="proxy-provider"', runtime_panel)
+        self.assertIn('data-model-panel="proxy-provider"', runtime_panel)
+        self.assertNotIn('<details class="admin-config-card admin-runtime-panel proxy-provider-api-panel"', runtime_panel)
         self.assertIn('id="proxyProviderCredentialSummary"', panel)
         self.assertNotIn('id="proxyProviderFieldDetails"', panel)
         for input_id in ("proxyProviderApiKey", "proxyProviderApiSecret", "proxyProviderWebhookSecret"):
@@ -41,6 +43,18 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertNotIn("proxyProviderAccountCurrency", panel)
         self.assertNotIn("proxyProviderCredentialState", panel)
         self.assertNotIn("保存需要管理员密码与 MFA", panel)
+
+    def test_runtime_provider_is_a_parallel_tab_and_all_panels_share_purchase_visual_language(self):
+        runtime_start = self.markup.index('id="secRuntime"')
+        runtime_end = self.markup.index('id="secAccount"', runtime_start)
+        runtime_panel = self.markup[runtime_start:runtime_end]
+        self.assertIn('class="admin-config-card admin-runtime-panel admin-runtime-provider-shell"', runtime_panel)
+        self.assertEqual(runtime_panel.count('data-model-tab='), 5)
+        for panel_name in ("text", "image", "runninghub", "video", "proxy-provider"):
+            self.assertIn(f'data-model-panel="{panel_name}"', runtime_panel)
+        self.assertIn(".page-admin .admin-runtime-provider-shell", self.styles)
+        self.assertIn("linear-gradient(105deg, #237fb2 0 8%, #155f96 24%, #123f69 56%, #102c47 100%)", self.styles)
+        self.assertIn(".admin-runtime-provider-shell .admin-model-tab-panel", self.styles)
 
     def test_provider_field_sync_stays_with_purchase_workspace(self):
         proxy_start = self.markup.index('id="secProxyMarket"')

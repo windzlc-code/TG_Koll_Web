@@ -1822,8 +1822,19 @@ function bindModelTabs() {
   const panels = Array.from(document.querySelectorAll("[data-model-panel]"));
   if (!tabs.length || !panels.length) return;
   const activate = (name) => {
-    tabs.forEach((tab) => tab.classList.toggle("is-active", tab.dataset.modelTab === name));
-    panels.forEach((panel) => panel.classList.toggle("is-active", panel.dataset.modelPanel === name));
+    tabs.forEach((tab) => {
+      const active = tab.dataset.modelTab === name;
+      tab.classList.toggle("is-active", active);
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-selected", active ? "true" : "false");
+      tab.tabIndex = active ? 0 : -1;
+    });
+    panels.forEach((panel) => {
+      const active = panel.dataset.modelPanel === name;
+      panel.classList.toggle("is-active", active);
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute("aria-hidden", active ? "false" : "true");
+    });
   };
   tabs.forEach((tab) => {
     tab.addEventListener("click", () => activate(tab.dataset.modelTab || "text"));
@@ -8779,8 +8790,8 @@ function renderProxyProviderCredentialStatus(status = {}) {
     readiness.hidden = reasons.length === 0;
     readiness.textContent = reasons.join("；");
   }
-  const details = el("proxyProviderApiDetails");
-  if (details && (!configured || !verified || status?.staged || status?.last_error_code)) details.open = true;
+  const providerTab = document.querySelector('[data-model-tab="proxy-provider"]');
+  if (providerTab) providerTab.classList.toggle("has-attention", !configured || !verified || !!status?.staged || !!status?.last_error_code);
 }
 
 async function loadProxyProviderCredentialStatus() {
