@@ -1954,6 +1954,9 @@ const adminState = {
   proxyMarketEditorBusy: false,
   proxyMarketSettings: null,
   proxyMarketLoadingPromise: null,
+  proxyPurchaseConfig: null,
+  proxyPurchaseProviderOptions: null,
+  proxyPurchaseOrders: [],
   customerGroupRows: [],
   customerTagRows: [],
   taxonomyLoadingPromise: null,
@@ -8608,6 +8611,365 @@ async function loadProxyMarketSettings() {
   }
 }
 
+function proxyPurchaseConfigValue(config, ...keys) {
+  for (const key of keys) {
+    if (config?.[key] !== undefined && config?.[key] !== null) return config[key];
+  }
+  return "";
+}
+
+function setProxyPurchaseSelectOptions(selectId, options, { valueKey = "value", labelKey = "label", emptyLabel = "请选择" } = {}) {
+  const select = el(selectId);
+  if (!select) return;
+  const previous = String(select.value || "");
+  select.replaceChildren();
+  if (emptyLabel) {
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = emptyLabel;
+    select.appendChild(empty);
+  }
+  (Array.isArray(options) ? options : []).forEach((item) => {
+    const value = typeof item === "object" ? item?.[valueKey] : item;
+    const label = typeof item === "object" ? item?.[labelKey] : item;
+    if (value === undefined || value === null || String(value) === "") return;
+    const option = document.createElement("option");
+    option.value = String(value);
+    option.textContent = String(label || value);
+    select.appendChild(option);
+  });
+  if (Array.from(select.options).some((option) => option.value === previous)) select.value = previous;
+}
+
+function renderProxyPurchaseConfig(payload = {}) {
+  const config = payload?.draft || payload?.config || payload || {};
+  const setupDefaults = config?.setup_defaults && typeof config.setup_defaults === "object" ? config.setup_defaults : {};
+  adminState.proxyPurchaseConfig = config;
+  const values = {
+    proxyPurchaseServiceId: proxyPurchaseConfigValue(config, "service_id", "default_service_id"),
+    proxyPurchasePlanId: proxyPurchaseConfigValue(config, "plan_id"),
+    proxyPurchaseDefaultCountry: proxyPurchaseConfigValue(config, "default_country", "country") || setupDefaults.country || "",
+    proxyPurchaseDefaultPeriod: proxyPurchaseConfigValue(config, "default_period", "period") || 1,
+    proxyPurchaseDefaultIsp: setupDefaults.isp || setupDefaults.isp_id || "",
+    proxyPurchaseDefaultPackage: setupDefaults.package || setupDefaults.package_id || "",
+    proxyPurchaseDefaultProtocol: setupDefaults.protocol || "",
+    proxyPurchaseDefaultAuthentication: setupDefaults.authentication || setupDefaults.auth || "",
+    proxyPurchasePointsPerUsd: proxyPurchaseConfigValue(config, "points_per_usd"),
+    proxyPurchaseUsdToNtdRate: proxyPurchaseConfigValue(config, "usd_to_ntd_rate") || 35,
+    proxyPurchasePaymentFeeRate: proxyPurchaseConfigValue(config, "payment_fee_rate") || 0,
+    proxyPurchaseFixedFeePoints: proxyPurchaseConfigValue(config, "fixed_fee_points") || 0,
+    proxyPurchaseMaxCostUsd: proxyPurchaseConfigValue(config, "max_vendor_cost_usd", "max_cost_usd"),
+    proxyPurchaseSafetyBufferUsd: proxyPurchaseConfigValue(config, "safety_buffer_usd") || 0,
+    proxyPurchaseMinProfitUsd: proxyPurchaseConfigValue(config, "minimum_profit_usd", "min_profit_usd") || 0,
+    proxyPurchaseEnabled: String(Boolean(proxyPurchaseConfigValue(config, "live_purchasing_enabled", "enabled"))),
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const control = el(id);
+    if (control && value !== "") control.value = String(value);
+  });
+  if (Object.prototype.hasOwnProperty.call(payload || {}, "credential_status")) {
+    const credential = payload?.credential_status;
+    const credentialReady = credential === true || credential?.configured === true || credential?.ready === true;
+    setText("proxyPurchaseCredentialStatus", `凭据状态：${credentialReady ? "已配置" : "未配置"}`);
+  }
+}
+
+function proxyPurchaseServiceLabel(service = {}) {
+  const plan = service.plan_name || service.plan?.name || service.plan_id || "";
+  return [service.name || service.label || service.service_name || service.id, plan].filter(Boolean).join(" · ");
+}
+
+function renderProxyPurchaseProviderOptions(payload = {}) {
+  adminState.proxyPurchaseProviderOptions = payload;
+  const supportedServices = (Array.isArray(payload?.services) ? payload.services : []).filter((service) => (
+    String(service?.id || service?.service_id || "") === "static-residential-ipv4"
+  ));
+  const services = supportedServices.map((service) => ({
+    value: service?.id || service?.service_id || service?.plan_id,
+    label: proxyPurchaseServiceLabel(service),
+  }));
+  if (!services.length) services.push({ value: "static-residential-ipv4", label: "静态住宅 IPv4" });
+  setProxyPurchaseSelectOptions("proxyPurchaseServiceId", services, { emptyLabel: "" });
+  if (el("proxyPurchaseServiceId")) el("proxyPurchaseServiceId").value = "static-residential-ipv4";
+
+  const plans = [];
+  supportedServices.forEach((service) => {
+    const nestedPlans = Array.isArray(service?.plans) ? service.plans : [];
+    nestedPlans.forEach((plan) => plans.push({
+      value: plan?.id || plan?.plan_id || plan?.value,
+      label: [service?.name || service?.label, plan?.name || plan?.label || plan?.id].filter(Boolean).join(" · "),
+    }));
+    if (!nestedPlans.length && (service?.plan_id || service?.plan?.id)) {
+      plans.push({ value: service.plan_id || service.plan.id, label: service.plan_name || service.plan?.name || service.plan_id || service.plan.id });
+    }
+  });
+  setProxyPurchaseSelectOptions("proxyPurchasePlanId", plans, { emptyLabel: "使用产品默认套餐" });
+
+  const setup = payload?.setup || {};
+  const rawCountries = setup.countries || setup.regions || payload?.regions || [];
+  const countries = (Array.isArray(rawCountries) ? rawCountries : []).map((country) => ({
+    value: country?.code || country?.id || country?.value || country,
+    label: country?.name || country?.label || country?.code || country,
+  }));
+  setProxyPurchaseSelectOptions("proxyPurchaseDefaultCountry", countries, { emptyLabel: "使用首个可售地区" });
+
+  const rawPeriods = setup.periods || setup.period || payload?.periods || [1];
+  const periods = (Array.isArray(rawPeriods) ? rawPeriods : [rawPeriods]).map((period) => ({
+    value: period?.value || period?.months || period,
+    label: `${period?.label || period?.value || period?.months || period} 个月`,
+  }));
+  setProxyPurchaseSelectOptions("proxyPurchaseDefaultPeriod", periods, { emptyLabel: "" });
+  const normalizeSetupChoices = (value) => (Array.isArray(value) ? value : value && typeof value !== "object" ? [value] : []).map((item) => ({
+    value: item?.id || item?.value || item?.code || item,
+    label: item?.name || item?.label || item?.value || item?.code || item,
+  }));
+  renderProxyPurchaseIsps(String(el("proxyPurchaseDefaultCountry")?.value || ""));
+  setProxyPurchaseSelectOptions("proxyPurchaseDefaultPackage", normalizeSetupChoices(setup.packages || setup.package), { emptyLabel: "自动选择" });
+  setProxyPurchaseSelectOptions("proxyPurchaseDefaultProtocol", normalizeSetupChoices(setup.protocols || setup.protocol), { emptyLabel: "使用供应商默认值" });
+  setProxyPurchaseSelectOptions("proxyPurchaseDefaultAuthentication", normalizeSetupChoices(setup.authentications || setup.authentication || setup.auth), { emptyLabel: "使用供应商默认值" });
+  setText("proxyPurchaseBalance", `供应商余额：${payload?.balance === undefined || payload?.balance === null ? "—" : `${Number(payload.balance).toLocaleString("zh-CN", { maximumFractionDigits: 4 })} USD`}`);
+  setText("proxyPurchaseLastSync", `同步：${payload?.last_sync_at ? formatBillingTime(payload.last_sync_at) : "刚刚"}`);
+  renderProxyPurchaseConfig({ config: adminState.proxyPurchaseConfig || {} });
+  renderProxyPurchaseIsps(String(el("proxyPurchaseDefaultCountry")?.value || ""));
+}
+
+function renderProxyPurchaseIsps(countryCode) {
+  const setup = adminState.proxyPurchaseProviderOptions?.setup || {};
+  const grouped = setup?.isps;
+  const raw = grouped && !Array.isArray(grouped) && typeof grouped === "object"
+    ? grouped[String(countryCode || "").toUpperCase()] || []
+    : grouped || setup?.isp || [];
+  const options = (Array.isArray(raw) ? raw : raw ? [raw] : []).map((item) => ({
+    value: item?.id || item?.value || item?.code || item,
+    label: item?.name || item?.label || item?.value || item?.code || item,
+  }));
+  setProxyPurchaseSelectOptions("proxyPurchaseDefaultIsp", options, { emptyLabel: "自动选择" });
+}
+
+async function loadProxyPurchaseConfig() {
+  const payload = await api("/api/admin/proxy-purchases/config");
+  renderProxyPurchaseConfig(payload || {});
+  return payload;
+}
+
+async function loadProxyPurchaseProviderOptions({ serviceId, planId } = {}) {
+  setMsg("proxyPurchaseConfigMsg", "正在同步供应商公开产品与选项...");
+  try {
+    const selectedService = String(serviceId || el("proxyPurchaseServiceId")?.value || "static-residential-ipv4");
+    const selectedPlan = String(planId === undefined ? el("proxyPurchasePlanId")?.value || "" : planId);
+    const query = new URLSearchParams({ service_id: selectedService });
+    if (selectedPlan) query.set("plan_id", selectedPlan);
+    const payload = await api(`/api/admin/proxy-purchases/provider-options?${query.toString()}`);
+    renderProxyPurchaseProviderOptions(payload || {});
+    setMsg("proxyPurchaseConfigMsg", "供应商选项已同步", true);
+    return payload;
+  } catch (error) {
+    setMsg("proxyPurchaseConfigMsg", `供应商同步失败：${getErrorMessage(error)}`, false);
+    throw error;
+  }
+}
+
+function proxyPurchaseConfigPayload() {
+  const setupDefaults = {
+    country: String(el("proxyPurchaseDefaultCountry")?.value || ""),
+    isp: String(el("proxyPurchaseDefaultIsp")?.value || ""),
+    package: String(el("proxyPurchaseDefaultPackage")?.value || ""),
+    protocol: String(el("proxyPurchaseDefaultProtocol")?.value || ""),
+    authentication: String(el("proxyPurchaseDefaultAuthentication")?.value || ""),
+  };
+  return {
+    provider: "proxy-cheap",
+    service_id: String(el("proxyPurchaseServiceId")?.value || ""),
+    plan_id: String(el("proxyPurchasePlanId")?.value || ""),
+    default_country: String(el("proxyPurchaseDefaultCountry")?.value || ""),
+    default_period: Math.max(1, Number(el("proxyPurchaseDefaultPeriod")?.value || 1)),
+    quantity: 1,
+    setup_defaults: setupDefaults,
+    points_per_usd: Number(el("proxyPurchasePointsPerUsd")?.value || 0),
+    usd_to_ntd_rate: Number(el("proxyPurchaseUsdToNtdRate")?.value || 0),
+    payment_fee_rate: Number(el("proxyPurchasePaymentFeeRate")?.value || 0),
+    fixed_fee_points: Number(el("proxyPurchaseFixedFeePoints")?.value || 0),
+    max_vendor_cost_usd: Number(el("proxyPurchaseMaxCostUsd")?.value || 0),
+    safety_buffer_usd: Number(el("proxyPurchaseSafetyBufferUsd")?.value || 0),
+    minimum_profit_usd: Number(el("proxyPurchaseMinProfitUsd")?.value || 0),
+    live_purchasing_enabled: el("proxyPurchaseEnabled")?.value === "true",
+  };
+}
+
+async function saveProxyPurchaseConfig() {
+  const form = el("proxyPurchaseConfigForm");
+  if (!form?.reportValidity()) return false;
+  form.setAttribute("aria-busy", "true");
+  setMsg("proxyPurchaseConfigMsg", "正在保存采购配置草稿...");
+  try {
+    const payload = await api("/api/admin/proxy-purchases/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(proxyPurchaseConfigPayload()),
+    });
+    renderProxyPurchaseConfig(payload || {});
+    setMsg("proxyPurchaseConfigMsg", "采购配置草稿已保存，发布前不会影响用户购买", true);
+    return payload;
+  } finally {
+    form.removeAttribute("aria-busy");
+  }
+}
+
+async function publishProxyPurchaseConfig() {
+  const form = el("proxyPurchaseConfigForm");
+  if (!form?.reportValidity()) return false;
+  const adminPassword = String(el("proxyPurchaseAdminPassword")?.value || "");
+  const totpCode = String(el("proxyPurchaseTotpCode")?.value || "").trim();
+  if (!adminPassword || !totpCode) {
+    setMsg("proxyPurchaseConfigMsg", "发布前请填写管理员密码与 MFA 验证码", false);
+    return false;
+  }
+  form.setAttribute("aria-busy", "true");
+  setMsg("proxyPurchaseConfigMsg", "正在校验成本与利润约束并发布...");
+  try {
+    await saveProxyPurchaseConfig();
+    const payload = await api("/api/admin/proxy-purchases/config/publish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ admin_password: adminPassword, totp_code: totpCode }),
+    });
+    if (el("proxyPurchaseAdminPassword")) el("proxyPurchaseAdminPassword").value = "";
+    if (el("proxyPurchaseTotpCode")) el("proxyPurchaseTotpCode").value = "";
+    renderProxyPurchaseConfig(payload || {});
+    setMsg("proxyPurchaseConfigMsg", "供应商采购配置已发布", true);
+    return payload;
+  } finally {
+    form.removeAttribute("aria-busy");
+  }
+}
+
+function renderProxyPurchaseOrders(payload = {}) {
+  const body = el("proxyPurchaseOrderBody");
+  if (!body) return;
+  const orders = Array.isArray(payload?.items) ? payload.items : [];
+  adminState.proxyPurchaseOrders = orders;
+  body.replaceChildren();
+  setText("proxyPurchaseOrderSummary", `共 ${orders.length.toLocaleString("zh-CN")} 条采购订单`);
+  if (!orders.length) {
+    const row = document.createElement("tr");
+    const cell = createBillingCell("暂无供应商采购订单");
+    cell.colSpan = 7;
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+  orders.forEach((order) => {
+    const row = document.createElement("tr");
+    row.appendChild(createBillingCell(order.id));
+    row.appendChild(createBillingCell([order.user_id ? `#${order.user_id}` : "-", order.country_name || order.country].filter(Boolean).join(" · ")));
+    row.appendChild(createBillingCell(order.vendor_price === undefined ? "-" : `${order.vendor_price} ${order.currency || "USD"}`));
+    row.appendChild(createBillingCell(order.charge_points === undefined ? "-" : `${Number(order.charge_points).toLocaleString("zh-CN", { maximumFractionDigits: 2 })} 点`));
+    row.appendChild(createBillingCell([
+      order.status || "pending",
+      order.renewal_status ? `续费：${order.renewal_status}` : "",
+    ].filter(Boolean).join(" / ")));
+    row.appendChild(createBillingCell([formatBillingTime(order.created_at), formatBillingTime(order.updated_at)].join(" / ")));
+    const actionCell = document.createElement("td");
+    const actionWrap = document.createElement("div");
+    actionWrap.className = "proxy-purchase-order-actions";
+    [
+      ["reconcile", "对账"],
+      ["bind", "绑定"],
+      ["confirm_not_created", "确认未创建"],
+    ].forEach(([action, label]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ghost admin-compact-button";
+      button.dataset.proxyPurchaseOrderId = String(order.id || "");
+      button.dataset.proxyPurchaseAction = action;
+      button.textContent = label;
+      actionWrap.appendChild(button);
+    });
+    if (["provider_unknown", "extending"].includes(String(order.renewal_status || ""))) {
+      [
+        ["renewal_reconcile", "核对续费"],
+        ["renewal_confirm_not_extended", "确认未续费"],
+      ].forEach(([action, label]) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "ghost admin-compact-button";
+        button.dataset.proxyPurchaseOrderId = String(order.id || "");
+        button.dataset.proxyPurchaseAction = action;
+        button.textContent = label;
+        actionWrap.appendChild(button);
+      });
+    }
+    actionCell.appendChild(actionWrap);
+    row.appendChild(actionCell);
+    body.appendChild(row);
+  });
+}
+
+async function loadProxyPurchaseOrders() {
+  const body = el("proxyPurchaseOrderBody");
+  body?.setAttribute("aria-busy", "true");
+  try {
+    const payload = await api("/api/admin/proxy-purchases/orders");
+    renderProxyPurchaseOrders(payload || {});
+    setMsg("proxyPurchaseOrderMsg", "");
+    return payload;
+  } catch (error) {
+    setMsg("proxyPurchaseOrderMsg", `采购订单读取失败：${getErrorMessage(error)}`, false);
+    throw error;
+  } finally {
+    body?.removeAttribute("aria-busy");
+  }
+}
+
+function selectProxyPurchaseOrderResolution(orderId, action) {
+  if (el("proxyPurchaseResolutionOrderId")) el("proxyPurchaseResolutionOrderId").value = String(orderId || "");
+  if (el("proxyPurchaseResolutionAction")) el("proxyPurchaseResolutionAction").value = String(action || "reconcile");
+  const providerInput = el("proxyPurchaseResolutionProviderOrderId");
+  if (providerInput) {
+    providerInput.required = action === "bind";
+    providerInput.disabled = String(action || "").startsWith("renewal_");
+    if (action !== "bind") providerInput.value = "";
+  }
+  el("proxyPurchaseResolutionReason")?.focus();
+}
+
+async function resolveProxyPurchaseOrder() {
+  const form = el("proxyPurchaseOrderResolutionForm");
+  const orderId = String(el("proxyPurchaseResolutionOrderId")?.value || "").trim();
+  const action = String(el("proxyPurchaseResolutionAction")?.value || "reconcile");
+  if (!orderId || !form?.reportValidity()) return false;
+  const renewalAction = action.startsWith("renewal_");
+  const apiAction = renewalAction ? action.slice("renewal_".length) : action;
+  const body = {
+    action: apiAction,
+    provider_order_id: renewalAction ? undefined : String(el("proxyPurchaseResolutionProviderOrderId")?.value || "").trim(),
+    reason: String(el("proxyPurchaseResolutionReason")?.value || "").trim(),
+    admin_password: String(el("proxyPurchaseResolutionPassword")?.value || ""),
+    totp_code: String(el("proxyPurchaseResolutionTotp")?.value || "").trim(),
+  };
+  form.setAttribute("aria-busy", "true");
+  setMsg("proxyPurchaseOrderMsg", `正在执行订单 ${orderId} 的人工处置...`);
+  try {
+    const endpoint = renewalAction
+      ? `/api/admin/proxy-purchases/orders/${encodeURIComponent(orderId)}/renewal/resolve`
+      : `/api/admin/proxy-purchases/orders/${encodeURIComponent(orderId)}/resolve`;
+    if (renewalAction) delete body.provider_order_id;
+    const payload = await api(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (el("proxyPurchaseResolutionPassword")) el("proxyPurchaseResolutionPassword").value = "";
+    if (el("proxyPurchaseResolutionTotp")) el("proxyPurchaseResolutionTotp").value = "";
+    await loadProxyPurchaseOrders();
+    const actualStatus = String(payload?.order?.status || "未知状态");
+    setMsg("proxyPurchaseOrderMsg", `订单 ${orderId} 处置完成，当前实际状态：${actualStatus}`, true);
+    return payload;
+  } finally {
+    form.removeAttribute("aria-busy");
+  }
+}
+
 async function loadProxyMarketWorkspace() {
   if (adminState.proxyMarketLoadingPromise) return adminState.proxyMarketLoadingPromise;
   setProxyMarketRecordsView(adminState.proxyMarketRecordsView);
@@ -8617,6 +8979,11 @@ async function loadProxyMarketWorkspace() {
     loadProxyMarketItems(),
     loadProxyMarketAllocations(),
     loadProxyMarketSettings(),
+    loadProxyPurchaseConfig().then(() => loadProxyPurchaseProviderOptions({
+      serviceId: "static-residential-ipv4",
+      planId: String(el("proxyPurchasePlanId")?.value || ""),
+    })),
+    loadProxyPurchaseOrders(),
   ]).finally(() => {
     section?.classList.remove("proxy-market-loading");
     if (adminState.proxyMarketLoadingPromise === request) adminState.proxyMarketLoadingPromise = null;
@@ -9693,6 +10060,71 @@ function bindActions() {
   el("btnRefreshProxyMarket")?.addEventListener("click", async () => {
     setMsg("proxyMarketMsg", "正在刷新代理 IP...");
     await loadProxyMarketWorkspace();
+  });
+  el("proxyPurchaseConfigForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await saveProxyPurchaseConfig();
+    } catch (error) {
+      setMsg("proxyPurchaseConfigMsg", getErrorMessage(error), false);
+    }
+  });
+  el("btnPublishProxyPurchaseConfig")?.addEventListener("click", async () => {
+    try {
+      await publishProxyPurchaseConfig();
+    } catch (error) {
+      setMsg("proxyPurchaseConfigMsg", getErrorMessage(error), false);
+    }
+  });
+  el("btnRefreshProxyPurchaseProvider")?.addEventListener("click", async () => {
+    try { await loadProxyPurchaseProviderOptions(); } catch {}
+  });
+  el("proxyPurchaseServiceId")?.addEventListener("change", async () => {
+    if (el("proxyPurchasePlanId")) el("proxyPurchasePlanId").value = "";
+    try {
+      await loadProxyPurchaseProviderOptions({
+        serviceId: "static-residential-ipv4",
+        planId: "",
+      });
+    } catch {}
+  });
+  el("proxyPurchasePlanId")?.addEventListener("change", async () => {
+    try {
+      await loadProxyPurchaseProviderOptions({
+        serviceId: "static-residential-ipv4",
+        planId: String(el("proxyPurchasePlanId")?.value || ""),
+      });
+    } catch {}
+  });
+  el("proxyPurchaseDefaultCountry")?.addEventListener("change", () => {
+    renderProxyPurchaseIsps(String(el("proxyPurchaseDefaultCountry")?.value || ""));
+  });
+  el("btnRefreshProxyPurchaseOrders")?.addEventListener("click", async () => {
+    try { await loadProxyPurchaseOrders(); } catch {}
+  });
+  el("proxyPurchaseOrderBody")?.addEventListener("click", async (event) => {
+    const button = event.target instanceof Element
+      ? event.target.closest("button[data-proxy-purchase-order-id]")
+      : null;
+    if (!(button instanceof HTMLButtonElement)) return;
+    selectProxyPurchaseOrderResolution(
+      button.dataset.proxyPurchaseOrderId || "",
+      button.dataset.proxyPurchaseAction || "reconcile",
+    );
+  });
+  el("proxyPurchaseResolutionAction")?.addEventListener("change", () => {
+    selectProxyPurchaseOrderResolution(
+      String(el("proxyPurchaseResolutionOrderId")?.value || ""),
+      String(el("proxyPurchaseResolutionAction")?.value || "reconcile"),
+    );
+  });
+  el("proxyPurchaseOrderResolutionForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await resolveProxyPurchaseOrder();
+    } catch (error) {
+      setMsg("proxyPurchaseOrderMsg", getErrorMessage(error), false);
+    }
   });
   el("proxyMarketFilterForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();

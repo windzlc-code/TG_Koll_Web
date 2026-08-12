@@ -335,6 +335,58 @@
       pointer-events: none;
     }
 
+    .proxy-purchase-admin-hero {
+      position: relative;
+      overflow: hidden;
+      padding: 18px;
+      color: #f7fbff;
+      border: 0;
+      border-radius: 12px;
+      background: linear-gradient(105deg, #237fb2 0 8%, #155f96 24%, #123f69 56%, #102c47 100%);
+    }
+
+    .proxy-purchase-admin-hero::after {
+      content: "";
+      position: absolute;
+      width: 180px;
+      height: 180px;
+      right: -64px;
+      top: -95px;
+      border: 1px solid rgba(255, 255, 255, .22);
+      border-radius: 50%;
+    }
+
+    .proxy-purchase-admin-hero .proxy-market-admin-band-head { position: relative; z-index: 1; margin-bottom: 16px; }
+    .proxy-purchase-admin-hero h3 { color: #fff; }
+    .proxy-purchase-admin-hero .small { color: #c5dbe9; }
+    .proxy-purchase-provider-health { display: flex; flex-wrap: wrap; gap: 8px; }
+    .proxy-purchase-provider-health span { padding: 6px 9px; border: 1px solid rgba(255,255,255,.22); border-radius: 6px; background: rgba(4,28,52,.25); font-size: 12px; }
+
+    .proxy-purchase-config-form {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+      padding: 16px;
+      color: var(--ink, #17202a);
+      border-radius: 10px;
+      background: rgba(255,255,255,.97);
+    }
+
+    .proxy-purchase-config-form label { min-width: 0; margin: 0; }
+    .proxy-purchase-config-form label > span { display: block; margin-bottom: 5px; }
+    .proxy-purchase-config-form .span-2 { grid-column: span 2; }
+    .proxy-purchase-config-form .proxy-purchase-config-actions { display: flex; align-items: end; gap: 8px; grid-column: 1 / -1; flex-wrap: wrap; }
+    .proxy-purchase-config-form .proxy-purchase-config-actions button { width: auto; }
+    .proxy-purchase-mfa { display: grid; grid-template-columns: repeat(2, minmax(160px, 240px)); gap: 10px; flex: 1 1 420px; }
+    .proxy-purchase-mfa-note { grid-column: 1 / -1; margin: 0; color: #51677c; font-size: 11px; }
+    .proxy-purchase-orders-table { min-width: 1060px; }
+    .proxy-purchase-order-resolution { display: grid; grid-template-columns: 1.1fr 1fr 1.2fr 1.5fr 1fr 1fr auto; gap: 10px; align-items: end; margin-top: 14px; padding: 14px; border: 1px solid #c5d2de; border-radius: 8px; background: #f7fafc; }
+    .proxy-purchase-order-resolution label { min-width: 0; margin: 0; }
+    .proxy-purchase-order-resolution label > span { display: block; margin-bottom: 5px; font-size: 11px; color: #51677c; }
+    .proxy-purchase-order-resolution button { width: auto; white-space: nowrap; }
+    .proxy-purchase-order-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+
     @media (max-width: 1100px) {
       .proxy-market-admin-stats {
         grid-template-columns: repeat(3, minmax(110px, 1fr));
@@ -351,6 +403,9 @@
       .proxy-market-admin-form {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
+
+      .proxy-purchase-config-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .proxy-purchase-order-resolution { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
       .proxy-market-admin-form .span-4 {
         grid-column: 1 / -1;
@@ -378,6 +433,13 @@
       .proxy-market-settings-form {
         grid-template-columns: 1fr;
       }
+
+      .proxy-purchase-config-form,
+      .proxy-purchase-mfa,
+      .proxy-purchase-order-resolution { grid-template-columns: 1fr; }
+
+      .proxy-purchase-config-form .span-2,
+      .proxy-purchase-mfa-note { grid-column: auto; }
 
       #proxyMarketUserLimitForm {
         grid-template-columns: 1fr;
@@ -1003,6 +1065,77 @@
           <div class="proxy-market-admin-stat"><span class="small">健康</span><strong id="proxyMarketStatHealthy">0</strong></div>
           <div class="proxy-market-admin-stat"><span class="small">已分配</span><strong id="proxyMarketStatAllocated">0</strong></div>
           <div class="proxy-market-admin-stat"><span class="small">需处理</span><strong id="proxyMarketStatAttention">0</strong></div>
+        </div>
+
+        <div class="proxy-market-admin-band proxy-purchase-admin-hero" id="proxyPurchaseAdminWorkspace">
+          <div class="proxy-market-admin-band-head">
+            <div>
+              <h3>Proxy-Cheap 供应商采购</h3>
+              <div class="small">映射供应商公开 API 选项；用户端仅显示地区、托管续费与算力点报价。</div>
+            </div>
+            <div class="proxy-purchase-provider-health" aria-label="供应商状态">
+              <span id="proxyPurchaseCredentialStatus">凭据状态：读取中</span>
+              <span id="proxyPurchaseBalance">供应商余额：—</span>
+              <span id="proxyPurchaseLastSync">同步：—</span>
+            </div>
+          </div>
+
+          <form id="proxyPurchaseConfigForm" class="proxy-purchase-config-form" novalidate>
+            <label><span>默认产品（首版固定）</span><select id="proxyPurchaseServiceId" required disabled><option value="static-residential-ipv4">静态住宅 IPv4</option></select></label>
+            <label><span>默认套餐</span><select id="proxyPurchasePlanId"><option value="">使用产品默认套餐</option></select></label>
+            <label><span>默认地区</span><select id="proxyPurchaseDefaultCountry"><option value="">使用首个可售地区</option></select></label>
+            <label><span>默认周期（月）</span><select id="proxyPurchaseDefaultPeriod"><option value="1">1</option></select></label>
+
+            <label><span>数量</span><input value="1" disabled aria-label="数量固定为一"></label>
+            <label><span>ISP</span><select id="proxyPurchaseDefaultIsp"><option value="">自动选择</option></select></label>
+            <label><span>代理套餐包</span><select id="proxyPurchaseDefaultPackage"><option value="">自动选择</option></select></label>
+            <label><span>连接协议</span><select id="proxyPurchaseDefaultProtocol"><option value="">使用供应商默认值</option></select></label>
+            <label><span>认证方式</span><select id="proxyPurchaseDefaultAuthentication"><option value="">使用供应商默认值</option></select></label>
+            <label><span>每美元兑换点数</span><input id="proxyPurchasePointsPerUsd" type="number" min="0.01" step="0.01" required></label>
+            <label><span>USD → NTD 汇率</span><input id="proxyPurchaseUsdToNtdRate" type="number" min="0.000001" step="0.000001" required></label>
+            <label><span>支付费率</span><input id="proxyPurchasePaymentFeeRate" type="number" min="0" max="1" step="0.0001" required></label>
+            <label><span>固定费用（点）</span><input id="proxyPurchaseFixedFeePoints" type="number" min="0" step="0.01" value="0" required></label>
+            <label><span>供应商成本上限（USD）</span><input id="proxyPurchaseMaxCostUsd" type="number" min="0.01" step="0.01" required></label>
+            <label><span>成本安全垫（USD）</span><input id="proxyPurchaseSafetyBufferUsd" type="number" min="0" step="0.01" value="0" required></label>
+            <label><span>最低利润（USD）</span><input id="proxyPurchaseMinProfitUsd" type="number" min="0" step="0.01" value="0" required></label>
+            <label><span>用户购买</span><select id="proxyPurchaseEnabled"><option value="false">关闭</option><option value="true">开放</option></select></label>
+            <label><span>供应商</span><input value="Proxy-Cheap（自动识别）" disabled></label>
+
+            <div class="proxy-purchase-config-actions">
+              <div class="proxy-purchase-mfa">
+                <label><span>管理员密码（发布时）</span><input id="proxyPurchaseAdminPassword" type="password" autocomplete="current-password"></label>
+                <label><span>MFA 验证码（发布时）</span><input id="proxyPurchaseTotpCode" autocomplete="one-time-code" maxlength="32"></label>
+                <p class="proxy-purchase-mfa-note">保存草稿不会生效；发布会在服务端校验不亏损约束，并要求 MFA 二次确认。</p>
+              </div>
+              <button id="btnRefreshProxyPurchaseProvider" type="button" class="ghost">同步供应商</button>
+              <button type="submit" class="ghost">保存草稿</button>
+              <button id="btnPublishProxyPurchaseConfig" type="button" class="primary">校验并发布</button>
+            </div>
+          </form>
+          <div id="proxyPurchaseConfigMsg" class="msg" role="status" aria-live="polite"></div>
+        </div>
+
+        <div class="proxy-market-admin-band">
+          <div class="proxy-market-admin-band-head">
+            <div><h3>供应商采购订单</h3><div class="small" id="proxyPurchaseOrderSummary">尚未加载</div></div>
+            <button id="btnRefreshProxyPurchaseOrders" type="button" class="ghost">刷新订单</button>
+          </div>
+          <div class="table-wrap admin-table-shell admin-governance-table-shell">
+            <table class="table admin-governance-table proxy-purchase-orders-table">
+              <thead><tr><th>订单</th><th>客户 / 地区</th><th>供应商成本</th><th>点数售价</th><th>状态</th><th>创建 / 更新</th><th>操作</th></tr></thead>
+              <tbody id="proxyPurchaseOrderBody"><tr><td colspan="7">进入页面后加载采购订单...</td></tr></tbody>
+            </table>
+          </div>
+          <form id="proxyPurchaseOrderResolutionForm" class="proxy-purchase-order-resolution" novalidate>
+            <label><span>当前订单</span><input id="proxyPurchaseResolutionOrderId" readonly required placeholder="请先选择订单操作"></label>
+            <label><span>处置动作</span><select id="proxyPurchaseResolutionAction" required><option value="reconcile">重新对账</option><option value="bind">绑定供应商订单</option><option value="confirm_not_created">确认未创建并释放</option><option value="renewal_reconcile">核对续费</option><option value="renewal_confirm_not_extended">确认未续费</option></select></label>
+            <label><span>供应商订单 ID（绑定必填）</span><input id="proxyPurchaseResolutionProviderOrderId" maxlength="160"></label>
+            <label><span>处置原因</span><input id="proxyPurchaseResolutionReason" minlength="3" maxlength="500" required placeholder="记录本次人工处置依据"></label>
+            <label><span>管理员密码</span><input id="proxyPurchaseResolutionPassword" type="password" autocomplete="current-password" required></label>
+            <label><span>MFA 验证码</span><input id="proxyPurchaseResolutionTotp" autocomplete="one-time-code" maxlength="64" required></label>
+            <button id="btnResolveProxyPurchaseOrder" type="submit" class="primary">执行并记录审计</button>
+          </form>
+          <div id="proxyPurchaseOrderMsg" class="msg" role="status" aria-live="polite"></div>
         </div>
 
         <div class="proxy-market-admin-band" id="proxyMarketRecordsBand">

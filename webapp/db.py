@@ -295,6 +295,8 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS billing_wallets (
           user_id INTEGER PRIMARY KEY,
           credit_units INTEGER NOT NULL DEFAULT 0 CHECK(credit_units >= 0),
+          cash_backed_credit_units INTEGER NOT NULL DEFAULT 0
+            CHECK(cash_backed_credit_units >= 0),
           billing_mode TEXT NOT NULL DEFAULT 'legacy' CHECK(billing_mode IN ('legacy', 'enforced')),
           unlimited_compute INTEGER NOT NULL DEFAULT 0 CHECK(unlimited_compute IN (0, 1)),
           migrated_legacy_balance INTEGER NOT NULL DEFAULT 0,
@@ -363,8 +365,11 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
           sku TEXT NOT NULL,
           status TEXT NOT NULL CHECK(status IN ('held', 'settled', 'released', 'waived')),
           reserved_credit_units INTEGER NOT NULL DEFAULT 0,
+          reserved_cash_backed_credit_units INTEGER NOT NULL DEFAULT 0,
           reserved_image_count INTEGER NOT NULL DEFAULT 0,
           settled_credit_units INTEGER NOT NULL DEFAULT 0,
+          settled_cash_backed_credit_units INTEGER NOT NULL DEFAULT 0,
+          refunded_cash_backed_credit_units INTEGER NOT NULL DEFAULT 0,
           settled_image_count INTEGER NOT NULL DEFAULT 0,
           catalog_version_id TEXT NOT NULL DEFAULT '',
           meta_json TEXT NOT NULL DEFAULT '{}',
@@ -382,6 +387,8 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
           event_type TEXT NOT NULL,
           amount_units INTEGER NOT NULL DEFAULT 0,
           balance_after_units INTEGER NOT NULL DEFAULT 0,
+          cash_backed_amount_units INTEGER NOT NULL DEFAULT 0,
+          cash_backed_balance_after_units INTEGER NOT NULL DEFAULT 0,
           ref_type TEXT NOT NULL DEFAULT '',
           ref_id TEXT NOT NULL DEFAULT '',
           order_id TEXT NOT NULL DEFAULT '',
@@ -451,6 +458,150 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
             "ALTER TABLE billing_wallets ADD COLUMN unlimited_compute INTEGER NOT NULL DEFAULT 0 "
             "CHECK(unlimited_compute IN (0, 1))"
         )
+    if "cash_backed_credit_units" not in wallet_columns:
+        # Existing/legacy balances cannot be proven to have come from paid credit packs.
+        conn.execute(
+            "ALTER TABLE billing_wallets ADD COLUMN cash_backed_credit_units "
+            "INTEGER NOT NULL DEFAULT 0 CHECK(cash_backed_credit_units >= 0)"
+        )
+    reservation_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(billing_reservations)").fetchall()
+    }
+    for column in (
+        "reserved_cash_backed_credit_units",
+        "settled_cash_backed_credit_units",
+        "refunded_cash_backed_credit_units",
+    ):
+        if column not in reservation_columns:
+            conn.execute(
+                f"ALTER TABLE billing_reservations ADD COLUMN {column} "
+                "INTEGER NOT NULL DEFAULT 0 CHECK(" + column + " >= 0)"
+            )
+    ledger_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(billing_ledger)").fetchall()
+    }
+    for column in ("cash_backed_amount_units", "cash_backed_balance_after_units"):
+        if column not in ledger_columns:
+            conn.execute(
+                f"ALTER TABLE billing_ledger ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
+            )
+    conn.execute(
+        "UPDATE billing_wallets SET cash_backed_credit_units = "
+        "MIN(MAX(cash_backed_credit_units, 0), MAX(credit_units, 0)) "
+        "WHERE cash_backed_credit_units < 0 OR cash_backed_credit_units > credit_units"
+    )
+    conn.execute("DROP TRIGGER IF EXISTS trg_billing_wallet_cash_backed_insert")
+    conn.execute("DROP TRIGGER IF EXISTS trg_billing_wallet_cash_backed_update")
+    conn.execute(
+        """
+        CREATE TRIGGER trg_billing_wallet_cash_backed_insert
+        AFTER INSERT ON billing_wallets
+        WHEN NEW.cash_backed_credit_units < 0
+          OR NEW.cash_backed_credit_units > NEW.credit_units
+        BEGIN
+          UPDATE billing_wallets
+          SET cash_backed_credit_units = MIN(MAX(NEW.cash_backed_credit_units, 0), MAX(NEW.credit_units, 0))
+          WHERE user_id = NEW.user_id;
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER trg_billing_wallet_cash_backed_update
+        AFTER UPDATE OF credit_units, cash_backed_credit_units ON billing_wallets
+        WHEN NEW.cash_backed_credit_units < 0
+          OR NEW.cash_backed_credit_units > NEW.credit_units
+        BEGIN
+          UPDATE billing_wallets
+          SET cash_backed_credit_units = MIN(MAX(NEW.cash_backed_credit_units, 0), MAX(NEW.credit_units, 0))
+          WHERE user_id = NEW.user_id;
+        END
+        """
+    )
+    cash_backfill = conn.execute(
+        "SELECT 1 FROM admin_config WHERE key = 'billing_cash_backed_backfill_v1'"
+    ).fetchone()
+    if cash_backfill is None:
+        # Reconstruct a conservative, provable lower bound by replaying the
+        # historical credit ledger in deterministic order. Paid-pack approval
+        # is the only event allowed to create a cash-backed candidate. Every
+        # negative credit event consumes that candidate; positive grants and
+        # releases never restore it because old rows cannot prove which bucket
+        # they originally came from.
+        wallet_rows = conn.execute(
+            "SELECT user_id, credit_units FROM billing_wallets ORDER BY user_id"
+        ).fetchall()
+        cash_candidates = {int(row["user_id"]): 0 for row in wallet_rows}
+        ledger_rows = conn.execute(
+            """
+            SELECT user_id, event_type, amount_units
+            FROM billing_ledger
+            WHERE asset_type = 'credit'
+            ORDER BY user_id, created_at, id
+            """
+        ).fetchall()
+        for ledger_row in ledger_rows:
+            user_id = int(ledger_row["user_id"])
+            if user_id not in cash_candidates:
+                continue
+            event_type = str(ledger_row["event_type"] or "")
+            amount_units = int(ledger_row["amount_units"] or 0)
+            candidate = cash_candidates[user_id]
+            if event_type == "credit_pack_approved" and amount_units > 0:
+                candidate += amount_units
+            elif event_type == "credit_pack_refunded":
+                # Refunds are a negative event in current ledgers, but abs()
+                # also safely handles older rows that encoded the magnitude as
+                # positive. This branch prevents the generic negative branch
+                # from deducting the same refund twice.
+                candidate -= abs(amount_units)
+            elif amount_units < 0:
+                candidate += amount_units
+            cash_candidates[user_id] = max(candidate, 0)
+
+        for row in wallet_rows:
+            user_id = int(row["user_id"])
+            before = int(
+                conn.execute(
+                    "SELECT cash_backed_credit_units FROM billing_wallets WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()[0]
+                or 0
+            )
+            target = min(
+                max(int(row["credit_units"] or 0), 0),
+                cash_candidates[user_id],
+            )
+            conn.execute(
+                "UPDATE billing_wallets SET cash_backed_credit_units = ? WHERE user_id = ?",
+                (target, user_id),
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO billing_ledger(
+                  id,user_id,asset_type,event_type,amount_units,balance_after_units,
+                  cash_backed_amount_units,cash_backed_balance_after_units,
+                  ref_type,ref_id,meta_json,idempotency_key,created_at
+                ) VALUES (
+                  'bill_entry_cash_backfill_' || ?,?,'audit','cash_backed_backfill',0,?,
+                  ?,?,'migration','billing_cash_backed_backfill_v1','{}',?,strftime('%s','now')
+                )
+                """,
+                (
+                    user_id,
+                    user_id,
+                    int(row["credit_units"] or 0),
+                    target - before,
+                    target,
+                    f"billing_cash_backed_backfill_v1:{user_id}",
+                ),
+            )
+        conn.execute(
+            "INSERT INTO admin_config(key,value_json,updated_at) "
+            "VALUES ('billing_cash_backed_backfill_v1','{\"completed\":true}',strftime('%s','now'))"
+        )
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_catalog_active ON billing_catalog_versions(status) WHERE status = 'active'")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_orders_user ON billing_orders(user_id, created_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_orders_status ON billing_orders(status, created_at)")
@@ -476,6 +627,212 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
     }.items():
         if column not in social_task_columns:
             conn.execute(f"ALTER TABLE social_automation_tasks ADD COLUMN {column} {definition}")
+
+
+def _ensure_proxy_purchase_schema(conn: sqlite3.Connection) -> None:
+    """Install the provider-purchase state machine with additive migrations."""
+    statements = (
+        """
+        CREATE TABLE IF NOT EXISTS proxy_purchase_config_versions (
+          id TEXT PRIMARY KEY,
+          version_number INTEGER NOT NULL UNIQUE,
+          status TEXT NOT NULL CHECK(status IN ('draft', 'active', 'retired')),
+          config_json TEXT NOT NULL DEFAULT '{}',
+          created_by INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          published_at INTEGER NOT NULL DEFAULT 0
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS proxy_purchase_quotes (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          provider_key TEXT NOT NULL DEFAULT 'proxycheap',
+          service_id TEXT NOT NULL,
+          request_hash TEXT NOT NULL,
+          request_json TEXT NOT NULL,
+          provider_price_minor INTEGER NOT NULL CHECK(provider_price_minor >= 0),
+          provider_currency TEXT NOT NULL,
+          credit_units INTEGER NOT NULL CHECK(credit_units >= 0),
+          config_version_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          expires_at INTEGER NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS proxy_purchase_orders (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          quote_id TEXT NOT NULL,
+          reservation_id TEXT NOT NULL DEFAULT '',
+          provider_key TEXT NOT NULL DEFAULT 'proxycheap',
+          provider_order_id TEXT NOT NULL DEFAULT '',
+          provider_proxy_id TEXT NOT NULL DEFAULT '',
+          request_hash TEXT NOT NULL,
+          request_json TEXT NOT NULL,
+          provider_cost_minor INTEGER NOT NULL DEFAULT 0 CHECK(provider_cost_minor >= 0),
+          provider_currency TEXT NOT NULL DEFAULT 'USD',
+          credit_units INTEGER NOT NULL CHECK(credit_units >= 0),
+          config_version_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          renewal_enabled INTEGER NOT NULL DEFAULT 0 CHECK(renewal_enabled IN (0, 1)),
+          idempotency_key TEXT NOT NULL,
+          error_code TEXT NOT NULL DEFAULT '',
+          error_detail TEXT NOT NULL DEFAULT '',
+          provider_response_json TEXT NOT NULL DEFAULT '{}',
+          last_synced_at INTEGER NOT NULL DEFAULT 0,
+          completed_at INTEGER NOT NULL DEFAULT 0,
+          next_attempt_at INTEGER NOT NULL DEFAULT 0,
+          reconcile_attempts INTEGER NOT NULL DEFAULT 0,
+          client_reference TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(user_id, idempotency_key),
+          FOREIGN KEY(user_id) REFERENCES users(id),
+          FOREIGN KEY(quote_id) REFERENCES proxy_purchase_quotes(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS proxy_purchase_events (
+          id TEXT PRIMARY KEY,
+          event_id TEXT NOT NULL UNIQUE,
+          order_id TEXT NOT NULL DEFAULT '',
+          provider_proxy_id TEXT NOT NULL DEFAULT '',
+          event_type TEXT NOT NULL,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          signature_verified INTEGER NOT NULL DEFAULT 0 CHECK(signature_verified IN (0, 1)),
+          processed_at INTEGER NOT NULL DEFAULT 0,
+          processing_status TEXT NOT NULL DEFAULT 'pending',
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          next_attempt_at INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS proxy_renewal_schedules (
+          id TEXT PRIMARY KEY,
+          order_id TEXT NOT NULL UNIQUE,
+          user_id INTEGER NOT NULL,
+          provider_proxy_id TEXT NOT NULL DEFAULT '',
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+          status TEXT NOT NULL DEFAULT 'scheduled',
+          next_attempt_at INTEGER NOT NULL DEFAULT 0,
+          expires_at INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT NOT NULL DEFAULT '',
+          idempotency_key TEXT NOT NULL DEFAULT '',
+          reservation_id TEXT NOT NULL DEFAULT '',
+          lease_token TEXT NOT NULL DEFAULT '',
+          lease_expires_at INTEGER NOT NULL DEFAULT 0,
+          provider_started_at INTEGER NOT NULL DEFAULT 0,
+          baseline_expires_at INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY(order_id) REFERENCES proxy_purchase_orders(id),
+          FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        """,
+    )
+    for statement in statements:
+        conn.execute(statement)
+
+    additive_columns = {
+        "proxy_purchase_orders": {
+            "next_attempt_at": "INTEGER NOT NULL DEFAULT 0",
+            "reconcile_attempts": "INTEGER NOT NULL DEFAULT 0",
+            "client_reference": "TEXT NOT NULL DEFAULT ''",
+        },
+        "proxy_renewal_schedules": {
+            "reservation_id": "TEXT NOT NULL DEFAULT ''",
+            "lease_token": "TEXT NOT NULL DEFAULT ''",
+            "lease_expires_at": "INTEGER NOT NULL DEFAULT 0",
+            "provider_started_at": "INTEGER NOT NULL DEFAULT 0",
+            "baseline_expires_at": "INTEGER NOT NULL DEFAULT 0",
+        },
+        "proxy_purchase_events": {
+            "processing_status": "TEXT NOT NULL DEFAULT 'pending'",
+            "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+            "next_attempt_at": "INTEGER NOT NULL DEFAULT 0",
+            "last_error": "TEXT NOT NULL DEFAULT ''",
+        },
+    }
+    for table, columns in additive_columns.items():
+        present = {
+            str(row["name"])
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        for column, definition in columns.items():
+            if column not in present:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_purchase_config_active "
+        "ON proxy_purchase_config_versions(status) WHERE status = 'active'"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proxy_purchase_quotes_user "
+        "ON proxy_purchase_quotes(user_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proxy_purchase_quotes_expiry "
+        "ON proxy_purchase_quotes(status, expires_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proxy_purchase_orders_user "
+        "ON proxy_purchase_orders(user_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proxy_purchase_orders_provider "
+        "ON proxy_purchase_orders(provider_key, provider_order_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proxy_purchase_orders_status "
+        "ON proxy_purchase_orders(status, updated_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proxy_purchase_orders_reconcile_due "
+        "ON proxy_purchase_orders(status, next_attempt_at, updated_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proxy_purchase_events_pending "
+        "ON proxy_purchase_events(processed_at, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proxy_purchase_events_processing "
+        "ON proxy_purchase_events(processing_status, next_attempt_at, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proxy_renewals_lease "
+        "ON proxy_renewal_schedules(status, lease_expires_at, next_attempt_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proxy_renewals_due "
+        "ON proxy_renewal_schedules(enabled, status, next_attempt_at)"
+    )
+
+    item_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(proxy_market_items)").fetchall()
+    }
+    for column, definition in {
+        "ownership_type": "TEXT NOT NULL DEFAULT 'shared'",
+        "owner_user_id": "INTEGER NOT NULL DEFAULT 0",
+        "provider_purchase_order_id": "TEXT NOT NULL DEFAULT ''",
+        "provider_proxy_id": "TEXT NOT NULL DEFAULT ''",
+    }.items():
+        if column not in item_columns:
+            conn.execute(f"ALTER TABLE proxy_market_items ADD COLUMN {column} {definition}")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proxy_market_owned "
+        "ON proxy_market_items(owner_user_id, ownership_type, status)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_market_provider_proxy "
+        "ON proxy_market_items(provider_key, provider_proxy_id) WHERE provider_proxy_id <> ''"
+    )
 
 
 def _ensure_auth_identity_schema(conn: sqlite3.Connection) -> None:
@@ -1057,7 +1414,6 @@ def ensure_crm_schema(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE crm_workflows ADD COLUMN schedule_id TEXT NOT NULL DEFAULT ''"
         )
-
     # The visitor hash already includes a UTC-day bucket. Include campaign and
     # lead in the unique key so one visitor can legitimately follow different
     # tenant-owned campaign links on the same day while replaying one token is
@@ -1867,6 +2223,7 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_owners_user ON persona_owners(user_id, archive_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_persona_group_owners_user ON persona_group_owners(user_id, group_id)")
         _ensure_commercial_billing_schema(conn)
+        _ensure_proxy_purchase_schema(conn)
         _ensure_email_delivery_governance_schema(conn)
         ensure_crm_schema(conn)
         conn.execute(

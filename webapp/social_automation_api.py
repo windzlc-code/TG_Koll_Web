@@ -5111,6 +5111,14 @@ def delete_social_proxy(proxy_id: str) -> int:
         ).fetchall()
         if bound:
             raise HTTPException(status_code=409, detail="代理仍被账号绑定，不能删除")
+        if (
+            str(row["source"] or "").strip().lower() == "provider_purchase"
+            and str(row["purchase_status"] or "").strip().lower() == "owned"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="已购买代理是账号资产，只能解除绑定，不能从代理列表删除",
+            )
         if release_system_proxy_in_transaction(
             conn,
             proxy=row,

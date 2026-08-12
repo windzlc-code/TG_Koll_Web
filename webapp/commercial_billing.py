@@ -897,6 +897,16 @@ def ensure_wallet(conn: sqlite3.Connection, user_id: int, *, now: int | None = N
             now=current,
         )
         row = conn.execute("SELECT * FROM billing_wallets WHERE user_id = ?", (int(user_id),)).fetchone()
+    if row is not None and int(row["cash_backed_credit_units"] or 0) > int(row["credit_units"] or 0):
+        # Protect the invariant when legacy tools/tests wrote total credit directly.
+        conn.execute(
+            "UPDATE billing_wallets SET cash_backed_credit_units = credit_units, updated_at = ? "
+            "WHERE user_id = ? AND cash_backed_credit_units > credit_units",
+            (current, int(user_id)),
+        )
+        row = conn.execute(
+            "SELECT * FROM billing_wallets WHERE user_id = ?", (int(user_id),)
+        ).fetchone()
     return dict(row)
 
 
@@ -1244,18 +1254,30 @@ def _insert_ledger(
     ref_id: str = "",
     order_id: str = "",
     reservation_id: str = "",
+    cash_backed_amount_units: int = 0,
+    cash_backed_balance_after_units: int | None = None,
     meta: dict[str, Any] | None = None,
     now: int | None = None,
 ) -> None:
+    if cash_backed_balance_after_units is None:
+        wallet = conn.execute(
+            "SELECT cash_backed_credit_units FROM billing_wallets WHERE user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+        cash_backed_balance_after_units = (
+            int(wallet["cash_backed_credit_units"] or 0) if wallet is not None else 0
+        )
     conn.execute(
         """
         INSERT OR IGNORE INTO billing_ledger(
           id, user_id, asset_type, event_type, amount_units, balance_after_units,
+          cash_backed_amount_units, cash_backed_balance_after_units,
           ref_type, ref_id, order_id, reservation_id, meta_json, idempotency_key, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             _id("bill_entry"), int(user_id), str(asset_type), str(event_type), int(amount_units), int(balance_after_units),
+            int(cash_backed_amount_units), int(cash_backed_balance_after_units),
             str(ref_type), str(ref_id), str(order_id), str(reservation_id), _dumps(meta or {}), str(idempotency_key), int(now or _now()),
         ),
     )
@@ -1358,7 +1380,16 @@ def _reservation_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         "sku": str(item.get("sku") or ""),
         "status": str(item.get("status") or ""),
         "reserved_points": points_from_units(int(item.get("reserved_credit_units") or 0)),
+        "reserved_cash_backed_points": points_from_units(
+            int(item.get("reserved_cash_backed_credit_units") or 0)
+        ),
         "charged_points": points_from_units(int(item.get("settled_credit_units") or 0)),
+        "charged_cash_backed_points": points_from_units(
+            int(item.get("settled_cash_backed_credit_units") or 0)
+        ),
+        "refunded_cash_backed_points": points_from_units(
+            int(item.get("refunded_cash_backed_credit_units") or 0)
+        ),
         "reserved_images": int(item.get("reserved_image_count") or 0),
         "free_images_used": int(item.get("settled_image_count") or 0),
         "unlimited_compute": bool(meta.get("unlimited_compute")),
@@ -1560,31 +1591,54 @@ def reserve_charge(
     else:
         credit_units = qty * rate_units
     balance = int(wallet["credit_units"])
+    cash_backed_balance = int(wallet.get("cash_backed_credit_units") or 0)
     if balance < credit_units:
         raise BillingError("INSUFFICIENT_POINTS", "算力点不足，请先提交储值申请", 402)
+    non_cash_balance = max(balance - cash_backed_balance, 0)
+    cash_backed_credit_units = max(credit_units - non_cash_balance, 0)
     if credit_units:
-        conn.execute("UPDATE billing_wallets SET credit_units = credit_units - ?, updated_at = ? WHERE user_id = ?", (credit_units, current, int(user_id)))
+        conn.execute(
+            "UPDATE billing_wallets SET credit_units = credit_units - ?, "
+            "cash_backed_credit_units = cash_backed_credit_units - ?, updated_at = ? "
+            "WHERE user_id = ? AND credit_units >= ? AND cash_backed_credit_units >= ?",
+            (
+                credit_units,
+                cash_backed_credit_units,
+                current,
+                int(user_id),
+                credit_units,
+                cash_backed_credit_units,
+            ),
+        )
     meta = {
         "quantity": qty,
         "unit_credit_units": rate_units,
         "image": bool(image),
         "admin_waived": False,
         "grant_holds": grant_holds,
+        "cash_backed_credit_units": cash_backed_credit_units,
     }
     conn.execute(
         """
         INSERT INTO billing_reservations(
-          id, user_id, ref_type, ref_id, sku, status, reserved_credit_units, reserved_image_count,
+          id, user_id, ref_type, ref_id, sku, status, reserved_credit_units,
+          reserved_cash_backed_credit_units, reserved_image_count,
           catalog_version_id, meta_json, idempotency_key, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'held', ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, 'held', ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (reservation_id, int(user_id), str(ref_type), str(ref_id), str(sku), credit_units, free_images, catalog_version_id, _dumps(meta), idem, current, current),
+        (
+            reservation_id, int(user_id), str(ref_type), str(ref_id), str(sku),
+            credit_units, cash_backed_credit_units, free_images, catalog_version_id,
+            _dumps(meta), idem, current, current,
+        ),
     )
     if credit_units:
         _insert_ledger(
             conn, user_id=int(user_id), asset_type="credit", event_type="reserve", amount_units=-credit_units,
             balance_after_units=balance - credit_units, ref_type=ref_type, ref_id=ref_id, reservation_id=reservation_id,
             idempotency_key=f"{idem}:credit_hold", meta={"sku": sku, "quantity": qty}, now=current,
+            cash_backed_amount_units=-cash_backed_credit_units,
+            cash_backed_balance_after_units=cash_backed_balance - cash_backed_credit_units,
         )
     if free_images:
         remaining_images = sum(int(row["remaining_count"] or 0) for row in conn.execute("SELECT remaining_count FROM billing_image_grants WHERE user_id = ?", (int(user_id),)).fetchall())
@@ -1594,6 +1648,245 @@ def reserve_charge(
             idempotency_key=f"{idem}:image_hold", meta={"sku": sku, "grant_holds": grant_holds}, now=current,
         )
     return _reservation_public(conn.execute("SELECT * FROM billing_reservations WHERE id = ?", (reservation_id,)).fetchone())
+
+
+def reserve_exact_cash_charge(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    ref_type: str,
+    ref_id: str,
+    sku: str,
+    credit_units: int,
+    idempotency_key: str,
+    meta: dict[str, Any] | None = None,
+    now: int | None = None,
+) -> dict[str, Any]:
+    """Reserve a server-calculated amount using only paid, cash-backed points."""
+    _ensure_immediate_transaction(conn)
+    current = int(now or _now())
+    amount = int(credit_units or 0)
+    if amount <= 0:
+        raise BillingError("INVALID_CHARGE", "Charge amount must be greater than zero", 400)
+    raw_idem = str(idempotency_key or "").strip()
+    if not raw_idem:
+        raise BillingError("IDEMPOTENCY_KEY_REQUIRED", "Idempotency key is required", 400)
+    # External purchase callers supply client-controlled keys. Scope them by
+    # owner so two customers can legitimately use the same client key while
+    # retaining the legacy globally-unique reservation schema.
+    idem = f"cash-exact:{int(user_id)}:{raw_idem}"
+    existing = conn.execute(
+        "SELECT * FROM billing_reservations WHERE idempotency_key = ?", (idem,)
+    ).fetchone()
+    if existing is None:
+        # Compatibility for holds created before per-user key scoping shipped.
+        existing = conn.execute(
+            "SELECT * FROM billing_reservations WHERE idempotency_key = ? AND user_id = ?",
+            (raw_idem, int(user_id)),
+        ).fetchone()
+    request_fingerprint = (
+        int(user_id), str(ref_type), str(ref_id), str(sku), amount
+    )
+    if existing is not None:
+        existing_meta = _loads(existing["meta_json"], {})
+        existing_fingerprint = (
+            int(existing["user_id"]),
+            str(existing["ref_type"]),
+            str(existing["ref_id"]),
+            str(existing["sku"]),
+            int(existing["reserved_credit_units"] or 0),
+        )
+        if (
+            existing_fingerprint != request_fingerprint
+            or not bool(existing_meta.get("exact_cash_backed"))
+        ):
+            raise BillingError(
+                "RESERVATION_IDEMPOTENCY_CONFLICT",
+                "Idempotency key is already bound to a different reservation request",
+                409,
+            )
+        return _reservation_public(existing)
+
+    wallet = ensure_wallet(conn, int(user_id), now=current)
+    balance = int(wallet["credit_units"] or 0)
+    cash_balance = int(wallet.get("cash_backed_credit_units") or 0)
+    if cash_balance < amount:
+        raise BillingError(
+            "INSUFFICIENT_CASH_BACKED_POINTS",
+            "Cash-backed points are insufficient for this purchase",
+            402,
+        )
+    reservation_id = _id("bill_hold")
+    merged_meta = dict(meta or {})
+    merged_meta.update(
+        {
+            "quantity": 1,
+            "unit_credit_units": amount,
+            "image": False,
+            "admin_waived": False,
+            "exact_cash_backed": True,
+            "cash_backed_credit_units": amount,
+        }
+    )
+    cursor = conn.execute(
+        "UPDATE billing_wallets SET credit_units = credit_units - ?, "
+        "cash_backed_credit_units = cash_backed_credit_units - ?, updated_at = ? "
+        "WHERE user_id = ? AND credit_units >= ? AND cash_backed_credit_units >= ?",
+        (amount, amount, current, int(user_id), amount, amount),
+    )
+    if cursor.rowcount != 1:
+        raise BillingError(
+            "INSUFFICIENT_CASH_BACKED_POINTS",
+            "Cash-backed points are insufficient for this purchase",
+            402,
+        )
+    conn.execute(
+        """
+        INSERT INTO billing_reservations(
+          id, user_id, ref_type, ref_id, sku, status, reserved_credit_units,
+          reserved_cash_backed_credit_units, catalog_version_id, meta_json,
+          idempotency_key, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'held', ?, ?, '', ?, ?, ?, ?)
+        """,
+        (
+            reservation_id, int(user_id), str(ref_type), str(ref_id), str(sku),
+            amount, amount, _dumps(merged_meta), idem, current, current,
+        ),
+    )
+    _insert_ledger(
+        conn,
+        user_id=int(user_id),
+        asset_type="credit",
+        event_type="reserve",
+        amount_units=-amount,
+        balance_after_units=balance - amount,
+        cash_backed_amount_units=-amount,
+        cash_backed_balance_after_units=cash_balance - amount,
+        ref_type=str(ref_type),
+        ref_id=str(ref_id),
+        reservation_id=reservation_id,
+        idempotency_key=f"{idem}:credit_hold",
+        meta={"sku": str(sku), "exact_cash_backed": True},
+        now=current,
+    )
+    return _reservation_public(
+        conn.execute(
+            "SELECT * FROM billing_reservations WHERE id = ?", (reservation_id,)
+        ).fetchone()
+    )
+
+
+def refund_settled_exact_cash_charge(
+    conn: sqlite3.Connection,
+    reservation_id: str,
+    *,
+    reason: str,
+    now: int | None = None,
+) -> dict[str, Any]:
+    """Idempotently reverse a settled exact cash-backed reservation."""
+    clean_reason = str(reason or "").strip()
+    if not clean_reason:
+        raise BillingError("REFUND_REASON_REQUIRED", "Refund reason is required", 400)
+    _ensure_immediate_transaction(conn)
+    current = int(now or _now())
+    row = conn.execute(
+        "SELECT * FROM billing_reservations WHERE id = ?", (str(reservation_id),)
+    ).fetchone()
+    if row is None:
+        raise BillingError("RESERVATION_NOT_FOUND", "Billing reservation not found", 404)
+    meta = _loads(row["meta_json"], {})
+    if not bool(meta.get("exact_cash_backed")):
+        raise BillingError(
+            "RESERVATION_NOT_EXACT_CASH",
+            "Only exact cash-backed reservations can use this refund path",
+            409,
+        )
+    if str(row["status"]) != "settled":
+        raise BillingError(
+            "RESERVATION_NOT_SETTLED",
+            "Only settled reservations can be refunded",
+            409,
+        )
+    settled = int(row["settled_cash_backed_credit_units"] or 0)
+    refunded = int(row["refunded_cash_backed_credit_units"] or 0)
+    amount = max(settled - refunded, 0)
+    if amount <= 0:
+        return _reservation_public(row)
+    wallet = ensure_wallet(conn, int(row["user_id"]), now=current)
+    before_total = int(wallet["credit_units"] or 0)
+    before_cash = int(wallet.get("cash_backed_credit_units") or 0)
+    updated = conn.execute(
+        "UPDATE billing_reservations SET refunded_cash_backed_credit_units = ?, "
+        "updated_at = ? WHERE id = ? AND status = 'settled' "
+        "AND refunded_cash_backed_credit_units = ?",
+        (settled, current, str(row["id"]), refunded),
+    ).rowcount
+    if updated != 1:
+        return _reservation_public(
+            conn.execute(
+                "SELECT * FROM billing_reservations WHERE id = ?", (str(row["id"]),)
+            ).fetchone()
+        )
+    conn.execute(
+        "UPDATE billing_wallets SET credit_units = credit_units + ?, "
+        "cash_backed_credit_units = cash_backed_credit_units + ?, updated_at = ? "
+        "WHERE user_id = ?",
+        (amount, amount, current, int(row["user_id"])),
+    )
+    _insert_ledger(
+        conn,
+        user_id=int(row["user_id"]),
+        asset_type="credit",
+        event_type="exact_cash_refund",
+        amount_units=amount,
+        balance_after_units=before_total + amount,
+        cash_backed_amount_units=amount,
+        cash_backed_balance_after_units=before_cash + amount,
+        ref_type=str(row["ref_type"]),
+        ref_id=str(row["ref_id"]),
+        reservation_id=str(row["id"]),
+        idempotency_key=f"{row['id']}:exact_cash_refund",
+        meta={"reason": clean_reason},
+        now=current,
+    )
+    return _reservation_public(
+        conn.execute(
+            "SELECT * FROM billing_reservations WHERE id = ?", (str(row["id"]),)
+        ).fetchone()
+    )
+
+
+def reserve_exact_charge(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    ref_type: str,
+    ref_id: str,
+    sku: str,
+    credit_units: int,
+    idempotency_key: str,
+    require_cash_backed: bool = True,
+    meta: dict[str, Any] | None = None,
+    now: int | None = None,
+) -> dict[str, Any]:
+    """Compatibility entrypoint for trusted, dynamic-price server workflows."""
+    if not require_cash_backed:
+        raise BillingError(
+            "CASH_BACKING_REQUIRED",
+            "Exact external purchases must require cash-backed points",
+            400,
+        )
+    return reserve_exact_cash_charge(
+        conn,
+        user_id=user_id,
+        ref_type=ref_type,
+        ref_id=ref_id,
+        sku=sku,
+        credit_units=credit_units,
+        idempotency_key=idempotency_key,
+        meta=meta,
+        now=now,
+    )
 
 
 def _restore_grants(conn: sqlite3.Connection, holds: list[dict[str, Any]], restore_count: int, now: int) -> None:
@@ -1650,18 +1943,29 @@ def settle_reservation(conn: sqlite3.Connection, reservation_id: str, *, actual_
         )
     image = bool(meta.get("image"))
     reserved_credit = int(row["reserved_credit_units"] or 0)
+    reserved_cash_backed = int(row["reserved_cash_backed_credit_units"] or 0)
     reserved_images = int(row["reserved_image_count"] or 0)
     settled_images = min(actual, reserved_images) if image else 0
     settled_credit = max(actual - settled_images, 0) * rate_units if image else actual * rate_units
+    reserved_non_cash = max(reserved_credit - reserved_cash_backed, 0)
+    settled_cash_backed = max(settled_credit - reserved_non_cash, 0)
     credit_refund = max(reserved_credit - settled_credit, 0)
+    cash_backed_refund = max(reserved_cash_backed - settled_cash_backed, 0)
     image_refund = max(reserved_images - settled_images, 0)
     wallet = ensure_wallet(conn, int(row["user_id"]), now=current)
     if credit_refund:
-        conn.execute("UPDATE billing_wallets SET credit_units = credit_units + ?, updated_at = ? WHERE user_id = ?", (credit_refund, current, int(row["user_id"])))
+        conn.execute(
+            "UPDATE billing_wallets SET credit_units = credit_units + ?, "
+            "cash_backed_credit_units = cash_backed_credit_units + ?, updated_at = ? "
+            "WHERE user_id = ?",
+            (credit_refund, cash_backed_refund, current, int(row["user_id"])),
+        )
         _insert_ledger(
             conn, user_id=int(row["user_id"]), asset_type="credit", event_type="reservation_refund", amount_units=credit_refund,
             balance_after_units=int(wallet["credit_units"]) + credit_refund, ref_type=str(row["ref_type"]), ref_id=str(row["ref_id"]),
             reservation_id=str(row["id"]), idempotency_key=f"{row['id']}:settle_credit_refund", meta={"actual_quantity": actual}, now=current,
+            cash_backed_amount_units=cash_backed_refund,
+            cash_backed_balance_after_units=int(wallet.get("cash_backed_credit_units") or 0) + cash_backed_refund,
         )
     holds = meta.get("grant_holds") if isinstance(meta.get("grant_holds"), list) else []
     if image_refund:
@@ -1673,8 +1977,10 @@ def settle_reservation(conn: sqlite3.Connection, reservation_id: str, *, actual_
             idempotency_key=f"{row['id']}:settle_image_refund", meta={"actual_quantity": actual}, now=current,
         )
     conn.execute(
-        "UPDATE billing_reservations SET status = 'settled', settled_credit_units = ?, settled_image_count = ?, updated_at = ? WHERE id = ? AND status = 'held'",
-        (settled_credit, settled_images, current, str(row["id"])),
+        "UPDATE billing_reservations SET status = 'settled', settled_credit_units = ?, "
+        "settled_cash_backed_credit_units = ?, settled_image_count = ?, updated_at = ? "
+        "WHERE id = ? AND status = 'held'",
+        (settled_credit, settled_cash_backed, settled_images, current, str(row["id"])),
     )
     _insert_ledger(
         conn, user_id=int(row["user_id"]), asset_type="audit", event_type="settled", amount_units=0,
@@ -1694,14 +2000,22 @@ def release_reservation(conn: sqlite3.Connection, reservation_id: str, *, now: i
         return _reservation_public(row)
     meta = _loads(row["meta_json"], {})
     credit_units = int(row["reserved_credit_units"] or 0)
+    cash_backed_credit_units = int(row["reserved_cash_backed_credit_units"] or 0)
     image_count = int(row["reserved_image_count"] or 0)
     wallet = ensure_wallet(conn, int(row["user_id"]), now=current)
     if credit_units:
-        conn.execute("UPDATE billing_wallets SET credit_units = credit_units + ?, updated_at = ? WHERE user_id = ?", (credit_units, current, int(row["user_id"])))
+        conn.execute(
+            "UPDATE billing_wallets SET credit_units = credit_units + ?, "
+            "cash_backed_credit_units = cash_backed_credit_units + ?, updated_at = ? "
+            "WHERE user_id = ?",
+            (credit_units, cash_backed_credit_units, current, int(row["user_id"])),
+        )
         _insert_ledger(
             conn, user_id=int(row["user_id"]), asset_type="credit", event_type="release", amount_units=credit_units,
             balance_after_units=int(wallet["credit_units"]) + credit_units, ref_type=str(row["ref_type"]), ref_id=str(row["ref_id"]),
             reservation_id=str(row["id"]), idempotency_key=f"{row['id']}:release_credit", now=current,
+            cash_backed_amount_units=cash_backed_credit_units,
+            cash_backed_balance_after_units=int(wallet.get("cash_backed_credit_units") or 0) + cash_backed_credit_units,
         )
     holds = meta.get("grant_holds") if isinstance(meta.get("grant_holds"), list) else []
     if image_count:
@@ -1887,11 +2201,19 @@ def approve_order(conn: sqlite3.Connection, order_id: str, *, actor_user_id: int
     if str(row["kind"]) == "credit_pack":
         credit_units = int(item.get("total_points") or 0) * POINT_SCALE * quantity
         before = int(wallet["credit_units"])
-        conn.execute("UPDATE billing_wallets SET credit_units = credit_units + ?, updated_at = ? WHERE user_id = ?", (credit_units, current, user_id))
+        cash_before = int(wallet.get("cash_backed_credit_units") or 0)
+        conn.execute(
+            "UPDATE billing_wallets SET credit_units = credit_units + ?, "
+            "cash_backed_credit_units = cash_backed_credit_units + ?, updated_at = ? "
+            "WHERE user_id = ?",
+            (credit_units, credit_units, current, user_id),
+        )
         _insert_ledger(
             conn, user_id=user_id, asset_type="credit", event_type="credit_pack_approved", amount_units=credit_units,
             balance_after_units=before + credit_units, order_id=str(row["id"]), ref_type="order", ref_id=str(row["id"]),
             idempotency_key=f"order:{row['id']}:credit", meta={"sku": str(row["sku"]), "quantity": quantity}, now=current,
+            cash_backed_amount_units=credit_units,
+            cash_backed_balance_after_units=cash_before + credit_units,
         )
         bonus_images = int(item.get("bonus_images") or 0) * quantity
         if bonus_images:
@@ -2287,7 +2609,8 @@ def refund_approved_order(
         credit_units = int(item.get("total_points") or 0) * POINT_SCALE * quantity
         bonus_images = int(item.get("bonus_images") or 0) * quantity
         balance = int(wallet["credit_units"])
-        if balance < credit_units:
+        cash_backed_balance = int(wallet.get("cash_backed_credit_units") or 0)
+        if balance < credit_units or cash_backed_balance < credit_units:
             raise BillingError(
                 "ORDER_BENEFITS_ALREADY_USED",
                 "The credited points have already been used and cannot be safely reclaimed",
@@ -2313,9 +2636,10 @@ def refund_approved_order(
 
         if credit_units > 0:
             conn.execute(
-                "UPDATE billing_wallets SET credit_units = credit_units - ?, updated_at = ? "
-                "WHERE user_id = ? AND credit_units >= ?",
-                (credit_units, current, user_id, credit_units),
+                "UPDATE billing_wallets SET credit_units = credit_units - ?, "
+                "cash_backed_credit_units = cash_backed_credit_units - ?, updated_at = ? "
+                "WHERE user_id = ? AND credit_units >= ? AND cash_backed_credit_units >= ?",
+                (credit_units, credit_units, current, user_id, credit_units, credit_units),
             )
             _insert_ledger(
                 conn,
@@ -2334,6 +2658,8 @@ def refund_approved_order(
                     "sku": str(row["sku"]),
                     "quantity": quantity,
                 },
+                cash_backed_amount_units=-credit_units,
+                cash_backed_balance_after_units=cash_backed_balance - credit_units,
                 now=current,
             )
         if bonus_grant is not None:
@@ -2479,17 +2805,29 @@ def adjust_credit(conn: sqlite3.Connection, *, user_id: int, delta_units: int, a
     after = int(wallet["credit_units"]) + int(delta_units)
     if after < 0:
         raise BillingError("INSUFFICIENT_POINTS", "调整后算力点不能为负数", 409)
-    conn.execute("UPDATE billing_wallets SET credit_units = ?, updated_at = ? WHERE user_id = ?", (after, current, int(user_id)))
+    cash_before = int(wallet.get("cash_backed_credit_units") or 0)
+    # Free/admin grants never become purchase-eligible. Negative adjustments
+    # consume non-cash points first and only then reduce the cash-backed bucket.
+    cash_after = min(cash_before, after)
+    conn.execute(
+        "UPDATE billing_wallets SET credit_units = ?, cash_backed_credit_units = ?, "
+        "updated_at = ? WHERE user_id = ?",
+        (after, cash_after, current, int(user_id)),
+    )
     ref_id = _id("adjustment")
     _insert_ledger(
         conn, user_id=int(user_id), asset_type="credit", event_type="admin_adjustment", amount_units=int(delta_units),
         balance_after_units=after, ref_type="admin_adjustment", ref_id=ref_id,
         idempotency_key=f"adjustment:{ref_id}", meta={"reason": str(reason), "actor_user_id": int(actor_user_id)}, now=current,
+        cash_backed_amount_units=cash_after - cash_before,
+        cash_backed_balance_after_units=cash_after,
     )
     return {
         "user_id": int(user_id),
         "credit_units": after,
         "points": points_from_units(after),
+        "cash_backed_credit_units": cash_after,
+        "cash_backed_points": points_from_units(cash_after),
         "unlimited_compute": bool(int(wallet.get("unlimited_compute") or 0)),
     }
 
@@ -2538,6 +2876,10 @@ def set_unlimited_compute(
         "user_id": int(user_id),
         "credit_units": int(wallet["credit_units"]),
         "points": points_from_units(int(wallet["credit_units"])),
+        "cash_backed_credit_units": int(wallet.get("cash_backed_credit_units") or 0),
+        "cash_backed_points": points_from_units(
+            int(wallet.get("cash_backed_credit_units") or 0)
+        ),
         "unlimited_compute": after,
     }
 
@@ -2567,6 +2909,10 @@ def billing_summary(conn: sqlite3.Connection, user_id: int, *, now: int | None =
         "unlimited_compute": bool(int(wallet.get("unlimited_compute") or 0)),
         "credit_units": int(wallet["credit_units"]),
         "points": points_from_units(int(wallet["credit_units"])),
+        "cash_backed_credit_units": int(wallet.get("cash_backed_credit_units") or 0),
+        "cash_backed_points": points_from_units(
+            int(wallet.get("cash_backed_credit_units") or 0)
+        ),
         "subscription_active": active_count > 0,
         "active_subscription_count": active_count,
         "threads_account_limit": threads_account_limit(conn, int(user_id), now=current),
@@ -2621,6 +2967,14 @@ def list_ledger(conn: sqlite3.Connection, *, user_id: int, limit: int = 100, bef
             "id": str(row["id"]), "asset_type": str(row["asset_type"]), "event_type": str(row["event_type"]),
             "amount_units": int(row["amount_units"]), "amount_points": points_from_units(abs(int(row["amount_units"]))) * (-1 if int(row["amount_units"]) < 0 else 1),
             "balance_after_units": int(row["balance_after_units"]), "balance_after_points": points_from_units(int(row["balance_after_units"])),
+            "cash_backed_amount_units": int(row["cash_backed_amount_units"]),
+            "cash_backed_amount_points": points_from_units(
+                abs(int(row["cash_backed_amount_units"]))
+            ) * (-1 if int(row["cash_backed_amount_units"]) < 0 else 1),
+            "cash_backed_balance_after_units": int(row["cash_backed_balance_after_units"]),
+            "cash_backed_balance_after_points": points_from_units(
+                int(row["cash_backed_balance_after_units"])
+            ),
             "ref_type": str(row["ref_type"]), "ref_id": str(row["ref_id"]), "order_id": str(row["order_id"]),
             "reservation_id": str(row["reservation_id"]), "meta": _loads(row["meta_json"], {}), "created_at": int(row["created_at"]),
         }

@@ -143,6 +143,11 @@ from .proxy_ip_admin import (
     register_proxy_ip_admin_routes,
     stop_proxy_market_health_monitor,
 )
+from .proxy_purchase_api import (
+    register_proxy_purchase_routes,
+    start_proxy_purchase_worker,
+    stop_proxy_purchase_worker,
+)
 from .notifications import create_notification, register_notification_routes
 from .remote_fetch_client import (
     RemoteFetchError,
@@ -21046,9 +21051,12 @@ def create_app() -> FastAPI:
         ensure_social_automation_worker_started()
         ensure_crm_runtime_started()
         ensure_proxy_market_health_monitor_started()
+        if not boundary.collector:
+            start_proxy_purchase_worker()
         try:
             yield
         finally:
+            stop_proxy_purchase_worker()
             stop_crm_runtime()
             stop_social_automation_worker()
             stop_proxy_market_health_monitor()
@@ -21346,6 +21354,36 @@ def create_app() -> FastAPI:
                 "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
                 "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
                 "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
+            },
+        )
+
+    @app.get("/proxy-purchase", include_in_schema=False)
+    @app.get("/proxy-purchase.html", include_in_schema=False)
+    def page_proxy_purchase(
+        request: Request,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    ) -> Response:
+        try:
+            user = _get_session_user_for_token(
+                session_token,
+                expected_admin_session=False,
+                request=request,
+            )
+        except HTTPException:
+            return RedirectResponse(
+                url=_public_login_location("/proxy-purchase"),
+                status_code=302,
+            )
+        if int(user.get("must_change_password") or 0) == 1:
+            return RedirectResponse(
+                url="/change-password.html?return_url=%2Fproxy-purchase",
+                status_code=302,
+            )
+        return _html_response_with_versions(
+            "proxy-purchase.html",
+            replacements={
+                "__PROXY_PURCHASE_CSS_VERSION__": _asset_version("assets", "proxy-purchase.css"),
+                "__PROXY_PURCHASE_JS_VERSION__": _asset_version("assets", "proxy-purchase.js"),
             },
         )
 
@@ -21751,6 +21789,13 @@ def create_app() -> FastAPI:
         collector_live_search=_crm_collector_live_search_enabled(),
     )
     register_proxy_ip_admin_routes(app)
+    register_proxy_purchase_routes(
+        app,
+        current_user_dependency=get_current_user,
+        admin_dependency=require_admin,
+        admin_step_up=_require_admin_step_up,
+        audit_callback=governance.record_audit,
+    )
     if boundary.collector:
         register_collector_routes(app)
     register_notification_routes(app)
@@ -28573,6 +28618,8 @@ def create_app() -> FastAPI:
                 "billing_ledger": int(conn.execute("SELECT COUNT(*) AS count FROM billing_ledger WHERE user_id = ?", (target_id,)).fetchone()["count"]),
                 "subscriptions": int(conn.execute("SELECT COUNT(*) AS count FROM billing_subscriptions WHERE user_id = ?", (target_id,)).fetchone()["count"]),
                 "orders": int(conn.execute("SELECT COUNT(*) AS count FROM billing_orders WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+                "proxy_purchase_orders": int(conn.execute("SELECT COUNT(*) AS count FROM proxy_purchase_orders WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+                "owned_proxy_assets": int(conn.execute("SELECT COUNT(*) AS count FROM proxy_market_items WHERE ownership_type = 'owned' AND owner_user_id = ?", (target_id,)).fetchone()["count"]),
             }
         return {
             "user": dict(row),
@@ -28849,6 +28896,59 @@ def create_app() -> FastAPI:
                     ).rowcount
                     conn.execute("DELETE FROM social_accounts WHERE user_id = ?", (target_id,))
                     conn.execute("DELETE FROM social_proxies WHERE user_id = ?", (target_id,))
+                    purchase_order_ids = [
+                        str(row["id"])
+                        for row in conn.execute(
+                            "SELECT id FROM proxy_purchase_orders WHERE user_id = ?",
+                            (target_id,),
+                        ).fetchall()
+                    ]
+                    purchased_proxy_ids = [
+                        str(row["provider_proxy_id"])
+                        for row in conn.execute(
+                            "SELECT provider_proxy_id FROM proxy_market_items "
+                            "WHERE ownership_type = 'owned' AND owner_user_id = ? "
+                            "AND provider_proxy_id <> ''",
+                            (target_id,),
+                        ).fetchall()
+                    ]
+                    if purchase_order_ids:
+                        placeholders = ",".join("?" for _ in purchase_order_ids)
+                        conn.execute(
+                            f"DELETE FROM proxy_purchase_events WHERE order_id IN ({placeholders})",
+                            purchase_order_ids,
+                        )
+                    if purchased_proxy_ids:
+                        placeholders = ",".join("?" for _ in purchased_proxy_ids)
+                        conn.execute(
+                            f"DELETE FROM proxy_purchase_events "
+                            f"WHERE provider_proxy_id IN ({placeholders})",
+                            purchased_proxy_ids,
+                        )
+                    conn.execute(
+                        "DELETE FROM proxy_renewal_schedules WHERE user_id = ?",
+                        (target_id,),
+                    )
+                    conn.execute(
+                        "DELETE FROM proxy_purchase_orders WHERE user_id = ?",
+                        (target_id,),
+                    )
+                    conn.execute(
+                        "DELETE FROM proxy_purchase_quotes WHERE user_id = ?",
+                        (target_id,),
+                    )
+                    conn.execute(
+                        "DELETE FROM proxy_market_items "
+                        "WHERE ownership_type = 'owned' AND owner_user_id = ?",
+                        (target_id,),
+                    )
+                    # Published pricing is shared financial configuration and
+                    # remains auditable, but must no longer identify a purged user.
+                    conn.execute(
+                        "UPDATE proxy_purchase_config_versions SET created_by = 0 "
+                        "WHERE created_by = ?",
+                        (target_id,),
+                    )
                     conn.execute("DELETE FROM persona_owners WHERE user_id = ?", (target_id,))
                     conn.execute("DELETE FROM persona_group_owners WHERE user_id = ?", (target_id,))
                     for billing_table in (

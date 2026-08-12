@@ -16927,6 +16927,15 @@ body.persona-media-sorting {
   background-image: none;
 }
 
+.proxy-purchase-fallback-link {
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--accent-ink, #0f5f94);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .account-proxy-purchase-placeholder button .ui-action-icon,
 .account-proxy-clear .ui-no-proxy-icon {
   display: block;

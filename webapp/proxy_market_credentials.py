@@ -76,29 +76,48 @@ def resolve_market_proxy_credentials(
     allocation_id = str(resolved.get("market_allocation_id") or "").strip()
     proxy_owner_id = int(resolved.get("user_id") or 0)
     expected_owner_id = proxy_owner_id if owner_user_id is None else int(owner_user_id)
-    if (
-        str(resolved.get("source") or "") != "marketplace"
-        or not proxy_id
-        or not allocation_id
-        or expected_owner_id <= 0
-        or proxy_owner_id != expected_owner_id
-    ):
+    source = str(resolved.get("source") or "").strip().lower()
+    if not proxy_id or expected_owner_id <= 0 or proxy_owner_id != expected_owner_id:
         raise ProxyMarketCredentialAuthorizationError(
             "market proxy credential binding is invalid"
         )
-    item = conn.execute(
-        """
-        SELECT item.*
-        FROM proxy_market_allocations allocation
-        JOIN proxy_market_items item ON item.id = allocation.item_id
-        WHERE allocation.id = ?
-          AND allocation.item_id = ?
-          AND allocation.social_proxy_id = ?
-          AND allocation.user_id = ?
-          AND allocation.status = 'active'
-        """,
-        (allocation_id, item_id, proxy_id, expected_owner_id),
-    ).fetchone()
+    if source == "marketplace" and allocation_id:
+        item = conn.execute(
+            """
+            SELECT item.*
+            FROM proxy_market_allocations allocation
+            JOIN proxy_market_items item ON item.id = allocation.item_id
+            WHERE allocation.id = ?
+              AND allocation.item_id = ?
+              AND allocation.social_proxy_id = ?
+              AND allocation.user_id = ?
+              AND allocation.status = 'active'
+            """,
+            (allocation_id, item_id, proxy_id, expected_owner_id),
+        ).fetchone()
+    elif source == "provider_purchase" and not allocation_id:
+        # Purchased assets are owned by the customer and deliberately have no
+        # shared-pool allocation. Authorize against both ownership columns and
+        # the immutable purchase/order linkage before decrypting credentials.
+        item = conn.execute(
+            """
+            SELECT item.*
+            FROM proxy_market_items item
+            JOIN proxy_purchase_orders purchase
+              ON purchase.id = item.provider_purchase_order_id
+            WHERE item.id = ?
+              AND item.ownership_type = 'owned'
+              AND item.owner_user_id = ?
+              AND item.credential_owner_user_id = ?
+              AND item.provider_proxy_id <> ''
+              AND purchase.user_id = ?
+              AND purchase.provider_proxy_id = item.provider_proxy_id
+              AND purchase.status IN ('active', 'succeeded', 'delivered')
+            """,
+            (item_id, expected_owner_id, expected_owner_id, expected_owner_id),
+        ).fetchone()
+    else:
+        item = None
     if item is None:
         raise ProxyMarketCredentialAuthorizationError(
             "market proxy credential access is not authorized"

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>购买专属代理 IP - Vecto</title>
+  <link rel="stylesheet" href="/assets/proxy-purchase.css?v=__PROXY_PURCHASE_CSS_VERSION__">
+  <script defer src="/assets/proxy-purchase.js?v=__PROXY_PURCHASE_JS_VERSION__"></script>
+</head>
+<body>
+  <main class="purchase-shell">
+    <header class="purchase-brand" aria-label="Vecto 代理采购">
+      <a href="/console.html" class="brand-link" aria-label="返回控制台">
+        <img src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="42" height="42">
+        <span><strong>Vecto</strong><small>代理采购中心</small></span>
+      </a>
+      <a class="back-link" href="/console.html">返回控制台</a>
+    </header>
+
+    <section class="purchase-stage" aria-labelledby="purchaseTitle">
+      <div class="purchase-intro">
+        <span class="eyebrow">PRIVATE NETWORK</span>
+        <h1 id="purchaseTitle">配置你的<br><em>专属代理 IP</em></h1>
+        <p>无需离开 Vecto 完成采购。代理激活后会自动加入你的可选列表，供应商凭据不会暴露在浏览器中。</p>
+        <div class="signal-line" aria-hidden="true"><i></i><i></i><i></i></div>
+      </div>
+
+      <section class="purchase-card" aria-label="代理购买设置">
+        <div class="card-head">
+          <div><span class="step">01</span><h2>购买设置</h2></div>
+          <span id="providerState" class="provider-state">正在连接供应商</span>
+        </div>
+
+        <div id="pageAlert" class="page-alert" role="alert" aria-live="assertive" hidden></div>
+
+        <form id="purchaseForm" novalidate>
+          <label class="field">
+            <span>代理地区</span>
+            <select id="country" name="country" required disabled>
+              <option value="">正在加载可售地区...</option>
+            </select>
+            <small>地区与供应商当前库存实时同步</small>
+          </label>
+
+          <label class="renewal-row" for="autoRenew">
+            <span><strong>平台托管自动续费</strong><small>到期前先检查现金背书点余额，足够时才续费</small></span>
+            <input id="autoRenew" name="autoRenew" type="checkbox">
+            <i aria-hidden="true"></i>
+          </label>
+
+          <div class="quote-panel" aria-live="polite">
+            <div><span>本次应付</span><strong id="quotePoints">—</strong><small>算力点</small></div>
+            <div class="balance"><span>现金背书点余额</span><strong id="cashBalance">—</strong></div>
+            <p id="quoteMeta">选择地区后获取实时报价</p>
+          </div>
+
+          <button id="buyButton" class="buy-button" type="submit" disabled>
+            <span id="buyButtonText">等待实时报价</span><i aria-hidden="true">→</i>
+          </button>
+        </form>
+
+        <section id="orderStatus" class="order-status" aria-live="polite" hidden>
+          <span class="status-orbit" aria-hidden="true"></span>
+          <div class="order-status-copy"><strong id="orderStatusTitle">订单已受理</strong><p id="orderStatusMessage"></p></div>
+          <label id="orderRenewalControl" class="order-renewal-control" hidden><input id="orderRenewal" type="checkbox"><span>自动续费</span></label>
+        </section>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

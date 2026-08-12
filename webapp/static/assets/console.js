@@ -27563,6 +27563,29 @@ function accountProxyPurchasePlaceholderHtml() {
   </section>`;
 }
 
+function openProxyPurchaseWindow() {
+  const purchaseUrl = "/proxy-purchase";
+  const purchaseWindow = window.open("about:blank", "_blank");
+  if (purchaseWindow) {
+    purchaseWindow.opener = null;
+    purchaseWindow.location.replace(purchaseUrl);
+    return true;
+  }
+  const message = "浏览器阻止了购买页面，请允许弹出窗口或点击此处继续。";
+  showMsg("socialMsg", message, false);
+  const socialMsg = document.getElementById("socialMsg");
+  if (socialMsg) {
+    const link = document.createElement("a");
+    link.href = purchaseUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "打开代理购买页面";
+    link.className = "proxy-purchase-fallback-link";
+    socialMsg.append(document.createTextNode(" "), link);
+  }
+  return false;
+}
+
 function accountProxyPickerFilters(modal) {
   return {
     ...Object.fromEntries(Array.from(modal?.querySelectorAll("[data-account-proxy-filter]") || []).map((control) => [
@@ -27869,7 +27892,7 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
       return;
     }
     if (event.target.closest("[data-account-proxy-purchase-placeholder]")) {
-      showMsg("socialMsg", "购买代理 IP 功能即将上线，后续购买的代理会自动显示在这里。", true);
+      openProxyPurchaseWindow();
       return;
     }
     const choice = event.target.closest("[data-account-proxy-choice]");
@@ -28453,7 +28476,7 @@ function openAccountPoolEditorModal(options) {
       return;
     }
     if (event.target.closest("[data-account-proxy-purchase-placeholder]")) {
-      showMsg("socialMsg", "购买代理 IP 功能即将上线，后续购买的代理会自动显示在这里。", true);
+      openProxyPurchaseWindow();
       return;
     }
     const choice = event.target.closest("[data-account-proxy-choice]");
