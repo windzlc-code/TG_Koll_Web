@@ -28100,6 +28100,7 @@ function closeAccountProxyPurchaseView(modal, options) {
   window.clearTimeout(view.pollTimer);
   view.purchaseDialog.remove();
   if (restore && view.sourceDialog?.isConnected) {
+    view.sourceDialog.classList.remove("account-proxy-purchase-source-hidden");
     view.sourceDialog.hidden = false;
     view.sourceDialog.removeAttribute("aria-hidden");
     view.sourceDialog.inert = false;
@@ -28148,6 +28149,7 @@ function openAccountProxyPurchaseView(modal, trigger = null) {
   };
   modal.__accountProxyPurchaseView = view;
   modal.__cleanup = view.cleanupWrapper;
+  sourceDialog.classList.add("account-proxy-purchase-source-hidden");
   sourceDialog.hidden = true;
   sourceDialog.setAttribute("aria-hidden", "true");
   sourceDialog.inert = true;

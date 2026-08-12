@@ -17261,6 +17261,10 @@ body.persona-media-sorting {
   background-image: none;
 }
 
+.console-modal-dialog.account-proxy-purchase-source-hidden {
+  display: none !important;
+}
+
 .console-modal-dialog.account-proxy-purchase-modal {
   width: min(560px, calc(100vw - 32px));
   grid-template-rows: auto minmax(0, 1fr);
@@ -17522,6 +17526,10 @@ body.persona-media-sorting {
   border: 1px solid #a9cde4;
   border-radius: 9px;
   background: #eff8fd;
+}
+
+.account-proxy-purchase-status[hidden] {
+  display: none !important;
 }
 
 .account-proxy-purchase-status > span {

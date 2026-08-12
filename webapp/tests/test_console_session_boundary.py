@@ -3477,13 +3477,16 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("data-account-proxy-purchase-close", markup)
         self.assertIn("购买专属代理 IP", markup)
         self.assertIn("sourceDialog.hidden = true", open_view)
+        self.assertIn('sourceDialog.classList.add("account-proxy-purchase-source-hidden")', open_view)
         self.assertIn("modal.appendChild(purchaseDialog)", open_view)
         self.assertNotIn("window.open", open_view)
         self.assertNotIn("host.innerHTML = accountProxyPurchaseEmbeddedHtml()", open_view)
         self.assertIn("view.purchaseDialog.remove()", close_view)
         self.assertIn("view.sourceDialog.hidden = false", close_view)
+        self.assertIn('view.sourceDialog.classList.remove("account-proxy-purchase-source-hidden")', close_view)
         self.assertIn("sync.hidden = ready", render_options)
         self.assertIn(".account-proxy-purchase-modal", self.styles)
+        self.assertIn(".account-proxy-purchase-status[hidden]", self.styles)
 
     def test_totp_code_card_uses_stable_svg_ring_and_millisecond_clock(self):
         controller = self._function_source("createAccountTotpController")
