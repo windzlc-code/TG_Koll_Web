@@ -15,8 +15,10 @@ from webapp.proxy_purchases import (
     ProxyPurchaseError,
     create_order,
     create_quote,
+    get_order,
     process_due_renewals,
     publish_config,
+    reconcile_due_orders,
     reconcile_order,
     record_webhook,
     save_config_draft,
@@ -34,6 +36,22 @@ class _UnknownProvider(MockProxyProvider):
     def execute(self, service_id, configuration):
         self.execute_calls += 1
         raise ProxyProviderOutcomeUnknown("unknown")
+
+
+class _PendingProvider(MockProxyProvider):
+    def get_order(self, order_id):
+        return {"id": order_id, "status": "PROCESSING"}
+
+    def get_order_proxies(self, order_id):
+        return {"data": [{"id": f"proxy-{order_id}", "status": "PENDING"}]}
+
+
+class _TerminalBeforeDeliveryProvider(MockProxyProvider):
+    def get_order(self, order_id):
+        return {"id": order_id, "status": "FAILED"}
+
+    def get_order_proxies(self, order_id):
+        return {"data": []}
 
 
 class ProxyPurchaseServiceTests(unittest.TestCase):
@@ -136,12 +154,17 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
                 "(SELECT id FROM proxy_market_items WHERE provider_purchase_order_id=?)",
                 (order["id"],),
             ).fetchone()
+            fetched = get_order(conn, user_id=self.user_id, order_id=order["id"])
             resolved = resolve_market_proxy_credentials(
                 conn,
                 stored,
                 owner_user_id=self.user_id,
             )
         self.assertEqual(replay["id"], order["id"])
+        self.assertEqual(order["market_item_id"], stored["market_item_id"])
+        self.assertEqual(order["social_proxy_id"], stored["id"])
+        self.assertEqual(fetched["market_item_id"], stored["market_item_id"])
+        self.assertEqual(fetched["social_proxy_id"], stored["id"])
         self.assertEqual(provider.execute_calls, 1)
         self.assertEqual(tuple(wallet), (90000, 90000))
         self.assertEqual(tuple(item), ("owned", self.user_id))
@@ -328,6 +351,43 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
         self.assertEqual(settled, "settled")
         self.assertEqual(provider.execute_calls, 1)
 
+    def test_manual_bind_rejects_supplier_order_already_owned_by_another_purchase(self):
+        provider = _UnknownProvider()
+        first_quote = self._quote(provider)
+        second_quote = self._quote(provider)
+        with app_db.db() as conn:
+            first = create_order(
+                conn,
+                user_id=self.user_id,
+                quote_id=first_quote["id"],
+                idempotency_key="bind-conflict-first",
+                provider=provider,
+                now=1_700_000_101,
+            )
+            second = create_order(
+                conn,
+                user_id=self.user_id,
+                quote_id=second_quote["id"],
+                idempotency_key="bind-conflict-second",
+                provider=provider,
+                now=1_700_000_102,
+            )
+            conn.execute(
+                "UPDATE proxy_purchase_orders SET provider_order_id='supplier-owned' WHERE id=?",
+                (first["id"],),
+            )
+            conn.commit()
+            with self.assertRaises(ProxyPurchaseError) as caught:
+                admin_resolve_order(
+                    conn,
+                    second["id"],
+                    "bind",
+                    provider_order_id="supplier-owned",
+                    actor_user_id=1,
+                    provider=provider,
+                )
+        self.assertEqual(caught.exception.code, "PROVIDER_ORDER_IN_USE")
+
     def test_renewal_mutation_is_not_repeated_after_local_settlement_crash(self):
         provider = MockProxyProvider()
         quote = self._quote(provider)
@@ -401,6 +461,163 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
             state = conn.execute("SELECT processing_status FROM proxy_purchase_events WHERE event_id='evt-process'").fetchone()[0]
         self.assertTrue(processed)
         self.assertEqual(state, "processed")
+
+    def test_webhook_provider_order_id_maps_to_local_purchase_order(self):
+        import hashlib
+        import hmac
+
+        provider = MockProxyProvider()
+        quote = self._quote(provider)
+        with app_db.db() as conn:
+            order = create_order(
+                conn,
+                user_id=self.user_id,
+                quote_id=quote["id"],
+                idempotency_key="webhook-provider-order-id",
+                provider=provider,
+                now=1_700_000_101,
+            )
+            body = json.dumps(
+                {"orderId": order["provider_order_id"]}, separators=(",", ":")
+            ).encode()
+            signature = hmac.new(
+                b"hook",
+                b"proxy.status.changed" + b"evt-provider-order-id" + body,
+                hashlib.sha256,
+            ).hexdigest()
+            record_webhook(
+                conn,
+                raw_body=body,
+                event_name="proxy.status.changed",
+                event_id="evt-provider-order-id",
+                signature=signature,
+                secret="hook",
+                now=1_700_000_102,
+            )
+        with app_db.db() as conn:
+            process_webhook_events(conn, provider=provider, now=1_700_000_103)
+            event = conn.execute(
+                "SELECT processing_status,last_error FROM proxy_purchase_events "
+                "WHERE event_id='evt-provider-order-id'"
+            ).fetchone()
+        self.assertEqual(tuple(event), ("processed", ""))
+
+    def test_successful_pending_reconcile_uses_capped_exponential_backoff(self):
+        provider = _PendingProvider()
+        quote = self._quote(provider)
+        with app_db.db() as conn:
+            order = create_order(
+                conn,
+                user_id=self.user_id,
+                quote_id=quote["id"],
+                idempotency_key="pending-backoff",
+                provider=provider,
+                now=1_700_000_101,
+            )
+            first = conn.execute(
+                "SELECT status,next_attempt_at,reconcile_attempts FROM proxy_purchase_orders WHERE id=?",
+                (order["id"],),
+            ).fetchone()
+            reconcile_order(conn, order_id=order["id"], provider=provider, now=1_700_000_161)
+            second = conn.execute(
+                "SELECT next_attempt_at,reconcile_attempts FROM proxy_purchase_orders WHERE id=?",
+                (order["id"],),
+            ).fetchone()
+            conn.execute(
+                "UPDATE proxy_purchase_orders SET reconcile_attempts=20,next_attempt_at=? WHERE id=?",
+                (1_700_000_281, order["id"]),
+            )
+            reconcile_order(conn, order_id=order["id"], provider=provider, now=1_700_000_281)
+            capped = conn.execute(
+                "SELECT next_attempt_at,reconcile_attempts FROM proxy_purchase_orders WHERE id=?",
+                (order["id"],),
+            ).fetchone()
+        self.assertEqual(tuple(first), ("provisioning", 1_700_000_161, 1))
+        self.assertEqual(tuple(second), (1_700_000_281, 2))
+        self.assertEqual(tuple(capped), (1_700_003_881, 21))
+
+    def test_terminal_before_delivery_holds_points_until_provider_refund_is_confirmed(self):
+        provider = _TerminalBeforeDeliveryProvider()
+        quote = self._quote(provider)
+        with app_db.db() as conn:
+            order = create_order(
+                conn,
+                user_id=self.user_id,
+                quote_id=quote["id"],
+                idempotency_key="terminal-refund-unconfirmed",
+                provider=provider,
+                now=1_700_000_101,
+            )
+            stored = conn.execute(
+                "SELECT status,error_code,next_attempt_at FROM proxy_purchase_orders WHERE id=?",
+                (order["id"],),
+            ).fetchone()
+            reservation = conn.execute(
+                "SELECT status FROM billing_reservations WHERE id=(SELECT reservation_id FROM proxy_purchase_orders WHERE id=?)",
+                (order["id"],),
+            ).fetchone()[0]
+            due_before_backoff = reconcile_due_orders(
+                conn,
+                provider=provider,
+                now=1_700_000_101 + 3599,
+            )
+        self.assertEqual(stored["status"], "provider_unknown")
+        self.assertEqual(stored["error_code"], "PROVIDER_REFUND_UNCONFIRMED")
+        self.assertEqual(stored["next_attempt_at"], 1_700_003_701)
+        self.assertEqual(reservation, "held")
+        self.assertEqual(due_before_backoff, [])
+
+        with app_db.db() as conn:
+            resolved = admin_resolve_order(
+                conn,
+                order["id"],
+                "confirm_provider_refunded",
+                actor_user_id=1,
+            )
+            replay = admin_resolve_order(
+                conn,
+                order["id"],
+                "confirm_provider_refunded",
+                actor_user_id=1,
+            )
+            final = conn.execute(
+                "SELECT status,error_code FROM proxy_purchase_orders WHERE id=?",
+                (order["id"],),
+            ).fetchone()
+            reservation = conn.execute(
+                "SELECT status FROM billing_reservations WHERE id=(SELECT reservation_id FROM proxy_purchase_orders WHERE id=?)",
+                (order["id"],),
+            ).fetchone()[0]
+            wallet = conn.execute(
+                "SELECT credit_units,cash_backed_credit_units FROM billing_wallets WHERE user_id=?",
+                (self.user_id,),
+            ).fetchone()
+        self.assertEqual(resolved["status"], "failed")
+        self.assertEqual(replay["status"], "failed")
+        self.assertEqual(tuple(final), ("failed", "MANUAL_CONFIRMED_PROVIDER_REFUNDED"))
+        self.assertEqual(reservation, "released")
+        self.assertEqual(tuple(wallet), (100000, 100000))
+
+    def test_provider_refund_confirmation_rejects_order_without_refund_pending_state(self):
+        provider = MockProxyProvider()
+        quote = self._quote(provider)
+        with app_db.db() as conn:
+            order = create_order(
+                conn,
+                user_id=self.user_id,
+                quote_id=quote["id"],
+                idempotency_key="refund-confirmation-rejected",
+                provider=provider,
+                now=1_700_000_101,
+            )
+            with self.assertRaises(ProxyPurchaseError) as caught:
+                admin_resolve_order(
+                    conn,
+                    order["id"],
+                    "confirm_provider_refunded",
+                    actor_user_id=1,
+                )
+        self.assertEqual(caught.exception.code, "PROVIDER_REFUND_CONFIRMATION_NOT_ALLOWED")
 
     def test_active_sync_applies_provider_canceled_status(self):
         provider = MockProxyProvider()

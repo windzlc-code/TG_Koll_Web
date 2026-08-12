@@ -277,6 +277,27 @@ class ProxyPurchaseApiTests(unittest.TestCase):
         self.assertEqual(audit["after"]["status"], "released")
         self.assertEqual(audit["outcome"], "success")
 
+    def test_admin_can_confirm_supplier_refund_with_mfa_and_audit(self):
+        resolved = {"id": "order-refunded", "status": "failed", "error_code": "PROVIDER_REFUND_CONFIRMED"}
+        with mock.patch.object(proxy_purchases, "admin_resolve_order", return_value=resolved) as action:
+            response = self.client.post(
+                "/api/admin/proxy-purchases/orders/order-refunded/resolve",
+                json={
+                    "action": "confirm_provider_refunded",
+                    "provider_order_id": "",
+                    "reason": "supplier balance credit verified",
+                    "admin_password": "test-password",
+                    "totp_code": "123456",
+                },
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(action.call_args.kwargs["action"], "confirm_provider_refunded")
+        self.assertEqual(self.step_up_calls[-1], ("test-password", "123456"))
+        self.assertEqual(
+            self.audit_calls[-1]["action"],
+            "proxy_purchase.order_confirm_provider_refunded",
+        )
+
     def test_admin_bind_requires_provider_order_id(self):
         response = self.client.post(
             "/api/admin/proxy-purchases/orders/order-test/resolve",

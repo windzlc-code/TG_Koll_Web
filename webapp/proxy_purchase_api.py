@@ -85,7 +85,7 @@ class ProxyPurchaseAdminActionPayload(ProxyPurchasePublishPayload):
 
 
 class ProxyPurchaseAdminResolutionPayload(ProxyPurchaseAdminActionPayload):
-    action: Literal["reconcile", "bind", "confirm_not_created"]
+    action: Literal["reconcile", "bind", "confirm_not_created", "confirm_provider_refunded"]
     provider_order_id: str = Field(default="", max_length=160)
 
 
@@ -193,7 +193,7 @@ def register_proxy_purchase_routes(
                 raise proxy_purchases.ProxyPurchaseError(
                     "ORDER_NOT_FOUND", "未找到对应的采购订单", 404
                 )
-            order = proxy_purchases._public_order(row)
+            order = proxy_purchases._public_order(row, conn=conn)
         return {"ok": True, "order": order}
 
     @app.get("/api/proxy-purchases/orders/{order_id}")

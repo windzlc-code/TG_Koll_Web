@@ -9017,6 +9017,9 @@ function renderProxyPurchaseOrders(payload = {}) {
       ["reconcile", "对账"],
       ["bind", "绑定"],
       ["confirm_not_created", "确认未创建"],
+      ...(String(order.error_code || "") === "PROVIDER_REFUND_UNCONFIRMED"
+        ? [["confirm_provider_refunded", "确认供应商已退款"]]
+        : []),
     ].forEach(([action, label]) => {
       const button = document.createElement("button");
       button.type = "button";

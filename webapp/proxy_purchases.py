@@ -54,11 +54,14 @@ _ORDER_PUBLIC_FIELDS = {
     "completed_at",
     "credit_units",
     "provider_currency",
+    "error_code",
 }
 _MOCK_PROVIDER_LOCK = threading.Lock()
 _MOCK_PROVIDERS: dict[str, MockProxyProvider] = {}
 _TERMINAL_FAILURES = {"failed", "canceled", "cancelled", "expired"}
 _ACTIVE_STATUSES = {"active", "completed", "ready"}
+_RECONCILE_BASE_DELAY_SECONDS = 60
+_RECONCILE_MAX_DELAY_SECONDS = 3600
 
 
 class ProxyPurchaseError(RuntimeError):
@@ -608,8 +611,28 @@ def _balance_usd(payload: Mapping[str, Any]) -> Decimal | None:
     return None
 
 
-def _public_order(row: Mapping[str, Any]) -> dict[str, Any]:
+def _reconcile_delay_seconds(attempts: int) -> int:
+    exponent = min(max(int(attempts), 0), 10)
+    return min(_RECONCILE_BASE_DELAY_SECONDS * (2**exponent), _RECONCILE_MAX_DELAY_SECONDS)
+
+
+def _public_order(
+    row: Mapping[str, Any], *, conn: sqlite3.Connection | None = None
+) -> dict[str, Any]:
     result = {key: row[key] for key in _ORDER_PUBLIC_FIELDS if key in row.keys()}
+    result["market_item_id"] = ""
+    result["social_proxy_id"] = ""
+    if conn is not None:
+        asset = conn.execute(
+            "SELECT item.id AS market_item_id,proxy.id AS social_proxy_id "
+            "FROM proxy_market_items item JOIN social_proxies proxy ON proxy.market_item_id=item.id "
+            "WHERE item.provider_purchase_order_id=? AND item.ownership_type='owned' "
+            "AND item.owner_user_id=? AND proxy.user_id=? ORDER BY proxy.created_at LIMIT 1",
+            (str(row["id"]), int(row["user_id"]), int(row["user_id"])),
+        ).fetchone()
+        if asset is not None:
+            result["market_item_id"] = str(asset["market_item_id"] or "")
+            result["social_proxy_id"] = str(asset["social_proxy_id"] or "")
     status = str(result.get("status") or "")
     messages = {
         "reserved": "订单已创建，正在提交供应商",
@@ -643,7 +666,7 @@ def create_order(
     if existing is not None:
         if str(existing["quote_id"]) != str(quote_id):
             raise ProxyPurchaseError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another request", 409)
-        return _public_order(existing)
+        return _public_order(existing, conn=conn)
     quote_row = conn.execute(
         "SELECT * FROM proxy_purchase_quotes WHERE id=? AND user_id=?", (str(quote_id), int(user_id))
     ).fetchone()
@@ -693,7 +716,7 @@ def create_order(
             conn.rollback()
             raise ProxyPurchaseError("IDEMPOTENCY_CONFLICT", "Idempotency key belongs to another request", 409)
         conn.commit()
-        return _public_order(concurrent)
+        return _public_order(concurrent, conn=conn)
     locked_quote = conn.execute(
         "SELECT status,expires_at FROM proxy_purchase_quotes WHERE id=? AND user_id=?",
         (str(quote_id), int(user_id)),
@@ -758,7 +781,10 @@ def create_order(
             (exc.code, str(exc), current + 300, current, order_id),
         )
         conn.commit()
-        return _public_order(conn.execute("SELECT * FROM proxy_purchase_orders WHERE id=?", (order_id,)).fetchone())
+        return _public_order(
+            conn.execute("SELECT * FROM proxy_purchase_orders WHERE id=?", (order_id,)).fetchone(),
+            conn=conn,
+        )
     except ProxyProviderError as exc:
         conn.execute("BEGIN IMMEDIATE")
         commercial_billing.release_reservation(conn, reservation_id, now=current)
@@ -769,7 +795,10 @@ def create_order(
         conn.commit()
         if isinstance(exc, ProxyProviderConfigurationError):
             raise
-        return _public_order(conn.execute("SELECT * FROM proxy_purchase_orders WHERE id=?", (order_id,)).fetchone())
+        return _public_order(
+            conn.execute("SELECT * FROM proxy_purchase_orders WHERE id=?", (order_id,)).fetchone(),
+            conn=conn,
+        )
 
     provider_order_id = _provider_order_id(result)
     if not provider_order_id:
@@ -793,7 +822,7 @@ def create_order(
         )
         conn.commit()
         try:
-            reconcile_order(conn, order_id=order_id, provider=provider)
+            reconcile_order(conn, order_id=order_id, provider=provider, now=current)
         except Exception as exc:
             # Execute already succeeded. Preserve the committed order for compensation;
             # never release points or let a delivery write failure cause a second purchase.
@@ -803,7 +832,10 @@ def create_order(
                 (type(exc).__name__, current, order_id),
             )
             conn.commit()
-    return _public_order(conn.execute("SELECT * FROM proxy_purchase_orders WHERE id=?", (order_id,)).fetchone())
+    return _public_order(
+        conn.execute("SELECT * FROM proxy_purchase_orders WHERE id=?", (order_id,)).fetchone(),
+        conn=conn,
+    )
 
 
 def _parse_timestamp(value: Any) -> int:
@@ -1025,7 +1057,7 @@ def reconcile_order(
     provider_order_id = str(order.get("provider_order_id") or "")
     if not provider_order_id:
         # There is no safe provider-side lookup key after an unknown Execute outcome.
-        return _public_order(row)
+        return _public_order(row, conn=conn)
     provider = provider or provider_from_environment(conn)
     details = provider.get_order(provider_order_id)
     proxies = _proxy_list(provider.get_order_proxies(provider_order_id))
@@ -1045,16 +1077,21 @@ def reconcile_order(
         was_delivered = bool(int(order.get("completed_at") or 0) > 0 or owned is not None)
         terminal_status = next(iter(proxy_statuses & _TERMINAL_FAILURES), "expired")
         if not was_delivered:
-            _refund_or_release_failed_order(
-                conn,
-                reservation_id=str(order["reservation_id"]),
-                reason="provider_terminal_failure_before_delivery",
-                now=current,
-            )
+            attempts = int(order.get("reconcile_attempts") or 0) + 1
             conn.execute(
-                "UPDATE proxy_purchase_orders SET status='failed',error_code='PROVIDER_TERMINAL_FAILURE',"
-                "provider_response_json=?,last_synced_at=?,updated_at=? WHERE id=?",
-                (_safe_provider_summary(details), current, current, str(order_id)),
+                "UPDATE proxy_purchase_orders SET status='provider_unknown',"
+                "error_code='PROVIDER_REFUND_UNCONFIRMED',"
+                "error_detail='Provider reached a terminal state before delivery; supplier refund must be confirmed',"
+                "provider_response_json=?,last_synced_at=?,next_attempt_at=?,"
+                "reconcile_attempts=?,updated_at=? WHERE id=?",
+                (
+                    _safe_provider_summary(details),
+                    current,
+                    current + _RECONCILE_MAX_DELAY_SECONDS,
+                    attempts,
+                    current,
+                    str(order_id),
+                ),
             )
         else:
             conn.execute(
@@ -1121,12 +1158,18 @@ def reconcile_order(
             )
         conn.commit()
     else:
+        attempts = int(order.get("reconcile_attempts") or 0) + 1
+        next_attempt_at = current + _reconcile_delay_seconds(int(order.get("reconcile_attempts") or 0))
         conn.execute(
-            "UPDATE proxy_purchase_orders SET status='provisioning',provider_response_json=?,last_synced_at=?,updated_at=? WHERE id=?",
-            (_safe_provider_summary(details), current, current, order_id),
+            "UPDATE proxy_purchase_orders SET status='provisioning',provider_response_json=?,"
+            "last_synced_at=?,next_attempt_at=?,reconcile_attempts=?,updated_at=? WHERE id=?",
+            (_safe_provider_summary(details), current, next_attempt_at, attempts, current, order_id),
         )
         conn.commit()
-    return _public_order(conn.execute("SELECT * FROM proxy_purchase_orders WHERE id=?", (order_id,)).fetchone())
+    return _public_order(
+        conn.execute("SELECT * FROM proxy_purchase_orders WHERE id=?", (order_id,)).fetchone(),
+        conn=conn,
+    )
 
 
 def resolve_unknown_order(
@@ -1159,6 +1202,17 @@ def resolve_unknown_order(
         if existing and existing != clean_provider_id:
             conn.rollback()
             raise ProxyPurchaseError("PROVIDER_ORDER_CONFLICT", "A different provider order is already bound", 409)
+        in_use = conn.execute(
+            "SELECT id FROM proxy_purchase_orders WHERE provider_key=? AND provider_order_id=? AND id<>? LIMIT 1",
+            (str(row["provider_key"] or "proxycheap"), clean_provider_id, str(order_id)),
+        ).fetchone()
+        if in_use is not None:
+            conn.rollback()
+            raise ProxyPurchaseError(
+                "PROVIDER_ORDER_IN_USE",
+                "Provider order id is already bound to another purchase",
+                409,
+            )
         conn.execute(
             "UPDATE proxy_purchase_orders SET provider_order_id=?,status='provisioning',error_code='',error_detail='',"
             "next_attempt_at=?,updated_at=? WHERE id=?",
@@ -1169,7 +1223,7 @@ def resolve_unknown_order(
     if clean_resolution == "confirm_not_ordered":
         if str(row["status"]) == "failed" and str(row["error_code"]) == "MANUAL_CONFIRMED_NOT_ORDERED":
             conn.commit()
-            return _public_order(row)
+            return _public_order(row, conn=conn)
         if str(row["provider_order_id"] or ""):
             conn.rollback()
             raise ProxyPurchaseError(
@@ -1187,7 +1241,44 @@ def resolve_unknown_order(
             (current, str(order_id)),
         )
         conn.commit()
-        return _public_order(conn.execute("SELECT * FROM proxy_purchase_orders WHERE id=?", (order_id,)).fetchone())
+        return _public_order(
+            conn.execute("SELECT * FROM proxy_purchase_orders WHERE id=?", (order_id,)).fetchone(),
+            conn=conn,
+        )
+    if clean_resolution == "confirm_provider_refunded":
+        if (
+            str(row["status"]) == "failed"
+            and str(row["error_code"]) == "MANUAL_CONFIRMED_PROVIDER_REFUNDED"
+        ):
+            conn.commit()
+            return _public_order(row, conn=conn)
+        if (
+            str(row["error_code"]) != "PROVIDER_REFUND_UNCONFIRMED"
+            or not str(row["provider_order_id"] or "").strip()
+        ):
+            conn.rollback()
+            raise ProxyPurchaseError(
+                "PROVIDER_REFUND_CONFIRMATION_NOT_ALLOWED",
+                "Only a provider-bound order awaiting supplier refund confirmation can be refunded",
+                409,
+            )
+        _refund_or_release_failed_order(
+            conn,
+            reservation_id=str(row["reservation_id"]),
+            reason=f"manual_provider_refund_confirmed:{int(actor_user_id)}",
+            now=current,
+        )
+        conn.execute(
+            "UPDATE proxy_purchase_orders SET status='failed',"
+            "error_code='MANUAL_CONFIRMED_PROVIDER_REFUNDED',error_detail='',"
+            "next_attempt_at=0,updated_at=? WHERE id=?",
+            (current, str(order_id)),
+        )
+        conn.commit()
+        return _public_order(
+            conn.execute("SELECT * FROM proxy_purchase_orders WHERE id=?", (order_id,)).fetchone(),
+            conn=conn,
+        )
     conn.rollback()
     raise ProxyPurchaseError("INVALID_RESOLUTION", "Unknown order resolution action", 400)
 
@@ -1205,6 +1296,7 @@ def admin_resolve_order(
         "bind_provider_order": "bind_provider_order",
         "confirm_not_created": "confirm_not_ordered",
         "confirm_not_ordered": "confirm_not_ordered",
+        "confirm_provider_refunded": "confirm_provider_refunded",
     }
     return resolve_unknown_order(
         conn,
@@ -1253,7 +1345,10 @@ def set_order_renewal(
                 f"renew:{order_id}:{expires_at}", current, current,
             ),
         )
-    return _public_order(conn.execute("SELECT * FROM proxy_purchase_orders WHERE id=?", (order_id,)).fetchone())
+    return _public_order(
+        conn.execute("SELECT * FROM proxy_purchase_orders WHERE id=?", (order_id,)).fetchone(),
+        conn=conn,
+    )
 
 
 def get_order(conn: sqlite3.Connection, *, user_id: int, order_id: str) -> dict[str, Any]:
@@ -1262,7 +1357,7 @@ def get_order(conn: sqlite3.Connection, *, user_id: int, order_id: str) -> dict[
     ).fetchone()
     if row is None:
         raise ProxyPurchaseError("ORDER_NOT_FOUND", "Purchase order was not found", 404)
-    return _public_order(row)
+    return _public_order(row, conn=conn)
 
 
 def process_due_renewals(
@@ -1602,7 +1697,15 @@ def process_webhook_events(
             if claimed != 1:
                 continue
             event = conn.execute("SELECT * FROM proxy_purchase_events WHERE id=?", (event_id,)).fetchone()
-            order_id = str(event["order_id"] or "") if event else ""
+            provider_order_id = str(event["order_id"] or "") if event else ""
+            order_id = ""
+            if provider_order_id:
+                order = conn.execute(
+                    "SELECT id FROM proxy_purchase_orders WHERE id=? OR provider_order_id=? "
+                    "ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END LIMIT 1",
+                    (provider_order_id, provider_order_id, provider_order_id),
+                ).fetchone()
+                order_id = str(order["id"]) if order else ""
             if not order_id and event and str(event["provider_proxy_id"] or ""):
                 order = conn.execute(
                     "SELECT id FROM proxy_purchase_orders WHERE provider_proxy_id=?",

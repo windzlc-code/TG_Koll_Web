@@ -3419,6 +3419,53 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("data-proxy-add", proxy_pool)
         self.assertNotIn("data-system-proxy-pool-open", proxy_pool)
 
+    def test_proxy_purchase_completion_waits_for_owned_proxy_and_restores_picker(self):
+        render_order = self._function_source("accountProxyPurchaseRenderOrder")
+        finalize = self._function_source("accountProxyPurchaseFinalizeActive")
+
+        self.assertIn('const complete = status === "active";', render_order)
+        self.assertIn("await fetchSocialDataShared({ force: true })", finalize)
+        self.assertIn("closeAccountProxyPurchaseView", finalize)
+        self.assertIn("await loadAccountProxyPickerPool(modal)", finalize)
+        self.assertIn("accountProxyPurchaseResolveLocalProxy", finalize)
+        self.assertNotIn("options[0]", finalize)
+        self.assertLess(
+            finalize.index("await fetchSocialDataShared({ force: true })"),
+            finalize.index("closeAccountProxyPurchaseView"),
+        )
+        self.assertLess(
+            finalize.index("closeAccountProxyPurchaseView"),
+            finalize.index("await loadAccountProxyPickerPool(modal)"),
+        )
+
+    def test_proxy_purchase_local_proxy_resolution_never_guesses(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            {self._function_source("accountProxyPurchaseLocalIds")}
+            {self._function_source("accountProxyPurchaseResolveLocalProxy")}
+
+            const pool = {{ options: [
+              {{ market_item_id: "market-a", social_proxy_id: "social-a" }},
+              {{ market_item_id: "market-b", social_proxy_id: "social-b" }},
+            ] }};
+            assert.deepStrictEqual(
+              accountProxyPurchaseResolveLocalProxy({{ market_item_id: "market-b" }}, pool),
+              {{ marketItemId: "market-b", socialProxyId: "social-b" }},
+            );
+            assert.deepStrictEqual(
+              accountProxyPurchaseResolveLocalProxy({{ social_proxy_id: "social-a" }}, pool),
+              {{ marketItemId: "market-a", socialProxyId: "social-a" }},
+            );
+            assert.strictEqual(accountProxyPurchaseResolveLocalProxy({{}}, pool), null);
+            assert.strictEqual(
+              accountProxyPurchaseResolveLocalProxy({{ market_item_id: "missing" }}, pool),
+              null,
+            );
+            """
+        )
+        self._run_node(harness)
+
     def test_totp_code_card_uses_stable_svg_ring_and_millisecond_clock(self):
         controller = self._function_source("createAccountTotpController")
 

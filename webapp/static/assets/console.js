@@ -27872,14 +27872,72 @@ function accountProxyPurchaseSchedulePoll(view) {
   view.pollTimer = window.setTimeout(() => accountProxyPurchasePollOrder(view), document.hidden ? Math.max(delay, 30000) : delay);
 }
 
-function accountProxyPurchaseRenderOrder(view, order = {}) {
+function accountProxyPurchaseLocalIds(order) {
+  order = order || {};
+  return {
+    marketItemId: String(order.market_item_id || order.local_market_item_id || "").trim(),
+    socialProxyId: String(order.social_proxy_id || order.local_social_proxy_id || "").trim(),
+  };
+}
+
+function accountProxyPurchaseResolveLocalProxy(order, poolData) {
+  order = order || {};
+  poolData = poolData || {};
+  const ids = accountProxyPurchaseLocalIds(order);
+  if (!ids.marketItemId && !ids.socialProxyId) return null;
+  const options = Array.isArray(poolData?.options) ? poolData.options : [];
+  const match = options.find((option) => {
+    const marketItemId = String(option?.market_item_id || "").trim();
+    const socialProxyId = String(option?.social_proxy_id || "").trim();
+    return (!ids.marketItemId || marketItemId === ids.marketItemId)
+      && (!ids.socialProxyId || socialProxyId === ids.socialProxyId);
+  });
+  if (!match) return null;
+  return {
+    marketItemId: String(match.market_item_id || "").trim(),
+    socialProxyId: String(match.social_proxy_id || "").trim(),
+  };
+}
+
+async function accountProxyPurchaseFinalizeActive(view, order) {
+  order = order || {};
+  if (!view?.modal?.isConnected || view.closed || view.finalizing) return;
+  view.finalizing = true;
+  const modal = view.modal;
+  try {
+    await fetchSocialDataShared({ force: true }).catch(() => null);
+    if (!modal.isConnected || view.closed) return;
+    closeAccountProxyPurchaseView(modal, { restore: true, refresh: false });
+    const poolData = await loadAccountProxyPickerPool(modal);
+    if (!modal.isConnected) return;
+    const localProxy = accountProxyPurchaseResolveLocalProxy(order, poolData || {});
+    const summary = modal.querySelector("[data-account-proxy-selection-summary]");
+    if (!localProxy) {
+      if (summary) summary.textContent = "购买成功，代理已加入列表；请选择使用。";
+      return;
+    }
+    const card = Array.from(modal.querySelectorAll("[data-account-proxy-card]"))
+      .find((candidate) => String(candidate.dataset.accountProxyCard || "") === localProxy.marketItemId);
+    const action = card?.querySelector("[data-account-proxy-market-choice]");
+    if (summary) summary.textContent = "购买成功，已定位新代理；首次选择时会自动检测。";
+    card?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    action?.focus?.({ preventScroll: true });
+  } catch (error) {
+    if (!modal.isConnected) return;
+    const summary = modal.querySelector("[data-account-proxy-selection-summary]");
+    if (summary) summary.textContent = "购买成功，代理列表刷新失败，请重新打开选择代理。";
+  }
+}
+
+function accountProxyPurchaseRenderOrder(view, order) {
+  order = order || {};
   if (!order?.id || view.closed) return;
   view.order = order;
   const panel = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-status]");
   const title = accountProxyPurchaseElement(view, "[data-account-proxy-order-title]");
   const message = accountProxyPurchaseElement(view, "[data-account-proxy-order-message]");
   const status = String(order.status || "pending").toLowerCase();
-  const complete = ["active", "completed", "settled", "success"].includes(status);
+  const complete = status === "active";
   const failed = ["failed", "cancelled", "canceled", "released", "refunded"].includes(status);
   const manual = status === "provider_unknown_no_reference"
     || (status === "provider_unknown" && !order.provider_order_id)
@@ -27908,7 +27966,7 @@ function accountProxyPurchaseRenderOrder(view, order = {}) {
         sync.textContent = "购买成功 · 已加入列表";
         sync.dataset.tone = "success";
       }
-      void fetchSocialDataShared({ force: true });
+      void accountProxyPurchaseFinalizeActive(view, order);
     }
     return;
   }
@@ -28017,7 +28075,7 @@ async function loadAccountProxyPurchaseForm(modal) {
   }
 }
 
-function closeAccountProxyPurchaseView(modal, { restore = true } = {}) {
+function closeAccountProxyPurchaseView(modal, { restore = true, refresh = true } = {}) {
   const view = modal?.__accountProxyPurchaseView;
   if (!view) return false;
   view.closed = true;
@@ -28030,7 +28088,7 @@ function closeAccountProxyPurchaseView(modal, { restore = true } = {}) {
     if (subtitle && view.previousSubtitle !== null) subtitle.textContent = view.previousSubtitle;
     accountProxyPoolFilterOptions(modal, modal.__accountProxyPoolData || {});
     refreshAccountProxyPickerOptions(modal);
-    void fetchSocialDataShared({ force: true }).then(() => loadAccountProxyPickerPool(modal));
+    if (refresh) void fetchSocialDataShared({ force: true }).then(() => loadAccountProxyPickerPool(modal));
   }
   if (modal.__cleanup === view.cleanupWrapper) modal.__cleanup = view.previousCleanup;
   delete modal.__accountProxyPurchaseView;
@@ -28046,6 +28104,7 @@ function openAccountProxyPurchaseView(modal, trigger = null) {
   const subtitle = title?.parentElement?.querySelector("p") || null;
   const previousCleanup = modal.__cleanup;
   const view = {
+    modal,
     host,
     previousHtml: host.innerHTML,
     previousTitle: title?.textContent || "",
@@ -28060,6 +28119,7 @@ function openAccountProxyPurchaseView(modal, trigger = null) {
     busy: false,
     loading: false,
     closed: false,
+    finalizing: false,
     cleanupWrapper: null,
   };
   view.cleanupWrapper = () => {

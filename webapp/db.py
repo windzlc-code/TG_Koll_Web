@@ -824,6 +824,36 @@ def _ensure_proxy_purchase_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_proxy_purchase_orders_provider "
         "ON proxy_purchase_orders(provider_key, provider_order_id)"
     )
+    duplicate_provider_ref = conn.execute(
+        "SELECT provider_key,provider_order_id,GROUP_CONCAT(id) AS local_ids "
+        "FROM proxy_purchase_orders WHERE provider_order_id<>'' "
+        "GROUP BY provider_key,provider_order_id HAVING COUNT(*)>1 LIMIT 1"
+    ).fetchone()
+    if duplicate_provider_ref is not None:
+        raise RuntimeError(
+            "Duplicate supplier order reference blocks proxy purchase migration: "
+            f"local purchase ids={str(duplicate_provider_ref['local_ids'] or '')}"
+        )
+    duplicate_provider_proxy = conn.execute(
+        "SELECT provider_key,provider_proxy_id,GROUP_CONCAT(id) AS local_ids "
+        "FROM proxy_purchase_orders WHERE provider_proxy_id<>'' "
+        "GROUP BY provider_key,provider_proxy_id HAVING COUNT(*)>1 LIMIT 1"
+    ).fetchone()
+    if duplicate_provider_proxy is not None:
+        raise RuntimeError(
+            "Duplicate supplier proxy reference blocks proxy purchase migration: "
+            f"local purchase ids={str(duplicate_provider_proxy['local_ids'] or '')}"
+        )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_purchase_orders_provider_order_unique "
+        "ON proxy_purchase_orders(provider_key, provider_order_id) "
+        "WHERE provider_order_id <> ''"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_purchase_orders_provider_proxy_unique "
+        "ON proxy_purchase_orders(provider_key, provider_proxy_id) "
+        "WHERE provider_proxy_id <> ''"
+    )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_proxy_provider_snapshots_sync "
         "ON proxy_provider_option_snapshots(provider_key, synced_at DESC)"
