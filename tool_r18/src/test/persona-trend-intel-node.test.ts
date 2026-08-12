@@ -61,7 +61,7 @@ describe("persona-trend-intel-node", () => {
       genres: ["美食創作者"],
       targetMarket: "cn_tw",
       trendTopics: ["超商甜點"],
-    } as any, "persona-1", "台北吃貨", { timeoutMs: 2500 });
+    } as any, "persona-1", "台北吃貨", { timeoutMs: 2500, bypassCache: true });
     const second = await fetchPersonaTrendIntelForNode({
       genres: ["美食創作者"],
       targetMarket: "cn_tw",
