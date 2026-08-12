@@ -544,6 +544,10 @@ def _identity_user_id(user: dict[str, Any]) -> int:
         return 0
 
 
+def _can_view_admin_proxy_inventory(user: dict[str, Any]) -> bool:
+    return bool(int(user.get("_workspace_admin_user_id") or 0) or int(user.get("is_admin") or 0))
+
+
 def _require_owned_resource(table: str, resource_id: str, user: dict[str, Any], *, label: str) -> Any:
     if table not in {"social_accounts", "social_proxies", "social_automation_tasks"}:
         raise RuntimeError("unsupported ownership table")
@@ -667,7 +671,11 @@ def _create_social_account_from_common_fields(
     if waived:
         mark_admin_billing_waived_payload(account_payload)
     try:
-        return create_social_account(account_payload, owner_user_id=_identity_user_id(user))
+        return create_social_account(
+            account_payload,
+            owner_user_id=_identity_user_id(user),
+            allow_admin_inventory=_can_view_admin_proxy_inventory(user),
+        )
     finally:
         if waived:
             clear_admin_billing_waived_payload(account_payload)
@@ -834,7 +842,11 @@ def _record_social_account_totp_outcome(account_id: str, user_id: int, outcome: 
 
 
 def _require_proxy_access(proxy_id: str, user: dict[str, Any]) -> Any:
-    return _require_owned_resource("social_proxies", proxy_id, user, label="代理")
+    row = _require_owned_resource("social_proxies", proxy_id, user, label="代理")
+    if not _can_view_admin_proxy_inventory(user):
+        if str(row["source"] or "") != "provider_purchase" or str(row["purchase_status"] or "") != "owned":
+            raise HTTPException(status_code=404, detail="代理不存在")
+    return row
 
 
 def _require_task_access(task_id: str, user: dict[str, Any]) -> Any:
@@ -2227,6 +2239,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
         return build_social_automation_overview(
             user_id=_identity_user_id(user),
             admin_waived=_daily_publish_admin_waived(user),
+            purchased_proxies_only=not _can_view_admin_proxy_inventory(user),
         )
 
     @app.get("/api/persona_dashboard/automation/browser_sessions")
@@ -2332,7 +2345,11 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_accounts(user: dict[str, Any] = Depends(get_current_user)):
         with db() as conn:
             rows = conn.execute("SELECT * FROM social_accounts WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC", (_identity_user_id(user),)).fetchall()
-            accounts = _account_public_rows(conn, rows)
+            accounts = _account_public_rows(
+                conn,
+                rows,
+                purchased_proxies_only=not _can_view_admin_proxy_inventory(user),
+            )
         return {"ok": True, "accounts": accounts}
 
     @app.post("/api/persona_dashboard/automation/accounts")
@@ -2340,11 +2357,17 @@ def register_social_automation_routes(app: FastAPI) -> None:
         _require_persona_reference_access(payload.persona_id, user)
         if payload.profile_dir:
             raise HTTPException(status_code=400, detail="普通用户不能指定浏览器配置目录")
+        if payload.residential_proxy is not None and not _can_view_admin_proxy_inventory(user):
+            raise HTTPException(status_code=403, detail="用户代理请通过购买入口添加")
         waived = _billing_admin_waived(user)
         if waived:
             mark_admin_billing_waived_payload(payload)
         try:
-            account = create_social_account(payload, owner_user_id=_identity_user_id(user))
+            account = create_social_account(
+                payload,
+                owner_user_id=_identity_user_id(user),
+                allow_admin_inventory=_can_view_admin_proxy_inventory(user),
+            )
         finally:
             if waived:
                 clear_admin_billing_waived_payload(payload)
@@ -2357,11 +2380,20 @@ def register_social_automation_routes(app: FastAPI) -> None:
             _require_persona_reference_access(payload.persona_id, user)
         if payload.profile_dir:
             raise HTTPException(status_code=400, detail="普通用户不能指定浏览器配置目录")
+        if payload.residential_proxy is not None and not _can_view_admin_proxy_inventory(user):
+            raise HTTPException(status_code=403, detail="用户代理请通过购买入口添加")
         if payload.proxy_id and not is_system_proxy_option_id(payload.proxy_id):
             proxy = _require_proxy_access(payload.proxy_id, user)
             if int(proxy["user_id"] or 0) != int(_require_account_access(account_id, user)["user_id"] or 0):
                 raise HTTPException(status_code=404, detail="代理不存在")
-        return {"ok": True, "account": update_social_account(account_id, payload)}
+        return {
+            "ok": True,
+            "account": update_social_account(
+                account_id,
+                payload,
+                allow_admin_inventory=_can_view_admin_proxy_inventory(user),
+            ),
+        }
 
     @app.delete("/api/persona_dashboard/automation/accounts/{account_id}")
     def api_social_account_delete(account_id: str, user: dict[str, Any] = Depends(get_current_user)):
@@ -2556,7 +2588,17 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_proxies(user: dict[str, Any] = Depends(get_current_user)):
         owner_user_id = _identity_user_id(user)
         with db() as conn:
-            rows = conn.execute("SELECT * FROM social_proxies WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC", (owner_user_id,)).fetchall()
+            if _can_view_admin_proxy_inventory(user):
+                rows = conn.execute(
+                    "SELECT * FROM social_proxies WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC",
+                    (owner_user_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM social_proxies WHERE user_id = ? AND source = 'provider_purchase' "
+                    "AND purchase_status = 'owned' ORDER BY updated_at DESC, created_at DESC",
+                    (owner_user_id,),
+                ).fetchall()
             proxies = _proxy_public_rows(conn, rows)
         return {"ok": True, "proxies": proxies}
 
@@ -2564,7 +2606,11 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_system_proxy_pool(user: dict[str, Any] = Depends(get_current_user)):
         owner_user_id = _identity_user_id(user)
         with db() as conn:
-            options = list_system_proxy_pool_options(conn, owner_user_id=owner_user_id)
+            options = list_system_proxy_pool_options(
+                conn,
+                owner_user_id=owner_user_id,
+                include_admin_inventory=_can_view_admin_proxy_inventory(user),
+            )
         current = next((
             option for option in options
             if bool(option.get("selected")) and str(option.get("ownership_type") or "shared") != "owned"
@@ -2590,6 +2636,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
                 owner_user_id=owner_user_id,
                 client_request_id=payload.client_request_id,
                 expected_current_item_id=payload.expected_current_item_id,
+                allow_admin_inventory=_can_view_admin_proxy_inventory(user),
             )
             proxy = _proxy_public_rows(conn, [proxy_row])[0]
         return {
@@ -2604,6 +2651,8 @@ def register_social_automation_routes(app: FastAPI) -> None:
         request: Request,
         user: dict[str, Any] = Depends(get_current_user),
     ):
+        if not _can_view_admin_proxy_inventory(user):
+            raise HTTPException(status_code=403, detail="用户代理请通过购买入口添加")
         return {
             "ok": True,
             "proxy": create_social_proxy(
@@ -3744,13 +3793,25 @@ def scrub_social_automation_task_secrets() -> int:
     return changed
 
 
-def build_social_automation_overview(*, user_id: int | None = None, admin_waived: bool = False) -> dict[str, Any]:
+def build_social_automation_overview(
+    *,
+    user_id: int | None = None,
+    admin_waived: bool = False,
+    purchased_proxies_only: bool = False,
+) -> dict[str, Any]:
     scope = "" if user_id is None else " WHERE user_id = ?"
     params: tuple[Any, ...] = () if user_id is None else (int(user_id),)
     with db() as conn:
         accounts = conn.execute(f"SELECT * FROM social_accounts{scope} ORDER BY updated_at DESC, created_at DESC", params).fetchall()
-        proxies = conn.execute(f"SELECT * FROM social_proxies{scope} ORDER BY updated_at DESC, created_at DESC", params).fetchall()
-        public_accounts = _account_public_rows(conn, accounts)
+        proxy_scope = scope
+        if user_id is not None and purchased_proxies_only:
+            proxy_scope = " WHERE user_id = ? AND source = 'provider_purchase' AND purchase_status = 'owned'"
+        proxies = conn.execute(f"SELECT * FROM social_proxies{proxy_scope} ORDER BY updated_at DESC, created_at DESC", params).fetchall()
+        public_accounts = _account_public_rows(
+            conn,
+            accounts,
+            purchased_proxies_only=purchased_proxies_only,
+        )
         public_proxies = _proxy_public_rows(conn, proxies)
         tasks = conn.execute(
             f"SELECT * FROM social_automation_tasks{scope} ORDER BY created_at DESC LIMIT 80",
@@ -5560,6 +5621,7 @@ def create_social_account(
     *,
     owner_user_id: int = 0,
     billing_admin_waived: bool = False,
+    allow_admin_inventory: bool = False,
 ) -> dict[str, Any]:
     billing_admin_waived = bool(billing_admin_waived or _consume_admin_billing_waiver(payload))
     platform = _normalize_platform(payload.platform)
@@ -5658,6 +5720,7 @@ def create_social_account(
                 item_id=source_item_id,
                 owner_user_id=owner_user_id,
                 client_request_id=f"account-create:{account_id}:{source_item_id}",
+                allow_admin_inventory=allow_admin_inventory,
             )
             proxy_id = str(proxy_row["id"] or "")
         if payload.residential_proxy is not None:
@@ -5712,7 +5775,12 @@ def create_social_account(
     return _account_public(row, proxy_row, totp_row)
 
 
-def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -> dict[str, Any]:
+def update_social_account(
+    account_id: str,
+    payload: SocialAccountPatchPayload,
+    *,
+    allow_admin_inventory: bool = False,
+) -> dict[str, Any]:
     if payload.clear_residential_proxy and (payload.residential_proxy is not None or payload.proxy_id is not None):
         raise HTTPException(status_code=400, detail="clear_residential_proxy 不能与 residential_proxy 或 proxy_id 同时提交")
     updates: dict[str, Any] = {}
@@ -5774,6 +5842,7 @@ def update_social_account(account_id: str, payload: SocialAccountPatchPayload) -
                 item_id=source_item_id,
                 owner_user_id=owner_user_id,
                 client_request_id=f"account-bind:{account_id}:{source_item_id}",
+                allow_admin_inventory=allow_admin_inventory,
             )
             target_proxy_id = str(proxy_row["id"] or "")
             updates["proxy_id"] = target_proxy_id
@@ -12631,13 +12700,19 @@ def _insert_log(conn, task_id: str, level: str, stage: str, message: str, data: 
     )
 
 
-def _account_public_rows(conn: Any, rows: list[Any]) -> list[dict[str, Any]]:
+def _account_public_rows(
+    conn: Any,
+    rows: list[Any],
+    *,
+    purchased_proxies_only: bool = False,
+) -> list[dict[str, Any]]:
     proxy_ids = {str(row["proxy_id"] or "").strip() for row in rows if str(row["proxy_id"] or "").strip()}
     account_ids = {str(row["id"] or "").strip() for row in rows if str(row["id"] or "").strip()}
     proxies: dict[str, Any] = {}
     totp_rows: dict[str, Any] = {}
     if proxy_ids:
         placeholders = ",".join("?" for _ in proxy_ids)
+        purchase_filter = " AND proxy.source = 'provider_purchase' AND proxy.purchase_status = 'owned'" if purchased_proxies_only else ""
         proxy_rows = conn.execute(
             f"""
             SELECT proxy.*,
@@ -12648,6 +12723,7 @@ def _account_public_rows(conn: Any, rows: list[Any]) -> list[dict[str, Any]]:
             FROM social_proxies proxy
             LEFT JOIN proxy_market_items item ON item.id = proxy.market_item_id
             WHERE proxy.id IN ({placeholders})
+            {purchase_filter}
             """,
             tuple(proxy_ids),
         ).fetchall()

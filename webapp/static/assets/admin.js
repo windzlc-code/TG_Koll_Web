@@ -1947,6 +1947,7 @@ const adminState = {
   serviceAccountRows: [],
   proxyMarketItemRows: [],
   proxyMarketAllocationRows: [],
+  proxyPurchasedAssetRows: [],
   proxyMarketInventory: { count: 0, capacity: 0, remaining: null },
   proxyMarketRecordsView: "inventory",
   proxyMarketSelectedItemId: null,
@@ -8549,11 +8550,12 @@ function renderProxyMarketAllocations(payload = {}) {
 }
 
 function setProxyMarketRecordsView(view) {
-  const normalized = view === "allocations" ? "allocations" : "inventory";
+  const normalized = ["inventory", "allocations", "purchased"].includes(view) ? view : "inventory";
   adminState.proxyMarketRecordsView = normalized;
   const pairs = [
     ["inventory", "proxyMarketInventoryTab", "proxyMarketInventoryPanel"],
     ["allocations", "proxyMarketAllocationTab", "proxyMarketAllocationPanel"],
+    ["purchased", "proxyMarketPurchasedTab", "proxyMarketPurchasedPanel"],
   ];
   pairs.forEach(([name, tabId, panelId]) => {
     const active = normalized === name;
@@ -8579,6 +8581,69 @@ async function loadProxyMarketAllocations() {
     return payload;
   } catch (error) {
     setMsg("proxyMarketAllocationMsg", `分配记录读取失败：${getErrorMessage(error)}`, false);
+    throw error;
+  } finally {
+    body?.removeAttribute("aria-busy");
+  }
+}
+
+function renderProxyPurchasedAssets(payload = {}) {
+  const body = el("proxyMarketPurchasedBody");
+  if (!body) return;
+  const rows = Array.isArray(payload.items) ? payload.items : [];
+  adminState.proxyPurchasedAssetRows = rows;
+  setText("proxyMarketPurchasedTabCount", rows.length);
+  setText("proxyMarketPurchasedSummary", `显示 ${rows.length} 个用户自购代理`);
+  body.replaceChildren();
+  if (!rows.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 5;
+    cell.appendChild(markAdminDynamicUiElement(createEmptyState("当前筛选条件下没有用户自购代理")));
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+  rows.forEach((item) => {
+    const row = document.createElement("tr");
+    appendCell(row, item.full_name || item.username || `用户 ${item.user_id || "-"}`, `${item.username || ""} · ID ${item.user_id || "-"}`);
+    appendCell(
+      row,
+      `${String(item.proxy_type || "").toUpperCase()} ${item.host || "-"}:${Number(item.port || 0) || "-"}`,
+      [item.country, item.region, item.city, item.isp].filter(Boolean).join(" · ") || "未标注地区",
+    );
+    appendCell(row, item.order_id || "-", item.provider_proxy_id ? `供应商代理 ${item.provider_proxy_id}` : "等待供应商返回");
+    appendCell(
+      row,
+      item.proxy_status || item.order_status || "unknown",
+      item.renewal_enabled ? `自动续费 · ${item.renewal_status || "已开启"}` : "自动续费未开启",
+    );
+    appendCell(
+      row,
+      `${Number(item.bound_account_count || 0)} 个账号`,
+      item.expires_at ? `到期 ${formatTime(item.expires_at)}` : "未返回到期时间",
+    );
+    body.appendChild(row);
+  });
+}
+
+async function loadProxyPurchasedAssets() {
+  const body = el("proxyMarketPurchasedBody");
+  body?.setAttribute("aria-busy", "true");
+  try {
+    const query = new URLSearchParams();
+    const search = String(el("proxyMarketPurchasedQuery")?.value || "").trim();
+    const status = String(el("proxyMarketPurchasedStatus")?.value || "").trim();
+    if (search) query.set("query", search);
+    if (status) query.set("status", status);
+    const suffix = query.toString();
+    const endpoint = "/api/admin/proxy-purchases/assets";
+    const payload = await api(`${endpoint}${suffix ? `?${suffix}` : ""}`);
+    renderProxyPurchasedAssets(payload || {});
+    setMsg("proxyMarketPurchasedMsg", "");
+    return payload;
+  } catch (error) {
+    setMsg("proxyMarketPurchasedMsg", `用户自购代理读取失败：${getErrorMessage(error)}`, false);
     throw error;
   } finally {
     body?.removeAttribute("aria-busy");
@@ -9120,6 +9185,7 @@ async function loadProxyMarketWorkspace() {
   const request = Promise.allSettled([
     loadProxyMarketItems(),
     loadProxyMarketAllocations(),
+    loadProxyPurchasedAssets(),
     loadProxyMarketSettings(),
     loadProxyPurchaseConfig().then(() => loadProxyPurchaseProviderOptions({
       serviceId: "static-residential-ipv4",
@@ -10386,6 +10452,7 @@ function bindActions() {
     const tabs = [
       el("proxyMarketInventoryTab"),
       el("proxyMarketAllocationTab"),
+      el("proxyMarketPurchasedTab"),
     ].filter((tab) => tab instanceof HTMLButtonElement);
     if (!tabs.length) return;
     const currentIndex = Math.max(0, tabs.indexOf(document.activeElement));
@@ -10403,6 +10470,12 @@ function bindActions() {
     try {
       await loadProxyMarketAllocations();
     } catch {}
+  });
+  el("proxyMarketPurchasedQuery")?.addEventListener("change", async () => {
+    try { await loadProxyPurchasedAssets(); } catch {}
+  });
+  el("proxyMarketPurchasedStatus")?.addEventListener("change", async () => {
+    try { await loadProxyPurchasedAssets(); } catch {}
   });
   el("proxyMarketAllocationBody")?.addEventListener("click", async (event) => {
     const button = event.target instanceof Element ? event.target.closest("button[data-proxy-market-action='revoke']") : null;

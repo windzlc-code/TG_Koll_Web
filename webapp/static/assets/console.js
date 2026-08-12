@@ -11143,15 +11143,6 @@ function renderMoreIcon() {
   </svg>`;
 }
 
-function renderPasteIcon() {
-  return `<svg class="ui-action-icon ui-paste-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <path d="M9 5.5h6"></path>
-    <rect x="5" y="4" width="14" height="17" rx="2"></rect>
-    <path d="M12 9v7"></path>
-    <path d="m9 13 3 3 3-3"></path>
-  </svg>`;
-}
-
 async function copyTextToClipboard(value = "") {
   const text = String(value || "");
   if (!text) throw new Error("没有可复制的内容");
@@ -27629,34 +27620,21 @@ function accountProxyPurchaseEmbeddedHtml() {
     <form class="account-proxy-purchase-form" data-account-proxy-purchase-form novalidate>
       <div class="account-proxy-purchase-alert" data-account-proxy-purchase-alert role="alert" aria-live="assertive" hidden></div>
       <section class="account-proxy-purchase-product" aria-label="固定代理规格">
-        <div><span>代理产品</span><strong data-account-proxy-product-name>静态住宅代理</strong></div>
-        <small>产品和套餐由平台固定配置，用户只需选择地区。</small>
+        <div><span>代理产品</span><strong data-account-proxy-product-name>静态住宅代理 · 1 个 · 1 个月</strong></div>
       </section>
       <label class="account-proxy-purchase-field">
-        <span>代理地区</span>
+        <span>购买地区</span>
         <select data-account-proxy-purchase-country required disabled>
           <option value="">正在加载可购买地区...</option>
         </select>
-        <small>地区和库存来自供应商当前可购买选项</small>
       </label>
-      <dl class="account-proxy-purchase-specs" aria-label="订单规格">
-        <div><dt>IP 类型</dt><dd data-account-proxy-product-ip>标准 IPv4</dd></div>
-        <div><dt>ISP</dt><dd data-account-proxy-product-isp>按地区自动匹配</dd></div>
-        <div><dt>数量</dt><dd data-account-proxy-product-quantity>1 个</dd></div>
-        <div><dt>周期</dt><dd data-account-proxy-product-period>1 个月</dd></div>
-      </dl>
       <label class="account-proxy-purchase-renewal">
-        <span><strong>平台托管自动续费</strong><small>到期前检查现金背书点余额，余额足够时才续费</small></span>
+        <span><strong>自动续费</strong></span>
         <input type="checkbox" data-account-proxy-purchase-renewal>
         <i aria-hidden="true"></i>
       </label>
-      <section class="account-proxy-purchase-quote" aria-live="polite">
-        <div><span>本次应付</span><strong data-account-proxy-quote-points>—</strong><small>算力点</small></div>
-        <div><span>现金背书点余额</span><strong data-account-proxy-cash-balance>—</strong></div>
-        <p data-account-proxy-quote-meta>选择地区后获取实时价格</p>
-      </section>
       <button class="account-proxy-purchase-submit" type="submit" data-account-proxy-purchase-submit disabled>
-        <span data-account-proxy-purchase-submit-text>等待实时报价</span><b aria-hidden="true">→</b>
+        <span data-account-proxy-purchase-submit-text>确认购买</span><b aria-hidden="true">→</b>
       </button>
       <section class="account-proxy-purchase-status" data-account-proxy-purchase-status aria-live="polite" hidden>
         <span aria-hidden="true"></span><div><strong data-account-proxy-order-title>订单已受理</strong><p data-account-proxy-order-message></p></div>
@@ -27669,8 +27647,7 @@ function accountProxyPurchaseDialogHtml() {
   return `<section class="console-modal-dialog account-proxy-purchase-modal" role="dialog" aria-modal="true" aria-labelledby="accountProxyPurchaseTitle">
     <div class="console-modal-head account-proxy-purchase-modal-head">
       <button type="button" class="account-proxy-purchase-back" data-account-proxy-purchase-back aria-label="返回代理列表">← <span>返回代理列表</span></button>
-      <div><strong id="accountProxyPurchaseTitle">购买专属代理 IP</strong><p>选择地区和续费方式，使用算力点完成购买</p></div>
-      <span data-account-proxy-purchase-sync hidden>正在同步</span>
+      <div><strong id="accountProxyPurchaseTitle">购买专属代理 IP</strong><p>选择地区后确认购买</p></div>
       ${renderModalCloseButton("data-account-proxy-purchase-close")}
     </div>
     <div class="console-modal-content account-proxy-purchase-modal-content">
@@ -27764,15 +27741,11 @@ function accountProxyPurchaseSetBusy(view, busy, label = "") {
   }
 }
 
-function accountProxyPurchaseClearQuote(view, message = "选择地区后获取实时价格") {
+function accountProxyPurchaseClearQuote(view) {
   view.quote = null;
-  const points = accountProxyPurchaseElement(view, "[data-account-proxy-quote-points]");
-  const meta = accountProxyPurchaseElement(view, "[data-account-proxy-quote-meta]");
   const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
   const text = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit-text]");
-  if (points) points.textContent = "—";
-  if (meta) meta.textContent = message;
-  if (text) text.textContent = "等待实时报价";
+  if (text) text.textContent = "确认购买";
   if (submit) submit.disabled = true;
 }
 
@@ -27804,12 +27777,7 @@ function accountProxyPurchaseRenderOptions(view, payload) {
   const serviceId = String(payload?.service_id || "static-residential-ipv4");
   const periodMonths = Math.max(1, Number(payload?.default_period?.value || 1));
   const mappings = [
-    ["[data-account-proxy-product-name]", serviceNames[serviceId] || "专属代理 IP"],
-    ["[data-account-proxy-product-ip]", `${payload?.is_unused_proxy ? "全新" : "标准"} ${String(payload?.ip_version || "IPv4")}`],
-    ["[data-account-proxy-product-isp]", payload?.isp_managed ? "按地区自动匹配" : "供应商自动匹配"],
-    ["[data-account-proxy-product-quantity]", `${Math.max(1, Number(payload?.quantity || 1))} 个`],
-    ["[data-account-proxy-product-period]", `${periodMonths} 个月`],
-    ["[data-account-proxy-cash-balance]", accountProxyPurchaseFormatPoints(payload?.cash_backed_points)],
+    ["[data-account-proxy-product-name]", `${serviceNames[serviceId] || "专属代理 IP"} · ${Math.max(1, Number(payload?.quantity || 1))} 个 · ${periodMonths} 个月`],
   ];
   mappings.forEach(([selector, value]) => {
     const node = accountProxyPurchaseElement(view, selector);
@@ -27818,12 +27786,7 @@ function accountProxyPurchaseRenderOptions(view, payload) {
   const ready = Boolean(payload?.configured && payload?.live_purchasing_enabled && regions.length);
   if (select) select.disabled = !ready;
   const sync = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-sync]");
-  if (sync) {
-    sync.textContent = ready ? "" : "当前不可购买";
-    sync.hidden = ready;
-    if (ready) delete sync.dataset.tone;
-    else sync.dataset.tone = "error";
-  }
+  if (sync) sync.hidden = ready;
   if (!ready) {
     accountProxyPurchaseAlert(view, "代理购买服务暂未开放。请稍后重试。");
   }
@@ -27839,7 +27802,7 @@ async function accountProxyPurchaseRefreshQuote(view) {
     accountProxyPurchaseClearQuote(view);
     return;
   }
-  accountProxyPurchaseClearQuote(view, "正在获取供应商实时价格...");
+  accountProxyPurchaseClearQuote(view);
   if (select) select.disabled = true;
   try {
     const payload = await api("/api/proxy-purchases/quotes", {
@@ -27852,27 +27815,16 @@ async function accountProxyPurchaseRefreshQuote(view) {
     if (!quote?.id) throw { detail: "供应商没有返回有效报价" };
     view.quote = quote;
     accountProxyPurchasePendingEnsure(quote);
-    const points = accountProxyPurchaseElement(view, "[data-account-proxy-quote-points]");
-    if (points) points.textContent = accountProxyPurchaseFormatPoints(quote.charge_points);
-    const rawExpiry = quote.expires_at;
-    const expiry = new Date(typeof rawExpiry === "number" || /^\d+(?:\.\d+)?$/.test(String(rawExpiry || ""))
-      ? Number(rawExpiry) * 1000
-      : rawExpiry);
-    const expiryText = Number.isNaN(expiry.getTime()) ? "短时间内有效" : `${expiry.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 前有效`;
-    const region = { code: quote.country || country, name: quote.country_name || "" };
-    const periodMonths = Math.max(1, Number(quote?.period?.value || quote?.period || 1));
-    const meta = accountProxyPurchaseElement(view, "[data-account-proxy-quote-meta]");
-    if (meta) meta.textContent = `${accountProxyPurchaseCountryLabel(region)} · ${periodMonths} 个月 · 数量 ${quote.quantity || 1} · ${expiryText}`;
     const affordable = accountProxyPurchaseAffordable(view, quote);
     const submitText = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit-text]");
     const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
-    if (submitText) submitText.textContent = affordable ? "确认并使用算力点购买" : "现金背书点余额不足";
+    if (submitText) submitText.textContent = "确认购买";
     if (submit) submit.disabled = !affordable;
-    if (!affordable) accountProxyPurchaseAlert(view, "现金背书点余额不足；免费赠送点不能用于供应商采购。");
+    if (!affordable) accountProxyPurchaseAlert(view, "可用算力点不足，暂时无法购买。");
   } catch (error) {
     if (view.closed || requestSeq !== view.quoteSeq) return;
-    accountProxyPurchaseClearQuote(view, "实时报价获取失败");
-    accountProxyPurchaseAlert(view, accountProxyPurchaseErrorMessage(error, "无法获取实时报价"));
+    accountProxyPurchaseClearQuote(view);
+    accountProxyPurchaseAlert(view, accountProxyPurchaseErrorMessage(error, "暂时无法确认库存，请稍后重试"));
   } finally {
     if (!view.closed && requestSeq === view.quoteSeq && select) {
       select.disabled = !view.options?.configured || !view.options?.live_purchasing_enabled;
@@ -28025,7 +27977,7 @@ async function accountProxyPurchaseSubmit(view, event) {
   event.preventDefault();
   if (view.busy || !view.quote?.id || !accountProxyPurchaseAffordable(view)) return;
   accountProxyPurchaseAlert(view, "");
-  accountProxyPurchaseSetBusy(view, true, "正在安全预占算力点...");
+  accountProxyPurchaseSetBusy(view, true, "正在提交订单...");
   const pending = accountProxyPurchasePendingWrite({ ...accountProxyPurchasePendingEnsure(view.quote), submitted: true });
   try {
     const payload = await accountProxyPurchaseCreateOrder(pending);
@@ -28044,7 +27996,7 @@ async function accountProxyPurchaseSubmit(view, event) {
     }
     accountProxyPurchasePendingClear();
     view.quote = null;
-    accountProxyPurchaseSetBusy(view, false, "请重新获取报价");
+    accountProxyPurchaseSetBusy(view, false, "确认购买");
     accountProxyPurchaseAlert(view, accountProxyPurchaseErrorMessage(error, "订单创建失败"));
   }
 }
@@ -28071,8 +28023,8 @@ async function loadAccountProxyPurchaseForm(modal) {
         await accountProxyPurchaseRecover(view, pending, { replayIfMissing: true });
       } catch (error) {
         if (Number(error?.status) >= 400 && Number(error?.status) < 500) accountProxyPurchasePendingClear();
-        accountProxyPurchaseSetBusy(view, false, "重新选择地区报价");
-        accountProxyPurchaseAlert(view, accountProxyPurchaseErrorMessage(error, "上次购买结果无法恢复，请重新获取报价"));
+        accountProxyPurchaseSetBusy(view, false, "确认购买");
+        accountProxyPurchaseAlert(view, accountProxyPurchaseErrorMessage(error, "上次购买结果无法恢复，请重新选择地区"));
       }
     } else if (pending) {
       accountProxyPurchasePendingClear();
@@ -28996,7 +28948,7 @@ function openAccountPoolEditorModal(options) {
       <div class="console-modal-head">
         <strong id="accountPoolEditorModalTitle">${editing ? "编辑账号" : "添加账号"}</strong>
         <div class="account-pool-create-modal-head-actions">
-          <button type="button" class="account-pool-paste-card-button" data-account-pool-paste-card title="${editing ? "粘贴并覆盖账号、密码和 2FA" : "粘贴账号、密码和 2FA"}" aria-label="${editing ? "粘贴并覆盖账号、密码和 2FA" : "粘贴账号、密码和 2FA"}">${renderPasteIcon()}</button>
+          <button type="button" class="account-pool-paste-card-button" data-account-pool-paste-card title="${editing ? "粘贴并覆盖账号、密码和 2FA" : "粘贴账号、密码和 2FA"}" aria-label="${editing ? "粘贴并覆盖账号、密码和 2FA" : "粘贴账号、密码和 2FA"}">${renderClipboardIcon()}<span>粘贴账号</span></button>
           ${renderModalCloseButton("data-account-pool-editor-cancel")}
         </div>
       </div>

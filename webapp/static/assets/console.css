@@ -16255,13 +16255,15 @@ body.persona-media-sorting {
 }
 
 .account-pool-paste-card-button {
-  display: inline-grid;
-  place-items: center;
-  width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
   height: 44px;
   min-width: 44px;
   min-height: 44px;
-  padding: 0;
+  padding: 0 10px;
   border: 0;
   border-radius: 7px;
   background: transparent;
@@ -16274,7 +16276,7 @@ body.persona-media-sorting {
   background: var(--soft);
 }
 
-.account-pool-paste-card-button .ui-paste-icon {
+.account-pool-paste-card-button .ui-clipboard-icon {
   width: 19px;
   height: 19px;
   fill: none;
@@ -17275,7 +17277,7 @@ body.persona-media-sorting {
 
 .account-proxy-purchase-modal-head {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   padding: 14px 16px;
   border-bottom: 1px solid var(--line);
 }
@@ -17303,16 +17305,6 @@ body.persona-media-sorting {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-solid);
-}
-
-.account-proxy-purchase-modal-head > [data-account-proxy-purchase-sync] {
-  padding: 4px 7px;
-  color: #a33a31;
-  border: 1px solid #e0aaa5;
-  border-radius: 999px;
-  background: #fff4f3;
-  font-size: 10px;
-  white-space: nowrap;
 }
 
 .account-proxy-purchase-modal-content {
@@ -17399,39 +17391,6 @@ body.persona-media-sorting {
   font-size: 11px;
 }
 
-.account-proxy-purchase-specs {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  margin: 0;
-}
-
-.account-proxy-purchase-specs > div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-solid);
-}
-
-.account-proxy-purchase-specs dt {
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.account-proxy-purchase-specs dd {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 800;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .account-proxy-purchase-renewal {
   display: flex;
   align-items: center;
@@ -17474,31 +17433,6 @@ body.persona-media-sorting {
 .account-proxy-purchase-renewal input:checked + i { border-color: #147fb4; background: #147fb4; }
 .account-proxy-purchase-renewal input:checked + i::after { transform: translateX(16px); }
 .account-proxy-purchase-renewal input:focus-visible + i { outline: 2px solid #66b9df; outline-offset: 2px; }
-
-.account-proxy-purchase-quote {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px 16px;
-  padding: 14px;
-  color: #fff;
-  border-radius: 10px;
-  background: #173a5e;
-}
-
-.account-proxy-purchase-quote > div { display: grid; gap: 2px; }
-.account-proxy-purchase-quote span,
-.account-proxy-purchase-quote small,
-.account-proxy-purchase-quote p { color: #cbe0f0; }
-.account-proxy-purchase-quote span { font-size: 10px; }
-.account-proxy-purchase-quote strong { font-size: 20px; }
-.account-proxy-purchase-quote small { font-size: 10px; }
-.account-proxy-purchase-quote p {
-  grid-column: 1 / -1;
-  margin: 0;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, .18);
-  font-size: 11px;
-}
 
 .account-proxy-purchase-submit {
   display: flex;
@@ -17553,11 +17487,9 @@ body.persona-media-sorting {
 @media (max-width: 640px) {
   .console-modal-dialog.account-proxy-purchase-modal { max-height: calc(100dvh - 12px); }
   .account-proxy-purchase-modal-head { grid-template-columns: auto minmax(0, 1fr) auto; padding: 10px; }
-  .account-proxy-purchase-modal-head > [data-account-proxy-purchase-sync] { grid-column: 2; justify-self: start; }
   .account-proxy-purchase-back span { display: none; }
   .account-proxy-purchase-embedded { max-height: calc(100dvh - 72px); }
   .account-proxy-purchase-form { padding: 12px; }
-  .account-proxy-purchase-specs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 .account-proxy-enable {

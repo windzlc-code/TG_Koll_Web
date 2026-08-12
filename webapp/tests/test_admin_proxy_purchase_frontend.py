@@ -49,6 +49,14 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         status = self._function("renderProxyProviderCredentialStatus", "loadProxyProviderCredentialStatus")
         self.assertIn("readiness.hidden = reasons.length === 0", status)
 
+    def test_admin_has_separate_user_purchased_proxy_asset_list(self):
+        self.assertIn('id="proxyMarketPurchasedTab"', self.markup)
+        self.assertIn('id="proxyMarketPurchasedPanel"', self.markup)
+        self.assertIn('id="proxyMarketPurchasedBody"', self.markup)
+        self.assertIn('"/api/admin/proxy-purchases/assets"', self.script)
+        self.assertIn("function renderProxyPurchasedAssets", self.script)
+        self.assertIn("function loadProxyPurchasedAssets", self.script)
+
 
 if __name__ == "__main__":
     unittest.main()

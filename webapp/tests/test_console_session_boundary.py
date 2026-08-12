@@ -3148,6 +3148,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("serializeAccountClipboardText", copy_one)
         self.assertIn("parseAccountClipboardText", paste)
         self.assertIn("data-account-pool-paste-card", editor)
+        self.assertIn('${renderClipboardIcon()}<span>粘贴账号</span>', editor)
+        self.assertNotIn("renderPasteIcon()", editor)
         self.assertNotIn('editing ? "" : `<button type="button" class="account-pool-paste-card-button"', editor)
         self.assertIn("navigator.clipboard.readText", paste)
         self.assertNotIn("VECTO_ACCOUNT_CARD_V1.", paste)
@@ -3487,6 +3489,20 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("sync.hidden = ready", render_options)
         self.assertIn(".account-proxy-purchase-modal", self.styles)
         self.assertIn(".account-proxy-purchase-status[hidden]", self.styles)
+
+    def test_proxy_purchase_page_hides_price_and_uses_plain_purchase_copy(self):
+        markup = self._function_source("accountProxyPurchaseEmbeddedHtml")
+        dialog = self._function_source("accountProxyPurchaseDialogHtml")
+        quote = self._function_source("accountProxyPurchaseRefreshQuote")
+
+        self.assertIn("自动续费", markup)
+        self.assertIn("确认购买", markup)
+        self.assertNotIn("平台托管自动续费", markup)
+        self.assertNotIn("现金背书点余额", markup)
+        self.assertNotIn("本次应付", markup)
+        self.assertNotIn("data-account-proxy-purchase-quote", markup)
+        self.assertNotIn("使用算力点完成购买", dialog)
+        self.assertNotIn("quote.charge_points", quote)
 
     def test_totp_code_card_uses_stable_svg_ring_and_millisecond_clock(self):
         controller = self._function_source("createAccountTotpController")

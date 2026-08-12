@@ -64,9 +64,12 @@ def list_available_system_proxy_options(
     conn: sqlite3.Connection,
     *,
     owner_user_id: int,
+    include_admin_inventory: bool = False,
 ) -> list[dict[str, Any]]:
     owner_id = int(owner_user_id or 0)
     if owner_id <= 0:
+        return []
+    if not include_admin_inventory:
         return []
     active_count = int(
         conn.execute(
@@ -143,6 +146,7 @@ def list_system_proxy_pool_options(
     conn: sqlite3.Connection,
     *,
     owner_user_id: int,
+    include_admin_inventory: bool = False,
 ) -> list[dict[str, Any]]:
     """Return the user's owned proxies, current shared proxy, and unclaimed choices.
 
@@ -205,6 +209,8 @@ def list_system_proxy_pool_options(
         item = dict(row)
         ownership_type = str(item.get("ownership_type") or "shared").strip().lower()
         owned = ownership_type == "owned" and int(item.get("owner_user_id") or 0) == owner_id
+        if not owned and not include_admin_inventory:
+            continue
         selected = int(item.get("allocation_user_id") or 0) == owner_id
         if not selected and not owned:
             if str(item.get("status") or "") != "active":
@@ -266,6 +272,7 @@ def claim_system_proxy_in_transaction(
     owner_user_id: int,
     client_request_id: str = "",
     allow_replacement: bool = False,
+    allow_admin_inventory: bool = False,
 ) -> Any:
     owner_id = int(owner_user_id or 0)
     clean_item_id = str(item_id or "").strip()
@@ -292,6 +299,23 @@ def claim_system_proxy_in_transaction(
         raise HTTPException(status_code=403, detail="账号当前不可使用系统代理")
     if int(user_data.get("is_admin") or 0) != 1 and str(user_data.get("approval_status") or "") != "approved":
         raise HTTPException(status_code=403, detail="账号审核通过后才能使用系统代理")
+    row = conn.execute("SELECT * FROM proxy_market_items WHERE id = ?", (clean_item_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="系统代理不存在")
+    item = dict(row)
+    ownership_type = str(item.get("ownership_type") or "shared").strip().lower()
+    if ownership_type == "owned":
+        if int(item.get("owner_user_id") or 0) != owner_id:
+            raise HTTPException(status_code=404, detail="系统代理不存在")
+        owned_proxy = conn.execute(
+            "SELECT * FROM social_proxies WHERE market_item_id = ? AND user_id = ? LIMIT 1",
+            (clean_item_id, owner_id),
+        ).fetchone()
+        if owned_proxy is None:
+            raise HTTPException(status_code=409, detail="已购代理正在同步，请稍后重试")
+        return owned_proxy
+    if not allow_admin_inventory:
+        raise HTTPException(status_code=404, detail="系统代理不存在")
     active_count = int(
         conn.execute(
             "SELECT COUNT(*) FROM proxy_market_allocations WHERE user_id = ? AND status = 'active'",
@@ -301,10 +325,6 @@ def claim_system_proxy_in_transaction(
     limit = _claim_limit(conn, owner_id)
     if active_count >= limit and not allow_replacement:
         raise HTTPException(status_code=409, detail=f"系统代理使用数量已达到上限（{limit} 个）")
-    row = conn.execute("SELECT * FROM proxy_market_items WHERE id = ?", (clean_item_id,)).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="系统代理不存在")
-    item = dict(row)
     if str(item.get("status") or "") != "active":
         raise HTTPException(status_code=409, detail="该系统代理已被占用或暂不可用")
     now = int(time.time())
@@ -391,11 +411,28 @@ def switch_system_proxy_in_transaction(
     owner_user_id: int,
     client_request_id: str = "",
     expected_current_item_id: str | None = None,
+    allow_admin_inventory: bool = False,
 ) -> tuple[Any, bool]:
     """Select one system proxy per user without changing account bindings."""
 
     owner_id = int(owner_user_id or 0)
     clean_item_id = str(item_id or "").strip()
+    target = conn.execute(
+        "SELECT ownership_type, owner_user_id FROM proxy_market_items WHERE id = ?",
+        (clean_item_id,),
+    ).fetchone()
+    if target is None:
+        raise HTTPException(status_code=404, detail="系统代理不存在")
+    if str(target["ownership_type"] or "shared").strip().lower() == "owned":
+        selected = claim_system_proxy_in_transaction(
+            conn,
+            item_id=clean_item_id,
+            owner_user_id=owner_id,
+            client_request_id=client_request_id,
+        )
+        return selected, False
+    if not allow_admin_inventory:
+        raise HTTPException(status_code=404, detail="系统代理不存在")
     current_rows = conn.execute(
         """
         SELECT proxy.*, allocation.item_id AS allocated_item_id
@@ -440,6 +477,7 @@ def switch_system_proxy_in_transaction(
         owner_user_id=owner_id,
         client_request_id=client_request_id,
         allow_replacement=bool(current_rows),
+        allow_admin_inventory=allow_admin_inventory,
     )
     selected_proxy_id = str(selected["id"] or "")
     replaced_proxy = any(str(row["id"] or "") != selected_proxy_id for row in current_rows)

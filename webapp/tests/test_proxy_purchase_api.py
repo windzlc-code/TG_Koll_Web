@@ -175,6 +175,18 @@ class ProxyPurchaseApiTests(unittest.TestCase):
         )
         self.assertEqual(cross_user.status_code, 404)
 
+        assets = self.client.get("/api/admin/proxy-purchases/assets")
+        self.assertEqual(assets.status_code, 200, assets.text)
+        self.assertEqual(len(assets.json()["items"]), 1)
+        asset = assets.json()["items"][0]
+        self.assertEqual(asset["order_id"], order["id"])
+        self.assertEqual(asset["user_id"], self.user_id)
+        self.assertEqual(asset["ownership_type"], "owned")
+        self.assertEqual(asset["source"], "provider_purchase")
+        self.assertEqual(asset["proxy_status"], "active")
+        self.assertNotIn("username_ciphertext", assets.text)
+        self.assertNotIn("password_ciphertext", assets.text)
+
     def test_idempotency_header_must_match_body(self):
         quote = self.client.post(
             "/api/proxy-purchases/quotes",

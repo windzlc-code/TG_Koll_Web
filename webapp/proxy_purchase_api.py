@@ -422,6 +422,24 @@ def register_proxy_purchase_routes(
         with db() as conn:
             return {"ok": True, "items": proxy_purchases.list_orders(conn, limit=200)}
 
+    @app.get("/api/admin/proxy-purchases/assets")
+    def api_admin_proxy_purchase_assets(
+        query: str = Query(default="", max_length=160),
+        status: str = Query(default="", max_length=40),
+        limit: int = Query(default=200, ge=1, le=500),
+        _admin: dict[str, Any] = Depends(admin_dependency),
+    ):
+        with db() as conn:
+            return {
+                "ok": True,
+                "items": proxy_purchases.list_owned_assets(
+                    conn,
+                    query=query,
+                    status=status,
+                    limit=limit,
+                ),
+            }
+
     @app.post("/api/admin/proxy-purchases/orders/{order_id}/reconcile")
     def api_admin_proxy_purchase_reconcile(
         order_id: str,

@@ -1803,6 +1803,113 @@ def list_orders(
     return result
 
 
+def list_owned_assets(
+    conn: sqlite3.Connection,
+    *,
+    query: str = "",
+    status: str = "",
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    conditions = [
+        "item.ownership_type = 'owned'",
+        "item.provider_purchase_order_id <> ''",
+    ]
+    params: list[Any] = []
+    clean_query = str(query or "").strip()
+    if clean_query:
+        pattern = f"%{clean_query}%"
+        conditions.append(
+            "(user.username LIKE ? OR user.full_name LIKE ? OR item.host LIKE ? "
+            "OR item.country LIKE ? OR item.region LIKE ? OR item.city LIKE ? "
+            "OR orders.id LIKE ? OR item.provider_proxy_id LIKE ?)"
+        )
+        params.extend([pattern] * 8)
+    clean_status = str(status or "").strip().lower()
+    if clean_status:
+        conditions.append("COALESCE(proxy.status, item.status) = ?")
+        params.append(clean_status)
+    params.append(min(max(int(limit), 1), 500))
+    rows = conn.execute(
+        f"""
+        SELECT item.id AS market_item_id,
+               proxy.id AS social_proxy_id,
+               orders.id AS order_id,
+               item.owner_user_id AS user_id,
+               user.username,
+               user.full_name,
+               item.display_name,
+               item.provider_key,
+               item.provider_proxy_id,
+               item.proxy_type,
+               item.host,
+               item.port,
+               item.country,
+               item.region,
+               item.city,
+               item.isp,
+               item.ownership_type,
+               COALESCE(proxy.source, 'provider_purchase') AS source,
+               COALESCE(proxy.status, item.status) AS proxy_status,
+               item.health_status,
+               COALESCE(orders.status, '') AS order_status,
+               COALESCE(renewal.enabled, orders.renewal_enabled, 0) AS renewal_enabled,
+               COALESCE(renewal.status, '') AS renewal_status,
+               (
+                 SELECT COUNT(*) FROM social_accounts account
+                 WHERE account.user_id = item.owner_user_id AND account.proxy_id = proxy.id
+               ) AS bound_account_count,
+               item.expires_at,
+               item.created_at,
+               item.updated_at
+        FROM proxy_market_items item
+        LEFT JOIN proxy_purchase_orders orders
+          ON orders.id = item.provider_purchase_order_id
+        LEFT JOIN users user
+          ON user.id = item.owner_user_id
+        LEFT JOIN social_proxies proxy
+          ON proxy.market_item_id = item.id AND proxy.user_id = item.owner_user_id
+        LEFT JOIN proxy_renewal_schedules renewal
+          ON renewal.order_id = orders.id
+        WHERE {' AND '.join(conditions)}
+        ORDER BY item.updated_at DESC, item.created_at DESC
+        LIMIT ?
+        """,
+        tuple(params),
+    ).fetchall()
+    return [
+        {
+            "market_item_id": str(row["market_item_id"] or ""),
+            "social_proxy_id": str(row["social_proxy_id"] or ""),
+            "order_id": str(row["order_id"] or ""),
+            "user_id": int(row["user_id"] or 0),
+            "username": str(row["username"] or ""),
+            "full_name": str(row["full_name"] or ""),
+            "display_name": str(row["display_name"] or ""),
+            "provider_key": str(row["provider_key"] or ""),
+            "provider_proxy_id": str(row["provider_proxy_id"] or ""),
+            "proxy_type": str(row["proxy_type"] or ""),
+            "host": str(row["host"] or ""),
+            "port": int(row["port"] or 0),
+            "country": str(row["country"] or ""),
+            "region": str(row["region"] or ""),
+            "city": str(row["city"] or ""),
+            "isp": str(row["isp"] or ""),
+            "ownership_type": str(row["ownership_type"] or ""),
+            "source": str(row["source"] or ""),
+            "proxy_status": str(row["proxy_status"] or ""),
+            "health_status": str(row["health_status"] or ""),
+            "order_status": str(row["order_status"] or ""),
+            "renewal_enabled": bool(row["renewal_enabled"]),
+            "renewal_status": str(row["renewal_status"] or ""),
+            "bound_account_count": int(row["bound_account_count"] or 0),
+            "expires_at": int(row["expires_at"] or 0),
+            "created_at": int(row["created_at"] or 0),
+            "updated_at": int(row["updated_at"] or 0),
+        }
+        for row in rows
+    ]
+
+
 def provider_options(
     conn: sqlite3.Connection, *, provider: ProxyProvider | None = None,
     service_id: str = "", plan_id: str = ""

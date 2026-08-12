@@ -863,13 +863,22 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             )
 
         with social_api.db() as conn:
-            options = social_api.list_available_system_proxy_options(conn, owner_user_id=42)
+            self.assertEqual(
+                social_api.list_available_system_proxy_options(conn, owner_user_id=42),
+                [],
+            )
+            options = social_api.list_available_system_proxy_options(
+                conn,
+                owner_user_id=42,
+                include_admin_inventory=True,
+            )
         self.assertEqual(len(options), 1)
         self.assertEqual(options[0]["id"], f"system_proxy_item:{item_id}")
 
         updated = social_api.update_social_account(
             account_id,
             social_api.SocialAccountPatchPayload(proxy_id=options[0]["id"], expected_proxy_id=""),
+            allow_admin_inventory=True,
         )
         allocated_proxy_id = updated["proxy_id"]
         self.assertTrue(allocated_proxy_id.startswith("social_proxy_"))
@@ -909,17 +918,39 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
                 item_id="pool-first",
                 owner_user_id=42,
                 client_request_id="select-first",
+                allow_admin_inventory=True,
             )
             self.assertFalse(replaced)
 
+        with self.assertRaises(HTTPException) as hidden:
+            social_api._require_proxy_access(str(first["id"]), {"id": 42, "is_admin": 0})
+        self.assertEqual(hidden.exception.status_code, 404)
+        visible_to_admin = social_api._require_proxy_access(
+            str(first["id"]),
+            {"id": 1, "_workspace_user_id": 42, "_workspace_admin_user_id": 1},
+        )
+        self.assertEqual(str(visible_to_admin["id"]), str(first["id"]))
+
         with social_api.db() as conn:
-            choices = social_api.list_system_proxy_pool_options(conn, owner_user_id=42)
+            self.assertEqual(
+                social_api.list_system_proxy_pool_options(conn, owner_user_id=42),
+                [],
+            )
+            choices = social_api.list_system_proxy_pool_options(
+                conn,
+                owner_user_id=42,
+                include_admin_inventory=True,
+            )
         self.assertEqual([row["market_item_id"] for row in choices], ["pool-first", "pool-second"])
         self.assertTrue(choices[0]["selected"])
         self.assertTrue(choices[1]["available"])
 
         with social_api.db() as conn:
-            other_user_choices = social_api.list_system_proxy_pool_options(conn, owner_user_id=43)
+            other_user_choices = social_api.list_system_proxy_pool_options(
+                conn,
+                owner_user_id=43,
+                include_admin_inventory=True,
+            )
         self.assertEqual(
             [row["market_item_id"] for row in other_user_choices],
             ["pool-second"],
@@ -933,6 +964,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
                 item_id="pool-second",
                 owner_user_id=42,
                 client_request_id="select-second",
+                allow_admin_inventory=True,
             )
         self.assertTrue(replaced)
         with social_api.db() as conn:
@@ -951,6 +983,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
                     item_id="pool-first",
                     owner_user_id=42,
                     expected_current_item_id="pool-first",
+                    allow_admin_inventory=True,
                 )
         self.assertEqual(stale.exception.status_code, 409)
         self.assertIn("其他页面变更", stale.exception.detail)
@@ -964,6 +997,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
                 conn,
                 item_id="busy-first",
                 owner_user_id=42,
+                allow_admin_inventory=True,
             )
             conn.execute(
                 """
@@ -982,6 +1016,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
                     conn,
                     item_id="busy-second",
                     owner_user_id=42,
+                    allow_admin_inventory=True,
                 )
         self.assertEqual(caught.exception.status_code, 409)
         self.assertIn("解除账号绑定", caught.exception.detail)

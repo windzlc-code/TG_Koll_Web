@@ -1113,7 +1113,7 @@
           <div class="proxy-market-admin-band-head">
             <div>
               <h3>Proxy-Cheap 供应商采购</h3>
-              <div class="small">映射供应商公开 API 选项；用户端仅显示地区、托管续费与算力点报价。</div>
+              <div class="small">映射供应商公开 API 选项；用户端仅选择地区和自动续费，然后确认购买。</div>
             </div>
           </div>
           <div id="proxyPurchaseReadiness" class="proxy-purchase-readiness" role="status" aria-live="polite">正在读取采购状态...</div>
@@ -1211,8 +1211,8 @@
         <div class="proxy-market-admin-band" id="proxyMarketRecordsBand">
           <div class="proxy-market-admin-band-head proxy-market-records-head">
             <div>
-              <h3>库存与分配</h3>
-              <div class="small">在同一区域切换查看代理库存和客户分配记录。</div>
+              <h3>代理资产管理</h3>
+              <div class="small">分别管理管理员库存、共享分配记录和用户自行购买的代理。</div>
             </div>
             <div class="proxy-market-record-tabs" id="proxyMarketRecordsTabs" role="tablist" aria-label="代理 IP 记录视图">
               <button id="proxyMarketInventoryTab" class="proxy-market-record-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="proxyMarketInventoryPanel" tabindex="0" data-proxy-market-records-view="inventory">
@@ -1220,6 +1220,9 @@
               </button>
               <button id="proxyMarketAllocationTab" class="proxy-market-record-tab" type="button" role="tab" aria-selected="false" aria-controls="proxyMarketAllocationPanel" tabindex="-1" data-proxy-market-records-view="allocations">
                 分配记录 <span class="proxy-market-record-tab-count" id="proxyMarketAllocationTabCount">0</span>
+              </button>
+              <button id="proxyMarketPurchasedTab" class="proxy-market-record-tab" type="button" role="tab" aria-selected="false" aria-controls="proxyMarketPurchasedPanel" tabindex="-1" data-proxy-market-records-view="purchased">
+                用户自购 <span class="proxy-market-record-tab-count" id="proxyMarketPurchasedTabCount">0</span>
               </button>
             </div>
           </div>
@@ -1297,6 +1300,36 @@
               </table>
             </div>
             <div id="proxyMarketAllocationMsg" class="msg" role="status" aria-live="polite"></div>
+          </div>
+
+          <div class="proxy-market-record-panel" id="proxyMarketPurchasedPanel" role="tabpanel" aria-labelledby="proxyMarketPurchasedTab" hidden>
+            <div class="proxy-market-admin-band-head">
+              <div>
+                <h3>用户自购代理</h3>
+                <div class="small" id="proxyMarketPurchasedSummary">尚未加载</div>
+              </div>
+              <div class="proxy-market-admin-filters">
+                <label><span>搜索</span><input id="proxyMarketPurchasedQuery" type="search" placeholder="用户、IP、地区或订单号"></label>
+                <label><span>状态</span>
+                  <select id="proxyMarketPurchasedStatus">
+                    <option value="">全部</option>
+                    <option value="active">可使用</option>
+                    <option value="pending">同步中</option>
+                    <option value="failed">异常</option>
+                    <option value="inactive">已停用</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            <div class="table-wrap admin-table-shell admin-governance-table-shell">
+              <table class="table admin-governance-table proxy-market-admin-table">
+                <thead><tr><th>用户</th><th>代理 / 地区</th><th>订单</th><th>状态 / 续费</th><th>绑定 / 到期</th></tr></thead>
+                <tbody id="proxyMarketPurchasedBody">
+                  <tr><td colspan="5">进入页面后加载用户自购代理...</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="proxyMarketPurchasedMsg" class="msg" role="status" aria-live="polite"></div>
           </div>
         </div>
 
