@@ -461,6 +461,11 @@ const SENSITIVE_RUNTIME_INPUT_IDS = [
   "rtVideoRunningHubEnterpriseApiKey",
   "rtVideoMiniMaxApiKey",
 ];
+const SENSITIVE_PROVIDER_INPUT_IDS = [
+  "proxyProviderApiKey",
+  "proxyProviderApiSecret",
+  "proxyProviderWebhookSecret",
+];
 
 const RUNTIME_SECRET_API_NAMES = {
   rtLlmApiKeyGpt: "llm_api_key_gpt",
@@ -587,6 +592,11 @@ function setActiveAdminPage(page, updateHash = true) {
   if (nextPage === "security") void loadSecurityAlerts();
   if (nextPage === "serviceAccounts") void loadServiceAccounts();
   if (nextPage === "proxyMarket") void loadProxyMarketWorkspace();
+  if (nextPage === "runtime") {
+    void loadProxyProviderCredentialStatus().catch((error) => {
+      setMsg("proxyProviderCredentialMsg", `供应商凭据状态读取失败：${getErrorMessage(error)}`, false);
+    });
+  }
   return true;
 }
 
@@ -2699,7 +2709,7 @@ function setButtonLoading(buttonId, loading, loadingText) {
 }
 
 function initSensitiveInputToggles() {
-  SENSITIVE_RUNTIME_INPUT_IDS.forEach((id) => {
+  [...SENSITIVE_RUNTIME_INPUT_IDS, ...SENSITIVE_PROVIDER_INPUT_IDS].forEach((id) => {
     const input = el(id);
     if (!input || input.type === "hidden" || input.closest(".sensitive-input-wrap")) return;
     input.type = "password";
@@ -8744,6 +8754,18 @@ function renderProxyProviderCredentialStatus(status = {}) {
   const verified = status?.verified === true;
   const label = verified ? "已验证" : configured ? "已保存，待验证" : "未配置";
   setText("proxyProviderCredentialSummary", label);
+  [
+    ["proxyProviderApiKey", status?.api_key_configured === true, "API Key"],
+    ["proxyProviderApiSecret", status?.api_secret_configured === true, "API Secret"],
+    ["proxyProviderWebhookSecret", status?.webhook_secret_configured === true, "Webhook Secret"],
+  ].forEach(([id, isConfigured, labelText]) => {
+    const input = el(id);
+    if (!input) return;
+    input.placeholder = isConfigured
+      ? `已保存，输入新 ${labelText} 后替换`
+      : `输入 ${labelText}${id === "proxyProviderWebhookSecret" ? "（可选）" : ""}`;
+    input.dataset.providerSecretConfigured = isConfigured ? "true" : "false";
+  });
   const readiness = el("proxyPurchaseReadiness");
   const reasons = [];
   if (!configured) reasons.push("尚未配置供应商 API 凭据");
@@ -8913,7 +8935,11 @@ async function loadProxyPurchaseProviderOptions({ serviceId, planId, persist = f
 
 function clearProxyProviderCredentialInputs() {
   ["proxyProviderApiKey", "proxyProviderApiSecret", "proxyProviderWebhookSecret"].forEach((id) => {
-    if (el(id)) el(id).value = "";
+    const input = el(id);
+    if (!input) return;
+    input.value = "";
+    input.type = "password";
+    updateSensitiveToggleVisual(getSensitiveToggleButton(id), false);
   });
 }
 
@@ -8962,7 +8988,7 @@ async function saveProxyProviderCredentials() {
     if (el("proxyProviderCredentialReason")) el("proxyProviderCredentialReason").value = "";
     await loadProxyPurchaseProviderOptions({
       serviceId: "static-residential-ipv4",
-      planId: String(el("proxyPurchasePlanId")?.value || ""),
+      planId: "",
       persist: true,
     });
     setMsg("proxyProviderCredentialMsg", "凭据已加密保存，连接测试和供应商字段同步均已完成", true);

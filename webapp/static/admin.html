@@ -375,6 +375,7 @@
     .proxy-provider-api-panel > summary::-webkit-details-marker { display: none; }
     .proxy-provider-api-panel > summary::after { content: "+"; flex: 0 0 auto; color: #155f96; font-size: 22px; line-height: 1; }
     .proxy-provider-api-panel[open] > summary::after { content: "−"; }
+    .admin-runtime-stack > .proxy-provider-api-panel { margin-top: 0; }
     .proxy-provider-api-panel > summary h4 { margin: 0 0 4px; font-size: 15px; }
     .proxy-provider-api-panel > summary p { margin: 0; color: #51677c; font-size: 12px; }
     .proxy-provider-api-body { margin-top: 14px; padding-top: 14px; border-top: 1px solid #d6e0e8; }
@@ -394,6 +395,7 @@
     .proxy-provider-field-map-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .proxy-provider-field-map-head h4 { margin: 0; font-size: 14px; }
     .proxy-provider-field-map[open] .proxy-provider-field-grid { margin-top: 9px; }
+    .proxy-provider-field-map-standalone { position: relative; z-index: 1; margin-top: 14px; padding: 14px 16px; border: 0; border-radius: 10px; background: rgba(255,255,255,.97); color: var(--ink, #17202a); }
     .proxy-provider-field-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
     .proxy-provider-field-item { min-width: 0; padding: 9px 10px; border: 1px solid #dbe3ea; border-radius: 7px; background: #f7fafc; }
     .proxy-provider-field-item strong { display: block; margin-bottom: 3px; font-size: 11px; color: #51677c; }
@@ -1118,38 +1120,12 @@
           </div>
           <div id="proxyPurchaseReadiness" class="proxy-purchase-readiness" role="status" aria-live="polite">正在读取采购状态...</div>
 
-          <details class="proxy-provider-api-panel" id="proxyProviderApiDetails" aria-labelledby="proxyProviderApiTitle">
-            <summary>
-              <div>
-                <h4 id="proxyProviderApiTitle">第三方代理 API 设置</h4>
-                <p>Proxy-Cheap · USD · 数量 1；供应商、币种和状态由服务端自动识别。</p>
-              </div>
-              <span id="proxyProviderCredentialSummary" class="proxy-provider-credential-summary">自动检测中</span>
+          <details class="proxy-provider-field-map proxy-provider-field-map-standalone" id="proxyProviderFieldDetails" aria-live="polite">
+            <summary class="proxy-provider-field-map-head">
+              <h4>供应商字段同步详情</h4>
+              <span class="small" id="proxyProviderFieldRevision">尚未同步</span>
             </summary>
-            <div class="proxy-provider-api-body">
-              <div class="proxy-provider-api-head">
-                <p>API Key 与 API Secret 仅加密保存在服务端；留空表示保留已保存内容。</p>
-                <button id="btnTestProxyProviderCredentials" type="button" class="ghost">测试连接</button>
-              </div>
-              <form id="proxyProviderCredentialForm" class="proxy-provider-credential-form" novalidate>
-                <label><span>API Key</span><input id="proxyProviderApiKey" type="password" autocomplete="new-password" maxlength="512" placeholder="留空保留已保存的 Key"></label>
-                <label><span>API Secret（私钥）</span><input id="proxyProviderApiSecret" type="password" autocomplete="new-password" maxlength="512" placeholder="留空保留已保存的 Secret"></label>
-                <label><span>Webhook Secret（可选）</span><input id="proxyProviderWebhookSecret" type="password" autocomplete="new-password" maxlength="512" placeholder="留空保留；配置后用于回调验签"></label>
-                <label><span>变更原因</span><input id="proxyProviderCredentialReason" minlength="3" maxlength="500" placeholder="例如：首次配置或轮换凭据"></label>
-                <div class="proxy-provider-credential-actions">
-                  <p class="proxy-provider-secret-note">管理员登录态与同源校验通过后即可保存；系统会自动验证凭据并同步公开产品字段。</p>
-                  <button id="btnSaveProxyProviderCredentials" type="submit" class="primary">保存并自动验证</button>
-                </div>
-              </form>
-              <details class="proxy-provider-field-map" id="proxyProviderFieldDetails" aria-live="polite">
-                <summary class="proxy-provider-field-map-head">
-                  <h4>供应商字段同步详情</h4>
-                  <span class="small" id="proxyProviderFieldRevision">尚未同步</span>
-                </summary>
-                <div id="proxyProviderFieldGrid" class="proxy-provider-field-grid"><div class="proxy-provider-field-item"><strong>状态</strong><span>等待连接供应商</span></div></div>
-              </details>
-              <div id="proxyProviderCredentialMsg" class="msg" role="status" aria-live="polite"></div>
-            </div>
+            <div id="proxyProviderFieldGrid" class="proxy-provider-field-grid"><div class="proxy-provider-field-item"><strong>状态</strong><span>等待连接供应商</span></div></div>
           </details>
 
           <form id="proxyPurchaseConfigForm" class="proxy-purchase-config-form" novalidate>
@@ -1863,6 +1839,33 @@
           </div>
         </div>
         <div class="admin-runtime-stack">
+          <details class="admin-config-card admin-runtime-panel proxy-provider-api-panel" id="proxyProviderApiDetails" aria-labelledby="proxyProviderApiTitle">
+            <summary>
+              <div>
+                <h4 id="proxyProviderApiTitle">第三方代理 API</h4>
+                <p>Proxy-Cheap 凭据只需配置一次；采购参数与供应商字段仍在“代理 IP 管理”中维护。</p>
+              </div>
+              <span id="proxyProviderCredentialSummary" class="proxy-provider-credential-summary">自动检测中</span>
+            </summary>
+            <div class="proxy-provider-api-body">
+              <div class="proxy-provider-api-head">
+                <p>密钥仅加密保存在服务端；已保存内容不会回传浏览器，留空即可保留原值。</p>
+                <button id="btnTestProxyProviderCredentials" type="button" class="ghost">测试连接</button>
+              </div>
+              <form id="proxyProviderCredentialForm" class="proxy-provider-credential-form" novalidate>
+                <label><span>API Key</span><input id="proxyProviderApiKey" type="password" autocomplete="new-password" maxlength="512" placeholder="输入 API Key"></label>
+                <label><span>API Secret（私钥）</span><input id="proxyProviderApiSecret" type="password" autocomplete="new-password" maxlength="512" placeholder="输入 API Secret"></label>
+                <label><span>Webhook Secret（可选）</span><input id="proxyProviderWebhookSecret" type="password" autocomplete="new-password" maxlength="512" placeholder="配置后用于回调验签"></label>
+                <label><span>变更原因</span><input id="proxyProviderCredentialReason" minlength="3" maxlength="500" placeholder="例如：首次配置或轮换凭据"></label>
+                <div class="proxy-provider-credential-actions">
+                  <p class="proxy-provider-secret-note">保存后系统会自动验证凭据并同步公开产品字段；再次进入时只显示配置状态，不显示原始密钥。</p>
+                  <button id="btnSaveProxyProviderCredentials" type="submit" class="primary">保存并自动验证</button>
+                </div>
+              </form>
+              <div id="proxyProviderCredentialMsg" class="msg" role="status" aria-live="polite"></div>
+            </div>
+          </details>
+
           <div class="admin-config-card admin-runtime-panel">
             <div class="admin-runtime-panel-head">
               <div>
