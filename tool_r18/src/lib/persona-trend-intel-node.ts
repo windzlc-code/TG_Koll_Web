@@ -33,6 +33,11 @@ const TAIWAN_PREFERRED_NEWS_DOMAINS = [
   "94m.com.tw",
   "miaoli.gov.tw",
 ] as const;
+const TAIWAN_DIRECT_NEWS_PAGES = [
+  { label: "經濟日報", url: "https://money.udn.com/money/index" },
+  { label: "ETtoday財經雲", url: "https://finance.ettoday.net/" },
+  { label: "ETtoday房產雲", url: "https://house.ettoday.net/" },
+] as const;
 const SHANGHAI_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Shanghai",
   year: "numeric",
@@ -156,6 +161,7 @@ function topicMatchNeedles(topics: string[]): string[] {
       不動產: ["房市", "房地產", "住宅", "房價", "土地", "租屋", "都更", "建案", "建商", "地產"],
       房地產: ["房市", "不動產", "住宅", "房價", "土地", "租屋", "都更", "建案", "建商", "地產"],
       財經: ["金融", "經濟", "股市", "薪資", "利率", "央行", "投資", "產業"],
+      超商: ["便利商店", "全家", "統一超商", "7-11", "新品", "甜點"],
     };
     const aliases = Object.entries(semanticAliases)
       .filter(([key]) => clean.includes(key))
@@ -211,6 +217,36 @@ async function fetchGoogleNewsRss(query: string, locale: LocaleInfo, timeoutMs: 
   } catch {
     const proxiedXml = await fetchTextViaProxy(url, timeoutMs);
     return parseGoogleNewsRssItems(proxiedXml);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseNewsPageHeadlines(html: string, sourceLabel: string): string[] {
+  if (!html) return [];
+  return uniqueHeadlines(Array.from(html.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/gi))
+    .map((match) => htmlDecode(match[1] || ""))
+    .filter((title) => title.length >= 10 && title.length <= 90)
+    .map((title) => `${title}（${sourceLabel}）`))
+    .slice(0, 80);
+}
+
+async function fetchDirectNewsPage(urlValue: string, sourceLabel: string, timeoutMs: number): Promise<string[]> {
+  const url = new URL(urlValue);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/136 Safari/537.36",
+        accept: "text/html,application/xhtml+xml",
+      },
+    });
+    if (!response.ok) return [];
+    return parseNewsPageHeadlines(await response.text(), sourceLabel);
+  } catch {
+    return parseNewsPageHeadlines(await fetchTextViaProxy(url, timeoutMs), sourceLabel);
   } finally {
     clearTimeout(timer);
   }
@@ -336,13 +372,19 @@ export async function fetchPersonaTrendIntelForNode(
   const fallbackNewsQueries = targetTopics.map((topic) => `${topic} ${locale.suffix} when:7d`);
   const socialQueries = targetTopics.map((topic) => `${topic} ${locale.socialTerms}`);
 
-  const [preferredNewsResults, fallbackNewsResults, socialResults] = await Promise.all([
+  const [directNewsResults, preferredNewsResults, fallbackNewsResults, socialResults] = await Promise.all([
+    locale.label === "台灣"
+      ? Promise.all(TAIWAN_DIRECT_NEWS_PAGES.map((page) => fetchDirectNewsPage(page.url, page.label, timeoutMs)))
+      : Promise.resolve([]),
     Promise.all(preferredNewsQueries.map((query) => fetchGoogleNewsRss(query, locale, timeoutMs))),
     Promise.all(fallbackNewsQueries.map((query) => fetchGoogleNewsRss(query, locale, timeoutMs))),
     Promise.all(socialQueries.map((query) => fetchGoogleNewsRss(query, locale, timeoutMs))),
   ]);
 
-  const preferredNews = uniqueHeadlines(preferredNewsResults.flat())
+  const directNews = uniqueHeadlines(directNewsResults.flat())
+    .filter((headline) => headlineMatchesPersonaTopics(headline, targetTopics))
+    .slice(0, 6);
+  const preferredNews = uniqueHeadlines([...directNews, ...preferredNewsResults.flat()])
     .filter((headline) => headlineMatchesPersonaTopics(headline, targetTopics))
     .slice(0, 6);
   const fallbackNews = uniqueHeadlines(fallbackNewsResults.flat())

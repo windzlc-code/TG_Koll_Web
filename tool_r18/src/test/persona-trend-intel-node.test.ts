@@ -72,6 +72,6 @@ describe("persona-trend-intel-node", () => {
     expect(first).toContain("指定台灣新聞來源命中");
     expect(first).toContain("便利商店新品聯名爆紅");
     expect(second).toBe(first);
-    expect(fetchMock).toHaveBeenCalledTimes(8);
+    expect(fetchMock).toHaveBeenCalledTimes(11);
   });
 });
