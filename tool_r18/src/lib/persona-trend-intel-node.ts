@@ -136,7 +136,7 @@ function writeCache(cache: Record<string, { updatedAt: string; text: string }>) 
 }
 
 function cacheEntryIsFresh(entry: { updatedAt: string; text: string } | undefined): boolean {
-  if (!entry?.text) return false;
+  if (!entry) return false;
   const updatedAt = Date.parse(entry.updatedAt || "");
   return Number.isFinite(updatedAt) && Date.now() - updatedAt < TREND_CACHE_TTL_MS;
 }
@@ -343,17 +343,6 @@ async function fetchTextViaProxy(url: URL, timeoutMs: number): Promise<string> {
   });
 }
 
-function buildFallbackIntel(topics: string[], locale: LocaleInfo): string {
-  const topicLine = topics.join("、") || "日常生活";
-  return [
-    "【本地兜底舆情摘要】",
-    `地區：${locale.label}`,
-    `主題方向：${topicLine}`,
-    "可用切角：把當天社群正在聊的話題壓成個人生活小事故、通勤觀察、吃喝消費、朋友會留言的短句",
-    "寫作提醒：不能像新聞摘要；必須寫成真人剛看到時事後的自然反應",
-  ].join("\n");
-}
-
 export async function fetchPersonaTrendIntelForNode(
   setup: DramaSetup,
   personaId?: string,
@@ -402,7 +391,7 @@ export async function fetchPersonaTrendIntelForNode(
         `【社媒討論】\n${social.length ? social.map((item) => `- ${item}`).join("\n") : "- 未取得可靠社群結果"}`,
         `【使用規則】\n- 地區：${locale.label}\n- 人設話題種子：${targetTopics.join("、")}\n- 只採用與人設或使用者本次主題高度相關的熱點；無關時不要硬套\n- 吸收事件事實、受眾痛點與討論角度，改寫為人設本人的自然觀察，禁止照抄標題或捏造細節`,
       ].join("\n\n")
-    : buildFallbackIntel(targetTopics, locale);
+    : "";
 
   cache[cacheKey] = { updatedAt: new Date().toISOString(), text };
   writeCache(cache);

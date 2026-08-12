@@ -74,4 +74,24 @@ describe("persona-trend-intel-node", () => {
     expect(second).toBe(first);
     expect(fetchMock).toHaveBeenCalledTimes(11);
   });
+
+  it("returns and caches an empty reference when no reliable headline matches", async () => {
+    const fetchMock = vi.fn(async () => new Response("<html><body>unrelated navigation</body></html>", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await fetchPersonaTrendIntelForNode({
+      genres: ["房地產"],
+      targetMarket: "cn_tw",
+      trendTopics: ["房市"],
+    } as any, "persona-no-news", "不動產顧問", { timeoutMs: 2500, bypassCache: true });
+    const second = await fetchPersonaTrendIntelForNode({
+      genres: ["房地產"],
+      targetMarket: "cn_tw",
+      trendTopics: ["房市"],
+    } as any, "persona-no-news", "不動產顧問", { timeoutMs: 2500 });
+
+    expect(first).toBe("");
+    expect(second).toBe("");
+    expect(fetchMock).toHaveBeenCalledTimes(11);
+  });
 });

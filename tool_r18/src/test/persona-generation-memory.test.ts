@@ -164,6 +164,35 @@ describe("persona generation memory", () => {
     expect(selectedMemoryBlock).not.toContain("在台北整理衣櫃");
   });
 
+  it("keeps news optional when a partial generation needs a retry", async () => {
+    const created = await runPersonaWorkflow({
+      action: "create",
+      name: "新聞邊界人設",
+      content: "以使用者指定方向與人設內核為主的生活觀察人設。",
+      setup: {
+        genres: ["生活觀察"],
+        personaPersonality: "理性",
+        personaGender: "女性",
+        personaStyle: "短評",
+        totalEpisodes: 50,
+        targetMarket: "cn_tw",
+        chineseScript: "traditional",
+      },
+    } as any);
+
+    await runPersonaWorkflow({
+      action: "generate-posts",
+      archiveId: created.archiveId,
+      count: 2,
+      customInstruction: "只写今天整理衣柜的生活感受",
+    });
+
+    const retryPrompt = prompts.find((prompt) => prompt.includes("现在只补充剩余")) || "";
+    expect(retryPrompt).toContain("新闻只作为可选参考，不是必须使用的创作任务");
+    expect(retryPrompt).toContain("优先遵守本次用户要求、人设内核、既有记忆和已选方向");
+    expect(retryPrompt).not.toContain("必须继续自然结合");
+  });
+
   it("injects saved tweet style profile as a fixed generation constraint", async () => {
     const created = await runPersonaWorkflow({
       action: "create",

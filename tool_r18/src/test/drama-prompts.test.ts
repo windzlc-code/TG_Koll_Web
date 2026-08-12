@@ -232,8 +232,10 @@ describe("buildSocialPostsPrompt", () => {
       "=== 美食創作者 ===\n【新聞與趨勢】\n便利商店新品聯名\n\n【社媒討論】\nThreads 上都在聊全家甜點\n\n【地區熱梗 / 網路語料】\n欸 真的假的 笑死",
     );
 
-    expect(prompt).toContain("目前多源即時情報（新聞 / 社媒 / 地區語料）");
+    expect(prompt).toContain("可選新聞參考（不是創作任務，不是必用素材）");
+    expect(prompt).toContain("本次使用者要求 > 人設內核與既有記憶 > 使用者選定方向");
     expect(prompt).toContain("只有與本次使用者要求或人設核心高度相關時才使用");
+    expect(prompt).toContain("即使相關也可以完全不用");
     expect(prompt).toContain("新聞與趨勢");
     expect(prompt).toContain("社媒討論");
     expect(prompt).toContain("地區熱梗 / 網路語料");

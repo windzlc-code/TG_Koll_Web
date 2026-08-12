@@ -505,7 +505,11 @@ export async function runPersonaWorkflow(input: PersonaWorkflowInput) {
           `现在只补充剩余 ${missing} 篇推文。`,
           `前面已经成功生成 ${posts.length} 篇，不要重复前面的内容。`,
           "必须直接输出缺少的推文正文，每篇之间只能用 --- 分隔。",
-          trendIntel ? `必须继续自然结合以下今日人设时事情报，不要写成新闻摘要：\n${trendIntel.slice(0, 1200)}` : "",
+          trendIntel ? [
+            "以下新闻只作为可选参考，不是必须使用的创作任务。",
+            "优先遵守本次用户要求、人设内核、既有记忆和已选方向；不高度相关时必须忽略，不得为了热点改变主题。",
+            trendIntel.slice(0, 1200),
+          ].join("\n") : "",
           "不要输出思考过程，不要输出说明，不要输出检查文本，不要输出标题说明。",
         ].join("\n");
         const retryGenerated = await generateTextWithGemini(retryPrompt, missing);
