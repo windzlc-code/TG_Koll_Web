@@ -7744,6 +7744,19 @@ function normalizeProxyMarketCountry(value) {
     || null;
 }
 
+function proxyPurchaseCountryLabel(country = {}, fallbackCode = "") {
+  const item = country && typeof country === "object" ? country : {};
+  const code = String(
+    item.code || item.country_code || item.id || item.value || fallbackCode || "",
+  ).trim().toUpperCase();
+  const rawName = String(
+    item.name || item.label || item.country_name || item.country || (typeof country === "string" ? country : "") || code,
+  ).trim();
+  const normalized = normalizeProxyMarketCountry(code) || normalizeProxyMarketCountry(rawName);
+  if (normalized?.code === "TW") return "中国台湾";
+  return normalized?.label || rawName || code || "待识别地区";
+}
+
 function inferProxyMarketProviderKey(hosts) {
   const ignoredLabels = new Set(["api", "direct", "gateway", "gw", "proxy", "res", "residential", "static"]);
   for (const rawHost of hosts || []) {
@@ -8381,7 +8394,7 @@ function renderProxyMarketItems(payload = {}) {
     const location = document.createElement("span");
     const ipType = String(item.ip_type || "static_residential").trim().toLowerCase();
     const typeLabel = ipType === "datacenter" ? "机房 IP" : "静态住宅 IP";
-    const locationText = [typeLabel, item.country, item.region, item.city, item.isp].filter(Boolean).join(" · ");
+    const locationText = [typeLabel, proxyPurchaseCountryLabel(item.country), item.region, item.city, item.isp].filter(Boolean).join(" · ");
     if (locationText) location.textContent = locationText;
     else location.appendChild(createAdminDynamicUiText("未标注地区"));
     endpointCell.append(endpoint, location);
@@ -8631,7 +8644,7 @@ function renderProxyPurchasedAssets(payload = {}) {
     appendCell(
       row,
       `${String(item.proxy_type || "").toUpperCase()} ${item.host || "-"}:${Number(item.port || 0) || "-"}`,
-      [item.country, item.region, item.city, item.isp].filter(Boolean).join(" · ") || "未标注地区",
+      [proxyPurchaseCountryLabel(item.country), item.region, item.city, item.isp].filter(Boolean).join(" · ") || "未标注地区",
     );
     appendCell(row, item.order_id || "-", item.provider_proxy_id ? `供应商代理 ${item.provider_proxy_id}` : "等待供应商返回");
     appendCell(
@@ -8879,7 +8892,7 @@ function renderProxyPurchaseProviderOptions(payload = {}) {
   const rawCountries = setup.countries || setup.regions || payload?.regions || [];
   const countries = (Array.isArray(rawCountries) ? rawCountries : []).map((country) => ({
     value: country?.code || country?.id || country?.value || country,
-    label: country?.name || country?.label || country?.code || country,
+    label: proxyPurchaseCountryLabel(country),
   }));
   setProxyPurchaseSelectOptions("proxyPurchaseDefaultCountry", countries, { emptyLabel: "使用首个可售地区" });
 
@@ -9102,7 +9115,10 @@ function renderProxyPurchaseOrders(payload = {}) {
   orders.forEach((order) => {
     const row = document.createElement("tr");
     row.appendChild(createBillingCell(order.id));
-    row.appendChild(createBillingCell([order.user_id ? `#${order.user_id}` : "-", order.country_name || order.country].filter(Boolean).join(" · ")));
+    row.appendChild(createBillingCell([
+      order.user_id ? `#${order.user_id}` : "-",
+      proxyPurchaseCountryLabel({ name: order.country_name, code: order.country }),
+    ].filter(Boolean).join(" · ")));
     row.appendChild(createBillingCell(order.vendor_price === undefined ? "-" : `${order.vendor_price} ${order.currency || "USD"}`));
     row.appendChild(createBillingCell(order.charge_points === undefined ? "-" : `${Number(order.charge_points).toLocaleString("zh-CN", { maximumFractionDigits: 2 })} 点`));
     row.appendChild(createBillingCell([

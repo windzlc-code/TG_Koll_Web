@@ -97,6 +97,18 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertIn("function renderProxyPurchasedAssets", self.script)
         self.assertIn("function loadProxyPurchasedAssets", self.script)
 
+    def test_purchase_regions_are_localized_to_chinese_in_admin_views(self):
+        country_label = self._function("proxyPurchaseCountryLabel", "inferProxyMarketProviderKey")
+        provider_options = self._function("renderProxyPurchaseProviderOptions", "renderProxyPurchaseIsps")
+        purchased_assets = self._function("renderProxyPurchasedAssets", "loadProxyPurchasedAssets")
+        purchase_orders = self._function("renderProxyPurchaseOrders", "loadProxyPurchaseOrders")
+
+        self.assertIn("normalizeProxyMarketCountry(code)", country_label)
+        self.assertIn('return "中国台湾"', country_label)
+        self.assertIn("label: proxyPurchaseCountryLabel(country)", provider_options)
+        self.assertIn("proxyPurchaseCountryLabel(item.country)", purchased_assets)
+        self.assertIn("proxyPurchaseCountryLabel({ name: order.country_name, code: order.country })", purchase_orders)
+
 
 if __name__ == "__main__":
     unittest.main()

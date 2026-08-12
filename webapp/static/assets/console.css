@@ -17297,21 +17297,31 @@ body.persona-media-sorting {
 
 .account-proxy-purchase-back {
   display: grid;
-  width: 36px;
-  min-width: 36px;
-  min-height: 36px;
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
   padding: 0;
   place-items: center;
   color: var(--ink);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-solid);
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
 }
 
 .account-proxy-purchase-back:hover,
 .account-proxy-purchase-back:focus-visible {
   color: var(--accent-dark);
-  border-color: var(--accent);
+  border: 0;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.account-proxy-purchase-back .ui-arrow-icon {
+  width: 22px;
+  height: 22px;
+  flex-basis: 22px;
+  -webkit-mask-size: 22px 22px;
+  mask-size: 22px 22px;
 }
 
 .account-proxy-purchase-modal-content {

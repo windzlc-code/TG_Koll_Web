@@ -27620,7 +27620,7 @@ function accountProxyPurchaseEmbeddedHtml() {
     <form class="account-proxy-purchase-form" data-account-proxy-purchase-form novalidate>
       <div class="account-proxy-purchase-alert" data-account-proxy-purchase-alert role="alert" aria-live="assertive" hidden></div>
       <section class="account-proxy-purchase-product" aria-label="固定代理规格">
-        <div><span>代理产品</span><strong data-account-proxy-product-name>静态住宅代理 IP · 1 个 · 1 个月</strong></div>
+        <div><span>代理产品</span><strong data-account-proxy-product-name>静态住宅代理 IP</strong></div>
         <small>独享固定 IP，购买后自动加入你的代理列表。</small>
       </section>
       <label class="account-proxy-purchase-field">
@@ -27777,9 +27777,8 @@ function accountProxyPurchaseRenderOptions(view, payload) {
     "rotating-mobile": "动态移动代理",
   };
   const serviceId = String(payload?.service_id || "static-residential-ipv4");
-  const periodMonths = Math.max(1, Number(payload?.default_period?.value || 1));
   const mappings = [
-    ["[data-account-proxy-product-name]", `${serviceNames[serviceId] || "专属代理 IP"} · ${Math.max(1, Number(payload?.quantity || 1))} 个 · ${periodMonths} 个月`],
+    ["[data-account-proxy-product-name]", serviceNames[serviceId] || "专属代理 IP"],
   ];
   mappings.forEach(([selector, value]) => {
     const node = accountProxyPurchaseElement(view, selector);

@@ -3493,9 +3493,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
     def test_proxy_purchase_page_hides_price_and_uses_plain_purchase_copy(self):
         markup = self._function_source("accountProxyPurchaseEmbeddedHtml")
         dialog = self._function_source("accountProxyPurchaseDialogHtml")
+        render_options = self._function_source("accountProxyPurchaseRenderOptions")
         quote = self._function_source("accountProxyPurchaseRefreshQuote")
 
         self.assertIn("静态住宅代理 IP", markup)
+        self.assertNotIn("· 1 个 · 1 个月", markup)
+        self.assertNotIn("periodMonths", render_options)
+        self.assertNotIn("payload?.quantity", render_options)
         self.assertIn("购买后自动加入你的代理列表", markup)
         self.assertIn("可购买地区与库存由供应商实时同步", markup)
         self.assertIn("自动续费", markup)
@@ -3515,6 +3519,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("min-height: 52px !important", self.styles)
         self.assertNotIn(".account-proxy-purchase-submit b", self.styles)
         self.assertNotIn(".account-proxy-purchase-back span { display: none; }", self.styles)
+        self.assertIn(".account-proxy-purchase-back .ui-arrow-icon", self.styles)
+        self.assertIn("width: 22px", self.styles)
+        self.assertIn("border: 0", self.styles)
 
     def test_totp_code_card_uses_stable_svg_ring_and_millisecond_clock(self):
         controller = self._function_source("createAccountTotpController")
