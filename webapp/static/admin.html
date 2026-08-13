@@ -400,6 +400,11 @@
     .proxy-purchase-config-form label { min-width: 0; margin: 0; }
     .proxy-purchase-config-form label > span { display: block; margin-bottom: 5px; }
     .proxy-purchase-config-form .span-2 { grid-column: span 2; }
+    .proxy-purchase-period-range { min-width: 0; }
+    .proxy-purchase-period-range > span { display: block; margin-bottom: 5px; }
+    .proxy-purchase-period-range-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; align-items: center; }
+    .proxy-purchase-period-range-controls b { color: #51677c; font-size: 12px; font-weight: 700; }
+    .proxy-purchase-period-range small { display: block; margin-top: 5px; color: #51677c; }
     .proxy-purchase-fx-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 78px; padding: 12px 14px; border: 1px solid #b9d7e8; border-radius: 8px; background: #edf8fd; }
     .proxy-purchase-fx-card > div { display: grid; gap: 3px; }
     .proxy-purchase-fx-card span { color: #51677c; font-size: 11px; }
@@ -1120,17 +1125,24 @@
           </details>
 
           <form id="proxyPurchaseConfigForm" class="proxy-purchase-config-form" novalidate>
-            <label><span>默认产品（首版固定）</span><select id="proxyPurchaseServiceId" required disabled><option value="static-residential-ipv4">静态住宅 IPv4</option></select></label>
             <label><span>默认套餐</span><select id="proxyPurchasePlanId"><option value="">使用产品默认套餐</option></select></label>
-            <label><span>默认地区</span><select id="proxyPurchaseDefaultCountry"><option value="">使用首个可售地区</option></select></label>
-            <label><span>固定购买时长</span><select id="proxyPurchaseDefaultPeriod"><option value="1">1 个月</option></select><small>用户端不显示时长选项，所有订单均使用这里设置的周期。</small></label>
+            <label><span>默认购买时长</span><select id="proxyPurchaseDefaultPeriod"><option value="1">1 个月</option></select><small>用户端不显示时长选项，订单使用这里设置的周期。</small></label>
+            <div class="proxy-purchase-period-range span-2">
+              <span>购买时长区间</span>
+              <div class="proxy-purchase-period-range-controls">
+                <select id="proxyPurchaseMinPeriod" aria-label="最短购买时长"><option value="1">1 个月</option></select>
+                <b aria-hidden="true">至</b>
+                <select id="proxyPurchaseMaxPeriod" aria-label="最长购买时长"><option value="1">1 个月</option></select>
+              </div>
+              <small>默认购买时长必须位于该区间内。</small>
+            </div>
             <label><span>汇率方式</span><select id="proxyPurchaseFxMode"><option value="auto">自动同步</option><option value="manual">手动上调</option></select></label>
             <label id="proxyPurchaseManualFxField"><span>手动 USD → NTD 汇率</span><input id="proxyPurchaseManualFxRate" type="number" min="0.000001" step="0.000001" value="35" required></label>
             <label><span>单个代理纯利润（NTD）</span><input id="proxyPurchaseProfitNtd" type="number" min="0" step="1" value="0" required></label>
             <label><span>用户购买</span><select id="proxyPurchaseEnabled"><option value="false">关闭</option><option value="true">开放</option></select></label>
 
             <section class="proxy-purchase-fx-card span-2" aria-live="polite">
-              <div><span>实时 USD / TWD 参考汇率</span><strong id="proxyPurchaseFxRate">正在读取...</strong><small id="proxyPurchaseFxMeta">系统会在每次报价时重新校验</small></div>
+              <div><span>USD / TWD 官方参考汇率</span><strong id="proxyPurchaseFxRate">正在读取...</strong><small id="proxyPurchaseFxMeta">每 15 分钟自动检查更新，报价时再次校验</small></div>
               <button id="btnRefreshProxyPurchaseFx" type="button" class="ghost">刷新汇率</button>
             </section>
 

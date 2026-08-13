@@ -1909,6 +1909,7 @@ function closeModelPickersOnOutsideClick(target) {
 const TASK_POLL_INTERVAL_MS = 10000;
 const GOVERNANCE_POLL_INTERVAL_MS = 30000;
 const SENTIMENT_COOKIE_POLL_INTERVAL_MS = 300000;
+const PROXY_PURCHASE_FX_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const EMAIL_DELIVERY_MANUAL_LIMIT_MAX = 10000000;
 const EMAIL_DELIVERY_POLICY_SAVE_TIMEOUT_MS = 30000;
 const taskState = {
@@ -8799,13 +8800,12 @@ function setProxyPurchaseSelectOptions(selectId, options, { valueKey = "value", 
 
 function renderProxyPurchaseConfig(payload = {}) {
   const config = payload?.draft || payload?.config || payload || {};
-  const setupDefaults = config?.setup_defaults && typeof config.setup_defaults === "object" ? config.setup_defaults : {};
   adminState.proxyPurchaseConfig = config;
   const values = {
-    proxyPurchaseServiceId: proxyPurchaseConfigValue(config, "service_id", "default_service_id"),
     proxyPurchasePlanId: proxyPurchaseConfigValue(config, "plan_id"),
-    proxyPurchaseDefaultCountry: proxyPurchaseConfigValue(config, "default_country", "country") || setupDefaults.country || "",
     proxyPurchaseDefaultPeriod: proxyPurchaseConfigValue(config, "default_period", "period") || 1,
+    proxyPurchaseMinPeriod: proxyPurchaseConfigValue(config, "min_period_months") || 1,
+    proxyPurchaseMaxPeriod: proxyPurchaseConfigValue(config, "max_period_months") || 1,
     proxyPurchaseFxMode: proxyPurchaseConfigValue(config, "fx_rate_mode") || "auto",
     proxyPurchaseManualFxRate: proxyPurchaseConfigValue(config, "manual_usd_to_ntd_rate", "usd_to_ntd_rate") || 35,
     proxyPurchaseProfitNtd: proxyPurchaseConfigValue(config, "profit_ntd") || 0,
@@ -8837,7 +8837,9 @@ function renderProxyPurchaseExchangeRate(payload = {}) {
   const updated = fetchedAt ? new Date(fetchedAt * 1000).toLocaleString("zh-CN", { hour12: false }) : "未刷新";
   const mode = payload?.mode === "manual" ? "手动上调" : "自动同步";
   const referenceCopy = Number.isFinite(reference) && reference !== rate ? ` · 市场参考 ${reference.toFixed(4)}` : "";
-  setText("proxyPurchaseFxMeta", `${mode}${referenceCopy} · ${updated}${payload?.stale ? " · 使用缓存" : ""}`);
+  const sourceDate = String(payload?.source_date || "").trim();
+  const sourceCopy = sourceDate ? ` · 官方参考日 ${sourceDate}` : "";
+  setText("proxyPurchaseFxMeta", `每 15 分钟自动刷新 · ${mode}${referenceCopy}${sourceCopy} · ${updated}${payload?.stale ? " · 使用缓存" : ""}`);
 }
 
 async function loadProxyPurchaseExchangeRate({ refresh = false } = {}) {
@@ -8925,24 +8927,11 @@ function renderProxyProviderFieldMap(payload = {}) {
   setText("proxyProviderFieldRevision", `${serviceCount} 产品 · ${countrySummary}${balanceSummary}`);
 }
 
-function proxyPurchaseServiceLabel(service = {}) {
-  const plan = service.plan_name || service.plan?.name || service.plan_id || "";
-  return [service.name || service.label || service.service_name || service.id, plan].filter(Boolean).join(" · ");
-}
-
 function renderProxyPurchaseProviderOptions(payload = {}) {
   adminState.proxyPurchaseProviderOptions = payload;
   const supportedServices = (Array.isArray(payload?.services) ? payload.services : []).filter((service) => (
     String(service?.id || service?.service_id || "") === "static-residential-ipv4"
   ));
-  const services = supportedServices.map((service) => ({
-    value: service?.id || service?.service_id || service?.plan_id,
-    label: proxyPurchaseServiceLabel(service),
-  }));
-  if (!services.length) services.push({ value: "static-residential-ipv4", label: "静态住宅 IPv4" });
-  setProxyPurchaseSelectOptions("proxyPurchaseServiceId", services, { emptyLabel: "" });
-  if (el("proxyPurchaseServiceId")) el("proxyPurchaseServiceId").value = "static-residential-ipv4";
-
   const plans = [];
   supportedServices.forEach((service) => {
     const nestedPlans = Array.isArray(service?.plans) ? service.plans : [];
@@ -8960,13 +8949,6 @@ function renderProxyPurchaseProviderOptions(payload = {}) {
   }
 
   const setup = payload?.setup || {};
-  const rawCountries = setup.countries || setup.regions || payload?.regions || [];
-  const countries = (Array.isArray(rawCountries) ? rawCountries : []).map((country) => ({
-    value: country?.code || country?.id || country?.value || country,
-    label: proxyPurchaseCountryLabel(country),
-  }));
-  setProxyPurchaseSelectOptions("proxyPurchaseDefaultCountry", countries, { emptyLabel: "使用首个可售地区" });
-
   const rawPeriods = setup.periods || setup.period || payload?.periods || [1];
   const monthPeriods = Array.isArray(rawPeriods)
     ? rawPeriods
@@ -8981,6 +8963,8 @@ function renderProxyPurchaseProviderOptions(payload = {}) {
     label: `${period?.label || period?.value || period?.months || period} 个月`,
   }));
   setProxyPurchaseSelectOptions("proxyPurchaseDefaultPeriod", periods, { emptyLabel: "" });
+  setProxyPurchaseSelectOptions("proxyPurchaseMinPeriod", periods, { emptyLabel: "" });
+  setProxyPurchaseSelectOptions("proxyPurchaseMaxPeriod", periods, { emptyLabel: "" });
   renderProxyProviderFieldMap(payload);
   const selectedProviderPlan = String(el("proxyPurchasePlanId")?.value || "");
   renderProxyPurchaseConfig({ config: adminState.proxyPurchaseConfig || {} });
@@ -8998,7 +8982,7 @@ async function loadProxyPurchaseConfig() {
 async function loadProxyPurchaseProviderOptions({ serviceId, planId, persist = false } = {}) {
   setMsg("proxyPurchaseConfigMsg", "正在同步供应商公开产品与选项...");
   try {
-    const selectedService = String(serviceId || el("proxyPurchaseServiceId")?.value || "static-residential-ipv4");
+    const selectedService = String(serviceId || "static-residential-ipv4");
     const selectedPlan = String(planId === undefined ? el("proxyPurchasePlanId")?.value || "" : planId);
     const query = new URLSearchParams({ service_id: selectedService });
     if (selectedPlan) query.set("plan_id", selectedPlan);
@@ -9069,19 +9053,18 @@ async function saveProxyProviderCredentials() {
 
 function proxyPurchaseConfigPayload() {
   const fixedPeriod = Math.max(1, Number(el("proxyPurchaseDefaultPeriod")?.value || 1));
-  const setupDefaults = {
-    country: String(el("proxyPurchaseDefaultCountry")?.value || ""),
-  };
+  const minimumPeriod = Math.max(1, Number(el("proxyPurchaseMinPeriod")?.value || 1));
+  const maximumPeriod = Math.max(1, Number(el("proxyPurchaseMaxPeriod")?.value || 1));
   return {
     provider: "proxy-cheap",
-    service_id: String(el("proxyPurchaseServiceId")?.value || ""),
+    service_id: "static-residential-ipv4",
     plan_id: String(el("proxyPurchasePlanId")?.value || ""),
-    default_country: String(el("proxyPurchaseDefaultCountry")?.value || ""),
+    default_country: "",
     default_period: fixedPeriod,
-    min_period_months: fixedPeriod,
-    max_period_months: fixedPeriod,
+    min_period_months: minimumPeriod,
+    max_period_months: maximumPeriod,
     quantity: 1,
-    setup_defaults: setupDefaults,
+    setup_defaults: {},
     pricing_mode: "supplier_plus_profit_ntd",
     fx_rate_mode: String(el("proxyPurchaseFxMode")?.value || "auto"),
     manual_usd_to_ntd_rate: Number(el("proxyPurchaseManualFxRate")?.value || 35),
@@ -9093,13 +9076,24 @@ function proxyPurchaseConfigPayload() {
 async function saveProxyPurchaseConfig() {
   const form = el("proxyPurchaseConfigForm");
   if (!form?.reportValidity()) return false;
+  const config = proxyPurchaseConfigPayload();
+  if (config.min_period_months > config.max_period_months) {
+    el("proxyPurchaseMinPeriod")?.focus();
+    setMsg("proxyPurchaseConfigMsg", "购买时长区间无效：最短时长不能大于最长时长", false);
+    return false;
+  }
+  if (config.default_period < config.min_period_months || config.default_period > config.max_period_months) {
+    el("proxyPurchaseDefaultPeriod")?.focus();
+    setMsg("proxyPurchaseConfigMsg", "默认购买时长必须位于购买时长区间内", false);
+    return false;
+  }
   form.setAttribute("aria-busy", "true");
   setMsg("proxyPurchaseConfigMsg", "正在保存采购配置草稿...");
   try {
     const payload = await api("/api/admin/proxy-purchases/config", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(proxyPurchaseConfigPayload()),
+      body: JSON.stringify(config),
     });
     renderProxyPurchaseConfig(payload || {});
     setMsg("proxyPurchaseConfigMsg", "采购配置草稿已保存，发布前不会影响用户购买", true);
@@ -10392,15 +10386,6 @@ function bindActions() {
       setMsg("proxyProviderCredentialMsg", getErrorMessage(error), false);
     }
   });
-  el("proxyPurchaseServiceId")?.addEventListener("change", async () => {
-    if (el("proxyPurchasePlanId")) el("proxyPurchasePlanId").value = "";
-    try {
-      await loadProxyPurchaseProviderOptions({
-        serviceId: "static-residential-ipv4",
-        planId: "",
-      });
-    } catch {}
-  });
   el("proxyPurchasePlanId")?.addEventListener("change", async () => {
     try {
       await loadProxyPurchaseProviderOptions({
@@ -11539,6 +11524,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   setInterval(() => {
     void refreshSentimentCookieProfilesIfActive({ force: true });
   }, SENTIMENT_COOKIE_POLL_INTERVAL_MS);
+  setInterval(() => {
+    if (document.hidden || adminState.activePage !== "proxyMarket") return;
+    void loadProxyPurchaseExchangeRate({ refresh: true }).catch((error) => {
+      setText("proxyPurchaseFxMeta", `自动刷新失败：${getErrorMessage(error)}`);
+    });
+  }, PROXY_PURCHASE_FX_REFRESH_INTERVAL_MS);
 });
 
 window.addEventListener("hashchange", () => {

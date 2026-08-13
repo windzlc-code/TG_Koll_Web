@@ -117,12 +117,14 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertNotIn("totpCode", publish)
         self.assertIn("JSON.stringify({})", publish)
 
-    def test_purchase_config_uses_fixed_duration_live_fx_and_ntd_profit_only(self):
+    def test_purchase_config_groups_duration_range_and_uses_ntd_profit_only(self):
         proxy_start = self.markup.index('id="proxyPurchaseAdminWorkspace"')
         proxy_end = self.markup.index('id="proxyPurchaseOrderSummary"', proxy_start)
         workspace = self.markup[proxy_start:proxy_end]
         for control_id in (
             "proxyPurchaseDefaultPeriod",
+            "proxyPurchaseMinPeriod",
+            "proxyPurchaseMaxPeriod",
             "proxyPurchaseFxMode",
             "proxyPurchaseManualFxRate",
             "proxyPurchaseProfitNtd",
@@ -130,10 +132,12 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
             "btnRefreshProxyPurchaseFx",
         ):
             self.assertIn(f'id="{control_id}"', workspace)
-        self.assertNotIn('id="proxyPurchaseMinPeriod"', workspace)
-        self.assertNotIn('id="proxyPurchaseMaxPeriod"', workspace)
+        self.assertIn("购买时长区间", workspace)
+        self.assertIn('class="proxy-purchase-period-range-controls"', workspace)
         self.assertIn("用户端不显示时长选项", workspace)
         for removed_id in (
+            "proxyPurchaseServiceId",
+            "proxyPurchaseDefaultCountry",
             "proxyPurchasePointsPerUsd",
             "proxyPurchaseUsdToNtdRate",
             "proxyPurchasePaymentFeeRate",
@@ -147,9 +151,15 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertIn("profit_ntd:", payload)
         self.assertIn("min_period_months:", payload)
         self.assertIn("max_period_months:", payload)
-        self.assertIn("min_period_months: fixedPeriod", payload)
-        self.assertIn("max_period_months: fixedPeriod", payload)
+        self.assertIn("min_period_months: minimumPeriod", payload)
+        self.assertIn("max_period_months: maximumPeriod", payload)
+        self.assertIn('service_id: "static-residential-ipv4"', payload)
+        self.assertIn('default_country: ""', payload)
         self.assertIn("/api/admin/proxy-purchases/exchange-rate", self.script)
+        self.assertIn("const PROXY_PURCHASE_FX_REFRESH_INTERVAL_MS = 15 * 60 * 1000", self.script)
+        self.assertIn('adminState.activePage !== "proxyMarket"', self.script)
+        self.assertIn("loadProxyPurchaseExchangeRate({ refresh: true })", self.script)
+        self.assertIn("每 15 分钟自动刷新", self.script)
 
     def test_purchase_sync_status_has_explicit_contrast_colors(self):
         self.assertIn("#proxyProviderFieldRevision", self.markup)
@@ -172,13 +182,11 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
 
     def test_purchase_regions_are_localized_to_chinese_in_admin_views(self):
         country_label = self._function("proxyPurchaseCountryLabel", "inferProxyMarketProviderKey")
-        provider_options = self._function("renderProxyPurchaseProviderOptions", "loadProxyPurchaseConfig")
         purchased_assets = self._function("renderProxyPurchasedAssets", "loadProxyPurchasedAssets")
         purchase_orders = self._function("renderProxyPurchaseOrders", "loadProxyPurchaseOrders")
 
         self.assertIn("normalizeProxyMarketCountry(code)", country_label)
         self.assertIn('return "中国台湾"', country_label)
-        self.assertIn("label: proxyPurchaseCountryLabel(country)", provider_options)
         self.assertIn("proxyPurchaseCountryLabel(item.country)", purchased_assets)
         self.assertIn("proxyPurchaseCountryLabel({ name: order.country_name, code: order.country })", purchase_orders)
 
