@@ -16234,6 +16234,13 @@ body.persona-media-sorting {
   font-weight: 850;
 }
 
+.account-login-identifier-hint {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
 .account-create-form input,
 .account-create-form select {
   width: 100%;

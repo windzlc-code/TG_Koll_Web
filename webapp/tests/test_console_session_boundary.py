@@ -3186,9 +3186,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("display_name", create_save)
         self.assertNotIn("display_name", edit_save)
         self.assertNotIn("DisplayName", identity)
-        self.assertNotIn("LoginUsername", identity)
+        self.assertIn("LoginUsername", identity)
         self.assertNotIn("显示名称", identity)
-        self.assertNotIn("登录账号", identity)
+        self.assertIn("登录账号", identity)
         self.assertIn("fields.login_password", apply)
         self.assertIn("fields.totp_secret_or_uri", apply)
         self.assertIn('password.dataset.passwordDirty = "true"', apply)
@@ -3203,7 +3203,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         parse = self._function_source("parseAccountClipboardText")
         copy_one = self._function_source("copyAccountPoolCardToClipboard")
 
-        self.assertIn('"账号: "', serialize)
+        self.assertIn('"登录账号: "', serialize)
         self.assertIn('"密码: "', serialize)
         self.assertIn('"2FA: "', serialize)
         self.assertNotIn("JSON.stringify", serialize)
@@ -3215,9 +3215,24 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("totp_secret_or_uri", parse)
         self.assertIn("copyTextToClipboard(state.accountClipboardText)", copy_one)
         self.assertIn(
-            'showMsg("socialMsg", "账号、密码和 2FA 已复制到剪贴板", true)',
+            'showMsg("socialMsg", "登录账号、密码和 2FA 已复制到剪贴板", true)',
             copy_one,
         )
+
+    def test_account_editor_accepts_platform_supported_login_identifiers(self):
+        copy = self._function_source("accountLoginIdentifierCopy")
+        identity = self._function_source("renderAccountIdentityFields")
+        create_save = self._function_source("saveAccountPoolCreateForm")
+        edit_save = self._function_source("saveAccountPoolEditForm")
+        runtime = (REPO_ROOT / "webapp" / "social_automation_api.py").read_text(encoding="utf-8")
+
+        self.assertIn('placeholder: "手机号、账号或邮箱"', copy)
+        self.assertIn('placeholder: "账号、电话号码或邮箱"', copy)
+        self.assertIn('id="${prefix}LoginUsername"', identity)
+        self.assertIn("data-account-platform-username-field", identity)
+        self.assertIn("login_username: loginIdentifier", create_save)
+        self.assertIn("login_username: loginIdentifier", edit_save)
+        self.assertIn('payload["login_username"] = str(payload.get("login_username")', runtime)
 
     def test_account_pool_clipboard_reuses_current_page_text_before_browser_read(self):
         copy_one = self._function_source("copyAccountPoolCardToClipboard")

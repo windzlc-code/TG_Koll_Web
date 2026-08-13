@@ -27248,9 +27248,55 @@ async function testProxyForm(prefix = "", proxy = null) {
   return result;
 }
 
+function accountLoginIdentifierCopy(platform = "") {
+  return normalizeAccountPoolPlatform(platform) === "instagram"
+    ? {
+      placeholder: "手机号、账号或邮箱",
+      hint: "支持 Instagram 用户名、手机号或邮箱。",
+    }
+    : {
+      placeholder: "账号、电话号码或邮箱",
+      hint: "支持 Threads 账号、电话号码或邮箱。",
+    };
+}
+
+function accountLoginIdentifierKind(value = "") {
+  const clean = String(value || "").trim();
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) return "email";
+  if (/^\+?[\d\s().-]{6,24}$/.test(clean) && /\d{6}/.test(clean.replace(/\D/g, ""))) return "phone";
+  return "username";
+}
+
+function normalizeAccountLoginIdentifier(value = "") {
+  const clean = String(value || "").trim();
+  return accountLoginIdentifierKind(clean) === "username" ? clean.replace(/^@+/, "") : clean;
+}
+
+function refreshAccountLoginIdentifierFields(modal) {
+  if (!modal) return;
+  const editing = modal.dataset.accountEditorMode === "edit";
+  const prefix = editing ? "accountPoolEdit" : "accountPool";
+  const loginInput = $(`${prefix}LoginUsername`);
+  const usernameInput = $(`${prefix}Username`);
+  const usernameField = modal.querySelector("[data-account-platform-username-field]");
+  if (!loginInput || !usernameInput || !usernameField) return;
+  const loginIdentifier = normalizeAccountLoginIdentifier(loginInput.value);
+  const usesAlternateIdentifier = accountLoginIdentifierKind(loginIdentifier) !== "username";
+  const autoSyncedLogin = String(usernameInput.dataset.autoSyncedLogin || "");
+  if (usesAlternateIdentifier) {
+    if (String(usernameInput.value || "").trim() === autoSyncedLogin) usernameInput.value = "";
+    usernameInput.dataset.autoSyncedLogin = "";
+  } else {
+    usernameInput.value = loginIdentifier;
+    usernameInput.dataset.autoSyncedLogin = loginIdentifier;
+  }
+  usernameField.hidden = !usesAlternateIdentifier;
+}
+
 function syncAccountPoolCreateDraftFromForm() {
   state.accountPoolCreateDraft = {
     ...(state.accountPoolCreateDraft || {}),
+    login_username: String($("accountPoolLoginUsername")?.value || "").trim(),
     username: String($("accountPoolUsername")?.value || "").trim(),
     login_password: String($("accountPoolLoginPassword")?.value || ""),
     totp_secret_or_uri: String($("accountPoolTotpSecret")?.value || "").trim(),
@@ -27265,11 +27311,24 @@ function resetAccountPoolCreateForm() {
 function renderAccountIdentityFields(account = null, mode = "create") {
   const editing = mode === "edit";
   const prefix = editing ? "accountPoolEdit" : "accountPool";
-  const username = editing ? String(account?.username || "") : accountPoolDraftValue("username");
+  const platform = account?.platform || normalizeAccountPoolPlatform();
+  const copy = accountLoginIdentifierCopy(platform);
+  const storedUsername = editing ? String(account?.username || "") : accountPoolDraftValue("username");
+  const loginIdentifier = editing
+    ? String(account?.login_username || account?.username || "")
+    : String(accountPoolDraftValue("login_username") || storedUsername);
+  const usesAlternateIdentifier = accountLoginIdentifierKind(loginIdentifier) !== "username";
+  const username = usesAlternateIdentifier && storedUsername === loginIdentifier ? "" : storedUsername;
   return `<div class="account-create-form account-create-form--modal">
     <label>
-      <span>账号用户名</span>
-      <input id="${prefix}Username" value="${esc(username)}" placeholder="例如：liliacvuiy575" autocomplete="off" />
+      <span>登录账号</span>
+      <input id="${prefix}LoginUsername" value="${esc(loginIdentifier)}" placeholder="${esc(copy.placeholder)}" autocomplete="username" />
+      <small class="account-login-identifier-hint">${esc(copy.hint)}</small>
+    </label>
+    <label data-account-platform-username-field${usesAlternateIdentifier ? "" : " hidden"}>
+      <span>账号用户名（可选）</span>
+      <input id="${prefix}Username" value="${esc(username)}" placeholder="例如：liliacvuiy575" autocomplete="off" data-auto-synced-login="${esc(usesAlternateIdentifier ? "" : loginIdentifier)}" />
+      <small class="account-login-identifier-hint">用于账号卡显示和登录后的账号校验。</small>
     </label>
     ${renderAccountPasswordField(account, {
       scope: editing ? "pool-edit" : "pool-create",
@@ -27299,18 +27358,21 @@ async function saveAccountPoolCreateForm(options) {
   const proxyId = String(options.proxyId || "");
   syncAccountPoolCreateDraftFromForm();
   const platform = normalizeAccountPoolPlatform();
+  const loginIdentifier = normalizeAccountLoginIdentifier(accountPoolDraftValue("login_username"));
+  const platformUsername = accountPoolDraftValue("username").trim().replace(/^@+/, "");
   const payload = {
     platform,
     persona_id: String(personaId || "").trim(),
-    username: accountPoolDraftValue("username").trim().replace(/^@+/, ""),
+    username: platformUsername || loginIdentifier,
+    login_username: loginIdentifier,
     login_password: accountPoolDraftValue("login_password"),
   };
   const selectedProxyId = String(proxyId || "").trim();
   if (selectedProxyId) payload.proxy_id = selectedProxyId;
   const totpSecret = accountPoolDraftValue("totp_secret_or_uri").trim();
   if (totpSecret) payload.totp_secret_or_uri = totpSecret;
-  if (!payload.username) {
-    showMsg("socialMsg", "请填写账号用户名。", false);
+  if (!loginIdentifier) {
+    showMsg("socialMsg", `请填写${accountLoginIdentifierCopy(platform).placeholder}。`, false);
     return false;
   }
   const result = await api("/api/persona_dashboard/automation/accounts", {
@@ -27337,7 +27399,7 @@ function accountPoolSelectedAccountsForAction() {
 function serializeAccountClipboardText(fields) {
   fields = fields || {};
   return [
-    "账号: " + String(fields.username || ""),
+    "登录账号: " + String(fields.login_username || fields.username || ""),
     "密码: " + String(fields.login_password || ""),
     "2FA: " + String(fields.totp_secret_or_uri || ""),
   ].join("\n");
@@ -27345,22 +27407,28 @@ function serializeAccountClipboardText(fields) {
 
 function parseAccountClipboardText(value = "") {
   const fields = {
+    login_username: "",
     username: "",
     login_password: "",
     totp_secret_or_uri: "",
   };
   const aliases = {
-    "账号": "username",
+    "登录账号": "login_username",
+    "账号": "login_username",
+    "用户名": "login_username",
+    "邮箱": "login_username",
+    "手机号": "login_username",
     "密码": "login_password",
     "2fa": "totp_secret_or_uri",
   };
   String(value || "").split(/\r?\n/).forEach((line) => {
-    const match = line.match(/^\s*(账号|密码|2fa)\s*[:：=]\s*(.*?)\s*$/i);
+    const match = line.match(/^\s*(登录账号|账号|用户名|邮箱|手机号|密码|2fa)\s*[:：=]\s*(.*?)\s*$/i);
     if (!match) return;
     fields[aliases[match[1].toLowerCase()]] = match[2];
   });
-  fields.username = fields.username.trim().replace(/^@+/, "");
-  if (!fields.username) throw new Error("剪贴板中没有账号字段");
+  fields.login_username = normalizeAccountLoginIdentifier(fields.login_username);
+  if (accountLoginIdentifierKind(fields.login_username) === "username") fields.username = fields.login_username;
+  if (!fields.login_username) throw new Error("剪贴板中没有登录账号字段");
   return fields;
 }
 
@@ -27369,8 +27437,12 @@ function applyAccountClipboardFields(modal, fields, totpController = null) {
   fields = fields || {};
   const editing = modal.dataset.accountEditorMode === "edit";
   const prefix = editing ? "accountPoolEdit" : "accountPool";
+  const loginIdentifier = normalizeAccountLoginIdentifier(fields.login_username || fields.username);
   const values = {
-    username: String(fields.username || "").trim().replace(/^@+/, ""),
+    login_username: loginIdentifier,
+    username: accountLoginIdentifierKind(loginIdentifier) === "username"
+      ? loginIdentifier
+      : String(fields.username || "").trim().replace(/^@+/, ""),
     login_password: String(fields.login_password || ""),
     totp_secret_or_uri: String(fields.totp_secret_or_uri || "").trim(),
   };
@@ -27380,9 +27452,12 @@ function applyAccountClipboardFields(modal, fields, totpController = null) {
       ...values,
     };
   }
+  const loginUsername = $(`${prefix}LoginUsername`);
   const username = $(`${prefix}Username`);
+  if (loginUsername) loginUsername.value = values.login_username;
   const password = $(`${prefix}LoginPassword`);
-  if (username) username.value = values.username;
+  if (username && (values.username || !editing)) username.value = values.username;
+  refreshAccountLoginIdentifierFields(modal);
   if (password) {
     password.value = values.login_password;
     if (editing) password.dataset.passwordDirty = "true";
@@ -27404,12 +27479,13 @@ async function copyAccountPoolCardToClipboard(accountId = "") {
     cache: "no-store",
   });
   state.accountClipboardText = serializeAccountClipboardText({
-    username: result?.username || result?.login_username,
+    login_username: result?.login_username || result?.username,
+    username: result?.username,
     login_password: result?.login_password,
     totp_secret_or_uri: result?.totp_secret_or_uri,
   });
   await copyTextToClipboard(state.accountClipboardText);
-  showMsg("socialMsg", "账号、密码和 2FA 已复制到剪贴板", true);
+  showMsg("socialMsg", "登录账号、密码和 2FA 已复制到剪贴板", true);
 }
 
 async function pasteAccountPoolCardFromClipboard(modal, totpController = null) {
@@ -29072,7 +29148,7 @@ function openAccountPoolEditorModal(options) {
     </section>`;
   document.body.appendChild(modal);
   const totpController = editing ? createAccountTotpController(modal, account) : null;
-  $(`${editing ? "accountPoolEdit" : "accountPool"}Username`)?.focus();
+  $(`${editing ? "accountPoolEdit" : "accountPool"}LoginUsername`)?.focus();
   modal.__cleanup = () => {
     totpController?.close();
     if (editing) clearAccountPasswordReveal(accountId, "pool-edit");
@@ -29217,6 +29293,9 @@ function openAccountPoolEditorModal(options) {
       });
   });
   modal.addEventListener("input", (event) => {
+    if (event.target.id === `${editing ? "accountPoolEdit" : "accountPool"}LoginUsername`) {
+      refreshAccountLoginIdentifierFields(modal);
+    }
     if (!editing) syncAccountPoolCreateDraftFromForm();
     if (event.target.closest("[data-account-proxy-filter]")) refreshAccountProxyPickerOptions(modal);
     const passwordInput = event.target.closest?.("[data-account-password-input]");
@@ -29248,14 +29327,16 @@ async function saveAccountPoolEditForm(accountId = "") {
   const cleanId = String(accountId || "").trim();
   if (!cleanId) return false;
   const account = accountById(cleanId);
-  const username = String($("accountPoolEditUsername")?.value || "").trim().replace(/^@+/, "");
-  if (!username) {
-    showMsg("socialMsg", "请填写账号用户名。", false);
+  const platform = normalizeAccountPoolPlatform(account?.platform || "");
+  const loginIdentifier = normalizeAccountLoginIdentifier($("accountPoolEditLoginUsername")?.value || "");
+  const platformUsername = String($("accountPoolEditUsername")?.value || "").trim().replace(/^@+/, "");
+  if (!loginIdentifier) {
+    showMsg("socialMsg", `请填写${accountLoginIdentifierCopy(platform).placeholder}。`, false);
     return false;
   }
   const payload = {
-    username,
-    login_username: username,
+    username: platformUsername || loginIdentifier,
+    login_username: loginIdentifier,
   };
   const loginPasswordInput = $("accountPoolEditLoginPassword");
   if (loginPasswordInput?.dataset.passwordDirty === "true") {
