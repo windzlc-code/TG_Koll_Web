@@ -17408,10 +17408,59 @@ body.persona-media-sorting {
   font-size: 11px;
 }
 
-.account-proxy-purchase-renewal {
-  display: flex;
+.account-proxy-purchase-city {
+  display: grid;
+  gap: 10px;
+}
+
+.account-proxy-purchase-city-toggle {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 10px;
+  color: var(--ink);
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-solid);
+  box-shadow: none;
+}
+
+.account-proxy-purchase-city-toggle:not(:disabled) { cursor: pointer; }
+.account-proxy-purchase-city-toggle:disabled { opacity: .55; cursor: not-allowed; }
+.account-proxy-purchase-city-toggle > span:last-child { display: grid; gap: 2px; min-width: 0; }
+.account-proxy-purchase-city-toggle strong { color: var(--ink); font-size: 13px; font-weight: 850; }
+.account-proxy-purchase-city-toggle small { color: var(--muted); font-size: 11px; line-height: 1.35; }
+
+.account-proxy-purchase-city-plus {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  color: #126fa7;
+  border-radius: 50%;
+  background: #e8f5fb;
+  transition: transform .16s ease, color .16s ease, background-color .16s ease;
+}
+
+.account-proxy-purchase-city-plus .ui-action-icon { width: 16px; height: 16px; }
+.account-proxy-purchase-city-toggle[aria-expanded="true"] .account-proxy-purchase-city-plus {
+  color: #fff;
+  background: #126fa7;
+  transform: rotate(45deg);
+}
+
+.account-proxy-purchase-city-field {
+  padding-left: 42px;
+}
+
+.account-proxy-purchase-renewal {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 16px;
   padding: 12px 14px;
   border: 1px solid var(--line);
@@ -17420,9 +17469,9 @@ body.persona-media-sorting {
   cursor: pointer;
 }
 
-.account-proxy-purchase-renewal > span { display: grid; gap: 3px; min-width: 0; }
-.account-proxy-purchase-renewal strong { color: var(--ink); font-size: 13px; }
-.account-proxy-purchase-renewal small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.account-proxy-purchase-renewal > span { display: grid; gap: 4px; min-width: 0; }
+.account-proxy-purchase-renewal strong { color: var(--ink); font-size: 14px; font-weight: 850; }
+.account-proxy-purchase-renewal small { max-width: 380px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .account-proxy-purchase-renewal input { position: absolute; opacity: 0; pointer-events: none; }
 .account-proxy-purchase-renewal > i {
   position: relative;

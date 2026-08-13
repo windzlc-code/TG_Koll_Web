@@ -51,30 +51,27 @@
             <small>可购买地区与库存由供应商实时同步。</small>
           </label>
 
-          <label class="field">
-            <span>代理城市</span>
-            <select id="city" name="city" required disabled>
-              <option value="">请先选择代理地区</option>
-            </select>
-            <small>选择城市后，供应商会自动匹配该城市当前可用的 ISP。</small>
-          </label>
-
-          <label class="field">
-            <span>购买时长</span>
-            <select id="period" name="period" required disabled>
-              <option value="1">1 个月</option>
-            </select>
-            <small>可选时长由管理员范围与供应商周期共同决定。</small>
-          </label>
+          <section class="city-disclosure" id="citySection">
+            <button type="button" class="city-toggle" id="cityToggle" aria-expanded="false" disabled>
+              <span class="city-plus" aria-hidden="true"></span>
+              <span><strong>精确选择城市</strong><small>可选；不选择时由供应商按国家地区自动分配。</small></span>
+            </button>
+            <label class="field city-field" id="cityPanel" hidden>
+              <span>城市（可选）</span>
+              <select id="city" name="city" disabled>
+                <option value="">请先选择代理地区</option>
+              </select>
+              <small>选择后将优先购买该城市当前可用的代理 IP。</small>
+            </label>
+          </section>
 
           <dl class="mapped-order-specs" aria-label="锁定订单参数">
             <div><dt>ISP</dt><dd id="productIsp">按地区自动匹配</dd></div>
             <div><dt>数量</dt><dd id="productQuantity">1 个</dd></div>
-            <div><dt>周期</dt><dd id="productPeriod">1 个月</dd></div>
           </dl>
 
           <label class="renewal-row" for="autoRenew">
-            <span><strong>自动续费</strong><small>到期前自动检查算力点余额，余额充足时自动续费；余额不足不会扣款，可随时关闭。</small></span>
+            <span><strong>自动续费</strong><small>到期前检查算力点余额，余额充足时自动续费；余额不足不会扣款。</small></span>
             <input id="autoRenew" name="autoRenew" type="checkbox">
             <i aria-hidden="true"></i>
           </label>

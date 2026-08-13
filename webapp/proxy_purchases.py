@@ -70,6 +70,126 @@ _ACTIVE_STATUSES = {"active", "completed", "ready"}
 _RECONCILE_BASE_DELAY_SECONDS = 60
 _RECONCILE_MAX_DELAY_SECONDS = 3600
 
+# Proxy-Cheap currently returns city labels in English. Keep the supplier ID
+# untouched for ordering, while exposing a stable Chinese display label to the
+# user and administrator interfaces.
+_CITY_ZH_NAMES = {
+    "Albany": "奥尔巴尼",
+    "Algiers": "阿尔及尔",
+    "Almaty": "阿拉木图",
+    "Amsterdam": "阿姆斯特丹",
+    "Ashburn": "阿什本",
+    "Astana": "阿斯塔纳",
+    "Athens": "雅典",
+    "Bangkok": "曼谷",
+    "Belgrade": "贝尔格莱德",
+    "Berlin": "柏林",
+    "Bogota": "波哥大",
+    "Bratislava": "布拉迪斯拉发",
+    "Brussels": "布鲁塞尔",
+    "Bucharest": "布加勒斯特",
+    "Budapest": "布达佩斯",
+    "Buenos Aires": "布宜诺斯艾利斯",
+    "Buffalo": "布法罗",
+    "Cairo": "开罗",
+    "Caracas": "加拉加斯",
+    "Chisinau": "基希讷乌",
+    "Colombo": "科伦坡",
+    "Copenhagen": "哥本哈根",
+    "Dhaka": "达卡",
+    "Dover": "多佛",
+    "Dubai": "迪拜",
+    "Dublin": "都柏林",
+    "Fair Lawn": "费尔劳恩",
+    "Frankfurt am Main": "法兰克福",
+    "Guatemala City": "危地马拉城",
+    "Hanoi": "河内",
+    "Helsinki": "赫尔辛基",
+    "Ho Chi Minh City": "胡志明市",
+    "Hong Kong": "中国香港",
+    "Honolulu": "檀香山",
+    "Hoofddorp": "霍夫多普",
+    "Istanbul": "伊斯坦布尔",
+    "Jakarta": "雅加达",
+    "Johannesburg": "约翰内斯堡",
+    "Kuala Lumpur": "吉隆坡",
+    "Kyiv": "基辅",
+    "Kyiv City": "基辅市",
+    "Lagos": "拉各斯",
+    "Lisbon": "里斯本",
+    "London": "伦敦",
+    "Los Angeles": "洛杉矶",
+    "Madrid": "马德里",
+    "Manila": "马尼拉",
+    "Melbourne": "墨尔本",
+    "Mesa": "梅萨",
+    "Mexico City": "墨西哥城",
+    "Miami": "迈阿密",
+    "Milan": "米兰",
+    "Montreal": "蒙特利尔",
+    "Morocco": "摩洛哥",
+    "Mount Vernon": "芒特弗农",
+    "Mumbai": "孟买",
+    "Nairobi": "内罗毕",
+    "New Delhi": "新德里",
+    "New Jersey": "新泽西",
+    "New Rochelle": "新罗谢尔",
+    "New York": "纽约",
+    "New York City": "纽约市",
+    "Newark": "纽瓦克",
+    "Niagara Falls": "尼亚加拉瀑布城",
+    "Nicosia": "尼科西亚",
+    "Niteroi": "尼泰罗伊",
+    "Nyiregyhaza": "尼赖吉哈佐",
+    "Ontario": "安大略",
+    "Osaka": "大阪",
+    "Oslo": "奥斯陆",
+    "Overland Park": "欧弗兰帕克",
+    "Paris": "巴黎",
+    "Philadelphia": "费城",
+    "Phnom Penh": "金边",
+    "Prague": "布拉格",
+    "Queretaro": "克雷塔罗",
+    "Redmond": "雷德蒙德",
+    "Rehoboth Beach": "里霍博斯比奇",
+    "Riga": "里加",
+    "Riyadh": "利雅得",
+    "Rochester": "罗切斯特",
+    "Rome": "罗马",
+    "Santiago": "圣地亚哥",
+    "San Francisco": "旧金山",
+    "Sao Paulo": "圣保罗",
+    "Schenectady": "斯克内克塔迪",
+    "Seattle": "西雅图",
+    "Seoul": "首尔",
+    "Singapore": "新加坡",
+    "Sofia": "索菲亚",
+    "Springfield": "斯普林菲尔德",
+    "Stockholm": "斯德哥尔摩",
+    "Sydney": "悉尼",
+    "Syracuse": "锡拉丘兹",
+    "Taichung": "台中",
+    "Taipei": "台北",
+    "Tallinn": "塔林",
+    "Tbilisi": "第比利斯",
+    "Tegucigalpa": "特古西加尔巴",
+    "Tel Aviv": "特拉维夫",
+    "Tokyo": "东京",
+    "Troy": "特洛伊",
+    "Utica": "尤蒂卡",
+    "Valencia": "瓦伦西亚",
+    "Valletta": "瓦莱塔",
+    "Vancouver": "温哥华",
+    "Vienna": "维也纳",
+    "Vilnius": "维尔纽斯",
+    "Warsaw": "华沙",
+    "Washington": "华盛顿",
+    "White Plains": "怀特普莱恩斯",
+    "Wilmington": "威尔明顿",
+    "Zagreb": "萨格勒布",
+    "Zurich": "苏黎世",
+}
+
 
 class ProxyPurchaseError(RuntimeError):
     def __init__(self, code: str, message: str, status_code: int = 400) -> None:
@@ -524,10 +644,12 @@ def _city_items(setup: Mapping[str, Any], country: str) -> list[dict[str, str]]:
         if not city_id or city_id in seen:
             continue
         seen.add(city_id)
+        name = str(item.get("name") or item.get("label") or city_id)
         result.append(
             {
                 "id": city_id,
-                "name": str(item.get("name") or item.get("label") or city_id),
+                "name": name,
+                "name_zh": _CITY_ZH_NAMES.get(name, name),
                 "region": str(item.get("region") or item.get("state") or ""),
             }
         )
@@ -685,12 +807,7 @@ def purchase_options(
         for region in regions
         if _city_items(setup, region["code"])
     }
-    supplier_periods = _supported_month_periods(setup)
-    min_months = int(config.get("min_period_months") or config["default_period_months"])
-    max_months = int(config.get("max_period_months") or config["default_period_months"])
-    allowed_periods = [value for value in supplier_periods if min_months <= value <= max_months]
-    if not allowed_periods:
-        allowed_periods = [int(config["default_period_months"])]
+    fixed_period = int(config["default_period_months"])
     return {
         "provider": "proxycheap",
         "configured": configured and config.get("status") == "active" and bool(config.get("enabled")),
@@ -699,7 +816,7 @@ def purchase_options(
         ),
         "regions": regions,
         "cities": cities,
-        "periods": [{"unit": "months", "value": value, "label": f"{value} 个月"} for value in allowed_periods],
+        "periods": [{"unit": "months", "value": fixed_period, "label": f"{fixed_period} 个月"}],
         "cash_backed_credit_units": cash_units,
         "cash_backed_points": cash_units / POINT_SCALE,
         "currency": "USD",
@@ -737,7 +854,8 @@ def create_quote(
     if config.get("status") != "active" or not bool(config.get("enabled")):
         raise ProxyPurchaseError("PURCHASES_DISABLED", "Proxy purchases are not configured", 503)
     clean_country = str(country or "").strip().upper()
-    months = int(period_months or config["default_period_months"])
+    fixed_months = int(config["default_period_months"])
+    months = int(period_months or fixed_months)
     setup = provider.get_setup(str(config["service_id"]), plan_id=str(config.get("plan_id") or ""))
     countries = {
         item["code"]: item["name"]
@@ -745,16 +863,11 @@ def create_quote(
     }
     if clean_country not in countries:
         raise ProxyPurchaseError("INVALID_COUNTRY", "The selected region is not currently orderable", 422)
-    min_months = int(config.get("min_period_months") or config["default_period_months"])
-    max_months = int(config.get("max_period_months") or config["default_period_months"])
     supported_periods = _supported_month_periods(setup)
-    if months < min_months or months > max_months or (supported_periods and months not in supported_periods):
-        raise ProxyPurchaseError("INVALID_PERIOD", "The selected purchase duration is not available", 422)
+    if months != fixed_months or (supported_periods and fixed_months not in supported_periods):
+        raise ProxyPurchaseError("INVALID_PERIOD", "The purchase duration is fixed by the administrator", 422)
     clean_city = str(city or "").strip()
     city_options = {item["id"]: item for item in _city_items(setup, clean_country)}
-    requires_city = bool(city_options and str(config.get("pricing_mode") or "") == "supplier_plus_profit_ntd")
-    if requires_city and clean_city not in city_options:
-        raise ProxyPurchaseError("INVALID_CITY", "Select an available city for this region", 422)
     if clean_city and clean_city not in city_options:
         raise ProxyPurchaseError("INVALID_CITY", "The selected city is not currently orderable", 422)
     request = _configuration(config, clean_country, months, city=clean_city, setup=setup)

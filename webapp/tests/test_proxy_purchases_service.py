@@ -181,7 +181,7 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
         self.assertEqual(owned[0]["social_proxy_id"], stored["id"])
         self.assertTrue(owned[0]["available"])
 
-    def test_city_duration_range_and_live_ntd_profit_pricing(self):
+    def test_optional_city_fixed_duration_and_live_ntd_profit_pricing(self):
         provider = MockProxyProvider(unit_price_usd="4.00")
         with app_db.db() as conn:
             draft = save_config_draft(
@@ -206,7 +206,8 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
             publish_config(conn, draft["id"], actor_user_id=self.user_id, provider=provider, now=1_700_000_051)
             options = purchase_options(conn, user_id=self.user_id, provider=provider)
         self.assertEqual(options["cities"]["US"][0]["id"], "New York")
-        self.assertEqual([item["value"] for item in options["periods"]], [1, 2])
+        self.assertEqual(options["cities"]["US"][0]["name_zh"], "纽约")
+        self.assertEqual([item["value"] for item in options["periods"]], [1])
 
         reference = ExchangeRateQuote("USD", "TWD", Decimal("32"), "test", 1_700_000_100)
         with mock.patch.object(proxy_purchases.exchange_rates, "get_usd_twd_rate", return_value=reference):
@@ -217,7 +218,7 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
                     user_id=self.user_id,
                     country="US",
                     city="New York",
-                    period_months=2,
+                    period_months=1,
                     auto_renew=False,
                     provider=provider,
                     now=1_700_000_100,
@@ -226,22 +227,22 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
                     "SELECT request_json FROM proxy_purchase_quotes WHERE id=?", (quote["id"],)
                 ).fetchone()[0])
         expected_units = int(
-            ((Decimal("286") / cash_per_point) * 100).quantize(Decimal("1"), rounding=ROUND_CEILING)
+            ((Decimal("158") / cash_per_point) * 100).quantize(Decimal("1"), rounding=ROUND_CEILING)
         )
         self.assertEqual(quote["charge_units"], expected_units)
         self.assertEqual(quote["city"], "New York")
         self.assertEqual(stored["city"], "New York")
         self.assertEqual(stored["region"], "New York")
         self.assertEqual(stored["ispId"], "mock-us-isp")
-        self.assertEqual(stored["_pricing"]["supplierCostNtd"], "256.00")
-        self.assertEqual(stored["_pricing"]["customerTotalNtd"], "286.00")
+        self.assertEqual(stored["_pricing"]["supplierCostNtd"], "128.00")
+        self.assertEqual(stored["_pricing"]["customerTotalNtd"], "158.00")
 
         with mock.patch.object(proxy_purchases.exchange_rates, "get_usd_twd_rate", return_value=reference):
             with app_db.db() as conn:
-                with self.assertRaisesRegex(ProxyPurchaseError, "city"):
-                    create_quote(conn, user_id=self.user_id, country="US", city="", period_months=1, auto_renew=False, provider=provider)
+                country_quote = create_quote(conn, user_id=self.user_id, country="US", city="", period_months=1, auto_renew=False, provider=provider)
+                self.assertEqual(country_quote["city"], "")
                 with self.assertRaisesRegex(ProxyPurchaseError, "duration"):
-                    create_quote(conn, user_id=self.user_id, country="US", city="New York", period_months=3, auto_renew=False, provider=provider)
+                    create_quote(conn, user_id=self.user_id, country="US", city="New York", period_months=2, auto_renew=False, provider=provider)
 
     def test_unknown_execute_holds_points_and_never_retries(self):
         provider = _UnknownProvider()

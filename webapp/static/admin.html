@@ -1123,9 +1123,7 @@
             <label><span>默认产品（首版固定）</span><select id="proxyPurchaseServiceId" required disabled><option value="static-residential-ipv4">静态住宅 IPv4</option></select></label>
             <label><span>默认套餐</span><select id="proxyPurchasePlanId"><option value="">使用产品默认套餐</option></select></label>
             <label><span>默认地区</span><select id="proxyPurchaseDefaultCountry"><option value="">使用首个可售地区</option></select></label>
-            <label><span>默认时长</span><select id="proxyPurchaseDefaultPeriod"><option value="1">1 个月</option></select></label>
-            <label><span>最短购买时长</span><select id="proxyPurchaseMinPeriod"><option value="1">1 个月</option></select></label>
-            <label><span>最长购买时长</span><select id="proxyPurchaseMaxPeriod"><option value="1">1 个月</option></select></label>
+            <label><span>固定购买时长</span><select id="proxyPurchaseDefaultPeriod"><option value="1">1 个月</option></select><small>用户端不显示时长选项，所有订单均使用这里设置的周期。</small></label>
             <label><span>汇率方式</span><select id="proxyPurchaseFxMode"><option value="auto">自动同步</option><option value="manual">手动上调</option></select></label>
             <label id="proxyPurchaseManualFxField"><span>手动 USD → NTD 汇率</span><input id="proxyPurchaseManualFxRate" type="number" min="0.000001" step="0.000001" value="35" required></label>
             <label><span>单个代理纯利润（NTD）</span><input id="proxyPurchaseProfitNtd" type="number" min="0" step="1" value="0" required></label>

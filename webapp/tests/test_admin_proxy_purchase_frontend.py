@@ -117,13 +117,12 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertNotIn("totpCode", publish)
         self.assertIn("JSON.stringify({})", publish)
 
-    def test_purchase_config_uses_duration_range_live_fx_and_ntd_profit_only(self):
+    def test_purchase_config_uses_fixed_duration_live_fx_and_ntd_profit_only(self):
         proxy_start = self.markup.index('id="proxyPurchaseAdminWorkspace"')
         proxy_end = self.markup.index('id="proxyPurchaseOrderSummary"', proxy_start)
         workspace = self.markup[proxy_start:proxy_end]
         for control_id in (
-            "proxyPurchaseMinPeriod",
-            "proxyPurchaseMaxPeriod",
+            "proxyPurchaseDefaultPeriod",
             "proxyPurchaseFxMode",
             "proxyPurchaseManualFxRate",
             "proxyPurchaseProfitNtd",
@@ -131,6 +130,9 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
             "btnRefreshProxyPurchaseFx",
         ):
             self.assertIn(f'id="{control_id}"', workspace)
+        self.assertNotIn('id="proxyPurchaseMinPeriod"', workspace)
+        self.assertNotIn('id="proxyPurchaseMaxPeriod"', workspace)
+        self.assertIn("用户端不显示时长选项", workspace)
         for removed_id in (
             "proxyPurchasePointsPerUsd",
             "proxyPurchaseUsdToNtdRate",
@@ -145,6 +147,8 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertIn("profit_ntd:", payload)
         self.assertIn("min_period_months:", payload)
         self.assertIn("max_period_months:", payload)
+        self.assertIn("min_period_months: fixedPeriod", payload)
+        self.assertIn("max_period_months: fixedPeriod", payload)
         self.assertIn("/api/admin/proxy-purchases/exchange-rate", self.script)
 
     def test_purchase_sync_status_has_explicit_contrast_colors(self):

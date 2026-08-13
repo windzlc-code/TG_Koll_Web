@@ -8806,8 +8806,6 @@ function renderProxyPurchaseConfig(payload = {}) {
     proxyPurchasePlanId: proxyPurchaseConfigValue(config, "plan_id"),
     proxyPurchaseDefaultCountry: proxyPurchaseConfigValue(config, "default_country", "country") || setupDefaults.country || "",
     proxyPurchaseDefaultPeriod: proxyPurchaseConfigValue(config, "default_period", "period") || 1,
-    proxyPurchaseMinPeriod: proxyPurchaseConfigValue(config, "min_period_months") || 1,
-    proxyPurchaseMaxPeriod: proxyPurchaseConfigValue(config, "max_period_months") || 1,
     proxyPurchaseFxMode: proxyPurchaseConfigValue(config, "fx_rate_mode") || "auto",
     proxyPurchaseManualFxRate: proxyPurchaseConfigValue(config, "manual_usd_to_ntd_rate", "usd_to_ntd_rate") || 35,
     proxyPurchaseProfitNtd: proxyPurchaseConfigValue(config, "profit_ntd") || 0,
@@ -8983,8 +8981,6 @@ function renderProxyPurchaseProviderOptions(payload = {}) {
     label: `${period?.label || period?.value || period?.months || period} 个月`,
   }));
   setProxyPurchaseSelectOptions("proxyPurchaseDefaultPeriod", periods, { emptyLabel: "" });
-  setProxyPurchaseSelectOptions("proxyPurchaseMinPeriod", periods, { emptyLabel: "" });
-  setProxyPurchaseSelectOptions("proxyPurchaseMaxPeriod", periods, { emptyLabel: "" });
   renderProxyProviderFieldMap(payload);
   const selectedProviderPlan = String(el("proxyPurchasePlanId")?.value || "");
   renderProxyPurchaseConfig({ config: adminState.proxyPurchaseConfig || {} });
@@ -9072,6 +9068,7 @@ async function saveProxyProviderCredentials() {
 }
 
 function proxyPurchaseConfigPayload() {
+  const fixedPeriod = Math.max(1, Number(el("proxyPurchaseDefaultPeriod")?.value || 1));
   const setupDefaults = {
     country: String(el("proxyPurchaseDefaultCountry")?.value || ""),
   };
@@ -9080,9 +9077,9 @@ function proxyPurchaseConfigPayload() {
     service_id: String(el("proxyPurchaseServiceId")?.value || ""),
     plan_id: String(el("proxyPurchasePlanId")?.value || ""),
     default_country: String(el("proxyPurchaseDefaultCountry")?.value || ""),
-    default_period: Math.max(1, Number(el("proxyPurchaseDefaultPeriod")?.value || 1)),
-    min_period_months: Math.max(1, Number(el("proxyPurchaseMinPeriod")?.value || 1)),
-    max_period_months: Math.max(1, Number(el("proxyPurchaseMaxPeriod")?.value || 1)),
+    default_period: fixedPeriod,
+    min_period_months: fixedPeriod,
+    max_period_months: fixedPeriod,
     quantity: 1,
     setup_defaults: setupDefaults,
     pricing_mode: "supplier_plus_profit_ntd",
@@ -9096,13 +9093,6 @@ function proxyPurchaseConfigPayload() {
 async function saveProxyPurchaseConfig() {
   const form = el("proxyPurchaseConfigForm");
   if (!form?.reportValidity()) return false;
-  const minimumPeriod = Number(el("proxyPurchaseMinPeriod")?.value || 1);
-  const maximumPeriod = Number(el("proxyPurchaseMaxPeriod")?.value || 1);
-  if (minimumPeriod > maximumPeriod) {
-    setMsg("proxyPurchaseConfigMsg", "最短购买时长不能大于最长购买时长", false);
-    el("proxyPurchaseMinPeriod")?.focus();
-    return false;
-  }
   form.setAttribute("aria-busy", "true");
   setMsg("proxyPurchaseConfigMsg", "正在保存采购配置草稿...");
   try {
