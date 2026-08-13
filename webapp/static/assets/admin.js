@@ -466,6 +466,7 @@ const SENSITIVE_PROVIDER_INPUT_IDS = [
   "proxyProviderApiSecret",
   "proxyProviderWebhookSecret",
 ];
+const PROVIDER_SECRET_MASK = "••••••••••••••••";
 
 const RUNTIME_SECRET_API_NAMES = {
   rtLlmApiKeyGpt: "llm_api_key_gpt",
@@ -528,6 +529,40 @@ function setRuntimeSecretInputState(inputId, configured, maskedValue) {
   const button = getSensitiveToggleButton(inputId);
   if (button) {
     updateSensitiveToggleVisual(button, false);
+  }
+}
+
+function hasSavedProviderSecret(inputId) {
+  const input = el(inputId);
+  return !!input
+    && input.dataset.providerSecretConfigured === "true"
+    && input.value === input.dataset.providerSecretMask;
+}
+
+function providerSecretInputValue(inputId) {
+  const input = el(inputId);
+  if (!input || hasSavedProviderSecret(inputId)) return "";
+  return input.value.trim();
+}
+
+function setProviderSecretInputState(inputId, configured, labelText) {
+  const input = el(inputId);
+  if (!input) return;
+  const isConfigured = !!configured;
+  input.type = "password";
+  input.value = isConfigured ? PROVIDER_SECRET_MASK : "";
+  input.dataset.providerSecretConfigured = isConfigured ? "true" : "false";
+  input.dataset.providerSecretMask = isConfigured ? PROVIDER_SECRET_MASK : "";
+  input.classList.toggle("is-saved-runtime-secret", isConfigured);
+  input.placeholder = isConfigured
+    ? `已保存，输入新 ${labelText} 后替换`
+    : `输入 ${labelText}${inputId === "proxyProviderWebhookSecret" ? "（可选）" : ""}`;
+  const button = getSensitiveToggleButton(inputId);
+  if (button) {
+    updateSensitiveToggleVisual(button, false);
+    button.disabled = isConfigured;
+    button.title = isConfigured ? "密钥已加密保存，不回显原值" : "显示";
+    button.setAttribute("aria-label", isConfigured ? "密钥已加密保存" : "显示密钥内容");
   }
 }
 
@@ -2762,6 +2797,27 @@ function initRuntimeSecretMaskInputs() {
       input.classList.remove("is-saved-runtime-secret");
       const button = getSensitiveToggleButton(id);
       if (button) {
+        updateSensitiveToggleVisual(button, input.type === "text");
+      }
+    });
+  });
+}
+
+function initProviderSecretMaskInputs() {
+  SENSITIVE_PROVIDER_INPUT_IDS.forEach((id) => {
+    const input = el(id);
+    if (!input || input.dataset.providerSecretMaskBound === "true") return;
+    input.dataset.providerSecretMaskBound = "true";
+    input.addEventListener("focus", () => {
+      if (hasSavedProviderSecret(id)) input.select();
+    });
+    input.addEventListener("input", () => {
+      if (input.value === input.dataset.providerSecretMask) return;
+      input.dataset.providerSecretConfigured = "false";
+      input.classList.remove("is-saved-runtime-secret");
+      const button = getSensitiveToggleButton(id);
+      if (button) {
+        button.disabled = false;
         updateSensitiveToggleVisual(button, input.type === "text");
       }
     });
@@ -8750,10 +8806,6 @@ function renderProxyPurchaseConfig(payload = {}) {
     proxyPurchasePlanId: proxyPurchaseConfigValue(config, "plan_id"),
     proxyPurchaseDefaultCountry: proxyPurchaseConfigValue(config, "default_country", "country") || setupDefaults.country || "",
     proxyPurchaseDefaultPeriod: proxyPurchaseConfigValue(config, "default_period", "period") || 1,
-    proxyPurchaseDefaultIsp: setupDefaults.isp || setupDefaults.isp_id || "",
-    proxyPurchaseDefaultPackage: setupDefaults.package || setupDefaults.package_id || "",
-    proxyPurchaseDefaultProtocol: setupDefaults.protocol || "",
-    proxyPurchaseDefaultAuthentication: setupDefaults.authentication || setupDefaults.auth || "",
     proxyPurchasePointsPerUsd: proxyPurchaseConfigValue(config, "points_per_usd"),
     proxyPurchaseUsdToNtdRate: proxyPurchaseConfigValue(config, "usd_to_ntd_rate") || 35,
     proxyPurchasePaymentFeeRate: proxyPurchaseConfigValue(config, "payment_fee_rate") || 0,
@@ -8783,12 +8835,7 @@ function renderProxyProviderCredentialStatus(status = {}) {
     ["proxyProviderApiSecret", status?.api_secret_configured === true, "API Secret"],
     ["proxyProviderWebhookSecret", status?.webhook_secret_configured === true, "Webhook Secret"],
   ].forEach(([id, isConfigured, labelText]) => {
-    const input = el(id);
-    if (!input) return;
-    input.placeholder = isConfigured
-      ? `已保存，输入新 ${labelText} 后替换`
-      : `输入 ${labelText}${id === "proxyProviderWebhookSecret" ? "（可选）" : ""}`;
-    input.dataset.providerSecretConfigured = isConfigured ? "true" : "false";
+    setProviderSecretInputState(id, isConfigured, labelText);
   });
   const readiness = el("proxyPurchaseReadiness");
   const reasons = [];
@@ -8897,39 +8944,25 @@ function renderProxyPurchaseProviderOptions(payload = {}) {
   setProxyPurchaseSelectOptions("proxyPurchaseDefaultCountry", countries, { emptyLabel: "使用首个可售地区" });
 
   const rawPeriods = setup.periods || setup.period || payload?.periods || [1];
-  const periods = (Array.isArray(rawPeriods) ? rawPeriods : [rawPeriods]).map((period) => ({
+  const monthPeriods = Array.isArray(rawPeriods)
+    ? rawPeriods
+    : Array.isArray(rawPeriods?.months)
+      ? rawPeriods.months
+      : rawPeriods && typeof rawPeriods === "object"
+        ? []
+        : [rawPeriods];
+  if (!monthPeriods.some((period) => Number(period?.value || period?.months || period) === 1)) monthPeriods.unshift(1);
+  const periods = monthPeriods.map((period) => ({
     value: period?.value || period?.months || period,
     label: `${period?.label || period?.value || period?.months || period} 个月`,
   }));
   setProxyPurchaseSelectOptions("proxyPurchaseDefaultPeriod", periods, { emptyLabel: "" });
-  const normalizeSetupChoices = (value) => (Array.isArray(value) ? value : value && typeof value !== "object" ? [value] : []).map((item) => ({
-    value: item?.id || item?.value || item?.code || item,
-    label: item?.name || item?.label || item?.value || item?.code || item,
-  }));
-  renderProxyPurchaseIsps(String(el("proxyPurchaseDefaultCountry")?.value || ""));
-  setProxyPurchaseSelectOptions("proxyPurchaseDefaultPackage", normalizeSetupChoices(setup.packages || setup.package), { emptyLabel: "自动选择" });
-  setProxyPurchaseSelectOptions("proxyPurchaseDefaultProtocol", normalizeSetupChoices(setup.protocols || setup.protocol), { emptyLabel: "使用供应商默认值" });
-  setProxyPurchaseSelectOptions("proxyPurchaseDefaultAuthentication", normalizeSetupChoices(setup.authentications || setup.authentication || setup.auth), { emptyLabel: "使用供应商默认值" });
   renderProxyProviderFieldMap(payload);
   const selectedProviderPlan = String(el("proxyPurchasePlanId")?.value || "");
   renderProxyPurchaseConfig({ config: adminState.proxyPurchaseConfig || {} });
   if (!String(adminState.proxyPurchaseConfig?.plan_id || "") && selectedProviderPlan && el("proxyPurchasePlanId")) {
     el("proxyPurchasePlanId").value = selectedProviderPlan;
   }
-  renderProxyPurchaseIsps(String(el("proxyPurchaseDefaultCountry")?.value || ""));
-}
-
-function renderProxyPurchaseIsps(countryCode) {
-  const setup = adminState.proxyPurchaseProviderOptions?.setup || {};
-  const grouped = setup?.isps;
-  const raw = grouped && !Array.isArray(grouped) && typeof grouped === "object"
-    ? grouped[String(countryCode || "").toUpperCase()] || []
-    : grouped || setup?.isp || [];
-  const options = (Array.isArray(raw) ? raw : raw ? [raw] : []).map((item) => ({
-    value: item?.id || item?.value || item?.code || item,
-    label: item?.name || item?.label || item?.value || item?.code || item,
-  }));
-  setProxyPurchaseSelectOptions("proxyPurchaseDefaultIsp", options, { emptyLabel: "自动选择" });
 }
 
 async function loadProxyPurchaseConfig() {
@@ -8957,19 +8990,13 @@ async function loadProxyPurchaseProviderOptions({ serviceId, planId, persist = f
   }
 }
 
-function clearProxyProviderCredentialInputs() {
-  ["proxyProviderApiKey", "proxyProviderApiSecret", "proxyProviderWebhookSecret"].forEach((id) => {
-    const input = el(id);
-    if (!input) return;
-    input.value = "";
-    input.type = "password";
-    updateSensitiveToggleVisual(getSensitiveToggleButton(id), false);
-  });
+function resetProxyProviderCredentialInputs() {
+  renderProxyProviderCredentialStatus(adminState.proxyProviderCredentialStatus || {});
 }
 
 async function testProxyProviderCredentials({ useInputs = true } = {}) {
-  const apiKey = useInputs ? String(el("proxyProviderApiKey")?.value || "").trim() : "";
-  const apiSecret = useInputs ? String(el("proxyProviderApiSecret")?.value || "").trim() : "";
+  const apiKey = useInputs ? providerSecretInputValue("proxyProviderApiKey") : "";
+  const apiSecret = useInputs ? providerSecretInputValue("proxyProviderApiSecret") : "";
   setMsg("proxyProviderCredentialMsg", "正在从服务端验证供应商鉴权与公开字段...");
   const payload = await api("/api/admin/proxy-purchases/provider-credentials/test", {
     method: "POST",
@@ -8997,9 +9024,9 @@ async function saveProxyProviderCredentials() {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        api_key: String(el("proxyProviderApiKey")?.value || "").trim(),
-        api_secret: String(el("proxyProviderApiSecret")?.value || "").trim(),
-        webhook_secret: String(el("proxyProviderWebhookSecret")?.value || "").trim(),
+        api_key: providerSecretInputValue("proxyProviderApiKey"),
+        api_secret: providerSecretInputValue("proxyProviderApiSecret"),
+        webhook_secret: providerSecretInputValue("proxyProviderWebhookSecret"),
       }),
     });
     renderProxyProviderCredentialStatus(saved || {});
@@ -9012,17 +9039,13 @@ async function saveProxyProviderCredentials() {
     return true;
   } finally {
     form.removeAttribute("aria-busy");
-    clearProxyProviderCredentialInputs();
+    resetProxyProviderCredentialInputs();
   }
 }
 
 function proxyPurchaseConfigPayload() {
   const setupDefaults = {
     country: String(el("proxyPurchaseDefaultCountry")?.value || ""),
-    isp: String(el("proxyPurchaseDefaultIsp")?.value || ""),
-    package: String(el("proxyPurchaseDefaultPackage")?.value || ""),
-    protocol: String(el("proxyPurchaseDefaultProtocol")?.value || ""),
-    authentication: String(el("proxyPurchaseDefaultAuthentication")?.value || ""),
   };
   return {
     provider: "proxy-cheap",
@@ -9065,12 +9088,6 @@ async function saveProxyPurchaseConfig() {
 async function publishProxyPurchaseConfig() {
   const form = el("proxyPurchaseConfigForm");
   if (!form?.reportValidity()) return false;
-  const adminPassword = String(el("proxyPurchaseAdminPassword")?.value || "");
-  const totpCode = String(el("proxyPurchaseTotpCode")?.value || "").trim();
-  if (!adminPassword || !totpCode) {
-    setMsg("proxyPurchaseConfigMsg", "发布前请填写管理员密码与 MFA 验证码", false);
-    return false;
-  }
   form.setAttribute("aria-busy", "true");
   setMsg("proxyPurchaseConfigMsg", "正在校验成本与利润约束并发布...");
   try {
@@ -9078,10 +9095,8 @@ async function publishProxyPurchaseConfig() {
     const payload = await api("/api/admin/proxy-purchases/config/publish", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ admin_password: adminPassword, totp_code: totpCode }),
+      body: JSON.stringify({}),
     });
-    if (el("proxyPurchaseAdminPassword")) el("proxyPurchaseAdminPassword").value = "";
-    if (el("proxyPurchaseTotpCode")) el("proxyPurchaseTotpCode").value = "";
     renderProxyPurchaseConfig(payload || {});
     setMsg("proxyPurchaseConfigMsg", "供应商采购配置已发布", true);
     return payload;
@@ -10361,9 +10376,6 @@ function bindActions() {
       });
     } catch {}
   });
-  el("proxyPurchaseDefaultCountry")?.addEventListener("change", () => {
-    renderProxyPurchaseIsps(String(el("proxyPurchaseDefaultCountry")?.value || ""));
-  });
   el("btnRefreshProxyPurchaseOrders")?.addEventListener("click", async () => {
     try { await loadProxyPurchaseOrders(); } catch {}
   });
@@ -11427,6 +11439,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (!me) return;
     initSensitiveInputToggles();
     initRuntimeSecretMaskInputs();
+    initProviderSecretMaskInputs();
     bindActions();
     setActiveAdminPage(readAdminPageFromHash(), false);
   } catch {

@@ -378,6 +378,7 @@
     .proxy-provider-field-map > summary::-webkit-details-marker { display: none; }
     .proxy-provider-field-map-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .proxy-provider-field-map-head h4 { margin: 0; font-size: 14px; }
+    #proxyProviderFieldRevision { color: #145f8b; font-weight: 700; }
     .proxy-provider-field-map[open] .proxy-provider-field-grid { margin-top: 9px; }
     .proxy-provider-field-map-standalone { position: relative; z-index: 1; margin-top: 14px; padding: 14px 16px; border: 0; border-radius: 10px; background: rgba(255,255,255,.97); color: var(--ink, #17202a); }
     .proxy-provider-field-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
@@ -399,10 +400,11 @@
     .proxy-purchase-config-form label { min-width: 0; margin: 0; }
     .proxy-purchase-config-form label > span { display: block; margin-bottom: 5px; }
     .proxy-purchase-config-form .span-2 { grid-column: span 2; }
-    .proxy-purchase-config-form .proxy-purchase-config-actions { display: flex; align-items: end; gap: 8px; grid-column: 1 / -1; flex-wrap: wrap; }
+    .proxy-purchase-config-form .proxy-purchase-config-actions { display: flex; align-items: end; justify-content: flex-end; gap: 8px; grid-column: 1 / -1; flex-wrap: wrap; }
     .proxy-purchase-config-form .proxy-purchase-config-actions button { width: auto; }
-    .proxy-purchase-mfa { display: grid; grid-template-columns: repeat(2, minmax(160px, 240px)); gap: 10px; flex: 1 1 420px; }
-    .proxy-purchase-mfa-note { grid-column: 1 / -1; margin: 0; color: #51677c; font-size: 11px; }
+    .proxy-purchase-admin-hero #proxyPurchaseConfigMsg { color: #e8f7ff; font-weight: 700; }
+    .proxy-purchase-admin-hero #proxyPurchaseConfigMsg.msg.ok { color: #a9f4d5; }
+    .proxy-purchase-admin-hero #proxyPurchaseConfigMsg.msg.err { color: #ffd1d1; }
     .proxy-purchase-orders-table { min-width: 1060px; }
     .proxy-purchase-order-resolution { display: grid; grid-template-columns: 1.1fr 1fr 1.2fr 1.5fr 1fr 1fr auto; gap: 10px; align-items: end; margin-top: 14px; padding: 14px; border: 1px solid #c5d2de; border-radius: 8px; background: #f7fafc; }
     .proxy-purchase-order-resolution label { min-width: 0; margin: 0; }
@@ -461,14 +463,12 @@
 
       .proxy-purchase-config-form,
       .proxy-provider-credential-form,
-      .proxy-purchase-mfa,
       .proxy-purchase-order-resolution { grid-template-columns: 1fr; }
 
       .proxy-provider-credential-form .proxy-provider-credential-actions { grid-column: auto; }
       .proxy-provider-field-grid { grid-template-columns: 1fr; }
 
-      .proxy-purchase-config-form .span-2,
-      .proxy-purchase-mfa-note { grid-column: auto; }
+      .proxy-purchase-config-form .span-2 { grid-column: auto; }
 
       #proxyMarketUserLimitForm {
         grid-template-columns: 1fr;
@@ -1117,12 +1117,7 @@
             <label><span>默认产品（首版固定）</span><select id="proxyPurchaseServiceId" required disabled><option value="static-residential-ipv4">静态住宅 IPv4</option></select></label>
             <label><span>默认套餐</span><select id="proxyPurchasePlanId"><option value="">使用产品默认套餐</option></select></label>
             <label><span>默认地区</span><select id="proxyPurchaseDefaultCountry"><option value="">使用首个可售地区</option></select></label>
-            <label><span>默认周期（月）</span><select id="proxyPurchaseDefaultPeriod"><option value="1">1</option></select></label>
-
-            <label><span>ISP</span><select id="proxyPurchaseDefaultIsp"><option value="">自动选择</option></select></label>
-            <label><span>代理套餐包</span><select id="proxyPurchaseDefaultPackage"><option value="">自动选择</option></select></label>
-            <label><span>连接协议</span><select id="proxyPurchaseDefaultProtocol"><option value="">使用供应商默认值</option></select></label>
-            <label><span>认证方式</span><select id="proxyPurchaseDefaultAuthentication"><option value="">使用供应商默认值</option></select></label>
+            <label><span>默认时长</span><select id="proxyPurchaseDefaultPeriod"><option value="1">1 个月</option></select></label>
             <label><span>每美元兑换点数</span><input id="proxyPurchasePointsPerUsd" type="number" min="0.01" step="0.01" required></label>
             <label><span>USD → NTD 汇率</span><input id="proxyPurchaseUsdToNtdRate" type="number" min="0.000001" step="0.000001" required></label>
             <label><span>支付费率</span><input id="proxyPurchasePaymentFeeRate" type="number" min="0" max="1" step="0.0001" required></label>
@@ -1133,11 +1128,6 @@
             <label><span>用户购买</span><select id="proxyPurchaseEnabled"><option value="false">关闭</option><option value="true">开放</option></select></label>
 
             <div class="proxy-purchase-config-actions">
-              <div class="proxy-purchase-mfa">
-                <label><span>管理员密码（发布时）</span><input id="proxyPurchaseAdminPassword" type="password" autocomplete="current-password"></label>
-                <label><span>MFA 验证码（发布时）</span><input id="proxyPurchaseTotpCode" autocomplete="one-time-code" maxlength="32"></label>
-                <p class="proxy-purchase-mfa-note">保存草稿不会生效；发布会在服务端校验不亏损约束，并要求 MFA 二次确认。</p>
-              </div>
               <button id="btnRefreshProxyPurchaseProvider" type="button" class="ghost">同步供应商</button>
               <button type="submit" class="ghost">保存草稿</button>
               <button id="btnPublishProxyPurchaseConfig" type="button" class="primary">校验并发布</button>

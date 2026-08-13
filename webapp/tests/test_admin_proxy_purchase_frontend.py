@@ -84,11 +84,42 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
             self.assertNotIn('totp_code:', source)
         self.assertNotIn('service_id:', test_connection)
         self.assertNotIn('plan_id:', test_connection)
-        self.assertIn("clearProxyProviderCredentialInputs();", save)
+        self.assertIn("resetProxyProviderCredentialInputs();", save)
         self.assertNotIn("testProxyProviderCredentials({ useInputs: false })", save)
         self.assertNotIn('el("proxyPurchasePlanId")', save)
         self.assertNotIn("proxyProviderCredentialReason", save)
         self.assertNotIn("reason,", save)
+
+    def test_saved_provider_credentials_remain_visible_as_non_secret_masks(self):
+        status = self._function("renderProxyProviderCredentialStatus", "loadProxyProviderCredentialStatus")
+        save = self._function("saveProxyProviderCredentials", "proxyPurchaseConfigPayload")
+        self.assertIn("PROVIDER_SECRET_MASK", self.script)
+        self.assertIn("setProviderSecretInputState", status)
+        self.assertIn("providerSecretInputValue", save)
+        self.assertNotIn('.value = ""', status)
+
+    def test_purchase_config_hides_provider_owned_defaults_and_publish_step_up(self):
+        proxy_start = self.markup.index('id="proxyPurchaseAdminWorkspace"')
+        proxy_end = self.markup.index('id="proxyPurchaseOrderSummary"', proxy_start)
+        workspace = self.markup[proxy_start:proxy_end]
+        for control_id in (
+            "proxyPurchaseDefaultIsp",
+            "proxyPurchaseDefaultPackage",
+            "proxyPurchaseDefaultProtocol",
+            "proxyPurchaseDefaultAuthentication",
+            "proxyPurchaseAdminPassword",
+            "proxyPurchaseTotpCode",
+        ):
+            self.assertNotIn(f'id="{control_id}"', workspace)
+        self.assertIn('<option value="1">1 个月</option>', workspace)
+        publish = self._function("publishProxyPurchaseConfig", "renderProxyPurchaseOrders")
+        self.assertNotIn("adminPassword", publish)
+        self.assertNotIn("totpCode", publish)
+        self.assertIn("JSON.stringify({})", publish)
+
+    def test_purchase_sync_status_has_explicit_contrast_colors(self):
+        self.assertIn("#proxyProviderFieldRevision", self.markup)
+        self.assertIn("#proxyPurchaseConfigMsg.msg.ok", self.markup)
 
     def test_healthy_status_does_not_keep_header_chips_visible(self):
         self.assertNotIn('id="proxyPurchaseCredentialStatus"', self.markup)
@@ -107,7 +138,7 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
 
     def test_purchase_regions_are_localized_to_chinese_in_admin_views(self):
         country_label = self._function("proxyPurchaseCountryLabel", "inferProxyMarketProviderKey")
-        provider_options = self._function("renderProxyPurchaseProviderOptions", "renderProxyPurchaseIsps")
+        provider_options = self._function("renderProxyPurchaseProviderOptions", "loadProxyPurchaseConfig")
         purchased_assets = self._function("renderProxyPurchasedAssets", "loadProxyPurchasedAssets")
         purchase_orders = self._function("renderProxyPurchaseOrders", "loadProxyPurchaseOrders")
 

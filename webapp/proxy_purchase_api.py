@@ -59,8 +59,7 @@ class ProxyPurchaseConfigPayload(_StrictModel):
 
 
 class ProxyPurchasePublishPayload(_StrictModel):
-    admin_password: str = Field(min_length=1, max_length=256)
-    totp_code: str = Field(min_length=1, max_length=64)
+    pass
 
 
 class ProxyProviderCredentialPayload(_StrictModel):
@@ -75,8 +74,10 @@ class ProxyProviderCredentialTestPayload(_StrictModel):
     api_secret: str = Field(default="", max_length=512)
 
 
-class ProxyPurchaseAdminActionPayload(ProxyPurchasePublishPayload):
+class ProxyPurchaseAdminActionPayload(_StrictModel):
     reason: str = Field(min_length=3, max_length=500)
+    admin_password: str = Field(min_length=1, max_length=256)
+    totp_code: str = Field(min_length=1, max_length=64)
 
 
 class ProxyPurchaseAdminResolutionPayload(ProxyPurchaseAdminActionPayload):
@@ -366,12 +367,6 @@ def register_proxy_purchase_routes(
                 raise proxy_purchases.ProxyPurchaseError(
                     "CONFIG_NOT_FOUND", "没有待发布的采购配置草稿", 404
                 )
-            admin_step_up(
-                conn,
-                admin,
-                admin_password=payload.admin_password,
-                totp_code=payload.totp_code,
-            )
             provider = proxy_purchases.provider_from_environment(conn)
             # publish_config validates provider setup before its first write,
             # so the network calls do not hold SQLite's write lock.

@@ -302,6 +302,33 @@ class ProxyPurchaseApiTests(unittest.TestCase):
         self.assertNotIn("ciphertext", serialized)
         self.assertNotIn("test-api-secret", serialized)
 
+    def test_admin_config_publish_no_longer_requires_password_or_mfa(self):
+        draft = self.client.put(
+            "/api/admin/proxy-purchases/config",
+            json={
+                "provider": "proxy-cheap",
+                "service_id": "static-residential-ipv4",
+                "plan_id": "standard",
+                "default_country": "US",
+                "default_period": 1,
+                "quantity": 1,
+                "setup_defaults": {"country": "US"},
+                "points_per_usd": "25",
+                "usd_to_ntd_rate": "35",
+                "payment_fee_rate": "0.05",
+                "fixed_fee_points": "0",
+                "max_vendor_cost_usd": "100",
+                "safety_buffer_usd": "0",
+                "minimum_profit_usd": "0",
+                "live_purchasing_enabled": True,
+            },
+        )
+        self.assertEqual(draft.status_code, 200, draft.text)
+        published = self.client.post("/api/admin/proxy-purchases/config/publish", json={})
+        self.assertEqual(published.status_code, 200, published.text)
+        self.assertEqual(published.json()["config"]["default_period"], 1)
+        self.assertFalse(self.step_up_calls)
+
     def test_admin_resolution_requires_mfa_and_records_audit(self):
         missing = self.client.post(
             "/api/admin/proxy-purchases/orders/order-missing/resolve",
