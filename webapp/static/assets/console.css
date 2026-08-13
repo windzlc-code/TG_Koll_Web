@@ -18451,13 +18451,18 @@ body.persona-media-sorting {
 
 .account-pool-card > .persona-profile-list-toggle {
   position: absolute;
-  right: 12px;
-  bottom: 12px;
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  min-height: 32px;
+  right: 10px;
+  bottom: 10px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
   padding: 0;
+}
+
+.account-pool-card > .persona-profile-list-toggle .ui-action-icon {
+  width: 16px;
+  height: 16px;
 }
 
 .account-pool-card--persona {
@@ -18820,33 +18825,37 @@ body.persona-media-sorting {
 
 .account-pool-card-actions {
   display: grid;
-  grid-template-columns: minmax(112px, 112px) repeat(3, max-content);
+  grid-template-columns: minmax(96px, 96px) repeat(3, max-content);
   align-items: center;
   justify-content: start;
+  gap: 4px;
 }
 
 .account-card-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
   white-space: nowrap;
 }
 
 .account-card-action--login {
   grid-column: span 1;
-  min-width: 112px;
+  min-width: 96px;
 }
 
-.account-pool-card-actions .account-card-action {
+.console-page .account-pool-card .account-pool-card-actions .account-card-action {
+  min-height: 26px;
+  padding: 2px 6px;
   margin: 0;
+  font-size: 11px;
 }
 
 .account-pool-card-actions .ui-action-icon,
 .account-pool-card-actions .ui-trash-icon {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 15px;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.9;
