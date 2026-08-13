@@ -35,9 +35,13 @@ class _Context:
 class LoginAssistancePresentationTests(unittest.TestCase):
     def test_verification_and_credentials_have_distinct_safe_prompts(self):
         code_prompt = runner._login_assistance_presentation({"status": "need_verification", "challenge_type": "sms_code", "reason": "短信验证"})
+        email_prompt = runner._login_assistance_presentation({"status": "need_verification", "challenge_type": "email_code", "reason": "邮箱验证"})
         credentials_prompt = runner._login_assistance_presentation({"status": "invalid_credentials", "reason": "密码错误"})
         self.assertEqual(code_prompt["kind"], "verification_code")
         self.assertEqual(code_prompt["field_label"], "短信验证码")
+        self.assertEqual(code_prompt["input_mode"], "numeric")
+        self.assertEqual(email_prompt["field_label"], "邮箱验证码")
+        self.assertEqual(email_prompt["input_mode"], "text")
         self.assertEqual(credentials_prompt["kind"], "credentials")
         self.assertIn("账号、邮箱或手机号", credentials_prompt["field_label"])
 
@@ -70,6 +74,33 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(fill.call_args.args[2], "654321")
         submit.assert_called_once()
         self.assertEqual(control["login_assistance_state"]["phase"], "running")
+
+    def test_email_verification_preserves_alphanumeric_code_and_uses_otp_field(self):
+        actions = queue.Queue(maxsize=2)
+        actions.put_nowait({"kind": "verification_code", "verification_code": "Ab7-X9"})
+        page, code_input, logger = mock.Mock(), mock.Mock(), mock.Mock()
+        page.is_closed.return_value = False
+        page.frames = []
+        page.context.pages = [page]
+        control = {
+            "login_assistance_queue": actions,
+            "login_assistance_lock": threading.Lock(),
+            "login_assistance_pending": True,
+        }
+
+        def locate(_surface, selectors, **_kwargs):
+            return code_input if 'input[name*="otp" i]' in selectors else None
+
+        with (
+            mock.patch.object(runner, "_visible_first", side_effect=locate),
+            mock.patch.object(runner, "_clear_and_type") as fill,
+            mock.patch.object(runner, "_click_text_button", return_value=True),
+        ):
+            consumed = runner._process_login_assistance_action(page, "instagram", logger, control)
+
+        self.assertTrue(consumed)
+        fill.assert_called_once()
+        self.assertEqual(fill.call_args.args[2], "Ab7-X9")
 
     def test_submission_error_remains_visible_until_retry_or_prompt_changes(self):
         actions = queue.Queue(maxsize=2)

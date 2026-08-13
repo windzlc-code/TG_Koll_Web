@@ -483,6 +483,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         task_source = self.source.split("async function createSocialTask(", 1)[1].split("async function ", 1)[0]
         self.assertNotIn("openLiveBrowserTaskView", task_source)
 
+    def test_login_assistance_refreshes_when_verification_field_contract_changes(self):
+        update_source = self._section(
+            "function updateLoginAssistanceModal(",
+            "async function submitLoginAssistance(",
+        )
+        self.assertIn("model.fieldLabel", update_source)
+        self.assertIn("model.inputMode", update_source)
+        self.assertIn("model.submitLabel", update_source)
+
     def test_open_login_account_actions_preserve_running_task_navigation(self):
         actions = self._section("function renderAccountPoolCardActions", "function renderAccountPoolCard(")
         create_task = self._javascript_function_source(self.source, "createSocialTask")

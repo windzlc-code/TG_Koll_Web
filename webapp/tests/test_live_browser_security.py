@@ -39,6 +39,27 @@ def test_login_assistance_queue_accepts_only_the_current_prompt_and_never_echoes
     assert actions.get_nowait() == {"kind": "verification_code", "verification_code": "314159"}
 
 
+def test_login_assistance_queue_preserves_alphanumeric_email_code_exactly():
+    actions = queue.Queue(maxsize=2)
+    control = {
+        "login_assistance_queue": actions,
+        "login_assistance_lock": threading.Lock(),
+        "login_assistance_pending": False,
+        "login_assistance_state": {"kind": "verification_code", "challenge_type": "email_code"},
+    }
+    payload = social_automation_api.LiveBrowserLoginAssistancePayload(
+        kind="verification_code", verification_code="Ab7-X9"
+    )
+    with (
+        mock.patch.object(social_automation_api, "_require_live_browser_manual_session", return_value="task-email"),
+        mock.patch.object(social_automation_api, "_running_control_for_live_browser_session", return_value=control),
+    ):
+        result = social_automation_api.queue_live_browser_login_assistance("live-email", payload)
+
+    assert "Ab7-X9" not in repr(result)
+    assert actions.get_nowait()["verification_code"] == "Ab7-X9"
+
+
 def test_login_assistance_queue_rejects_stale_prompt_kind():
     control = {
         "login_assistance_queue": queue.Queue(maxsize=2),

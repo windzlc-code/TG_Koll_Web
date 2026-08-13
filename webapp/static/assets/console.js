@@ -26412,7 +26412,16 @@ function renderLoginAssistanceAction(model = {}, session = null) {
 function updateLoginAssistanceModal(modal, task = {}, session = null) {
   if (!modal?.isConnected) return;
   const model = loginAssistanceViewModel(task, session);
-  const renderKey = JSON.stringify([model.phase, model.kind, model.title, model.message, Boolean(session?.input_allowed)]);
+  const renderKey = JSON.stringify([
+    model.phase,
+    model.kind,
+    model.title,
+    model.message,
+    model.fieldLabel,
+    model.inputMode,
+    model.submitLabel,
+    Boolean(session?.input_allowed),
+  ]);
   if (modal.dataset.loginAssistanceRenderKey === renderKey) return;
   modal.dataset.loginAssistanceRenderKey = renderKey;
   const body = modal.querySelector("[data-login-assistance-body]");

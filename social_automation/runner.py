@@ -3403,7 +3403,8 @@ def _login_assistance_presentation(status: dict[str, Any] | None) -> dict[str, A
         code_labels = {"sms_code": ("输入短信验证码", "短信验证码"), "email_code": ("输入邮箱验证码", "邮箱验证码"), "authenticator_totp": ("输入身份验证器验证码", "验证码"), "unknown_code": ("输入验证码", "验证码"), "verification": ("输入验证码", "验证码")}
         if challenge_type in code_labels:
             title, label = code_labels[challenge_type]
-            return {"phase": "attention", "kind": "verification_code", "title": title, "message": reason or "请填写平台当前要求的验证码。", "field_label": label, "input_mode": "numeric", "submit_label": "提交验证码", "challenge_type": challenge_type}
+            input_mode = "numeric" if challenge_type in {"sms_code", "authenticator_totp"} else "text"
+            return {"phase": "attention", "kind": "verification_code", "title": title, "message": reason or "请填写平台当前要求的验证码。", "field_label": label, "input_mode": input_mode, "submit_label": "提交验证码", "challenge_type": challenge_type}
         return {"phase": "attention", "kind": "browser_interaction", "title": "需要人工验证", "message": reason or "平台要求完成身份确认，请打开实时画面继续。", "submit_label": "查看验证页面", "challenge_type": challenge_type}
     return {"phase": "running", "kind": "progress", "title": "正在执行登录", "message": reason or "正在检查页面并同步登录状态。", "challenge_type": challenge_type}
 
@@ -9783,6 +9784,10 @@ def _verification_code_input(page):
             'input[name*="security_code" i]',
             'input[name*="verification_code" i]',
             'input[name*="code" i]',
+            'input[name*="otp" i]',
+            'input[id*="otp" i]',
+            'input[aria-label*="otp" i]',
+            'input[placeholder*="otp" i]',
             'input[aria-label*="code" i]',
             'input[placeholder*="code" i]',
             'input[aria-label*="验证码"]',
