@@ -11,6 +11,7 @@ import os
 import asyncio
 import ipaddress
 import logging
+import queue
 import re
 import sqlite3
 import threading
@@ -528,6 +529,13 @@ class LiveBrowserKeyPayload(BaseModel):
 
 class LiveBrowserModePayload(BaseModel):
     mode: str = Field(default="manual", max_length=20)
+
+
+class LiveBrowserLoginAssistancePayload(StrictProxyModel):
+    kind: str = Field(min_length=1, max_length=32)
+    verification_code: str = Field(default="", max_length=64)
+    login_username: str = Field(default="", max_length=SOCIAL_ACCOUNT_LOGIN_USERNAME_MAX_LENGTH)
+    login_password: str = Field(default="", max_length=SOCIAL_ACCOUNT_LOGIN_PASSWORD_MAX_LENGTH)
 
 
 def configure_social_automation(*, data_dir: Path, new_id: Callable[[str], str] | None = None) -> None:
@@ -2308,6 +2316,11 @@ def register_social_automation_routes(app: FastAPI) -> None:
         _require_live_browser_session_access(session_id, user)
         return {"ok": True, **press_live_browser_session_key(session_id, payload.key)}
 
+    @app.post("/api/persona_dashboard/automation/browser_sessions/{session_id}/login_assistance")
+    def api_social_browser_session_login_assistance(session_id: str, payload: LiveBrowserLoginAssistancePayload, user: dict[str, Any] = Depends(get_current_user)):
+        _require_live_browser_session_access(session_id, user)
+        return {"ok": True, **queue_live_browser_login_assistance(session_id, payload)}
+
     @app.post("/api/persona_dashboard/automation/browser_sessions/{session_id}/screenshot")
     def api_social_browser_session_screenshot(session_id: str, user: dict[str, Any] = Depends(get_current_user)):
         _require_live_browser_session_access(session_id, user)
@@ -2570,8 +2583,6 @@ def register_social_automation_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=409, detail="打开登录默认使用自动模式；需要人工操作时请在浏览器窗口中切换人工接管")
         if requested_mode is None:
             raise HTTPException(status_code=422, detail="auto_submit must be a boolean when provided")
-        if not str(account["login_username"] or account["username"] or "").strip() or not str(account["login_password"] or ""):
-            raise HTTPException(status_code=409, detail="请先保存登录账号和密码，再打开自动登录")
         task_payload["auto_submit"] = True
         task_payload.setdefault("login_wait_seconds", wait_seconds)
         return {
@@ -2745,11 +2756,6 @@ def register_social_automation_routes(app: FastAPI) -> None:
         if str(payload.task_type or "").strip() == "open_login":
             if _open_login_auto_submit_mode(payload.payload) is not True:
                 raise HTTPException(status_code=409, detail="登录任务必须从自动模式启动；运行后可随时切换人工接管")
-            task_payload = payload.payload if isinstance(payload.payload, dict) else {}
-            effective_username = str(task_payload.get("login_username") or account["login_username"] or account["username"] or "").strip()
-            effective_password = str(task_payload.get("login_password") or account["login_password"] or "")
-            if not effective_username or not effective_password:
-                raise HTTPException(status_code=409, detail="请先提供或保存登录账号和密码，再创建自动登录任务")
         return {
             "ok": True,
             "task": _create_social_task_for_user(payload, user),
@@ -4091,10 +4097,16 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
         if raise_on_error:
             raise HTTPException(status_code=503, detail="实时浏览器会话暂时不可用") from exc
         return []
+    controls_by_session: dict[str, dict[str, Any]] = {}
     with _RUNNING_TASK_CONTROLS_LOCK:
         current_tasks_by_session = {
             str(control.get("live_browser_session_id") or ""): str(control.get("current_task_id") or task_id or "")
             for task_id, control in _RUNNING_TASK_CONTROLS.items()
+            if str(control.get("live_browser_session_id") or "")
+        }
+        controls_by_session = {
+            str(control.get("live_browser_session_id") or ""): control
+            for control in _RUNNING_TASK_CONTROLS.values()
             if str(control.get("live_browser_session_id") or "")
         }
     for session in sessions:
@@ -4173,6 +4185,12 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
         if current_task_type in {"open_login", "publish_post"}:
             session["login_mode"] = _live_browser_open_login_mode(row)
             session["takeover_waiting_for"] = _running_task_takeover_waiting_for(str(row["id"] or ""))
+        if current_task_type == "open_login":
+            control = controls_by_session.get(str(session.get("id") or session.get("session_id") or "")) or {}
+            assistance = control.get("login_assistance_state")
+            session["login_assistance"] = dict(assistance) if isinstance(assistance, dict) else {
+                "phase": "running", "kind": "progress", "title": "正在启动登录", "message": "正在连接指纹浏览器并检查账号状态。",
+            }
         if str(row["error"] or "").strip():
             session["task_error"] = str(row["error"] or "")
         row_values = dict(row)
@@ -4905,6 +4923,40 @@ def press_live_browser_session_key(session_id: str, key: str) -> dict[str, Any]:
     clean_key = _normalize_live_browser_key(key)
     _require_live_browser_manual_session(session_id)
     return _press_live_browser_session_key_via_display(session_id, clean_key)
+
+
+def queue_live_browser_login_assistance(session_id: str, payload: LiveBrowserLoginAssistancePayload) -> dict[str, Any]:
+    task_id = _require_live_browser_manual_session(session_id)
+    control = _running_control_for_live_browser_session(session_id)
+    if not isinstance(control, dict):
+        raise HTTPException(status_code=409, detail="当前登录任务已结束，请重新打开登录")
+    assistance = control.get("login_assistance_state")
+    assistance = assistance if isinstance(assistance, dict) else {}
+    expected_kind = str(assistance.get("kind") or "").strip().lower()
+    kind = str(payload.kind or "").strip().lower()
+    if kind not in {"verification_code", "credentials", "confirm"} or expected_kind != kind:
+        raise HTTPException(status_code=409, detail="登录页面状态已变化，请按页面最新提示重新操作")
+    if kind == "verification_code" and not str(payload.verification_code or "").strip():
+        raise HTTPException(status_code=422, detail="请输入验证码")
+    if kind == "credentials" and (not str(payload.login_username or "").strip() or not str(payload.login_password or "")):
+        raise HTTPException(status_code=422, detail="请完整填写登录账号和密码")
+    actions = control.get("login_assistance_queue")
+    if actions is None or not hasattr(actions, "put_nowait"):
+        raise HTTPException(status_code=409, detail="登录映射通道尚未就绪，请稍后重试")
+    if control.get("login_assistance_pending"):
+        raise HTTPException(status_code=409, detail="上一次输入正在提交，请等待页面更新")
+    action = {"kind": kind}
+    if kind == "verification_code":
+        action["verification_code"] = str(payload.verification_code or "").strip()
+    elif kind == "credentials":
+        action["login_username"] = str(payload.login_username or "").strip()
+        action["login_password"] = str(payload.login_password or "")
+    try:
+        actions.put_nowait(action)
+    except queue.Full as exc:
+        raise HTTPException(status_code=409, detail="登录输入正在排队，请稍后重试") from exc
+    control["login_assistance_pending"] = True
+    return {"accepted": True, "task_id": task_id, "session_id": str(session_id or ""), "kind": kind}
 
 
 def _running_control_for_live_browser_session(session_id: str) -> dict[str, Any] | None:
@@ -9463,6 +9515,9 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         "batch_tasks": batch_tasks,
         "completed_batch_task_ids": [],
         "live_browser_session_id": "",
+        "login_assistance_queue": queue.Queue(maxsize=2),
+        "login_assistance_pending": False,
+        "login_assistance_state": {"phase": "running", "kind": "progress", "title": "正在启动登录", "message": "正在连接指纹浏览器并检查账号状态。"},
         "publish_submit_lock": threading.RLock(),
         "resource_snapshot_provider": _browser_runtime_resource_snapshot,
         "resource_metrics_lock": threading.RLock(),

@@ -36,6 +36,15 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         cls.profile_source = PROFILE_JS.read_text(encoding="utf-8")
         cls.profile_styles = PROFILE_CSS.read_text(encoding="utf-8")
 
+    def test_open_login_uses_live_mapping_modal_and_structured_assistance(self):
+        self.assertIn("function openLoginAssistanceView", self.source)
+        self.assertIn("data-login-assistance-form", self.source)
+        self.assertIn("/login_assistance", self.source)
+        self.assertIn("openLoginAssistanceView(activeTask.id, accountId)", self.source)
+        self.assertIn("login-assistance-success", self.styles)
+        self.assertIn("login-assistance-spinner", self.styles)
+        self.assertIn("login-assistance-draw", self.styles)
+
     def test_console_uses_vecto_site_navigation_without_replacing_workspace_navigation(self):
         self.assertIn('data-site-header data-site-page="console"', self.markup)
         self.assertIn('<a class="site-skip-link"', self.markup)
@@ -492,7 +501,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('class="row-actions account-pool-card-actions"', actions)
         self.assertNotIn("请先绑定人设后再打开登录", actions)
         self.assertNotIn("请先绑定人设后再打开登录", create_task)
-        self.assertGreaterEqual(self.source.count("openLiveBrowserTaskView(activeTask.id)"), 3)
+        self.assertGreaterEqual(self.source.count("openLiveBrowserTaskView(activeTask.id)"), 2)
+        self.assertIn("openLoginAssistanceView(activeTask.id, accountId)", self.source)
 
     def test_account_card_actions_keep_icons_and_single_row_login_width(self):
         update_status = self._javascript_function_source(self.source, "updateAccountStatusViews")

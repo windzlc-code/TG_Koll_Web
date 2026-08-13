@@ -1,5 +1,6 @@
 ﻿import unittest
 import contextlib
+import queue
 import threading
 from pathlib import Path
 from unittest import mock
@@ -29,6 +30,38 @@ class _Context:
 
     def grant_permissions(self, permissions, origin=None):
         self.permissions.append((permissions, origin))
+
+
+class LoginAssistancePresentationTests(unittest.TestCase):
+    def test_verification_and_credentials_have_distinct_safe_prompts(self):
+        code_prompt = runner._login_assistance_presentation({"status": "need_verification", "challenge_type": "sms_code", "reason": "短信验证"})
+        credentials_prompt = runner._login_assistance_presentation({"status": "invalid_credentials", "reason": "密码错误"})
+        self.assertEqual(code_prompt["kind"], "verification_code")
+        self.assertEqual(code_prompt["field_label"], "短信验证码")
+        self.assertEqual(credentials_prompt["kind"], "credentials")
+        self.assertIn("账号、邮箱或手机号", credentials_prompt["field_label"])
+
+    def test_only_ready_state_maps_to_success(self):
+        self.assertEqual(runner._login_assistance_presentation({"status": "ready"})["phase"], "success")
+        self.assertNotEqual(runner._login_assistance_presentation({"status": "need_verification"})["phase"], "success")
+
+    def test_verification_submission_is_consumed_by_the_browser_task_thread(self):
+        actions = queue.Queue(maxsize=2)
+        actions.put_nowait({"kind": "verification_code", "verification_code": "654321"})
+        control = {"login_assistance_queue": actions, "login_assistance_pending": True}
+        page, code_input, logger = mock.Mock(), mock.Mock(), mock.Mock()
+        with (
+            mock.patch.object(runner, "_verification_code_input", return_value=code_input),
+            mock.patch.object(runner, "_clear_and_type") as fill,
+            mock.patch.object(runner, "_click_text_button", return_value=True) as submit,
+        ):
+            consumed = runner._process_login_assistance_action(page, "instagram", logger, control)
+        self.assertTrue(consumed)
+        self.assertFalse(control["login_assistance_pending"])
+        fill.assert_called_once()
+        self.assertEqual(fill.call_args.args[2], "654321")
+        submit.assert_called_once()
+        self.assertEqual(control["login_assistance_state"]["phase"], "running")
 
 
 class _BackgroundPage:

@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import queue
 import sqlite3
 import threading
 from http.cookies import SimpleCookie
@@ -17,6 +18,32 @@ from starlette.responses import Response
 from social_automation import live_browser
 from webapp import social_automation_api
 from webapp.auth import get_current_user
+
+
+def test_login_assistance_queue_accepts_only_the_current_prompt_and_never_echoes_secrets():
+    actions = queue.Queue(maxsize=2)
+    control = {"login_assistance_queue": actions, "login_assistance_pending": False, "login_assistance_state": {"kind": "verification_code"}}
+    payload = social_automation_api.LiveBrowserLoginAssistancePayload(kind="verification_code", verification_code="314159")
+    with (
+        mock.patch.object(social_automation_api, "_require_live_browser_manual_session", return_value="task-1"),
+        mock.patch.object(social_automation_api, "_running_control_for_live_browser_session", return_value=control),
+    ):
+        result = social_automation_api.queue_live_browser_login_assistance("live-task-1", payload)
+    assert result == {"accepted": True, "task_id": "task-1", "session_id": "live-task-1", "kind": "verification_code"}
+    assert "314159" not in repr(result)
+    assert actions.get_nowait() == {"kind": "verification_code", "verification_code": "314159"}
+
+
+def test_login_assistance_queue_rejects_stale_prompt_kind():
+    control = {"login_assistance_queue": queue.Queue(maxsize=2), "login_assistance_pending": False, "login_assistance_state": {"kind": "credentials"}}
+    payload = social_automation_api.LiveBrowserLoginAssistancePayload(kind="verification_code", verification_code="123456")
+    with (
+        mock.patch.object(social_automation_api, "_require_live_browser_manual_session", return_value="task-1"),
+        mock.patch.object(social_automation_api, "_running_control_for_live_browser_session", return_value=control),
+        pytest.raises(Exception) as exc_info,
+    ):
+        social_automation_api.queue_live_browser_login_assistance("live-task-1", payload)
+    assert getattr(exc_info.value, "status_code", None) == 409
 
 
 def test_live_browser_view_uses_stable_low_latency_decoder_settings():
@@ -785,7 +812,7 @@ def test_generic_open_login_http_allows_unbound_persona():
     create_task.assert_called_once()
 
 
-def test_generic_task_http_rejects_automatic_login_without_effective_credentials():
+def test_generic_task_http_allows_login_mapping_to_request_missing_credentials():
     client = _security_test_client()
     with (
         mock.patch.object(
@@ -794,7 +821,7 @@ def test_generic_task_http_rejects_automatic_login_without_effective_credentials
             return_value={"persona_id": "persona-1", "login_username": "", "username": "", "login_password": ""},
         ),
         mock.patch.object(social_automation_api, "_validate_user_task_media_paths"),
-        mock.patch.object(social_automation_api, "_create_social_task_for_user") as create_task,
+        mock.patch.object(social_automation_api, "_create_social_task_for_user", return_value={"id": "task-1", "status": "queued"}) as create_task,
     ):
         response = client.post(
             "/api/persona_dashboard/automation/tasks",
@@ -807,8 +834,9 @@ def test_generic_task_http_rejects_automatic_login_without_effective_credentials
             },
         )
 
-    assert response.status_code == 409
-    create_task.assert_not_called()
+    assert response.status_code == 200
+    assert response.json()["task"]["id"] == "task-1"
+    create_task.assert_called_once()
 
 
 def test_live_browser_mode_endpoint_requests_manual_takeover():

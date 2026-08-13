@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import json
 import os
+import queue
 import random
 import re
 import shutil
@@ -2892,6 +2893,24 @@ def _run_open_login(
     if platform == "threads" and not auto_submit:
         _prepare_manual_threads_login_page(page, logger)
     logger.log("info", "open_login", "浏览器登录窗口已打开。", {"wait_seconds": wait_seconds, "auto_submit": auto_submit})
+    if not has_credentials:
+        current_status = _detect_platform_login_state(page, platform)
+        if platform == "threads":
+            current_status = _restore_threads_after_instagram_login(page, current_status, logger)
+        _request_manual_takeover(context_control)
+        return _wait_for_manual_login_completion(
+            page,
+            task,
+            screenshot_dir,
+            logger,
+            platform,
+            cancel_event,
+            str(current_status.get("reason") or "请在登录助手中填写账号和密码。"),
+            str(current_status.get("status") or "cookie_expired"),
+            "",
+            current_status,
+            context_control,
+        )
     deadline = time.time() + wait_seconds
     last_status: dict[str, Any] = {}
     login_attempts = 0
@@ -3273,6 +3292,10 @@ def _wait_for_manual_login_completion(
         screenshot_path,
     )
     last_seen_status = str(status or "")
+    initial_status = dict(last_status or {})
+    initial_status.setdefault("status", status)
+    initial_status.setdefault("reason", reason)
+    _publish_login_assistance_state(page, context_control, initial_status)
 
     def raise_manual_login_timeout() -> None:
         shot = _screenshot(page, screenshot_dir, task, "manual_login_timeout", logger)
@@ -3309,6 +3332,9 @@ def _wait_for_manual_login_completion(
                     "cookie_expired",
                     screenshot_path,
                 ) from exc
+        if _process_login_assistance_action(page, platform, logger, context_control):
+            _wait_for_cancellation(0.8, cancel_event)
+            continue
         if time.monotonic() >= deadline:
             raise_manual_login_timeout()
         current_status = _detect_platform_login_state(page, platform)
@@ -3317,6 +3343,7 @@ def _wait_for_manual_login_completion(
         if time.monotonic() >= deadline:
             raise_manual_login_timeout()
         current_code = str(current_status.get("status") or "").strip()
+        _publish_login_assistance_state(page, context_control, current_status)
         if current_code == "post_login_interstitial":
             if _resolve_instagram_post_login_interstitial(page, logger):
                 if platform == "threads":
@@ -3337,6 +3364,7 @@ def _wait_for_manual_login_completion(
                     {"url": _safe_navigation_url(page.url), "details": _safe_login_status(stable_status), "manual_completion": True},
                     shot,
                 )
+                _publish_login_assistance_state(page, context_control, stable_status)
                 return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
             current_status = stable_status
             current_code = str(current_status.get("status") or "").strip()
@@ -3351,13 +3379,105 @@ def _wait_for_manual_login_completion(
         remaining_seconds = deadline - time.monotonic()
         if remaining_seconds <= 0:
             raise_manual_login_timeout()
-        wait_seconds = min(5.0, remaining_seconds)
+        wait_seconds = min(1.0, remaining_seconds)
         wait = getattr(cancel_event, "wait", None) if cancel_event is not None else None
         if callable(wait):
             if wait(wait_seconds):
                 _raise_if_cancelled(cancel_event)
         else:
             time.sleep(wait_seconds)
+
+
+def _login_assistance_presentation(status: dict[str, Any] | None) -> dict[str, Any]:
+    current = dict(status or {})
+    status_code = str(current.get("status") or "").strip().lower()
+    challenge_type = str(current.get("challenge_type") or "").strip().lower()
+    reason = str(current.get("reason") or "").strip()
+    if status_code == "ready":
+        return {"phase": "success", "kind": "success", "title": "登录成功", "message": "账号登录状态已确认，可以开始使用。", "challenge_type": challenge_type}
+    if status_code in {"invalid_credentials", "cookie_expired"}:
+        return {"phase": "attention", "kind": "credentials", "title": "重新输入登录信息" if status_code == "invalid_credentials" else "需要登录信息", "message": reason or "当前页面需要账号和密码。", "field_label": "账号、邮箱或手机号", "submit_label": "提交并继续", "challenge_type": challenge_type}
+    if status_code == "account_confirmation_required":
+        return {"phase": "attention", "kind": "confirm", "title": "需要确认账号", "message": reason or "平台正在等待确认继续使用当前账号。", "submit_label": "确认并继续", "challenge_type": challenge_type}
+    if status_code == "need_verification":
+        code_labels = {"sms_code": ("输入短信验证码", "短信验证码"), "email_code": ("输入邮箱验证码", "邮箱验证码"), "authenticator_totp": ("输入身份验证器验证码", "验证码"), "unknown_code": ("输入验证码", "验证码"), "verification": ("输入验证码", "验证码")}
+        if challenge_type in code_labels:
+            title, label = code_labels[challenge_type]
+            return {"phase": "attention", "kind": "verification_code", "title": title, "message": reason or "请填写平台当前要求的验证码。", "field_label": label, "input_mode": "numeric", "submit_label": "提交验证码", "challenge_type": challenge_type}
+        return {"phase": "attention", "kind": "browser_interaction", "title": "需要人工验证", "message": reason or "平台要求完成身份确认，请打开实时画面继续。", "submit_label": "查看验证页面", "challenge_type": challenge_type}
+    return {"phase": "running", "kind": "progress", "title": "正在执行登录", "message": reason or "正在检查页面并同步登录状态。", "challenge_type": challenge_type}
+
+
+def _publish_login_assistance_state(page: Any, context_control: dict[str, Any] | None, status: dict[str, Any] | None) -> None:
+    if not isinstance(context_control, dict):
+        return
+    current = dict(status or {})
+    if str(current.get("status") or "").strip().lower() == "need_verification" and not current.get("challenge_type"):
+        with contextlib.suppress(Exception):
+            current["challenge_type"] = str(_classify_verification_challenge(page).get("type") or "")
+    presentation = _login_assistance_presentation(current)
+    presentation["updated_at"] = int(time.time())
+    context_control["login_assistance_state"] = presentation
+
+
+def _mapped_login_input(page: Any, selectors: list[str]) -> Any | None:
+    return _visible_first(page, selectors, timeout_ms=1200)
+
+
+def _process_login_assistance_action(page: Any, platform: str, logger: AutomationLogger, context_control: dict[str, Any] | None) -> bool:
+    if not isinstance(context_control, dict):
+        return False
+    actions = context_control.get("login_assistance_queue")
+    if actions is None or not hasattr(actions, "get_nowait"):
+        return False
+    try:
+        action = actions.get_nowait()
+    except queue.Empty:
+        return False
+    context_control["login_assistance_pending"] = False
+    if not isinstance(action, dict):
+        return False
+    kind = str(action.get("kind") or "").strip().lower()
+    try:
+        if kind == "verification_code":
+            code = str(action.get("verification_code") or "").strip()
+            code_input = _verification_code_input(page)
+            if not code or code_input is None:
+                raise RuntimeError("当前页面没有可填写的验证码输入框")
+            _clear_and_type(page, code_input, code, mode="type", logger=logger, stage="mapped_verification_code")
+            clicked = _click_text_button(page, logger, ["Continue", "Confirm", "Verify", "Submit", "Next", "继续", "确认", "验证", "提交", "下一步"], "mapped_verification_submit")
+            if not clicked:
+                page.keyboard.press("Enter")
+            message = "验证码已提交，正在确认登录结果。"
+        elif kind == "credentials":
+            username = str(action.get("login_username") or "").strip()
+            password = str(action.get("login_password") or "")
+            if not username or not password:
+                raise RuntimeError("请完整填写登录账号和密码")
+            username_input = _mapped_login_input(page, ['input[name="username"]', 'input[autocomplete="username"]', 'input[type="email"]', 'input[type="tel"]', 'input[aria-label*="username" i]', 'input[aria-label*="email" i]', 'input[aria-label*="phone" i]', 'input[placeholder*="username" i]', 'input[placeholder*="email" i]', 'input[placeholder*="phone" i]'])
+            password_input = _mapped_login_input(page, ['input[name="password"]', 'input[autocomplete="current-password"]', 'input[type="password"]', 'input[aria-label*="password" i]', 'input[placeholder*="password" i]'])
+            if username_input is None or password_input is None:
+                raise RuntimeError("当前页面尚未显示账号密码输入框")
+            _clear_and_type(page, username_input, username, mode="type", logger=logger, stage="mapped_login_username")
+            _clear_and_type(page, password_input, password, mode="type", logger=logger, stage="mapped_login_password")
+            clicked = _click_text_button(page, logger, ["Log in", "Log In", "Login", "Continue", "登录", "登入", "继续"], "mapped_login_submit")
+            if not clicked:
+                page.keyboard.press("Enter")
+            message = "登录信息已提交，正在检查账号状态。"
+        elif kind == "confirm":
+            clicked = _click_text_button(page, logger, ["Continue", "Confirm", "Yes", "Continue with Instagram", "继续", "确认", "是", "使用 Instagram 继续"], "mapped_login_confirm")
+            if not clicked:
+                raise RuntimeError("当前页面没有可确认的按钮")
+            message = "确认操作已提交，正在继续登录。"
+        else:
+            raise RuntimeError("当前登录步骤不支持该操作")
+    except Exception as exc:
+        context_control["login_assistance_state"] = {"phase": "attention", "kind": kind or "browser_interaction", "title": "暂时无法提交", "message": str(exc)[:240], "submit_label": "重试", "updated_at": int(time.time())}
+        logger.log("warn", "login_assistance_submit_failed", "登录映射页提交失败。", {"kind": kind, "error": str(exc)[:240]})
+        return True
+    context_control["login_assistance_state"] = {"phase": "running", "kind": "progress", "title": "正在验证", "message": message, "updated_at": int(time.time())}
+    logger.log("info", "login_assistance_submitted", message, {"kind": kind, "platform": platform})
+    return True
 
 
 def _confirm_platform_ready(page, platform: str, logger: AutomationLogger, cancel_event: Any | None = None) -> dict[str, Any]:

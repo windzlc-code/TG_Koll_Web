@@ -26318,6 +26318,230 @@ function openLiveBrowserTaskView(taskId = "") {
   refreshLiveBrowserSessionsSoon(cleanTaskId);
 }
 
+function loginAssistanceTaskStatus(task = {}) {
+  return String(task?.status || "queued").trim().toLowerCase() || "queued";
+}
+
+function loginAssistanceViewModel(task = {}, session = null) {
+  const taskStatus = loginAssistanceTaskStatus(task);
+  const assistance = session?.login_assistance && typeof session.login_assistance === "object"
+    ? session.login_assistance
+    : {};
+  if (taskStatus === "success" || assistance.phase === "success") {
+    return {
+      phase: "success",
+      kind: "success",
+      title: "登录成功",
+      message: "账号登录状态已确认，可以开始使用。",
+    };
+  }
+  if (["failed", "cancelled"].includes(taskStatus)) {
+    return {
+      phase: "error",
+      kind: "error",
+      title: taskStatus === "cancelled" ? "登录已停止" : "登录未完成",
+      message: String(task?.error || "本次登录任务没有完成，请稍后重试。"),
+    };
+  }
+  return {
+    phase: String(assistance.phase || "running"),
+    kind: String(assistance.kind || "progress"),
+    title: String(assistance.title || (session ? "正在执行登录" : "正在启动浏览器")),
+    message: String(assistance.message || (session ? "正在同步浏览器登录状态。" : "正在连接指纹浏览器，请稍候。")),
+    fieldLabel: String(assistance.field_label || "验证码"),
+    inputMode: String(assistance.input_mode || "text"),
+    submitLabel: String(assistance.submit_label || "提交并继续"),
+  };
+}
+
+function renderLoginAssistanceVisual(model = {}) {
+  if (model.phase === "success") {
+    return `<span class="login-assistance-success" aria-hidden="true">
+      <svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="27"></circle><path d="m19 33 9 9 18-20"></path></svg>
+    </span>`;
+  }
+  if (model.phase === "error") {
+    return `<span class="login-assistance-error-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v6"></path><path d="M12 17h.01"></path></svg>
+    </span>`;
+  }
+  if (model.phase === "attention") {
+    return `<span class="login-assistance-attention" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M12 3 2.8 20h18.4L12 3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
+    </span>`;
+  }
+  return `<span class="login-assistance-spinner" aria-hidden="true"></span>`;
+}
+
+function renderLoginAssistanceAction(model = {}, session = null) {
+  const inputAllowed = Boolean(session?.input_allowed);
+  if (model.kind === "verification_code") {
+    return `<form class="login-assistance-form" data-login-assistance-form data-login-assistance-kind="verification_code">
+      <label>${esc(model.fieldLabel)}
+        <input name="verification_code" type="text" inputmode="${model.inputMode === "numeric" ? "numeric" : "text"}" autocomplete="one-time-code" maxlength="64" placeholder="请输入${esc(model.fieldLabel)}" required />
+      </label>
+      <button type="submit" class="primary" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在开放输入")}</button>
+    </form>`;
+  }
+  if (model.kind === "credentials") {
+    return `<form class="login-assistance-form" data-login-assistance-form data-login-assistance-kind="credentials">
+      <label>账号、邮箱或手机号
+        <input name="login_username" type="text" autocomplete="username" maxlength="320" placeholder="请输入登录账号" required />
+      </label>
+      <label>登录密码
+        <input name="login_password" type="password" autocomplete="current-password" maxlength="512" placeholder="请输入登录密码" required />
+      </label>
+      <button type="submit" class="primary" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在开放输入")}</button>
+    </form>`;
+  }
+  if (model.kind === "confirm") {
+    return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-submit="confirm" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在开放操作")}</button>`;
+  }
+  if (model.kind === "browser_interaction") {
+    return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-live>${esc(model.submitLabel || "查看验证页面")}</button>`;
+  }
+  if (model.phase === "success") {
+    return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-close>完成</button>`;
+  }
+  if (model.phase === "error") {
+    return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-close>关闭</button>`;
+  }
+  return `<div class="login-assistance-progress-note"><span></span>页面状态会自动更新，无需刷新</div>`;
+}
+
+function updateLoginAssistanceModal(modal, task = {}, session = null) {
+  if (!modal?.isConnected) return;
+  const model = loginAssistanceViewModel(task, session);
+  const renderKey = JSON.stringify([model.phase, model.kind, model.title, model.message, Boolean(session?.input_allowed)]);
+  if (modal.dataset.loginAssistanceRenderKey === renderKey) return;
+  modal.dataset.loginAssistanceRenderKey = renderKey;
+  const body = modal.querySelector("[data-login-assistance-body]");
+  if (!body) return;
+  body.className = `login-assistance-body is-${esc(model.phase)}`;
+  body.innerHTML = `
+    <div class="login-assistance-visual">${renderLoginAssistanceVisual(model)}</div>
+    <div class="login-assistance-copy">
+      <strong>${esc(model.title)}</strong>
+      <p>${esc(model.message)}</p>
+    </div>
+    <div class="login-assistance-action">${renderLoginAssistanceAction(model, session)}</div>
+    ${session && model.kind !== "browser_interaction" && model.phase !== "success"
+      ? `<button type="button" class="login-assistance-live-link" data-login-assistance-live>查看实时画面</button>`
+      : ""}
+  `;
+  translateConsoleLanguage(body, currentLanguage());
+}
+
+async function submitLoginAssistance(modal, session, payload = {}) {
+  const sessionId = liveBrowserSessionId(session);
+  if (!sessionId) return;
+  const submitButton = modal.querySelector("[data-login-assistance-form] button[type='submit'], [data-login-assistance-submit]");
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = "提交中...";
+  }
+  try {
+    await api(`/api/persona_dashboard/automation/browser_sessions/${encodeURIComponent(sessionId)}/login_assistance`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    modal.dataset.loginAssistanceRenderKey = "";
+    updateLoginAssistanceModal(modal, { status: "running" }, {
+      ...session,
+      login_assistance: {
+        phase: "running",
+        kind: "progress",
+        title: "正在验证",
+        message: "内容已同步到指纹浏览器，正在等待平台反馈。",
+      },
+    });
+  } catch (error) {
+    showToast(error?.detail || error?.message || "登录信息提交失败", false);
+    modal.dataset.loginAssistanceRenderKey = "";
+  }
+}
+
+function openLoginAssistanceView(taskId = "", accountId = "") {
+  const cleanTaskId = String(taskId || "").trim();
+  if (!cleanTaskId) return;
+  const existing = document.getElementById("loginAssistanceModal");
+  if (existing) closeConsoleModal(null, existing);
+  const account = selectedSocialAccount(accountId)
+    || (state.socialAccounts || []).find((item) => String(item?.id || "") === String(accountId || ""))
+    || {};
+  const modal = document.createElement("div");
+  modal.id = "loginAssistanceModal";
+  modal.className = "console-modal login-assistance-modal";
+  modal.dataset.modalKey = "login-assistance";
+  modal.innerHTML = `
+    <div class="console-modal-backdrop"></div>
+    <section class="console-modal-dialog login-assistance-dialog" role="dialog" aria-modal="true" aria-labelledby="loginAssistanceTitle">
+      <div class="console-modal-head login-assistance-head">
+        <div>
+          <strong id="loginAssistanceTitle">登录助手</strong>
+          <span>${esc(platformLabel(account?.platform || ""))} · ${esc(account?.username || account?.login_username || "当前账号")}</span>
+        </div>
+        ${renderModalCloseButton("data-login-assistance-close")}
+      </div>
+      <div class="login-assistance-body is-running" data-login-assistance-body></div>
+    </section>
+  `;
+  document.body.appendChild(modal);
+  markConsoleDynamicUi(modal);
+  translateConsoleLanguage(modal, currentLanguage());
+  let currentSession = null;
+  let stopped = false;
+  let timer = 0;
+  const poll = async () => {
+    if (stopped || !modal.isConnected) return;
+    const [task] = await Promise.all([
+      refreshSocialTaskState(cleanTaskId),
+      refreshLiveBrowserSessionsOnly().catch(() => []),
+    ]);
+    currentSession = (state.socialBrowserSessions || []).find((item) => String(item?.task_id || "") === cleanTaskId) || null;
+    const currentTask = task || (state.socialTasks || []).find((item) => String(item?.id || "") === cleanTaskId) || { id: cleanTaskId, status: "queued" };
+    updateLoginAssistanceModal(modal, currentTask, currentSession);
+    if (!stopped && modal.isConnected && !["success", "failed", "cancelled"].includes(loginAssistanceTaskStatus(currentTask))) {
+      timer = window.setTimeout(poll, 1000);
+    }
+  };
+  modal.__cleanup = () => {
+    stopped = true;
+    if (timer) window.clearTimeout(timer);
+  };
+  modal.addEventListener("click", (event) => {
+    if (event.target.closest("[data-login-assistance-close]")) {
+      closeConsoleModal(null, modal);
+      return;
+    }
+    if (event.target.closest("[data-login-assistance-live]")) {
+      closeConsoleModal(null, modal);
+      openLiveBrowserTaskView(cleanTaskId);
+      return;
+    }
+    if (event.target.closest("[data-login-assistance-submit='confirm']") && currentSession) {
+      void submitLoginAssistance(modal, currentSession, { kind: "confirm" });
+    }
+  });
+  modal.addEventListener("submit", (event) => {
+    const form = event.target.closest("[data-login-assistance-form]");
+    if (!form || !currentSession) return;
+    event.preventDefault();
+    const values = new FormData(form);
+    const kind = String(form.dataset.loginAssistanceKind || "");
+    const payload = { kind };
+    if (kind === "verification_code") payload.verification_code = String(values.get("verification_code") || "").trim();
+    if (kind === "credentials") {
+      payload.login_username = String(values.get("login_username") || "").trim();
+      payload.login_password = String(values.get("login_password") || "");
+    }
+    void submitLoginAssistance(modal, currentSession, payload);
+  });
+  updateLoginAssistanceModal(modal, { id: cleanTaskId, status: "queued" }, null);
+  void poll();
+}
+
 function openVideoWorkspace(moduleId = "") {
   const nextModule = VIDEO_WORKSPACE_MODULES.some((item) => item.id === moduleId)
     ? moduleId
@@ -34208,10 +34432,14 @@ function bindEvents() {
       const account = selectedSocialAccount(accountId);
       const activeTask = activeOpenLoginTaskForAccount(accountId);
       if (activeTask?.id) {
-        openLiveBrowserTaskView(activeTask.id);
+        openLoginAssistanceView(activeTask.id, accountId);
         return;
       }
       createSocialTask("open_login", accountId, account?.persona_id || "", "socialMsg")
+        .then((result) => {
+          const taskId = String(result?.task?.id || "").trim();
+          if (taskId) openLoginAssistanceView(taskId, accountId);
+        })
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "打开登录失败", false));
       return;
     }
