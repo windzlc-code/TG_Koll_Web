@@ -195,6 +195,8 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn('data-account-proxy-purchase-city', purchase_view)
         self.assertIn('data-account-proxy-purchase-city-toggle', purchase_view)
         self.assertIn('城市（可选）', purchase_view)
+        self.assertIn('>添加城市</span>', purchase_view)
+        self.assertNotIn('精确选择城市', purchase_view)
         self.assertNotIn('data-account-proxy-purchase-period', purchase_view)
         self.assertNotIn('购买时长', purchase_view)
         self.assertIn('data-account-proxy-purchase-renewal', purchase_view)
@@ -218,6 +220,19 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn('data-tone="danger"', self.console_styles)
         self.assertIn('.account-proxy-purchase-embedded {', self.console_styles)
         self.assertIn('.account-proxy-purchase-form {', self.console_styles)
+        city_toggle_style = self.console_styles[
+            self.console_styles.index('.account-proxy-purchase-city-toggle {'):
+            self.console_styles.index('.account-proxy-purchase-city-toggle:not', self.console_styles.index('.account-proxy-purchase-city-toggle {'))
+        ]
+        self.assertIn('justify-content: center;', city_toggle_style)
+        self.assertIn('border: 0;', city_toggle_style)
+        self.assertIn('background: transparent;', city_toggle_style)
+        self.assertIn('.account-proxy-purchase-city-field[hidden] { display: none !important; }', self.console_styles)
+        city_field_style = self.console_styles[
+            self.console_styles.index('.account-proxy-purchase-city-field {'):
+            self.console_styles.index('.account-proxy-purchase-renewal {', self.console_styles.index('.account-proxy-purchase-city-field {'))
+        ]
+        self.assertNotIn('padding-left:', city_field_style)
         self.assertNotIn('.account-proxy-purchase-embedded iframe', self.console_styles)
         self.assertIn('new URLSearchParams(window.location.search).get("embedded") === "1"', self.purchase_script)
         self.assertIn('window.parent.postMessage({ type: "vecto:proxy-purchase-complete"', self.purchase_script)
@@ -228,8 +243,17 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         standalone_markup = (STATIC_ROOT / "proxy-purchase.html").read_text(encoding="utf-8")
         self.assertIn("静态住宅代理 IP", standalone_markup)
         self.assertIn("自动续费", standalone_markup)
-        self.assertIn("精确选择城市", standalone_markup)
+        self.assertIn("添加城市", standalone_markup)
+        self.assertNotIn("精确选择城市", standalone_markup)
         self.assertIn("城市（可选）", standalone_markup)
+        self.assertIn('.city-field[hidden] { display: none !important; }', self.purchase_styles)
+        standalone_city_toggle = self.purchase_styles[
+            self.purchase_styles.index('.city-toggle {'):
+            self.purchase_styles.index('.city-toggle:not', self.purchase_styles.index('.city-toggle {'))
+        ]
+        self.assertIn('justify-content: center;', standalone_city_toggle)
+        self.assertIn('border: 0;', standalone_city_toggle)
+        self.assertIn('background: transparent;', standalone_city_toggle)
         self.assertNotIn("购买时长", standalone_markup)
         self.assertNotIn('id="period"', standalone_markup)
         self.assertIn("确认购买", standalone_markup)

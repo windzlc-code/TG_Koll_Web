@@ -27633,7 +27633,7 @@ function accountProxyPurchaseEmbeddedHtml() {
       <section class="account-proxy-purchase-city" data-account-proxy-purchase-city-section>
         <button type="button" class="account-proxy-purchase-city-toggle" data-account-proxy-purchase-city-toggle aria-expanded="false" disabled>
           <span class="account-proxy-purchase-city-plus" aria-hidden="true">${renderPlusIcon()}</span>
-          <span><strong>精确选择城市</strong><small>可选；不选择时由供应商按国家地区自动分配。</small></span>
+          <span>添加城市</span>
         </button>
         <label class="account-proxy-purchase-field account-proxy-purchase-city-field" data-account-proxy-purchase-city-panel hidden>
           <span>城市（可选）</span>

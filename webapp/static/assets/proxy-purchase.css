@@ -75,31 +75,28 @@ h2 { margin: 0; font-size: 21px; }
 
 .city-disclosure { margin-top: 16px; }
 .city-toggle {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  display: flex;
+  justify-content: center;
   align-items: center;
-  gap: 11px;
+  gap: 7px;
   width: 100%;
-  min-height: 56px;
-  padding: 9px 11px;
+  min-height: 40px;
+  padding: 0;
   color: var(--ink);
-  text-align: left;
-  border: 1px solid #b9c9d8;
-  border-radius: 9px;
-  background: #fff;
+  text-align: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   box-shadow: none;
 }
 .city-toggle:not(:disabled) { cursor: pointer; }
 .city-toggle:disabled { opacity: .55; cursor: not-allowed; }
-.city-toggle > span:last-child { display: grid; gap: 3px; }
-.city-toggle strong { font-size: 14px; font-weight: 800; }
-.city-toggle small { color: var(--muted); font-size: 11px; line-height: 1.4; }
-.city-plus { position: relative; width: 32px; height: 32px; border-radius: 50%; background: #e8f5fb; transition: transform .16s ease, background-color .16s ease; }
-.city-plus::before, .city-plus::after { content: ""; position: absolute; top: 50%; left: 50%; width: 14px; height: 2px; border-radius: 2px; background: var(--blue); transform: translate(-50%, -50%); }
-.city-plus::after { transform: translate(-50%, -50%) rotate(90deg); }
-.city-toggle[aria-expanded="true"] .city-plus { background: var(--blue); transform: rotate(45deg); }
-.city-toggle[aria-expanded="true"] .city-plus::before, .city-toggle[aria-expanded="true"] .city-plus::after { background: #fff; }
-.city-field { margin-top: 12px; padding-left: 45px; }
+.city-toggle > span:last-child { font-size: 14px; font-weight: 800; }
+.city-plus { display: inline-grid; width: 18px; height: 18px; place-items: center; color: var(--blue); transition: transform .16s ease; }
+.city-plus .ui-action-icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.city-toggle[aria-expanded="true"] .city-plus { transform: rotate(45deg); }
+.city-field { width: 100%; margin-top: 12px; }
+.city-field[hidden] { display: none !important; }
 
 .mapped-order-specs { display: grid; grid-template-columns: 1.4fr .7fr; gap: 8px; margin: 16px 0 0; }
 .mapped-order-specs > div { min-width: 0; padding: 10px 11px; border: 1px solid #d2dee8; border-radius: 7px; background: #f8fafc; }
