@@ -22,7 +22,12 @@ from webapp.auth import get_current_user
 
 def test_login_assistance_queue_accepts_only_the_current_prompt_and_never_echoes_secrets():
     actions = queue.Queue(maxsize=2)
-    control = {"login_assistance_queue": actions, "login_assistance_pending": False, "login_assistance_state": {"kind": "verification_code"}}
+    control = {
+        "login_assistance_queue": actions,
+        "login_assistance_lock": threading.Lock(),
+        "login_assistance_pending": False,
+        "login_assistance_state": {"kind": "verification_code"},
+    }
     payload = social_automation_api.LiveBrowserLoginAssistancePayload(kind="verification_code", verification_code="314159")
     with (
         mock.patch.object(social_automation_api, "_require_live_browser_manual_session", return_value="task-1"),
@@ -35,7 +40,12 @@ def test_login_assistance_queue_accepts_only_the_current_prompt_and_never_echoes
 
 
 def test_login_assistance_queue_rejects_stale_prompt_kind():
-    control = {"login_assistance_queue": queue.Queue(maxsize=2), "login_assistance_pending": False, "login_assistance_state": {"kind": "credentials"}}
+    control = {
+        "login_assistance_queue": queue.Queue(maxsize=2),
+        "login_assistance_lock": threading.Lock(),
+        "login_assistance_pending": False,
+        "login_assistance_state": {"kind": "credentials"},
+    }
     payload = social_automation_api.LiveBrowserLoginAssistancePayload(kind="verification_code", verification_code="123456")
     with (
         mock.patch.object(social_automation_api, "_require_live_browser_manual_session", return_value="task-1"),
@@ -44,6 +54,30 @@ def test_login_assistance_queue_rejects_stale_prompt_kind():
     ):
         social_automation_api.queue_live_browser_login_assistance("live-task-1", payload)
     assert getattr(exc_info.value, "status_code", None) == 409
+
+
+def test_login_assistance_queue_rejects_a_second_submission_until_browser_completion():
+    control = {
+        "login_assistance_queue": queue.Queue(maxsize=2),
+        "login_assistance_lock": threading.Lock(),
+        "login_assistance_pending": False,
+        "login_assistance_state": {"kind": "credentials"},
+    }
+    first = social_automation_api.LiveBrowserLoginAssistancePayload(
+        kind="credentials", login_username="first", login_password="secret-1"
+    )
+    second = social_automation_api.LiveBrowserLoginAssistancePayload(
+        kind="credentials", login_username="second", login_password="secret-2"
+    )
+    with (
+        mock.patch.object(social_automation_api, "_require_live_browser_manual_session", return_value="task-1"),
+        mock.patch.object(social_automation_api, "_running_control_for_live_browser_session", return_value=control),
+    ):
+        social_automation_api.queue_live_browser_login_assistance("live-task-1", first)
+        with pytest.raises(Exception) as exc_info:
+            social_automation_api.queue_live_browser_login_assistance("live-task-1", second)
+    assert getattr(exc_info.value, "status_code", None) == 409
+    assert control["login_assistance_queue"].qsize() == 1
 
 
 def test_live_browser_view_uses_stable_low_latency_decoder_settings():

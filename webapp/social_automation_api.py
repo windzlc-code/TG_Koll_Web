@@ -4930,12 +4930,7 @@ def queue_live_browser_login_assistance(session_id: str, payload: LiveBrowserLog
     control = _running_control_for_live_browser_session(session_id)
     if not isinstance(control, dict):
         raise HTTPException(status_code=409, detail="当前登录任务已结束，请重新打开登录")
-    assistance = control.get("login_assistance_state")
-    assistance = assistance if isinstance(assistance, dict) else {}
-    expected_kind = str(assistance.get("kind") or "").strip().lower()
     kind = str(payload.kind or "").strip().lower()
-    if kind not in {"verification_code", "credentials", "confirm"} or expected_kind != kind:
-        raise HTTPException(status_code=409, detail="登录页面状态已变化，请按页面最新提示重新操作")
     if kind == "verification_code" and not str(payload.verification_code or "").strip():
         raise HTTPException(status_code=422, detail="请输入验证码")
     if kind == "credentials" and (not str(payload.login_username or "").strip() or not str(payload.login_password or "")):
@@ -4943,19 +4938,30 @@ def queue_live_browser_login_assistance(session_id: str, payload: LiveBrowserLog
     actions = control.get("login_assistance_queue")
     if actions is None or not hasattr(actions, "put_nowait"):
         raise HTTPException(status_code=409, detail="登录映射通道尚未就绪，请稍后重试")
-    if control.get("login_assistance_pending"):
-        raise HTTPException(status_code=409, detail="上一次输入正在提交，请等待页面更新")
-    action = {"kind": kind}
-    if kind == "verification_code":
-        action["verification_code"] = str(payload.verification_code or "").strip()
-    elif kind == "credentials":
-        action["login_username"] = str(payload.login_username or "").strip()
-        action["login_password"] = str(payload.login_password or "")
-    try:
-        actions.put_nowait(action)
-    except queue.Full as exc:
-        raise HTTPException(status_code=409, detail="登录输入正在排队，请稍后重试") from exc
-    control["login_assistance_pending"] = True
+    submission_lock = control.get("login_assistance_lock")
+    if submission_lock is None or not hasattr(submission_lock, "__enter__"):
+        raise HTTPException(status_code=409, detail="登录映射通道尚未就绪，请稍后重试")
+    with submission_lock:
+        if control.get("login_assistance_pending"):
+            raise HTTPException(status_code=409, detail="上一次输入正在提交，请等待页面更新")
+        assistance = control.get("login_assistance_state")
+        assistance = assistance if isinstance(assistance, dict) else {}
+        expected_kind = str(assistance.get("kind") or "").strip().lower()
+        if kind not in {"verification_code", "credentials", "confirm"} or expected_kind != kind:
+            raise HTTPException(status_code=409, detail="登录页面状态已变化，请按页面最新提示重新操作")
+        action = {"kind": kind}
+        if kind == "verification_code":
+            action["verification_code"] = str(payload.verification_code or "").strip()
+        elif kind == "credentials":
+            action["login_username"] = str(payload.login_username or "").strip()
+            action["login_password"] = str(payload.login_password or "")
+        try:
+            actions.put_nowait(action)
+        except queue.Full as exc:
+            raise HTTPException(status_code=409, detail="登录输入正在排队，请稍后重试") from exc
+        control["login_assistance_pending"] = True
+        if assistance.get("action_error"):
+            control["login_assistance_state"] = {**assistance, "action_error": False}
     return {"accepted": True, "task_id": task_id, "session_id": str(session_id or ""), "kind": kind}
 
 
@@ -9516,6 +9522,7 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         "completed_batch_task_ids": [],
         "live_browser_session_id": "",
         "login_assistance_queue": queue.Queue(maxsize=2),
+        "login_assistance_lock": threading.Lock(),
         "login_assistance_pending": False,
         "login_assistance_state": {"phase": "running", "kind": "progress", "title": "正在启动登录", "message": "正在连接指纹浏览器并检查账号状态。"},
         "publish_submit_lock": threading.RLock(),

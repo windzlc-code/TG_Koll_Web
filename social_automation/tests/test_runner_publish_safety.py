@@ -48,11 +48,19 @@ class LoginAssistancePresentationTests(unittest.TestCase):
     def test_verification_submission_is_consumed_by_the_browser_task_thread(self):
         actions = queue.Queue(maxsize=2)
         actions.put_nowait({"kind": "verification_code", "verification_code": "654321"})
-        control = {"login_assistance_queue": actions, "login_assistance_pending": True}
+        control = {
+            "login_assistance_queue": actions,
+            "login_assistance_lock": threading.Lock(),
+            "login_assistance_pending": True,
+        }
         page, code_input, logger = mock.Mock(), mock.Mock(), mock.Mock()
+
+        def assert_pending_while_browser_is_typing(*_args, **_kwargs):
+            self.assertTrue(control["login_assistance_pending"])
+
         with (
             mock.patch.object(runner, "_verification_code_input", return_value=code_input),
-            mock.patch.object(runner, "_clear_and_type") as fill,
+            mock.patch.object(runner, "_clear_and_type", side_effect=assert_pending_while_browser_is_typing) as fill,
             mock.patch.object(runner, "_click_text_button", return_value=True) as submit,
         ):
             consumed = runner._process_login_assistance_action(page, "instagram", logger, control)
@@ -62,6 +70,28 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(fill.call_args.args[2], "654321")
         submit.assert_called_once()
         self.assertEqual(control["login_assistance_state"]["phase"], "running")
+
+    def test_submission_error_remains_visible_until_retry_or_prompt_changes(self):
+        actions = queue.Queue(maxsize=2)
+        actions.put_nowait({"kind": "credentials", "login_username": "name", "login_password": "secret"})
+        control = {
+            "login_assistance_queue": actions,
+            "login_assistance_lock": threading.Lock(),
+            "login_assistance_pending": True,
+            "login_assistance_state": {"phase": "attention", "kind": "credentials"},
+        }
+        with mock.patch.object(runner, "_mapped_login_input", return_value=None):
+            runner._process_login_assistance_action(mock.Mock(), "instagram", mock.Mock(), control)
+
+        runner._publish_login_assistance_state(
+            mock.Mock(), control, {"status": "cookie_expired", "reason": "still on login"}
+        )
+        self.assertEqual(control["login_assistance_state"]["title"], "暂时无法提交")
+
+        runner._publish_login_assistance_state(
+            mock.Mock(), control, {"status": "need_verification", "challenge_type": "sms_code"}
+        )
+        self.assertEqual(control["login_assistance_state"]["kind"], "verification_code")
 
 
 class _BackgroundPage:

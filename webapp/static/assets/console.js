@@ -31872,7 +31872,6 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
     });
     refreshLiveBrowserSessionsSoon(String(result.task?.id || ""), 60, 500);
     await loadSocial();
-    if (taskType === "open_login") openLiveBrowserTaskView(String(result.task?.id || ""));
     return result;
   } finally {
     setActionLocked(lockParts, false);
@@ -33786,10 +33785,14 @@ function bindEvents() {
       const accountId = String(personaOpenLogin.dataset.personaOpenLogin || selectedPersonaAutomationAccount(persona)?.id || "").trim();
       const activeTask = activeOpenLoginTaskForAccount(accountId);
       if (activeTask?.id) {
-        openLiveBrowserTaskView(activeTask.id);
+        openLoginAssistanceView(activeTask.id, accountId);
         return;
       }
       createSocialTask("open_login", accountId, persona?.id || "", "commandMsg")
+        .then((result) => {
+          const taskId = String(result?.task?.id || "").trim();
+          if (taskId) openLoginAssistanceView(taskId, accountId);
+        })
         .catch((error) => showMsg("commandMsg", error.detail || error.message || "打开登录失败", false));
     }
     if (event.target.closest("[data-open-unified-automation]")) {
@@ -33857,10 +33860,14 @@ function bindEvents() {
       const accountId = String(personaAccountOpenLogin.dataset.personaAccountOpenLogin || "").trim();
       const activeTask = activeOpenLoginTaskForAccount(accountId);
       if (activeTask?.id) {
-        openLiveBrowserTaskView(activeTask.id);
+        openLoginAssistanceView(activeTask.id, accountId);
         return;
       }
       createSocialTask("open_login", accountId, persona?.id || "", "commandMsg")
+        .then((result) => {
+          const taskId = String(result?.task?.id || "").trim();
+          if (taskId) openLoginAssistanceView(taskId, accountId);
+        })
         .catch((error) => showMsg("commandMsg", error.detail || error.message || "打开登录失败", false));
       return;
     }

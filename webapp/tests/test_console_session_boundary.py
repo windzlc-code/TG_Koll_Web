@@ -479,12 +479,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("simpleScheduleAt", task_source)
         self.assertIn('target_urls: splitLines(targetUrls)', task_source)
 
-    def test_open_login_task_opens_the_live_browser_view_after_creation(self):
+    def test_open_login_task_waits_for_the_calling_entry_to_open_assistance(self):
         task_source = self.source.split("async function createSocialTask(", 1)[1].split("async function ", 1)[0]
-        self.assertIn(
-            'if (taskType === "open_login") openLiveBrowserTaskView(String(result.task?.id || ""));',
-            task_source,
-        )
+        self.assertNotIn("openLiveBrowserTaskView", task_source)
 
     def test_open_login_account_actions_preserve_running_task_navigation(self):
         actions = self._section("function renderAccountPoolCardActions", "function renderAccountPoolCard(")
@@ -501,8 +498,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('class="row-actions account-pool-card-actions"', actions)
         self.assertNotIn("请先绑定人设后再打开登录", actions)
         self.assertNotIn("请先绑定人设后再打开登录", create_task)
-        self.assertGreaterEqual(self.source.count("openLiveBrowserTaskView(activeTask.id)"), 2)
-        self.assertIn("openLoginAssistanceView(activeTask.id, accountId)", self.source)
+        self.assertNotIn("openLiveBrowserTaskView(activeTask.id)", self.source)
+        self.assertGreaterEqual(self.source.count("openLoginAssistanceView(activeTask.id, accountId)"), 3)
+        self.assertGreaterEqual(self.source.count("openLoginAssistanceView(taskId, accountId)"), 3)
 
     def test_account_card_actions_keep_icons_and_single_row_login_width(self):
         update_status = self._javascript_function_source(self.source, "updateAccountStatusViews")

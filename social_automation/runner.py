@@ -3416,12 +3416,27 @@ def _publish_login_assistance_state(page: Any, context_control: dict[str, Any] |
         with contextlib.suppress(Exception):
             current["challenge_type"] = str(_classify_verification_challenge(page).get("type") or "")
     presentation = _login_assistance_presentation(current)
+    previous = context_control.get("login_assistance_state")
+    if isinstance(previous, dict) and previous.get("action_error"):
+        previous_kind = str(previous.get("prompt_kind") or previous.get("kind") or "").strip().lower()
+        next_kind = str(presentation.get("kind") or "").strip().lower()
+        if previous_kind and previous_kind == next_kind and str(presentation.get("phase") or "") != "success":
+            return
     presentation["updated_at"] = int(time.time())
     context_control["login_assistance_state"] = presentation
 
 
 def _mapped_login_input(page: Any, selectors: list[str]) -> Any | None:
     return _visible_first(page, selectors, timeout_ms=1200)
+
+
+def _set_login_assistance_pending(context_control: dict[str, Any], pending: bool) -> None:
+    submission_lock = context_control.get("login_assistance_lock")
+    if submission_lock is not None and hasattr(submission_lock, "__enter__"):
+        with submission_lock:
+            context_control["login_assistance_pending"] = bool(pending)
+        return
+    context_control["login_assistance_pending"] = bool(pending)
 
 
 def _process_login_assistance_action(page: Any, platform: str, logger: AutomationLogger, context_control: dict[str, Any] | None) -> bool:
@@ -3434,8 +3449,8 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
         action = actions.get_nowait()
     except queue.Empty:
         return False
-    context_control["login_assistance_pending"] = False
     if not isinstance(action, dict):
+        _set_login_assistance_pending(context_control, False)
         return False
     kind = str(action.get("kind") or "").strip().lower()
     try:
@@ -3472,10 +3487,12 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
         else:
             raise RuntimeError("当前登录步骤不支持该操作")
     except Exception as exc:
-        context_control["login_assistance_state"] = {"phase": "attention", "kind": kind or "browser_interaction", "title": "暂时无法提交", "message": str(exc)[:240], "submit_label": "重试", "updated_at": int(time.time())}
+        context_control["login_assistance_state"] = {"phase": "attention", "kind": kind or "browser_interaction", "prompt_kind": kind, "action_error": True, "title": "暂时无法提交", "message": str(exc)[:240], "submit_label": "重试", "updated_at": int(time.time())}
+        _set_login_assistance_pending(context_control, False)
         logger.log("warn", "login_assistance_submit_failed", "登录映射页提交失败。", {"kind": kind, "error": str(exc)[:240]})
         return True
     context_control["login_assistance_state"] = {"phase": "running", "kind": "progress", "title": "正在验证", "message": message, "updated_at": int(time.time())}
+    _set_login_assistance_pending(context_control, False)
     logger.log("info", "login_assistance_submitted", message, {"kind": kind, "platform": platform})
     return True
 
