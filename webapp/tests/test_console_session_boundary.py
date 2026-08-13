@@ -494,17 +494,20 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("请先绑定人设后再打开登录", create_task)
         self.assertGreaterEqual(self.source.count("openLiveBrowserTaskView(activeTask.id)"), 3)
 
-    def test_account_card_actions_keep_icons_and_double_width_login(self):
+    def test_account_card_actions_keep_icons_and_single_row_login_width(self):
         update_status = self._javascript_function_source(self.source, "updateAccountStatusViews")
+        action_styles = self.styles.split(".account-pool-card-actions {", 1)[1].split(".persona-account-summary-actions", 1)[0]
 
         self.assertIn('button.querySelector("[data-account-proxy-label]")', update_status)
         self.assertNotIn('button.textContent = String(account.proxy_id', update_status)
         self.assertIn(".account-pool-card-actions {", self.styles)
-        self.assertIn("grid-template-columns: minmax(144px, 144px) repeat(3, max-content);", self.styles)
-        self.assertIn(".account-card-action--login {", self.styles)
-        self.assertIn("grid-column: span 1;", self.styles)
-        self.assertIn(".account-pool-card-actions .ui-action-icon,", self.styles)
-        self.assertIn(".account-pool-card-actions .ui-trash-icon", self.styles)
+        self.assertIn("grid-template-columns: minmax(112px, 112px) repeat(3, max-content);", action_styles)
+        self.assertNotIn("grid-template-columns: repeat(3, minmax(0, 1fr));", action_styles)
+        self.assertIn(".account-card-action--login {", action_styles)
+        self.assertIn("grid-column: span 1;", action_styles)
+        self.assertIn("min-width: 112px;", action_styles)
+        self.assertIn(".account-pool-card-actions .ui-action-icon,", action_styles)
+        self.assertIn(".account-pool-card-actions .ui-trash-icon", action_styles)
 
     def test_open_login_browser_exit_refreshes_the_terminal_task_state(self):
         refresh_source = self._javascript_function_source(self.source, "refreshLiveBrowserSessionsSoon")
