@@ -104,6 +104,10 @@ def _identity_user_id(user: dict[str, Any]) -> int:
     return user_id
 
 
+def _admin_purchase_waived(user: dict[str, Any]) -> bool:
+    return bool(int(user.get("is_admin") or 0) or int(user.get("_workspace_admin_user_id") or 0))
+
+
 def _error_response(exc: Exception) -> JSONResponse:
     status = int(getattr(exc, "status_code", 502) or 502)
     code = str(getattr(exc, "code", "PROXY_PURCHASE_ERROR"))
@@ -181,6 +185,7 @@ def register_proxy_purchase_routes(
                 user_id=_identity_user_id(user),
                 quote_id=payload.quote_id,
                 idempotency_key=body_key,
+                admin_waived=_admin_purchase_waived(user),
             )
         return {"ok": True, "order": order}
 

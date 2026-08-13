@@ -10925,6 +10925,17 @@ function renderPlusIcon() {
   </svg>`;
 }
 
+function renderProxyPurchasePlusIcon() {
+  return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <defs><linearGradient id="proxyPurchaseCityPlusGradient" gradientUnits="userSpaceOnUse" x1="4" y1="4" x2="20" y2="20">
+      <stop offset="0%" stop-color="#168cbd"></stop>
+      <stop offset="42%" stop-color="#114f83"></stop>
+      <stop offset="100%" stop-color="#0d3157"></stop>
+    </linearGradient></defs>
+    <path d="M12 4v16M4 12h16" fill="none" stroke="url(#proxyPurchaseCityPlusGradient)" stroke-width="2.2" stroke-linecap="round"></path>
+  </svg>`;
+}
+
 function renderSelectAllIcon() {
   return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <rect x="4" y="4" width="16" height="16" rx="4"></rect>
@@ -27632,8 +27643,8 @@ function accountProxyPurchaseEmbeddedHtml() {
       </label>
       <section class="account-proxy-purchase-city" data-account-proxy-purchase-city-section>
         <button type="button" class="account-proxy-purchase-city-toggle" data-account-proxy-purchase-city-toggle aria-expanded="false" disabled>
-          <span class="account-proxy-purchase-city-plus" aria-hidden="true">${renderPlusIcon()}</span>
-          <span>添加城市</span>
+          <span class="account-proxy-purchase-city-label">添加城市</span>
+          <span class="account-proxy-purchase-city-plus" aria-hidden="true">${renderProxyPurchasePlusIcon()}</span>
         </button>
         <label class="account-proxy-purchase-field account-proxy-purchase-city-field" data-account-proxy-purchase-city-panel hidden>
           <span>城市（可选）</span>
@@ -27675,6 +27686,8 @@ const ACCOUNT_PROXY_PURCHASE_PENDING_KEY = "vecto.proxyPurchase.pending.v1";
 
 function accountProxyPurchaseErrorMessage(error = {}, fallback = "请求失败，请稍后重试") {
   const detail = error?.detail;
+  const code = String(error?.code || detail?.code || "");
+  if (code === "INSUFFICIENT_CASH_BACKED_POINTS") return "可用算力点不足，暂时无法购买。";
   if (Array.isArray(detail)) return detail.map((item) => item?.msg || String(item)).join("；");
   if (detail && typeof detail === "object") return String(detail.message || detail.detail || fallback);
   return String(detail || error?.message || fallback);
@@ -27733,15 +27746,6 @@ function accountProxyPurchaseCountryLabel(region = {}) {
   return accountProxyCountry(String(region?.name || code), code).label;
 }
 
-function accountProxyPurchaseAffordable(view, quote = view?.quote) {
-  const balanceUnits = Number(view?.options?.cash_backed_credit_units);
-  const chargeUnits = Number(quote?.charge_units);
-  if (Number.isFinite(balanceUnits) && Number.isFinite(chargeUnits)) return balanceUnits >= chargeUnits;
-  const balancePoints = Number(view?.options?.cash_backed_points);
-  const chargePoints = Number(quote?.charge_points);
-  return !Number.isFinite(balancePoints) || !Number.isFinite(chargePoints) || balancePoints >= chargePoints;
-}
-
 function accountProxyPurchaseSetBusy(view, busy, label = "") {
   view.busy = Boolean(busy);
   const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
@@ -27749,7 +27753,7 @@ function accountProxyPurchaseSetBusy(view, busy, label = "") {
   const city = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city]");
   const cityToggle = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city-toggle]");
   const renewal = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-renewal]");
-  if (submit) submit.disabled = view.busy || !view.quote || !accountProxyPurchaseAffordable(view);
+  if (submit) submit.disabled = view.busy || !view.quote;
   if (select) select.disabled = view.busy || !view.options?.configured || !view.options?.live_purchasing_enabled;
   if (city) city.disabled = view.busy || !select?.value || !view.options?.cities?.[String(select.value)]?.length;
   if (cityToggle) cityToggle.disabled = view.busy || !select?.value || !view.options?.cities?.[String(select.value)]?.length;
@@ -27879,12 +27883,10 @@ async function accountProxyPurchaseRefreshQuote(view) {
     if (!quote?.id) throw { detail: "供应商没有返回有效报价" };
     view.quote = quote;
     accountProxyPurchasePendingEnsure(quote);
-    const affordable = accountProxyPurchaseAffordable(view, quote);
     const submitText = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit-text]");
     const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
     if (submitText) submitText.textContent = "确认购买";
-    if (submit) submit.disabled = !affordable;
-    if (!affordable) accountProxyPurchaseAlert(view, "可用算力点不足，暂时无法购买。");
+    if (submit) submit.disabled = false;
   } catch (error) {
     if (view.closed || requestSeq !== view.quoteSeq) return;
     accountProxyPurchaseClearQuote(view);
@@ -28039,7 +28041,7 @@ async function accountProxyPurchaseRecover(view, pending = {}, { replayIfMissing
 
 async function accountProxyPurchaseSubmit(view, event) {
   event.preventDefault();
-  if (view.busy || !view.quote?.id || !accountProxyPurchaseAffordable(view)) return;
+  if (view.busy || !view.quote?.id) return;
   accountProxyPurchaseAlert(view, "");
   accountProxyPurchaseSetBusy(view, true, "正在提交订单...");
   const pending = accountProxyPurchasePendingWrite({ ...accountProxyPurchasePendingEnsure(view.quote), submitted: true });

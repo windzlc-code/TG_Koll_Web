@@ -1020,6 +1020,7 @@ def create_order(
     user_id: int,
     quote_id: str,
     idempotency_key: str,
+    admin_waived: bool = False,
     provider: ProxyProvider | None = None,
     now: int | None = None,
 ) -> dict[str, Any]:
@@ -1114,6 +1115,7 @@ def create_order(
         sku="proxycheap_owned_proxy",
         credit_units=int(quote_row["credit_units"]),
         idempotency_key=f"proxy-purchase:{int(user_id)}:{idem}",
+        admin_waived=bool(admin_waived),
         meta={"quote_id": str(quote_id), "provider": "proxycheap"},
         now=current,
     )

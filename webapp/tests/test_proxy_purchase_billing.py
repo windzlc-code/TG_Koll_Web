@@ -107,6 +107,36 @@ class ProxyPurchaseBillingTests(unittest.TestCase):
                 )
         self.assertEqual(raised.exception.code, "INSUFFICIENT_CASH_BACKED_POINTS")
 
+    def test_exact_cash_reservation_can_be_waived_for_admin_without_balance(self):
+        with db_module.db() as conn:
+            conn.execute(
+                "UPDATE users SET is_admin = 1 WHERE id = ?",
+                (self.user_id,),
+            )
+            conn.execute(
+                "UPDATE billing_wallets SET credit_units = 0, cash_backed_credit_units = 0 "
+                "WHERE user_id = ?",
+                (self.user_id,),
+            )
+            reservation = commercial_billing.reserve_exact_cash_charge(
+                conn,
+                user_id=self.user_id,
+                ref_type="proxy_purchase",
+                ref_id="purchase-admin",
+                sku="proxycheap:test",
+                credit_units=300,
+                idempotency_key="proxy-purchase-admin",
+                admin_waived=True,
+            )
+            wallet = conn.execute(
+                "SELECT credit_units, cash_backed_credit_units FROM billing_wallets WHERE user_id = ?",
+                (self.user_id,),
+            ).fetchone()
+
+        self.assertEqual(reservation["status"], "waived")
+        self.assertEqual(reservation["reserved_points"], 0)
+        self.assertEqual((int(wallet["credit_units"]), int(wallet["cash_backed_credit_units"])), (0, 0))
+
     def test_exact_cash_idempotency_keys_are_scoped_per_user(self):
         with db_module.db() as conn:
             other = conn.execute(

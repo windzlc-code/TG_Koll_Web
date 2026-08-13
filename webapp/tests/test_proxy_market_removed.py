@@ -195,8 +195,12 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn('data-account-proxy-purchase-city', purchase_view)
         self.assertIn('data-account-proxy-purchase-city-toggle', purchase_view)
         self.assertIn('城市（可选）', purchase_view)
-        self.assertIn('>添加城市</span>', purchase_view)
+        self.assertIn('<span class="account-proxy-purchase-city-label">添加城市</span>', purchase_view)
         self.assertNotIn('精确选择城市', purchase_view)
+        self.assertLess(
+            purchase_view.index('account-proxy-purchase-city-label'),
+            purchase_view.index('account-proxy-purchase-city-plus'),
+        )
         self.assertNotIn('data-account-proxy-purchase-period', purchase_view)
         self.assertNotIn('购买时长', purchase_view)
         self.assertIn('data-account-proxy-purchase-renewal', purchase_view)
@@ -212,6 +216,14 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn("function accountProxyPurchaseToggleCity", purchase_view)
         self.assertIn('api("/api/proxy-purchases/orders"', purchase_view)
         self.assertIn('/api/proxy-purchases/orders/recover', purchase_view)
+        self.assertNotIn('function accountProxyPurchaseAffordable', purchase_view)
+        refresh_quote = purchase_view[
+            purchase_view.index('async function accountProxyPurchaseRefreshQuote'):
+            purchase_view.index('function accountProxyPurchaseSchedulePoll')
+        ]
+        self.assertNotIn('可用算力点不足，暂时无法购买。', refresh_quote)
+        self.assertIn('INSUFFICIENT_CASH_BACKED_POINTS', purchase_view)
+        self.assertIn('if (view.busy || !view.quote?.id) return;', purchase_view)
         self.assertNotIn('window.addEventListener("message"', purchase_view)
         self.assertIn('const action = selected ? "当前使用" : "选择使用";', self.console_script)
         self.assertNotIn('"切换使用"', self.console_script)
@@ -227,6 +239,9 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn('justify-content: center;', city_toggle_style)
         self.assertIn('border: 0;', city_toggle_style)
         self.assertIn('background: transparent;', city_toggle_style)
+        self.assertIn('.account-proxy-purchase-city-label {', self.console_styles)
+        self.assertIn('font-weight: 400;', self.console_styles)
+        self.assertIn('background: linear-gradient(100deg, #168cbd 0%, #114f83 42%, #0d3157 100%);', self.console_styles)
         self.assertIn('.account-proxy-purchase-city-field[hidden] { display: none !important; }', self.console_styles)
         city_field_style = self.console_styles[
             self.console_styles.index('.account-proxy-purchase-city-field {'):
@@ -245,6 +260,7 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn("自动续费", standalone_markup)
         self.assertIn("添加城市", standalone_markup)
         self.assertNotIn("精确选择城市", standalone_markup)
+        self.assertLess(standalone_markup.index('class="city-label"'), standalone_markup.index('class="city-plus"'))
         self.assertIn("城市（可选）", standalone_markup)
         self.assertIn('.city-field[hidden] { display: none !important; }', self.purchase_styles)
         standalone_city_toggle = self.purchase_styles[
@@ -254,6 +270,11 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn('justify-content: center;', standalone_city_toggle)
         self.assertIn('border: 0;', standalone_city_toggle)
         self.assertIn('background: transparent;', standalone_city_toggle)
+        self.assertIn('.city-label {', self.purchase_styles)
+        self.assertIn('font-weight: 400;', self.purchase_styles)
+        self.assertIn('background: linear-gradient(100deg, #168cbd 0%, #114f83 42%, #0d3157 100%);', self.purchase_styles)
+        self.assertNotIn('function hasEnoughCashBackedBalance', self.purchase_script)
+        self.assertIn('if (state.busy || !state.quote?.id) return;', self.purchase_script)
         self.assertNotIn("购买时长", standalone_markup)
         self.assertNotIn('id="period"', standalone_markup)
         self.assertIn("确认购买", standalone_markup)

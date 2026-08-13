@@ -181,6 +181,44 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
         self.assertEqual(owned[0]["social_proxy_id"], stored["id"])
         self.assertTrue(owned[0]["available"])
 
+    def test_admin_order_executes_without_user_point_balance(self):
+        provider = MockProxyProvider(unit_price_usd="4.00")
+        with app_db.db() as conn:
+            conn.execute("UPDATE users SET is_admin=1 WHERE id=?", (self.user_id,))
+            conn.execute(
+                "UPDATE billing_wallets SET credit_units=0,cash_backed_credit_units=0 WHERE user_id=?",
+                (self.user_id,),
+            )
+        quote = self._quote(provider)
+        with app_db.db() as conn:
+            order = create_order(
+                conn,
+                user_id=self.user_id,
+                quote_id=quote["id"],
+                idempotency_key="admin-buy-without-points",
+                admin_waived=True,
+                provider=provider,
+                now=1_700_000_101,
+            )
+            order_row = conn.execute(
+                "SELECT reservation_id FROM proxy_purchase_orders WHERE id=?",
+                (order["id"],),
+            ).fetchone()
+            reservation = conn.execute(
+                "SELECT status,reserved_credit_units,reserved_cash_backed_credit_units "
+                "FROM billing_reservations WHERE id=?",
+                (order_row["reservation_id"],),
+            ).fetchone()
+            wallet = conn.execute(
+                "SELECT credit_units,cash_backed_credit_units FROM billing_wallets WHERE user_id=?",
+                (self.user_id,),
+            ).fetchone()
+
+        self.assertEqual(order["status"], "active")
+        self.assertEqual(provider.execute_calls, 1)
+        self.assertEqual(tuple(reservation), ("waived", 0, 0))
+        self.assertEqual(tuple(wallet), (0, 0))
+
     def test_optional_city_fixed_duration_and_live_ntd_profit_pricing(self):
         provider = MockProxyProvider(unit_price_usd="4.00")
         with app_db.db() as conn:

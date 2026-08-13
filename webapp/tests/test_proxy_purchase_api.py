@@ -91,7 +91,8 @@ class ProxyPurchaseApiTests(unittest.TestCase):
         app = FastAPI()
 
         def current_user(x_test_user_id: int = Header(default=self.user_id)):
-            return {"id": int(x_test_user_id), "is_admin": 0}
+            user_id = int(x_test_user_id)
+            return {"id": user_id, "is_admin": 1 if user_id == self.admin_id else 0}
 
         def require_admin():
             return {"id": self.admin_id, "is_admin": 1}
@@ -200,6 +201,24 @@ class ProxyPurchaseApiTests(unittest.TestCase):
             json={"quote_id": quote["id"], "idempotency_key": "different-key"},
         )
         self.assertEqual(response.status_code, 409)
+
+    def test_admin_purchase_passes_balance_waiver_only_at_order_creation(self):
+        with mock.patch.object(
+            proxy_purchases,
+            "create_order",
+            return_value={"id": "proxy-order-admin", "status": "active"},
+        ) as create:
+            response = self.client.post(
+                "/api/proxy-purchases/orders",
+                headers={
+                    "X-Test-User-ID": str(self.admin_id),
+                    "Idempotency-Key": "admin-buy-once",
+                },
+                json={"quote_id": "quote-admin", "idempotency_key": "admin-buy-once"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(create.call_args.kwargs["admin_waived"])
 
     def test_admin_provider_options_passes_selected_service_and_plan(self):
         with mock.patch.object(proxy_purchases, "provider_options", return_value={"services": [], "setup": {}}) as options:

@@ -17431,20 +17431,27 @@ body.persona-media-sorting {
 
 .account-proxy-purchase-city-toggle:not(:disabled) { cursor: pointer; }
 .account-proxy-purchase-city-toggle:disabled { opacity: .55; cursor: not-allowed; }
-.account-proxy-purchase-city-toggle > span:last-child { color: var(--ink); font-size: 13px; font-weight: 850; }
+
+.account-proxy-purchase-city-label {
+  color: transparent;
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1;
+  background: linear-gradient(100deg, #168cbd 0%, #114f83 42%, #0d3157 100%);
+  background-clip: text;
+  -webkit-background-clip: text;
+}
 
 .account-proxy-purchase-city-plus {
   display: inline-grid;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   place-items: center;
-  color: #126fa7;
-  transition: transform .16s ease, color .16s ease;
+  transition: transform .16s ease;
 }
 
-.account-proxy-purchase-city-plus .ui-action-icon { width: 16px; height: 16px; }
+.account-proxy-purchase-city-plus .ui-action-icon { width: 22px; height: 22px; }
 .account-proxy-purchase-city-toggle[aria-expanded="true"] .account-proxy-purchase-city-plus {
-  color: #126fa7;
   transform: rotate(45deg);
 }
 

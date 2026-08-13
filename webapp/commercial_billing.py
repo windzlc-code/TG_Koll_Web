@@ -1659,6 +1659,7 @@ def reserve_exact_cash_charge(
     sku: str,
     credit_units: int,
     idempotency_key: str,
+    admin_waived: bool = False,
     meta: dict[str, Any] | None = None,
     now: int | None = None,
 ) -> dict[str, Any]:
@@ -1685,16 +1686,22 @@ def reserve_exact_cash_charge(
             (raw_idem, int(user_id)),
         ).fetchone()
     request_fingerprint = (
-        int(user_id), str(ref_type), str(ref_id), str(sku), amount
+        int(user_id), str(ref_type), str(ref_id), str(sku), amount, bool(admin_waived)
     )
     if existing is not None:
         existing_meta = _loads(existing["meta_json"], {})
+        existing_amount = int(
+            existing_meta.get("theoretical_credit_units")
+            or existing["reserved_credit_units"]
+            or 0
+        )
         existing_fingerprint = (
             int(existing["user_id"]),
             str(existing["ref_type"]),
             str(existing["ref_id"]),
             str(existing["sku"]),
-            int(existing["reserved_credit_units"] or 0),
+            existing_amount,
+            bool(existing_meta.get("admin_waived")),
         )
         if (
             existing_fingerprint != request_fingerprint
@@ -1710,13 +1717,63 @@ def reserve_exact_cash_charge(
     wallet = ensure_wallet(conn, int(user_id), now=current)
     balance = int(wallet["credit_units"] or 0)
     cash_balance = int(wallet.get("cash_backed_credit_units") or 0)
+    reservation_id = _id("bill_hold")
+    if admin_waived:
+        merged_meta = dict(meta or {})
+        merged_meta.update(
+            {
+                "quantity": 1,
+                "unit_credit_units": amount,
+                "theoretical_credit_units": amount,
+                "image": False,
+                "admin_waived": True,
+                "waived_reason": "admin",
+                "exact_cash_backed": True,
+                "cash_backed_credit_units": 0,
+            }
+        )
+        conn.execute(
+            "INSERT INTO billing_reservations(id,user_id,ref_type,ref_id,sku,status,"
+            "catalog_version_id,meta_json,idempotency_key,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,'waived','',?,?,?,?)",
+            (
+                reservation_id,
+                int(user_id),
+                str(ref_type),
+                str(ref_id),
+                str(sku),
+                _dumps(merged_meta),
+                idem,
+                current,
+                current,
+            ),
+        )
+        _insert_ledger(
+            conn,
+            user_id=int(user_id),
+            asset_type="audit",
+            event_type="admin_waived",
+            amount_units=0,
+            balance_after_units=balance,
+            cash_backed_balance_after_units=cash_balance,
+            ref_type=str(ref_type),
+            ref_id=str(ref_id),
+            reservation_id=reservation_id,
+            idempotency_key=f"{idem}:waived",
+            meta={"sku": str(sku), "theoretical_credit_units": amount},
+            now=current,
+        )
+        return _reservation_public(
+            conn.execute(
+                "SELECT * FROM billing_reservations WHERE id = ?", (reservation_id,)
+            ).fetchone()
+        )
     if cash_balance < amount:
         raise BillingError(
             "INSUFFICIENT_CASH_BACKED_POINTS",
             "Cash-backed points are insufficient for this purchase",
             402,
         )
-    reservation_id = _id("bill_hold")
     merged_meta = dict(meta or {})
     merged_meta.update(
         {

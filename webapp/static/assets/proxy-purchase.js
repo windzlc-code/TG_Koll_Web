@@ -9,6 +9,8 @@
 
   function errorMessage(error, fallback = "请求失败，请稍后重试") {
     const detail = error?.detail;
+    const code = String(error?.code || detail?.code || "");
+    if (code === "INSUFFICIENT_CASH_BACKED_POINTS") return "可用算力点不足，暂时无法购买。";
     if (Array.isArray(detail)) return detail.map((item) => item?.msg || String(item)).join("；");
     if (detail && typeof detail === "object") return String(detail.message || detail.detail || fallback);
     return String(detail || error?.message || fallback);
@@ -86,15 +88,6 @@
       } catch (_) {}
     }
     return String(region?.name || code || "未知地区");
-  }
-
-  function hasEnoughCashBackedBalance(quote = state.quote) {
-    const balanceUnits = Number(state.options?.cash_backed_credit_units);
-    const chargeUnits = Number(quote?.charge_units);
-    if (Number.isFinite(balanceUnits) && Number.isFinite(chargeUnits)) return balanceUnits >= chargeUnits;
-    const balancePoints = Number(state.options?.cash_backed_points);
-    const chargePoints = Number(quote?.charge_points);
-    return !Number.isFinite(balancePoints) || !Number.isFinite(chargePoints) || balancePoints >= chargePoints;
   }
 
   function renderOptions(payload) {
@@ -194,10 +187,8 @@
       if (!quote?.id) throw { detail: "供应商没有返回有效报价" };
       state.quote = quote;
       ensurePendingRequest(quote);
-      const affordable = hasEnoughCashBackedBalance(quote);
       byId("buyButtonText").textContent = "确认购买";
-      byId("buyButton").disabled = !affordable;
-      if (!affordable) setAlert("当前现金背书点不足以购买该代理；免费赠送点不能用于供应商采购。");
+      byId("buyButton").disabled = false;
     } catch (error) {
       if (requestSeq !== state.quoteSeq) return;
       clearQuote();
@@ -291,7 +282,7 @@
 
   async function submitOrder(event) {
     event.preventDefault();
-    if (state.busy || !state.quote?.id || !hasEnoughCashBackedBalance()) return;
+    if (state.busy || !state.quote?.id) return;
     setAlert("");
     setBusy(true, "正在安全预占算力点...");
     const pending = storePendingRequest({ ...ensurePendingRequest(state.quote), submitted: true });
