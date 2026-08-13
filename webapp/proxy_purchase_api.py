@@ -28,6 +28,8 @@ class _StrictModel(BaseModel):
 
 class ProxyQuotePayload(_StrictModel):
     country: str = Field(min_length=2, max_length=16)
+    city: str = Field(default="", max_length=160)
+    period_months: int | None = Field(default=None, ge=1, le=36)
     auto_renew: bool = False
 
 
@@ -46,13 +48,19 @@ class ProxyPurchaseConfigPayload(_StrictModel):
     plan_id: str = Field(default="", max_length=160)
     default_country: str = Field(default="", max_length=16)
     default_period: int = Field(default=1, ge=1, le=36)
+    min_period_months: int = Field(default=1, ge=1, le=36)
+    max_period_months: int = Field(default=1, ge=1, le=36)
     quantity: int = Field(default=1, ge=1, le=1)
     setup_defaults: dict[str, Any] = Field(default_factory=dict)
-    points_per_usd: Decimal = Field(gt=0, le=1_000_000)
-    usd_to_ntd_rate: Decimal = Field(gt=0, le=1_000_000)
+    pricing_mode: Literal["supplier_plus_profit_ntd", "legacy_points_per_usd"] = "supplier_plus_profit_ntd"
+    fx_rate_mode: Literal["auto", "manual"] = "auto"
+    manual_usd_to_ntd_rate: Decimal = Field(default=Decimal("35"), gt=0, le=1_000_000)
+    profit_ntd: Decimal = Field(default=Decimal("0"), ge=0, le=1_000_000)
+    points_per_usd: Decimal = Field(default=Decimal("25"), gt=0, le=1_000_000)
+    usd_to_ntd_rate: Decimal = Field(default=Decimal("35"), gt=0, le=1_000_000)
     payment_fee_rate: Decimal = Field(default=Decimal("0"), ge=0, le=1)
     fixed_fee_points: Decimal = Field(default=Decimal("0"), ge=0, le=1_000_000)
-    max_vendor_cost_usd: Decimal = Field(gt=0, le=1_000_000)
+    max_vendor_cost_usd: Decimal = Field(default=Decimal("1000000"), gt=0, le=1_000_000)
     safety_buffer_usd: Decimal = Field(default=Decimal("0"), ge=0, le=1_000_000)
     minimum_profit_usd: Decimal = Field(default=Decimal("0"), ge=0, le=1_000_000)
     live_purchasing_enabled: bool = False
@@ -150,6 +158,8 @@ def register_proxy_purchase_routes(
                 user_id=_identity_user_id(user),
                 country=payload.country,
                 auto_renew=payload.auto_renew,
+                city=payload.city,
+                period_months=payload.period_months,
             )
         return {"ok": True, "quote": quote}
 
@@ -251,6 +261,19 @@ def register_proxy_purchase_routes(
                 "live_purchasing_enabled": purchasing,
             },
         }
+
+    @app.get("/api/admin/proxy-purchases/exchange-rate")
+    def api_admin_proxy_purchase_exchange_rate(
+        refresh: bool = Query(default=False),
+        _admin: dict[str, Any] = Depends(admin_dependency),
+    ):
+        with db() as conn:
+            status = proxy_purchases.exchange_rate_status(
+                conn,
+                force_refresh=bool(refresh),
+                include_draft=True,
+            )
+        return JSONResponse(content={"ok": True, **status}, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/admin/proxy-purchases/provider-credentials")
     def api_admin_proxy_provider_credentials(_admin: dict[str, Any] = Depends(admin_dependency)):

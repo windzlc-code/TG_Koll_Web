@@ -27630,6 +27630,20 @@ function accountProxyPurchaseEmbeddedHtml() {
         </select>
         <small>可购买地区与库存由供应商实时同步。</small>
       </label>
+      <label class="account-proxy-purchase-field">
+        <span>购买城市</span>
+        <select data-account-proxy-purchase-city required disabled>
+          <option value="">请先选择代理地区</option>
+        </select>
+        <small>城市与可用 ISP 会按所选地区自动匹配。</small>
+      </label>
+      <label class="account-proxy-purchase-field">
+        <span>购买时长</span>
+        <select data-account-proxy-purchase-period required disabled>
+          <option value="1">1 个月</option>
+        </select>
+        <small>可选范围由管理员设置，并受供应商当前周期限制。</small>
+      </label>
       <label class="account-proxy-purchase-renewal">
         <span><strong>自动续费</strong><small>到期前自动检查算力点余额，余额充足时自动续费；余额不足不会扣款，可随时关闭。</small></span>
         <input type="checkbox" data-account-proxy-purchase-renewal>
@@ -27733,9 +27747,13 @@ function accountProxyPurchaseSetBusy(view, busy, label = "") {
   view.busy = Boolean(busy);
   const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
   const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
+  const city = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city]");
+  const period = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-period]");
   const renewal = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-renewal]");
   if (submit) submit.disabled = view.busy || !view.quote || !accountProxyPurchaseAffordable(view);
   if (select) select.disabled = view.busy || !view.options?.configured || !view.options?.live_purchasing_enabled;
+  if (city) city.disabled = view.busy || !select?.value || !view.options?.cities?.[String(select.value)]?.length;
+  if (period) period.disabled = view.busy || !view.options?.configured || !view.options?.live_purchasing_enabled;
   if (renewal) renewal.disabled = view.busy;
   if (label) {
     const text = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit-text]");
@@ -27769,6 +27787,24 @@ function accountProxyPurchaseRenderOptions(view, payload) {
       if (option.value) select.append(option);
     });
   }
+  const period = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-period]");
+  const periods = Array.isArray(payload?.periods) ? payload.periods : [];
+  if (period) {
+    period.replaceChildren();
+    periods.forEach((item) => {
+      const value = Math.max(1, Number(item?.value || 1));
+      const option = document.createElement("option");
+      option.value = String(value);
+      option.textContent = String(item?.label || `${value} 个月`);
+      period.append(option);
+    });
+    if (!period.options.length) period.add(new Option("1 个月", "1"));
+    const preferred = String(payload?.default_period?.value || period.options[0]?.value || "1");
+    period.value = Array.from(period.options).some((option) => option.value === preferred)
+      ? preferred
+      : String(period.options[0]?.value || "1");
+    period.disabled = !Boolean(payload?.configured && payload?.live_purchasing_enabled);
+  }
   const serviceNames = {
     "static-residential-ipv4": "静态住宅代理 IP",
     "static-datacenter-ipv4": "数据中心 IPv4 代理",
@@ -27793,13 +27829,39 @@ function accountProxyPurchaseRenderOptions(view, payload) {
   }
 }
 
+function accountProxyPurchaseRenderCities(view) {
+  const country = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
+  const city = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city]");
+  if (!city) return;
+  const items = Array.isArray(view?.options?.cities?.[String(country?.value || "")])
+    ? view.options.cities[String(country.value)]
+    : [];
+  city.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = items.length ? "请选择购买城市" : "该地区由供应商自动分配城市";
+  city.append(placeholder);
+  items.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = String(item?.id || "");
+    option.textContent = [String(item?.name || item?.id || ""), String(item?.region || "")].filter(Boolean).join(" · ");
+    if (option.value) city.append(option);
+  });
+  city.required = items.length > 0;
+  city.disabled = !country?.value || items.length === 0;
+}
+
 async function accountProxyPurchaseRefreshQuote(view) {
   const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
   const renewal = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-renewal]");
+  const citySelect = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city]");
+  const periodSelect = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-period]");
   const country = String(select?.value || "").trim().toUpperCase();
+  const city = String(citySelect?.value || "").trim();
+  const requiresCity = Boolean(view?.options?.cities?.[country]?.length);
   const requestSeq = ++view.quoteSeq;
   accountProxyPurchaseAlert(view, "");
-  if (!country) {
+  if (!country || (requiresCity && !city)) {
     accountProxyPurchaseClearQuote(view);
     return;
   }
@@ -27809,7 +27871,12 @@ async function accountProxyPurchaseRefreshQuote(view) {
     const payload = await api("/api/proxy-purchases/quotes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ country, auto_renew: Boolean(renewal?.checked) }),
+      body: JSON.stringify({
+        country,
+        city,
+        period_months: Math.max(1, Number(periodSelect?.value || 1)),
+        auto_renew: Boolean(renewal?.checked),
+      }),
     });
     if (view.closed || requestSeq !== view.quoteSeq) return;
     const quote = payload?.quote;
@@ -28115,9 +28182,17 @@ function openAccountProxyPurchaseView(modal, trigger = null) {
   });
   const form = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-form]");
   const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
+  const city = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city]");
+  const period = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-period]");
   const renewal = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-renewal]");
   form?.addEventListener("submit", (event) => { void accountProxyPurchaseSubmit(view, event); });
-  select?.addEventListener("change", () => { void accountProxyPurchaseRefreshQuote(view); });
+  select?.addEventListener("change", () => {
+    accountProxyPurchaseRenderCities(view);
+    accountProxyPurchaseClearQuote(view);
+    if (!view?.options?.cities?.[String(select.value || "")]?.length) void accountProxyPurchaseRefreshQuote(view);
+  });
+  city?.addEventListener("change", () => { void accountProxyPurchaseRefreshQuote(view); });
+  period?.addEventListener("change", () => { void accountProxyPurchaseRefreshQuote(view); });
   renewal?.addEventListener("change", () => { void accountProxyPurchaseRefreshQuote(view); });
   purchaseDialog.querySelector("[data-account-proxy-purchase-back]")?.focus();
   void loadAccountProxyPurchaseForm(modal);

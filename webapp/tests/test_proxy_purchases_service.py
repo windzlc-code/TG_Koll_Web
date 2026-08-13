@@ -4,12 +4,15 @@ import json
 import os
 import tempfile
 import unittest
+from decimal import Decimal, ROUND_CEILING
 from unittest import mock
 
 from cryptography.fernet import Fernet
 
 from webapp import db as app_db
 from webapp import commercial_billing
+from webapp import proxy_purchases
+from webapp.exchange_rates import ExchangeRateQuote
 from webapp.proxy_providers import MockProxyProvider, ProxyProviderOutcomeUnknown
 from webapp.proxy_purchases import (
     ProxyPurchaseError,
@@ -177,6 +180,68 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
         self.assertEqual(len(owned), 1)
         self.assertEqual(owned[0]["social_proxy_id"], stored["id"])
         self.assertTrue(owned[0]["available"])
+
+    def test_city_duration_range_and_live_ntd_profit_pricing(self):
+        provider = MockProxyProvider(unit_price_usd="4.00")
+        with app_db.db() as conn:
+            draft = save_config_draft(
+                conn,
+                {
+                    "provider": "proxy-cheap",
+                    "live_purchasing_enabled": True,
+                    "service_id": "static-residential-ipv4",
+                    "plan_id": "standard",
+                    "default_period": 1,
+                    "min_period_months": 1,
+                    "max_period_months": 2,
+                    "pricing_mode": "supplier_plus_profit_ntd",
+                    "fx_rate_mode": "auto",
+                    "manual_usd_to_ntd_rate": "35",
+                    "profit_ntd": "30",
+                    "max_vendor_cost_usd": "100",
+                },
+                actor_user_id=self.user_id,
+                now=1_700_000_050,
+            )
+            publish_config(conn, draft["id"], actor_user_id=self.user_id, provider=provider, now=1_700_000_051)
+            options = purchase_options(conn, user_id=self.user_id, provider=provider)
+        self.assertEqual(options["cities"]["US"][0]["id"], "New York")
+        self.assertEqual([item["value"] for item in options["periods"]], [1, 2])
+
+        reference = ExchangeRateQuote("USD", "TWD", Decimal("32"), "test", 1_700_000_100)
+        with mock.patch.object(proxy_purchases.exchange_rates, "get_usd_twd_rate", return_value=reference):
+            with app_db.db() as conn:
+                cash_per_point = proxy_purchases._lowest_cash_per_point(conn)
+                quote = create_quote(
+                    conn,
+                    user_id=self.user_id,
+                    country="US",
+                    city="New York",
+                    period_months=2,
+                    auto_renew=False,
+                    provider=provider,
+                    now=1_700_000_100,
+                )
+                stored = json.loads(conn.execute(
+                    "SELECT request_json FROM proxy_purchase_quotes WHERE id=?", (quote["id"],)
+                ).fetchone()[0])
+        expected_units = int(
+            ((Decimal("286") / cash_per_point) * 100).quantize(Decimal("1"), rounding=ROUND_CEILING)
+        )
+        self.assertEqual(quote["charge_units"], expected_units)
+        self.assertEqual(quote["city"], "New York")
+        self.assertEqual(stored["city"], "New York")
+        self.assertEqual(stored["region"], "New York")
+        self.assertEqual(stored["ispId"], "mock-us-isp")
+        self.assertEqual(stored["_pricing"]["supplierCostNtd"], "256.00")
+        self.assertEqual(stored["_pricing"]["customerTotalNtd"], "286.00")
+
+        with mock.patch.object(proxy_purchases.exchange_rates, "get_usd_twd_rate", return_value=reference):
+            with app_db.db() as conn:
+                with self.assertRaisesRegex(ProxyPurchaseError, "city"):
+                    create_quote(conn, user_id=self.user_id, country="US", city="", period_months=1, auto_renew=False, provider=provider)
+                with self.assertRaisesRegex(ProxyPurchaseError, "duration"):
+                    create_quote(conn, user_id=self.user_id, country="US", city="New York", period_months=3, auto_renew=False, provider=provider)
 
     def test_unknown_execute_holds_points_and_never_retries(self):
         provider = _UnknownProvider()
@@ -419,6 +484,53 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
         self.assertEqual(status, "provider_unknown")
         self.assertEqual(second, [])
         self.assertEqual(provider.extend_calls, 1)
+
+    def test_renewal_uses_original_purchase_duration(self):
+        provider = MockProxyProvider()
+        with app_db.db() as conn:
+            draft = save_config_draft(
+                conn,
+                {
+                    "provider": "proxy-cheap",
+                    "live_purchasing_enabled": True,
+                    "service_id": "static-residential-ipv4",
+                    "plan_id": "standard",
+                    "default_period": 2,
+                    "min_period_months": 1,
+                    "max_period_months": 2,
+                    "points_per_usd": "25",
+                    "max_vendor_cost_usd": "100",
+                },
+                actor_user_id=self.user_id,
+            )
+            publish_config(conn, draft["id"], actor_user_id=self.user_id, provider=provider)
+            quote = create_quote(
+                conn,
+                user_id=self.user_id,
+                country="US",
+                city="New York",
+                period_months=2,
+                auto_renew=True,
+                provider=provider,
+                now=1_700_000_100,
+            )
+        with app_db.db() as conn:
+            order = create_order(
+                conn,
+                user_id=self.user_id,
+                quote_id=quote["id"],
+                idempotency_key="renew-original-period",
+                provider=provider,
+                now=1_700_000_101,
+            )
+            conn.execute(
+                "UPDATE proxy_renewal_schedules SET next_attempt_at=? WHERE order_id=?",
+                (1_700_000_102, order["id"]),
+            )
+        with app_db.db() as conn:
+            process_due_renewals(conn, provider=provider, now=1_700_000_103)
+        self.assertEqual(provider.extension_quote_periods, [2])
+        self.assertEqual(provider.extend_periods, [2])
 
     def test_webhook_deduplicates_verified_event(self):
         import hashlib

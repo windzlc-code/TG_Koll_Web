@@ -51,6 +51,22 @@
             <small>可购买地区与库存由供应商实时同步。</small>
           </label>
 
+          <label class="field">
+            <span>代理城市</span>
+            <select id="city" name="city" required disabled>
+              <option value="">请先选择代理地区</option>
+            </select>
+            <small>选择城市后，供应商会自动匹配该城市当前可用的 ISP。</small>
+          </label>
+
+          <label class="field">
+            <span>购买时长</span>
+            <select id="period" name="period" required disabled>
+              <option value="1">1 个月</option>
+            </select>
+            <small>可选时长由管理员范围与供应商周期共同决定。</small>
+          </label>
+
           <dl class="mapped-order-specs" aria-label="锁定订单参数">
             <div><dt>ISP</dt><dd id="productIsp">按地区自动匹配</dd></div>
             <div><dt>数量</dt><dd id="productQuantity">1 个</dd></div>

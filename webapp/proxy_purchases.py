@@ -14,6 +14,7 @@ from decimal import Decimal, InvalidOperation, ROUND_CEILING
 from typing import Any, Mapping
 
 from . import commercial_billing
+from . import exchange_rates
 from . import proxy_provider_credentials
 from .proxy_market_credentials import encrypt_market_credentials
 from .proxy_providers import (
@@ -34,6 +35,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "service_id": "static-residential-ipv4",
     "plan_id": "",
     "default_period_months": 1,
+    "min_period_months": 1,
+    "max_period_months": 1,
+    "pricing_mode": "legacy_points_per_usd",
+    "fx_rate_mode": "auto",
+    "manual_usd_to_ntd_rate": "35.00",
+    "profit_ntd": "0.00",
     "points_per_usd": "25.00",
     "fixed_fee_points": "0.00",
     "max_vendor_cost_usd": "100.00",
@@ -105,7 +112,23 @@ def _minor_units(amount: Decimal) -> int:
     return int((amount * 100).quantize(Decimal("1"), rounding=ROUND_CEILING))
 
 
-def _points_units(provider_amount_usd: Decimal, config: Mapping[str, Any]) -> int:
+def _points_units(
+    provider_amount_usd: Decimal,
+    config: Mapping[str, Any],
+    *,
+    cash_per_point_ntd: Decimal | None = None,
+    fx_rate: Decimal | None = None,
+) -> int:
+    if str(config.get("pricing_mode") or "") == "supplier_plus_profit_ntd":
+        if cash_per_point_ntd is None or cash_per_point_ntd <= 0 or fx_rate is None or fx_rate <= 0:
+            raise ProxyPurchaseError("INVALID_CONFIG", "NTD pricing requires a cash point rate and USD/TWD rate")
+        profit_ntd = _decimal(config.get("profit_ntd", 0), "profit_ntd")
+        customer_total_ntd = (provider_amount_usd * fx_rate) + profit_ntd
+        return int(
+            ((customer_total_ntd / cash_per_point_ntd) * POINT_SCALE).quantize(
+                Decimal("1"), rounding=ROUND_CEILING
+            )
+        )
     per_usd = _decimal(config.get("points_per_usd"), "points_per_usd", minimum="0.01")
     fixed = _decimal(config.get("fixed_fee_points", 0), "fixed_fee_points")
     safety = _decimal(config.get("safety_buffer_usd", 0), "safety_buffer_usd")
@@ -117,7 +140,19 @@ def _points_units(provider_amount_usd: Decimal, config: Mapping[str, Any]) -> in
     )
 
 
-def _required_revenue_ntd(provider_amount_usd: Decimal, config: Mapping[str, Any]) -> Decimal:
+def _required_revenue_ntd(
+    provider_amount_usd: Decimal,
+    config: Mapping[str, Any],
+    *,
+    fx_rate: Decimal | None = None,
+) -> Decimal:
+    if str(config.get("pricing_mode") or "") == "supplier_plus_profit_ntd":
+        effective_fx = fx_rate or _decimal(
+            config.get("manual_usd_to_ntd_rate") or config.get("usd_to_ntd_rate"),
+            "manual_usd_to_ntd_rate",
+            minimum="0.000001",
+        )
+        return (provider_amount_usd * effective_fx) + _decimal(config.get("profit_ntd", 0), "profit_ntd")
     fx = _decimal(config.get("usd_to_ntd_rate"), "usd_to_ntd_rate", minimum="0.000001")
     fee = _decimal(config.get("payment_fee_rate", 0), "payment_fee_rate")
     if fee > Decimal("1"):
@@ -132,15 +167,56 @@ def _assert_profitable(
     credit_units: int,
     config: Mapping[str, Any],
     cash_per_point_ntd: Decimal,
+    *,
+    fx_rate: Decimal | None = None,
 ) -> None:
     revenue_ntd = (Decimal(int(credit_units)) / POINT_SCALE) * cash_per_point_ntd
-    required_ntd = _required_revenue_ntd(provider_amount_usd, config)
+    required_ntd = _required_revenue_ntd(provider_amount_usd, config, fx_rate=fx_rate)
     if revenue_ntd < required_ntd:
         raise ProxyPurchaseError(
             "UNPROFITABLE_PRICE",
-            "Point price does not cover provider cost, payment fee, safety buffer and minimum profit",
+            "Point price does not cover the converted provider cost and configured profit",
             409,
         )
+
+
+def _effective_usd_twd_rate(
+    config: Mapping[str, Any], *, force_refresh: bool = False
+) -> tuple[Decimal, dict[str, Any]]:
+    try:
+        reference = exchange_rates.get_usd_twd_rate(force_refresh=force_refresh)
+    except exchange_rates.ExchangeRateError as exc:
+        if str(config.get("fx_rate_mode") or "auto") == "manual":
+            manual = _decimal(
+                config.get("manual_usd_to_ntd_rate"),
+                "manual_usd_to_ntd_rate",
+                minimum="0.000001",
+            )
+            return manual, {
+                "base": "USD",
+                "quote": "TWD",
+                "rate": str(manual),
+                "reference_rate": "",
+                "mode": "manual",
+                "source": "manual-fallback",
+                "fetched_at": _now(),
+                "stale": True,
+            }
+        raise ProxyPurchaseError("FX_RATE_UNAVAILABLE", str(exc), 503) from exc
+    mode = str(config.get("fx_rate_mode") or "auto")
+    effective = reference.rate
+    if mode == "manual":
+        manual = _decimal(
+            config.get("manual_usd_to_ntd_rate"),
+            "manual_usd_to_ntd_rate",
+            minimum="0.000001",
+        )
+        # Manual adjustment may raise the conversion rate, but never undercut
+        # the live reference and silently sell below the supplier cost.
+        effective = max(reference.rate, manual)
+    public = reference.public()
+    public.update({"rate": str(effective), "reference_rate": str(reference.rate), "mode": mode})
+    return effective, public
 
 
 def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -168,6 +244,12 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     months = int(merged.get("default_period_months") or 1)
     if months < 1 or months > 36:
         raise ProxyPurchaseError("INVALID_CONFIG", "default_period_months must be between 1 and 36")
+    min_months = int(config.get("min_period_months") or months)
+    max_months = int(config.get("max_period_months") or months)
+    if min_months < 1 or max_months > 36 or min_months > max_months:
+        raise ProxyPurchaseError("INVALID_CONFIG", "purchase duration range must be between 1 and 36 months")
+    if months < min_months or months > max_months:
+        months = min_months
     ttl = int(merged.get("quote_ttl_seconds") or 180)
     if ttl < 120 or ttl > 300:
         raise ProxyPurchaseError("INVALID_CONFIG", "quote_ttl_seconds must be between 120 and 300")
@@ -180,12 +262,25 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
     payment_fee = _decimal(merged.get("payment_fee_rate", 0), "payment_fee_rate")
     if payment_fee > Decimal("1"):
         raise ProxyPurchaseError("INVALID_CONFIG", "payment_fee_rate must not exceed 1")
+    pricing_mode = str(merged.get("pricing_mode") or "legacy_points_per_usd")
+    if pricing_mode not in {"legacy_points_per_usd", "supplier_plus_profit_ntd"}:
+        raise ProxyPurchaseError("INVALID_CONFIG", "pricing_mode is invalid")
+    fx_rate_mode = str(merged.get("fx_rate_mode") or "auto")
+    if fx_rate_mode not in {"auto", "manual"}:
+        raise ProxyPurchaseError("INVALID_CONFIG", "fx_rate_mode must be auto or manual")
+    manual_fx = _decimal(
+        merged.get("manual_usd_to_ntd_rate") or merged.get("usd_to_ntd_rate"),
+        "manual_usd_to_ntd_rate",
+        minimum="0.000001",
+    )
+    profit_ntd = _decimal(merged.get("profit_ntd", 0), "profit_ntd")
     if merged.get("lowest_cash_per_point") not in (None, ""):
         cash_per_point = _decimal(
             merged.get("lowest_cash_per_point"), "lowest_cash_per_point", minimum="0.000001"
         )
-        max_units = _points_units(max_cost, merged)
-        _assert_profitable(max_cost, max_units, merged, cash_per_point)
+        if pricing_mode == "legacy_points_per_usd":
+            max_units = _points_units(max_cost, merged)
+            _assert_profitable(max_cost, max_units, merged, cash_per_point)
     merged["service_id"] = service_id
     merged["plan_id"] = str(merged.get("plan_id") or "")[:160]
     merged["default_period_months"] = months
@@ -202,6 +297,12 @@ def validate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         "service_id": service_id,
         "plan_id": str(merged.get("plan_id") or "")[:160],
         "default_period_months": months,
+        "min_period_months": min_months,
+        "max_period_months": max_months,
+        "pricing_mode": pricing_mode,
+        "fx_rate_mode": fx_rate_mode,
+        "manual_usd_to_ntd_rate": str(manual_fx),
+        "profit_ntd": str(profit_ntd),
         "points_per_usd": str(_decimal(merged.get("points_per_usd"), "points_per_usd", minimum="0.01")),
         "fixed_fee_points": str(_decimal(merged.get("fixed_fee_points", 0), "fixed_fee_points")),
         "max_vendor_cost_usd": str(max_cost),
@@ -265,6 +366,19 @@ def get_config(conn: sqlite3.Connection, *, include_draft: bool = False) -> dict
         }
     )
     return _config_public(config)
+
+
+def exchange_rate_status(
+    conn: sqlite3.Connection, *, force_refresh: bool = False, include_draft: bool = True
+) -> dict[str, Any]:
+    config = get_config(conn, include_draft=include_draft)
+    rate, status = _effective_usd_twd_rate(config, force_refresh=force_refresh)
+    return {
+        **status,
+        "rate": str(rate),
+        "manual_rate": str(config.get("manual_usd_to_ntd_rate") or ""),
+        "mode": str(config.get("fx_rate_mode") or "auto"),
+    }
 
 
 def save_config_draft(
@@ -334,6 +448,17 @@ def _validate_provider_config(provider: ProxyProvider, config: Mapping[str, Any]
     country = str(defaults.get("country") or "").upper()
     if country and country not in countries:
         raise ProxyPurchaseError("PROVIDER_COUNTRY_UNAVAILABLE", "Configured default country is unavailable", 409)
+    supplier_periods = _supported_month_periods(setup)
+    if supplier_periods:
+        requested_periods = set(
+            range(int(config.get("min_period_months") or 1), int(config.get("max_period_months") or 1) + 1)
+        )
+        if not requested_periods.issubset(set(supplier_periods)):
+            raise ProxyPurchaseError(
+                "PROVIDER_PERIOD_UNAVAILABLE",
+                "Configured purchase duration range is not fully supported by the supplier",
+                409,
+            )
     isp = str(defaults.get("isp") or defaults.get("ispId") or "")
     if isp:
         setup_data = setup.get("data") if isinstance(setup.get("data"), Mapping) else setup
@@ -383,6 +508,71 @@ def _country_isp_items(setup: Mapping[str, Any], country: str) -> list[dict[str,
     return [dict(item) for item in items if isinstance(item, Mapping)] if isinstance(items, list) else []
 
 
+def _city_items(setup: Mapping[str, Any], country: str) -> list[dict[str, str]]:
+    raw_cities = _setup_data(setup).get("cities")
+    if not isinstance(raw_cities, Mapping):
+        return []
+    items = raw_cities.get(str(country or "").strip().upper(), [])
+    if not isinstance(items, list):
+        return []
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        city_id = str(item.get("id") or item.get("value") or item.get("code") or item.get("name") or "").strip()
+        if not city_id or city_id in seen:
+            continue
+        seen.add(city_id)
+        result.append(
+            {
+                "id": city_id,
+                "name": str(item.get("name") or item.get("label") or city_id),
+                "region": str(item.get("region") or item.get("state") or ""),
+            }
+        )
+    return result
+
+
+def _city_raw_item(setup: Mapping[str, Any], country: str, city_id: str) -> Mapping[str, Any] | None:
+    raw_cities = _setup_data(setup).get("cities")
+    items = raw_cities.get(str(country or "").strip().upper(), []) if isinstance(raw_cities, Mapping) else []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        candidate = str(item.get("id") or item.get("value") or item.get("code") or item.get("name") or "").strip()
+        if candidate == str(city_id or "").strip():
+            return item
+    return None
+
+
+def _supported_month_periods(setup: Mapping[str, Any]) -> list[int]:
+    raw = _setup_data(setup).get("periods")
+    values: list[Any]
+    if isinstance(raw, Mapping):
+        values = list(raw.get("months") or [])
+    elif isinstance(raw, list):
+        values = raw
+    else:
+        values = []
+    result: set[int] = set()
+    for item in values:
+        if isinstance(item, Mapping):
+            unit = str(item.get("unit") or "months").lower()
+            value = item.get("value") or item.get("months")
+            if unit not in {"month", "months"}:
+                continue
+        else:
+            value = item
+        try:
+            months = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= months <= 36:
+            result.add(months)
+    return sorted(result)
+
+
 def _orderable_regions(setup: Mapping[str, Any], service_id: str) -> list[dict[str, str]]:
     regions = _region_items(setup)
     raw_isps = _setup_data(setup).get("isps")
@@ -396,6 +586,7 @@ def _configuration(
     country: str,
     period_months: int,
     *,
+    city: str = "",
     setup: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     result = dict(config.get("default_parameters") or {})
@@ -411,7 +602,17 @@ def _configuration(
     )
     service_id = str(config.get("service_id") or "")
     if setup is not None and service_id == "static-residential-ipv4":
+        if configured_country != clean_country:
+            result.pop("region", None)
+            result.pop("city", None)
         isps = _country_isp_items(setup, clean_country)
+        clean_city = str(city or "").strip()
+        city_item = _city_raw_item(setup, clean_country, clean_city) if clean_city else None
+        if clean_city:
+            result["city"] = clean_city
+            city_region = str(city_item.get("region") or city_item.get("state") or "") if city_item else ""
+            if city_region:
+                result["region"] = city_region
         if isps:
             available = {
                 str(item.get("id") or item.get("value") or item.get("code") or ""): item
@@ -421,15 +622,15 @@ def _configuration(
             mapped_isp = per_country.get(clean_country) if isinstance(per_country, Mapping) else ""
             configured_isp = str(result.get("isp") or result.get("ispId") or "")
             preferred = str(mapped_isp or (configured_isp if configured_country == clean_country else ""))
-            result["ispId"] = preferred if preferred in available else next(iter(available))
+            city_isps = city_item.get("isps") if city_item else []
+            city_isp_ids = [str(value) for value in city_isps] if isinstance(city_isps, list) else []
+            city_preferred = next((value for value in city_isp_ids if value in available), "")
+            result["ispId"] = city_preferred or (preferred if preferred in available else next(iter(available)))
             result.pop("isp", None)
         else:
             result.pop("isp", None)
             result.pop("ispId", None)
             result.pop("isp_by_country", None)
-        if configured_country != clean_country:
-            result.pop("region", None)
-            result.pop("city", None)
     return result
 
 
@@ -479,6 +680,17 @@ def purchase_options(
     wallet = commercial_billing.ensure_wallet(conn, int(user_id))
     cash_units = int(wallet.get("cash_backed_credit_units") or 0)
     defaults = dict(config.get("default_parameters") or {})
+    cities = {
+        region["code"]: _city_items(setup, region["code"])
+        for region in regions
+        if _city_items(setup, region["code"])
+    }
+    supplier_periods = _supported_month_periods(setup)
+    min_months = int(config.get("min_period_months") or config["default_period_months"])
+    max_months = int(config.get("max_period_months") or config["default_period_months"])
+    allowed_periods = [value for value in supplier_periods if min_months <= value <= max_months]
+    if not allowed_periods:
+        allowed_periods = [int(config["default_period_months"])]
     return {
         "provider": "proxycheap",
         "configured": configured and config.get("status") == "active" and bool(config.get("enabled")),
@@ -486,6 +698,8 @@ def purchase_options(
             purchasing and config.get("status") == "active" and config.get("enabled")
         ),
         "regions": regions,
+        "cities": cities,
+        "periods": [{"unit": "months", "value": value, "label": f"{value} 个月"} for value in allowed_periods],
         "cash_backed_credit_units": cash_units,
         "cash_backed_points": cash_units / POINT_SCALE,
         "currency": "USD",
@@ -512,6 +726,7 @@ def create_quote(
     user_id: int,
     country: str,
     auto_renew: bool,
+    city: str = "",
     period_months: int | None = None,
     provider: ProxyProvider | None = None,
     now: int | None = None,
@@ -530,16 +745,53 @@ def create_quote(
     }
     if clean_country not in countries:
         raise ProxyPurchaseError("INVALID_COUNTRY", "The selected region is not currently orderable", 422)
-    request = _configuration(config, clean_country, months, setup=setup)
+    min_months = int(config.get("min_period_months") or config["default_period_months"])
+    max_months = int(config.get("max_period_months") or config["default_period_months"])
+    supported_periods = _supported_month_periods(setup)
+    if months < min_months or months > max_months or (supported_periods and months not in supported_periods):
+        raise ProxyPurchaseError("INVALID_PERIOD", "The selected purchase duration is not available", 422)
+    clean_city = str(city or "").strip()
+    city_options = {item["id"]: item for item in _city_items(setup, clean_country)}
+    requires_city = bool(city_options and str(config.get("pricing_mode") or "") == "supplier_plus_profit_ntd")
+    if requires_city and clean_city not in city_options:
+        raise ProxyPurchaseError("INVALID_CITY", "Select an available city for this region", 422)
+    if clean_city and clean_city not in city_options:
+        raise ProxyPurchaseError("INVALID_CITY", "The selected city is not currently orderable", 422)
+    request = _configuration(config, clean_country, months, city=clean_city, setup=setup)
     quoted = provider.quote(str(config["service_id"]), request)
     if quoted.currency != "USD":
         raise ProxyPurchaseError("UNSUPPORTED_CURRENCY", "Only USD provider quotes are supported", 409)
     max_cost = _decimal(config["max_vendor_cost_usd"], "max_vendor_cost_usd")
     if quoted.amount > max_cost:
         raise ProxyPurchaseError("COST_LIMIT_EXCEEDED", "Provider cost exceeds the configured ceiling", 409)
-    charge_units = _points_units(quoted.amount, config)
-    _assert_profitable(quoted.amount, charge_units, config, _lowest_cash_per_point(conn))
-    request_record = {**request, "autoRenew": bool(auto_renew), "countryName": countries[clean_country]}
+    cash_per_point = _lowest_cash_per_point(conn)
+    fx_rate: Decimal | None = None
+    fx_public: dict[str, Any] = {}
+    if str(config.get("pricing_mode") or "") == "supplier_plus_profit_ntd":
+        fx_rate, fx_public = _effective_usd_twd_rate(config)
+    charge_units = _points_units(
+        quoted.amount,
+        config,
+        cash_per_point_ntd=cash_per_point,
+        fx_rate=fx_rate,
+    )
+    _assert_profitable(quoted.amount, charge_units, config, cash_per_point, fx_rate=fx_rate)
+    request_record = {
+        **request,
+        "autoRenew": bool(auto_renew),
+        "countryName": countries[clean_country],
+        "cityName": city_options.get(clean_city, {}).get("name", clean_city),
+        "_pricing": {
+            "mode": str(config.get("pricing_mode") or "legacy_points_per_usd"),
+            "fxRate": str(fx_rate or ""),
+            "profitNtd": str(config.get("profit_ntd") or "0"),
+            "supplierCostNtd": str((quoted.amount * fx_rate) if fx_rate else ""),
+            "customerTotalNtd": str(_required_revenue_ntd(quoted.amount, config, fx_rate=fx_rate)),
+            "cashPerPointNtd": str(cash_per_point),
+            "fxSource": str(fx_public.get("source") or ""),
+            "fxFetchedAt": int(fx_public.get("fetched_at") or 0),
+        },
+    }
     request_hash = hashlib.sha256(_json(request_record).encode()).hexdigest()
     quote_id = _id("proxy_quote")
     expires_at = current + int(config["quote_ttl_seconds"])
@@ -567,6 +819,8 @@ def create_quote(
         "id": quote_id,
         "country": clean_country,
         "country_name": countries[clean_country],
+        "city": clean_city,
+        "city_name": city_options.get(clean_city, {}).get("name", clean_city),
         "period": {"unit": "months", "value": months},
         "quantity": 1,
         "auto_renew": bool(auto_renew),
@@ -689,7 +943,11 @@ def create_order(
         raise ProxyPurchaseError("QUOTE_CONFIG_RETIRED", "Pricing configuration changed; request a new quote", 409)
     config = validate_config(_loads(config_row["config_json"], {}))
     request_record = _loads(quote_row["request_json"], {})
-    request = {key: value for key, value in request_record.items() if key not in {"autoRenew", "countryName"}}
+    request = {
+        key: value
+        for key, value in request_record.items()
+        if key not in {"autoRenew", "countryName", "cityName", "_pricing"}
+    }
     fresh = provider.quote(str(quote_row["service_id"]), request)
     fresh_minor = _minor_units(fresh.amount)
     if fresh.currency != "USD" or fresh_minor > int(quote_row["provider_price_minor"]):
@@ -697,11 +955,16 @@ def create_order(
         raise ProxyPurchaseError("PRICE_CHANGED", "Provider price increased; confirm a new quote", 409)
     if fresh.amount > _decimal(config["max_vendor_cost_usd"], "max_vendor_cost_usd"):
         raise ProxyPurchaseError("COST_LIMIT_EXCEEDED", "Provider cost exceeds the configured ceiling", 409)
+    pricing = request_record.get("_pricing") if isinstance(request_record.get("_pricing"), Mapping) else {}
+    recorded_fx = None
+    if pricing.get("fxRate") not in (None, ""):
+        recorded_fx = _decimal(pricing.get("fxRate"), "quote fxRate", minimum="0.000001")
     _assert_profitable(
         fresh.amount,
         int(quote_row["credit_units"]),
         config,
         _lowest_cash_per_point(conn),
+        fx_rate=recorded_fx,
     )
     balance = _balance_usd(provider.get_balance())
     if balance is None or balance < fresh.amount:
@@ -1434,13 +1697,17 @@ def process_due_renewals(
             if claimed != 1:
                 continue
             schedule_row = conn.execute(
-                "SELECT schedule.*,orders.config_version_id FROM proxy_renewal_schedules schedule "
+                "SELECT schedule.*,orders.config_version_id,orders.request_json AS order_request_json "
+                "FROM proxy_renewal_schedules schedule "
                 "JOIN proxy_purchase_orders orders ON orders.id=schedule.order_id WHERE schedule.id=? AND schedule.lease_token=?",
                 (str(candidate["id"]), lease),
             ).fetchone()
             if schedule_row is None:
                 continue
             schedule = dict(schedule_row)
+            order_request = _loads(schedule.get("order_request_json"), {})
+            renewal_period = order_request.get("period") if isinstance(order_request.get("period"), Mapping) else {}
+            renewal_months = max(1, min(int(renewal_period.get("value") or 1), 36))
             if not bool(getattr(provider, "safe_reconciliation_enabled", isinstance(provider, MockProxyProvider))):
                 conn.execute(
                     "UPDATE proxy_renewal_schedules SET status='config_blocked',lease_token='',lease_expires_at=0,"
@@ -1449,13 +1716,24 @@ def process_due_renewals(
                 )
                 conn.commit()
                 continue
-            quote = provider.extension_quote(str(schedule["provider_proxy_id"]), period_months=1)
+            quote = provider.extension_quote(
+                str(schedule["provider_proxy_id"]), period_months=renewal_months
+            )
             cfg_row = conn.execute("SELECT config_json FROM proxy_purchase_config_versions WHERE id=?", (str(schedule["config_version_id"]),)).fetchone()
             if quote.currency != "USD" or cfg_row is None:
                 raise ProxyPurchaseError("RENEWAL_CONFIG_INVALID", "Renewal pricing configuration is invalid", 409)
             config = validate_config(_loads(cfg_row["config_json"], {}))
-            units = _points_units(quote.amount, config)
-            _assert_profitable(quote.amount, units, config, _lowest_cash_per_point(conn))
+            cash_per_point = _lowest_cash_per_point(conn)
+            renewal_fx = None
+            if str(config.get("pricing_mode") or "") == "supplier_plus_profit_ntd":
+                renewal_fx, _ = _effective_usd_twd_rate(config)
+            units = _points_units(
+                quote.amount,
+                config,
+                cash_per_point_ntd=cash_per_point,
+                fx_rate=renewal_fx,
+            )
+            _assert_profitable(quote.amount, units, config, cash_per_point, fx_rate=renewal_fx)
             if quote.amount > _decimal(config["max_vendor_cost_usd"], "max_vendor_cost_usd"):
                 _disable_renewal(conn, schedule, "cost_limit", "cost ceiling exceeded", current)
                 continue
@@ -1481,7 +1759,9 @@ def process_due_renewals(
                 (str(reservation["id"]), current, current, str(schedule["id"]), lease),
             )
             conn.commit()
-            response = provider.extend_period(str(schedule["provider_proxy_id"]), period_months=1)
+            response = provider.extend_period(
+                str(schedule["provider_proxy_id"]), period_months=renewal_months
+            )
             actual_expiry = _parse_timestamp(_proxy_field(response, "expiresAt", "expires_at", "expirationDate"))
             if actual_expiry <= int(schedule["expires_at"] or 0):
                 actual = provider.get_proxy(str(schedule["provider_proxy_id"]))
@@ -1795,6 +2075,8 @@ def list_orders(
                     "user_id": int(row["user_id"]),
                     "country": str(request.get("country") or ""),
                     "country_name": str(request.get("countryName") or request.get("country") or ""),
+                    "city": str(request.get("city") or ""),
+                    "city_name": str(request.get("cityName") or request.get("city") or ""),
                     "vendor_price": str(Decimal(int(row["provider_cost_minor"] or 0)) / 100),
                     "currency": str(row["provider_currency"] or "USD"),
                 }

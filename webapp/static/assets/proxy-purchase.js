@@ -70,6 +70,8 @@
     button.classList.toggle("busy", state.busy);
     button.disabled = state.busy || !state.quote;
     byId("country").disabled = state.busy || !state.options?.configured;
+    byId("city").disabled = state.busy || !byId("country").value || !state.options?.cities?.[byId("country").value]?.length;
+    byId("period").disabled = state.busy || !state.options?.configured;
     byId("autoRenew").disabled = state.busy;
     if (label) byId("buyButtonText").textContent = label;
   }
@@ -110,6 +112,18 @@
       option.textContent = countryDisplayName(region);
       if (option.value) select.append(option);
     });
+    const period = byId("period");
+    period.replaceChildren();
+    const periods = Array.isArray(payload?.periods) ? payload.periods : [];
+    periods.forEach((item) => {
+      const value = Math.max(1, Number(item?.value || 1));
+      const option = document.createElement("option");
+      option.value = String(value);
+      option.textContent = String(item?.label || `${value} 个月`);
+      period.append(option);
+    });
+    if (!period.options.length) period.add(new Option("1 个月", "1"));
+    period.value = String(payload?.default_period?.value || period.options[0]?.value || "1");
     const serviceNames = {
       "static-residential-ipv4": "静态住宅代理 IP",
       "datacenter-ipv4": "数据中心代理",
@@ -130,7 +144,27 @@
     byId("providerState").textContent = ready ? `${provider} 已连接` : "采购服务尚未开放";
     byId("providerState").classList.toggle("ready", ready);
     select.disabled = !ready;
+    period.disabled = !ready;
     if (!ready) setAlert("代理采购当前尚未开放，请联系管理员完成供应商与定价配置。");
+  }
+
+  function renderCities() {
+    const country = byId("country").value;
+    const city = byId("city");
+    const items = Array.isArray(state.options?.cities?.[country]) ? state.options.cities[country] : [];
+    city.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = items.length ? "请选择代理城市" : "该地区由供应商自动分配城市";
+    city.append(placeholder);
+    items.forEach((item) => {
+      const option = document.createElement("option");
+      option.value = String(item?.id || "");
+      option.textContent = [String(item?.name || item?.id || ""), String(item?.region || "")].filter(Boolean).join(" · ");
+      if (option.value) city.append(option);
+    });
+    city.required = items.length > 0;
+    city.disabled = !country || items.length === 0;
   }
 
   function clearQuote() {
@@ -141,16 +175,23 @@
 
   async function refreshQuote() {
     const country = byId("country").value;
+    const city = byId("city").value;
+    const requiresCity = Boolean(state.options?.cities?.[country]?.length);
     const requestSeq = ++state.quoteSeq;
     setAlert("");
-    if (!country) { clearQuote(); return; }
+    if (!country || (requiresCity && !city)) { clearQuote(); return; }
     clearQuote();
     byId("country").disabled = true;
     try {
       const payload = await api("/api/proxy-purchases/quotes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ country, auto_renew: byId("autoRenew").checked }),
+        body: JSON.stringify({
+          country,
+          city,
+          period_months: Math.max(1, Number(byId("period").value || 1)),
+          auto_renew: byId("autoRenew").checked,
+        }),
       });
       if (requestSeq !== state.quoteSeq) return;
       const quote = payload?.quote;
@@ -304,7 +345,16 @@
 
   async function init() {
     byId("purchaseForm").addEventListener("submit", submitOrder);
-    byId("country").addEventListener("change", refreshQuote);
+    byId("country").addEventListener("change", () => {
+      renderCities();
+      clearQuote();
+      if (!state.options?.cities?.[byId("country").value]?.length) void refreshQuote();
+    });
+    byId("city").addEventListener("change", refreshQuote);
+    byId("period").addEventListener("change", () => {
+      byId("productPeriod").textContent = `${Math.max(1, Number(byId("period").value || 1))} 个月`;
+      void refreshQuote();
+    });
     byId("autoRenew").addEventListener("change", refreshQuote);
     byId("orderRenewal").addEventListener("change", updateRenewal);
     try {

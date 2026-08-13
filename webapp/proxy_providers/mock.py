@@ -19,6 +19,8 @@ class MockProxyProvider:
         self.orders: dict[str, JsonObject] = {}
         self.execute_calls = 0
         self.extend_calls = 0
+        self.extension_quote_periods: list[int] = []
+        self.extend_periods: list[int] = []
 
     def list_services(self) -> JsonObject:
         return {
@@ -39,8 +41,15 @@ class MockProxyProvider:
                 {"code": "US", "name": "United States"},
                 {"code": "GB", "name": "United Kingdom"},
             ],
-            "isps": [],
-            "periods": [{"unit": "months", "value": 1}],
+            "cities": {
+                "US": [{"id": "New York", "label": "New York", "region": "New York", "isps": ["mock-us-isp"]}],
+                "GB": [{"id": "London", "label": "London", "isps": ["mock-gb-isp"]}],
+            },
+            "isps": {
+                "US": [{"id": "mock-us-isp", "name": "Mock US ISP"}],
+                "GB": [{"id": "mock-gb-isp", "name": "Mock GB ISP"}],
+            },
+            "periods": {"months": list(range(1, 13))},
             "planId": plan_id,
         }
 
@@ -100,9 +109,11 @@ class MockProxyProvider:
         return {"balance": "1000.00", "currency": "USD"}
 
     def extension_quote(self, proxy_id: str, *, period_months: int) -> ProviderQuote:
+        self.extension_quote_periods.append(int(period_months))
         amount = self.unit_price_usd * int(period_months)
         return ProviderQuote(amount=amount, currency="USD", raw={"total": str(amount), "currency": "USD"})
 
     def extend_period(self, proxy_id: str, *, period_months: int) -> JsonObject:
         self.extend_calls += 1
+        self.extend_periods.append(int(period_months))
         return {"id": proxy_id, "status": "ACTIVE", "periodInMonths": int(period_months)}

@@ -400,6 +400,12 @@
     .proxy-purchase-config-form label { min-width: 0; margin: 0; }
     .proxy-purchase-config-form label > span { display: block; margin-bottom: 5px; }
     .proxy-purchase-config-form .span-2 { grid-column: span 2; }
+    .proxy-purchase-fx-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 78px; padding: 12px 14px; border: 1px solid #b9d7e8; border-radius: 8px; background: #edf8fd; }
+    .proxy-purchase-fx-card > div { display: grid; gap: 3px; }
+    .proxy-purchase-fx-card span { color: #51677c; font-size: 11px; }
+    .proxy-purchase-fx-card strong { color: #0d5f91; font-size: 18px; }
+    .proxy-purchase-fx-card small { color: #51677c; font-size: 10px; }
+    .proxy-purchase-fx-card button { width: auto; flex: 0 0 auto; }
     .proxy-purchase-config-form .proxy-purchase-config-actions { display: flex; align-items: end; justify-content: flex-end; gap: 8px; grid-column: 1 / -1; flex-wrap: wrap; }
     .proxy-purchase-config-form .proxy-purchase-config-actions button { width: auto; }
     .proxy-purchase-admin-hero #proxyPurchaseConfigMsg { color: #e8f7ff; font-weight: 700; }
@@ -1100,7 +1106,7 @@
           <div class="proxy-market-admin-band-head">
             <div>
               <h3>Proxy-Cheap 供应商采购</h3>
-              <div class="small">映射供应商公开 API 选项；用户端仅选择地区和自动续费，然后确认购买。</div>
+              <div class="small">国家、城市、周期与官方价格实时取自供应商；系统按新台币汇率加纯利润后自动换算算力点。</div>
             </div>
           </div>
           <div id="proxyPurchaseReadiness" class="proxy-purchase-readiness" role="status" aria-live="polite">正在读取采购状态...</div>
@@ -1118,14 +1124,17 @@
             <label><span>默认套餐</span><select id="proxyPurchasePlanId"><option value="">使用产品默认套餐</option></select></label>
             <label><span>默认地区</span><select id="proxyPurchaseDefaultCountry"><option value="">使用首个可售地区</option></select></label>
             <label><span>默认时长</span><select id="proxyPurchaseDefaultPeriod"><option value="1">1 个月</option></select></label>
-            <label><span>每美元兑换点数</span><input id="proxyPurchasePointsPerUsd" type="number" min="0.01" step="0.01" required></label>
-            <label><span>USD → NTD 汇率</span><input id="proxyPurchaseUsdToNtdRate" type="number" min="0.000001" step="0.000001" required></label>
-            <label><span>支付费率</span><input id="proxyPurchasePaymentFeeRate" type="number" min="0" max="1" step="0.0001" required></label>
-            <label><span>固定费用（点）</span><input id="proxyPurchaseFixedFeePoints" type="number" min="0" step="0.01" value="0" required></label>
-            <label><span>供应商成本上限（USD）</span><input id="proxyPurchaseMaxCostUsd" type="number" min="0.01" step="0.01" required></label>
-            <label><span>成本安全垫（USD）</span><input id="proxyPurchaseSafetyBufferUsd" type="number" min="0" step="0.01" value="0" required></label>
-            <label><span>最低利润（USD）</span><input id="proxyPurchaseMinProfitUsd" type="number" min="0" step="0.01" value="0" required></label>
+            <label><span>最短购买时长</span><select id="proxyPurchaseMinPeriod"><option value="1">1 个月</option></select></label>
+            <label><span>最长购买时长</span><select id="proxyPurchaseMaxPeriod"><option value="1">1 个月</option></select></label>
+            <label><span>汇率方式</span><select id="proxyPurchaseFxMode"><option value="auto">自动同步</option><option value="manual">手动上调</option></select></label>
+            <label id="proxyPurchaseManualFxField"><span>手动 USD → NTD 汇率</span><input id="proxyPurchaseManualFxRate" type="number" min="0.000001" step="0.000001" value="35" required></label>
+            <label><span>单个代理纯利润（NTD）</span><input id="proxyPurchaseProfitNtd" type="number" min="0" step="1" value="0" required></label>
             <label><span>用户购买</span><select id="proxyPurchaseEnabled"><option value="false">关闭</option><option value="true">开放</option></select></label>
+
+            <section class="proxy-purchase-fx-card span-2" aria-live="polite">
+              <div><span>实时 USD / TWD 参考汇率</span><strong id="proxyPurchaseFxRate">正在读取...</strong><small id="proxyPurchaseFxMeta">系统会在每次报价时重新校验</small></div>
+              <button id="btnRefreshProxyPurchaseFx" type="button" class="ghost">刷新汇率</button>
+            </section>
 
             <div class="proxy-purchase-config-actions">
               <button id="btnRefreshProxyPurchaseProvider" type="button" class="ghost">同步供应商</button>

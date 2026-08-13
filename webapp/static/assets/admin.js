@@ -8806,13 +8806,11 @@ function renderProxyPurchaseConfig(payload = {}) {
     proxyPurchasePlanId: proxyPurchaseConfigValue(config, "plan_id"),
     proxyPurchaseDefaultCountry: proxyPurchaseConfigValue(config, "default_country", "country") || setupDefaults.country || "",
     proxyPurchaseDefaultPeriod: proxyPurchaseConfigValue(config, "default_period", "period") || 1,
-    proxyPurchasePointsPerUsd: proxyPurchaseConfigValue(config, "points_per_usd"),
-    proxyPurchaseUsdToNtdRate: proxyPurchaseConfigValue(config, "usd_to_ntd_rate") || 35,
-    proxyPurchasePaymentFeeRate: proxyPurchaseConfigValue(config, "payment_fee_rate") || 0,
-    proxyPurchaseFixedFeePoints: proxyPurchaseConfigValue(config, "fixed_fee_points") || 0,
-    proxyPurchaseMaxCostUsd: proxyPurchaseConfigValue(config, "max_vendor_cost_usd", "max_cost_usd"),
-    proxyPurchaseSafetyBufferUsd: proxyPurchaseConfigValue(config, "safety_buffer_usd") || 0,
-    proxyPurchaseMinProfitUsd: proxyPurchaseConfigValue(config, "minimum_profit_usd", "min_profit_usd") || 0,
+    proxyPurchaseMinPeriod: proxyPurchaseConfigValue(config, "min_period_months") || 1,
+    proxyPurchaseMaxPeriod: proxyPurchaseConfigValue(config, "max_period_months") || 1,
+    proxyPurchaseFxMode: proxyPurchaseConfigValue(config, "fx_rate_mode") || "auto",
+    proxyPurchaseManualFxRate: proxyPurchaseConfigValue(config, "manual_usd_to_ntd_rate", "usd_to_ntd_rate") || 35,
+    proxyPurchaseProfitNtd: proxyPurchaseConfigValue(config, "profit_ntd") || 0,
     proxyPurchaseEnabled: String(Boolean(proxyPurchaseConfigValue(config, "live_purchasing_enabled", "enabled"))),
   };
   Object.entries(values).forEach(([id, value]) => {
@@ -8822,6 +8820,33 @@ function renderProxyPurchaseConfig(payload = {}) {
   if (Object.prototype.hasOwnProperty.call(payload || {}, "credential_status")) {
     renderProxyProviderCredentialStatus(payload?.credential_status || {});
   }
+  syncProxyPurchaseFxMode();
+}
+
+function syncProxyPurchaseFxMode() {
+  const manual = el("proxyPurchaseFxMode")?.value === "manual";
+  const field = el("proxyPurchaseManualFxField");
+  const input = el("proxyPurchaseManualFxRate");
+  if (field) field.hidden = !manual;
+  if (input) input.disabled = !manual;
+}
+
+function renderProxyPurchaseExchangeRate(payload = {}) {
+  const rate = Number(payload?.rate);
+  const reference = Number(payload?.reference_rate || payload?.rate);
+  setText("proxyPurchaseFxRate", Number.isFinite(rate) ? `1 USD = ${rate.toFixed(4)} TWD` : "暂时不可用");
+  const fetchedAt = Number(payload?.fetched_at || 0);
+  const updated = fetchedAt ? new Date(fetchedAt * 1000).toLocaleString("zh-CN", { hour12: false }) : "未刷新";
+  const mode = payload?.mode === "manual" ? "手动上调" : "自动同步";
+  const referenceCopy = Number.isFinite(reference) && reference !== rate ? ` · 市场参考 ${reference.toFixed(4)}` : "";
+  setText("proxyPurchaseFxMeta", `${mode}${referenceCopy} · ${updated}${payload?.stale ? " · 使用缓存" : ""}`);
+}
+
+async function loadProxyPurchaseExchangeRate({ refresh = false } = {}) {
+  setText("proxyPurchaseFxMeta", refresh ? "正在刷新市场参考汇率..." : "正在读取市场参考汇率...");
+  const payload = await api(`/api/admin/proxy-purchases/exchange-rate${refresh ? "?refresh=true" : ""}`);
+  renderProxyPurchaseExchangeRate(payload || {});
+  return payload;
 }
 
 function renderProxyProviderCredentialStatus(status = {}) {
@@ -8875,6 +8900,7 @@ function renderProxyProviderFieldMap(payload = {}) {
   const rows = [
     ["公开产品", Array.isArray(payload?.services) ? `${payload.services.length} 项` : "0 项"],
     ["可售地区", proxyProviderSetupValueSummary(setup.countries || setup.regions)],
+    ["可售城市", proxyProviderSetupValueSummary(setup.cities)],
     ["ISP", proxyProviderSetupValueSummary(setup.isps || setup.isp)],
     ["套餐包", proxyProviderSetupValueSummary(setup.packages || setup.package)],
     ["周期", proxyProviderSetupValueSummary(setup.periods || setup.period)],
@@ -8957,6 +8983,8 @@ function renderProxyPurchaseProviderOptions(payload = {}) {
     label: `${period?.label || period?.value || period?.months || period} 个月`,
   }));
   setProxyPurchaseSelectOptions("proxyPurchaseDefaultPeriod", periods, { emptyLabel: "" });
+  setProxyPurchaseSelectOptions("proxyPurchaseMinPeriod", periods, { emptyLabel: "" });
+  setProxyPurchaseSelectOptions("proxyPurchaseMaxPeriod", periods, { emptyLabel: "" });
   renderProxyProviderFieldMap(payload);
   const selectedProviderPlan = String(el("proxyPurchasePlanId")?.value || "");
   renderProxyPurchaseConfig({ config: adminState.proxyPurchaseConfig || {} });
@@ -9053,15 +9081,14 @@ function proxyPurchaseConfigPayload() {
     plan_id: String(el("proxyPurchasePlanId")?.value || ""),
     default_country: String(el("proxyPurchaseDefaultCountry")?.value || ""),
     default_period: Math.max(1, Number(el("proxyPurchaseDefaultPeriod")?.value || 1)),
+    min_period_months: Math.max(1, Number(el("proxyPurchaseMinPeriod")?.value || 1)),
+    max_period_months: Math.max(1, Number(el("proxyPurchaseMaxPeriod")?.value || 1)),
     quantity: 1,
     setup_defaults: setupDefaults,
-    points_per_usd: Number(el("proxyPurchasePointsPerUsd")?.value || 0),
-    usd_to_ntd_rate: Number(el("proxyPurchaseUsdToNtdRate")?.value || 0),
-    payment_fee_rate: Number(el("proxyPurchasePaymentFeeRate")?.value || 0),
-    fixed_fee_points: Number(el("proxyPurchaseFixedFeePoints")?.value || 0),
-    max_vendor_cost_usd: Number(el("proxyPurchaseMaxCostUsd")?.value || 0),
-    safety_buffer_usd: Number(el("proxyPurchaseSafetyBufferUsd")?.value || 0),
-    minimum_profit_usd: Number(el("proxyPurchaseMinProfitUsd")?.value || 0),
+    pricing_mode: "supplier_plus_profit_ntd",
+    fx_rate_mode: String(el("proxyPurchaseFxMode")?.value || "auto"),
+    manual_usd_to_ntd_rate: Number(el("proxyPurchaseManualFxRate")?.value || 35),
+    profit_ntd: Number(el("proxyPurchaseProfitNtd")?.value || 0),
     live_purchasing_enabled: el("proxyPurchaseEnabled")?.value === "true",
   };
 }
@@ -9069,6 +9096,13 @@ function proxyPurchaseConfigPayload() {
 async function saveProxyPurchaseConfig() {
   const form = el("proxyPurchaseConfigForm");
   if (!form?.reportValidity()) return false;
+  const minimumPeriod = Number(el("proxyPurchaseMinPeriod")?.value || 1);
+  const maximumPeriod = Number(el("proxyPurchaseMaxPeriod")?.value || 1);
+  if (minimumPeriod > maximumPeriod) {
+    setMsg("proxyPurchaseConfigMsg", "最短购买时长不能大于最长购买时长", false);
+    el("proxyPurchaseMinPeriod")?.focus();
+    return false;
+  }
   form.setAttribute("aria-busy", "true");
   setMsg("proxyPurchaseConfigMsg", "正在保存采购配置草稿...");
   try {
@@ -9091,7 +9125,8 @@ async function publishProxyPurchaseConfig() {
   form.setAttribute("aria-busy", "true");
   setMsg("proxyPurchaseConfigMsg", "正在校验成本与利润约束并发布...");
   try {
-    await saveProxyPurchaseConfig();
+    const saved = await saveProxyPurchaseConfig();
+    if (!saved) return false;
     const payload = await api("/api/admin/proxy-purchases/config/publish", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -9126,6 +9161,7 @@ function renderProxyPurchaseOrders(payload = {}) {
     row.appendChild(createBillingCell([
       order.user_id ? `#${order.user_id}` : "-",
       proxyPurchaseCountryLabel({ name: order.country_name, code: order.country }),
+      order.city_name || order.city || "",
     ].filter(Boolean).join(" · ")));
     row.appendChild(createBillingCell(order.vendor_price === undefined ? "-" : `${order.vendor_price} ${order.currency || "USD"}`));
     row.appendChild(createBillingCell(order.charge_points === undefined ? "-" : `${Number(order.charge_points).toLocaleString("zh-CN", { maximumFractionDigits: 2 })} 点`));
@@ -9252,6 +9288,7 @@ async function loadProxyMarketWorkspace() {
       serviceId: "static-residential-ipv4",
       planId: String(el("proxyPurchasePlanId")?.value || ""),
     })),
+    loadProxyPurchaseExchangeRate(),
     loadProxyPurchaseOrders(),
   ]).finally(() => {
     section?.classList.remove("proxy-market-loading");
@@ -10348,6 +10385,12 @@ function bindActions() {
   el("btnRefreshProxyPurchaseProvider")?.addEventListener("click", async () => {
     try { await loadProxyPurchaseProviderOptions({ persist: true }); } catch {}
   });
+  el("btnRefreshProxyPurchaseFx")?.addEventListener("click", async () => {
+    try { await loadProxyPurchaseExchangeRate({ refresh: true }); } catch (error) {
+      setText("proxyPurchaseFxMeta", `刷新失败：${getErrorMessage(error)}`);
+    }
+  });
+  el("proxyPurchaseFxMode")?.addEventListener("change", syncProxyPurchaseFxMode);
   el("proxyProviderCredentialForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try { await saveProxyProviderCredentials(); } catch (error) {

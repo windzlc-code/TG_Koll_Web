@@ -192,6 +192,8 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         ]
         self.assertIn('class="account-proxy-purchase-form"', purchase_view)
         self.assertIn('data-account-proxy-purchase-country', purchase_view)
+        self.assertIn('data-account-proxy-purchase-city', purchase_view)
+        self.assertIn('data-account-proxy-purchase-period', purchase_view)
         self.assertIn('data-account-proxy-purchase-renewal', purchase_view)
         self.assertNotIn('data-account-proxy-quote-points', purchase_view)
         self.assertIn('data-account-proxy-purchase-submit', purchase_view)
@@ -200,6 +202,8 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertNotIn('/proxy-purchase?embedded=1', purchase_view)
         self.assertIn('await api("/api/proxy-purchases/options", { cache: "no-store" })', self.console_script)
         self.assertIn('api("/api/proxy-purchases/quotes"', purchase_view)
+        self.assertIn("period_months:", purchase_view)
+        self.assertIn("function accountProxyPurchaseRenderCities", purchase_view)
         self.assertIn('api("/api/proxy-purchases/orders"', purchase_view)
         self.assertIn('/api/proxy-purchases/orders/recover', purchase_view)
         self.assertNotIn('window.addEventListener("message"', purchase_view)

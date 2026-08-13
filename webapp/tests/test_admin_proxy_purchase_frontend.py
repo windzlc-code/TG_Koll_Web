@@ -117,6 +117,36 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertNotIn("totpCode", publish)
         self.assertIn("JSON.stringify({})", publish)
 
+    def test_purchase_config_uses_duration_range_live_fx_and_ntd_profit_only(self):
+        proxy_start = self.markup.index('id="proxyPurchaseAdminWorkspace"')
+        proxy_end = self.markup.index('id="proxyPurchaseOrderSummary"', proxy_start)
+        workspace = self.markup[proxy_start:proxy_end]
+        for control_id in (
+            "proxyPurchaseMinPeriod",
+            "proxyPurchaseMaxPeriod",
+            "proxyPurchaseFxMode",
+            "proxyPurchaseManualFxRate",
+            "proxyPurchaseProfitNtd",
+            "proxyPurchaseFxRate",
+            "btnRefreshProxyPurchaseFx",
+        ):
+            self.assertIn(f'id="{control_id}"', workspace)
+        for removed_id in (
+            "proxyPurchasePointsPerUsd",
+            "proxyPurchaseUsdToNtdRate",
+            "proxyPurchasePaymentFeeRate",
+            "proxyPurchaseFixedFeePoints",
+            "proxyPurchaseSafetyBufferUsd",
+            "proxyPurchaseMinProfitUsd",
+        ):
+            self.assertNotIn(f'id="{removed_id}"', workspace)
+        payload = self._function("proxyPurchaseConfigPayload", "saveProxyPurchaseConfig")
+        self.assertIn('pricing_mode: "supplier_plus_profit_ntd"', payload)
+        self.assertIn("profit_ntd:", payload)
+        self.assertIn("min_period_months:", payload)
+        self.assertIn("max_period_months:", payload)
+        self.assertIn("/api/admin/proxy-purchases/exchange-rate", self.script)
+
     def test_purchase_sync_status_has_explicit_contrast_colors(self):
         self.assertIn("#proxyProviderFieldRevision", self.markup)
         self.assertIn("#proxyPurchaseConfigMsg.msg.ok", self.markup)

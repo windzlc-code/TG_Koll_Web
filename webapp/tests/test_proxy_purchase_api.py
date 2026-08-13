@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from decimal import Decimal
 
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, Header
@@ -16,6 +17,7 @@ from webapp import proxy_purchases
 from webapp import proxy_purchase_api
 from webapp import proxy_provider_credentials
 from webapp.proxy_purchase_api import register_proxy_purchase_routes
+from webapp.exchange_rates import ExchangeRateQuote
 
 
 class ProxyPurchaseApiTests(unittest.TestCase):
@@ -129,7 +131,7 @@ class ProxyPurchaseApiTests(unittest.TestCase):
         self.assertEqual(options.json()["quantity"], 1)
         self.assertEqual(options.json()["ip_version"], "IPv4")
         self.assertEqual(options.json()["authentication_type"], "USERNAME_PASSWORD")
-        self.assertFalse(options.json()["isp_managed"])
+        self.assertTrue(options.json()["isp_managed"])
 
         quote_response = self.client.post(
             "/api/proxy-purchases/quotes",
@@ -209,6 +211,16 @@ class ProxyPurchaseApiTests(unittest.TestCase):
         options.assert_called_once()
         self.assertEqual(options.call_args.kwargs["service_id"], "static-residential-ipv4")
         self.assertEqual(options.call_args.kwargs["plan_id"], "plan-a")
+
+    def test_admin_can_refresh_server_side_usd_twd_rate(self):
+        quote = ExchangeRateQuote("USD", "TWD", Decimal("32.217"), "Frankfurter", 1_700_000_100, "2026-08-13")
+        with mock.patch.object(proxy_purchases.exchange_rates, "get_usd_twd_rate", return_value=quote) as rate:
+            response = self.client.get("/api/admin/proxy-purchases/exchange-rate", params={"refresh": "true"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["rate"], "32.217")
+        self.assertEqual(response.json()["quote"], "TWD")
+        self.assertEqual(response.headers.get("cache-control"), "no-store")
+        rate.assert_called_once_with(force_refresh=True)
 
     def test_admin_provider_credentials_are_encrypted_write_only_and_audited(self):
         with (
