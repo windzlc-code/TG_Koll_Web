@@ -3430,6 +3430,76 @@ def _mapped_login_input(page: Any, selectors: list[str]) -> Any | None:
     return _visible_first(page, selectors, timeout_ms=1200)
 
 
+def _login_assistance_surfaces(page: Any) -> list[tuple[Any, Any]]:
+    candidates: list[Any] = []
+    context = getattr(page, "context", None)
+    context_pages = getattr(context, "pages", None)
+    pages = list(context_pages) if isinstance(context_pages, (list, tuple)) else []
+    for candidate in reversed(pages):
+        if all(candidate is not existing for existing in candidates):
+            candidates.append(candidate)
+    if all(page is not existing for existing in candidates):
+        candidates.append(page)
+    surfaces: list[tuple[Any, Any]] = []
+    for candidate in candidates:
+        try:
+            closed = bool(getattr(candidate, "is_closed", lambda: False)())
+        except Exception:
+            closed = False
+        if closed:
+            continue
+        candidate_frames = getattr(candidate, "frames", None)
+        frames = list(candidate_frames) if isinstance(candidate_frames, (list, tuple)) else []
+        surfaces.extend((candidate, frame) for frame in reversed(frames))
+        surfaces.append((candidate, candidate))
+    return surfaces
+
+
+def _mapped_login_credentials(page: Any) -> tuple[Any, Any, Any, Any] | None:
+    username_selectors = [
+        'input[name="username"]',
+        'input[autocomplete="username"]',
+        'input[type="email"]',
+        'input[type="tel"]',
+        'input[aria-label*="username" i]',
+        'input[aria-label*="email" i]',
+        'input[aria-label*="phone" i]',
+        'input[placeholder*="username" i]',
+        'input[placeholder*="email" i]',
+        'input[placeholder*="phone" i]',
+        'input[placeholder*="mobile" i]',
+    ]
+    password_selectors = [
+        'input[name="password"]',
+        'input[autocomplete="current-password"]',
+        'input[type="password"]',
+        'input[aria-label*="password" i]',
+        'input[placeholder*="password" i]',
+    ]
+    for action_page, surface in _login_assistance_surfaces(page):
+        username_input = _mapped_login_input(surface, username_selectors)
+        password_input = _mapped_login_input(surface, password_selectors)
+        if username_input is not None and password_input is not None:
+            return action_page, surface, username_input, password_input
+    return None
+
+
+def _mapped_login_verification_code(page: Any) -> tuple[Any, Any, Any] | None:
+    for action_page, surface in _login_assistance_surfaces(page):
+        code_input = _verification_code_input(surface)
+        if code_input is not None:
+            return action_page, surface, code_input
+    return None
+
+
+def _mapped_login_confirmation_page(page: Any, logger: AutomationLogger) -> Any | None:
+    labels = ["Continue", "Confirm", "Yes", "Continue with Instagram", "继续", "确认", "是", "使用 Instagram 继续"]
+    for action_page, surface in _login_assistance_surfaces(page):
+        if _click_text_button(surface, logger, labels, "mapped_login_confirm"):
+            return action_page
+    return None
+
+
 def _set_login_assistance_pending(context_control: dict[str, Any], pending: bool) -> None:
     submission_lock = context_control.get("login_assistance_lock")
     if submission_lock is not None and hasattr(submission_lock, "__enter__"):
@@ -3456,32 +3526,33 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
     try:
         if kind == "verification_code":
             code = str(action.get("verification_code") or "").strip()
-            code_input = _verification_code_input(page)
-            if not code or code_input is None:
+            verification = _mapped_login_verification_code(page)
+            if not code or verification is None:
                 raise RuntimeError("当前页面没有可填写的验证码输入框")
-            _clear_and_type(page, code_input, code, mode="type", logger=logger, stage="mapped_verification_code")
-            clicked = _click_text_button(page, logger, ["Continue", "Confirm", "Verify", "Submit", "Next", "继续", "确认", "验证", "提交", "下一步"], "mapped_verification_submit")
+            action_page, action_surface, code_input = verification
+            _clear_and_type(action_page, code_input, code, mode="type", logger=logger, stage="mapped_verification_code")
+            clicked = _click_text_button(action_surface, logger, ["Continue", "Confirm", "Verify", "Submit", "Next", "继续", "确认", "验证", "提交", "下一步"], "mapped_verification_submit")
             if not clicked:
-                page.keyboard.press("Enter")
+                action_page.keyboard.press("Enter")
             message = "验证码已提交，正在确认登录结果。"
         elif kind == "credentials":
             username = str(action.get("login_username") or "").strip()
             password = str(action.get("login_password") or "")
             if not username or not password:
                 raise RuntimeError("请完整填写登录账号和密码")
-            username_input = _mapped_login_input(page, ['input[name="username"]', 'input[autocomplete="username"]', 'input[type="email"]', 'input[type="tel"]', 'input[aria-label*="username" i]', 'input[aria-label*="email" i]', 'input[aria-label*="phone" i]', 'input[placeholder*="username" i]', 'input[placeholder*="email" i]', 'input[placeholder*="phone" i]'])
-            password_input = _mapped_login_input(page, ['input[name="password"]', 'input[autocomplete="current-password"]', 'input[type="password"]', 'input[aria-label*="password" i]', 'input[placeholder*="password" i]'])
-            if username_input is None or password_input is None:
+            credentials = _mapped_login_credentials(page)
+            if credentials is None:
                 raise RuntimeError("当前页面尚未显示账号密码输入框")
-            _clear_and_type(page, username_input, username, mode="type", logger=logger, stage="mapped_login_username")
-            _clear_and_type(page, password_input, password, mode="type", logger=logger, stage="mapped_login_password")
-            clicked = _click_text_button(page, logger, ["Log in", "Log In", "Login", "Continue", "登录", "登入", "继续"], "mapped_login_submit")
+            action_page, action_surface, username_input, password_input = credentials
+            _clear_and_type(action_page, username_input, username, mode="type", logger=logger, stage="mapped_login_username")
+            _clear_and_type(action_page, password_input, password, mode="type", logger=logger, stage="mapped_login_password")
+            clicked = _click_text_button(action_surface, logger, ["Log in", "Log In", "Login", "Continue", "登录", "登入", "继续"], "mapped_login_submit")
             if not clicked:
-                page.keyboard.press("Enter")
+                action_page.keyboard.press("Enter")
             message = "登录信息已提交，正在检查账号状态。"
         elif kind == "confirm":
-            clicked = _click_text_button(page, logger, ["Continue", "Confirm", "Yes", "Continue with Instagram", "继续", "确认", "是", "使用 Instagram 继续"], "mapped_login_confirm")
-            if not clicked:
+            action_page = _mapped_login_confirmation_page(page, logger)
+            if action_page is None:
                 raise RuntimeError("当前页面没有可确认的按钮")
             message = "确认操作已提交，正在继续登录。"
         else:
@@ -9427,7 +9498,12 @@ def _click_text_button(
                 if loc.count() and loc.is_visible(timeout=2500):
                     if abort_if is not None and abort_if():
                         return False
-                    if _human_click(page, loc, logger, stage, abort_if=abort_if):
+                    action_page = getattr(page, "page", None)
+                    if callable(action_page):
+                        action_page = action_page()
+                    if action_page is None:
+                        action_page = page
+                    if _human_click(action_page, loc, logger, stage, abort_if=abort_if):
                         return True
             except Exception:
                 continue

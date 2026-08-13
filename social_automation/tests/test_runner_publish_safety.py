@@ -59,7 +59,7 @@ class LoginAssistancePresentationTests(unittest.TestCase):
             self.assertTrue(control["login_assistance_pending"])
 
         with (
-            mock.patch.object(runner, "_verification_code_input", return_value=code_input),
+            mock.patch.object(runner, "_mapped_login_verification_code", return_value=(page, page, code_input)),
             mock.patch.object(runner, "_clear_and_type", side_effect=assert_pending_while_browser_is_typing) as fill,
             mock.patch.object(runner, "_click_text_button", return_value=True) as submit,
         ):
@@ -92,6 +92,40 @@ class LoginAssistancePresentationTests(unittest.TestCase):
             mock.Mock(), control, {"status": "need_verification", "challenge_type": "sms_code"}
         )
         self.assertEqual(control["login_assistance_state"]["kind"], "verification_code")
+
+    def test_credentials_follow_the_visible_login_page_when_context_switched_tabs(self):
+        actions = queue.Queue(maxsize=2)
+        actions.put_nowait({"kind": "credentials", "login_username": "name", "login_password": "secret"})
+        stale_page, login_page = mock.Mock(), mock.Mock()
+        stale_page.is_closed.return_value = False
+        login_page.is_closed.return_value = False
+        stale_page.frames = []
+        login_page.frames = []
+        stale_page.context.pages = [stale_page, login_page]
+        username_input, password_input = mock.Mock(), mock.Mock()
+        control = {
+            "login_assistance_queue": actions,
+            "login_assistance_lock": threading.Lock(),
+            "login_assistance_pending": True,
+        }
+
+        def locate(surface, selectors, **_kwargs):
+            if surface is not login_page:
+                return None
+            return password_input if any('password' in selector for selector in selectors) else username_input
+
+        with (
+            mock.patch.object(runner, "_visible_first", side_effect=locate),
+            mock.patch.object(runner, "_clear_and_type") as fill,
+            mock.patch.object(runner, "_click_text_button", return_value=True),
+        ):
+            consumed = runner._process_login_assistance_action(
+                stale_page, "instagram", mock.Mock(), control
+            )
+
+        self.assertTrue(consumed)
+        self.assertEqual(fill.call_args_list[0].args[1:3], (username_input, "name"))
+        self.assertEqual(fill.call_args_list[1].args[1:3], (password_input, "secret"))
 
 
 class _BackgroundPage:
