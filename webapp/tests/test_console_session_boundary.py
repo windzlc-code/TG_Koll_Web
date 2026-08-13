@@ -3233,6 +3233,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("login_username: loginIdentifier", create_save)
         self.assertIn("login_username: loginIdentifier", edit_save)
         self.assertIn('payload["login_username"] = str(payload.get("login_username")', runtime)
+        self.assertIn(".account-create-form [hidden]", self.styles)
 
     def test_account_pool_clipboard_reuses_current_page_text_before_browser_read(self):
         copy_one = self._function_source("copyAccountPoolCardToClipboard")
