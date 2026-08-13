@@ -18818,6 +18818,59 @@ body.persona-media-sorting {
   font-weight: 780;
 }
 
+.account-pool-card-actions {
+  display: grid;
+  grid-template-columns: minmax(144px, 144px) repeat(3, max-content);
+  align-items: center;
+  justify-content: start;
+}
+
+.account-card-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.account-card-action--login {
+  grid-column: span 1;
+  min-width: 144px;
+}
+
+.account-pool-card-actions .account-card-action {
+  margin: 0;
+}
+
+.account-pool-card-actions .ui-action-icon,
+.account-pool-card-actions .ui-trash-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (max-width: 520px) {
+  .account-pool-card-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .account-pool-card-actions .account-card-action--login {
+    grid-column: span 2;
+    min-width: 0;
+  }
+
+  .account-pool-card-actions .account-card-action {
+    min-width: 0;
+  }
+}
+
+
 .persona-account-summary-actions .persona-account-card-action {
   display: inline-flex;
   align-items: center;

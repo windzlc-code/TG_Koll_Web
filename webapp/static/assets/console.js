@@ -26364,7 +26364,8 @@ function updateAccountStatusViews() {
   });
   document.querySelectorAll("[data-account-proxy-picker]").forEach((button) => {
     const account = accountById.get(String(button.dataset.accountProxyPicker || ""));
-    if (account) button.textContent = String(account.proxy_id || "").trim() ? "切换代理" : "选择代理";
+    const label = button.querySelector("[data-account-proxy-label]");
+    if (account && label) label.textContent = String(account.proxy_id || "").trim() ? "切换代理" : "选择代理";
   });
   document.querySelectorAll("[data-account-totp-for]").forEach((node) => {
     const account = accountById.get(String(node.dataset.accountTotpFor || ""));
@@ -26911,25 +26912,25 @@ function renderAccountPoolCardActions(account, { context = "pool", personaAccoun
   const activeLoginTask = activeOpenLoginTaskForAccount(accountId);
   const loginAction = (attribute) => {
     if (activeLoginTask?.id) {
-      return `<button type="button" class="primary" ${attribute}="${esc(accountId)}" data-open-login-task-id="${esc(activeLoginTask.id)}">${renderBusyButtonContent("执行中", true, activeLoginTask.created_at || activeLoginTask.updated_at)}</button>`;
+      return `<button type="button" class="primary account-card-action account-card-action--login" ${attribute}="${esc(accountId)}" data-open-login-task-id="${esc(activeLoginTask.id)}">${renderBrowserLaunchIcon()}${renderBusyButtonContent("执行中", true, activeLoginTask.created_at || activeLoginTask.updated_at)}</button>`;
     }
-    return `<button type="button" class="primary" ${attribute}="${esc(accountId)}">打开登录</button>`;
+    return `<button type="button" class="primary account-card-action account-card-action--login" ${attribute}="${esc(accountId)}">${renderBrowserLaunchIcon()}<span>打开登录</span></button>`;
   };
   if (context === "persona-settings") {
     const changeAction = personaAccountAction ? `<button type="button" class="persona-account-card-action persona-account-card-change" data-persona-account-add data-persona-account-platform="${esc(personaAccountAction.platform || "")}" title="${esc(personaAccountAction.title || "更换当前账号")}" aria-label="${esc(personaAccountAction.title || "更换当前账号")}">${renderPersonaAccountBindingIcon("replace")}<span>更换</span></button>` : "";
     return `<div class="row-actions persona-account-summary-actions">
       ${loginAction("data-persona-account-open-login")}
-      <button type="button" data-persona-account-proxy="${esc(accountId)}">${proxyLabel}</button>
-      <button type="button" data-persona-account-edit="${esc(accountId)}">编辑</button>
+      <button type="button" class="account-card-action account-card-action--proxy" data-persona-account-proxy="${esc(accountId)}">${renderNetworkIcon()}<span data-account-proxy-label>${esc(proxyLabel)}</span></button>
+      <button type="button" class="account-card-action account-card-action--edit" data-persona-account-edit="${esc(accountId)}">${renderEditIcon()}<span>编辑</span></button>
       <button type="button" class="persona-account-card-action persona-account-card-unbind" data-persona-account-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>${renderPersonaAccountBindingIcon("remove")}<span>移除</span></button>
       ${changeAction}
     </div>`;
   }
-  return `<div class="row-actions">
+  return `<div class="row-actions account-pool-card-actions">
     ${loginAction("data-social-open-login")}
-    <button type="button" data-account-proxy-picker="${esc(accountId)}">${proxyLabel}</button>
-    <button type="button" data-account-pool-edit="${esc(accountId)}">编辑</button>
-    <button type="button" class="danger" data-social-delete-account="${esc(accountId)}">删除</button>
+    <button type="button" class="account-card-action account-card-action--proxy" data-account-proxy-picker="${esc(accountId)}">${renderNetworkIcon()}<span data-account-proxy-label>${esc(proxyLabel)}</span></button>
+    <button type="button" class="account-card-action account-card-action--edit" data-account-pool-edit="${esc(accountId)}">${renderEditIcon()}<span>编辑</span></button>
+    <button type="button" class="danger account-card-action account-card-action--delete" data-social-delete-account="${esc(accountId)}">${renderTrashIcon()}<span>删除</span></button>
   </div>`;
 }
 

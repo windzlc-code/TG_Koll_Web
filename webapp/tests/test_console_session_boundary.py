@@ -484,10 +484,27 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("activeOpenLoginTaskForAccount(accountId)", actions)
         self.assertIn('data-open-login-task-id="${esc(activeLoginTask.id)}"', actions)
         self.assertIn('renderBusyButtonContent("执行中"', actions)
-        self.assertIn('class="primary" ${attribute}="${esc(accountId)}">打开登录</button>', actions)
+        self.assertIn('class="primary account-card-action account-card-action--login"', actions)
+        self.assertIn('${renderBrowserLaunchIcon()}<span>打开登录</span>', actions)
+        self.assertIn('${renderNetworkIcon()}<span data-account-proxy-label>${esc(proxyLabel)}</span>', actions)
+        self.assertIn('${renderEditIcon()}<span>编辑</span>', actions)
+        self.assertIn('${renderTrashIcon()}<span>删除</span>', actions)
+        self.assertIn('class="row-actions account-pool-card-actions"', actions)
         self.assertNotIn("请先绑定人设后再打开登录", actions)
         self.assertNotIn("请先绑定人设后再打开登录", create_task)
         self.assertGreaterEqual(self.source.count("openLiveBrowserTaskView(activeTask.id)"), 3)
+
+    def test_account_card_actions_keep_icons_and_double_width_login(self):
+        update_status = self._javascript_function_source(self.source, "updateAccountStatusViews")
+
+        self.assertIn('button.querySelector("[data-account-proxy-label]")', update_status)
+        self.assertNotIn('button.textContent = String(account.proxy_id', update_status)
+        self.assertIn(".account-pool-card-actions {", self.styles)
+        self.assertIn("grid-template-columns: minmax(144px, 144px) repeat(3, max-content);", self.styles)
+        self.assertIn(".account-card-action--login {", self.styles)
+        self.assertIn("grid-column: span 1;", self.styles)
+        self.assertIn(".account-pool-card-actions .ui-action-icon,", self.styles)
+        self.assertIn(".account-pool-card-actions .ui-trash-icon", self.styles)
 
     def test_open_login_browser_exit_refreshes_the_terminal_task_state(self):
         refresh_source = self._javascript_function_source(self.source, "refreshLiveBrowserSessionsSoon")

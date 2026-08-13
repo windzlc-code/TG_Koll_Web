@@ -3410,7 +3410,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             'data-persona-delete-memory="${esc(row.id)}">删除</button>',
             'data-persona-delete-preset-id="${esc(presetId)}">删除</button>',
             'data-persona-delete-image="${esc(item.id)}" ${!item.id ? "disabled" : ""}>删除</button>',
-            'data-social-delete-account="${esc(accountId)}">删除</button>',
+            'data-social-delete-account="${esc(accountId)}">${renderTrashIcon()}<span>删除</span></button>',
             'data-proxy-delete="${esc(proxy.id)}"',
         ):
             with self.subTest(action=action):
