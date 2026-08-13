@@ -3458,6 +3458,8 @@ def _login_assistance_surfaces(page: Any) -> list[tuple[Any, Any]]:
 def _mapped_login_credentials(page: Any) -> tuple[Any, Any, Any, Any] | None:
     username_selectors = [
         'input[name="username"]',
+        'input[name="email"]',
+        'input[name="phone"]',
         'input[autocomplete="username"]',
         'input[type="email"]',
         'input[type="tel"]',
@@ -3471,6 +3473,7 @@ def _mapped_login_credentials(page: Any) -> tuple[Any, Any, Any, Any] | None:
     ]
     password_selectors = [
         'input[name="password"]',
+        'input[name="pass"]',
         'input[autocomplete="current-password"]',
         'input[type="password"]',
         'input[aria-label*="password" i]',

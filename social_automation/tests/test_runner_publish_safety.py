@@ -112,7 +112,11 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         def locate(surface, selectors, **_kwargs):
             if surface is not login_page:
                 return None
-            return password_input if any('password' in selector for selector in selectors) else username_input
+            if 'input[name="email"]' in selectors:
+                return username_input
+            if 'input[name="pass"]' in selectors:
+                return password_input
+            return None
 
         with (
             mock.patch.object(runner, "_visible_first", side_effect=locate),
