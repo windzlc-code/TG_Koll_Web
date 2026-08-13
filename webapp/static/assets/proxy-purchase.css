@@ -132,6 +132,39 @@ h2 { margin: 0; font-size: 21px; }
 .order-status.manual .status-orbit { border-color: #ead9aa; border-top-color: #9a6b00; animation-duration: 1.8s; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+.purchase-success {
+  display: grid;
+  min-height: 420px;
+  padding: 44px 20px 28px;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  text-align: center;
+}
+.purchase-success[hidden] { display: none !important; }
+.purchase-success-check {
+  display: grid;
+  width: 88px;
+  height: 88px;
+  margin-bottom: 8px;
+  place-items: center;
+  color: #15966f;
+  border-radius: 50%;
+  background: #e9f8f2;
+  animation: purchaseSuccessPop .42s cubic-bezier(.2, .9, .3, 1.25) both;
+}
+.purchase-success-check svg { width: 66px; height: 66px; overflow: visible; }
+.purchase-success-check circle,
+.purchase-success-check path { fill: none; stroke: currentColor; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.purchase-success-check circle { opacity: .24; }
+.purchase-success-check path { stroke-dasharray: 42; stroke-dashoffset: 42; animation: purchaseSuccessCheckDraw .46s .2s ease-out forwards; }
+.purchase-success > strong { font-size: 24px; }
+.purchase-success > p { margin: 0; color: var(--muted); font-size: 13px; }
+.purchase-success > button { width: min(280px, 100%); min-height: 48px; margin-top: 16px; color: #fff; border: 0; border-radius: 8px; background: var(--navy); font-weight: 800; cursor: pointer; }
+.purchase-card.is-success > :not(.purchase-success) { display: none !important; }
+@keyframes purchaseSuccessPop { from { opacity: 0; transform: scale(.72); } to { opacity: 1; transform: scale(1); } }
+@keyframes purchaseSuccessCheckDraw { to { stroke-dashoffset: 0; } }
+
 @media (max-width: 760px) {
   .purchase-shell { width: min(100% - 28px, 600px); padding-top: 18px; }
   .purchase-brand { margin-bottom: 30px; }

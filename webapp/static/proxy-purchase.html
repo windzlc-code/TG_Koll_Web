@@ -81,6 +81,15 @@
           </button>
         </form>
 
+        <section id="purchaseSuccess" class="purchase-success" role="status" aria-live="polite" hidden>
+          <span class="purchase-success-check" aria-hidden="true">
+            <svg viewBox="0 0 64 64" focusable="false"><circle cx="32" cy="32" r="27"></circle><path d="m19 32 9 9 18-20"></path></svg>
+          </span>
+          <strong>购买成功</strong>
+          <p>代理 IP 已加入你的代理列表。</p>
+          <button id="purchaseSuccessDone" type="button">完成</button>
+        </section>
+
         <section id="orderStatus" class="order-status" aria-live="polite" hidden>
           <span class="status-orbit" aria-hidden="true"></span>
           <div class="order-status-copy"><strong id="orderStatusTitle">订单已受理</strong><p id="orderStatusMessage"></p></div>

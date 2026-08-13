@@ -17562,6 +17562,75 @@ body.persona-media-sorting {
 .account-proxy-purchase-status[data-tone="error"] { border-color: #efbbb6; background: #fff4f3; }
 .account-proxy-purchase-status[data-tone="error"] > span { background: #b5473d; }
 
+.account-proxy-purchase-success {
+  display: grid;
+  min-height: 360px;
+  padding: 42px 24px 28px;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  text-align: center;
+  background: #f7fafc;
+}
+
+.account-proxy-purchase-success[hidden] { display: none !important; }
+
+.account-proxy-purchase-success-check {
+  display: grid;
+  width: 82px;
+  height: 82px;
+  margin-bottom: 8px;
+  place-items: center;
+  color: #15966f;
+  border-radius: 50%;
+  background: #e9f8f2;
+  animation: accountProxyPurchaseSuccessPop .42s cubic-bezier(.2, .9, .3, 1.25) both;
+}
+
+.account-proxy-purchase-success-check svg { width: 62px; height: 62px; overflow: visible; }
+.account-proxy-purchase-success-check circle,
+.account-proxy-purchase-success-check path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.account-proxy-purchase-success-check circle { opacity: .24; }
+.account-proxy-purchase-success-check path {
+  stroke-dasharray: 42;
+  stroke-dashoffset: 42;
+  animation: accountProxyPurchaseCheckDraw .46s .2s ease-out forwards;
+}
+
+.account-proxy-purchase-success > strong { color: var(--ink); font-size: 22px; }
+.account-proxy-purchase-success > p { margin: 0; color: var(--muted); font-size: 13px; }
+.account-proxy-purchase-success > button {
+  width: min(260px, 100%);
+  min-height: 46px;
+  margin-top: 14px;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  background: #223a4c;
+  font-weight: 800;
+}
+
+@keyframes accountProxyPurchaseSuccessPop {
+  from { opacity: 0; transform: scale(.72); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes accountProxyPurchaseCheckDraw {
+  to { stroke-dashoffset: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-proxy-purchase-success-check,
+  .account-proxy-purchase-success-check path { animation: none; }
+  .account-proxy-purchase-success-check path { stroke-dashoffset: 0; }
+}
+
 @media (max-width: 640px) {
   .console-modal-dialog.account-proxy-purchase-modal { max-height: calc(100dvh - 12px); }
   .account-proxy-purchase-modal-head { grid-template-columns: auto minmax(0, 1fr) auto; padding: 10px; }

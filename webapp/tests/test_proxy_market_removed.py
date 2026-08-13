@@ -207,6 +207,10 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertNotIn('data-account-proxy-quote-points', purchase_view)
         self.assertIn('data-account-proxy-purchase-submit', purchase_view)
         self.assertIn('data-account-proxy-purchase-status', purchase_view)
+        self.assertIn('data-account-proxy-purchase-success', purchase_view)
+        self.assertIn('<p>选择地区后确认购买</p>', purchase_view)
+        self.assertIn('class="account-proxy-purchase-success-check"', purchase_view)
+        self.assertIn('data-account-proxy-purchase-success-done', purchase_view)
         self.assertNotIn("<iframe", purchase_view)
         self.assertNotIn('/proxy-purchase?embedded=1', purchase_view)
         self.assertIn('await api("/api/proxy-purchases/options", { cache: "no-store" })', self.console_script)
@@ -223,7 +227,21 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         ]
         self.assertNotIn('可用算力点不足，暂时无法购买。', refresh_quote)
         self.assertIn('INSUFFICIENT_CASH_BACKED_POINTS', purchase_view)
-        self.assertIn('if (view.busy || !view.quote?.id) return;', purchase_view)
+        self.assertIn('if (view.busy || !country) return;', purchase_view)
+        self.assertIn('accountProxyPurchaseSetBusy(view, true, "正在检测...");', purchase_view)
+        self.assertIn('quote = await accountProxyPurchaseRefreshQuote(view);', purchase_view)
+        self.assertIn('if (submit) submit.disabled = view.busy || (!view.quote && !select?.value);', purchase_view)
+        purchase_listeners = purchase_view[
+            purchase_view.index('select?.addEventListener("change"'):
+            purchase_view.index('purchaseDialog.querySelector("[data-account-proxy-purchase-back]")')
+        ]
+        self.assertNotIn('accountProxyPurchaseRefreshQuote', purchase_listeners)
+        render_order = purchase_view[
+            purchase_view.index('function accountProxyPurchaseRenderOrder'):
+            purchase_view.index('async function accountProxyPurchasePollOrder')
+        ]
+        self.assertIn('success.hidden = false;', render_order)
+        self.assertNotIn('accountProxyPurchaseFinalizeActive(view, order)', render_order)
         self.assertNotIn('window.addEventListener("message"', purchase_view)
         self.assertIn('const action = selected ? "当前使用" : "选择使用";', self.console_script)
         self.assertNotIn('"切换使用"', self.console_script)
@@ -243,6 +261,8 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn('font-weight: 400;', self.console_styles)
         self.assertIn('background: linear-gradient(100deg, #168cbd 0%, #114f83 42%, #0d3157 100%);', self.console_styles)
         self.assertIn('.account-proxy-purchase-city-field[hidden] { display: none !important; }', self.console_styles)
+        self.assertIn('.account-proxy-purchase-success-check', self.console_styles)
+        self.assertIn('@keyframes accountProxyPurchaseCheckDraw', self.console_styles)
         city_field_style = self.console_styles[
             self.console_styles.index('.account-proxy-purchase-city-field {'):
             self.console_styles.index('.account-proxy-purchase-renewal {', self.console_styles.index('.account-proxy-purchase-city-field {'))
@@ -274,7 +294,17 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn('font-weight: 400;', self.purchase_styles)
         self.assertIn('background: linear-gradient(100deg, #168cbd 0%, #114f83 42%, #0d3157 100%);', self.purchase_styles)
         self.assertNotIn('function hasEnoughCashBackedBalance', self.purchase_script)
-        self.assertIn('if (state.busy || !state.quote?.id) return;', self.purchase_script)
+        self.assertIn('if (state.busy || !country) return;', self.purchase_script)
+        self.assertIn('setBusy(true, "正在检测...");', self.purchase_script)
+        self.assertIn('quote = await refreshQuote();', self.purchase_script)
+        standalone_listeners = self.purchase_script[
+            self.purchase_script.index('byId("country").addEventListener("change"'):
+            self.purchase_script.index('byId("orderRenewal").addEventListener')
+        ]
+        self.assertNotIn('refreshQuote', standalone_listeners)
+        self.assertIn('id="purchaseSuccess"', standalone_markup)
+        self.assertIn('class="purchase-success-check"', standalone_markup)
+        self.assertIn('@keyframes purchaseSuccessCheckDraw', self.purchase_styles)
         self.assertNotIn("购买时长", standalone_markup)
         self.assertNotIn('id="period"', standalone_markup)
         self.assertIn("确认购买", standalone_markup)

@@ -70,7 +70,7 @@
     state.busy = Boolean(busy);
     const button = byId("buyButton");
     button.classList.toggle("busy", state.busy);
-    button.disabled = state.busy || !state.quote;
+    button.disabled = state.busy || (!state.quote && !byId("country").value);
     byId("country").disabled = state.busy || !state.options?.configured;
     byId("city").disabled = state.busy || !byId("country").value || !state.options?.cities?.[byId("country").value]?.length;
     byId("cityToggle").disabled = state.busy || !byId("country").value || !state.options?.cities?.[byId("country").value]?.length;
@@ -160,7 +160,7 @@
   function clearQuote() {
     state.quote = null;
     byId("buyButtonText").textContent = "确认购买";
-    byId("buyButton").disabled = true;
+    byId("buyButton").disabled = state.busy || !byId("country").value;
   }
 
   async function refreshQuote() {
@@ -168,7 +168,7 @@
     const city = byId("city").value;
     const requestSeq = ++state.quoteSeq;
     setAlert("");
-    if (!country) { clearQuote(); return; }
+    if (!country) { clearQuote(); return null; }
     clearQuote();
     byId("country").disabled = true;
     try {
@@ -182,19 +182,21 @@
           auto_renew: byId("autoRenew").checked,
         }),
       });
-      if (requestSeq !== state.quoteSeq) return;
+      if (requestSeq !== state.quoteSeq) return null;
       const quote = payload?.quote;
       if (!quote?.id) throw { detail: "供应商没有返回有效报价" };
       state.quote = quote;
       ensurePendingRequest(quote);
       byId("buyButtonText").textContent = "确认购买";
-      byId("buyButton").disabled = false;
+      byId("buyButton").disabled = state.busy;
+      return quote;
     } catch (error) {
-      if (requestSeq !== state.quoteSeq) return;
+      if (requestSeq !== state.quoteSeq) return null;
       clearQuote();
       setAlert(errorMessage(error, "无法获取实时报价"));
+      return null;
     } finally {
-      if (requestSeq === state.quoteSeq) byId("country").disabled = !state.options?.configured;
+      if (requestSeq === state.quoteSeq) byId("country").disabled = state.busy || !state.options?.configured;
     }
   }
 
@@ -238,7 +240,11 @@
       setBusy(false, complete ? "购买已完成" : "重新获取报价");
       byId("buyButton").disabled = true;
       if (complete && embedded && window.parent !== window) {
-        window.parent.postMessage({ type: "vecto:proxy-purchase-complete", orderId: String(order.id) }, window.location.origin);
+        byId("purchaseSuccess").dataset.orderId = String(order.id);
+      }
+      if (complete) {
+        document.querySelector(".purchase-card")?.classList.add("is-success");
+        byId("purchaseSuccess").hidden = false;
       }
       return;
     }
@@ -282,10 +288,21 @@
 
   async function submitOrder(event) {
     event.preventDefault();
-    if (state.busy || !state.quote?.id) return;
+    const country = String(byId("country").value || "").trim();
+    if (state.busy || !country) return;
     setAlert("");
+    setBusy(true, "正在检测...");
+    let quote = state.quote;
+    if (!quote?.id) {
+      quote = await refreshQuote();
+      if (!quote?.id) {
+        setBusy(false, "确认购买");
+        return;
+      }
+    }
+    state.quote = quote;
     setBusy(true, "正在安全预占算力点...");
-    const pending = storePendingRequest({ ...ensurePendingRequest(state.quote), submitted: true });
+    const pending = storePendingRequest({ ...ensurePendingRequest(quote), submitted: true });
     try {
       const payload = await createOrderFromPending(pending);
       renderOrder(payload?.order);
@@ -335,12 +352,19 @@
     byId("country").addEventListener("change", () => {
       renderCities();
       clearQuote();
-      void refreshQuote();
+      setAlert("");
     });
     byId("cityToggle").addEventListener("click", toggleCities);
-    byId("city").addEventListener("change", refreshQuote);
-    byId("autoRenew").addEventListener("change", refreshQuote);
+    byId("city").addEventListener("change", () => { clearQuote(); setAlert(""); });
+    byId("autoRenew").addEventListener("change", () => { clearQuote(); setAlert(""); });
     byId("orderRenewal").addEventListener("change", updateRenewal);
+    byId("purchaseSuccessDone").addEventListener("click", () => {
+      if (embedded && window.parent !== window) {
+        window.parent.postMessage({ type: "vecto:proxy-purchase-complete", orderId: String(state.order?.id || "") }, window.location.origin);
+        return;
+      }
+      location.assign("/console.html");
+    });
     try {
       renderOptions(await api("/api/proxy-purchases/options"));
       const pending = readPendingRequest();

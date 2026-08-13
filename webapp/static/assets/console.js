@@ -27666,6 +27666,14 @@ function accountProxyPurchaseEmbeddedHtml() {
         <span aria-hidden="true"></span><div><strong data-account-proxy-order-title>订单已受理</strong><p data-account-proxy-order-message></p></div>
       </section>
     </form>
+    <section class="account-proxy-purchase-success" data-account-proxy-purchase-success role="status" aria-live="polite" hidden>
+      <span class="account-proxy-purchase-success-check" aria-hidden="true">
+        <svg viewBox="0 0 64 64" focusable="false"><circle cx="32" cy="32" r="27"></circle><path d="m19 32 9 9 18-20"></path></svg>
+      </span>
+      <strong>购买成功</strong>
+      <p>代理 IP 已加入你的代理列表。</p>
+      <button type="button" data-account-proxy-purchase-success-done>完成</button>
+    </section>
   </section>`;
 }
 
@@ -27673,7 +27681,7 @@ function accountProxyPurchaseDialogHtml() {
   return `<section class="console-modal-dialog account-proxy-purchase-modal" role="dialog" aria-modal="true" aria-labelledby="accountProxyPurchaseTitle">
     <div class="console-modal-head account-proxy-purchase-modal-head">
       <button type="button" class="account-proxy-purchase-back" data-account-proxy-purchase-back title="返回代理列表" aria-label="返回代理列表"><span class="ui-arrow-icon ui-arrow-icon--left" aria-hidden="true"></span></button>
-      <div><strong id="accountProxyPurchaseTitle">购买专属代理 IP</strong><p>选择购买地区与续费方式，购买成功后自动加入代理列表</p></div>
+      <div><strong id="accountProxyPurchaseTitle">购买专属代理 IP</strong><p>选择地区后确认购买</p></div>
       ${renderModalCloseButton("data-account-proxy-purchase-close")}
     </div>
     <div class="console-modal-content account-proxy-purchase-modal-content">
@@ -27753,7 +27761,7 @@ function accountProxyPurchaseSetBusy(view, busy, label = "") {
   const city = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city]");
   const cityToggle = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city-toggle]");
   const renewal = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-renewal]");
-  if (submit) submit.disabled = view.busy || !view.quote;
+  if (submit) submit.disabled = view.busy || (!view.quote && !select?.value);
   if (select) select.disabled = view.busy || !view.options?.configured || !view.options?.live_purchasing_enabled;
   if (city) city.disabled = view.busy || !select?.value || !view.options?.cities?.[String(select.value)]?.length;
   if (cityToggle) cityToggle.disabled = view.busy || !select?.value || !view.options?.cities?.[String(select.value)]?.length;
@@ -27767,9 +27775,10 @@ function accountProxyPurchaseSetBusy(view, busy, label = "") {
 function accountProxyPurchaseClearQuote(view) {
   view.quote = null;
   const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
+  const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
   const text = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit-text]");
   if (text) text.textContent = "确认购买";
-  if (submit) submit.disabled = true;
+  if (submit) submit.disabled = view.busy || !select?.value;
 }
 
 function accountProxyPurchaseRenderOptions(view, payload) {
@@ -27863,7 +27872,7 @@ async function accountProxyPurchaseRefreshQuote(view) {
   accountProxyPurchaseAlert(view, "");
   if (!country) {
     accountProxyPurchaseClearQuote(view);
-    return;
+    return null;
   }
   accountProxyPurchaseClearQuote(view);
   if (select) select.disabled = true;
@@ -27878,7 +27887,7 @@ async function accountProxyPurchaseRefreshQuote(view) {
         auto_renew: Boolean(renewal?.checked),
       }),
     });
-    if (view.closed || requestSeq !== view.quoteSeq) return;
+    if (view.closed || requestSeq !== view.quoteSeq) return null;
     const quote = payload?.quote;
     if (!quote?.id) throw { detail: "供应商没有返回有效报价" };
     view.quote = quote;
@@ -27886,14 +27895,16 @@ async function accountProxyPurchaseRefreshQuote(view) {
     const submitText = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit-text]");
     const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
     if (submitText) submitText.textContent = "确认购买";
-    if (submit) submit.disabled = false;
+    if (submit) submit.disabled = view.busy;
+    return quote;
   } catch (error) {
-    if (view.closed || requestSeq !== view.quoteSeq) return;
+    if (view.closed || requestSeq !== view.quoteSeq) return null;
     accountProxyPurchaseClearQuote(view);
     accountProxyPurchaseAlert(view, accountProxyPurchaseErrorMessage(error, "暂时无法确认库存，请稍后重试"));
+    return null;
   } finally {
     if (!view.closed && requestSeq === view.quoteSeq && select) {
-      select.disabled = !view.options?.configured || !view.options?.live_purchasing_enabled;
+      select.disabled = view.busy || !view.options?.configured || !view.options?.live_purchasing_enabled;
     }
   }
 }
@@ -27967,6 +27978,8 @@ function accountProxyPurchaseRenderOrder(view, order) {
   if (!order?.id || view.closed) return;
   view.order = order;
   const panel = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-status]");
+  const form = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-form]");
+  const success = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-success]");
   const title = accountProxyPurchaseElement(view, "[data-account-proxy-order-title]");
   const message = accountProxyPurchaseElement(view, "[data-account-proxy-order-message]");
   const status = String(order.status || "pending").toLowerCase();
@@ -27994,12 +28007,13 @@ function accountProxyPurchaseRenderOrder(view, order) {
     const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
     if (submit) submit.disabled = true;
     if (complete) {
+      if (form) form.hidden = true;
+      if (success) success.hidden = false;
       const sync = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-sync]");
       if (sync) {
         sync.textContent = "购买成功 · 已加入列表";
         sync.dataset.tone = "success";
       }
-      void accountProxyPurchaseFinalizeActive(view, order);
     }
     return;
   }
@@ -28041,10 +28055,22 @@ async function accountProxyPurchaseRecover(view, pending = {}, { replayIfMissing
 
 async function accountProxyPurchaseSubmit(view, event) {
   event.preventDefault();
-  if (view.busy || !view.quote?.id) return;
+  const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
+  const country = String(select?.value || "").trim().toUpperCase();
+  if (view.busy || !country) return;
   accountProxyPurchaseAlert(view, "");
+  accountProxyPurchaseSetBusy(view, true, "正在检测...");
+  let quote = view.quote;
+  if (!quote?.id) {
+    quote = await accountProxyPurchaseRefreshQuote(view);
+    if (!quote?.id) {
+      accountProxyPurchaseSetBusy(view, false, "确认购买");
+      return;
+    }
+  }
+  view.quote = quote;
   accountProxyPurchaseSetBusy(view, true, "正在提交订单...");
-  const pending = accountProxyPurchasePendingWrite({ ...accountProxyPurchasePendingEnsure(view.quote), submitted: true });
+  const pending = accountProxyPurchasePendingWrite({ ...accountProxyPurchasePendingEnsure(quote), submitted: true });
   try {
     const payload = await accountProxyPurchaseCreateOrder(pending);
     accountProxyPurchaseRenderOrder(view, payload?.order);
@@ -28187,11 +28213,20 @@ function openAccountProxyPurchaseView(modal, trigger = null) {
   select?.addEventListener("change", () => {
     accountProxyPurchaseRenderCities(view);
     accountProxyPurchaseClearQuote(view);
-    void accountProxyPurchaseRefreshQuote(view);
+    accountProxyPurchaseAlert(view, "");
   });
   cityToggle?.addEventListener("click", () => accountProxyPurchaseToggleCity(view));
-  city?.addEventListener("change", () => { void accountProxyPurchaseRefreshQuote(view); });
-  renewal?.addEventListener("change", () => { void accountProxyPurchaseRefreshQuote(view); });
+  city?.addEventListener("change", () => {
+    accountProxyPurchaseClearQuote(view);
+    accountProxyPurchaseAlert(view, "");
+  });
+  renewal?.addEventListener("change", () => {
+    accountProxyPurchaseClearQuote(view);
+    accountProxyPurchaseAlert(view, "");
+  });
+  purchaseDialog.querySelector("[data-account-proxy-purchase-success-done]")?.addEventListener("click", () => {
+    void accountProxyPurchaseFinalizeActive(view, view.order);
+  });
   purchaseDialog.querySelector("[data-account-proxy-purchase-back]")?.focus();
   void loadAccountProxyPurchaseForm(modal);
   return true;
