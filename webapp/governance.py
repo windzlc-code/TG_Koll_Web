@@ -980,39 +980,6 @@ def dashboard_snapshot(conn: sqlite3.Connection, *, days: int = 30, at: int | No
     alert_rows = conn.execute(
         "SELECT severity AS label, COUNT(*) AS value FROM security_alerts WHERE status IN ('open','acknowledged','investigating') GROUP BY severity"
     ).fetchall()
-    pending_users = conn.execute(
-        "SELECT id, username, full_name, company, created_at FROM users WHERE is_admin = 0 AND lifecycle_status = 'pending' ORDER BY created_at ASC LIMIT 8"
-    ).fetchall()
-    recent_failures = conn.execute(
-        """
-        SELECT id, user_id, status, error, updated_at, source FROM (
-          SELECT id, user_id, status, error, updated_at, 'task' AS source FROM tasks WHERE status = 'failed'
-          UNION ALL
-          SELECT id, user_id, status, error, updated_at, 'social' AS source FROM social_automation_tasks WHERE status = 'failed'
-        ) ORDER BY updated_at DESC LIMIT 8
-        """
-    ).fetchall()
-    recent_audits = conn.execute(
-        "SELECT id, actor_user_id, target_user_id, action, risk_level, outcome, created_at FROM audit_events ORDER BY created_at DESC LIMIT 8"
-    ).fetchall()
-    open_alerts = conn.execute(
-        "SELECT id, severity, status, title, target_user_id, last_seen_at FROM security_alerts WHERE status IN ('open','acknowledged','investigating') ORDER BY CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END DESC, last_seen_at DESC LIMIT 8"
-    ).fetchall()
-    expiring_subscriptions = conn.execute(
-        "SELECT id, user_id, plan_sku, current_period_end FROM billing_subscriptions "
-        "WHERE status = 'active' AND current_period_end > ? AND current_period_end <= ? "
-        "ORDER BY current_period_end ASC LIMIT 8",
-        (current, current + 7 * 86400),
-    ).fetchall()
-    password_operations = conn.execute(
-        "SELECT id, actor_user_id, target_user_id, action, reason, risk_level, created_at FROM audit_events "
-        "WHERE action IN ('user.password_reveal','user.password_set','user.password_reset','user.password_restore') "
-        "ORDER BY created_at DESC LIMIT 8"
-    ).fetchall()
-    batch_jobs = conn.execute(
-        "SELECT id, action, status, total_count, success_count, failed_count, skipped_count, created_at, finished_at "
-        "FROM admin_batch_jobs ORDER BY created_at DESC LIMIT 8"
-    ).fetchall()
     return {
         "generated_at": current,
         "timezone": "Asia/Shanghai",
@@ -1042,15 +1009,6 @@ def dashboard_snapshot(conn: sqlite3.Connection, *, days: int = 30, at: int | No
             "lifecycle": [dict(row) for row in lifecycle_rows],
             "subscriptions": [dict(row) for row in subscription_rows],
             "alerts": [dict(row) for row in alert_rows],
-        },
-        "queues": {
-            "pending_users": [dict(row) for row in pending_users],
-            "failed_tasks": [dict(row) for row in recent_failures],
-            "security_alerts": [dict(row) for row in open_alerts],
-            "recent_audits": [dict(row) for row in recent_audits],
-            "expiring_subscriptions": [dict(row) for row in expiring_subscriptions],
-            "password_operations": [dict(row) for row in password_operations],
-            "batch_jobs": [dict(row) for row in batch_jobs],
         },
     }
 

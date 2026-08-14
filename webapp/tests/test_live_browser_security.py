@@ -794,6 +794,42 @@ def test_open_login_http_rejects_manual_start_mode():
     create_task.assert_not_called()
 
 
+def test_reuse_session_starts_shared_login_runner_without_credentials():
+    client = _security_test_client()
+    with (
+        mock.patch.object(
+            social_automation_api,
+            "_require_account_access",
+            return_value={"persona_id": "persona-1", "login_username": "", "username": "saved-user", "login_password": ""},
+        ),
+        mock.patch.object(
+            social_automation_api,
+            "create_account_task",
+            return_value={"id": "task-session", "status": "queued"},
+        ) as create_task,
+    ):
+        response = client.post(
+            "/api/persona_dashboard/automation/accounts/account-1/reuse_session",
+            json={
+                "payload": {
+                    "login_username": "must-not-pass",
+                    "login_password": "must-not-pass",
+                    "password": "must-not-pass",
+                }
+            },
+        )
+
+    assert response.status_code == 200
+    submitted = create_task.call_args.args[2]
+    assert create_task.call_args.args[:2] == ("account-1", "open_login")
+    assert submitted["auto_submit"] is False
+    assert submitted["wait_for_manual"] is True
+    assert submitted["session_reuse"] is True
+    assert "login_username" not in submitted
+    assert "login_password" not in submitted
+    assert "password" not in submitted
+
+
 def test_generic_task_http_rejects_manual_login_start_mode():
     client = _security_test_client()
     with (

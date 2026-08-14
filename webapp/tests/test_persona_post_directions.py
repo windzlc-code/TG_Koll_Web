@@ -106,11 +106,33 @@ def test_generate_posts_passes_clean_trend_topic_context_to_the_node_workflow(mo
 
     server._generate_persona_archive_posts("persona-1", payload)
 
+    assert captured["trendTopicContext"].pop("writingLocale") == "zh-TW"
     assert captured["trendTopicContext"] == {
         "userInput": "第一次剪短发怎么沟通",
         "selectedDirections": ["夏季短发沟通", "发型护理"],
         "selectedMemorySummaries": ["客人上次剪了层次短发"],
     }
+
+
+def test_generate_posts_includes_rewrite_source_in_trend_topic_context(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(server, "_list_persona_archive_posts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        server,
+        "_run_persona_workflow_cli",
+        lambda payload: captured.update(payload) or {"postIds": [], "posts": []},
+    )
+
+    server._generate_persona_archive_posts(
+        "persona-1",
+        server.PersonaDashboardGeneratePostsPayload(
+            rewrite_source_title="雨天剪髮",
+            rewrite_source_content="客人擔心雨天剪短髮會毛躁",
+            writing_locale="zh-TW",
+        ),
+    )
+
+    assert captured["trendTopicContext"]["userInput"] == "雨天剪髮\n客人擔心雨天剪短髮會毛躁"
 
 
 def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
@@ -125,6 +147,7 @@ def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     assert "data-persona-post-direction-keyword" in script
     assert "换一批" in script
     assert "handlePersonaGeneratePrimaryAction" in script
+    assert 'prompt: [String(draft.title || "").trim(), String(draft.content || "").trim()]' in script
     assert ".persona-post-direction-panel" in styles
     assert ".persona-post-direction-tag.is-selected" in styles
 

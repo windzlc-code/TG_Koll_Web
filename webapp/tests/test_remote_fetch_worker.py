@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,16 @@ from webapp.worker_server import (
     create_worker_app,
     run_tool_r18_job,
 )
+
+
+def current_keyword_strategy(keywords):
+    body = json.dumps(keywords, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    import hashlib
+    return {
+        "keywords": keywords,
+        "keywordStrategyVersion": 33,
+        "keywordDigest": hashlib.sha256(body).hexdigest(),
+    }
 
 
 class RemoteFetchProtocolTests(unittest.TestCase):
@@ -88,7 +99,9 @@ class RemoteFetchStoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.path = Path(self.temp.name) / "jobs.db"
-        self.store = JobStore(self.path)
+        self.runtime_dir = Path(self.temp.name) / "runtime"
+        self.runtime_dir.mkdir(parents=True)
+        self.store = JobStore(self.path, runtime_dir=self.runtime_dir)
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -116,7 +129,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             self.submit(digest="b" * 64)
 
-    def test_persona_target_is_registered_for_old_host_low_frequency_refill(self) -> None:
+    def test_persona_hot_submit_does_not_register_background_refill(self) -> None:
         now = int(time.time())
         self.store.submit(
             idempotency_key="capture:pool-target:1234",
@@ -127,6 +140,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
                 "action": "fetch-hot-candidates",
                 "archiveId": "archive_pool_target",
                 "archiveSnapshot": {"id": "archive_pool_target", "posts": []},
+                **current_keyword_strategy(["理发师", "理发店趣事"]),
                 "liveOnly": False,
                 "recordShown": False,
                 "limit": 10,
@@ -136,13 +150,318 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertIsNotNone(original)
         self.store.finish(original[0]["id"], status="success", result={"ok": True})
         self.assertFalse(self.store.enqueue_due_pool_refill(now=now))
-        self.assertTrue(self.store.enqueue_due_pool_refill(now=now + 21601))
-        queued = self.store.claim_next()
-        self.assertIsNotNone(queued)
-        _job, payload = queued
+        self.assertFalse(self.store.enqueue_due_pool_refill(now=now + 21601))
+        with self.store._connection() as connection:
+            target_count = connection.execute("SELECT COUNT(*) FROM fetch_pool_targets").fetchone()[0]
+        self.assertEqual(target_count, 0)
+
+    def pool_payload(self, archive_id: str, *, user_initiated: bool) -> dict:
+        return {
+            "action": "fetch-hot-candidates",
+            "archiveId": archive_id,
+            "archiveSnapshot": {"id": archive_id, "posts": []},
+            **current_keyword_strategy(["hair salon", "hair care trends"]),
+            "liveOnly": False,
+            "recordShown": False,
+            "userInitiated": user_initiated,
+            "limit": 10,
+        }
+
+    def test_only_user_initiated_persona_hot_submit_registers_refill_target(self) -> None:
+        self.store.submit(
+            idempotency_key="capture:inactive-target:1234",
+            request_digest="d" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="archive_inactive_target",
+            payload=self.pool_payload("archive_inactive_target", user_initiated=False),
+        )
+        with self.store._connection() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM fetch_pool_targets").fetchone()[0], 0)
+
+        self.store.submit(
+            idempotency_key="capture:active-target:1234",
+            request_digest="e" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="archive_active_target",
+            payload=self.pool_payload("archive_active_target", user_initiated=True),
+        )
+        with self.store._connection() as connection:
+            target = connection.execute("SELECT * FROM fetch_pool_targets").fetchone()
+        self.assertIsNotNone(target)
+        self.assertEqual(target["archive_id"], "archive_active_target")
+        self.assertGreater(target["active_until"], target["last_user_fetch_at"])
+        self.assertEqual(target["low_watermark"], 50)
+        self.assertEqual(target["target_watermark"], 100)
+
+    def test_dataset_overview_lists_global_pool_first_and_named_persona_counts(self) -> None:
+        now = int(time.time())
+        archive_id = "12345678-1234-4234-8234-123456789abc"
+        payload = self.pool_payload(archive_id, user_initiated=True)
+        payload["archiveSnapshot"]["name"] = "理发师"
+        self.store.submit(
+            idempotency_key="capture:dataset-overview:1234",
+            request_digest="9" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id=archive_id,
+            payload=payload,
+        )
+        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
+        cache_dir.mkdir()
+        candidate = {
+            "id": "persona-candidate-1",
+            "content": "qualified persona candidate content " * 4,
+            "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        }
+        (cache_dir / f"{archive_id}-keywords-strict.json").write_text(
+            json.dumps({f"{archive_id}::strict::query": {"candidates": [candidate]}}),
+            encoding="utf-8",
+        )
+        global_db = sqlite3.connect(self.runtime_dir / "sentiment_hot_global_pool.sqlite3")
+        global_db.execute(
+            "CREATE TABLE sentiment_hot_global_candidates(id TEXT,candidate_json TEXT,content_at_ms INTEGER)"
+        )
+        global_db.execute(
+            "INSERT INTO sentiment_hot_global_candidates VALUES(?,?,?)",
+            ("global-1", json.dumps({"content": "qualified global candidate content " * 4}), now * 1000),
+        )
+        global_db.commit()
+        global_db.close()
+
+        overview = self.store.dataset_overview(now=now)
+        self.assertEqual(overview["global"]["count"], 1)
+        self.assertEqual(overview["global"]["capacity"], 100000)
+        self.assertEqual(len(overview["personas"]), 1)
+        self.assertEqual(overview["personas"][0]["name"], "理发师")
+        self.assertEqual(overview["personas"][0]["count"], 1)
+        self.assertEqual(overview["personas"][0]["capacity"], 100)
+
+    def test_clear_hot_dataset_removes_candidates_but_preserves_persona_refill_target(self) -> None:
+        now = int(time.time())
+        archive_id = "12345678-1234-4234-8234-123456789abc"
+        payload = self.pool_payload(archive_id, user_initiated=True)
+        payload["archiveSnapshot"]["name"] = "理发师"
+        self.store.submit(
+            idempotency_key="capture:dataset-clear:1234",
+            request_digest="8" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id=archive_id,
+            payload=payload,
+        )
+        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
+        cache_dir.mkdir()
+        candidate = {
+            "id": "persona-candidate-1",
+            "content": "qualified persona candidate content " * 4,
+            "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        }
+        cache_path = cache_dir / f"{archive_id}-keywords-strict.json"
+        cache_path.write_text(
+            json.dumps({f"{archive_id}::strict::query": {"candidates": [candidate]}}),
+            encoding="utf-8",
+        )
+        global_path = self.runtime_dir / "sentiment_hot_global_pool.sqlite3"
+        global_db = sqlite3.connect(global_path)
+        try:
+            global_db.execute(
+                "CREATE TABLE sentiment_hot_global_candidates(id TEXT,candidate_json TEXT,content_at_ms INTEGER)"
+            )
+            global_db.execute(
+                "INSERT INTO sentiment_hot_global_candidates VALUES(?,?,?)",
+                ("global-1", json.dumps({"content": "qualified global candidate content " * 4}), now * 1000),
+            )
+            global_db.commit()
+        finally:
+            global_db.close()
+
+        persona_result = self.store.clear_hot_dataset(archive_id)
+        self.assertEqual(persona_result["deleted_count"], 1)
+        cleared_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        self.assertEqual(cleared_cache[f"{archive_id}::strict::query"]["candidates"], [])
+        with self.store._connection() as connection:
+            target = connection.execute(
+                "SELECT low_watermark,target_watermark FROM fetch_pool_targets WHERE archive_id=?",
+                (archive_id,),
+            ).fetchone()
+        self.assertIsNotNone(target)
+        self.assertEqual((target["low_watermark"], target["target_watermark"]), (50, 100))
+
+        global_result = self.store.clear_hot_dataset("global")
+        self.assertEqual(global_result["deleted_count"], 1)
+        global_db = sqlite3.connect(global_path)
+        try:
+            self.assertEqual(global_db.execute("SELECT COUNT(*) FROM sentiment_hot_global_candidates").fetchone()[0], 0)
+        finally:
+            global_db.close()
+        global_json = json.loads((self.runtime_dir / "sentiment_hot_global_pool.json").read_text(encoding="utf-8"))
+        self.assertEqual(global_json["candidates"], [])
+        with self.assertRaises(ValueError):
+            self.store.clear_hot_dataset("not-a-dataset")
+
+    def test_due_persona_below_watermark_enqueues_one_internal_refill(self) -> None:
+        now = int(time.time())
+        self.store.submit(
+            idempotency_key="capture:low-water:1234",
+            request_digest="f" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="archive_low_water",
+            payload=self.pool_payload("archive_low_water", user_initiated=True),
+        )
+        original = self.store.claim_next()
+        self.assertIsNotNone(original)
+        self.store.finish(original[0]["id"], status="success", result={"ok": True})
+        with self.store._connection() as connection:
+            connection.execute("UPDATE fetch_pool_targets SET next_run_at=?", (now,))
+        self.assertTrue(self.store.enqueue_due_pool_refill(now=now))
+        with self.store._connection() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM fetch_jobs WHERE unit_id LIKE 'pool_%'"
+            ).fetchall()
+        self.assertEqual(len(rows), 1)
+        payload = json.loads(rows[0]["payload_json"])
         self.assertTrue(payload["_poolRefill"])
-        self.assertFalse(payload["liveOnly"])
+        self.assertFalse(payload["userInitiated"])
         self.assertEqual(payload["limit"], 20)
+        self.assertFalse(self.store.enqueue_due_pool_refill(now=now + 1))
+
+    def test_due_persona_waits_while_its_user_fetch_is_still_active(self) -> None:
+        now = int(time.time())
+        self.store.submit(
+            idempotency_key="capture:active-fetch:1234",
+            request_digest="0" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="archive_active_fetch",
+            payload=self.pool_payload("archive_active_fetch", user_initiated=True),
+        )
+        with self.store._connection() as connection:
+            connection.execute("UPDATE fetch_pool_targets SET next_run_at=?", (now,))
+        self.assertFalse(self.store.enqueue_due_pool_refill(now=now))
+        with self.store._connection() as connection:
+            target = connection.execute("SELECT next_run_at FROM fetch_pool_targets").fetchone()
+            refill_count = connection.execute(
+                "SELECT COUNT(*) FROM fetch_jobs WHERE unit_id LIKE 'pool_%'"
+            ).fetchone()[0]
+        self.assertEqual(target["next_run_at"], now + 60)
+        self.assertEqual(refill_count, 0)
+
+    def test_watermark_hysteresis_starts_below_50_and_continues_to_100(self) -> None:
+        now = int(time.time())
+        archive_id = "archive_full_water"
+        self.store.submit(
+            idempotency_key="capture:full-water:1234",
+            request_digest="1" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id=archive_id,
+            payload=self.pool_payload(archive_id, user_initiated=True),
+        )
+        original = self.store.claim_next()
+        self.assertIsNotNone(original)
+        self.store.finish(original[0]["id"], status="success", result={"ok": True})
+        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
+        cache_dir.mkdir()
+        candidates = [
+            {
+                "id": f"candidate-{index}",
+                "content": "useful persona candidate content " * 4,
+                "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+            }
+            for index in range(50)
+        ]
+        (cache_dir / f"{archive_id}-keywords-strict.json").write_text(
+            json.dumps({f"{archive_id}::strict::query": {"candidates": candidates}}),
+            encoding="utf-8",
+        )
+        with self.store._connection() as connection:
+            connection.execute("UPDATE fetch_pool_targets SET next_run_at=?", (now,))
+        self.assertFalse(self.store.enqueue_due_pool_refill(now=now))
+        with self.store._connection() as connection:
+            target = connection.execute("SELECT last_available_count FROM fetch_pool_targets").fetchone()
+            refill_count = connection.execute(
+                "SELECT COUNT(*) FROM fetch_jobs WHERE unit_id LIKE 'pool_%'"
+            ).fetchone()[0]
+        self.assertEqual(target["last_available_count"], 50)
+        self.assertEqual(refill_count, 0)
+
+        with self.store._connection() as connection:
+            connection.execute(
+                "UPDATE fetch_pool_targets SET last_run_at=last_user_fetch_at,next_run_at=?",
+                (now,),
+            )
+        self.assertTrue(self.store.enqueue_due_pool_refill(now=now))
+        refill = self.store.claim_next()
+        self.assertIsNotNone(refill)
+        self.store.finish(refill[0]["id"], status="success", result={"ok": True})
+
+        candidates.extend(
+            {
+                "id": f"candidate-{index}",
+                "content": "useful persona candidate content " * 4,
+                "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+            }
+            for index in range(50, 100)
+        )
+        (cache_dir / f"{archive_id}-keywords-strict.json").write_text(
+            json.dumps({f"{archive_id}::strict::query": {"candidates": candidates}}),
+            encoding="utf-8",
+        )
+        with self.store._connection() as connection:
+            connection.execute("UPDATE fetch_pool_targets SET next_run_at=?", (now + 601,))
+        self.assertFalse(self.store.enqueue_due_pool_refill(now=now + 601))
+        with self.store._connection() as connection:
+            target = connection.execute("SELECT last_available_count,last_run_at FROM fetch_pool_targets").fetchone()
+        self.assertEqual(target["last_available_count"], 100)
+        self.assertEqual(target["last_run_at"], 0)
+
+    def test_expired_persona_target_is_removed_without_refill(self) -> None:
+        now = int(time.time())
+        self.store.submit(
+            idempotency_key="capture:expired-water:1234",
+            request_digest="2" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="archive_expired_water",
+            payload=self.pool_payload("archive_expired_water", user_initiated=True),
+        )
+        original = self.store.claim_next()
+        self.assertIsNotNone(original)
+        self.store.finish(original[0]["id"], status="success", result={"ok": True})
+        with self.store._connection() as connection:
+            connection.execute(
+                "UPDATE fetch_pool_targets SET next_run_at=?,active_until=?",
+                (now, now),
+            )
+        self.assertFalse(self.store.enqueue_due_pool_refill(now=now))
+        with self.store._connection() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM fetch_pool_targets").fetchone()[0], 0)
+
+    def test_persona_hot_envelope_rejects_external_pool_refill(self) -> None:
+        payload = self.pool_payload("archive_external_refill", user_initiated=False)
+        payload["_poolRefill"] = True
+        with self.assertRaisesRegex(ProtocolError, "cannot be submitted externally"):
+            _validate_envelope(
+                {
+                    "capability": "persona.hot_candidates.v1",
+                    "unit_id": "archive_external_refill",
+                    "payload": payload,
+                }
+            )
+
+    def test_persona_hot_envelope_rejects_empty_keywords_from_new_host(self) -> None:
+        with self.assertRaisesRegex(ProtocolError, "keywords"):
+            _validate_envelope(
+                {
+                    "capability": "persona.hot_candidates.v1",
+                    "unit_id": "archive_empty_keywords",
+                    "payload": {
+                        "action": "fetch-hot-candidates",
+                        "archiveId": "archive_empty_keywords",
+                        "archiveSnapshot": {"id": "archive_empty_keywords", "posts": []},
+                        "keywords": [],
+                        "keywordStrategyVersion": 33,
+                        "keywordDigest": "0" * 64,
+                        "liveOnly": False,
+                        "recordShown": False,
+                    },
+                }
+            )
 
     def test_nonce_replay_is_persistently_rejected(self) -> None:
         now = int(time.time())
@@ -295,6 +614,8 @@ class RemoteFetchIsolationTests(unittest.TestCase):
             paths = {route.path for route in app.routes}
             self.assertIn("/health", paths)
             self.assertIn("/internal/worker/v1/jobs", paths)
+            self.assertIn("/internal/worker/v1/hot-datasets/refresh", paths)
+            self.assertIn("/internal/worker/v1/hot-datasets/{dataset_id}", paths)
             self.assertNotIn("/api/auth/login", paths)
             self.assertNotIn("/api/crm/v1/bootstrap", paths)
         finally:
@@ -310,6 +631,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                 "payload": {
                     "archiveId": "archive_12345678",
                     "archiveSnapshot": {"id": "archive_12345678", "posts": []},
+                    **current_keyword_strategy(["理发师", "理发店趣事"]),
                     "liveOnly": False,
                     "recordShown": False,
                     "cookies": ["must-not-cross-control-boundary"],
@@ -369,7 +691,6 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         observed = {}
 
         responses = [
-            {"ok": True, "candidates": []},
             {"ok": True, "candidates": [{"id": "candidate-1", "hotScore": 800}]},
         ]
 
@@ -387,6 +708,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                     "_workerCapability": "persona.hot_candidates.v1",
                     "action": "fetch-hot-candidates",
                     "platform": "threads",
+                    **current_keyword_strategy(["理发师", "理发店趣事"]),
                     "limit": 1,
                     "accountId": "must-not-reach-node",
                 },
@@ -397,6 +719,8 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         sent = json.loads(observed["command"][-1])
         self.assertNotIn("_workerCapability", sent)
         self.assertNotIn("accountId", sent)
+        self.assertEqual(sent["sourcePolicy"], "authenticated_only")
+        self.assertTrue(sent["recordShown"])
         self.assertEqual(
             observed["env"]["PERSONA_DASHBOARD_THREADS_PROFILE_DIR"],
             "/collector/profiles/one",
@@ -405,7 +729,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertEqual(pool.acquire_args["capability"], "persona.hot_candidates.v1")
         self.assertTrue(pool.released[0][1]["succeeded"])
 
-    def test_runtime_does_not_lease_account_when_reader_pool_is_sufficient(self) -> None:
+    def test_background_refill_uses_reader_without_leasing_account(self) -> None:
         class FakePool:
             def acquire(self, **_kwargs):
                 raise AssertionError("reader-only pass must not lease an account")
@@ -434,7 +758,10 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                     "_workerCapability": "persona.hot_candidates.v1",
                     "action": "fetch-hot-candidates",
                     "platform": "threads",
+                    **current_keyword_strategy(["理发师", "理发店趣事"]),
                     "limit": 2,
+                    "_poolRefill": True,
+                    "userInitiated": False,
                 },
                 threading.Event(),
             )
@@ -442,8 +769,10 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in result["candidates"]], ["reader-1", "reader-2"])
         sent = json.loads(popen.call_args.args[0][-1])
         self.assertEqual(sent["sourcePolicy"], "reader_only")
+        self.assertFalse(sent["recordShown"])
+        self.assertNotIn("userInitiated", sent)
 
-    def test_runtime_rotates_collector_account_when_first_result_is_sparse(self) -> None:
+    def test_interactive_hot_fetch_uses_authenticated_account_only(self) -> None:
         class FakePool:
             def __init__(self):
                 self.acquired = 0
@@ -473,7 +802,6 @@ class RemoteFetchIsolationTests(unittest.TestCase):
 
         pool = FakePool()
         responses = [
-            {"ok": True, "candidates": [{"id": "one", "hotScore": 600}]},
             {"ok": True, "candidates": [
                 {"id": "one", "hotScore": 600},
                 {"id": "two", "hotScore": 900},
@@ -489,15 +817,74 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                     "_workerCapability": "persona.hot_candidates.v1",
                     "action": "fetch-hot-candidates",
                     "platform": "threads",
+                    **current_keyword_strategy(["理发师", "理发店趣事"]),
                     "limit": 10,
                 },
                 threading.Event(),
             )
 
         self.assertEqual(pool.acquired, 1)
-        self.assertEqual([item["id"] for item in result["candidates"]], ["two", "three", "one"])
+        self.assertEqual([item["id"] for item in result["candidates"]], ["one", "two", "three"])
         self.assertEqual(len(pool.released), 1)
         self.assertTrue(pool.released[0][1]["succeeded"])
+        self.assertEqual(len(responses), 0)
+
+    def test_interactive_hot_fetch_rotates_account_after_sparse_result(self) -> None:
+        class FakePool:
+            def __init__(self):
+                self.acquired = 0
+                self.released = []
+
+            def acquire(self, **_kwargs):
+                self.acquired += 1
+                return {"lease_id": f"collease_{self.acquired:08d}", "account": {"id": f"account-{self.acquired}"}}
+
+            def use_runtime_profile(self, _lease_id, *, holder, consumer):
+                return consumer({"platform": "threads", "profile_dir": f"/collector/profiles/{self.acquired}"})
+
+            def release(self, lease_id, **kwargs):
+                self.released.append((lease_id, kwargs))
+
+        class FakeProcess:
+            returncode = 0
+
+            def __init__(self, body):
+                self.body = body
+
+            def poll(self):
+                return 0
+
+            def communicate(self):
+                return json.dumps(self.body), ""
+
+        pool = FakePool()
+        responses = [
+            {"ok": True, "candidates": [{"id": "one", "hotScore": 600}]},
+            {"ok": True, "candidates": [
+                {"id": "two", "hotScore": 900},
+                {"id": "three", "hotScore": 700},
+                {"id": "four", "hotScore": 650},
+            ]},
+        ]
+        with (
+            patch("webapp.worker_server._configured_collector_pool", return_value=pool),
+            patch("webapp.worker_server.subprocess.Popen", side_effect=lambda *_args, **_kwargs: FakeProcess(responses.pop(0))),
+        ):
+            result = run_tool_r18_job(
+                {
+                    "_workerCapability": "persona.hot_candidates.v1",
+                    "action": "fetch-hot-candidates",
+                    "platform": "threads",
+                    **current_keyword_strategy(["理发师", "理发店趣事"]),
+                    "limit": 10,
+                },
+                threading.Event(),
+            )
+
+        self.assertEqual(pool.acquired, 2)
+        self.assertEqual([item["id"] for item in result["candidates"]], ["two", "three", "four"])
+        self.assertFalse(pool.released[0][1]["succeeded"])
+        self.assertTrue(pool.released[1][1]["succeeded"])
 
     def test_capability_requires_current_snapshot_and_hides_unimplemented_dashboard(self) -> None:
         with self.assertRaisesRegex(ProtocolError, "archive snapshot"):

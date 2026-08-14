@@ -63,6 +63,7 @@ from .auth import (
 from .db import db, get_admin_config, init_db, set_admin_config
 from .deployment import deployment_boundary, is_collector_deployment
 from .collector_api import register_collector_routes
+from .remote_fetch_protocol import signed_headers
 from .auth_email import (
     VERIFICATION_RESEND_SECONDS,
     VERIFICATION_TTL_SECONDS,
@@ -12395,7 +12396,7 @@ class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
     limit: int = 10
     search_mode: str = "strict"
     writing_locale: str = "zh-TW"
-    freshness_days: int = 7
+    freshness_days: int = 30
     freshness_policy: str = "legacy"
     keywords: list[str] = Field(default_factory=list)
 
@@ -14046,6 +14047,7 @@ def _normalize_hot_workflow_text(value: Any) -> str:
 
 _PERSONA_HOT_RUN_LOCK = threading.Lock()
 _PERSONA_HOT_PROCESS_LOCK = threading.Lock()
+_PERSONA_HOT_KEYWORD_BATCH_LOCK = threading.Lock()
 _PERSONA_HOT_INTERACTIVE_REQUESTED = threading.Event()
 _PERSONA_HOT_BACKGROUND_PROCESS: subprocess.Popen[str] | None = None
 _PERSONA_HOT_INTERACTIVE_PROCESS: subprocess.Popen[str] | None = None
@@ -14633,11 +14635,10 @@ def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: i
         if _normalize_hot_workflow_text(item)
     ]
     warning_text = " ".join(normalized).lower()
-    keyword_fallback_active = "已切换精简人设主题策略" in warning_text
-    keyword_failure = ("热点关键词" in warning_text or "热点搜索策略" in warning_text) and not keyword_fallback_active
+    keyword_failure = "热点关键词" in warning_text or "热点搜索策略" in warning_text
     keyword_timed_out = keyword_failure and any(token in warning_text for token in ("超时", "timeout", "timed out"))
     keyword_invalid = keyword_failure and any(token in warning_text for token in (
-        "未返回符合规范", "未返回可用", "策略不可用", "关键词不可用",
+        "未返回符合规范", "未返回符合当前人设核心", "未返回可用", "策略不可用", "关键词不可用",
     ))
     keyword_rate_limited = keyword_failure and any(token in warning_text for token in (
         "限流", "rate limit", "too many requests",
@@ -14647,7 +14648,7 @@ def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: i
     if count <= 0 and keyword_rate_limited:
         return ["热点关键词生成请求受限，本次未执行抓取，请稍后重试。"]
     if count <= 0 and keyword_invalid:
-        return ["模型未返回符合规范的热点关键词，本次未执行抓取，请稍后重试。"]
+        return ["模型未返回符合当前人设核心的有效热点关键词，请稍后重试。"]
     if count <= 0 and keyword_failure:
         return ["热点关键词生成失败，本次未执行抓取，请稍后重试。"]
 
@@ -14695,7 +14696,7 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
     seen: set[str] = set()
     for item in raw_keywords:
         keyword = _normalize_hot_workflow_text(item)
-        if not keyword or keyword in seen:
+        if not keyword or "韭菜" in keyword or keyword in seen:
             continue
         seen.add(keyword)
         keywords.append(keyword)
@@ -14704,35 +14705,130 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
     return keywords
 
 
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 33
+PERSONA_HOT_KEYWORD_BATCH_SIZE = 8
+
+
+def _persona_hot_keyword_digest(keywords: list[str]) -> str:
+    encoded = json.dumps(keywords, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _persona_hot_keyword_batch_state_path() -> Path:
+    return TOOL_R18_RUNTIME_DIR / "persona_hot_keyword_batches.json"
+
+
+def _persona_hot_keyword_batch_key(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload) -> str:
+    search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
+    writing_locale = _normalize_persona_writing_locale(payload.writing_locale)
+    return json.dumps([str(archive_id or "").strip(), search_mode, writing_locale], ensure_ascii=False, separators=(",", ":"))
+
+
+def _read_persona_hot_keyword_batch_state() -> dict[str, Any]:
+    raw = _read_json_file(_persona_hot_keyword_batch_state_path())
+    return raw if isinstance(raw, dict) else {}
+
+
+def _write_persona_hot_keyword_batch_state(state: dict[str, Any]) -> None:
+    _atomic_write_text(
+        _persona_hot_keyword_batch_state_path(),
+        json.dumps(state, ensure_ascii=False, indent=2),
+    )
+
+
+def _persona_hot_keyword_batch_from_row(row: Any) -> list[str]:
+    if not isinstance(row, dict):
+        return []
+    if _to_int(row.get("strategy_version"), 0) != PERSONA_HOT_KEYWORD_STRATEGY_VERSION:
+        return []
+    keywords = _persona_hot_payload_keywords(row.get("keywords"))
+    cursor = min(max(_to_int(row.get("cursor"), 0), 0), len(keywords))
+    return keywords[cursor:cursor + PERSONA_HOT_KEYWORD_BATCH_SIZE]
+
+
+def _consume_persona_hot_keyword_batch(
+    archive_id: str,
+    payload: PersonaDashboardHotCandidatesFetchPayload,
+    keywords: list[str],
+) -> bool:
+    consumed = _persona_hot_payload_keywords(keywords)
+    if not consumed:
+        return False
+    with _PERSONA_HOT_KEYWORD_BATCH_LOCK:
+        state = _read_persona_hot_keyword_batch_state()
+        key = _persona_hot_keyword_batch_key(archive_id, payload)
+        row = state.get(key)
+        if not isinstance(row, dict) or _persona_hot_keyword_batch_from_row(row) != consumed:
+            return False
+        all_keywords = _persona_hot_payload_keywords(row.get("keywords"))
+        cursor = min(max(_to_int(row.get("cursor"), 0), 0), len(all_keywords))
+        row["cursor"] = min(len(all_keywords), cursor + len(consumed))
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        state[key] = row
+        _write_persona_hot_keyword_batch_state(state)
+        return True
+
+
 def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="missing persona id")
     search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
-    result = _run_persona_hot_workflow_cli(
-        {
-            "action": "prepare-hot-keywords",
-            "archiveId": clean_id,
-            "prompt": str(payload.prompt or "").strip(),
-            "refresh": bool(payload.refresh),
-            "searchMode": search_mode,
-            "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
-        },
-        timeout_seconds=75,
-    )
-    result = result if isinstance(result, dict) else {}
-    warnings = [
-        _normalize_hot_workflow_text(item)
-        for item in (result.get("warnings") if isinstance(result.get("warnings"), list) else [])
-        if _normalize_hot_workflow_text(item)
-    ]
-    return {
-        "ok": True,
-        "archive_name": str(result.get("archiveName") or result.get("archive_name") or "").strip(),
-        "keywords": _persona_hot_payload_keywords(result.get("keywords")),
-        "search_mode": "normal" if str(result.get("searchMode") or search_mode).strip().lower() == "normal" else "strict",
-        "warnings": warnings,
-    }
+    with _PERSONA_HOT_KEYWORD_BATCH_LOCK:
+        state = _read_persona_hot_keyword_batch_state()
+        key = _persona_hot_keyword_batch_key(clean_id, payload)
+        existing = state.get(key)
+        remaining_batch = _persona_hot_keyword_batch_from_row(existing)
+        if remaining_batch:
+            return {
+                "ok": True,
+                "archive_name": str(existing.get("archive_name") or "").strip(),
+                "keywords": remaining_batch,
+                "search_mode": search_mode,
+                "warnings": [],
+            }
+
+        # Once every keyword in the previous strategy has been dispatched
+        # successfully, explicitly bypass the strategy cache. A normal refresh
+        # still reuses the current unconsumed batch and never spends model quota.
+        force_regenerate = isinstance(existing, dict) and bool(_persona_hot_payload_keywords(existing.get("keywords")))
+        result = _run_persona_hot_workflow_cli(
+            {
+                "action": "prepare-hot-keywords",
+                "archiveId": clean_id,
+                "prompt": str(payload.prompt or "").strip(),
+                "refresh": bool(payload.refresh),
+                "forceRegenerate": force_regenerate,
+                "searchMode": search_mode,
+                "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
+            },
+            timeout_seconds=75,
+        )
+        result = result if isinstance(result, dict) else {}
+        warnings = [
+            _normalize_hot_workflow_text(item)
+            for item in (result.get("warnings") if isinstance(result.get("warnings"), list) else [])
+            if _normalize_hot_workflow_text(item)
+        ]
+        all_keywords = _persona_hot_payload_keywords(result.get("keywords"))
+        row = {
+            "archive_name": str(result.get("archiveName") or result.get("archive_name") or "").strip(),
+            "keywords": all_keywords,
+            "strategy_version": PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
+            "cursor": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if all_keywords:
+            state[key] = row
+            _write_persona_hot_keyword_batch_state(state)
+        return {
+            "ok": True,
+            "archive_name": row["archive_name"],
+            "keywords": all_keywords[:PERSONA_HOT_KEYWORD_BATCH_SIZE],
+            "search_mode": "normal" if str(result.get("searchMode") or search_mode).strip().lower() == "normal" else "strict",
+            "warnings": warnings,
+        }
 
 
 def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload) -> dict[str, Any]:
@@ -14742,14 +14838,27 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
 
     limit = min(max(_to_int(payload.limit, 10), 1), 20)
     search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
-    freshness_days = min(max(_to_int(payload.freshness_days, 7), 0), 15)
+    freshness_days = min(max(_to_int(payload.freshness_days, 30), 0), 30)
     keywords = _persona_hot_payload_keywords(payload.keywords)
+    if not keywords:
+        prepared = _prepare_persona_hot_keywords(clean_id, payload)
+        keywords = _persona_hot_payload_keywords(prepared.get("keywords"))
+        if not keywords:
+            prepared_warnings = prepared.get("warnings") if isinstance(prepared.get("warnings"), list) else []
+            detail = next((str(item).strip() for item in reversed(prepared_warnings) if str(item).strip()), "")
+            raise HTTPException(
+                status_code=503,
+                detail=detail or "热点关键词模型暂时不可用，请稍后重试。",
+            )
     result = _run_persona_hot_workflow_cli(
         {
             "action": "fetch-hot-candidates",
             "archiveId": clean_id,
             "prompt": str(payload.prompt or "").strip(),
-            "refresh": bool(payload.refresh),
+            # A foreground click must always execute one authenticated search.
+            # The old host may merge its candidate pool, but a full pool must
+            # never suppress the current keyword batch.
+            "refresh": True,
             # Ask the old host for an overscan batch. It persists the complete
             # qualified pool; this endpoint still returns only the requested
             # display count below.
@@ -14759,6 +14868,11 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "freshnessDays": freshness_days,
             "freshnessPolicy": "strict" if str(payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
             "keywords": keywords,
+            "keywordStrategyVersion": PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
+            "keywordDigest": _persona_hot_keyword_digest(keywords),
+            # Only this billable, user-facing route may activate scheduled
+            # low-watermark refill on the old collector host.
+            "userInitiated": True,
             "recordShown": False,
             # The old collector owns both persona/global pools. Pool-backed
             # requests read and replenish there; the new application only
@@ -14769,6 +14883,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
         # headroom for the worker's single sparse-result account rotation.
         timeout_seconds=65,
     )
+    _consume_persona_hot_keyword_batch(clean_id, payload, keywords)
 
     # Collector-account health is an old-host implementation detail. Never
     # expose or infer account Cookie state through the product-facing route.
@@ -14782,7 +14897,14 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
         )
         if normalized
     ]
-    candidates.sort(key=lambda item: _number(item.get("hot_score"), 0), reverse=True)
+    def candidate_display_priority(item: dict[str, Any]) -> tuple[float, float]:
+        try:
+            published_at = _parse_business_iso_timestamp(item.get("published_at"))
+        except Exception:
+            published_at = 0.0
+        return published_at, _number(item.get("hot_score"), 0)
+
+    candidates.sort(key=candidate_display_priority, reverse=True)
     candidates = candidates[:limit]
     return {
         "ok": True,
@@ -14793,7 +14915,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             if _normalize_hot_workflow_text(item)
         ] or keywords,
         "search_mode": "normal" if str(result.get("searchMode") or search_mode).strip().lower() == "normal" else "strict",
-        "freshness_days": min(max(_to_int(result.get("freshnessDays"), freshness_days), 0), 15),
+        "freshness_days": min(max(_to_int(result.get("freshnessDays"), freshness_days), 0), 30),
         "freshness_policy": "strict" if str(result.get("freshnessPolicy") or payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
         "cookie_statuses": cookie_rows,
         "warnings": _persona_hot_user_warnings(result.get("warnings"), len(candidates), limit, cookie_rows),
@@ -15025,6 +15147,14 @@ def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHot
     }
     if not cleaned_candidates:
         raise HTTPException(status_code=400, detail="请先选择至少一条热点候选。")
+    target_platform = _normalize_persona_content_platform(payload.platform)
+    mismatched_platforms = [
+        _normalize_persona_content_platform(item.get("platform"))
+        for item in cleaned_candidates
+        if _normalize_persona_content_platform(item.get("platform")) != target_platform
+    ]
+    if mismatched_platforms:
+        raise HTTPException(status_code=400, detail="热点推文只能保存到对应平台。")
     result = _run_persona_hot_workflow_cli(
         {
             "action": "import-hot-candidates",
@@ -15044,7 +15174,7 @@ def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHot
             for post in _list_persona_archive_posts(clean_id)
             if str(post.get("id") or "").strip() not in existing_post_ids
         }
-    _set_persona_archive_posts_platform(clean_id, result_post_ids, payload.platform)
+    _set_persona_archive_posts_platform(clean_id, result_post_ids, target_platform)
     posts = _list_persona_archive_posts(clean_id)
     post_by_id = {str(post.get("id") or "").strip(): post for post in posts if str(post.get("id") or "").strip()}
     imported_posts = []
@@ -15221,6 +15351,15 @@ def _generate_persona_archive_posts(
         for post in _list_persona_archive_posts(clean_id, include_generation_candidates=True)
         if str(post.get("id") or "").strip()
     }
+    trend_user_input = "\n".join(dict.fromkeys(
+        text
+        for text in (
+            str(payload.prompt or "").strip(),
+            str(getattr(payload, "rewrite_source_title", "") or "").strip(),
+            str(getattr(payload, "rewrite_source_content", "") or "").strip(),
+        )
+        if text
+    ))
     result = _run_persona_workflow_cli({
         "action": "generate-posts",
         "archiveId": clean_id,
@@ -15232,9 +15371,10 @@ def _generate_persona_archive_posts(
         "selectedMemoryEntryIds": [str(item or "").strip() for item in (payload.selected_memory_ids or []) if str(item or "").strip()],
         "selectedMemorySummaries": [str(item or "").strip() for item in (payload.selected_memory_summaries or []) if str(item or "").strip()],
         "trendTopicContext": {
-            "userInput": str(payload.prompt or "").strip(),
+            "userInput": trend_user_input,
             "selectedDirections": [str(item or "").strip() for item in (payload.selected_directions or []) if str(item or "").strip()][:10],
             "selectedMemorySummaries": [str(item or "").strip() for item in (payload.selected_memory_summaries or []) if str(item or "").strip()][:10],
+            "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
         },
         "textModelBranch": "free",
     })
@@ -22510,6 +22650,98 @@ def create_app() -> FastAPI:
         )
         return response
 
+    @app.get("/api/auth/google/account-session/start")
+    def api_google_account_session_start(
+        request: Request,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        """Authorize the signed-in console account without reading browser secrets.
+
+        This flow intentionally reuses Google's standard OAuth validation but
+        never exposes Chrome passwords, cookies, or OAuth tokens to frontend
+        JavaScript.  Its only frontend-visible result is verified identity
+        metadata returned later by ``/api/me``.
+        """
+
+        client_ip = _request_client_ip(request)
+        _enforce_auth_rate_limit(
+            "google_oauth_account_session_start_ip",
+            client_ip,
+            limit=20,
+            window_seconds=600,
+        )
+        with db() as conn:
+            try:
+                runtime = _get_runtime_config(conn)
+            except RuntimeConfigFileError as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            if not _auth_login_policy(runtime)["google_login_enabled"]:
+                raise HTTPException(status_code=503, detail="Google login is not available")
+        state = generate_oauth_token()
+        nonce = generate_oauth_token()
+        try:
+            authorization_url = create_google_authorization(
+                state,
+                nonce,
+                _google_callback_uri(),
+            )
+        except GoogleOAuthConfigurationError as exc:
+            raise HTTPException(status_code=503, detail="Google login is not configured") from exc
+        now = _now_ts()
+        owner_user_id = _workspace_user_id(user)
+        admin_console = request_uses_admin_session(request, owner_user_id if _is_admin_workspace(user) else None)
+        if admin_console:
+            return_params = {"view": "accounts", "admin_console": "1"}
+            if _is_admin_workspace(user):
+                return_params["admin_workspace_user_id"] = str(owner_user_id)
+            console_return_path = f"/admin-console.html?{urlencode(return_params)}"
+        else:
+            console_return_path = "/console.html?view=accounts"
+        context_json = json.dumps(
+            {"purpose": "social_account_session", "user_id": owner_user_id},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        with db() as conn:
+            conn.execute(
+                """
+                DELETE FROM oauth_authorization_flows
+                WHERE expires_at <= ? OR (consumed_at > 0 AND consumed_at <= ?)
+                """,
+                (now, now - 3600),
+            )
+            conn.execute(
+                """
+                INSERT INTO oauth_authorization_flows(
+                  state_digest, provider, nonce_digest, flow_token_digest,
+                  return_path, context_json, request_ip, user_id, expires_at,
+                  consumed_at, created_at
+                ) VALUES (?, 'google', ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                """,
+                (
+                    oauth_token_digest(state),
+                    oauth_token_digest(nonce),
+                    oauth_token_digest(nonce),
+                    console_return_path,
+                    context_json,
+                    client_ip,
+                    owner_user_id,
+                    now + 600,
+                    now,
+                ),
+            )
+        response = RedirectResponse(url=authorization_url, status_code=302)
+        response.set_cookie(
+            key=GOOGLE_OAUTH_FLOW_COOKIE,
+            value=nonce,
+            httponly=True,
+            max_age=600,
+            samesite="lax",
+            secure=_session_cookie_secure(request),
+            path="/",
+        )
+        return response
+
     @app.get("/api/auth/google/callback")
     def api_google_callback(
         request: Request,
@@ -22566,6 +22798,10 @@ def create_app() -> FastAPI:
             if consumed.rowcount != 1:
                 return _oauth_error_redirect("oauth_state_invalid")
             return_path = _safe_local_return_url(str(row["return_path"] or "/"), "/")
+            try:
+                flow_context = json.loads(str(row["context_json"] or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                flow_context = {}
         try:
             claims = exchange_google_code(
                 code,
@@ -22584,6 +22820,66 @@ def create_app() -> FastAPI:
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        if str(flow_context.get("purpose") or "") == "social_account_session":
+            owner_user_id = int(flow_context.get("user_id") or row["user_id"] or 0)
+            if owner_user_id <= 0:
+                return _oauth_error_redirect("oauth_state_invalid")
+            with db() as conn:
+                owner = conn.execute("SELECT * FROM users WHERE id = ?", (owner_user_id,)).fetchone()
+                if owner is None or int(owner["is_disabled"] or 0):
+                    return _oauth_error_redirect("account_unavailable")
+                subject_owner = conn.execute(
+                    "SELECT user_id FROM oauth_identities WHERE provider = 'google' AND provider_subject = ?",
+                    (subject,),
+                ).fetchone()
+                user_google = conn.execute(
+                    "SELECT provider_subject FROM oauth_identities WHERE user_id = ? AND provider = 'google'",
+                    (owner_user_id,),
+                ).fetchone()
+                email_owner = conn.execute(
+                    "SELECT user_id FROM user_auth_emails WHERE email_normalized = ? COLLATE NOCASE",
+                    (email,),
+                ).fetchone()
+                result_code = "conflict" if (
+                    (subject_owner is not None and int(subject_owner["user_id"] or 0) != owner_user_id)
+                    or (user_google is not None and str(user_google["provider_subject"] or "") != subject)
+                    or (email_owner is not None and int(email_owner["user_id"] or 0) != owner_user_id)
+                ) else "success"
+                if result_code == "success":
+                    if user_google is None:
+                        conn.execute(
+                            """
+                            INSERT INTO oauth_identities(
+                              user_id, provider, provider_subject, email_normalized,
+                              email_verified, profile_json, login_enabled, last_login_at,
+                              created_at, updated_at
+                            ) VALUES (?, 'google', ?, ?, 1, ?, 1, ?, ?, ?)
+                            """,
+                            (owner_user_id, subject, email, profile_json, now, now, now),
+                        )
+                    else:
+                        conn.execute(
+                            """
+                            UPDATE oauth_identities
+                            SET email_normalized = ?, email_verified = 1, profile_json = ?,
+                                login_enabled = 1, last_login_at = ?, updated_at = ?
+                            WHERE user_id = ? AND provider = 'google'
+                            """,
+                            (email, profile_json, now, now, owner_user_id),
+                        )
+                parsed_return = urlsplit(return_path)
+                return_params = dict(parse_qsl(parsed_return.query, keep_blank_values=True))
+                return_params["google_account_session"] = result_code
+                result_return_path = urlunsplit((
+                    "",
+                    "",
+                    parsed_return.path or "/console.html",
+                    urlencode(return_params),
+                    parsed_return.fragment,
+                ))
+                response = RedirectResponse(url=result_return_path, status_code=302)
+            response.delete_cookie(GOOGLE_OAUTH_FLOW_COOKIE, path="/")
+            return response
         with db() as conn:
             identity = conn.execute(
                 """
@@ -23958,7 +24254,7 @@ def create_app() -> FastAPI:
             ).fetchone()
             google_row = conn.execute(
                 """
-                SELECT login_enabled
+                SELECT login_enabled, email_normalized, email_verified
                 FROM oauth_identities
                 WHERE user_id = ? AND provider = 'google'
                 LIMIT 1
@@ -23972,8 +24268,16 @@ def create_app() -> FastAPI:
             "google_login_enabled": int(google_row["login_enabled"] or 0) if google_row else 0,
         }
         return {
-            "verified_email": str(email_row["email_normalized"] or "") if email_row else "",
-            "email_verified_at": int(email_row["verified_at"] or 0) if email_row else 0,
+            "verified_email": (
+                str(email_row["email_normalized"] or "")
+                if email_row
+                else str(google_row["email_normalized"] or "") if google_row and int(google_row["email_verified"] or 0) else ""
+            ),
+            "email_verified_at": (
+                int(email_row["verified_at"] or 0)
+                if email_row
+                else int(google_row["email_verified"] or 0) if google_row else 0
+            ),
             "email_2fa_enabled": bool(int(account.get("email_2fa_enabled") or 0)),
             "password_login_enabled": bool(auth_source["password_login_enabled"]),
             "auth_methods": _user_auth_methods_payload(auth_source),
@@ -26528,6 +26832,68 @@ def create_app() -> FastAPI:
         _invalidate_admin_dashboard_cache()
         return {"ok": True, "email_delivery": overview}
 
+    def _hot_dataset_worker_request(method: str, path: str) -> dict[str, Any]:
+        try:
+            keys_path = Path(os.getenv("TG_FETCH_WORKER_KEYS_FILE", "/data/internal/remote-fetch-keys.json"))
+            keys = json.loads(keys_path.read_text(encoding="utf-8"))
+            key_id = sorted(keys)[0]
+            secret = str(keys[key_id])
+            headers = signed_headers(
+                secret=secret,
+                key_id=key_id,
+                method=method,
+                path=path,
+                body=b"",
+                timestamp=int(time.time()),
+                nonce=secrets.token_urlsafe(24),
+            )
+            base_url = os.getenv("TG_FETCH_WORKER_INTERNAL_URL", "http://tg-koll-capture-worker:8092").rstrip("/")
+            response = requests.request(method, base_url + path, headers=headers, timeout=(3, 12))
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("invalid worker response")
+            return payload
+        except (OSError, IndexError, KeyError, ValueError, requests.RequestException) as exc:
+            raise HTTPException(status_code=502, detail="旧机热点数据 worker 暂不可用") from exc
+
+    @app.get("/api/admin/hot-datasets")
+    def api_admin_hot_datasets(_user: dict[str, Any] = Depends(require_admin)):
+        path = Path(os.getenv("TG_HOT_DATASET_OVERVIEW_PATH", "/collector-proxy/hot-dataset-overview.json"))
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {"configured": False, "generated_at": 0, "global": {}, "personas": []}
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=503, detail="热点数据集概览暂不可用") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=503, detail="热点数据集概览格式无效")
+        generated_at = int(payload.get("generated_at") or 0)
+        return {
+            "configured": True,
+            "stale": not generated_at or _now_ts() - generated_at > 90,
+            "generated_at": generated_at,
+            "global": payload.get("global") if isinstance(payload.get("global"), dict) else {},
+            "personas": payload.get("personas") if isinstance(payload.get("personas"), list) else [],
+        }
+
+    @app.post("/api/admin/hot-datasets/refresh")
+    def api_admin_refresh_hot_datasets(user: dict[str, Any] = Depends(require_admin)):
+        _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-datasets/refresh")
+        return {"ok": True, **api_admin_hot_datasets(user)}
+
+    @app.delete("/api/admin/hot-datasets/{dataset_id}")
+    def api_admin_delete_hot_dataset(dataset_id: str, user: dict[str, Any] = Depends(require_admin)):
+        clean_id = str(dataset_id or "").strip().lower()
+        if clean_id != "global":
+            try:
+                if str(uuid.UUID(clean_id)) != clean_id:
+                    raise ValueError
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="热点数据集 ID 无效") from exc
+        result = _hot_dataset_worker_request("DELETE", f"/internal/worker/v1/hot-datasets/{clean_id}")
+        return {"ok": True, "deleted_count": int(result.get("deleted_count") or 0), **api_admin_hot_datasets(user)}
+
     @app.get("/api/admin/dashboard")
     def api_admin_dashboard(
         days: int = 30,
@@ -26569,20 +26935,11 @@ def create_app() -> FastAPI:
                 payload["summary"]["service_health"] = "degraded"
         browser_sessions = _live_browser_sessions(user_id=None)
         browser_counts = {"running": 0, "idle": 0, "manual": 0, "error": 0, "reclaimable": 0}
-        manual_queue: list[dict[str, Any]] = []
         for session in browser_sessions:
             task_status = str(session.get("task_status") or "").strip().lower()
             login_mode = str(session.get("login_mode") or "").strip().lower()
             if login_mode == "manual" or bool(session.get("input_allowed")):
                 browser_counts["manual"] += 1
-                manual_queue.append(
-                    {
-                        "session_id": str(session.get("id") or session.get("session_id") or ""),
-                        "task_id": str(session.get("task_id") or ""),
-                        "title": str(session.get("title") or session.get("username") or "需要人工处理的浏览器"),
-                        "task_status": task_status,
-                    }
-                )
             elif task_status in {"failed", "error"} or session.get("task_error"):
                 browser_counts["error"] += 1
             elif task_status in {"completed", "success", "cancelled", "canceled"}:
@@ -26594,7 +26951,6 @@ def create_app() -> FastAPI:
         payload.setdefault("distributions", {})["browsers"] = [
             {"label": label, "value": value} for label, value in browser_counts.items()
         ]
-        payload.setdefault("queues", {})["manual_browsers"] = manual_queue[:8]
         payload["summary"]["browser_sessions"] = len(browser_sessions)
         with _ADMIN_DASHBOARD_CACHE_LOCK:
             _ADMIN_DASHBOARD_CACHE[cache_key] = (monotonic_now, payload)

@@ -239,5 +239,8 @@ describe("buildSocialPostsPrompt", () => {
     expect(prompt).toContain("新聞與趨勢");
     expect(prompt).toContain("社媒討論");
     expect(prompt).toContain("地區熱梗 / 網路語料");
+    expect(prompt).not.toContain("必須自然融入上方");
+    expect(prompt).toContain("人設相關新聞");
+    expect(prompt).toContain("地區熱門話題");
   });
 });

@@ -1691,7 +1691,7 @@
   box-shadow: inset 0 4px 0 #d8d2cc;
 }
 
-:root[data-theme="light"] .page-admin :is(.admin-governance-chart, .admin-distribution-list, .admin-health-list, .admin-queue-list) {
+:root[data-theme="light"] .page-admin :is(.admin-governance-chart, .admin-distribution-list, .admin-health-list) {
   background: #eef2f5;
   border-color: #c0c8cf;
 }

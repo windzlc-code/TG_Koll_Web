@@ -25,6 +25,8 @@ logs/
 .codex-tmp/
 .codex_tmp/
 .codex_tmp_py/
+.codex-*-live/
+.codex-*-rollback/
 .playwright-mcp/
 .playwright-cli/
 .serena/
@@ -52,6 +54,7 @@ tmp_*.png
 *-review.png
 *-final.png
 *-verified.png
+*-audit-restored.png
 account-*.png
 !webapp/static/assets/opc/account-avatar-mascot.png
 persona-*.png

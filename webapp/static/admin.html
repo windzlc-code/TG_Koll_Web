@@ -76,14 +76,12 @@
     }
 
     .proxy-market-admin-filters label,
-    .proxy-market-admin-form label,
     .proxy-market-settings-form label {
       min-width: 0;
       margin: 0;
     }
 
     .proxy-market-admin-filters label > span,
-    .proxy-market-admin-form label > span,
     .proxy-market-settings-form label > span {
       display: block;
       margin-bottom: 5px;
@@ -171,25 +169,6 @@
       margin-bottom: 16px;
     }
 
-    .proxy-market-admin-form {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
-    }
-
-    .proxy-market-admin-form .span-2 {
-      grid-column: span 2;
-    }
-
-    .proxy-market-admin-form .span-4 {
-      grid-column: 1 / -1;
-    }
-
-    .proxy-market-admin-form textarea {
-      min-height: 82px;
-      resize: vertical;
-    }
-
     .proxy-market-smart-import {
       grid-column: 1 / -1;
       padding: 12px;
@@ -241,25 +220,6 @@
 
     .proxy-market-smart-result[data-state="error"] {
       color: var(--danger, #c62828);
-    }
-
-    .proxy-market-credential-note {
-      display: flex;
-      align-items: center;
-      min-height: 36px;
-      padding: 8px 10px;
-      border-left: 3px solid var(--accent, #2563eb);
-      background: color-mix(in srgb, var(--accent, #2563eb) 7%, transparent);
-    }
-
-    .proxy-market-admin-editor-actions {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 10px;
-      grid-column: 1 / -1;
-      padding-top: 2px;
     }
 
     .proxy-market-admin-table td {
@@ -436,24 +396,16 @@
         border-top: 1px solid var(--line, #d9e0e8);
       }
 
-      .proxy-market-admin-form {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
       .proxy-purchase-config-form,
       .proxy-provider-credential-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .proxy-provider-field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .proxy-purchase-order-resolution { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
-      .proxy-market-admin-form .span-4 {
-        grid-column: 1 / -1;
-      }
     }
 
     @media (max-width: 760px) {
       .proxy-market-admin-head-actions,
       .proxy-market-admin-band-head,
-      .proxy-market-admin-editor-actions,
       .proxy-market-smart-import-actions {
         align-items: stretch;
         flex-direction: column;
@@ -467,7 +419,6 @@
 
       .proxy-market-admin-stats,
       .proxy-market-admin-filters,
-      .proxy-market-admin-form,
       .proxy-market-settings-form {
         grid-template-columns: 1fr;
       }
@@ -517,10 +468,57 @@
         min-height: 44px;
       }
 
-      .proxy-market-admin-form .span-2,
-      .proxy-market-admin-form .span-4 {
-        grid-column: auto;
-      }
+    }
+    .hot-dataset-overview {
+      margin: 18px 0;
+      padding: 18px 20px 20px;
+      border: 1px solid #d9e2e8;
+      border-radius: 16px;
+      background: linear-gradient(145deg, #fbfcfd 0%, #f2f6f8 100%);
+      box-shadow: 0 12px 30px rgba(28, 50, 65, 0.06);
+    }
+    .hot-dataset-overview > header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .hot-dataset-overview > header strong { display: block; color: #1f3442; font-size: 16px; }
+    .hot-dataset-overview > header span { display: block; margin-top: 3px; color: #738493; font-size: 12px; }
+    .hot-dataset-overview-time { white-space: nowrap; }
+    .hot-dataset-overview-actions { display: flex; align-items: center; gap: 10px; }
+    .hot-dataset-refresh { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 6px 10px; }
+    .hot-dataset-refresh svg, .hot-dataset-delete svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .hot-dataset-list { display: grid; gap: 10px; }
+    .hot-dataset-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(150px, 22%) 34px;
+      align-items: center;
+      gap: 18px;
+      min-height: 58px;
+      padding: 9px 12px 9px 14px;
+      border: 1px solid rgba(176, 193, 203, 0.52);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.82);
+    }
+    .hot-dataset-row.is-global { border-color: #9eafb9; background: #fff; }
+    .hot-dataset-meter-copy { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
+    .hot-dataset-meter-copy strong { color: #223846; font-size: 14px; font-variant-numeric: tabular-nums; }
+    .hot-dataset-meter-copy span { color: #718390; font-size: 12px; }
+    .hot-dataset-track { height: 12px; overflow: hidden; border-radius: 999px; background: #e4ebef; box-shadow: inset 0 1px 2px rgba(31, 52, 66, 0.08); }
+    .hot-dataset-fill { display: block; height: 100%; border-radius: inherit; transition: width 360ms ease; }
+    .hot-dataset-name { display: grid; grid-template-columns: 10px minmax(0, 1fr); column-gap: 9px; align-items: center; }
+    .hot-dataset-name i { width: 9px; height: 9px; border-radius: 50%; background: var(--dataset-color); box-shadow: 0 0 0 4px color-mix(in srgb, var(--dataset-color) 16%, transparent); }
+    .hot-dataset-name strong { overflow: hidden; color: #1d303d; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+    .hot-dataset-name small { grid-column: 2; margin-top: 2px; color: #7c8b95; font-size: 11px; }
+    .hot-dataset-delete { display: inline-grid; width: 34px; min-width: 34px; height: 34px; min-height: 34px; place-items: center; padding: 0; color: #a93f3f; border: 1px solid #ebcaca; border-radius: 8px; background: #fff8f8; }
+    .hot-dataset-delete:hover, .hot-dataset-delete:focus-visible { color: #842d2d; border-color: #dca5a5; background: #fff0f0; }
+    @media (max-width: 760px) {
+      .hot-dataset-overview { padding: 15px; }
+      .hot-dataset-overview > header { align-items: flex-start; flex-direction: column; gap: 5px; }
+      .hot-dataset-overview-actions { width: 100%; justify-content: space-between; }
+      .hot-dataset-row { grid-template-columns: minmax(0, 1fr) 110px 34px; gap: 8px; padding-inline: 10px; }
     }
   </style>
 </head>
@@ -691,6 +689,20 @@
           <article class="admin-governance-kpi is-health"><span>服务健康</span><strong id="govKpiHealth">-</strong><small id="govKpiHealthMeta">正在检查</small></article>
         </div>
 
+        <article class="hot-dataset-overview" aria-labelledby="hotDatasetOverviewTitle">
+          <header>
+            <div><strong id="hotDatasetOverviewTitle">热点候选数据集</strong><span>全局池置顶；人设池按独立容量显示可用候选</span></div>
+            <div class="hot-dataset-overview-actions">
+              <span id="hotDatasetOverviewTime" class="hot-dataset-overview-time">正在读取旧机数据…</span>
+              <button id="btnRefreshHotDatasets" type="button" class="ghost hot-dataset-refresh" aria-label="立即刷新热点候选数据集">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5"></path><path d="M18.5 9A7.5 7.5 0 1 0 19 16"></path></svg>
+                <span>刷新数据集</span>
+              </button>
+            </div>
+          </header>
+          <div id="hotDatasetOverviewList" class="hot-dataset-list" aria-live="polite"></div>
+        </article>
+
         <div class="admin-governance-chart-grid">
           <article class="admin-governance-panel admin-chart-panel">
             <header><div><strong>客户趋势</strong><span id="governanceUsersRangeLabel">近 30 天新增与启用</span></div><div class="admin-chart-legend"><i class="is-blue"></i>新增 <i class="is-success"></i>启用</div></header>
@@ -732,40 +744,6 @@
           </article>
         </div>
 
-        <div class="admin-governance-queue-grid">
-          <article class="admin-governance-panel admin-queue-panel">
-            <header><div><strong>待审核客户</strong><span>按申请时间排序</span></div><button type="button" class="ghost" data-page-jump="users">查看全部</button></header>
-            <div id="governancePendingQueue" class="admin-queue-list"></div>
-          </article>
-          <article class="admin-governance-panel admin-queue-panel">
-            <header><div><strong>最近失败任务</strong><span>跨生成与自动化任务</span></div><button type="button" class="ghost" data-page-jump="tasks">查看全部</button></header>
-            <div id="governanceFailureQueue" class="admin-queue-list"></div>
-          </article>
-          <article class="admin-governance-panel admin-queue-panel">
-            <header><div><strong>安全告警</strong><span>高风险优先</span></div><button type="button" class="ghost" data-page-jump="security">进入处置</button></header>
-            <div id="governanceSecurityQueue" class="admin-queue-list"></div>
-          </article>
-          <article class="admin-governance-panel admin-queue-panel">
-            <header><div><strong>最近审计事件</strong><span>敏感操作追踪</span></div><button type="button" class="ghost" data-page-jump="audit">查看日志</button></header>
-            <div id="governanceAuditQueue" class="admin-queue-list"></div>
-          </article>
-          <article class="admin-governance-panel admin-queue-panel">
-            <header><div><strong>人工浏览器任务</strong><span>需要人工接管</span></div></header>
-            <div id="governanceBrowserQueue" class="admin-queue-list"></div>
-          </article>
-          <article class="admin-governance-panel admin-queue-panel">
-            <header><div><strong>即将到期订阅</strong><span>7 天内到期</span></div></header>
-            <div id="governanceSubscriptionQueue" class="admin-queue-list"></div>
-          </article>
-          <article class="admin-governance-panel admin-queue-panel">
-            <header><div><strong>密码敏感操作</strong><span>查看、修改、重置与恢复</span></div></header>
-            <div id="governancePasswordQueue" class="admin-queue-list"></div>
-          </article>
-          <article class="admin-governance-panel admin-queue-panel">
-            <header><div><strong>后台批量作业</strong><span>最近执行结果</span></div></header>
-            <div id="governanceBatchQueue" class="admin-queue-list"></div>
-          </article>
-        </div>
         <div id="governanceMsg" class="msg" role="status" aria-live="polite"></div>
       </section>
 
@@ -1233,7 +1211,7 @@
               </div>
               <button id="btnNewProxyMarketItem" type="button" class="primary">
                 <svg viewBox="0 0 24 24" aria-hidden="true" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round"><path d="M12 5v14M5 12h14"></path></svg>
-                新建代理
+                自动添加代理
               </button>
             </div>
             <div class="table-wrap admin-table-shell admin-governance-table-shell">
@@ -1306,90 +1284,41 @@
         <div class="proxy-market-admin-band" id="proxyMarketEditor">
           <div class="proxy-market-admin-band-head">
             <div>
-              <h3 id="proxyMarketEditorTitle">新建代理</h3>
-              <div class="small" id="proxyMarketEditorHint">先保存草稿，再依次执行真实检测和发布。</div>
+              <h3>自动识别并添加代理</h3>
+              <div class="small">粘贴代理连接信息即可。系统会自动识别协议、地址、端口和凭据，真实检测通过后直接加入库存。</div>
             </div>
           </div>
-          <form id="proxyMarketItemForm" class="proxy-market-admin-form" novalidate>
-            <div class="proxy-market-smart-import">
+          <div class="proxy-market-smart-import proxy-market-auto-import">
               <div class="proxy-market-smart-import-head">
                 <div>
                   <strong>智能识别代理信息</strong>
-                  <div class="small">粘贴内容会保留，点击“识别并填充”后才会解析；国家/地区支持全球 ISO 代码及常用中外文名称。</div>
+                  <div class="small">支持代理链接、host:port:user:password、JSON 和多行供应商格式；地区、城市与 ISP 由真实网络检测自动识别。</div>
                 </div>
               </div>
               <textarea
                 id="proxyMarketSmartInput"
-                aria-label="待识别的代理信息"
+                aria-label="待自动识别的代理信息"
                 autocomplete="off"
                 spellcheck="false"
                 rows="6"
-                placeholder="代理链接：socks5://user:password@198.51.100.27:8022&#10;四段格式：198.51.100.27:8022:user:password&#10;新增供应商格式：198.51.100.27:8022:user:password&#10;direct.provider.example:8001:user:password&#10;台湾&#10;同时支持 JSON、user:password@host:port、竖线分隔和多行键值"
+                placeholder="代理链接：socks5://user:password@198.51.100.27:8022&#10;四段格式：198.51.100.27:8022:user:password&#10;也支持 JSON、user:password@host:port、竖线分隔和多行键值"
               ></textarea>
               <div class="proxy-market-smart-import-actions">
-                <span class="small proxy-market-smart-result" id="proxyMarketSmartResult" role="status" aria-live="polite">粘贴后会即时识别；真实网络检测仅在点击检测按钮时执行。</span>
+                <span class="small proxy-market-smart-result" id="proxyMarketSmartResult" role="status" aria-live="polite">等待粘贴代理信息，系统会即时解析格式。</span>
                 <div class="proxy-market-admin-actions">
                   <button id="btnPasteProxyMarketSmartInput" type="button" class="ghost" title="从剪贴板粘贴">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h6M9 3h6v4H9z"></path><path d="M7 5H5v16h14V5h-2"></path></svg>
                     粘贴
                   </button>
-                  <button id="btnParseProxyMarketSmartInput" type="button" class="ghost">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 12h7M4 17h5"></path><path d="m15 15 2 2 4-5"></path></svg>
-                    识别并填充
-                  </button>
-                  <button id="btnInspectProxyMarketConnection" type="button" class="primary">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="m16 16 4 4M8 11h6M11 8v6"></path></svg>
-                    检测自动填写字段
+                  <button id="btnAutoPublishProxyMarketItem" type="button" class="primary">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 12 2.5 2.5L16 9"></path><circle cx="12" cy="12" r="9"></circle></svg>
+                    自动检测并发布
                   </button>
                 </div>
               </div>
             </div>
 
-            <label><span>SKU</span><input id="proxyMarketSku" maxlength="80" pattern="[A-Za-z0-9._-]{2,80}" placeholder="TW-TPE-001" required></label>
-            <label><span>显示名称</span><input id="proxyMarketDisplayName" maxlength="120" placeholder="台湾代理IP"></label>
-            <label><span>供应商键</span><input id="proxyMarketProviderKey" maxlength="80" placeholder="provider-a"></label>
-            <label><span>代理协议</span><select id="proxyMarketProxyType"><option value="socks5">SOCKS5</option><option value="https">HTTPS</option><option value="http">HTTP</option></select></label>
-
-            <label class="span-2"><span>主机</span><input id="proxyMarketHost" maxlength="255" placeholder="proxy.example.com" required></label>
-            <label><span>端口</span><input id="proxyMarketPort" type="number" min="1" max="65535" inputmode="numeric" required></label>
-            <label><span>到期时间</span><input id="proxyMarketExpiresAt" type="datetime-local"></label>
-
-            <label><span>用户名</span><input id="proxyMarketUsername" maxlength="255" autocomplete="off" placeholder="编辑时留空保留"></label>
-            <label><span>密码</span><input id="proxyMarketPassword" type="password" maxlength="512" autocomplete="new-password" placeholder="编辑时留空保留"></label>
-            <div class="proxy-market-credential-note span-2 small" id="proxyMarketCredentialNote">后台不会回显已保存凭据。编辑时空密码不会覆盖原密码。</div>
-
-            <label><span>国家 / 地区</span><input id="proxyMarketCountry" maxlength="80" placeholder="TW"></label>
-            <label><span>州 / 省</span><input id="proxyMarketRegion" maxlength="100" placeholder="Taipei"></label>
-            <label><span>城市</span><input id="proxyMarketCity" maxlength="100" placeholder="Taipei"></label>
-            <label><span>ISP</span><input id="proxyMarketIsp" maxlength="160" placeholder="ISP 名称"></label>
-
-            <label><span>售价（分）</span><input id="proxyMarketPriceCents" type="number" min="0" step="1" value="0"></label>
-            <label><span>币种</span><input id="proxyMarketCurrency" maxlength="10" value="TWD"></label>
-            <label><span>计费周期</span><select id="proxyMarketBillingCycle"><option value="month">每月</option><option value="week">每周</option><option value="day">每日</option><option value="once">一次性</option></select></label>
-            <label><span>IP 类型</span><input value="静态住宅" disabled></label>
-
-            <label class="span-2"><span>标签</span><input id="proxyMarketTags" placeholder="逗号分隔，例如 台湾, 低延迟"></label>
-            <label class="span-2"><span>适用场景</span><input id="proxyMarketUseCases" placeholder="逗号分隔，例如 社媒运营, 本地化测试"></label>
-            <label class="span-4"><span>代理说明</span><textarea id="proxyMarketDescription" maxlength="1200" placeholder="说明线路能力与使用限制"></textarea></label>
-
-            <div class="proxy-market-admin-editor-actions">
-              <span class="small" id="proxyMarketEditorState">当前为新建模式</span>
-              <div class="proxy-market-admin-actions">
-                <button id="btnCancelProxyMarketEdit" type="button" class="ghost">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
-                  清空
-                </button>
-                <button id="btnSaveProxyMarketItem" type="submit" class="ghost">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5Z"></path><path d="M8 4v6h8V4M8 20v-6h8v6"></path></svg>
-                  保存草稿
-                </button>
-                <button id="btnPublishProxyMarketItem" type="button" class="primary">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 12 2.5 2.5L16 9"></path><circle cx="12" cy="12" r="9"></circle></svg>
-                  检测并发布
-                </button>
-              </div>
-            </div>
-          </form>
+          </div>
           <div id="proxyMarketItemMsg" class="msg" role="status" aria-live="polite"></div>
         </div>
 
@@ -1768,59 +1697,96 @@
         </div>
       </section>
 
-      <section class="card section admin-page-view" id="secCrm" data-page-view="crm">
-        <div class="section-head admin-governance-head">
+      <section class="card section admin-page-view crm-admin-center" id="secCrm" data-page-view="crm">
+        <div class="section-head admin-governance-head crm-admin-heading">
           <div>
-            <h3>CRM 模块管理</h3>
-            <p>控制全局开放、维护与紧急暂停；管理用户授权、导入批次和运行健康。</p>
+            <div class="crm-admin-eyebrow">CRM 管理中心</div>
+            <h3>按步骤管理客户 CRM</h3>
+            <p>第一次使用也不用记技术参数：先确认服务正常，再为客户开通，需要时导入旧资料。</p>
           </div>
-          <button class="btn ghost" id="btnCrmAdminRefresh" type="button">刷新状态</button>
+          <button class="btn ghost crm-refresh-button" id="btnCrmAdminRefresh" type="button">重新检查</button>
         </div>
-        <div class="admin-config-grid">
-          <section class="admin-config-card" aria-labelledby="crmGlobalSettingsTitle">
-            <h4 id="crmGlobalSettingsTitle">全局策略</h4>
-            <p class="meta">环境硬开关 CRM_ENABLED 必须启用，后台开关才会生效。</p>
-            <form id="crmGlobalSettingsForm" class="form-grid" novalidate>
-              <label class="switch"><input id="crmGlobalEnabled" type="checkbox"><span>全局启用 CRM</span></label>
-              <label class="switch"><input id="crmMaintenance" type="checkbox"><span>维护模式</span></label>
-              <label class="switch"><input id="crmEmergencyPause" type="checkbox"><span>紧急暂停</span></label>
-              <div class="row">
-                <button class="btn primary" type="submit">保存 CRM 策略</button>
-                <button class="btn danger" id="btnCrmEmergencyPause" type="button">立即紧急暂停</button>
+
+        <div class="crm-quick-guide" aria-label="CRM 操作顺序">
+          <div class="crm-guide-step"><span>1</span><div><strong>确认服务</strong><small>查看 CRM 是否可以正常使用</small></div></div>
+          <div class="crm-guide-step"><span>2</span><div><strong>开通客户</strong><small>输入客户编号并保存权限</small></div></div>
+          <div class="crm-guide-step"><span>3</span><div><strong>导入资料</strong><small>先检查文件，确认后再导入</small></div></div>
+        </div>
+
+        <div class="crm-admin-grid crm-admin-primary-grid">
+          <section class="admin-config-card crm-control-card" aria-labelledby="crmGlobalSettingsTitle">
+            <div class="crm-card-heading">
+              <span class="crm-card-number">1</span>
+              <div><h4 id="crmGlobalSettingsTitle">CRM 服务开关</h4><p>日常使用只需开启第一项；另外两项仅在维护或故障时使用。</p></div>
+            </div>
+            <form id="crmGlobalSettingsForm" class="form-grid crm-setting-list" novalidate>
+              <label class="crm-setting-option"><input id="crmGlobalEnabled" type="checkbox"><span><strong>允许客户使用 CRM</strong><small>关闭后，所有客户会暂时无法进入 CRM。</small></span></label>
+              <label class="crm-setting-option"><input id="crmMaintenance" type="checkbox"><span><strong>临时维护</strong><small>保留所有资料，但暂停新的 CRM 操作。</small></span></label>
+              <label class="crm-setting-option is-danger"><input id="crmEmergencyPause" type="checkbox"><span><strong>紧急停止所有任务</strong><small>只在发现异常或需要立即停机时开启。</small></span></label>
+              <div class="row crm-card-actions">
+                <button class="btn primary" type="submit">保存服务设置</button>
+                <button class="btn danger" id="btnCrmEmergencyPause" type="button">立即停止</button>
               </div>
             </form>
             <div class="msg" id="crmGlobalMsg" role="status" aria-live="polite"></div>
           </section>
-          <section class="admin-config-card" aria-labelledby="crmHealthTitle">
-            <h4 id="crmHealthTitle">服务健康</h4>
-            <div id="crmHealthSummary" class="admin-health-list" aria-live="polite">尚未读取</div>
+
+          <section class="admin-config-card crm-health-card" aria-labelledby="crmHealthTitle">
+            <div class="crm-card-heading">
+              <span class="crm-card-number">✓</span>
+              <div><h4 id="crmHealthTitle">当前运行状态</h4><p>出现“需要处理”时，按照右侧说明检查即可。</p></div>
+            </div>
+            <div id="crmHealthHeadline" class="crm-health-headline is-loading" role="status" aria-live="polite">
+              <span class="crm-health-headline-dot" aria-hidden="true"></span>
+              <div><strong>正在检查 CRM 服务</strong><small>请稍候，系统正在读取最新状态。</small></div>
+            </div>
+            <div id="crmHealthSummary" class="crm-health-list" aria-live="polite"></div>
           </section>
-          <section class="admin-config-card" aria-labelledby="crmUserAccessTitle">
-            <h4 id="crmUserAccessTitle">用户模块授权</h4>
+
+          <section class="admin-config-card crm-access-card" aria-labelledby="crmUserAccessTitle">
+            <div class="crm-card-heading">
+              <span class="crm-card-number">2</span>
+              <div><h4 id="crmUserAccessTitle">为客户开通 CRM</h4><p>客户编号可在“账号与登录”的客户列表中查看。</p></div>
+            </div>
             <form id="crmUserAccessForm" class="form-grid" novalidate>
-              <label>客户 ID<input id="crmUserAccessId" type="number" min="1" required></label>
-              <label class="switch"><input id="crmUserAccessEnabled" type="checkbox"><span>允许管理员代管该客户 CRM 工作区</span></label>
-              <div class="row">
-                <button class="btn ghost" id="btnCrmUserAccessLoad" type="button">读取当前授权</button>
-                <button class="btn primary" id="btnCrmUserAccessSave" type="submit" disabled>保存用户授权</button>
+              <label class="crm-field-label" for="crmUserAccessId">客户编号</label>
+              <div class="crm-inline-field">
+                <input id="crmUserAccessId" type="number" min="1" inputmode="numeric" placeholder="例如：12" required>
+                <button class="btn ghost" id="btnCrmUserAccessLoad" type="button">查询客户状态</button>
+              </div>
+              <div class="crm-field-help">先输入客户编号并查询，确认是正确客户后才能保存。</div>
+              <label class="crm-setting-option crm-customer-access-option"><input id="crmUserAccessEnabled" type="checkbox"><span><strong>允许这位客户使用 CRM</strong><small>取消勾选会回收权限，但不会删除客户已有资料。</small></span></label>
+              <div class="row crm-card-actions">
+                <button class="btn primary" id="btnCrmUserAccessSave" type="submit" disabled>保存开通状态</button>
               </div>
             </form>
-            <div class="msg" id="crmUserAccessMsg" role="status" aria-live="polite"></div>
+            <div class="msg" id="crmUserAccessMsg" role="status" aria-live="polite">输入客户编号后，先点击“查询客户状态”。</div>
           </section>
-          <section class="admin-config-card" aria-labelledby="crmImportTitle">
-            <h4 id="crmImportTitle">历史数据导入</h4>
-            <p class="meta">文件必须先上传到持久卷的 crm_imports 目录；先 dry-run，再激活批次。</p>
-            <form id="crmImportDryRunForm" class="form-grid" novalidate>
-              <label>目标客户 ID<input id="crmImportUserId" type="number" min="1" required></label>
-              <label>导入源文件名<input id="crmImportSource" type="text" placeholder="crm-state.json" required></label>
-              <button class="btn primary" type="submit">执行 dry-run</button>
+
+          <section class="admin-config-card crm-import-card" aria-labelledby="crmImportTitle">
+            <div class="crm-card-heading">
+              <span class="crm-card-number">3</span>
+              <div><h4 id="crmImportTitle">导入旧 CRM 资料</h4><p>系统会先检查文件；只有检查通过并再次确认后，资料才会写入。</p></div>
+            </div>
+            <div class="crm-import-safety-note"><strong>不会直接修改客户资料</strong><span>第一步只做安全检查，可以放心执行。</span></div>
+            <form id="crmImportDryRunForm" class="form-grid crm-import-check-form" novalidate>
+              <div class="crm-import-fields">
+                <label><span class="crm-field-label">导入到哪位客户</span><input id="crmImportUserId" type="number" min="1" inputmode="numeric" placeholder="填写客户编号" required><small>客户编号可在客户列表中查看。</small></label>
+                <label><span class="crm-field-label">备份文件名</span><input id="crmImportSource" type="text" placeholder="例如：crm-state.json" autocomplete="off" required><small>只填写文件名，不需要填写服务器路径；若文件尚未上传，请联系服务器管理员。</small></label>
+              </div>
+              <button class="btn primary crm-import-primary-action" id="btnCrmImportCheck" type="submit">第一步：检查文件</button>
             </form>
-            <form id="crmImportActivateForm" class="form-grid" novalidate>
-              <label>批次 ID<input id="crmImportBatchId" type="text" required></label>
-              <div class="row"><button class="btn ghost" type="submit">激活已校验批次</button><button class="btn danger" id="btnCrmImportDismiss" type="button">废弃待处理批次</button></div>
+            <form id="crmImportActivateForm" class="crm-import-confirm-panel" novalidate>
+              <input id="crmImportBatchId" type="hidden">
+              <div id="crmImportSelectionSummary" class="crm-import-selection-summary">完成文件检查后，这里会显示是否可以继续导入。</div>
+              <div class="row crm-card-actions">
+                <button class="btn primary" id="btnCrmImportActivate" type="submit" disabled>第二步：确认导入</button>
+                <button class="btn ghost" id="btnCrmImportDismiss" type="button" disabled>取消本次导入</button>
+              </div>
             </form>
             <div class="msg" id="crmImportMsg" role="status" aria-live="polite"></div>
-            <pre id="crmImportStatus" class="code-box" aria-live="polite">尚无导入报告</pre>
+            <div class="crm-import-history-head"><strong>最近导入记录</strong><span>只显示易懂的状态，不显示技术代码。</span></div>
+            <div id="crmImportStatus" class="crm-import-history" aria-live="polite"><div class="crm-import-empty">暂无导入记录。</div></div>
           </section>
         </div>
       </section>

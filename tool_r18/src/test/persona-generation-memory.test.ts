@@ -4,6 +4,7 @@ import { loadPersonaArchive, savePersonaArchive } from "@/lib/persona-archives";
 import { planPersonaPostGenerationBatches, runPersonaWorkflow } from "@/core/persona/persona-workflow-service";
 import { getPersonaMemory, replacePersonaMemoryEntries } from "@/lib/persona-memory";
 import { consolidateOldPersonaMemory } from "@/lib/persona-memory-v2";
+import { fetchPersonaTrendIntelForNode } from "@/lib/persona-trend-intel-node";
 
 const prompts: string[] = [];
 
@@ -45,6 +46,7 @@ vi.mock("@/lib/persona-trend-intel-node", () => ({
 describe("persona generation memory", () => {
   beforeEach(() => {
     prompts.length = 0;
+    vi.mocked(fetchPersonaTrendIntelForNode).mockClear();
     process.env.PERSONA_MEMORY_AI_TEST = "1";
     window.localStorage.clear();
   });
@@ -162,6 +164,8 @@ describe("persona generation memory", () => {
     expect(generationPrompt).toContain("一週前去了日本");
     expect(generationPrompt).toContain("必须优先引导本轮推文主题");
     expect(selectedMemoryBlock).not.toContain("在台北整理衣櫃");
+    const trendCall = vi.mocked(fetchPersonaTrendIntelForNode).mock.calls.at(-1);
+    expect(trendCall?.[3]?.topicContext?.selectedMemorySummaries?.join(" ")).toContain("東京街角咖啡店");
   });
 
   it("keeps news optional when a partial generation needs a retry", async () => {

@@ -332,6 +332,7 @@ function applyPersonaOverviewPostRows(persona) {
 const initialConsoleParams = new URLSearchParams(window.location.search);
 const initialConsoleView = initialConsoleParams.get("view");
 const initialAccountBrowserPanel = initialConsoleParams.get("browser_panel");
+const initialGoogleAccountSessionResult = initialConsoleParams.get("google_account_session");
 const VIDEO_WORKBENCH_ENABLED = ADMIN_CONSOLE_SESSION;
 const VIDEO_WORKSPACE_MODULES = [
   { id: "digital_human_video", label: "数字人口播视频" },
@@ -356,6 +357,20 @@ function clearInitialConsoleRouteHint() {
   url.searchParams.delete("browser_panel");
   url.searchParams.delete("video_module");
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function consumeGoogleAccountSessionResult() {
+  if (!initialGoogleAccountSessionResult) return;
+  const url = new URL(window.location.href);
+  url.searchParams.delete("google_account_session");
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  if (initialGoogleAccountSessionResult === "success") {
+    showMsg("socialMsg", "Google 授权已完成，可继续保存账号或一键登录。", true);
+    openGoogleAccountSessionModal();
+    return;
+  }
+  showMsg("socialMsg", "该 Google 身份已绑定其他账户，请更换 Google 账号后重试。", false);
+  openGoogleAccountSessionModal();
 }
 
 const state = {
@@ -3390,8 +3405,6 @@ function logStageLabel(stage, level) {
     profile_lock_cleanup_failed: "清理配置锁失败",
     profile_lock_active: "配置锁占用",
     profile_rebuild_failed: "配置备份失败",
-    cookie_import: "导入登录状态",
-    cookie_import_failed: "导入登录状态失败",
     live_browser_ready: "监控已启动",
     live_browser_viewport: "同步监控尺寸",
     live_browser_viewport_failed: "同步监控尺寸失败",
@@ -3535,7 +3548,7 @@ function personaFavoritePosts(persona = selectedPersona()) {
     .filter((post) => personaPostMatchesContentPlatform(post, persona));
 }
 
-function renderPersonaContentPlatformRail(persona, { disabled = false } = {}) {
+function renderPersonaContentPlatformRail(persona, { disabled = false, showHotCandidateBadges = false } = {}) {
   const current = personaContentPlatform(persona);
   return `
     <div class="persona-content-platform-rail">
@@ -3544,6 +3557,7 @@ function renderPersonaContentPlatformRail(persona, { disabled = false } = {}) {
            aria-label="推文归档平台">
         ${accountPoolPlatforms.map(([platform, label]) => {
           const isActive = platform === current;
+          const unreadCount = showHotCandidateBadges ? personaHotUnreadCount(persona, platform) : 0;
           return `
             <button type="button"
                     class="${isActive ? "is-active" : ""}"
@@ -3551,9 +3565,10 @@ function renderPersonaContentPlatformRail(persona, { disabled = false } = {}) {
                     role="tab"
                     aria-selected="${isActive ? "true" : "false"}"
                     ${disabled ? "disabled" : ""}>
-              ${renderAccountPoolPlatformIcon(platform)}
-              <strong>${esc(label)}</strong>
-            </button>
+               ${renderAccountPoolPlatformIcon(platform)}
+               <strong>${esc(label)}</strong>
+               ${unreadCount ? `<span class="persona-platform-hot-badge" aria-label="${esc(`${label} 新抓取 ${unreadCount} 条`)}">${esc(unreadCount)}</span>` : ""}
+             </button>
           `;
         }).join("")}
       </div>
@@ -4391,12 +4406,14 @@ function renderPersonaHotSourceIdentity(candidate) {
   ).trim();
   const displayAuthor = author || "来源账号未获取";
   const mediaItems = personaHotCandidateMediaItems(candidate);
+  const platform = normalizePersonaContentPlatform(candidate?.platform || "threads");
+  const platformName = platformLabel(platform);
   return `
     <div class="persona-hot-source-identity">
-      <span class="persona-hot-source-meta">
-        <span class="persona-hot-source-context">
-          <span>${esc((candidate?.platform || "threads").toUpperCase())}</span>
-          ${renderMediaTypeBadge(mediaItems)}
+        <span class="persona-hot-source-meta">
+          <span class="persona-hot-source-context">
+            <span class="account-pool-card-platform persona-hot-source-platform" data-account-platform="${esc(platform)}" title="${esc(platformName)}" aria-label="${esc(platformName)}">${renderAccountPoolPlatformIcon(platform)}<span>${esc(platformName)}</span></span>
+            ${renderMediaTypeBadge(mediaItems)}
         </span>
         <span class="persona-hot-source-byline">
           <small>${esc(formatTime(candidate?.captured_at || candidate?.published_at || ""))}</small>
@@ -4409,10 +4426,6 @@ function renderPersonaHotSourceIdentity(candidate) {
 
 function normalizePersonaHotSearchMode(value) {
   return String(value || "").trim() === "normal" ? "normal" : "strict";
-}
-
-function personaHotSearchModeLabel(value) {
-  return normalizePersonaHotSearchMode(value) === "normal" ? "泛垂直" : "垂直";
 }
 
 function parsePersonaHotKeywordText(value) {
@@ -4435,7 +4448,14 @@ function personaHotKeywordText(form, hotState = {}) {
   return existing || formatPersonaHotKeywordText(hotState.keywords);
 }
 
-function personaHotCandidates(persona = selectedPersona()) {
+function personaHotKeywordChips(keywords = []) {
+  const rows = parsePersonaHotKeywordText(formatPersonaHotKeywordText(keywords));
+  return rows.length
+    ? rows.map((keyword) => `<span>${esc(keyword)}</span>`).join("")
+    : `<small>本次没有生成有效关键词</small>`;
+}
+
+function personaHotAllCandidates(persona = selectedPersona()) {
   const personaKey = String(persona?.id || "").trim();
   const fetchedRows = state.personaHotCandidateResults[personaKey]?.candidates;
   const rows = Array.isArray(fetchedRows) ? fetchedRows : [];
@@ -4467,6 +4487,31 @@ function personaHotCandidates(persona = selectedPersona()) {
     });
   });
   return [...deduped.values()];
+}
+
+function personaHotCandidates(persona = selectedPersona(), platform = personaContentPlatform(persona)) {
+  const targetPlatform = normalizePersonaContentPlatform(platform);
+  return personaHotAllCandidates(persona).filter(
+    (candidate) => normalizePersonaContentPlatform(candidate.platform) === targetPlatform,
+  );
+}
+
+function personaHotUnreadCount(persona = selectedPersona(), platform = personaContentPlatform(persona)) {
+  const personaKey = String(persona?.id || "").trim();
+  const targetPlatform = normalizePersonaContentPlatform(platform);
+  return Math.max(0, Number(state.personaHotCandidateResults[personaKey]?.unread_counts?.[targetPlatform] || 0));
+}
+
+function clearPersonaHotUnreadCount(persona = selectedPersona(), platform = personaContentPlatform(persona)) {
+  const personaKey = String(persona?.id || "").trim();
+  const targetPlatform = normalizePersonaContentPlatform(platform);
+  const hotState = state.personaHotCandidateResults[personaKey];
+  if (!hotState || !personaHotUnreadCount(persona, targetPlatform)) return false;
+  hotState.unread_counts = {
+    ...(hotState.unread_counts || {}),
+    [targetPlatform]: 0,
+  };
+  return true;
 }
 
 function personaHotPreviewCandidate(persona = selectedPersona()) {
@@ -4898,8 +4943,15 @@ function renderPersonaHotCandidateEditorModal(persona, candidate) {
   if (!modal || !content || !persona || !candidate) return;
   const candidateId = personaHotCandidateKey(candidate);
   const mediaItems = personaHotMediaDraft(persona, candidate);
+  const author = String(candidate?.author || candidate?.author_name || candidate?.username || candidate?.account_name || "").trim();
+  const displayAuthor = author ? `@${author.replace(/^@/, "")}` : "来源账号未获取";
+  const sourceUrl = String(candidate?.source_url || "").trim();
   content.innerHTML = `
     <div class="persona-hot-editor-modal-content" data-persona-hot-editor-candidate="${esc(candidateId)}">
+      <div class="persona-hot-editor-source">
+        <strong class="persona-hot-editor-author">${esc(displayAuthor)}</strong>
+        ${sourceUrl ? `<a class="persona-hot-editor-source-link" href="${esc(sourceUrl)}" target="_blank" rel="noopener" title="${esc(sourceUrl)}">${renderSourceLinkIcon()}<span>${esc(sourceUrl)}</span></a>` : ""}
+      </div>
       <section class="persona-hot-editor-copy">
         <div class="persona-hot-editor-section-head">
           <strong>推文正文</strong>
@@ -4950,6 +5002,8 @@ function startPersonaHotCandidateEdit(persona, candidateId) {
   const cleanCandidateId = String(candidateId || "").trim();
   const candidate = personaHotCandidates(persona).find((item) => personaHotCandidateKey(item) === cleanCandidateId);
   if (!persona || !candidate) return;
+  const platform = normalizePersonaContentPlatform(candidate?.platform || "threads");
+  const platformName = platformLabel(platform);
   snapshotPersonaHotPreviewContent();
   const form = personaFormState(persona.id).generate;
   form.hotPreviewId = cleanCandidateId;
@@ -4972,6 +5026,14 @@ function startPersonaHotCandidateEdit(persona, candidateId) {
   });
   const modal = $("consoleModal");
   modal?.querySelector(".console-modal-dialog")?.classList.add("persona-hot-editor-modal");
+  if (modal) {
+    modal.dataset.accountPlatform = platform;
+    modal.querySelector(".console-modal-close")?.insertAdjacentHTML("beforebegin", `
+      <span class="account-pool-card-platform persona-hot-editor-header-platform" title="${esc(platformName)}" aria-label="${esc(platformName)}">
+        ${renderAccountPoolPlatformIcon(platform)}<span>${esc(platformName)}</span>
+      </span>
+    `);
+  }
   renderPersonaHotCandidateEditorModal(persona, candidate);
   if (!modal) return request;
   modal.__requestClose = async (result) => {
@@ -4993,12 +5055,15 @@ function startPersonaHotCandidateEdit(persona, candidateId) {
     modal.dataset.closing = "1";
     closeConsoleModal(true, modal);
     try {
-      await importPersonaHotDrafts([cleanCandidateId], { applyStoredEdits: true, choosePlatform: true });
+      await importPersonaHotDrafts([cleanCandidateId], { applyStoredEdits: true });
     } catch (error) {
       showMsg("commandMsg", error.detail || error.message || "导入热点草稿失败。", false);
     }
   };
+  modal.addEventListener("pointerdown", handlePersonaMediaPointerDown);
+  modal.addEventListener("keydown", handlePersonaMediaSortKeydown);
   modal.addEventListener("click", (event) => {
+    closeConsoleDropdowns(event.target.closest("[data-console-dropdown]"));
     event.stopPropagation();
     const previewButton = event.target.closest("[data-media-preview-group]");
     if (previewButton) {
@@ -5039,8 +5104,13 @@ function startPersonaHotCandidateEdit(persona, candidateId) {
       renderPersonaHotCandidateEditorModal(persona, candidate);
       return;
     }
-    const card = event.target.closest(".persona-edit-media-card[data-persona-media-card-index]");
-    if (card && !event.target.closest("button, a, input, label, [role=\"button\"]")) {
+    const previewShell = event.target.closest(".persona-public-media-preview-shell");
+    const card = previewShell?.closest(".persona-edit-media-card[data-persona-media-card-index]");
+    if (
+      card
+      && !event.target.closest("summary")
+      && !event.target.closest("button, a, input, label, [role=\"button\"]")
+    ) {
       togglePersonaMediaBulkSelection(card, card.dataset.personaMediaCardIndex);
     }
   });
@@ -5122,10 +5192,10 @@ function renderPersonaHotMediaPreview(persona, candidate) {
                      <strong>媒体不可预览</strong>
                      <small>${esc(item.reason || "原始文件已失效")}</small>
                  </div>`
-               : renderMediaPreviewButton(item, previewGroupId, itemPreviewIndex, {
+                 : renderMediaPreviewButton(item, previewGroupId, itemPreviewIndex, {
                    className: "persona-edit-media-preview",
                    frameClass: "persona-media-frame",
-                   caption: mediaKindLabel(item.type),
+                   showCaption: false,
                    interactive: Boolean(previewGroupId) && itemPreviewIndex >= 0,
                  })}
             <span class="persona-edit-media-order persona-hot-media-index-badge" aria-hidden="true">${index + 1}</span>
@@ -6291,6 +6361,7 @@ async function deleteSocialAccountRecord(accountId, messageId = "socialMsg") {
   showMsg(messageId, "执行账号已删除。", true);
   await loadSocial().catch(() => {});
   renderWorkspace();
+  consumeGoogleAccountSessionResult();
   return true;
 }
 
@@ -6499,7 +6570,7 @@ function renderPersonaExecutionAccountBadge(persona) {
   return `<span class="persona-status-chip ${statusClass}">${platformLogos}<span>账号：${esc(accountLabel)}</span></span>`;
 }
 
-function personaAccountHomepageUrl(persona = selectedPersona()) {
+function personaAccountHomepageTarget(persona = selectedPersona()) {
   const platform = personaContentPlatform(persona);
   const account = personaAccounts(persona).find(
     (item) => String(item?.platform || "").trim().toLowerCase() === platform,
@@ -6507,20 +6578,34 @@ function personaAccountHomepageUrl(persona = selectedPersona()) {
   const username = String(account?.username || account?.account_username || account?.login_username || "")
     .trim()
     .replace(/^@+/, "");
-  if (!username) return "";
+  if (!username) return { account, platform, url: "" };
   const handle = encodeURIComponent(username);
-  return platform === "instagram"
+  const url = platform === "instagram"
     ? `https://www.instagram.com/${handle}/`
-    : `https://www.threads.net/@${handle}`;
+    : `https://www.threads.com/@${handle}`;
+  return { account, platform, url };
+}
+
+function personaAccountHomepageUrl(persona = selectedPersona()) {
+  return personaAccountHomepageTarget(persona).url;
 }
 
 function openPersonaAccountHomepage() {
-  const url = personaAccountHomepageUrl();
-  if (!url) {
+  const target = personaAccountHomepageTarget();
+  if (!target.url) {
     showMsg("commandMsg", "当前平台尚未绑定可打开的账号。", false);
     return;
   }
-  window.open(url, "_blank", "noopener,noreferrer");
+  const mobile = isMobileNavMode();
+  if (mobile && accountDisplayedStatus(target.account) !== "ready") {
+    showMsg("commandMsg", "当前账号尚未确认登录，请先完成登录后再打开主页。", false);
+    return;
+  }
+  if (mobile) {
+    window.location.assign(target.url);
+    return;
+  }
+  window.open(target.url, "_blank", "noopener,noreferrer");
 }
 
 function personaSummaryCounts(persona) {
@@ -20009,7 +20094,9 @@ function generatePersonaPayloadFromState(persona, profile = selectedPersonaProfi
   form.targetWords = targetWords;
   const payload = {
     count,
-    prompt: "",
+    prompt: [String(draft.title || "").trim(), String(draft.content || "").trim()]
+      .filter(Boolean)
+      .join("\n"),
     platform: personaContentPlatform(persona),
     target_words: targetWords,
     content_time_slot: String(form.contentTimeSlot || "").trim(),
@@ -21079,7 +21166,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
   const personaKey = String(persona.id || "").trim();
   snapshotPersonaCurrentForm();
   const form = personaFormState(persona.id).generate;
-  const previousCandidates = personaHotCandidates(persona);
+  const previousCandidates = personaHotAllCandidates(persona);
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
   let hotState = state.personaHotCandidateResults[String(persona.id)] || {};
   let keywords = parsePersonaHotKeywordText(personaHotKeywordText(form, hotState));
@@ -21134,10 +21221,9 @@ async function fetchPersonaHotCandidates(refresh = false) {
         writing_locale: PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.writingLocale || ""))
           ? String(form.writingLocale)
           : PERSONA_DEFAULT_WRITING_LOCALE,
-        // Keep the source live and the 500 heat floor strict, but do not
-        // discard otherwise qualified real posts solely because they are
-        // older than seven days. The earlier ten-result path was age-unbounded.
-        freshness_days: 0,
+        // Keep the source live and the 500 heat floor strict. The collector
+        // accepts posts from the latest 30 days and returns newer posts first.
+        freshness_days: 30,
         freshness_policy: "strict",
       }),
     }, 15000);
@@ -21165,17 +21251,24 @@ async function fetchPersonaHotCandidates(refresh = false) {
       }
     }
     if (!result) throw { detail: "热点抓取超时，请稍后重试。", status: 408 };
+    const fetchedCandidates = Array.isArray(result.candidates) ? result.candidates : [];
+    const unreadCounts = Object.fromEntries(accountPoolPlatforms.map(([platform]) => [platform, 0]));
+    fetchedCandidates.forEach((candidate) => {
+      const platform = normalizePersonaContentPlatform(candidate?.platform || "threads");
+      unreadCounts[platform] = Number(unreadCounts[platform] || 0) + 1;
+    });
     state.personaHotCandidateResults[String(persona.id)] = {
-      candidates: Array.isArray(result.candidates) ? result.candidates : [],
+      candidates: fetchedCandidates,
       keywords: Array.isArray(result.keywords) && result.keywords.length ? result.keywords : keywords,
       cookie_statuses: Array.isArray(result.cookie_statuses) ? result.cookie_statuses : [],
       warnings: Array.isArray(result.warnings) ? result.warnings : [],
       search_mode: normalizePersonaHotSearchMode(result.search_mode || form.hotSearchMode),
       cooldown: result.cooldown && typeof result.cooldown === "object" ? result.cooldown : {},
+      unread_counts: unreadCounts,
       fetched_at: new Date().toISOString(),
     };
     form.hotKeywordText = formatPersonaHotKeywordText(state.personaHotCandidateResults[String(persona.id)].keywords);
-    const nextCandidates = personaHotCandidates(persona);
+    const nextCandidates = personaHotAllCandidates(persona);
     reconcilePersonaHotMediaStateAfterRefresh(persona.id, previousCandidates, nextCandidates);
     state.transientWorkspaceLeaveAcknowledgement = "";
     const candidateIds = nextCandidates.map((item) => String(item.candidate_id || "").trim()).filter(Boolean);
@@ -21251,6 +21344,9 @@ async function submitPersonaHotDraftImport(persona, selected, {
   targetPlatform = personaContentPlatform(persona),
 } = {}) {
   const resolvedTargetPlatform = normalizePersonaContentPlatform(targetPlatform);
+  if (selected.some((candidate) => normalizePersonaContentPlatform(candidate?.platform) !== resolvedTargetPlatform)) {
+    throw { detail: "热点推文只能保存到对应的平台。", status: 400 };
+  }
   const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates/import`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -21381,7 +21477,6 @@ async function submitPersonaHotDraftImport(persona, selected, {
 async function importPersonaHotDrafts(candidateIds = null, {
   showCompletionModal = true,
   applyStoredEdits = false,
-  choosePlatform = false,
   targetPlatform = "",
 } = {}) {
   const persona = selectedPersona();
@@ -21406,17 +21501,10 @@ async function importPersonaHotDrafts(candidateIds = null, {
     showMsg("commandMsg", "请先勾选至少一条带正文的热点候选。", false);
     return;
   }
-  let resolvedTargetPlatform = normalizePersonaContentPlatform(targetPlatform || personaContentPlatform(persona));
-  if (choosePlatform) {
-    const account = await choosePublishPlatformAccount(persona, {
-      title: "选择导入平台",
-      message: "选择热点草稿要归档到的平台，确认后才会开始导入。",
-      confirmText: "导入草稿",
-      modalKey: "persona-hot-import-platform-picker",
-      persistSelection: false,
-    });
-    if (!account) return null;
-    resolvedTargetPlatform = normalizePersonaContentPlatform(account.platform);
+  const resolvedTargetPlatform = normalizePersonaContentPlatform(targetPlatform || personaContentPlatform(persona));
+  if (selected.some((candidate) => normalizePersonaContentPlatform(candidate.platform) !== resolvedTargetPlatform)) {
+    showMsg("commandMsg", "热点推文只能保存到对应的平台。", false);
+    return null;
   }
   const applyCurrentEdits = requestedIds.length === 0 || applyStoredEdits;
   if (requestedIds.length === 0) snapshotPersonaHotPreviewContent();
@@ -23725,7 +23813,7 @@ function renderPersonaHotCandidatePreview(candidate) {
   const persona = selectedPersona();
   const candidateId = personaHotCandidateKey(candidate);
   return `
-    <div class="persona-hot-preview-card" data-persona-hot-preview-key="${esc(`${persona?.id || ""}:${candidateId}`)}">
+    <div class="persona-hot-preview-card" data-account-platform="${esc(normalizePersonaContentPlatform(candidate.platform))}" data-persona-hot-preview-key="${esc(`${persona?.id || ""}:${candidateId}`)}">
       ${renderPersonaHotSourceIdentity(candidate)}
       <label>导入正文
         <textarea id="personaHotPreviewContent" rows="7" readonly>${esc(personaHotEditedContent(persona?.id, candidate))}</textarea>
@@ -23736,8 +23824,8 @@ function renderPersonaHotCandidatePreview(candidate) {
       ${renderPersonaHotMediaPreview(persona, candidate)}
     </div>
     <div class="row-actions persona-hot-preview-actions">
-      ${candidate.source_url ? `<a href="${esc(candidate.source_url)}" target="_blank" rel="noopener">打开帖子</a>` : ""}
-      <button type="button" class="primary" data-persona-start-hot-edit="${esc(candidateId)}">编辑</button>
+      ${candidate.source_url ? `<a href="${esc(candidate.source_url)}" target="_blank" rel="noopener">${renderSourceLinkIcon()}<span>打开帖子</span></a>` : ""}
+      <button type="button" class="primary" data-persona-start-hot-edit="${esc(candidateId)}">${renderEditIcon()}<span>编辑</span></button>
     </div>
   `;
 }
@@ -23749,8 +23837,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const allCandidatesSelected = Boolean(candidates.length)
     && candidates.every((candidate) => selectedIds.has(personaHotCandidateKey(candidate)));
   const preview = personaHotPreviewCandidate(persona);
-  const warnings = Array.isArray(hotState.warnings) ? hotState.warnings : [];
-  const cookieStatuses = Array.isArray(hotState.cookie_statuses) ? hotState.cookie_statuses : [];
+  const keywords = Array.isArray(hotState.keywords) ? hotState.keywords : [];
   const hotBusy = isActionLocked("persona", persona?.id || "", "hot_candidates");
   const keywordBusy = isActionLocked("persona", persona?.id || "", "hot_keywords");
   const hotBusyStartedAt = actionLockStartedAt("persona", persona?.id || "", "hot_candidates");
@@ -23782,12 +23869,11 @@ function renderPersonaHotCandidatePicker(persona, form) {
         ${hotBusy ? `<button type="button" class="persona-hot-fetch-action" data-persona-cancel-hot>取消抓取</button>` : ""}
       </div>
     </div>
-    ${(warnings.length || cookieStatuses.length) ? `
-      <div class="persona-inline-panel persona-inline-panel--nested">
-        <div class="persona-hot-status-row"><strong>抓取方式</strong><span>${esc(personaHotSearchModeLabel(hotState.search_mode || hotMode))}</span></div>
-        ${cookieStatuses.length ? `<div class="persona-hot-status-row"><strong>Cookie 状态</strong><span>${esc(cookieStatuses.map((item) => `${item.label || item.platform || "-"}：${item.message || item.health || "-"}`).join(" / "))}</span></div>` : ""}
-        ${warnings.length ? `<div class="persona-warning-inline">${warnings.map(esc).join(" / ")}</div>` : ""}
-      </div>
+    ${keywords.length ? `
+      <details class="persona-hot-keyword-disclosure">
+        <summary><span>生成关键词</span><small>${esc(keywords.length)} 个</small>${renderExpandIcon(false)}</summary>
+        <div class="persona-hot-keyword-chips">${personaHotKeywordChips(keywords)}</div>
+      </details>
     ` : ""}
     ${candidates.length ? `<div class="persona-hot-layout">
       <section class="persona-hot-list">
@@ -23804,7 +23890,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
             const previewing = personaHotCandidateKey(preview) === candidateId;
             const mediaItems = personaHotCandidateMediaItems(candidate);
             return `
-              <article class="persona-hot-card ${checked ? "is-selected" : ""} ${previewing ? "is-preview" : ""}">
+              <article class="persona-hot-card ${checked ? "is-selected" : ""} ${previewing ? "is-preview" : ""}" data-account-platform="${esc(normalizePersonaContentPlatform(candidate.platform))}">
                 <input
                   type="checkbox"
                   class="persona-hot-card-check"
@@ -23818,8 +23904,8 @@ function renderPersonaHotCandidatePicker(persona, form) {
                 </button>
                 ${mediaItems.length ? renderPersonaHotMediaPreview(persona, candidate) : ""}
                 <div class="row-actions persona-hot-card-actions">
-                  ${candidate.source_url ? `<a href="${esc(candidate.source_url)}" target="_blank" rel="noopener">打开帖子</a>` : ""}
-                  <button type="button" class="primary" data-persona-start-hot-edit="${esc(candidateId)}">编辑</button>
+                  ${candidate.source_url ? `<a href="${esc(candidate.source_url)}" target="_blank" rel="noopener">${renderSourceLinkIcon()}<span>打开帖子</span></a>` : ""}
+                  <button type="button" class="primary" data-persona-start-hot-edit="${esc(candidateId)}">${renderEditIcon()}<span>编辑</span></button>
                 </div>
               </article>
             `;
@@ -24341,7 +24427,6 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
   const personaId = String(options.personaId || selectedPersona()?.id || "").trim();
   const source = options.source === "favorites" ? "favorites" : "posts";
   const postId = String(options.postId || personaMediaTargetPost(selectedPersona()).post?.id || "").trim();
-  const sourceLabel = String(options.sourceLabel || (source === "favorites" ? "收藏" : "草稿")).trim();
   const hotMode = options.mode === "hot";
   const hotCandidateId = String(options.candidateId || "").trim();
   const selectedIndexes = personaMediaBulkSelection(personaId, source, postId, rows.length);
@@ -24363,12 +24448,12 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
       accept="image/*,video/*"
       ${hotMode ? "data-persona-hot-editor-media-input" : "data-persona-direct-media-input"}
     />
-    ${rows.length ? renderPersonaPublicMediaSelectionToolbar({
-      selectedCount: selectedIndexes.size,
-      totalCount: rows.length,
-      selectAllAttribute: "data-persona-media-select-all",
-      deleteAttribute: hotMode ? "data-persona-hot-media-delete-selected" : "data-persona-media-delete-selected",
-    }) : ""}
+    ${rows.length ? `${renderPersonaPublicMediaSelectionToolbar({
+    selectedCount: selectedIndexes.size,
+    totalCount: rows.length,
+    selectAllAttribute: "data-persona-media-select-all",
+    deleteAttribute: hotMode ? "data-persona-hot-media-delete-selected" : "data-persona-media-delete-selected",
+  })}
     <div
       class="persona-edit-media-grid"
       data-persona-media-sort-grid
@@ -24429,10 +24514,12 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
       <label class="upload-add-media persona-media-add-tile persona-public-media-add-tile" for="${esc(inputId)}" title="选择媒体" aria-label="选择媒体">
         ${renderPlusIcon()}
       </label>
-    </div>
-    ${rows.length ? "" : `<label class="persona-media-empty-picker" for="${esc(inputId)}">
-      <strong>拖动图片或视频到这里，或点击选择</strong>
-      <span>媒体会直接加入当前${esc(sourceLabel)}并在这里编辑。</span>
+    </div>` : `<label class="persona-media-empty-picker" for="${esc(inputId)}">
+      ${renderPlusIcon()}
+      <span class="persona-media-empty-picker-copy">
+        <strong>添加媒体</strong>
+        <small>拖动图片或视频到这里，或点击选择</small>
+      </span>
     </label>`}
   </div>`;
 }
@@ -25669,6 +25756,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         ` : ""}
         ${renderPersonaContentPlatformRail(persona, {
           disabled: isEditingDraft || generationControlsLocked || hotImportBusy,
+          showHotCandidateBadges: composeMode === "hot",
         })}
         <div class="persona-compose-workspace ${hasComposeAside ? "has-media" : ""}">
           <section class="persona-compose-post-side persona-production-section ${isEditingDraft ? "is-editing-draft" : ""} ${editingDirty ? "is-dirty" : ""}">
@@ -25725,9 +25813,8 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           </div>
         ` : generateMode === "hot" ? `
           ${renderPersonaHotCandidatePicker(persona, generateForm)}
-          ${personaHotCandidates(persona).length ? `<div class="row-actions">
-            <button type="button" class="primary" data-persona-import-hot-drafts ${personaHotSelectedCandidates(persona).length && !hotImportBusy ? "" : "disabled"}>${hotImportBusy ? renderBusyButtonContent("正在导入热点", true, actionLockStartedAt("persona", persona.id, "hot_import")) : "导入到当前人设草稿库"}</button>
-            <button type="button" data-persona-route-step="content:posts">查看草稿</button>
+          ${personaHotCandidates(persona).length ? `<div class="persona-draft-global-save-dock persona-hot-import-dock">
+            <button type="button" class="primary persona-draft-global-save-button persona-gradient-outline-action" data-persona-import-hot-drafts ${personaHotSelectedCandidates(persona).length && !hotImportBusy ? "" : "disabled"}>${hotImportBusy ? renderBusyButtonContent("正在导入热点", true, actionLockStartedAt("persona", persona.id, "hot_import")) : "导入到当前人设草稿库"}</button>
           </div>` : ""}
         ` : `
           <label>草稿标题（可选）
@@ -26213,6 +26300,14 @@ function refreshLiveBrowserSessionsSoon(taskId = "", attempts = 16, delayMs = 50
       if (isPersonaWorkspaceModule()) renderPersonaDetail();
       return;
     }
+    if (matched && !takeoverPending) {
+      if (targetTaskId && !taskFinished && attempt < attempts) {
+        window.setTimeout(() => run(attempt + 1), delayMs);
+        return;
+      }
+      finish();
+      return;
+    }
     if (found && !takeoverPending) {
       finish();
       return;
@@ -26572,6 +26667,30 @@ window.VectoConsoleNavigation = {
   openVideoWorkspace,
 };
 
+function renderAccountOpenLoginButtonContent(activeLoginTask = null) {
+  if (activeLoginTask?.id) {
+    return renderBusyButtonContent(
+      "执行中",
+      true,
+      activeLoginTask.started_at || activeLoginTask.created_at || activeLoginTask.updated_at
+    );
+  }
+  return `${renderBrowserLaunchIcon()}<span>打开登录</span>`;
+}
+
+function updateAccountOpenLoginButton(button, accountId = "") {
+  if (!button) return;
+  const activeLoginTask = activeOpenLoginTaskForAccount(accountId);
+  button.innerHTML = renderAccountOpenLoginButtonContent(activeLoginTask);
+  if (activeLoginTask?.id) {
+    button.dataset.openLoginTaskId = String(activeLoginTask.id);
+    button.setAttribute("aria-busy", "true");
+    return;
+  }
+  delete button.dataset.openLoginTaskId;
+  button.removeAttribute("aria-busy");
+}
+
 function updateAccountStatusViews() {
   const accountById = new Map((state.socialAccounts || []).map((account) => [String(account.id || ""), account]));
   document.querySelectorAll("[data-account-status-for]").forEach((node) => {
@@ -26604,6 +26723,10 @@ function updateAccountStatusViews() {
     const account = accountById.get(String(node.dataset.accountTotpFor || ""));
     if (account) updateAccountTotpBadgeNode(node, account);
   });
+  document.querySelectorAll("[data-social-open-login], [data-persona-account-open-login]").forEach((button) => {
+    const accountId = String(button.dataset.socialOpenLogin || button.dataset.personaAccountOpenLogin || "");
+    updateAccountOpenLoginButton(button, accountId);
+  });
 }
 
 const accountPoolPlatforms = [
@@ -26614,10 +26737,8 @@ const accountPoolPlatforms = [
 function renderAccountPoolPlatformIcon(platform = "") {
   const value = String(platform || "").trim().toLowerCase();
   if (value === "instagram") {
-    return `<svg class="platform-outline-icon platform-outline-icon--instagram" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <rect x="3.5" y="3.5" width="17" height="17" rx="5"></rect>
-      <circle cx="12" cy="12" r="4"></circle>
-      <circle cx="17.35" cy="6.75" r=".8" fill="currentColor" stroke="none"></circle>
+    return `<svg class="platform-brand-icon platform-outline-icon platform-outline-icon--instagram" viewBox="0 0 512 512" aria-hidden="true" focusable="false">
+      <image href="/assets/brands/instagram-glyph-gradient.svg" width="512" height="512" preserveAspectRatio="xMidYMid meet"></image>
     </svg>`;
   }
   if (value === "threads") {
@@ -27145,17 +27266,17 @@ function renderAccountPoolCardActions(account, { context = "pool", personaAccoun
   const activeLoginTask = activeOpenLoginTaskForAccount(accountId);
   const loginAction = (attribute) => {
     if (activeLoginTask?.id) {
-      return `<button type="button" class="primary account-card-action account-card-action--login" ${attribute}="${esc(accountId)}" data-open-login-task-id="${esc(activeLoginTask.id)}">${renderBrowserLaunchIcon()}${renderBusyButtonContent("执行中", true, activeLoginTask.created_at || activeLoginTask.updated_at)}</button>`;
+      return `<button type="button" class="primary account-card-action account-card-action--login" ${attribute}="${esc(accountId)}" data-open-login-task-id="${esc(activeLoginTask.id)}" aria-busy="true">${renderAccountOpenLoginButtonContent(activeLoginTask)}</button>`;
     }
-    return `<button type="button" class="primary account-card-action account-card-action--login" ${attribute}="${esc(accountId)}">${renderBrowserLaunchIcon()}<span>打开登录</span></button>`;
+    return `<button type="button" class="primary account-card-action account-card-action--login" ${attribute}="${esc(accountId)}">${renderAccountOpenLoginButtonContent()}</button>`;
   };
   if (context === "persona-settings") {
-    const changeAction = personaAccountAction ? `<button type="button" class="persona-account-card-action persona-account-card-change" data-persona-account-add data-persona-account-platform="${esc(personaAccountAction.platform || "")}" title="${esc(personaAccountAction.title || "更换当前账号")}" aria-label="${esc(personaAccountAction.title || "更换当前账号")}">${renderPersonaAccountBindingIcon("replace")}<span>更换</span></button>` : "";
+    const changeAction = personaAccountAction ? `<button type="button" class="account-card-action persona-account-card-action persona-account-card-change" data-persona-account-add data-persona-account-platform="${esc(personaAccountAction.platform || "")}" title="${esc(personaAccountAction.title || "更换当前账号")}" aria-label="${esc(personaAccountAction.title || "更换当前账号")}">${renderPersonaAccountBindingIcon("replace")}<span>更换</span></button>` : "";
     return `<div class="row-actions persona-account-summary-actions">
       ${loginAction("data-persona-account-open-login")}
       <button type="button" class="account-card-action account-card-action--proxy" data-persona-account-proxy="${esc(accountId)}">${renderNetworkIcon()}<span data-account-proxy-label>${esc(proxyLabel)}</span></button>
       <button type="button" class="account-card-action account-card-action--edit" data-persona-account-edit="${esc(accountId)}">${renderEditIcon()}<span>编辑</span></button>
-      <button type="button" class="persona-account-card-action persona-account-card-unbind" data-persona-account-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>${renderPersonaAccountBindingIcon("remove")}<span>移除</span></button>
+      <button type="button" class="account-card-action persona-account-card-action persona-account-card-unbind" data-persona-account-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>${renderPersonaAccountBindingIcon("remove")}<span>移除</span></button>
       ${changeAction}
     </div>`;
   }
@@ -27174,7 +27295,7 @@ function renderAccountPoolCardFields(account, { selectionControl = "", includeCo
     platformLabel(platform),
     account?.display_name && account.display_name !== account.username ? account.display_name : "",
   ].filter(Boolean).join(" · ");
-  return `<span class="account-pool-card-main">
+  return `<span class="account-pool-card-main" data-account-platform="${esc(platform)}">
     ${selectionControl}
     <small class="account-pool-card-platform">
       ${renderAccountPoolPlatformIcon(platform)}
@@ -27574,7 +27695,7 @@ function renderAccountEditorForm(account = null, mode = "create") {
   const editing = mode === "edit";
   const platform = account?.platform || normalizeAccountPoolPlatform();
   return `<div class="account-pool-create-modal-body">
-    <div class="account-pool-editor-platform">
+    <div class="account-pool-editor-platform" data-account-platform="${esc(platform)}">
       <span>平台：</span>
       ${renderAccountPoolPlatformIcon(platform)}
       <strong>${esc(platformLabel(platform))}</strong>
@@ -27621,7 +27742,7 @@ async function saveAccountPoolCreateForm(options) {
   resetAccountPoolCreateForm();
   await loadSocial();
   showMsg("socialMsg", payload.persona_id ? "账号已保存，并已绑定当前人设。" : "账号已保存。", true);
-  return true;
+  return account;
 }
 
 function accountPoolSelectedAccountsForAction() {
@@ -27779,9 +27900,9 @@ async function openAccountPoolDuplicateModal() {
     title: "复制账号卡",
     message: `将 ${rows.length} 个 ${platformLabel(source)} 账号复制到 ${platformLabel(target)}。只复制账号用户名、登录密码和 2FA；不会复制人设、代理、登录状态或浏览器会话。`,
     contentHtml: `<div class="account-card-duplicate-route">
-      <span>${renderAccountPoolPlatformIcon(source)}<strong>${esc(platformLabel(source))}</strong></span>
+      <span data-account-platform="${esc(source)}">${renderAccountPoolPlatformIcon(source)}<strong>${esc(platformLabel(source))}</strong></span>
       <i class="ui-arrow-icon ui-arrow-icon--right" aria-hidden="true"></i>
-      <span>${renderAccountPoolPlatformIcon(target)}<strong>${esc(platformLabel(target))}</strong></span>
+      <span data-account-platform="${esc(target)}">${renderAccountPoolPlatformIcon(target)}<strong>${esc(platformLabel(target))}</strong></span>
     </div>`,
     confirmText: "复制账号卡",
     modalKey: "account-card-duplicate",
@@ -28950,14 +29071,17 @@ function renderAccountProxyPickerPanel(account = null, mode = "create") {
 function renderAccountTotpSection(account = null, mode = "edit") {
   const creating = mode === "create";
   return `<section class="account-totp-section" data-account-totp-section>
-    <div class="account-totp-head">
+    <button type="button" class="account-totp-head" data-account-totp-toggle aria-expanded="false">
       <div>
         <strong>两步验证 (2FA)</strong>
-        <span>支持 Base32 密钥或 otpauth URI</span>
+        <span>按需展开并填写验证密钥</span>
       </div>
-      <span class="account-totp-state" data-account-totp-state>${creating ? "2FA 未配置" : ""}</span>
-    </div>
-    <div class="account-totp-body" data-account-totp-body>
+      <span class="account-totp-head-meta">
+        <span class="account-totp-state" data-account-totp-state>${creating ? "2FA 未配置" : ""}</span>
+        <svg class="account-totp-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m8 10 4 4 4-4"></path></svg>
+      </span>
+    </button>
+    <div class="account-totp-body" data-account-totp-body hidden>
       ${creating ? `<div class="account-totp-entry">
         <label for="accountPoolTotpSecret">
           <span>2FA 密钥</span>
@@ -29393,6 +29517,19 @@ function openAccountPoolEditorModal(options) {
     return true;
   };
   modal.addEventListener("click", (event) => {
+    const totpToggle = event.target.closest("[data-account-totp-toggle]");
+    if (totpToggle) {
+      const section = totpToggle.closest("[data-account-totp-section]");
+      const body = section?.querySelector("[data-account-totp-body]");
+      const expanded = totpToggle.getAttribute("aria-expanded") === "true";
+      totpToggle.setAttribute("aria-expanded", expanded ? "false" : "true");
+      if (body) body.hidden = expanded;
+      section?.classList.toggle("is-expanded", !expanded);
+      if (!expanded) {
+        window.requestAnimationFrame(() => body?.querySelector("input")?.focus());
+      }
+      return;
+    }
     const pasteCard = event.target.closest("[data-account-pool-paste-card]");
     if (pasteCard) {
       pasteCard.disabled = true;
@@ -29512,7 +29649,9 @@ function openAccountPoolEditorModal(options) {
       });
     saveRequest
       .then((saved) => {
-        if (saved !== false) close();
+        if (saved !== false) {
+           close();
+         }
         else saveButton.disabled = false;
       })
       .catch(async (error) => {
@@ -29543,7 +29682,206 @@ function openAccountPoolEditorModal(options) {
 }
 
 function openAccountPoolCreateModal(options) {
-  openAccountPoolEditorModal(options);
+  options = options || {};
+  openAccountAddMethodModal(options);
+}
+
+function renderAccountAddMethodIcon(method = "manual") {
+  if (method === "google") {
+    return `<img src="/assets/opc/google-g-gradient.svg" alt="" aria-hidden="true" />`;
+  }
+  if (method === "session") {
+    return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="3"></rect><path d="M3 9h18"></path><path d="M8 15h8"></path><path d="m13 12 3 3-3 3"></path></svg>`;
+  }
+  return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"></path></svg>`;
+}
+
+async function startAccountBrowserSessionReuse(accountId = "", personaId = "", messageId = "socialMsg") {
+  const cleanAccountId = String(accountId || "").trim();
+  if (!cleanAccountId) throw new Error("账号不存在，请刷新后重试。");
+  const existingTask = activeOpenLoginTaskForAccount(cleanAccountId);
+  if (existingTask) {
+    return { task: existingTask, reused: true };
+  }
+  const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanAccountId)}/reuse_session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ payload: {} }),
+  });
+  const taskId = String(result?.task?.id || "").trim();
+  showMsg(messageId, "正在检测该账号的浏览器登录态。", true, {
+    key: taskId ? socialTaskToastKey(taskId, result.task) : undefined,
+    kind: "queued",
+    taskId,
+    taskPanel: String(personaId || "").trim() ? "persona" : "regular",
+    personaId: String(personaId || "").trim(),
+    target: "复用浏览器登录态",
+  });
+  refreshLiveBrowserSessionsSoon(taskId, 60, 500);
+  await loadSocial();
+  return result;
+}
+
+function googleAccountSessionIdentity() {
+  const google = state.currentUser?.auth_methods?.google || {};
+  const email = String(state.currentUser?.verified_email || state.currentUser?.email || "").trim();
+  return {
+    authorized: Boolean(google.bound && google.enabled && email),
+    email,
+  };
+}
+
+async function createGoogleSessionAccount(modal, { login = false } = {}) {
+  const identity = googleAccountSessionIdentity();
+  if (!identity.authorized) throw new Error("请先授权 Google 账号。");
+  const username = String(modal.querySelector("[data-google-session-username]")?.value || "").trim().replace(/^@+/, "");
+  if (!username) throw new Error("请填写要接入的平台账号用户名。");
+  const platform = normalizeAccountPoolPlatform(modal.dataset.googleSessionPlatform || state.accountPoolPlatform);
+  const personaId = String(modal.dataset.googleSessionPersonaId || "").trim();
+  const account = accountPoolAccounts().find((item) => (
+    normalizeAccountPoolPlatform(item.platform) === platform
+    && String(item.username || "").trim().replace(/^@+/, "").toLowerCase() === username.toLowerCase()
+  )) || (await api("/api/persona_dashboard/automation/accounts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      platform,
+      persona_id: personaId,
+      username,
+      login_username: username,
+      status: "pending_login",
+    }),
+  }))?.account || {};
+  state.accountPoolPlatform = platform;
+  state.accountPoolAccountId = String(account.id || "");
+  state.accountPoolSelectedAccountIds = account.id ? [String(account.id)] : [];
+  state.preferredAccountId = String(account.id || "");
+  await loadSocial();
+  if (login && account.id) {
+    await startAccountBrowserSessionReuse(String(account.id), personaId, "socialMsg");
+  } else {
+    showMsg("socialMsg", "账号已保存，可随时打开账号浏览器。", true);
+  }
+  return account;
+}
+
+function openGoogleAccountSessionModal(options = {}) {
+  closeConsoleModal(null);
+  const platform = normalizeAccountPoolPlatform(options.platform || state.accountPoolPlatform);
+  const personaId = String(options.personaId || "").trim();
+  const identity = googleAccountSessionIdentity();
+  const suggestedUsername = identity.email ? identity.email.split("@")[0] : "";
+  const modal = document.createElement("div");
+  modal.id = "consoleModal";
+  modal.className = "console-modal";
+  modal.dataset.googleSessionPlatform = platform;
+  modal.dataset.googleSessionPersonaId = personaId;
+  modal.innerHTML = `
+    <div class="console-modal-backdrop" data-google-session-cancel></div>
+    <section class="console-modal-dialog google-account-session-modal" role="dialog" aria-modal="true" aria-labelledby="googleAccountSessionTitle">
+      <div class="console-modal-head">
+        <strong id="googleAccountSessionTitle">Google 快速接入</strong>
+        ${renderModalCloseButton("data-google-session-cancel")}
+      </div>
+      <div class="console-modal-content google-account-session-content">
+        <div class="google-account-session-hero">
+          <span class="account-add-method-icon">${renderAccountAddMethodIcon("google")}</span>
+          <span><strong>${identity.authorized ? "Google 授权已连接" : "需要 Google 授权"}</strong><small>使用标准 OAuth 确认邮箱并创建账号卡。</small></span>
+        </div>
+        <div class="google-account-session-platform" data-account-platform="${esc(platform)}">
+          <span class="google-account-session-platform-brand">${renderAccountPoolPlatformIcon(platform)} <strong>${esc(platformLabel(platform))}</strong></span>
+        </div>
+        <dl class="google-account-session-facts">
+          <div><dt>Google 邮箱</dt><dd>${identity.email ? esc(identity.email) : "尚未授权"}</dd></div>
+        </dl>
+        ${identity.authorized ? "" : `<button type="button" class="google-account-authorize-button" data-google-session-authorize>${renderAccountAddMethodIcon("google")}<span>授权 Google 账号</span></button>`}
+        <label class="google-account-session-field">
+          <span>平台账号用户名</span>
+          <input type="text" data-google-session-username value="${esc(suggestedUsername)}" placeholder="例如：liliacvuiy575" autocomplete="off" ${identity.authorized ? "" : "disabled"} />
+          <small>用于查找或创建该平台的账号卡。</small>
+        </label>
+        <p class="account-add-method-note">打开账号专属指纹浏览器并复用服务器上已有登录状态；首次未登录时在该浏览器完成一次平台认证，之后可跨设备复用。</p>
+      </div>
+      <div class="console-modal-actions google-account-session-actions">
+        <button type="button" data-google-session-save ${identity.authorized ? "" : "disabled"}>保存账号</button>
+        <button type="button" class="primary" data-google-session-login ${identity.authorized ? "" : "disabled"}>保存并打开浏览器</button>
+      </div>
+    </section>`;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  modal.addEventListener("click", (event) => {
+    if (event.target.closest("[data-google-session-cancel]")) {
+      close();
+      return;
+    }
+    if (event.target.closest("[data-google-session-authorize]")) {
+      window.location.assign(adminWorkspaceUrl("/api/auth/google/account-session/start"));
+      return;
+    }
+    const saveButton = event.target.closest("[data-google-session-save]");
+    const loginButton = event.target.closest("[data-google-session-login]");
+    const actionButton = saveButton || loginButton;
+    if (!actionButton) return;
+    actionButton.disabled = true;
+    createGoogleSessionAccount(modal, { login: Boolean(loginButton) })
+      .then(() => close())
+      .catch((error) => {
+        actionButton.disabled = false;
+        showMsg("socialMsg", error.detail || error.message || "账号接入失败。", false);
+      });
+  });
+  modal.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
+  });
+  modal.querySelector(identity.authorized ? "[data-google-session-username]" : "[data-google-session-authorize]")?.focus();
+}
+
+function openAccountAddMethodModal(options = {}) {
+  closeConsoleModal(null);
+  const modal = document.createElement("div");
+  modal.id = "consoleModal";
+  modal.className = "console-modal";
+  modal.innerHTML = `
+    <div class="console-modal-backdrop" data-account-add-method-cancel></div>
+    <section class="console-modal-dialog account-add-method-modal" role="dialog" aria-modal="true" aria-labelledby="accountAddMethodTitle">
+      <div class="console-modal-head">
+        <strong id="accountAddMethodTitle">添加账号</strong>
+        ${renderModalCloseButton("data-account-add-method-cancel")}
+      </div>
+      <div class="console-modal-content account-add-method-content">
+        <p>选择账号接入方式</p>
+        <div class="account-add-method-buttons">
+          <button type="button" class="account-add-method-button" data-account-add-method="manual">
+            <span class="account-add-method-icon">${renderAccountAddMethodIcon("manual")}</span>
+            <span>填写账号</span>
+          </button>
+          <button type="button" class="account-add-method-button account-add-method-button-google" data-account-add-method="google">
+            <span class="account-add-method-icon">${renderAccountAddMethodIcon("google")}</span>
+            <span>Google 快速接入</span>
+          </button>
+        </div>
+        <p class="account-add-method-note">Google 授权用于确认身份；平台登录状态保存在账号专属指纹浏览器中。</p>
+      </div>
+    </section>`;
+  document.body.appendChild(modal);
+  const close = () => {
+    modal.remove();
+  };
+  modal.addEventListener("click", (event) => {
+    if (event.target.closest("[data-account-add-method-cancel]")) {
+      close();
+      return;
+    }
+    const method = event.target.closest("[data-account-add-method]")?.dataset.accountAddMethod;
+    if (!method) return;
+    close();
+    if (method === "google") openGoogleAccountSessionModal(options);
+    else openAccountPoolEditorModal(options);
+  });
+  modal.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
+  });
+  modal.querySelector("[data-account-add-method]")?.focus();
 }
 
 function openAccountPoolEditModal(accountId = "") {
@@ -31586,7 +31924,7 @@ function renderMatrixPublishPanel() {
         <section class="matrix-publish-setting">
           <strong class="matrix-publish-setting-label">执行平台</strong>
           <div class="matrix-publish-platform-picker">
-            <button type="button" class="matrix-publish-platform-trigger" data-matrix-publish-platform-trigger aria-haspopup="listbox" aria-expanded="${platformPickerOpen ? "true" : "false"}">
+            <button type="button" class="matrix-publish-platform-trigger" data-account-platform="${esc(platform)}" data-matrix-publish-platform-trigger aria-haspopup="listbox" aria-expanded="${platformPickerOpen ? "true" : "false"}">
               ${renderAccountPoolPlatformIcon(platform)}
               <strong>${esc(platformLabel(platform))}</strong>
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"></path></svg>
@@ -32825,7 +33163,7 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-fetch-hot]")) {
-      fetchPersonaHotCandidates(false).catch(() => {});
+      fetchPersonaHotCandidates(true).catch(() => {});
       return;
     }
     if (event.target.closest("[data-persona-cancel-hot]")) {
@@ -32833,7 +33171,7 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-import-hot-drafts]")) {
-      importPersonaHotDrafts(null, { choosePlatform: true }).catch(() => {});
+      importPersonaHotDrafts().catch(() => {});
       return;
     }
     const hotMediaReplace = event.target.closest("[data-persona-hot-media-replace]");
@@ -33081,7 +33419,8 @@ function bindEvents() {
       togglePersonaMediaBulkSelection(personaMediaSelect, personaMediaSelect.dataset.personaMediaSelectIndex);
       return;
     }
-    const personaMediaCard = event.target.closest(".persona-edit-media-card[data-persona-media-card-index]");
+    const personaMediaPreview = event.target.closest(".persona-public-media-preview-shell");
+    const personaMediaCard = personaMediaPreview?.closest(".persona-edit-media-card[data-persona-media-card-index]");
     if (
       personaMediaCard
       && !event.target.closest("button, a, input, label, [role=\"button\"]")
@@ -33282,7 +33621,11 @@ function bindEvents() {
         return;
       }
       const nextPlatform = normalizePersonaContentPlatform(contentPlatformButton.dataset.personaContentPlatform);
-      if (nextPlatform === personaContentPlatform(persona)) return;
+      const unreadCleared = clearPersonaHotUnreadCount(persona, nextPlatform);
+      if (nextPlatform === personaContentPlatform(persona)) {
+        if (unreadCleared) renderPersonaDetail();
+        return;
+      }
       const hasTransientComposer = Boolean(activePersonaDraftComposerTransientState(persona));
       if (!(await confirmPersonaContentPlatformSwitch(persona, nextPlatform))) return;
       if (hasTransientComposer) resetPersonaNewDraftComposer(persona.id);

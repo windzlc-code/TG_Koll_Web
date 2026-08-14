@@ -18,6 +18,7 @@ export type PersonaTrendTopicContext = {
   userInput?: string;
   selectedDirections?: string[];
   selectedMemorySummaries?: string[];
+  writingLocale?: string;
 };
 
 const CACHE_FILE = "persona-trend-intel-cache.json";
@@ -115,6 +116,23 @@ function htmlDecode(value: string): string {
 }
 
 function pickLocale(setup: DramaSetup): LocaleInfo {
+  const writingLocale = String((setup as any)._writingLocale || "").trim();
+  const writingLocales: Record<string, LocaleInfo> = {
+    "zh-TW": { label: "台灣", hl: "zh-TW", gl: "TW", ceid: "TW:zh-Hant", suffix: "台灣 最新", socialTerms: "Threads Dcard PTT 台灣討論" },
+    "zh-CN": { label: "中國", hl: "zh-CN", gl: "CN", ceid: "CN:zh-Hans", suffix: "中國 最新", socialTerms: "微博 小紅書 熱門討論" },
+    "en-US": { label: "美國", hl: "en-US", gl: "US", ceid: "US:en", suffix: "latest trending", socialTerms: "TikTok Instagram Reddit discussion" },
+    "ja-JP": { label: "日本", hl: "ja", gl: "JP", ceid: "JP:ja", suffix: "日本 最新 トレンド", socialTerms: "X Instagram 日本 トレンド" },
+    "ko-KR": { label: "韓國", hl: "ko", gl: "KR", ceid: "KR:ko", suffix: "한국 최신 트렌드", socialTerms: "X Instagram 한국 트렌드" },
+    "vi-VN": { label: "越南", hl: "vi", gl: "VN", ceid: "VN:vi", suffix: "Việt Nam xu hướng mới", socialTerms: "TikTok Facebook Việt Nam thảo luận" },
+    "th-TH": { label: "泰國", hl: "th", gl: "TH", ceid: "TH:th", suffix: "ไทย กระแสล่าสุด", socialTerms: "TikTok Facebook ไทย กระแส" },
+    "id-ID": { label: "印尼", hl: "id", gl: "ID", ceid: "ID:id", suffix: "Indonesia tren terbaru", socialTerms: "TikTok Instagram Indonesia diskusi" },
+    "ms-MY": { label: "馬來西亞", hl: "ms", gl: "MY", ceid: "MY:ms", suffix: "Malaysia trend terkini", socialTerms: "TikTok Instagram Malaysia perbincangan" },
+    "es-ES": { label: "西班牙", hl: "es", gl: "ES", ceid: "ES:es", suffix: "España tendencias recientes", socialTerms: "TikTok Instagram España conversación" },
+    "pt-BR": { label: "巴西", hl: "pt-BR", gl: "BR", ceid: "BR:pt-419", suffix: "Brasil tendências recentes", socialTerms: "TikTok Instagram Brasil discussão" },
+    "fr-FR": { label: "法國", hl: "fr", gl: "FR", ceid: "FR:fr", suffix: "France tendances récentes", socialTerms: "TikTok Instagram France discussion" },
+    "de-DE": { label: "德國", hl: "de", gl: "DE", ceid: "DE:de", suffix: "Deutschland aktuelle Trends", socialTerms: "TikTok Instagram Deutschland Diskussion" },
+  };
+  if (writingLocales[writingLocale]) return writingLocales[writingLocale];
   const raw = `${(setup as any).targetMarket || ""} ${(setup as any).localeKey || ""} ${(setup as any).chineseScript || ""}`.toLowerCase();
   if (/hk|香港/.test(raw)) {
     return { label: "香港", hl: "zh-HK", gl: "HK", ceid: "HK:zh-Hant", suffix: "香港 最新", socialTerms: "Threads LIHKG 香港討論" };
@@ -426,14 +444,24 @@ export async function fetchPersonaTrendIntelForNode(
     .filter((headline) => headlineMatchesPersonaTopics(headline, targetTopics))
     .slice(0, 6);
   const fetchedAt = new Date().toISOString();
-  const text = news.length || social.length
+  let text = news.length || social.length
     ? [
-        `【即時新聞熱點｜${fetchedAt}】\n${news.length ? news.map((item) => `- ${item}`).join("\n") : "- 未取得可靠新聞結果"}`,
+        `【人設相關新聞｜${fetchedAt}】\n${news.length ? news.map((item) => `- ${item}`).join("\n") : "- 未取得可靠新聞結果"}`,
         `【指定台灣新聞來源命中】\n- ${preferredNews.length} 則；其餘結果僅在指定來源不足時補充`,
         `【社媒討論】\n${social.length ? social.map((item) => `- ${item}`).join("\n") : "- 未取得可靠社群結果"}`,
         `【使用規則】\n- 地區：${locale.label}\n- 人設話題種子：${targetTopics.join("、")}\n- 只採用與人設或使用者本次主題高度相關的熱點；無關時不要硬套\n- 吸收事件事實、受眾痛點與討論角度，改寫為人設本人的自然觀察，禁止照抄標題或捏造細節`,
       ].join("\n\n")
     : "";
+
+  if (!text) {
+    const generalTrends = uniqueHeadlines(await fetchGoogleNewsRss(`${locale.suffix} when:1d`, locale, timeoutMs)).slice(0, 5);
+    if (generalTrends.length) {
+      text = [
+        `【地區熱門話題｜${fetchedAt}】\n${generalTrends.map((item) => `- ${item}`).join("\n")}`,
+        `【使用規則】\n- 地區：${locale.label}\n- 目前沒有命中可靠的人設相關新聞\n- 只有在能自然轉化為人設視角時才使用；可從人設的生活、工作或情緒觀察切入\n- 不得假裝人設具備無關專業、不得硬套關係、不得照抄標題或捏造細節\n- 無法自然結合時可完全忽略，直接依人設生成`,
+      ].join("\n\n");
+    }
+  }
 
   cache[cacheKey] = { updatedAt: new Date().toISOString(), text };
   writeCache(cache);

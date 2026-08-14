@@ -54,6 +54,21 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn('@app.get("/api/admin/proxy-market/items")', self.proxy_admin_source)
         self.assertNotIn('@app.get("/api/proxy-market/catalog")', self.proxy_admin_source)
 
+    def test_admin_proxy_inventory_uses_automatic_recognition_only(self):
+        self.assertIn('id="proxyMarketSmartInput"', self.admin_markup)
+        self.assertIn('id="btnAutoPublishProxyMarketItem"', self.admin_markup)
+        self.assertIn("function previewProxyMarketSmartInput", self.admin_script)
+        self.assertIn("function autoDetectAndPublishProxyMarketItem", self.admin_script)
+        self.assertIn('api("/api/admin/proxy-market/inspect"', self.admin_script)
+        self.assertNotIn('id="proxyMarketItemForm"', self.admin_markup)
+        self.assertNotIn('id="proxyMarketSku"', self.admin_markup)
+        self.assertNotIn('id="proxyMarketHost"', self.admin_markup)
+        self.assertNotIn('id="btnSaveProxyMarketItem"', self.admin_markup)
+        self.assertNotIn('id="btnPublishProxyMarketItem"', self.admin_markup)
+        self.assertNotIn("function readProxyMarketItemForm", self.admin_script)
+        self.assertNotIn("function saveProxyMarketItem", self.admin_script)
+        self.assertNotIn('proxyMarketAction === "edit"', self.admin_script)
+
     def test_console_selects_directly_from_the_shared_pool_without_add_entrypoints(self):
         self.assertIn('"/api/persona_dashboard/automation/system-proxy-pool"', self.console_script)
         self.assertIn('"/api/persona_dashboard/automation/system-proxy-pool/select"', self.console_script)

@@ -715,6 +715,7 @@ class AccountGovernanceTests(unittest.TestCase):
         self.assertEqual(snapshot["timezone"], "Asia/Shanghai")
         self.assertEqual(snapshot["summary"]["consumed_points"], 2.75)
         self.assertEqual(snapshot["summary"]["lifetime_consumed_points"], 12.0)
+        self.assertNotIn("queues", snapshot)
 
     def test_admin_can_switch_email_delivery_limit_between_auto_and_manual(self):
         admin, identity = self._admin_client()
@@ -1199,9 +1200,7 @@ class AccountGovernanceTests(unittest.TestCase):
         self.assertGreaterEqual(int(dashboard.json()["summary"]["customers"]), 1)
         self.assertGreaterEqual(int(dashboard.json()["summary"]["disabled"]), 1)
         self.assertGreaterEqual(int(dashboard.json()["summary"]["open_alerts"]), 1)
-        self.assertTrue(
-            any(item["id"] == alert_id for item in dashboard.json()["queues"]["security_alerts"])
-        )
+        self.assertNotIn("queues", dashboard.json())
 
         resolved = admin.patch(
             f"/api/admin/security/alerts/{alert_id}",

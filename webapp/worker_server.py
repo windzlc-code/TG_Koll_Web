@@ -15,6 +15,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +42,9 @@ ALLOWED_CAPABILITIES = {
     "persona.hot_post_metrics.v1": "refresh-hot-post",
 }
 TERMINAL_STATES = {"success", "failed", "cancelled"}
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 33
 _SAFE_JOB_ID = re.compile(r"job_[0-9a-f]{24}")
+_PERSONA_ARCHIVE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 
 
 def _truthy_environment(name: str) -> bool:
@@ -56,6 +59,155 @@ def _collector_platform(payload: Mapping[str, Any]) -> str:
     source_meta = post_snapshot.get("sourceMeta") if isinstance(post_snapshot, Mapping) else None
     nested = str(source_meta.get("platform") or "").strip().lower() if isinstance(source_meta, Mapping) else ""
     return nested if nested in {"threads", "instagram"} else "threads"
+
+
+def _clean_hot_keywords(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        keyword = str(item or "").strip()
+        if not keyword or keyword in seen:
+            continue
+        seen.add(keyword)
+        cleaned.append(keyword)
+        if len(cleaned) >= 32:
+            break
+    return cleaned
+
+
+def _hot_keyword_digest(keywords: list[str]) -> str:
+    body = json.dumps(keywords, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(body).hexdigest()
+
+
+def _has_current_hot_keyword_strategy(payload: Mapping[str, Any]) -> bool:
+    keywords = _clean_hot_keywords(payload.get("keywords"))
+    return (
+        bool(keywords)
+        and int(payload.get("keywordStrategyVersion") or 0) == PERSONA_HOT_KEYWORD_STRATEGY_VERSION
+        and str(payload.get("keywordDigest") or "").strip().lower() == _hot_keyword_digest(keywords)
+    )
+
+
+def _candidate_identity(value: Mapping[str, Any]) -> str:
+    candidate_id = str(value.get("id") or "").strip()
+    if candidate_id:
+        return f"id:{candidate_id}"
+    source_url = str(
+        value.get("sourceUrl")
+        or value.get("source_url")
+        or value.get("url")
+        or ""
+    ).strip()
+    if source_url:
+        return f"url:{source_url}"
+    content = str(value.get("content") or value.get("text") or "").strip()
+    return f"content:{hashlib.sha256(content.encode('utf-8')).hexdigest()}" if content else ""
+
+
+def _candidate_is_fresh(value: Mapping[str, Any], *, now: int, freshness_days: int) -> bool:
+    raw = str(value.get("publishedAt") or value.get("published_at") or "").strip()
+    if not raw:
+        return True
+    try:
+        published = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=timezone.utc)
+        return published.timestamp() >= now - max(1, freshness_days) * 86400
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _persona_available_candidate_count(runtime_dir: Path, archive_id: str, *, now: int) -> int:
+    """Count fresh, useful and not-yet-shown candidates for one persona only."""
+
+    blocked_ids: set[str] = set()
+    store_path = runtime_dir / "sentiment_hot_candidates.json"
+    try:
+        store = json.loads(store_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        store = {}
+    if isinstance(store, dict):
+        for section in ("shown", "selected", "imported"):
+            rows = store.get(section)
+            archive_rows = rows.get(archive_id) if isinstance(rows, dict) else None
+            if isinstance(archive_rows, list):
+                for row in archive_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    for key, prefix in (("id", "id:"), ("urlKey", "url:"), ("contentKey", "content:")):
+                        token = str(row.get(key) or "").strip()
+                        if token:
+                            blocked_ids.add(f"{prefix}{token}")
+
+    freshness_days = max(1, min(int(os.getenv("TG_HOT_POOL_FRESHNESS_DAYS", "30") or 30), 30))
+    identities: set[str] = set()
+    cache_dir = runtime_dir / "sentiment_threads_search_cache"
+    try:
+        cache_files = list(cache_dir.iterdir())
+    except OSError:
+        cache_files = []
+    prefix = f"{archive_id}-"
+    for cache_file in cache_files:
+        if not cache_file.is_file() or not cache_file.name.startswith(prefix) or cache_file.suffix != ".json":
+            continue
+        try:
+            cache = json.loads(cache_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(cache, dict):
+            continue
+        for bucket in cache.values():
+            candidates = bucket.get("candidates") if isinstance(bucket, dict) else None
+            if not isinstance(candidates, list):
+                continue
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                content = str(candidate.get("content") or candidate.get("text") or "").strip()
+                if len(content) < 60 or not _candidate_is_fresh(candidate, now=now, freshness_days=freshness_days):
+                    continue
+                identity = _candidate_identity(candidate)
+                if identity and identity not in blocked_ids:
+                    identities.add(identity)
+    return len(identities)
+
+
+def _global_available_candidate_count(runtime_dir: Path, *, now: int) -> int:
+    cutoff_ms = (now - 30 * 86400) * 1000
+    database_path = runtime_dir / "sentiment_hot_global_pool.sqlite3"
+    try:
+        connection = sqlite3.connect(str(database_path))
+        try:
+            rows = connection.execute(
+                "SELECT candidate_json,content_at_ms FROM sentiment_hot_global_candidates WHERE content_at_ms >= ?",
+                (cutoff_ms,),
+            ).fetchall()
+        finally:
+            connection.close()
+        return sum(
+            1
+            for raw, _content_at_ms in rows
+            if len(str(json.loads(str(raw or "{}")).get("content") or "").strip()) >= 60
+        )
+    except (OSError, sqlite3.Error, json.JSONDecodeError):
+        pass
+    try:
+        value = json.loads((runtime_dir / "sentiment_hot_global_pool.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+    candidates = value.get("candidates") if isinstance(value, dict) else None
+    if not isinstance(candidates, list):
+        return 0
+    return sum(
+        1
+        for candidate in candidates
+        if isinstance(candidate, dict)
+        and len(str(candidate.get("content") or "").strip()) >= 60
+        and _candidate_is_fresh(candidate, now=now, freshness_days=30)
+    )
 
 
 def _configured_collector_pool() -> CollectorAccountPool | None:
@@ -118,12 +270,19 @@ class JobStore:
         *,
         terminal_retention_seconds: int = 72 * 60 * 60,
         minimum_terminal_jobs: int = 200,
+        runtime_dir: Path | None = None,
     ):
         self.path = Path(path).resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self.terminal_retention_seconds = max(60, int(terminal_retention_seconds))
         self.minimum_terminal_jobs = max(0, min(int(minimum_terminal_jobs), 10_000))
+        self.runtime_dir = Path(
+            runtime_dir
+            or os.getenv("TOOL_R18_RUNTIME_DIR", "")
+            or ROOT_DIR / "tool_r18" / ".runtime" / "automatic-script"
+        ).resolve()
+        self._dataset_overview_published_at = 0.0
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -181,12 +340,30 @@ class JobStore:
                   payload_json TEXT NOT NULL,
                   next_run_at INTEGER NOT NULL,
                   last_run_at INTEGER NOT NULL DEFAULT 0,
+                  last_user_fetch_at INTEGER NOT NULL DEFAULT 0,
+                  active_until INTEGER NOT NULL DEFAULT 0,
+                  low_watermark INTEGER NOT NULL DEFAULT 50,
+                  target_watermark INTEGER NOT NULL DEFAULT 100,
+                  last_available_count INTEGER NOT NULL DEFAULT 0,
                   updated_at INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_fetch_pool_targets_due
                   ON fetch_pool_targets(next_run_at, archive_id);
                 """
             )
+            existing_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(fetch_pool_targets)")
+            }
+            for name, definition in (
+                ("last_user_fetch_at", "INTEGER NOT NULL DEFAULT 0"),
+                ("active_until", "INTEGER NOT NULL DEFAULT 0"),
+                ("low_watermark", "INTEGER NOT NULL DEFAULT 50"),
+                ("target_watermark", "INTEGER NOT NULL DEFAULT 100"),
+                ("last_available_count", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in existing_columns:
+                    connection.execute(f"ALTER TABLE fetch_pool_targets ADD COLUMN {name} {definition}")
             connection.execute(
                 """
                 UPDATE fetch_jobs
@@ -295,58 +472,110 @@ class JobStore:
                     now,
                 ),
             )
-            row = connection.execute("SELECT * FROM fetch_jobs WHERE id=?", (job_id,)).fetchone()
-            if capability == "persona.hot_candidates.v1":
+            if (
+                capability == "persona.hot_candidates.v1"
+                and payload.get("userInitiated") is True
+                and not payload.get("_poolRefill")
+                and _has_current_hot_keyword_strategy(payload)
+            ):
                 archive_id = str(payload.get("archiveId") or "").strip()
                 snapshot = payload.get("archiveSnapshot")
                 if archive_id and isinstance(snapshot, dict) and str(snapshot.get("id") or "").strip() == archive_id:
+                    low_watermark = max(1, min(int(os.getenv("TG_HOT_POOL_LOW_WATERMARK", "50") or 50), 1000))
+                    target_watermark = max(
+                        low_watermark,
+                        min(int(os.getenv("TG_HOT_POOL_TARGET_WATERMARK", "100") or 100), 2000),
+                    )
+                    active_seconds = max(3600, int(os.getenv("TG_HOT_POOL_ACTIVE_SECONDS", "604800") or 604800))
+                    initial_delay = max(10, int(os.getenv("TG_HOT_POOL_INITIAL_DELAY_SECONDS", "60") or 60))
                     refill_payload = dict(payload)
-                    refill_payload.update({
-                        "refresh": False,
-                        "recordShown": False,
-                        "liveOnly": False,
-                        "limit": 20,
-                        "_workerCapability": capability,
-                        "_poolRefill": True,
-                    })
-                    interval = max(3600, int(os.getenv("TG_HOT_POOL_REFILL_SECONDS", "21600") or 21600))
+                    refill_payload["userInitiated"] = False
+                    refill_payload["_poolRefill"] = True
+                    refill_payload["recordShown"] = False
+                    refill_payload["liveOnly"] = False
+                    refill_payload["refresh"] = True
                     connection.execute(
                         """
-                        INSERT INTO fetch_pool_targets(archive_id,payload_json,next_run_at,last_run_at,updated_at)
-                        VALUES(?,?,?,0,?)
+                        INSERT INTO fetch_pool_targets(
+                          archive_id,payload_json,next_run_at,last_run_at,last_user_fetch_at,
+                          active_until,low_watermark,target_watermark,last_available_count,updated_at
+                        ) VALUES(?,?,?,0,?,?,?,?,0,?)
                         ON CONFLICT(archive_id) DO UPDATE SET
                           payload_json=excluded.payload_json,
-                          next_run_at=MIN(fetch_pool_targets.next_run_at, excluded.next_run_at),
+                          next_run_at=MIN(fetch_pool_targets.next_run_at,excluded.next_run_at),
+                          last_run_at=0,
+                          last_user_fetch_at=excluded.last_user_fetch_at,
+                          active_until=excluded.active_until,
+                          low_watermark=excluded.low_watermark,
+                          target_watermark=excluded.target_watermark,
                           updated_at=excluded.updated_at
                         """,
-                        (archive_id, json.dumps(refill_payload, ensure_ascii=False, separators=(",", ":")), now + interval, now),
+                        (
+                            archive_id,
+                            json.dumps(refill_payload, ensure_ascii=False, separators=(",", ":")),
+                            now + initial_delay,
+                            now,
+                            now + active_seconds,
+                            low_watermark,
+                            target_watermark,
+                            now,
+                        ),
                     )
+            row = connection.execute("SELECT * FROM fetch_jobs WHERE id=?", (job_id,)).fetchone()
             return self.public(row), True
 
     def enqueue_due_pool_refill(self, *, now: int | None = None) -> bool:
         timestamp = int(now or time.time())
-        interval = max(3600, int(os.getenv("TG_HOT_POOL_REFILL_SECONDS", "21600") or 21600))
+        interval = max(300, int(os.getenv("TG_HOT_POOL_REFILL_SECONDS", "600") or 600))
         with self._lock, self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            connection.execute("DELETE FROM fetch_pool_targets WHERE active_until <= ?", (timestamp,))
             target = connection.execute(
-                "SELECT * FROM fetch_pool_targets WHERE next_run_at <= ? ORDER BY next_run_at,archive_id LIMIT 1",
-                (timestamp,),
+                "SELECT * FROM fetch_pool_targets WHERE active_until > ? AND next_run_at <= ? ORDER BY next_run_at,archive_id LIMIT 1",
+                (timestamp, timestamp),
             ).fetchone()
             if target is None:
                 return False
             archive_id = str(target["archive_id"])
-            active = connection.execute(
-                "SELECT 1 FROM fetch_jobs WHERE capability='persona.hot_candidates.v1' AND unit_id=? AND status IN ('queued','running') LIMIT 1",
-                (f"pool_{hashlib.sha256(archive_id.encode('utf-8')).hexdigest()[:24]}",),
-            ).fetchone()
+            available_count = _persona_available_candidate_count(self.runtime_dir, archive_id, now=timestamp)
             next_run = timestamp + interval
             connection.execute(
-                "UPDATE fetch_pool_targets SET next_run_at=?,last_run_at=?,updated_at=? WHERE archive_id=?",
-                (next_run, timestamp, timestamp, archive_id),
+                "UPDATE fetch_pool_targets SET next_run_at=?,last_available_count=?,updated_at=? WHERE archive_id=?",
+                (next_run, available_count, timestamp, archive_id),
             )
-            if active is not None:
+            low_watermark = max(1, int(target["low_watermark"] or 50))
+            target_watermark = max(low_watermark, int(target["target_watermark"] or 100))
+            refilling = int(target["last_run_at"] or 0) >= int(target["last_user_fetch_at"] or 0) > 0
+            if available_count >= target_watermark:
+                connection.execute(
+                    "UPDATE fetch_pool_targets SET last_run_at=0,updated_at=? WHERE archive_id=?",
+                    (timestamp, archive_id),
+                )
+                return False
+            if not refilling and available_count >= low_watermark:
                 return False
             payload = json.loads(str(target["payload_json"] or "{}"))
+            if not _has_current_hot_keyword_strategy(payload):
+                connection.execute("DELETE FROM fetch_pool_targets WHERE archive_id=?", (archive_id,))
+                return False
+            active_rows = connection.execute(
+                "SELECT payload_json FROM fetch_jobs WHERE capability='persona.hot_candidates.v1' AND status IN ('queued','running')"
+            ).fetchall()
+            active = any(
+                str(json.loads(str(row["payload_json"] or "{}")).get("archiveId") or "").strip() == archive_id
+                for row in active_rows
+            )
+            if active:
+                connection.execute(
+                    "UPDATE fetch_pool_targets SET next_run_at=?,updated_at=? WHERE archive_id=?",
+                    (timestamp + 60, timestamp, archive_id),
+                )
+                return False
+            payload["limit"] = min(20, max(1, target_watermark - available_count))
+            connection.execute(
+                "UPDATE fetch_pool_targets SET last_run_at=?,updated_at=? WHERE archive_id=?",
+                (timestamp, timestamp, archive_id),
+            )
             unit_id = f"pool_{hashlib.sha256(archive_id.encode('utf-8')).hexdigest()[:24]}"
             idempotency_key = f"pool:{hashlib.sha256(f'{archive_id}:{timestamp // interval}'.encode('utf-8')).hexdigest()[:24]}"
             job_id = f"job_{uuid.uuid4().hex[:24]}"
@@ -469,6 +698,133 @@ class JobStore:
                 payload=payload,
             )
 
+    def dataset_overview(self, *, now: int | None = None) -> dict[str, Any]:
+        timestamp = int(now or time.time())
+        archive_ids: set[str] = set()
+        names: dict[str, str] = {}
+        targets: dict[str, sqlite3.Row] = {}
+        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
+        with contextlib.suppress(OSError):
+            for path in cache_dir.iterdir():
+                archive_id = path.name[:36]
+                if path.is_file() and _PERSONA_ARCHIVE_ID.fullmatch(archive_id):
+                    archive_ids.add(archive_id)
+        try:
+            shown_store = json.loads((self.runtime_dir / "sentiment_hot_candidates.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            shown_store = {}
+        shown = shown_store.get("shown") if isinstance(shown_store, dict) else None
+        if isinstance(shown, dict):
+            archive_ids.update(key for key in shown if _PERSONA_ARCHIVE_ID.fullmatch(str(key)))
+        with self._connection() as connection:
+            for row in connection.execute("SELECT * FROM fetch_pool_targets"):
+                archive_id = str(row["archive_id"] or "")
+                if not _PERSONA_ARCHIVE_ID.fullmatch(archive_id):
+                    continue
+                archive_ids.add(archive_id)
+                targets[archive_id] = row
+                with contextlib.suppress(json.JSONDecodeError):
+                    payload = json.loads(str(row["payload_json"] or "{}"))
+                    names[archive_id] = str((payload.get("archiveSnapshot") or {}).get("name") or "").strip()
+            job_rows = connection.execute(
+                "SELECT payload_json FROM fetch_jobs WHERE capability='persona.hot_candidates.v1' ORDER BY created_at DESC LIMIT 1000"
+            ).fetchall()
+        for row in job_rows:
+            with contextlib.suppress(json.JSONDecodeError):
+                payload = json.loads(str(row["payload_json"] or "{}"))
+                archive_id = str(payload.get("archiveId") or "")
+                if archive_id in archive_ids and not names.get(archive_id):
+                    names[archive_id] = str((payload.get("archiveSnapshot") or {}).get("name") or "").strip()
+        personas: list[dict[str, Any]] = []
+        for archive_id in archive_ids:
+            target = targets.get(archive_id)
+            capacity = max(1, int(target["target_watermark"] or 100)) if target is not None else 100
+            count = _persona_available_candidate_count(self.runtime_dir, archive_id, now=timestamp)
+            last_run_at = int(target["last_run_at"] or 0) if target is not None else 0
+            last_user_fetch_at = int(target["last_user_fetch_at"] or 0) if target is not None else 0
+            personas.append({
+                "archive_id": archive_id,
+                "name": names.get(archive_id) or f"人设 {archive_id[:8]}",
+                "count": count,
+                "capacity": capacity,
+                "active": bool(target is not None and int(target["active_until"] or 0) > timestamp),
+                "refilling": bool(last_run_at >= last_user_fetch_at > 0 and count < capacity),
+            })
+        personas.sort(key=lambda item: (str(item["name"]).casefold(), str(item["archive_id"])))
+        return {
+            "generated_at": timestamp,
+            "global": {
+                "name": "全局数据集",
+                "count": _global_available_candidate_count(self.runtime_dir, now=timestamp),
+                "capacity": max(1, int(os.getenv("TG_HOT_GLOBAL_POOL_CAPACITY", "100000") or 100000)),
+            },
+            "personas": personas,
+        }
+
+    def publish_dataset_overview(self, *, force: bool = False) -> None:
+        monotonic_now = time.monotonic()
+        if not force and monotonic_now - self._dataset_overview_published_at < 30:
+            return
+        self._dataset_overview_published_at = monotonic_now
+        path = Path(os.getenv("TG_HOT_DATASET_OVERVIEW_PATH", "/collector-proxy/hot-dataset-overview.json"))
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(json.dumps(self.dataset_overview(), ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            os.replace(temporary, path)
+        except OSError:
+            with contextlib.suppress(OSError):
+                temporary.unlink()
+
+    def clear_hot_dataset(self, dataset_id: str) -> dict[str, Any]:
+        clean_id = str(dataset_id or "").strip()
+        if clean_id != "global" and not _PERSONA_ARCHIVE_ID.fullmatch(clean_id):
+            raise ValueError("invalid hot dataset id")
+        count_before = (
+            _global_available_candidate_count(self.runtime_dir, now=int(time.time()))
+            if clean_id == "global"
+            else _persona_available_candidate_count(self.runtime_dir, clean_id, now=int(time.time()))
+        )
+        with self._lock:
+            if clean_id == "global":
+                database_path = self.runtime_dir / "sentiment_hot_global_pool.sqlite3"
+                if database_path.exists():
+                    connection = sqlite3.connect(str(database_path), timeout=15)
+                    try:
+                        with contextlib.suppress(sqlite3.OperationalError):
+                            connection.execute("DELETE FROM sentiment_hot_global_candidates")
+                            connection.commit()
+                    finally:
+                        connection.close()
+                pool_path = self.runtime_dir / "sentiment_hot_global_pool.json"
+                pool_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = pool_path.with_name(f".{pool_path.name}.{os.getpid()}.tmp")
+                temporary.write_text(
+                    json.dumps({"version": 1, "updatedAt": int(time.time() * 1000), "candidates": []}, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                os.replace(temporary, pool_path)
+            else:
+                cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
+                with contextlib.suppress(OSError):
+                    for cache_path in cache_dir.iterdir():
+                        if not cache_path.is_file() or not cache_path.name.startswith(f"{clean_id}-") or cache_path.suffix != ".json":
+                            continue
+                        try:
+                            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+                        except (OSError, json.JSONDecodeError):
+                            continue
+                        if not isinstance(cache, dict):
+                            continue
+                        for bucket in cache.values():
+                            if isinstance(bucket, dict) and isinstance(bucket.get("candidates"), list):
+                                bucket["candidates"] = []
+                        temporary = cache_path.with_name(f".{cache_path.name}.{os.getpid()}.tmp")
+                        temporary.write_text(json.dumps(cache, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+                        os.replace(temporary, cache_path)
+        self.publish_dataset_overview(force=True)
+        return {"dataset_id": clean_id, "deleted_count": count_before, "overview": self.dataset_overview()}
+
 
 def _parse_json_output(stdout: str) -> dict[str, Any] | None:
     text = str(stdout or "").strip()
@@ -521,6 +877,11 @@ def _run_tool_r18_job_once(
     runtime_payload = dict(payload)
     capability = str(runtime_payload.pop("_workerCapability", "") or "").strip()
     background_refill = bool(runtime_payload.pop("_poolRefill", False))
+    runtime_payload.pop("userInitiated", None)
+    if capability == "persona.hot_candidates.v1":
+        runtime_payload["keywords"] = _clean_hot_keywords(runtime_payload.get("keywords"))
+        if not _has_current_hot_keyword_strategy(runtime_payload):
+            raise RuntimeError("persona hot keywords must use the current new-host strategy")
     for private_field in (
         "accountId", "account_id", "senderUsername", "sender_username",
         "userId", "user_id", "loginUsername", "login_username",
@@ -595,7 +956,7 @@ def _run_tool_r18_job_once(
             start_new_session=os.name != "nt",
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
-        deadline = time.monotonic() + max(30, min(int(timeout_seconds), 180))
+        deadline = time.monotonic() + max(10, min(int(timeout_seconds), 180))
         while process.poll() is None:
             if cancel_event.wait(0.2):
                 _terminate_process(process)
@@ -637,39 +998,6 @@ def _run_tool_r18_job_once(
                 )
 
 
-def _merge_collector_candidate_results(
-    first: dict[str, Any],
-    second: dict[str, Any],
-    *,
-    limit: int,
-) -> dict[str, Any]:
-    merged = dict(second if len(second.get("candidates") or []) > len(first.get("candidates") or []) else first)
-    candidates: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for result in (first, second):
-        for candidate in result.get("candidates") if isinstance(result.get("candidates"), list) else []:
-            if not isinstance(candidate, dict):
-                continue
-            key = str(candidate.get("id") or candidate.get("candidateId") or candidate.get("sourceUrl") or "").strip()
-            if not key:
-                key = json.dumps(candidate, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-            if key in seen:
-                continue
-            seen.add(key)
-            candidates.append(candidate)
-    candidates.sort(key=lambda item: float(item.get("hotScore") or item.get("hot_score") or 0), reverse=True)
-    merged["candidates"] = candidates[:limit]
-    warnings: list[str] = []
-    for result in (first, second):
-        for warning in result.get("warnings") if isinstance(result.get("warnings"), list) else []:
-            text = str(warning or "").strip()
-            if text and text not in warnings:
-                warnings.append(text)
-    warnings.append("公开 Reader / 旧机候选池不足，已使用一个账号池登录态补充本轮结果。")
-    merged["warnings"] = warnings
-    return merged
-
-
 def run_tool_r18_job(
     payload: dict[str, Any],
     cancel_event: threading.Event,
@@ -680,38 +1008,56 @@ def run_tool_r18_job(
     if capability not in {"persona.hot_candidates.v1", "crm.threads_live_search.v1"}:
         return _run_tool_r18_job_once(payload, cancel_event, timeout_seconds=timeout_seconds)
 
-    reader_payload = {**payload, "sourcePolicy": "reader_only"}
-    try:
-        first = _run_tool_r18_job_once(
-            reader_payload,
+    # Public Reader is reserved for the scheduled background candidate-pool
+    # refill. A user-triggered hot fetch always uses the authenticated pool.
+    if capability == "persona.hot_candidates.v1" and bool(payload.get("_poolRefill")):
+        return _run_tool_r18_job_once(
+            {
+                **payload,
+                "sourcePolicy": "reader_only",
+                "refresh": True,
+                "recordShown": False,
+            },
             cancel_event,
             timeout_seconds=timeout_seconds,
             use_collector_profile=False,
         )
-    except Exception as exc:
-        first = {
-            "ok": True,
-            "candidates": [],
-            "warnings": [f"公开 Reader 本轮不可用，已转账号池登录态补充：{str(exc)[:300]}"],
-        }
-    candidates = first.get("candidates") if isinstance(first.get("candidates"), list) else []
+
+    authenticated_payload = {
+        **payload,
+        "sourcePolicy": "authenticated_only",
+        **({"recordShown": True} if capability == "persona.hot_candidates.v1" else {}),
+    }
+    # Two complete 30-second account windows fit the new-host 65-second RPC
+    # budget. Three 20-second windows repeatedly expired while the search UI
+    # was still loading and never executed the supplied keyword batch.
+    attempt_limit = max(1, min(int(os.getenv("TG_AUTH_ACCOUNT_ATTEMPTS", "2") or 2), 3))
+    per_account_timeout = max(15, min(int(os.getenv("TG_AUTH_ACCOUNT_TIMEOUT_SECONDS", "30") or 30), int(timeout_seconds)))
     requested_limit = max(1, min(int(payload.get("limit") or 10), 20))
-    if (
-        len(candidates) >= requested_limit
-        or cancel_event.is_set()
-    ):
-        warnings = first.setdefault("warnings", [])
-        if isinstance(warnings, list):
-            warnings.append("公开 Reader / 旧机候选池已满足本轮需求，未租用登录态账号。")
-        return first
-    authenticated_payload = {**payload, "sourcePolicy": "authenticated_only"}
-    second = _run_tool_r18_job_once(
-        authenticated_payload,
-        cancel_event,
-        timeout_seconds=timeout_seconds,
-        use_collector_profile=True,
-    )
-    return _merge_collector_candidate_results(first, second, limit=requested_limit)
+    sufficient_count = min(requested_limit, 3)
+    best_result: dict[str, Any] | None = None
+    last_error: Exception | None = None
+    for attempt in range(attempt_limit):
+        try:
+            result = _run_tool_r18_job_once(
+                authenticated_payload,
+                cancel_event,
+                timeout_seconds=per_account_timeout,
+                use_collector_profile=True,
+            )
+            if best_result is None or len(result.get("candidates") or []) > len(best_result.get("candidates") or []):
+                best_result = result
+            if len(result.get("candidates") or []) >= sufficient_count or cancel_event.is_set():
+                return result
+        except Exception as exc:
+            last_error = exc
+            if cancel_event.is_set() or (attempt + 1 >= attempt_limit and best_result is None):
+                raise
+            if attempt + 1 >= attempt_limit:
+                break
+    if best_result is not None:
+        return best_result
+    raise RuntimeError("authenticated account-pool fetch failed") from last_error
 
 
 class WorkerRuntime:
@@ -732,6 +1078,7 @@ class WorkerRuntime:
     def start(self) -> None:
         if self.thread is not None and self.thread.is_alive():
             return
+        self.store.publish_dataset_overview(force=True)
         self.stop_event.clear()
         self.thread = threading.Thread(
             target=self._loop,
@@ -760,9 +1107,8 @@ class WorkerRuntime:
 
     def _loop(self) -> None:
         while not self.stop_event.is_set():
-            with contextlib.suppress(Exception):
-                if self.store.enqueue_due_pool_refill():
-                    self.wake_event.set()
+            self.store.publish_dataset_overview()
+            self.store.enqueue_due_pool_refill()
             claimed = self.store.claim_next()
             if claimed is None:
                 self.wake_event.wait(1.0)
@@ -818,6 +1164,12 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
             raise ProtocolError("remote fetch must set recordShown=false")
         if capability == "persona.hot_candidates.v1" and normalized.get("liveOnly") is not False:
             raise ProtocolError("persona hot fetch must use the old-host candidate pool")
+        if capability == "persona.hot_candidates.v1":
+            if normalized.get("_poolRefill"):
+                raise ProtocolError("background pool refill cannot be submitted externally")
+            normalized["keywords"] = _clean_hot_keywords(normalized.get("keywords"))
+            if not _has_current_hot_keyword_strategy(normalized):
+                raise ProtocolError("persona hot keywords must use the current new-host strategy")
         if capability == "crm.threads_live_search.v1" and normalized.get("liveOnly") is not True:
             raise ProtocolError("CRM live search must remain live-only")
         normalized.pop("sourcePolicy", None)
@@ -867,7 +1219,7 @@ def create_worker_app(
     runner: Callable[[dict[str, Any], threading.Event], dict[str, Any]] = run_tool_r18_job,
 ) -> FastAPI:
     resolved = settings or WorkerSettings.from_environment()
-    store = JobStore(resolved.database_path)
+    store = JobStore(resolved.database_path, runtime_dir=resolved.runtime_dir)
     runtime = WorkerRuntime(store, runner)
 
     @contextlib.asynccontextmanager
@@ -925,6 +1277,23 @@ def create_worker_app(
             "capabilities": sorted(ALLOWED_CAPABILITIES),
             "concurrency": 1,
         }
+
+    @app.post("/internal/worker/v1/hot-datasets/refresh")
+    async def refresh_hot_datasets(request: Request) -> dict[str, Any]:
+        body = await request.body()
+        await authenticate(request, body)
+        store.publish_dataset_overview(force=True)
+        return {"ok": True, "overview": store.dataset_overview()}
+
+    @app.delete("/internal/worker/v1/hot-datasets/{dataset_id}")
+    async def delete_hot_dataset(dataset_id: str, request: Request) -> dict[str, Any]:
+        body = await request.body()
+        await authenticate(request, body)
+        try:
+            result = store.clear_hot_dataset(dataset_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, **result}
 
     @app.post("/internal/worker/v1/jobs", status_code=202)
     async def submit_job(request: Request) -> JSONResponse:

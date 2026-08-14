@@ -110,3 +110,40 @@ def test_crm_admin_access_editor_requires_loading_current_permission():
     assert "loadCrmUserAccess" in admin_js
     assert "crmUserAccessLoadedId" in admin_js
     assert "回收 CRM 权限" in admin_js
+
+
+def test_crm_admin_center_is_novice_friendly_and_hides_technical_payloads():
+    admin_html = (ROOT / "webapp" / "static" / "admin.html").read_text(encoding="utf-8")
+    admin_js = (ROOT / "webapp" / "static" / "assets" / "admin.js").read_text(encoding="utf-8")
+    admin_css = (ROOT / "webapp" / "static" / "assets" / "style.css").read_text(encoding="utf-8")
+    crm_section = admin_html[
+        admin_html.index('id="secCrm"') : admin_html.index('id="secRuntime"')
+    ]
+
+    for copy in (
+        "按步骤管理客户 CRM",
+        "确认服务",
+        "开通客户",
+        "导入资料",
+        "第一步：检查文件",
+        "第二步：确认导入",
+        "只显示易懂的状态，不显示技术代码",
+    ):
+        assert copy in crm_section
+
+    for technical_copy in (
+        "CRM_ENABLED",
+        "dry-run",
+        "批次 ID",
+        "crm_imports",
+        "source_sha256",
+        "code-box",
+    ):
+        assert technical_copy not in crm_section
+
+    assert 'id="crmImportBatchId" type="hidden"' in crm_section
+    assert "renderCrmImportStatus" in admin_js
+    assert "crmFriendlyError" in admin_js
+    assert "JSON.stringify(payload?.items" not in admin_js
+    assert ".page-admin #secCrm .crm-quick-guide" in admin_css
+    assert ".page-admin #secCrm .crm-import-record" in admin_css

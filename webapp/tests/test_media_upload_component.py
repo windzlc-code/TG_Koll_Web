@@ -134,19 +134,24 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('modalKey: "persona-hot-editor"', starter)
         self.assertIn("modal.__requestClose = async (result) =>", starter)
         self.assertLess(starter.index('modalKey: "persona-hot-editor"'), starter.index("importPersonaHotDrafts"))
-        self.assertIn("applyStoredEdits: true, choosePlatform: true", starter)
+        self.assertIn("applyStoredEdits: true", starter)
+        self.assertNotIn("choosePlatform", starter)
         self.assertNotIn("choosePublishPlatformAccount", starter)
         self.assertIn("data-persona-hot-content-editor", self.script)
         self.assertIn("renderPersonaHotCandidateEditorModal", self.script)
+        self.assertIn('class="account-pool-card-platform persona-hot-editor-header-platform"', starter)
+        self.assertIn("renderAccountPoolPlatformIcon(platform)", starter)
+        self.assertIn('modal.addEventListener("pointerdown", handlePersonaMediaPointerDown);', starter)
+        self.assertIn('modal.addEventListener("keydown", handlePersonaMediaSortKeydown);', starter)
         self.assertIn("startPersonaHotCandidateEdit(persona, candidateId);", handler)
         self.assertNotIn("importPersonaHotDrafts", handler)
         self.assertNotIn("openPersonaHotCandidateInDraftEditor", self.script)
 
     def test_hotspot_cards_open_media_and_source_without_detail_modal(self):
         self.assertIn('class="row-actions persona-hot-card-actions"', self.script)
-        self.assertIn('target="_blank" rel="noopener">打开帖子</a>', self.script)
+        self.assertIn('${renderSourceLinkIcon()}<span>打开帖子</span></a>', self.script)
         self.assertIn('data-persona-start-hot-edit="${esc(candidateId)}"', self.script)
-        self.assertIn(">编辑</button>", self.script)
+        self.assertIn('${renderEditIcon()}<span>编辑</span></button>', self.script)
         self.assertNotIn("async function openPersonaHotCandidateDetail", self.script)
         self.assertNotIn('data-persona-view-hot-candidate=', self.script)
         self.assertNotIn('modalKey: "persona-hot-candidate-detail"', self.script)
@@ -157,6 +162,60 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('interactive: Boolean(previewGroupId) && itemPreviewIndex >= 0,', self.script)
         self.assertIn(".persona-hot-card-actions a {", self.styles)
         self.assertIn("justify-content: center;", self.styles)
+
+    def test_hotspot_card_controls_keep_the_requested_shared_alignment(self):
+        source_identity = self.script[
+            self.script.index("function renderPersonaHotSourceIdentity"):
+            self.script.index("\nfunction normalizePersonaHotSearchMode")
+        ]
+        platform_field = source_identity.index("account-pool-card-platform persona-hot-source-platform")
+        media_badge = source_identity.index("renderMediaTypeBadge(mediaItems)")
+        self.assertLess(platform_field, media_badge)
+        self.assertNotIn("persona-hot-source-platform-field", source_identity)
+        self.assertNotIn("platform.toUpperCase()", source_identity)
+        byline = source_identity.split('class="persona-hot-source-byline"', 1)[1]
+        self.assertNotIn("persona-hot-source-platform", byline)
+
+        action_styles = self.styles.split(".persona-hot-card-actions button,", 1)[1].split("}", 1)[0]
+        self.assertIn("width: auto;", action_styles)
+        self.assertIn("flex: 0 0 auto;", action_styles)
+        self.assertIn("box-sizing: border-box;", action_styles)
+        self.assertIn("min-height: 38px;", action_styles)
+
+        media_preview = self.script[
+            self.script.index("function renderPersonaHotMediaPreview"):
+            self.script.index("\nfunction renderPersonaHotOrigin")
+        ]
+        self.assertIn("showCaption: false,", media_preview)
+
+        select_all_styles = self.styles.split(
+            ".console-page .console-shell .persona-hot-toolbar button.bulk-selection-icon-button {",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("border: 0;", select_all_styles)
+        self.assertIn("box-shadow: none;", select_all_styles)
+
+        media_index_styles = self.styles.split(
+            ".persona-edit-media-order.persona-hot-media-index-badge {",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("width: 20px;", media_index_styles)
+        self.assertIn("height: 20px;", media_index_styles)
+        self.assertIn("border: 1px solid var(--accent);", media_index_styles)
+
+        mobile_action_styles = self.styles.split(
+            ".console-page .persona-detail .persona-hot-card-actions > a,",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("height: 38px;", mobile_action_styles)
+        self.assertIn("min-height: 38px;", mobile_action_styles)
+
+        mobile_index_styles = self.styles.split(
+            ".console-page .persona-detail .persona-hot-media-grid .persona-edit-media-order.persona-hot-media-index-badge {",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("width: 20px;", mobile_index_styles)
+        self.assertIn("height: 20px;", mobile_index_styles)
 
     def test_hotspot_editor_reuses_public_modal_and_complete_media_editor(self):
         modal_renderer = self.script[
@@ -171,6 +230,10 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("renderPersonaEditableMediaGrid(mediaItems, {", modal_renderer)
         self.assertIn('mode: "hot"', modal_renderer)
         self.assertIn("data-persona-hot-content-editor", modal_renderer)
+        self.assertIn('class="persona-hot-editor-source"', modal_renderer)
+        self.assertNotIn("renderAccountPoolPlatformIcon(platform)", modal_renderer)
+        self.assertIn('class="persona-hot-editor-source-link"', modal_renderer)
+        self.assertIn("renderSourceLinkIcon()", modal_renderer)
         self.assertIn("data-persona-hot-editor-media-input", editor_renderer)
         self.assertIn("data-persona-hot-editor-media-replace", editor_renderer)
         self.assertIn("data-persona-hot-editor-media-delete", editor_renderer)
@@ -179,6 +242,24 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("preparePersonaDraftMediaOps(operations)", self.script)
         self.assertIn("preparedMediaOpsByCandidate", self.script)
         self.assertIn('.persona-hot-editor-modal {', self.styles)
+        self.assertIn(
+            '.console-modal[data-modal-key="persona-hot-editor"] .persona-hot-editor-header-platform {',
+            self.styles,
+        )
+        header_layout_styles = self.styles.split(
+            '.console-modal[data-modal-key="persona-hot-editor"] .console-modal-head {', 1
+        )[1].split("}", 1)[0]
+        self.assertIn("grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);", header_layout_styles)
+        header_platform_styles = self.styles.split(
+            '.console-modal[data-modal-key="persona-hot-editor"] .persona-hot-editor-header-platform {', 1
+        )[1].split("}", 1)[0]
+        self.assertIn("justify-self: center;", header_platform_styles)
+        self.assertIn("font-size: 16px;", header_platform_styles)
+        header_platform_icon_styles = self.styles.split(
+            '.console-modal[data-modal-key="persona-hot-editor"] .persona-hot-editor-header-platform > svg {', 1
+        )[1].split("}", 1)[0]
+        self.assertIn("width: 19px;", header_platform_icon_styles)
+        self.assertIn("height: 19px;", header_platform_icon_styles)
 
     def test_hotspot_cards_show_source_identity_all_media_and_merged_heat_views(self):
         picker = self.script[
@@ -200,11 +281,16 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertNotIn("persona-hot-source-avatar", source_identity)
         self.assertIn("persona-hot-source-byline", source_identity)
         self.assertIn("persona-hot-source-context", source_identity)
+        self.assertIn("account-pool-card-platform persona-hot-source-platform", source_identity)
+        self.assertIn("renderAccountPoolPlatformIcon(platform)", source_identity)
+        self.assertIn("platformLabel(platform)", source_identity)
+        self.assertNotIn("persona-hot-source-platform-field", source_identity)
+        self.assertNotIn("platform.toUpperCase()", source_identity)
         self.assertIn('["热度/浏览", personaHotCombinedViewMetric(candidate)]', metrics)
         self.assertNotIn('["热度",', metrics)
         self.assertNotIn('["浏览",', metrics)
 
-    def test_hotspot_import_uses_public_platform_picker_before_writing_drafts(self):
+    def test_hotspot_import_stays_on_the_current_candidate_platform(self):
         importer = self.script[
             self.script.index("async function importPersonaHotDrafts"):
             self.script.index("\nfunction resetPersonaDraftEditor", self.script.index("async function importPersonaHotDrafts"))
@@ -218,12 +304,54 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             self.script.index('const hotMediaReplace = event.target.closest', self.script.index('if (event.target.closest("[data-persona-import-hot-drafts]"))'))
         ]
 
-        self.assertIn("await choosePublishPlatformAccount(persona, {", importer)
-        self.assertIn('title: "选择导入平台"', importer)
-        self.assertIn('confirmText: "导入草稿"', importer)
+        self.assertNotIn("choosePublishPlatformAccount", importer)
+        self.assertNotIn("choosePlatform", importer)
         self.assertIn("targetPlatform", submitter)
         self.assertIn("platform: resolvedTargetPlatform", submitter)
-        self.assertIn("choosePlatform: true", handler)
+        self.assertIn("personaContentPlatform(persona)", importer)
+        self.assertIn("candidate.platform", importer)
+        self.assertIn("resolvedTargetPlatform", importer)
+        self.assertNotIn("choosePlatform", handler)
+
+    def test_hotspot_results_are_filtered_by_platform_with_click_to_clear_badges(self):
+        candidates = self.script[
+            self.script.index("function personaHotAllCandidates"):
+            self.script.index("\nfunction personaHotPreviewCandidate")
+        ]
+        platform_rail = self.script[
+            self.script.index("function renderPersonaContentPlatformRail"):
+            self.script.index("\nfunction personaOverviewDraftCount")
+        ]
+        platform_handler = self.script[
+            self.script.index('const contentPlatformButton = event.target.closest("[data-persona-content-platform]");'):
+            self.script.index('const contentTabButton = event.target.closest', self.script.index('const contentPlatformButton = event.target.closest("[data-persona-content-platform]");'))
+        ]
+        picker = self.script[
+            self.script.index("function renderPersonaHotCandidatePicker"):
+            self.script.index("\nfunction personaMediaTaskOptions")
+        ]
+
+        self.assertIn("personaHotAllCandidates", candidates)
+        self.assertIn("personaContentPlatform(persona)", candidates)
+        self.assertIn("candidate.platform", candidates)
+        self.assertIn("persona-platform-hot-badge", platform_rail)
+        self.assertIn("personaHotUnreadCount", platform_rail)
+        self.assertIn("clearPersonaHotUnreadCount", platform_handler)
+        self.assertLess(
+            platform_handler.index("clearPersonaHotUnreadCount"),
+            platform_handler.index("if (nextPlatform === personaContentPlatform(persona))"),
+        )
+        self.assertIn('<details class="persona-hot-keyword-disclosure">', picker)
+        self.assertIn("personaHotKeywordChips", picker)
+        self.assertNotIn("Cookie 状态", picker)
+        self.assertNotIn("抓取方式</strong>", picker)
+
+    def test_hotspot_import_action_reuses_sticky_primary_dock_without_view_draft(self):
+        panel_start = self.script.index('generateMode === "hot" ? `')
+        panel = self.script[panel_start:self.script.index('` : `', panel_start)]
+        self.assertIn("persona-draft-global-save-dock persona-hot-import-dock", panel)
+        self.assertIn("persona-draft-global-save-button persona-gradient-outline-action", panel)
+        self.assertNotIn("查看草稿", panel)
 
     def test_mobile_hotspot_cards_expand_without_inline_single_preview(self):
         mobile_hotspot = self.styles.split("@media (max-width: 980px) {\n  .persona-hot-layout {", 1)[1].split("\n}", 1)[0]
@@ -608,6 +736,35 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('closeConsoleDropdowns(event.target.closest("[data-console-dropdown]"));', self.script)
         self.assertIn(".persona-public-media-edit-menu[open] > summary", self.styles)
 
+        hot_editor = self.script.split("function startPersonaHotCandidateEdit", 1)[1].split(
+            "function cancelPersonaHotCandidateEdit",
+            1,
+        )[0]
+        self.assertIn('closeConsoleDropdowns(event.target.closest("[data-console-dropdown]"));', hot_editor)
+
+    def test_public_media_selection_only_uses_the_image_preview_surface(self):
+        hot_editor = self.script.split("function startPersonaHotCandidateEdit", 1)[1].split(
+            "function cancelPersonaHotCandidateEdit",
+            1,
+        )[0]
+        self.assertIn(
+            'event.target.closest(".persona-public-media-preview-shell")',
+            hot_editor,
+        )
+        self.assertIn('event.target.closest("summary")', hot_editor)
+
+        console_click_handler = self.script.split(
+            'const personaMediaSelect = event.target.closest("[data-persona-media-select-index]")',
+            1,
+        )[1].split(
+            'const personaMediaSelectAll = event.target.closest("[data-persona-media-select-all]")',
+            1,
+        )[0]
+        self.assertIn(
+            'event.target.closest(".persona-public-media-preview-shell")',
+            console_click_handler,
+        )
+
     def test_hot_editor_and_standard_upload_share_public_media_cards(self):
         renderer = self.script.split("function renderPersonaEditableMediaGrid", 1)[1].split(
             "function renderPersonaImageLibraryPreview", 1
@@ -624,10 +781,40 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertNotIn(".persona-edit-media-actions", self.styles)
         self.assertNotIn(".persona-hot-media-action", self.styles)
 
+    def test_hot_editor_empty_media_uses_only_the_compact_public_add_control(self):
+        renderer = self.script.split("function renderPersonaEditableMediaGrid", 1)[1].split(
+            "function renderPersonaImageLibraryPreview", 1
+        )[0]
+        self.assertIn('class="persona-media-empty-picker"', renderer)
+        self.assertIn("renderPlusIcon()", renderer)
+        self.assertIn("<strong>添加媒体</strong>", renderer)
+        self.assertIn("拖动图片或视频到这里，或点击选择", renderer)
+        self.assertNotIn("媒体会直接加入当前", renderer)
+        self.assertIn('class="persona-media-empty-picker-copy"', renderer)
+        self.assertIn("rows.length ? `", renderer)
+        empty_picker_layout = self.styles.split(
+            ".console-modal-dialog label.persona-media-empty-picker {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("display: inline-flex;", empty_picker_layout)
+        self.assertIn("align-items: center;", empty_picker_layout)
+        empty_picker_icon = self.styles.split(".persona-media-empty-picker .ui-action-icon {", 1)[1].split("}", 1)[0]
+        self.assertIn("fill: none;", empty_picker_icon)
+        self.assertIn("stroke: currentColor;", empty_picker_icon)
+
+    def test_hot_editor_restores_the_existing_media_sort_handlers(self):
+        starter = self.script.split("function startPersonaHotCandidateEdit", 1)[1].split(
+            "function cancelPersonaHotCandidateEdit", 1
+        )[0]
+        self.assertIn('modal.addEventListener("pointerdown", handlePersonaMediaPointerDown);', starter)
+        self.assertIn('modal.addEventListener("keydown", handlePersonaMediaSortKeydown);', starter)
+        self.assertIn("movePersonaHotEditorMedia(hotCandidateId, fromIndex, toIndex);", self.script)
+        self.assertIn('data-persona-media-drag-handle', self.script)
+
     def test_persona_media_card_surface_selects_and_only_eye_opens_preview(self):
         self.assertIn('interactive: false,', self.script)
         self.assertIn('data-media-preview-group="${esc(groupId)}"', self.script)
-        self.assertIn('const personaMediaCard = event.target.closest(".persona-edit-media-card', self.script)
+        self.assertIn('const personaMediaPreview = event.target.closest(".persona-public-media-preview-shell")', self.script)
+        self.assertIn('const personaMediaCard = personaMediaPreview?.closest(".persona-edit-media-card', self.script)
 
     def test_new_upload_media_cards_support_edit_and_cross_device_reordering(self):
         self.assertIn('data-upload-sort-card="${esc(index)}"', self.script)
@@ -692,7 +879,7 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("height: 28px;", persona_select_styles)
         self.assertIn("place-items: center;", persona_select_styles)
         self.assertIn("border-radius: 50%;", persona_select_styles)
-        self.assertIn('const personaMediaCard = event.target.closest(".persona-edit-media-card', self.script)
+        self.assertIn('const personaMediaPreview = event.target.closest(".persona-public-media-preview-shell")', self.script)
 
     def test_upload_sorting_blocks_native_card_drag_and_keeps_actions_out_of_drag_gesture(self):
         drag_start = self.script.split("function handleUploadPreviewDragStart(event)", 1)[1].split(

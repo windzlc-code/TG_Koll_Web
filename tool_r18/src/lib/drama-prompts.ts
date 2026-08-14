@@ -280,6 +280,13 @@ const REGIONAL_FLAVOR_PACKS: Record<string, RegionalFlavorPack> = {
 };
 
 export function resolvePromptLocaleKey(setup: DramaSetup, characters = ""): string {
+  const writingLocaleMap: Record<string, string> = {
+    "zh-TW": "cn_tw", "zh-CN": "cn", "en-US": "west", "ja-JP": "jp", "ko-KR": "kr",
+    "vi-VN": "vn", "th-TH": "th", "id-ID": "id", "ms-MY": "my", "es-ES": "west",
+    "pt-BR": "west", "fr-FR": "west", "de-DE": "west",
+  };
+  const writingLocale = String((setup as any)._writingLocale || "").trim();
+  if (writingLocaleMap[writingLocale]) return writingLocaleMap[writingLocale];
   const market = setup.targetMarket || "cn";
   if (market === "cn" && setup.chineseScript === "traditional") {
     const regionHint = (setup as any)._regionHint as string | undefined;
@@ -1672,7 +1679,12 @@ export function buildSocialPostsPrompt(
     kr: "한국어",
     sea: "English",
   };
-  const outputLang = langMap[market] || "簡體中文";
+  const writingLanguageMap: Record<string, string> = {
+    "zh-TW": "繁體中文（台灣用語）", "zh-CN": "簡體中文", "en-US": "English", "ja-JP": "日本語",
+    "ko-KR": "한국어", "vi-VN": "Tiếng Việt", "th-TH": "ภาษาไทย", "id-ID": "Bahasa Indonesia",
+    "ms-MY": "Bahasa Melayu", "es-ES": "Español", "pt-BR": "Português do Brasil", "fr-FR": "Français", "de-DE": "Deutsch",
+  };
+  const outputLang = writingLanguageMap[String((setup as any)._writingLocale || "")] || langMap[market] || "簡體中文";
 
   // Per-market localization rules injected into the prompt
   const localeRules: Record<string, string> = {
@@ -1969,7 +1981,7 @@ ${wordRange ? `**字數要求：每篇嚴格控制在 ${wordRange}，這是每�
 ${wordRange ? `- 每篇字數嚴格控制在 ${wordRange}\n` : ""}- 完全符合「${personaTypes}」人設的語氣和性格
 - 內容真實貼近生活，像真人在分享日常
 - 如果新內容涉及過去經歷，必須與上方記憶保持一致
-${todayNews ? `- 必須自然融入上方「目前網路熱門話題」中的內容，使用流行用語，引用熱點事件，讓推文顯得真實、時髦` : ""}
+${todayNews ? `- 若上方有人設相關新聞，優先選擇與本次方向最相關的一則作為自然切角；若只有地區熱門話題，僅在能自然轉化為人設視角時使用，不能硬套，無法自然結合即可忽略` : ""}
 ${isPersonaMode ? `- 嚴格按照上方「文章版型」的格式` : ""}
 ${existingCount > 0 ? `- 這是第 ${existingCount + 1} 到 ${existingCount + count} 篇，避免與前 ${existingCount} 篇重複` : ""}
 ${customInstruction ? `- 本次創作方向：${customInstruction}` : ""}

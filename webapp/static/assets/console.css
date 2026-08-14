@@ -3901,6 +3901,12 @@ textarea:focus {
   padding: 0;
 }
 
+.console-page .console-shell .persona-hot-toolbar button.bulk-selection-icon-button {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .upload-selection-toolbar :is(.bulk-selection-icon-button, .unified-action-icon-button),
 .persona-temp-edit-actions :is(.bulk-selection-icon-button, .unified-action-icon-button),
 .persona-create-actions :is(.bulk-selection-icon-button, .unified-action-icon-button),
@@ -6789,19 +6795,63 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 10px;
 }
 
-.persona-hot-status-row {
-  display: grid;
-  gap: 4px;
+.persona-hot-keyword-disclosure {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
 }
 
-.persona-hot-status-row strong {
-  font-size: 13px;
+.persona-hot-keyword-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 8px 11px;
+  cursor: pointer;
+  list-style: none;
 }
 
-.persona-hot-status-row span {
+.persona-hot-keyword-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.persona-hot-keyword-disclosure > summary > span {
+  font-weight: 800;
+}
+
+.persona-hot-keyword-disclosure > summary > small {
+  margin-left: auto;
   color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
+}
+
+.persona-hot-keyword-disclosure > summary .ui-expand-icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  transition: transform var(--motion-fast);
+}
+
+.persona-hot-keyword-disclosure[open] > summary .ui-expand-icon {
+  transform: rotate(180deg);
+}
+
+.persona-hot-keyword-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 11px 11px;
+}
+
+.persona-hot-keyword-chips > span {
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel-solid));
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 .persona-hot-list,
@@ -6935,7 +6985,6 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 6px;
 }
 
-.persona-hot-source-context > span:first-child,
 .persona-hot-source-byline small {
   color: var(--muted);
   font-size: 11px;
@@ -6952,6 +7001,11 @@ body.persona-touch-dragging .persona-list-card:active {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.persona-hot-source-platform {
+  flex: 0 0 auto;
+  font-weight: 800;
 }
 
 .persona-hot-card > .persona-hot-media-grid {
@@ -7061,7 +7115,12 @@ body.persona-touch-dragging .persona-list-card:active {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 30px;
+  gap: 6px;
+  width: auto;
+  height: 38px;
+  min-height: 38px;
+  box-sizing: border-box;
+  flex: 0 0 auto;
   padding: 4px 12px;
   line-height: 1;
   text-align: center;
@@ -7217,21 +7276,23 @@ body.persona-touch-dragging .persona-list-card:active {
   aspect-ratio: 1;
 }
 
-.persona-hot-media-index-badge {
+.persona-edit-media-order.persona-hot-media-index-badge {
   position: absolute;
-  left: 8px;
-  bottom: 8px;
+  left: 6px;
+  bottom: 6px;
   z-index: 2;
   display: inline-grid;
   place-items: center;
-  min-width: 24px;
-  height: 24px;
-  padding: 0 6px;
-  border: 1px solid var(--line-strong);
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0;
+  border: 1px solid var(--accent);
   border-radius: 999px;
   background: rgba(255, 255, 255, .94);
   color: var(--ink);
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 800;
   line-height: 1;
   pointer-events: none;
@@ -7246,6 +7307,76 @@ body.persona-touch-dragging .persona-list-card:active {
   display: grid;
   gap: 14px;
   min-height: 0;
+}
+
+.console-modal[data-modal-key="persona-hot-editor"] .console-modal-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.console-modal[data-modal-key="persona-hot-editor"] .console-modal-close {
+  justify-self: end;
+}
+
+.console-modal[data-modal-key="persona-hot-editor"] .persona-hot-editor-header-platform {
+  justify-self: center;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 850;
+}
+
+.console-modal[data-modal-key="persona-hot-editor"] .persona-hot-editor-header-platform > svg {
+  width: 19px;
+  height: 19px;
+  flex-basis: 19px;
+}
+
+.persona-hot-editor-source {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.persona-hot-editor-author {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.persona-hot-editor-author {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.persona-hot-editor-source-link {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.persona-hot-editor-source-link .ui-action-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+}
+
+.persona-hot-editor-source-link span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .persona-hot-editor-copy,
@@ -7289,6 +7420,15 @@ body.persona-touch-dragging .persona-list-card:active {
 
   .persona-hot-editor-copy textarea {
     min-height: 150px;
+  }
+
+  .persona-hot-editor-source {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .persona-hot-editor-source-link {
+    grid-column: 1 / -1;
+    justify-self: stretch;
   }
 }
 
@@ -13094,19 +13234,45 @@ body.persona-touch-dragging .persona-list-card:active {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.persona-media-empty-picker {
-  display: grid;
-  place-items: center;
-  gap: 4px;
-  min-height: 112px;
-  padding: 18px;
-  color: var(--muted);
-  text-align: center;
+.console-modal-dialog label.persona-media-empty-picker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 7px 14px;
+  color: var(--ink);
   cursor: pointer;
 }
 
 .persona-media-empty-picker strong {
   color: var(--ink);
+}
+
+.persona-media-empty-picker-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  text-align: left;
+}
+
+.persona-media-empty-picker-copy small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.persona-media-empty-picker .ui-action-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .persona-media-selection-toolbar {
@@ -16254,6 +16420,239 @@ body.persona-media-sorting {
   width: min(760px, calc(100vw - 32px));
 }
 
+.account-add-method-modal {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.account-add-method-content {
+  display: grid;
+  gap: 10px;
+}
+
+.account-add-method-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.account-add-method-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-solid, #fff);
+  color: var(--ink);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.account-add-method-button:hover,
+.account-add-method-button:focus-visible {
+  border-color: var(--accent);
+  background: var(--soft);
+}
+
+.account-add-method-button .account-add-method-icon {
+  width: 28px;
+  height: 28px;
+  background: transparent;
+}
+
+.account-add-method-button .account-add-method-icon svg,
+.account-add-method-button .account-add-method-icon img {
+  width: 19px;
+  height: 19px;
+}
+
+.account-add-method-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 9px;
+  background: var(--soft);
+}
+
+.account-add-method-icon svg,
+.account-add-method-icon img {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.account-add-method-icon img {
+  object-fit: contain;
+}
+
+.google-account-session-modal {
+  width: min(600px, calc(100vw - 32px));
+}
+
+.google-account-session-content {
+  display: grid;
+  gap: 14px;
+}
+
+.google-account-session-hero {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
+}
+
+.google-account-session-hero > span:last-child {
+  display: grid;
+  gap: 3px;
+}
+
+.google-account-session-hero small,
+.google-account-session-field small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.google-account-session-facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  margin: 0;
+}
+
+.google-account-session-facts > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.google-account-session-platform {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--soft);
+}
+
+.google-account-session-platform-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.google-account-session-platform-brand > :is(svg, img) {
+  width: 23px;
+  height: 23px;
+  flex: 0 0 23px;
+}
+
+.google-account-session-platform[data-account-platform="threads"] .google-account-session-platform-brand {
+  color: #101010;
+}
+
+.google-account-session-platform[data-account-platform="instagram"] .google-account-session-platform-brand {
+  color: var(--instagram-platform-accent, #c13584);
+}
+
+.google-account-session-facts dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.google-account-session-facts dd {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.google-account-session-facts dd.is-ready {
+  color: #087c52;
+}
+
+.google-account-session-facts dd.is-unavailable {
+  color: #b34a2b;
+}
+
+.google-account-session-facts svg {
+  width: 17px;
+  height: 17px;
+}
+
+.google-account-authorize-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-solid, #fff);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.google-account-authorize-button .account-add-method-icon {
+  width: 24px;
+  height: 24px;
+  background: transparent;
+}
+
+.google-account-authorize-button img {
+  width: 19px;
+  height: 19px;
+}
+
+.google-account-session-field {
+  display: grid;
+  gap: 7px;
+}
+
+.google-account-session-field > span {
+  font-weight: 700;
+}
+
+.google-account-session-actions > button {
+  flex: 1 1 0;
+}
+
+@media (max-width: 620px) {
+  .account-add-method-buttons,
+  .google-account-session-facts {
+    grid-template-columns: 1fr;
+  }
+
+}
+
+.account-add-method-note {
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--soft);
+  font-size: 11px;
+}
+
 .account-pool-create-modal-body {
   display: grid;
   gap: 12px;
@@ -16391,6 +16790,14 @@ body.persona-media-sorting {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .account-totp-head > div {
@@ -16800,6 +17207,32 @@ body.persona-media-sorting {
 .account-proxy-picker-toolbar p {
   margin: 0;
   flex: 1 1 100%;
+}
+
+.account-totp-head-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.account-totp-chevron {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 160ms ease;
+}
+
+.account-totp-head[aria-expanded="true"] .account-totp-chevron {
+  transform: rotate(180deg);
+}
+
+.account-totp-body[hidden] {
+  display: none;
 }
 
 .account-proxy-picker-panel .account-residential-proxy-head button {
@@ -18410,7 +18843,7 @@ body.persona-media-sorting {
   grid-template-columns: none;
   gap: 8px;
   width: 100%;
-  padding: 1px 1px 4px;
+  padding: 10px 6px 4px;
   overflow-x: auto;
   overscroll-behavior-x: contain;
   scroll-snap-type: x proximity;
@@ -18419,6 +18852,7 @@ body.persona-media-sorting {
 }
 
 .persona-content-platform-tabs button {
+  position: relative;
   grid-template-columns: auto minmax(0, 1fr);
   grid-template-areas: "icon label";
   grid-template-rows: minmax(0, 1fr);
@@ -18431,6 +18865,28 @@ body.persona-media-sorting {
   padding: 7px 11px;
   scroll-snap-align: start;
   border-radius: 10px;
+  overflow: visible;
+}
+
+.persona-platform-hot-badge {
+  position: absolute;
+  z-index: 2;
+  top: -8px;
+  right: -5px;
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  height: 20px;
+  padding: 0 6px;
+  border: 2px solid var(--panel-solid);
+  border-radius: 999px;
+  background: #e14a3b;
+  color: #fff !important;
+  font-size: 11px !important;
+  font-weight: 900;
+  line-height: 1;
+  opacity: 1 !important;
+  box-shadow: 0 3px 9px rgb(150 37 29 / 24%);
 }
 
 .persona-content-platform-tabs button > svg {
@@ -18855,15 +19311,15 @@ body.persona-media-sorting {
   min-width: 96px;
 }
 
-.console-page .account-pool-card .account-pool-card-actions .account-card-action {
+.console-page .account-pool-card .row-actions .account-card-action {
   min-height: 26px;
   padding: 2px 6px;
   margin: 0;
   font-size: 11px;
 }
 
-.account-pool-card-actions .ui-action-icon,
-.account-pool-card-actions .ui-trash-icon {
+.account-pool-card .row-actions .ui-action-icon,
+.account-pool-card .row-actions .ui-trash-icon {
   width: 13px;
   height: 13px;
   flex: 0 0 13px;
@@ -18879,16 +19335,6 @@ body.persona-media-sorting {
   align-items: center;
   justify-content: center;
   gap: 4px;
-}
-
-.persona-account-summary-actions .persona-account-card-action .ui-action-icon {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .persona-account-pool-layout {
@@ -23413,6 +23859,12 @@ body.console-page {
     line-height: 1.25;
   }
 
+  .console-page .persona-detail .persona-hot-card-actions > a,
+  .console-page .persona-detail .persona-hot-card-actions > button {
+    height: 38px;
+    min-height: 38px;
+  }
+
   .console-page .persona-detail .persona-first-run-actions button {
     width: min(100%, 300px);
     height: 52px;
@@ -23466,6 +23918,13 @@ body.console-page {
     min-height: 32px;
     padding: 0;
     border-radius: 50%;
+  }
+
+  .console-page .persona-detail .persona-hot-media-grid .persona-edit-media-order.persona-hot-media-index-badge {
+    width: 20px;
+    min-width: 20px;
+    height: 20px;
+    min-height: 20px;
   }
 
   .console-page .persona-detail h3,
@@ -27630,6 +28089,42 @@ body.console-page {
 /* Native platform identity shared by every Threads / Instagram platform picker. */
 .console-page {
   --instagram-platform-gradient: linear-gradient(135deg, #405de6 0%, #833ab4 30%, #c13584 52%, #e1306c 68%, #f77737 86%, #fcaf45 100%);
+  --instagram-brand-gradient: linear-gradient(120deg, #ffcc00 0%, #fe4a05 24%, #ff0f3f 43%, #ff005f 58%, #fc01d8 78%, #780cff 100%);
+}
+
+/* Instagram uses the unchanged official Gradient RGB Glyph asset from Meta's
+   brand resource; every platform picker reaches it through one renderer. */
+.console-page .platform-outline-icon--instagram {
+  overflow: visible;
+  fill: none;
+  stroke: none;
+}
+
+.console-page :where(
+  [data-persona-content-platform="instagram"]:not(.is-active):not(.is-current) > strong,
+  [data-persona-account-platform="instagram"]:not(.is-active) > strong,
+  [data-account-pool-platform="instagram"]:not(.is-active) > strong,
+  [data-matrix-publish-platform-option="instagram"]:not(.is-active) > strong,
+  [data-persona-dashboard-platform-option="instagram"]:not(.is-active) > strong,
+  [data-publish-platform-tab="instagram"]:not(.is-active) > span,
+  .google-account-session-platform[data-account-platform="instagram"] .google-account-session-platform-brand > strong,
+  .account-pool-card-main[data-account-platform="instagram"] .account-pool-card-platform > span,
+  .publish-history-card[data-account-platform="instagram"] .account-pool-card-platform > span,
+  .account-pool-editor-platform[data-account-platform="instagram"] > strong,
+  .account-card-duplicate-route > span[data-account-platform="instagram"] > strong,
+  .matrix-publish-platform-trigger[data-account-platform="instagram"] > strong,
+  .persona-heat-platform-row[data-platform="instagram"] .persona-heat-platform-label > b,
+  .persona-donut-legend .is-platform[data-platform="instagram"] > em
+) {
+  display: inline-block;
+  padding-bottom: 2px;
+  overflow: visible;
+  background: var(--instagram-brand-gradient);
+  color: transparent;
+  line-height: 1.2;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .console-page .persona-execution-platform-logo[data-persona-content-platform="threads"] {
@@ -27714,6 +28209,20 @@ body.console-page {
   color: #fff;
 }
 
+.console-page :where(
+  .account-pool-platform-tabs button:is(
+    [data-persona-content-platform="instagram"],
+    [data-persona-account-platform="instagram"],
+    [data-account-pool-platform="instagram"],
+    [data-matrix-publish-platform-option="instagram"],
+    [data-persona-dashboard-platform-option="instagram"]
+  ).is-active,
+  .publish-platform-picker-tabs button[data-publish-platform-tab="instagram"].is-active,
+  .persona-execution-platform-logo[data-persona-content-platform="instagram"].is-current
+) > .platform-outline-icon--instagram {
+  filter: brightness(0) invert(1);
+}
+
 .console-page :is(.console-shell, .console-modal) .account-pool-platform-tabs button:is(
   [data-persona-content-platform],
   [data-persona-account-platform],
@@ -27783,11 +28292,11 @@ body.console-page {
   }
 }
 
-.console-page :is(.account-pool-card, .publish-history-card)[data-account-platform="threads"] .account-pool-card-platform {
+.console-page :is(.account-pool-card, .publish-history-card, .persona-hot-card, .persona-hot-preview-card, .console-modal[data-modal-key="persona-hot-editor"])[data-account-platform="threads"] .account-pool-card-platform {
   color: #000;
 }
 
-.console-page :is(.account-pool-card, .publish-history-card)[data-account-platform="instagram"] .account-pool-card-platform {
+.console-page :is(.account-pool-card, .publish-history-card, .persona-hot-card, .persona-hot-preview-card, .console-modal[data-modal-key="persona-hot-editor"])[data-account-platform="instagram"] .account-pool-card-platform {
   color: #c13584;
 }
 
@@ -27897,6 +28406,18 @@ body.console-page {
   padding: 38px 34px 30px;
   overflow-y: auto;
   text-align: center;
+}
+
+.persona-hot-card-actions :is(.ui-action-icon, .ui-edit-icon),
+.persona-hot-preview-actions :is(.ui-action-icon, .ui-edit-icon) {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .login-assistance-visual {

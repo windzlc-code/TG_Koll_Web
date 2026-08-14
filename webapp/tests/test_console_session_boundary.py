@@ -494,13 +494,19 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
     def test_open_login_account_actions_preserve_running_task_navigation(self):
         actions = self._section("function renderAccountPoolCardActions", "function renderAccountPoolCard(")
+        content = self._javascript_function_source(self.source, "renderAccountOpenLoginButtonContent")
         create_task = self._javascript_function_source(self.source, "createSocialTask")
 
         self.assertIn("activeOpenLoginTaskForAccount(accountId)", actions)
         self.assertIn('data-open-login-task-id="${esc(activeLoginTask.id)}"', actions)
-        self.assertIn('renderBusyButtonContent("执行中"', actions)
+        self.assertIn('renderAccountOpenLoginButtonContent(activeLoginTask)', actions)
+        self.assertIn('renderBusyButtonContent(', content)
+        self.assertIn('"执行中"', content)
+        self.assertIn('aria-busy="true"', actions)
+        busy_branch = content.split("if (activeLoginTask?.id)", 1)[1].split("return `${renderBrowserLaunchIcon()}", 1)[0]
+        self.assertNotIn("renderBrowserLaunchIcon()", busy_branch)
         self.assertIn('class="primary account-card-action account-card-action--login"', actions)
-        self.assertIn('${renderBrowserLaunchIcon()}<span>打开登录</span>', actions)
+        self.assertIn('${renderBrowserLaunchIcon()}<span>打开登录</span>', content)
         self.assertIn('${renderNetworkIcon()}<span data-account-proxy-label>${esc(proxyLabel)}</span>', actions)
         self.assertIn('${renderEditIcon()}<span>编辑</span>', actions)
         self.assertIn('${renderTrashIcon()}<span>删除</span>', actions)
@@ -528,8 +534,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("font-size: 11px;", action_styles)
         self.assertIn("gap: 4px;", action_styles)
         self.assertIn("width: 13px;", action_styles)
-        self.assertIn(".account-pool-card-actions .ui-action-icon,", action_styles)
-        self.assertIn(".account-pool-card-actions .ui-trash-icon", action_styles)
+        self.assertIn(".account-pool-card .row-actions .ui-action-icon,", action_styles)
+        self.assertIn(".account-pool-card .row-actions .ui-trash-icon", action_styles)
         self.assertIn(".account-pool-card > .persona-profile-list-toggle {", self.styles)
         self.assertIn("width: 28px;", self.styles)
 
@@ -538,6 +544,53 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("await refreshSocialTaskState(targetTaskId)", refresh_source)
         self.assertIn("if (targetTaskId && !matched && observedTarget)", refresh_source)
         self.assertIn("if (!taskFinished && attempt < attempts)", refresh_source)
+        self.assertIn("if (matched && !takeoverPending)", refresh_source)
+        self.assertIn("window.setTimeout(() => run(attempt + 1), delayMs)", refresh_source)
+
+    def test_task_refresh_updates_open_login_buttons_without_replacing_cards(self):
+        account_status = self._javascript_function_source(self.source, "updateAccountStatusViews")
+        button_sync = self._javascript_function_source(self.source, "updateAccountOpenLoginButton")
+        button_content = self._javascript_function_source(self.source, "renderAccountOpenLoginButtonContent")
+        active_login = self._javascript_function_source(self.source, "activeOpenLoginTaskForAccount")
+
+        self.assertIn('[data-social-open-login], [data-persona-account-open-login]', account_status)
+        self.assertIn("updateAccountOpenLoginButton(button, accountId)", account_status)
+        self.assertIn("activeOpenLoginTaskForAccount(accountId)", button_sync)
+        self.assertIn("delete button.dataset.openLoginTaskId", button_sync)
+        self.assertIn("renderBrowserLaunchIcon()", button_content)
+        self.assertNotIn("renderSocialAccounts()", account_status)
+
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const state = {{ socialTasks: [{{ id: "login-1", account_id: "account-1", task_type: "open_login", status: "running", started_at: 100 }}] }};
+            const renderBusyButtonContent = (label) => `<span class="task-button-busy">${{label}}</span>`;
+            const renderBrowserLaunchIcon = () => `<svg class="browser-icon"></svg>`;
+            {active_login}
+            {button_content}
+            {button_sync}
+            const attributes = {{}};
+            const button = {{
+              dataset: {{ socialOpenLogin: "account-1" }},
+              innerHTML: "",
+              setAttribute(name, value) {{ attributes[name] = value; }},
+              removeAttribute(name) {{ delete attributes[name]; }},
+            }};
+            updateAccountOpenLoginButton(button, "account-1");
+            assert.match(button.innerHTML, /task-button-busy/);
+            assert.doesNotMatch(button.innerHTML, /browser-icon/);
+            assert.equal(button.dataset.openLoginTaskId, "login-1");
+            assert.equal(attributes["aria-busy"], "true");
+
+            state.socialTasks[0].status = "success";
+            updateAccountOpenLoginButton(button, "account-1");
+            assert.match(button.innerHTML, /browser-icon/);
+            assert.match(button.innerHTML, /打开登录/);
+            assert.equal(button.dataset.openLoginTaskId, undefined);
+            assert.equal(attributes["aria-busy"], undefined);
+            """
+        )
+        self._run_node(harness)
 
     def test_missing_edited_draft_is_recreated_with_current_text_and_media(self):
         create_source = self._javascript_function_source(self.source, "createPersonaDraftPost")
@@ -1491,7 +1544,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('hotSearchMode: "strict"', self.source)
         self.assertNotIn('data-persona-hot-freshness-', self.source)
         self.assertNotIn('热点时限', self.source)
-        self.assertIn('freshness_days: 0,', self.source)
+        self.assertIn('freshness_days: 30,', self.source)
         self.assertIn('freshness_policy: "strict",', self.source)
         self.assertIn('return [...deduped.values()];', self.source)
         self.assertNotIn("is-reserved", self.source)
@@ -1518,6 +1571,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             fetch_source.index("const controller = new AbortController();"),
         )
         self.assertIn('data-persona-fetch-hot', self.source)
+        self.assertIn('fetchPersonaHotCandidates(true)', self.source)
         self.assertIn('抓取热点', self.source)
         self.assertNotIn('步骤 1：生成关键词', self.source)
         self.assertNotIn('data-persona-hot-keywords', self.source)
@@ -3376,7 +3430,35 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("2FA 未配置", self._function_source("renderAccountTotpSection"))
         self.assertIn("renderAccountEditorForm(account, mode)", modal)
         self.assertIn('event.target.closest("[data-account-totp-create-stage]")', modal)
-        self.assertIn("openAccountPoolEditorModal(options)", create_entry)
+        self.assertIn("openAccountAddMethodModal(options)", create_entry)
+        method_modal = self._section("function openAccountAddMethodModal", "function openAccountPoolEditModal")
+        google_modal = self._section("function openGoogleAccountSessionModal", "function openAccountAddMethodModal")
+        reuse_session = self._function_source("startAccountBrowserSessionReuse")
+        totp_section = self._function_source("renderAccountTotpSection")
+        self.assertIn('data-account-add-method="manual"', method_modal)
+        self.assertIn('data-account-add-method="google"', method_modal)
+        self.assertIn("Google 快速接入", method_modal)
+        self.assertIn("账号专属指纹浏览器", google_modal)
+        self.assertIn("data-google-session-authorize", google_modal)
+        self.assertIn("data-google-session-save", google_modal)
+        self.assertIn("data-google-session-login", google_modal)
+        self.assertNotIn("登录态 · 待检测", google_modal)
+        self.assertNotIn("data-google-platform-session-state", google_modal)
+        self.assertNotIn("startAccountBrowserCookieImport", self.source)
+        self.assertNotIn("cookie_import_ticket", self.source)
+        self.assertNotIn("account-cookie-helper", self.source)
+        self.assertNotIn("bridgeWindow", google_modal)
+        self.assertIn("startAccountBrowserSessionReuse", self.source)
+        self.assertIn('class="google-account-session-platform"', google_modal)
+        self.assertNotIn("浏览器环境", google_modal)
+        self.assertIn('adminWorkspaceUrl("/api/auth/google/account-session/start")', google_modal)
+        self.assertNotIn('type="password"', google_modal)
+        self.assertIn("/reuse_session", reuse_session)
+        self.assertNotIn("openLiveBrowserTaskView", reuse_session)
+        self.assertIn("data-account-totp-toggle", totp_section)
+        self.assertIn('aria-expanded="false"', totp_section)
+        self.assertIn("data-account-totp-body hidden", totp_section)
+        self.assertIn('event.target.closest("[data-account-totp-toggle]")', modal)
         self.assertIn("openAccountPoolEditorModal({ account })", edit_modal)
         self.assertNotIn("renderAccountCreatePasswordField", self.source)
         self.assertNotIn("renderAccountCreateTotpSection", self.source)

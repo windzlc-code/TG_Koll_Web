@@ -481,6 +481,114 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
         self.assertEqual(logged_in.headers["location"], "/about-vecto.html")
         self.assertIsNotNone(second.cookies.get("session_token"))
 
+    def test_google_account_session_authorizes_current_user_without_replacing_session(self):
+        client = self._register_email_user(
+            email="account.owner@gmail.com",
+            username="account-owner",
+        )
+        original_session = client.cookies.get("session_token")
+        original_me = client.get("/api/auth/me").json()
+        captured = {}
+
+        def authorization_url(state, nonce, redirect_uri):
+            captured.update(state=state, nonce=nonce, redirect_uri=redirect_uri)
+            return f"https://accounts.google.test/auth?state={state}"
+
+        with mock.patch.object(
+            server,
+            "create_google_authorization",
+            side_effect=authorization_url,
+        ):
+            started = client.get(
+                "/api/auth/google/account-session/start",
+                follow_redirects=False,
+            )
+        self.assertEqual(started.status_code, 302, started.text)
+        self.assertEqual(
+            captured["redirect_uri"],
+            "https://www.vecto-ai.cn/api/auth/google/callback",
+        )
+
+        claims = {
+            "sub": "google-account-session-owner",
+            "email": "account.owner@gmail.com",
+            "email_verified": True,
+            "name": "Account Owner",
+            "picture": "https://example.com/account-owner.png",
+        }
+        with mock.patch.object(server, "exchange_google_code", return_value=claims):
+            callback = client.get(
+                f"/api/auth/google/callback?state={captured['state']}&code=session-code",
+                follow_redirects=False,
+            )
+        self.assertEqual(callback.status_code, 302, callback.text)
+        self.assertEqual(
+            callback.headers["location"],
+            "/console.html?view=accounts&google_account_session=success",
+        )
+        self.assertEqual(client.cookies.get("session_token"), original_session)
+
+        me = client.get("/api/auth/me")
+        self.assertEqual(me.status_code, 200, me.text)
+        self.assertEqual(me.json()["id"], original_me["id"])
+        self.assertEqual(me.json()["verified_email"], "account.owner@gmail.com")
+        self.assertTrue(me.json()["auth_methods"]["google"]["bound"])
+        self.assertTrue(me.json()["auth_methods"]["google"]["enabled"])
+        with db_module.db() as conn:
+            identity = conn.execute(
+                "SELECT user_id, provider_subject FROM oauth_identities WHERE provider = 'google'"
+            ).fetchone()
+        self.assertEqual(int(identity["user_id"]), int(original_me["id"]))
+        self.assertEqual(identity["provider_subject"], "google-account-session-owner")
+
+    def test_google_account_session_preserves_admin_workspace_context(self):
+        customer = self._register_email_user(
+            email="managed.customer@gmail.com",
+            username="managed-customer",
+        )
+        customer_id = int(customer.get("/api/auth/me").json()["id"])
+        captured = {}
+
+        def authorization_url(state, nonce, redirect_uri):
+            captured.update(state=state, nonce=nonce, redirect_uri=redirect_uri)
+            return f"https://accounts.google.test/auth?state={state}"
+
+        with mock.patch.object(
+            server,
+            "create_google_authorization",
+            side_effect=authorization_url,
+        ):
+            started = self.admin.get(
+                "/api/auth/google/account-session/start",
+                params={
+                    "admin_console": "1",
+                    "admin_workspace_user_id": str(customer_id),
+                },
+                follow_redirects=False,
+            )
+        self.assertEqual(started.status_code, 302, started.text)
+
+        claims = {
+            "sub": "google-managed-customer",
+            "email": "managed.customer@gmail.com",
+            "email_verified": True,
+            "name": "Managed Customer",
+            "picture": "",
+        }
+        with mock.patch.object(server, "exchange_google_code", return_value=claims):
+            callback = self.admin.get(
+                f"/api/auth/google/callback?state={captured['state']}&code=managed-code",
+                follow_redirects=False,
+            )
+        self.assertEqual(callback.status_code, 302, callback.text)
+        parsed = urlsplit(callback.headers["location"])
+        callback_query = parse_qs(parsed.query)
+        self.assertEqual(parsed.path, "/admin-console.html")
+        self.assertEqual(callback_query["view"], ["accounts"])
+        self.assertEqual(callback_query["admin_console"], ["1"])
+        self.assertEqual(callback_query["admin_workspace_user_id"], [str(customer_id)])
+        self.assertEqual(callback_query["google_account_session"], ["success"])
+
     def test_google_pkce_verifier_is_reused_and_equivalent_scopes_are_accepted(self):
         state = "state-token-with-more-than-thirty-two-random-characters"
         nonce = "nonce-token-with-more-than-thirty-two-random-characters"

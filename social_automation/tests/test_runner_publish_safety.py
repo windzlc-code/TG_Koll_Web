@@ -1,4 +1,4 @@
-﻿import unittest
+import unittest
 import contextlib
 import queue
 import threading

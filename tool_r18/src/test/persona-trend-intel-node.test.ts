@@ -87,11 +87,33 @@ describe("persona-trend-intel-node", () => {
       trendTopics: ["超商甜點"],
     } as any, "persona-1", "台北吃貨", { timeoutMs: 2500 });
 
-    expect(first).toContain("即時新聞熱點");
+    expect(first).toContain("人設相關新聞");
     expect(first).toContain("指定台灣新聞來源命中");
     expect(first).toContain("便利商店新品聯名爆紅");
     expect(second).toBe(first);
     expect(fetchMock).toHaveBeenCalledTimes(11);
+  });
+
+  it("falls back to a general regional trend only when persona-related news is unavailable", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      const query = url.searchParams.get("q") || "";
+      const body = query.includes("台灣 最新")
+        ? `<?xml version="1.0"?><rss><channel><item><title><![CDATA[全台今晚一起看流星雨 - 即時新聞]]></title></item></channel></rss>`
+        : "<html><body>unrelated navigation</body></html>";
+      return new Response(body, { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchPersonaTrendIntelForNode({
+      genres: ["理髮師"],
+      targetMarket: "cn_tw",
+      trendTopics: ["剪髮"],
+    } as any, "persona-general-fallback", "理髮師", { timeoutMs: 2500, bypassCache: true });
+
+    expect(result).toContain("地區熱門話題");
+    expect(result).toContain("全台今晚一起看流星雨");
+    expect(result).toContain("能自然轉化為人設視角時才使用");
   });
 
   it("returns and caches an empty reference when no reliable headline matches", async () => {
@@ -111,6 +133,6 @@ describe("persona-trend-intel-node", () => {
 
     expect(first).toBe("");
     expect(second).toBe("");
-    expect(fetchMock).toHaveBeenCalledTimes(11);
+    expect(fetchMock).toHaveBeenCalledTimes(12);
   });
 });

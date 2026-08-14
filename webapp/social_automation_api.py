@@ -330,7 +330,7 @@ def _screenshot_thumbnail_bytes(path: Path) -> bytes:
         output = BytesIO()
         image.save(output, format="JPEG", quality=72, optimize=True)
     return output.getvalue()
-_EPHEMERAL_TASK_SECRETS: dict[str, dict[str, str]] = {}
+_EPHEMERAL_TASK_SECRETS: dict[str, dict[str, Any]] = {}
 _EPHEMERAL_TASK_SECRETS_LOCK = threading.Lock()
 _TASK_SECRETS_SCRUBBED = False
 _ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -2585,6 +2585,48 @@ def register_social_automation_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=422, detail="auto_submit must be a boolean when provided")
         task_payload["auto_submit"] = True
         task_payload.setdefault("login_wait_seconds", wait_seconds)
+        return {
+            "ok": True,
+            "task": create_account_task(
+                account_id,
+                "open_login",
+                task_payload,
+                billing_admin_waived=_billing_admin_waived(user),
+            ),
+        }
+
+    @app.post("/api/persona_dashboard/automation/accounts/{account_id}/reuse_session")
+    def api_social_account_reuse_session(
+        account_id: str,
+        payload: dict[str, Any] | None = Body(default=None),
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        """Open the account-owned persistent profile without accepting credentials.
+
+        This endpoint is intentionally separate from automatic credential login:
+        it can only reuse the server-side profile already assigned to this account.
+        If that profile is no longer authenticated, the shared login runner keeps
+        the browser open for the existing manual-takeover flow.
+        """
+
+        _require_account_access(account_id, user)
+        wait_seconds = max(3600, int(os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600")))
+        body = payload if isinstance(payload, dict) else {}
+        task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
+        task_payload = dict(task_payload or {})
+        _validate_user_task_media_paths(task_payload, user)
+        task_payload.pop("login_username", None)
+        task_payload.pop("login_password", None)
+        task_payload.pop("username", None)
+        task_payload.pop("password", None)
+        task_payload.update(
+            {
+                "auto_submit": False,
+                "wait_for_manual": True,
+                "session_reuse": True,
+                "login_wait_seconds": wait_seconds,
+            }
+        )
         return {
             "ok": True,
             "task": create_account_task(

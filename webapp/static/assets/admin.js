@@ -671,45 +671,256 @@ function setMsg(id, message, ok = true) {
   node.className = `msg ${ok ? "ok" : "err"}`;
 }
 
+function crmFriendlyError(err, fallback = "操作没有完成，请稍后重试。") {
+  const code = String(err?.detail?.code || err?.code || "").toLowerCase();
+  const message = getErrorMessage(err);
+  if (code.includes("import_not_found")) return "找不到这份导入记录，请重新检查文件。";
+  if (code.includes("source_changed")) return "备份文件在检查后发生了变化，请重新检查。";
+  if (code.includes("import_blocked")) return "文件中有必须处理的问题，修正后再重新检查。";
+  if (code.includes("capacity") || /space|disk|容量|空间/i.test(message)) return "服务器存储空间不足，请先清理空间后再试。";
+  if (/not found|no such file|找不到|不存在/i.test(message)) return "找不到这个备份文件，请确认文件名是否正确。";
+  if (/permission|forbidden|无权|权限/i.test(message)) return "当前账号没有执行此操作的权限。";
+  if (/^[a-z0-9_.:-]+$/i.test(message) || /crm_[a-z0-9_]+/i.test(message)) return fallback;
+  if (!/[\u3400-\u9fff]/.test(message)) return fallback;
+  return message || fallback;
+}
+
+function crmFormatStorage(bytes) {
+  const value = Math.max(0, Number(bytes || 0));
+  if (!value) return "剩余空间未知";
+  const gb = value / (1024 ** 3);
+  return `约剩余 ${gb >= 10 ? gb.toFixed(0) : gb.toFixed(1)} GB`;
+}
+
+function crmFormatDate(value) {
+  const numeric = Number(value || 0);
+  const date = numeric ? new Date(numeric < 1e12 ? numeric * 1000 : numeric) : new Date(value || "");
+  if (Number.isNaN(date.getTime())) return "时间未知";
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function crmFileName(value) {
+  const parts = String(value || "").split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) || "未命名备份文件";
+}
+
 function renderCrmHealth(payload) {
   const node = el("crmHealthSummary");
+  const headline = el("crmHealthHeadline");
   if (!node) return;
   const settings = payload?.settings || {};
   const checks = payload?.checks || {};
+  const serviceReady = Boolean(payload?.ready) && !settings.emergency_pause;
+  const temporarilyStopped = !settings.enabled || settings.maintenance || settings.emergency_pause;
+  if (headline) {
+    headline.className = `crm-health-headline ${serviceReady && !temporarilyStopped ? "is-ready" : "is-warning"}`;
+    const title = headline.querySelector("strong");
+    const detail = headline.querySelector("small");
+    if (title) title.textContent = serviceReady && !temporarilyStopped ? "CRM 可以正常使用" : "CRM 当前需要处理";
+    if (detail) {
+      detail.textContent = settings.emergency_pause
+        ? "已启用紧急停止，客户任务暂时不会继续。"
+        : settings.maintenance
+          ? "当前处于维护状态，客户资料仍会保留。"
+          : !settings.enabled
+            ? "CRM 服务开关尚未开启。"
+            : !settings.hard_enabled
+              ? "服务器基础配置尚未开启，请联系技术人员处理。"
+              : "下方有服务未就绪，请按提示检查。";
+    }
+  }
   const rows = [
-    ["综合状态", payload?.status || "unknown"],
-    ["环境硬开关", settings.hard_enabled ? "已启用" : "未启用"],
-    ["数据库", checks.database ? "正常" : "异常"],
-    ["CRM 数据结构", checks.database_schema ? "完整" : "缺表或版本异常"],
-    ["CRM 静态资源", checks.static_html && checks.static_assets ? "正常" : "异常"],
-    ["媒体目录", checks.media_writable ? "可写" : "不可写"],
-    ["磁盘", checks.disk_ok ? `${Number(checks.disk_free_bytes || 0).toLocaleString("zh-CN")} bytes 可用` : "空间不足"],
-    ["追踪签名密钥", checks.tracking_secret ? "已配置" : "未配置"],
-    ["社媒 Worker", checks.worker_adapter_registered ? "已注册" : "未注册"],
-    ["计费适配器", checks.billing_adapter_registered ? "已注册" : "未注册"],
-    ["调度器租约", checks.scheduler_lease ? "正常" : "未持有"],
-    ["全局开关", settings.enabled ? "已启用" : "未启用"],
-    ["维护模式", settings.maintenance ? "开启" : "关闭"],
-    ["紧急暂停", settings.emergency_pause ? "开启" : "关闭"],
-    ["待人工复核动作", Number(payload?.unknown_actions || 0).toLocaleString("zh-CN")],
+    {
+      label: "客户资料",
+      ok: Boolean(checks.database && checks.database_schema),
+      success: "资料库连接正常",
+      problem: "资料库需要技术人员检查",
+    },
+    {
+      label: "CRM 页面",
+      ok: Boolean(checks.static_html && checks.static_assets),
+      success: "页面文件完整",
+      problem: "页面文件缺失，请重新部署",
+    },
+    {
+      label: "文件与空间",
+      ok: Boolean(checks.media_writable && checks.disk_ok),
+      success: `可以保存文件，${crmFormatStorage(checks.disk_free_bytes)}`,
+      problem: checks.disk_ok ? "文件目录暂时不可写" : "服务器空间不足",
+    },
+    {
+      label: "自动化任务",
+      ok: Boolean(checks.worker_adapter_registered && checks.scheduler_lease),
+      success: "发布和定时任务可用",
+      problem: "自动化服务尚未准备好",
+    },
+    {
+      label: "费用记录",
+      ok: Boolean(checks.billing_adapter_registered),
+      success: "使用记录可以正常计费",
+      problem: "费用记录服务需要检查",
+    },
+    {
+      label: "链接安全",
+      ok: Boolean(checks.tracking_secret),
+      success: "客户链接保护正常",
+      problem: "链接保护尚未配置",
+    },
+    {
+      label: "人工确认",
+      ok: Number(payload?.unknown_actions || 0) === 0,
+      success: "没有待确认事项",
+      problem: `有 ${Number(payload?.unknown_actions || 0).toLocaleString("zh-CN")} 项需要人工确认`,
+    },
   ];
-  node.replaceChildren(...rows.map(([label, value]) => {
+  node.replaceChildren(...rows.map((item) => {
     const row = document.createElement("div");
-    const strong = document.createElement("strong");
-    const span = document.createElement("span");
-    strong.textContent = label;
-    span.textContent = value;
-    row.append(strong, span);
+    row.className = `crm-health-item ${item.ok ? "is-ok" : "is-warning"}`;
+    const icon = document.createElement("span");
+    icon.className = "crm-health-item-icon";
+    icon.textContent = item.ok ? "✓" : "!";
+    const copy = document.createElement("div");
+    const label = document.createElement("strong");
+    const description = document.createElement("small");
+    label.textContent = item.label;
+    description.textContent = item.ok ? item.success : item.problem;
+    copy.append(label, description);
+    const status = document.createElement("span");
+    status.className = "crm-health-item-status";
+    status.textContent = item.ok ? "正常" : "需要处理";
+    row.append(icon, copy, status);
     return row;
   }));
 }
 
-async function loadCrmImportStatus(userId = el("crmImportUserId")?.value) {
+let crmImportItems = [];
+
+function crmImportState(batch) {
+  const status = String(batch?.status || "").toLowerCase();
+  const blockingCount = Array.isArray(batch?.report?.blocking_errors) ? batch.report.blocking_errors.length : 0;
+  const states = {
+    dry_run: { label: blockingCount ? "检查未通过" : "等待确认", tone: blockingCount ? "error" : "ready" },
+    staged: { label: "正在准备", tone: "pending" },
+    active: { label: "已导入", tone: "success" },
+    failed: { label: "导入失败", tone: "error" },
+    dismissed: { label: "已取消", tone: "muted" },
+  };
+  const view = states[status] || { label: "等待处理", tone: "pending" };
+  return {
+    ...view,
+    status,
+    blockingCount,
+    warningCount: Array.isArray(batch?.report?.warnings) ? batch.report.warnings.length : 0,
+    canActivate: status === "dry_run" && blockingCount === 0,
+    canDismiss: Boolean(batch?.id) && !["active", "dismissed"].includes(status),
+  };
+}
+
+function crmImportRecognizedCount(batch) {
+  const reported = Number(batch?.report?.recognized_entities);
+  if (Number.isFinite(reported) && reported >= 0) return reported;
+  return Object.values(batch?.counts || {}).reduce((total, value) => total + Math.max(0, Number(value || 0)), 0);
+}
+
+function selectCrmImportBatch(batch, { announce = false } = {}) {
+  const hidden = el("crmImportBatchId");
+  const activateButton = el("btnCrmImportActivate");
+  const dismissButton = el("btnCrmImportDismiss");
+  const summary = el("crmImportSelectionSummary");
+  if (!batch) {
+    if (hidden) hidden.value = "";
+    if (activateButton) activateButton.disabled = true;
+    if (dismissButton) dismissButton.disabled = true;
+    if (summary) {
+      summary.className = "crm-import-selection-summary";
+      summary.textContent = "完成文件检查后，这里会显示是否可以继续导入。";
+    }
+    return;
+  }
+  const state = crmImportState(batch);
+  if (hidden) hidden.value = String(batch.id || "");
+  if (activateButton) activateButton.disabled = !state.canActivate;
+  if (dismissButton) dismissButton.disabled = !state.canDismiss;
+  if (summary) {
+    summary.className = `crm-import-selection-summary is-${state.tone}`;
+    summary.textContent = state.canActivate
+      ? `“${crmFileName(batch.source_path)}”检查通过，可以确认导入。`
+      : state.blockingCount
+        ? `这份文件发现 ${state.blockingCount} 个必须处理的问题，暂时不能导入。`
+        : state.status === "active"
+          ? "这份资料已经导入完成，无需重复操作。"
+          : state.status === "dismissed"
+            ? "这次导入已经取消。"
+            : "这份资料当前不能继续导入，请重新检查文件。";
+  }
+  if (announce) setMsg("crmImportMsg", `已选择“${crmFileName(batch.source_path)}”。`, true);
+}
+
+function renderCrmImportStatus(items = [], preferredBatchId = "", allowSelection = true) {
+  const node = el("crmImportStatus");
+  if (!node) return;
+  crmImportItems = Array.isArray(items) ? items : [];
+  const currentId = String(preferredBatchId || el("crmImportBatchId")?.value || "");
+  const selected = allowSelection
+    ? crmImportItems.find((item) => String(item?.id || "") === currentId)
+      || crmImportItems.find((item) => crmImportState(item).canActivate)
+      || null
+    : null;
+  selectCrmImportBatch(selected);
+  node.replaceChildren();
+  if (!crmImportItems.length) {
+    const empty = document.createElement("div");
+    empty.className = "crm-import-empty";
+    empty.textContent = "暂无导入记录。完成一次文件检查后，记录会显示在这里。";
+    node.append(empty);
+    return;
+  }
+  crmImportItems.slice(0, 6).forEach((batch) => {
+    const state = crmImportState(batch);
+    const card = document.createElement("article");
+    card.className = `crm-import-record is-${state.tone}`;
+    if (String(batch?.id || "") === String(selected?.id || "")) card.classList.add("is-selected");
+    const heading = document.createElement("div");
+    heading.className = "crm-import-record-heading";
+    const title = document.createElement("strong");
+    title.textContent = crmFileName(batch?.source_path);
+    const badge = document.createElement("span");
+    badge.className = "crm-import-record-badge";
+    badge.textContent = state.label;
+    heading.append(title, badge);
+    const meta = document.createElement("div");
+    meta.className = "crm-import-record-meta";
+    meta.textContent = `客户 ${Number(batch?.user_id || 0) || "未知"} · ${crmFormatDate(batch?.updated_at || batch?.created_at)}`;
+    const facts = document.createElement("div");
+    facts.className = "crm-import-record-facts";
+    const recognized = document.createElement("span");
+    recognized.textContent = `识别到 ${crmImportRecognizedCount(batch).toLocaleString("zh-CN")} 条资料`;
+    const issues = document.createElement("span");
+    issues.textContent = state.blockingCount
+      ? `${state.blockingCount} 个问题必须处理`
+      : state.warningCount
+        ? `${state.warningCount} 条普通提醒`
+        : "没有发现阻断问题";
+    facts.append(recognized, issues);
+    const choose = document.createElement("button");
+    choose.className = "btn ghost crm-import-record-action";
+    choose.type = "button";
+    choose.textContent = String(batch?.id || "") === String(selected?.id || "") ? "当前记录" : "查看此记录";
+    choose.disabled = String(batch?.id || "") === String(selected?.id || "");
+    choose.addEventListener("click", () => {
+      selectCrmImportBatch(batch, { announce: true });
+      renderCrmImportStatus(crmImportItems, String(batch?.id || ""), true);
+    });
+    card.append(heading, meta, facts, choose);
+    node.append(card);
+  });
+}
+
+async function loadCrmImportStatus(userId = el("crmImportUserId")?.value, preferredBatchId = "") {
   const targetId = Math.max(0, Number(userId || 0));
   const query = targetId ? `?user_id=${encodeURIComponent(targetId)}` : "";
   const payload = await api(`/api/admin/modules/crm/import-status${query}`);
-  const node = el("crmImportStatus");
-  if (node) node.textContent = JSON.stringify(payload?.items || [], null, 2);
+  renderCrmImportStatus(payload?.items || [], preferredBatchId, Boolean(targetId || preferredBatchId));
   return payload;
 }
 
@@ -723,10 +934,10 @@ async function loadCrmAdminModule() {
     if (el("crmMaintenance")) el("crmMaintenance").checked = Boolean(settings?.maintenance);
     if (el("crmEmergencyPause")) el("crmEmergencyPause").checked = Boolean(settings?.emergency_pause);
     renderCrmHealth(health);
-    setMsg("crmGlobalMsg", settings?.hard_enabled ? "CRM 策略已同步。" : "环境硬开关 CRM_ENABLED 尚未启用。", Boolean(settings?.hard_enabled));
+    setMsg("crmGlobalMsg", settings?.hard_enabled ? "服务设置和运行状态已更新。" : "服务器基础配置尚未开启，请联系技术人员处理。", Boolean(settings?.hard_enabled));
     await loadCrmImportStatus();
   } catch (err) {
-    setMsg("crmGlobalMsg", getErrorMessage(err), false);
+    setMsg("crmGlobalMsg", crmFriendlyError(err, "CRM 状态读取失败，请稍后重试。"), false);
   }
 }
 
@@ -739,7 +950,7 @@ async function saveCrmGlobalSettings(event) {
   };
   let confirmed = false;
   if (!desired.enabled || desired.maintenance || desired.emergency_pause) {
-    const decision = await requestAdminPublicAction({ title: "确认 CRM 策略暂停", message: "关闭模块、开启维护或紧急暂停会让后续 CRM 父流程按策略暂停。确认保存吗？", confirmLabel: "确认保存并暂停", tone: "danger" });
+    const decision = await requestAdminPublicAction({ title: "确认暂停 CRM 服务", message: "保存后，客户将暂时无法继续新的 CRM 操作；已有资料不会被删除。确认保存吗？", confirmLabel: "确认暂停", tone: "danger" });
     if (!decision.confirmed) return;
     confirmed = true;
   }
@@ -749,10 +960,10 @@ async function saveCrmGlobalSettings(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...desired, confirmed }),
     });
-    setMsg("crmGlobalMsg", `CRM 策略已保存；策略暂停流程 ${Number(payload?.paused_workflows || 0)} 个。`, true);
+    setMsg("crmGlobalMsg", `服务设置已保存；已暂停 ${Number(payload?.paused_workflows || 0)} 个等待中的任务。`, true);
     await loadCrmAdminModule();
   } catch (err) {
-    setMsg("crmGlobalMsg", getErrorMessage(err), false);
+    setMsg("crmGlobalMsg", crmFriendlyError(err, "服务设置保存失败，请稍后重试。"), false);
   }
 }
 
@@ -763,12 +974,12 @@ function resetCrmUserAccessEditor() {
   crmUserAccessLoadedId = 0;
   crmUserAccessLoadedEnabled = false;
   if (el("btnCrmUserAccessSave")) el("btnCrmUserAccessSave").disabled = true;
-  setMsg("crmUserAccessMsg", "请先读取该客户当前授权。", true);
+  setMsg("crmUserAccessMsg", "客户编号有变化，请重新查询客户状态。", true);
 }
 
 async function loadCrmUserAccess() {
   const userId = Math.max(0, Number(el("crmUserAccessId")?.value || 0));
-  if (!userId) return setMsg("crmUserAccessMsg", "请填写有效客户 ID。", false);
+  if (!userId) return setMsg("crmUserAccessMsg", "请输入正确的客户编号。", false);
   if (el("btnCrmUserAccessSave")) el("btnCrmUserAccessSave").disabled = true;
   try {
     const payload = await api(`/api/admin/users/${userId}/modules/crm`);
@@ -777,23 +988,23 @@ async function loadCrmUserAccess() {
     crmUserAccessLoadedEnabled = enabled;
     if (el("crmUserAccessEnabled")) el("crmUserAccessEnabled").checked = enabled;
     if (el("btnCrmUserAccessSave")) el("btnCrmUserAccessSave").disabled = false;
-    setMsg("crmUserAccessMsg", `已读取客户 ${userId}：CRM ${enabled ? "已授权" : "未授权"}。`, true);
+    setMsg("crmUserAccessMsg", `客户 ${userId} 当前${enabled ? "可以使用 CRM" : "尚未开通 CRM"}，确认无误后可保存。`, true);
   } catch (err) {
     crmUserAccessLoadedId = 0;
-    setMsg("crmUserAccessMsg", getErrorMessage(err), false);
+    setMsg("crmUserAccessMsg", crmFriendlyError(err, "没有找到这位客户，请检查客户编号。"), false);
   }
 }
 
 async function saveCrmUserAccess(event) {
   event.preventDefault();
   const userId = Math.max(0, Number(el("crmUserAccessId")?.value || 0));
-  if (!userId) return setMsg("crmUserAccessMsg", "请填写有效客户 ID。", false);
-  if (userId !== crmUserAccessLoadedId) return setMsg("crmUserAccessMsg", "客户 ID 已变化，请重新读取当前授权后再保存。", false);
+  if (!userId) return setMsg("crmUserAccessMsg", "请输入正确的客户编号。", false);
+  if (userId !== crmUserAccessLoadedId) return setMsg("crmUserAccessMsg", "客户编号有变化，请重新查询后再保存。", false);
   const enabled = Boolean(el("crmUserAccessEnabled")?.checked);
   if (crmUserAccessLoadedEnabled && !enabled) {
     const decision = await requestAdminPublicAction({
       title: "回收 CRM 权限",
-      message: `回收客户 ${userId} 的 CRM 权限后，后续父流程会按策略暂停。确认继续吗？`,
+      message: `关闭后，客户 ${userId} 将无法继续使用 CRM，但已有资料不会被删除。确认关闭吗？`,
       confirmLabel: "确认回收权限",
       tone: "danger",
     });
@@ -807,9 +1018,9 @@ async function saveCrmUserAccess(event) {
     });
     crmUserAccessLoadedEnabled = Boolean(payload?.enabled);
     if (el("crmUserAccessEnabled")) el("crmUserAccessEnabled").checked = crmUserAccessLoadedEnabled;
-    setMsg("crmUserAccessMsg", payload?.enabled ? "已授予 CRM 权限。" : "已回收 CRM 权限并暂停后续流程。", true);
+    setMsg("crmUserAccessMsg", payload?.enabled ? "已为这位客户开通 CRM。" : "已关闭这位客户的 CRM 使用权限。", true);
   } catch (err) {
-    setMsg("crmUserAccessMsg", getErrorMessage(err), false);
+    setMsg("crmUserAccessMsg", crmFriendlyError(err, "客户开通状态保存失败，请稍后重试。"), false);
   }
 }
 
@@ -817,18 +1028,29 @@ async function runCrmImportDryRun(event) {
   event.preventDefault();
   const userId = Math.max(0, Number(el("crmImportUserId")?.value || 0));
   const source = String(el("crmImportSource")?.value || "").trim();
-  if (!userId || !source) return setMsg("crmImportMsg", "请填写目标客户 ID 和导入源文件名。", false);
+  if (!userId || !source) return setMsg("crmImportMsg", "请填写客户编号和备份文件名。", false);
+  const checkButton = el("btnCrmImportCheck");
+  if (checkButton) {
+    checkButton.disabled = true;
+    checkButton.textContent = "正在检查文件…";
+  }
+  selectCrmImportBatch(null);
   try {
     const payload = await api("/api/admin/modules/crm/import/dry-run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user_id: userId, source }),
     });
-    if (el("crmImportBatchId")) el("crmImportBatchId").value = payload?.id || "";
-    setMsg("crmImportMsg", `dry-run 完成：${payload?.id || "未返回批次 ID"}`, true);
-    await loadCrmImportStatus(userId);
+    const problems = Array.isArray(payload?.report?.blocking_errors) ? payload.report.blocking_errors.length : 0;
+    setMsg("crmImportMsg", problems ? `文件检查完成，发现 ${problems} 个必须处理的问题。` : "文件检查通过，可以进行第二步。", problems === 0);
+    await loadCrmImportStatus(userId, String(payload?.id || ""));
   } catch (err) {
-    setMsg("crmImportMsg", getErrorMessage(err), false);
+    setMsg("crmImportMsg", crmFriendlyError(err, "文件检查失败，请确认客户编号和文件名。"), false);
+  } finally {
+    if (checkButton) {
+      checkButton.disabled = false;
+      checkButton.textContent = "第一步：检查文件";
+    }
   }
 }
 
@@ -836,38 +1058,47 @@ async function activateCrmImport(event) {
   event.preventDefault();
   const userId = Math.max(0, Number(el("crmImportUserId")?.value || 0));
   const batchId = String(el("crmImportBatchId")?.value || "").trim();
-  if (!userId || !batchId) return setMsg("crmImportMsg", "请填写目标客户 ID 和批次 ID。", false);
+  if (!userId || !batchId) return setMsg("crmImportMsg", "请先完成第一步文件检查。", false);
   let status;
-  try { status = await loadCrmImportStatus(userId); } catch (err) { return setMsg("crmImportMsg", getErrorMessage(err), false); }
+  try { status = await loadCrmImportStatus(userId, batchId); } catch (err) { return setMsg("crmImportMsg", crmFriendlyError(err, "无法读取文件检查结果，请重新检查。"), false); }
   const batch = (status?.items || []).find((item) => String(item?.id || "") === batchId);
   const blocking = batch?.report?.blocking_errors || [];
-  if (!batch || String(batch.status || "") !== "dry_run") return setMsg("crmImportMsg", "批次不存在或不是可激活的 dry-run 状态。", false);
-  if (blocking.length) return setMsg("crmImportMsg", `批次仍有 ${blocking.length} 个阻断错误，不能激活。`, false);
-  const decision = await requestAdminPublicAction({ title: "激活 CRM 历史数据", message: `将批次 ${batchId} 激活到客户 ${userId}。源哈希：${String(batch.source_sha256 || "未知").slice(0, 16)}…，确认继续吗？`, confirmLabel: "确认激活", tone: "danger" });
+  if (!batch || String(batch.status || "") !== "dry_run") return setMsg("crmImportMsg", "这份检查结果已经失效，请重新检查文件。", false);
+  if (blocking.length) return setMsg("crmImportMsg", `文件仍有 ${blocking.length} 个必须处理的问题，暂时不能导入。`, false);
+  const decision = await requestAdminPublicAction({ title: "确认导入旧 CRM 资料", message: `系统将把“${crmFileName(batch.source_path)}”中的资料导入客户 ${userId}。操作前会自动备份当前数据，确认继续吗？`, confirmLabel: "确认导入", tone: "danger" });
   if (!decision.confirmed) return;
+  const activateButton = el("btnCrmImportActivate");
+  if (activateButton) {
+    activateButton.disabled = true;
+    activateButton.textContent = "正在导入…";
+  }
   try {
     const payload = await api("/api/admin/modules/crm/import/activate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user_id: userId, batch_id: batchId, confirmed: true }),
     });
-    setMsg("crmImportMsg", `导入批次 ${payload?.id || batchId} 已激活。`, true);
-    await loadCrmImportStatus(userId);
+    setMsg("crmImportMsg", "旧 CRM 资料已成功导入。", true);
+    await loadCrmImportStatus(userId, String(payload?.id || batchId));
   } catch (err) {
-    setMsg("crmImportMsg", getErrorMessage(err), false);
+    setMsg("crmImportMsg", crmFriendlyError(err, "资料导入失败，客户现有资料未受影响。"), false);
+  } finally {
+    if (activateButton) activateButton.textContent = "第二步：确认导入";
   }
 }
 
 async function dismissCrmImport() {
   const userId = Math.max(0, Number(el("crmImportUserId")?.value || 0));
   const batchId = String(el("crmImportBatchId")?.value || "").trim();
-  if (!userId || !batchId) return setMsg("crmImportMsg", "请填写目标客户 ID 和批次 ID。", false);
-  const decision = await requestAdminPublicAction({ title: "废弃 CRM 导入批次", message: `将清理批次 ${batchId} 尚未激活的 staging 数据，并重新计算迁移锁。确认继续吗？`, confirmLabel: "确认废弃", tone: "danger" });
+  if (!userId || !batchId) return setMsg("crmImportMsg", "当前没有可以取消的导入记录。", false);
+  const decision = await requestAdminPublicAction({ title: "取消本次资料导入", message: "取消后会清理这次尚未写入的临时资料，不会删除客户原有内容。确认取消吗？", confirmLabel: "确认取消", tone: "danger" });
   if (!decision.confirmed) return;
   try {
     await api(`/api/admin/modules/crm/import/${encodeURIComponent(batchId)}/dismiss`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: userId, confirmed: true }) });
-    setMsg("crmImportMsg", `批次 ${batchId} 已废弃，迁移状态已重算。`, true); await loadCrmImportStatus(userId); await loadCrmAdminModule();
-  } catch (err) { setMsg("crmImportMsg", getErrorMessage(err), false); }
+    setMsg("crmImportMsg", "本次资料导入已取消。", true);
+    await loadCrmImportStatus(userId);
+    await loadCrmAdminModule();
+  } catch (err) { setMsg("crmImportMsg", crmFriendlyError(err, "取消失败，请稍后重试。"), false); }
 }
 
 function showAdminPublicPrompt({ title = "操作提示", message = "", ok = true, busy = false } = {}) {
@@ -2007,8 +2238,6 @@ const adminState = {
   proxyPurchasedAssetRows: [],
   proxyMarketInventory: { count: 0, capacity: 0, remaining: null },
   proxyMarketRecordsView: "inventory",
-  proxyMarketSelectedItemId: null,
-  proxyMarketInspectRequestId: 0,
   proxyMarketEditorBusy: false,
   proxyMarketSettings: null,
   proxyMarketLoadingPromise: null,
@@ -6710,28 +6939,122 @@ function renderGovernanceHealth(health = {}) {
   });
 }
 
-function renderGovernanceQueue(containerId, items, emptyMessage, renderItem) {
-  const container = el(containerId);
-  if (!container) return;
-  container.replaceChildren();
-  if (!Array.isArray(items) || !items.length) {
-    container.appendChild(createEmptyState(emptyMessage));
-    return;
-  }
-  items.forEach((item) => container.appendChild(renderItem(item)));
+function hotDatasetColor(index, globalRow = false) {
+  if (globalRow) return { solid: "hsl(204 31% 30%)", gradient: "linear-gradient(90deg, hsl(204 31% 30%), hsl(191 39% 43%))" };
+  const hue = (24 + index * 137.508) % 360;
+  return {
+    solid: `hsl(${hue.toFixed(1)} 62% 48%)`,
+    gradient: `linear-gradient(90deg, hsl(${hue.toFixed(1)} 62% 48%), hsl(${((hue + 20) % 360).toFixed(1)} 70% 58%))`,
+  };
 }
 
-function governanceQueueItem(title, detail, badgeValue, badgeTone) {
-  const row = document.createElement("div");
-  row.className = "admin-queue-item";
-  const copy = document.createElement("div");
-  const strong = document.createElement("strong");
-  strong.textContent = String(title || "-");
-  const meta = document.createElement("span");
-  meta.textContent = String(detail || "-");
-  copy.append(strong, meta);
-  row.append(copy, createGovernanceBadge(badgeValue, badgeTone));
-  return row;
+async function refreshHotDatasets({ force = true } = {}) {
+  const button = el("btnRefreshHotDatasets");
+  if (button) button.disabled = true;
+  setText("hotDatasetOverviewTime", force ? "正在重新统计…" : "正在读取…");
+  try {
+    const payload = await api(
+      force ? "/api/admin/hot-datasets/refresh" : "/api/admin/hot-datasets",
+      force ? { method: "POST" } : {},
+    );
+    renderHotDatasetOverview(payload || {});
+    return payload;
+  } catch (error) {
+    setText("hotDatasetOverviewTime", `刷新失败：${getErrorMessage(error)}`);
+    return null;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function deleteHotDataset(item = {}) {
+  const datasetId = item.global ? "global" : String(item.archive_id || "").trim();
+  if (!datasetId) return;
+  const datasetName = String(item.name || (item.global ? "全局数据集" : "未命名人设"));
+  const decision = await requestAdminPublicAction({
+    title: `重要提示：删除${datasetName}`,
+    message: item.global
+      ? "确定后会清空全局热点候选池中的全部内容。此操作不可撤销；后续新抓取的合格内容仍会重新进入全局池。"
+      : `确定后会清空“${datasetName}”的全部热点候选，不会删除人设。此操作不可撤销；如果该人设仍满足原有自动补充条件，后续会重新补充。`,
+    confirmLabel: "确认删除数据集",
+    cancelLabel: "取消",
+    tone: "danger",
+  });
+  if (!decision.confirmed) return;
+  try {
+    const payload = await api(`/api/admin/hot-datasets/${encodeURIComponent(datasetId)}`, { method: "DELETE" });
+    renderHotDatasetOverview(payload || {});
+    showAdminPublicPrompt({
+      title: "数据集已清空",
+      message: `已删除 ${Math.max(0, Number(payload?.deleted_count || 0)).toLocaleString("zh-CN")} 条候选数据。`,
+      ok: true,
+    });
+  } catch (error) {
+    showAdminPublicPrompt({ title: "删除失败", message: getErrorMessage(error), ok: false });
+  }
+}
+
+function renderHotDatasetOverview(payload = {}) {
+  const container = el("hotDatasetOverviewList");
+  if (!container) return;
+  container.replaceChildren();
+  if (!payload.configured) {
+    container.appendChild(createEmptyState("旧机候选池汇总尚未生成"));
+    setText("hotDatasetOverviewTime", "等待 worker 汇总");
+    return;
+  }
+  const globalDataset = payload.global && typeof payload.global === "object" ? payload.global : {};
+  const personas = Array.isArray(payload.personas) ? payload.personas : [];
+  const rows = [{ ...globalDataset, global: true }, ...personas];
+  rows.forEach((item, index) => {
+    const count = Math.max(0, Number(item.count || 0));
+    const capacity = Math.max(1, Number(item.capacity || (item.global ? 100000 : 100)));
+    const percent = Math.min(100, count / capacity * 100);
+    const color = hotDatasetColor(index, Boolean(item.global));
+    const row = document.createElement("div");
+    row.className = `hot-dataset-row${item.global ? " is-global" : ""}`;
+    row.style.setProperty("--dataset-color", color.solid);
+    const meter = document.createElement("div");
+    const copy = document.createElement("div");
+    copy.className = "hot-dataset-meter-copy";
+    const value = document.createElement("strong");
+    value.textContent = `${count.toLocaleString("zh-CN")} 条可用`;
+    const ratio = document.createElement("span");
+    ratio.textContent = `${percent < 1 && count ? percent.toFixed(2) : percent.toFixed(0)}% · 上限 ${capacity.toLocaleString("zh-CN")}`;
+    copy.append(value, ratio);
+    const track = document.createElement("div");
+    track.className = "hot-dataset-track";
+    const fill = document.createElement("span");
+    fill.className = "hot-dataset-fill";
+    fill.style.width = `${percent}%`;
+    fill.style.minWidth = count ? "5px" : "0";
+    fill.style.background = color.gradient;
+    track.appendChild(fill);
+    meter.append(copy, track);
+    const identity = document.createElement("div");
+    identity.className = "hot-dataset-name";
+    const dot = document.createElement("i");
+    dot.setAttribute("aria-hidden", "true");
+    const name = document.createElement("strong");
+    name.textContent = String(item.name || (item.global ? "全局数据集" : "未命名人设"));
+    const state = document.createElement("small");
+    state.textContent = item.global ? "全局候选池" : (item.refilling ? "补充中" : (item.active ? "已激活" : "独立人设池"));
+    identity.append(dot, name, state);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "hot-dataset-delete";
+    remove.setAttribute("aria-label", `删除${name.textContent}数据集`);
+    remove.title = "删除数据集";
+    remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M7 7l1 13h8l1-13"></path><path d="M10 11v5M14 11v5"></path></svg>';
+    remove.addEventListener("click", () => void deleteHotDataset(item));
+    row.append(meter, identity, remove);
+    container.appendChild(row);
+  });
+  const generatedAt = Number(payload.generated_at || 0);
+  setText(
+    "hotDatasetOverviewTime",
+    generatedAt ? `${payload.stale ? "数据延迟 · " : ""}${formatTime(generatedAt)}` : "刚刚更新",
+  );
 }
 
 function renderGovernanceDashboard(payload = {}) {
@@ -6801,22 +7124,6 @@ function renderGovernanceDashboard(payload = {}) {
   renderGovernanceDistribution("governanceSubscriptionDistribution", payload.distributions?.subscriptions || []);
   renderGovernanceDistribution("governanceBrowserDistribution", payload.distributions?.browsers || []);
   renderGovernanceHealth(health);
-  renderGovernanceQueue("governancePendingQueue", payload.queues?.pending_users, "没有待审核客户", (item) =>
-    governanceQueueItem(item.username, `${item.full_name || item.company || "未填写资料"} · ${formatTime(item.created_at)}`, "pending"));
-  renderGovernanceQueue("governanceFailureQueue", payload.queues?.failed_tasks, "近期没有失败任务", (item) =>
-    governanceQueueItem(item.id, `${oneLine(item.error || "无错误摘要")} · ${formatTime(item.updated_at)}`, "failed"));
-  renderGovernanceQueue("governanceSecurityQueue", payload.queues?.security_alerts, "没有开放安全告警", (item) =>
-    governanceQueueItem(item.title, `用户 ${item.target_user_id || "-"} · ${formatTime(item.last_seen_at)}`, item.severity));
-  renderGovernanceQueue("governanceAuditQueue", payload.queues?.recent_audits, "暂无审计事件", (item) =>
-    governanceQueueItem(item.action, `操作者 ${item.actor_user_id || "-"} · ${formatTime(item.created_at)}`, item.risk_level));
-  renderGovernanceQueue("governanceBrowserQueue", payload.queues?.manual_browsers, "没有待人工接管的浏览器", (item) =>
-    governanceQueueItem(item.title, `${item.task_id || item.session_id || "-"} · ${governanceLabel(item.task_status)}`, "manual", "warning"));
-  renderGovernanceQueue("governanceSubscriptionQueue", payload.queues?.expiring_subscriptions, "7 天内没有到期订阅", (item) =>
-    governanceQueueItem(item.plan_sku, `用户 ${item.user_id || "-"} · ${formatTime(item.current_period_end)}`, "expiring"));
-  renderGovernanceQueue("governancePasswordQueue", payload.queues?.password_operations, "暂无密码敏感操作", (item) =>
-    governanceQueueItem(item.action, `目标 ${item.target_user_id || "-"} · ${formatTime(item.created_at)}`, item.risk_level));
-  renderGovernanceQueue("governanceBatchQueue", payload.queues?.batch_jobs, "暂无批量作业", (item) =>
-    governanceQueueItem(item.action, `成功 ${item.success_count || 0} · 失败 ${item.failed_count || 0} · 跳过 ${item.skipped_count || 0}`, item.status));
   const generatedAt = Number(payload.generated_at || 0);
   setText("governanceUpdatedAt", generatedAt ? `数据时间：${formatTime(generatedAt)}` : `刷新于 ${new Date().toLocaleTimeString("zh-CN", { timeZone: ADMIN_TIME_ZONE, hour12: false })}`);
 }
@@ -7080,6 +7387,15 @@ async function loadGovernanceDashboard({ force = false } = {}) {
   }
   syncGovernanceChartRangeLabels();
   const requestId = ++adminState.governanceRequestId;
+  void api("/api/admin/hot-datasets")
+    .then((payload) => {
+      if (requestId === adminState.governanceRequestId) renderHotDatasetOverview(payload || {});
+    })
+    .catch(() => {
+      if (requestId !== adminState.governanceRequestId) return;
+      renderHotDatasetOverview({ configured: false });
+      setText("hotDatasetOverviewTime", "数据读取失败");
+    });
   const request = api(`/api/admin/dashboard?${query.toString()}`)
     .then((payload) => {
       if (requestId !== adminState.governanceRequestId) return null;
@@ -8096,19 +8412,12 @@ function setProxyMarketSmartResult(message, state = "") {
 
 function syncProxyMarketEditorActions() {
   const busy = Boolean(adminState.proxyMarketEditorBusy);
-  const form = el("proxyMarketItemForm");
-  if (form?.elements) {
-    Array.from(form.elements).forEach((control) => {
-      if (!control || typeof control.disabled !== "boolean") return;
-      control.disabled = busy || (
-        control.id === "proxyMarketSku"
-        && Boolean(adminState.proxyMarketSelectedItemId)
-      );
-    });
-  }
-  if (el("btnCancelProxyMarketEdit")) el("btnCancelProxyMarketEdit").disabled = busy;
-  if (el("btnSaveProxyMarketItem")) el("btnSaveProxyMarketItem").disabled = busy;
-  if (el("btnPublishProxyMarketItem")) el("btnPublishProxyMarketItem").disabled = busy;
+  const input = el("proxyMarketSmartInput");
+  const pasteButton = el("btnPasteProxyMarketSmartInput");
+  const publishButton = el("btnAutoPublishProxyMarketItem");
+  if (input) input.disabled = busy;
+  if (pasteButton) pasteButton.disabled = busy;
+  if (publishButton) publishButton.disabled = busy;
 }
 
 function setProxyMarketEditorBusy(busy) {
@@ -8116,213 +8425,146 @@ function setProxyMarketEditorBusy(busy) {
   syncProxyMarketEditorActions();
 }
 
-async function applyProxyMarketSmartInput({ quiet = false } = {}) {
+function previewProxyMarketSmartInput() {
   const input = el("proxyMarketSmartInput");
-  if (!input?.value?.trim()) return null;
-  const rawInput = input.value;
-  const parsed = parseProxyMarketSmartInput(rawInput);
+  const raw = String(input?.value || "").trim();
+  if (!raw) {
+    setProxyMarketSmartResult("等待粘贴代理信息，系统会即时解析格式。");
+    return null;
+  }
+  const parsed = parseProxyMarketSmartInput(raw);
   if (parsed._errors?.length) {
     setProxyMarketSmartResult(parsed._errors.join("；"), "error");
     return null;
   }
-  let switchedToNew = false;
-  const selectedId = String(adminState.proxyMarketSelectedItemId || "");
-  const selectedItem = (Array.isArray(adminState.proxyMarketItemRows) ? adminState.proxyMarketItemRows : [])
-    .find((item) => String(item?.id || "") === selectedId);
-  const parsedHost = String(parsed.host || "").trim().toLowerCase();
-  const parsedPort = Number(parsed.port || 0);
-  const selectedHost = String(selectedItem?.host || "").trim().toLowerCase();
-  const selectedPort = Number(selectedItem?.port || 0);
-  const endpointChanged = Boolean(
-    selectedItem
-    && parsedHost
-    && parsedPort
-    && (parsedHost !== selectedHost || parsedPort !== selectedPort)
-  );
-  if (endpointChanged) {
-    const decision = await requestAdminPublicAction({
-      title: "发现新的代理地址",
-      message: `当前正在编辑 ${selectedItem.sku || selectedItem.id}，识别到的是另一条代理地址。\n\n选择“新建库存”将保留原记录；选择“覆盖当前”才会继续修改当前库存。`,
-      confirmLabel: "新建库存",
-      cancelLabel: "覆盖当前",
-    });
-    if (decision.confirmed) {
-      resetProxyMarketEditor();
-      if (input) input.value = rawInput;
-      switchedToNew = true;
-    } else if (!decision.cancelled) {
-      return null;
-    }
-  }
-  const previousHost = el("proxyMarketHost")?.value?.trim() || "";
-  const previousPort = Number(el("proxyMarketPort")?.value || 0);
-  const previousProxyType = el("proxyMarketProxyType")?.value || "";
-  const previousProviderKey = el("proxyMarketProviderKey")?.value || "";
-  const previousCountry = el("proxyMarketCountry")?.value?.trim() || "";
-  const currentSku = el("proxyMarketSku")?.value?.trim() || "";
-  const currentDisplayName = el("proxyMarketDisplayName")?.value?.trim() || "";
-  const skuCanAutofill = !currentSku || (
-    previousHost
-    && previousPort
-    && currentSku === proxyMarketGeneratedSku(
-      previousHost,
-      previousPort,
-      previousProxyType,
-      previousProviderKey,
-    )
-  );
-  const displayNameCanAutofill = !currentDisplayName || (
-    previousHost
-    && (
-      currentDisplayName === `${previousHost} 静态住宅代理`
-      || currentDisplayName === `${normalizeProxyMarketCountry(previousCountry)?.label || previousCountry}静态住宅代理`
-      || currentDisplayName === `${previousHost} 代理IP`
-      || currentDisplayName === `${normalizeProxyMarketCountry(previousCountry)?.label || previousCountry}代理IP`
-    )
-  );
-  const fieldMap = {
-    proxy_type: "proxyMarketProxyType", host: "proxyMarketHost", port: "proxyMarketPort",
-    username: "proxyMarketUsername", password: "proxyMarketPassword",
-    country: "proxyMarketCountry", region: "proxyMarketRegion", city: "proxyMarketCity", isp: "proxyMarketIsp",
-    sku: "proxyMarketSku", display_name: "proxyMarketDisplayName", provider_key: "proxyMarketProviderKey",
-    expires_at: "proxyMarketExpiresAt", display_price_cents: "proxyMarketPriceCents",
-    currency: "proxyMarketCurrency", billing_cycle: "proxyMarketBillingCycle",
-    tags: "proxyMarketTags", use_cases: "proxyMarketUseCases", description: "proxyMarketDescription",
-  };
-  const applied = [];
-  Object.entries(fieldMap).forEach(([field, id]) => {
-    if (parsed[field] === undefined || parsed[field] === null || parsed[field] === "") return;
-    const control = el(id);
-    if (!control || control.disabled) return;
-    control.value = Array.isArray(parsed[field]) ? parsed[field].join(", ") : String(parsed[field]);
-    applied.push(field);
-  });
-  if (parsed._username_specified && el("proxyMarketUsername")) {
-    el("proxyMarketUsername").value = String(parsed.username || "");
-    applied.push("username");
-  }
-  if (parsed._password_specified && el("proxyMarketPassword")) {
-    el("proxyMarketPassword").value = String(parsed.password || "");
-    applied.push("password");
-  }
-  if (parsed._credentials_specified) {
-    applied.push("credentials");
-  }
-  const host = String(parsed.host || el("proxyMarketHost")?.value || "").trim();
-  const port = Number(parsed.port || el("proxyMarketPort")?.value || 0);
-  if (!adminState.proxyMarketSelectedItemId && host && port && skuCanAutofill) {
-    el("proxyMarketSku").value = proxyMarketGeneratedSku(
-      host,
-      port,
-      el("proxyMarketProxyType")?.value || "",
-      el("proxyMarketProviderKey")?.value || "",
-    );
-    applied.push("sku");
-  }
-  if (host && displayNameCanAutofill) {
-    const countryLabel = parsed._country_label
-      || normalizeProxyMarketCountry(parsed.country || el("proxyMarketCountry")?.value)?.label
-      || "";
-    el("proxyMarketDisplayName").value = countryLabel
-      ? `${countryLabel}代理IP`
-      : `${host} 代理IP`;
-    applied.push("display_name");
-  }
-  if (!applied.length) {
-    if (!quiet && input?.value?.trim()) setProxyMarketSmartResult("未识别到有效代理字段，请检查格式。", "error");
+  if (!parsed.host || !Number.isInteger(Number(parsed.port))) {
+    setProxyMarketSmartResult("未识别到完整的代理地址和端口，请检查粘贴格式。", "error");
     return null;
   }
-  setText("proxyMarketEditorHint", "智能识别已更新字段；点击“检测并发布”会先验证连接，再替换线上配置。");
-  if (input) input.value = "";
-  const labels = [];
-  if (parsed.proxy_type) labels.push(String(parsed.proxy_type).toUpperCase());
-  if (parsed.host) labels.push("主机");
-  if (parsed.port) labels.push("端口");
-  if (parsed._username_specified && parsed.username) labels.push("账号");
-  if (parsed._password_specified && parsed.password) labels.push("密码（已隐藏）");
-  if (
-    parsed._username_specified
-    && parsed._password_specified
-    && !parsed.username
-    && !parsed.password
-  ) labels.push("无认证");
-  const metadataLabels = { country: "国家", region: "地区", city: "城市", isp: "ISP" };
-  Object.entries(metadataLabels).forEach(([field, label]) => { if (parsed[field]) labels.push(label); });
-  if (parsed.provider_key) labels.push("供应商");
-  if (parsed._provider_endpoint_count) labels.push(`${parsed._provider_endpoint_count} 个供应商入口`);
-  const primaryHint = parsed._provider_endpoint_count
-    ? "；IP 行作为主连接，域名行仅用于识别供应商"
-    : "";
-  const modeHint = switchedToNew ? "；已自动切换为新建库存，原记录未修改" : "";
-  setProxyMarketSmartResult(`已填充${labels.length ? `：${labels.join("、")}` : "可识别字段"}${primaryHint}${modeHint}；原始代理串已从输入框清除。`, "success");
-  setText("proxyMarketEditorHint", "智能识别结果尚未保存；连接与凭据需通过真实检测后才会发布。");
+  const details = [String(parsed.proxy_type || "socks5").toUpperCase(), `${parsed.host}:${parsed.port}`];
+  if (parsed._username_specified && parsed.username) details.push("已识别账号");
+  if (parsed._password_specified && parsed.password) details.push("已识别密码");
+  if (parsed.country || parsed._country_label) details.push(parsed._country_label || parsed.country);
+  if (parsed.provider_key) details.push(`供应商 ${parsed.provider_key}`);
+  setProxyMarketSmartResult(`已自动识别：${details.join(" · ")}。点击“自动检测并发布”完成真实检测。`, "success");
   return parsed;
 }
 
-async function inspectProxyMarketConnection() {
-  if (el("proxyMarketSmartInput")?.value?.trim()) {
-    setProxyMarketSmartResult("请先点击“识别并填充”，确认字段后再执行检测。", "error");
-    return null;
+function proxyMarketAutomaticPayload(parsed, detected = {}) {
+  const host = String(parsed.host || "").trim();
+  const port = Number(parsed.port || 0);
+  const proxyType = normalizeProxyMarketProtocol(parsed.proxy_type) || "socks5";
+  const providerKey = String(parsed.provider_key || inferProxyMarketProviderKey([host]) || "auto").trim().slice(0, 80);
+  const normalizedCountry = normalizeProxyMarketCountry(detected.country || parsed.country);
+  const country = String(detected.country || normalizedCountry?.code || parsed.country || "").trim();
+  const countryName = String(detected.country_name || parsed._country_label || normalizedCountry?.label || country).trim();
+  const locationName = [countryName, detected.region || parsed.region, detected.city || parsed.city]
+    .map((value) => String(value || "").trim())
+    .filter((value, index, values) => value && values.indexOf(value) === index)
+    .join(" ");
+  const suppliedSku = String(parsed.sku || "").trim();
+  return {
+    sku: /^[A-Za-z0-9._-]{2,80}$/.test(suppliedSku)
+      ? suppliedSku
+      : proxyMarketGeneratedSku(host, port, proxyType, providerKey),
+    display_name: String(parsed.display_name || "").trim() || `${locationName || host}静态住宅代理`,
+    provider_key: providerKey,
+    proxy_type: proxyType,
+    host,
+    port,
+    username: String(parsed.username || ""),
+    password: String(parsed.password || ""),
+    country,
+    region: String(detected.region || parsed.region || "").trim(),
+    city: String(detected.city || parsed.city || "").trim(),
+    isp: String(detected.isp || parsed.isp || "").trim(),
+    ip_type: "static_residential",
+    description: String(parsed.description || "系统自动识别并通过真实网络检测后发布。").trim(),
+    tags: Array.isArray(parsed.tags) ? parsed.tags : parseProxyMarketList(parsed.tags),
+    use_cases: Array.isArray(parsed.use_cases) ? parsed.use_cases : parseProxyMarketList(parsed.use_cases),
+    display_price_cents: Math.max(0, Math.round(Number(parsed.display_price_cents || 0))),
+    currency: String(parsed.currency || "TWD").trim().toUpperCase(),
+    billing_cycle: String(parsed.billing_cycle || "month").trim(),
+    expires_at: timestampFromLocalInput(parsed.expires_at),
+  };
+}
+
+function findProxyMarketItemByEndpoint(parsed) {
+  const proxyType = normalizeProxyMarketProtocol(parsed.proxy_type) || "socks5";
+  const host = String(parsed.host || "").trim().toLowerCase();
+  const port = Number(parsed.port || 0);
+  return adminState.proxyMarketItemRows.find((item) => (
+    String(item.proxy_type || "socks5").toLowerCase() === proxyType
+    && String(item.host || "").trim().toLowerCase() === host
+    && Number(item.port || 0) === port
+  )) || null;
+}
+
+async function autoDetectAndPublishProxyMarketItem() {
+  const parsed = previewProxyMarketSmartInput();
+  if (!parsed) return null;
+  const existingItem = findProxyMarketItemByEndpoint(parsed);
+  if (String(existingItem?.status || "") === "archived") {
+    throw new Error("该代理已归档，不能重复自动添加；请先处理归档记录。");
   }
-  const host = el("proxyMarketHost")?.value?.trim() || "";
-  const port = Number(el("proxyMarketPort")?.value || 0);
-  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
-    setProxyMarketSmartResult("请先提供有效的主机和 1-65535 端口。", "error");
-    return null;
-  }
-  const requestId = ++adminState.proxyMarketInspectRequestId;
-  const itemId = String(adminState.proxyMarketSelectedItemId || "");
-  const proxyType = el("proxyMarketProxyType")?.value || "socks5";
-  const username = String(el("proxyMarketUsername")?.value || "");
-  const password = String(el("proxyMarketPassword")?.value || "");
-  const connectionStillMatches = () => (
-    requestId === adminState.proxyMarketInspectRequestId
-    && itemId === String(adminState.proxyMarketSelectedItemId || "")
-    && proxyType === (el("proxyMarketProxyType")?.value || "socks5")
-    && host === (el("proxyMarketHost")?.value?.trim() || "")
-    && port === Number(el("proxyMarketPort")?.value || 0)
-    && username === String(el("proxyMarketUsername")?.value || "")
-    && password === String(el("proxyMarketPassword")?.value || "")
-  );
-  const button = el("btnInspectProxyMarketConnection");
-  if (button) button.disabled = true;
-  setProxyMarketSmartResult("正在进行真实网络检测并识别地区、城市和 ISP...");
+  setProxyMarketEditorBusy(true);
+  setMsg("proxyMarketItemMsg", "正在自动识别并执行真实网络检测...");
+  showAdminPublicPrompt({ title: "自动识别代理", message: "正在识别连接信息并执行真实网络检测，检测通过后会直接发布。", busy: true });
   try {
-    const result = await api("/api/admin/proxy-market/inspect", {
+    const inspectResult = await api("/api/admin/proxy-market/inspect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        item_id: itemId,
-        proxy_type: proxyType,
-        host,
-        port,
-        username,
-        password,
+        item_id: String(existingItem?.id || ""),
+        proxy_type: normalizeProxyMarketProtocol(parsed.proxy_type) || "socks5",
+        host: String(parsed.host || "").trim(),
+        port: Number(parsed.port || 0),
+        username: String(parsed.username || ""),
+        password: String(parsed.password || ""),
       }),
     });
-    if (!connectionStillMatches()) return null;
-    const check = result?.check || {};
-    const detected = check.detected || {};
-    [
-      ["proxyMarketCountry", detected.country],
-      ["proxyMarketRegion", detected.region],
-      ["proxyMarketCity", detected.city],
-      ["proxyMarketIsp", detected.isp],
-    ].forEach(([id, value]) => {
-      if (el(id) && String(value || "").trim()) el(id).value = String(value).trim();
+    const check = inspectResult?.check || {};
+    const payload = proxyMarketAutomaticPayload(parsed, check.detected || {});
+    let savedResult;
+    let itemId = String(existingItem?.id || "");
+    if (existingItem) {
+      savedResult = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(proxyMarketPatchPayload(payload)),
+      });
+    } else {
+      savedResult = await api("/api/admin/proxy-market/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      itemId = String(savedResult?.item?.id || "");
+    }
+    if (!itemId) throw new Error("自动识别已完成，但服务器没有返回库存编号");
+    applyProxyMarketItemLocally(savedResult?.item, { ...(existingItem || {}), id: itemId, ...payload });
+    const published = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/test-and-publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(proxyMarketPublishPayload(payload)),
     });
-    setText("proxyMarketEditorHint", "检测已自动填写地区字段；点击“检测并发布”会再次验证连接并原子发布。");
-    const location = [detected.country_name || detected.country, detected.region, detected.city].filter(Boolean).join(" / ");
-    setProxyMarketSmartResult(
-      `检测通过${location ? `：${location}` : ""}${detected.isp ? ` · ${detected.isp}` : ""}${Number(check.latency_ms || 0) ? ` · ${Number(check.latency_ms)} ms` : ""}`,
-      "success",
-    );
-    return result;
+    applyProxyMarketItemLocally(published?.item, { id: itemId, status: "active", health_status: "healthy" });
+    const latency = Number(published?.check?.latency_ms || check.latency_ms || 0);
+    const message = `${existingItem ? "已更新现有代理" : "代理已加入库存"}，真实检测通过${latency ? `，延迟 ${latency} ms` : ""}`;
+    if (el("proxyMarketSmartInput")) el("proxyMarketSmartInput").value = "";
+    setProxyMarketSmartResult(message, "success");
+    await refreshProxyMarketItemsAfterWrite("proxyMarketItemMsg", message);
+    showAdminPublicPrompt({ title: "自动发布完成", message, ok: true });
+    return published;
   } catch (error) {
-    if (connectionStillMatches()) setProxyMarketSmartResult(`检测失败：${getErrorMessage(error)}`, "error");
+    const message = `自动检测发布失败：${getErrorMessage(error)}`;
+    setProxyMarketSmartResult(message, "error");
+    setMsg("proxyMarketItemMsg", message, false);
+    showAdminPublicPrompt({ title: "自动发布失败", message, ok: false });
+    try { error.adminPublicPromptShown = true; } catch (_) {}
     throw error;
   } finally {
-    if (button && requestId === adminState.proxyMarketInspectRequestId) button.disabled = false;
+    setProxyMarketEditorBusy(false);
   }
 }
 
@@ -8490,12 +8732,6 @@ function renderProxyMarketItems(payload = {}) {
     const actionCell = document.createElement("td");
     const actionRow = document.createElement("div");
     actionRow.className = "proxy-market-table-actions";
-    const edit = createProxyMarketIconButton(
-      "编辑代理",
-      "edit",
-      item.id,
-      '<path d="M4 20h4l11-11-4-4L4 16v4Z"></path><path d="m13.5 6.5 4 4"></path>',
-    );
     const publish = createProxyMarketIconButton(
       Number(item.published_at || 0) ? "重新检测并发布" : "检测并发布",
       "publish",
@@ -8540,7 +8776,7 @@ function renderProxyMarketItems(payload = {}) {
       "danger",
     );
     archive.disabled = String(item.status) === "archived";
-    actionRow.append(edit, publish, status, archive);
+    actionRow.append(publish, status, archive);
     actionCell.appendChild(actionRow);
     row.appendChild(actionCell);
     body.appendChild(row);
@@ -9283,111 +9519,15 @@ async function loadProxyMarketWorkspace() {
 }
 
 function resetProxyMarketEditor({ focus = false } = {}) {
-  adminState.proxyMarketInspectRequestId += 1;
-  adminState.proxyMarketSelectedItemId = null;
-  el("proxyMarketItemForm")?.reset();
-  if (el("btnInspectProxyMarketConnection")) el("btnInspectProxyMarketConnection").disabled = false;
-  if (el("proxyMarketSku")) el("proxyMarketSku").disabled = false;
-  if (el("proxyMarketCurrency")) el("proxyMarketCurrency").value = "TWD";
-  if (el("proxyMarketPriceCents")) el("proxyMarketPriceCents").value = "0";
-  if (el("proxyMarketProxyType")) el("proxyMarketProxyType").value = "socks5";
-  if (el("proxyMarketBillingCycle")) el("proxyMarketBillingCycle").value = "month";
-  setText("proxyMarketEditorTitle", "新建代理");
-  setText("proxyMarketEditorHint", "可先保存草稿，或直接点击“检测并发布”完成真实检测和发布。");
-  setText("proxyMarketEditorState", "当前为新建模式");
-  setText("proxyMarketCredentialNote", "后台不会回显已保存凭据。编辑时空密码不会覆盖原密码。");
-  setProxyMarketSmartResult("粘贴内容会保留，请点击“识别并填充”开始解析。");
+  const input = el("proxyMarketSmartInput");
+  if (input) input.value = "";
+  setProxyMarketSmartResult("等待粘贴代理信息，系统会即时解析格式。");
   setMsg("proxyMarketItemMsg", "");
   setProxyMarketEditorBusy(false);
   if (focus) {
     el("proxyMarketEditor")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    window.setTimeout(() => el("proxyMarketSku")?.focus(), 250);
+    window.setTimeout(() => input?.focus(), 250);
   }
-}
-
-function editProxyMarketItem(itemId, { focus = true } = {}) {
-  const item = proxyMarketItemById(itemId);
-  if (!item) return;
-  adminState.proxyMarketInspectRequestId += 1;
-  adminState.proxyMarketSelectedItemId = String(item.id || "");
-  if (el("btnInspectProxyMarketConnection")) el("btnInspectProxyMarketConnection").disabled = false;
-  if (el("proxyMarketSmartInput")) el("proxyMarketSmartInput").value = "";
-  setProxyMarketSmartResult("可粘贴新连接信息覆盖候选字段；已保存凭据不会回显。");
-  const values = {
-    proxyMarketSku: item.sku,
-    proxyMarketDisplayName: item.display_name,
-    proxyMarketProviderKey: item.provider_key,
-    proxyMarketProxyType: item.proxy_type || "socks5",
-    proxyMarketHost: item.host,
-    proxyMarketPort: item.port,
-    proxyMarketExpiresAt: localInputFromTimestamp(item.expires_at),
-    proxyMarketUsername: "",
-    proxyMarketPassword: "",
-    proxyMarketCountry: item.country,
-    proxyMarketRegion: item.region,
-    proxyMarketCity: item.city,
-    proxyMarketIsp: item.isp,
-    proxyMarketPriceCents: item.display_price_cents,
-    proxyMarketCurrency: item.currency || "TWD",
-    proxyMarketBillingCycle: item.billing_cycle || "month",
-    proxyMarketTags: (item.tags || []).join(", "),
-    proxyMarketUseCases: (item.use_cases || []).join(", "),
-    proxyMarketDescription: item.description,
-  };
-  Object.entries(values).forEach(([id, value]) => {
-    if (el(id)) el(id).value = String(value ?? "");
-  });
-  if (el("proxyMarketSku")) el("proxyMarketSku").disabled = true;
-  setText("proxyMarketEditorTitle", `编辑 ${item.sku || item.id}`);
-  setText("proxyMarketEditorHint", "元数据可直接保存；连接、端口与新凭据只有真实检测成功后才会替换线上配置。");
-  setText("proxyMarketEditorState", `库存状态：${PROXY_MARKET_STATUS_LABELS[item.status] || item.status || "-"} · 版本 ${Number(item.version || 1)}`);
-  const configured = [];
-  if (item.username_configured) configured.push("用户名");
-  if (item.password_configured) configured.push("密码");
-  setText(
-    "proxyMarketCredentialNote",
-    configured.length
-      ? `已配置${configured.join("和")}，内容不会回显；输入新值会在检测成功后替换，空密码保留原密码。`
-      : "当前未保存认证凭据；如代理需要认证，请在检测发布前填写。",
-  );
-  setMsg("proxyMarketItemMsg", "");
-  syncProxyMarketEditorActions();
-  if (focus) {
-    el("proxyMarketEditor")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    window.setTimeout(() => el("proxyMarketDisplayName")?.focus(), 250);
-  }
-}
-
-function readProxyMarketItemForm() {
-  const form = el("proxyMarketItemForm");
-  if (!form?.reportValidity()) return null;
-  const payload = {
-    sku: el("proxyMarketSku")?.value?.trim() || "",
-    display_name: el("proxyMarketDisplayName")?.value?.trim() || "",
-    provider_key: el("proxyMarketProviderKey")?.value?.trim() || "",
-    proxy_type: el("proxyMarketProxyType")?.value || "socks5",
-    host: el("proxyMarketHost")?.value?.trim() || "",
-    port: Number(el("proxyMarketPort")?.value || 0),
-    username: String(el("proxyMarketUsername")?.value || ""),
-    password: String(el("proxyMarketPassword")?.value || ""),
-    country: el("proxyMarketCountry")?.value?.trim() || "",
-    region: el("proxyMarketRegion")?.value?.trim() || "",
-    city: el("proxyMarketCity")?.value?.trim() || "",
-    isp: el("proxyMarketIsp")?.value?.trim() || "",
-    ip_type: "static_residential",
-    description: el("proxyMarketDescription")?.value?.trim() || "",
-    tags: parseProxyMarketList(el("proxyMarketTags")?.value),
-    use_cases: parseProxyMarketList(el("proxyMarketUseCases")?.value),
-    display_price_cents: Math.max(0, Math.round(Number(el("proxyMarketPriceCents")?.value || 0))),
-    currency: el("proxyMarketCurrency")?.value?.trim()?.toUpperCase() || "TWD",
-    billing_cycle: el("proxyMarketBillingCycle")?.value || "month",
-    expires_at: timestampFromLocalInput(el("proxyMarketExpiresAt")?.value),
-  };
-  if (!adminState.proxyMarketSelectedItemId && !/^[A-Za-z0-9._-]{2,80}$/.test(payload.sku)) {
-    setMsg("proxyMarketItemMsg", "SKU 需为 2-80 位字母、数字、点、下划线或短横线", false);
-    return null;
-  }
-  return payload;
 }
 
 function proxyMarketPatchPayload(payload) {
@@ -9418,104 +9558,6 @@ function proxyMarketPublishPayload(payload) {
   if (payload.username) result.username = payload.username;
   if (payload.password) result.password = payload.password;
   return result;
-}
-
-async function saveProxyMarketItem({ publish = false } = {}) {
-  const payload = readProxyMarketItemForm();
-  if (!payload) return null;
-  const selectedId = adminState.proxyMarketSelectedItemId;
-  const createdDraft = !selectedId;
-  const existingItem = selectedId ? proxyMarketItemById(selectedId) : null;
-  setProxyMarketEditorBusy(true);
-  setMsg("proxyMarketItemMsg", publish ? "正在保存、检测并发布代理..." : "正在保存代理库存...");
-  if (publish) {
-    showAdminPublicPrompt({
-      title: "代理检测与发布",
-      message: "正在保存当前配置并执行真实连接检测，检测通过后会自动发布。",
-      busy: true,
-    });
-  }
-  try {
-    let result;
-    if (selectedId) {
-      result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(selectedId)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(proxyMarketPatchPayload(payload)),
-      });
-    } else {
-      result = await api("/api/admin/proxy-market/items", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-    }
-    const itemId = String(result?.item?.id || selectedId || "");
-    if (!itemId) throw new Error("代理库存已保存，但响应缺少草稿 ID");
-    applyProxyMarketItemLocally(result?.item, {
-      ...(existingItem || {}),
-      id: itemId,
-      sku: payload.sku,
-      ...proxyMarketPatchPayload(payload),
-      proxy_type: payload.proxy_type,
-      host: payload.host,
-      port: payload.port,
-      ip_type: "static_residential",
-      status: existingItem?.status || "draft",
-      health_status: existingItem?.health_status || "pending",
-    });
-    adminState.proxyMarketSelectedItemId = itemId;
-    editProxyMarketItem(itemId, { focus: false });
-    if (publish) {
-      try {
-        result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/test-and-publish`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(proxyMarketPublishPayload(payload)),
-        });
-      } catch (error) {
-        error.proxyMarketDraftSaved = createdDraft;
-        error.proxyMarketChangesSaved = true;
-        throw error;
-      }
-      applyProxyMarketItemLocally(result?.item, {
-        id: itemId,
-        status: "active",
-        health_status: "healthy",
-      });
-    }
-    if (el("proxyMarketUsername")) el("proxyMarketUsername").value = "";
-    if (el("proxyMarketPassword")) el("proxyMarketPassword").value = "";
-    const successMessage = publish
-      ? `真实检测通过，代理已发布${Number(result?.check?.latency_ms || 0) ? `，延迟 ${Number(result.check.latency_ms)} ms` : ""}`
-      : "代理库存已保存";
-    await refreshProxyMarketItemsAfterWrite("proxyMarketItemMsg", successMessage);
-    if (publish) {
-      showAdminPublicPrompt({
-        title: "检测发布完成",
-        message: successMessage,
-        ok: true,
-      });
-    }
-    return result;
-  } catch (error) {
-    if (publish) {
-      const prefix = error?.proxyMarketDraftSaved
-        ? "草稿已保存并保留在编辑器中；检测发布失败"
-        : error?.proxyMarketChangesSaved
-          ? "库存修改已保存；检测发布失败"
-          : "检测发布失败";
-      showAdminPublicPrompt({
-        title: "检测发布失败",
-        message: `${prefix}：${getErrorMessage(error)}`,
-        ok: false,
-      });
-      try { error.adminPublicPromptShown = true; } catch (_) {}
-    }
-    throw error;
-  } finally {
-    setProxyMarketEditorBusy(false);
-  }
 }
 
 async function publishProxyMarketRow(itemId, button) {
@@ -9615,7 +9657,6 @@ async function archiveProxyMarketItem(itemId, button) {
   try {
     const result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/archive`, { method: "POST" });
     applyProxyMarketItemLocally(result?.item, { ...item, status: "archived", available: false });
-    if (String(adminState.proxyMarketSelectedItemId || "") === String(itemId)) resetProxyMarketEditor();
     await refreshProxyMarketItemsAfterWrite("proxyMarketMsg", `${item.sku || item.id} 已归档`);
   } finally {
     button.disabled = false;
@@ -10284,26 +10325,38 @@ function bindActions() {
   el("crmImportDryRunForm")?.addEventListener("submit", runCrmImportDryRun);
   el("crmImportActivateForm")?.addEventListener("submit", activateCrmImport);
   el("btnCrmImportDismiss")?.addEventListener("click", () => void dismissCrmImport());
+  el("crmImportUserId")?.addEventListener("input", () => {
+    selectCrmImportBatch(null);
+    setMsg("crmImportMsg", "客户编号有变化，请重新检查文件。", true);
+  });
+  el("crmImportUserId")?.addEventListener("change", () => {
+    void loadCrmImportStatus().catch((err) => setMsg("crmImportMsg", crmFriendlyError(err, "导入记录读取失败，请稍后重试。"), false));
+  });
+  el("crmImportSource")?.addEventListener("input", () => {
+    selectCrmImportBatch(null);
+    setMsg("crmImportMsg", "文件名有变化，请重新执行第一步检查。", true);
+  });
   el("btnCrmEmergencyPause")?.addEventListener("click", async () => {
     const decision = await requestAdminPublicAction({
-      title: "紧急暂停 CRM",
-      message: "当前提交中的单动作将按安全边界收尾，其余 CRM 父流程会暂停。确认继续吗？",
-      confirmLabel: "确认紧急暂停",
+      title: "立即停止 CRM",
+      message: "系统会停止等待中的 CRM 任务；正在保存的单个操作会安全结束，客户资料不会被删除。确认继续吗？",
+      confirmLabel: "确认停止",
       tone: "danger",
     });
     if (!decision.confirmed) return;
     try {
       const payload = await api("/api/admin/modules/crm/emergency-pause", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirmed: true }) });
-      setMsg("crmGlobalMsg", `已紧急暂停；暂停流程 ${Number(payload?.paused_workflows || 0)} 个。`, true);
+      setMsg("crmGlobalMsg", `CRM 已停止；共暂停 ${Number(payload?.paused_workflows || 0)} 个等待中的任务。`, true);
       await loadCrmAdminModule();
     } catch (err) {
-      setMsg("crmGlobalMsg", getErrorMessage(err), false);
+      setMsg("crmGlobalMsg", crmFriendlyError(err, "CRM 未能停止，请稍后重试。"), false);
     }
   });
   bindModelTabs();
   bindTextModelContentTabs();
   bindRunningHubSlotTabs();
   el("btnRefreshGovernance")?.addEventListener("click", () => void loadGovernanceDashboard({ force: true }));
+  el("btnRefreshHotDatasets")?.addEventListener("click", () => void refreshHotDatasets({ force: true }));
   el("governanceRange")?.addEventListener("change", () => { syncGovernanceRangeControls(); void loadGovernanceDashboard({ force: true }); });
   el("governanceStartDate")?.addEventListener("change", () => void loadGovernanceDashboard({ force: true }));
   el("governanceEndDate")?.addEventListener("change", () => void loadGovernanceDashboard({ force: true }));
@@ -10436,7 +10489,6 @@ function bindActions() {
     } catch {}
   });
   el("btnNewProxyMarketItem")?.addEventListener("click", () => resetProxyMarketEditor({ focus: true }));
-  el("btnCancelProxyMarketEdit")?.addEventListener("click", () => resetProxyMarketEditor({ focus: true }));
   el("btnPasteProxyMarketSmartInput")?.addEventListener("click", async () => {
     try {
       const value = await navigator.clipboard.readText();
@@ -10445,48 +10497,21 @@ function bindActions() {
         return;
       }
       if (el("proxyMarketSmartInput")) el("proxyMarketSmartInput").value = value;
-      setProxyMarketSmartResult("内容已粘贴，请点击“识别并填充”开始解析。");
+      previewProxyMarketSmartInput();
       el("proxyMarketSmartInput")?.focus();
     } catch {
       el("proxyMarketSmartInput")?.focus();
-      setProxyMarketSmartResult("浏览器未允许读取剪贴板，请手动粘贴后识别。", "error");
+      setProxyMarketSmartResult("浏览器未允许读取剪贴板，请直接粘贴到识别框。", "error");
     }
   });
-  el("btnParseProxyMarketSmartInput")?.addEventListener("click", () => {
-    void applyProxyMarketSmartInput().catch((error) => {
-      setProxyMarketSmartResult(getErrorMessage(error), "error");
-    });
+  el("proxyMarketSmartInput")?.addEventListener("input", () => {
+    previewProxyMarketSmartInput();
   });
-  el("btnInspectProxyMarketConnection")?.addEventListener("click", async () => {
+  el("btnAutoPublishProxyMarketItem")?.addEventListener("click", async () => {
     try {
-      await inspectProxyMarketConnection();
-    } catch {}
-  });
-  el("proxyMarketItemForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      await saveProxyMarketItem();
+      await autoDetectAndPublishProxyMarketItem();
     } catch (error) {
-      setMsg("proxyMarketItemMsg", getErrorMessage(error), false);
-    }
-  });
-  el("btnPublishProxyMarketItem")?.addEventListener("click", async () => {
-    try {
-      await saveProxyMarketItem({ publish: true });
-    } catch (error) {
-      const prefix = error?.proxyMarketDraftSaved
-        ? "草稿已保存并保留在编辑器中；检测发布失败"
-        : error?.proxyMarketChangesSaved
-          ? "库存修改已保存；检测发布失败"
-          : "检测发布失败";
-      setMsg("proxyMarketItemMsg", `${prefix}：${getErrorMessage(error)}`, false);
-      if (!error?.adminPublicPromptShown) {
-        showAdminPublicPrompt({
-          title: "检测发布失败",
-          message: `${prefix}：${getErrorMessage(error)}`,
-          ok: false,
-        });
-      }
+      if (!error?.adminPublicPromptShown) setMsg("proxyMarketItemMsg", `自动检测发布失败：${getErrorMessage(error)}`, false);
     }
   });
   el("proxyMarketItemBody")?.addEventListener("click", async (event) => {
@@ -10494,7 +10519,6 @@ function bindActions() {
     if (!(button instanceof HTMLButtonElement)) return;
     const itemId = button.dataset.id || "";
     try {
-      if (button.dataset.proxyMarketAction === "edit") editProxyMarketItem(itemId);
       if (button.dataset.proxyMarketAction === "publish") await publishProxyMarketRow(itemId, button);
       if (button.dataset.proxyMarketAction === "archive") await archiveProxyMarketItem(itemId, button);
     } catch (error) {

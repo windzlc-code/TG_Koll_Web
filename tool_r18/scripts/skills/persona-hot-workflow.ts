@@ -10,6 +10,7 @@ import {
   fetchSentimentHotCandidates,
   getSentimentHotGlobalPoolStat,
   listSentimentHotCandidatePoolStats,
+  sentimentHotCandidatePoolLimits,
   prepareSentimentHotKeywords,
   refreshSentimentSourceMetrics,
   warmSentimentHotSearchStrategy,
@@ -48,6 +49,7 @@ type PrepareHotKeywordsInput = {
   archiveId: string;
   prompt?: string;
   refresh?: boolean;
+  forceRegenerate?: boolean;
   searchMode?: "normal" | "strict";
   writingLocale?: string;
   memorySummaries?: string[];
@@ -209,6 +211,7 @@ export async function prepareHotKeywords(input: PrepareHotKeywordsInput) {
     searchMode: input.searchMode === "normal" ? "normal" : "strict",
     writingLocale: String(input.writingLocale || "").trim() || undefined,
     refresh: input.refresh === true,
+    forceRegenerate: input.forceRegenerate === true,
   } as Parameters<typeof prepareSentimentHotKeywords>[0]);
   return {
     ok: true,
@@ -369,7 +372,7 @@ async function main() {
     const requestedIds = new Set((input.archiveIds || []).map((id) => String(id || "").trim()).filter(Boolean));
     const archives = (await listPersonaArchives()).filter((archive) => requestedIds.size === 0 || requestedIds.has(archive.id));
     const pools = requestedIds.size > 0 && archives.length === 0 ? [] : listSentimentHotCandidatePoolStats(archives);
-    await printJsonAndExit({ ok: true, pools, globalPool: getSentimentHotGlobalPoolStat() });
+    await printJsonAndExit({ ok: true, limits: sentimentHotCandidatePoolLimits(), pools, globalPool: getSentimentHotGlobalPoolStat() });
   }
   if (input.action === "import-hot-candidates") {
     await printJsonAndExit(await importHotCandidates(input));

@@ -68,6 +68,20 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         for label_id in ("governanceUsersRangeLabel", "governanceTasksRangeLabel"):
             self.assertIn(f'id="{label_id}"', self.html)
 
+    def test_hot_dataset_overview_is_vertical_global_first_and_uses_unique_persona_colors(self):
+        for element_id in ("hotDatasetOverviewTitle", "hotDatasetOverviewTime", "hotDatasetOverviewList", "btnRefreshHotDatasets"):
+            self.assertIn(f'id="{element_id}"', self.html)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) minmax(150px, 22%) 34px", self.html)
+        self.assertLess(self.html.index('class="admin-governance-kpis"'), self.html.index('class="hot-dataset-overview"'))
+        self.assertIn("const rows = [{ ...globalDataset, global: true }, ...personas];", self.script)
+        self.assertIn("index * 137.508", self.script)
+        self.assertIn('/api/admin/hot-datasets/refresh', self.script)
+        self.assertIn('/api/admin/hot-datasets/${encodeURIComponent(datasetId)}', self.script)
+        self.assertIn('{ method: "DELETE" }', self.script)
+        self.assertIn('requestAdminPublicAction({', self.script)
+        self.assertIn('确认删除数据集', self.script)
+        self.assertIn('function renderHotDatasetOverview(', self.script)
+
     def test_social_automation_limits_are_managed_in_admin_runtime(self):
         for element_id in (
             "rtSocialDailyPublishLimit",
@@ -559,7 +573,7 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
 
         health = self.script[
             self.script.index("function renderGovernanceHealth")
-            : self.script.index("function renderGovernanceQueue")
+            : self.script.index("function hotDatasetColor")
         ]
         for label in ("数据库", "连接与查询", "密码保险库", "加密密钥检查", "计费执行", "未启用"):
             self.assertIn(label, health)
@@ -575,6 +589,26 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn("markAdminDynamicUiElement(option)", taxonomy)
         self.assertIn('createAdminDynamicUiText("位客户")', taxonomy)
         self.assertNotIn("markAdminDynamicUiElement(name)", taxonomy)
+
+    def test_overview_notification_queue_is_removed_at_code_level(self):
+        for token in (
+            "admin-governance-queue-grid",
+            "admin-queue-panel",
+            "admin-queue-list",
+            "governancePendingQueue",
+            "governanceFailureQueue",
+            "governanceSecurityQueue",
+            "governanceAuditQueue",
+            "governanceBrowserQueue",
+            "governanceSubscriptionQueue",
+            "governancePasswordQueue",
+            "governanceBatchQueue",
+        ):
+            self.assertNotIn(token, self.html)
+        for token in ("renderGovernanceQueue", "governanceQueueItem", "admin-queue-item"):
+            self.assertNotIn(token, self.script)
+        for token in ("admin-governance-queue-grid", "admin-queue-list", "admin-queue-item"):
+            self.assertNotIn(token, self.styles)
 
     def test_admin_language_and_account_icons_are_centered_in_fixed_light_theme(self):
         self.assertIn(
