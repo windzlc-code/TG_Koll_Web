@@ -23132,6 +23132,12 @@ def create_app() -> FastAPI:
                 if primary_email_row is not None
                 else ""
             )
+            password_only_managed_login = bool(
+                not is_admin
+                and str(user.get("account_type") or "").strip().lower() == "managed"
+                and not primary_email
+                and not mfa_enabled
+            )
             if expected_admin is True and not is_admin:
                 raise HTTPException(status_code=403, detail="此入口仅供管理员登录")
             if expected_admin is False and is_admin:
@@ -23225,7 +23231,12 @@ def create_app() -> FastAPI:
                 and client_ip
                 and not hmac.compare_digest(preflight_login_ip, client_ip)
             )
-            if preflight_device_changed and preflight_ip_changed and not high_risk_verified:
+            if (
+                preflight_device_changed
+                and preflight_ip_changed
+                and not high_risk_verified
+                and not password_only_managed_login
+            ):
                 active_token_rows = conn.execute(
                     "SELECT token FROM sessions WHERE user_id = ? AND revoked_at = 0 AND expires_at > ?",
                     (int(user["id"]), _now_ts()),
@@ -23427,7 +23438,11 @@ def create_app() -> FastAPI:
                 and not hmac.compare_digest(previous_login_ip, client_ip)
             )
             high_risk_login = bool(device_changed and ip_changed and not matching_presented_token)
-            if high_risk_login and not high_risk_verified:
+            if (
+                high_risk_login
+                and not high_risk_verified
+                and not password_only_managed_login
+            ):
                 security_verification_required = True
                 security_verification_details = {
                     "new_device": True,
@@ -23505,7 +23520,11 @@ def create_app() -> FastAPI:
                         "method": (
                             f"password+{high_risk_verification_method}"
                             if high_risk_verification_method
-                            else "password"
+                            else (
+                                "password+managed_recovery"
+                                if high_risk_login and password_only_managed_login
+                                else "password"
+                            )
                         ),
                     },
                     risk_level="high" if high_risk_login else "low",
@@ -23517,7 +23536,12 @@ def create_app() -> FastAPI:
                         alert_type="new_device_and_network_login",
                         severity="high",
                         title="账号从新设备和新网络登录",
-                        summary=f"账号 {username} 已完成安全确认，并接管原有登录会话。",
+                        summary=(
+                            f"账号 {username} 使用管理员创建的密码型账号从新设备和新网络登录；"
+                            "该账号尚未配置独立二次验证方式。"
+                            if password_only_managed_login
+                            else f"账号 {username} 已完成安全确认，并接管原有登录会话。"
+                        ),
                         target_user_id=int(user["id"]),
                         fingerprint=(
                             f"new-context:{int(user['id'])}:"

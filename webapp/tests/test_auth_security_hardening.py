@@ -1629,6 +1629,62 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertEqual(int(active_count), 1)
         self.assertEqual(str(alert["severity"]), "high")
 
+    def test_admin_created_password_only_customer_can_recover_on_new_device_and_network(self):
+        admin, _identity = self._admin_client()
+        created = admin.post(
+            "/api/admin/users",
+            json={
+                "username": "managed_password_only",
+                "password": "guest123",
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        user_id = int(created.json()["user"]["id"])
+
+        trusted_browser = TestClient(self.app, client=("198.51.100.10", 50000))
+        seeded = trusted_browser.post(
+            "/api/auth/user-login",
+            json={
+                "username": "managed_password_only",
+                "password": "guest123",
+                "device_id": "trusted-device-a",
+            },
+        )
+        self.assertEqual(seeded.status_code, 200, seeded.text)
+
+        new_browser = TestClient(self.app, client=("203.0.113.25", 50000))
+        conflict = new_browser.post(
+            "/api/auth/user-login",
+            json={
+                "username": "managed_password_only",
+                "password": "guest123",
+                "device_id": "new-device-b",
+            },
+        )
+        self.assertEqual(conflict.status_code, 409, conflict.text)
+        self.assertEqual(conflict.json()["detail"]["code"], "SESSION_CONFLICT")
+
+        self.assertEqual(trusted_browser.post("/api/auth/logout").status_code, 200)
+        recovered = new_browser.post(
+            "/api/auth/user-login",
+            json={
+                "username": "managed_password_only",
+                "password": "guest123",
+                "device_id": "new-device-b",
+            },
+        )
+        self.assertEqual(recovered.status_code, 200, recovered.text)
+        self.assertEqual(recovered.json()["id"], user_id)
+
+        with server.db() as conn:
+            alert = conn.execute(
+                "SELECT severity FROM security_alerts "
+                "WHERE target_user_id = ? AND alert_type = 'new_device_and_network_login'",
+                (user_id,),
+            ).fetchone()
+        self.assertIsNotNone(alert)
+        self.assertEqual(str(alert["severity"]), "high")
+
     def test_second_browser_login_for_customer_returns_session_conflict(self):
         first_browser, _user_id = self._approved_client("single_session_customer")
         second_browser = TestClient(self.app)
