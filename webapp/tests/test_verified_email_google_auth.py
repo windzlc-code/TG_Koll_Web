@@ -511,7 +511,7 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
 
         claims = {
             "sub": "google-account-session-owner",
-            "email": "account.owner@gmail.com",
+            "email": "linked.google.account@gmail.com",
             "email_verified": True,
             "name": "Account Owner",
             "picture": "https://example.com/account-owner.png",
@@ -534,12 +534,76 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
         self.assertEqual(me.json()["verified_email"], "account.owner@gmail.com")
         self.assertTrue(me.json()["auth_methods"]["google"]["bound"])
         self.assertTrue(me.json()["auth_methods"]["google"]["enabled"])
+        self.assertEqual(
+            me.json()["auth_methods"]["google"]["email"],
+            "linked.google.account@gmail.com",
+        )
         with db_module.db() as conn:
             identity = conn.execute(
                 "SELECT user_id, provider_subject FROM oauth_identities WHERE provider = 'google'"
             ).fetchone()
         self.assertEqual(int(identity["user_id"]), int(original_me["id"]))
         self.assertEqual(identity["provider_subject"], "google-account-session-owner")
+
+    def test_google_account_session_rebinds_verified_identity_to_current_user(self):
+        original = self._register_email_user(
+            email="original.google.owner@gmail.com",
+            username="original-google-owner",
+        )
+        current = self._register_email_user(
+            email="current.console.owner@gmail.com",
+            username="current-console-owner",
+        )
+        original_user_id = int(original.get("/api/auth/me").json()["id"])
+        current_user_id = int(current.get("/api/auth/me").json()["id"])
+        claims = {
+            "sub": "transferable-google-subject",
+            "email": "original.google.owner@gmail.com",
+            "email_verified": True,
+            "name": "Google Owner",
+            "picture": "",
+        }
+
+        def authorize(client, code):
+            captured = {}
+
+            def authorization_url(state, nonce, redirect_uri):
+                captured.update(state=state, nonce=nonce, redirect_uri=redirect_uri)
+                return f"https://accounts.google.test/auth?state={state}"
+
+            with mock.patch.object(
+                server,
+                "create_google_authorization",
+                side_effect=authorization_url,
+            ):
+                started = client.get(
+                    "/api/auth/google/account-session/start",
+                    follow_redirects=False,
+                )
+            self.assertEqual(started.status_code, 302, started.text)
+            with mock.patch.object(server, "exchange_google_code", return_value=claims):
+                return client.get(
+                    f"/api/auth/google/callback?state={captured['state']}&code={code}",
+                    follow_redirects=False,
+                )
+
+        first_callback = authorize(original, "original-binding")
+        self.assertIn("google_account_session=success", first_callback.headers["location"])
+        rebound_callback = authorize(current, "replacement-binding")
+        self.assertIn("google_account_session=success", rebound_callback.headers["location"])
+
+        with db_module.db() as conn:
+            identity = conn.execute(
+                "SELECT user_id FROM oauth_identities WHERE provider = 'google' AND provider_subject = ?",
+                (claims["sub"],),
+            ).fetchone()
+        self.assertIsNotNone(identity)
+        self.assertEqual(int(identity["user_id"]), current_user_id)
+        self.assertNotEqual(int(identity["user_id"]), original_user_id)
+        self.assertFalse(original.get("/api/auth/me").json()["auth_methods"]["google"]["bound"])
+        current_google = current.get("/api/auth/me").json()["auth_methods"]["google"]
+        self.assertTrue(current_google["bound"])
+        self.assertEqual(current_google["email"], claims["email"])
 
     def test_google_account_session_preserves_admin_workspace_context(self):
         customer = self._register_email_user(

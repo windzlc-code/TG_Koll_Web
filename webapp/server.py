@@ -5513,6 +5513,7 @@ def _user_auth_methods_payload(user: dict[str, Any]) -> dict[str, Any]:
         "google": {
             "bound": google_bound,
             "enabled": google_enabled,
+            "email": str(user.get("google_identity_email") or "").strip(),
         },
     }
 
@@ -21532,16 +21533,10 @@ def create_app() -> FastAPI:
             )
         if int(user.get("must_change_password") or 0) == 1:
             return RedirectResponse(
-                url="/change-password.html?return_url=%2Fproxy-purchase",
+                url="/change-password.html?return_url=%2Fconsole.html",
                 status_code=302,
             )
-        return _html_response_with_versions(
-            "proxy-purchase.html",
-            replacements={
-                "__PROXY_PURCHASE_CSS_VERSION__": _asset_version("assets", "proxy-purchase.css"),
-                "__PROXY_PURCHASE_JS_VERSION__": _asset_version("assets", "proxy-purchase.js"),
-            },
-        )
+        return RedirectResponse(url="/console.html", status_code=302)
 
     @app.get("/profile.html", include_in_schema=False)
     @app.get("/admin-profile.html", include_in_schema=False)
@@ -22828,45 +22823,36 @@ def create_app() -> FastAPI:
                 owner = conn.execute("SELECT * FROM users WHERE id = ?", (owner_user_id,)).fetchone()
                 if owner is None or int(owner["is_disabled"] or 0):
                     return _oauth_error_redirect("account_unavailable")
-                subject_owner = conn.execute(
-                    "SELECT user_id FROM oauth_identities WHERE provider = 'google' AND provider_subject = ?",
+                subject_identity = conn.execute(
+                    "SELECT id, user_id FROM oauth_identities WHERE provider = 'google' AND provider_subject = ?",
                     (subject,),
                 ).fetchone()
-                user_google = conn.execute(
-                    "SELECT provider_subject FROM oauth_identities WHERE user_id = ? AND provider = 'google'",
-                    (owner_user_id,),
-                ).fetchone()
-                email_owner = conn.execute(
-                    "SELECT user_id FROM user_auth_emails WHERE email_normalized = ? COLLATE NOCASE",
-                    (email,),
-                ).fetchone()
-                result_code = "conflict" if (
-                    (subject_owner is not None and int(subject_owner["user_id"] or 0) != owner_user_id)
-                    or (user_google is not None and str(user_google["provider_subject"] or "") != subject)
-                    or (email_owner is not None and int(email_owner["user_id"] or 0) != owner_user_id)
-                ) else "success"
-                if result_code == "success":
-                    if user_google is None:
-                        conn.execute(
-                            """
-                            INSERT INTO oauth_identities(
-                              user_id, provider, provider_subject, email_normalized,
-                              email_verified, profile_json, login_enabled, last_login_at,
-                              created_at, updated_at
-                            ) VALUES (?, 'google', ?, ?, 1, ?, 1, ?, ?, ?)
-                            """,
-                            (owner_user_id, subject, email, profile_json, now, now, now),
-                        )
-                    else:
-                        conn.execute(
-                            """
-                            UPDATE oauth_identities
-                            SET email_normalized = ?, email_verified = 1, profile_json = ?,
-                                login_enabled = 1, last_login_at = ?, updated_at = ?
-                            WHERE user_id = ? AND provider = 'google'
-                            """,
-                            (email, profile_json, now, now, owner_user_id),
-                        )
+                conn.execute(
+                    "DELETE FROM oauth_identities WHERE user_id = ? AND provider = 'google' AND provider_subject != ?",
+                    (owner_user_id, subject),
+                )
+                if subject_identity is None:
+                    conn.execute(
+                        """
+                        INSERT INTO oauth_identities(
+                          user_id, provider, provider_subject, email_normalized,
+                          email_verified, profile_json, login_enabled, last_login_at,
+                          created_at, updated_at
+                        ) VALUES (?, 'google', ?, ?, 1, ?, 1, ?, ?, ?)
+                        """,
+                        (owner_user_id, subject, email, profile_json, now, now, now),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE oauth_identities
+                        SET user_id = ?, email_normalized = ?, email_verified = 1,
+                            profile_json = ?, login_enabled = 1, last_login_at = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (owner_user_id, email, profile_json, now, now, int(subject_identity["id"])),
+                    )
+                result_code = "success"
                 parsed_return = urlsplit(return_path)
                 return_params = dict(parse_qsl(parsed_return.query, keep_blank_values=True))
                 return_params["google_account_session"] = result_code
@@ -24266,6 +24252,7 @@ def create_app() -> FastAPI:
             "password_login_enabled": int(account.get("password_login_enabled", 1) or 0),
             "google_identity_bound": 1 if google_row is not None else 0,
             "google_login_enabled": int(google_row["login_enabled"] or 0) if google_row else 0,
+            "google_identity_email": str(google_row["email_normalized"] or "") if google_row else "",
         }
         return {
             "verified_email": (
@@ -26881,6 +26868,20 @@ def create_app() -> FastAPI:
     def api_admin_refresh_hot_datasets(user: dict[str, Any] = Depends(require_admin)):
         _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-datasets/refresh")
         return {"ok": True, **api_admin_hot_datasets(user)}
+
+    @app.get("/api/admin/hot-datasets/events")
+    def api_admin_hot_dataset_events(_user: dict[str, Any] = Depends(require_admin)):
+        payload = _hot_dataset_worker_request("GET", "/internal/worker/v1/hot-datasets/events")
+        events = payload.get("events")
+        return {"ok": True, "events": events if isinstance(events, list) else []}
+
+    @app.delete("/api/admin/hot-datasets/events/{event_id}")
+    def api_admin_delete_hot_dataset_event(event_id: str, _user: dict[str, Any] = Depends(require_admin)):
+        clean_id = str(event_id or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{32}", clean_id):
+            raise HTTPException(status_code=400, detail="热点数据集记录 ID 无效")
+        _hot_dataset_worker_request("DELETE", f"/internal/worker/v1/hot-datasets/events/{clean_id}")
+        return {"ok": True, "deleted": True}
 
     @app.delete("/api/admin/hot-datasets/{dataset_id}")
     def api_admin_delete_hot_dataset(dataset_id: str, user: dict[str, Any] = Depends(require_admin)):

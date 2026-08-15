@@ -911,6 +911,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
 
     def test_system_proxy_pool_switches_single_unbound_allocation(self):
         self._seed_system_proxy_owner_and_items("pool-first", "pool-second")
+        selected_at = social_api._now()
         with social_api.db() as conn:
             conn.execute("BEGIN IMMEDIATE")
             first, replaced = social_api.switch_system_proxy_in_transaction(
@@ -919,12 +920,12 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
                 owner_user_id=42,
                 client_request_id="select-first",
                 allow_admin_inventory=True,
+                now=selected_at,
             )
             self.assertFalse(replaced)
 
-        with self.assertRaises(HTTPException) as hidden:
-            social_api._require_proxy_access(str(first["id"]), {"id": 42, "is_admin": 0})
-        self.assertEqual(hidden.exception.status_code, 404)
+        visible_to_owner = social_api._require_proxy_access(str(first["id"]), {"id": 42, "is_admin": 0})
+        self.assertEqual(str(visible_to_owner["id"]), str(first["id"]))
         visible_to_admin = social_api._require_proxy_access(
             str(first["id"]),
             {"id": 1, "_workspace_user_id": 42, "_workspace_admin_user_id": 1},
@@ -932,18 +933,20 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         self.assertEqual(str(visible_to_admin["id"]), str(first["id"]))
 
         with social_api.db() as conn:
-            self.assertEqual(
-                social_api.list_system_proxy_pool_options(conn, owner_user_id=42),
-                [],
-            )
+            owner_choices = social_api.list_system_proxy_pool_options(conn, owner_user_id=42)
             choices = social_api.list_system_proxy_pool_options(
                 conn,
                 owner_user_id=42,
                 include_admin_inventory=True,
             )
+        self.assertEqual([row["market_item_id"] for row in owner_choices], ["pool-first", "pool-second"])
+        self.assertTrue(owner_choices[0]["details_revealed"])
+        self.assertFalse(owner_choices[1]["details_revealed"])
+        self.assertEqual(owner_choices[1]["host"], "")
+        self.assertFalse(owner_choices[1]["monthly_free_available"])
         self.assertEqual([row["market_item_id"] for row in choices], ["pool-first", "pool-second"])
         self.assertTrue(choices[0]["selected"])
-        self.assertTrue(choices[1]["available"])
+        self.assertFalse(choices[1]["available"])
 
         with social_api.db() as conn:
             other_user_choices = social_api.list_system_proxy_pool_options(
@@ -957,14 +960,30 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         )
         self.assertTrue(other_user_choices[0]["available"])
 
+        with self.assertRaises(HTTPException) as monthly_used:
+            with social_api.db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                social_api.switch_system_proxy_in_transaction(
+                    conn,
+                    item_id="pool-second",
+                    owner_user_id=42,
+                    client_request_id="select-second-same-month",
+                    allow_admin_inventory=True,
+                    now=selected_at,
+                )
+        self.assertIn("本月免费代理机会已使用", monthly_used.exception.detail)
+
+        next_month = selected_at + 32 * 24 * 60 * 60
         with social_api.db() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            conn.execute("UPDATE proxy_market_items SET last_check_at=? WHERE id='pool-second'", (next_month,))
             second, replaced = social_api.switch_system_proxy_in_transaction(
                 conn,
                 item_id="pool-second",
                 owner_user_id=42,
-                client_request_id="select-second",
+                client_request_id="select-second-next-month",
                 allow_admin_inventory=True,
+                now=next_month,
             )
         self.assertTrue(replaced)
         with social_api.db() as conn:

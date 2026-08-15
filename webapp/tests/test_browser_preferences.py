@@ -737,7 +737,7 @@ class BrowserPreferencesTests(unittest.TestCase):
         self.assertEqual(response.json()["preferences"]["manual_timeout_seconds"], 600)
         self.assertEqual(response.json()["preferences"]["standby_seconds"], 120)
         self.assertEqual(response.json()["preferences"]["auto_close_seconds"], 600)
-        self.assertEqual(social_automation_api.get_user_browser_preferences(2)["manual_timeout_seconds"], 900)
+        self.assertEqual(social_automation_api.get_user_browser_preferences(2)["manual_timeout_seconds"], 300)
 
     def test_auto_configure_uses_server_recommendation(self):
         app = FastAPI()

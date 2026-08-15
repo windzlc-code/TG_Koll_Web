@@ -235,6 +235,34 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(overview["personas"][0]["count"], 1)
         self.assertEqual(overview["personas"][0]["capacity"], 100)
 
+    def test_hot_dataset_change_events_use_first_snapshot_as_baseline_and_can_be_deleted(self) -> None:
+        archive_id = "12345678-1234-4234-8234-123456789abc"
+        baseline = {
+            "generated_at": 1_700_000_000,
+            "global": {"name": "全局数据集", "count": 10, "capacity": 100000},
+            "personas": [{"archive_id": archive_id, "name": "理发师", "count": 4, "capacity": 100}],
+        }
+        self.store._record_dataset_overview_changes(baseline, reason="worker_sync", source="worker")
+        self.assertEqual(self.store.list_hot_dataset_events(), [])
+
+        changed = {
+            **baseline,
+            "generated_at": 1_700_000_030,
+            "global": {**baseline["global"], "count": 13},
+            "personas": [{**baseline["personas"][0], "count": 2}],
+        }
+        self.store._record_dataset_overview_changes(changed, reason="worker_sync", source="worker")
+        events = self.store.list_hot_dataset_events()
+        self.assertEqual(len(events), 2)
+        self.assertEqual({event["dataset_id"]: event["delta"] for event in events}, {"global": 3, archive_id: -2})
+        self.assertEqual({event["dataset_id"]: (event["count_before"], event["count_after"]) for event in events}, {"global": (10, 13), archive_id: (4, 2)})
+
+        self.assertTrue(self.store.delete_hot_dataset_event(events[0]["id"]))
+        self.assertEqual(len(self.store.list_hot_dataset_events()), 1)
+        self.assertFalse(self.store.delete_hot_dataset_event(events[0]["id"]))
+        with self.assertRaises(ValueError):
+            self.store.delete_hot_dataset_event("invalid")
+
     def test_clear_hot_dataset_removes_candidates_but_preserves_persona_refill_target(self) -> None:
         now = int(time.time())
         archive_id = "12345678-1234-4234-8234-123456789abc"
@@ -615,6 +643,8 @@ class RemoteFetchIsolationTests(unittest.TestCase):
             self.assertIn("/health", paths)
             self.assertIn("/internal/worker/v1/jobs", paths)
             self.assertIn("/internal/worker/v1/hot-datasets/refresh", paths)
+            self.assertIn("/internal/worker/v1/hot-datasets/events", paths)
+            self.assertIn("/internal/worker/v1/hot-datasets/events/{event_id}", paths)
             self.assertIn("/internal/worker/v1/hot-datasets/{dataset_id}", paths)
             self.assertNotIn("/api/auth/login", paths)
             self.assertNotIn("/api/crm/v1/bootstrap", paths)

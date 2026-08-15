@@ -10614,7 +10614,6 @@ body.persona-touch-dragging .persona-list-card:active {
 
 @media (prefers-reduced-motion: reduce) {
   .persona-public-media-card.is-modify-source,
-  .account-proxy-purchase-placeholder,
   .persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {
     animation: none;
   }
@@ -17173,7 +17172,174 @@ body.persona-media-sorting {
 }
 
 .account-proxy-picker-modal {
+  --proxy-purchase-navy: #102c47;
+  --proxy-purchase-deep: #0b3f73;
+  --proxy-purchase-blue: #126eaa;
+  --proxy-purchase-cyan: #55c6d7;
+  --proxy-purchase-line: #c9d6e3;
+  --proxy-purchase-paper: #f7fafc;
+  --proxy-purchase-muted: #64758a;
+  position: relative;
+  overflow: hidden;
   width: min(880px, calc(100vw - 32px));
+  gap: 0;
+  padding: 0;
+  border-color: #bdccda;
+  border-radius: 18px;
+  box-shadow: 0 22px 60px rgba(16, 44, 71, .2);
+}
+
+.account-proxy-picker-modal::before {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  inset: 0 0 auto;
+  height: 5px;
+  background: linear-gradient(90deg, #68d5df 0 9%, #1678b4 24%, #102c47 70%);
+}
+
+.account-proxy-picker-modal .console-modal-head {
+  padding: 25px 26px 18px;
+  border-bottom: 1px solid #d7e1ea;
+  background: rgba(255, 255, 255, .97);
+}
+
+.account-proxy-purchase-title {
+  display: flex !important;
+  align-items: center;
+  gap: 11px !important;
+}
+
+.account-proxy-purchase-title > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.account-proxy-purchase-step {
+  display: grid;
+  place-items: center;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  color: #fff;
+  border-radius: 50%;
+  background: var(--proxy-purchase-navy);
+  font: 700 11px/1 ui-monospace, Consolas, monospace;
+}
+
+.account-proxy-picker-modal .account-proxy-purchase-head-actions {
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.account-proxy-provider-state {
+  padding: 6px 9px;
+  color: #087b65;
+  border: 1px solid #95d4c7;
+  border-radius: 6px;
+  background: #eefbf8;
+  font-size: 11px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.account-proxy-picker-modal .console-modal-content {
+  gap: 14px;
+  padding: 20px 22px 24px;
+  background:
+    linear-gradient(90deg, rgba(16, 44, 71, .028) 1px, transparent 1px) 0 0 / 44px 44px,
+    linear-gradient(rgba(16, 44, 71, .028) 1px, transparent 1px) 0 0 / 44px 44px,
+    var(--proxy-purchase-paper);
+}
+
+.account-proxy-mapped-product {
+  display: grid;
+  gap: 8px;
+  padding: 14px 15px;
+  border: 1px solid #bfd0de;
+  border-radius: 10px;
+  background: #f5f9fc;
+}
+
+.account-proxy-mapped-product > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-proxy-mapped-product span {
+  color: var(--proxy-purchase-muted);
+  font-size: 11px;
+}
+
+.account-proxy-mapped-product strong {
+  overflow: hidden;
+  color: var(--proxy-purchase-deep);
+  font-size: 13px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-proxy-mapped-product small {
+  color: var(--proxy-purchase-muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.account-proxy-region-guide {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 132px;
+  padding: 20px;
+  border: 1px dashed #b9c9d8;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .9);
+}
+
+.account-proxy-region-guide-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 46px;
+  width: 46px;
+  height: 46px;
+  color: #fff;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #1678b4, #102c47);
+}
+
+.account-proxy-region-guide-icon .ui-network-icon {
+  display: block;
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.account-proxy-region-guide > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.account-proxy-region-guide strong {
+  color: var(--proxy-purchase-navy, #102c47);
+  font-size: 15px;
+}
+
+.account-proxy-region-guide p {
+  max-width: 540px;
+  color: var(--proxy-purchase-muted, #64758a);
+  font-size: 12px;
+  line-height: 1.65;
 }
 
 .account-proxy-picker-modal .console-modal-head > div,
@@ -17255,9 +17421,6 @@ body.persona-media-sorting {
 
 .account-proxy-picker-controls,
 .account-proxy-picker-filters {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   min-width: 0;
 }
 
@@ -17268,51 +17431,76 @@ body.persona-media-sorting {
 
 .account-proxy-picker-filters {
   display: grid;
-  grid-template-columns: minmax(0, 142px) 36px;
-  flex: 0 1 auto;
-  align-items: center;
+  width: 100%;
+  gap: 8px;
 }
 
-.account-proxy-region-filter {
-  display: block;
-  min-width: 0;
-  margin: 0;
+.account-proxy-picker-location-row,
+.account-proxy-picker-action-row {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-proxy-picker-location-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.account-proxy-picker-action-row {
+  grid-template-columns: minmax(0, 112px) minmax(0, 142px);
+  justify-content: start;
 }
 
 .account-proxy-picker-filters label {
   display: grid;
+  gap: 7px;
   min-width: 0;
   margin: 0;
 }
 
+.account-proxy-picker-filters label > span {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .account-proxy-picker-filters select {
   min-width: 0;
-  height: 36px;
-  min-height: 36px;
-  padding: 0 10px;
+  height: 46px;
+  min-height: 46px;
+  padding: 0 38px 0 12px;
+  color: var(--ink);
+  border: 1px solid #b9c9d8;
+  border-radius: 8px;
+  background-color: #fff;
   box-sizing: border-box;
 }
 
-.account-proxy-picker-filters select:focus {
+.account-proxy-picker-filters select:focus,
+.account-proxy-picker-filters select:focus-visible {
+  outline: 3px solid rgba(85, 198, 215, .24);
+  border-color: var(--proxy-purchase-blue, var(--accent));
   box-shadow: none;
 }
 
 .account-proxy-filter-menu {
   position: relative;
-  width: 36px;
-  height: 36px;
+  width: 100%;
+  height: 40px;
 }
 
 .account-proxy-filter-menu > summary {
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 40px;
   padding: 0;
   color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--panel-solid);
+  background: #fff;
   list-style: none;
   cursor: pointer;
   box-sizing: border-box;
@@ -17383,113 +17571,9 @@ body.persona-media-sorting {
   background: var(--soft);
 }
 
-.account-proxy-purchase-placeholder {
-  --account-proxy-flow-highlight: #337bb1;
-  --account-proxy-flow-cyan: #1963a2;
-  --account-proxy-flow-blue: color-mix(in srgb, var(--accent-dark) 18%, #0b65b1);
-  --account-proxy-flow-deep: color-mix(in srgb, var(--accent-dark) 24%, #06366f);
-  --account-proxy-flow-navy: #243b53;
-  position: relative;
-  isolation: isolate;
-  display: flex;
-  align-items: center;
-  min-height: 56px;
-  gap: 9px;
-  margin: 2px 0 12px;
-  padding: 6px 10px;
-  box-sizing: border-box;
-  color: #f5fbfb;
-  border: 2px solid transparent;
-  border-radius: var(--radius);
-  background: linear-gradient(
-    100deg,
-    var(--account-proxy-flow-highlight) 0%,
-    var(--account-proxy-flow-cyan) 4%,
-    var(--account-proxy-flow-blue) 20%,
-    var(--account-proxy-flow-deep) 68%,
-    var(--account-proxy-flow-navy) 100%
-  ) border-box;
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
-  background-position: 0 0;
-  animation: none;
-  will-change: auto;
-}
-
-.account-proxy-purchase-icon {
-  display: grid;
-  place-items: center;
-  flex: 0 0 30px;
-  width: 30px;
-  height: 30px;
-  color: #fff;
-  border: 1px solid color-mix(in srgb, #fff 62%, transparent);
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--account-proxy-flow-deep) 58%, transparent);
-}
-
-.account-proxy-purchase-icon .ui-action-icon {
-  width: 16px;
-  height: 16px;
-}
-
-.account-proxy-purchase-placeholder > div {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.account-proxy-purchase-placeholder strong {
-  font-size: 13px;
-}
-
-.account-proxy-purchase-placeholder > div > span {
-  color: color-mix(in srgb, #fff 72%, var(--accent));
-  font-size: 11px;
-}
-
-.account-proxy-purchase-placeholder button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  flex: 0 0 auto;
-  min-height: 30px;
-  margin-left: auto;
-  color: #fff;
-  border: 1px solid var(--account-proxy-flow-blue);
-  background: var(--account-proxy-flow-blue);
-  background-image: none;
-}
-
-.account-proxy-purchase-placeholder button:is(:hover, :focus-visible, :active) {
-  color: #fff;
-  border-color: var(--account-proxy-flow-blue);
-  background: var(--account-proxy-flow-blue);
-  background-image: none;
-}
-
-.proxy-purchase-fallback-link {
-  display: inline-block;
-  margin-left: 6px;
-  color: var(--accent-ink, #0f5f94);
-  font-weight: 700;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.account-proxy-purchase-placeholder button .ui-action-icon,
-.account-proxy-clear .ui-no-proxy-icon {
-  display: block;
-  flex: 0 0 15px;
-  width: 15px;
-  height: 15px;
-  margin: 0;
-}
-
 .account-proxy-picker-controls .account-proxy-clear,
 .account-proxy-filter-menu > summary,
 .account-proxy-filter-menu-options button,
-.account-proxy-purchase-placeholder button,
 .proxy-market-mini-card > button {
   appearance: none;
   box-shadow: none;
@@ -17505,35 +17589,11 @@ body.persona-media-sorting {
 .account-proxy-filter-menu-options button:hover,
 .account-proxy-filter-menu-options button:focus-visible,
 .account-proxy-filter-menu-options button:active,
-.account-proxy-purchase-placeholder button:hover,
-.account-proxy-purchase-placeholder button:focus-visible,
-.account-proxy-purchase-placeholder button:active,
 .proxy-market-mini-card > button:hover,
 .proxy-market-mini-card > button:focus-visible,
 .proxy-market-mini-card > button:active {
   box-shadow: none;
   transform: none;
-}
-
-@media (max-width: 640px) {
-  .account-proxy-picker-controls {
-    gap: 6px;
-  }
-
-  .account-proxy-region-filter {
-    width: 142px;
-  }
-
-  .account-proxy-options.proxy-market-mini-grid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 8px;
-  }
-
-  .account-proxy-options .proxy-market-mini-card {
-    gap: 7px;
-    padding: 10px;
-    min-height: 176px;
-  }
 }
 
 .proxy-market-mini-grid {
@@ -17552,13 +17612,30 @@ body.persona-media-sorting {
 }
 
 .proxy-market-mini-card {
+  position: relative;
+  overflow: hidden;
   display: grid;
-  grid-template-rows: auto auto minmax(18px, auto) auto auto 34px;
-  min-height: 198px;
+  grid-template-rows: auto auto minmax(18px, auto) auto auto auto 34px;
+  min-height: 222px;
   gap: 8px;
-  padding: 11px;
-  border-color: var(--line);
-  background: var(--panel-solid);
+  padding: 14px;
+  border-color: #bfd0de;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 8px 22px rgba(16, 44, 71, .07);
+}
+
+.proxy-market-mini-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, #68d5df 0 12%, #1678b4 32%, #102c47 82%);
+}
+
+.proxy-market-mini-card[aria-current="true"] {
+  border-color: var(--proxy-purchase-blue, #126eaa);
+  box-shadow: 0 10px 26px rgba(16, 44, 71, .12);
 }
 
 .proxy-market-mini-card-head,
@@ -17588,13 +17665,14 @@ body.persona-media-sorting {
 }
 
 .proxy-market-mini-country {
-  color: var(--ink);
-  background: var(--soft);
+  color: #fff;
+  background: var(--proxy-purchase-navy, #102c47);
 }
 
 .proxy-market-mini-stock {
   color: #0b6957;
   background: #ddf7ef;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #15a383 24%, transparent);
 }
 
 .proxy-market-mini-usage {
@@ -17665,6 +17743,24 @@ body.persona-media-sorting {
   gap: 6px;
   width: 100%;
   min-height: 34px;
+  border-color: var(--proxy-purchase-navy, #102c47);
+  border-radius: 8px;
+  background: var(--proxy-purchase-navy, #102c47);
+  color: #fff;
+  font-weight: 800;
+}
+
+.proxy-market-mini-card > button:not(:disabled):hover,
+.proxy-market-mini-card > button:not(:disabled):focus-visible {
+  border-color: #174d78;
+  background: #174d78;
+  color: #fff;
+}
+
+.proxy-market-mini-card > button:disabled {
+  color: #778796;
+  border-color: #d9e1e8;
+  background: #d9e1e8;
 }
 
 .proxy-market-mini-card > button .ui-network-icon {
@@ -17683,18 +17779,22 @@ body.persona-media-sorting {
   justify-content: center;
   gap: 6px;
   flex: 0 0 auto;
-  height: 36px;
-  min-height: 36px;
+  height: 40px;
+  min-height: 40px;
   padding: 0 10px;
   color: var(--ink);
   border: 1px solid var(--line);
-  background: var(--panel-solid);
+  border-radius: 8px;
+  background: #fff;
   box-sizing: border-box;
   white-space: nowrap;
 }
 
-.account-proxy-clear .ui-no-proxy-icon,
-.account-proxy-purchase-placeholder :is(.ui-network-icon, .ui-shopping-bag-icon) {
+.account-proxy-clear .ui-no-proxy-icon {
+  display: block;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.9;
@@ -17703,383 +17803,23 @@ body.persona-media-sorting {
 }
 
 #consoleModal :is(.account-proxy-picker-modal, .account-proxy-picker-panel) .proxy-market-mini-card > button.primary {
-  background-color: var(--accent);
+  border-color: var(--proxy-purchase-navy, #102c47);
+  background-color: var(--proxy-purchase-navy, #102c47);
   background-image: none;
 }
 
-.console-modal-dialog.account-proxy-purchase-source-hidden {
-  display: none !important;
-}
-
-.console-modal-dialog.account-proxy-purchase-modal {
-  width: min(560px, calc(100vw - 32px));
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 0;
-  padding: 0;
-  overflow: hidden;
-}
-
-.account-proxy-purchase-modal-head {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--line);
-}
-
-.account-proxy-purchase-modal-head > div {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-
-.account-proxy-purchase-modal-head > div > p {
-  overflow: hidden;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.account-proxy-purchase-back {
-  display: grid;
-  width: 44px;
-  min-width: 44px;
-  min-height: 44px;
-  padding: 0;
-  place-items: center;
-  color: var(--ink);
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  box-shadow: none;
-}
-
-.account-proxy-purchase-back:hover,
-.account-proxy-purchase-back:focus-visible {
-  color: var(--accent-dark);
-  border: 0;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
-.account-proxy-purchase-back .ui-arrow-icon {
-  width: 22px;
-  height: 22px;
-  flex-basis: 22px;
-  -webkit-mask-size: 22px 22px;
-  mask-size: 22px 22px;
-}
-
-.account-proxy-purchase-modal-content {
-  padding: 0;
-  overflow: hidden;
-}
-
-.account-proxy-purchase-embedded {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr);
-  max-height: min(720px, calc(100vh - 120px));
-  min-height: 0;
-  overflow: hidden;
-  background: #f7fafc;
-}
-
-.account-proxy-purchase-form {
-  display: grid;
-  gap: 14px;
-  min-height: 0;
-  padding: 16px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-  background: #f7fafc;
-}
-
-.account-proxy-purchase-alert {
-  padding: 10px 12px;
-  color: #9a332c;
-  border: 1px solid #efbbb6;
-  border-radius: 8px;
-  background: #fff4f3;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.account-proxy-purchase-product {
-  display: grid;
-  gap: 5px;
-  padding: 13px 14px;
-  color: #fff;
-  border: 1px solid #155f91;
-  border-radius: 10px;
-  background: linear-gradient(100deg, #168cbd 0%, #114f83 30%, #0d3157 100%);
-}
-
-.account-proxy-purchase-product > div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.account-proxy-purchase-product span,
-.account-proxy-purchase-product small { color: #d8f4ff; }
-.account-proxy-purchase-product span { font-size: 11px; }
-.account-proxy-purchase-product strong { font-size: 15px; }
-.account-proxy-purchase-product small { font-size: 11px; line-height: 1.45; }
-
-.account-proxy-purchase-field {
-  display: grid;
-  gap: 6px;
-}
-
-.account-proxy-purchase-field > span {
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 850;
-}
-
-.account-proxy-purchase-field > select {
-  width: 100%;
-  min-height: 42px;
-  color: var(--ink);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background-color: var(--panel-solid);
-  font-weight: 750;
-}
-
-.account-proxy-purchase-field > small {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.account-proxy-purchase-city {
-  display: grid;
-  gap: 10px;
-}
-
-.account-proxy-purchase-city-toggle {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  min-height: 40px;
-  padding: 0;
-  color: var(--ink);
-  text-align: center;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.account-proxy-purchase-city-toggle:not(:disabled) { cursor: pointer; }
-.account-proxy-purchase-city-toggle:disabled { opacity: .55; cursor: not-allowed; }
-
-.account-proxy-purchase-city-label {
-  color: transparent;
-  font-size: 17px;
-  font-weight: 400;
-  line-height: 1;
-  background: linear-gradient(100deg, #168cbd 0%, #114f83 42%, #0d3157 100%);
-  background-clip: text;
-  -webkit-background-clip: text;
-}
-
-.account-proxy-purchase-city-plus {
-  display: inline-grid;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  transition: transform .16s ease;
-}
-
-.account-proxy-purchase-city-plus .ui-action-icon { width: 22px; height: 22px; }
-.account-proxy-purchase-city-toggle[aria-expanded="true"] .account-proxy-purchase-city-plus {
-  transform: rotate(45deg);
-}
-
-.account-proxy-purchase-city-field {
-  width: 100%;
-}
-.account-proxy-purchase-city-field[hidden] { display: none !important; }
-
-.account-proxy-purchase-renewal {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 16px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--panel-solid);
-  cursor: pointer;
-}
-
-.account-proxy-purchase-renewal > span { display: grid; gap: 4px; min-width: 0; }
-.account-proxy-purchase-renewal strong { color: var(--ink); font-size: 14px; font-weight: 850; }
-.account-proxy-purchase-renewal small { max-width: 380px; color: var(--muted); font-size: 11px; line-height: 1.45; }
-.account-proxy-purchase-renewal input { position: absolute; opacity: 0; pointer-events: none; }
-.account-proxy-purchase-renewal > i {
-  position: relative;
-  flex: 0 0 38px;
-  width: 38px;
-  height: 22px;
-  border: 1px solid #aebbc7;
-  border-radius: 999px;
-  background: #dce3e9;
-  transition: background-color .16s ease, border-color .16s ease;
-}
-
-.account-proxy-purchase-renewal > i::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #fff;
-  transition: transform .16s ease;
-}
-
-.account-proxy-purchase-renewal input:checked + i { border-color: #147fb4; background: #147fb4; }
-.account-proxy-purchase-renewal input:checked + i::after { transform: translateX(16px); }
-.account-proxy-purchase-renewal input:focus-visible + i { outline: 2px solid #66b9df; outline-offset: 2px; }
-
-.account-proxy-purchase-submit {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 52px;
-  min-height: 52px;
-  padding: 0 16px;
-  color: #fff;
-  border: 0;
-  border-radius: 8px;
-  background: #223a4c;
-  font-size: 16px;
-  font-weight: 850;
-}
-
-.account-proxy-purchase-submit:not(:disabled) { cursor: pointer; }
-.account-proxy-purchase-submit:disabled { opacity: .55; }
-
-/* Keep the purchase CTA larger than the global compact mobile button rule. */
-@media (max-width: 760px) {
-  .console-page .account-proxy-purchase-submit {
-    height: 52px;
-    min-height: 52px !important;
-  }
-}
-
-.account-proxy-purchase-status {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid #a9cde4;
-  border-radius: 9px;
-  background: #eff8fd;
-}
-
-.account-proxy-purchase-status[hidden] {
-  display: none !important;
-}
-
-.account-proxy-purchase-status > span {
-  width: 9px;
-  height: 9px;
-  margin-top: 4px;
-  border-radius: 50%;
-  background: #147fb4;
-}
-
-.account-proxy-purchase-status > div { display: grid; gap: 3px; }
-.account-proxy-purchase-status strong { color: var(--ink); font-size: 12px; }
-.account-proxy-purchase-status p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
-.account-proxy-purchase-status[data-tone="success"] { border-color: #9bd2c7; background: #edfaf7; }
-.account-proxy-purchase-status[data-tone="success"] > span { background: #08725f; }
-.account-proxy-purchase-status[data-tone="warning"] { border-color: #e3c17d; background: #fff9e9; }
-.account-proxy-purchase-status[data-tone="warning"] > span { background: #aa6e00; }
-.account-proxy-purchase-status[data-tone="error"] { border-color: #efbbb6; background: #fff4f3; }
-.account-proxy-purchase-status[data-tone="error"] > span { background: #b5473d; }
-
-.account-proxy-purchase-success {
-  display: grid;
-  min-height: 360px;
-  padding: 42px 24px 28px;
-  place-items: center;
-  align-content: center;
-  gap: 12px;
-  text-align: center;
-  background: #f7fafc;
-}
-
-.account-proxy-purchase-success[hidden] { display: none !important; }
-
-.account-proxy-purchase-success-check {
-  display: grid;
-  width: 82px;
-  height: 82px;
-  margin-bottom: 8px;
-  place-items: center;
-  color: #15966f;
-  border-radius: 50%;
-  background: #e9f8f2;
-  animation: accountProxyPurchaseSuccessPop .42s cubic-bezier(.2, .9, .3, 1.25) both;
-}
-
-.account-proxy-purchase-success-check svg { width: 62px; height: 62px; overflow: visible; }
-.account-proxy-purchase-success-check circle,
-.account-proxy-purchase-success-check path {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 4;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.account-proxy-purchase-success-check circle { opacity: .24; }
-.account-proxy-purchase-success-check path {
-  stroke-dasharray: 42;
-  stroke-dashoffset: 42;
-  animation: accountProxyPurchaseCheckDraw .46s .2s ease-out forwards;
-}
-
-.account-proxy-purchase-success > strong { color: var(--ink); font-size: 22px; }
-.account-proxy-purchase-success > p { margin: 0; color: var(--muted); font-size: 13px; }
-.account-proxy-purchase-success > button {
-  width: min(260px, 100%);
-  min-height: 46px;
-  margin-top: 14px;
-  color: #fff;
-  border: 0;
-  border-radius: 8px;
-  background: #223a4c;
-  font-weight: 800;
-}
-
-@keyframes accountProxyPurchaseSuccessPop {
-  from { opacity: 0; transform: scale(.72); }
-  to { opacity: 1; transform: scale(1); }
-}
-
-@keyframes accountProxyPurchaseCheckDraw {
-  to { stroke-dashoffset: 0; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .account-proxy-purchase-success-check,
-  .account-proxy-purchase-success-check path { animation: none; }
-  .account-proxy-purchase-success-check path { stroke-dashoffset: 0; }
-}
-
 @media (max-width: 640px) {
-  .console-modal-dialog.account-proxy-purchase-modal { max-height: calc(100dvh - 12px); }
-  .account-proxy-purchase-modal-head { grid-template-columns: auto minmax(0, 1fr) auto; padding: 10px; }
-  .account-proxy-purchase-embedded { max-height: calc(100dvh - 72px); }
-  .account-proxy-purchase-form { padding: 12px; }
+  .account-proxy-picker-modal { border-radius: 13px; }
+  .account-proxy-picker-modal .console-modal-head { padding: 20px 16px 15px; }
+  .account-proxy-picker-modal .console-modal-content { padding: 15px 11px 18px; }
+  .account-proxy-provider-state { padding: 5px 7px; font-size: 10px; }
+  .account-proxy-purchase-step { flex-basis: 30px; width: 30px; height: 30px; }
+  .account-proxy-region-guide { min-height: 118px; padding: 16px; }
+  .account-proxy-region-guide-icon { flex-basis: 40px; width: 40px; height: 40px; }
+  .account-proxy-picker-controls { gap: 6px; }
+  .account-proxy-picker-action-row { grid-template-columns: minmax(0, 104px) minmax(0, 136px); }
+  .account-proxy-options.proxy-market-mini-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .account-proxy-options .proxy-market-mini-card { gap: 7px; padding: 13px; min-height: 210px; }
 }
 
 .account-proxy-enable {
@@ -19141,6 +18881,97 @@ body.persona-media-sorting {
   white-space: nowrap;
 }
 
+.account-pool-card-continue-login {
+  display: inline-flex;
+  grid-area: resume;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--soft);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: none;
+}
+
+.account-pool-card-continue-login[hidden] {
+  display: none;
+}
+
+.account-pool-card-continue-login:hover,
+.account-pool-card-continue-login:focus-visible {
+  background: var(--ink);
+  color: var(--surface);
+}
+
+.account-pool-card-continue-login .ui-action-icon {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.proxy-market-mini-renewal,
+.proxy-market-mini-managed-renewal {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.proxy-market-mini-renewal {
+  justify-content: space-between;
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 9px;
+  border: 1px solid #c9d6e3;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: none;
+}
+
+.proxy-market-mini-renewal i {
+  position: relative;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: #c6d2dc;
+  transition: background var(--motion-fast);
+}
+
+.proxy-market-mini-renewal i::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, .18);
+  transition: transform var(--motion-fast);
+}
+
+.proxy-market-mini-renewal[aria-pressed="true"] i { background: #126eaa; }
+.proxy-market-mini-renewal[aria-pressed="true"] i::after { transform: translateX(18px); }
+.proxy-market-mini-managed-renewal { justify-content: flex-end; }
+
+.account-proxy-filter-menu > summary span {
+  font-size: 12px;
+  font-weight: 750;
+}
+
 .account-pool-bound-persona {
   display: block;
   width: 100%;
@@ -19174,7 +19005,7 @@ body.persona-media-sorting {
   display: grid;
   grid-template-columns: 22px auto auto minmax(0, 1fr) auto;
   grid-template-areas:
-    "check platform copy status status"
+    "check platform copy resume status"
     "username username username username totp";
   align-items: center;
   gap: 4px 7px;
@@ -19227,10 +19058,10 @@ body.persona-media-sorting {
 
 .account-pool-card.account-pool-card--persona .account-pool-card-main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   grid-template-areas:
-    "platform flags"
-    "username flags";
+    "platform resume flags"
+    "username username flags";
   align-items: center;
   gap: 4px 7px;
 }
@@ -28408,6 +28239,26 @@ body.console-page {
   text-align: center;
 }
 
+.login-assistance-footer {
+  display: flex;
+  justify-content: center;
+  padding: 14px 20px 18px;
+  border-top: 1px solid #d6e0e8;
+  background: #fff;
+}
+
+.login-assistance-footer button {
+  width: min(100%, 390px);
+  min-height: 46px;
+  justify-content: center;
+  border-radius: 10px;
+  font-size: 15px;
+}
+
+.login-assistance-footer button[hidden] {
+  display: none;
+}
+
 .persona-hot-card-actions :is(.ui-action-icon, .ui-edit-icon),
 .persona-hot-preview-actions :is(.ui-action-icon, .ui-edit-icon) {
   width: 16px;
@@ -28509,6 +28360,13 @@ body.console-page {
   line-height: 1.65;
 }
 
+.login-assistance-deadline {
+  color: #b66d08;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 .login-assistance-action {
   width: min(100%, 390px);
 }
@@ -28605,6 +28463,10 @@ body.console-page {
   .login-assistance-body {
     min-height: 390px;
     padding: 30px 20px 24px;
+  }
+
+  .login-assistance-footer {
+    padding: 12px 16px 16px;
   }
 }
 

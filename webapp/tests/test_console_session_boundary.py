@@ -44,6 +44,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("login-assistance-success", self.styles)
         self.assertIn("login-assistance-spinner", self.styles)
         self.assertIn("login-assistance-draw", self.styles)
+        self.assertIn('data-login-assistance-stop', self.source)
+        self.assertIn('cancelSocialAutomationTask(cleanTaskId', self.source)
+        self.assertIn("login-assistance-footer", self.styles)
 
     def test_console_uses_vecto_site_navigation_without_replacing_workspace_navigation(self):
         self.assertIn('data-site-header data-site-page="console"', self.markup)
@@ -491,6 +494,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("model.fieldLabel", update_source)
         self.assertIn("model.inputMode", update_source)
         self.assertIn("model.submitLabel", update_source)
+        self.assertIn("model.remainingSeconds", update_source)
+        self.assertIn("login-assistance-deadline", update_source)
+        self.assertIn("超时后本次登录将自动取消", self.source)
 
     def test_open_login_account_actions_preserve_running_task_navigation(self):
         actions = self._section("function renderAccountPoolCardActions", "function renderAccountPoolCard(")
@@ -516,6 +522,18 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("openLiveBrowserTaskView(activeTask.id)", self.source)
         self.assertGreaterEqual(self.source.count("openLoginAssistanceView(activeTask.id, accountId)"), 3)
         self.assertGreaterEqual(self.source.count("openLoginAssistanceView(taskId, accountId)"), 3)
+
+    def test_account_card_exposes_continue_login_for_any_active_login_task(self):
+        fields = self._section("function renderAccountPoolCardFields", "function renderAccountPoolCard(")
+        update = self._javascript_function_source(self.source, "updateAccountLoginResumeButton")
+
+        self.assertIn('data-account-login-resume="true"', fields)
+        self.assertIn("继续登录", fields)
+        self.assertIn("Boolean(activeLoginTask?.id)", update)
+        self.assertNotIn('=== "need_manual"', update)
+        self.assertIn("Boolean(activeLoginTask?.id)", fields)
+        self.assertIn("renderBrowserLaunchIcon()", update)
+        self.assertIn("continue-login", self.styles)
 
     def test_account_card_actions_keep_icons_and_single_row_login_width(self):
         update_status = self._javascript_function_source(self.source, "updateAccountStatusViews")
@@ -3261,32 +3279,32 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("显示名称", identity)
         self.assertIn("登录账号", identity)
         self.assertIn("fields.login_password", apply)
-        self.assertIn("fields.totp_secret_or_uri", apply)
+        self.assertNotIn("totp_secret_or_uri", apply)
         self.assertIn('password.dataset.passwordDirty = "true"', apply)
-        self.assertIn("totp_secret_or_uri", create_save)
+        self.assertNotIn("totp_secret_or_uri", create_save)
         self.assertNotIn("/card-transfer", create_save)
         self.assertNotIn("/card-transfer", edit_save)
-        self.assertIn("/totp", edit_save)
+        self.assertNotIn("/totp", edit_save)
         self.assertNotIn("data-account-card-paste-summary", self.source)
 
-    def test_account_pool_clipboard_is_only_three_plain_text_fields(self):
+    def test_account_pool_clipboard_is_only_account_and_password_plain_text(self):
         serialize = self._function_source("serializeAccountClipboardText")
         parse = self._function_source("parseAccountClipboardText")
         copy_one = self._function_source("copyAccountPoolCardToClipboard")
 
         self.assertIn('"登录账号: "', serialize)
         self.assertIn('"密码: "', serialize)
-        self.assertIn('"2FA: "', serialize)
+        self.assertNotIn('"2FA: "', serialize)
         self.assertNotIn("JSON.stringify", serialize)
         self.assertNotIn("platform", serialize)
         self.assertNotIn("proxy", serialize)
         self.assertNotIn("persona", serialize)
         self.assertIn("username", parse)
         self.assertIn("login_password", parse)
-        self.assertIn("totp_secret_or_uri", parse)
+        self.assertNotIn("totp_secret_or_uri", parse)
         self.assertIn("copyTextToClipboard(state.accountClipboardText)", copy_one)
         self.assertIn(
-            'showMsg("socialMsg", "登录账号、密码和 2FA 已复制到剪贴板", true)',
+            'showMsg("socialMsg", "登录账号和密码已复制到剪贴板", true)',
             copy_one,
         )
 
@@ -3423,42 +3441,34 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         save = self._function_source("saveAccountPoolCreateForm")
 
         self.assertIn("renderAccountIdentityFields(account, mode)", editor)
-        self.assertIn("renderAccountTotpSection(account, mode)", editor)
+        self.assertNotIn("renderAccountTotpSection(account, mode)", editor)
         self.assertIn("renderAccountProxyPickerPanel(account, mode)", editor)
-        self.assertIn("data-account-totp-create-stage", self._function_source("renderAccountTotpSection"))
-        self.assertIn("<span>2FA 密钥</span>", self._function_source("renderAccountTotpSection"))
-        self.assertIn("2FA 未配置", self._function_source("renderAccountTotpSection"))
         self.assertIn("renderAccountEditorForm(account, mode)", modal)
-        self.assertIn('event.target.closest("[data-account-totp-create-stage]")', modal)
+        self.assertNotIn("data-account-totp", modal)
         self.assertIn("openAccountAddMethodModal(options)", create_entry)
         method_modal = self._section("function openAccountAddMethodModal", "function openAccountPoolEditModal")
-        google_modal = self._section("function openGoogleAccountSessionModal", "function openAccountAddMethodModal")
+        google_result = self._function_source("consumeGoogleAccountSessionResult")
         reuse_session = self._function_source("startAccountBrowserSessionReuse")
-        totp_section = self._function_source("renderAccountTotpSection")
         self.assertIn('data-account-add-method="manual"', method_modal)
+        self.assertIn("填写账号密码", method_modal)
         self.assertIn('data-account-add-method="google"', method_modal)
         self.assertIn("Google 快速接入", method_modal)
-        self.assertIn("账号专属指纹浏览器", google_modal)
-        self.assertIn("data-google-session-authorize", google_modal)
-        self.assertIn("data-google-session-save", google_modal)
-        self.assertIn("data-google-session-login", google_modal)
-        self.assertNotIn("登录态 · 待检测", google_modal)
-        self.assertNotIn("data-google-platform-session-state", google_modal)
+        self.assertIn("两种入口均使用现有账号密码登录流程", method_modal)
+        self.assertIn("openAccountPoolEditorModal(options)", method_modal)
+        self.assertNotIn("openGoogleAccountSessionModal", self.source)
+        self.assertNotIn("createGoogleSessionAccount", self.source)
+        self.assertNotIn("startGoogleBrowserLogin", self.source)
+        self.assertNotIn('login_target: "google"', self.source)
+        self.assertNotIn('connection_method: "google_browser"', self.source)
         self.assertNotIn("startAccountBrowserCookieImport", self.source)
         self.assertNotIn("cookie_import_ticket", self.source)
         self.assertNotIn("account-cookie-helper", self.source)
-        self.assertNotIn("bridgeWindow", google_modal)
         self.assertIn("startAccountBrowserSessionReuse", self.source)
-        self.assertIn('class="google-account-session-platform"', google_modal)
-        self.assertNotIn("浏览器环境", google_modal)
-        self.assertIn('adminWorkspaceUrl("/api/auth/google/account-session/start")', google_modal)
-        self.assertNotIn('type="password"', google_modal)
+        self.assertIn("openAccountPoolEditorModal", google_result)
+        self.assertIn("googleAccountSessionResultConsumed", google_result)
+        self.assertNotIn("一键谷歌登录", google_result)
         self.assertIn("/reuse_session", reuse_session)
         self.assertNotIn("openLiveBrowserTaskView", reuse_session)
-        self.assertIn("data-account-totp-toggle", totp_section)
-        self.assertIn('aria-expanded="false"', totp_section)
-        self.assertIn("data-account-totp-body hidden", totp_section)
-        self.assertIn('event.target.closest("[data-account-totp-toggle]")', modal)
         self.assertIn("openAccountPoolEditorModal({ account })", edit_modal)
         self.assertNotIn("renderAccountCreatePasswordField", self.source)
         self.assertNotIn("renderAccountCreateTotpSection", self.source)
@@ -3485,7 +3495,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('event.target.closest("[data-account-proxy-picker-open]")', modal)
         self.assertNotIn("saveAccountInlineCustomProxy", modal)
         self.assertIn('payload.proxy_id = selectedProxyId', save)
-        self.assertIn('payload.totp_secret_or_uri = totpSecret', save)
+        self.assertNotIn("totp_secret_or_uri", save)
         self.assertNotIn("payload.residential_proxy", save)
 
     def test_account_proxy_picker_matches_backend_eligibility_and_tracks_real_changes(self):
@@ -3539,9 +3549,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         proxy_pool = self._function_source("renderProxyPool")
 
         self.assertIn("accountProxyPoolFiltersHtml", picker)
-        self.assertIn("accountProxyPurchasePlaceholderHtml", picker)
         self.assertIn("loadAccountProxyPickerPool", picker)
         self.assertIn("claimAccountProxyPoolOption", picker)
+        self.assertIn('data-account-proxy-filter="city"', self.source)
+        self.assertIn('class="account-proxy-picker-location-row"', self.source)
+        self.assertIn('class="account-proxy-picker-action-row"', self.source)
         self.assertIn("选择代理", picker)
         self.assertNotIn("data-account-proxy-custom-add", picker)
         self.assertNotIn("data-account-system-proxy-pool-open", picker)
@@ -3555,7 +3567,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("data-account-proxy-picker-open", editor_modal)
         self.assertNotIn("saveAccountInlineCustomProxy", editor_modal)
         self.assertIn("data-account-proxy-picker-open", picker_panel)
-        self.assertIn("accountProxyPurchasePlaceholderHtml", picker_panel)
+        self.assertNotIn("accountProxyPurchasePlaceholderHtml", picker_panel)
+        self.assertNotIn("openAccountProxyPurchaseView", self.source)
         self.assertNotIn("accountProxyInlineCustomFormHtml", picker_panel)
         self.assertNotIn("function saveAccountInlineCustomProxy", self.source)
         self.assertNotIn("function openSystemProxyPoolModal", self.source)
@@ -3563,107 +3576,20 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("data-proxy-add", proxy_pool)
         self.assertNotIn("data-system-proxy-pool-open", proxy_pool)
 
-    def test_proxy_purchase_completion_waits_for_owned_proxy_and_restores_picker(self):
-        render_order = self._function_source("accountProxyPurchaseRenderOrder")
-        finalize = self._function_source("accountProxyPurchaseFinalizeActive")
+    def test_proxy_selection_confirms_free_claim_and_keeps_renewal_in_cards(self):
+        claim = self._function_source("claimAccountProxyPoolOption")
+        cards = self._section("function accountProxyOptionCardsHtml", "function setAccountProxyPoolSort")
+        renewal = self._function_source("updateAccountProxyRenewal")
 
-        self.assertIn('const complete = status === "active";', render_order)
-        self.assertIn("await fetchSocialDataShared({ force: true })", finalize)
-        self.assertIn("closeAccountProxyPurchaseView", finalize)
-        self.assertIn("await loadAccountProxyPickerPool(modal)", finalize)
-        self.assertIn("accountProxyPurchaseResolveLocalProxy", finalize)
-        self.assertNotIn("options[0]", finalize)
-        self.assertLess(
-            finalize.index("await fetchSocialDataShared({ force: true })"),
-            finalize.index("closeAccountProxyPurchaseView"),
-        )
-        self.assertLess(
-            finalize.index("closeAccountProxyPurchaseView"),
-            finalize.index("await loadAccountProxyPickerPool(modal)"),
-        )
-
-    def test_proxy_purchase_local_proxy_resolution_never_guesses(self):
-        harness = textwrap.dedent(
-            f"""
-            const assert = require("assert");
-            {self._function_source("accountProxyPurchaseLocalIds")}
-            {self._function_source("accountProxyPurchaseResolveLocalProxy")}
-
-            const pool = {{ options: [
-              {{ market_item_id: "market-a", social_proxy_id: "social-a" }},
-              {{ market_item_id: "market-b", social_proxy_id: "social-b" }},
-            ] }};
-            assert.deepStrictEqual(
-              accountProxyPurchaseResolveLocalProxy({{ market_item_id: "market-b" }}, pool),
-              {{ marketItemId: "market-b", socialProxyId: "social-b" }},
-            );
-            assert.deepStrictEqual(
-              accountProxyPurchaseResolveLocalProxy({{ social_proxy_id: "social-a" }}, pool),
-              {{ marketItemId: "market-a", socialProxyId: "social-a" }},
-            );
-            assert.strictEqual(accountProxyPurchaseResolveLocalProxy({{}}, pool), null);
-            assert.strictEqual(
-              accountProxyPurchaseResolveLocalProxy({{ market_item_id: "missing" }}, pool),
-              null,
-            );
-            """
-        )
-        self._run_node(harness)
-
-    def test_proxy_purchase_uses_independent_dialog_and_restores_origin(self):
-        markup = self._function_source("accountProxyPurchaseDialogHtml")
-        open_view = self._function_source("openAccountProxyPurchaseView")
-        close_view = self._function_source("closeAccountProxyPurchaseView")
-        render_options = self._function_source("accountProxyPurchaseRenderOptions")
-
-        self.assertIn("account-proxy-purchase-modal", markup)
-        self.assertIn("data-account-proxy-purchase-back", markup)
-        self.assertIn("data-account-proxy-purchase-close", markup)
-        self.assertIn("购买专属代理 IP", markup)
-        self.assertIn("sourceDialog.hidden = true", open_view)
-        self.assertIn('sourceDialog.classList.add("account-proxy-purchase-source-hidden")', open_view)
-        self.assertIn("modal.appendChild(purchaseDialog)", open_view)
-        self.assertNotIn("window.open", open_view)
-        self.assertNotIn("host.innerHTML = accountProxyPurchaseEmbeddedHtml()", open_view)
-        self.assertIn("view.purchaseDialog.remove()", close_view)
-        self.assertIn("view.sourceDialog.hidden = false", close_view)
-        self.assertIn('view.sourceDialog.classList.remove("account-proxy-purchase-source-hidden")', close_view)
-        self.assertIn("sync.hidden = ready", render_options)
-        self.assertIn(".account-proxy-purchase-modal", self.styles)
-        self.assertIn(".account-proxy-purchase-status[hidden]", self.styles)
-
-    def test_proxy_purchase_page_hides_price_and_uses_plain_purchase_copy(self):
-        markup = self._function_source("accountProxyPurchaseEmbeddedHtml")
-        dialog = self._function_source("accountProxyPurchaseDialogHtml")
-        render_options = self._function_source("accountProxyPurchaseRenderOptions")
-        quote = self._function_source("accountProxyPurchaseRefreshQuote")
-
-        self.assertIn("静态住宅代理 IP", markup)
-        self.assertNotIn("· 1 个 · 1 个月", markup)
-        self.assertNotIn("periodMonths", render_options)
-        self.assertNotIn("payload?.quantity", render_options)
-        self.assertIn("购买后自动加入你的代理列表", markup)
-        self.assertIn("可购买地区与库存由供应商实时同步", markup)
-        self.assertIn("自动续费", markup)
-        self.assertIn("余额充足时自动续费", markup)
-        self.assertIn("确认购买", markup)
-        self.assertNotIn("平台托管自动续费", markup)
-        self.assertNotIn("现金背书点余额", markup)
-        self.assertNotIn("本次应付", markup)
-        self.assertNotIn("data-account-proxy-purchase-quote", markup)
-        self.assertNotIn("<b aria-hidden", markup)
-        self.assertNotIn("使用算力点完成购买", dialog)
-        self.assertIn("ui-arrow-icon ui-arrow-icon--left", dialog)
-        self.assertNotIn(">←", dialog)
-        self.assertNotIn("quote.charge_points", quote)
-        self.assertIn("justify-content: center", self.styles)
-        self.assertIn("min-height: 52px", self.styles)
-        self.assertIn("min-height: 52px !important", self.styles)
-        self.assertNotIn(".account-proxy-purchase-submit b", self.styles)
-        self.assertNotIn(".account-proxy-purchase-back span { display: none; }", self.styles)
-        self.assertIn(".account-proxy-purchase-back .ui-arrow-icon", self.styles)
-        self.assertIn("width: 22px", self.styles)
-        self.assertIn("border: 0", self.styles)
+        self.assertIn("openConsoleModal", claim)
+        self.assertIn("stack: true", claim)
+        self.assertIn("本月免费机会领取后不可重复使用", claim)
+        self.assertIn("选择后显示 IP、端口和凭据", cards)
+        self.assertIn('data-account-proxy-renewal-order', cards)
+        self.assertIn('"免费"', cards)
+        self.assertIn('/api/proxy-purchases/orders/${encodeURIComponent(orderId)}/renewal', renewal)
+        self.assertNotIn("function accountProxyPurchaseDialogHtml", self.source)
+        self.assertNotIn("account-proxy-purchase-modal", self.styles)
 
     def test_totp_code_card_uses_stable_svg_ring_and_millisecond_clock(self):
         controller = self._function_source("createAccountTotpController")

@@ -1622,7 +1622,7 @@ def init_db() -> None:
                 CHECK(completion_policy IN ('immediate_close', 'review_hold')),
               review_hold_seconds INTEGER NOT NULL DEFAULT 30
                 CHECK(review_hold_seconds BETWEEN 10 AND 300),
-              manual_timeout_seconds INTEGER NOT NULL DEFAULT 900
+              manual_timeout_seconds INTEGER NOT NULL DEFAULT 300
                 CHECK(manual_timeout_seconds BETWEEN 300 AND 1800),
               requested_concurrency INTEGER NOT NULL DEFAULT 1
                 CHECK(requested_concurrency BETWEEN 1 AND 12),

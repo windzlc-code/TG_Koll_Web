@@ -61,6 +61,7 @@ from .system_proxy_pool import (
     is_system_proxy_option_id,
     list_available_system_proxy_options,
     list_system_proxy_pool_options,
+    monthly_free_proxy_status,
     release_system_proxy_in_transaction,
     switch_system_proxy_in_transaction,
     system_proxy_item_id,
@@ -513,7 +514,7 @@ class BrowserPreferencesPayload(BaseModel):
     review_hold_seconds: int = Field(default=30, ge=10, le=300)
     standby_seconds: int | None = Field(default=None, ge=0, le=3600)
     auto_close_seconds: int | None = Field(default=None, ge=10, le=86400)
-    manual_timeout_seconds: int = Field(default=900, ge=300, le=1800)
+    manual_timeout_seconds: int = Field(default=300, ge=300, le=1800)
     requested_concurrency: int = Field(default=1, ge=1, le=12)
     text_input_mode: str = Field(default="paste", max_length=20)
 
@@ -852,7 +853,12 @@ def _record_social_account_totp_outcome(account_id: str, user_id: int, outcome: 
 def _require_proxy_access(proxy_id: str, user: dict[str, Any]) -> Any:
     row = _require_owned_resource("social_proxies", proxy_id, user, label="代理")
     if not _can_view_admin_proxy_inventory(user):
-        if str(row["source"] or "") != "provider_purchase" or str(row["purchase_status"] or "") != "owned":
+        source = str(row["source"] or "")
+        purchase_status = str(row["purchase_status"] or "")
+        if not (
+            (source == "provider_purchase" and purchase_status == "owned")
+            or (source == "marketplace" and purchase_status == "leased")
+        ):
             raise HTTPException(status_code=404, detail="代理不存在")
     return row
 
@@ -2573,10 +2579,10 @@ def register_social_automation_routes(app: FastAPI) -> None:
         user: dict[str, Any] = Depends(get_current_user),
     ):
         account = _require_account_access(account_id, user)
-        wait_seconds = max(3600, int(os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600")))
         body = payload if isinstance(payload, dict) else {}
         task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
         task_payload = dict(task_payload or {})
+        wait_seconds = max(3600, int(os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600")))
         _validate_user_task_media_paths(task_payload, user)
         requested_mode = _open_login_auto_submit_mode(task_payload)
         if requested_mode is False and "auto_submit" in task_payload:
@@ -2648,8 +2654,10 @@ def register_social_automation_routes(app: FastAPI) -> None:
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM social_proxies WHERE user_id = ? AND source = 'provider_purchase' "
-                    "AND purchase_status = 'owned' ORDER BY updated_at DESC, created_at DESC",
+                    "SELECT * FROM social_proxies WHERE user_id = ? AND ("
+                    "(source = 'provider_purchase' AND purchase_status = 'owned') OR "
+                    "(source = 'marketplace' AND purchase_status = 'leased')) "
+                    "ORDER BY updated_at DESC, created_at DESC",
                     (owner_user_id,),
                 ).fetchall()
             proxies = _proxy_public_rows(conn, rows)
@@ -2664,6 +2672,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
                 owner_user_id=owner_user_id,
                 include_admin_inventory=_can_view_admin_proxy_inventory(user),
             )
+            monthly_free = monthly_free_proxy_status(conn, owner_user_id=owner_user_id)
         current = next((
             option for option in options
             if bool(option.get("selected")) and str(option.get("ownership_type") or "shared") != "owned"
@@ -2671,6 +2680,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
         return {
             "ok": True,
             "claim_limit": 1,
+            "monthly_free": monthly_free,
             "current": current,
             "options": options,
         }
@@ -2689,7 +2699,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
                 owner_user_id=owner_user_id,
                 client_request_id=payload.client_request_id,
                 expected_current_item_id=payload.expected_current_item_id,
-                allow_admin_inventory=_can_view_admin_proxy_inventory(user),
+                allow_admin_inventory=True,
             )
             proxy = _proxy_public_rows(conn, [proxy_row])[0]
         return {
@@ -4349,7 +4359,7 @@ def _default_user_browser_preferences() -> dict[str, Any]:
         "review_hold_seconds": 30,
         "standby_seconds": 0,
         "auto_close_seconds": 30,
-        "manual_timeout_seconds": 900,
+        "manual_timeout_seconds": 300,
         "requested_concurrency": max(
             1,
             min(SOCIAL_AUTOMATION_USER_CONCURRENCY_LIMIT, global_limit),
@@ -4375,7 +4385,7 @@ def get_user_browser_preferences(user_id: int) -> dict[str, Any]:
             "review_hold_seconds": max(10, min(int(row["review_hold_seconds"] or 30), 300)),
             "standby_seconds": max(0, min(int(row["standby_seconds"] or 0), 3600)),
             "auto_close_seconds": max(10, min(int(row["auto_close_seconds"] or 30), 86400)),
-            "manual_timeout_seconds": max(300, min(int(row["manual_timeout_seconds"] or 900), 1800)),
+            "manual_timeout_seconds": max(300, min(int(row["manual_timeout_seconds"] or 300), 1800)),
             "requested_concurrency": max(
                 1,
                 min(
@@ -4409,7 +4419,7 @@ def effective_user_browser_preferences(preferences: dict[str, Any]) -> dict[str,
         "review_hold_seconds": hold_seconds if policy == "review_hold" else 0,
         "standby_seconds": standby_seconds if policy == "review_hold" else 0,
         "auto_close_seconds": auto_close_seconds if policy == "review_hold" else 10,
-        "manual_timeout_seconds": max(300, min(int(preferences.get("manual_timeout_seconds") or 900), 1800)),
+        "manual_timeout_seconds": max(300, min(int(preferences.get("manual_timeout_seconds") or 300), 1800)),
         "requested_concurrency": max(
             1,
             min(
@@ -4694,7 +4704,7 @@ def browser_environment_recommendation(user_id: int) -> dict[str, Any]:
             "review_hold_seconds": 30,
             "standby_seconds": 0,
             "auto_close_seconds": 30,
-            "manual_timeout_seconds": 900,
+            "manual_timeout_seconds": 300,
             "requested_concurrency": recommended_concurrency,
             "text_input_mode": "paste",
         },
@@ -5790,7 +5800,7 @@ def create_social_account(
             LIMIT 1
             """,
             (persona_id, owner_user_id, platform, username),
-        ).fetchone()
+        ).fetchone() if username else None
         if existing:
             raise HTTPException(status_code=409, detail="同平台账号用户名已存在")
         account_id = _NEW_ID("social_account")
@@ -9774,17 +9784,6 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
     if _is_task_cancelled(task_id):
         _discard_ephemeral_task_secrets(task_id)
         return
-    account_id = str(account.get("id") or task.get("account_id") or "")
-    owner_user_id = int(account.get("user_id") or task.get("user_id") or 0)
-    control["totp_code_provider"] = lambda: _reserve_social_account_totp_code(
-        account_id,
-        owner_user_id,
-    )
-    control["totp_outcome_callback"] = lambda outcome: _record_social_account_totp_outcome(
-        account_id,
-        owner_user_id,
-        str(outcome or ""),
-    )
     task = _apply_runtime_task_preferences(task, account, control)
     from social_automation.runner import (
         AutoLoginFailedError,

@@ -333,6 +333,7 @@ const initialConsoleParams = new URLSearchParams(window.location.search);
 const initialConsoleView = initialConsoleParams.get("view");
 const initialAccountBrowserPanel = initialConsoleParams.get("browser_panel");
 const initialGoogleAccountSessionResult = initialConsoleParams.get("google_account_session");
+let googleAccountSessionResultConsumed = false;
 const VIDEO_WORKBENCH_ENABLED = ADMIN_CONSOLE_SESSION;
 const VIDEO_WORKSPACE_MODULES = [
   { id: "digital_human_video", label: "数字人口播视频" },
@@ -360,17 +361,18 @@ function clearInitialConsoleRouteHint() {
 }
 
 function consumeGoogleAccountSessionResult() {
-  if (!initialGoogleAccountSessionResult) return;
+  if (!initialGoogleAccountSessionResult || googleAccountSessionResultConsumed) return;
+  googleAccountSessionResultConsumed = true;
   const url = new URL(window.location.href);
   url.searchParams.delete("google_account_session");
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   if (initialGoogleAccountSessionResult === "success") {
-    showMsg("socialMsg", "Google 授权已完成，可继续保存账号或一键登录。", true);
-    openGoogleAccountSessionModal();
+    showMsg("socialMsg", "Google 授权已完成，请填写平台账号密码继续登录。", true);
+    openAccountPoolEditorModal({ platform: state.accountPoolPlatform });
     return;
   }
   showMsg("socialMsg", "该 Google 身份已绑定其他账户，请更换 Google 账号后重试。", false);
-  openGoogleAccountSessionModal();
+  openAccountPoolEditorModal({ platform: state.accountPoolPlatform });
 }
 
 const state = {
@@ -6361,7 +6363,6 @@ async function deleteSocialAccountRecord(accountId, messageId = "socialMsg") {
   showMsg(messageId, "执行账号已删除。", true);
   await loadSocial().catch(() => {});
   renderWorkspace();
-  consumeGoogleAccountSessionResult();
   return true;
 }
 
@@ -11007,17 +11008,6 @@ function renderPlusIcon() {
   return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <path d="M12 5v14"></path>
     <path d="M5 12h14"></path>
-  </svg>`;
-}
-
-function renderProxyPurchasePlusIcon() {
-  return `<svg class="ui-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <defs><linearGradient id="proxyPurchaseCityPlusGradient" gradientUnits="userSpaceOnUse" x1="4" y1="4" x2="20" y2="20">
-      <stop offset="0%" stop-color="#168cbd"></stop>
-      <stop offset="42%" stop-color="#114f83"></stop>
-      <stop offset="100%" stop-color="#0d3157"></stop>
-    </linearGradient></defs>
-    <path d="M12 4v16M4 12h16" fill="none" stroke="url(#proxyPurchaseCityPlusGradient)" stroke-width="2.2" stroke-linecap="round"></path>
   </svg>`;
 }
 
@@ -17223,7 +17213,7 @@ function normalizeBrowserPreferences(value) {
   const rawAutoCloseSeconds = Number(raw.auto_close_seconds);
   const autoCloseSeconds = Math.min(Math.max(Math.round(Number.isFinite(rawAutoCloseSeconds) ? rawAutoCloseSeconds : reviewHoldSeconds), 10), 86400);
   const rawManualTimeout = Number(raw.manual_timeout_seconds);
-  const manualTimeout = Math.min(Math.max(Math.round(Number.isFinite(rawManualTimeout) ? rawManualTimeout : 900), 300), 1800);
+  const manualTimeout = Math.min(Math.max(Math.round(Number.isFinite(rawManualTimeout) ? rawManualTimeout : 300), 300), 1800);
   const rawRequestedConcurrency = Number(raw.requested_concurrency);
   const requestedConcurrency = Math.min(Math.max(Math.round(Number.isFinite(rawRequestedConcurrency) ? rawRequestedConcurrency : 2), 1), 12);
   return {
@@ -26422,6 +26412,10 @@ function loginAssistanceViewModel(task = {}, session = null) {
   const assistance = session?.login_assistance && typeof session.login_assistance === "object"
     ? session.login_assistance
     : {};
+  const expiresAt = Number(assistance.expires_at || 0);
+  const remainingSeconds = expiresAt > 0
+    ? Math.max(0, Math.ceil(expiresAt - (Date.now() / 1000)))
+    : 0;
   if (taskStatus === "success" || assistance.phase === "success") {
     return {
       phase: "success",
@@ -26446,7 +26440,15 @@ function loginAssistanceViewModel(task = {}, session = null) {
     fieldLabel: String(assistance.field_label || "验证码"),
     inputMode: String(assistance.input_mode || "text"),
     submitLabel: String(assistance.submit_label || "提交并继续"),
+    remainingSeconds,
   };
+}
+
+function loginAssistanceTimeLimitLabel(remainingSeconds = 0) {
+  const totalSeconds = Math.max(0, Number(remainingSeconds || 0));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  return `剩余 ${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}，超时后本次登录将自动取消。`;
 }
 
 function renderLoginAssistanceVisual(model = {}) {
@@ -26507,6 +26509,8 @@ function renderLoginAssistanceAction(model = {}, session = null) {
 function updateLoginAssistanceModal(modal, task = {}, session = null) {
   if (!modal?.isConnected) return;
   const model = loginAssistanceViewModel(task, session);
+  const taskStatus = loginAssistanceTaskStatus(task);
+  const canStop = !["success", "failed", "cancelled"].includes(taskStatus);
   const renderKey = JSON.stringify([
     model.phase,
     model.kind,
@@ -26515,6 +26519,8 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
     model.fieldLabel,
     model.inputMode,
     model.submitLabel,
+    model.remainingSeconds,
+    taskStatus,
     Boolean(session?.input_allowed),
   ]);
   if (modal.dataset.loginAssistanceRenderKey === renderKey) return;
@@ -26527,12 +26533,20 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
     <div class="login-assistance-copy">
       <strong>${esc(model.title)}</strong>
       <p>${esc(model.message)}</p>
+      ${model.remainingSeconds > 0 && !["success", "error"].includes(model.phase)
+        ? `<small class="login-assistance-deadline">${esc(loginAssistanceTimeLimitLabel(model.remainingSeconds))}</small>`
+        : ""}
     </div>
     <div class="login-assistance-action">${renderLoginAssistanceAction(model, session)}</div>
     ${session && model.kind !== "browser_interaction" && model.phase !== "success"
       ? `<button type="button" class="login-assistance-live-link" data-login-assistance-live>查看实时画面</button>`
       : ""}
   `;
+  const stopButton = modal.querySelector("[data-login-assistance-stop]");
+  if (stopButton) {
+    stopButton.hidden = !canStop;
+    if (!stopButton.dataset.stopPending) stopButton.disabled = !canStop;
+  }
   translateConsoleLanguage(body, currentLanguage());
 }
 
@@ -26589,6 +26603,9 @@ function openLoginAssistanceView(taskId = "", accountId = "") {
         ${renderModalCloseButton("data-login-assistance-close")}
       </div>
       <div class="login-assistance-body is-running" data-login-assistance-body></div>
+      <div class="login-assistance-footer">
+        <button type="button" class="danger" data-login-assistance-stop>停止任务</button>
+      </div>
     </section>
   `;
   document.body.appendChild(modal);
@@ -26614,7 +26631,27 @@ function openLoginAssistanceView(taskId = "", accountId = "") {
     stopped = true;
     if (timer) window.clearTimeout(timer);
   };
-  modal.addEventListener("click", (event) => {
+  modal.addEventListener("click", async (event) => {
+    const stopButton = event.target.closest("[data-login-assistance-stop]");
+    if (stopButton) {
+      stopButton.disabled = true;
+      stopButton.dataset.stopPending = "true";
+      stopButton.textContent = "正在停止…";
+      try {
+        const result = await cancelSocialAutomationTask(cleanTaskId, "socialMsg");
+        const cancelledTask = result?.task
+          || (state.socialTasks || []).find((item) => String(item?.id || "") === cleanTaskId)
+          || { id: cleanTaskId, status: "cancelled" };
+        modal.dataset.loginAssistanceRenderKey = "";
+        updateLoginAssistanceModal(modal, { ...cancelledTask, status: "cancelled" }, currentSession);
+      } catch (error) {
+        delete stopButton.dataset.stopPending;
+        stopButton.disabled = false;
+        stopButton.textContent = "停止任务";
+        showToast(error?.detail || error?.message || "停止登录任务失败", false);
+      }
+      return;
+    }
     if (event.target.closest("[data-login-assistance-close]")) {
       closeConsoleModal(null, modal);
       return;
@@ -26691,6 +26728,19 @@ function updateAccountOpenLoginButton(button, accountId = "") {
   button.removeAttribute("aria-busy");
 }
 
+function updateAccountLoginResumeButton(button, accountId = "") {
+  if (!button) return;
+  const activeLoginTask = activeOpenLoginTaskForAccount(accountId);
+  const canResume = Boolean(activeLoginTask?.id);
+  button.hidden = !canResume;
+  button.innerHTML = `${renderBrowserLaunchIcon()}<span>继续登录</span>`;
+  if (canResume && activeLoginTask?.id) {
+    button.dataset.openLoginTaskId = String(activeLoginTask.id);
+    return;
+  }
+  delete button.dataset.openLoginTaskId;
+}
+
 function updateAccountStatusViews() {
   const accountById = new Map((state.socialAccounts || []).map((account) => [String(account.id || ""), account]));
   document.querySelectorAll("[data-account-status-for]").forEach((node) => {
@@ -26725,7 +26775,8 @@ function updateAccountStatusViews() {
   });
   document.querySelectorAll("[data-social-open-login], [data-persona-account-open-login]").forEach((button) => {
     const accountId = String(button.dataset.socialOpenLogin || button.dataset.personaAccountOpenLogin || "");
-    updateAccountOpenLoginButton(button, accountId);
+    if (button.matches("[data-account-login-resume]")) updateAccountLoginResumeButton(button, accountId);
+    else updateAccountOpenLoginButton(button, accountId);
   });
 }
 
@@ -27288,9 +27339,11 @@ function renderAccountPoolCardActions(account, { context = "pool", personaAccoun
   </div>`;
 }
 
-function renderAccountPoolCardFields(account, { selectionControl = "", includeCopyButton = false } = {}) {
+function renderAccountPoolCardFields(account, { selectionControl = "", includeCopyButton = false, loginActionAttribute = "data-social-open-login" } = {}) {
   const accountId = String(account?.id || "");
   const platform = normalizeAccountPoolPlatform(account?.platform || "threads");
+  const activeLoginTask = activeOpenLoginTaskForAccount(accountId);
+  const canResumeLogin = Boolean(activeLoginTask?.id);
   const platformCopy = [
     platformLabel(platform),
     account?.display_name && account.display_name !== account.username ? account.display_name : "",
@@ -27307,6 +27360,7 @@ function renderAccountPoolCardFields(account, { selectionControl = "", includeCo
         ${includeCopyButton ? `<button type="button" class="account-pool-card-copy-button" data-account-pool-copy-card="${esc(accountId)}" title="复制账号字段" aria-label="复制账号字段">${renderClipboardIcon()}</button>` : ""}
       </span>
     </span>
+    <button type="button" class="account-pool-card-continue-login" ${loginActionAttribute}="${esc(accountId)}" data-account-login-resume="true" ${activeLoginTask?.id ? `data-open-login-task-id="${esc(activeLoginTask.id)}"` : ""} ${canResumeLogin ? "" : "hidden"}>${renderBrowserLaunchIcon()}<span>继续登录</span></button>
     <span class="account-pool-card-flags">
       <span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${renderAccountStatusContent(account)}</span>
       ${renderAccountTotpBadge(account)}
@@ -27329,7 +27383,11 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
       <span aria-hidden="true"></span>
     </label>`;
   return `<article class="account-card account-pool-card ${isPersonaSettings ? "account-pool-card--persona" : ""} ${active ? "is-active" : ""} ${checked ? "is-checked" : ""}" data-account-platform="${esc(accountPlatform)}" ${accountCardTarget} role="button" tabindex="0" aria-pressed="${active ? "true" : "false"}">
-    ${renderAccountPoolCardFields(account, { selectionControl, includeCopyButton: !isPersonaSettings })}
+    ${renderAccountPoolCardFields(account, {
+      selectionControl,
+      includeCopyButton: !isPersonaSettings,
+      loginActionAttribute: isPersonaSettings ? "data-persona-account-open-login" : "data-social-open-login",
+    })}
     <strong class="account-pool-bound-persona ${boundPersona ? "is-bound" : "is-unbound"}" title="${esc(boundPersona ? `已绑定：${boundPersona.name || boundPersona.id}` : "未绑定人设")}">${esc(boundPersona ? `已绑定：${boundPersona.name || boundPersona.id}` : "未绑定人设")}</strong>
     <div class="account-card-meta">
       <span data-account-proxy-for="${esc(accountId)}">${esc(accountResidentialProxyLabel(account))}</span>
@@ -27653,7 +27711,6 @@ function syncAccountPoolCreateDraftFromForm() {
     login_username: String($("accountPoolLoginUsername")?.value || "").trim(),
     username: String($("accountPoolUsername")?.value || "").trim(),
     login_password: String($("accountPoolLoginPassword")?.value || ""),
-    totp_secret_or_uri: String($("accountPoolTotpSecret")?.value || "").trim(),
   };
 }
 
@@ -27701,7 +27758,6 @@ function renderAccountEditorForm(account = null, mode = "create") {
       <strong>${esc(platformLabel(platform))}</strong>
     </div>
     ${renderAccountIdentityFields(account, mode)}
-    ${renderAccountTotpSection(account, mode)}
     ${renderAccountProxyPickerPanel(account, mode)}
   </div>`;
 }
@@ -27723,8 +27779,6 @@ async function saveAccountPoolCreateForm(options) {
   };
   const selectedProxyId = String(proxyId || "").trim();
   if (selectedProxyId) payload.proxy_id = selectedProxyId;
-  const totpSecret = accountPoolDraftValue("totp_secret_or_uri").trim();
-  if (totpSecret) payload.totp_secret_or_uri = totpSecret;
   if (!loginIdentifier) {
     showMsg("socialMsg", `请填写${accountLoginIdentifierCopy(platform).placeholder}。`, false);
     return false;
@@ -27755,7 +27809,6 @@ function serializeAccountClipboardText(fields) {
   return [
     "登录账号: " + String(fields.login_username || fields.username || ""),
     "密码: " + String(fields.login_password || ""),
-    "2FA: " + String(fields.totp_secret_or_uri || ""),
   ].join("\n");
 }
 
@@ -27764,7 +27817,6 @@ function parseAccountClipboardText(value = "") {
     login_username: "",
     username: "",
     login_password: "",
-    totp_secret_or_uri: "",
   };
   const aliases = {
     "登录账号": "login_username",
@@ -27773,10 +27825,9 @@ function parseAccountClipboardText(value = "") {
     "邮箱": "login_username",
     "手机号": "login_username",
     "密码": "login_password",
-    "2fa": "totp_secret_or_uri",
   };
   String(value || "").split(/\r?\n/).forEach((line) => {
-    const match = line.match(/^\s*(登录账号|账号|用户名|邮箱|手机号|密码|2fa)\s*[:：=]\s*(.*?)\s*$/i);
+    const match = line.match(/^\s*(登录账号|账号|用户名|邮箱|手机号|密码)\s*[:：=]\s*(.*?)\s*$/i);
     if (!match) return;
     fields[aliases[match[1].toLowerCase()]] = match[2];
   });
@@ -27786,7 +27837,7 @@ function parseAccountClipboardText(value = "") {
   return fields;
 }
 
-function applyAccountClipboardFields(modal, fields, totpController = null) {
+function applyAccountClipboardFields(modal, fields) {
   if (!modal) return false;
   fields = fields || {};
   const editing = modal.dataset.accountEditorMode === "edit";
@@ -27798,7 +27849,6 @@ function applyAccountClipboardFields(modal, fields, totpController = null) {
       ? loginIdentifier
       : String(fields.username || "").trim().replace(/^@+/, ""),
     login_password: String(fields.login_password || ""),
-    totp_secret_or_uri: String(fields.totp_secret_or_uri || "").trim(),
   };
   if (!editing) {
     state.accountPoolCreateDraft = {
@@ -27816,13 +27866,6 @@ function applyAccountClipboardFields(modal, fields, totpController = null) {
     password.value = values.login_password;
     if (editing) password.dataset.passwordDirty = "true";
   }
-  if (editing && values.totp_secret_or_uri) {
-    totpController?.showUpdate();
-  }
-  const totpInput = editing
-    ? modal.querySelector("[data-account-totp-secret]")
-    : $("accountPoolTotpSecret");
-  if (totpInput) totpInput.value = values.totp_secret_or_uri;
   return true;
 }
 
@@ -27836,13 +27879,12 @@ async function copyAccountPoolCardToClipboard(accountId = "") {
     login_username: result?.login_username || result?.username,
     username: result?.username,
     login_password: result?.login_password,
-    totp_secret_or_uri: result?.totp_secret_or_uri,
   });
   await copyTextToClipboard(state.accountClipboardText);
-  showMsg("socialMsg", "登录账号、密码和 2FA 已复制到剪贴板", true);
+  showMsg("socialMsg", "登录账号和密码已复制到剪贴板", true);
 }
 
-async function pasteAccountPoolCardFromClipboard(modal, totpController = null) {
+async function pasteAccountPoolCardFromClipboard(modal) {
   let text = String(state.accountClipboardText || "").trim();
   if (!text && navigator.clipboard?.readText) {
     try {
@@ -27850,7 +27892,7 @@ async function pasteAccountPoolCardFromClipboard(modal, totpController = null) {
     } catch (_) {}
   }
   if (!text) throw new Error("剪贴板中没有账号文本");
-  applyAccountClipboardFields(modal, parseAccountClipboardText(text), totpController);
+  applyAccountClipboardFields(modal, parseAccountClipboardText(text));
 }
 
 async function duplicateAccountPoolSelectedAccounts(targetPlatform = "") {
@@ -28032,635 +28074,27 @@ function systemProxyPoolLocation(proxy = {}) {
     .join(" · ") || "待识别";
 }
 
-function accountProxyPoolFiltersHtml() {
+function accountProxyPoolFiltersHtml(scope = "modal", selectedProxyId = "") {
   return `<div class="account-proxy-picker-filters" data-account-proxy-filters>
-    <label class="account-proxy-region-filter"><select data-account-proxy-filter="country" aria-label="地区" title="地区"><option value="">全部地区</option></select></label>
-    <details class="account-proxy-filter-menu" data-console-dropdown>
-      <summary title="排序" aria-label="排序">${renderTaskQueueFilterIcon()}</summary>
-      <div class="account-proxy-filter-menu-options" role="listbox" aria-label="排序">
-        <button type="button" role="option" data-account-proxy-sort-option="time_desc" aria-selected="true">最新加入</button>
-        <button type="button" role="option" data-account-proxy-sort-option="time_asc" aria-selected="false">最早加入</button>
-        <button type="button" role="option" data-account-proxy-sort-option="name_asc" aria-selected="false">名称 A - Z</button>
-        <button type="button" role="option" data-account-proxy-sort-option="name_desc" aria-selected="false">名称 Z - A</button>
-        <button type="button" role="option" data-account-proxy-sort-option="country_asc" aria-selected="false">地区 A - Z</button>
-        <button type="button" role="option" data-account-proxy-sort-option="health_first" aria-selected="false">可用优先</button>
-      </div>
-    </details>
+    <div class="account-proxy-picker-location-row">
+      <label class="account-proxy-region-filter"><span>代理地区</span><select data-account-proxy-filter="country" aria-label="地区" title="地区"><option value="">全部地区</option></select></label>
+      <label class="account-proxy-city-filter"><span>城市</span><select data-account-proxy-filter="city" aria-label="城市" title="城市" disabled><option value="">请先选择地区</option></select></label>
+    </div>
+    <div class="account-proxy-picker-action-row">
+      <details class="account-proxy-filter-menu" data-console-dropdown>
+        <summary title="筛选和排序" aria-label="筛选和排序">${renderTaskQueueFilterIcon()}<span>筛选</span></summary>
+        <div class="account-proxy-filter-menu-options" role="listbox" aria-label="排序">
+          <button type="button" role="option" data-account-proxy-sort-option="time_desc" aria-selected="true">最新加入</button>
+          <button type="button" role="option" data-account-proxy-sort-option="time_asc" aria-selected="false">最早加入</button>
+          <button type="button" role="option" data-account-proxy-sort-option="name_asc" aria-selected="false">名称 A - Z</button>
+          <button type="button" role="option" data-account-proxy-sort-option="name_desc" aria-selected="false">名称 Z - A</button>
+          <button type="button" role="option" data-account-proxy-sort-option="country_asc" aria-selected="false">地区 A - Z</button>
+          <button type="button" role="option" data-account-proxy-sort-option="health_first" aria-selected="false">可用优先</button>
+        </div>
+      </details>
+      <button type="button" class="account-proxy-clear" data-account-proxy-choice="" data-account-proxy-choice-scope="${esc(scope)}" aria-pressed="${selectedProxyId ? "false" : "true"}">${renderNoProxyIcon()}<span>不使用代理</span></button>
+    </div>
   </div>`;
-}
-
-function accountProxyPurchasePlaceholderHtml() {
-  return `<section class="account-proxy-purchase-placeholder" aria-label="购买代理 IP">
-    <span class="account-proxy-purchase-icon">${renderShoppingBagIcon()}</span>
-    <div><strong>购买专属代理 IP</strong><span>自费购买后将自动加入你的可选代理列表</span></div>
-    <button type="button" data-account-proxy-purchase-placeholder>${renderShoppingBagIcon()}<span>点击购买</span></button>
-  </section>`;
-}
-
-function accountProxyPurchaseEmbeddedHtml() {
-  return `<section class="account-proxy-purchase-embedded" data-account-proxy-purchase-view aria-label="专属代理 IP 购买">
-    <form class="account-proxy-purchase-form" data-account-proxy-purchase-form novalidate>
-      <div class="account-proxy-purchase-alert" data-account-proxy-purchase-alert role="alert" aria-live="assertive" hidden></div>
-      <section class="account-proxy-purchase-product" aria-label="固定代理规格">
-        <div><span>代理产品</span><strong data-account-proxy-product-name>静态住宅代理 IP</strong></div>
-        <small>独享固定 IP，购买后自动加入你的代理列表。</small>
-      </section>
-      <label class="account-proxy-purchase-field">
-        <span>购买地区</span>
-        <select data-account-proxy-purchase-country required disabled>
-          <option value="">正在加载可购买地区...</option>
-        </select>
-        <small>可购买地区与库存由供应商实时同步。</small>
-      </label>
-      <section class="account-proxy-purchase-city" data-account-proxy-purchase-city-section>
-        <button type="button" class="account-proxy-purchase-city-toggle" data-account-proxy-purchase-city-toggle aria-expanded="false" disabled>
-          <span class="account-proxy-purchase-city-label">添加城市</span>
-          <span class="account-proxy-purchase-city-plus" aria-hidden="true">${renderProxyPurchasePlusIcon()}</span>
-        </button>
-        <label class="account-proxy-purchase-field account-proxy-purchase-city-field" data-account-proxy-purchase-city-panel hidden>
-          <span>城市（可选）</span>
-          <select data-account-proxy-purchase-city disabled>
-            <option value="">请先选择代理地区</option>
-          </select>
-          <small>选择后将优先购买该城市当前可用的代理 IP。</small>
-        </label>
-      </section>
-      <label class="account-proxy-purchase-renewal">
-        <span><strong>自动续费</strong><small>到期前检查算力点余额，余额充足时自动续费；余额不足不会扣款。</small></span>
-        <input type="checkbox" data-account-proxy-purchase-renewal>
-        <i aria-hidden="true"></i>
-      </label>
-      <button class="account-proxy-purchase-submit" type="submit" data-account-proxy-purchase-submit disabled>
-        <span data-account-proxy-purchase-submit-text>确认购买</span>
-      </button>
-      <section class="account-proxy-purchase-status" data-account-proxy-purchase-status aria-live="polite" hidden>
-        <span aria-hidden="true"></span><div><strong data-account-proxy-order-title>订单已受理</strong><p data-account-proxy-order-message></p></div>
-      </section>
-    </form>
-    <section class="account-proxy-purchase-success" data-account-proxy-purchase-success role="status" aria-live="polite" hidden>
-      <span class="account-proxy-purchase-success-check" aria-hidden="true">
-        <svg viewBox="0 0 64 64" focusable="false"><circle cx="32" cy="32" r="27"></circle><path d="m19 32 9 9 18-20"></path></svg>
-      </span>
-      <strong>购买成功</strong>
-      <p>代理 IP 已加入你的代理列表。</p>
-      <button type="button" data-account-proxy-purchase-success-done>完成</button>
-    </section>
-  </section>`;
-}
-
-function accountProxyPurchaseDialogHtml() {
-  return `<section class="console-modal-dialog account-proxy-purchase-modal" role="dialog" aria-modal="true" aria-labelledby="accountProxyPurchaseTitle">
-    <div class="console-modal-head account-proxy-purchase-modal-head">
-      <button type="button" class="account-proxy-purchase-back" data-account-proxy-purchase-back title="返回代理列表" aria-label="返回代理列表"><span class="ui-arrow-icon ui-arrow-icon--left" aria-hidden="true"></span></button>
-      <div><strong id="accountProxyPurchaseTitle">购买专属代理 IP</strong><p>选择地区后确认购买</p></div>
-      ${renderModalCloseButton("data-account-proxy-purchase-close")}
-    </div>
-    <div class="console-modal-content account-proxy-purchase-modal-content">
-      ${accountProxyPurchaseEmbeddedHtml()}
-    </div>
-  </section>`;
-}
-
-const ACCOUNT_PROXY_PURCHASE_PENDING_KEY = "vecto.proxyPurchase.pending.v1";
-
-function accountProxyPurchaseErrorMessage(error = {}, fallback = "请求失败，请稍后重试") {
-  const detail = error?.detail;
-  const code = String(error?.code || detail?.code || "");
-  if (code === "INSUFFICIENT_CASH_BACKED_POINTS") return "可用算力点不足，暂时无法购买。";
-  if (Array.isArray(detail)) return detail.map((item) => item?.msg || String(item)).join("；");
-  if (detail && typeof detail === "object") return String(detail.message || detail.detail || fallback);
-  return String(detail || error?.message || fallback);
-}
-
-function accountProxyPurchasePendingRead() {
-  try {
-    const pending = JSON.parse(sessionStorage.getItem(ACCOUNT_PROXY_PURCHASE_PENDING_KEY) || "null");
-    return pending?.quoteId && pending?.idempotencyKey ? pending : null;
-  } catch (_) {
-    return null;
-  }
-}
-
-function accountProxyPurchasePendingWrite(pending = {}) {
-  try { sessionStorage.setItem(ACCOUNT_PROXY_PURCHASE_PENDING_KEY, JSON.stringify(pending)); } catch (_) {}
-  return pending;
-}
-
-function accountProxyPurchasePendingClear() {
-  try { sessionStorage.removeItem(ACCOUNT_PROXY_PURCHASE_PENDING_KEY); } catch (_) {}
-}
-
-function accountProxyPurchasePendingEnsure(quote = {}) {
-  const existing = accountProxyPurchasePendingRead();
-  if (existing?.quoteId === quote?.id) return existing;
-  return accountProxyPurchasePendingWrite({
-    quoteId: String(quote?.id || ""),
-    idempotencyKey: globalThis.crypto?.randomUUID?.() || `proxy-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    createdAt: Date.now(),
-    submitted: false,
-  });
-}
-
-function accountProxyPurchaseElement(view, selector) {
-  return view?.purchaseDialog?.querySelector(selector)
-    || view?.host?.querySelector(`[data-account-proxy-purchase-view] ${selector}`)
-    || null;
-}
-
-function accountProxyPurchaseAlert(view, message = "") {
-  const node = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-alert]");
-  if (!node) return;
-  node.textContent = String(message || "");
-  node.hidden = !message;
-}
-
-function accountProxyPurchaseFormatPoints(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(number) : "—";
-}
-
-function accountProxyPurchaseCountryLabel(region = {}) {
-  const code = String(region?.code || region?.country || "").trim().toUpperCase();
-  if (code === "TW") return "中国台湾";
-  return accountProxyCountry(String(region?.name || code), code).label;
-}
-
-function accountProxyPurchaseSetBusy(view, busy, label = "") {
-  view.busy = Boolean(busy);
-  const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
-  const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
-  const city = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city]");
-  const cityToggle = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city-toggle]");
-  const renewal = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-renewal]");
-  if (submit) submit.disabled = view.busy || (!view.quote && !select?.value);
-  if (select) select.disabled = view.busy || !view.options?.configured || !view.options?.live_purchasing_enabled;
-  if (city) city.disabled = view.busy || !select?.value || !view.options?.cities?.[String(select.value)]?.length;
-  if (cityToggle) cityToggle.disabled = view.busy || !select?.value || !view.options?.cities?.[String(select.value)]?.length;
-  if (renewal) renewal.disabled = view.busy;
-  if (label) {
-    const text = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit-text]");
-    if (text) text.textContent = label;
-  }
-}
-
-function accountProxyPurchaseClearQuote(view) {
-  view.quote = null;
-  const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
-  const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
-  const text = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit-text]");
-  if (text) text.textContent = "确认购买";
-  if (submit) submit.disabled = view.busy || !select?.value;
-}
-
-function accountProxyPurchaseRenderOptions(view, payload) {
-  payload = payload || {};
-  view.options = payload;
-  const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
-  const regions = Array.isArray(payload?.regions) ? payload.regions : [];
-  if (select) {
-    select.replaceChildren();
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = regions.length ? "请选择代理地区" : "暂无可购买地区";
-    select.append(placeholder);
-    regions.forEach((region) => {
-      const option = document.createElement("option");
-      option.value = String(region?.code || "").trim().toUpperCase();
-      option.textContent = accountProxyPurchaseCountryLabel(region);
-      if (option.value) select.append(option);
-    });
-  }
-  const serviceNames = {
-    "static-residential-ipv4": "静态住宅代理 IP",
-    "static-datacenter-ipv4": "数据中心 IPv4 代理",
-    "datacenter-ipv4": "数据中心 IPv4 代理",
-    "rotating-residential": "动态住宅代理",
-    "rotating-mobile": "动态移动代理",
-  };
-  const serviceId = String(payload?.service_id || "static-residential-ipv4");
-  const mappings = [
-    ["[data-account-proxy-product-name]", serviceNames[serviceId] || "专属代理 IP"],
-  ];
-  mappings.forEach(([selector, value]) => {
-    const node = accountProxyPurchaseElement(view, selector);
-    if (node) node.textContent = value;
-  });
-  const ready = Boolean(payload?.configured && payload?.live_purchasing_enabled && regions.length);
-  if (select) select.disabled = !ready;
-  const sync = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-sync]");
-  if (sync) sync.hidden = ready;
-  if (!ready) {
-    accountProxyPurchaseAlert(view, "代理购买服务暂未开放。请稍后重试。");
-  }
-}
-
-function accountProxyPurchaseRenderCities(view) {
-  const country = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
-  const city = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city]");
-  const toggle = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city-toggle]");
-  const panel = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city-panel]");
-  if (!city) return;
-  const items = Array.isArray(view?.options?.cities?.[String(country?.value || "")])
-    ? view.options.cities[String(country.value)]
-    : [];
-  city.replaceChildren();
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent = items.length ? "由供应商自动分配城市" : "该地区暂无可选城市";
-  city.append(placeholder);
-  items.forEach((item) => {
-    const option = document.createElement("option");
-    option.value = String(item?.id || "");
-    option.textContent = String(item?.name_zh || item?.name || item?.id || "");
-    if (option.value) city.append(option);
-  });
-  city.required = false;
-  city.disabled = !country?.value || items.length === 0;
-  if (toggle) {
-    toggle.disabled = !country?.value || items.length === 0;
-    toggle.setAttribute("aria-expanded", "false");
-  }
-  if (panel) panel.hidden = true;
-}
-
-function accountProxyPurchaseToggleCity(view) {
-  const toggle = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city-toggle]");
-  const panel = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city-panel]");
-  if (!toggle || !panel || toggle.disabled) return;
-  const expanded = toggle.getAttribute("aria-expanded") !== "true";
-  toggle.setAttribute("aria-expanded", String(expanded));
-  panel.hidden = !expanded;
-  if (expanded) accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city]")?.focus();
-}
-
-async function accountProxyPurchaseRefreshQuote(view) {
-  const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
-  const renewal = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-renewal]");
-  const citySelect = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city]");
-  const country = String(select?.value || "").trim().toUpperCase();
-  const city = String(citySelect?.value || "").trim();
-  const requestSeq = ++view.quoteSeq;
-  accountProxyPurchaseAlert(view, "");
-  if (!country) {
-    accountProxyPurchaseClearQuote(view);
-    return null;
-  }
-  accountProxyPurchaseClearQuote(view);
-  if (select) select.disabled = true;
-  try {
-    const payload = await api("/api/proxy-purchases/quotes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        country,
-        city,
-        period_months: Math.max(1, Number(view?.options?.default_period?.value || 1)),
-        auto_renew: Boolean(renewal?.checked),
-      }),
-    });
-    if (view.closed || requestSeq !== view.quoteSeq) return null;
-    const quote = payload?.quote;
-    if (!quote?.id) throw { detail: "供应商没有返回有效报价" };
-    view.quote = quote;
-    accountProxyPurchasePendingEnsure(quote);
-    const submitText = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit-text]");
-    const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
-    if (submitText) submitText.textContent = "确认购买";
-    if (submit) submit.disabled = view.busy;
-    return quote;
-  } catch (error) {
-    if (view.closed || requestSeq !== view.quoteSeq) return null;
-    accountProxyPurchaseClearQuote(view);
-    accountProxyPurchaseAlert(view, accountProxyPurchaseErrorMessage(error, "暂时无法确认库存，请稍后重试"));
-    return null;
-  } finally {
-    if (!view.closed && requestSeq === view.quoteSeq && select) {
-      select.disabled = view.busy || !view.options?.configured || !view.options?.live_purchasing_enabled;
-    }
-  }
-}
-
-function accountProxyPurchaseSchedulePoll(view) {
-  window.clearTimeout(view.pollTimer);
-  const delay = Math.min(3000 * (2 ** view.pollAttempt), 60000);
-  view.pollAttempt = Math.min(view.pollAttempt + 1, 6);
-  view.pollTimer = window.setTimeout(() => accountProxyPurchasePollOrder(view), document.hidden ? Math.max(delay, 30000) : delay);
-}
-
-function accountProxyPurchaseLocalIds(order) {
-  order = order || {};
-  return {
-    marketItemId: String(order.market_item_id || order.local_market_item_id || "").trim(),
-    socialProxyId: String(order.social_proxy_id || order.local_social_proxy_id || "").trim(),
-  };
-}
-
-function accountProxyPurchaseResolveLocalProxy(order, poolData) {
-  order = order || {};
-  poolData = poolData || {};
-  const ids = accountProxyPurchaseLocalIds(order);
-  if (!ids.marketItemId && !ids.socialProxyId) return null;
-  const options = Array.isArray(poolData?.options) ? poolData.options : [];
-  const match = options.find((option) => {
-    const marketItemId = String(option?.market_item_id || "").trim();
-    const socialProxyId = String(option?.social_proxy_id || "").trim();
-    return (!ids.marketItemId || marketItemId === ids.marketItemId)
-      && (!ids.socialProxyId || socialProxyId === ids.socialProxyId);
-  });
-  if (!match) return null;
-  return {
-    marketItemId: String(match.market_item_id || "").trim(),
-    socialProxyId: String(match.social_proxy_id || "").trim(),
-  };
-}
-
-async function accountProxyPurchaseFinalizeActive(view, order) {
-  order = order || {};
-  if (!view?.modal?.isConnected || view.closed || view.finalizing) return;
-  view.finalizing = true;
-  const modal = view.modal;
-  try {
-    await fetchSocialDataShared({ force: true }).catch(() => null);
-    if (!modal.isConnected || view.closed) return;
-    closeAccountProxyPurchaseView(modal, { restore: true, refresh: false });
-    const poolData = await loadAccountProxyPickerPool(modal);
-    if (!modal.isConnected) return;
-    const localProxy = accountProxyPurchaseResolveLocalProxy(order, poolData || {});
-    const summary = modal.querySelector("[data-account-proxy-selection-summary]");
-    if (!localProxy) {
-      if (summary) summary.textContent = "购买成功，代理已加入列表；请选择使用。";
-      return;
-    }
-    const card = Array.from(modal.querySelectorAll("[data-account-proxy-card]"))
-      .find((candidate) => String(candidate.dataset.accountProxyCard || "") === localProxy.marketItemId);
-    const action = card?.querySelector("[data-account-proxy-market-choice]");
-    if (summary) summary.textContent = "购买成功，已定位新代理；首次选择时会自动检测。";
-    card?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
-    action?.focus?.({ preventScroll: true });
-  } catch (error) {
-    if (!modal.isConnected) return;
-    const summary = modal.querySelector("[data-account-proxy-selection-summary]");
-    if (summary) summary.textContent = "购买成功，代理列表刷新失败，请重新打开选择代理。";
-  }
-}
-
-function accountProxyPurchaseRenderOrder(view, order) {
-  order = order || {};
-  if (!order?.id || view.closed) return;
-  view.order = order;
-  const panel = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-status]");
-  const form = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-form]");
-  const success = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-success]");
-  const title = accountProxyPurchaseElement(view, "[data-account-proxy-order-title]");
-  const message = accountProxyPurchaseElement(view, "[data-account-proxy-order-message]");
-  const status = String(order.status || "pending").toLowerCase();
-  const complete = status === "active";
-  const failed = ["failed", "cancelled", "canceled", "released", "refunded"].includes(status);
-  const manual = status === "provider_unknown_no_reference"
-    || (status === "provider_unknown" && !order.provider_order_id)
-    || String(order.error_code || "").toLowerCase() === "provider_unknown_no_reference";
-  if (panel) {
-    panel.hidden = false;
-    panel.dataset.tone = complete ? "success" : failed ? "error" : manual ? "warning" : "pending";
-  }
-  if (title) title.textContent = complete
-    ? "购买成功，代理已加入列表"
-    : failed ? "订单未能完成" : manual ? "订单正在人工核验" : "订单已受理，正在配置";
-  if (message) message.textContent = String(order.message || (complete
-    ? "返回代理列表后即可选择使用。"
-    : failed ? "预占算力点将根据订单结果自动释放。"
-      : manual ? "请勿重复购买，管理员核验后会更新结果。" : "配置完成后会自动更新，无需重复提交。"));
-  if (complete || failed) {
-    accountProxyPurchasePendingClear();
-    window.clearTimeout(view.pollTimer);
-    view.quote = null;
-    accountProxyPurchaseSetBusy(view, false, complete ? "购买已完成" : "请重新获取报价");
-    const submit = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-submit]");
-    if (submit) submit.disabled = true;
-    if (complete) {
-      if (form) form.hidden = true;
-      if (success) success.hidden = false;
-      const sync = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-sync]");
-      if (sync) {
-        sync.textContent = "购买成功 · 已加入列表";
-        sync.dataset.tone = "success";
-      }
-    }
-    return;
-  }
-  accountProxyPurchaseSetBusy(view, true, manual ? "订单人工核验中" : "订单处理中，请勿重复提交");
-  if (!manual) accountProxyPurchaseSchedulePoll(view);
-}
-
-async function accountProxyPurchasePollOrder(view) {
-  if (!view?.order?.id || view.closed) return;
-  try {
-    const payload = await api(`/api/proxy-purchases/orders/${encodeURIComponent(view.order.id)}`);
-    accountProxyPurchaseRenderOrder(view, payload?.order);
-  } catch (error) {
-    const message = accountProxyPurchaseElement(view, "[data-account-proxy-order-message]");
-    if (message) message.textContent = `状态暂时无法刷新：${accountProxyPurchaseErrorMessage(error)}。系统稍后继续重试。`;
-    accountProxyPurchaseSchedulePoll(view);
-  }
-}
-
-async function accountProxyPurchaseCreateOrder(pending = {}) {
-  return api("/api/proxy-purchases/orders", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Idempotency-Key": pending.idempotencyKey },
-    body: JSON.stringify({ quote_id: pending.quoteId, idempotency_key: pending.idempotencyKey }),
-  });
-}
-
-async function accountProxyPurchaseRecover(view, pending = {}, { replayIfMissing = true } = {}) {
-  accountProxyPurchaseSetBusy(view, true, "正在恢复上次购买结果...");
-  try {
-    const payload = await api(`/api/proxy-purchases/orders/recover?idempotency_key=${encodeURIComponent(pending.idempotencyKey)}`);
-    accountProxyPurchaseRenderOrder(view, payload?.order);
-  } catch (error) {
-    if (Number(error?.status) !== 404 || !replayIfMissing) throw error;
-    const payload = await accountProxyPurchaseCreateOrder(pending);
-    accountProxyPurchaseRenderOrder(view, payload?.order);
-  }
-}
-
-async function accountProxyPurchaseSubmit(view, event) {
-  event.preventDefault();
-  const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
-  const country = String(select?.value || "").trim().toUpperCase();
-  if (view.busy || !country) return;
-  accountProxyPurchaseAlert(view, "");
-  accountProxyPurchaseSetBusy(view, true, "正在检测...");
-  let quote = view.quote;
-  if (!quote?.id) {
-    quote = await accountProxyPurchaseRefreshQuote(view);
-    if (!quote?.id) {
-      accountProxyPurchaseSetBusy(view, false, "确认购买");
-      return;
-    }
-  }
-  view.quote = quote;
-  accountProxyPurchaseSetBusy(view, true, "正在提交订单...");
-  const pending = accountProxyPurchasePendingWrite({ ...accountProxyPurchasePendingEnsure(quote), submitted: true });
-  try {
-    const payload = await accountProxyPurchaseCreateOrder(pending);
-    accountProxyPurchaseRenderOrder(view, payload?.order);
-  } catch (error) {
-    const uncertain = error instanceof TypeError || Number(error?.status) >= 500 || !Number.isFinite(Number(error?.status));
-    if (uncertain) {
-      try {
-        await accountProxyPurchaseRecover(view, pending, { replayIfMissing: true });
-        return;
-      } catch (recoveryError) {
-        accountProxyPurchaseSetBusy(view, true, "订单结果待恢复");
-        accountProxyPurchaseAlert(view, `${accountProxyPurchaseErrorMessage(recoveryError, "暂时无法确认订单结果")}。请求已安全保留，请勿重复购买。`);
-        return;
-      }
-    }
-    accountProxyPurchasePendingClear();
-    view.quote = null;
-    accountProxyPurchaseSetBusy(view, false, "确认购买");
-    accountProxyPurchaseAlert(view, accountProxyPurchaseErrorMessage(error, "订单创建失败"));
-  }
-}
-
-async function loadAccountProxyPurchaseForm(modal) {
-  const view = modal?.__accountProxyPurchaseView;
-  const section = view?.host?.querySelector("[data-account-proxy-purchase-view]");
-  if (!view || !section || view.loading) return false;
-  view.loading = true;
-  const sync = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-sync]");
-  if (sync) {
-    sync.hidden = false;
-    sync.textContent = "正在同步";
-    delete sync.dataset.tone;
-  }
-  accountProxyPurchaseAlert(view, "");
-  try {
-    const payload = await api("/api/proxy-purchases/options", { cache: "no-store" });
-    if (modal.__accountProxyPurchaseView !== view || !section.isConnected) return false;
-    accountProxyPurchaseRenderOptions(view, payload);
-    const pending = accountProxyPurchasePendingRead();
-    if (pending?.submitted) {
-      try {
-        await accountProxyPurchaseRecover(view, pending, { replayIfMissing: true });
-      } catch (error) {
-        if (Number(error?.status) >= 400 && Number(error?.status) < 500) accountProxyPurchasePendingClear();
-        accountProxyPurchaseSetBusy(view, false, "确认购买");
-        accountProxyPurchaseAlert(view, accountProxyPurchaseErrorMessage(error, "上次购买结果无法恢复，请重新选择地区"));
-      }
-    } else if (pending) {
-      accountProxyPurchasePendingClear();
-    }
-    return true;
-  } catch (error) {
-    if (modal.__accountProxyPurchaseView !== view || !section.isConnected) return false;
-    accountProxyPurchaseAlert(view, accountProxyPurchaseErrorMessage(error, "代理购买服务加载失败"));
-    if (sync) {
-      sync.hidden = false;
-      sync.textContent = Number(error?.status || 0) === 404 ? "版本未同步" : "连接失败";
-      sync.dataset.tone = "error";
-    }
-    return false;
-  } finally {
-    view.loading = false;
-  }
-}
-
-function closeAccountProxyPurchaseView(modal, options) {
-  const { restore = true, refresh = true } = options || {};
-  const view = modal?.__accountProxyPurchaseView;
-  if (!view) return false;
-  view.closed = true;
-  window.clearTimeout(view.pollTimer);
-  view.purchaseDialog.remove();
-  if (restore && view.sourceDialog?.isConnected) {
-    view.sourceDialog.classList.remove("account-proxy-purchase-source-hidden");
-    view.sourceDialog.hidden = false;
-    view.sourceDialog.removeAttribute("aria-hidden");
-    view.sourceDialog.inert = false;
-    accountProxyPoolFilterOptions(modal, modal.__accountProxyPoolData || {});
-    refreshAccountProxyPickerOptions(modal);
-    if (refresh) void fetchSocialDataShared({ force: true }).then(() => loadAccountProxyPickerPool(modal));
-    view.trigger?.focus?.({ preventScroll: true });
-  }
-  if (modal.__cleanup === view.cleanupWrapper) modal.__cleanup = view.previousCleanup;
-  delete modal.__accountProxyPurchaseView;
-  return true;
-}
-
-function openAccountProxyPurchaseView(modal, trigger = null) {
-  if (!modal?.isConnected || modal.__accountProxyPurchaseView) return false;
-  const sourceDialog = trigger?.closest(".console-modal-dialog");
-  if (!sourceDialog) return false;
-  const container = document.createElement("div");
-  container.innerHTML = accountProxyPurchaseDialogHtml();
-  const purchaseDialog = container.firstElementChild;
-  if (!purchaseDialog) return false;
-  const previousCleanup = modal.__cleanup;
-  const view = {
-    modal,
-    host: purchaseDialog,
-    sourceDialog,
-    purchaseDialog,
-    trigger,
-    previousCleanup,
-    options: null,
-    quote: null,
-    order: null,
-    quoteSeq: 0,
-    pollTimer: 0,
-    pollAttempt: 0,
-    busy: false,
-    loading: false,
-    closed: false,
-    finalizing: false,
-    cleanupWrapper: null,
-  };
-  view.cleanupWrapper = () => {
-    view.closed = true;
-    window.clearTimeout(view.pollTimer);
-    previousCleanup?.();
-  };
-  modal.__accountProxyPurchaseView = view;
-  modal.__cleanup = view.cleanupWrapper;
-  sourceDialog.classList.add("account-proxy-purchase-source-hidden");
-  sourceDialog.hidden = true;
-  sourceDialog.setAttribute("aria-hidden", "true");
-  sourceDialog.inert = true;
-  modal.appendChild(purchaseDialog);
-  purchaseDialog.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape") return;
-    event.preventDefault();
-    event.stopPropagation();
-    closeAccountProxyPurchaseView(modal);
-  });
-  const form = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-form]");
-  const select = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-country]");
-  const city = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city]");
-  const cityToggle = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-city-toggle]");
-  const renewal = accountProxyPurchaseElement(view, "[data-account-proxy-purchase-renewal]");
-  form?.addEventListener("submit", (event) => { void accountProxyPurchaseSubmit(view, event); });
-  select?.addEventListener("change", () => {
-    accountProxyPurchaseRenderCities(view);
-    accountProxyPurchaseClearQuote(view);
-    accountProxyPurchaseAlert(view, "");
-  });
-  cityToggle?.addEventListener("click", () => accountProxyPurchaseToggleCity(view));
-  city?.addEventListener("change", () => {
-    accountProxyPurchaseClearQuote(view);
-    accountProxyPurchaseAlert(view, "");
-  });
-  renewal?.addEventListener("change", () => {
-    accountProxyPurchaseClearQuote(view);
-    accountProxyPurchaseAlert(view, "");
-  });
-  purchaseDialog.querySelector("[data-account-proxy-purchase-success-done]")?.addEventListener("click", () => {
-    void accountProxyPurchaseFinalizeActive(view, view.order);
-  });
-  purchaseDialog.querySelector("[data-account-proxy-purchase-back]")?.focus();
-  void loadAccountProxyPurchaseForm(modal);
-  return true;
 }
 
 function accountProxyPickerFilters(modal) {
@@ -28686,11 +28120,23 @@ function accountProxyPoolFilterOptions(modal, poolData = {}) {
     .map((value) => ({ value, label: accountProxyCountry(value).label }))
     .sort((left, right) => left.label.localeCompare(right.label, "zh-Hans-CN"));
   select("country", countries, "全部地区");
+  const selectedCountry = String(modal?.querySelector('[data-account-proxy-filter="country"]')?.value || "");
+  const cities = [...new Set((selectedCountry ? options : [])
+    .filter((item) => String(item.country || item.country_code || "").trim() === selectedCountry)
+    .map((item) => String(item.city || "").trim())
+    .filter(Boolean))]
+    .map((value) => ({ value, label: value }))
+    .sort((left, right) => left.label.localeCompare(right.label, "zh-Hans-CN"));
+  select("city", cities, selectedCountry ? "全部城市" : "请先选择地区");
+  const cityControl = modal?.querySelector('[data-account-proxy-filter="city"]');
+  if (cityControl) cityControl.disabled = !selectedCountry;
 }
 
 function accountProxyPoolMatches(proxy = {}, filters = {}) {
   const country = String(filters.country || "").trim();
   if (country && String(proxy.country || "").trim() !== country) return false;
+  const city = String(filters.city || "").trim();
+  if (city && String(proxy.city || "").trim() !== city) return false;
   return true;
 }
 
@@ -28717,6 +28163,12 @@ function accountProxyPoolSortOptions(options = [], sort = "time_desc") {
 
 function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", poolData = {}, filters = {} } = {}) {
   const selectedId = String(selectedProxyId || "").trim();
+  if (!String(filters.country || "").trim()) {
+    return `<section class="account-proxy-region-guide" data-account-proxy-region-guide data-account-proxy-options data-account-proxy-choice-scope="${esc(scope)}" role="status">
+      <span class="account-proxy-region-guide-icon" aria-hidden="true">${renderNetworkIcon()}</span>
+      <div><strong>请先选择代理地区</strong><p>选择地区后，下方会显示该地区可领取或已购买的代理；城市为可选筛选条件。</p></div>
+    </section>`;
+  }
   const marketOptions = accountProxyPoolSortOptions(
     (Array.isArray(poolData.options) ? poolData.options : []).filter((proxy) => accountProxyPoolMatches(proxy, filters)),
     filters.sort,
@@ -28725,10 +28177,14 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", po
     const itemId = String(proxy.market_item_id || "").trim();
     const proxyId = String(proxy.social_proxy_id || "").trim();
     const selected = proxyId && proxyId === selectedId;
-    const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "未填写地址";
+    const detailsRevealed = proxy.details_revealed !== false;
+    const endpoint = detailsRevealed
+      ? ([String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "出口信息待检测")
+      : "选择后显示 IP、端口和凭据";
     const country = accountProxyCountry(proxy).code;
     const healthLabel = String(proxy.health_status || "healthy").toLowerCase() === "healthy" ? "检测可用" : "待检测";
-    const action = selected ? "当前使用" : "选择使用";
+    const canChoose = proxy.available !== false;
+    const action = selected ? "当前使用" : (canChoose ? "选择使用" : "本月机会已使用");
     const boundCount = Math.max(0, Number(proxy.bound_account_count) || 0);
     const usageTone = boundCount >= 4 ? "danger" : (boundCount >= 3 ? "warning" : (boundCount === 2 ? "notice" : (boundCount === 1 ? "safe" : "idle")));
     const riskHint = boundCount >= 4
@@ -28738,13 +28194,16 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", po
         : "";
     const usageHint = riskHint || `${boundCount}/3 个账号正在使用`;
     const ownershipType = String(proxy.ownership_type || "shared").toLowerCase();
-    const stockLabel = ownershipType === "owned" ? "已购买" : (proxyId ? "已获取" : "可领取");
+    const stockLabel = ownershipType === "owned" ? "已购买" : (proxyId ? "已获取" : "免费");
+    const renewal = ownershipType === "owned" && proxy.purchase_order_id
+      ? `<button type="button" class="proxy-market-mini-renewal" data-account-proxy-renewal-order="${esc(proxy.purchase_order_id)}" data-renewal-enabled="${proxy.renewal_enabled ? "true" : "false"}" aria-pressed="${proxy.renewal_enabled ? "true" : "false"}"><span>自动续费</span><i aria-hidden="true"></i></button>`
+      : `<span class="proxy-market-mini-managed-renewal">平台托管续期</span>`;
     return `<article class="proxy-market-mini-card" data-account-proxy-card="${esc(itemId)}" ${selected ? 'aria-current="true"' : ""}>
       <div class="proxy-market-mini-card-head">
         <span class="proxy-market-mini-country">${esc(country)}</span>
         <span class="proxy-market-mini-card-badges"><span class="proxy-market-mini-usage" data-tone="${esc(usageTone)}" title="${esc(usageHint)}">${boundCount}/3</span><span class="proxy-market-mini-stock">${esc(stockLabel)}</span></span>
       </div>
-      <strong>${esc(proxy.name || endpoint)}</strong>
+      <strong>${esc(detailsRevealed ? (proxy.name || endpoint) : `${accountProxyCountry(proxy).label}官方代理`)}</strong>
       <span class="proxy-market-mini-location">${esc(endpoint)} · ${esc(systemProxyPoolLocation(proxy))}</span>
       <span class="proxy-market-mini-risk" data-tone="${esc(usageTone)}">${esc(riskHint)}</span>
       <div class="proxy-market-mini-meta">
@@ -28752,7 +28211,8 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", po
         <span>${esc(proxyProtocol(proxy))}</span>
         <strong>${esc(healthLabel)}</strong>
       </div>
-      <button type="button" class="primary" data-account-proxy-market-choice="${esc(itemId)}" data-account-proxy-choice-scope="${esc(scope)}" ${selected ? "disabled" : ""}>${renderNetworkIcon()}<span>${esc(action)}</span></button>
+      ${renewal}
+      <button type="button" class="primary" data-account-proxy-market-choice="${esc(itemId)}" data-account-proxy-choice-scope="${esc(scope)}" ${(selected || !canChoose) ? "disabled" : ""}>${renderNetworkIcon()}<span>${esc(action)}</span></button>
     </article>`;
   };
   const empty = renderModuleEmptyState({
@@ -28842,6 +28302,17 @@ async function claimAccountProxyPoolOption(modal, itemId = "") {
   const existingOption = (Array.isArray(modal.__accountProxyPoolData?.options) ? modal.__accountProxyPoolData.options : [])
     .find((option) => String(option?.market_item_id || "").trim() === cleanItemId);
   const existingProxyId = String(existingOption?.social_proxy_id || "").trim();
+  const confirmation = await openConsoleModal({
+    title: "确认使用代理",
+    message: existingProxyId
+      ? `确定将 ${systemProxyPoolLocation(existingOption || {})} 的代理用于当前账号吗？`
+      : `确定领取 ${systemProxyPoolLocation(existingOption || {})} 的官方代理吗？本月免费机会领取后不可重复使用。`,
+    confirmText: "确定使用",
+    cancelText: "暂不使用",
+    modalKey: "account-proxy-confirm",
+    stack: true,
+  });
+  if (!confirmation || !modal.isConnected) return false;
   if (existingProxyId) {
     modal.dataset.accountProxyClaiming = "true";
     modal.querySelectorAll("[data-account-proxy-market-choice]").forEach((button) => { button.disabled = true; });
@@ -28891,6 +28362,30 @@ async function claimAccountProxyPoolOption(modal, itemId = "") {
       delete modal.dataset.accountProxyClaiming;
       modal.querySelectorAll("[data-account-proxy-market-choice]").forEach((button) => { button.disabled = button.classList.contains("is-selected"); });
     }
+  }
+}
+
+async function updateAccountProxyRenewal(modal, button) {
+  const orderId = String(button?.dataset.accountProxyRenewalOrder || "").trim();
+  if (!modal?.isConnected || !orderId || button.disabled) return false;
+  const enabled = button.dataset.renewalEnabled !== "true";
+  button.disabled = true;
+  try {
+    await api(`/api/proxy-purchases/orders/${encodeURIComponent(orderId)}/renewal`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    button.dataset.renewalEnabled = enabled ? "true" : "false";
+    button.setAttribute("aria-pressed", enabled ? "true" : "false");
+    await loadAccountProxyPickerPool(modal);
+    showMsg("socialMsg", enabled ? "自动续费已开启。" : "自动续费已关闭。", true);
+    return true;
+  } catch (error) {
+    showMsg("socialMsg", error.detail || error.message || "自动续费设置失败", false);
+    return false;
+  } finally {
+    if (button.isConnected) button.disabled = false;
   }
 }
 
@@ -28971,18 +28466,18 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
   modal.dataset.originalProxyId = originalProxyId;
   modal.innerHTML = `
     <div class="console-modal-backdrop" data-account-proxy-picker-cancel></div>
-    <section class="console-modal-dialog account-proxy-picker-modal" role="dialog" aria-modal="true" aria-labelledby="accountProxyPickerTitle">
+    <section class="console-modal-dialog account-proxy-picker-modal proxy-purchase-legacy-theme" role="dialog" aria-modal="true" aria-labelledby="accountProxyPickerTitle">
       <div class="console-modal-head">
-        <div><strong id="accountProxyPickerTitle">选择代理</strong><p>${esc(accountDisplayName(account))} · 选择或购买要绑定的代理 IP</p></div>
-        ${renderModalCloseButton("data-account-proxy-picker-cancel")}
+        <div class="account-proxy-purchase-title"><span class="account-proxy-purchase-step">01</span><div><strong id="accountProxyPickerTitle">选择代理</strong><p>${esc(accountDisplayName(account))} · 选择或购买要绑定的代理 IP</p></div></div>
+        <div class="account-proxy-purchase-head-actions"><span class="account-proxy-provider-state">官方代理池</span>${renderModalCloseButton("data-account-proxy-picker-cancel")}</div>
       </div>
       <div class="console-modal-content">
-        <div class="account-proxy-picker-toolbar">
-          <p data-account-proxy-selection-summary>${account.proxy_id ? `当前绑定：${esc(accountResidentialProxyLabel(account))}` : "当前未使用代理 IP"}</p>
-        </div>
-        ${accountProxyPurchasePlaceholderHtml()}
+        <section class="account-proxy-mapped-product" aria-label="当前代理配置">
+          <div><span>当前代理配置</span><strong data-account-proxy-selection-summary>${account.proxy_id ? `当前绑定：${esc(accountResidentialProxyLabel(account))}` : "当前未使用代理 IP"}</strong></div>
+          <small>每月可免费选择一次官方代理，确认后自动加入你的代理列表。</small>
+        </section>
         <div class="account-proxy-picker-toolbar account-proxy-picker-filter-toolbar">
-          <div class="account-proxy-picker-controls">${accountProxyPoolFiltersHtml()}<button type="button" class="account-proxy-clear" data-account-proxy-choice="" data-account-proxy-choice-scope="modal" aria-pressed="${selectedProxyId ? "false" : "true"}">${renderNoProxyIcon()}<span>不使用代理</span></button></div>
+          <div class="account-proxy-picker-controls">${accountProxyPoolFiltersHtml("modal", selectedProxyId)}</div>
         </div>
         ${accountProxyOptionCardsHtml(selectedProxyId, { scope: "modal" })}
       </div>
@@ -28990,7 +28485,6 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
   document.body.appendChild(modal);
   if (selectedProxyId !== originalProxyId) updateAccountProxyChoice(modal, selectedProxyId);
   const close = () => {
-    closeAccountProxyPurchaseView(modal, { restore: false });
     modal.remove();
     return true;
   };
@@ -29009,17 +28503,9 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
       }
       return;
     }
-    const purchaseTrigger = event.target.closest("[data-account-proxy-purchase-placeholder]");
-    if (purchaseTrigger) {
-      openAccountProxyPurchaseView(modal, purchaseTrigger);
-      return;
-    }
-    if (event.target.closest("[data-account-proxy-purchase-back], [data-account-proxy-purchase-close]")) {
-      closeAccountProxyPurchaseView(modal);
-      return;
-    }
-    if (event.target.closest("[data-account-proxy-purchase-retry]")) {
-      void loadAccountProxyPurchaseForm(modal);
+    const renewal = event.target.closest("[data-account-proxy-renewal-order]");
+    if (renewal) {
+      void updateAccountProxyRenewal(modal, renewal);
       return;
     }
     const choice = event.target.closest("[data-account-proxy-choice]");
@@ -29045,6 +28531,11 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
     if (event.target.closest("[data-account-proxy-filter]")) refreshAccountProxyPickerOptions(modal);
   });
   modal.addEventListener("change", (event) => {
+    if (event.target.matches('[data-account-proxy-filter="country"]')) {
+      const cityFilter = modal.querySelector('[data-account-proxy-filter="city"]');
+      if (cityFilter) cityFilter.value = "";
+      accountProxyPoolFilterOptions(modal, modal.__accountProxyPoolData || {});
+    }
     if (event.target.closest("[data-account-proxy-filter]")) refreshAccountProxyPickerOptions(modal);
   });
   void loadAccountProxyPickerPool(modal);
@@ -29059,9 +28550,8 @@ function renderAccountProxyPickerPanel(account = null, mode = "create") {
       <div class="account-proxy-inline-head-actions"><button type="button" data-account-proxy-picker-open aria-expanded="false">${proxyId ? "切换代理" : "选择代理"}</button></div>
     </div>
     <div class="account-proxy-inline-options" data-account-proxy-inline-options hidden>
-      ${accountProxyPurchasePlaceholderHtml()}
       <div class="account-proxy-picker-toolbar account-proxy-picker-filter-toolbar">
-        <div class="account-proxy-picker-controls">${accountProxyPoolFiltersHtml()}<button type="button" class="account-proxy-clear" data-account-proxy-choice="" data-account-proxy-choice-scope="edit" aria-pressed="${proxyId ? "false" : "true"}">${renderNoProxyIcon()}<span>不使用代理</span></button></div>
+        <div class="account-proxy-picker-controls">${accountProxyPoolFiltersHtml("edit", proxyId)}</div>
       </div>
       ${accountProxyOptionCardsHtml(proxyId, { scope: "edit" })}
     </div>
@@ -29491,7 +28981,7 @@ function openAccountPoolEditorModal(options) {
       <div class="console-modal-head">
         <strong id="accountPoolEditorModalTitle">${editing ? "编辑账号" : "添加账号"}</strong>
         <div class="account-pool-create-modal-head-actions">
-          <button type="button" class="account-pool-paste-card-button" data-account-pool-paste-card title="${editing ? "粘贴并覆盖账号、密码和 2FA" : "粘贴账号、密码和 2FA"}" aria-label="${editing ? "粘贴并覆盖账号、密码和 2FA" : "粘贴账号、密码和 2FA"}">${renderClipboardIcon()}<span>粘贴账号</span></button>
+          <button type="button" class="account-pool-paste-card-button" data-account-pool-paste-card title="${editing ? "粘贴并覆盖账号和密码" : "粘贴账号和密码"}" aria-label="${editing ? "粘贴并覆盖账号和密码" : "粘贴账号和密码"}">${renderClipboardIcon()}<span>粘贴账号</span></button>
           ${renderModalCloseButton("data-account-pool-editor-cancel")}
         </div>
       </div>
@@ -29504,10 +28994,8 @@ function openAccountPoolEditorModal(options) {
       </div>
     </section>`;
   document.body.appendChild(modal);
-  const totpController = editing ? createAccountTotpController(modal, account) : null;
   $(`${editing ? "accountPoolEdit" : "accountPool"}LoginUsername`)?.focus();
   modal.__cleanup = () => {
-    totpController?.close();
     if (editing) clearAccountPasswordReveal(accountId, "pool-edit");
     else resetAccountPoolCreateForm();
   };
@@ -29517,75 +29005,14 @@ function openAccountPoolEditorModal(options) {
     return true;
   };
   modal.addEventListener("click", (event) => {
-    const totpToggle = event.target.closest("[data-account-totp-toggle]");
-    if (totpToggle) {
-      const section = totpToggle.closest("[data-account-totp-section]");
-      const body = section?.querySelector("[data-account-totp-body]");
-      const expanded = totpToggle.getAttribute("aria-expanded") === "true";
-      totpToggle.setAttribute("aria-expanded", expanded ? "false" : "true");
-      if (body) body.hidden = expanded;
-      section?.classList.toggle("is-expanded", !expanded);
-      if (!expanded) {
-        window.requestAnimationFrame(() => body?.querySelector("input")?.focus());
-      }
-      return;
-    }
     const pasteCard = event.target.closest("[data-account-pool-paste-card]");
     if (pasteCard) {
       pasteCard.disabled = true;
-      pasteAccountPoolCardFromClipboard(modal, totpController)
+      pasteAccountPoolCardFromClipboard(modal)
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "粘贴账号字段失败", false))
         .finally(() => {
           if (pasteCard.isConnected) pasteCard.disabled = false;
         });
-      return;
-    }
-    const totpCreateStage = event.target.closest("[data-account-totp-create-stage]");
-    if (totpCreateStage) {
-      syncAccountPoolCreateDraftFromForm();
-      const secret = accountPoolDraftValue("totp_secret_or_uri").trim();
-      const stateNode = modal.querySelector("[data-account-totp-state]");
-      const message = modal.querySelector("[data-account-totp-message]");
-      if (!secret) {
-        if (message) {
-          message.textContent = "请先输入 2FA 密钥。";
-          message.dataset.tone = "error";
-          message.hidden = false;
-        }
-        return;
-      }
-      if (stateNode) {
-        stateNode.textContent = "保存后启用";
-        stateNode.dataset.totpStatus = "pending";
-      }
-      if (message) {
-        message.textContent = "2FA 密钥已填写，保存账号后启用。";
-        message.dataset.tone = "success";
-        message.hidden = false;
-      }
-      return;
-    }
-    const totpCopy = event.target.closest("[data-account-totp-copy]");
-    if (totpCopy) {
-      void totpController?.copyCode(totpCopy);
-      return;
-    }
-    const totpSubmit = event.target.closest("[data-account-totp-submit]");
-    if (totpSubmit) {
-      void totpController?.submit(totpSubmit);
-      return;
-    }
-    if (event.target.closest("[data-account-totp-update]")) {
-      totpController?.showUpdate();
-      return;
-    }
-    if (event.target.closest("[data-account-totp-update-cancel]")) {
-      totpController?.cancelUpdate();
-      return;
-    }
-    const totpDelete = event.target.closest("[data-account-totp-delete]");
-    if (totpDelete) {
-      void totpController?.remove(totpDelete);
       return;
     }
     const passwordToggle = event.target.closest("[data-account-password-toggle]");
@@ -29618,17 +29045,9 @@ function openAccountPoolEditorModal(options) {
       void claimAccountProxyPoolOption(modal, marketChoice.dataset.accountProxyMarketChoice || "");
       return;
     }
-    const purchaseTrigger = event.target.closest("[data-account-proxy-purchase-placeholder]");
-    if (purchaseTrigger) {
-      openAccountProxyPurchaseView(modal, purchaseTrigger);
-      return;
-    }
-    if (event.target.closest("[data-account-proxy-purchase-back], [data-account-proxy-purchase-close]")) {
-      closeAccountProxyPurchaseView(modal);
-      return;
-    }
-    if (event.target.closest("[data-account-proxy-purchase-retry]")) {
-      void loadAccountProxyPurchaseForm(modal);
+    const renewal = event.target.closest("[data-account-proxy-renewal-order]");
+    if (renewal) {
+      void updateAccountProxyRenewal(modal, renewal);
       return;
     }
     const choice = event.target.closest("[data-account-proxy-choice]");
@@ -29674,6 +29093,11 @@ function openAccountPoolEditorModal(options) {
     if (editing && passwordInput) passwordInput.dataset.passwordDirty = "true";
   });
   modal.addEventListener("change", (event) => {
+    if (event.target.matches('[data-account-proxy-filter="country"]')) {
+      const cityFilter = modal.querySelector('[data-account-proxy-filter="city"]');
+      if (cityFilter) cityFilter.value = "";
+      accountProxyPoolFilterOptions(modal, modal.__accountProxyPoolData || {});
+    }
     if (event.target.closest("[data-account-proxy-filter]")) refreshAccountProxyPickerOptions(modal);
   });
   modal.addEventListener("keydown", (event) => {
@@ -29722,120 +29146,6 @@ async function startAccountBrowserSessionReuse(accountId = "", personaId = "", m
   return result;
 }
 
-function googleAccountSessionIdentity() {
-  const google = state.currentUser?.auth_methods?.google || {};
-  const email = String(state.currentUser?.verified_email || state.currentUser?.email || "").trim();
-  return {
-    authorized: Boolean(google.bound && google.enabled && email),
-    email,
-  };
-}
-
-async function createGoogleSessionAccount(modal, { login = false } = {}) {
-  const identity = googleAccountSessionIdentity();
-  if (!identity.authorized) throw new Error("请先授权 Google 账号。");
-  const username = String(modal.querySelector("[data-google-session-username]")?.value || "").trim().replace(/^@+/, "");
-  if (!username) throw new Error("请填写要接入的平台账号用户名。");
-  const platform = normalizeAccountPoolPlatform(modal.dataset.googleSessionPlatform || state.accountPoolPlatform);
-  const personaId = String(modal.dataset.googleSessionPersonaId || "").trim();
-  const account = accountPoolAccounts().find((item) => (
-    normalizeAccountPoolPlatform(item.platform) === platform
-    && String(item.username || "").trim().replace(/^@+/, "").toLowerCase() === username.toLowerCase()
-  )) || (await api("/api/persona_dashboard/automation/accounts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      platform,
-      persona_id: personaId,
-      username,
-      login_username: username,
-      status: "pending_login",
-    }),
-  }))?.account || {};
-  state.accountPoolPlatform = platform;
-  state.accountPoolAccountId = String(account.id || "");
-  state.accountPoolSelectedAccountIds = account.id ? [String(account.id)] : [];
-  state.preferredAccountId = String(account.id || "");
-  await loadSocial();
-  if (login && account.id) {
-    await startAccountBrowserSessionReuse(String(account.id), personaId, "socialMsg");
-  } else {
-    showMsg("socialMsg", "账号已保存，可随时打开账号浏览器。", true);
-  }
-  return account;
-}
-
-function openGoogleAccountSessionModal(options = {}) {
-  closeConsoleModal(null);
-  const platform = normalizeAccountPoolPlatform(options.platform || state.accountPoolPlatform);
-  const personaId = String(options.personaId || "").trim();
-  const identity = googleAccountSessionIdentity();
-  const suggestedUsername = identity.email ? identity.email.split("@")[0] : "";
-  const modal = document.createElement("div");
-  modal.id = "consoleModal";
-  modal.className = "console-modal";
-  modal.dataset.googleSessionPlatform = platform;
-  modal.dataset.googleSessionPersonaId = personaId;
-  modal.innerHTML = `
-    <div class="console-modal-backdrop" data-google-session-cancel></div>
-    <section class="console-modal-dialog google-account-session-modal" role="dialog" aria-modal="true" aria-labelledby="googleAccountSessionTitle">
-      <div class="console-modal-head">
-        <strong id="googleAccountSessionTitle">Google 快速接入</strong>
-        ${renderModalCloseButton("data-google-session-cancel")}
-      </div>
-      <div class="console-modal-content google-account-session-content">
-        <div class="google-account-session-hero">
-          <span class="account-add-method-icon">${renderAccountAddMethodIcon("google")}</span>
-          <span><strong>${identity.authorized ? "Google 授权已连接" : "需要 Google 授权"}</strong><small>使用标准 OAuth 确认邮箱并创建账号卡。</small></span>
-        </div>
-        <div class="google-account-session-platform" data-account-platform="${esc(platform)}">
-          <span class="google-account-session-platform-brand">${renderAccountPoolPlatformIcon(platform)} <strong>${esc(platformLabel(platform))}</strong></span>
-        </div>
-        <dl class="google-account-session-facts">
-          <div><dt>Google 邮箱</dt><dd>${identity.email ? esc(identity.email) : "尚未授权"}</dd></div>
-        </dl>
-        ${identity.authorized ? "" : `<button type="button" class="google-account-authorize-button" data-google-session-authorize>${renderAccountAddMethodIcon("google")}<span>授权 Google 账号</span></button>`}
-        <label class="google-account-session-field">
-          <span>平台账号用户名</span>
-          <input type="text" data-google-session-username value="${esc(suggestedUsername)}" placeholder="例如：liliacvuiy575" autocomplete="off" ${identity.authorized ? "" : "disabled"} />
-          <small>用于查找或创建该平台的账号卡。</small>
-        </label>
-        <p class="account-add-method-note">打开账号专属指纹浏览器并复用服务器上已有登录状态；首次未登录时在该浏览器完成一次平台认证，之后可跨设备复用。</p>
-      </div>
-      <div class="console-modal-actions google-account-session-actions">
-        <button type="button" data-google-session-save ${identity.authorized ? "" : "disabled"}>保存账号</button>
-        <button type="button" class="primary" data-google-session-login ${identity.authorized ? "" : "disabled"}>保存并打开浏览器</button>
-      </div>
-    </section>`;
-  document.body.appendChild(modal);
-  const close = () => modal.remove();
-  modal.addEventListener("click", (event) => {
-    if (event.target.closest("[data-google-session-cancel]")) {
-      close();
-      return;
-    }
-    if (event.target.closest("[data-google-session-authorize]")) {
-      window.location.assign(adminWorkspaceUrl("/api/auth/google/account-session/start"));
-      return;
-    }
-    const saveButton = event.target.closest("[data-google-session-save]");
-    const loginButton = event.target.closest("[data-google-session-login]");
-    const actionButton = saveButton || loginButton;
-    if (!actionButton) return;
-    actionButton.disabled = true;
-    createGoogleSessionAccount(modal, { login: Boolean(loginButton) })
-      .then(() => close())
-      .catch((error) => {
-        actionButton.disabled = false;
-        showMsg("socialMsg", error.detail || error.message || "账号接入失败。", false);
-      });
-  });
-  modal.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") close();
-  });
-  modal.querySelector(identity.authorized ? "[data-google-session-username]" : "[data-google-session-authorize]")?.focus();
-}
-
 function openAccountAddMethodModal(options = {}) {
   closeConsoleModal(null);
   const modal = document.createElement("div");
@@ -29853,14 +29163,14 @@ function openAccountAddMethodModal(options = {}) {
         <div class="account-add-method-buttons">
           <button type="button" class="account-add-method-button" data-account-add-method="manual">
             <span class="account-add-method-icon">${renderAccountAddMethodIcon("manual")}</span>
-            <span>填写账号</span>
+            <span>填写账号密码</span>
           </button>
           <button type="button" class="account-add-method-button account-add-method-button-google" data-account-add-method="google">
             <span class="account-add-method-icon">${renderAccountAddMethodIcon("google")}</span>
             <span>Google 快速接入</span>
           </button>
         </div>
-        <p class="account-add-method-note">Google 授权用于确认身份；平台登录状态保存在账号专属指纹浏览器中。</p>
+        <p class="account-add-method-note">两种入口均使用现有账号密码登录流程，登录状态保存在账号专属指纹浏览器中。</p>
       </div>
     </section>`;
   document.body.appendChild(modal);
@@ -29875,8 +29185,7 @@ function openAccountAddMethodModal(options = {}) {
     const method = event.target.closest("[data-account-add-method]")?.dataset.accountAddMethod;
     if (!method) return;
     close();
-    if (method === "google") openGoogleAccountSessionModal(options);
-    else openAccountPoolEditorModal(options);
+    openAccountPoolEditorModal(options);
   });
   modal.addEventListener("keydown", (event) => {
     if (event.key === "Escape") close();
@@ -29914,7 +29223,6 @@ async function saveAccountPoolEditForm(accountId = "") {
     payload.login_password = String(loginPasswordInput.value || "");
   }
   const editModal = $("consoleModal");
-  const totpSecret = String(editModal?.querySelector("[data-account-totp-secret]")?.value || "").trim();
   const selectedProxyId = String(editModal?.dataset.selectedProxyId || "").trim();
   const originalProxyId = String(editModal?.dataset.originalProxyId || account?.proxy_id || "").trim();
   const proxyChanged = accountProxyBindingChanged(originalProxyId, selectedProxyId);
@@ -29928,13 +29236,6 @@ async function saveAccountPoolEditForm(accountId = "") {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (totpSecret) {
-    await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanId)}/totp`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ secret_or_uri: totpSecret }),
-    });
-  }
   state.accountPoolAccountId = String(result.account?.id || cleanId);
   await loadSocial({ force: true });
   renderSocialAccounts();
@@ -35115,6 +34416,7 @@ async function init() {
   const socialReady = loadSocial({ render: false }).then(() => {
     if (window.matchMedia("(max-width: 820px)").matches) renderSocialAccounts();
     updateAccountStatusViews();
+    consumeGoogleAccountSessionResult();
     if (!hasPersonaBootstrap || isPersonaWorkspaceModule() || state.activeModule === "publishing" || state.activeModule === "automation") scheduleWorkspaceRender(false);
   }).catch(() => {});
   const personasReady = loadPersonas().then(() => {

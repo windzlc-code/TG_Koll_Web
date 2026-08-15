@@ -349,6 +349,25 @@ class JobStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_fetch_pool_targets_due
                   ON fetch_pool_targets(next_run_at, archive_id);
+                CREATE TABLE IF NOT EXISTS hot_dataset_snapshots (
+                  dataset_id TEXT PRIMARY KEY,
+                  dataset_name TEXT NOT NULL,
+                  candidate_count INTEGER NOT NULL,
+                  observed_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS hot_dataset_change_events (
+                  id TEXT PRIMARY KEY,
+                  dataset_id TEXT NOT NULL,
+                  dataset_name TEXT NOT NULL,
+                  delta INTEGER NOT NULL,
+                  count_before INTEGER NOT NULL,
+                  count_after INTEGER NOT NULL,
+                  reason TEXT NOT NULL,
+                  source TEXT NOT NULL,
+                  created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_hot_dataset_change_events_created
+                  ON hot_dataset_change_events(created_at DESC, id DESC);
                 """
             )
             existing_columns = {
@@ -761,7 +780,110 @@ class JobStore:
             "personas": personas,
         }
 
-    def publish_dataset_overview(self, *, force: bool = False) -> None:
+    @staticmethod
+    def _dataset_overview_rows(overview: Mapping[str, Any]) -> list[tuple[str, str, int]]:
+        rows: list[tuple[str, str, int]] = []
+        global_dataset = overview.get("global")
+        if isinstance(global_dataset, Mapping):
+            rows.append(("global", str(global_dataset.get("name") or "全局数据集"), max(0, int(global_dataset.get("count") or 0))))
+        personas = overview.get("personas")
+        if isinstance(personas, list):
+            for persona in personas:
+                if not isinstance(persona, Mapping):
+                    continue
+                dataset_id = str(persona.get("archive_id") or "").strip().lower()
+                if not _PERSONA_ARCHIVE_ID.fullmatch(dataset_id):
+                    continue
+                rows.append((dataset_id, str(persona.get("name") or f"人设 {dataset_id[:8]}"), max(0, int(persona.get("count") or 0))))
+        return rows
+
+    def _record_dataset_overview_changes(
+        self,
+        overview: Mapping[str, Any],
+        *,
+        reason: str,
+        source: str,
+    ) -> None:
+        observed_at = max(1, int(overview.get("generated_at") or time.time()))
+        with self._connection() as connection:
+            for dataset_id, dataset_name, candidate_count in self._dataset_overview_rows(overview):
+                previous = connection.execute(
+                    "SELECT candidate_count FROM hot_dataset_snapshots WHERE dataset_id=?",
+                    (dataset_id,),
+                ).fetchone()
+                if previous is not None:
+                    count_before = max(0, int(previous["candidate_count"] or 0))
+                    delta = candidate_count - count_before
+                    if delta:
+                        connection.execute(
+                            """
+                            INSERT INTO hot_dataset_change_events(
+                              id,dataset_id,dataset_name,delta,count_before,count_after,reason,source,created_at
+                            ) VALUES(?,?,?,?,?,?,?,?,?)
+                            """,
+                            (
+                                uuid.uuid4().hex,
+                                dataset_id,
+                                dataset_name,
+                                delta,
+                                count_before,
+                                candidate_count,
+                                str(reason or "worker_sync")[:40],
+                                str(source or "worker")[:40],
+                                observed_at,
+                            ),
+                        )
+                connection.execute(
+                    """
+                    INSERT INTO hot_dataset_snapshots(dataset_id,dataset_name,candidate_count,observed_at)
+                    VALUES(?,?,?,?)
+                    ON CONFLICT(dataset_id) DO UPDATE SET
+                      dataset_name=excluded.dataset_name,
+                      candidate_count=excluded.candidate_count,
+                      observed_at=excluded.observed_at
+                    """,
+                    (dataset_id, dataset_name, candidate_count, observed_at),
+                )
+            connection.execute(
+                """
+                DELETE FROM hot_dataset_change_events
+                WHERE id NOT IN (
+                  SELECT id FROM hot_dataset_change_events
+                  ORDER BY created_at DESC, id DESC
+                  LIMIT 2000
+                )
+                """
+            )
+
+    def list_hot_dataset_events(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(int(limit or 200), 500))
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id,dataset_id,dataset_name,delta,count_before,count_after,reason,source,created_at
+                FROM hot_dataset_change_events
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_hot_dataset_event(self, event_id: str) -> bool:
+        clean_id = str(event_id or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{32}", clean_id):
+            raise ValueError("invalid hot dataset event id")
+        with self._connection() as connection:
+            cursor = connection.execute("DELETE FROM hot_dataset_change_events WHERE id=?", (clean_id,))
+            return bool(cursor.rowcount)
+
+    def publish_dataset_overview(
+        self,
+        *,
+        force: bool = False,
+        reason: str = "worker_sync",
+        source: str = "worker",
+    ) -> None:
         monotonic_now = time.monotonic()
         if not force and monotonic_now - self._dataset_overview_published_at < 30:
             return
@@ -769,8 +891,10 @@ class JobStore:
         path = Path(os.getenv("TG_HOT_DATASET_OVERVIEW_PATH", "/collector-proxy/hot-dataset-overview.json"))
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         try:
+            overview = self.dataset_overview()
+            self._record_dataset_overview_changes(overview, reason=reason, source=source)
             path.parent.mkdir(parents=True, exist_ok=True)
-            temporary.write_text(json.dumps(self.dataset_overview(), ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            temporary.write_text(json.dumps(overview, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
             os.replace(temporary, path)
         except OSError:
             with contextlib.suppress(OSError):
@@ -780,6 +904,7 @@ class JobStore:
         clean_id = str(dataset_id or "").strip()
         if clean_id != "global" and not _PERSONA_ARCHIVE_ID.fullmatch(clean_id):
             raise ValueError("invalid hot dataset id")
+        self.publish_dataset_overview(force=True)
         count_before = (
             _global_available_candidate_count(self.runtime_dir, now=int(time.time()))
             if clean_id == "global"
@@ -822,7 +947,7 @@ class JobStore:
                         temporary = cache_path.with_name(f".{cache_path.name}.{os.getpid()}.tmp")
                         temporary.write_text(json.dumps(cache, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
                         os.replace(temporary, cache_path)
-        self.publish_dataset_overview(force=True)
+        self.publish_dataset_overview(force=True, reason="manual_delete", source="admin")
         return {"dataset_id": clean_id, "deleted_count": count_before, "overview": self.dataset_overview()}
 
 
@@ -1282,8 +1407,26 @@ def create_worker_app(
     async def refresh_hot_datasets(request: Request) -> dict[str, Any]:
         body = await request.body()
         await authenticate(request, body)
-        store.publish_dataset_overview(force=True)
+        store.publish_dataset_overview(force=True, reason="manual_refresh", source="admin")
         return {"ok": True, "overview": store.dataset_overview()}
+
+    @app.get("/internal/worker/v1/hot-datasets/events")
+    async def get_hot_dataset_events(request: Request) -> dict[str, Any]:
+        body = await request.body()
+        await authenticate(request, body)
+        return {"ok": True, "events": store.list_hot_dataset_events()}
+
+    @app.delete("/internal/worker/v1/hot-datasets/events/{event_id}")
+    async def delete_hot_dataset_event(event_id: str, request: Request) -> dict[str, Any]:
+        body = await request.body()
+        await authenticate(request, body)
+        try:
+            deleted = store.delete_hot_dataset_event(event_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not deleted:
+            raise HTTPException(status_code=404, detail="hot dataset event not found")
+        return {"ok": True, "deleted": True}
 
     @app.delete("/internal/worker/v1/hot-datasets/{dataset_id}")
     async def delete_hot_dataset(dataset_id: str, request: Request) -> dict[str, Any]:

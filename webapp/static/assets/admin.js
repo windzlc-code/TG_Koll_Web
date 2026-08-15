@@ -6958,12 +6958,96 @@ async function refreshHotDatasets({ force = true } = {}) {
       force ? { method: "POST" } : {},
     );
     renderHotDatasetOverview(payload || {});
+    await refreshHotDatasetEvents();
     return payload;
   } catch (error) {
     setText("hotDatasetOverviewTime", `刷新失败：${getErrorMessage(error)}`);
     return null;
   } finally {
     if (button) button.disabled = false;
+  }
+}
+
+function hotDatasetEventReason(event = {}) {
+  const reason = String(event.reason || "");
+  const delta = Number(event.delta || 0);
+  if (reason === "manual_delete") return "手动删除数据集";
+  if (reason === "manual_refresh") return delta > 0 ? "刷新时发现新增" : "刷新时发现减少";
+  return delta > 0 ? "自动补充" : "候选已使用或清理";
+}
+
+function renderHotDatasetEvents(payload = {}) {
+  const body = el("hotDatasetEventsBody");
+  if (!body) return;
+  body.replaceChildren();
+  const events = Array.isArray(payload.events) ? payload.events : [];
+  if (!events.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 6;
+    cell.className = "hot-dataset-event-empty";
+    cell.textContent = "暂无增减记录；后续补充、使用或删除时会自动记录";
+    row.appendChild(cell);
+    body.appendChild(row);
+  } else {
+    events.forEach((event) => {
+      const delta = Number(event.delta || 0);
+      const row = document.createElement("tr");
+      const timeCell = document.createElement("td");
+      timeCell.textContent = formatTime(Number(event.created_at || 0));
+      const datasetCell = document.createElement("td");
+      datasetCell.textContent = String(event.dataset_name || (event.dataset_id === "global" ? "全局数据集" : "未命名人设"));
+      const deltaCell = document.createElement("td");
+      deltaCell.className = `hot-dataset-event-delta ${delta > 0 ? "is-increase" : "is-decrease"}`;
+      deltaCell.textContent = `${delta > 0 ? "+" : ""}${delta.toLocaleString("zh-CN")} 条`;
+      const countsCell = document.createElement("td");
+      countsCell.className = "hot-dataset-event-counts";
+      countsCell.textContent = `${Math.max(0, Number(event.count_before || 0)).toLocaleString("zh-CN")} → ${Math.max(0, Number(event.count_after || 0)).toLocaleString("zh-CN")}`;
+      const reasonCell = document.createElement("td");
+      reasonCell.textContent = hotDatasetEventReason(event);
+      const actionCell = document.createElement("td");
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "hot-dataset-event-delete";
+      remove.title = "删除这条记录";
+      remove.setAttribute("aria-label", `删除${datasetCell.textContent}的这条增减记录`);
+      remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M7 7l1 13h8l1-13"></path><path d="M10 11v5M14 11v5"></path></svg>';
+      remove.addEventListener("click", () => void deleteHotDatasetEvent(event));
+      actionCell.appendChild(remove);
+      row.append(timeCell, datasetCell, deltaCell, countsCell, reasonCell, actionCell);
+      body.appendChild(row);
+    });
+  }
+  setText("hotDatasetEventsTime", `更新于 ${formatTime(Math.floor(Date.now() / 1000))}`);
+}
+
+async function refreshHotDatasetEvents() {
+  try {
+    const payload = await api("/api/admin/hot-datasets/events");
+    renderHotDatasetEvents(payload || {});
+    return payload;
+  } catch (error) {
+    setText("hotDatasetEventsTime", `记录读取失败：${getErrorMessage(error)}`);
+    return null;
+  }
+}
+
+async function deleteHotDatasetEvent(event = {}) {
+  const eventId = String(event.id || "").trim();
+  if (!eventId) return;
+  const decision = await requestAdminPublicAction({
+    title: "删除这条补充记录？",
+    message: "只会删除这条日志，不会删除热点候选数据。删除后无法恢复。",
+    confirmLabel: "确认删除记录",
+    cancelLabel: "取消",
+    tone: "danger",
+  });
+  if (!decision.confirmed) return;
+  try {
+    await api(`/api/admin/hot-datasets/events/${encodeURIComponent(eventId)}`, { method: "DELETE" });
+    await refreshHotDatasetEvents();
+  } catch (error) {
+    showAdminPublicPrompt({ title: "删除记录失败", message: getErrorMessage(error), ok: false });
   }
 }
 
@@ -6984,6 +7068,7 @@ async function deleteHotDataset(item = {}) {
   try {
     const payload = await api(`/api/admin/hot-datasets/${encodeURIComponent(datasetId)}`, { method: "DELETE" });
     renderHotDatasetOverview(payload || {});
+    await refreshHotDatasetEvents();
     showAdminPublicPrompt({
       title: "数据集已清空",
       message: `已删除 ${Math.max(0, Number(payload?.deleted_count || 0)).toLocaleString("zh-CN")} 条候选数据。`,
@@ -7396,6 +7481,7 @@ async function loadGovernanceDashboard({ force = false } = {}) {
       renderHotDatasetOverview({ configured: false });
       setText("hotDatasetOverviewTime", "数据读取失败");
     });
+  void refreshHotDatasetEvents();
   const request = api(`/api/admin/dashboard?${query.toString()}`)
     .then((payload) => {
       if (requestId !== adminState.governanceRequestId) return null;

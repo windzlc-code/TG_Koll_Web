@@ -49,6 +49,16 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(runner._login_assistance_presentation({"status": "ready"})["phase"], "success")
         self.assertNotEqual(runner._login_assistance_presentation({"status": "need_verification"})["phase"], "success")
 
+    def test_login_assistance_publishes_the_manual_deadline(self):
+        control = {"login_assistance_expires_at": 1_900_000_000}
+        runner._publish_login_assistance_state(
+            mock.Mock(),
+            control,
+            {"status": "need_verification", "challenge_type": "authenticator_totp"},
+        )
+        self.assertEqual(control["login_assistance_state"]["kind"], "verification_code")
+        self.assertEqual(control["login_assistance_state"]["expires_at"], 1_900_000_000)
+
     def test_verification_submission_is_consumed_by_the_browser_task_thread(self):
         actions = queue.Queue(maxsize=2)
         actions.put_nowait({"kind": "verification_code", "verification_code": "654321"})
@@ -1413,10 +1423,10 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
     def test_manual_login_timeout_uses_payload_default_and_clamped_bounds(self):
         cases = [
-            ({}, 900),
+            ({}, 300),
             ({"manual_login_timeout_seconds": 1}, 300),
             ({"manual_login_timeout_seconds": 9999}, 1800),
-            ({"manual_login_timeout_seconds": "invalid"}, 900),
+            ({"manual_login_timeout_seconds": "invalid"}, 300),
         ]
         for payload, expected_timeout in cases:
             with self.subTest(payload=payload):
@@ -1465,7 +1475,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                     "manual login required",
                 )
 
-        cancel_event.wait.assert_called_once_with(5.0)
+        cancel_event.wait.assert_called_once_with(1.0)
         sleep.assert_not_called()
 
     def test_manual_login_success_logic_is_preserved_before_timeout(self):

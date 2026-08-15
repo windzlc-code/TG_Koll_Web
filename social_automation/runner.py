@@ -21,7 +21,7 @@ INSTAGRAM_LOGIN = "https://www.instagram.com/accounts/login/"
 THREADS_HOME = "https://www.threads.net/"
 DEFAULT_LOGIN_SELF_HEAL_ATTEMPTS = 4
 LOGIN_FORM_WAIT_SECONDS = 12
-DEFAULT_MANUAL_LOGIN_TIMEOUT_SECONDS = 900
+DEFAULT_MANUAL_LOGIN_TIMEOUT_SECONDS = 300
 MIN_MANUAL_LOGIN_TIMEOUT_SECONDS = 300
 MAX_MANUAL_LOGIN_TIMEOUT_SECONDS = 1800
 MAX_AUTO_TOTP_ATTEMPTS = 2
@@ -3284,6 +3284,8 @@ def _wait_for_manual_login_completion(
         min(manual_login_timeout_seconds, MAX_MANUAL_LOGIN_TIMEOUT_SECONDS),
     )
     deadline = time.monotonic() + manual_login_timeout_seconds
+    if isinstance(context_control, dict):
+        context_control["login_assistance_expires_at"] = int(time.time()) + manual_login_timeout_seconds
     logger.log(
         "warn",
         "need_manual",
@@ -3417,6 +3419,9 @@ def _publish_login_assistance_state(page: Any, context_control: dict[str, Any] |
         with contextlib.suppress(Exception):
             current["challenge_type"] = str(_classify_verification_challenge(page).get("type") or "")
     presentation = _login_assistance_presentation(current)
+    expires_at = context_control.get("login_assistance_expires_at")
+    if expires_at:
+        presentation["expires_at"] = int(expires_at)
     previous = context_control.get("login_assistance_state")
     if isinstance(previous, dict) and previous.get("action_error"):
         previous_kind = str(previous.get("prompt_kind") or previous.get("kind") or "").strip().lower()
@@ -3527,6 +3532,7 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
         _set_login_assistance_pending(context_control, False)
         return False
     kind = str(action.get("kind") or "").strip().lower()
+    expires_at = context_control.get("login_assistance_expires_at")
     try:
         if kind == "verification_code":
             code = str(action.get("verification_code") or "").strip()
@@ -3562,11 +3568,11 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
         else:
             raise RuntimeError("当前登录步骤不支持该操作")
     except Exception as exc:
-        context_control["login_assistance_state"] = {"phase": "attention", "kind": kind or "browser_interaction", "prompt_kind": kind, "action_error": True, "title": "暂时无法提交", "message": str(exc)[:240], "submit_label": "重试", "updated_at": int(time.time())}
+        context_control["login_assistance_state"] = {"phase": "attention", "kind": kind or "browser_interaction", "prompt_kind": kind, "action_error": True, "title": "暂时无法提交", "message": str(exc)[:240], "submit_label": "重试", "updated_at": int(time.time()), **({"expires_at": int(expires_at)} if expires_at else {})}
         _set_login_assistance_pending(context_control, False)
         logger.log("warn", "login_assistance_submit_failed", "登录映射页提交失败。", {"kind": kind, "error": str(exc)[:240]})
         return True
-    context_control["login_assistance_state"] = {"phase": "running", "kind": "progress", "title": "正在验证", "message": message, "updated_at": int(time.time())}
+    context_control["login_assistance_state"] = {"phase": "running", "kind": "progress", "title": "正在验证", "message": message, "updated_at": int(time.time()), **({"expires_at": int(expires_at)} if expires_at else {})}
     _set_login_assistance_pending(context_control, False)
     logger.log("info", "login_assistance_submitted", message, {"kind": kind, "platform": platform})
     return True

@@ -4,6 +4,7 @@ import json
 import sqlite3
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -15,6 +16,7 @@ SYSTEM_PROXY_OPTION_PREFIX = "system_proxy_item:"
 SYSTEM_PROXY_SETTINGS_KEY = "proxy_market_settings"
 DEFAULT_SYSTEM_PROXY_LIMIT = 1
 DEFAULT_HEALTH_MAX_AGE_SECONDS = 24 * 60 * 60
+SHANGHAI_TIME_ZONE = timezone(timedelta(hours=8), name="Asia/Shanghai")
 
 
 def system_proxy_item_id(value: Any) -> str:
@@ -50,6 +52,42 @@ def _settings(conn: sqlite3.Connection) -> dict[str, int]:
 def _claim_limit(conn: sqlite3.Connection, owner_user_id: int) -> int:
     del conn, owner_user_id
     return DEFAULT_SYSTEM_PROXY_LIMIT
+
+
+def monthly_free_proxy_status(
+    conn: sqlite3.Connection,
+    *,
+    owner_user_id: int,
+    now: int | None = None,
+) -> dict[str, Any]:
+    """Return the one-free-official-proxy allowance for the current Shanghai month."""
+
+    owner_id = int(owner_user_id or 0)
+    current = int(now or time.time())
+    local_now = datetime.fromtimestamp(current, SHANGHAI_TIME_ZONE)
+    month_start = local_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    start_at = int(month_start.timestamp())
+    resets_at = int(next_month.timestamp())
+    used = conn.execute(
+        """
+        SELECT item_id, claimed_at
+        FROM proxy_market_allocations
+        WHERE user_id = ?
+          AND claim_mode IN ('monthly_free', 'console_select')
+          AND claimed_at >= ? AND claimed_at < ?
+        ORDER BY claimed_at DESC, id DESC
+        LIMIT 1
+        """,
+        (owner_id, start_at, resets_at),
+    ).fetchone() if owner_id > 0 else None
+    return {
+        "available": used is None,
+        "period": month_start.strftime("%Y-%m"),
+        "resets_at": resets_at,
+        "used_at": int(used["claimed_at"] or 0) if used is not None else 0,
+        "item_id": str(used["item_id"] or "") if used is not None else "",
+    }
 
 
 def _fresh_and_healthy(item: dict[str, Any], *, now: int, max_age_seconds: int) -> bool:
@@ -159,6 +197,7 @@ def list_system_proxy_pool_options(
     if owner_id <= 0:
         return []
     now = int(time.time())
+    monthly_free = monthly_free_proxy_status(conn, owner_user_id=owner_id, now=now)
     max_age = int(_settings(conn)["health_max_age_seconds"])
     rows = conn.execute(
         """
@@ -172,6 +211,9 @@ def list_system_proxy_pool_options(
                owned_proxy.isp AS owned_proxy_isp,
                owned_proxy.last_check_at AS owned_proxy_last_check_at,
                owned_proxy.last_check_result AS owned_proxy_last_check_result,
+               owned_order.id AS purchase_order_id,
+               owned_order.renewal_enabled AS renewal_enabled,
+               renewal.status AS renewal_status,
                (
                  SELECT COUNT(*)
                  FROM social_accounts account
@@ -186,6 +228,11 @@ def list_system_proxy_pool_options(
          AND owned_proxy.market_item_id = item.id
          AND owned_proxy.user_id = ?
          AND owned_proxy.status IN ('active', 'failed', 'pending')
+        LEFT JOIN proxy_purchase_orders owned_order
+          ON owned_order.id = item.provider_purchase_order_id
+         AND owned_order.user_id = ?
+        LEFT JOIN proxy_renewal_schedules renewal
+          ON renewal.order_id = owned_order.id
         WHERE (
           item.ownership_type = 'owned'
           AND item.owner_user_id = ?
@@ -202,15 +249,13 @@ def list_system_proxy_pool_options(
                  END,
                  item.published_at DESC, item.updated_at DESC, item.id ASC
         """,
-        (owner_id, owner_id, owner_id, owner_id, owner_id),
+        (owner_id, owner_id, owner_id, owner_id, owner_id, owner_id),
     ).fetchall()
     options: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
         ownership_type = str(item.get("ownership_type") or "shared").strip().lower()
         owned = ownership_type == "owned" and int(item.get("owner_user_id") or 0) == owner_id
-        if not owned and not include_admin_inventory:
-            continue
         selected = int(item.get("allocation_user_id") or 0) == owner_id
         if not selected and not owned:
             if str(item.get("status") or "") != "active":
@@ -229,6 +274,7 @@ def list_system_proxy_pool_options(
         region = str((item.get("owned_proxy_region") if owned else item.get("region")) or "")
         city = str((item.get("owned_proxy_city") if owned else item.get("city")) or "")
         isp = str((item.get("owned_proxy_isp") if owned else item.get("isp")) or "")
+        details_revealed = bool(owned or selected or include_admin_inventory)
         options.append(
             {
                 "id": f"{SYSTEM_PROXY_OPTION_PREFIX}{str(item.get('id') or '')}",
@@ -236,8 +282,8 @@ def list_system_proxy_pool_options(
                 "social_proxy_id": str(item.get("social_proxy_id") or ""),
                 "name": str(item.get("display_name") or item.get("sku") or "系统代理"),
                 "proxy_type": str(item.get("proxy_type") or "socks5"),
-                "host": str(item.get("host") or ""),
-                "port": int(item.get("port") or 0),
+                "host": str(item.get("host") or "") if details_revealed else "",
+                "port": int(item.get("port") or 0) if details_revealed else 0,
                 "country": country,
                 "country_code": str(response.get("country_code") or (country if len(country) == 2 else "")).upper(),
                 "region": region,
@@ -252,10 +298,16 @@ def list_system_proxy_pool_options(
                     else "pending"
                 ) if owned else str(item.get("health_status") or "pending"),
                 "last_check_at": int((item.get("owned_proxy_last_check_at") if owned else item.get("last_check_at")) or 0),
-                "exit_ip": str(parsed_check.get("exit_ip") or parsed_check.get("ip") or ""),
+                "exit_ip": str(parsed_check.get("exit_ip") or parsed_check.get("ip") or "") if details_revealed else "",
                 "selected": selected,
-                "available": owned or not selected,
+                "available": bool(owned or selected or monthly_free["available"]),
                 "ownership_type": "owned" if owned else "shared",
+                "details_revealed": details_revealed,
+                "monthly_free": not owned,
+                "monthly_free_available": bool(monthly_free["available"]),
+                "purchase_order_id": str(item.get("purchase_order_id") or ""),
+                "renewal_enabled": bool(int(item.get("renewal_enabled") or 0)),
+                "renewal_status": str(item.get("renewal_status") or ""),
                 "bound_account_count": int(item.get("bound_account_count") or 0),
                 "claimed_at": int(item.get("claimed_at") or 0),
                 "published_at": int(item.get("published_at") or 0),
@@ -273,6 +325,8 @@ def claim_system_proxy_in_transaction(
     client_request_id: str = "",
     allow_replacement: bool = False,
     allow_admin_inventory: bool = False,
+    claim_mode: str = "monthly_free",
+    now: int | None = None,
 ) -> Any:
     owner_id = int(owner_user_id or 0)
     clean_item_id = str(item_id or "").strip()
@@ -327,7 +381,7 @@ def claim_system_proxy_in_transaction(
         raise HTTPException(status_code=409, detail=f"系统代理使用数量已达到上限（{limit} 个）")
     if str(item.get("status") or "") != "active":
         raise HTTPException(status_code=409, detail="该系统代理已被占用或暂不可用")
-    now = int(time.time())
+    now = int(now or time.time())
     if not _fresh_and_healthy(
         item,
         now=now,
@@ -377,13 +431,14 @@ def claim_system_proxy_in_transaction(
               id, item_id, user_id, social_proxy_id, status, claim_mode,
               display_price_cents_snapshot, currency, idempotency_key,
               claimed_at, released_at, seen_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'active', 'console_select', ?, ?, ?, ?, 0, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, 0, ?, ?, ?)
             """,
             (
                 allocation_id,
                 clean_item_id,
                 owner_id,
                 proxy_id,
+                str(claim_mode or "monthly_free"),
                 int(item.get("display_price_cents") or 0),
                 str(item.get("currency") or "TWD"),
                 clean_request_id,
@@ -412,10 +467,12 @@ def switch_system_proxy_in_transaction(
     client_request_id: str = "",
     expected_current_item_id: str | None = None,
     allow_admin_inventory: bool = False,
+    now: int | None = None,
 ) -> tuple[Any, bool]:
     """Select one system proxy per user without changing account bindings."""
 
     owner_id = int(owner_user_id or 0)
+    current_time = int(now or time.time())
     clean_item_id = str(item_id or "").strip()
     target = conn.execute(
         "SELECT ownership_type, owner_user_id FROM proxy_market_items WHERE id = ?",
@@ -471,6 +528,13 @@ def switch_system_proxy_in_transaction(
         if bound_account is not None:
             raise HTTPException(status_code=409, detail="当前代理仍有账号绑定，请先解除账号绑定后再切换代理 IP")
 
+    benefit = monthly_free_proxy_status(conn, owner_user_id=owner_id, now=current_time)
+    if not benefit["available"]:
+        raise HTTPException(
+            status_code=409,
+            detail="本月免费代理机会已使用，下月可重新选择",
+        )
+
     selected = current or claim_system_proxy_in_transaction(
         conn,
         item_id=clean_item_id,
@@ -478,6 +542,8 @@ def switch_system_proxy_in_transaction(
         client_request_id=client_request_id,
         allow_replacement=bool(current_rows),
         allow_admin_inventory=allow_admin_inventory,
+        claim_mode="monthly_free",
+        now=current_time,
     )
     selected_proxy_id = str(selected["id"] or "")
     replaced_proxy = any(str(row["id"] or "") != selected_proxy_id for row in current_rows)

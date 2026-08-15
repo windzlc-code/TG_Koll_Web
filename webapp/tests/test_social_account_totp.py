@@ -1,4 +1,5 @@
 import json
+import inspect
 import os
 import sqlite3
 import tempfile
@@ -11,6 +12,12 @@ from fastapi.testclient import TestClient
 
 import webapp.server as server
 from webapp import governance, social_automation_api
+
+
+def test_login_tasks_do_not_inject_saved_totp_codes():
+    source = inspect.getsource(social_automation_api._execute_claimed_task_with_control)
+    assert 'control["totp_code_provider"]' not in source
+    assert 'control["totp_outcome_callback"]' not in source
 
 
 class SocialAccountTotpApiTests(unittest.TestCase):

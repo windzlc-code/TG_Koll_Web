@@ -69,7 +69,15 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             self.assertIn(f'id="{label_id}"', self.html)
 
     def test_hot_dataset_overview_is_vertical_global_first_and_uses_unique_persona_colors(self):
-        for element_id in ("hotDatasetOverviewTitle", "hotDatasetOverviewTime", "hotDatasetOverviewList", "btnRefreshHotDatasets"):
+        for element_id in (
+            "hotDatasetOverviewTitle",
+            "hotDatasetOverviewTime",
+            "hotDatasetOverviewList",
+            "btnRefreshHotDatasets",
+            "hotDatasetEventsTitle",
+            "hotDatasetEventsTime",
+            "hotDatasetEventsBody",
+        ):
             self.assertIn(f'id="{element_id}"', self.html)
         self.assertIn("grid-template-columns: minmax(0, 1fr) minmax(150px, 22%) 34px", self.html)
         self.assertLess(self.html.index('class="admin-governance-kpis"'), self.html.index('class="hot-dataset-overview"'))
@@ -77,10 +85,14 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn("index * 137.508", self.script)
         self.assertIn('/api/admin/hot-datasets/refresh', self.script)
         self.assertIn('/api/admin/hot-datasets/${encodeURIComponent(datasetId)}', self.script)
+        self.assertIn('/api/admin/hot-datasets/events', self.script)
+        self.assertIn('/api/admin/hot-datasets/events/${encodeURIComponent(eventId)}', self.script)
         self.assertIn('{ method: "DELETE" }', self.script)
         self.assertIn('requestAdminPublicAction({', self.script)
         self.assertIn('确认删除数据集', self.script)
         self.assertIn('function renderHotDatasetOverview(', self.script)
+        self.assertIn('function renderHotDatasetEvents(', self.script)
+        self.assertIn('候选已使用或清理', self.script)
 
     def test_social_automation_limits_are_managed_in_admin_runtime(self):
         for element_id in (
