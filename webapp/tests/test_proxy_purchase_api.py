@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -189,6 +190,52 @@ class ProxyPurchaseApiTests(unittest.TestCase):
         self.assertEqual(asset["proxy_status"], "active")
         self.assertNotIn("username_ciphertext", assets.text)
         self.assertNotIn("password_ciphertext", assets.text)
+
+    def test_monthly_free_supplier_proxy_uses_platform_funds_once(self):
+        with app_db.db() as conn:
+            before = int(conn.execute(
+                "SELECT credit_units FROM billing_wallets WHERE user_id=?", (self.user_id,)
+            ).fetchone()[0])
+
+        response = self.client.post(
+            "/api/proxy-purchases/monthly-free",
+            json={
+                "country": "US",
+                "city": "",
+                "period_months": 1,
+                "auto_renew": True,
+                "client_request_id": "monthly-free-test",
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        order = response.json()["order"]
+        self.assertEqual(order["status"], "active")
+        self.assertTrue(order["social_proxy_id"])
+
+        with app_db.db() as conn:
+            after = int(conn.execute(
+                "SELECT credit_units FROM billing_wallets WHERE user_id=?", (self.user_id,)
+            ).fetchone()[0])
+            reservation = conn.execute(
+                "SELECT status,meta_json FROM billing_reservations WHERE id=("
+                "SELECT reservation_id FROM proxy_purchase_orders WHERE id=?)",
+                (order["id"],),
+            ).fetchone()
+        self.assertEqual(after, before)
+        self.assertEqual(str(reservation["status"]), "waived")
+        self.assertEqual(json.loads(str(reservation["meta_json"]))["waived_reason"], "monthly_free_proxy")
+
+        repeated = self.client.post(
+            "/api/proxy-purchases/monthly-free",
+            json={
+                "country": "US",
+                "city": "",
+                "period_months": 1,
+                "auto_renew": False,
+                "client_request_id": "monthly-free-repeat",
+            },
+        )
+        self.assertEqual(repeated.status_code, 409)
 
     def test_idempotency_header_must_match_body(self):
         quote = self.client.post(

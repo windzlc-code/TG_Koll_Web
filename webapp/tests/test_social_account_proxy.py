@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 from webapp.db import init_db
 import webapp.social_automation_api as social_api
+import webapp.system_proxy_pool as system_proxy_pool
 
 
 class SocialAccountResidentialProxyTests(unittest.TestCase):
@@ -943,10 +944,10 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         self.assertTrue(owner_choices[0]["details_revealed"])
         self.assertFalse(owner_choices[1]["details_revealed"])
         self.assertEqual(owner_choices[1]["host"], "")
-        self.assertFalse(owner_choices[1]["monthly_free_available"])
+        self.assertTrue(owner_choices[1]["monthly_free_available"])
         self.assertEqual([row["market_item_id"] for row in choices], ["pool-first", "pool-second"])
         self.assertTrue(choices[0]["selected"])
-        self.assertFalse(choices[1]["available"])
+        self.assertTrue(choices[1]["available"])
 
         with social_api.db() as conn:
             other_user_choices = social_api.list_system_proxy_pool_options(
@@ -960,30 +961,15 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
         )
         self.assertTrue(other_user_choices[0]["available"])
 
-        with self.assertRaises(HTTPException) as monthly_used:
-            with social_api.db() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                social_api.switch_system_proxy_in_transaction(
-                    conn,
-                    item_id="pool-second",
-                    owner_user_id=42,
-                    client_request_id="select-second-same-month",
-                    allow_admin_inventory=True,
-                    now=selected_at,
-                )
-        self.assertIn("本月免费代理机会已使用", monthly_used.exception.detail)
-
-        next_month = selected_at + 32 * 24 * 60 * 60
         with social_api.db() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute("UPDATE proxy_market_items SET last_check_at=? WHERE id='pool-second'", (next_month,))
             second, replaced = social_api.switch_system_proxy_in_transaction(
                 conn,
                 item_id="pool-second",
                 owner_user_id=42,
-                client_request_id="select-second-next-month",
+                client_request_id="select-second-same-month",
                 allow_admin_inventory=True,
-                now=next_month,
+                now=selected_at,
             )
         self.assertTrue(replaced)
         with social_api.db() as conn:
@@ -1006,6 +992,30 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
                 )
         self.assertEqual(stale.exception.status_code, 409)
         self.assertIn("其他页面变更", stale.exception.detail)
+
+    def test_admin_proxy_selection_is_independent_from_platform_free_allowance(self):
+        self._seed_system_proxy_owner_and_items("managed-first", "managed-second")
+        with mock.patch.object(
+            system_proxy_pool,
+            "monthly_free_proxy_status",
+            return_value={"available": False, "period": "2026-08"},
+        ):
+            with social_api.db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                selected, replaced = social_api.switch_system_proxy_in_transaction(
+                    conn,
+                    item_id="managed-first",
+                    owner_user_id=42,
+                    client_request_id="managed-selection",
+                    allow_admin_inventory=True,
+                )
+        self.assertFalse(replaced)
+        with social_api.db() as conn:
+            allocation = conn.execute(
+                "SELECT claim_mode FROM proxy_market_allocations WHERE social_proxy_id=?",
+                (str(selected["id"]),),
+            ).fetchone()
+        self.assertEqual(str(allocation["claim_mode"]), "console_select")
 
     def test_system_proxy_pool_rejects_switch_while_current_proxy_is_bound(self):
         self._seed_system_proxy_owner_and_items("busy-first", "busy-second")

@@ -13,6 +13,7 @@ from . import proxy_purchases
 from . import proxy_provider_credentials
 from .db import db
 from .proxy_providers import ProxyProviderError
+from .system_proxy_pool import monthly_free_proxy_status
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,10 @@ class ProxyQuotePayload(_StrictModel):
 class ProxyOrderPayload(_StrictModel):
     quote_id: str = Field(min_length=8, max_length=160)
     idempotency_key: str = Field(min_length=8, max_length=160)
+
+
+class ProxyMonthlyFreePayload(ProxyQuotePayload):
+    client_request_id: str = Field(min_length=8, max_length=100)
 
 
 class ProxyRenewalPayload(_StrictModel):
@@ -166,6 +171,46 @@ def register_proxy_purchase_routes(
                 period_months=payload.period_months,
             )
         return {"ok": True, "quote": quote}
+
+    @app.post("/api/proxy-purchases/monthly-free")
+    def api_proxy_purchase_monthly_free(
+        payload: ProxyMonthlyFreePayload,
+        request: Request,
+        user: dict[str, Any] = Depends(current_user_dependency),
+    ):
+        """Purchase one supplier proxy for the user's monthly platform allowance."""
+
+        guard_write(request)
+        user_id = _identity_user_id(user)
+        with db() as conn:
+            allowance = monthly_free_proxy_status(conn, owner_user_id=user_id)
+            if not allowance["available"]:
+                raise HTTPException(status_code=409, detail="本月免费官方代理机会已使用")
+            quote = proxy_purchases.create_quote(
+                conn,
+                user_id=user_id,
+                country=payload.country,
+                auto_renew=payload.auto_renew,
+                city=payload.city,
+                period_months=payload.period_months,
+            )
+            conn.commit()
+            # A deterministic attempt number makes concurrent clicks converge on
+            # one idempotency key while still allowing a retry after a failed order.
+            attempt = int(conn.execute(
+                "SELECT COUNT(*) FROM proxy_purchase_orders WHERE user_id=? "
+                "AND idempotency_key LIKE ?",
+                (user_id, f"monthly-free:{allowance['period']}:%"),
+            ).fetchone()[0]) + 1
+            order = proxy_purchases.create_order(
+                conn,
+                user_id=user_id,
+                quote_id=str(quote["id"]),
+                idempotency_key=f"monthly-free:{allowance['period']}:{attempt}",
+                admin_waived=True,
+                waived_reason="monthly_free_proxy",
+            )
+        return {"ok": True, "order": order, "allowance": allowance}
 
     @app.post("/api/proxy-purchases/orders")
     def api_proxy_purchase_order(

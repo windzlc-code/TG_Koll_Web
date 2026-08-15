@@ -1720,6 +1720,7 @@ def reserve_exact_cash_charge(
     reservation_id = _id("bill_hold")
     if admin_waived:
         merged_meta = dict(meta or {})
+        waived_reason = str(merged_meta.get("waived_reason") or "admin").strip() or "admin"
         merged_meta.update(
             {
                 "quantity": 1,
@@ -1727,7 +1728,7 @@ def reserve_exact_cash_charge(
                 "theoretical_credit_units": amount,
                 "image": False,
                 "admin_waived": True,
-                "waived_reason": "admin",
+                "waived_reason": waived_reason,
                 "exact_cash_backed": True,
                 "cash_backed_credit_units": 0,
             }

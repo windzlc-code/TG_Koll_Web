@@ -1002,8 +1002,8 @@ def _public_order(
             result["social_proxy_id"] = str(asset["social_proxy_id"] or "")
     status = str(result.get("status") or "")
     messages = {
-        "reserved": "订单已创建，正在提交供应商",
-        "provider_unknown": "供应商结果待确认，系统正在自动对账",
+        "reserved": "订单已创建，正在开通代理",
+        "provider_unknown": "开通结果待确认，系统正在自动对账",
         "provisioning": "订单已受理，正在配置代理",
         "active": "购买成功，代理已加入你的列表",
         "failed": "购买失败，预占点数已释放",
@@ -1021,6 +1021,7 @@ def create_order(
     quote_id: str,
     idempotency_key: str,
     admin_waived: bool = False,
+    waived_reason: str = "admin",
     provider: ProxyProvider | None = None,
     now: int | None = None,
 ) -> dict[str, Any]:
@@ -1116,7 +1117,11 @@ def create_order(
         credit_units=int(quote_row["credit_units"]),
         idempotency_key=f"proxy-purchase:{int(user_id)}:{idem}",
         admin_waived=bool(admin_waived),
-        meta={"quote_id": str(quote_id), "provider": "proxycheap"},
+        meta={
+            "quote_id": str(quote_id),
+            "provider": "proxycheap",
+            "waived_reason": str(waived_reason or "admin").strip() or "admin",
+        },
         now=current,
     )
     reservation_id = str(reservation["id"])

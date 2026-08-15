@@ -69,24 +69,36 @@ def monthly_free_proxy_status(
     next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
     start_at = int(month_start.timestamp())
     resets_at = int(next_month.timestamp())
-    used = conn.execute(
+    rows = conn.execute(
         """
-        SELECT item_id, claimed_at
-        FROM proxy_market_allocations
-        WHERE user_id = ?
-          AND claim_mode IN ('monthly_free', 'console_select')
-          AND claimed_at >= ? AND claimed_at < ?
-        ORDER BY claimed_at DESC, id DESC
-        LIMIT 1
+        SELECT purchase.id AS order_id, purchase.created_at, purchase.status,
+               reservation.meta_json
+        FROM proxy_purchase_orders purchase
+        JOIN billing_reservations reservation ON reservation.id = purchase.reservation_id
+        WHERE purchase.user_id = ?
+          AND purchase.created_at >= ? AND purchase.created_at < ?
+          AND purchase.status <> 'failed'
+          AND reservation.status = 'waived'
+        ORDER BY purchase.created_at DESC, purchase.id DESC
         """,
         (owner_id, start_at, resets_at),
-    ).fetchone() if owner_id > 0 else None
+    ).fetchall() if owner_id > 0 else []
+    used = None
+    for row in rows:
+        try:
+            meta = json.loads(str(row["meta_json"] or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            meta = {}
+        if isinstance(meta, dict) and str(meta.get("waived_reason") or "") == "monthly_free_proxy":
+            used = row
+            break
     return {
         "available": used is None,
         "period": month_start.strftime("%Y-%m"),
         "resets_at": resets_at,
-        "used_at": int(used["claimed_at"] or 0) if used is not None else 0,
-        "item_id": str(used["item_id"] or "") if used is not None else "",
+        "used_at": int(used["created_at"] or 0) if used is not None else 0,
+        "item_id": "",
+        "order_id": str(used["order_id"] or "") if used is not None else "",
     }
 
 
@@ -300,10 +312,10 @@ def list_system_proxy_pool_options(
                 "last_check_at": int((item.get("owned_proxy_last_check_at") if owned else item.get("last_check_at")) or 0),
                 "exit_ip": str(parsed_check.get("exit_ip") or parsed_check.get("ip") or "") if details_revealed else "",
                 "selected": selected,
-                "available": bool(owned or selected or monthly_free["available"]),
+                "available": True,
                 "ownership_type": "owned" if owned else "shared",
                 "details_revealed": details_revealed,
-                "monthly_free": not owned,
+                "monthly_free": False,
                 "monthly_free_available": bool(monthly_free["available"]),
                 "purchase_order_id": str(item.get("purchase_order_id") or ""),
                 "renewal_enabled": bool(int(item.get("renewal_enabled") or 0)),
@@ -528,13 +540,6 @@ def switch_system_proxy_in_transaction(
         if bound_account is not None:
             raise HTTPException(status_code=409, detail="当前代理仍有账号绑定，请先解除账号绑定后再切换代理 IP")
 
-    benefit = monthly_free_proxy_status(conn, owner_user_id=owner_id, now=current_time)
-    if not benefit["available"]:
-        raise HTTPException(
-            status_code=409,
-            detail="本月免费代理机会已使用，下月可重新选择",
-        )
-
     selected = current or claim_system_proxy_in_transaction(
         conn,
         item_id=clean_item_id,
@@ -542,7 +547,7 @@ def switch_system_proxy_in_transaction(
         client_request_id=client_request_id,
         allow_replacement=bool(current_rows),
         allow_admin_inventory=allow_admin_inventory,
-        claim_mode="monthly_free",
+        claim_mode="console_select",
         now=current_time,
     )
     selected_proxy_id = str(selected["id"] or "")

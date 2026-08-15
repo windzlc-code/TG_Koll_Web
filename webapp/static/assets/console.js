@@ -347,11 +347,14 @@ const VIDEO_WORKSPACE_MODULES = [
 ];
 const initialVideoModule = initialConsoleParams.get("video_module");
 const initialVideoModuleIsSupported = VIDEO_WORKSPACE_MODULES.some((item) => item.id === initialVideoModule);
-const initialConsoleViewIsSupported = ["workspace", "video_workspace", "tasks", "accounts", "billing", "console_settings", "persona_dashboard"].includes(initialConsoleView);
+const initialAccountProxySelectorId = String(initialConsoleParams.get("account_id") || "").trim();
+const initialAccountProxySelectorMode = initialConsoleParams.get("proxy_mode") === "create" ? "create" : "edit";
+const initialConsoleViewIsSupported = ["workspace", "video_workspace", "tasks", "accounts", "proxy_selector", "billing", "console_settings", "persona_dashboard"].includes(initialConsoleView);
 const initialAccountBrowserPanelIsSupported = ["browsers", "proxies"].includes(initialAccountBrowserPanel);
 
 function clearInitialConsoleRouteHint() {
   if (initialConsoleView === "video_workspace" && initialVideoModuleIsSupported) return;
+  if (initialConsoleView === "proxy_selector") return;
   if (!initialConsoleViewIsSupported && !initialAccountBrowserPanelIsSupported) return;
   const url = new URL(window.location.href);
   url.searchParams.delete("view");
@@ -520,6 +523,14 @@ const state = {
   accountPasswordValues: {},
   accountPasswordVisible: {},
   accountPoolCreateDraft: {},
+  accountProxyPoolSnapshot: null,
+  accountProxySelector: {
+    accountId: initialAccountProxySelectorId,
+    mode: initialAccountProxySelectorMode,
+    selectedProxyId: "",
+    originalProxyId: "",
+    returnModal: null,
+  },
   accountClipboardText: "",
   proxyPoolPage: 1,
   proxyPoolPageSize: 10,
@@ -1171,6 +1182,10 @@ function bindMobileNavigation() {
     const pageBackTarget = mobilePageBackTarget();
     if (pageBackTarget === "live-browser") {
       returnFromLiveBrowserTaskView();
+      return;
+    }
+    if (state.view === "proxy_selector" && pageBackTarget === "accounts") {
+      closeAccountProxySelectorPage();
       return;
     }
     if (pageBackTarget) {
@@ -7304,6 +7319,7 @@ function setView(view) {
     tasks: "任务队列",
     social: "浏览器发布",
     accounts: state.accountBrowserPanel === "browsers" ? "浏览器列表" : "账号管理",
+    proxy_selector: "选择代理",
     billing: "订阅与算力",
     console_settings: "个人设置",
     persona_dashboard: "人设看板",
@@ -7314,11 +7330,12 @@ function setView(view) {
   updateVideoWorkspaceFlow();
   if ($("moduleMenu")) syncModuleMenuState();
   if (view === "console_settings") renderConsoleSettingsPage();
+  if (view === "proxy_selector") renderAccountProxySelectorPage();
   if (view === "persona_dashboard") window.PersonaDashboard?.mount?.($("personaDashboardApp"));
   else window.PersonaDashboard?.unmount?.();
   if (view === "tasks") loadTasks();
   if (view === "billing") loadBilling().catch(() => {});
-  if (view === "social" || view === "accounts") scheduleSocialViewRefresh(view);
+  if (view === "social" || view === "accounts" || view === "proxy_selector") scheduleSocialViewRefresh(view);
   else cancelScheduledSocialViewRefresh();
   if (view === "video_workspace") {
     syncVideoWorkspaceRoute();
@@ -7669,6 +7686,7 @@ function mobilePageToolbarDescriptor() {
     if (panel === "browsers") return { icon: "browser_list", title: "浏览器列表" };
     return { icon: "accounts", title: "账号管理" };
   }
+  if (state.view === "proxy_selector") return { icon: "proxies", title: "选择代理" };
   return {
     tasks: { icon: "tasks", title: "任务队列" },
     social: { icon: "social", title: "浏览器发布" },
@@ -7682,6 +7700,7 @@ function isMobilePersistentDockPage() {
   if (state.view === "persona_dashboard") return true;
   if (state.view === "tasks") return true;
   if (state.view === "accounts") return true;
+  if (state.view === "proxy_selector") return true;
   return state.view === "workspace" && ["personas", "tweet_generation", "publishing"].includes(state.activeModule);
 }
 
@@ -7695,11 +7714,13 @@ function renderMobileNavToggleIcon(back = false) {
 function mobilePageBackTarget() {
   if (state.view === "video_workspace") return "workspace";
   if (state.view === "accounts" && state.accountBrowserPanel === "browsers") return "live-browser";
+  if (state.view === "proxy_selector") return "accounts";
   if (["tasks", "billing", "console_settings"].includes(state.view)) return "persona_dashboard";
   return "";
 }
 
 function syncMobilePageToolbar() {
+  const toolbar = $("mobilePageToolbar");
   const navToggle = $("mobileNavToggle");
   const videoButton = $("mobileVideoWorkspaceButton");
   const videoIcon = $("mobileVideoWorkspaceIcon");
@@ -7707,6 +7728,7 @@ function syncMobilePageToolbar() {
   const icon = $("mobilePageToolbarIcon");
   const personaDashboardActions = $("personaDashboardToolbarActions");
   const pageBackTarget = mobilePageBackTarget();
+  toolbar?.classList.toggle("is-proxy-selector-page", state.view === "proxy_selector");
   const showBrowserBack = pageBackTarget === "live-browser";
   const showPageBack = Boolean(pageBackTarget);
   const browserBackLabel = liveBrowserReturnLabel();
@@ -26152,6 +26174,7 @@ async function loadSocial({ render = true, force = false } = {}) {
   if (render) {
     clearAccountPasswordRevealState();
     renderSocialAccounts();
+    if (state.view === "proxy_selector") renderAccountProxySelectorPage();
     renderSocialTasks();
     syncStandaloneSocialForm();
     if (isPersonaWorkspaceModule()) renderPersonaModule();
@@ -26174,7 +26197,7 @@ function cancelScheduledSocialViewRefresh() {
 }
 
 function scheduleSocialViewRefresh(view = state.view) {
-  const targetView = ["social", "accounts"].includes(view) ? view : "";
+  const targetView = ["social", "accounts", "proxy_selector"].includes(view) ? view : "";
   if (!targetView) return;
   if (state.socialViewRefreshHandle) {
     if (state.socialViewRefreshTarget === targetView) return;
@@ -26187,7 +26210,8 @@ function scheduleSocialViewRefresh(view = state.view) {
     if (state.view !== targetView) return;
     loadSocial({ render: false }).then(() => {
       if (state.view !== targetView) return;
-      renderSocialAccounts();
+      if (targetView === "proxy_selector") renderAccountProxySelectorPage();
+      else renderSocialAccounts();
       if (targetView === "social") renderSocialTasks();
     }).catch(() => {});
   };
@@ -27502,7 +27526,7 @@ function sharedProxyFieldsHtml(prefix, proxy = null) {
     <label><span>代理名称</span><input id="${esc(prefix)}Name" value="${esc(proxy?.name || "")}" placeholder="检测后自动生成，也可手动填写" /></label>
     <label><span>代理类型</span><select id="${esc(prefix)}Protocol">${proxySelectOptions([["auto", "自动检测（推荐）"], ["http", "HTTP"], ["socks5", "SOCKS5"], ["https", "HTTPS"]], protocol)}</select></label>
     <label><span>代理方式</span><select id="${esc(prefix)}ConnectionMode"><option value="proxy" selected>Proxy（代理服务器）</option></select></label>
-    <label><span>供应商 / 来源</span><select id="${esc(prefix)}Source">${proxySourceOptions(source)}</select></label>
+    <label><span>代理来源</span><select id="${esc(prefix)}Source">${proxySourceOptions(source)}</select></label>
     <label><span>持有方式</span><select id="${esc(prefix)}PurchaseStatus">${proxySelectOptions([["owned", "自有"], ["leased", "租用"]], proxy?.purchase_status || "owned")}</select></label>
     <label><span>服务器地址</span><input id="${esc(prefix)}Host" value="${esc(proxy?.host || "")}" placeholder="208.113.11.225 或 proxy.example.com" autocomplete="off" /></label>
     <label><span>服务端口</span><input id="${esc(prefix)}Port" type="number" min="1" max="65535" value="${esc(proxy?.port || "")}" placeholder="1080" /></label>
@@ -28076,11 +28100,13 @@ function systemProxyPoolLocation(proxy = {}) {
 
 function accountProxyPoolFiltersHtml(scope = "modal", selectedProxyId = "") {
   return `<div class="account-proxy-picker-filters" data-account-proxy-filters>
-    <div class="account-proxy-picker-location-row">
-      <label class="account-proxy-region-filter"><span>代理地区</span><select data-account-proxy-filter="country" aria-label="地区" title="地区"><option value="">全部地区</option></select></label>
-      <label class="account-proxy-city-filter"><span>城市</span><select data-account-proxy-filter="city" aria-label="城市" title="城市" disabled><option value="">请先选择地区</option></select></label>
+    <div class="account-proxy-type-tabs" role="tablist" aria-label="代理来源">
+      <button type="button" class="is-active" role="tab" aria-selected="true" data-account-proxy-type="supplier">平台代理</button>
+      <button type="button" role="tab" aria-selected="false" data-account-proxy-type="managed">管理员代理</button>
     </div>
-    <div class="account-proxy-picker-action-row">
+    <div class="account-proxy-picker-location-row">
+      <label class="account-proxy-region-filter"><span>代理地区</span><select data-account-proxy-filter="country" aria-label="地区" title="地区"><option value="">请选择地区</option></select></label>
+      <label class="account-proxy-city-filter"><span>城市</span><select data-account-proxy-filter="city" aria-label="城市" title="城市" disabled><option value="">请先选择地区</option></select></label>
       <details class="account-proxy-filter-menu" data-console-dropdown>
         <summary title="筛选和排序" aria-label="筛选和排序">${renderTaskQueueFilterIcon()}<span>筛选</span></summary>
         <div class="account-proxy-filter-menu-options" role="listbox" aria-label="排序">
@@ -28092,6 +28118,9 @@ function accountProxyPoolFiltersHtml(scope = "modal", selectedProxyId = "") {
           <button type="button" role="option" data-account-proxy-sort-option="health_first" aria-selected="false">可用优先</button>
         </div>
       </details>
+    </div>
+    <div class="account-proxy-picker-action-row">
+      <p>当前账号不需要独立网络环境时，可保持直连。</p>
       <button type="button" class="account-proxy-clear" data-account-proxy-choice="" data-account-proxy-choice-scope="${esc(scope)}" aria-pressed="${selectedProxyId ? "false" : "true"}">${renderNoProxyIcon()}<span>不使用代理</span></button>
     </div>
   </div>`;
@@ -28103,12 +28132,43 @@ function accountProxyPickerFilters(modal) {
     String(control.dataset.accountProxyFilter || ""),
     String(control.value || "").trim(),
     ])),
+    type: String(modal?.dataset.accountProxyType || "supplier"),
     sort: String(modal?.dataset.accountProxySort || "time_desc"),
   };
 }
 
+function accountProxyCountryCode(proxy = {}) {
+  return String(accountProxyCountry(proxy).code || "").trim().toUpperCase();
+}
+
+function accountProxyPurchaseCityLabel(options = {}, country = "", city = "") {
+  const item = (Array.isArray(options?.cities?.[country]) ? options.cities[country] : [])
+    .find((candidate) => String(candidate?.id || "") === String(city || ""));
+  return String(item?.name_zh || item?.name || item?.id || city || "").trim();
+}
+
+function normalizeAccountProxyCity(value = "") {
+  return String(value || "")
+    .normalize("NFKC")
+    .trim()
+    .toLocaleLowerCase("en-US")
+    .replace(/[\s._-]+/g, "");
+}
+
+function accountProxyCityAliases(options = {}, country = "", city = "") {
+  const selected = String(city || "").trim();
+  if (!selected) return [];
+  const item = (Array.isArray(options?.cities?.[country]) ? options.cities[country] : [])
+    .find((candidate) => String(candidate?.id || "") === selected);
+  return [selected, item?.id, item?.name, item?.name_zh, item?.label, item?.region]
+    .map(normalizeAccountProxyCity)
+    .filter(Boolean);
+}
+
 function accountProxyPoolFilterOptions(modal, poolData = {}) {
   const options = Array.isArray(poolData.options) ? poolData.options : [];
+  const purchaseOptions = poolData.purchase_options || {};
+  const proxyType = String(modal?.dataset.accountProxyType || "supplier");
   const select = (name, values, label) => {
     const control = modal?.querySelector(`[data-account-proxy-filter="${name}"]`);
     if (!control) return;
@@ -28116,27 +28176,52 @@ function accountProxyPoolFilterOptions(modal, poolData = {}) {
     control.innerHTML = `<option value="">${esc(label)}</option>${values.map((value) => `<option value="${esc(value.value)}">${esc(value.label)}</option>`).join("")}`;
     control.value = values.some((value) => value.value === selected) ? selected : "";
   };
-  const countries = [...new Set(options.map((item) => String(item.country || item.country_code || "").trim()).filter(Boolean))]
-    .map((value) => ({ value, label: accountProxyCountry(value).label }))
-    .sort((left, right) => left.label.localeCompare(right.label, "zh-Hans-CN"));
-  select("country", countries, "全部地区");
+  const supplierCountries = (Array.isArray(purchaseOptions.regions) ? purchaseOptions.regions : [])
+    .map((region) => ({ value: String(region?.code || "").toUpperCase(), label: accountProxyCountry(region?.code || region?.name).label }))
+    .filter((item) => item.value);
+  const poolCountries = options
+    .filter((item) => proxyType === "supplier"
+      ? String(item?.ownership_type || "").toLowerCase() === "owned"
+      : String(item?.ownership_type || "shared").toLowerCase() !== "owned")
+    .map((item) => ({ value: accountProxyCountryCode(item), label: accountProxyCountry(item).label }))
+    .filter((item) => item.value);
+  const countryMap = new Map((proxyType === "supplier" ? [...supplierCountries, ...poolCountries] : poolCountries)
+    .map((item) => [item.value, item]));
+  const countries = [...countryMap.values()].sort((left, right) => left.label.localeCompare(right.label, "zh-Hans-CN"));
+  select("country", countries, countries.length ? "请选择地区" : "暂无可选地区");
   const selectedCountry = String(modal?.querySelector('[data-account-proxy-filter="country"]')?.value || "");
-  const cities = [...new Set((selectedCountry ? options : [])
-    .filter((item) => String(item.country || item.country_code || "").trim() === selectedCountry)
+  const supplierCities = proxyType === "supplier" && selectedCountry
+    ? (Array.isArray(purchaseOptions?.cities?.[selectedCountry]) ? purchaseOptions.cities[selectedCountry] : [])
+      .map((item) => ({ value: String(item?.id || ""), label: String(item?.name_zh || item?.name || item?.id || "") }))
+      .filter((item) => item.value)
+    : [];
+  const poolCities = selectedCountry ? options
+    .filter((item) => accountProxyCountryCode(item) === selectedCountry)
     .map((item) => String(item.city || "").trim())
-    .filter(Boolean))]
-    .map((value) => ({ value, label: value }))
-    .sort((left, right) => left.label.localeCompare(right.label, "zh-Hans-CN"));
+    .filter(Boolean)
+    .map((value) => ({ value, label: value })) : [];
+  const cityMap = new Map(supplierCities.map((item) => [item.value, item]));
+  poolCities.forEach((item) => {
+    const normalized = normalizeAccountProxyCity(item.value);
+    const alreadyRepresented = supplierCities.some((candidate) => [candidate.value, candidate.label]
+      .some((value) => normalizeAccountProxyCity(value) === normalized));
+    if (!alreadyRepresented) cityMap.set(item.value, item);
+  });
+  const cities = [...cityMap.values()].sort((left, right) => left.label.localeCompare(right.label, "zh-Hans-CN"));
   select("city", cities, selectedCountry ? "全部城市" : "请先选择地区");
   const cityControl = modal?.querySelector('[data-account-proxy-filter="city"]');
   if (cityControl) cityControl.disabled = !selectedCountry;
 }
 
-function accountProxyPoolMatches(proxy = {}, filters = {}) {
+function accountProxyPoolMatches(proxy = {}, filters = {}, purchaseOptions = {}) {
   const country = String(filters.country || "").trim();
-  if (country && String(proxy.country || "").trim() !== country) return false;
+  if (country && accountProxyCountryCode(proxy) !== country.toUpperCase()) return false;
   const city = String(filters.city || "").trim();
-  if (city && String(proxy.city || "").trim() !== city) return false;
+  if (city) {
+    const selectedAliases = accountProxyCityAliases(purchaseOptions, country.toUpperCase(), city);
+    const proxyAliases = [proxy.city, proxy.region].map(normalizeAccountProxyCity).filter(Boolean);
+    if (!proxyAliases.some((value) => selectedAliases.includes(value))) return false;
+  }
   return true;
 }
 
@@ -28163,56 +28248,73 @@ function accountProxyPoolSortOptions(options = [], sort = "time_desc") {
 
 function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", poolData = {}, filters = {} } = {}) {
   const selectedId = String(selectedProxyId || "").trim();
+  const proxyType = String(filters.type || "supplier");
+  const purchaseOptions = poolData.purchase_options || {};
   if (!String(filters.country || "").trim()) {
     return `<section class="account-proxy-region-guide" data-account-proxy-region-guide data-account-proxy-options data-account-proxy-choice-scope="${esc(scope)}" role="status">
       <span class="account-proxy-region-guide-icon" aria-hidden="true">${renderNetworkIcon()}</span>
-      <div><strong>请先选择代理地区</strong><p>选择地区后，下方会显示该地区可领取或已购买的代理；城市为可选筛选条件。</p></div>
+      <div><strong>请先选择代理地区</strong><p>${proxyType === "supplier" ? "选择地区和城市后，可免费领取或购买平台专属静态 IP。" : "选择地区后会显示管理员后台投放的平台托管代理。"}</p></div>
     </section>`;
   }
+  const allPoolOptions = Array.isArray(poolData.options) ? poolData.options : [];
   const marketOptions = accountProxyPoolSortOptions(
-    (Array.isArray(poolData.options) ? poolData.options : []).filter((proxy) => accountProxyPoolMatches(proxy, filters)),
+    allPoolOptions.filter((proxy) => {
+      const owned = String(proxy?.ownership_type || "shared").toLowerCase() === "owned";
+      return (proxyType === "supplier" ? owned : !owned) && accountProxyPoolMatches(proxy, filters, purchaseOptions);
+    }),
     filters.sort,
   );
-  const marketOption = (proxy) => {
+  const marketOption = (proxy, kind = "supplier") => {
     const itemId = String(proxy.market_item_id || "").trim();
     const proxyId = String(proxy.social_proxy_id || "").trim();
     const selected = proxyId && proxyId === selectedId;
     const detailsRevealed = proxy.details_revealed !== false;
-    const endpoint = detailsRevealed
-      ? ([String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "出口信息待检测")
-      : "选择后显示 IP、端口和凭据";
+    const ipAddress = detailsRevealed
+      ? (String(proxy.exit_ip || proxy.host || "").trim() || "待检测")
+      : "选择后显示";
     const country = accountProxyCountry(proxy).code;
-    const healthLabel = String(proxy.health_status || "healthy").toLowerCase() === "healthy" ? "检测可用" : "待检测";
+    const regionLabel = accountProxyCountry(proxy).label;
+    const cityLabel = String(proxy.city || proxy.region || "").trim() || "全部城市";
     const canChoose = proxy.available !== false;
-    const action = selected ? "当前使用" : (canChoose ? "选择使用" : "本月机会已使用");
-    const boundCount = Math.max(0, Number(proxy.bound_account_count) || 0);
-    const usageTone = boundCount >= 4 ? "danger" : (boundCount >= 3 ? "warning" : (boundCount === 2 ? "notice" : (boundCount === 1 ? "safe" : "idle")));
-    const riskHint = boundCount >= 4
-      ? `已超出建议上限，${boundCount} 个账号共用的关联风险较高，但仍可继续选择`
-      : boundCount === 3
-        ? "已达到 3 个账号的建议上限，但仍可继续选择"
-        : "";
-    const usageHint = riskHint || `${boundCount}/3 个账号正在使用`;
+    const action = selected ? "当前使用" : "选择使用";
     const ownershipType = String(proxy.ownership_type || "shared").toLowerCase();
-    const stockLabel = ownershipType === "owned" ? "已购买" : (proxyId ? "已获取" : "免费");
     const renewal = ownershipType === "owned" && proxy.purchase_order_id
       ? `<button type="button" class="proxy-market-mini-renewal" data-account-proxy-renewal-order="${esc(proxy.purchase_order_id)}" data-renewal-enabled="${proxy.renewal_enabled ? "true" : "false"}" aria-pressed="${proxy.renewal_enabled ? "true" : "false"}"><span>自动续费</span><i aria-hidden="true"></i></button>`
-      : `<span class="proxy-market-mini-managed-renewal">平台托管续期</span>`;
+      : `<div class="proxy-market-compact-renewal"><span>自动续费</span><strong>${kind === "managed" ? "管理员维护" : "未开启"}</strong></div>`;
     return `<article class="proxy-market-mini-card" data-account-proxy-card="${esc(itemId)}" ${selected ? 'aria-current="true"' : ""}>
       <div class="proxy-market-mini-card-head">
-        <span class="proxy-market-mini-country">${esc(country)}</span>
-        <span class="proxy-market-mini-card-badges"><span class="proxy-market-mini-usage" data-tone="${esc(usageTone)}" title="${esc(usageHint)}">${boundCount}/3</span><span class="proxy-market-mini-stock">${esc(stockLabel)}</span></span>
+        <span class="proxy-market-mini-card-kinds"><span class="proxy-market-mini-kind" data-kind="${esc(kind)}">${kind === "supplier" ? "平台代理" : "管理员代理"}</span><span class="proxy-market-mini-country">${esc(country)}</span></span>
       </div>
-      <strong>${esc(detailsRevealed ? (proxy.name || endpoint) : `${accountProxyCountry(proxy).label}官方代理`)}</strong>
-      <span class="proxy-market-mini-location">${esc(endpoint)} · ${esc(systemProxyPoolLocation(proxy))}</span>
-      <span class="proxy-market-mini-risk" data-tone="${esc(usageTone)}">${esc(riskHint)}</span>
-      <div class="proxy-market-mini-meta">
-        <span>${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
-        <span>${esc(proxyProtocol(proxy))}</span>
-        <strong>${esc(healthLabel)}</strong>
-      </div>
+      <dl class="proxy-market-compact-fields">
+        <div><dt>地区</dt><dd>${esc(regionLabel)}</dd></div>
+        <div><dt>城市</dt><dd>${esc(cityLabel)}</dd></div>
+        <div><dt>代理 IP</dt><dd>${esc(ipAddress)}</dd></div>
+      </dl>
       ${renewal}
       <button type="button" class="primary" data-account-proxy-market-choice="${esc(itemId)}" data-account-proxy-choice-scope="${esc(scope)}" ${(selected || !canChoose) ? "disabled" : ""}>${renderNetworkIcon()}<span>${esc(action)}</span></button>
+    </article>`;
+  };
+  const supplierCard = () => {
+    const countryCode = String(filters.country || "").toUpperCase();
+    const region = (Array.isArray(purchaseOptions.regions) ? purchaseOptions.regions : [])
+      .find((item) => String(item?.code || "").toUpperCase() === countryCode);
+    if (!region) return "";
+    const cityId = String(filters.city || "");
+    const cityLabel = accountProxyPurchaseCityLabel(purchaseOptions, countryCode, cityId);
+    const monthlyFree = poolData?.monthly_free?.available !== false;
+    const configured = Boolean(purchaseOptions.configured && purchaseOptions.live_purchasing_enabled);
+    return `<article class="proxy-market-mini-card proxy-market-supplier-card" data-account-proxy-supplier-card>
+      <div class="proxy-market-mini-card-head">
+        <span class="proxy-market-mini-card-kinds"><span class="proxy-market-mini-kind" data-kind="supplier">平台代理</span><span class="proxy-market-mini-country">${esc(countryCode)}</span></span>
+        <span class="proxy-market-mini-stock">${monthlyFree ? "本月免费" : "实时购买"}</span>
+      </div>
+      <dl class="proxy-market-compact-fields">
+        <div><dt>地区</dt><dd>${esc(accountProxyCountry(countryCode).label)}</dd></div>
+        <div><dt>城市</dt><dd>${esc(cityLabel || "全部城市")}</dd></div>
+        <div><dt>代理 IP</dt><dd>购买后分配</dd></div>
+      </dl>
+      <button type="button" class="proxy-market-mini-renewal proxy-market-purchase-renewal" data-account-proxy-purchase-renewal aria-pressed="false"><span>自动续费</span><i aria-hidden="true"></i></button>
+      <button type="button" class="primary" data-account-proxy-supplier-choice data-account-proxy-choice-scope="${esc(scope)}" ${configured ? "" : "disabled"}>${renderNetworkIcon()}<span>${configured ? (monthlyFree ? "免费选择" : "购买并使用") : "暂不可用"}</span></button>
     </article>`;
   };
   const empty = renderModuleEmptyState({
@@ -28221,8 +28323,11 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", po
     detail: "请调整筛选条件后重试",
     className: "system-proxy-pool-empty",
   });
+  const cards = proxyType === "supplier"
+    ? [supplierCard(), ...marketOptions.map((option) => marketOption(option, "supplier"))].filter(Boolean)
+    : marketOptions.map((option) => marketOption(option, "managed"));
   return `<div class="account-proxy-options proxy-market-mini-grid" data-account-proxy-options data-account-proxy-choice-scope="${esc(scope)}" role="group" aria-label="选择代理 IP">
-    ${marketOptions.length ? marketOptions.map(marketOption).join("") : empty}
+    ${cards.length ? cards.join("") : empty}
   </div>`;
 }
 
@@ -28281,10 +28386,33 @@ async function loadAccountProxyPickerPool(modal) {
   const options = modal.querySelector("[data-account-proxy-options]");
   if (options) options.setAttribute("aria-busy", "true");
   try {
-    const data = await api("/api/persona_dashboard/automation/system-proxy-pool");
+    const [poolResult, purchaseResult] = await Promise.allSettled([
+      api("/api/persona_dashboard/automation/system-proxy-pool"),
+      api("/api/proxy-purchases/options"),
+    ]);
+    if (poolResult.status !== "fulfilled") throw poolResult.reason;
+    const data = {
+      ...(poolResult.value || {}),
+      purchase_options: purchaseResult.status === "fulfilled" ? (purchaseResult.value || {}) : {},
+      purchase_error: purchaseResult.status === "rejected" ? (purchaseResult.reason?.detail || purchaseResult.reason?.message || "平台代理目录加载失败") : "",
+    };
     if (!modal.isConnected) return data;
     modal.__accountProxyPoolData = data || {};
     accountProxyPoolFilterOptions(modal, data || {});
+    const supplierCount = (Array.isArray(data?.purchase_options?.regions) ? data.purchase_options.regions.length : 0)
+      + (Array.isArray(data?.options) ? data.options.filter((item) => String(item?.ownership_type || "").toLowerCase() === "owned").length : 0);
+    const managedCount = Array.isArray(data?.options)
+      ? data.options.filter((item) => String(item?.ownership_type || "shared").toLowerCase() !== "owned").length : 0;
+    modal.querySelectorAll("[data-account-proxy-type]").forEach((button) => {
+      const type = String(button.dataset.accountProxyType || "supplier");
+      button.dataset.count = String(type === "supplier" ? supplierCount : managedCount);
+    });
+    const providerState = modal.querySelector("[data-account-proxy-provider-state]");
+    if (providerState) {
+      const ready = Boolean(data?.purchase_options?.configured && data?.purchase_options?.live_purchasing_enabled);
+      providerState.textContent = ready ? "代理服务已连接" : "代理服务未开放";
+      providerState.classList.toggle("is-ready", ready);
+    }
     refreshAccountProxyPickerOptions(modal);
     return data;
   } catch (error) {
@@ -28306,7 +28434,7 @@ async function claimAccountProxyPoolOption(modal, itemId = "") {
     title: "确认使用代理",
     message: existingProxyId
       ? `确定将 ${systemProxyPoolLocation(existingOption || {})} 的代理用于当前账号吗？`
-      : `确定领取 ${systemProxyPoolLocation(existingOption || {})} 的官方代理吗？本月免费机会领取后不可重复使用。`,
+      : `确定将 ${systemProxyPoolLocation(existingOption || {})} 的管理员代理用于当前账号吗？`,
     confirmText: "确定使用",
     cancelText: "暂不使用",
     modalKey: "account-proxy-confirm",
@@ -28361,6 +28489,89 @@ async function claimAccountProxyPoolOption(modal, itemId = "") {
     if (modal.isConnected) {
       delete modal.dataset.accountProxyClaiming;
       modal.querySelectorAll("[data-account-proxy-market-choice]").forEach((button) => { button.disabled = button.classList.contains("is-selected"); });
+    }
+  }
+}
+
+async function waitForAccountProxyPurchase(order = {}) {
+  let current = order || {};
+  for (let attempt = 0; attempt < 12 && current?.id && !current?.social_proxy_id; attempt += 1) {
+    const status = String(current.status || "").toLowerCase();
+    if (["failed", "expired", "cancelled", "refunded"].includes(status)) break;
+    await new Promise((resolve) => window.setTimeout(resolve, attempt < 3 ? 1200 : 2500));
+    const result = await api(`/api/proxy-purchases/orders/${encodeURIComponent(current.id)}`);
+    current = result?.order || current;
+  }
+  return current;
+}
+
+async function purchaseAccountProxySupplierOption(modal, button) {
+  if (!modal?.isConnected || !button || modal.dataset.accountProxyPurchasing === "true") return false;
+  const filters = accountProxyPickerFilters(modal);
+  const country = String(filters.country || "").trim().toUpperCase();
+  const city = String(filters.city || "").trim();
+  if (!country) return false;
+  const purchaseOptions = modal.__accountProxyPoolData?.purchase_options || {};
+  const periodMonths = Math.max(1, Number(purchaseOptions?.default_period?.value || 1));
+  const autoRenew = button.closest("[data-account-proxy-supplier-card]")
+    ?.querySelector("[data-account-proxy-purchase-renewal]")?.getAttribute("aria-pressed") === "true";
+  const monthlyFree = modal.__accountProxyPoolData?.monthly_free?.available !== false;
+  const cityLabel = accountProxyPurchaseCityLabel(purchaseOptions, country, city);
+  modal.dataset.accountProxyPurchasing = "true";
+  modal.querySelectorAll("[data-account-proxy-supplier-choice]").forEach((node) => { node.disabled = true; });
+  try {
+    let quote = null;
+    if (!monthlyFree) {
+      const quoteResult = await api("/api/proxy-purchases/quotes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ country, city, period_months: periodMonths, auto_renew: autoRenew }),
+      });
+      quote = quoteResult?.quote || null;
+    }
+    const confirmation = await openConsoleModal({
+      title: monthlyFree ? "确认免费选择" : "确认购买平台代理",
+      message: monthlyFree
+        ? `确定选择 ${accountProxyCountry(country).label}${cityLabel ? ` · ${cityLabel}` : ""} 的平台代理吗？平台承担费用，本次不会扣除用户点数。`
+        : `确定购买 ${accountProxyCountry(country).label}${cityLabel ? ` · ${cityLabel}` : ""} 的平台代理吗？本次需要 ${numberText(quote?.charge_points || 0)} 点。`,
+      confirmText: monthlyFree ? "确认免费选择" : "确认购买",
+      cancelText: "暂不购买",
+      modalKey: "account-proxy-supplier-confirm",
+      stack: true,
+    });
+    if (!confirmation || !modal.isConnected) return false;
+    const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const result = monthlyFree
+      ? await api("/api/proxy-purchases/monthly-free", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ country, city, period_months: periodMonths, auto_renew: autoRenew, client_request_id: requestId }),
+      })
+      : await api("/api/proxy-purchases/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": `proxy-purchase:${requestId}` },
+        body: JSON.stringify({ quote_id: quote.id, idempotency_key: `proxy-purchase:${requestId}` }),
+      });
+    const order = await waitForAccountProxyPurchase(result?.order || {});
+    if (!order?.social_proxy_id) {
+      const failed = ["failed", "expired", "cancelled", "refunded"].includes(String(order?.status || "").toLowerCase());
+      showMsg("socialMsg", failed ? (order?.message || "平台代理购买失败") : "订单已提交，代理开通后会自动显示在平台代理选项卡。", !failed);
+      await loadAccountProxyPickerPool(modal);
+      return false;
+    }
+    await fetchSocialDataShared({ force: true });
+    if (!modal.isConnected) return false;
+    await loadAccountProxyPickerPool(modal);
+    updateAccountProxyChoice(modal, String(order.social_proxy_id));
+    showMsg("socialMsg", monthlyFree ? "免费平台代理已开通。" : "平台代理已购买。", true);
+    return String(order.social_proxy_id);
+  } catch (error) {
+    showMsg("socialMsg", error.detail || error.message || "平台代理购买失败", false);
+    return false;
+  } finally {
+    if (modal.isConnected) {
+      delete modal.dataset.accountProxyPurchasing;
+      modal.querySelectorAll("[data-account-proxy-supplier-choice]").forEach((node) => { node.disabled = false; });
     }
   }
 }
@@ -28437,7 +28648,6 @@ async function commitAccountProxyPickerSelection(modal, accountId = "", proxyId 
       const saved = await saveAccountProxyBinding(cleanAccountId, selectedProxyId, expectedProxyId);
       if (saved === false) return false;
     }
-    modal.remove();
     return true;
   } catch (error) {
     const reconciled = await reconcileAccountProxyBindingConflict(modal, cleanAccountId, error);
@@ -28448,97 +28658,245 @@ async function commitAccountProxyPickerSelection(modal, accountId = "", proxyId 
   }
 }
 
-function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
-  const account = accountById(accountId);
-  if (!account) {
+function accountProxyEntryCopy(poolData = null) {
+  const monthlyFree = poolData?.monthly_free?.available;
+  if (monthlyFree === true) {
+    return { title: "免费选择专属代理 IP", detail: "本月免费一次，开通后自动加入列表", action: "免费选择" };
+  }
+  return {
+    title: "选择专属代理 IP",
+    detail: monthlyFree === false ? "按地区和城市选择，并绑定到当前账号。" : "进入代理页面选择地区、城市和可用代理。",
+    action: "选择代理",
+  };
+}
+
+function accountProxyEntryCardHtml(proxyId = "", poolData = null) {
+  const copy = accountProxyEntryCopy(poolData);
+  return `<button type="button" class="account-proxy-entry-card" data-account-proxy-picker-open aria-label="${esc(copy.action)}">
+    <span class="account-proxy-entry-icon" aria-hidden="true">${renderShoppingBagIcon()}</span>
+    <span class="account-proxy-entry-copy"><strong>${esc(copy.title)}</strong><small>${esc(copy.detail)}</small></span>
+    <span class="account-proxy-entry-action">${renderShoppingBagIcon()}<b>${esc(copy.action)}</b></span>
+  </button>`;
+}
+
+function updateAccountProxyEntryCard(container, proxyId = "", poolData = state.accountProxyPoolSnapshot) {
+  const card = container?.querySelector?.("[data-account-proxy-picker-open]");
+  if (card) card.outerHTML = accountProxyEntryCardHtml(proxyId, poolData);
+  const summary = container?.querySelector?.("[data-account-proxy-selection-summary]");
+  const proxy = socialProxyById(proxyId);
+  if (summary) summary.textContent = proxyId ? accountResidentialProxyLabel(proxy || { proxy_id: proxyId }) : "未使用代理 IP";
+}
+
+async function loadAccountProxyEntryStatus(container) {
+  if (!container?.isConnected) return null;
+  try {
+    const data = await api("/api/persona_dashboard/automation/system-proxy-pool");
+    state.accountProxyPoolSnapshot = data || {};
+    if (container.isConnected) updateAccountProxyEntryCard(container, container.dataset.selectedProxyId || "", data || {});
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function syncAccountProxySelectorRoute(active = true) {
+  const url = new URL(window.location.href);
+  if (active) {
+    url.searchParams.set("view", "proxy_selector");
+    if (state.accountProxySelector.accountId) url.searchParams.set("account_id", state.accountProxySelector.accountId);
+    else url.searchParams.delete("account_id");
+    url.searchParams.set("proxy_mode", state.accountProxySelector.mode === "create" ? "create" : "edit");
+  } else {
+    url.searchParams.set("view", "accounts");
+    url.searchParams.delete("account_id");
+    url.searchParams.delete("proxy_mode");
+  }
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function openAccountProxySelectorPage({ accountId = "", initialProxyId = null, mode = "edit", returnModal = null } = {}) {
+  const cleanAccountId = String(accountId || "").trim();
+  const normalizedMode = cleanAccountId ? "edit" : (mode === "create" ? "create" : "edit");
+  const account = cleanAccountId ? accountById(cleanAccountId) : null;
+  if (normalizedMode === "edit" && !account) {
     showMsg("socialMsg", "账号不存在，请刷新后重试。", false);
+    return false;
+  }
+  const originalProxyId = normalizedMode === "create"
+    ? String(state.accountPoolCreateDraft?.proxy_id || "").trim()
+    : String(account?.proxy_id || "").trim();
+  const selectedProxyId = initialProxyId === null || initialProxyId === undefined ? originalProxyId : String(initialProxyId || "").trim();
+  state.accountProxySelector = {
+    accountId: cleanAccountId,
+    mode: normalizedMode,
+    selectedProxyId,
+    originalProxyId,
+    returnModal: returnModal?.isConnected ? returnModal : null,
+  };
+  if (returnModal?.isConnected) {
+    returnModal.hidden = true;
+    returnModal.setAttribute("aria-hidden", "true");
+  }
+  syncAccountProxySelectorRoute(true);
+  setView("proxy_selector");
+  renderAccountProxySelectorPage();
+  scrollConsolePageToTop();
+  return true;
+}
+
+function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
+  const options = arguments[2] || {};
+  return openAccountProxySelectorPage({
+    accountId,
+    initialProxyId,
+    mode: options.mode || (accountId ? "edit" : "create"),
+    returnModal: options.returnModal || null,
+  });
+}
+
+function renderAccountProxySelectorPage() {
+  const page = $("accountProxySelectorPage");
+  if (!page) return;
+  const context = state.accountProxySelector || {};
+  const account = context.accountId ? accountById(context.accountId) : null;
+  if (context.mode !== "create" && !account) {
+    page.innerHTML = renderModuleEmptyState({
+      icon: "network",
+      title: state.socialDataLoadedAt ? "未找到要设置代理的账号" : "正在加载账号信息",
+      detail: state.socialDataLoadedAt ? "请返回账号管理后重新选择" : "账号加载完成后会自动显示代理选项",
+    });
     return;
   }
-  closeConsoleModal(null);
-  const originalProxyId = String(account.proxy_id || "").trim();
-  const selectedProxyId = initialProxyId === null || initialProxyId === undefined
-    ? originalProxyId
-    : String(initialProxyId || "").trim();
-  const modal = document.createElement("div");
-  modal.id = "consoleModal";
-  modal.className = "console-modal";
-  modal.dataset.selectedProxyId = selectedProxyId;
-  modal.dataset.originalProxyId = originalProxyId;
-  modal.innerHTML = `
-    <div class="console-modal-backdrop" data-account-proxy-picker-cancel></div>
-    <section class="console-modal-dialog account-proxy-picker-modal proxy-purchase-legacy-theme" role="dialog" aria-modal="true" aria-labelledby="accountProxyPickerTitle">
-      <div class="console-modal-head">
-        <div class="account-proxy-purchase-title"><span class="account-proxy-purchase-step">01</span><div><strong id="accountProxyPickerTitle">选择代理</strong><p>${esc(accountDisplayName(account))} · 选择或购买要绑定的代理 IP</p></div></div>
-        <div class="account-proxy-purchase-head-actions"><span class="account-proxy-provider-state">官方代理池</span>${renderModalCloseButton("data-account-proxy-picker-cancel")}</div>
+  const selectedProxyId = String(context.selectedProxyId || account?.proxy_id || state.accountPoolCreateDraft?.proxy_id || "").trim();
+  const originalProxyId = String(context.originalProxyId || account?.proxy_id || "").trim();
+  context.selectedProxyId = selectedProxyId;
+  context.originalProxyId = originalProxyId;
+  page.dataset.selectedProxyId = selectedProxyId;
+  page.dataset.originalProxyId = originalProxyId;
+  page.dataset.accountProxyType = page.dataset.accountProxyType || "supplier";
+  page.innerHTML = `<section class="account-proxy-selector-shell proxy-purchase-legacy-theme">
+    <header class="account-proxy-selector-head">
+      <button type="button" class="account-proxy-selector-back" data-account-proxy-page-back title="返回账号" aria-label="返回账号">${renderPersonaProfileEditorBackIcon()}</button>
+      <div><strong>选择代理</strong><p>${esc(account ? accountDisplayName(account) : `${platformLabel(state.accountPoolPlatform)} 新账号`)} · 选择要绑定的代理 IP</p></div>
+      <button type="button" class="account-proxy-selector-close" data-account-proxy-page-close title="关闭" aria-label="关闭"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12"></path><path d="M18 6 6 18"></path></svg></button>
+    </header>
+    <div class="account-proxy-selector-content">
+      <section class="account-proxy-selector-hero">
+        <div><span>专属代理 IP</span><strong>静态住宅代理 IP</strong><p>选择地区和城市后开通，代理会自动加入你的可选列表。</p></div>
+        <span class="account-proxy-provider-state" data-account-proxy-provider-state>正在连接代理服务</span>
+      </section>
+      <div class="account-proxy-picker-toolbar account-proxy-picker-filter-toolbar">
+        <div class="account-proxy-picker-controls">${accountProxyPoolFiltersHtml("page", selectedProxyId)}</div>
       </div>
-      <div class="console-modal-content">
-        <section class="account-proxy-mapped-product" aria-label="当前代理配置">
-          <div><span>当前代理配置</span><strong data-account-proxy-selection-summary>${account.proxy_id ? `当前绑定：${esc(accountResidentialProxyLabel(account))}` : "当前未使用代理 IP"}</strong></div>
-          <small>每月可免费选择一次官方代理，确认后自动加入你的代理列表。</small>
-        </section>
-        <div class="account-proxy-picker-toolbar account-proxy-picker-filter-toolbar">
-          <div class="account-proxy-picker-controls">${accountProxyPoolFiltersHtml("modal", selectedProxyId)}</div>
-        </div>
-        ${accountProxyOptionCardsHtml(selectedProxyId, { scope: "modal" })}
-      </div>
-    </section>`;
-  document.body.appendChild(modal);
-  if (selectedProxyId !== originalProxyId) updateAccountProxyChoice(modal, selectedProxyId);
-  const close = () => {
-    modal.remove();
+      ${accountProxyOptionCardsHtml(selectedProxyId, { scope: "page" })}
+    </div>
+  </section>`;
+  void loadAccountProxyPickerPool(page).then((data) => {
+    if (data) state.accountProxyPoolSnapshot = data;
+  });
+}
+
+function closeAccountProxySelectorPage(selectedProxyId = null) {
+  const context = state.accountProxySelector || {};
+  const returnModal = context.returnModal;
+  const hasSelection = selectedProxyId !== null && selectedProxyId !== undefined;
+  if (hasSelection) {
+    context.selectedProxyId = String(selectedProxyId || "").trim();
+    if (context.mode === "create") state.accountPoolCreateDraft = { ...(state.accountPoolCreateDraft || {}), proxy_id: context.selectedProxyId };
+  }
+  syncAccountProxySelectorRoute(false);
+  setView("accounts");
+  if (returnModal?.isConnected) {
+    if (hasSelection) {
+      returnModal.dataset.selectedProxyId = context.selectedProxyId;
+      if (context.mode === "edit") returnModal.dataset.originalProxyId = context.selectedProxyId;
+      updateAccountProxyEntryCard(returnModal, context.selectedProxyId);
+    }
+    returnModal.hidden = false;
+    returnModal.removeAttribute("aria-hidden");
+    returnModal.querySelector("[data-account-proxy-picker-open]")?.focus();
+  }
+  context.returnModal = null;
+}
+
+async function completeAccountProxySelectorSelection(page, proxyId = "") {
+  const context = state.accountProxySelector || {};
+  const selectedProxyId = String(proxyId || "").trim();
+  if (context.mode === "create") {
+    updateAccountProxyChoice(page, selectedProxyId);
+    closeAccountProxySelectorPage(selectedProxyId);
     return true;
-  };
-  modal.addEventListener("click", async (event) => {
-    const sortOption = event.target.closest("[data-account-proxy-sort-option]");
-    if (sortOption) {
-      setAccountProxyPoolSort(modal, sortOption.dataset.accountProxySortOption || "time_desc");
-      sortOption.closest("details")?.removeAttribute("open");
-      return;
-    }
-    const marketChoice = event.target.closest("[data-account-proxy-market-choice]");
-    if (marketChoice && !marketChoice.disabled) {
-      const claimedProxyId = await claimAccountProxyPoolOption(modal, marketChoice.dataset.accountProxyMarketChoice || "");
-      if (claimedProxyId && marketChoice.dataset.accountProxyChoiceScope === "modal") {
-        await commitAccountProxyPickerSelection(modal, account.id, claimedProxyId);
-      }
-      return;
-    }
-    const renewal = event.target.closest("[data-account-proxy-renewal-order]");
-    if (renewal) {
-      void updateAccountProxyRenewal(modal, renewal);
-      return;
-    }
-    const choice = event.target.closest("[data-account-proxy-choice]");
-    if (choice) {
-      if (choice.disabled) return;
-      const proxyId = choice.dataset.accountProxyChoice || "";
-      updateAccountProxyChoice(modal, proxyId);
-      refreshAccountProxyPickerOptions(modal);
-      if (choice.dataset.accountProxyChoiceScope === "modal") {
-        await commitAccountProxyPickerSelection(modal, account.id, proxyId);
-      }
-      return;
-    }
-    if (event.target.closest("[data-account-proxy-picker-cancel]")) {
-      close();
-      return;
-    }
-  });
-  modal.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") close();
-  });
-  modal.addEventListener("input", (event) => {
-    if (event.target.closest("[data-account-proxy-filter]")) refreshAccountProxyPickerOptions(modal);
-  });
-  modal.addEventListener("change", (event) => {
-    if (event.target.matches('[data-account-proxy-filter="country"]')) {
-      const cityFilter = modal.querySelector('[data-account-proxy-filter="city"]');
-      if (cityFilter) cityFilter.value = "";
-      accountProxyPoolFilterOptions(modal, modal.__accountProxyPoolData || {});
-    }
-    if (event.target.closest("[data-account-proxy-filter]")) refreshAccountProxyPickerOptions(modal);
-  });
-  void loadAccountProxyPickerPool(modal);
+  }
+  const saved = await commitAccountProxyPickerSelection(page, context.accountId || "", selectedProxyId);
+  if (saved) closeAccountProxySelectorPage(selectedProxyId);
+  return saved;
+}
+
+async function handleAccountProxySelectorClick(event) {
+  const page = $("accountProxySelectorPage");
+  if (!page || state.view !== "proxy_selector") return;
+  if (event.target.closest("[data-account-proxy-page-back], [data-account-proxy-page-close]")) {
+    closeAccountProxySelectorPage();
+    return;
+  }
+  const typeButton = event.target.closest("[data-account-proxy-type]");
+  if (typeButton) {
+    page.dataset.accountProxyType = String(typeButton.dataset.accountProxyType || "supplier");
+    page.querySelectorAll("[data-account-proxy-type]").forEach((button) => {
+      const selected = button === typeButton;
+      button.classList.toggle("is-active", selected);
+      button.setAttribute("aria-selected", selected ? "true" : "false");
+    });
+    const countryFilter = page.querySelector('[data-account-proxy-filter="country"]');
+    const cityFilter = page.querySelector('[data-account-proxy-filter="city"]');
+    if (countryFilter) countryFilter.value = "";
+    if (cityFilter) cityFilter.value = "";
+    accountProxyPoolFilterOptions(page, page.__accountProxyPoolData || {});
+    refreshAccountProxyPickerOptions(page);
+    return;
+  }
+  const sortOption = event.target.closest("[data-account-proxy-sort-option]");
+  if (sortOption) {
+    setAccountProxyPoolSort(page, sortOption.dataset.accountProxySortOption || "time_desc");
+    sortOption.closest("details")?.removeAttribute("open");
+    return;
+  }
+  const purchaseRenewal = event.target.closest("[data-account-proxy-purchase-renewal]");
+  if (purchaseRenewal) {
+    const enabled = purchaseRenewal.getAttribute("aria-pressed") !== "true";
+    purchaseRenewal.setAttribute("aria-pressed", enabled ? "true" : "false");
+    return;
+  }
+  const supplierChoice = event.target.closest("[data-account-proxy-supplier-choice]");
+  if (supplierChoice && !supplierChoice.disabled) {
+    const purchasedProxyId = await purchaseAccountProxySupplierOption(page, supplierChoice);
+    if (purchasedProxyId) await completeAccountProxySelectorSelection(page, purchasedProxyId);
+    return;
+  }
+  const marketChoice = event.target.closest("[data-account-proxy-market-choice]");
+  if (marketChoice && !marketChoice.disabled) {
+    const claimedProxyId = await claimAccountProxyPoolOption(page, marketChoice.dataset.accountProxyMarketChoice || "");
+    if (claimedProxyId) await completeAccountProxySelectorSelection(page, claimedProxyId);
+    return;
+  }
+  const renewal = event.target.closest("[data-account-proxy-renewal-order]");
+  if (renewal) {
+    void updateAccountProxyRenewal(page, renewal);
+    return;
+  }
+  const choice = event.target.closest("[data-account-proxy-choice]");
+  if (choice && !choice.disabled) await completeAccountProxySelectorSelection(page, choice.dataset.accountProxyChoice || "");
+}
+
+function handleAccountProxySelectorFilterChange(event) {
+  const page = $("accountProxySelectorPage");
+  if (!page || state.view !== "proxy_selector" || !event.target.closest("[data-account-proxy-filter]")) return;
+  if (event.target.matches('[data-account-proxy-filter="country"]')) {
+    const cityFilter = page.querySelector('[data-account-proxy-filter="city"]');
+    if (cityFilter) cityFilter.value = "";
+    accountProxyPoolFilterOptions(page, page.__accountProxyPoolData || {});
+  }
+  refreshAccountProxyPickerOptions(page);
 }
 
 function renderAccountProxyPickerPanel(account = null, mode = "create") {
@@ -28547,14 +28905,8 @@ function renderAccountProxyPickerPanel(account = null, mode = "create") {
   return `<section class="account-residential-proxy account-proxy-picker-panel">
     <div class="account-residential-proxy-head">
       <div class="account-proxy-inline-summary"><strong>代理 IP</strong><span data-account-proxy-selection-summary>${esc(proxyId ? accountResidentialProxyLabel(account || selectedProxy) : "未使用代理 IP")}</span></div>
-      <div class="account-proxy-inline-head-actions"><button type="button" data-account-proxy-picker-open aria-expanded="false">${proxyId ? "切换代理" : "选择代理"}</button></div>
     </div>
-    <div class="account-proxy-inline-options" data-account-proxy-inline-options hidden>
-      <div class="account-proxy-picker-toolbar account-proxy-picker-filter-toolbar">
-        <div class="account-proxy-picker-controls">${accountProxyPoolFiltersHtml("edit", proxyId)}</div>
-      </div>
-      ${accountProxyOptionCardsHtml(proxyId, { scope: "edit" })}
-    </div>
+    ${accountProxyEntryCardHtml(proxyId, state.accountProxyPoolSnapshot)}
   </section>`;
 }
 
@@ -28973,6 +29325,7 @@ function openAccountPoolEditorModal(options) {
   modal.className = "console-modal";
   modal.dataset.selectedProxyId = selectedProxyId;
   modal.dataset.originalProxyId = selectedProxyId;
+  modal.dataset.accountProxyType = "supplier";
   modal.dataset.accountEditorMode = mode;
   modal.dataset.accountEditorId = accountId;
   modal.innerHTML = `
@@ -28994,6 +29347,7 @@ function openAccountPoolEditorModal(options) {
       </div>
     </section>`;
   document.body.appendChild(modal);
+  void loadAccountProxyEntryStatus(modal);
   $(`${editing ? "accountPoolEdit" : "accountPool"}LoginUsername`)?.focus();
   modal.__cleanup = () => {
     if (editing) clearAccountPasswordReveal(accountId, "pool-edit");
@@ -29027,34 +29381,11 @@ function openAccountPoolEditorModal(options) {
     }
     const pickerOpen = event.target.closest("[data-account-proxy-picker-open]");
     if (pickerOpen) {
-      const options = modal.querySelector("[data-account-proxy-inline-options]");
-      const expanded = !options?.hidden;
-      if (options) options.hidden = expanded;
-      pickerOpen.setAttribute("aria-expanded", expanded ? "false" : "true");
-      if (!expanded) void loadAccountProxyPickerPool(modal);
-      return;
-    }
-    const sortOption = event.target.closest("[data-account-proxy-sort-option]");
-    if (sortOption) {
-      setAccountProxyPoolSort(modal, sortOption.dataset.accountProxySortOption || "time_desc");
-      sortOption.closest("details")?.removeAttribute("open");
-      return;
-    }
-    const marketChoice = event.target.closest("[data-account-proxy-market-choice]");
-    if (marketChoice && !marketChoice.disabled) {
-      void claimAccountProxyPoolOption(modal, marketChoice.dataset.accountProxyMarketChoice || "");
-      return;
-    }
-    const renewal = event.target.closest("[data-account-proxy-renewal-order]");
-    if (renewal) {
-      void updateAccountProxyRenewal(modal, renewal);
-      return;
-    }
-    const choice = event.target.closest("[data-account-proxy-choice]");
-    if (choice) {
-      if (choice.disabled) return;
-      updateAccountProxyChoice(modal, choice.dataset.accountProxyChoice || "");
-      refreshAccountProxyPickerOptions(modal);
+      if (!editing) syncAccountPoolCreateDraftFromForm();
+      openAccountProxyPickerModal(accountId, modal.dataset.selectedProxyId || "", {
+        mode,
+        returnModal: modal,
+      });
       return;
     }
     const saveButton = event.target.closest("[data-account-pool-editor-save]");
@@ -29088,17 +29419,8 @@ function openAccountPoolEditorModal(options) {
       refreshAccountLoginIdentifierFields(modal);
     }
     if (!editing) syncAccountPoolCreateDraftFromForm();
-    if (event.target.closest("[data-account-proxy-filter]")) refreshAccountProxyPickerOptions(modal);
     const passwordInput = event.target.closest?.("[data-account-password-input]");
     if (editing && passwordInput) passwordInput.dataset.passwordDirty = "true";
-  });
-  modal.addEventListener("change", (event) => {
-    if (event.target.matches('[data-account-proxy-filter="country"]')) {
-      const cityFilter = modal.querySelector('[data-account-proxy-filter="city"]');
-      if (cityFilter) cityFilter.value = "";
-      accountProxyPoolFilterOptions(modal, modal.__accountProxyPoolData || {});
-    }
-    if (event.target.closest("[data-account-proxy-filter]")) refreshAccountProxyPickerOptions(modal);
   });
   modal.addEventListener("keydown", (event) => {
     if (event.key === "Escape") close();
@@ -33892,6 +34214,12 @@ function bindEvents() {
   if ($("socialAccount")) $("socialAccount").addEventListener("change", syncStandaloneSocialForm);
   if ($("socialPlatform")) $("socialPlatform").addEventListener("change", syncStandaloneSocialForm);
   if ($("runSocialOnce")) $("runSocialOnce").addEventListener("click", () => api("/api/persona_dashboard/automation/worker/run_once", { method: "POST" }).then(loadSocial).catch((error) => showMsg("socialMsg", error.detail || error.message || "执行失败", false)));
+  $("accountProxySelectorPage")?.addEventListener("click", (event) => {
+    handleAccountProxySelectorClick(event)
+      .catch((error) => showMsg("socialMsg", error.detail || error.message || "代理操作失败", false));
+  });
+  $("accountProxySelectorPage")?.addEventListener("input", handleAccountProxySelectorFilterChange);
+  $("accountProxySelectorPage")?.addEventListener("change", handleAccountProxySelectorFilterChange);
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click", async (event) => {
     const personaMobileToggle = event.target.closest("[data-persona-mobile-list-toggle]");
     if (personaMobileToggle) {
