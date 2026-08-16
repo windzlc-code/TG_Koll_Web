@@ -16423,52 +16423,6 @@ body.persona-media-sorting {
   width: min(760px, calc(100vw - 32px));
 }
 
-.account-add-method-list {
-  display: grid;
-  gap: 10px;
-}
-
-.account-add-method-list > p {
-  margin: 0;
-}
-
-.account-add-method-button {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  min-height: 64px;
-  padding: 10px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel-solid, #fff);
-  color: var(--ink);
-  text-align: left;
-}
-
-.account-add-method-button:hover,
-.account-add-method-button:focus-visible {
-  border-color: var(--accent);
-  background: var(--soft);
-}
-
-.account-add-method-button > svg,
-.account-add-method-button > .platform-brand-icon {
-  flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-}
-
-.account-add-method-button > span {
-  display: grid;
-  gap: 2px;
-}
-
-.account-add-method-button small {
-  color: var(--muted);
-  font-weight: 400;
-}
-
 .google-account-session-modal {
   width: min(600px, calc(100vw - 32px));
 }

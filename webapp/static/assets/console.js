@@ -29478,47 +29478,7 @@ function openAccountPoolEditorModal(options) {
 function openAccountPoolCreateModal(options) {
   options = options || {};
   const platform = normalizeAccountPoolPlatform(options.platform || state.accountPoolPlatform);
-  const platformLabel = platform === "instagram" ? "Instagram" : "Threads";
-  closeConsoleModal(null);
-  const modal = document.createElement("div");
-  modal.id = "consoleModal";
-  modal.className = "console-modal";
-  modal.innerHTML = `
-    <div class="console-modal-backdrop" data-account-add-method-close></div>
-    <section class="console-modal-dialog account-pool-create-modal" role="dialog" aria-modal="true" aria-labelledby="accountAddMethodTitle">
-      <div class="console-modal-head">
-        <strong id="accountAddMethodTitle">添加账号</strong>
-        ${renderModalCloseButton("data-account-add-method-close")}
-      </div>
-      <div class="console-modal-content account-add-method-list">
-        <p class="muted">选择 ${esc(platformLabel)} 账号接入方式</p>
-        <button type="button" class="account-add-method-button" data-account-add-manual>
-          ${renderEditIcon()}<span><strong>填写账号密码</strong><small>保存后启动现有浏览器自动登录流程</small></span>
-        </button>
-        <button type="button" class="account-add-method-button" data-account-add-official>
-          ${renderAccountPoolPlatformIcon(platform)}<span><strong>${esc(platformLabel)} 官方授权</strong><small>由平台授权并同步官方 API 允许的数据</small></span>
-        </button>
-      </div>
-    </section>`;
-  document.body.appendChild(modal);
-  const close = () => modal.remove();
-  modal.addEventListener("click", (event) => {
-    if (event.target.closest("[data-account-add-method-close]")) {
-      close();
-      return;
-    }
-    if (event.target.closest("[data-account-add-manual]")) {
-      close();
-      openAccountPoolEditorModal({ ...options, platform });
-      return;
-    }
-    if (event.target.closest("[data-account-add-official]")) {
-      const url = new URL(`/api/${platform}/oauth/start`, window.location.origin);
-      const personaId = String(options.personaId || "").trim();
-      if (personaId) url.searchParams.set("persona_id", personaId);
-      window.location.assign(adminWorkspaceUrl(`${url.pathname}${url.search}`));
-    }
-  });
+  openAccountPoolEditorModal({ ...options, platform });
 }
 
 async function startAccountBrowserSessionReuse(accountId = "", personaId = "", messageId = "socialMsg") {
