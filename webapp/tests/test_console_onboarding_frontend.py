@@ -8,8 +8,8 @@ ONBOARDING_CSS_PATH = ROOT / "webapp" / "static" / "assets" / "console-onboardin
 
 
 def test_console_loads_isolated_onboarding_assets():
-    assert '/assets/console-onboarding.css?v=20260817-12' in CONSOLE_HTML
-    assert '/assets/console-onboarding.js?v=20260817-12' in CONSOLE_HTML
+    assert '/assets/console-onboarding.css?v=20260817-13' in CONSOLE_HTML
+    assert '/assets/console-onboarding.js?v=20260817-13' in CONSOLE_HTML
     assert 'id="consoleOnboardingLauncher"' not in CONSOLE_HTML
 
 
@@ -39,6 +39,14 @@ def test_onboarding_is_available_to_all_non_admin_users_and_can_be_reopened():
     eligibility_exit = script.index('if (!runtime.eligible) return;', eligibility_check)
     launcher_binding = script.index('syncLaunchers();', eligibility_exit)
     assert eligibility_check < eligibility_exit < launcher_binding
+
+    launch_start = script.index('function launchReminder()')
+    launch_end = script.index('function ensureEdgeLauncher()', launch_start)
+    launch_body = script[launch_start:launch_end]
+    assert 'const progress = readProgress();' in launch_body
+    assert 'if (progress.status === "active")' in launch_body
+    assert 'startGuide(resumeStep());' in launch_body
+    assert 'openReminder(resumeStep());' in launch_body
 
 
 def test_onboarding_covers_the_primary_business_flow_without_blocking_it():

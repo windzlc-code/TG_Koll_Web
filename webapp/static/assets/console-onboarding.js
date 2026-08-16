@@ -247,6 +247,11 @@
 
   function launchReminder() {
     runtime.eligible = true;
+    const progress = readProgress();
+    if (progress.status === "active") {
+      startGuide(resumeStep());
+      return;
+    }
     openReminder(resumeStep());
   }
 
