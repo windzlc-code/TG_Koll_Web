@@ -90,14 +90,15 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn(".account-proxy-picker-location-row", self.console_styles)
         self.assertIn(".proxy-market-mini-renewal", self.console_styles)
         self.assertIn("proxy-purchase-legacy-theme", self.console_script)
-        self.assertIn("account-proxy-selector-shell", self.console_script)
+        self.assertIn("account-proxy-picker-modal", self.console_script)
+        self.assertNotIn("account-proxy-selector-shell", self.console_script)
         self.assertIn("account-proxy-entry-card", self.console_script)
         self.assertNotIn("account-proxy-mapped-product", self.console_script)
         self.assertIn("data-account-proxy-region-guide", self.console_script)
         self.assertIn('if (!String(filters.country || "").trim())', self.console_script)
         self.assertIn('cityControl.disabled = !selectedCountry', self.console_script)
         self.assertIn(".account-proxy-region-guide", self.console_styles)
-        self.assertIn("#68d5df 0 9%, #1678b4 24%, #102c47 70%", self.console_styles)
+        self.assertIn("#68d5df 0 12%, #1678b4 32%, #102c47 82%", self.console_styles)
 
     def test_backend_enforces_monthly_free_selection_and_masks_unclaimed_details(self):
         self.assertIn("def monthly_free_proxy_status", self.system_proxy_pool_source)
