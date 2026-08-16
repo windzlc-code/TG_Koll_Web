@@ -180,6 +180,19 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertIn("function renderProxyPurchasedAssets", self.script)
         self.assertIn("function loadProxyPurchasedAssets", self.script)
 
+    def test_proxy_auto_import_editor_keeps_balanced_layout_container(self):
+        editor_start = self.markup.index('<div class="proxy-market-admin-band" id="proxyMarketEditor">')
+        settings_heading = self.markup.index("<h3>库存、领取与健康策略</h3>", editor_start)
+        settings_start = self.markup.rfind(
+            '<div class="proxy-market-admin-band">',
+            editor_start,
+            settings_heading,
+        )
+        editor = self.markup[editor_start:settings_start]
+
+        self.assertEqual(editor.count("<div"), editor.count("</div>"))
+        self.assertIn('id="proxyMarketItemMsg"', editor)
+
     def test_purchase_regions_are_localized_to_chinese_in_admin_views(self):
         country_label = self._function("proxyPurchaseCountryLabel", "inferProxyMarketProviderKey")
         purchased_assets = self._function("renderProxyPurchasedAssets", "loadProxyPurchasedAssets")
