@@ -223,6 +223,10 @@
   width: min(232px, calc(100vw - 20px));
 }
 
+.console-onboarding-card.is-exit-confirmation {
+  border-color: rgba(185, 83, 75, 0.42);
+}
+
 .console-onboarding-step-head {
   display: flex;
   align-items: center;
@@ -288,6 +292,19 @@
 .console-onboarding-actions button.is-exit:hover,
 .console-onboarding-actions button.is-exit:focus-visible {
   color: #13789e;
+}
+
+.console-onboarding-actions button.is-exit-confirm {
+  border-color: rgba(185, 83, 75, 0.42);
+  background: #fff7f6;
+  color: #a13f38;
+}
+
+.console-onboarding-actions button.is-exit-confirm:hover,
+.console-onboarding-actions button.is-exit-confirm:focus-visible {
+  border-color: rgba(185, 83, 75, 0.68);
+  background: #fff0ee;
+  color: #8f302a;
 }
 
 :root[data-theme="dark"] .console-onboarding-card {

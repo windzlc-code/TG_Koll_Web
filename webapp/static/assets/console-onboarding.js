@@ -386,7 +386,7 @@
           <button type="button" class="is-quiet" data-onboarding-close>稍后</button>
           <button type="button" class="is-secondary" data-onboarding-jump>前往</button>
           <button type="button" class="is-primary" data-onboarding-start>开始</button>
-          <button type="button" class="is-exit" data-onboarding-dismiss>退出</button>
+          <button type="button" class="is-exit" data-onboarding-request-exit>退出</button>
         </div>
       </section>`;
     syncLaunchers();
@@ -442,7 +442,7 @@
     const host = ensureHost();
     host.innerHTML = `
       <section class="console-onboarding-card is-guide" role="dialog" aria-modal="false" aria-labelledby="consoleOnboardingTitle">
-        <button type="button" class="console-onboarding-close" data-onboarding-exit aria-label="关闭教程">×</button>
+        <button type="button" class="console-onboarding-close" data-onboarding-close aria-label="暂时收起教程">×</button>
         <div class="console-onboarding-step-head">
           <div class="console-onboarding-kicker">${step.eyebrow}</div>
           <strong>${runtime.currentStep + 1}/${steps.length}</strong>
@@ -450,7 +450,8 @@
         <h2 id="consoleOnboardingTitle">${step.title}</h2>
         <p>${step.message}</p>
         <div class="console-onboarding-actions">
-          ${runtime.currentStep > 0 ? '<button type="button" class="is-quiet" data-onboarding-prev>上一步</button>' : '<button type="button" class="is-quiet" data-onboarding-exit>退出</button>'}
+          ${runtime.currentStep > 0 ? '<button type="button" class="is-quiet" data-onboarding-prev>上一步</button>' : ''}
+          <button type="button" class="is-exit" data-onboarding-request-exit>退出</button>
           <button type="button" class="is-primary" ${last ? "data-onboarding-complete" : "data-onboarding-next"}>${last ? "完成教程" : "下一步"}</button>
         </div>
       </section>`;
@@ -469,6 +470,32 @@
     closeCard();
     removeBeacons();
     syncLaunchers();
+  }
+
+  function renderExitConfirmation() {
+    const step = steps[runtime.currentStep] || steps[0];
+    const host = ensureHost();
+    host.innerHTML = `
+      <section class="console-onboarding-card is-exit-confirmation" role="alertdialog" aria-modal="false" aria-labelledby="consoleOnboardingExitTitle">
+        <button type="button" class="console-onboarding-close" data-onboarding-cancel-exit aria-label="继续教程">×</button>
+        <div class="console-onboarding-kicker">确认操作</div>
+        <h2 id="consoleOnboardingExitTitle">要退出新手教程吗？</h2>
+        <p>确认退出后将隐藏全部步骤提示；仍可从首页“教程”重新开启。</p>
+        <div class="console-onboarding-actions">
+          <button type="button" class="is-quiet" data-onboarding-cancel-exit>继续教程</button>
+          <button type="button" class="is-exit-confirm" data-onboarding-confirm-exit>确认退出</button>
+        </div>
+      </section>`;
+    syncLaunchers();
+    scheduleCardPosition(step);
+  }
+
+  function cancelExitConfirmation() {
+    if (runtime.guided) {
+      renderGuideStep(runtime.currentStep);
+      return;
+    }
+    openReminder(runtime.currentStep);
   }
 
   function renderCompletionNotice() {
@@ -521,7 +548,15 @@
       closeCard();
       return;
     }
-    if (action.hasAttribute("data-onboarding-dismiss") || action.hasAttribute("data-onboarding-exit")) {
+    if (action.hasAttribute("data-onboarding-cancel-exit")) {
+      cancelExitConfirmation();
+      return;
+    }
+    if (action.hasAttribute("data-onboarding-request-exit")) {
+      renderExitConfirmation();
+      return;
+    }
+    if (action.hasAttribute("data-onboarding-confirm-exit")) {
       exitGuide();
       return;
     }

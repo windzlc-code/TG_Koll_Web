@@ -8,8 +8,8 @@ ONBOARDING_CSS_PATH = ROOT / "webapp" / "static" / "assets" / "console-onboardin
 
 
 def test_console_loads_isolated_onboarding_assets():
-    assert '/assets/console-onboarding.css?v=20260817-11' in CONSOLE_HTML
-    assert '/assets/console-onboarding.js?v=20260817-11' in CONSOLE_HTML
+    assert '/assets/console-onboarding.css?v=20260817-12' in CONSOLE_HTML
+    assert '/assets/console-onboarding.js?v=20260817-12' in CONSOLE_HTML
     assert 'id="consoleOnboardingLauncher"' not in CONSOLE_HTML
 
 
@@ -77,9 +77,17 @@ def test_onboarding_covers_the_primary_business_flow_without_blocking_it():
     assert 'className = "console-onboarding-beacon"' in script
     assert 'data-onboarding-start' in script
     assert 'data-onboarding-jump' in script
-    assert 'data-onboarding-dismiss' in script
-    assert 'class="is-exit" data-onboarding-dismiss>退出</button>' in script
-    assert 'data-onboarding-exit' in script
+    assert 'data-onboarding-request-exit' in script
+    assert 'class="is-exit" data-onboarding-request-exit>退出</button>' in script
+    assert 'data-onboarding-confirm-exit' in script
+    assert 'data-onboarding-cancel-exit' in script
+    assert 'function renderExitConfirmation()' in script
+    assert '要退出新手教程吗？' in script
+    assert '确认退出' in script
+    assert '继续教程' in script
+    assert 'data-onboarding-close aria-label="暂时收起教程"' in script
+    assert 'if (action.hasAttribute("data-onboarding-confirm-exit"))' in script
+    assert 'if (action.hasAttribute("data-onboarding-request-exit"))' in script
     assert 'role="dialog"' in script
     assert 'aria-modal="false"' in script
     assert 'scheduleCardPosition(step)' in script
@@ -127,4 +135,5 @@ def test_onboarding_visuals_are_subtle_responsive_and_motion_safe():
     assert 'flex-wrap: nowrap' in styles
     assert 'min-height: 23px' in styles
     assert '.console-onboarding-actions button.is-exit' in styles
+    assert '.console-onboarding-card.is-exit-confirmation' in styles
     assert '.console-onboarding-dismiss' not in styles
