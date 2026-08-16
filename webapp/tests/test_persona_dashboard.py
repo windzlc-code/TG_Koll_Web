@@ -4487,8 +4487,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_persona_hot_keywords_consume_remaining_batches_then_regenerate(self):
         self._write_archives()
-        initial_keywords = [f"keyword-{index}" for index in range(12)]
-        regenerated_keywords = [f"fresh-{index}" for index in range(10)]
+        initial_keywords = [f"keyword-{index}" for index in range(30)]
+        regenerated_keywords = [f"fresh-{index}" for index in range(26)]
         payload = server.PersonaDashboardHotCandidatesFetchPayload(
             search_mode="strict",
             writing_locale="zh-CN",
@@ -4513,18 +4513,18 @@ class PersonaDashboardApiTests(unittest.TestCase):
         with mock.patch.object(server, "_run_persona_hot_workflow_cli", side_effect=fake_results) as mocked:
             first = server._prepare_persona_hot_keywords("persona-1", payload)
             repeated_before_success = server._prepare_persona_hot_keywords("persona-1", payload)
-            self.assertEqual(first["keywords"], initial_keywords[:8])
-            self.assertEqual(repeated_before_success["keywords"], initial_keywords[:8])
+            self.assertEqual(first["keywords"], initial_keywords[:24])
+            self.assertEqual(repeated_before_success["keywords"], initial_keywords[:24])
             self.assertEqual(mocked.call_count, 1)
 
             self.assertTrue(server._consume_persona_hot_keyword_batch("persona-1", payload, first["keywords"]))
             remaining = server._prepare_persona_hot_keywords("persona-1", payload)
-            self.assertEqual(remaining["keywords"], initial_keywords[8:])
+            self.assertEqual(remaining["keywords"], initial_keywords[24:])
             self.assertEqual(mocked.call_count, 1)
 
             self.assertTrue(server._consume_persona_hot_keyword_batch("persona-1", payload, remaining["keywords"]))
             regenerated = server._prepare_persona_hot_keywords("persona-1", payload)
-            self.assertEqual(regenerated["keywords"], regenerated_keywords[:8])
+            self.assertEqual(regenerated["keywords"], regenerated_keywords[:24])
             self.assertEqual(mocked.call_count, 2)
             self.assertTrue(mocked.call_args_list[1].args[0]["forceRegenerate"])
 
@@ -4559,9 +4559,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_persona_hot_keyword_batch_is_not_consumed_when_collection_fails(self):
         self._write_archives()
-        keywords = [f"keyword-{index}" for index in range(12)]
+        keywords = [f"keyword-{index}" for index in range(30)]
         payload = server.PersonaDashboardHotCandidatesFetchPayload(
-            keywords=keywords[:8],
+            keywords=keywords[:24],
             search_mode="strict",
             writing_locale="zh-CN",
         )
@@ -4575,7 +4575,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=prepared_result):
             prepared = server._prepare_persona_hot_keywords("persona-1", payload)
-        self.assertEqual(prepared["keywords"], keywords[:8])
+        self.assertEqual(prepared["keywords"], keywords[:24])
 
         with mock.patch.object(server, "_run_persona_hot_workflow_cli", side_effect=RuntimeError("capture failed")):
             with self.assertRaisesRegex(RuntimeError, "capture failed"):
@@ -4583,7 +4583,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         with mock.patch.object(server, "_run_persona_hot_workflow_cli") as mocked:
             repeated = server._prepare_persona_hot_keywords("persona-1", payload)
-        self.assertEqual(repeated["keywords"], keywords[:8])
+        self.assertEqual(repeated["keywords"], keywords[:24])
         mocked.assert_not_called()
 
     def test_fetch_persona_hot_candidates_prepares_missing_keywords_on_new_host(self):

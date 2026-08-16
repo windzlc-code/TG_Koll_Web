@@ -3606,7 +3606,7 @@ async function fetchThreadsSearchPageCandidates(args: {
   const excludedHistoryKeys = new Set<string>();
   const queryRound = Math.max(0, Math.floor(Number(args.queryRound) || 0));
   // Controller-issued keyword batches already rotate on the new host. Keep
-  // their order stable here so all eight selected terms are actually queried
+  // their order stable here so all selected terms are actually queried
   // instead of rotating into derived variants based on display history.
   const baseSeed = args.queryKeywords?.length
     ? 0
@@ -3664,7 +3664,7 @@ async function fetchThreadsSearchPageCandidates(args: {
   // succeeds. Do not discard that successful response at the old 8s wrapper;
   // keep three seconds of the 30s source budget for normalization and return.
   const readerInitialTimeoutMs = Math.min(15_000, remainingSentimentDeadlineMs(args.deadlineAt, 15_000));
-  const readerCandidates = allowReader ? await withSentimentTimeout(fetchThreadsReaderSearchCandidates({
+  const readerPromise = allowReader ? withSentimentTimeout(fetchThreadsReaderSearchCandidates({
       archiveId: args.archiveId,
       keywords: args.keywords,
       queries: queries.slice(0, THREADS_READER_QUERY_BATCH_SIZE),
@@ -3675,8 +3675,33 @@ async function fetchThreadsSearchPageCandidates(args: {
       searchMode: args.searchMode,
       deadlineAt: args.deadlineAt,
       deferRelevanceGate: args.deferRelevanceGate,
-  }).catch(() => []), readerInitialTimeoutMs, []) : [];
+  }).catch(() => []), readerInitialTimeoutMs, []) : Promise.resolve([] as SentimentHotCandidate[]);
+  // Preserve the original anonymous public-search path alongside the Reader.
+  // Threads can return only an application shell to an HTTP reader; the
+  // existing public browser parser consumes delayed anonymous result cards
+  // without attaching account cookies or leasing a collector account.
+  const publicBrowserTimeoutMs = Math.min(THREADS_PUBLIC_BROWSER_TIMEOUT_MS, sourceTimeoutMs);
+  const publicBrowserDeadlineAt = args.deadlineAt
+    ? Math.min(args.deadlineAt, Date.now() + publicBrowserTimeoutMs)
+    : Date.now() + publicBrowserTimeoutMs;
+  const publicBrowserPromise = allowReader ? withSentimentTimeout(fetchThreadsBrowserSearchCandidates({
+      archiveId: args.archiveId,
+      keywords: args.keywords,
+      queries: publicBrowserQueries,
+      limit: sourceLimit,
+      excludeIds: excluded,
+      freshnessDays: args.freshnessDays,
+      ignoreHistory: args.ignoreHistory,
+      searchMode: args.searchMode,
+      recentSearch: false,
+      deadlineAt: publicBrowserDeadlineAt,
+      warnings: args.warnings,
+      allowUnauthenticated: true,
+      publicOnly: true,
+  }).catch(() => []), publicBrowserTimeoutMs, []) : Promise.resolve([] as SentimentHotCandidate[]);
+  const [readerCandidates, publicBrowserCandidates] = await Promise.all([readerPromise, publicBrowserPromise]);
   addAll(readerCandidates);
+  addAll(publicBrowserCandidates);
 
   const authenticatedCookies = allowAuthenticated && byId.size < args.limit
     ? readSentimentBrowserAuthCookies("threads")

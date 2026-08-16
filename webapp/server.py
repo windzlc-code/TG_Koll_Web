@@ -14708,7 +14708,7 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
 
 
 PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 44
-PERSONA_HOT_KEYWORD_BATCH_SIZE = 8
+PERSONA_HOT_KEYWORD_BATCH_SIZE = 24
 
 
 def _persona_hot_keyword_digest(keywords: list[str]) -> str:
