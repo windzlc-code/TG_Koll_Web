@@ -28122,9 +28122,11 @@ function openAccountProxySelectionSuccess(proxyId = "", poolData = {}) {
 
 function accountProxyPoolFiltersHtml(scope = "modal", selectedProxyId = "") {
   return `<div class="account-proxy-picker-filters" data-account-proxy-filters>
-    <div class="account-proxy-type-tabs" role="tablist" aria-label="代理来源">
-      <button type="button" class="is-active" role="tab" aria-selected="true" data-account-proxy-type="supplier">平台代理</button>
-      <button type="button" role="tab" aria-selected="false" data-account-proxy-type="selected">用户选择</button>
+    <div class="account-proxy-source-row">
+      <div class="account-proxy-type-tabs" role="tablist" aria-label="代理来源">
+        <button type="button" class="is-active" role="tab" aria-selected="true" data-account-proxy-type="supplier">平台</button>
+        <button type="button" role="tab" aria-selected="false" data-account-proxy-type="selected">用户</button>
+      </div>
       <button type="button" class="account-proxy-clear" data-account-proxy-choice="" data-account-proxy-choice-scope="${esc(scope)}" aria-pressed="${selectedProxyId ? "false" : "true"}">${renderNoProxyIcon()}<span>不使用代理</span></button>
     </div>
     <div class="account-proxy-picker-location-row">
@@ -28736,8 +28738,9 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
   modalRoot.dataset.accountProxySort = "time_desc";
   const pickerTemplate = document.createElement("template");
   pickerTemplate.innerHTML = `
-    <section class="console-modal-dialog account-proxy-picker-modal proxy-purchase-legacy-theme" role="dialog" aria-modal="true" aria-labelledby="accountProxyPickerTitle" tabindex="-1">
+    <section class="console-modal-dialog account-proxy-picker-modal proxy-purchase-legacy-theme ${returnModal ? "has-return" : ""}" role="dialog" aria-modal="true" aria-labelledby="accountProxyPickerTitle" tabindex="-1">
       <div class="console-modal-head">
+        ${returnModal ? `<button type="button" class="persona-profile-editor-back account-proxy-picker-back" data-account-proxy-picker-back title="返回账号编辑" aria-label="返回账号编辑">${renderPersonaProfileEditorBackIcon()}</button>` : ""}
         <div class="account-proxy-picker-heading">
           <strong id="accountProxyPickerTitle">选择代理</strong>
           <p>${esc(account ? accountDisplayName(account) : `${platformLabel(state.accountPoolPlatform)} 新账号`)} · 选择要绑定的代理 IP</p>
@@ -28820,7 +28823,7 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
     try {
       const activeDropdown = event.target.closest("[data-console-dropdown]");
       closeConsoleDropdowns(activeDropdown);
-      if (event.target.closest("[data-account-proxy-picker-cancel]")) {
+      if (event.target.closest("[data-account-proxy-picker-cancel], [data-account-proxy-picker-back]")) {
         close();
         return;
       }
