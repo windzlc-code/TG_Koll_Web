@@ -17186,7 +17186,6 @@ body.persona-media-sorting {
   position: relative;
   overflow: hidden;
   width: min(880px, 100%);
-  min-height: calc(100dvh - 150px);
   margin: 0 auto;
   border: 1px solid #bdccda;
   border-radius: 18px;
@@ -17194,21 +17193,12 @@ body.persona-media-sorting {
   box-shadow: 0 16px 42px rgba(16, 44, 71, .13);
 }
 
-.account-proxy-selector-shell::before {
-  content: "";
-  position: absolute;
-  z-index: 3;
-  inset: 0 0 auto;
-  height: 5px;
-  background: linear-gradient(90deg, #68d5df 0 9%, #1678b4 24%, #102c47 70%);
-}
-
 .account-proxy-selector-head {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  grid-template-columns: minmax(0, 1fr) 40px;
   align-items: center;
   gap: 12px;
-  padding: 25px 26px 18px;
+  padding: 18px 22px 15px;
   border-bottom: 1px solid #d7e1ea;
   background: rgba(255, 255, 255, .97);
 }
@@ -17235,7 +17225,6 @@ body.persona-media-sorting {
   white-space: nowrap;
 }
 
-.account-proxy-selector-back,
 .account-proxy-selector-close {
   display: inline-flex;
   align-items: center;
@@ -17250,8 +17239,6 @@ body.persona-media-sorting {
   box-shadow: none;
 }
 
-.account-proxy-selector-back:hover,
-.account-proxy-selector-back:focus-visible,
 .account-proxy-selector-close:hover,
 .account-proxy-selector-close:focus-visible {
   border-color: #c8d6e2;
@@ -17259,7 +17246,6 @@ body.persona-media-sorting {
   box-shadow: none;
 }
 
-.account-proxy-selector-back svg,
 .account-proxy-selector-close svg {
   width: 21px;
   height: 21px;
@@ -17289,8 +17275,8 @@ body.persona-media-sorting {
 
 .account-proxy-selector-content {
   display: grid;
-  gap: 14px;
-  padding: 20px 22px 24px;
+  gap: 12px;
+  padding: 14px 18px 18px;
   background:
     linear-gradient(90deg, rgba(16, 44, 71, .028) 1px, transparent 1px) 0 0 / 44px 44px,
     linear-gradient(rgba(16, 44, 71, .028) 1px, transparent 1px) 0 0 / 44px 44px,
@@ -17302,7 +17288,7 @@ body.persona-media-sorting {
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
-  padding: 18px;
+  padding: 14px 16px;
   color: #fff;
   border-radius: 12px;
   background: linear-gradient(110deg, #126eaa 0%, #0b4e83 48%, #102c47 100%);
@@ -17333,8 +17319,8 @@ body.persona-media-sorting {
   display: flex;
   align-items: center;
   gap: 14px;
-  min-height: 132px;
-  padding: 20px;
+  min-height: 92px;
+  padding: 15px 16px;
   border: 1px dashed #b9c9d8;
   border-radius: 10px;
   background: rgba(255, 255, 255, .9);
@@ -17973,15 +17959,14 @@ body.persona-media-sorting {
 @media (max-width: 640px) {
   .mobile-page-toolbar.is-proxy-selector-page { display: none; }
   .account-proxy-selector-view { margin: -8px; }
-  .account-proxy-selector-shell { min-height: calc(100dvh - 118px); border-radius: 0; }
-  .account-proxy-selector-head { grid-template-columns: 34px minmax(0, 1fr) 34px; gap: 8px; padding: 20px 12px 14px; }
+  .account-proxy-selector-shell { border-radius: 0; }
+  .account-proxy-selector-head { grid-template-columns: minmax(0, 1fr) 34px; gap: 8px; padding: 14px 12px 11px; }
   .account-proxy-selector-head strong { font-size: 18px; }
-  .account-proxy-selector-back,
   .account-proxy-selector-close { width: 34px; height: 34px; }
-  .account-proxy-selector-content { padding: 14px 10px 18px; }
-  .account-proxy-selector-hero { padding: 14px; }
+  .account-proxy-selector-content { padding: 10px 10px 14px; }
+  .account-proxy-selector-hero { padding: 12px 14px; }
   .account-proxy-provider-state { padding: 5px 7px; font-size: 10px; }
-  .account-proxy-region-guide { min-height: 118px; padding: 16px; }
+  .account-proxy-region-guide { min-height: 84px; padding: 13px; }
   .account-proxy-region-guide-icon { flex-basis: 40px; width: 40px; height: 40px; }
   .account-proxy-entry-card { grid-template-columns: 36px minmax(0, 1fr) auto; gap: 9px; padding: 11px; }
   .account-proxy-entry-icon { width: 36px; height: 36px; }

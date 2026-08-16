@@ -3464,6 +3464,20 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('white-space: nowrap;', self.styles[self.styles.index('.account-proxy-entry-copy small {'):])
         self.assertNotIn('.account-proxy-picker-modal', self.styles)
 
+    def test_account_proxy_selector_keeps_filter_interaction_stable_and_content_sized(self):
+        selector_open = self._section("function openAccountProxySelectorPage", "function openAccountProxyPickerModal")
+        selector_page = self._function_source("renderAccountProxySelectorPage")
+        bind_events = self._function_source("bindEvents")
+        shell_start = self.styles.index(".account-proxy-selector-shell {")
+        shell_rule = self.styles[shell_start:self.styles.index("}", shell_start) + 1]
+
+        self.assertNotIn("renderAccountProxySelectorPage();", selector_open)
+        self.assertNotIn('addEventListener("input", handleAccountProxySelectorFilterChange)', bind_events)
+        self.assertIn('addEventListener("change", handleAccountProxySelectorFilterChange)', bind_events)
+        self.assertNotIn("data-account-proxy-page-back", selector_page)
+        self.assertNotIn("min-height: calc(100dvh", shell_rule)
+        self.assertNotIn(".account-proxy-selector-shell::before", self.styles)
+
     def test_account_create_uses_the_full_editor_instead_of_the_legacy_form(self):
         editor = self._function_source("renderAccountEditorForm")
         identity = self._function_source("renderAccountIdentityFields")

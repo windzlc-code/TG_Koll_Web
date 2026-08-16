@@ -7335,7 +7335,7 @@ function setView(view) {
   else window.PersonaDashboard?.unmount?.();
   if (view === "tasks") loadTasks();
   if (view === "billing") loadBilling().catch(() => {});
-  if (view === "social" || view === "accounts" || view === "proxy_selector") scheduleSocialViewRefresh(view);
+  if (view === "social" || view === "accounts") scheduleSocialViewRefresh(view);
   else cancelScheduledSocialViewRefresh();
   if (view === "video_workspace") {
     syncVideoWorkspaceRoute();
@@ -26174,7 +26174,9 @@ async function loadSocial({ render = true, force = false } = {}) {
   if (render) {
     clearAccountPasswordRevealState();
     renderSocialAccounts();
-    if (state.view === "proxy_selector") renderAccountProxySelectorPage();
+    if (state.view === "proxy_selector" && !$("accountProxySelectorPage")?.querySelector(".account-proxy-selector-shell")) {
+      renderAccountProxySelectorPage();
+    }
     renderSocialTasks();
     syncStandaloneSocialForm();
     if (isPersonaWorkspaceModule()) renderPersonaModule();
@@ -28739,7 +28741,6 @@ function openAccountProxySelectorPage({ accountId = "", initialProxyId = null, m
   }
   syncAccountProxySelectorRoute(true);
   setView("proxy_selector");
-  renderAccountProxySelectorPage();
   scrollConsolePageToTop();
   return true;
 }
@@ -28776,7 +28777,6 @@ function renderAccountProxySelectorPage() {
   page.dataset.accountProxyType = page.dataset.accountProxyType || "supplier";
   page.innerHTML = `<section class="account-proxy-selector-shell proxy-purchase-legacy-theme">
     <header class="account-proxy-selector-head">
-      <button type="button" class="account-proxy-selector-back" data-account-proxy-page-back title="返回账号" aria-label="返回账号">${renderPersonaProfileEditorBackIcon()}</button>
       <div><strong>选择代理</strong><p>${esc(account ? accountDisplayName(account) : `${platformLabel(state.accountPoolPlatform)} 新账号`)} · 选择要绑定的代理 IP</p></div>
       <button type="button" class="account-proxy-selector-close" data-account-proxy-page-close title="关闭" aria-label="关闭"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12"></path><path d="M18 6 6 18"></path></svg></button>
     </header>
@@ -28835,7 +28835,7 @@ async function completeAccountProxySelectorSelection(page, proxyId = "") {
 async function handleAccountProxySelectorClick(event) {
   const page = $("accountProxySelectorPage");
   if (!page || state.view !== "proxy_selector") return;
-  if (event.target.closest("[data-account-proxy-page-back], [data-account-proxy-page-close]")) {
+  if (event.target.closest("[data-account-proxy-page-close]")) {
     closeAccountProxySelectorPage();
     return;
   }
@@ -34218,7 +34218,6 @@ function bindEvents() {
     handleAccountProxySelectorClick(event)
       .catch((error) => showMsg("socialMsg", error.detail || error.message || "代理操作失败", false));
   });
-  $("accountProxySelectorPage")?.addEventListener("input", handleAccountProxySelectorFilterChange);
   $("accountProxySelectorPage")?.addEventListener("change", handleAccountProxySelectorFilterChange);
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click", async (event) => {
     const personaMobileToggle = event.target.closest("[data-persona-mobile-list-toggle]");
@@ -34744,6 +34743,9 @@ async function init() {
   const socialReady = loadSocial({ render: false }).then(() => {
     if (window.matchMedia("(max-width: 820px)").matches) renderSocialAccounts();
     updateAccountStatusViews();
+    if (state.view === "proxy_selector" && !$("accountProxySelectorPage")?.querySelector(".account-proxy-selector-shell")) {
+      renderAccountProxySelectorPage();
+    }
     consumeGoogleAccountSessionResult();
     if (!hasPersonaBootstrap || isPersonaWorkspaceModule() || state.activeModule === "publishing" || state.activeModule === "automation") scheduleWorkspaceRender(false);
   }).catch(() => {});
