@@ -71,6 +71,7 @@ class CRMOPCLiveAdapterTests(unittest.TestCase):
 
     @staticmethod
     def _live_result():
+        current = datetime.now(timezone.utc)
         return {
             "ok": True,
             "liveOnly": True,
@@ -84,6 +85,7 @@ class CRMOPCLiveAdapterTests(unittest.TestCase):
                     "sourceUrl": "https://www.threads.net/@low/post/1",
                     "engagement": {"likes": 3, "comments": 0, "shares": 0},
                     "capturedAt": "2026-08-10T00:00:00Z",
+                    "publishedAt": (current - timedelta(days=2)).isoformat(),
                 },
                 {
                     "id": "candidate-high",
@@ -92,6 +94,7 @@ class CRMOPCLiveAdapterTests(unittest.TestCase):
                     "content": "high engagement",
                     "sourceUrl": "https://www.threads.com/@high/post/2",
                     "metrics": {"likeCount": 1, "replyCount": 4, "repostCount": 2},
+                    "publishedAt": (current - timedelta(days=1)).isoformat(),
                 },
                 {
                     "id": "instagram-result",
@@ -291,6 +294,42 @@ class CRMOPCLiveAdapterTests(unittest.TestCase):
             )
         self.assertEqual(observed["freshnessDays"], 7)
         self.assertEqual([row["id"] for row in result["data"]], ["recent"])
+        self.assertEqual(result["timeWindow"]["excluded_older"], 1)
+        self.assertEqual(result["timeWindow"]["excluded_unknown"], 1)
+
+    def test_default_time_window_is_enforced_on_returned_rows(self):
+        current = datetime.now(timezone.utc)
+        with db_module.db() as conn:
+            result = search_threads_live(
+                conn,
+                TenantContext(self.user_id),
+                {"query": "AI 营销", "accountId": "threads-live"},
+                executor=lambda _request: {
+                    "ok": True,
+                    "liveOnly": True,
+                    "candidates": [
+                        {
+                            "id": "recent-default",
+                            "platform": "threads",
+                            "sourceUrl": "https://www.threads.com/@recent/post/default",
+                            "publishedAt": (current - timedelta(days=1)).isoformat(),
+                        },
+                        {
+                            "id": "old-default",
+                            "platform": "threads",
+                            "sourceUrl": "https://www.threads.com/@old/post/default",
+                            "publishedAt": (current - timedelta(days=8)).isoformat(),
+                        },
+                        {
+                            "id": "unknown-default",
+                            "platform": "threads",
+                            "sourceUrl": "https://www.threads.com/@unknown/post/default",
+                        },
+                    ],
+                },
+            )
+        self.assertEqual([row["id"] for row in result["data"]], ["recent-default"])
+        self.assertEqual(result["timeWindow"]["lookback_days"], 7)
         self.assertEqual(result["timeWindow"]["excluded_older"], 1)
         self.assertEqual(result["timeWindow"]["excluded_unknown"], 1)
 

@@ -69,6 +69,10 @@ def test_collection_result_creates_one_deduplicated_pool_and_is_idempotent(crm_d
                     "profileUrl": "https://www.threads.com/@alpha.user",
                     "sourceUrl": "https://www.threads.com/@alpha.user/post/one",
                     "keyword": "mortgage",
+                    "audience_tier": "precision",
+                    "audience_reason": "multiple_persona_signals",
+                    "audience_matched_groups": ["industry", "need"],
+                    "audience_matched_keywords": ["mortgage", "monthly payment"],
                 },
                 {"username": "alpha.user", "displayName": "duplicate"},
                 {"username": "Beta_User", "platform": "threads"},
@@ -89,6 +93,14 @@ def test_collection_result_creates_one_deduplicated_pool_and_is_idempotent(crm_d
             "SELECT COUNT(*) FROM crm_events WHERE user_id=? AND event_type='collection_lead_captured'",
             (user_id,),
         ).fetchone()[0] == 2
+        persisted = conn.execute(
+            "SELECT tags_json,profile_json FROM crm_leads WHERE user_id=? AND username='alpha.user'",
+            (user_id,),
+        ).fetchone()
+        assert "audience:precision" in json.loads(persisted["tags_json"])
+        profile = json.loads(persisted["profile_json"])
+        assert profile["audienceTier"] == "precision"
+        assert profile["audienceMatchedGroups"] == ["industry", "need"]
 
 
 def test_collection_profile_requires_dom_proved_profile_identity(crm_db) -> None:

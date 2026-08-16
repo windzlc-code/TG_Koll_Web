@@ -414,10 +414,10 @@ def search_threads_live(
         payload.get("lookbackDays")
         or payload.get("lookback_days")
         or payload.get("freshnessDays")
+        or request["freshnessDays"]
     )
-    if lookback_value is not None:
-        time_window = filter_rows_by_collection_window(rows, lookback_value)
-        rows = [dict(item) for item in time_window["data"]]
+    time_window = filter_rows_by_collection_window(rows, lookback_value)
+    rows = [dict(item) for item in time_window["data"]]
 
     audience: dict[str, Any] | None = None
     persona = payload.get("persona")

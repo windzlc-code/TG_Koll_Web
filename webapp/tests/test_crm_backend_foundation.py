@@ -3,8 +3,10 @@ import base64
 import os
 import sqlite3
 import tempfile
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -74,6 +76,17 @@ class CRMBackendFoundationTests(unittest.TestCase):
             actor_user_id=self.admin_id,
         )
 
+    def _grant_dm_consent(self, conn: sqlite3.Connection, lead_id: str) -> None:
+        now = 1_700_000_000
+        conn.execute(
+            """
+            INSERT INTO crm_events(
+              id,user_id,lead_id,event_type,occurred_at,payload_json,active,created_at,updated_at
+            ) VALUES (?,?,?,?,?,'{}',1,?,?)
+            """,
+            (f"consent-{lead_id}", self.user_id, str(lead_id), "consent_verified", now, now, now),
+        )
+
     def test_schema_contains_native_crm_tables_and_indexes(self):
         expected = {
             "user_module_access", "crm_workflows", "crm_workflow_steps", "crm_action_ledger",
@@ -104,6 +117,7 @@ class CRMBackendFoundationTests(unittest.TestCase):
             return {"social_task_id": "social_crm_1"}
 
         with db_module.db() as conn:
+            self._grant_dm_consent(conn, "lead-1")
             workflow = create_workflow_atomic(
                 conn,
                 user_id=self.user_id,
@@ -115,6 +129,7 @@ class CRMBackendFoundationTests(unittest.TestCase):
                 actions=[{
                     "action_type": "direct_message", "target_key": "threads:lead-1",
                     "account_id": "account-1", "content": "hello", "sku": "crm_dm_batch",
+                    "payload": {"lead_id": "lead-1"},
                 }],
                 billing_adapter=billing_adapter,
                 social_task_adapter=social_adapter,
@@ -188,6 +203,9 @@ class CRMBackendFoundationTests(unittest.TestCase):
         self.assertEqual(reserves[0]["quantity"], 1)
         self.assertEqual(len(social_requests), 2)
         self.assertEqual(dispatched["actions"][1]["billing_reservation_id"], "")
+        self.assertNotIn("scheduled_at", social_requests[0])
+        self.assertGreaterEqual(int(social_requests[1]["scheduled_at"]), int(time.time()) + 179)
+        self.assertLessEqual(int(social_requests[1]["scheduled_at"]), int(time.time()) + 301)
 
     def test_write_workflow_waits_for_explicit_confirmation_before_dispatch(self):
         calls = []
@@ -201,10 +219,14 @@ class CRMBackendFoundationTests(unittest.TestCase):
             return {"social_task_id": "confirm-social"}
 
         with db_module.db() as conn:
+            self._grant_dm_consent(conn, "lead-confirm")
             waiting = create_workflow_atomic(
                 conn, user_id=self.user_id, workflow_type="direct_message", title="needs confirm",
                 input_data={}, idempotency_key="needs-confirmation",
-                actions=[{"action_type": "direct_message", "target_key": "lead-confirm", "content": "hi", "sku": "crm_dm_batch"}],
+                actions=[{
+                    "action_type": "direct_message", "target_key": "lead-confirm", "content": "hi",
+                    "sku": "crm_dm_batch", "payload": {"lead_id": "lead-confirm"},
+                }],
                 billing_adapter=billing, social_task_adapter=social,
             )
             self.assertEqual(waiting["status"], "awaiting_confirmation")
@@ -218,6 +240,48 @@ class CRMBackendFoundationTests(unittest.TestCase):
         self.assertEqual(confirmed["actions"][0]["billing_reservation_id"], "confirm-bill")
         self.assertEqual(confirmed["confirmation"]["confirmed_by"], self.user_id)
         self.assertEqual(calls, [("billing", "reserve"), ("social", "create")])
+
+    def test_direct_message_dispatch_rechecks_trust_after_preflight(self):
+        calls = []
+
+        def adapter(_conn, request):
+            calls.append(request)
+            return {"reservation_id": "unexpected", "social_task_id": "unexpected"}
+
+        with self.assertRaises(CRMError) as blocked:
+            with db_module.db() as conn:
+                self._grant_dm_consent(conn, "lead-revoked")
+                waiting = create_workflow_atomic(
+                    conn,
+                    user_id=self.user_id,
+                    workflow_type="direct_message",
+                    title="trust is rechecked",
+                    input_data={},
+                    idempotency_key="dm-trust-recheck",
+                    actions=[{
+                        "action_type": "direct_message",
+                        "target_key": "instagram:lead-revoked",
+                        "account_id": "sender-1",
+                        "content": "approved while consent exists",
+                        "payload": {"lead_id": "lead-revoked"},
+                    }],
+                    billing_adapter=adapter,
+                    social_task_adapter=adapter,
+                )
+                conn.execute(
+                    "UPDATE crm_events SET active=0 WHERE user_id=? AND lead_id=?",
+                    (self.user_id, "lead-revoked"),
+                )
+                confirm_workflow_atomic(
+                    conn,
+                    user_id=self.user_id,
+                    workflow_id=waiting["id"],
+                    confirmed_by=self.user_id,
+                    billing_adapter=adapter,
+                    social_task_adapter=adapter,
+                )
+        self.assertEqual(blocked.exception.code, "crm_direct_message_trust_evidence_required")
+        self.assertEqual(calls, [])
 
     def test_server_owned_action_contract_blocks_free_write_disguise_and_nested_secrets(self):
         with db_module.db() as conn:
@@ -393,7 +457,7 @@ class CRMBackendFoundationTests(unittest.TestCase):
                 )
         self.assertEqual(raised.exception.code, "crm_duplicate_action")
 
-    def test_direct_message_ledger_blocks_recipient_with_changed_copy_for_same_account(self):
+    def test_direct_message_ledger_blocks_recipient_across_sender_rotation(self):
         def billing(_conn, request):
             return {"reservation_id": f"bill-{request['action_id']}"}
 
@@ -403,9 +467,11 @@ class CRMBackendFoundationTests(unittest.TestCase):
         first = {
             "action_type": "direct_message", "target_key": "instagram:lead-once",
             "account_id": "sender-1", "content": "first copy",
+            "payload": {"lead_id": "lead-once"},
         }
         changed_copy = dict(first, content="a different message must not bypass recipient dedupe")
         with db_module.db() as conn:
+            self._grant_dm_consent(conn, "lead-once")
             create_workflow_atomic(
                 conn, user_id=self.user_id, workflow_type="private_outreach", title="first", input_data={},
                 idempotency_key="dm-recipient-first", confirmed_by=self.user_id, actions=[first],
@@ -420,14 +486,15 @@ class CRMBackendFoundationTests(unittest.TestCase):
                 )
         self.assertEqual(raised.exception.code, "crm_duplicate_action")
 
-        with db_module.db() as conn:
-            rotated = create_workflow_atomic(
-                conn, user_id=self.user_id, workflow_type="private_outreach", title="rotated sender", input_data={},
-                idempotency_key="dm-recipient-third", confirmed_by=self.user_id,
-                actions=[dict(changed_copy, account_id="sender-2")],
-                billing_adapter=billing, social_task_adapter=social,
-            )
-        self.assertEqual(rotated["actions"][0]["account_id"], "sender-2")
+        with self.assertRaises(CRMError) as rotated_duplicate:
+            with db_module.db() as conn:
+                create_workflow_atomic(
+                    conn, user_id=self.user_id, workflow_type="private_outreach", title="rotated sender", input_data={},
+                    idempotency_key="dm-recipient-third", confirmed_by=self.user_id,
+                    actions=[dict(changed_copy, account_id="sender-2")],
+                    billing_adapter=billing, social_task_adapter=social,
+                )
+        self.assertEqual(rotated_duplicate.exception.code, "crm_duplicate_action")
 
     def test_adapter_failure_rolls_back_parent_step_ledger_and_reservation_side_effect(self):
         def billing_adapter(conn, request):
@@ -1037,6 +1104,7 @@ class CRMBackendFoundationTests(unittest.TestCase):
                     "platform": "threads",
                     "likeCount": 12,
                     "replyCount": 4,
+                    "publishedAt": datetime.now(timezone.utc).isoformat(),
                 }],
             }
 

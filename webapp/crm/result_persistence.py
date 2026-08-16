@@ -135,8 +135,16 @@ def _normalize_candidate(
         or source_url
     )
     raw_tags = _list(raw.get("tags"))
+    audience_tier = str(raw.get("audience_tier") or raw.get("audienceTier") or "").strip().lower()
+    if audience_tier not in {"precision", "expanded", "excluded"}:
+        audience_tier = ""
     tags = []
-    for tag in [*raw_tags, f"channel:{platform}", *( [f"keyword:{query}"] if query else [])]:
+    for tag in [
+        *raw_tags,
+        f"channel:{platform}",
+        *([f"keyword:{query}"] if query else []),
+        *([f"audience:{audience_tier}"] if audience_tier else []),
+    ]:
         clean = str(tag or "").strip()[:120]
         if clean and clean not in tags:
             tags.append(clean)
@@ -156,6 +164,18 @@ def _normalize_candidate(
             "likeCount": _nonnegative_int(raw.get("like_count") or raw.get("likeCount")),
             "replyCount": _nonnegative_int(raw.get("reply_count") or raw.get("replyCount")),
             "repostCount": _nonnegative_int(raw.get("repost_count") or raw.get("repostCount")),
+            "audienceTier": audience_tier,
+            "audienceReason": str(raw.get("audience_reason") or raw.get("audienceReason") or "").strip()[:160],
+            "audienceMatchedGroups": [
+                str(item or "").strip()[:120]
+                for item in _list(raw.get("audience_matched_groups") or raw.get("audienceMatchedGroups"))[:20]
+                if str(item or "").strip()
+            ],
+            "audienceMatchedKeywords": [
+                str(item or "").strip()[:120]
+                for item in _list(raw.get("audience_matched_keywords") or raw.get("audienceMatchedKeywords"))[:50]
+                if str(item or "").strip()
+            ],
         },
     }
 
@@ -303,7 +323,29 @@ def persist_collection_result(
     for candidate in normalized:
         identity = _username(candidate.get("platform_user_key") or candidate.get("username"))
         if identity:
-            deduplicated[(_platform(candidate.get("platform")), identity)] = candidate
+            key = (_platform(candidate.get("platform")), identity)
+            previous = deduplicated.get(key)
+            if previous is None:
+                deduplicated[key] = candidate
+                continue
+            merged = dict(previous)
+            merged["tags"] = list(
+                dict.fromkeys(
+                    [
+                        *(str(item) for item in previous.get("tags") or []),
+                        *(str(item) for item in candidate.get("tags") or []),
+                    ]
+                )
+            )[:100]
+            profile = dict(previous.get("profile") or {})
+            for field, value in dict(candidate.get("profile") or {}).items():
+                if value not in (None, "", [], {}):
+                    profile[field] = value
+            merged["profile"] = profile
+            if not str(merged.get("display_name") or "").strip():
+                merged["display_name"] = candidate.get("display_name") or ""
+            merged["score"] = max(_number(previous.get("score")), _number(candidate.get("score")))
+            deduplicated[key] = merged
     candidates = list(deduplicated.values())[:limit]
     if not candidates:
         return {"pool_id": "", "collected": 0, "new_leads": 0, "new_members": 0, "duplicates_removed": len(normalized)}

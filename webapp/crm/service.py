@@ -136,6 +136,50 @@ def _record_confirmed_action_event(
     )
 
 
+def _record_platform_moderation_event(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    workflow_id: str,
+    social_task_id: str,
+    account_id: str,
+    watchdog: dict[str, Any],
+) -> None:
+    """Persist one account-scoped moderation signal for the preflight cooldown gate."""
+
+    clean_account_id = str(account_id or "").strip()
+    clean_task_id = str(social_task_id or "").strip()
+    if not clean_account_id or not clean_task_id:
+        return
+    current = now_ts()
+    payload = {
+        "account_id": clean_account_id,
+        # The local account id is the stable sender identity used by preflight.
+        "sender_username": clean_account_id,
+        "social_task_id": clean_task_id,
+        "reason": str(watchdog.get("reason") or "").strip(),
+        "source_text": str(watchdog.get("source_text") or "").strip()[:500],
+    }
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO crm_events(
+          id,user_id,lead_id,workflow_id,event_type,occurred_at,payload_json,
+          import_batch_id,active,legacy_id,legacy_payload_json,schema_version,created_at,updated_at
+        ) VALUES (?,?, '',?,'platform_moderation_detected',?,?,'',1,?,'{}',1,?,?)
+        """,
+        (
+            f"crm_event_moderation_{clean_task_id}",
+            int(user_id),
+            str(workflow_id),
+            current,
+            dumps(payload),
+            f"platform_moderation:{clean_task_id}",
+            current,
+            current,
+        ),
+    )
+
+
 def crm_data_dir() -> Path:
     return Path(str(os.getenv("WEBAPP_DATA_DIR", "webapp_data") or "webapp_data")).resolve()
 
@@ -406,22 +450,62 @@ def sync_social_child_tasks(
         if row["social_status"] is None:
             continue
         status = str(row["social_status"] or "")
-        result = loads(row["result_json"], {})
+        result_json = str(row["result_json"] or "{}")
+        social_error = str(row["social_error"] or "")
+        social_updated_at = int(row["social_updated_at"] or 0)
+        result = loads(result_json, {})
         watchdog = classify_task_attention(
             {
                 "status": "queued" if status in {"queued", "preparing"} else status,
-                "updated_at": int(row["social_updated_at"] or 0),
-                "error": str(row["social_error"] or ""),
+                "updated_at": social_updated_at,
+                "error": social_error,
                 "result": result,
             }
         )
         if watchdog is not None:
-            status = "need_manual"
             watchdog_error = dumps({"code": watchdog["code"], "reason": watchdog["reason"]})
-            conn.execute(
-                "UPDATE social_automation_tasks SET status='need_manual',error=?,updated_at=? WHERE id=? AND user_id=?",
-                (watchdog_error, now_ts(), str(row["social_task_id"]), int(user_id)),
+            watchdog_updated_at = now_ts()
+            changed = conn.execute(
+                """
+                UPDATE social_automation_tasks
+                SET status='need_manual',error=?,updated_at=?
+                WHERE id=? AND user_id=?
+                  AND status IN ('preparing','queued','running','need_manual') AND updated_at=?
+                """,
+                (
+                    watchdog_error,
+                    watchdog_updated_at,
+                    str(row["social_task_id"]),
+                    int(user_id),
+                    social_updated_at,
+                ),
             )
+            if changed.rowcount:
+                status = "need_manual"
+                social_error = watchdog_error
+                social_updated_at = watchdog_updated_at
+                if str(watchdog.get("code") or "") == "platform_moderation_cooldown":
+                    _record_platform_moderation_event(
+                        conn,
+                        user_id=int(user_id),
+                        workflow_id=str(workflow_id),
+                        social_task_id=str(row["social_task_id"]),
+                        account_id=str(row["account_id"] or ""),
+                        watchdog=watchdog,
+                    )
+            else:
+                fresh = conn.execute(
+                    "SELECT status,result_json,error,updated_at FROM social_automation_tasks WHERE id=? AND user_id=?",
+                    (str(row["social_task_id"]), int(user_id)),
+                ).fetchone()
+                if fresh is None:
+                    continue
+                status = str(fresh["status"] or "")
+                result_json = str(fresh["result_json"] or "{}")
+                social_error = str(fresh["error"] or "")
+                social_updated_at = int(fresh["updated_at"] or 0)
+                result = loads(result_json, {})
+                watchdog = None
         if status == "need_manual":
             child_needs_manual = True
         payload = loads(row["payload_json"], {})
@@ -451,7 +535,7 @@ def sync_social_child_tasks(
             continue
         before = str(row["action_state"] or "")
         evidence = _normalized_action_evidence(str(row["social_task_id"]), result)
-        evidence_error = str(row["social_error"] or "")
+        evidence_error = social_error
         if watchdog is not None:
             evidence_error = str(watchdog["code"])
         if status == "success" and not write_proved:
@@ -479,11 +563,11 @@ def sync_social_child_tasks(
                 payload=event_payload,
                 result=result,
             )
-        step_error = watchdog_error if watchdog is not None else str(row["social_error"] or "")
-        step_updated_at = now_ts() if watchdog is not None else int(row["social_updated_at"] or now_ts())
+        step_error = watchdog_error if watchdog is not None else social_error
+        step_updated_at = social_updated_at or now_ts()
         conn.execute(
             "UPDATE crm_workflow_steps SET status=?,result_json=?,error_code=?,updated_at=? WHERE id=? AND user_id=?",
-            (status, row["result_json"], step_error, step_updated_at, str(row["step_id"]), int(user_id)),
+            (status, result_json, step_error, step_updated_at, str(row["step_id"]), int(user_id)),
         )
         if before != desired:
             synced += 1
@@ -538,7 +622,9 @@ def reconcile_all_due(
     workflows = 0
     actions = 0
     errors: list[dict[str, Any]] = []
-    for row in rows:
+    for index, row in enumerate(rows):
+        savepoint = f"crm_reconcile_{index}"
+        conn.execute(f"SAVEPOINT {savepoint}")
         try:
             result = sync_social_child_tasks(
                 conn,
@@ -549,6 +635,9 @@ def reconcile_all_due(
             )
             workflows += 1
             actions += int(result["synced_actions"])
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
         except Exception as exc:
+            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
             errors.append({"workflow_id": str(row["id"]), "error": type(exc).__name__})
     return {"workflows": workflows, "actions": actions, "errors": errors, "has_more": len(rows) >= min(max(int(limit or 200), 1), 1000)}

@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from .comment_policy import assess_public_comment_content
 from .errors import CRMError
 from .legacy_operations import Provider, TenantContext, normalize_locale
 
@@ -630,6 +631,7 @@ def generate_public_comment_drafts(
         except Exception:
             warning = "provider_failed_or_invalid"
 
+    accepted_comments: list[str] = []
     for draft in drafts:
         lead = next(lead for lead, _url in candidates if _clean(lead.get("id"), 180) == draft["leadId"])
         if mortgage and not _mortgage_comment_matches(draft["comment"], lead):
@@ -646,6 +648,40 @@ def generate_public_comment_drafts(
             payload.get("mentionSourceAuthor") is True,
         )
         draft["mentionUsername"] = _source_author(draft["sourcePostUrl"]) if payload.get("mentionSourceAuthor") is True else ""
+        content_policy = assess_public_comment_content(
+            comment=draft["comment"],
+            recent_comments=accepted_comments,
+        )
+        if not content_policy["allowed"]:
+            fallback = _first_contact_comment(
+                _fallback_comment(pool, lead, locale),
+                pool,
+                lead,
+                locale,
+                hook,
+                strategy,
+                strategy_message,
+            )
+            fallback = _add_mention(
+                _PROMISE_RE.sub("", fallback),
+                draft["sourcePostUrl"],
+                payload.get("mentionSourceAuthor") is True,
+            )
+            fallback_policy = assess_public_comment_content(
+                comment=fallback,
+                recent_comments=accepted_comments,
+            )
+            if fallback_policy["allowed"]:
+                draft["comment"] = fallback
+                draft["policyFallback"] = True
+                content_policy = fallback_policy
+            else:
+                draft["selected"] = False
+                draft["blockedReason"] = str(fallback_policy.get("reason") or content_policy.get("reason") or "")
+                content_policy = fallback_policy
+        draft["contentPolicy"] = content_policy
+        if draft.get("selected") is True:
+            accepted_comments.append(str(draft.get("comment") or ""))
     return {"data": drafts, "engine": engine, "warning": warning, "progress": progress}
 
 

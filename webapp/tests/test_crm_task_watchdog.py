@@ -26,6 +26,24 @@ def test_watchdog_detects_platform_blockers_before_stale_thresholds():
         assert result["code"] == code
 
 
+def test_watchdog_detects_platform_moderation_from_structured_result_or_warning():
+    structured = classify_task_attention(
+        {
+            "status": "running",
+            "updatedAt": NOW,
+            "result": {"moderationDetected": True, "moderationReason": "平台移除留言"},
+        },
+        current_time=NOW,
+    )
+    warning = classify_task_attention(
+        {"status": "running", "updatedAt": NOW, "warnings": ["removed your comment as spam"]},
+        current_time=NOW,
+    )
+    assert structured and structured["code"] == "platform_moderation_cooldown"
+    assert structured["reason"] == "平台移除留言"
+    assert warning and warning["code"] == "platform_moderation_cooldown"
+
+
 def test_queued_and_running_tasks_use_120_and_240_second_defaults():
     queued = classify_task_attention(
         {"status": "queued", "created_at": NOW - 120},

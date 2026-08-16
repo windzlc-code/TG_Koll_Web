@@ -10,6 +10,8 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from .errors import CRMError
+from .direct_message_policy import evaluate_direct_message_trust
+from .engagement_policy import evaluate_public_comment_rate, next_public_comment_delay
 
 JsonDict = dict[str, Any]
 Adapter = Callable[[sqlite3.Connection, JsonDict], JsonDict]
@@ -352,8 +354,8 @@ def find_active_duplicate_action(
 ) -> sqlite3.Row | None:
     """Return the active ledger row that makes a platform write unsafe to repeat.
 
-    A private-message recipient may only be contacted once per sending account,
-    regardless of copy changes.  Other write actions retain the legacy
+    A private-message recipient may only be contacted once per tenant,
+    regardless of sender rotation or copy changes.  Other write actions retain the legacy
     target-and-content policy so distinct public replies remain possible.
     """
 
@@ -362,12 +364,12 @@ def find_active_duplicate_action(
         return conn.execute(
             f"""
             SELECT id,workflow_id,state FROM crm_action_ledger
-            WHERE user_id=? AND account_id=? AND action_type='direct_message' AND target_key=?
+            WHERE user_id=? AND action_type='direct_message' AND target_key=?
               AND state IN ({placeholders})
             ORDER BY created_at DESC LIMIT 1
             """,
             (
-                int(user_id), str(account_id or ""), str(target_key),
+                int(user_id), str(target_key),
                 *ACTIVE_DUPLICATE_STATES,
             ),
         ).fetchone()
@@ -651,6 +653,20 @@ def _dispatch_action_atomic(
         step_id=str(step_id),
         action=action,
     )
+    if str(action.get("action_type") or "") == "direct_message":
+        trust_policy = evaluate_direct_message_trust(
+            conn,
+            user_id=int(user_id),
+            account_id=str(action.get("account_id") or ""),
+            action=dict(action),
+        )
+        if not trust_policy["allowed"]:
+            raise CRMError(
+                f"crm_direct_message_{trust_policy['code']}",
+                "crm.errors.actionBlocked",
+                status_code=409,
+                details={"trust": trust_policy},
+            )
     sku = str(action.get("sku") or "").strip()
     if bool(action.get("write", True)) and not sku:
         raise CRMError("crm_billing_sku_required", "crm.errors.billingSkuRequired", status_code=409)
@@ -691,14 +707,81 @@ def _dispatch_action_atomic(
             raise CRMError("crm_billing_reservation_failed", "crm.errors.billingReservationFailed", status_code=503, retryable=True)
     action_for_child = dict(action)
     action_for_child["billing_reservation_id"] = reservation_id
+    scheduled_at = 0
+    if str(action.get("action_type") or "") == "public_comment":
+        current = now_ts()
+        rate_events: list[JsonDict] = []
+        rows = conn.execute(
+            """
+            SELECT state,created_at,updated_at
+            FROM crm_action_ledger
+            WHERE user_id=? AND account_id=? AND action_type='public_comment'
+              AND id<>? AND state IN ('reserved','submitting','submitted','confirmed','unknown')
+              AND updated_at>=?
+            ORDER BY updated_at DESC
+            """,
+            (int(user_id), str(action.get("account_id") or ""), str(action_id), current - 86400),
+        ).fetchall()
+        rate_events.extend({
+            "event_type": (
+                "engagement_touch_published"
+                if str(row["state"] or "") == "confirmed"
+                else "engagement_touch_submitted"
+            ),
+            "sender_username": str(action.get("account_id") or ""),
+            "occurred_at": int(row["updated_at"] or row["created_at"] or 0),
+        } for row in rows)
+        try:
+            moderation_rows = conn.execute(
+                """
+                SELECT event_type,occurred_at,payload_json
+                FROM crm_events
+                WHERE user_id=? AND event_type='platform_moderation_detected'
+                  AND active=1 AND occurred_at>=?
+                ORDER BY occurred_at DESC
+                """,
+                (int(user_id), current - 86400),
+            ).fetchall()
+            for row in moderation_rows:
+                payload = loads(row["payload_json"], {})
+                if str(payload.get("account_id") or payload.get("sender_username") or "") != str(action.get("account_id") or ""):
+                    continue
+                rate_events.append({
+                    "event_type": "platform_moderation_detected",
+                    "sender_username": str(action.get("account_id") or ""),
+                    "occurred_at": int(row["occurred_at"] or 0),
+                    "reason": str(payload.get("reason") or ""),
+                })
+        except sqlite3.OperationalError:
+            pass
+        rate = evaluate_public_comment_rate(
+            events=rate_events,
+            sender_username=str(action.get("account_id") or ""),
+            current_time=current,
+        )
+        wait_seconds = int(rate.get("wait_seconds") or 0)
+        if str(rate.get("reason") or "") == "minimum_interval" and wait_seconds:
+            wait_seconds += max(0, next_public_comment_delay() - 180)
+        if wait_seconds:
+            scheduled_at = current + wait_seconds
+            action_for_child["payload"] = {
+                **dict(action_for_child.get("payload") or {}),
+                "_crm_rate_policy": {
+                    "reason": str(rate.get("reason") or ""),
+                    "scheduled_at": scheduled_at,
+                },
+            }
+    child_request = {
+        "operation": "create", "user_id": int(user_id), "workflow_id": workflow_id,
+        "step_id": step_id, "action_id": action_id, "action": action_for_child,
+        "billing_reservation_id": reservation_id, "idempotency_key": action_idempotency_key,
+    }
+    if scheduled_at:
+        child_request["scheduled_at"] = scheduled_at
     child = _call_adapter(
         social_task_adapter,
         conn,
-        {
-            "operation": "create", "user_id": int(user_id), "workflow_id": workflow_id,
-            "step_id": step_id, "action_id": action_id, "action": action_for_child,
-            "billing_reservation_id": reservation_id, "idempotency_key": action_idempotency_key,
-        },
+        child_request,
         fallback_code="crm_child_task_failed",
         fallback_key="crm.errors.childTaskFailed",
     )

@@ -6,6 +6,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
+from .engagement_policy import is_platform_moderation_warning
+
 
 QUEUED_STALE_SECONDS = 120
 RUNNING_STALE_SECONDS = 240
@@ -121,6 +123,26 @@ def classify_task_attention(
         return None
 
     text = task_attention_text(row)
+    result = _mapping(row.get("result"))
+    moderation_detected = (
+        result.get("moderationDetected") is True
+        or result.get("moderation_detected") is True
+        or str(result.get("status") or "").strip().lower() == "removed_by_platform"
+        or is_platform_moderation_warning(text)
+    )
+    if moderation_detected:
+        reason = str(
+            result.get("moderationReason")
+            or result.get("moderation_reason")
+            or result.get("error")
+            or "平台已移除留言或标记为垃圾信息，账号需要立即冷却并人工检查。"
+        ).strip()
+        return {
+            "code": "platform_moderation_cooldown",
+            "reason": reason,
+            "source_text": text[:500],
+            "stale_for_seconds": 0,
+        }
     for code, pattern, reason in _SIGNALS:
         if pattern.search(text):
             return {"code": code, "reason": reason, "source_text": text[:500], "stale_for_seconds": 0}

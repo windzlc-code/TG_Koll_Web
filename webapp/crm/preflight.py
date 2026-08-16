@@ -11,7 +11,8 @@ from typing import Any
 
 from .errors import CRMError
 from .comment_policy import assess_public_comment_content
-from .engagement_policy import evaluate_public_comment_rate
+from .direct_message_policy import evaluate_direct_message_trust
+from .engagement_policy import PUBLIC_COMMENT_MAX_PER_DAY, evaluate_public_comment_rate
 from .repository import canonicalize_action, dumps, find_active_duplicate_action, loads
 
 
@@ -38,6 +39,7 @@ EXECUTABLE_ACTION_TYPES = {
     "instagram_group_members_inspect",
     "instagram_group_status_inspect",
 }
+
 
 # ``share`` is intentionally not executable here: the current browser worker's
 # only deterministic operation is "Copy link", which does not create a remote
@@ -120,6 +122,9 @@ def build_preflight(
     allowed: list[dict[str, Any]] = []
     duplicate_count = 0
     blocked_count = 0
+    planned_write_keys: set[tuple[str, str, str]] = set()
+    planned_comments_by_account: dict[str, list[str]] = {}
+    planned_comment_count_by_account: dict[str, int] = {}
     for index, action in enumerate(canonical):
         reason = ""
         policy: dict[str, Any] = {}
@@ -149,6 +154,10 @@ def build_preflight(
                     reason = "crm_account_needs_login"
         if not reason and bool(action.get("write")):
             content_hash = hashlib.sha256(str(action.get("content") or "").encode("utf-8")).hexdigest()
+            batch_key = (action_type, str(action["target_key"]), content_hash)
+            if batch_key in planned_write_keys:
+                reason = "crm_duplicate_action"
+                duplicate_count += 1
             duplicate = find_active_duplicate_action(
                 conn,
                 user_id=int(user_id),
@@ -157,9 +166,19 @@ def build_preflight(
                 target_key=str(action["target_key"]),
                 content_hash=content_hash,
             )
-            if duplicate is not None:
+            if not reason and duplicate is not None:
                 reason = "crm_duplicate_action"
                 duplicate_count += 1
+        if not reason and action_type == "direct_message":
+            trust_policy = evaluate_direct_message_trust(
+                conn,
+                user_id=int(user_id),
+                account_id=account_id,
+                action=action,
+            )
+            policy["trust"] = trust_policy
+            if not trust_policy["allowed"]:
+                reason = f"crm_direct_message_{trust_policy['code']}"
         if not reason and action_type == "public_comment":
             recent_comments: list[str] = []
             try:
@@ -183,6 +202,7 @@ def build_preflight(
             except sqlite3.OperationalError:
                 # Migration/bootstrap tests may not have the complete ledger yet.
                 recent_comments = []
+            recent_comments.extend(planned_comments_by_account.get(account_id, ()))
             content_policy = assess_public_comment_content(
                 comment=action.get("content"),
                 recent_comments=recent_comments,
@@ -219,20 +239,65 @@ def build_preflight(
                     }
                     for row in touch_rows
                 ]
-                rate_policy = evaluate_public_comment_rate(
-                    events=rate_events,
-                    sender_username=sender_username,
-                    current_time=now,
-                )
-                policy["rate"] = rate_policy
-                if not rate_policy["allowed"]:
-                    reason = f"crm_public_comment_{rate_policy['reason']}"
             except sqlite3.OperationalError:
                 pass
+            try:
+                moderation_rows = conn.execute(
+                    """
+                    SELECT event_type,occurred_at,payload_json
+                    FROM crm_events
+                    WHERE user_id=? AND event_type='platform_moderation_detected'
+                      AND active=1 AND occurred_at>=?
+                    ORDER BY occurred_at DESC
+                    """,
+                    (int(user_id), now - 86400),
+                ).fetchall()
+                for row in moderation_rows:
+                    payload = loads(row["payload_json"], {})
+                    if str(payload.get("account_id") or payload.get("sender_username") or "") != account_id:
+                        continue
+                    rate_events.append(
+                        {
+                            "event_type": str(row["event_type"] or ""),
+                            "sender_username": account_id,
+                            "occurred_at": int(row["occurred_at"] or 0),
+                            "reason": str(payload.get("reason") or ""),
+                        }
+                    )
+            except sqlite3.OperationalError:
+                pass
+            rate_policy = evaluate_public_comment_rate(
+                events=rate_events,
+                sender_username=account_id,
+                current_time=now,
+            )
+            policy["rate"] = rate_policy
+            if not rate_policy["allowed"]:
+                reason = f"crm_public_comment_{rate_policy['reason']}"
+            elif (
+                int(rate_policy.get("daily_count") or 0)
+                + int(planned_comment_count_by_account.get(account_id, 0))
+                >= PUBLIC_COMMENT_MAX_PER_DAY
+            ):
+                reason = "crm_public_comment_daily_public_comment_limit"
+                policy["rate"] = {
+                    **rate_policy,
+                    "allowed": False,
+                    "reason": "daily_public_comment_limit",
+                }
         if reason:
             blocked_count += 1
         else:
             allowed.append(action)
+            if bool(action.get("write")):
+                planned_write_keys.add((
+                    action_type,
+                    str(action["target_key"]),
+                    hashlib.sha256(str(action.get("content") or "").encode("utf-8")).hexdigest(),
+                ))
+            if action_type == "public_comment":
+                planned_comments_by_account.setdefault(account_id, []).append(str(action.get("content") or ""))
+                planned_comment_count_by_account[account_id] = planned_comment_count_by_account.get(account_id, 0) + 1
         decisions.append({
             "index": index,
             "action_type": action_type,
