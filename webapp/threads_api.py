@@ -71,13 +71,14 @@ def settings() -> ThreadsApiSettings:
 
 def authorization_url(state: str) -> str:
     config = settings()
-    return f"{THREADS_AUTHORIZE_URL}?{urlencode({
-        'client_id': config.app_id,
-        'redirect_uri': config.redirect_uri,
-        'scope': ','.join(config.scopes),
-        'response_type': 'code',
-        'state': state,
-    })}"
+    query = urlencode({
+        "client_id": config.app_id,
+        "redirect_uri": config.redirect_uri,
+        "scope": ",".join(config.scopes),
+        "response_type": "code",
+        "state": state,
+    })
+    return f"{THREADS_AUTHORIZE_URL}?{query}"
 
 
 def _request_json(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
