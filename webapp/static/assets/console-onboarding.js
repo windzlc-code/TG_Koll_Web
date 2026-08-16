@@ -51,8 +51,11 @@
     guided: false,
     currentStep: 0,
     host: null,
+    edgeLauncher: null,
+    homeLauncher: null,
     observer: null,
     syncFrame: 0,
+    cardPositionFrame: 0,
   };
 
   function storageKey(userId) {
@@ -81,7 +84,18 @@
   }
 
   function visibleElement(elements) {
-    return elements.find((element) => !element.hidden && element.getClientRects().length) || elements[0] || null;
+    return elements.find((element) => {
+      if (element.hidden || !element.getClientRects().length) return false;
+      const style = window.getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0
+        && rect.height > 0
+        && rect.right > 0
+        && rect.bottom > 0
+        && rect.left < document.documentElement.clientWidth
+        && rect.top < document.documentElement.clientHeight;
+    }) || null;
   }
 
   function stepTargets(step) {
@@ -100,6 +114,21 @@
     });
   }
 
+  function releaseBeaconHost(host) {
+    if (!(host instanceof HTMLElement) || host.querySelector(":scope > .console-onboarding-beacon")) return;
+    host.classList.remove("has-onboarding-beacon");
+    if (host.dataset.onboardingPositioned === "true") {
+      host.style.removeProperty("position");
+      delete host.dataset.onboardingPositioned;
+    }
+  }
+
+  function removeBeacon(beacon) {
+    const host = beacon.parentElement;
+    beacon.remove();
+    releaseBeaconHost(host);
+  }
+
   function syncBeacons() {
     if (!runtime.eligible) return;
     const progress = readProgress();
@@ -108,42 +137,47 @@
       return;
     }
     steps.forEach((step, index) => {
-      stepTargets(step).forEach((target) => {
-        const beaconHost = target.parentElement;
-        if (!beaconHost) return;
-        target.dataset.onboardingTarget = step.id;
-        beaconHost.classList.add("has-onboarding-beacon");
-        if (window.getComputedStyle(beaconHost).position === "static") {
-          beaconHost.dataset.onboardingPositioned = "true";
-          beaconHost.style.position = "relative";
-        }
-        const targetRect = target.getBoundingClientRect();
-        const hostRect = beaconHost.getBoundingClientRect();
-        const beaconLeft = targetRect.right - hostRect.left - 10;
-        const beaconTop = targetRect.top - hostRect.top + (targetRect.height / 2);
-        const existing = beaconHost.querySelector(`:scope > .console-onboarding-beacon[data-target-id="${step.id}"]`);
-        if (existing) {
-          existing.style.setProperty("--onboarding-beacon-left", `${beaconLeft}px`);
-          existing.style.setProperty("--onboarding-beacon-top", `${beaconTop}px`);
-          return;
-        }
-        const beacon = document.createElement("button");
-        beacon.type = "button";
-        beacon.className = "console-onboarding-beacon";
-        beacon.dataset.step = String(index);
-        beacon.dataset.targetId = step.id;
-        beacon.style.setProperty("--onboarding-beacon-left", `${beaconLeft}px`);
-        beacon.style.setProperty("--onboarding-beacon-top", `${beaconTop}px`);
-        beacon.setAttribute("aria-label", `${BEACON_LABEL}：${step.title}`);
-        beacon.title = step.title;
-        beacon.innerHTML = '<span aria-hidden="true">!</span>';
-        beacon.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          openReminder(index);
-        });
-        beaconHost.appendChild(beacon);
+      const target = activeTarget(step);
+      const beaconHost = target?.parentElement || null;
+      document.querySelectorAll(`.console-onboarding-beacon[data-target-id="${step.id}"]`).forEach((beacon) => {
+        if (!beaconHost || beacon.parentElement !== beaconHost) removeBeacon(beacon);
       });
+      stepTargets(step).forEach((candidate) => {
+        if (candidate !== target) delete candidate.dataset.onboardingTarget;
+      });
+      if (!target || !beaconHost) return;
+      target.dataset.onboardingTarget = step.id;
+      beaconHost.classList.add("has-onboarding-beacon");
+      if (window.getComputedStyle(beaconHost).position === "static") {
+        beaconHost.dataset.onboardingPositioned = "true";
+        beaconHost.style.position = "relative";
+      }
+      const targetRect = target.getBoundingClientRect();
+      const hostRect = beaconHost.getBoundingClientRect();
+      const beaconLeft = targetRect.right - hostRect.left - 2;
+      const beaconTop = targetRect.top - hostRect.top + 2;
+      const existing = beaconHost.querySelector(`:scope > .console-onboarding-beacon[data-target-id="${step.id}"]`);
+      if (existing) {
+        existing.style.setProperty("--onboarding-beacon-left", `${beaconLeft}px`);
+        existing.style.setProperty("--onboarding-beacon-top", `${beaconTop}px`);
+        return;
+      }
+      const beacon = document.createElement("button");
+      beacon.type = "button";
+      beacon.className = "console-onboarding-beacon";
+      beacon.dataset.step = String(index);
+      beacon.dataset.targetId = step.id;
+      beacon.style.setProperty("--onboarding-beacon-left", `${beaconLeft}px`);
+      beacon.style.setProperty("--onboarding-beacon-top", `${beaconTop}px`);
+      beacon.setAttribute("aria-label", `${BEACON_LABEL}：${step.title}`);
+      beacon.title = step.title;
+      beacon.innerHTML = '<span aria-hidden="true">!</span>';
+      beacon.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openReminder(index);
+      });
+      beaconHost.appendChild(beacon);
     });
   }
 
@@ -152,11 +186,13 @@
     runtime.syncFrame = window.requestAnimationFrame(() => {
       runtime.syncFrame = 0;
       syncBeacons();
+      syncLaunchers();
+      scheduleCardPosition();
     });
   }
 
   function removeBeacons() {
-    document.querySelectorAll(".console-onboarding-beacon").forEach((element) => element.remove());
+    document.querySelectorAll(".console-onboarding-beacon").forEach(removeBeacon);
     document.querySelectorAll(".has-onboarding-beacon").forEach((element) => {
       element.classList.remove("has-onboarding-beacon");
       if (element.dataset.onboardingPositioned === "true") {
@@ -167,6 +203,61 @@
     document.querySelectorAll("[data-onboarding-target]").forEach((element) => {
       delete element.dataset.onboardingTarget;
     });
+  }
+
+  function resumeStep() {
+    const progress = readProgress();
+    const step = progress.status === "active" ? Number(progress.step || 0) : 0;
+    return Math.max(0, Math.min(step, steps.length - 1));
+  }
+
+  function launchReminder() {
+    runtime.eligible = true;
+    openReminder(resumeStep());
+  }
+
+  function ensureEdgeLauncher() {
+    if (runtime.edgeLauncher?.isConnected) return runtime.edgeLauncher;
+    const launcher = document.createElement("button");
+    launcher.id = "consoleOnboardingEdgeLauncher";
+    launcher.className = "console-onboarding-edge-launcher";
+    launcher.type = "button";
+    launcher.setAttribute("aria-label", "打开新手提示");
+    launcher.title = "新手提示";
+    launcher.innerHTML = '<span aria-hidden="true">!</span>';
+    launcher.addEventListener("click", launchReminder);
+    document.body.appendChild(launcher);
+    runtime.edgeLauncher = launcher;
+    return launcher;
+  }
+
+  function ensureHomeLauncher() {
+    const page = document.querySelector('[data-panel="persona_dashboard"] .persona-dashboard-page');
+    if (!page) return null;
+    let slot = page.querySelector(":scope > .console-onboarding-home-slot");
+    if (!slot) {
+      slot = document.createElement("div");
+      slot.className = "console-onboarding-home-slot";
+      page.appendChild(slot);
+    }
+    if (runtime.homeLauncher?.isConnected) return runtime.homeLauncher;
+    const launcher = document.createElement("button");
+    launcher.id = "consoleOnboardingHomeLauncher";
+    launcher.className = "console-onboarding-home-launcher";
+    launcher.type = "button";
+    launcher.textContent = "新手提示";
+    launcher.addEventListener("click", launchReminder);
+    slot.appendChild(launcher);
+    runtime.homeLauncher = launcher;
+    return launcher;
+  }
+
+  function syncLaunchers() {
+    if (!runtime.eligible) return;
+    const completed = readProgress().status === "completed";
+    ensureEdgeLauncher().hidden = completed;
+    const homeLauncher = ensureHomeLauncher();
+    if (homeLauncher) homeLauncher.hidden = !completed;
   }
 
   function ensureHost() {
@@ -188,10 +279,54 @@
     runtime.guided = false;
   }
 
-  function renderProgressDots(index) {
-    return steps.map((_, itemIndex) => (
-      `<span class="${itemIndex === index ? "is-current" : itemIndex < index ? "is-done" : ""}" aria-hidden="true"></span>`
-    )).join("");
+  function clamp(value, minimum, maximum) {
+    return Math.min(Math.max(value, minimum), maximum);
+  }
+
+  function positionCard(step = steps[runtime.currentStep] || steps[0]) {
+    const card = runtime.host?.querySelector(".console-onboarding-card");
+    if (!card) return;
+    const target = activeTarget(step);
+    const margin = 10;
+    const viewportWidth = document.documentElement.clientWidth;
+    const viewportHeight = document.documentElement.clientHeight;
+    const cardRect = card.getBoundingClientRect();
+    let left = viewportWidth - cardRect.width - margin;
+    let top = viewportHeight - cardRect.height - margin;
+    let placement = "floating";
+    if (target) {
+      const targetRect = target.getBoundingClientRect();
+      const desktopSidebarTarget = viewportWidth > 820
+        && targetRect.right < 340
+        && viewportWidth - targetRect.right > cardRect.width + (margin * 2);
+      if (desktopSidebarTarget) {
+        left = targetRect.right + margin;
+        top = clamp(targetRect.top, margin, viewportHeight - cardRect.height - margin);
+        placement = "right";
+      } else {
+        left = clamp(
+          targetRect.left + (targetRect.width / 2) - (cardRect.width / 2),
+          margin,
+          viewportWidth - cardRect.width - margin,
+        );
+        const fitsAbove = targetRect.top - cardRect.height - margin >= margin;
+        top = fitsAbove
+          ? targetRect.top - cardRect.height - margin
+          : clamp(targetRect.bottom + margin, margin, viewportHeight - cardRect.height - margin);
+        placement = fitsAbove ? "top" : "bottom";
+      }
+    }
+    card.dataset.placement = placement;
+    card.style.setProperty("--onboarding-card-left", `${Math.round(left)}px`);
+    card.style.setProperty("--onboarding-card-top", `${Math.round(top)}px`);
+  }
+
+  function scheduleCardPosition(step = steps[runtime.currentStep] || steps[0]) {
+    if (runtime.cardPositionFrame) window.cancelAnimationFrame(runtime.cardPositionFrame);
+    runtime.cardPositionFrame = window.requestAnimationFrame(() => {
+      runtime.cardPositionFrame = 0;
+      positionCard(step);
+    });
   }
 
   function openReminder(index = 0) {
@@ -204,16 +339,17 @@
     host.innerHTML = `
       <section class="console-onboarding-card is-reminder" role="dialog" aria-modal="false" aria-labelledby="consoleOnboardingTitle">
         <button type="button" class="console-onboarding-close" data-onboarding-close aria-label="关闭提示">×</button>
-        <div class="console-onboarding-kicker">快速提示 · ${runtime.currentStep + 1}/${steps.length}</div>
+        <div class="console-onboarding-kicker">提示 ${runtime.currentStep + 1}/${steps.length}</div>
         <h2 id="consoleOnboardingTitle">${step.title}</h2>
         <p>${step.message}</p>
         <div class="console-onboarding-actions">
-          <button type="button" class="is-quiet" data-onboarding-close>稍后再看</button>
-          <button type="button" class="is-secondary" data-onboarding-jump>前往此功能</button>
-          <button type="button" class="is-primary" data-onboarding-start>开始教程</button>
+          <button type="button" class="is-quiet" data-onboarding-close>稍后</button>
+          <button type="button" class="is-secondary" data-onboarding-jump>前往</button>
+          <button type="button" class="is-primary" data-onboarding-start>开始</button>
         </div>
-        <button type="button" class="console-onboarding-dismiss" data-onboarding-dismiss>关闭这些提示</button>
+        <button type="button" class="console-onboarding-dismiss" data-onboarding-dismiss>不再提示</button>
       </section>`;
+    scheduleCardPosition(step);
   }
 
   function navigateToStep(index, { render = true } = {}) {
@@ -227,6 +363,7 @@
         const nextTarget = activeTarget(step) || target;
         nextTarget.classList.add("is-onboarding-focus");
         nextTarget.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+        scheduleCardPosition(step);
       }, 180);
     }
     if (render) renderGuideStep(runtime.currentStep);
@@ -243,19 +380,17 @@
       <section class="console-onboarding-card is-guide" role="dialog" aria-modal="false" aria-labelledby="consoleOnboardingTitle">
         <button type="button" class="console-onboarding-close" data-onboarding-exit aria-label="关闭教程">×</button>
         <div class="console-onboarding-step-head">
-          <div>
-            <div class="console-onboarding-kicker">${step.eyebrow}</div>
-            <h2 id="consoleOnboardingTitle">${step.title}</h2>
-          </div>
+          <div class="console-onboarding-kicker">${step.eyebrow}</div>
           <strong>${runtime.currentStep + 1}/${steps.length}</strong>
         </div>
-        <div class="console-onboarding-progress">${renderProgressDots(runtime.currentStep)}</div>
+        <h2 id="consoleOnboardingTitle">${step.title}</h2>
         <p>${step.message}</p>
         <div class="console-onboarding-actions">
-          ${runtime.currentStep > 0 ? '<button type="button" class="is-quiet" data-onboarding-prev>上一步</button>' : '<button type="button" class="is-quiet" data-onboarding-exit>关闭教程</button>'}
+          ${runtime.currentStep > 0 ? '<button type="button" class="is-quiet" data-onboarding-prev>上一步</button>' : '<button type="button" class="is-quiet" data-onboarding-exit>退出</button>'}
           <button type="button" class="is-primary" ${last ? "data-onboarding-complete" : "data-onboarding-next"}>${last ? "完成教程" : "下一步"}</button>
         </div>
       </section>`;
+    scheduleCardPosition(step);
   }
 
   function startGuide(index = 0) {
@@ -268,15 +403,49 @@
     writeProgress("dismissed", runtime.currentStep);
     closeCard();
     removeBeacons();
+    syncLaunchers();
+  }
+
+  function renderCompletionNotice() {
+    runtime.guided = false;
+    clearFocus();
+    const host = ensureHost();
+    host.innerHTML = `
+      <section class="console-onboarding-card is-completion" role="dialog" aria-modal="false" aria-labelledby="consoleOnboardingCompleteTitle">
+        <button type="button" class="console-onboarding-close" data-onboarding-close aria-label="关闭完成提示">×</button>
+        <div class="console-onboarding-kicker">教程完成</div>
+        <h2 id="consoleOnboardingCompleteTitle">已完成全部提示</h2>
+        <p>以后可在首页底部的“新手提示”重新查看。</p>
+        <div class="console-onboarding-actions">
+          <button type="button" class="is-quiet" data-onboarding-close>知道了</button>
+          <button type="button" class="is-primary" data-onboarding-locate>查看位置</button>
+        </div>
+      </section>`;
+    scheduleCardPosition(steps[steps.length - 1]);
+  }
+
+  function locateHomeLauncher() {
+    const homeStep = steps[steps.length - 1];
+    activeTarget(homeStep)?.click();
+    closeCard();
+    window.setTimeout(() => {
+      const launcher = ensureHomeLauncher();
+      if (!launcher) return;
+      launcher.hidden = false;
+      launcher.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+      launcher.classList.add("is-located");
+      launcher.focus({ preventScroll: true });
+      window.setTimeout(() => launcher.classList.remove("is-located"), 1600);
+    }, 220);
   }
 
   function completeGuide() {
     writeProgress("completed", steps.length - 1);
-    closeCard();
     removeBeacons();
-    const launcher = document.getElementById("consoleOnboardingLauncher");
-    launcher?.classList.add("is-complete");
-    window.setTimeout(() => launcher?.classList.remove("is-complete"), 900);
+    syncLaunchers();
+    runtime.homeLauncher?.classList.add("is-complete");
+    window.setTimeout(() => runtime.homeLauncher?.classList.remove("is-complete"), 700);
+    renderCompletionNotice();
   }
 
   function handleSurfaceAction(event) {
@@ -307,6 +476,10 @@
       navigateToStep(runtime.currentStep + 1);
       return;
     }
+    if (action.hasAttribute("data-onboarding-locate")) {
+      locateHomeLauncher();
+      return;
+    }
     if (action.hasAttribute("data-onboarding-complete")) completeGuide();
   }
 
@@ -315,27 +488,14 @@
     return Number(user.created_at || 0) >= ONBOARDING_RELEASE_EPOCH;
   }
 
-  function bindLauncher() {
-    const launcher = document.getElementById("consoleOnboardingLauncher");
-    if (!launcher) return;
-    launcher.title = "重新打开新手引导";
-    launcher.setAttribute("aria-label", "重新打开新手引导");
-    launcher.hidden = false;
-    launcher.addEventListener("click", () => {
-      runtime.eligible = true;
-      const progress = readProgress();
-      const resumeStep = progress.status === "active" ? Number(progress.step || 0) : 0;
-      openReminder(Math.max(0, Math.min(resumeStep, steps.length - 1)));
-    });
-  }
-
   function observeNavigation() {
     runtime.observer?.disconnect();
     runtime.observer = new MutationObserver(scheduleBeaconSync);
-    [document.getElementById("moduleMenu"), document.getElementById("mobileTaskDock"), document.querySelector(".sidebar-bottom-actions")]
+    [document.getElementById("moduleMenu"), document.getElementById("mobileTaskDock"), document.querySelector(".sidebar-bottom-actions"), document.getElementById("personaDashboardApp")]
       .filter(Boolean)
       .forEach((element) => runtime.observer.observe(element, { childList: true, subtree: true }));
     window.addEventListener("resize", scheduleBeaconSync, { passive: true });
+    window.addEventListener("scroll", () => scheduleCardPosition(), { passive: true, capture: true });
   }
 
   async function loadCurrentUser() {
@@ -367,8 +527,8 @@
     runtime.storageKey = storageKey(user.id);
     runtime.eligible = isNewUser(user);
     if (!runtime.eligible) return;
-    bindLauncher();
     observeNavigation();
+    syncLaunchers();
     syncBeacons();
   }
 

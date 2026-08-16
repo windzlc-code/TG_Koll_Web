@@ -8,8 +8,9 @@ ONBOARDING_CSS_PATH = ROOT / "webapp" / "static" / "assets" / "console-onboardin
 
 
 def test_console_loads_isolated_onboarding_assets():
-    assert '/assets/console-onboarding.css?v=20260817-4' in CONSOLE_HTML
-    assert '/assets/console-onboarding.js?v=20260817-4' in CONSOLE_HTML
+    assert '/assets/console-onboarding.css?v=20260817-6' in CONSOLE_HTML
+    assert '/assets/console-onboarding.js?v=20260817-6' in CONSOLE_HTML
+    assert 'id="consoleOnboardingLauncher"' not in CONSOLE_HTML
 
 
 def test_onboarding_is_scoped_to_new_non_admin_users_and_can_be_reopened():
@@ -20,11 +21,12 @@ def test_onboarding_is_scoped_to_new_non_admin_users_and_can_be_reopened():
     assert 'is_admin' in script
     assert 'acting_admin' in script
     assert 'vecto-console-onboarding' in script
-    assert 'consoleOnboardingLauncher' in script
-    assert '重新打开新手引导' in script
+    assert 'consoleOnboardingEdgeLauncher' in script
+    assert 'consoleOnboardingHomeLauncher' in script
+    assert '打开新手提示' in script
     eligibility_check = script.index('runtime.eligible = isNewUser(user);')
     eligibility_exit = script.index('if (!runtime.eligible) return;', eligibility_check)
-    launcher_binding = script.index('bindLauncher();', eligibility_exit)
+    launcher_binding = script.index('syncLaunchers();', eligibility_exit)
     assert eligibility_check < eligibility_exit < launcher_binding
 
 
@@ -49,14 +51,29 @@ def test_onboarding_covers_the_primary_business_flow_without_blocking_it():
     assert 'click()' in script
     assert 'role="dialog"' in script
     assert 'aria-modal="false"' in script
+    assert 'scheduleCardPosition(step)' in script
+    assert 'rect.left < document.documentElement.clientWidth' in script
+    assert '新手提示' in script
+    assert 'const beaconLeft = targetRect.right - hostRect.left - 2;' in script
+    assert 'const beaconTop = targetRect.top - hostRect.top + 2;' in script
+    assert 'const target = activeTarget(step);' in script
+    assert 'if (!target || !beaconHost) return;' in script
+    assert 'if (candidate !== target) delete candidate.dataset.onboardingTarget;' in script
+    assert '已完成全部提示' in script
+    assert '以后可在首页底部的“新手提示”重新查看。' in script
+    assert 'data-onboarding-locate' in script
+    assert 'scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" })' in script
 
 
 def test_onboarding_visuals_are_subtle_responsive_and_motion_safe():
     styles = ONBOARDING_CSS_PATH.read_text(encoding="utf-8")
 
     assert '.console-onboarding-beacon' in styles
-    assert '.site-header .console-onboarding-launcher[hidden]' in styles
-    assert 'z-index: 1500' in styles
+    assert '.console-onboarding-edge-launcher' in styles
+    assert '.console-onboarding-home-launcher' in styles
+    assert '.site-header .console-onboarding-launcher' not in styles
+    assert 'background: #1684aa' in styles
+    assert 'z-index: 1450' in styles
     assert '@keyframes console-onboarding-beacon-pulse' in styles
     assert '.console-onboarding-card' in styles
     assert '.is-onboarding-focus' in styles
@@ -64,3 +81,7 @@ def test_onboarding_visuals_are_subtle_responsive_and_motion_safe():
     assert '@media (prefers-reduced-motion: reduce)' in styles
     assert 'pointer-events: none' in styles
     assert '.console-onboarding-card' in styles and 'pointer-events: auto' in styles
+    assert 'width: 13px !important' in styles
+    assert 'height: 13px !important' in styles
+    assert '.console-onboarding-card.is-completion' in styles
+    assert '.console-onboarding-home-launcher.is-located' in styles
