@@ -10800,7 +10800,7 @@ function renderPersonaAccountPoolPickerCard(account, currentPersona = selectedPe
   const accountId = String(account?.id || "").trim();
   const binding = personaAccountBindingDisplay(account, currentPersona);
   return `<button type="button" class="persona-account-picker-card" data-persona-account-pool-select="${esc(accountId)}">
-    ${renderAccountPoolCardFields(account)}
+    ${renderAccountPoolCardFields(account, { includeContinueLogin: false })}
     <span class="persona-account-picker-card-meta"><span class="persona-account-picker-binding ${esc(binding.className)}">${esc(binding.label)}</span><span class="persona-account-picker-proxy">${esc(accountResidentialProxyLabel(account))}</span></span>
     <span class="persona-account-picker-card-action is-${esc(binding.actionKind)}">${renderPersonaAccountBindingIcon(binding.actionKind)}<span>${esc(binding.action)}</span></span>
   </button>`;
@@ -27341,7 +27341,7 @@ function renderAccountPoolCardActions(account, { context = "pool", personaAccoun
   </div>`;
 }
 
-function renderAccountPoolCardFields(account, { selectionControl = "", includeCopyButton = false, loginActionAttribute = "data-social-open-login" } = {}) {
+function renderAccountPoolCardFields(account, { selectionControl = "", includeCopyButton = false, includeContinueLogin = true, loginActionAttribute = "data-social-open-login" } = {}) {
   const accountId = String(account?.id || "");
   const platform = normalizeAccountPoolPlatform(account?.platform || "threads");
   const activeLoginTask = activeOpenLoginTaskForAccount(accountId);
@@ -27362,7 +27362,7 @@ function renderAccountPoolCardFields(account, { selectionControl = "", includeCo
         ${includeCopyButton ? `<button type="button" class="account-pool-card-copy-button" data-account-pool-copy-card="${esc(accountId)}" title="复制账号字段" aria-label="复制账号字段">${renderClipboardIcon()}</button>` : ""}
       </span>
     </span>
-    <button type="button" class="account-pool-card-continue-login" ${loginActionAttribute}="${esc(accountId)}" data-account-login-resume="true" ${activeLoginTask?.id ? `data-open-login-task-id="${esc(activeLoginTask.id)}"` : ""} ${canResumeLogin ? "" : "hidden"}>${renderBrowserLaunchIcon()}<span>继续登录</span></button>
+    ${includeContinueLogin ? `<button type="button" class="account-pool-card-continue-login" ${loginActionAttribute}="${esc(accountId)}" data-account-login-resume="true" ${activeLoginTask?.id ? `data-open-login-task-id="${esc(activeLoginTask.id)}"` : ""} ${canResumeLogin ? "" : "hidden"}>${renderBrowserLaunchIcon()}<span>继续登录</span></button>` : ""}
     <span class="account-pool-card-flags">
       ${platform === "threads" && account?.api_connected ? `<span class="status ok" title="Threads 官方 API 已授权${account.api_last_sync_at ? `，最近同步：${formatTime(account.api_last_sync_at)}` : ""}">API 已接入</span>` : ""}
       <span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${renderAccountStatusContent(account)}</span>
@@ -28244,7 +28244,7 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", po
   if (!String(filters.country || "").trim()) {
     return `<section class="account-proxy-region-guide" data-account-proxy-region-guide data-account-proxy-options data-account-proxy-choice-scope="${esc(scope)}" role="status">
       <span class="account-proxy-region-guide-icon" aria-hidden="true">${renderNetworkIcon()}</span>
-      <div><strong>请先选择代理地区</strong><p>${proxyType === "supplier" ? "选择地区和城市后，可免费领取或购买平台专属静态 IP。" : "选择地区后会显示管理员后台投放的平台托管代理。"}</p></div>
+      <div><strong>请先选择代理地区</strong><p>${proxyType === "supplier" ? "选择地区和城市后，会显示可选的专属静态 IP。" : "选择地区后会显示管理员后台投放的平台托管代理。"}</p></div>
     </section>`;
   }
   const allPoolOptions = Array.isArray(poolData.options) ? poolData.options : [];
@@ -28268,13 +28268,18 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", po
     const cityLabel = String(proxy.city || proxy.region || "").trim() || "全部城市";
     const canChoose = proxy.available !== false;
     const action = selected ? "当前使用" : "选择使用";
+    const status = selected ? "当前使用" : (canChoose ? "可选择" : "已占用");
     const ownershipType = String(proxy.ownership_type || "shared").toLowerCase();
     const renewal = ownershipType === "owned" && proxy.purchase_order_id
       ? `<button type="button" class="proxy-market-mini-renewal" data-account-proxy-renewal-order="${esc(proxy.purchase_order_id)}" data-renewal-enabled="${proxy.renewal_enabled ? "true" : "false"}" aria-pressed="${proxy.renewal_enabled ? "true" : "false"}"><span>自动续费</span><i aria-hidden="true"></i></button>`
       : `<div class="proxy-market-compact-renewal"><span>自动续费</span><strong>${kind === "managed" ? "管理员维护" : "未开启"}</strong></div>`;
     return `<article class="proxy-market-mini-card" data-account-proxy-card="${esc(itemId)}" ${selected ? 'aria-current="true"' : ""}>
-      <div class="proxy-market-mini-card-head">
-        <span class="proxy-market-mini-card-kinds"><span class="proxy-market-mini-kind" data-kind="${esc(kind)}">${kind === "supplier" ? "平台代理" : "管理员代理"}</span><span class="proxy-market-mini-country">${esc(country)}</span></span>
+      <div class="proxy-market-mini-card-banner">
+        <div class="proxy-market-mini-card-head">
+          <span class="proxy-market-mini-card-kinds"><span class="proxy-market-mini-kind" data-kind="${esc(kind)}">${kind === "supplier" ? "平台代理" : "管理员代理"}</span><span class="proxy-market-mini-country">${esc(country)}</span></span>
+          <span class="proxy-market-mini-stock">${esc(status)}</span>
+        </div>
+        <strong class="proxy-market-mini-title">${esc(regionLabel)}代理 IP</strong>
       </div>
       <dl class="proxy-market-compact-fields">
         <div><dt>地区</dt><dd>${esc(regionLabel)}</dd></div>
@@ -28295,17 +28300,20 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", po
     const monthlyFree = poolData?.monthly_free?.available !== false;
     const configured = Boolean(purchaseOptions.configured && purchaseOptions.live_purchasing_enabled);
     return `<article class="proxy-market-mini-card proxy-market-supplier-card" data-account-proxy-supplier-card>
-      <div class="proxy-market-mini-card-head">
-        <span class="proxy-market-mini-card-kinds"><span class="proxy-market-mini-kind" data-kind="supplier">平台代理</span><span class="proxy-market-mini-country">${esc(countryCode)}</span></span>
-        <span class="proxy-market-mini-stock">${monthlyFree ? "本月免费" : "实时购买"}</span>
+      <div class="proxy-market-mini-card-banner">
+        <div class="proxy-market-mini-card-head">
+          <span class="proxy-market-mini-card-kinds"><span class="proxy-market-mini-kind" data-kind="supplier">平台代理</span><span class="proxy-market-mini-country">${esc(countryCode)}</span></span>
+          <span class="proxy-market-mini-stock">${monthlyFree ? "本月免费" : "可选择"}</span>
+        </div>
+        <strong class="proxy-market-mini-title">${esc(accountProxyCountry(countryCode).label)}静态住宅代理 IP</strong>
       </div>
       <dl class="proxy-market-compact-fields">
         <div><dt>地区</dt><dd>${esc(accountProxyCountry(countryCode).label)}</dd></div>
         <div><dt>城市</dt><dd>${esc(cityLabel || "全部城市")}</dd></div>
-        <div><dt>代理 IP</dt><dd>购买后分配</dd></div>
+        <div><dt>代理 IP</dt><dd>选择后分配</dd></div>
       </dl>
       <button type="button" class="proxy-market-mini-renewal proxy-market-purchase-renewal" data-account-proxy-purchase-renewal aria-pressed="false"><span>自动续费</span><i aria-hidden="true"></i></button>
-      <button type="button" class="primary" data-account-proxy-supplier-choice data-account-proxy-choice-scope="${esc(scope)}" ${configured ? "" : "disabled"}>${renderNetworkIcon()}<span>${configured ? (monthlyFree ? "免费选择" : "购买并使用") : "暂不可用"}</span></button>
+      <button type="button" class="primary" data-account-proxy-supplier-choice data-account-proxy-choice-scope="${esc(scope)}" ${configured ? "" : "disabled"}>${renderNetworkIcon()}<span>${configured ? (monthlyFree ? "免费选择" : "选择使用") : "暂不可用"}</span></button>
     </article>`;
   };
   const empty = renderModuleEmptyState({
@@ -28401,7 +28409,7 @@ async function loadAccountProxyPickerPool(modal) {
     const providerState = modal.querySelector("[data-account-proxy-provider-state]");
     if (providerState) {
       const ready = Boolean(data?.purchase_options?.configured && data?.purchase_options?.live_purchasing_enabled);
-      providerState.textContent = ready ? "代理服务已连接" : "代理服务未开放";
+      providerState.textContent = ready ? "服务已连接" : "服务未开放";
       providerState.classList.toggle("is-ready", ready);
     }
     refreshAccountProxyPickerOptions(modal);
@@ -28521,12 +28529,12 @@ async function purchaseAccountProxySupplierOption(modal, button) {
       quote = quoteResult?.quote || null;
     }
     const confirmation = await openConsoleModal({
-      title: monthlyFree ? "确认免费选择" : "确认购买平台代理",
+      title: monthlyFree ? "确认免费选择" : "确认选择平台代理",
       message: monthlyFree
         ? `确定选择 ${accountProxyCountry(country).label}${cityLabel ? ` · ${cityLabel}` : ""} 的平台代理吗？平台承担费用，本次不会扣除用户点数。`
-        : `确定购买 ${accountProxyCountry(country).label}${cityLabel ? ` · ${cityLabel}` : ""} 的平台代理吗？本次需要 ${numberText(quote?.charge_points || 0)} 点。`,
-      confirmText: monthlyFree ? "确认免费选择" : "确认购买",
-      cancelText: "暂不购买",
+        : `确定选择 ${accountProxyCountry(country).label}${cityLabel ? ` · ${cityLabel}` : ""} 的平台代理吗？本次需要 ${numberText(quote?.charge_points || 0)} 点。`,
+      confirmText: monthlyFree ? "确认免费选择" : "确认选择",
+      cancelText: "暂不选择",
       modalKey: "account-proxy-supplier-confirm",
       stack: true,
     });
@@ -28546,7 +28554,7 @@ async function purchaseAccountProxySupplierOption(modal, button) {
     const order = await waitForAccountProxyPurchase(result?.order || {});
     if (!order?.social_proxy_id) {
       const failed = ["failed", "expired", "cancelled", "refunded"].includes(String(order?.status || "").toLowerCase());
-      showMsg("socialMsg", failed ? (order?.message || "平台代理购买失败") : "订单已提交，代理开通后会自动显示在平台代理选项卡。", !failed);
+      showMsg("socialMsg", failed ? (order?.message || "平台代理选择失败") : "选择请求已提交，代理就绪后会自动显示在平台代理选项卡。", !failed);
       await loadAccountProxyPickerPool(modal);
       return false;
     }
@@ -28554,10 +28562,10 @@ async function purchaseAccountProxySupplierOption(modal, button) {
     if (!modal.isConnected) return false;
     await loadAccountProxyPickerPool(modal);
     updateAccountProxyChoice(modal, String(order.social_proxy_id));
-    showMsg("socialMsg", monthlyFree ? "免费平台代理已开通。" : "平台代理已购买。", true);
+    showMsg("socialMsg", monthlyFree ? "免费平台代理已选择。" : "平台代理已选择。", true);
     return String(order.social_proxy_id);
   } catch (error) {
-    showMsg("socialMsg", error.detail || error.message || "平台代理购买失败", false);
+    showMsg("socialMsg", error.detail || error.message || "平台代理选择失败", false);
     return false;
   } finally {
     if (modal.isConnected) {
@@ -28703,10 +28711,14 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
     ? originalProxyId
     : String(initialProxyId || "").trim();
 
+  if (typeof returnModal?.__accountProxyPickerClose === "function") {
+    returnModal.__accountProxyPickerClose();
+  }
   const existingPicker = document.getElementById("accountProxyPickerModal");
   if (typeof existingPicker?.__close === "function") existingPicker.__close();
   else existingPicker?.remove();
   const originalDialog = returnModal?.querySelector(".console-modal-dialog") || null;
+  if (returnModal && !originalDialog) return false;
   const modalRoot = returnModal || document.createElement("div");
   modalRoot.dataset.selectedProxyId = selectedProxyId;
   modalRoot.dataset.originalProxyId = originalProxyId;
@@ -28724,7 +28736,7 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
       </div>
       <div class="console-modal-content account-proxy-picker-content">
         <section class="account-proxy-picker-hero">
-          <div><span>专属代理 IP</span><strong>静态住宅代理 IP</strong><p>选择地区和城市后开通，代理会自动加入你的可选列表。</p></div>
+          <div><span>专属代理 IP</span><strong>静态住宅代理 IP</strong><p>选择后自动加入列表。</p></div>
           <span class="account-proxy-provider-state" data-account-proxy-provider-state>正在连接代理服务</span>
         </section>
         <div class="account-proxy-picker-toolbar account-proxy-picker-filter-toolbar">
@@ -28757,6 +28769,7 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
         updateAccountProxyEntryCard(returnModal, cleanProxyId);
       }
       returnModal.dataset.accountModalPage = "editor";
+      delete returnModal.__accountProxyPickerClose;
       window.requestAnimationFrame(() => returnModal.querySelector("[data-account-proxy-picker-open]")?.focus({ preventScroll: true }));
     }
   };
@@ -28767,7 +28780,8 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
     restoreReturnModal(proxyId);
   };
   pickerDialog.__close = close;
-  modalRoot.__close = close;
+  if (returnModal) returnModal.__accountProxyPickerClose = close;
+  else modalRoot.__close = close;
   const completeSelection = async (proxyId = "") => {
     const cleanProxyId = String(proxyId || "").trim();
     if (mode === "create") {

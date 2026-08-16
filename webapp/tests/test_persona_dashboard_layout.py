@@ -3888,7 +3888,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         helper_end = self.console_script.index("\nfunction renderAccountPoolCard(", helper_start)
         helper = self.console_script[helper_start:helper_end]
 
-        self.assertIn("renderAccountPoolCardFields(account)", picker)
+        self.assertIn("renderAccountPoolCardFields(account, { includeContinueLogin: false })", picker)
+        self.assertIn("includeContinueLogin = true", helper)
         self.assertIn('"platform status"', self.styles)
         self.assertIn('"username totp"', self.styles)
         self.assertLess(helper.index("account-pool-card-platform"), helper.index("account-pool-card-copy"))

@@ -237,6 +237,76 @@ class ProxyPurchaseApiTests(unittest.TestCase):
         )
         self.assertEqual(repeated.status_code, 409)
 
+    def test_paid_supplier_order_after_monthly_free_uses_provider_and_customer_funds(self):
+        provider = proxy_purchases.MockProxyProvider(unit_price_usd="4.00")
+        with mock.patch.object(proxy_purchases, "provider_from_environment", return_value=provider):
+            with app_db.db() as conn:
+                before = dict(conn.execute(
+                    "SELECT credit_units,cash_backed_credit_units FROM billing_wallets WHERE user_id=?",
+                    (self.user_id,),
+                ).fetchone())
+
+            free_response = self.client.post(
+                "/api/proxy-purchases/monthly-free",
+                json={
+                    "country": "US",
+                    "city": "",
+                    "period_months": 1,
+                    "auto_renew": False,
+                    "client_request_id": "monthly-free-before-paid",
+                },
+            )
+            self.assertEqual(free_response.status_code, 200, free_response.text)
+            self.assertEqual(free_response.json()["order"]["status"], "active")
+            self.assertEqual(provider.execute_calls, 1)
+
+            exhausted = self.client.post(
+                "/api/proxy-purchases/monthly-free",
+                json={
+                    "country": "US",
+                    "city": "",
+                    "period_months": 1,
+                    "auto_renew": False,
+                    "client_request_id": "monthly-free-exhausted",
+                },
+            )
+            self.assertEqual(exhausted.status_code, 409)
+
+            quote_response = self.client.post(
+                "/api/proxy-purchases/quotes",
+                json={"country": "US", "city": "", "period_months": 1, "auto_renew": True},
+            )
+            self.assertEqual(quote_response.status_code, 200, quote_response.text)
+            quote = quote_response.json()["quote"]
+            paid_response = self.client.post(
+                "/api/proxy-purchases/orders",
+                headers={"Idempotency-Key": "paid-after-monthly-free"},
+                json={"quote_id": quote["id"], "idempotency_key": "paid-after-monthly-free"},
+            )
+            self.assertEqual(paid_response.status_code, 200, paid_response.text)
+            paid_order = paid_response.json()["order"]
+
+        self.assertEqual(paid_order["status"], "active")
+        self.assertTrue(paid_order["social_proxy_id"])
+        self.assertEqual(provider.execute_calls, 2)
+        with app_db.db() as conn:
+            after = dict(conn.execute(
+                "SELECT credit_units,cash_backed_credit_units FROM billing_wallets WHERE user_id=?",
+                (self.user_id,),
+            ).fetchone())
+            reservations = conn.execute(
+                "SELECT status,meta_json FROM billing_reservations WHERE ref_type='proxy_purchase' "
+                "AND user_id=? ORDER BY created_at,id",
+                (self.user_id,),
+            ).fetchall()
+        self.assertEqual(int(after["credit_units"]), int(before["credit_units"]) - int(quote["charge_units"]))
+        self.assertEqual(
+            int(after["cash_backed_credit_units"]),
+            int(before["cash_backed_credit_units"]) - int(quote["charge_units"]),
+        )
+        self.assertEqual([str(row["status"]) for row in reservations], ["waived", "settled"])
+        self.assertEqual(json.loads(str(reservations[0]["meta_json"]))["waived_reason"], "monthly_free_proxy")
+
     def test_idempotency_header_must_match_body(self):
         quote = self.client.post(
             "/api/proxy-purchases/quotes",

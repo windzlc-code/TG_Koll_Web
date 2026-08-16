@@ -17100,6 +17100,7 @@ body.persona-media-sorting {
   width: min(760px, calc(100vw - 32px));
   max-height: min(760px, calc(100dvh - 32px));
   overflow: hidden;
+  outline: none;
   gap: 0;
   padding: 0;
   border: 1px solid #bdccda;
@@ -17678,14 +17679,6 @@ body.persona-media-sorting {
   box-shadow: inset 0 0 0 1px rgba(151, 116, 37, .18);
 }
 
-.proxy-market-mini-card::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto;
-  height: 3px;
-  background: linear-gradient(90deg, #68d5df 0 12%, #1678b4 32%, #102c47 82%);
-}
-
 .proxy-market-mini-card[aria-current="true"] {
   border-color: var(--proxy-purchase-blue, #126eaa);
   box-shadow: 0 10px 26px rgba(16, 44, 71, .12);
@@ -17712,6 +17705,40 @@ body.persona-media-sorting {
 .proxy-market-mini-country {
   color: #fff;
   background: var(--proxy-purchase-navy, #102c47);
+}
+
+.proxy-market-mini-card-banner {
+  display: grid;
+  gap: 8px;
+  margin: -14px -14px 2px;
+  padding: 12px 14px 11px;
+  border-radius: 9px 9px 6px 6px;
+  background: linear-gradient(100deg, #168fbd 0%, #147db2 30%, #115b91 62%, #102c47 100%);
+  color: #fff;
+}
+
+.proxy-market-mini-title {
+  color: #fff;
+  font-size: 15px;
+  font-weight: 850;
+  line-height: 1.25;
+}
+
+.proxy-market-mini-card-banner .proxy-market-mini-kind {
+  color: #effcff;
+  background: rgba(255, 255, 255, .13);
+  box-shadow: inset 0 0 0 1px rgba(231, 252, 255, .28);
+}
+
+.proxy-market-mini-card-banner .proxy-market-mini-country {
+  color: #102c47;
+  background: rgba(255, 255, 255, .94);
+}
+
+.proxy-market-mini-card-banner .proxy-market-mini-stock {
+  color: #effffb;
+  background: rgba(27, 193, 164, .24);
+  box-shadow: inset 0 0 0 1px rgba(221, 255, 247, .32);
 }
 
 .proxy-market-mini-stock {
@@ -17741,7 +17768,7 @@ body.persona-media-sorting {
 
 .proxy-market-compact-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1px;
   margin: 1px 0;
   overflow: hidden;
@@ -17756,10 +17783,6 @@ body.persona-media-sorting {
   min-width: 0;
   padding: 8px 9px;
   background: #f8fbfd;
-}
-
-.proxy-market-compact-fields > div:last-child {
-  grid-column: 1 / -1;
 }
 
 .proxy-market-compact-fields dt,
@@ -17843,11 +17866,17 @@ body.persona-media-sorting {
 @media (max-width: 640px) {
   .account-proxy-picker-layer { padding: 10px; }
   .account-proxy-picker-modal { width: min(560px, calc(100vw - 20px)); max-height: calc(100dvh - 20px); border-radius: 14px; }
-  .account-proxy-picker-modal > .console-modal-head { grid-template-columns: minmax(0, 1fr) 34px; gap: 8px; padding: 14px 12px 11px; }
-  .account-proxy-picker-heading strong { font-size: 18px; }
-  .account-proxy-picker-content { padding: 10px 10px 14px; }
-  .account-proxy-picker-hero { padding: 12px 14px; }
-  .account-proxy-provider-state { padding: 5px 7px; font-size: 10px; }
+  .account-proxy-picker-modal > .console-modal-head { grid-template-columns: minmax(0, 1fr) 32px; gap: 7px; padding: 11px 12px 9px; }
+  .account-proxy-picker-heading { gap: 2px; }
+  .account-proxy-picker-heading strong { font-size: 16px; }
+  .account-proxy-picker-heading p { font-size: 10px; line-height: 1.35; }
+  .account-proxy-picker-content { gap: 8px; padding: 8px 10px 10px; }
+  .account-proxy-picker-hero { gap: 6px; padding: 7px 10px; border-radius: 10px; }
+  .account-proxy-picker-hero > div { gap: 2px; }
+  .account-proxy-picker-hero strong { font-size: 14px; }
+  .account-proxy-picker-hero span,
+  .account-proxy-picker-hero p { font-size: 9px; line-height: 1.25; }
+  .account-proxy-provider-state { padding: 3px 6px; font-size: 9px; }
   .account-proxy-region-guide { min-height: 84px; padding: 13px; }
   .account-proxy-region-guide-icon { flex-basis: 40px; width: 40px; height: 40px; }
   .account-proxy-entry-card { grid-template-columns: 36px minmax(0, 1fr) auto; gap: 9px; padding: 11px; }
@@ -17855,14 +17884,46 @@ body.persona-media-sorting {
   .account-proxy-entry-copy strong { font-size: 13px; }
   .account-proxy-entry-copy small { font-size: 10px; }
   .account-proxy-entry-action { min-height: 36px; padding: 0 9px; }
-  .account-proxy-picker-controls { gap: 6px; }
+  .account-proxy-picker-toolbar { margin-bottom: 5px; }
+  .account-proxy-picker-controls { gap: 5px; }
+  .account-proxy-picker-filters { gap: 7px; }
+  .account-proxy-type-tabs { gap: 3px; padding: 3px; }
+  .account-proxy-picker-modal .account-proxy-type-tabs button { height: 26px; min-height: 26px !important; padding: 0 25px 0 10px; box-sizing: border-box; font-size: 10px; }
+  .account-proxy-type-tabs button::after { right: 7px; font-size: 8px; }
   .account-proxy-picker-location-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 82px;
-    gap: 6px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 74px;
+    gap: 5px;
   }
-  .account-proxy-picker-action-row { grid-template-columns: minmax(0, 1fr) auto; }
-  .account-proxy-options.proxy-market-mini-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .account-proxy-options .proxy-market-mini-card { gap: 7px; padding: 13px; min-height: 210px; }
+  .account-proxy-picker-filters label { gap: 4px; }
+  .account-proxy-picker-filters label > span { font-size: 10px; }
+  .account-proxy-filter-menu,
+  .account-proxy-filter-menu > summary { height: 32px; min-height: 32px; box-sizing: border-box; border-radius: 7px; font-size: 10px; }
+  .account-proxy-picker-modal select[data-account-proxy-filter] {
+    height: 32px !important;
+    min-height: 32px !important;
+    box-sizing: border-box;
+    padding: 0 26px 0 8px;
+    border-radius: 7px;
+    font-size: 10px;
+  }
+  .account-proxy-filter-menu > summary { gap: 4px; }
+  .account-proxy-filter-menu > summary .ui-action-icon { width: 15px; height: 15px; flex-basis: 15px; }
+  .account-proxy-filter-menu > summary span { font-size: 10px; }
+  .account-proxy-picker-action-row { grid-template-columns: minmax(0, 1fr) auto; min-height: 30px; padding-top: 5px; }
+  .account-proxy-picker-action-row > p { font-size: 9px; line-height: 1.35; }
+  .account-proxy-clear { height: 30px; min-height: 30px; padding: 0 7px; border-radius: 7px; font-size: 10px; }
+  .account-proxy-clear .ui-no-proxy-icon { width: 14px; height: 14px; flex-basis: 14px; }
+  .account-proxy-options.proxy-market-mini-grid { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .account-proxy-options .proxy-market-mini-card { gap: 4px; padding: 8px; min-height: 0; border-radius: 9px; box-shadow: 0 5px 14px rgba(16, 44, 71, .06); }
+  .account-proxy-options .proxy-market-mini-card-banner { gap: 4px; margin: -8px -8px 0; padding: 7px 8px 6px; border-radius: 8px 8px 5px 5px; }
+  .account-proxy-options .proxy-market-mini-title { font-size: 12px; line-height: 1.2; }
+  .proxy-market-mini-kind,
+  .proxy-market-mini-country,
+  .proxy-market-mini-stock { min-height: 19px; padding: 1px 6px; font-size: 9px; }
+  .proxy-market-compact-fields > div { gap: 1px; padding: 4px 6px; }
+  .proxy-market-compact-fields dt { font-size: 8px; line-height: 1.1; }
+  .proxy-market-compact-fields dd { font-size: 10px; line-height: 1.2; }
+  .proxy-market-mini-card > button { height: 30px; min-height: 30px; padding: 0 8px; box-sizing: border-box; font-size: 11px; }
 }
 
 .account-proxy-enable {
@@ -19001,6 +19062,15 @@ body.persona-media-sorting {
   font-weight: 750;
 }
 
+.proxy-market-mini-card > button.proxy-market-mini-renewal[aria-pressed="true"],
+.proxy-market-mini-card > button.proxy-market-mini-renewal:hover,
+.proxy-market-mini-card > button.proxy-market-mini-renewal:focus-visible,
+.proxy-market-mini-card > button.proxy-market-mini-renewal:active {
+  border-color: #c9d6e3;
+  background: #fff;
+  color: var(--ink);
+}
+
 .proxy-market-mini-renewal i {
   position: relative;
   flex: 0 0 40px;
@@ -19026,6 +19096,31 @@ body.persona-media-sorting {
 
 .proxy-market-mini-card > .proxy-market-mini-renewal[aria-pressed="true"] i { background: #126eaa; }
 .proxy-market-mini-card > .proxy-market-mini-renewal[aria-pressed="true"] i::after { transform: translateX(18px); }
+
+@media (max-width: 640px) {
+  .account-proxy-picker-modal .proxy-market-mini-card > .proxy-market-mini-renewal {
+    height: 30px;
+    min-height: 30px;
+    padding: 3px 6px;
+    box-sizing: border-box;
+    font-size: 10px;
+  }
+
+  .account-proxy-picker-modal .proxy-market-mini-renewal i {
+    flex-basis: 34px;
+    width: 34px;
+    height: 18px;
+  }
+
+  .account-proxy-picker-modal .proxy-market-mini-renewal i::after {
+    width: 14px;
+    height: 14px;
+  }
+
+  .account-proxy-picker-modal .proxy-market-mini-card > .proxy-market-mini-renewal[aria-pressed="true"] i::after {
+    transform: translateX(16px);
+  }
+}
 
 .account-proxy-filter-menu > summary span {
   font-size: 12px;
@@ -22187,7 +22282,7 @@ body.console-page {
   }
 
   .console-page :is(
-    button:not(.account-password-toggle):not(.account-pool-card-copy-button):not(.live-browser-expand-button):not(.account-proxy-clear),
+    button:not(.account-password-toggle):not(.account-pool-card-copy-button):not(.live-browser-expand-button):not(.account-proxy-clear):not(.persona-avatar-add-button),
     .button,
     .chip-button,
     a[role="button"],

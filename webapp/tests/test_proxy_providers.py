@@ -87,6 +87,32 @@ class ProxyCheapProviderTests(unittest.TestCase):
             with self.assertRaises(ProxyProviderOutcomeUnknown):
                 provider.execute("static-residential-ipv4", {})
 
+    def test_execute_posts_the_real_supplier_order_endpoint(self):
+        session = _Session(_Response({"orderId": "supplier-order-1", "status": "pending"}))
+        with mock.patch.dict("os.environ", {"PROXYCHEAP_EXECUTE_SAFE_RECONCILIATION": "true"}):
+            provider = ProxyCheapProvider(
+                api_key="key",
+                api_secret="secret",
+                session=session,
+                purchases_enabled=True,
+            )
+            result = provider.execute(
+                "static-residential-ipv4",
+                {
+                    "planId": "standard",
+                    "country": "US",
+                    "quantity": 99,
+                    "period": {"unit": "months", "value": 1},
+                },
+            )
+
+        self.assertEqual(result["orderId"], "supplier-order-1")
+        method, url, kwargs = session.calls[0]
+        self.assertEqual((method, url), ("POST", f"{API_BASE_URL}/v2/order/static-residential-ipv4/execute"))
+        self.assertEqual(kwargs["json"]["quantity"], 1)
+        self.assertEqual(kwargs["json"]["country"], "US")
+        self.assertEqual(kwargs["json"]["autoExtend"], {"isEnabled": False})
+
     def test_price_without_currency_fails_closed(self):
         provider = ProxyCheapProvider(
             api_key="key", api_secret="secret", session=_Session(_Response({"finalPrice": "4.25"}))
