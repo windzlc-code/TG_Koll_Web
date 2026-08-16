@@ -61,6 +61,10 @@
     observer: null,
     syncFrame: 0,
     cardPositionFrame: 0,
+    completionMonitorInstalled: false,
+    actionArmedStep: -1,
+    actionArmedAt: 0,
+    advancing: false,
   };
 
   function storageKey(userId) {
@@ -76,16 +80,36 @@
     }
   }
 
-  function writeProgress(status, step = runtime.currentStep) {
+  function completedStepIds(progress = readProgress()) {
+    return Array.from(new Set(
+      (Array.isArray(progress.completedSteps) ? progress.completedSteps : [])
+        .map((value) => String(value || "").trim())
+        .filter((value) => steps.some((step) => step.id === value)),
+    ));
+  }
+
+  function writeProgress(status, step = runtime.currentStep, options = {}) {
     if (!runtime.storageKey) return;
     try {
+      const previous = readProgress();
       window.localStorage.setItem(runtime.storageKey, JSON.stringify({
         version: ONBOARDING_VERSION,
         status,
         step,
+        completedSteps: options.resetCompleted
+          ? []
+          : (options.completedSteps || completedStepIds(previous)),
         updatedAt: Date.now(),
       }));
     } catch {}
+  }
+
+  function markStepCompleted(index) {
+    const step = steps[index];
+    if (!step) return;
+    const completed = new Set(completedStepIds());
+    completed.add(step.id);
+    writeProgress("active", index, { completedSteps: Array.from(completed) });
   }
 
   function visibleElement(elements) {
@@ -167,15 +191,19 @@
       removeBeacons();
       return;
     }
+    const activeIndex = progress.status === "active" ? resumeStep() : -1;
+    const completed = new Set(completedStepIds(progress));
     steps.forEach((step, index) => {
+      const shouldShow = (activeIndex < 0 || index === activeIndex) && !completed.has(step.id);
       const target = activeStepTarget(step);
       const beaconHost = target?.parentElement || null;
       document.querySelectorAll(`.console-onboarding-beacon[data-target-id="${step.id}"]`).forEach((beacon) => {
-        if (!beaconHost || beacon.parentElement !== beaconHost) removeBeacon(beacon);
+        if (!shouldShow || !beaconHost || beacon.parentElement !== beaconHost) removeBeacon(beacon);
       });
       stepTargets(step).forEach((candidate) => {
-        if (candidate !== target) delete candidate.dataset.onboardingTarget;
+        if (!shouldShow || candidate !== target) delete candidate.dataset.onboardingTarget;
       });
+      if (!shouldShow) return;
       if (!target || !beaconHost) return;
       target.dataset.onboardingTarget = step.id;
       beaconHost.classList.add("has-onboarding-beacon");
@@ -209,6 +237,11 @@
       beacon.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
+        const latest = readProgress();
+        if (latest.status === "active") {
+          startGuide(resumeStep());
+          return;
+        }
         openReminder(index);
       });
       beaconHost.appendChild(beacon);
@@ -444,6 +477,8 @@
     runtime.guided = true;
     writeProgress("active", runtime.currentStep);
     const last = runtime.currentStep === steps.length - 1;
+    const previousCompleted = runtime.currentStep > 0
+      && completedStepIds().includes(steps[runtime.currentStep - 1].id);
     const host = ensureHost();
     host.innerHTML = `
       <section class="console-onboarding-card is-guide" role="dialog" aria-modal="false" aria-labelledby="consoleOnboardingTitle">
@@ -455,7 +490,7 @@
         <h2 id="consoleOnboardingTitle">${step.title}</h2>
         <p>${step.message}</p>
         <div class="console-onboarding-actions">
-          ${runtime.currentStep > 0 ? '<button type="button" class="is-quiet" data-onboarding-prev>上一步</button>' : ''}
+          ${runtime.currentStep > 0 && !previousCompleted ? '<button type="button" class="is-quiet" data-onboarding-prev>上一步</button>' : ''}
           <button type="button" class="is-exit" data-onboarding-request-exit>退出</button>
           <button type="button" class="is-primary" ${last ? "data-onboarding-complete" : "data-onboarding-next"}>${last ? "完成教程" : "下一步"}</button>
         </div>
@@ -466,8 +501,123 @@
 
   function startGuide(index = 0) {
     runtime.eligible = true;
+    if (readProgress().status !== "active") {
+      writeProgress("active", Math.max(0, Math.min(index, steps.length - 1)), { resetCompleted: true });
+    }
     navigateToStep(Math.max(0, Math.min(index, steps.length - 1)));
     syncBeacons();
+  }
+
+  function resetCompletionArm() {
+    runtime.actionArmedStep = -1;
+    runtime.actionArmedAt = 0;
+  }
+
+  function armCurrentStepFromAction(event) {
+    const progress = readProgress();
+    if (progress.status !== "active") return;
+    const index = resumeStep();
+    const step = steps[index];
+    if (!step || !event.target?.closest?.(step.targetSelector)) return;
+    runtime.actionArmedStep = index;
+    runtime.actionArmedAt = Date.now();
+  }
+
+  function requestDescriptor(input, options = {}) {
+    try {
+      const request = input instanceof Request ? input : null;
+      const url = new URL(request?.url || String(input || ""), window.location.href);
+      return {
+        method: String(options.method || request?.method || "GET").toUpperCase(),
+        pathname: url.pathname,
+      };
+    } catch {
+      return { method: "GET", pathname: "" };
+    }
+  }
+
+  function responseTask(data) {
+    return data?.task && typeof data.task === "object" ? data.task : data;
+  }
+
+  function completionResponseMatches(index, request, data) {
+    const path = request.pathname;
+    if (index === 0) {
+      const endpoint = path === "/api/persona_dashboard/personas"
+        || path === "/api/persona_dashboard/personas/ai_create";
+      return request.method === "POST" && endpoint && Boolean(data?.id || data?.profile?.id);
+    }
+    if (index === 1) {
+      return request.method === "POST"
+        && path === "/api/persona_dashboard/automation/accounts"
+        && Boolean(data?.account?.id);
+    }
+    if (index === 2) {
+      const task = responseTask(data);
+      return request.method === "GET"
+        && /\/api\/persona_dashboard\/personas\/[^/]+\/generate_posts\/tasks\/[^/]+$/.test(path)
+        && String(task?.status || "").toLowerCase() === "success";
+    }
+    if (index === 3) {
+      const publishEndpoint = /\/api\/persona_dashboard\/personas\/[^/]+\/(?:posts|favorites)\/[^/]+\/publish$/.test(path);
+      const automationEndpoint = path === "/api/persona_dashboard/automation/tasks";
+      return request.method === "POST"
+        && (publishEndpoint || automationEndpoint)
+        && Boolean(data?.task?.id);
+    }
+    if (index === 4) {
+      const task = responseTask(data);
+      return request.method === "GET"
+        && /\/api\/persona_dashboard\/refresh\/[^/]+$/.test(path)
+        && String(task?.status || "").toLowerCase() === "success";
+    }
+    return false;
+  }
+
+  function advanceAfterRecognizedAction(index) {
+    if (runtime.advancing) return;
+    const progress = readProgress();
+    if (
+      progress.status !== "active"
+      || resumeStep() !== index
+      || runtime.actionArmedStep !== index
+      || Date.now() - runtime.actionArmedAt > 30 * 60 * 1000
+    ) return;
+    runtime.advancing = true;
+    markStepCompleted(index);
+    resetCompletionArm();
+    removeBeacons();
+    window.setTimeout(() => {
+      runtime.advancing = false;
+      if (index >= steps.length - 1) {
+        completeGuide();
+        return;
+      }
+      navigateToStep(index + 1);
+      syncBeacons();
+    }, 420);
+  }
+
+  function inspectCompletionResponse(request, response) {
+    if (!response.ok || runtime.actionArmedStep < 0) return;
+    response.clone().json().then((data) => {
+      const index = runtime.actionArmedStep;
+      if (!completionResponseMatches(index, request, data)) return;
+      advanceAfterRecognizedAction(index);
+    }).catch(() => {});
+  }
+
+  function installCompletionMonitor() {
+    if (runtime.completionMonitorInstalled) return;
+    runtime.completionMonitorInstalled = true;
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+      const request = requestDescriptor(args[0], args[1] || {});
+      const response = await originalFetch(...args);
+      inspectCompletionResponse(request, response);
+      return response;
+    };
+    document.addEventListener("click", armCurrentStepFromAction, true);
   }
 
   function exitGuide() {
@@ -575,10 +725,12 @@
       return;
     }
     if (action.hasAttribute("data-onboarding-prev")) {
+      resetCompletionArm();
       navigateToStep(runtime.currentStep - 1);
       return;
     }
     if (action.hasAttribute("data-onboarding-next")) {
+      resetCompletionArm();
       navigateToStep(runtime.currentStep + 1);
       return;
     }
@@ -629,6 +781,7 @@
     runtime.storageKey = storageKey(user.id);
     runtime.eligible = isEligibleUser(user);
     if (!runtime.eligible) return;
+    installCompletionMonitor();
     observeNavigation();
     syncLaunchers();
     syncBeacons();

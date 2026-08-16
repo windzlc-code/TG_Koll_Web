@@ -8,8 +8,8 @@ ONBOARDING_CSS_PATH = ROOT / "webapp" / "static" / "assets" / "console-onboardin
 
 
 def test_console_loads_isolated_onboarding_assets():
-    assert '/assets/console-onboarding.css?v=20260817-13' in CONSOLE_HTML
-    assert '/assets/console-onboarding.js?v=20260817-13' in CONSOLE_HTML
+    assert '/assets/console-onboarding.css?v=20260817-14' in CONSOLE_HTML
+    assert '/assets/console-onboarding.js?v=20260817-14' in CONSOLE_HTML
     assert 'id="consoleOnboardingLauncher"' not in CONSOLE_HTML
 
 
@@ -47,6 +47,41 @@ def test_onboarding_is_available_to_all_non_admin_users_and_can_be_reopened():
     assert 'if (progress.status === "active")' in launch_body
     assert 'startGuide(resumeStep());' in launch_body
     assert 'openReminder(resumeStep());' in launch_body
+
+
+def test_active_tutorial_only_marks_the_current_unfinished_step():
+    script = ONBOARDING_JS_PATH.read_text(encoding="utf-8")
+
+    assert 'const activeIndex = progress.status === "active" ? resumeStep() : -1;' in script
+    assert 'const completed = new Set(completedStepIds(progress));' in script
+    assert 'const shouldShow = (activeIndex < 0 || index === activeIndex) && !completed.has(step.id);' in script
+    assert 'if (!shouldShow || !beaconHost || beacon.parentElement !== beaconHost) removeBeacon(beacon);' in script
+    assert 'if (!shouldShow) return;' in script
+    assert 'if (latest.status === "active")' in script
+    assert 'startGuide(resumeStep());' in script
+    assert 'openReminder(index);' in script
+    assert 'completedSteps:' in script
+    assert 'markStepCompleted(index);' in script
+
+
+def test_business_success_responses_advance_each_onboarding_step():
+    script = ONBOARDING_JS_PATH.read_text(encoding="utf-8")
+
+    for endpoint in (
+        'path === "/api/persona_dashboard/personas"',
+        'path === "/api/persona_dashboard/personas/ai_create"',
+        'path === "/api/persona_dashboard/automation/accounts"',
+        'generate_posts\\/tasks\\/',
+        'path === "/api/persona_dashboard/automation/tasks"',
+        'persona_dashboard\\/refresh\\/',
+    ):
+        assert endpoint in script
+    assert 'document.addEventListener("click", armCurrentStepFromAction, true);' in script
+    assert 'runtime.actionArmedStep !== index' in script
+    assert 'Date.now() - runtime.actionArmedAt > 30 * 60 * 1000' in script
+    assert 'response.clone().json()' in script
+    assert 'navigateToStep(index + 1);' in script
+    assert 'completeGuide();' in script
 
 
 def test_onboarding_covers_the_primary_business_flow_without_blocking_it():
@@ -104,7 +139,7 @@ def test_onboarding_covers_the_primary_business_flow_without_blocking_it():
     assert 'const beaconTop = targetRect.top - hostRect.top + 2;' in script
     assert 'const target = activeStepTarget(step);' in script
     assert 'if (!target || !beaconHost) return;' in script
-    assert 'if (candidate !== target) delete candidate.dataset.onboardingTarget;' in script
+    assert 'if (!shouldShow || candidate !== target) delete candidate.dataset.onboardingTarget;' in script
     assert 'activeEntryTarget(step)?.click();' in script
     assert 'waitForStepTarget(step).then((nextTarget)' in script
     assert 'target.click();' not in script
