@@ -88,7 +88,7 @@ def _action(target: str):
         "action_type": "public_comment",
         "account_id": "account-one",
         "target_key": target,
-        "content": f"comment for {target}",
+        "content": "这条内容把实际执行顺序说明得很完整，其中的限制条件也很有参考价值。",
     }
 
 

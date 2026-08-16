@@ -19,6 +19,11 @@ from typing import Any
 from urllib.parse import quote_plus, urlparse
 
 from .errors import CRMError
+from .collection_policy import (
+    create_zero_result_recovery_plan,
+    filter_rows_by_collection_window,
+    normalize_collection_lookback_days,
+)
 from .legacy_operations import (
     HOTSPOT_SCHEMA,
     MAX_HOTSPOT_RESULTS,
@@ -28,6 +33,7 @@ from .legacy_operations import (
     query_opc_history,
     search_hotspots,
 )
+from .persona_scope import apply_persona_audience_scope
 
 
 THREADS_SEARCH_SCHEMA = "crm.threads-live-search.v1"
@@ -342,7 +348,10 @@ def search_threads_live(
         "delayMs": delay_ms,
         "browserMode": "persistent",
         "searchMode": "normal" if payload.get("searchMode") == "normal" else "strict",
-        "freshnessDays": _integer(payload.get("freshnessDays"), default=7, minimum=1, maximum=30),
+        "freshnessDays": normalize_collection_lookback_days(
+            payload.get("lookbackDays") or payload.get("lookback_days") or payload.get("freshnessDays"),
+            7,
+        ),
         "freshnessPolicy": "strict",
         "refresh": True,
         "recordShown": False,
@@ -400,6 +409,27 @@ def search_threads_live(
         if len(rows) >= limit:
             break
 
+    time_window: dict[str, Any] | None = None
+    lookback_value = (
+        payload.get("lookbackDays")
+        or payload.get("lookback_days")
+        or payload.get("freshnessDays")
+    )
+    if lookback_value is not None:
+        time_window = filter_rows_by_collection_window(rows, lookback_value)
+        rows = [dict(item) for item in time_window["data"]]
+
+    audience: dict[str, Any] | None = None
+    persona = payload.get("persona")
+    if isinstance(persona, Mapping):
+        audience = apply_persona_audience_scope(
+            rows,
+            audience_scope=payload.get("audienceScope") or payload.get("audience_scope") or "vertical",
+            persona=persona,
+            query_keywords=payload.get("keywords") or [query],
+        )
+        rows = [dict(item) for item in audience["eligible"]]
+
     warnings = raw.get("warnings") if isinstance(raw.get("warnings"), (list, tuple)) else []
     warning_items = [_clean(item, 300) for item in warnings if _clean(item, 300)]
     single_warning = _clean(raw.get("warning"), 300)
@@ -442,6 +472,32 @@ def search_threads_live(
             "recordShown": False,
         },
     }
+    if time_window is not None:
+        response["timeWindow"] = {
+            key: value for key, value in time_window.items() if key != "data"
+        }
+        if time_window["excluded_older"] or time_window["excluded_unknown"] or time_window["excluded_future"]:
+            response["warnings"].append(
+                "已按时间范围排除 "
+                f"{time_window['excluded_older']} 条过期、"
+                f"{time_window['excluded_unknown']} 条日期不明、"
+                f"{time_window['excluded_future']} 条未来时间数据。"
+            )
+            response["warning"] = "；".join(response["warnings"])
+    if audience is not None:
+        response["audience"] = {
+            "scope": audience["audience_scope"],
+            "counts": audience["counts"],
+        }
+    if not rows:
+        response["zeroResultRecovery"] = create_zero_result_recovery_plan({
+            "result_count": 0,
+            "limit": limit,
+            "lookback_days": normalize_collection_lookback_days(lookback_value or request["freshnessDays"]),
+            "keywords": payload.get("keywords") or [query],
+            "model_keywords": payload.get("modelKeywords") or payload.get("model_keywords"),
+            "persona": persona if isinstance(persona, Mapping) else None,
+        })
     if collector_mode:
         response["source"]["accountScope"] = COLLECTOR_ACCOUNT_SCOPE
     else:

@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from webapp import db as db_module
@@ -245,6 +246,53 @@ class CRMOPCLiveAdapterTests(unittest.TestCase):
         self.assertEqual(result["data"], [])
         self.assertEqual(result["count"], 0)
         self.assertFalse(result["source"]["historyFallback"])
+        self.assertTrue(result["zeroResultRecovery"]["can_retry"])
+
+    def test_explicit_time_window_is_forwarded_and_filters_unverifiable_rows(self):
+        observed = {}
+        current = datetime.now(timezone.utc)
+
+        def executor(request):
+            observed.update(request)
+            return {
+                "ok": True,
+                "liveOnly": True,
+                "candidates": [
+                    {
+                        "id": "recent",
+                        "platform": "threads",
+                        "sourceUrl": "https://www.threads.com/@recent/post/1",
+                        "publishedAt": (current - timedelta(days=1)).isoformat(),
+                    },
+                    {
+                        "id": "old",
+                        "platform": "threads",
+                        "sourceUrl": "https://www.threads.com/@old/post/2",
+                        "publishedAt": (current - timedelta(days=10)).isoformat(),
+                    },
+                    {
+                        "id": "unknown",
+                        "platform": "threads",
+                        "sourceUrl": "https://www.threads.com/@unknown/post/3",
+                    },
+                ],
+            }
+
+        with db_module.db() as conn:
+            result = search_threads_live(
+                conn,
+                TenantContext(self.user_id),
+                {
+                    "query": "AI 营销",
+                    "accountId": "threads-live",
+                    "lookbackDays": 7,
+                },
+                executor=executor,
+            )
+        self.assertEqual(observed["freshnessDays"], 7)
+        self.assertEqual([row["id"] for row in result["data"]], ["recent"])
+        self.assertEqual(result["timeWindow"]["excluded_older"], 1)
+        self.assertEqual(result["timeWindow"]["excluded_unknown"], 1)
 
     def test_attested_batch_still_rejects_a_row_declared_as_mock_or_cache(self):
         for marker in ("mock", "cache_fallback"):

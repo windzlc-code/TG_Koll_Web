@@ -40,8 +40,8 @@ def rate_lookup(_conn, sku):
 
 def test_preflight_signs_canonical_allowed_actions_and_quotes_once_per_sku(conn):
     actions = [
-        {"action_type": "public_comment", "account_id": "acct", "target_key": "https://threads.test/1", "content": "hello"},
-        {"action_type": "public_comment", "account_id": "acct", "target_key": "https://threads.test/2", "content": "hello"},
+        {"action_type": "public_comment", "account_id": "acct", "target_key": "https://threads.test/1", "content": "你整理的实际案例很完整，尤其是执行顺序这一点很有参考价值。"},
+        {"action_type": "public_comment", "account_id": "acct", "target_key": "https://threads.test/2", "content": "这里对成本变化的说明很清楚，也补足了常见讨论里缺少的条件。"},
     ]
     result = build_preflight(
         conn, user_id=7, actions=actions, secret=SECRET,
@@ -72,6 +72,26 @@ def test_preflight_blocks_cross_tenant_and_allows_native_direct_message(conn):
     )
     assert allowed["allowed_count"] == 1
     assert allowed["actions"][0]["sku"] == "crm_direct_message_batch"
+
+
+def test_preflight_applies_public_comment_content_policy(conn):
+    with pytest.raises(CRMError) as blocked:
+        build_preflight(
+            conn,
+            user_id=7,
+            actions=[{
+                "action_type": "public_comment",
+                "account_id": "acct",
+                "target_key": "https://threads.test/policy",
+                "content": "加我 LINE：https://example.test",
+            }],
+            secret=SECRET,
+            rate_lookup=rate_lookup,
+            current_time=100,
+        )
+    decision = blocked.value.details["decisions"][0]
+    assert decision["reason_code"] == "crm_public_comment_first_contact_information"
+    assert decision["policy"]["content"]["allowed"] is False
 
 
 def test_preflight_detects_duplicate_and_login_gate(conn):
@@ -129,7 +149,7 @@ def test_direct_message_preflight_blocks_same_account_recipient_even_when_copy_c
 def test_preflight_token_rejects_action_change_and_expiry(conn):
     result = build_preflight(
         conn, user_id=7,
-        actions=[{"action_type": "public_comment", "account_id": "acct", "target_key": "target", "content": "x"}],
+        actions=[{"action_type": "public_comment", "account_id": "acct", "target_key": "target", "content": "这条内容把实际限制讲得很清楚，特别是前后条件之间的关系。"}],
         secret=SECRET, rate_lookup=rate_lookup, current_time=100, ttl_seconds=60,
     )
     changed = [dict(result["actions"][0], content="changed")]

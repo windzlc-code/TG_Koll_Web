@@ -10,7 +10,9 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from .errors import CRMError
-from .repository import canonicalize_action, dumps, find_active_duplicate_action
+from .comment_policy import assess_public_comment_content
+from .engagement_policy import evaluate_public_comment_rate
+from .repository import canonicalize_action, dumps, find_active_duplicate_action, loads
 
 
 EXECUTABLE_ACTION_TYPES = {
@@ -120,6 +122,8 @@ def build_preflight(
     blocked_count = 0
     for index, action in enumerate(canonical):
         reason = ""
+        policy: dict[str, Any] = {}
+        duplicate = None
         action_type = str(action["action_type"])
         if action_type not in EXECUTABLE_ACTION_TYPES:
             reason = "crm_action_blocked"
@@ -143,7 +147,6 @@ def build_preflight(
                     "abnormal", "banned", "needs_login", "cookie_expired", "pending_login",
                 }:
                     reason = "crm_account_needs_login"
-        duplicate = None
         if not reason and bool(action.get("write")):
             content_hash = hashlib.sha256(str(action.get("content") or "").encode("utf-8")).hexdigest()
             duplicate = find_active_duplicate_action(
@@ -157,6 +160,75 @@ def build_preflight(
             if duplicate is not None:
                 reason = "crm_duplicate_action"
                 duplicate_count += 1
+        if not reason and action_type == "public_comment":
+            recent_comments: list[str] = []
+            try:
+                prior_rows = conn.execute(
+                    """
+                    SELECT step.payload_json
+                    FROM crm_action_ledger action
+                    JOIN crm_workflow_steps step ON step.id=action.step_id AND step.user_id=action.user_id
+                    WHERE action.user_id=? AND action.account_id=? AND action.action_type='public_comment'
+                      AND action.state IN ('submitted','confirmed')
+                    ORDER BY action.updated_at DESC
+                    LIMIT 100
+                    """,
+                    (int(user_id), account_id),
+                ).fetchall()
+                for prior in prior_rows:
+                    prior_payload = loads(prior["payload_json"], {})
+                    prior_content = str(prior_payload.get("content") or "").strip()
+                    if prior_content:
+                        recent_comments.append(prior_content)
+            except sqlite3.OperationalError:
+                # Migration/bootstrap tests may not have the complete ledger yet.
+                recent_comments = []
+            content_policy = assess_public_comment_content(
+                comment=action.get("content"),
+                recent_comments=recent_comments,
+            )
+            policy["content"] = content_policy
+            if not content_policy["allowed"]:
+                reason = f"crm_public_comment_{content_policy['code']}"
+        if not reason and action_type == "public_comment" and account is not None:
+            rate_events: list[dict[str, Any]] = []
+            try:
+                touch_rows = conn.execute(
+                    """
+                    SELECT state,created_at,updated_at
+                    FROM crm_action_ledger
+                    WHERE user_id=? AND account_id=? AND action_type='public_comment'
+                      AND state IN ('submitted','confirmed') AND updated_at>=?
+                    ORDER BY updated_at DESC
+                    """,
+                    (int(user_id), account_id, now - 86400),
+                ).fetchall()
+                # The account id is the stable local sender identity.  The rate
+                # evaluator only requires that event and requested identities
+                # match; no platform credential is exposed to this policy.
+                sender_username = account_id
+                rate_events = [
+                    {
+                        "event_type": (
+                            "engagement_touch_published"
+                            if str(row["state"] or "") == "confirmed"
+                            else "engagement_touch_submitted"
+                        ),
+                        "sender_username": sender_username,
+                        "occurred_at": int(row["updated_at"] or row["created_at"] or 0),
+                    }
+                    for row in touch_rows
+                ]
+                rate_policy = evaluate_public_comment_rate(
+                    events=rate_events,
+                    sender_username=sender_username,
+                    current_time=now,
+                )
+                policy["rate"] = rate_policy
+                if not rate_policy["allowed"]:
+                    reason = f"crm_public_comment_{rate_policy['reason']}"
+            except sqlite3.OperationalError:
+                pass
         if reason:
             blocked_count += 1
         else:
@@ -168,6 +240,7 @@ def build_preflight(
             "allowed": not bool(reason),
             "reason_code": reason,
             "duplicate_action_id": str(duplicate["id"] or "") if duplicate is not None else "",
+            "policy": policy,
         })
     if not allowed:
         raise CRMError(

@@ -974,7 +974,8 @@ class CRMBackendFoundationTests(unittest.TestCase):
         client = TestClient(app)
         action = {
             "action_type": "public_comment", "account_id": "preflight-account",
-            "target_key": "https://www.threads.net/@target/post/one", "content": "hello",
+            "target_key": "https://www.threads.net/@target/post/one",
+            "content": "这条分享把实际执行过程说明得很清楚，其中的边界条件很有参考价值。",
         }
         missing = client.post(
             "/api/crm/v1/tasks",

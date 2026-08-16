@@ -20,6 +20,7 @@ from .repository import (
     transition_action_state_atomic,
     update_workflow_status,
 )
+from .task_watchdog import classify_task_attention
 
 MODULE_KEY = "crm"
 MODULE_CONFIG_KEY = "crm_module_settings_v1"
@@ -405,10 +406,25 @@ def sync_social_child_tasks(
         if row["social_status"] is None:
             continue
         status = str(row["social_status"] or "")
+        result = loads(row["result_json"], {})
+        watchdog = classify_task_attention(
+            {
+                "status": "queued" if status in {"queued", "preparing"} else status,
+                "updated_at": int(row["social_updated_at"] or 0),
+                "error": str(row["social_error"] or ""),
+                "result": result,
+            }
+        )
+        if watchdog is not None:
+            status = "need_manual"
+            watchdog_error = dumps({"code": watchdog["code"], "reason": watchdog["reason"]})
+            conn.execute(
+                "UPDATE social_automation_tasks SET status='need_manual',error=?,updated_at=? WHERE id=? AND user_id=?",
+                (watchdog_error, now_ts(), str(row["social_task_id"]), int(user_id)),
+            )
         if status == "need_manual":
             child_needs_manual = True
         payload = loads(row["payload_json"], {})
-        result = loads(row["result_json"], {})
         submission_state = str(payload.get("_billing_submission_state") or "")
         outcome_unknown = bool(result.get("action_outcome_unknown") or result.get("publish_outcome_unknown"))
         spec = action_spec(str(row["action_type"] or ""))
@@ -436,6 +452,8 @@ def sync_social_child_tasks(
         before = str(row["action_state"] or "")
         evidence = _normalized_action_evidence(str(row["social_task_id"]), result)
         evidence_error = str(row["social_error"] or "")
+        if watchdog is not None:
+            evidence_error = str(watchdog["code"])
         if status == "success" and not write_proved:
             evidence_error = "crm_platform_evidence_missing"
         _advance_action(
@@ -461,9 +479,11 @@ def sync_social_child_tasks(
                 payload=event_payload,
                 result=result,
             )
+        step_error = watchdog_error if watchdog is not None else str(row["social_error"] or "")
+        step_updated_at = now_ts() if watchdog is not None else int(row["social_updated_at"] or now_ts())
         conn.execute(
             "UPDATE crm_workflow_steps SET status=?,result_json=?,error_code=?,updated_at=? WHERE id=? AND user_id=?",
-            (status, row["result_json"], str(row["social_error"] or ""), int(row["social_updated_at"] or now_ts()), str(row["step_id"]), int(user_id)),
+            (status, row["result_json"], step_error, step_updated_at, str(row["step_id"]), int(user_id)),
         )
         if before != desired:
             synced += 1
@@ -507,12 +527,13 @@ def reconcile_all_due(
             OR task.status != step.status
             OR COALESCE(task.result_json,'{}') != COALESCE(step.result_json,'{}')
             OR COALESCE(task.error,'') != COALESCE(step.error_code,'')
+            OR (task.status IN ('queued','preparing','running') AND task.updated_at <= ?)
           )
         GROUP BY workflow.id, workflow.user_id
         ORDER BY child_updated_at DESC, workflow.id
         LIMIT ?
         """,
-        (min(max(int(limit or 200), 1), 1000),),
+        (now_ts() - 120, min(max(int(limit or 200), 1), 1000)),
     ).fetchall()
     workflows = 0
     actions = 0
