@@ -14707,7 +14707,7 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
     return keywords
 
 
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 33
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 34
 PERSONA_HOT_KEYWORD_BATCH_SIZE = 8
 
 
@@ -14857,7 +14857,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "action": "fetch-hot-candidates",
             "archiveId": clean_id,
             "prompt": str(payload.prompt or "").strip(),
-            # A foreground click must always execute one authenticated search.
+            # A foreground click must always execute one public Reader search.
             # The old host may merge its candidate pool, but a full pool must
             # never suppress the current keyword batch.
             "refresh": True,

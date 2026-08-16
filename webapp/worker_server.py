@@ -42,7 +42,7 @@ ALLOWED_CAPABILITIES = {
     "persona.hot_post_metrics.v1": "refresh-hot-post",
 }
 TERMINAL_STATES = {"success", "failed", "cancelled"}
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 33
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 34
 _SAFE_JOB_ID = re.compile(r"job_[0-9a-f]{24}")
 _PERSONA_ARCHIVE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 
@@ -992,6 +992,18 @@ def _terminate_process(process: subprocess.Popen[str]) -> None:
             process.kill()
 
 
+def _apply_hot_reader_execution_profile(
+    runtime_environment: dict[str, str],
+    *,
+    background_refill: bool,
+) -> None:
+    # Four Spider processes avoid challenge-page bursts while total query
+    # coverage remains independent inside the importer.
+    runtime_environment["SENTIMENT_HOT_READER_CONCURRENCY"] = "4"
+    runtime_environment["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"] = "1" if background_refill else "0"
+    runtime_environment["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"] = "55000" if background_refill else "90000"
+
+
 def _run_tool_r18_job_once(
     payload: dict[str, Any],
     cancel_event: threading.Event,
@@ -1020,6 +1032,11 @@ def _run_tool_r18_job_once(
     holder = f"runtime_{uuid.uuid4().hex}"
     lease: dict[str, Any] | None = None
     runtime_environment = os.environ.copy()
+    if capability == "persona.hot_candidates.v1":
+        _apply_hot_reader_execution_profile(
+            runtime_environment,
+            background_refill=background_refill,
+        )
     if collector_pool is not None and use_collector_profile:
         if not capability:
             raise RuntimeError("collector capability is missing")
@@ -1133,25 +1150,33 @@ def run_tool_r18_job(
     if capability not in {"persona.hot_candidates.v1", "crm.threads_live_search.v1"}:
         return _run_tool_r18_job_once(payload, cancel_event, timeout_seconds=timeout_seconds)
 
-    # Public Reader is reserved for the scheduled background candidate-pool
-    # refill. A user-triggered hot fetch always uses the authenticated pool.
-    if capability == "persona.hot_candidates.v1" and bool(payload.get("_poolRefill")):
-        return _run_tool_r18_job_once(
+    # Persona hotspot discovery always uses the public Reader. Authenticated
+    # accounts remain reserved for CRM/full-data refresh capabilities.
+    if capability == "persona.hot_candidates.v1":
+        background_refill = bool(payload.get("_poolRefill"))
+        result = _run_tool_r18_job_once(
             {
                 **payload,
                 "sourcePolicy": "reader_only",
                 "refresh": True,
-                "recordShown": False,
+                "recordShown": not background_refill,
             },
             cancel_event,
             timeout_seconds=timeout_seconds,
             use_collector_profile=False,
         )
+        warnings = result.setdefault("warnings", [])
+        if isinstance(warnings, list):
+            warnings.append(
+                "Background HTTP-only Spider refill completed without leasing an authenticated account."
+                if background_refill
+                else "Interactive hot fetch used the public HTTP-only Spider reader without leasing an authenticated account."
+            )
+        return result
 
     authenticated_payload = {
         **payload,
         "sourcePolicy": "authenticated_only",
-        **({"recordShown": True} if capability == "persona.hot_candidates.v1" else {}),
     }
     # Two complete 30-second account windows fit the new-host 65-second RPC
     # budget. Three 20-second windows repeatedly expired while the search UI

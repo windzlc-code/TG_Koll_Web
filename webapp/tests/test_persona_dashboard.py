@@ -4593,7 +4593,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(mocked.call_args_list[0].args[0]["action"], "prepare-hot-keywords")
         self.assertEqual(mocked.call_args_list[1].args[0]["action"], "fetch-hot-candidates")
         self.assertEqual(mocked.call_args_list[1].args[0]["keywords"], ["历史老师", "历史课堂"])
-        self.assertEqual(mocked.call_args_list[1].args[0]["keywordStrategyVersion"], 33)
+        self.assertEqual(mocked.call_args_list[1].args[0]["keywordStrategyVersion"], 34)
         self.assertRegex(mocked.call_args_list[1].args[0]["keywordDigest"], r"^[0-9a-f]{64}$")
 
     def test_hot_keyword_gateway_html_error_is_not_exposed(self):

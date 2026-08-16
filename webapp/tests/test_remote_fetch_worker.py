@@ -32,7 +32,7 @@ def current_keyword_strategy(keywords):
     import hashlib
     return {
         "keywords": keywords,
-        "keywordStrategyVersion": 33,
+        "keywordStrategyVersion": 34,
         "keywordDigest": hashlib.sha256(body).hexdigest(),
     }
 
@@ -483,7 +483,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
                         "archiveId": "archive_empty_keywords",
                         "archiveSnapshot": {"id": "archive_empty_keywords", "posts": []},
                         "keywords": [],
-                        "keywordStrategyVersion": 33,
+                        "keywordStrategyVersion": 34,
                         "keywordDigest": "0" * 64,
                         "liveOnly": False,
                         "recordShown": False,
@@ -735,11 +735,11 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         ):
             result = run_tool_r18_job(
                 {
-                    "_workerCapability": "persona.hot_candidates.v1",
+                    "_workerCapability": "crm.threads_live_search.v1",
                     "action": "fetch-hot-candidates",
                     "platform": "threads",
-                    **current_keyword_strategy(["理发师", "理发店趣事"]),
                     "limit": 1,
+                    "recordShown": False,
                     "accountId": "must-not-reach-node",
                 },
                 threading.Event(),
@@ -750,13 +750,13 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertNotIn("_workerCapability", sent)
         self.assertNotIn("accountId", sent)
         self.assertEqual(sent["sourcePolicy"], "authenticated_only")
-        self.assertTrue(sent["recordShown"])
+        self.assertFalse(sent["recordShown"])
         self.assertEqual(
             observed["env"]["PERSONA_DASHBOARD_THREADS_PROFILE_DIR"],
             "/collector/profiles/one",
         )
         self.assertEqual(observed["env"]["TG_COLLECTOR_PROFILE_REQUIRED"], "1")
-        self.assertEqual(pool.acquire_args["capability"], "persona.hot_candidates.v1")
+        self.assertEqual(pool.acquire_args["capability"], "crm.threads_live_search.v1")
         self.assertTrue(pool.released[0][1]["succeeded"])
 
     def test_background_refill_uses_reader_without_leasing_account(self) -> None:
@@ -801,16 +801,17 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertEqual(sent["sourcePolicy"], "reader_only")
         self.assertFalse(sent["recordShown"])
         self.assertNotIn("userInitiated", sent)
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_CONCURRENCY"], "4")
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"], "1")
 
-    def test_interactive_hot_fetch_uses_authenticated_account_only(self) -> None:
+    def test_interactive_hot_fetch_uses_reader_without_leasing_account(self) -> None:
         class FakePool:
             def __init__(self):
                 self.acquired = 0
                 self.released = []
 
             def acquire(self, **_kwargs):
-                self.acquired += 1
-                return {"lease_id": f"collease_{self.acquired:08d}", "account": {"id": "hidden"}}
+                raise AssertionError("interactive Reader fetch must not lease an account")
 
             def use_runtime_profile(self, _lease_id, *, holder, consumer):
                 return consumer({"platform": "threads", "profile_dir": f"/collector/profiles/{self.acquired}"})
@@ -840,7 +841,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         ]
         with (
             patch("webapp.worker_server._configured_collector_pool", return_value=pool),
-            patch("webapp.worker_server.subprocess.Popen", side_effect=lambda *_args, **_kwargs: FakeProcess(responses.pop(0))),
+            patch("webapp.worker_server.subprocess.Popen", side_effect=lambda *_args, **_kwargs: FakeProcess(responses.pop(0))) as popen,
         ):
             result = run_tool_r18_job(
                 {
@@ -853,13 +854,17 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                 threading.Event(),
             )
 
-        self.assertEqual(pool.acquired, 1)
+        self.assertEqual(pool.acquired, 0)
         self.assertEqual([item["id"] for item in result["candidates"]], ["one", "two", "three"])
-        self.assertEqual(len(pool.released), 1)
-        self.assertTrue(pool.released[0][1]["succeeded"])
+        self.assertEqual(len(pool.released), 0)
         self.assertEqual(len(responses), 0)
+        sent = json.loads(popen.call_args.args[0][-1])
+        self.assertEqual(sent["sourcePolicy"], "reader_only")
+        self.assertTrue(sent["recordShown"])
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_CONCURRENCY"], "4")
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"], "0")
 
-    def test_interactive_hot_fetch_rotates_account_after_sparse_result(self) -> None:
+    def test_crm_live_search_rotates_account_after_sparse_result(self) -> None:
         class FakePool:
             def __init__(self):
                 self.acquired = 0
@@ -902,10 +907,9 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         ):
             result = run_tool_r18_job(
                 {
-                    "_workerCapability": "persona.hot_candidates.v1",
+                    "_workerCapability": "crm.threads_live_search.v1",
                     "action": "fetch-hot-candidates",
                     "platform": "threads",
-                    **current_keyword_strategy(["理发师", "理发店趣事"]),
                     "limit": 10,
                 },
                 threading.Event(),

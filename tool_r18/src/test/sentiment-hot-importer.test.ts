@@ -482,6 +482,23 @@ describe("sentiment hot importer", () => {
     expect(resolveSentimentHotModelQueryKeywords(strategy, "strict")).toContain("染发烫发价格踩雷");
   });
 
+  it("keeps a common property-search synonym in the first strict keyword batch", () => {
+    const strategy = {
+      primaryQueries: ["日本買房", "日本不動產", "東京買房", "大阪買房", "日本房貸"],
+      ecosystemQueries: [],
+      broadQueries: ["海外置產"],
+      requiredAnchorTerms: ["日本買房", "日本不動產", "東京買房"],
+      normalAnchorTerms: ["海外置產", "房地產", "投資理財"],
+      strictAcceptTerms: ["日本買房", "日本不動產", "東京買房", "大阪買房", "日本房貸"],
+      normalAcceptTerms: ["海外置產", "房地產", "投資理財", "租金回報", "資產配置"],
+      rejectTerms: [],
+      personaGuardTerms: [],
+      domainSummary: "日本不動產與跨境置產",
+    } as any;
+
+    expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict").slice(0, 8)).toContain("日本置產");
+  });
+
   it("keeps vertical and broad-vertical keyword sets distinct without standalone intent filler", () => {
     const strategy = {
       primaryQueries: [

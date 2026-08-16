@@ -105,7 +105,7 @@ const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 8_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
-const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 33;
+const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 34;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 28;
@@ -1127,6 +1127,12 @@ function expandSentimentHotCoreKeywordVariants(keywords: string[]): string[] {
     const text = cleanText(keyword);
     add(text);
     if (!text || !hasHan(text)) continue;
+    // Keep common audience search wording beside the model term. Threads users
+    // discuss property ownership with both buying and asset-placement wording.
+    if (/買房/u.test(text)) add(text.replace(/買房/gu, "置產"));
+    if (/买房/u.test(text)) add(text.replace(/买房/gu, "置业"));
+    if (/不動產/u.test(text)) add(text.replace(/不動產/gu, "置產"));
+    if (/不动产/u.test(text)) add(text.replace(/不动产/gu, "置业"));
     if (/头发/u.test(text)) add(text.replace(/头发/gu, "发"));
     for (const suffix of suffixes) {
       if (text.length <= suffix.length + 1 || !text.endsWith(suffix)) continue;
@@ -1778,6 +1784,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
             "职场趣事、生活日常、搞笑、故事、经验等通用内容类型必须与当前职业、行业、产品或主题锚点组合后才能输出，禁止单独输出或只与避坑、真实、推荐等意图词组合。",
             "primaryQueries 必须优先产出近 30 天内更可能出现高互动内容的短搜索词：主领域实体词、热门场景词、翻车/避坑/对比/前后变化/价格争议/真实体验等平台用户会主动讨论的高热词；其余再覆盖简介里的细分专长，总计至少 10 类。",
             "primaryQueries 前 12 个必须是普通用户会搜索和转发的高互动组合词，优先把主领域实体与翻车、避坑、前后对比、价格、推荐、真实体验、测评、吐槽、踩雷两两组合；不要输出脱离领域实体的韭菜、价格、真实、搞笑等单独意图词，也不要用内部运营词、从业者自嗨词或难以形成高热度讨论的抽象词。",
+            "primaryQueries 前 8 个必须分散覆盖至少 4 个主领域实体、常用同义叫法或不同子主题；同一个基础实体最多安排 2 个意图组合，不能用同一主题反复叠加避坑、翻车、真实体验等词占满首批。",
             "broadQueries 覆盖主领域品牌、产品、事件、受众问题、价格选择、使用经验和行业动态；必须避免只有内部从业者才会搜索的冷门话术。",
             "ecosystemQueries 必须是直接父领域或相邻消费场景里的高热搜索词，但正文仍必须能用 requiredAnchorTerms/strictAcceptTerms 证明属于当前人设主领域，不能漂移到无关行业。",
             "broadQueries 和 ecosystemQueries 必须包含 4-8 个主领域高互动的受众、社区或对象词；应根据当前人设自动推导，不能套用固定行业词。",
