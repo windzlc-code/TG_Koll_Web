@@ -97,11 +97,12 @@
 
 .has-onboarding-beacon {
   isolation: isolate;
+  overflow: visible !important;
 }
 
 .console-page button.console-onboarding-beacon {
   position: absolute;
-  z-index: 3;
+  z-index: 20;
   top: var(--onboarding-beacon-top, 2px);
   left: var(--onboarding-beacon-left, calc(100% - 2px));
   display: grid;

@@ -8,16 +8,17 @@ ONBOARDING_CSS_PATH = ROOT / "webapp" / "static" / "assets" / "console-onboardin
 
 
 def test_console_loads_isolated_onboarding_assets():
-    assert '/assets/console-onboarding.css?v=20260817-9' in CONSOLE_HTML
-    assert '/assets/console-onboarding.js?v=20260817-9' in CONSOLE_HTML
+    assert '/assets/console-onboarding.css?v=20260817-10' in CONSOLE_HTML
+    assert '/assets/console-onboarding.js?v=20260817-10' in CONSOLE_HTML
     assert 'id="consoleOnboardingLauncher"' not in CONSOLE_HTML
 
 
-def test_onboarding_is_scoped_to_new_non_admin_users_and_can_be_reopened():
+def test_onboarding_is_available_to_all_non_admin_users_and_can_be_reopened():
     script = ONBOARDING_JS_PATH.read_text(encoding="utf-8")
 
     assert 'const ONBOARDING_VERSION = "2026.08"' in script
-    assert 'created_at' in script
+    assert 'ONBOARDING_RELEASE_EPOCH' not in script
+    assert 'created_at' not in script
     assert 'is_admin' in script
     assert 'acting_admin' in script
     assert 'vecto-console-onboarding' in script
@@ -31,7 +32,8 @@ def test_onboarding_is_scoped_to_new_non_admin_users_and_can_be_reopened():
     assert 'if (homeLauncher) homeLauncher.hidden = false;' in script
     assert 'ensureEdgeLauncher().hidden = homeLauncherVisible;' in script
     assert 'if (!runtime.guided && ["dismissed", "completed"].includes(progress.status))' in script
-    eligibility_check = script.index('runtime.eligible = isNewUser(user);')
+    assert 'function isEligibleUser(user)' in script
+    eligibility_check = script.index('runtime.eligible = isEligibleUser(user);')
     eligibility_exit = script.index('if (!runtime.eligible) return;', eligibility_check)
     launcher_binding = script.index('syncLaunchers();', eligibility_exit)
     assert eligibility_check < eligibility_exit < launcher_binding
@@ -113,6 +115,8 @@ def test_onboarding_visuals_are_subtle_responsive_and_motion_safe():
     assert 'width: 18px !important' in styles
     assert 'width: min(238px, calc(100vw - 20px))' in styles
     assert 'height: 18px !important' in styles
+    assert 'z-index: 20' in styles
+    assert 'overflow: visible !important' in styles
     assert '.console-onboarding-card.is-completion' in styles
     assert '.console-onboarding-home-launcher.is-located' in styles
     assert '.console-onboarding-home-launcher svg' in styles

@@ -2,7 +2,6 @@
   "use strict";
 
   const ONBOARDING_VERSION = "2026.08";
-  const ONBOARDING_RELEASE_EPOCH = Date.parse("2026-08-16T16:00:00Z") / 1000;
   const STORAGE_PREFIX = "vecto-console-onboarding";
   const BEACON_LABEL = "查看此功能的新手提示";
 
@@ -542,9 +541,8 @@
     if (action.hasAttribute("data-onboarding-complete")) completeGuide();
   }
 
-  function isNewUser(user) {
-    if (!user || user.is_admin || user.acting_admin) return false;
-    return Number(user.created_at || 0) >= ONBOARDING_RELEASE_EPOCH;
+  function isEligibleUser(user) {
+    return Boolean(user && !user.is_admin && !user.acting_admin);
   }
 
   function observeNavigation() {
@@ -579,10 +577,9 @@
   async function init() {
     await waitForConsoleReady();
     const user = await loadCurrentUser();
-    if (user.is_admin || user.acting_admin) return;
     runtime.user = user;
     runtime.storageKey = storageKey(user.id);
-    runtime.eligible = isNewUser(user);
+    runtime.eligible = isEligibleUser(user);
     if (!runtime.eligible) return;
     observeNavigation();
     syncLaunchers();
