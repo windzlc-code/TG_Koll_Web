@@ -3613,7 +3613,22 @@ export function candidateMatchesCurrentKeywords(candidate: SentimentHotCandidate
   const strongNeedles = buildStrongRelevanceNeedlesForMode(relevanceKeywords, searchMode);
   const matchedCount = countMatchedNeedles(candidate, needles);
   const matchedStrongCount = countMatchedNeedles(candidate, strongNeedles);
-  if (matchedCount <= 0) return false;
+  const spiderSourceParts = source === "threads-reader-search"
+    && (candidate.metrics as any)?.publicSearch === true
+    && (candidate.metrics as any)?.crawler === "spider-http-hydration"
+    && sourceQuery.length >= 4
+    ? segmentPersonaWords(sourceQuery).filter((part) => (
+        part.length >= 2
+        && !isWeakRelevanceKeyword(part)
+        && !isGenericSentimentKeyword(part)
+      ))
+    : [];
+  // Hydration rows are real results of this exact public search. Keep a long,
+  // hot row when the visible body uses one concrete part of that query even if
+  // it does not repeat the complete controller phrase verbatim.
+  const matchesSpiderSourcePart = spiderSourceParts.length > 0
+    && countMatchedNeedles(candidate, spiderSourceParts) > 0;
+  if (matchedCount <= 0 && !matchesSpiderSourcePart) return false;
   // Public Threads search can include recommendation cards unrelated to the
   // submitted term. Keep a card only when its visible author/content actually
   // contains the query or another current persona/platform tag.

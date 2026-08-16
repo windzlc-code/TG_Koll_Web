@@ -1016,6 +1016,37 @@ describe("sentiment hot importer", () => {
     } as any, ["理发师", "剪发"], "strict")).toBe(true);
   });
 
+  it("keeps a long hot Spider result when its body matches a concrete part of the source query", () => {
+    const candidate = {
+      id: "spider-japan-property",
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@property/post/example",
+      author: "property",
+      content: "小樽這間房子有庭院和五房格局，陽台可以看到港町與海灣方向。室內與土地面積都已列清楚，但房子是現狀交屋，停車位目前未設，庭院施工後是否可規劃仍要確認，老屋狀況、交易文件與後續維護成本也應逐項查驗。想看看日本還有哪些值得研究的物件，可以先保存這份檢查方向。",
+      media: [],
+      hotScore: 2344,
+      publishedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+      metrics: {
+        source: "threads-reader-search",
+        crawler: "spider-http-hydration",
+        publicSearch: true,
+        query: "日本置產",
+      },
+      capturedAt: new Date().toISOString(),
+    };
+
+    const controllerBatch = [
+      "日本買房避坑", "日本置產避坑", "日本買房", "日本不動產",
+      "日本置產", "東京豪宅開箱", "東京豪宅", "日本置產真實收益",
+    ];
+    expect(candidateMatchesCurrentKeywords(candidate as any, controllerBatch, "strict")).toBe(true);
+    expect(finalizeSentimentHotCandidatesForDisplay([candidate] as any, 1, {
+      keywords: controllerBatch,
+      searchMode: "strict",
+      freshnessDays: 30,
+    })).toHaveLength(1);
+  });
+
   it("does not treat a generic live-stream word as strict persona relevance", () => {
     const genericLive = {
       id: "generic-live",
