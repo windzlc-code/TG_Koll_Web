@@ -8,8 +8,8 @@ ONBOARDING_CSS_PATH = ROOT / "webapp" / "static" / "assets" / "console-onboardin
 
 
 def test_console_loads_isolated_onboarding_assets():
-    assert '/assets/console-onboarding.css?v=20260817-8' in CONSOLE_HTML
-    assert '/assets/console-onboarding.js?v=20260817-8' in CONSOLE_HTML
+    assert '/assets/console-onboarding.css?v=20260817-9' in CONSOLE_HTML
+    assert '/assets/console-onboarding.js?v=20260817-9' in CONSOLE_HTML
     assert 'id="consoleOnboardingLauncher"' not in CONSOLE_HTML
 
 
@@ -110,8 +110,9 @@ def test_onboarding_visuals_are_subtle_responsive_and_motion_safe():
     assert '@media (prefers-reduced-motion: reduce)' in styles
     assert 'pointer-events: none' in styles
     assert '.console-onboarding-card' in styles and 'pointer-events: auto' in styles
-    assert 'width: 13px !important' in styles
-    assert 'height: 13px !important' in styles
+    assert 'width: 18px !important' in styles
+    assert 'width: min(238px, calc(100vw - 20px))' in styles
+    assert 'height: 18px !important' in styles
     assert '.console-onboarding-card.is-completion' in styles
     assert '.console-onboarding-home-launcher.is-located' in styles
     assert '.console-onboarding-home-launcher svg' in styles
