@@ -4528,6 +4528,35 @@ class PersonaDashboardApiTests(unittest.TestCase):
             self.assertEqual(mocked.call_count, 2)
             self.assertTrue(mocked.call_args_list[1].args[0]["forceRegenerate"])
 
+    def test_persona_hot_keyword_version_change_reuses_model_strategy_cache(self):
+        self._write_archives()
+        payload = server.PersonaDashboardHotCandidatesFetchPayload(
+            search_mode="strict",
+            writing_locale="zh-CN",
+        )
+        key = server._persona_hot_keyword_batch_key("persona-1", payload)
+        server._write_persona_hot_keyword_batch_state({
+            key: {
+                "archive_name": "History Teacher",
+                "keywords": ["old-keyword"],
+                "strategy_version": server.PERSONA_HOT_KEYWORD_STRATEGY_VERSION - 1,
+                "cursor": 1,
+            },
+        })
+        fake_result = {
+            "ok": True,
+            "archiveName": "History Teacher",
+            "keywords": ["new-keyword"],
+            "searchMode": "strict",
+            "warnings": [],
+        }
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fake_result) as mocked:
+            result = server._prepare_persona_hot_keywords("persona-1", payload)
+
+        self.assertEqual(result["keywords"], ["new-keyword"])
+        self.assertFalse(mocked.call_args.args[0]["forceRegenerate"])
+
     def test_persona_hot_keyword_batch_is_not_consumed_when_collection_fails(self):
         self._write_archives()
         keywords = [f"keyword-{index}" for index in range(12)]
@@ -4593,7 +4622,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(mocked.call_args_list[0].args[0]["action"], "prepare-hot-keywords")
         self.assertEqual(mocked.call_args_list[1].args[0]["action"], "fetch-hot-candidates")
         self.assertEqual(mocked.call_args_list[1].args[0]["keywords"], ["历史老师", "历史课堂"])
-        self.assertEqual(mocked.call_args_list[1].args[0]["keywordStrategyVersion"], 34)
+        self.assertEqual(
+            mocked.call_args_list[1].args[0]["keywordStrategyVersion"],
+            server.PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
+        )
         self.assertRegex(mocked.call_args_list[1].args[0]["keywordDigest"], r"^[0-9a-f]{64}$")
 
     def test_hot_keyword_gateway_html_error_is_not_exposed(self):

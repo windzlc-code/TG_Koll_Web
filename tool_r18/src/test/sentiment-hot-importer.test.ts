@@ -58,6 +58,7 @@ import {
   parseThreadsSearchTextCandidates,
   planThreadsBrowserDomQueryLanes,
   prepareSentimentHotKeywords,
+  prioritizeSearchablePrimaryQueries,
   refreshSentimentSourceMetrics,
   replaceThreadsSearchVariables,
   resolveSentimentHotModelStrategyKeywords,
@@ -69,6 +70,7 @@ import {
   shouldTreatThreadsProfileAsLoginWall,
   shouldUseThreadsSearchGraphqlTemplate,
   sentimentHotCandidatePoolLimits,
+  sentimentHotStrategyHasSearchablePrimaryBatch,
 } from "@/lib/sentiment-hot-importer";
 
 afterEach(() => {
@@ -76,6 +78,48 @@ afterEach(() => {
 });
 
 describe("sentiment hot importer", () => {
+  it("rejects a model batch dominated by editorial labels instead of searchable topics", () => {
+    const base = {
+      broadQueries: ["汽车维修故障"],
+      ecosystemQueries: ["汽车保养费用"],
+      requiredAnchorTerms: ["汽车", "引擎", "底盘"],
+      normalAnchorTerms: ["车辆", "维修", "保养"],
+      strictAcceptTerms: ["汽车", "引擎", "底盘", "煞车", "变速箱"],
+      normalAcceptTerms: ["车辆", "维修", "保养", "故障", "零件"],
+      rejectTerms: ["游戏"],
+      domainSummary: "汽车维修与车辆故障诊断",
+    } as any;
+    expect(sentimentHotStrategyHasSearchablePrimaryBatch({
+      ...base,
+      primaryQueries: [
+        "修车避坑指南", "汽车发动机维修", "汽车维修", "汽车底盘异响检修",
+        "机械原理科普", "汽车修理", "汽车保养常识", "修车工真实生活",
+      ],
+    })).toBe(false);
+    expect(sentimentHotStrategyHasSearchablePrimaryBatch({
+      ...base,
+      primaryQueries: [
+        "引擎故障灯", "底盘异响", "煞车抖动", "变速箱顿挫",
+        "冷气不冷", "中古车检查", "汽车维修", "保养费用",
+      ],
+    })).toBe(true);
+  });
+
+  it("moves model editorial labels behind concrete queries without inventing replacements", () => {
+    const modelQueries = [
+      "修车避坑指南", "汽车发动机维修", "汽车维修", "汽车底盘异响检修",
+      "机械原理科普", "汽车修理", "汽车保养常识", "修车工真实生活",
+      "引擎故障灯", "底盘异响", "煞车抖动", "变速箱顿挫",
+    ];
+    const ordered = prioritizeSearchablePrimaryQueries(modelQueries);
+    expect(new Set(ordered)).toEqual(new Set(modelQueries));
+    expect(ordered).toHaveLength(modelQueries.length);
+    expect(ordered.slice(0, 8)).toEqual([
+      "汽车发动机维修", "汽车维修", "汽车底盘异响检修", "汽车修理",
+      "引擎故障灯", "底盘异响", "煞车抖动", "变速箱顿挫",
+    ]);
+  });
+
   it("uses the runtime model priority before built-in hot keyword defaults", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sentiment-hot-config-"));
     const configPath = path.join(dir, "api_config.json");
@@ -482,7 +526,40 @@ describe("sentiment hot importer", () => {
     expect(resolveSentimentHotModelQueryKeywords(strategy, "strict")).toContain("染发烫发价格踩雷");
   });
 
-  it("keeps a common property-search synonym in the first strict keyword batch", () => {
+  it("puts persona-specific audience queries ahead of generic domain anchors", () => {
+    const strategy = {
+      primaryQueries: [
+        "台灣人日本買房", "非居住者日本貸款", "東京豪宅", "大阪塔樓",
+        "日本一戶建", "日本租金收益", "日本房產傳承", "日圓資產配置",
+      ],
+      ecosystemQueries: ["海外資產配置"],
+      broadQueries: ["日本房產融資"],
+      requiredAnchorTerms: ["日本不動產", "日本買房", "日本房貸"],
+      normalAnchorTerms: ["海外房產", "資產配置", "房貸融資"],
+      strictAcceptTerms: ["東京豪宅", "大阪塔樓", "日本一戶建", "日本房貸", "租金收益"],
+      normalAcceptTerms: ["海外房產", "資產配置", "房貸融資", "資產傳承", "日圓資產"],
+      rejectTerms: [],
+      personaGuardTerms: [],
+      domainSummary: "台灣客戶購買日本高端不動產、融資與跨境資產配置",
+    } as any;
+
+    const firstBatch = resolveSentimentHotModelQueryKeywords(strategy, "strict").slice(0, 8);
+
+    expect(firstBatch).toEqual([
+      "台灣人日本買房",
+      "非居住者日本貸款",
+      "日本不動產",
+      "東京豪宅",
+      "大阪塔樓",
+      "日本買房",
+      "日本一戶建",
+      "日本租金收益",
+    ]);
+    expect(firstBatch.filter((keyword) => strategy.primaryQueries.includes(keyword))).toHaveLength(6);
+    expect(firstBatch).not.toContain("資產配置");
+  });
+
+  it("does not invent a property synonym outside the model strategy", () => {
     const strategy = {
       primaryQueries: ["日本買房", "日本不動產", "東京買房", "大阪買房", "日本房貸"],
       ecosystemQueries: [],
@@ -496,7 +573,31 @@ describe("sentiment hot importer", () => {
       domainSummary: "日本不動產與跨境置產",
     } as any;
 
-    expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict").slice(0, 8)).toContain("日本置產");
+    expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict").slice(0, 8)).not.toContain("日本置產");
+  });
+
+  it("interleaves concrete compound queries with searchable strict terms", () => {
+    const strategy = {
+      primaryQueries: ["台灣人日本買房融資", "東京豪宅投資回報", "日本不動產台籍融資", "跨境理財日本房產", "日本買房匯率風險"],
+      ecosystemQueries: [],
+      broadQueries: [],
+      requiredAnchorTerms: ["日本不動產", "日本買房", "跨境理財"],
+      normalAnchorTerms: ["海外房產", "資產配置", "房貸融資"],
+      strictAcceptTerms: ["日本不動產", "日本買房", "跨境理財", "台籍融資", "東京豪宅"],
+      normalAcceptTerms: ["海外房產", "資產配置", "房貸融資", "租金回報", "匯率風險"],
+      rejectTerms: [],
+      personaGuardTerms: [],
+      domainSummary: "台灣人投資日本不動產與跨境融資",
+    } as any;
+
+    const keywords = resolveSentimentHotModelStrategyKeywords(strategy, "strict");
+    expect(keywords.slice(0, 4)).toEqual([
+      strategy.primaryQueries[0],
+      strategy.strictAcceptTerms[0],
+      strategy.primaryQueries[1],
+      strategy.strictAcceptTerms[1],
+    ]);
+    expect(keywords).toContain(strategy.primaryQueries[4]);
   });
 
   it("keeps vertical and broad-vertical keyword sets distinct without standalone intent filler", () => {
@@ -1016,13 +1117,13 @@ describe("sentiment hot importer", () => {
     } as any, ["理发师", "剪发"], "strict")).toBe(true);
   });
 
-  it("keeps a long hot Spider result when its body matches a concrete part of the source query", () => {
+  it("trusts cheap keyword-search evidence without a whole-content model review", () => {
     const candidate = {
       id: "spider-japan-property",
       platform: "threads",
       sourceUrl: "https://www.threads.com/@property/post/example",
       author: "property",
-      content: "小樽這間房子有庭院和五房格局，陽台可以看到港町與海灣方向。室內與土地面積都已列清楚，但房子是現狀交屋，停車位目前未設，庭院施工後是否可規劃仍要確認，老屋狀況、交易文件與後續維護成本也應逐項查驗。想看看日本還有哪些值得研究的物件，可以先保存這份檢查方向。",
+      content: "小樽這間房子有庭院和五房格局，陽台可以看到港町與海灣方向。室內與土地面積都已列清楚，但房子是現狀交屋，停車位目前未設，庭院施工後是否可規劃仍要確認，老屋狀況、交易文件與後續維護成本也應逐項查驗。這類物件是否值得研究，應先把這份檢查方向完整保存。",
       media: [],
       hotScore: 2344,
       publishedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
@@ -1039,12 +1140,48 @@ describe("sentiment hot importer", () => {
       "日本買房避坑", "日本置產避坑", "日本買房", "日本不動產",
       "日本置產", "東京豪宅開箱", "東京豪宅", "日本置產真實收益",
     ];
-    expect(candidateMatchesCurrentKeywords(candidate as any, controllerBatch, "strict")).toBe(true);
+    expect(candidateMatchesCurrentKeywords(candidate as any, controllerBatch, "strict")).toBe(false);
     expect(finalizeSentimentHotCandidatesForDisplay([candidate] as any, 1, {
       keywords: controllerBatch,
       searchMode: "strict",
       freshnessDays: 30,
+    })).toHaveLength(0);
+    const keywordSearchHit = {
+      ...candidate,
+      metrics: { ...candidate.metrics, matchedKeywords: ["source-query-hit"] },
+    };
+    expect(finalizeSentimentHotCandidatesForDisplay([keywordSearchHit] as any, 1, {
+      keywords: controllerBatch,
+      searchMode: "strict",
+      freshnessDays: 30,
     })).toHaveLength(1);
+  });
+
+  it("rejects stale cache evidence from a generic query outside the current batch", () => {
+    const candidate = {
+      id: "stale-generic-system-query",
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@frontend/post/stale-system",
+      author: "frontend",
+      content: "前端系统最近调整了登录流程与刷新令牌机制，这篇内容完整讨论浏览器缓存、并发请求、接口错误处理、页面状态管理、线上监控和发布回滚流程。",
+      media: [],
+      hotScore: 1800,
+      publishedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+      metrics: {
+        source: "threads-reader-search",
+        query: "系统",
+        matchedKeywords: ["系统"],
+        crawler: "spider-http-hydration",
+        publicSearch: true,
+      },
+      capturedAt: new Date().toISOString(),
+    };
+
+    expect(finalizeSentimentHotCandidatesForDisplay([candidate] as any, 10, {
+      keywords: ["修车避坑指南", "汽车发动机维修", "汽车维修", "汽车底盘异响检修"],
+      searchMode: "strict",
+      freshnessDays: 30,
+    })).toHaveLength(0);
   });
 
   it("does not treat a generic live-stream word as strict persona relevance", () => {

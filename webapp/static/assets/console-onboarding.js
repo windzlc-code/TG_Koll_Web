@@ -12,35 +12,41 @@
       title: "先建立你的人设",
       eyebrow: "第 1 步 · 我的⼈设",
       message: "补充名称、定位和头像，后续生成内容与账号运营都会沿用这套人设。",
-      selector: '[data-module="personas"]',
+      targetSelector: "[data-persona-open-create]",
+      entrySelector: '[data-module="personas"]',
     },
     {
       id: "accounts",
       title: "添加并检查平台账号",
       eyebrow: "第 2 步 · 账号管理",
       message: "添加 Threads 或 Instagram 账号，完成登录、代理与两步验证检查。",
-      selector: '[data-workspace-module="accounts"]',
+      targetSelector: "[data-account-pool-add], [data-persona-manage-account]",
+      entrySelector: '[data-workspace-module="accounts"]',
+      beaconAnchorSelector: "strong",
     },
     {
       id: "tweet_generation",
       title: "生成第一批推文",
       eyebrow: "第 3 步 · 推文生成",
       message: "选择人设与内容方向，生成草稿后可继续编辑、配图并保存。",
-      selector: '[data-module="tweet_generation"]',
+      targetSelector: "[data-persona-generate-posts]",
+      entrySelector: '[data-module="tweet_generation"]',
     },
     {
       id: "publishing",
       title: "把内容交给任务流程",
       eyebrow: "第 4 步 · 任务",
       message: "选择发布账号与执行方式，确认后任务会进入队列并由浏览器自动执行。",
-      selector: '[data-module="publishing"]',
+      targetSelector: "[data-persona-publish-submit], [data-persona-run-automation]",
+      entrySelector: '[data-module="publishing"]',
     },
     {
       id: "persona_dashboard",
       title: "回到看板查看结果",
       eyebrow: "第 5 步 · 人设看板",
       message: "查看内容、发布和互动数据，确认结果后再调整下一轮运营计划。",
-      selector: '[data-view="persona_dashboard"], [data-workspace-view="persona_dashboard"]',
+      targetSelector: "#btnPersonaDashboardSync",
+      entrySelector: '[data-view="persona_dashboard"], [data-workspace-view="persona_dashboard"]',
     },
   ];
 
@@ -98,14 +104,40 @@
     }) || null;
   }
 
-  function stepTargets(step) {
-    return Array.from(document.querySelectorAll(step.selector)).filter((element) => (
+  function renderedElement(elements) {
+    return elements.find((element) => {
+      if (element.hidden || !element.getClientRects().length) return false;
+      const style = window.getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    }) || null;
+  }
+
+  function matchingTargets(selector) {
+    return Array.from(document.querySelectorAll(selector)).filter((element) => (
       element instanceof HTMLElement && !element.classList.contains("console-onboarding-beacon")
     ));
   }
 
-  function activeTarget(step) {
-    return visibleElement(stepTargets(step));
+  function stepTargets(step) {
+    return matchingTargets(step.targetSelector);
+  }
+
+  function stepEntryTargets(step) {
+    return matchingTargets(step.entrySelector);
+  }
+
+  function activeStepTarget(step) {
+    return renderedElement(stepTargets(step));
+  }
+
+  function activeEntryTarget(step) {
+    return renderedElement(stepEntryTargets(step));
+  }
+
+  function guideTarget(step) {
+    return activeStepTarget(step) || activeEntryTarget(step);
   }
 
   function clearFocus() {
@@ -132,12 +164,12 @@
   function syncBeacons() {
     if (!runtime.eligible) return;
     const progress = readProgress();
-    if (["dismissed", "completed"].includes(progress.status)) {
+    if (!runtime.guided && ["dismissed", "completed"].includes(progress.status)) {
       removeBeacons();
       return;
     }
     steps.forEach((step, index) => {
-      const target = activeTarget(step);
+      const target = activeStepTarget(step);
       const beaconHost = target?.parentElement || null;
       document.querySelectorAll(`.console-onboarding-beacon[data-target-id="${step.id}"]`).forEach((beacon) => {
         if (!beaconHost || beacon.parentElement !== beaconHost) removeBeacon(beacon);
@@ -152,7 +184,10 @@
         beaconHost.dataset.onboardingPositioned = "true";
         beaconHost.style.position = "relative";
       }
-      const targetRect = target.getBoundingClientRect();
+      const beaconAnchor = step.beaconAnchorSelector
+        ? target.querySelector(step.beaconAnchorSelector) || target
+        : target;
+      const targetRect = beaconAnchor.getBoundingClientRect();
       const hostRect = beaconHost.getBoundingClientRect();
       const beaconLeft = targetRect.right - hostRect.left - 2;
       const beaconTop = targetRect.top - hostRect.top + 2;
@@ -232,32 +267,33 @@
   }
 
   function ensureHomeLauncher() {
-    const page = document.querySelector('[data-panel="persona_dashboard"] .persona-dashboard-page');
-    if (!page) return null;
-    let slot = page.querySelector(":scope > .console-onboarding-home-slot");
-    if (!slot) {
-      slot = document.createElement("div");
-      slot.className = "console-onboarding-home-slot";
-      page.appendChild(slot);
-    }
+    const toolbar = document.getElementById("personaDashboardToolbarActions");
+    if (!toolbar) return null;
     if (runtime.homeLauncher?.isConnected) return runtime.homeLauncher;
     const launcher = document.createElement("button");
     launcher.id = "consoleOnboardingHomeLauncher";
     launcher.className = "console-onboarding-home-launcher";
     launcher.type = "button";
-    launcher.textContent = "新手提示";
+    launcher.setAttribute("aria-label", "重新查看新手教程");
+    launcher.title = "重新查看新手教程";
+    launcher.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 5.5c2.7-.9 5.3-.4 8 1.3v12c-2.7-1.7-5.3-2.2-8-1.3z"></path>
+        <path d="M20 5.5c-2.7-.9-5.3-.4-8 1.3v12c2.7-1.7 5.3-2.2 8-1.3z"></path>
+      </svg>
+      <span>教程</span>`;
     launcher.addEventListener("click", launchReminder);
-    slot.appendChild(launcher);
+    toolbar.insertBefore(launcher, document.getElementById("btnPersonaDashboardSync"));
     runtime.homeLauncher = launcher;
     return launcher;
   }
 
   function syncLaunchers() {
     if (!runtime.eligible) return;
-    const completed = readProgress().status === "completed";
-    ensureEdgeLauncher().hidden = completed;
     const homeLauncher = ensureHomeLauncher();
-    if (homeLauncher) homeLauncher.hidden = !completed;
+    if (homeLauncher) homeLauncher.hidden = false;
+    const homeLauncherVisible = Boolean(homeLauncher && visibleElement([homeLauncher]));
+    ensureEdgeLauncher().hidden = homeLauncherVisible;
   }
 
   function ensureHost() {
@@ -286,7 +322,7 @@
   function positionCard(step = steps[runtime.currentStep] || steps[0]) {
     const card = runtime.host?.querySelector(".console-onboarding-card");
     if (!card) return;
-    const target = activeTarget(step);
+    const target = guideTarget(step);
     const margin = 10;
     const viewportWidth = document.documentElement.clientWidth;
     const viewportHeight = document.documentElement.clientHeight;
@@ -334,7 +370,7 @@
     runtime.currentStep = steps.indexOf(step);
     runtime.guided = false;
     clearFocus();
-    activeTarget(step)?.classList.add("is-onboarding-focus");
+    guideTarget(step)?.classList.add("is-onboarding-focus");
     const host = ensureHost();
     host.innerHTML = `
       <section class="console-onboarding-card is-reminder" role="dialog" aria-modal="false" aria-labelledby="consoleOnboardingTitle">
@@ -352,19 +388,42 @@
     scheduleCardPosition(step);
   }
 
+  function waitForStepTarget(step, timeoutMs = 2400) {
+    const startedAt = window.performance.now();
+    return new Promise((resolve) => {
+      const inspect = () => {
+        const target = activeStepTarget(step);
+        if (target || window.performance.now() - startedAt >= timeoutMs) {
+          resolve(target);
+          return;
+        }
+        window.setTimeout(inspect, 80);
+      };
+      inspect();
+    });
+  }
+
+  function focusStepTarget(step, target) {
+    if (!target) return;
+    clearFocus();
+    target.classList.add("is-onboarding-focus");
+    target.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+    scheduleBeaconSync();
+    scheduleCardPosition(step);
+  }
+
   function navigateToStep(index, { render = true } = {}) {
     const step = steps[index] || steps[0];
     runtime.currentStep = steps.indexOf(step);
     clearFocus();
-    const target = activeTarget(step);
+    const target = activeStepTarget(step);
     if (target) {
-      target.click();
-      window.setTimeout(() => {
-        const nextTarget = activeTarget(step) || target;
-        nextTarget.classList.add("is-onboarding-focus");
-        nextTarget.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
-        scheduleCardPosition(step);
-      }, 180);
+      focusStepTarget(step, target);
+    } else {
+      activeEntryTarget(step)?.click();
+      waitForStepTarget(step).then((nextTarget) => {
+        focusStepTarget(step, nextTarget || activeEntryTarget(step));
+      });
     }
     if (render) renderGuideStep(runtime.currentStep);
   }
@@ -395,8 +454,8 @@
 
   function startGuide(index = 0) {
     runtime.eligible = true;
-    syncBeacons();
     navigateToStep(Math.max(0, Math.min(index, steps.length - 1)));
+    syncBeacons();
   }
 
   function exitGuide() {
@@ -415,7 +474,7 @@
         <button type="button" class="console-onboarding-close" data-onboarding-close aria-label="关闭完成提示">×</button>
         <div class="console-onboarding-kicker">教程完成</div>
         <h2 id="consoleOnboardingCompleteTitle">已完成全部提示</h2>
-        <p>以后可在首页底部的“新手提示”重新查看。</p>
+        <p>以后可在首页标题栏的“教程”按钮重新查看。</p>
         <div class="console-onboarding-actions">
           <button type="button" class="is-quiet" data-onboarding-close>知道了</button>
           <button type="button" class="is-primary" data-onboarding-locate>查看位置</button>
@@ -426,7 +485,7 @@
 
   function locateHomeLauncher() {
     const homeStep = steps[steps.length - 1];
-    activeTarget(homeStep)?.click();
+    activeEntryTarget(homeStep)?.click();
     closeCard();
     window.setTimeout(() => {
       const launcher = ensureHomeLauncher();
@@ -491,9 +550,7 @@
   function observeNavigation() {
     runtime.observer?.disconnect();
     runtime.observer = new MutationObserver(scheduleBeaconSync);
-    [document.getElementById("moduleMenu"), document.getElementById("mobileTaskDock"), document.querySelector(".sidebar-bottom-actions"), document.getElementById("personaDashboardApp")]
-      .filter(Boolean)
-      .forEach((element) => runtime.observer.observe(element, { childList: true, subtree: true }));
+    runtime.observer.observe(document.body, { childList: true, subtree: true });
     window.addEventListener("resize", scheduleBeaconSync, { passive: true });
     window.addEventListener("scroll", () => scheduleCardPosition(), { passive: true, capture: true });
   }

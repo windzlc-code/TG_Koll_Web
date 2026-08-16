@@ -8,8 +8,8 @@ ONBOARDING_CSS_PATH = ROOT / "webapp" / "static" / "assets" / "console-onboardin
 
 
 def test_console_loads_isolated_onboarding_assets():
-    assert '/assets/console-onboarding.css?v=20260817-6' in CONSOLE_HTML
-    assert '/assets/console-onboarding.js?v=20260817-6' in CONSOLE_HTML
+    assert '/assets/console-onboarding.css?v=20260817-8' in CONSOLE_HTML
+    assert '/assets/console-onboarding.js?v=20260817-8' in CONSOLE_HTML
     assert 'id="consoleOnboardingLauncher"' not in CONSOLE_HTML
 
 
@@ -24,6 +24,13 @@ def test_onboarding_is_scoped_to_new_non_admin_users_and_can_be_reopened():
     assert 'consoleOnboardingEdgeLauncher' in script
     assert 'consoleOnboardingHomeLauncher' in script
     assert '打开新手提示' in script
+    assert 'personaDashboardToolbarActions' in script
+    assert '重新查看新手教程' in script
+    assert '<span>教程</span>' in script
+    assert 'toolbar.insertBefore(launcher, document.getElementById("btnPersonaDashboardSync"));' in script
+    assert 'if (homeLauncher) homeLauncher.hidden = false;' in script
+    assert 'ensureEdgeLauncher().hidden = homeLauncherVisible;' in script
+    assert 'if (!runtime.guided && ["dismissed", "completed"].includes(progress.status))' in script
     eligibility_check = script.index('runtime.eligible = isNewUser(user);')
     eligibility_exit = script.index('if (!runtime.eligible) return;', eligibility_check)
     launcher_binding = script.index('syncLaunchers();', eligibility_exit)
@@ -43,24 +50,46 @@ def test_onboarding_covers_the_primary_business_flow_without_blocking_it():
     for step in expected_steps:
         assert step in script
 
+    for target_selector in (
+        'targetSelector: "[data-persona-open-create]"',
+        'targetSelector: "[data-account-pool-add], [data-persona-manage-account]"',
+        'targetSelector: "[data-persona-generate-posts]"',
+        'targetSelector: "[data-persona-publish-submit], [data-persona-run-automation]"',
+        'targetSelector: "#btnPersonaDashboardSync"',
+    ):
+        assert target_selector in script
+    assert 'beaconAnchorSelector: "strong"' in script
+    assert 'target.querySelector(step.beaconAnchorSelector) || target' in script
+
+    for entry_selector in (
+        'entrySelector: \'[data-module="personas"]\'',
+        'entrySelector: \'[data-workspace-module="accounts"]\'',
+        'entrySelector: \'[data-module="tweet_generation"]\'',
+        'entrySelector: \'[data-module="publishing"]\'',
+        'entrySelector: \'[data-view="persona_dashboard"], [data-workspace-view="persona_dashboard"]\'',
+    ):
+        assert entry_selector in script
+
     assert 'className = "console-onboarding-beacon"' in script
     assert 'data-onboarding-start' in script
     assert 'data-onboarding-jump' in script
     assert 'data-onboarding-dismiss' in script
     assert 'data-onboarding-exit' in script
-    assert 'click()' in script
     assert 'role="dialog"' in script
     assert 'aria-modal="false"' in script
     assert 'scheduleCardPosition(step)' in script
-    assert 'rect.left < document.documentElement.clientWidth' in script
     assert '新手提示' in script
     assert 'const beaconLeft = targetRect.right - hostRect.left - 2;' in script
     assert 'const beaconTop = targetRect.top - hostRect.top + 2;' in script
-    assert 'const target = activeTarget(step);' in script
+    assert 'const target = activeStepTarget(step);' in script
     assert 'if (!target || !beaconHost) return;' in script
     assert 'if (candidate !== target) delete candidate.dataset.onboardingTarget;' in script
+    assert 'activeEntryTarget(step)?.click();' in script
+    assert 'waitForStepTarget(step).then((nextTarget)' in script
+    assert 'target.click();' not in script
+    assert 'runtime.observer.observe(document.body, { childList: true, subtree: true });' in script
     assert '已完成全部提示' in script
-    assert '以后可在首页底部的“新手提示”重新查看。' in script
+    assert '以后可在首页标题栏的“教程”按钮重新查看。' in script
     assert 'data-onboarding-locate' in script
     assert 'scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" })' in script
 
@@ -85,3 +114,5 @@ def test_onboarding_visuals_are_subtle_responsive_and_motion_safe():
     assert 'height: 13px !important' in styles
     assert '.console-onboarding-card.is-completion' in styles
     assert '.console-onboarding-home-launcher.is-located' in styles
+    assert '.console-onboarding-home-launcher svg' in styles
+    assert '.console-onboarding-home-slot' not in styles

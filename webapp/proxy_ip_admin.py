@@ -306,6 +306,7 @@ def run_proxy_market_health_maintenance_once(*, now: int | None = None, limit: i
         is_healthy = bool(result.get("ok"))
         response = result.get("response") if isinstance(result.get("response"), dict) else {}
         connection = response.get("connection") if isinstance(response.get("connection"), dict) else {}
+        result_json = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
         next_status = str(item.get("status") or "active")
         if is_healthy and next_status == "maintenance":
             next_status = "active"
@@ -332,7 +333,7 @@ def run_proxy_market_health_maintenance_once(*, now: int | None = None, limit: i
                     "healthy" if is_healthy else "failed",
                     int(result.get("latency_ms") or 0),
                     checked_at,
-                    json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                    result_json,
                     str(response.get("country") or ""),
                     str(response.get("country") or ""),
                     str(response.get("region") or ""),
@@ -346,6 +347,33 @@ def run_proxy_market_health_maintenance_once(*, now: int | None = None, limit: i
                     int(item.get("version") or 1),
                 ),
             ).rowcount
+            if updated and str(item.get("ownership_type") or "").strip().lower() == "owned":
+                conn.execute(
+                    """
+                    UPDATE social_proxies
+                    SET country = CASE WHEN ? != '' THEN ? ELSE country END,
+                        region = CASE WHEN ? != '' THEN ? ELSE region END,
+                        city = CASE WHEN ? != '' THEN ? ELSE city END,
+                        isp = CASE WHEN ? != '' THEN ? ELSE isp END,
+                        last_check_at = ?, last_check_result = ?, updated_at = ?
+                    WHERE market_item_id = ? AND user_id = ?
+                    """,
+                    (
+                        str(response.get("country") or ""),
+                        str(response.get("country") or ""),
+                        str(response.get("region") or ""),
+                        str(response.get("region") or ""),
+                        str(response.get("city") or ""),
+                        str(response.get("city") or ""),
+                        str(connection.get("isp") or connection.get("org") or ""),
+                        str(connection.get("isp") or connection.get("org") or ""),
+                        checked_at,
+                        result_json,
+                        checked_at,
+                        str(item["id"]),
+                        int(item.get("owner_user_id") or 0),
+                    ),
+                )
         if not updated:
             summary["skipped"] += 1
             continue

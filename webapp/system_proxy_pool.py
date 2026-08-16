@@ -274,7 +274,11 @@ def list_system_proxy_pool_options(
                 continue
             if not _fresh_and_healthy(item, now=now, max_age_seconds=max_age):
                 continue
-        check_result = str((item.get("owned_proxy_last_check_result") if owned else item.get("last_check_result_json")) or "{}")
+        check_result = str(
+            (item.get("last_check_result_json") or item.get("owned_proxy_last_check_result"))
+            if owned
+            else (item.get("last_check_result_json") or "{}")
+        )
         try:
             parsed_check = json.loads(check_result)
         except (TypeError, ValueError, json.JSONDecodeError):
@@ -282,10 +286,10 @@ def list_system_proxy_pool_options(
         if not isinstance(parsed_check, dict):
             parsed_check = {}
         response = parsed_check.get("response") if isinstance(parsed_check.get("response"), dict) else {}
-        country = str((item.get("owned_proxy_country") if owned else item.get("country")) or "")
-        region = str((item.get("owned_proxy_region") if owned else item.get("region")) or "")
-        city = str((item.get("owned_proxy_city") if owned else item.get("city")) or "")
-        isp = str((item.get("owned_proxy_isp") if owned else item.get("isp")) or "")
+        country = str(item.get("country") or (item.get("owned_proxy_country") if owned else "") or "")
+        region = str(item.get("region") or (item.get("owned_proxy_region") if owned else "") or "")
+        city = str(item.get("city") or (item.get("owned_proxy_city") if owned else "") or "")
+        isp = str(item.get("isp") or (item.get("owned_proxy_isp") if owned else "") or "")
         details_revealed = bool(owned or selected or include_admin_inventory)
         options.append(
             {

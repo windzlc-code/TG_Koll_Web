@@ -19,6 +19,7 @@ from webapp.remote_fetch_protocol import (
 )
 from webapp.worker_server import (
     JobStore,
+    PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
     WorkerRuntime,
     WorkerSettings,
     _validate_envelope,
@@ -32,7 +33,7 @@ def current_keyword_strategy(keywords):
     import hashlib
     return {
         "keywords": keywords,
-        "keywordStrategyVersion": 34,
+        "keywordStrategyVersion": PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
         "keywordDigest": hashlib.sha256(body).hexdigest(),
     }
 
@@ -483,7 +484,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
                         "archiveId": "archive_empty_keywords",
                         "archiveSnapshot": {"id": "archive_empty_keywords", "posts": []},
                         "keywords": [],
-                        "keywordStrategyVersion": 34,
+                        "keywordStrategyVersion": PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
                         "keywordDigest": "0" * 64,
                         "liveOnly": False,
                         "recordShown": False,
@@ -861,7 +862,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         sent = json.loads(popen.call_args.args[0][-1])
         self.assertEqual(sent["sourcePolicy"], "reader_only")
         self.assertTrue(sent["recordShown"])
-        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_CONCURRENCY"], "4")
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_CONCURRENCY"], "24")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"], "0")
 
     def test_crm_live_search_rotates_account_after_sparse_result(self) -> None:

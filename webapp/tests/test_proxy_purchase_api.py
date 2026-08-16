@@ -304,8 +304,9 @@ class ProxyPurchaseApiTests(unittest.TestCase):
             int(after["cash_backed_credit_units"]),
             int(before["cash_backed_credit_units"]) - int(quote["charge_units"]),
         )
-        self.assertEqual([str(row["status"]) for row in reservations], ["waived", "settled"])
-        self.assertEqual(json.loads(str(reservations[0]["meta_json"]))["waived_reason"], "monthly_free_proxy")
+        self.assertCountEqual([str(row["status"]) for row in reservations], ["waived", "settled"])
+        waived_reservation = next(row for row in reservations if str(row["status"]) == "waived")
+        self.assertEqual(json.loads(str(waived_reservation["meta_json"]))["waived_reason"], "monthly_free_proxy")
 
     def test_idempotency_header_must_match_body(self):
         quote = self.client.post(

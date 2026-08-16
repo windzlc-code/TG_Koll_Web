@@ -14707,7 +14707,7 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
     return keywords
 
 
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 34
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 44
 PERSONA_HOT_KEYWORD_BATCH_SIZE = 8
 
 
@@ -14793,7 +14793,11 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
         # Once every keyword in the previous strategy has been dispatched
         # successfully, explicitly bypass the strategy cache. A normal refresh
         # still reuses the current unconsumed batch and never spends model quota.
-        force_regenerate = isinstance(existing, dict) and bool(_persona_hot_payload_keywords(existing.get("keywords")))
+        force_regenerate = (
+            isinstance(existing, dict)
+            and _to_int(existing.get("strategy_version"), 0) == PERSONA_HOT_KEYWORD_STRATEGY_VERSION
+            and bool(_persona_hot_payload_keywords(existing.get("keywords")))
+        )
         result = _run_persona_hot_workflow_cli(
             {
                 "action": "prepare-hot-keywords",

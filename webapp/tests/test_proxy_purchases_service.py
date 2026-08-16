@@ -11,6 +11,7 @@ from cryptography.fernet import Fernet
 
 from webapp import db as app_db
 from webapp import commercial_billing
+from webapp import proxy_ip_admin
 from webapp import proxy_purchases
 from webapp.exchange_rates import ExchangeRateQuote
 from webapp.proxy_providers import MockProxyProvider, ProxyProviderOutcomeUnknown
@@ -174,12 +175,38 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
         self.assertEqual(tuple(social), ("provider_purchase", "owned", ""))
         self.assertEqual(resolved["username"], "mock-user")
         self.assertEqual(resolved["password"], "mock-password")
+        health_result = {
+            "ok": True,
+            "exit_ip": "198.51.100.10",
+            "latency_ms": 42,
+            "response": {
+                "country": "Portugal",
+                "country_code": "PT",
+                "region": "Distrito de Lisboa",
+                "city": "Lisbon",
+                "connection": {"isp": "Mock ISP"},
+            },
+        }
+        with mock.patch.object(proxy_ip_admin, "_run_proxy_connection_check", return_value=health_result):
+            maintenance = proxy_ip_admin.run_proxy_market_health_maintenance_once(now=1_700_000_103)
+        self.assertEqual(maintenance["healthy"], 1)
         with app_db.db() as conn:
             selectable = list_system_proxy_pool_options(conn, owner_user_id=self.user_id)
+            synchronized = conn.execute(
+                "SELECT country,region,city,isp,last_check_result FROM social_proxies WHERE id=?",
+                (stored["id"],),
+            ).fetchone()
         owned = [row for row in selectable if row["ownership_type"] == "owned"]
         self.assertEqual(len(owned), 1)
         self.assertEqual(owned[0]["social_proxy_id"], stored["id"])
         self.assertTrue(owned[0]["available"])
+        self.assertEqual(owned[0]["country"], "Portugal")
+        self.assertEqual(owned[0]["country_code"], "PT")
+        self.assertEqual(owned[0]["region"], "Distrito de Lisboa")
+        self.assertEqual(owned[0]["city"], "Lisbon")
+        self.assertEqual(owned[0]["exit_ip"], "198.51.100.10")
+        self.assertEqual(tuple(synchronized)[:4], ("Portugal", "Distrito de Lisboa", "Lisbon", "Mock ISP"))
+        self.assertTrue(json.loads(str(synchronized["last_check_result"]))["ok"])
 
     def test_admin_order_executes_without_user_point_balance(self):
         provider = MockProxyProvider(unit_price_usd="4.00")
