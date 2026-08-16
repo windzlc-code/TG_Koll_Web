@@ -28706,22 +28706,14 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
   const existingPicker = document.getElementById("accountProxyPickerModal");
   if (typeof existingPicker?.__close === "function") existingPicker.__close();
   else existingPicker?.remove();
-  if (returnModal) {
-    returnModal.hidden = true;
-    returnModal.setAttribute("aria-hidden", "true");
-  } else {
-    closeConsoleModal(null);
-  }
-
-  const modal = document.createElement("div");
-  modal.id = "accountProxyPickerModal";
-  modal.className = "console-modal account-proxy-picker-layer";
-  modal.dataset.selectedProxyId = selectedProxyId;
-  modal.dataset.originalProxyId = originalProxyId;
-  modal.dataset.accountProxyType = "supplier";
-  modal.dataset.accountProxySort = "time_desc";
-  modal.innerHTML = `
-    <div class="console-modal-backdrop" data-account-proxy-picker-cancel></div>
+  const originalDialog = returnModal?.querySelector(".console-modal-dialog") || null;
+  const modalRoot = returnModal || document.createElement("div");
+  modalRoot.dataset.selectedProxyId = selectedProxyId;
+  modalRoot.dataset.originalProxyId = originalProxyId;
+  modalRoot.dataset.accountProxyType = "supplier";
+  modalRoot.dataset.accountProxySort = "time_desc";
+  const pickerTemplate = document.createElement("template");
+  pickerTemplate.innerHTML = `
     <section class="console-modal-dialog account-proxy-picker-modal proxy-purchase-legacy-theme" role="dialog" aria-modal="true" aria-labelledby="accountProxyPickerTitle" tabindex="-1">
       <div class="console-modal-head">
         <div class="account-proxy-picker-heading">
@@ -28741,8 +28733,19 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
         ${accountProxyOptionCardsHtml(selectedProxyId, { scope: "modal" })}
       </div>
     </section>`;
-  document.body.appendChild(modal);
-  markConsoleDynamicUi(modal);
+  const pickerDialog = pickerTemplate.content.firstElementChild;
+  pickerDialog.id = "accountProxyPickerModal";
+  if (returnModal) {
+    returnModal.dataset.accountModalPage = "proxy";
+    originalDialog.replaceWith(pickerDialog);
+  } else {
+    closeConsoleModal(null);
+    modalRoot.className = "console-modal account-proxy-picker-layer";
+    modalRoot.innerHTML = '<div class="console-modal-backdrop" data-account-proxy-picker-cancel></div>';
+    modalRoot.appendChild(pickerDialog);
+    document.body.appendChild(modalRoot);
+  }
+  markConsoleDynamicUi(modalRoot);
 
   const restoreReturnModal = (proxyId = null) => {
     const hasSelection = proxyId !== null && proxyId !== undefined;
@@ -28753,40 +28756,42 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
         if (mode === "edit") returnModal.dataset.originalProxyId = cleanProxyId;
         updateAccountProxyEntryCard(returnModal, cleanProxyId);
       }
-      returnModal.hidden = false;
-      returnModal.removeAttribute("aria-hidden");
+      returnModal.dataset.accountModalPage = "editor";
       window.requestAnimationFrame(() => returnModal.querySelector("[data-account-proxy-picker-open]")?.focus({ preventScroll: true }));
     }
   };
   const close = (proxyId = null) => {
-    if (!modal.isConnected) return;
-    modal.remove();
+    if (!pickerDialog.isConnected) return;
+    if (returnModal) pickerDialog.replaceWith(originalDialog);
+    else modalRoot.remove();
     restoreReturnModal(proxyId);
   };
-  modal.__close = close;
+  pickerDialog.__close = close;
+  modalRoot.__close = close;
   const completeSelection = async (proxyId = "") => {
     const cleanProxyId = String(proxyId || "").trim();
     if (mode === "create") {
       state.accountPoolCreateDraft = { ...(state.accountPoolCreateDraft || {}), proxy_id: cleanProxyId };
-      updateAccountProxyChoice(modal, cleanProxyId);
+      updateAccountProxyChoice(modalRoot, cleanProxyId);
       close(cleanProxyId);
       return true;
     }
-    const saved = await commitAccountProxyPickerSelection(modal, cleanAccountId, cleanProxyId);
+    const saved = await commitAccountProxyPickerSelection(modalRoot, cleanAccountId, cleanProxyId);
     if (saved) close(cleanProxyId);
     return saved;
   };
   const refreshForFilter = (target) => {
     if (!target?.closest?.("[data-account-proxy-filter]")) return;
     if (target.matches('[data-account-proxy-filter="country"]')) {
-      const cityFilter = modal.querySelector('[data-account-proxy-filter="city"]');
+      const cityFilter = modalRoot.querySelector('[data-account-proxy-filter="city"]');
       if (cityFilter) cityFilter.value = "";
-      accountProxyPoolFilterOptions(modal, modal.__accountProxyPoolData || {});
+      accountProxyPoolFilterOptions(modalRoot, modalRoot.__accountProxyPoolData || {});
     }
-    refreshAccountProxyPickerOptions(modal);
+    refreshAccountProxyPickerOptions(modalRoot);
   };
 
-  modal.addEventListener("click", async (event) => {
+  pickerDialog.addEventListener("click", async (event) => {
+    event.stopPropagation();
     try {
       if (event.target.closest("[data-account-proxy-picker-cancel]")) {
         close();
@@ -28794,23 +28799,23 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
       }
       const typeButton = event.target.closest("button[data-account-proxy-type]");
       if (typeButton) {
-        modal.dataset.accountProxyType = String(typeButton.dataset.accountProxyType || "supplier");
-        modal.querySelectorAll("[data-account-proxy-type]").forEach((button) => {
+        modalRoot.dataset.accountProxyType = String(typeButton.dataset.accountProxyType || "supplier");
+        modalRoot.querySelectorAll("[data-account-proxy-type]").forEach((button) => {
           const selected = button === typeButton;
           button.classList.toggle("is-active", selected);
           button.setAttribute("aria-selected", selected ? "true" : "false");
         });
-        const countryFilter = modal.querySelector('[data-account-proxy-filter="country"]');
-        const cityFilter = modal.querySelector('[data-account-proxy-filter="city"]');
+        const countryFilter = modalRoot.querySelector('[data-account-proxy-filter="country"]');
+        const cityFilter = modalRoot.querySelector('[data-account-proxy-filter="city"]');
         if (countryFilter) countryFilter.value = "";
         if (cityFilter) cityFilter.value = "";
-        accountProxyPoolFilterOptions(modal, modal.__accountProxyPoolData || {});
-        refreshAccountProxyPickerOptions(modal);
+        accountProxyPoolFilterOptions(modalRoot, modalRoot.__accountProxyPoolData || {});
+        refreshAccountProxyPickerOptions(modalRoot);
         return;
       }
       const sortOption = event.target.closest("[data-account-proxy-sort-option]");
       if (sortOption) {
-        setAccountProxyPoolSort(modal, sortOption.dataset.accountProxySortOption || "time_desc");
+        setAccountProxyPoolSort(modalRoot, sortOption.dataset.accountProxySortOption || "time_desc");
         sortOption.closest("details")?.removeAttribute("open");
         return;
       }
@@ -28822,19 +28827,19 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
       }
       const supplierChoice = event.target.closest("[data-account-proxy-supplier-choice]");
       if (supplierChoice && !supplierChoice.disabled) {
-        const purchasedProxyId = await purchaseAccountProxySupplierOption(modal, supplierChoice);
+        const purchasedProxyId = await purchaseAccountProxySupplierOption(modalRoot, supplierChoice);
         if (purchasedProxyId) await completeSelection(purchasedProxyId);
         return;
       }
       const marketChoice = event.target.closest("[data-account-proxy-market-choice]");
       if (marketChoice && !marketChoice.disabled) {
-        const claimedProxyId = await claimAccountProxyPoolOption(modal, marketChoice.dataset.accountProxyMarketChoice || "");
+        const claimedProxyId = await claimAccountProxyPoolOption(modalRoot, marketChoice.dataset.accountProxyMarketChoice || "");
         if (claimedProxyId) await completeSelection(claimedProxyId);
         return;
       }
       const renewal = event.target.closest("[data-account-proxy-renewal-order]");
       if (renewal) {
-        await updateAccountProxyRenewal(modal, renewal);
+        await updateAccountProxyRenewal(modalRoot, renewal);
         return;
       }
       const choice = event.target.closest("[data-account-proxy-choice]");
@@ -28843,19 +28848,29 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
       showMsg("socialMsg", error.detail || error.message || "代理操作失败", false);
     }
   });
-  modal.addEventListener("input", (event) => refreshForFilter(event.target));
-  modal.addEventListener("change", (event) => refreshForFilter(event.target));
-  modal.addEventListener("keydown", (event) => {
+  pickerDialog.addEventListener("input", (event) => {
+    event.stopPropagation();
+    refreshForFilter(event.target);
+  });
+  pickerDialog.addEventListener("change", (event) => {
+    event.stopPropagation();
+    refreshForFilter(event.target);
+  });
+  pickerDialog.addEventListener("keydown", (event) => {
+    event.stopPropagation();
     if (event.key === "Escape") {
       event.preventDefault();
       close();
     }
   });
 
-  void loadAccountProxyPickerPool(modal).then((data) => {
+  if (!returnModal) {
+    modalRoot.querySelector("[data-account-proxy-picker-cancel]")?.addEventListener("click", close);
+  }
+  void loadAccountProxyPickerPool(modalRoot).then((data) => {
     if (data) state.accountProxyPoolSnapshot = data;
   });
-  window.requestAnimationFrame(() => modal.querySelector(".account-proxy-picker-modal")?.focus({ preventScroll: true }));
+  window.requestAnimationFrame(() => pickerDialog.focus({ preventScroll: true }));
   return true;
 }
 
