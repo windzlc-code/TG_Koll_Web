@@ -1757,6 +1757,65 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS social_oauth_flows (
+              state_digest TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              platform TEXT NOT NULL,
+              persona_id TEXT NOT NULL DEFAULT '',
+              expires_at INTEGER NOT NULL,
+              consumed_at INTEGER NOT NULL DEFAULT 0,
+              created_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS social_account_api_credentials (
+              account_id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              platform TEXT NOT NULL,
+              platform_user_id TEXT NOT NULL DEFAULT '',
+              access_token_ciphertext TEXT NOT NULL,
+              token_type TEXT NOT NULL DEFAULT 'bearer',
+              scope_json TEXT NOT NULL DEFAULT '[]',
+              expires_at INTEGER NOT NULL DEFAULT 0,
+              status TEXT NOT NULL DEFAULT 'active',
+              last_sync_at INTEGER NOT NULL DEFAULT 0,
+              last_error TEXT NOT NULL DEFAULT '',
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              FOREIGN KEY(account_id) REFERENCES social_accounts(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS social_account_api_snapshots (
+              account_id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              platform TEXT NOT NULL,
+              data_json TEXT NOT NULL DEFAULT '{}',
+              refreshed_at INTEGER NOT NULL DEFAULT 0,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              FOREIGN KEY(account_id) REFERENCES social_accounts(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_social_oauth_flows_expiry "
+            "ON social_oauth_flows(platform, expires_at, consumed_at)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_social_account_api_platform_user "
+            "ON social_account_api_credentials(user_id, platform, platform_user_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_social_account_api_snapshots_owner "
+            "ON social_account_api_snapshots(user_id, platform, refreshed_at DESC)"
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS proxy_market_items (
               id TEXT PRIMARY KEY,
               sku TEXT NOT NULL UNIQUE COLLATE NOCASE,

@@ -20,6 +20,7 @@ import uuid
 import contextlib
 import subprocess
 import shutil
+import secrets
 import tempfile
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
@@ -30,7 +31,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
@@ -51,6 +52,16 @@ from .password_vault import (
     PasswordVaultError,
     decrypt_secret as decrypt_vault_secret,
     encrypt_secret as encrypt_vault_secret,
+)
+from .threads_api import (
+    ThreadsApiError,
+    account_api_public_rows,
+    authorization_url as threads_authorization_url,
+    exchange_code as exchange_threads_code,
+    fetch_profile as fetch_threads_profile,
+    save_credential as save_threads_credential,
+    settings as threads_api_settings,
+    sync_account as sync_threads_account,
 )
 from .proxy_market_credentials import (
     ProxyMarketCredentialAuthorizationError,
@@ -2247,6 +2258,155 @@ def register_social_automation_routes(app: FastAPI) -> None:
     @app.get("/api/health")
     def api_health():
         return {"ok": True, "service": "tg-koll-web-console"}
+
+    @app.get("/api/threads/oauth/start")
+    def api_threads_oauth_start(
+        persona_id: str = "",
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        console_url = "/console.html?view=accounts"
+        clean_persona_id = str(persona_id or "").strip()
+        if clean_persona_id:
+            _require_persona_reference_access(clean_persona_id, user)
+        try:
+            threads_api_settings()
+        except ThreadsApiError as exc:
+            return RedirectResponse(
+                f"{console_url}&threads_oauth=error&message={quote(str(exc)[:300], safe='')}",
+                status_code=302,
+            )
+        state = secrets.token_urlsafe(32)
+        state_digest = hashlib.sha256(state.encode("utf-8")).hexdigest()
+        now = _now()
+        with db() as conn:
+            conn.execute(
+                "DELETE FROM social_oauth_flows WHERE expires_at < ? OR consumed_at > 0",
+                (now,),
+            )
+            conn.execute(
+                """
+                INSERT INTO social_oauth_flows(
+                  state_digest, user_id, platform, persona_id, expires_at, consumed_at, created_at
+                ) VALUES (?, ?, 'threads', ?, ?, 0, ?)
+                """,
+                (state_digest, _identity_user_id(user), clean_persona_id, now + 600, now),
+            )
+        return RedirectResponse(threads_authorization_url(state), status_code=302)
+
+    @app.get("/api/threads/oauth/callback")
+    def api_threads_oauth_callback(
+        code: str = "",
+        state: str = "",
+        error: str = "",
+        error_description: str = "",
+        error_message: str = "",
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        console_url = "/console.html?view=accounts"
+        if error:
+            return RedirectResponse(
+                f"{console_url}&threads_oauth=error&message={quote(str(error_description or error_message or error)[:300], safe='')}",
+                status_code=302,
+            )
+        clean_code = str(code or "").strip()
+        clean_state = str(state or "").strip()
+        if not clean_code or not clean_state:
+            return RedirectResponse(
+                f"{console_url}&threads_oauth=error&message={quote('Threads 授权回调无效，请重新发起授权。', safe='')}",
+                status_code=302,
+            )
+        state_digest = hashlib.sha256(clean_state.encode("utf-8")).hexdigest()
+        owner_user_id = _identity_user_id(user)
+        now = _now()
+        with db() as conn:
+            flow = conn.execute(
+                """
+                SELECT * FROM social_oauth_flows
+                WHERE state_digest = ? AND user_id = ? AND platform = 'threads'
+                  AND consumed_at = 0 AND expires_at >= ?
+                """,
+                (state_digest, owner_user_id, now),
+            ).fetchone()
+            if not flow:
+                return RedirectResponse(
+                    f"{console_url}&threads_oauth=error&message={quote('Threads 授权状态无效或已过期，请重新发起授权。', safe='')}",
+                    status_code=302,
+                )
+            updated = conn.execute(
+                "UPDATE social_oauth_flows SET consumed_at = ? WHERE state_digest = ? AND consumed_at = 0",
+                (now, state_digest),
+            )
+            if updated.rowcount != 1:
+                return RedirectResponse(
+                    f"{console_url}&threads_oauth=error&message={quote('Threads 授权状态已使用，请重新发起授权。', safe='')}",
+                    status_code=302,
+                )
+            persona_id = str(flow["persona_id"] or "").strip()
+        try:
+            token_payload = exchange_threads_code(clean_code)
+            access_token = str(token_payload.get("access_token") or "").strip()
+            profile = fetch_threads_profile(access_token)
+            username = str(profile.get("username") or "").strip().lstrip("@")
+            platform_user_id = str(profile.get("id") or token_payload.get("user_id") or "").strip()
+            if not username or not platform_user_id:
+                raise ThreadsApiError("Threads 授权未返回有效账号资料。")
+            with db() as conn:
+                account_row = conn.execute(
+                    """
+                    SELECT * FROM social_accounts
+                    WHERE user_id = ? AND platform = 'threads' AND lower(username) = lower(?)
+                    ORDER BY updated_at DESC LIMIT 1
+                    """,
+                    (owner_user_id, username),
+                ).fetchone()
+            if account_row:
+                account_id = str(account_row["id"] or "")
+            else:
+                created = create_social_account(
+                    SocialAccountPayload(
+                        persona_id=persona_id,
+                        platform="threads",
+                        username=username,
+                        display_name=str(profile.get("name") or "").strip(),
+                        status="pending_login",
+                    ),
+                    owner_user_id=owner_user_id,
+                )
+                account_id = str(created.get("id") or "")
+            config = threads_api_settings()
+            save_threads_credential(
+                account_id=account_id,
+                user_id=owner_user_id,
+                platform_user_id=platform_user_id,
+                access_token=access_token,
+                scopes=config.scopes,
+                expires_in=int(token_payload.get("expires_in") or 0),
+            )
+            sync_warning = ""
+            try:
+                sync_threads_account(account_id, owner_user_id)
+            except ThreadsApiError as exc:
+                sync_warning = str(exc)
+        except ThreadsApiError as exc:
+            return RedirectResponse(
+                f"{console_url}&threads_oauth=error&message={quote(str(exc)[:300], safe='')}",
+                status_code=302,
+            )
+        target = f"{console_url}&threads_oauth=success&threads_account_id={quote(account_id, safe='')}"
+        if sync_warning:
+            target += f"&threads_sync_warning={quote(sync_warning[:300], safe='')}"
+        return RedirectResponse(target, status_code=302)
+
+    @app.post("/api/threads/accounts/{account_id}/sync")
+    def api_threads_account_sync(account_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        account = _require_account_access(account_id, user)
+        if str(account["platform"] or "").strip().lower() != "threads":
+            raise HTTPException(status_code=400, detail="仅 Threads 账号支持此 API 同步。")
+        try:
+            data = sync_threads_account(account_id, _identity_user_id(user))
+        except ThreadsApiError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"ok": True, "account_id": account_id, "data": data}
 
     @app.get("/api/persona_dashboard/automation/overview")
     def api_social_automation_overview(user: dict[str, Any] = Depends(get_current_user)):
@@ -12813,6 +12973,7 @@ def _account_public_rows(
     account_ids = {str(row["id"] or "").strip() for row in rows if str(row["id"] or "").strip()}
     proxies: dict[str, Any] = {}
     totp_rows: dict[str, Any] = {}
+    api_rows: dict[str, dict[str, Any]] = {}
     if proxy_ids:
         placeholders = ",".join("?" for _ in proxy_ids)
         purchase_filter = " AND proxy.source = 'provider_purchase' AND proxy.purchase_status = 'owned'" if purchased_proxies_only else ""
@@ -12838,14 +12999,24 @@ def _account_public_rows(
             tuple(account_ids),
         ).fetchall()
         totp_rows = {str(row["account_id"] or ""): row for row in secret_rows}
-    return [
-        _account_public(
+        api_rows = account_api_public_rows(conn, account_ids)
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        account = _account_public(
             row,
             proxies.get(str(row["proxy_id"] or "")),
             totp_rows.get(str(row["id"] or "")),
         )
-        for row in rows
-    ]
+        account.update(api_rows.get(str(row["id"] or ""), {
+            "api_connected": False,
+            "api_status": "",
+            "api_scopes": [],
+            "api_expires_at": 0,
+            "api_last_sync_at": 0,
+            "api_last_error": "",
+        }))
+        result.append(account)
+    return result
 
 
 def _proxy_public_rows(conn: Any, rows: list[Any]) -> list[dict[str, Any]]:
@@ -12969,6 +13140,12 @@ def _account_public(row: Any, proxy_row: Any | None = None, totp_row: Any | None
         "totp_status": str(totp["status"]),
         "totp_updated_at": int(totp["updated_at"]),
         "totp_last_verified_at": int(totp["last_verified_at"]),
+        "api_connected": False,
+        "api_status": "",
+        "api_scopes": [],
+        "api_expires_at": 0,
+        "api_last_sync_at": 0,
+        "api_last_error": "",
         "last_login_check_at": int(item.get("last_login_check_at") or 0),
         "last_run_at": int(item.get("last_run_at") or 0),
         "last_error": str(item.get("last_error") or ""),

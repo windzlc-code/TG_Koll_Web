@@ -643,18 +643,28 @@ async function main() {
     ? archives.filter((archive) => scopedTargetIds.has(String(archive.id || "")))
     : archives;
   const useRssHub = source === "rsshub";
-  const refreshAuth = useRssHub ? { ok: true, message: "RSSHub 模式不需要浏览器 Cookie" } : await refreshSentimentBrowserCookiesForPlatform("threads").catch((error: any) => ({
+  const skippedThreadsAccountIds = new Set(
+    String(process.env.PERSONA_DASHBOARD_SKIP_THREADS_ACCOUNT_IDS || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+  const hasBrowserThreadsTargets = targets.some((archive) =>
+    collectThreadsRefreshTargets(archive).some((target) => !skippedThreadsAccountIds.has(String(target.accountId || ""))),
+  );
+  const threadsBrowserNotNeeded = useRssHub || !hasBrowserThreadsTargets;
+  const refreshAuth = threadsBrowserNotNeeded ? { ok: true, message: "Threads API 已覆盖已授权账号" } : await refreshSentimentBrowserCookiesForPlatform("threads").catch((error: any) => ({
     ok: false,
     message: error instanceof Error ? error.message : String(error || "unknown"),
   }));
-  const liveAuthStatus: any = useRssHub ? null : await getLiveSentimentBrowserAuthProfileBinding("threads").catch((error: any) => ({
+  const liveAuthStatus: any = threadsBrowserNotNeeded ? null : await getLiveSentimentBrowserAuthProfileBinding("threads").catch((error: any) => ({
     health: "missing",
     hasRequiredSessionCookie: false,
     authorizationNeedsRefresh: true,
     message: error instanceof Error ? error.message : String(error || "unknown"),
   }));
-  const auth: any = useRssHub
-    ? { ok: true, message: "RSSHub 模式不需要浏览器 Cookie", profileKey: "rsshub" }
+  const auth: any = threadsBrowserNotNeeded
+    ? { ok: true, message: refreshAuth.message, profileKey: useRssHub ? "rsshub" : "threads_api" }
     : {
         ...liveAuthStatus,
         ok: sentimentAuthStatusIsUsable(liveAuthStatus),
@@ -669,6 +679,7 @@ async function main() {
       results.push({ archiveId: archive.id, name: archive.name, ok: false, skipped: true, message: "未绑定可用 Threads 账号，请先在账号池绑定并确认账号已登录。" });
     }
     for (const target of refreshTargets) {
+      if (skippedThreadsAccountIds.has(String(target.accountId || ""))) continue;
       const username = normalizeThreadsUsername(target.username);
       if (!username) continue;
       if (!auth.ok) {

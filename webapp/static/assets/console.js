@@ -334,6 +334,10 @@ const initialConsoleView = initialConsoleParams.get("view");
 const initialAccountBrowserPanel = initialConsoleParams.get("browser_panel");
 const initialGoogleAccountSessionResult = initialConsoleParams.get("google_account_session");
 let googleAccountSessionResultConsumed = false;
+const initialThreadsOauthResult = initialConsoleParams.get("threads_oauth");
+const initialThreadsOauthAccountId = String(initialConsoleParams.get("threads_account_id") || "").trim();
+const initialThreadsOauthMessage = String(initialConsoleParams.get("message") || initialConsoleParams.get("threads_sync_warning") || "").trim();
+let threadsOauthResultConsumed = false;
 const VIDEO_WORKBENCH_ENABLED = ADMIN_CONSOLE_SESSION;
 const VIDEO_WORKSPACE_MODULES = [
   { id: "digital_human_video", label: "数字人口播视频" },
@@ -3102,6 +3106,31 @@ function renderAccountFieldHead(label, account, options = {}) {
 
 function accountDisplayName(account) {
   return String(account?.username || account?.account_username || account?.id || "").trim() || "未命名账号";
+}
+
+async function consumeThreadsOauthResult() {
+  if (!initialThreadsOauthResult || threadsOauthResultConsumed) return;
+  threadsOauthResultConsumed = true;
+  const url = new URL(window.location.href);
+  ["threads_oauth", "threads_account_id", "threads_sync_warning", "message"].forEach((key) => url.searchParams.delete(key));
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  if (initialThreadsOauthResult !== "success") {
+    showMsg("socialMsg", initialThreadsOauthMessage || "Threads 授权未完成，请重新接入。", false);
+    return;
+  }
+  await loadSocial({ render: false, force: true }).catch(() => {});
+  showMsg(
+    "socialMsg",
+    initialThreadsOauthMessage
+      ? `Threads API 已接入；数据同步提示：${initialThreadsOauthMessage}`
+      : "Threads API 已接入，账号数据已通过官方接口同步。正在检测浏览器登录状态…",
+    true,
+  );
+  if (initialThreadsOauthAccountId) {
+    startAccountBrowserSessionReuse(initialThreadsOauthAccountId, "", "socialMsg").catch((error) => {
+      showMsg("socialMsg", error.detail || error.message || "Threads API 已接入，但浏览器登录检测未启动。", false);
+    });
+  }
 }
 
 function accountTotpStatusLabel(status = "", configured = false) {
@@ -14379,7 +14408,7 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
     const task = await api("/api/persona_dashboard/refresh", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ archive_id: cleanPersonaId, source: "browser" }),
+      body: JSON.stringify({ archive_id: cleanPersonaId, source: "api_first" }),
     });
     const taskId = String(task?.id || "").trim();
     if (!taskId) throw new Error("刷新任务未返回任务 ID");
@@ -27388,6 +27417,7 @@ function renderAccountPoolCardFields(account, { selectionControl = "", includeCo
     </span>
     <button type="button" class="account-pool-card-continue-login" ${loginActionAttribute}="${esc(accountId)}" data-account-login-resume="true" ${activeLoginTask?.id ? `data-open-login-task-id="${esc(activeLoginTask.id)}"` : ""} ${canResumeLogin ? "" : "hidden"}>${renderBrowserLaunchIcon()}<span>继续登录</span></button>
     <span class="account-pool-card-flags">
+      ${platform === "threads" && account?.api_connected ? `<span class="status ok" title="Threads 官方 API 已授权${account.api_last_sync_at ? `，最近同步：${formatTime(account.api_last_sync_at)}` : ""}">API 已接入</span>` : ""}
       <span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${renderAccountStatusContent(account)}</span>
       ${renderAccountTotpBadge(account)}
     </span>
@@ -29433,6 +29463,7 @@ function openAccountPoolCreateModal(options) {
 }
 
 function renderAccountAddMethodIcon(method = "manual") {
+  if (method === "threads_api") return renderAccountPoolPlatformIcon("threads");
   if (method === "google") {
     return `<img src="/assets/opc/google-g-gradient.svg" alt="" aria-hidden="true" />`;
   }
@@ -29470,6 +29501,9 @@ async function startAccountBrowserSessionReuse(accountId = "", personaId = "", m
 
 function openAccountAddMethodModal(options = {}) {
   closeConsoleModal(null);
+  const platform = normalizeAccountPoolPlatform(options.platform || state.accountPoolPlatform);
+  const apiMethod = platform === "threads" ? "threads_api" : "google";
+  const apiMethodLabel = platform === "threads" ? "Threads 接入" : "Google 快速接入";
   const modal = document.createElement("div");
   modal.id = "consoleModal";
   modal.className = "console-modal";
@@ -29487,12 +29521,14 @@ function openAccountAddMethodModal(options = {}) {
             <span class="account-add-method-icon">${renderAccountAddMethodIcon("manual")}</span>
             <span>填写账号密码</span>
           </button>
-          <button type="button" class="account-add-method-button account-add-method-button-google" data-account-add-method="google">
-            <span class="account-add-method-icon">${renderAccountAddMethodIcon("google")}</span>
-            <span>Google 快速接入</span>
+          <button type="button" class="account-add-method-button account-add-method-button-google" data-account-add-method="${apiMethod}">
+            <span class="account-add-method-icon">${renderAccountAddMethodIcon(apiMethod)}</span>
+            <span>${apiMethodLabel}</span>
           </button>
         </div>
-        <p class="account-add-method-note">两种入口均使用现有账号密码登录流程，登录状态保存在账号专属指纹浏览器中。</p>
+        <p class="account-add-method-note">${platform === "threads"
+          ? "Threads 接入通过官方授权同步可用数据；网页登录仍复用账号专属浏览器。"
+          : "两种入口均使用现有账号密码登录流程，登录状态保存在账号专属指纹浏览器中。"}</p>
       </div>
     </section>`;
   document.body.appendChild(modal);
@@ -29507,6 +29543,13 @@ function openAccountAddMethodModal(options = {}) {
     const method = event.target.closest("[data-account-add-method]")?.dataset.accountAddMethod;
     if (!method) return;
     close();
+    if (method === "threads_api") {
+      const params = new URLSearchParams();
+      const personaId = String(options.personaId || options.persona_id || "").trim();
+      if (personaId) params.set("persona_id", personaId);
+      window.location.assign(`/api/threads/oauth/start${params.toString() ? `?${params}` : ""}`);
+      return;
+    }
     openAccountPoolEditorModal(options);
   });
   modal.addEventListener("keydown", (event) => {
@@ -34747,6 +34790,7 @@ async function init() {
       renderAccountProxySelectorPage();
     }
     consumeGoogleAccountSessionResult();
+    consumeThreadsOauthResult().catch(() => {});
     if (!hasPersonaBootstrap || isPersonaWorkspaceModule() || state.activeModule === "publishing" || state.activeModule === "automation") scheduleWorkspaceRender(false);
   }).catch(() => {});
   const personasReady = loadPersonas().then(() => {
