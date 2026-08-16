@@ -289,10 +289,14 @@
 
   function syncLaunchers() {
     if (!runtime.eligible) return;
+    const progress = readProgress();
     const homeLauncher = ensureHomeLauncher();
     if (homeLauncher) homeLauncher.hidden = false;
     const homeLauncherVisible = Boolean(homeLauncher && visibleElement([homeLauncher]));
-    ensureEdgeLauncher().hidden = homeLauncherVisible;
+    const cardOpen = Boolean(runtime.host?.querySelector(".console-onboarding-card"));
+    const reminderSuppressed = ["dismissed", "completed"].includes(progress.status);
+    const edgeLauncher = ensureEdgeLauncher();
+    edgeLauncher.hidden = homeLauncherVisible || cardOpen || reminderSuppressed;
   }
 
   function ensureHost() {
@@ -312,6 +316,7 @@
     host.replaceChildren();
     if (!keepFocus) clearFocus();
     runtime.guided = false;
+    syncLaunchers();
   }
 
   function clamp(value, minimum, maximum) {
@@ -381,9 +386,10 @@
           <button type="button" class="is-quiet" data-onboarding-close>稍后</button>
           <button type="button" class="is-secondary" data-onboarding-jump>前往</button>
           <button type="button" class="is-primary" data-onboarding-start>开始</button>
+          <button type="button" class="is-exit" data-onboarding-dismiss>退出</button>
         </div>
-        <button type="button" class="console-onboarding-dismiss" data-onboarding-dismiss>不再提示</button>
       </section>`;
+    syncLaunchers();
     scheduleCardPosition(step);
   }
 
@@ -448,6 +454,7 @@
           <button type="button" class="is-primary" ${last ? "data-onboarding-complete" : "data-onboarding-next"}>${last ? "完成教程" : "下一步"}</button>
         </div>
       </section>`;
+    syncLaunchers();
     scheduleCardPosition(step);
   }
 
@@ -479,6 +486,7 @@
           <button type="button" class="is-primary" data-onboarding-locate>查看位置</button>
         </div>
       </section>`;
+    syncLaunchers();
     scheduleCardPosition(steps[steps.length - 1]);
   }
 

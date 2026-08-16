@@ -8,8 +8,8 @@ ONBOARDING_CSS_PATH = ROOT / "webapp" / "static" / "assets" / "console-onboardin
 
 
 def test_console_loads_isolated_onboarding_assets():
-    assert '/assets/console-onboarding.css?v=20260817-10' in CONSOLE_HTML
-    assert '/assets/console-onboarding.js?v=20260817-10' in CONSOLE_HTML
+    assert '/assets/console-onboarding.css?v=20260817-11' in CONSOLE_HTML
+    assert '/assets/console-onboarding.js?v=20260817-11' in CONSOLE_HTML
     assert 'id="consoleOnboardingLauncher"' not in CONSOLE_HTML
 
 
@@ -30,7 +30,9 @@ def test_onboarding_is_available_to_all_non_admin_users_and_can_be_reopened():
     assert '<span>教程</span>' in script
     assert 'toolbar.insertBefore(launcher, document.getElementById("btnPersonaDashboardSync"));' in script
     assert 'if (homeLauncher) homeLauncher.hidden = false;' in script
-    assert 'ensureEdgeLauncher().hidden = homeLauncherVisible;' in script
+    assert 'const cardOpen = Boolean(runtime.host?.querySelector(".console-onboarding-card"));' in script
+    assert 'const reminderSuppressed = ["dismissed", "completed"].includes(progress.status);' in script
+    assert 'edgeLauncher.hidden = homeLauncherVisible || cardOpen || reminderSuppressed;' in script
     assert 'if (!runtime.guided && ["dismissed", "completed"].includes(progress.status))' in script
     assert 'function isEligibleUser(user)' in script
     eligibility_check = script.index('runtime.eligible = isEligibleUser(user);')
@@ -76,6 +78,7 @@ def test_onboarding_covers_the_primary_business_flow_without_blocking_it():
     assert 'data-onboarding-start' in script
     assert 'data-onboarding-jump' in script
     assert 'data-onboarding-dismiss' in script
+    assert 'class="is-exit" data-onboarding-dismiss>退出</button>' in script
     assert 'data-onboarding-exit' in script
     assert 'role="dialog"' in script
     assert 'aria-modal="false"' in script
@@ -121,3 +124,7 @@ def test_onboarding_visuals_are_subtle_responsive_and_motion_safe():
     assert '.console-onboarding-home-launcher.is-located' in styles
     assert '.console-onboarding-home-launcher svg' in styles
     assert '.console-onboarding-home-slot' not in styles
+    assert 'flex-wrap: nowrap' in styles
+    assert 'min-height: 23px' in styles
+    assert '.console-onboarding-actions button.is-exit' in styles
+    assert '.console-onboarding-dismiss' not in styles
