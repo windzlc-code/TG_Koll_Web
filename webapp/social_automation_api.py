@@ -26,7 +26,7 @@ from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
@@ -62,6 +62,15 @@ from .threads_api import (
     save_credential as save_threads_credential,
     settings as threads_api_settings,
     sync_account as sync_threads_account,
+)
+from .instagram_api import (
+    InstagramApiError,
+    authorization_url as instagram_authorization_url,
+    exchange_code as exchange_instagram_code,
+    fetch_profile as fetch_instagram_profile,
+    save_credential as save_instagram_credential,
+    settings as instagram_api_settings,
+    sync_account as sync_instagram_account,
 )
 from .proxy_market_credentials import (
     ProxyMarketCredentialAuthorizationError,
@@ -2259,20 +2268,52 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_health():
         return {"ok": True, "service": "tg-koll-web-console"}
 
-    @app.get("/api/threads/oauth/start")
-    def api_threads_oauth_start(
-        persona_id: str = "",
-        user: dict[str, Any] = Depends(get_current_user),
-    ):
-        console_url = "/console.html?view=accounts"
+    def oauth_return_path(request: Request, user: dict[str, Any]) -> str:
+        workspace_user_id = str(user.get("_workspace_user_id") or "").strip()
+        if workspace_user_id:
+            return (
+                "/admin-console.html?view=accounts"
+                f"&{ADMIN_CONSOLE_QUERY}=1&{ADMIN_WORKSPACE_QUERY}={quote(workspace_user_id, safe='')}"
+            )
+        return "/console.html?view=accounts"
+
+    def oauth_result_url(
+        return_path: str,
+        platform: str,
+        status: str,
+        *,
+        message: str = "",
+        account_id: str = "",
+        sync_warning: str = "",
+    ) -> str:
+        separator = "&" if "?" in return_path else "?"
+        params: dict[str, str] = {f"{platform}_oauth": status}
+        if message:
+            params["message"] = str(message)[:300]
+        if account_id:
+            params[f"{platform}_account_id"] = account_id
+        if sync_warning:
+            params[f"{platform}_sync_warning"] = str(sync_warning)[:300]
+        return f"{return_path}{separator}{urlencode(params)}"
+
+    def start_platform_oauth(
+        platform: str,
+        request: Request,
+        user: dict[str, Any],
+        persona_id: str,
+    ) -> RedirectResponse:
+        return_path = oauth_return_path(request, user)
         clean_persona_id = str(persona_id or "").strip()
         if clean_persona_id:
             _require_persona_reference_access(clean_persona_id, user)
         try:
-            threads_api_settings()
-        except ThreadsApiError as exc:
+            if platform == "threads":
+                threads_api_settings()
+            else:
+                instagram_api_settings()
+        except (ThreadsApiError, InstagramApiError) as exc:
             return RedirectResponse(
-                f"{console_url}&threads_oauth=error&message={quote(str(exc)[:300], safe='')}",
+                oauth_result_url(return_path, platform, "error", message=str(exc)),
                 status_code=302,
             )
         state = secrets.token_urlsafe(32)
@@ -2286,12 +2327,206 @@ def register_social_automation_routes(app: FastAPI) -> None:
             conn.execute(
                 """
                 INSERT INTO social_oauth_flows(
-                  state_digest, user_id, platform, persona_id, expires_at, consumed_at, created_at
-                ) VALUES (?, ?, 'threads', ?, ?, 0, ?)
+                  state_digest, user_id, platform, persona_id, return_path,
+                  expires_at, consumed_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?)
                 """,
-                (state_digest, _identity_user_id(user), clean_persona_id, now + 600, now),
+                (
+                    state_digest,
+                    _identity_user_id(user),
+                    platform,
+                    clean_persona_id,
+                    return_path,
+                    now + 600,
+                    now,
+                ),
             )
-        return RedirectResponse(threads_authorization_url(state), status_code=302)
+        authorization_url = (
+            threads_authorization_url(state)
+            if platform == "threads"
+            else instagram_authorization_url(state)
+        )
+        return RedirectResponse(authorization_url, status_code=302)
+
+    @app.get("/api/threads/oauth/start")
+    def api_threads_oauth_start(
+        request: Request,
+        persona_id: str = "",
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        return start_platform_oauth("threads", request, user, persona_id)
+
+    @app.get("/api/instagram/oauth/start")
+    def api_instagram_oauth_start(
+        request: Request,
+        persona_id: str = "",
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        return start_platform_oauth("instagram", request, user, persona_id)
+
+    def finish_platform_oauth(
+        platform: str,
+        *,
+        code: str,
+        state: str,
+        error: str,
+        error_description: str,
+        error_message: str,
+    ) -> RedirectResponse:
+        clean_state = str(state or "").strip()
+        fallback_path = "/console.html?view=accounts"
+        if not clean_state:
+            message = error_description or error_message or error or f"{platform.title()} 授权回调无效，请重新发起授权。"
+            return RedirectResponse(
+                oauth_result_url(fallback_path, platform, "error", message=message),
+                status_code=302,
+            )
+        state_digest = hashlib.sha256(clean_state.encode("utf-8")).hexdigest()
+        now = _now()
+        claim_marker = -now
+        with db() as conn:
+            flow = conn.execute(
+                """
+                SELECT * FROM social_oauth_flows
+                WHERE state_digest = ? AND platform = ?
+                  AND consumed_at = 0 AND expires_at >= ?
+                """,
+                (state_digest, platform, now),
+            ).fetchone()
+            if not flow:
+                return RedirectResponse(
+                    oauth_result_url(
+                        fallback_path,
+                        platform,
+                        "error",
+                        message=f"{platform.title()} 授权状态无效或已过期，请重新发起授权。",
+                    ),
+                    status_code=302,
+                )
+            return_path = str(flow["return_path"] or fallback_path)
+            owner_user_id = int(flow["user_id"] or 0)
+            persona_id = str(flow["persona_id"] or "").strip()
+            updated = conn.execute(
+                "UPDATE social_oauth_flows SET consumed_at = ? WHERE state_digest = ? AND consumed_at = 0",
+                (claim_marker, state_digest),
+            )
+            if updated.rowcount != 1:
+                return RedirectResponse(
+                    oauth_result_url(return_path, platform, "error", message="授权状态已使用，请重新发起授权。"),
+                    status_code=302,
+                )
+        if error:
+            with db() as conn:
+                conn.execute(
+                    "UPDATE social_oauth_flows SET consumed_at = ? WHERE state_digest = ? AND consumed_at = ?",
+                    (now, state_digest, claim_marker),
+                )
+            message = error_description or error_message or error
+            return RedirectResponse(
+                oauth_result_url(return_path, platform, "error", message=message),
+                status_code=302,
+            )
+        clean_code = str(code or "").strip()
+        if not clean_code:
+            with db() as conn:
+                conn.execute(
+                    "UPDATE social_oauth_flows SET consumed_at = 0 WHERE state_digest = ? AND consumed_at = ?",
+                    (state_digest, claim_marker),
+                )
+            return RedirectResponse(
+                oauth_result_url(return_path, platform, "error", message="授权回调未返回授权码，请重新发起授权。"),
+                status_code=302,
+            )
+        api_error = ThreadsApiError if platform == "threads" else InstagramApiError
+        try:
+            if platform == "threads":
+                token_payload = exchange_threads_code(clean_code)
+                access_token = str(token_payload.get("access_token") or "").strip()
+                profile = fetch_threads_profile(access_token)
+                config = threads_api_settings()
+            else:
+                token_payload = exchange_instagram_code(clean_code)
+                access_token = str(token_payload.get("access_token") or "").strip()
+                profile = fetch_instagram_profile(access_token)
+                config = instagram_api_settings()
+            username = str(profile.get("username") or "").strip().lstrip("@")
+            platform_user_id = str(profile.get("id") or token_payload.get("user_id") or "").strip()
+            if not username or not platform_user_id:
+                raise api_error(f"{platform.title()} 授权未返回有效账号资料。")
+            with db() as conn:
+                account_row = conn.execute(
+                    """
+                    SELECT * FROM social_accounts
+                    WHERE user_id = ? AND platform = ? AND lower(username) = lower(?)
+                    ORDER BY updated_at DESC LIMIT 1
+                    """,
+                    (owner_user_id, platform, username),
+                ).fetchone()
+            if account_row:
+                account_id = str(account_row["id"] or "")
+            else:
+                created = create_social_account(
+                    SocialAccountPayload(
+                        persona_id=persona_id,
+                        platform=platform,
+                        username=username,
+                        display_name=str(profile.get("name") or "").strip(),
+                        status="pending_login",
+                    ),
+                    owner_user_id=owner_user_id,
+                )
+                account_id = str(created.get("id") or "")
+            if platform == "threads":
+                save_threads_credential(
+                    account_id=account_id,
+                    user_id=owner_user_id,
+                    platform_user_id=platform_user_id,
+                    access_token=access_token,
+                    scopes=config.scopes,
+                    expires_in=int(token_payload.get("expires_in") or 0),
+                )
+            else:
+                save_instagram_credential(
+                    account_id=account_id,
+                    user_id=owner_user_id,
+                    platform_user_id=platform_user_id,
+                    access_token=access_token,
+                    scopes=config.scopes,
+                    expires_in=int(token_payload.get("expires_in") or 0),
+                )
+            sync_warning = ""
+            try:
+                if platform == "threads":
+                    sync_threads_account(account_id, owner_user_id)
+                else:
+                    sync_instagram_account(account_id, owner_user_id)
+            except (ThreadsApiError, InstagramApiError) as exc:
+                sync_warning = str(exc)
+        except (ThreadsApiError, InstagramApiError) as exc:
+            with db() as conn:
+                conn.execute(
+                    "UPDATE social_oauth_flows SET consumed_at = 0 WHERE state_digest = ? AND consumed_at = ?",
+                    (state_digest, claim_marker),
+                )
+            return RedirectResponse(
+                oauth_result_url(return_path, platform, "error", message=str(exc)),
+                status_code=302,
+            )
+        with db() as conn:
+            conn.execute(
+                "UPDATE social_oauth_flows SET consumed_at = ? WHERE state_digest = ? AND consumed_at = ?",
+                (now, state_digest, claim_marker),
+            )
+        return RedirectResponse(
+            oauth_result_url(
+                return_path,
+                platform,
+                "success",
+                account_id=account_id,
+                sync_warning=sync_warning,
+            ),
+            status_code=302,
+        )
 
     @app.get("/api/threads/oauth/callback")
     def api_threads_oauth_callback(
@@ -2300,102 +2535,32 @@ def register_social_automation_routes(app: FastAPI) -> None:
         error: str = "",
         error_description: str = "",
         error_message: str = "",
-        user: dict[str, Any] = Depends(get_current_user),
     ):
-        console_url = "/console.html?view=accounts"
-        if error:
-            return RedirectResponse(
-                f"{console_url}&threads_oauth=error&message={quote(str(error_description or error_message or error)[:300], safe='')}",
-                status_code=302,
-            )
-        clean_code = str(code or "").strip()
-        clean_state = str(state or "").strip()
-        if not clean_code or not clean_state:
-            return RedirectResponse(
-                f"{console_url}&threads_oauth=error&message={quote('Threads 授权回调无效，请重新发起授权。', safe='')}",
-                status_code=302,
-            )
-        state_digest = hashlib.sha256(clean_state.encode("utf-8")).hexdigest()
-        owner_user_id = _identity_user_id(user)
-        now = _now()
-        with db() as conn:
-            flow = conn.execute(
-                """
-                SELECT * FROM social_oauth_flows
-                WHERE state_digest = ? AND user_id = ? AND platform = 'threads'
-                  AND consumed_at = 0 AND expires_at >= ?
-                """,
-                (state_digest, owner_user_id, now),
-            ).fetchone()
-            if not flow:
-                return RedirectResponse(
-                    f"{console_url}&threads_oauth=error&message={quote('Threads 授权状态无效或已过期，请重新发起授权。', safe='')}",
-                    status_code=302,
-                )
-            updated = conn.execute(
-                "UPDATE social_oauth_flows SET consumed_at = ? WHERE state_digest = ? AND consumed_at = 0",
-                (now, state_digest),
-            )
-            if updated.rowcount != 1:
-                return RedirectResponse(
-                    f"{console_url}&threads_oauth=error&message={quote('Threads 授权状态已使用，请重新发起授权。', safe='')}",
-                    status_code=302,
-                )
-            persona_id = str(flow["persona_id"] or "").strip()
-        try:
-            token_payload = exchange_threads_code(clean_code)
-            access_token = str(token_payload.get("access_token") or "").strip()
-            profile = fetch_threads_profile(access_token)
-            username = str(profile.get("username") or "").strip().lstrip("@")
-            platform_user_id = str(profile.get("id") or token_payload.get("user_id") or "").strip()
-            if not username or not platform_user_id:
-                raise ThreadsApiError("Threads 授权未返回有效账号资料。")
-            with db() as conn:
-                account_row = conn.execute(
-                    """
-                    SELECT * FROM social_accounts
-                    WHERE user_id = ? AND platform = 'threads' AND lower(username) = lower(?)
-                    ORDER BY updated_at DESC LIMIT 1
-                    """,
-                    (owner_user_id, username),
-                ).fetchone()
-            if account_row:
-                account_id = str(account_row["id"] or "")
-            else:
-                created = create_social_account(
-                    SocialAccountPayload(
-                        persona_id=persona_id,
-                        platform="threads",
-                        username=username,
-                        display_name=str(profile.get("name") or "").strip(),
-                        status="pending_login",
-                    ),
-                    owner_user_id=owner_user_id,
-                )
-                account_id = str(created.get("id") or "")
-            config = threads_api_settings()
-            save_threads_credential(
-                account_id=account_id,
-                user_id=owner_user_id,
-                platform_user_id=platform_user_id,
-                access_token=access_token,
-                scopes=config.scopes,
-                expires_in=int(token_payload.get("expires_in") or 0),
-            )
-            sync_warning = ""
-            try:
-                sync_threads_account(account_id, owner_user_id)
-            except ThreadsApiError as exc:
-                sync_warning = str(exc)
-        except ThreadsApiError as exc:
-            return RedirectResponse(
-                f"{console_url}&threads_oauth=error&message={quote(str(exc)[:300], safe='')}",
-                status_code=302,
-            )
-        target = f"{console_url}&threads_oauth=success&threads_account_id={quote(account_id, safe='')}"
-        if sync_warning:
-            target += f"&threads_sync_warning={quote(sync_warning[:300], safe='')}"
-        return RedirectResponse(target, status_code=302)
+        return finish_platform_oauth(
+            "threads",
+            code=code,
+            state=state,
+            error=error,
+            error_description=error_description,
+            error_message=error_message,
+        )
+
+    @app.get("/api/instagram/oauth/callback")
+    def api_instagram_oauth_callback(
+        code: str = "",
+        state: str = "",
+        error: str = "",
+        error_description: str = "",
+        error_message: str = "",
+    ):
+        return finish_platform_oauth(
+            "instagram",
+            code=code,
+            state=state,
+            error=error,
+            error_description=error_description,
+            error_message=error_message,
+        )
 
     @app.post("/api/threads/accounts/{account_id}/sync")
     def api_threads_account_sync(account_id: str, user: dict[str, Any] = Depends(get_current_user)):
@@ -2405,6 +2570,17 @@ def register_social_automation_routes(app: FastAPI) -> None:
         try:
             data = sync_threads_account(account_id, _identity_user_id(user))
         except ThreadsApiError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"ok": True, "account_id": account_id, "data": data}
+
+    @app.post("/api/instagram/accounts/{account_id}/sync")
+    def api_instagram_account_sync(account_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        account = _require_account_access(account_id, user)
+        if str(account["platform"] or "").strip().lower() != "instagram":
+            raise HTTPException(status_code=400, detail="仅 Instagram 账号支持此 API 同步。")
+        try:
+            data = sync_instagram_account(account_id, _identity_user_id(user))
+        except InstagramApiError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return {"ok": True, "account_id": account_id, "data": data}
 

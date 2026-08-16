@@ -64,6 +64,7 @@ class ThreadsApiTests(unittest.TestCase):
         self.assertTrue(url.startswith("https://threads.net/oauth/authorize?"))
         self.assertIn("client_id=app-id", url)
         self.assertIn("threads_basic", url)
+        self.assertIn("threads_profile_discovery", url)
         self.assertIn("state=state-value", url)
 
     @patch("webapp.threads_api.paginated_get")

@@ -337,7 +337,11 @@ let googleAccountSessionResultConsumed = false;
 const initialThreadsOauthResult = initialConsoleParams.get("threads_oauth");
 const initialThreadsOauthAccountId = String(initialConsoleParams.get("threads_account_id") || "").trim();
 const initialThreadsOauthMessage = String(initialConsoleParams.get("message") || initialConsoleParams.get("threads_sync_warning") || "").trim();
+const initialInstagramOauthResult = initialConsoleParams.get("instagram_oauth");
+const initialInstagramOauthAccountId = String(initialConsoleParams.get("instagram_account_id") || "").trim();
+const initialInstagramOauthMessage = String(initialConsoleParams.get("message") || initialConsoleParams.get("instagram_sync_warning") || "").trim();
 let threadsOauthResultConsumed = false;
+let instagramOauthResultConsumed = false;
 const VIDEO_WORKBENCH_ENABLED = ADMIN_CONSOLE_SESSION;
 const VIDEO_WORKSPACE_MODULES = [
   { id: "digital_human_video", label: "数字人口播视频" },
@@ -3109,26 +3113,36 @@ function accountDisplayName(account) {
 }
 
 async function consumeThreadsOauthResult() {
-  if (!initialThreadsOauthResult || threadsOauthResultConsumed) return;
-  threadsOauthResultConsumed = true;
+  const platform = initialInstagramOauthResult ? "instagram" : "threads";
+  const providerLabel = platform === "instagram" ? "Instagram" : "Threads";
+  const result = platform === "instagram" ? initialInstagramOauthResult : initialThreadsOauthResult;
+  const accountId = platform === "instagram" ? initialInstagramOauthAccountId : initialThreadsOauthAccountId;
+  const message = platform === "instagram" ? initialInstagramOauthMessage : initialThreadsOauthMessage;
+  const consumed = platform === "instagram" ? instagramOauthResultConsumed : threadsOauthResultConsumed;
+  if (!result || consumed) return;
+  if (platform === "instagram") instagramOauthResultConsumed = true;
+  else threadsOauthResultConsumed = true;
   const url = new URL(window.location.href);
-  ["threads_oauth", "threads_account_id", "threads_sync_warning", "message"].forEach((key) => url.searchParams.delete(key));
+  [
+    "threads_oauth", "threads_account_id", "threads_sync_warning",
+    "instagram_oauth", "instagram_account_id", "instagram_sync_warning", "message",
+  ].forEach((key) => url.searchParams.delete(key));
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-  if (initialThreadsOauthResult !== "success") {
-    showMsg("socialMsg", initialThreadsOauthMessage || "Threads 授权未完成，请重新接入。", false);
+  if (result !== "success") {
+    showMsg("socialMsg", message || `${providerLabel} 授权未完成，请重新接入。`, false);
     return;
   }
   await loadSocial({ render: false, force: true }).catch(() => {});
   showMsg(
     "socialMsg",
-    initialThreadsOauthMessage
-      ? `Threads API 已接入；数据同步提示：${initialThreadsOauthMessage}`
-      : "Threads API 已接入，账号数据已通过官方接口同步。正在检测浏览器登录状态…",
+    message
+      ? `${providerLabel} API 已接入；数据同步提示：${message}`
+      : `${providerLabel} API 已接入，账号数据已通过官方接口同步。正在检测浏览器登录状态…`,
     true,
   );
-  if (initialThreadsOauthAccountId) {
-    startAccountBrowserSessionReuse(initialThreadsOauthAccountId, "", "socialMsg").catch((error) => {
-      showMsg("socialMsg", error.detail || error.message || "Threads API 已接入，但浏览器登录检测未启动。", false);
+  if (accountId) {
+    startAccountBrowserSessionReuse(accountId, "", "socialMsg").catch((error) => {
+      showMsg("socialMsg", error.detail || error.message || `${providerLabel} API 已接入，但浏览器登录检测未启动。`, false);
     });
   }
 }
@@ -27851,7 +27865,19 @@ async function saveAccountPoolCreateForm(options) {
   state.preferredAccountId = String(account.id || "");
   resetAccountPoolCreateForm();
   await loadSocial();
-  showMsg("socialMsg", payload.persona_id ? "账号已保存，并已绑定当前人设。" : "账号已保存。", true);
+  if (!account.id) {
+    showMsg("socialMsg", payload.persona_id ? "账号已保存，并已绑定当前人设。" : "账号已保存。", true);
+    return account;
+  }
+  showMsg("socialMsg", "账号已保存，正在启动自动登录。", true);
+  try {
+    const loginResult = await createSocialTask("open_login", account.id, payload.persona_id, "socialMsg");
+    const taskId = String(loginResult?.task?.id || "").trim();
+    if (taskId) openLoginAssistanceView(taskId, account.id);
+    else showMsg("socialMsg", "账号已保存，但自动登录未启动，请在账号卡中重试。", false);
+  } catch (error) {
+    showMsg("socialMsg", `账号已保存，但自动登录启动失败：${error.detail || error.message || "请稍后重试"}`, false);
+  }
   return account;
 }
 
@@ -28690,33 +28716,28 @@ async function commitAccountProxyPickerSelection(modal, accountId = "", proxyId 
   }
 }
 
-function accountProxyEntryCopy(poolData = null) {
-  const monthlyFree = poolData?.monthly_free?.available;
-  if (monthlyFree === true) {
-    return { title: "免费选择专属代理 IP", detail: "本月免费一次，开通后自动加入列表", action: "免费选择" };
-  }
+function accountProxyEntryCopy(proxyId = "", poolData = null, proxySource = null) {
+  const monthlyFree = poolData?.monthly_free?.available !== false;
   return {
-    title: "选择专属代理 IP",
-    detail: monthlyFree === false ? "按地区和城市选择，并绑定到当前账号。" : "进入代理页面选择地区、城市和可用代理。",
-    action: "选择代理",
+    title: "代理 IP",
+    detail: proxyId ? accountResidentialProxyLabel(proxySource || { proxy_id: proxyId }) : "未使用代理 IP",
+    action: monthlyFree ? "免费选择" : "选择代理",
   };
 }
 
-function accountProxyEntryCardHtml(proxyId = "", poolData = null) {
-  const copy = accountProxyEntryCopy(poolData);
+function accountProxyEntryCardHtml(proxyId = "", poolData = null, proxySource = null) {
+  const copy = accountProxyEntryCopy(proxyId, poolData, proxySource);
   return `<button type="button" class="account-proxy-entry-card" data-account-proxy-picker-open aria-label="${esc(copy.action)}">
-    <span class="account-proxy-entry-icon" aria-hidden="true">${renderShoppingBagIcon()}</span>
+    <span class="account-proxy-entry-icon" aria-hidden="true">${renderNetworkIcon()}</span>
     <span class="account-proxy-entry-copy"><strong>${esc(copy.title)}</strong><small>${esc(copy.detail)}</small></span>
-    <span class="account-proxy-entry-action">${renderShoppingBagIcon()}<b>${esc(copy.action)}</b></span>
+    <span class="account-proxy-entry-action">${renderNetworkIcon()}<b>${esc(copy.action)}</b></span>
   </button>`;
 }
 
 function updateAccountProxyEntryCard(container, proxyId = "", poolData = state.accountProxyPoolSnapshot) {
   const card = container?.querySelector?.("[data-account-proxy-picker-open]");
-  if (card) card.outerHTML = accountProxyEntryCardHtml(proxyId, poolData);
-  const summary = container?.querySelector?.("[data-account-proxy-selection-summary]");
   const proxy = socialProxyById(proxyId);
-  if (summary) summary.textContent = proxyId ? accountResidentialProxyLabel(proxy || { proxy_id: proxyId }) : "未使用代理 IP";
+  if (card) card.outerHTML = accountProxyEntryCardHtml(proxyId, poolData, proxy);
 }
 
 async function loadAccountProxyEntryStatus(container) {
@@ -28933,10 +28954,7 @@ function renderAccountProxyPickerPanel(account = null, mode = "create") {
   const proxyId = String(account?.proxy_id || (mode === "create" ? accountPoolDraftValue("proxy_id") : "")).trim();
   const selectedProxy = socialProxyById(proxyId);
   return `<section class="account-residential-proxy account-proxy-picker-panel">
-    <div class="account-residential-proxy-head">
-      <div class="account-proxy-inline-summary"><strong>代理 IP</strong><span data-account-proxy-selection-summary>${esc(proxyId ? accountResidentialProxyLabel(account || selectedProxy) : "未使用代理 IP")}</span></div>
-    </div>
-    ${accountProxyEntryCardHtml(proxyId, state.accountProxyPoolSnapshot)}
+    ${accountProxyEntryCardHtml(proxyId, state.accountProxyPoolSnapshot, account || selectedProxy)}
   </section>`;
 }
 
@@ -29372,7 +29390,7 @@ function openAccountPoolEditorModal(options) {
         ${renderAccountEditorForm(account, mode)}
       </div>
       <div class="console-modal-actions">
-        <button type="button" class="primary" data-account-pool-editor-save>${editing ? "保存修改" : "保存账号"}</button>
+        <button type="button" class="primary" data-account-pool-editor-save>${editing ? "保存修改" : "保存并登录"}</button>
         <button type="button" data-account-pool-editor-cancel>取消</button>
       </div>
     </section>`;
@@ -29459,18 +29477,48 @@ function openAccountPoolEditorModal(options) {
 
 function openAccountPoolCreateModal(options) {
   options = options || {};
-  openAccountAddMethodModal(options);
-}
-
-function renderAccountAddMethodIcon(method = "manual") {
-  if (method === "threads_api") return renderAccountPoolPlatformIcon("threads");
-  if (method === "google") {
-    return `<img src="/assets/opc/google-g-gradient.svg" alt="" aria-hidden="true" />`;
-  }
-  if (method === "session") {
-    return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="3"></rect><path d="M3 9h18"></path><path d="M8 15h8"></path><path d="m13 12 3 3-3 3"></path></svg>`;
-  }
-  return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"></path></svg>`;
+  const platform = normalizeAccountPoolPlatform(options.platform || state.accountPoolPlatform);
+  const platformLabel = platform === "instagram" ? "Instagram" : "Threads";
+  closeConsoleModal(null);
+  const modal = document.createElement("div");
+  modal.id = "consoleModal";
+  modal.className = "console-modal";
+  modal.innerHTML = `
+    <div class="console-modal-backdrop" data-account-add-method-close></div>
+    <section class="console-modal-dialog account-pool-create-modal" role="dialog" aria-modal="true" aria-labelledby="accountAddMethodTitle">
+      <div class="console-modal-head">
+        <strong id="accountAddMethodTitle">添加账号</strong>
+        ${renderModalCloseButton("data-account-add-method-close")}
+      </div>
+      <div class="console-modal-content account-add-method-list">
+        <p class="muted">选择 ${esc(platformLabel)} 账号接入方式</p>
+        <button type="button" class="account-add-method-button" data-account-add-manual>
+          ${renderEditIcon()}<span><strong>填写账号密码</strong><small>保存后启动现有浏览器自动登录流程</small></span>
+        </button>
+        <button type="button" class="account-add-method-button" data-account-add-official>
+          ${renderAccountPoolPlatformIcon(platform)}<span><strong>${esc(platformLabel)} 官方授权</strong><small>由平台授权并同步官方 API 允许的数据</small></span>
+        </button>
+      </div>
+    </section>`;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  modal.addEventListener("click", (event) => {
+    if (event.target.closest("[data-account-add-method-close]")) {
+      close();
+      return;
+    }
+    if (event.target.closest("[data-account-add-manual]")) {
+      close();
+      openAccountPoolEditorModal({ ...options, platform });
+      return;
+    }
+    if (event.target.closest("[data-account-add-official]")) {
+      const url = new URL(`/api/${platform}/oauth/start`, window.location.origin);
+      const personaId = String(options.personaId || "").trim();
+      if (personaId) url.searchParams.set("persona_id", personaId);
+      window.location.assign(adminWorkspaceUrl(`${url.pathname}${url.search}`));
+    }
+  });
 }
 
 async function startAccountBrowserSessionReuse(accountId = "", personaId = "", messageId = "socialMsg") {
@@ -29497,65 +29545,6 @@ async function startAccountBrowserSessionReuse(accountId = "", personaId = "", m
   refreshLiveBrowserSessionsSoon(taskId, 60, 500);
   await loadSocial();
   return result;
-}
-
-function openAccountAddMethodModal(options = {}) {
-  closeConsoleModal(null);
-  const platform = normalizeAccountPoolPlatform(options.platform || state.accountPoolPlatform);
-  const apiMethod = platform === "threads" ? "threads_api" : "google";
-  const apiMethodLabel = platform === "threads" ? "Threads 接入" : "Google 快速接入";
-  const modal = document.createElement("div");
-  modal.id = "consoleModal";
-  modal.className = "console-modal";
-  modal.innerHTML = `
-    <div class="console-modal-backdrop" data-account-add-method-cancel></div>
-    <section class="console-modal-dialog account-add-method-modal" role="dialog" aria-modal="true" aria-labelledby="accountAddMethodTitle">
-      <div class="console-modal-head">
-        <strong id="accountAddMethodTitle">添加账号</strong>
-        ${renderModalCloseButton("data-account-add-method-cancel")}
-      </div>
-      <div class="console-modal-content account-add-method-content">
-        <p>选择账号接入方式</p>
-        <div class="account-add-method-buttons">
-          <button type="button" class="account-add-method-button" data-account-add-method="manual">
-            <span class="account-add-method-icon">${renderAccountAddMethodIcon("manual")}</span>
-            <span>填写账号密码</span>
-          </button>
-          <button type="button" class="account-add-method-button account-add-method-button-google" data-account-add-method="${apiMethod}">
-            <span class="account-add-method-icon">${renderAccountAddMethodIcon(apiMethod)}</span>
-            <span>${apiMethodLabel}</span>
-          </button>
-        </div>
-        <p class="account-add-method-note">${platform === "threads"
-          ? "Threads 接入通过官方授权同步可用数据；网页登录仍复用账号专属浏览器。"
-          : "两种入口均使用现有账号密码登录流程，登录状态保存在账号专属指纹浏览器中。"}</p>
-      </div>
-    </section>`;
-  document.body.appendChild(modal);
-  const close = () => {
-    modal.remove();
-  };
-  modal.addEventListener("click", (event) => {
-    if (event.target.closest("[data-account-add-method-cancel]")) {
-      close();
-      return;
-    }
-    const method = event.target.closest("[data-account-add-method]")?.dataset.accountAddMethod;
-    if (!method) return;
-    close();
-    if (method === "threads_api") {
-      const params = new URLSearchParams();
-      const personaId = String(options.personaId || options.persona_id || "").trim();
-      if (personaId) params.set("persona_id", personaId);
-      window.location.assign(`/api/threads/oauth/start${params.toString() ? `?${params}` : ""}`);
-      return;
-    }
-    openAccountPoolEditorModal(options);
-  });
-  modal.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") close();
-  });
-  modal.querySelector("[data-account-add-method]")?.focus();
 }
 
 function openAccountPoolEditModal(accountId = "") {

@@ -1762,12 +1762,22 @@ def init_db() -> None:
               user_id INTEGER NOT NULL,
               platform TEXT NOT NULL,
               persona_id TEXT NOT NULL DEFAULT '',
+              return_path TEXT NOT NULL DEFAULT '/console.html?view=accounts',
               expires_at INTEGER NOT NULL,
               consumed_at INTEGER NOT NULL DEFAULT 0,
               created_at INTEGER NOT NULL
             )
             """
         )
+        oauth_flow_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(social_oauth_flows)").fetchall()
+        }
+        if "return_path" not in oauth_flow_columns:
+            conn.execute(
+                "ALTER TABLE social_oauth_flows ADD COLUMN return_path "
+                "TEXT NOT NULL DEFAULT '/console.html?view=accounts'"
+            )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS social_account_api_credentials (

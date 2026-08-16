@@ -23,6 +23,7 @@ THREADS_DEFAULT_SCOPES = (
     "threads_manage_insights",
     "threads_keyword_search",
     "threads_manage_mentions",
+    "threads_profile_discovery",
 )
 THREAD_FIELDS = (
     "id,media_product_type,media_type,media_url,permalink,owner,username,text,"
