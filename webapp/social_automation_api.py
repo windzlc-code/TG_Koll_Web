@@ -4486,6 +4486,7 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
             raise HTTPException(status_code=503, detail="实时浏览器会话暂时不可用") from exc
         return []
     controls_by_session: dict[str, dict[str, Any]] = {}
+    controls_by_task: dict[str, dict[str, Any]] = {}
     with _RUNNING_TASK_CONTROLS_LOCK:
         current_tasks_by_session = {
             str(control.get("live_browser_session_id") or ""): str(control.get("current_task_id") or task_id or "")
@@ -4496,6 +4497,11 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
             str(control.get("live_browser_session_id") or ""): control
             for control in _RUNNING_TASK_CONTROLS.values()
             if str(control.get("live_browser_session_id") or "")
+        }
+        controls_by_task = {
+            str(task_id): control
+            for task_id, control in _RUNNING_TASK_CONTROLS.items()
+            if str(task_id or "")
         }
     for session in sessions:
         current_task_id = current_tasks_by_session.get(str(session.get("id") or session.get("session_id") or ""))
@@ -4574,11 +4580,30 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
             session["login_mode"] = _live_browser_open_login_mode(row)
             session["takeover_waiting_for"] = _running_task_takeover_waiting_for(str(row["id"] or ""))
         if current_task_type == "open_login":
-            control = controls_by_session.get(str(session.get("id") or session.get("session_id") or "")) or {}
+            session_id = str(session.get("id") or session.get("session_id") or "")
+            task_key = str(session.get("task_id") or row["id"] or "")
+            control = controls_by_session.get(session_id) or controls_by_task.get(task_key) or {}
             assistance = control.get("login_assistance_state")
-            session["login_assistance"] = dict(assistance) if isinstance(assistance, dict) else {
-                "phase": "running", "kind": "progress", "title": "正在启动登录", "message": "正在连接指纹浏览器并检查账号状态。",
-            }
+            if not isinstance(assistance, dict):
+                assistance = session.get("login_assistance")
+            if not isinstance(assistance, dict) or not assistance:
+                assistance = {
+                    "phase": "running",
+                    "kind": "progress",
+                    "title": "正在启动登录",
+                    "message": "正在连接指纹浏览器并检查账号状态。",
+                }
+            elif (
+                str(assistance.get("title") or "") == "正在启动登录"
+                and bool(session.get("browser_ready"))
+                and str(assistance.get("kind") or "progress") == "progress"
+            ):
+                assistance = {
+                    **assistance,
+                    "title": "正在执行登录",
+                    "message": "指纹浏览器已打开，正在检查页面并同步登录状态。",
+                }
+            session["login_assistance"] = dict(assistance)
         if str(row["error"] or "").strip():
             session["task_error"] = str(row["error"] or "")
         row_values = dict(row)

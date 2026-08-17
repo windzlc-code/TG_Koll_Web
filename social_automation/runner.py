@@ -2397,7 +2397,13 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
     if restriction is not None:
         return restriction
     if _is_verification_url(url):
-        return {"status": "need_verification", "reason": "Threads/Instagram 需要输入验证码。", "url": url}
+        challenge = _classify_verification_challenge(page)
+        return {
+            "status": "need_verification",
+            "reason": "Threads/Instagram 需要输入验证码。",
+            "url": url,
+            "challenge_type": str(challenge.get("type") or ""),
+        }
     if "/accounts/scraping_warning" in normalized_url:
         return {
             "status": "post_login_interstitial",
@@ -2616,14 +2622,39 @@ def _detect_platform_login_state(page, platform: str) -> dict[str, Any]:
         if "instagram.com" in str(page.url or "").lower():
             instagram_status = _detect_instagram_login_state(page)
             if str(instagram_status.get("status") or "") == "ready":
-                return {
+                return _enrich_login_state_with_visible_challenge(page, {
                     **instagram_status,
                     "status": "threads_restore_required",
                     "reason": "Instagram login is ready; Threads still requires final confirmation on the Threads domain.",
-                }
-            return instagram_status
-        return _detect_threads_login_state(page)
-    return _detect_instagram_login_state(page)
+                })
+            return _enrich_login_state_with_visible_challenge(page, instagram_status)
+        return _enrich_login_state_with_visible_challenge(page, _detect_threads_login_state(page))
+    return _enrich_login_state_with_visible_challenge(page, _detect_instagram_login_state(page))
+
+
+def _enrich_login_state_with_visible_challenge(page, status: dict[str, Any] | None) -> dict[str, Any]:
+    current = dict(status or {})
+    current_code = str(current.get("status") or "").strip().lower()
+    if current_code in {"ready", "need_verification", "invalid_credentials", "account_confirmation_required"}:
+        return current
+    mapped = None
+    with contextlib.suppress(Exception):
+        mapped = _mapped_login_verification_code(page)
+    if mapped is None:
+        return current
+    challenge = {}
+    with contextlib.suppress(Exception):
+        challenge = _classify_verification_challenge(page)
+    challenge_type = str(challenge.get("type") or "unknown_code")
+    if challenge_type in {"", "none"}:
+        challenge_type = "unknown_code"
+    return {
+        **current,
+        "status": "need_verification",
+        "reason": str(current.get("reason") or "检测到验证码输入框，需要填写平台验证码。"),
+        "challenge_type": challenge_type,
+        "url": str(current.get("url") or getattr(page, "url", "") or ""),
+    }
 
 
 def _int_payload_or_env(payload: dict[str, Any], key: str, env_key: str, default: int, minimum: int, maximum: int) -> int:
@@ -2975,6 +3006,7 @@ def _run_open_login(
                 )
                 time.sleep(2)
                 continue
+            _publish_login_assistance_state(page, context_control, last_status)
             if last_status.get("status") == "ready":
                 stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
                 if stable_status.get("status") == "ready":
@@ -3020,6 +3052,15 @@ def _run_open_login(
                         _sleep_between(1.5, 3.0)
                         continue
             if _verification_visible(page):
+                _publish_login_assistance_state(
+                    page,
+                    context_control,
+                    {
+                        "status": "need_verification",
+                        "reason": "检测到验证码或安全挑战，正在同步登录助手。",
+                        "url": str(getattr(page, "url", "") or ""),
+                    },
+                )
                 totp_result = _try_auto_totp_challenge(
                     page,
                     task,
@@ -3430,6 +3471,17 @@ def _publish_login_assistance_state(page: Any, context_control: dict[str, Any] |
             return
     presentation["updated_at"] = int(time.time())
     context_control["login_assistance_state"] = presentation
+    session_id = str(context_control.get("live_browser_session_id") or "").strip()
+    if not session_id:
+        task = context_control.get("task") if isinstance(context_control.get("task"), dict) else {}
+        task_id = str(context_control.get("current_task_id") or task.get("id") or "").strip()
+        if task_id:
+            session_id = f"live_{task_id}"
+    if session_id:
+        with contextlib.suppress(Exception):
+            from social_automation.live_browser import update_live_browser_login_assistance
+
+            update_live_browser_login_assistance(session_id, presentation)
 
 
 def _mapped_login_input(page: Any, selectors: list[str]) -> Any | None:
@@ -9834,7 +9886,18 @@ def _has_large_verification_illustration(page) -> bool:
 def _classify_verification_challenge(page) -> dict[str, Any]:
     url = str(page.url or "")
     text = _page_body_text_lower(page)
-    code_input = _verification_code_input(page)
+    mapped = None
+    with contextlib.suppress(Exception):
+        mapped = _mapped_login_verification_code(page)
+    code_input = mapped[2] if mapped else _verification_code_input(page)
+    if mapped is not None:
+        action_page, surface, _code = mapped
+        extra_text = _page_body_text_lower(surface)
+        if extra_text and extra_text not in text:
+            text = f"{text} {extra_text}".strip()
+        surface_url = str(getattr(action_page, "url", "") or getattr(surface, "url", "") or "")
+        if surface_url:
+            url = surface_url
     has_code_input = code_input is not None
     has_visual_illustration = _has_large_verification_illustration(page)
 
@@ -9962,6 +10025,11 @@ def _wait_for_verification_challenge_ready(
         "method_selection",
     }
     if challenge_type in terminal_types:
+        _publish_login_assistance_state(
+            page,
+            context_control,
+            {"status": "need_verification", "challenge_type": challenge_type, "reason": "检测到平台验证码页面。"},
+        )
         return challenge
     if not _is_verification_url(str(page.url or "")) and challenge_type not in {
         "unknown_challenge",
@@ -9969,6 +10037,11 @@ def _wait_for_verification_challenge_ready(
     }:
         return challenge
 
+    _publish_login_assistance_state(
+        page,
+        context_control,
+        {"status": "need_verification", "challenge_type": challenge_type or "unknown_code", "reason": "正在确认验证码页面。"},
+    )
     deadline = time.monotonic() + AUTO_TOTP_CHALLENGE_READY_WAIT_SECONDS
     while time.monotonic() < deadline:
         if not _wait_interruptibly(0.25, cancel_event, context_control):

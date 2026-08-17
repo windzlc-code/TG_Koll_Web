@@ -20,6 +20,38 @@ from webapp import social_automation_api
 from webapp.auth import get_current_user
 
 
+def test_login_assistance_is_exposed_on_live_browser_sessions_and_survives_registry(tmp_path, monkeypatch):
+    registry_path = tmp_path / "live_browser_sessions.json"
+    monkeypatch.setattr(live_browser, "_registry_path", lambda: registry_path)
+    session = live_browser.LiveBrowserSession(
+        id="live_task-assist",
+        task_id="task-assist",
+        account_id="account-1",
+        account_username="navon3562",
+        platform="threads",
+        task_type="open_login",
+        display=":90",
+        width=1280,
+        height=720,
+        vnc_port=6901,
+        web_port=6901,
+        started_at=1,
+        browser_ready_at=2,
+    )
+    live_browser._SESSIONS[session.id] = session
+    try:
+        assistance = {"phase": "attention", "kind": "verification_code", "title": "输入短信验证码"}
+        assert live_browser.update_live_browser_login_assistance(session.id, assistance) is True
+        assert live_browser._SESSIONS[session.id].login_assistance["kind"] == "verification_code"
+        public = live_browser._session_public(session)
+        assert public["login_assistance"]["title"] == "输入短信验证码"
+        restored = live_browser._session_from_registry(live_browser._read_registry()[session.id])
+        assert restored is not None
+        assert restored.login_assistance["kind"] == "verification_code"
+    finally:
+        live_browser._SESSIONS.pop(session.id, None)
+
+
 def test_login_assistance_queue_accepts_only_the_current_prompt_and_never_echoes_secrets():
     actions = queue.Queue(maxsize=2)
     control = {

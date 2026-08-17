@@ -41,6 +41,7 @@ class LiveBrowserSession:
     process_identities: list[dict[str, Any]] = field(default_factory=list)
     processes: list[subprocess.Popen] = field(default_factory=list, repr=False)
     temp_dir: str = ""
+    login_assistance: dict[str, Any] = field(default_factory=dict)
 
 
 _SESSIONS: dict[str, LiveBrowserSession] = {}
@@ -470,6 +471,7 @@ def _session_public(session: LiveBrowserSession) -> dict[str, Any]:
         "standby_started_at": session.standby_started_at,
         "close_at": session.close_at,
         "process_pids": process_pids,
+        "login_assistance": dict(session.login_assistance or {}) if isinstance(session.login_assistance, dict) else {},
     }
 
 
@@ -574,7 +576,31 @@ def _session_from_registry(row: dict[str, Any]) -> LiveBrowserSession | None:
         process_identities=[dict(identity) for identity in row.get("process_identities", []) if isinstance(identity, dict)]
         if isinstance(row.get("process_identities"), list)
         else [],
+        login_assistance=dict(row.get("login_assistance") or {}) if isinstance(row.get("login_assistance"), dict) else {},
     )
+
+
+def update_live_browser_login_assistance(session_id: str, assistance: dict[str, Any] | None) -> bool:
+    clean_id = str(session_id or "").strip()
+    payload = dict(assistance or {}) if isinstance(assistance, dict) else {}
+    if not clean_id or not payload:
+        return False
+    with _LOCK:
+        session = _SESSIONS.get(clean_id)
+        if session is not None:
+            session.login_assistance = payload
+    if session is not None:
+        _save_session_registry(session)
+        return True
+    with _REGISTRY_LOCK:
+        sessions = _read_registry()
+        row = sessions.get(clean_id)
+        if not isinstance(row, dict):
+            return False
+        row["login_assistance"] = payload
+        sessions[clean_id] = row
+        _write_registry(sessions)
+    return True
 
 
 def _session_processes_alive(session: LiveBrowserSession) -> bool:

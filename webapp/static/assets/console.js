@@ -26678,7 +26678,7 @@ function loginAssistanceTaskStatus(task = {}) {
 
 function loginAssistanceViewModel(task = {}, session = null) {
   const taskStatus = loginAssistanceTaskStatus(task);
-  const assistance = session?.login_assistance && typeof session.login_assistance === "object"
+  let assistance = session?.login_assistance && typeof session.login_assistance === "object"
     ? session.login_assistance
     : {};
   const expiresAt = Number(assistance.expires_at || 0);
@@ -26699,6 +26699,33 @@ function loginAssistanceViewModel(task = {}, session = null) {
       kind: "error",
       title: taskStatus === "cancelled" ? "登录已停止" : "登录未完成",
       message: String(task?.error || "本次登录任务没有完成，请稍后重试。"),
+    };
+  }
+  const bootstrapStarting = String(assistance.title || "") === "正在启动登录"
+    && String(assistance.kind || "progress") === "progress";
+  if (bootstrapStarting && session?.browser_ready) {
+    assistance = {
+      ...assistance,
+      title: "正在执行登录",
+      message: "指纹浏览器已打开，正在检查页面并同步登录状态。",
+    };
+  }
+  const account = selectedSocialAccount(session?.account_id || task?.account_id)
+    || (state.socialAccounts || []).find((item) => String(item?.id || "") === String(session?.account_id || task?.account_id || ""))
+    || {};
+  if (
+    String(assistance.kind || "progress") === "progress"
+    && String(account?.status || "").trim() === "need_verification"
+  ) {
+    return {
+      phase: "attention",
+      kind: "verification_code",
+      title: "输入验证码",
+      message: "平台已进入验证码页面，请填写后提交。",
+      fieldLabel: "验证码",
+      inputMode: "text",
+      submitLabel: "提交验证码",
+      remainingSeconds,
     };
   }
   return {
@@ -26909,7 +26936,11 @@ function openLoginAssistanceView(taskId = "", accountId = "") {
       refreshSocialTaskState(cleanTaskId),
       refreshLiveBrowserSessionsOnly().catch(() => []),
     ]);
-    currentSession = (state.socialBrowserSessions || []).find((item) => String(item?.task_id || "") === cleanTaskId) || null;
+    currentSession = (state.socialBrowserSessions || []).find((item) => String(item?.task_id || "") === cleanTaskId)
+      || (accountId
+        ? (state.socialBrowserSessions || []).find((item) => String(item?.account_id || "") === String(accountId || ""))
+        : null)
+      || null;
     const currentTask = task || (state.socialTasks || []).find((item) => String(item?.id || "") === cleanTaskId) || { id: cleanTaskId, status: "queued" };
     updateLoginAssistanceModal(modal, currentTask, currentSession);
     if (!stopped && modal.isConnected && !["success", "failed", "cancelled"].includes(loginAssistanceTaskStatus(currentTask))) {

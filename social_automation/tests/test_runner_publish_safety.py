@@ -59,6 +59,44 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(control["login_assistance_state"]["kind"], "verification_code")
         self.assertEqual(control["login_assistance_state"]["expires_at"], 1_900_000_000)
 
+    def test_login_assistance_is_persisted_to_the_live_browser_session(self):
+        control = {"live_browser_session_id": "live_task-1"}
+        with mock.patch("social_automation.live_browser.update_live_browser_login_assistance") as persist:
+            runner._publish_login_assistance_state(
+                mock.Mock(),
+                control,
+                {"status": "need_verification", "challenge_type": "sms_code"},
+            )
+        persist.assert_called_once()
+        self.assertEqual(persist.call_args.args[0], "live_task-1")
+        self.assertEqual(persist.call_args.args[1]["kind"], "verification_code")
+
+    def test_visible_code_input_on_another_tab_is_treated_as_verification(self):
+        main_page, challenge_page = mock.Mock(), mock.Mock()
+        main_page.url = "https://www.threads.net/"
+        challenge_page.url = "https://www.instagram.com/challenge/"
+        code_input = mock.Mock()
+        with (
+            mock.patch.object(runner, "_mapped_login_verification_code", return_value=(challenge_page, challenge_page, code_input)),
+            mock.patch.object(runner, "_classify_verification_challenge", return_value={"type": "sms_code"}),
+        ):
+            status = runner._enrich_login_state_with_visible_challenge(
+                main_page,
+                {"status": "cookie_expired", "reason": "尚未检测到有效会话"},
+            )
+        self.assertEqual(status["status"], "need_verification")
+        self.assertEqual(status["challenge_type"], "sms_code")
+
+    def test_open_login_publishes_assistance_before_waiting_for_totp(self):
+        source = Path(runner.__file__).read_text(encoding="utf-8")
+        auto_login = source.split("def _run_open_login(", 1)[1].split("def _wait_for_manual_login_completion(", 1)[0]
+        self.assertIn("_publish_login_assistance_state(page, context_control, last_status)", auto_login)
+        self.assertIn('检测到验证码或安全挑战，正在同步登录助手', auto_login)
+        self.assertLess(
+            auto_login.index("_publish_login_assistance_state("),
+            auto_login.index("_try_auto_totp_challenge("),
+        )
+
     def test_verification_submission_is_consumed_by_the_browser_task_thread(self):
         actions = queue.Queue(maxsize=2)
         actions.put_nowait({"kind": "verification_code", "verification_code": "654321"})

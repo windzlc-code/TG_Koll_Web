@@ -500,6 +500,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("login-assistance-deadline", update_source)
         self.assertNotIn("remainingSeconds", render_key)
         self.assertIn("超时后本次登录将自动取消", self.source)
+        view_model = self._function_source("loginAssistanceViewModel")
+        self.assertIn('String(assistance.title || "") === "正在启动登录"', view_model)
+        self.assertIn("session?.browser_ready", view_model)
+        self.assertIn('account?.status || "").trim() === "need_verification"', view_model)
+        poll = self._function_source("openLoginAssistanceView")
+        self.assertIn("item?.account_id", poll)
+        self.assertIn("refreshLiveBrowserSessionsOnly()", poll)
 
     def test_open_login_account_actions_preserve_running_task_navigation(self):
         actions = self._section("function renderAccountPoolCardActions", "function renderAccountPoolCard(")
