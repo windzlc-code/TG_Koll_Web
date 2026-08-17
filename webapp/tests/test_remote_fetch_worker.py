@@ -473,19 +473,39 @@ class RemoteFetchStoreTests(unittest.TestCase):
                 }
             )
 
-    def test_persona_hot_envelope_rejects_empty_keywords_from_new_host(self) -> None:
-        with self.assertRaisesRegex(ProtocolError, "keywords"):
+    def test_persona_hot_envelope_accepts_archive_id_without_snapshot_or_keywords(self) -> None:
+        capability, unit_id, payload = _validate_envelope(
+            {
+                "capability": "persona.hot_candidates.v1",
+                "unit_id": "archive_empty_keywords",
+                "payload": {
+                    "action": "fetch-hot-candidates",
+                    "archiveId": "archive_empty_keywords",
+                    "archiveSnapshot": {"id": "archive_empty_keywords", "posts": []},
+                    "keywords": ["must-not-cross"],
+                    "keywordStrategyVersion": PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
+                    "keywordDigest": "0" * 64,
+                    "liveOnly": False,
+                    "recordShown": False,
+                },
+            }
+        )
+        self.assertEqual(capability, "persona.hot_candidates.v1")
+        self.assertEqual(unit_id, "archive_empty_keywords")
+        self.assertEqual(payload["archiveId"], "archive_empty_keywords")
+        self.assertNotIn("archiveSnapshot", payload)
+        self.assertNotIn("keywords", payload)
+        self.assertNotIn("keywordStrategyVersion", payload)
+        self.assertNotIn("keywordDigest", payload)
+
+    def test_persona_hot_envelope_requires_archive_id(self) -> None:
+        with self.assertRaisesRegex(ProtocolError, "archive id"):
             _validate_envelope(
                 {
                     "capability": "persona.hot_candidates.v1",
-                    "unit_id": "archive_empty_keywords",
+                    "unit_id": "archive_missing_id",
                     "payload": {
                         "action": "fetch-hot-candidates",
-                        "archiveId": "archive_empty_keywords",
-                        "archiveSnapshot": {"id": "archive_empty_keywords", "posts": []},
-                        "keywords": [],
-                        "keywordStrategyVersion": PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
-                        "keywordDigest": "0" * 64,
                         "liveOnly": False,
                         "recordShown": False,
                     },
@@ -681,6 +701,9 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertNotIn("user_id", payload)
         self.assertNotIn("profile_dir", payload)
         self.assertEqual(payload["_workerCapability"], "persona.hot_candidates.v1")
+        self.assertEqual(payload["archiveId"], "archive_12345678")
+        self.assertNotIn("archiveSnapshot", payload)
+        self.assertNotIn("keywords", payload)
         with self.assertRaises(ProtocolError):
             _validate_envelope(
                 {
@@ -689,6 +712,25 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                     "payload": {"liveOnly": True, "recordShown": False},
                 }
             )
+
+    def test_keyword_capability_uses_local_archive_id_only(self) -> None:
+        capability, unit_id, payload = _validate_envelope(
+            {
+                "capability": "persona.hot_keywords.v1",
+                "unit_id": "archive_12345678",
+                "payload": {
+                    "archiveId": "archive_12345678",
+                    "archiveSnapshot": {"id": "archive_12345678", "posts": []},
+                    "searchMode": "strict",
+                },
+            }
+        )
+        self.assertEqual(capability, "persona.hot_keywords.v1")
+        self.assertEqual(unit_id, "archive_12345678")
+        self.assertEqual(payload["action"], "prepare-hot-keywords")
+        self.assertEqual(payload["archiveId"], "archive_12345678")
+        self.assertEqual(payload["searchMode"], "strict")
+        self.assertNotIn("archiveSnapshot", payload)
 
     def test_runtime_uses_only_the_leased_collector_profile(self) -> None:
         class FakePool:

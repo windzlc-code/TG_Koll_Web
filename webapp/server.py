@@ -14201,6 +14201,8 @@ def _remote_fetch_capability(payload: dict[str, Any]) -> str:
         return "crm.threads_live_search.v1"
     if action == "fetch-hot-candidates":
         return "persona.hot_candidates.v1"
+    if action == "prepare-hot-keywords":
+        return "persona.hot_keywords.v1"
     if action == "refresh-hot-post":
         return "persona.hot_post_metrics.v1"
     return ""
@@ -14248,6 +14250,36 @@ _REMOTE_CRM_FETCH_FIELDS = frozenset({
     "writingLocale",
     "accountScope",
 })
+
+_REMOTE_PERSONA_HOT_REQUEST_FIELDS = frozenset({
+    "action",
+    "archiveId",
+    "prompt",
+    "refresh",
+    "forceRegenerate",
+    "limit",
+    "searchMode",
+    "writingLocale",
+    "freshnessDays",
+    "freshnessPolicy",
+    "userInitiated",
+    "recordShown",
+    "liveOnly",
+})
+
+
+def _remote_fetch_persona_hot_request(payload: dict[str, Any]) -> dict[str, Any]:
+    """Send only the search request. The old host owns the persona dataset."""
+
+    remote_payload: dict[str, Any] = {}
+    for key in _REMOTE_PERSONA_HOT_REQUEST_FIELDS:
+        value = payload.get(key)
+        if isinstance(value, (str, bool, int, float)):
+            remote_payload[key] = value
+    archive_id = str(payload.get("archiveId") or "").strip()
+    if archive_id:
+        remote_payload["archiveId"] = archive_id
+    return remote_payload
 
 
 def _remote_fetch_safe_setup_value(value: Any) -> Any:
@@ -14403,6 +14435,8 @@ def _run_remote_persona_hot_workflow(
     archive_id = str(payload.get("archiveId") or "").strip()
     if capability == "crm.threads_live_search.v1":
         remote_payload = _remote_fetch_crm_payload(payload)
+    elif capability in {"persona.hot_candidates.v1", "persona.hot_keywords.v1"}:
+        remote_payload = _remote_fetch_persona_hot_request(payload)
     else:
         remote_payload = dict(payload)
         archive_snapshot = _remote_fetch_archive_snapshot(archive_id)
@@ -14845,8 +14879,9 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
     limit = min(max(_to_int(payload.limit, 10), 1), 20)
     search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
     freshness_days = min(max(_to_int(payload.freshness_days, 30), 0), 30)
-    keywords = _persona_hot_payload_keywords(payload.keywords)
-    if not keywords:
+    remote_required = configured_remote_fetch_mode() == "remote_required"
+    keywords = [] if remote_required else _persona_hot_payload_keywords(payload.keywords)
+    if not remote_required and not keywords:
         prepared = _prepare_persona_hot_keywords(clean_id, payload)
         keywords = _persona_hot_payload_keywords(prepared.get("keywords"))
         if not keywords:
@@ -14856,8 +14891,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
                 status_code=503,
                 detail=detail or "热点关键词模型暂时不可用，请稍后重试。",
             )
-    result = _run_persona_hot_workflow_cli(
-        {
+    fetch_payload: dict[str, Any] = {
             "action": "fetch-hot-candidates",
             "archiveId": clean_id,
             "prompt": str(payload.prompt or "").strip(),
@@ -14873,23 +14907,27 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
             "freshnessDays": freshness_days,
             "freshnessPolicy": "strict" if str(payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
-            "keywords": keywords,
-            "keywordStrategyVersion": PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
-            "keywordDigest": _persona_hot_keyword_digest(keywords),
             # Only this billable, user-facing route may activate scheduled
             # low-watermark refill on the old collector host.
             "userInitiated": True,
             "recordShown": False,
-            # The old collector owns both persona/global pools. Pool-backed
-            # requests read and replenish there; the new application only
+            # The old collector owns the persona dataset, keyword strategy,
+            # and both persona/global pools. The new application only
             # triggers the job and renders the returned candidates.
             "liveOnly": False,
-        },
+    }
+    if not remote_required:
+        fetch_payload["keywords"] = keywords
+        fetch_payload["keywordStrategyVersion"] = PERSONA_HOT_KEYWORD_STRATEGY_VERSION
+        fetch_payload["keywordDigest"] = _persona_hot_keyword_digest(keywords)
+    result = _run_persona_hot_workflow_cli(
+        fetch_payload,
         # A healthy account normally returns within 20-30 seconds. Keep enough
         # headroom for the worker's single sparse-result account rotation.
         timeout_seconds=65,
     )
-    _consume_persona_hot_keyword_batch(clean_id, payload, keywords)
+    if not remote_required:
+        _consume_persona_hot_keyword_batch(clean_id, payload, keywords)
 
     # Collector-account health is an old-host implementation detail. Never
     # expose or infer account Cookie state through the product-facing route.

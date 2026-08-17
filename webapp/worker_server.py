@@ -39,6 +39,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 ALLOWED_CAPABILITIES = {
     "crm.threads_live_search.v1": "fetch-hot-candidates",
     "persona.hot_candidates.v1": "fetch-hot-candidates",
+    "persona.hot_keywords.v1": "prepare-hot-keywords",
     "persona.hot_post_metrics.v1": "refresh-hot-post",
 }
 TERMINAL_STATES = {"success", "failed", "cancelled"}
@@ -89,6 +90,26 @@ def _has_current_hot_keyword_strategy(payload: Mapping[str, Any]) -> bool:
         and int(payload.get("keywordStrategyVersion") or 0) == PERSONA_HOT_KEYWORD_STRATEGY_VERSION
         and str(payload.get("keywordDigest") or "").strip().lower() == _hot_keyword_digest(keywords)
     )
+
+
+def _local_persona_archive_names(runtime_dir: Path) -> dict[str, str]:
+    path = Path(runtime_dir) / "persona_archives.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    rows = raw if isinstance(raw, list) else (raw.get("archives") if isinstance(raw, dict) else None)
+    if not isinstance(rows, list):
+        return {}
+    names: dict[str, str] = {}
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        archive_id = str(item.get("id") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if archive_id and name:
+            names[archive_id] = name
+    return names
 
 
 def _candidate_identity(value: Mapping[str, Any]) -> str:
@@ -495,11 +516,9 @@ class JobStore:
                 capability == "persona.hot_candidates.v1"
                 and payload.get("userInitiated") is True
                 and not payload.get("_poolRefill")
-                and _has_current_hot_keyword_strategy(payload)
             ):
                 archive_id = str(payload.get("archiveId") or "").strip()
-                snapshot = payload.get("archiveSnapshot")
-                if archive_id and isinstance(snapshot, dict) and str(snapshot.get("id") or "").strip() == archive_id:
+                if archive_id:
                     low_watermark = max(1, min(int(os.getenv("TG_HOT_POOL_LOW_WATERMARK", "50") or 50), 1000))
                     target_watermark = max(
                         low_watermark,
@@ -574,7 +593,7 @@ class JobStore:
             if not refilling and available_count >= low_watermark:
                 return False
             payload = json.loads(str(target["payload_json"] or "{}"))
-            if not _has_current_hot_keyword_strategy(payload):
+            if not str(payload.get("archiveId") or "").strip():
                 connection.execute("DELETE FROM fetch_pool_targets WHERE archive_id=?", (archive_id,))
                 return False
             active_rows = connection.execute(
@@ -722,6 +741,11 @@ class JobStore:
         archive_ids: set[str] = set()
         names: dict[str, str] = {}
         targets: dict[str, sqlite3.Row] = {}
+        local_names = _local_persona_archive_names(self.runtime_dir)
+        for archive_id, name in local_names.items():
+            if _PERSONA_ARCHIVE_ID.fullmatch(archive_id):
+                archive_ids.add(archive_id)
+                names[archive_id] = name
         cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
         with contextlib.suppress(OSError):
             for path in cache_dir.iterdir():
@@ -744,7 +768,9 @@ class JobStore:
                 targets[archive_id] = row
                 with contextlib.suppress(json.JSONDecodeError):
                     payload = json.loads(str(row["payload_json"] or "{}"))
-                    names[archive_id] = str((payload.get("archiveSnapshot") or {}).get("name") or "").strip()
+                    snapshot_name = str((payload.get("archiveSnapshot") or {}).get("name") or "").strip()
+                    if snapshot_name:
+                        names[archive_id] = snapshot_name
             job_rows = connection.execute(
                 "SELECT payload_json FROM fetch_jobs WHERE capability='persona.hot_candidates.v1' ORDER BY created_at DESC LIMIT 1000"
             ).fetchall()
@@ -753,7 +779,9 @@ class JobStore:
                 payload = json.loads(str(row["payload_json"] or "{}"))
                 archive_id = str(payload.get("archiveId") or "")
                 if archive_id in archive_ids and not names.get(archive_id):
-                    names[archive_id] = str((payload.get("archiveSnapshot") or {}).get("name") or "").strip()
+                    snapshot_name = str((payload.get("archiveSnapshot") or {}).get("name") or "").strip()
+                    if snapshot_name:
+                        names[archive_id] = snapshot_name
         personas: list[dict[str, Any]] = []
         for archive_id in archive_ids:
             target = targets.get(archive_id)
@@ -1013,10 +1041,9 @@ def _run_tool_r18_job_once(
     capability = str(runtime_payload.pop("_workerCapability", "") or "").strip()
     background_refill = bool(runtime_payload.pop("_poolRefill", False))
     runtime_payload.pop("userInitiated", None)
-    if capability == "persona.hot_candidates.v1":
+    if capability in {"persona.hot_candidates.v1", "persona.hot_keywords.v1"}:
+        runtime_payload.pop("archiveSnapshot", None)
         runtime_payload["keywords"] = _clean_hot_keywords(runtime_payload.get("keywords"))
-        if not _has_current_hot_keyword_strategy(runtime_payload):
-            raise RuntimeError("persona hot keywords must use the current new-host strategy")
     for private_field in (
         "accountId", "account_id", "senderUsername", "sender_username",
         "userId", "user_id", "loginUsername", "login_username",
@@ -1315,20 +1342,27 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
         if capability == "persona.hot_candidates.v1":
             if normalized.get("_poolRefill"):
                 raise ProtocolError("background pool refill cannot be submitted externally")
-            normalized["keywords"] = _clean_hot_keywords(normalized.get("keywords"))
-            if not _has_current_hot_keyword_strategy(normalized):
-                raise ProtocolError("persona hot keywords must use the current new-host strategy")
+            # The old host owns the persona dataset and keyword strategy.
+            normalized.pop("keywords", None)
+            normalized.pop("keywordStrategyVersion", None)
+            normalized.pop("keywordDigest", None)
         if capability == "crm.threads_live_search.v1" and normalized.get("liveOnly") is not True:
             raise ProtocolError("CRM live search must remain live-only")
         normalized.pop("sourcePolicy", None)
-    if capability in {
-        "crm.threads_live_search.v1",
-        "persona.hot_candidates.v1",
-    }:
+    if capability == "crm.threads_live_search.v1":
         archive_snapshot = normalized.get("archiveSnapshot")
         archive_id = str(normalized.get("archiveId") or "").strip()
         if not isinstance(archive_snapshot, dict) or str(archive_snapshot.get("id") or "").strip() != archive_id:
             raise ProtocolError("current persona archive snapshot is required")
+    if capability in {
+        "persona.hot_candidates.v1",
+        "persona.hot_keywords.v1",
+    }:
+        archive_id = str(normalized.get("archiveId") or "").strip()
+        if not archive_id:
+            raise ProtocolError("persona archive id is required")
+        normalized["archiveId"] = archive_id
+        normalized.pop("archiveSnapshot", None)
     if capability == "persona.hot_post_metrics.v1":
         post_snapshot = normalized.get("postSnapshot")
         post_id = str(normalized.get("postId") or "").strip()

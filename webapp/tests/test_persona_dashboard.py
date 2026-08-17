@@ -4628,6 +4628,41 @@ class PersonaDashboardApiTests(unittest.TestCase):
         )
         self.assertRegex(mocked.call_args_list[1].args[0]["keywordDigest"], r"^[0-9a-f]{64}$")
 
+    def test_fetch_persona_hot_candidates_skips_local_keyword_prep_in_remote_mode(self):
+        self._write_archives()
+        fetched = {
+            "ok": True,
+            "archiveName": "History Teacher",
+            "keywords": ["历史老师", "历史课堂"],
+            "searchMode": "strict",
+            "warnings": [],
+            "candidates": [],
+        }
+
+        with (
+            mock.patch.object(server, "configured_remote_fetch_mode", return_value="remote_required"),
+            mock.patch.object(server, "_prepare_persona_hot_keywords") as prepared,
+            mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fetched) as mocked,
+        ):
+            body = server._fetch_persona_hot_candidates(
+                "persona-1",
+                server.PersonaDashboardHotCandidatesFetchPayload(
+                    keywords=["must-not-send"],
+                    search_mode="strict",
+                ),
+            )
+
+        self.assertTrue(body["ok"])
+        prepared.assert_not_called()
+        mocked.assert_called_once()
+        payload = mocked.call_args.args[0]
+        self.assertEqual(payload["action"], "fetch-hot-candidates")
+        self.assertEqual(payload["archiveId"], "persona-1")
+        self.assertNotIn("keywords", payload)
+        self.assertNotIn("keywordStrategyVersion", payload)
+        self.assertNotIn("keywordDigest", payload)
+        self.assertNotIn("archiveSnapshot", payload)
+
     def test_hot_keyword_gateway_html_error_is_not_exposed(self):
         detail = server._normalize_persona_hot_workflow_error_detail(
             "<html><head><title>502 Bad Gateway</title></head></html>",
