@@ -12190,9 +12190,10 @@ function syncUploadDropzone(input) {
           <button type="button" data-media-preview-group="${esc(previewGroupId)}" data-media-preview-index="${esc(previewIndex)}" aria-label="查看 ${esc(file.name)}" title="查看">
             ${renderEyeIcon()}
           </button>` : ""}
-        ${type === "image" && !selectionControlsModify ? `<button type="button" class="${isModifySource ? "is-active" : ""}" data-upload-media-modify="${esc(index)}" title="${isModifySource ? "取消媒体修改" : "媒体修改"}" aria-label="${isModifySource ? "取消" : "选择"}第 ${esc(index + 1)} 张图片进行媒体修改" aria-pressed="${isModifySource ? "true" : "false"}">${renderPlusIcon()}</button>` : ""}
         ${renderPersonaPublicMediaEditMenu({
           displayIndex: index,
+          modifyAttribute: type === "image" ? `data-upload-media-modify="${esc(index)}"` : "",
+          modifyActive: isModifySource,
           replaceAttribute: `data-upload-edit-index="${esc(index)}"`,
           deleteAttribute: `data-upload-remove-index="${esc(index)}"`,
         })}
@@ -24059,19 +24060,15 @@ function renderPersonaPendingMediaInput(persona) {
 }
 
 function renderPersonaMediaComposerPlaceholder(persona, mediaForm) {
-  const operationMode = mediaForm?.operationMode === "generate" ? "generate" : "replace";
   return `
     <section class="persona-compose-media-side persona-production-section">
       <div class="persona-inline-panel persona-inline-panel--nested persona-media-operation-panel">
-        ${renderPersonaMediaOperationTabs(operationMode)}
         <div class="persona-media-operation-pane">
-          ${operationMode === "replace"
-            ? renderPersonaCompactMediaUpload(persona)
-            : `${renderPersonaPendingMediaInput(persona)}${renderModuleEmptyState({
-              icon: "media",
-              title: "先选择一条草稿",
-              detail: "保存或生成推文后，即可使用 AI 生成配图",
-            })}`}
+          ${renderPersonaPendingMediaInput(persona)}${renderModuleEmptyState({
+            icon: "media",
+            title: "先选择一条草稿",
+            detail: "保存或生成推文后，即可使用 AI 生成配图",
+          })}
         </div>
       </div>
     </section>`;
@@ -24083,15 +24080,12 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
     return `
       <section class="persona-compose-media-side persona-production-section">
         <div class="persona-inline-panel persona-inline-panel--nested persona-media-operation-panel">
-          ${renderPersonaMediaOperationTabs(operationMode)}
           <div class="persona-media-operation-pane">
-            ${operationMode === "replace"
-              ? renderPersonaCompactMediaUpload(persona)
-              : `${renderPersonaPendingMediaInput(persona)}${renderModuleEmptyState({
-                icon: "media",
-                title: "先准备一条草稿",
-                detail: "保存或生成推文后，即可使用 AI 生成配图",
-              })}`}
+            ${renderPersonaPendingMediaInput(persona)}${renderModuleEmptyState({
+              icon: "media",
+              title: "先准备一条草稿",
+              detail: "保存或生成推文后，即可使用 AI 生成配图",
+            })}
           </div>
         </div>
       </section>`;
@@ -24121,23 +24115,16 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
         <p>${esc(referenceContent || `当前${sourceLabel}没有正文。`)}</p>
       </div>
       <div class="persona-inline-panel persona-inline-panel--nested persona-media-operation-panel">
-        ${isFavoriteMedia ? `<strong>收藏媒体</strong>` : renderPersonaMediaOperationTabs(operationMode)}
-        ${operationMode === "replace" ? `
+        ${isFavoriteMedia ? `<strong>收藏媒体</strong>
           <div class="persona-media-operation-pane">
             ${postMediaItems.length
               ? renderPersonaEditableMediaGrid(postMediaItems, {
                 personaId: persona.id,
-                source: isFavoriteMedia ? "favorites" : "posts",
+                source: "favorites",
                 postId: post.id,
                 sourceLabel,
               })
               : renderPersonaCompactMediaUpload(persona, post)}
-            ${mediaModifyActive ? `
-              ${renderPersonaMediaPromptField(mediaForm, mediaTaskState)}
-              <div class="row-actions persona-media-task-actions">
-                <button type="button" class="primary" data-persona-run-media-task data-persona-media-action="generate" aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : "生成修改图"}</button>
-              </div>
-            ` : ""}
           </div>
         ` : `
           <div class="persona-media-operation-pane">
