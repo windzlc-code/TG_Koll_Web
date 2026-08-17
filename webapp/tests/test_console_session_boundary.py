@@ -1343,6 +1343,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("function restorePublishAssistanceView", self.source)
         self.assertIn("data-restore-publish-assistance", self.source)
         self.assertIn("state.publishAssistanceDismissed = true", self._function_source("openTaskAssistanceView"))
+        self.assertIn("is-publish-assistance", self._function_source("openTaskAssistanceView"))
+        self.assertNotIn("login-assistance-content", self._function_source("renderTaskAssistanceDetails"))
+        self.assertIn(".login-assistance-modal.is-publish-assistance .login-assistance-dialog", self.styles)
+        self.assertIn("min-height: 0", self.styles)
         self.assertIn("function loginAssistanceMappedInputAllowed", self.source)
         self.assertIn("loginAssistanceMappedInputAllowed(session)", self._function_source("renderLoginAssistanceAction"))
         self.assertIn('data-login-assistance-accept', self._function_source("renderLoginAssistanceAction"))
@@ -1380,7 +1384,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               {{ login_assistance: {{ phase: "running", kind: "progress", title: "正在启动发布" }} }}
             );
             assert.strictEqual(starting.kind, "progress");
-            assert.strictEqual(starting.content, caption);
+            assert.strictEqual(starting.content, undefined);
+            assert.strictEqual(renderTaskAssistanceDetails(starting), "");
             assert.ok(!String(starting.title).includes("实时浏览器"));
 
             const composing = publishAssistanceViewModel(
@@ -1388,7 +1393,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               {{ browser_ready: true, login_assistance: {{ phase: "running", kind: "progress", title: "正在撰写发布内容", content: caption }} }}
             );
             assert.strictEqual(composing.title, "正在撰写发布内容");
-            assert.strictEqual(composing.content, caption);
+            assert.strictEqual(composing.content, undefined);
+            assert.strictEqual(renderTaskAssistanceDetails(composing), "");
 
             const session = {{
               id: "live_task-1",
@@ -1445,7 +1451,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.strictEqual(success.permalink, permalink);
             assert.ok(String(success.screenshotUrl).includes("shot_success.png"));
             const details = renderTaskAssistanceDetails(success);
-            assert.ok(details.includes(caption));
+            assert.ok(!details.includes(caption));
+            assert.ok(!details.includes("login-assistance-content"));
             assert.ok(details.includes("login-assistance-shot"));
             assert.ok(details.includes("查看发布链接"));
 

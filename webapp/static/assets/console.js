@@ -26756,7 +26756,6 @@ function publishAssistanceViewModel(task = {}, session = null) {
   const assistance = session?.login_assistance && typeof session.login_assistance === "object"
     ? session.login_assistance
     : {};
-  const payload = taskAssistancePayload(task);
   const result = task?.result && typeof task.result === "object" ? task.result : {};
   const permalink = String(
     assistance.permalink || result.published_url || result.publishedUrl || result.url || result.post_url || result.permalink || "",
@@ -26764,14 +26763,13 @@ function publishAssistanceViewModel(task = {}, session = null) {
   const screenshotUrl = String(assistance.screenshot_url || "").trim()
     || latestSocialTaskScreenshot(task, [])
     || "";
-  const content = String(assistance.content || payload.caption || payload.content || payload.text || "").trim();
   const expiresAt = Number(assistance.expires_at || 0);
   const remainingSeconds = expiresAt > 0
     ? Math.max(0, Math.ceil(expiresAt - (Date.now() / 1000)))
     : 0;
   const loginLike = loginAssistanceViewModel(task, session);
   if (["verification_code", "credentials", "confirm", "choice", "browser_interaction"].includes(String(assistance.kind || ""))) {
-    return { ...loginLike, content, permalink, screenshotUrl };
+    return { ...loginLike, permalink, screenshotUrl };
   }
   if (taskStatus === "success" || assistance.phase === "success") {
     return {
@@ -26779,7 +26777,6 @@ function publishAssistanceViewModel(task = {}, session = null) {
       kind: "success",
       title: "发布成功",
       message: permalink ? "帖子已发布，可查看截图和链接。" : "发布已完成。",
-      content,
       permalink,
       screenshotUrl,
     };
@@ -26790,8 +26787,6 @@ function publishAssistanceViewModel(task = {}, session = null) {
       kind: "error",
       title: String(assistance.title || (taskStatus === "cancelled" ? "发布已停止" : "发布未完成")),
       message: String(assistance.message || task?.error || "本次发布没有完成，请稍后重试。"),
-      content,
-      screenshotUrl,
     };
   }
   if (taskStatus === "need_manual" || assistance.kind === "takeover") {
@@ -26801,8 +26796,6 @@ function publishAssistanceViewModel(task = {}, session = null) {
       title: String(assistance.title || "需要人工接管"),
       message: String(assistance.message || "自动发布遇到需要人工处理的步骤，接受后将打开实时浏览器。"),
       submitLabel: String(assistance.submit_label || "接受并接管"),
-      content,
-      screenshotUrl,
       remainingSeconds,
     };
   }
@@ -26813,7 +26806,6 @@ function publishAssistanceViewModel(task = {}, session = null) {
     kind: "progress",
     title: String(assistance.title || (session?.browser_ready || !bootstrapStarting ? "正在发布" : "正在启动发布")),
     message: String(assistance.message || (session ? "正在同步发布进度，无需打开浏览器。" : "正在连接指纹浏览器，请稍候。")),
-    content,
     remainingSeconds,
   };
 }
@@ -26994,16 +26986,15 @@ function renderLoginAssistanceAction(model = {}, session = null) {
 }
 
 function renderTaskAssistanceDetails(model = {}) {
+  if (String(model.phase || model.kind || "") !== "success") return "";
   const permalink = String(model.permalink || "").trim();
   const screenshotUrl = String(model.screenshotUrl || "").trim();
-  const content = String(model.content || "").trim();
-  if (!permalink && !screenshotUrl && !content) return "";
+  if (!permalink && !screenshotUrl) return "";
   const shotHref = screenshotUrl.startsWith("http") || screenshotUrl.startsWith("/")
     ? adminWorkspaceUrl(screenshotUrl)
     : screenshotUrl;
   const linkHref = permalink ? adminWorkspacePageUrl(permalink) : "";
   return `<div class="login-assistance-details">
-    ${content ? `<p class="login-assistance-content">${esc(content)}</p>` : ""}
     ${screenshotUrl ? `<img class="login-assistance-shot" src="${esc(shotHref)}" alt="任务截图" />` : ""}
     ${linkHref ? `<a class="login-assistance-permalink" href="${esc(linkHref)}" target="_blank" rel="noopener">查看发布链接</a>` : ""}
   </div>`;
@@ -27023,7 +27014,6 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
     model.inputMode,
     model.submitLabel,
     JSON.stringify(model.actions || []),
-    model.content || "",
     model.permalink || "",
     model.screenshotUrl || "",
     taskStatus,
@@ -27114,7 +27104,7 @@ function openTaskAssistanceView(taskId = "", options) {
     || {};
   const modal = document.createElement("div");
   modal.id = "loginAssistanceModal";
-  modal.className = "console-modal login-assistance-modal";
+  modal.className = `console-modal login-assistance-modal${mode === "publish" ? " is-publish-assistance" : ""}`;
   modal.dataset.modalKey = mode === "publish" ? "publish-assistance" : "login-assistance";
   modal.innerHTML = `
     <div class="console-modal-backdrop"></div>
