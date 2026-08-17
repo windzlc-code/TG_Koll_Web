@@ -14,16 +14,15 @@ import {
 import {
   analyzeThreadsProfileVisibleSignals,
   acquireSentimentBrowserWorkSlot,
+  anonymousReaderRetryReason,
   applyPersonaGuardToSentimentHotStrategy,
   boundedBrowserPageConcurrency,
   buildInstagramHotSearchQueries,
   buildModelOrderedThreadsSearchQueries,
   buildSentimentHotSearchStrategyCacheKey,
-  buildJinaReaderUrl,
   buildThreadsReaderSearchUrl,
   buildThreadsSearchUrl,
   candidateMatchesRequestedFreshness,
-  candidateMatchesGlobalPoolRetention,
   candidateMatchesSentimentHotStrategyAnchors,
   candidateMatchesCurrentKeywords,
   cleanSentimentCandidateContent,
@@ -32,6 +31,7 @@ import {
   finalizeSentimentHotCandidatesForDisplay,
   isObviouslyLowQualitySentimentHotCandidate,
   isCacheableSentimentReaderResponse,
+  isRetryableAnonymousReaderError,
   isChineseSentimentCandidate,
   isUsableThreadsSearchGraphqlTemplate,
   parseInstagramAuthenticatedSearchPayload,
@@ -56,9 +56,6 @@ import {
   parseThreadsDetailEngagementMarkdown,
   parseThreadsDetailMediaMarkdown,
   parseThreadsSearchTextCandidates,
-  planThreadsBrowserDomQueryLanes,
-  prepareSentimentHotKeywords,
-  prioritizeSearchablePrimaryQueries,
   refreshSentimentSourceMetrics,
   replaceThreadsSearchVariables,
   resolveSentimentHotModelStrategyKeywords,
@@ -66,11 +63,13 @@ import {
   resolveSentimentHotManualQueryKeywords,
   resolveSentimentHotStrategyTimeoutMs,
   resolveSentimentHotDisplayHeatThreshold,
+  resolveSentimentHotReaderConcurrency,
+  resolveSentimentHotReaderTotalTimeoutMs,
+  shouldRunSentimentHotReaderPlatformsSerially,
+  SENTIMENT_HOT_READER_CONCURRENCY,
   resolveSentimentHotTextModelPreference,
   shouldTreatThreadsProfileAsLoginWall,
   shouldUseThreadsSearchGraphqlTemplate,
-  sentimentHotCandidatePoolLimits,
-  sentimentHotStrategyHasSearchablePrimaryBatch,
 } from "@/lib/sentiment-hot-importer";
 
 afterEach(() => {
@@ -78,49 +77,29 @@ afterEach(() => {
 });
 
 describe("sentiment hot importer", () => {
-  it("rejects a model batch dominated by editorial labels instead of searchable topics", () => {
-    const base = {
-      broadQueries: ["汽车维修故障"],
-      ecosystemQueries: ["汽车保养费用"],
-      requiredAnchorTerms: ["汽车", "引擎", "底盘"],
-      normalAnchorTerms: ["车辆", "维修", "保养"],
-      strictAcceptTerms: ["汽车", "引擎", "底盘", "煞车", "变速箱"],
-      normalAcceptTerms: ["车辆", "维修", "保养", "故障", "零件"],
-      rejectTerms: ["游戏"],
-      domainSummary: "汽车维修与车辆故障诊断",
-    } as any;
-    expect(sentimentHotStrategyHasSearchablePrimaryBatch({
-      ...base,
-      primaryQueries: [
-        "修车避坑指南", "汽车发动机维修", "汽车维修", "汽车底盘异响检修",
-        "机械原理科普", "汽车修理", "汽车保养常识", "修车工真实生活",
-      ],
-    })).toBe(false);
-    expect(sentimentHotStrategyHasSearchablePrimaryBatch({
-      ...base,
-      primaryQueries: [
-        "引擎故障灯", "底盘异响", "煞车抖动", "变速箱顿挫",
-        "冷气不冷", "中古车检查", "汽车维修", "保养费用",
-      ],
-    })).toBe(true);
+  it("uses one fixed 24-request public Reader window", () => {
+    expect(SENTIMENT_HOT_READER_CONCURRENCY).toBe(24);
   });
 
-  it("moves model editorial labels behind concrete queries without inventing replacements", () => {
-    const modelQueries = [
-      "修车避坑指南", "汽车发动机维修", "汽车维修", "汽车底盘异响检修",
-      "机械原理科普", "汽车修理", "汽车保养常识", "修车工真实生活",
-      "引擎故障灯", "底盘异响", "煞车抖动", "变速箱顿挫",
-    ];
-    const ordered = prioritizeSearchablePrimaryQueries(modelQueries);
-    expect(new Set(ordered)).toEqual(new Set(modelQueries));
-    expect(ordered).toHaveLength(modelQueries.length);
-    expect(ordered.slice(0, 8)).toEqual([
-      "汽车发动机维修", "汽车维修", "汽车底盘异响检修", "汽车修理",
-      "引擎故障灯", "底盘异响", "煞车抖动", "变速箱顿挫",
-    ]);
+  it("resolves isolated interactive and refill Reader profiles", () => {
+    expect(resolveSentimentHotReaderConcurrency(undefined)).toBe(24);
+    expect(resolveSentimentHotReaderConcurrency("4")).toBe(4);
+    expect(resolveSentimentHotReaderConcurrency("99")).toBe(24);
+    expect(resolveSentimentHotReaderTotalTimeoutMs("55000")).toBe(55_000);
+    expect(resolveSentimentHotReaderTotalTimeoutMs("999999")).toBe(90_000);
+    expect(shouldRunSentimentHotReaderPlatformsSerially("1")).toBe(true);
+    expect(shouldRunSentimentHotReaderPlatformsSerially("0")).toBe(false);
   });
 
-  it("uses the runtime model priority before built-in hot keyword defaults", () => {
+  it("retries only transient Reader failures that can benefit from a new proxy connection", () => {
+    expect(anonymousReaderRetryReason({ ok: false, status: 429, headers: {}, body: "" })).toBe("rate_limited");
+    expect(anonymousReaderRetryReason({ ok: false, status: 503, headers: {}, body: "service unavailable" })).toBe("upstream_503");
+    expect(anonymousReaderRetryReason({ ok: true, status: 200, headers: {}, body: "Log in for more Threads" })).toBe("login_wall_or_challenge");
+    expect(anonymousReaderRetryReason({ ok: false, status: 404, headers: {}, body: "not found" })).toBe("");
+    expect(isRetryableAnonymousReaderError(new Error("request timed out"))).toBe(true);
+    expect(isRetryableAnonymousReaderError(new Error("invalid proxy configuration"))).toBe(false);
+  });
+  it("prioritizes dedicated hot keyword models before global defaults", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sentiment-hot-config-"));
     const configPath = path.join(dir, "api_config.json");
     fs.writeFileSync(configPath, JSON.stringify({
@@ -129,9 +108,9 @@ describe("sentiment hot importer", () => {
     vi.stubEnv("AUTO_TWEET_API_CONFIG_PATH", configPath);
 
     expect(resolveSentimentHotTextModelPreference().split(",").map((model) => model.trim()).slice(0, 3)).toEqual([
-      "google/gemini-3.1-pro-preview",
       "xai/grok-4.3",
       "xai/grok-4.5",
+      "google/gemini-3.1-pro-preview",
     ]);
   });
 
@@ -145,94 +124,6 @@ describe("sentiment hot importer", () => {
     expect(boundedBrowserPageConcurrency(1)).toBe(1);
     expect(boundedBrowserPageConcurrency(2)).toBe(2);
     expect(boundedBrowserPageConcurrency(8)).toBe(2);
-  });
-
-  it("fans eight authenticated DOM queries across both browser pages after one bootstrap", () => {
-    const plan = planThreadsBrowserDomQueryLanes(
-      ["q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8"],
-      2,
-    );
-
-    expect(plan.bootstrapQueries).toEqual(["q1"]);
-    expect(plan.queryLanes).toEqual([
-      ["q2", "q4", "q6", "q8"],
-      ["q3", "q5", "q7"],
-    ]);
-    expect(plan.queryLanes.flat()).toHaveLength(7);
-  });
-
-  it("fans the complete authenticated DOM batch across two pages without bootstrap", () => {
-    const plan = planThreadsBrowserDomQueryLanes(
-      ["q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8"],
-      2,
-      0,
-    );
-
-    expect(plan.bootstrapQueries).toEqual([]);
-    expect(plan.queryLanes).toEqual([
-      ["q1", "q3", "q5", "q7"],
-      ["q2", "q4", "q6", "q8"],
-    ]);
-  });
-
-  it("keeps a five-times larger effective persona candidate pool", () => {
-    expect(sentimentHotCandidatePoolLimits()).toMatchObject({
-      readyTarget: 2_000,
-      perRowLimit: 2_000,
-      maxRowsPerArchive: 40,
-      globalLimit: 100_000,
-    });
-  });
-
-  it("expires the global pool by tweet publication time after thirty days", () => {
-    const now = Date.UTC(2026, 7, 14, 0, 0, 0);
-    const candidate = {
-      id: "published-time-retention",
-      platform: "threads",
-      sourceUrl: "https://www.threads.net/@demo/post/published-time-retention",
-      author: "demo",
-      content: "用于验证候选池只按照推文发布时间判断新鲜度，而不是按照服务器抓取时间延长保存期限。".repeat(2),
-      hotScore: 5_000,
-      engagement: { likeCount: 5_000 },
-      capturedAt: new Date(now).toISOString(),
-    } as any;
-
-    expect(candidateMatchesGlobalPoolRetention({
-      ...candidate,
-      publishedAt: new Date(now - 29 * 24 * 60 * 60 * 1000).toISOString(),
-    }, now)).toBe(true);
-    expect(candidateMatchesGlobalPoolRetention({
-      ...candidate,
-      publishedAt: new Date(now - 31 * 24 * 60 * 60 * 1000).toISOString(),
-    }, now)).toBe(false);
-    expect(candidateMatchesGlobalPoolRetention({
-      ...candidate,
-      publishedAt: "",
-    }, now)).toBe(false);
-  });
-
-  it("keeps hot candidates with at least twenty readable characters", () => {
-    const candidate = (id: string, content: string) => ({
-      id,
-      platform: "threads",
-      sourceUrl: `https://www.threads.net/@demo/post/${id}`,
-      author: "demo",
-      content,
-      hotScore: 5_000,
-      engagement: { likeCount: 5_000 },
-      metrics: { source: "threads-account-search", query: "理发", recentSearch: true },
-      publishedAt: new Date().toISOString(),
-      capturedAt: new Date().toISOString(),
-    });
-
-    const content = "理发造型护理染发烫发剪发发型设计经验分享建议";
-    const short = candidate("short", content.slice(0, 19));
-    const long = candidate("long", content.slice(0, 20));
-
-    expect(finalizeSentimentHotCandidatesForDisplay([short, long] as any, 10, {
-      keywords: ["理发"],
-      searchMode: "strict",
-    }).map((item) => item.id)).toEqual(["long"]);
   });
 
   it("caps browser processes inside one hot workflow lease at two slots", async () => {
@@ -286,12 +177,6 @@ describe("sentiment hot importer", () => {
     releaseSecond();
     if (previous === undefined) delete process.env.SENTIMENT_BROWSER_PAGE_CONCURRENCY;
     else process.env.SENTIMENT_BROWSER_PAGE_CONCURRENCY = previous;
-  });
-
-  it("builds a valid Jina Reader URL for HTTPS Threads pages", () => {
-    expect(buildJinaReaderUrl("https://www.threads.com/search?q=tea")).toBe(
-      "https://r.jina.ai/http://www.threads.com/search?q=tea",
-    );
   });
 
   it("keeps the Threads reader on the public result page unless recent mode is explicit", () => {
@@ -483,34 +368,37 @@ describe("sentiment hot importer", () => {
     expect(queries).not.toContain("趣事");
   });
 
-  it("puts compact CJK Reader queries before their spaced controller labels", () => {
-    const keywords = [
-      "遊戲 災情",
-      "理財 詐騙 避坑",
-      "理財 詐騙",
-      "投資 新手 推薦",
-      "投資 新手",
-      "手遊 抽卡 翻車",
-      "二次元 投資",
-      "動漫 周邊 價格",
-    ];
+  it("keeps model primary query order and excludes generic anchor filler from strict dispatch", () => {
+    const strategy = {
+      primaryQueries: ["\u6c7d\u8f66\u4fee\u7406\u7ffb\u8f66", "\u4fee\u8f66\u907f\u5751", "\u53d1\u52a8\u673a\u7ef4\u4fee\u4ef7\u683c", "\u4fee\u8f66\u524d\u540e\u5bf9\u6bd4", "\u6c7d\u8f66\u4fee\u7406\u7ecf\u9a8c"],
+      ecosystemQueries: ["\u6c7d\u8f66\u7ef4\u4fee\u884c\u4e1a"],
+      broadQueries: ["\u6c7d\u8f66\u7ef4\u4fee\u4e89\u8bae"],
+      requiredAnchorTerms: ["\u6c7d\u8f66\u4fee\u7406", "\u4fee\u8f66", "\u53d1\u52a8\u673a\u7ef4\u4fee"],
+      normalAnchorTerms: ["\u6c7d\u8f66", "\u7ef4\u4fee", "\u53d1\u52a8\u673a"],
+      strictAcceptTerms: ["\u95ee\u9898", "\u7cfb\u7edf", "\u771f\u5b9e", "\u7ef4\u4fee", "\u6c7d\u8f66"],
+      normalAcceptTerms: ["\u95ee\u9898", "\u7cfb\u7edf", "\u771f\u5b9e", "\u7ef4\u4fee", "\u6c7d\u8f66"],
+      rejectTerms: [],
+      personaGuardTerms: [],
+      domainSummary: "\u6c7d\u8f66\u7ef4\u4fee\u884c\u4e1a",
+    } as any;
 
-    const queries = buildModelOrderedThreadsSearchQueries(keywords);
+    const keywords = resolveSentimentHotModelStrategyKeywords(strategy, "strict");
+    expect(keywords.slice(0, 5)).toEqual(strategy.primaryQueries);
+    expect(keywords).not.toContain("\u95ee\u9898");
+    expect(keywords).not.toContain("\u7cfb\u7edf");
+    expect(keywords).not.toContain("\u771f\u5b9e");
+    expect(keywords).toContain("\u6c7d\u8f66\u4fee\u7406");
+    expect(keywords).not.toContain("\u7ef4\u4fee");
 
-    expect(queries.slice(0, 8)).toEqual([
-      "遊戲災情",
-      "理財詐騙避坑",
-      "理財詐騙",
-      "投資新手推薦",
-      "投資新手",
-      "手遊抽卡翻車",
-      "二次元投資",
-      "動漫周邊價格",
-    ]);
-    expect(queries).toContain("理財 詐騙");
+    const queries = buildModelOrderedThreadsSearchQueries(["\u53d8\u901f\u7bb1\u95ee\u9898", "\u6c7d\u8f66\u4fee\u7406\u771f\u5b9e", "\u5239\u8f66\u7cfb\u7edf"]);
+    expect(queries).toContain("\u53d8\u901f\u7bb1\u95ee\u9898");
+    expect(queries).not.toContain("\u95ee\u9898");
+    expect(queries).not.toContain("\u7cfb\u7edf");
+    expect(queries).not.toContain("\u771f\u5b9e");
+    expect(queries).not.toContain("\u7ef4\u4fee");
   });
 
-  it("keeps broad vertical model terms out of strict discovery", () => {
+  it("uses broad vertical model terms for strict discovery without widening strict acceptance", () => {
     const strategy = {
       primaryQueries: ["理发师 顾客 吐槽", "理发店 奇葩客人", "剪头发 翻车", "男士理发 油头", "美发沙龙 职场"],
       ecosystemQueries: [],
@@ -524,142 +412,7 @@ describe("sentiment hot importer", () => {
       domainSummary: "理发与美发行业",
     } as any;
     expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict")).not.toContain("染发烫发价格踩雷");
-    expect(resolveSentimentHotModelQueryKeywords(strategy, "strict")).not.toContain("染发烫发价格踩雷");
-    expect(resolveSentimentHotModelQueryKeywords(strategy, "normal")).toContain("染发烫发价格踩雷");
-  });
-
-  it("puts persona-specific audience queries ahead of generic domain anchors", () => {
-    const strategy = {
-      primaryQueries: [
-        "台灣人日本買房", "非居住者日本貸款", "東京豪宅", "大阪塔樓",
-        "日本一戶建", "日本租金收益", "日本房產傳承", "日圓資產配置",
-      ],
-      ecosystemQueries: ["海外資產配置"],
-      broadQueries: ["日本房產融資"],
-      requiredAnchorTerms: ["日本不動產", "日本買房", "日本房貸"],
-      normalAnchorTerms: ["海外房產", "資產配置", "房貸融資"],
-      strictAcceptTerms: ["東京豪宅", "大阪塔樓", "日本一戶建", "日本房貸", "租金收益"],
-      normalAcceptTerms: ["海外房產", "資產配置", "房貸融資", "資產傳承", "日圓資產"],
-      rejectTerms: [],
-      personaGuardTerms: [],
-      domainSummary: "台灣客戶購買日本高端不動產、融資與跨境資產配置",
-    } as any;
-
-    const firstBatch = resolveSentimentHotModelQueryKeywords(strategy, "strict").slice(0, 8);
-
-    expect(firstBatch).toEqual([
-      "台灣人日本買房",
-      "非居住者日本貸款",
-      "日本不動產",
-      "東京豪宅",
-      "大阪塔樓",
-      "日本買房",
-      "日本一戶建",
-      "日本租金收益",
-    ]);
-    expect(firstBatch.filter((keyword) => strategy.primaryQueries.includes(keyword))).toHaveLength(6);
-    expect(firstBatch).not.toContain("資產配置");
-  });
-
-  it("does not invent a property synonym outside the model strategy", () => {
-    const strategy = {
-      primaryQueries: ["日本買房", "日本不動產", "東京買房", "大阪買房", "日本房貸"],
-      ecosystemQueries: [],
-      broadQueries: ["海外置產"],
-      requiredAnchorTerms: ["日本買房", "日本不動產", "東京買房"],
-      normalAnchorTerms: ["海外置產", "房地產", "投資理財"],
-      strictAcceptTerms: ["日本買房", "日本不動產", "東京買房", "大阪買房", "日本房貸"],
-      normalAcceptTerms: ["海外置產", "房地產", "投資理財", "租金回報", "資產配置"],
-      rejectTerms: [],
-      personaGuardTerms: [],
-      domainSummary: "日本不動產與跨境置產",
-    } as any;
-
-    expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict").slice(0, 8)).not.toContain("日本置產");
-  });
-
-  it("interleaves concrete compound queries with searchable strict terms", () => {
-    const strategy = {
-      primaryQueries: ["台灣人日本買房融資", "東京豪宅投資回報", "日本不動產台籍融資", "跨境理財日本房產", "日本買房匯率風險"],
-      ecosystemQueries: [],
-      broadQueries: [],
-      requiredAnchorTerms: ["日本不動產", "日本買房", "跨境理財"],
-      normalAnchorTerms: ["海外房產", "資產配置", "房貸融資"],
-      strictAcceptTerms: ["日本不動產", "日本買房", "跨境理財", "台籍融資", "東京豪宅"],
-      normalAcceptTerms: ["海外房產", "資產配置", "房貸融資", "租金回報", "匯率風險"],
-      rejectTerms: [],
-      personaGuardTerms: [],
-      domainSummary: "台灣人投資日本不動產與跨境融資",
-    } as any;
-
-    const keywords = resolveSentimentHotModelStrategyKeywords(strategy, "strict");
-    expect(keywords.slice(0, 4)).toEqual([
-      strategy.primaryQueries[0],
-      strategy.strictAcceptTerms[0],
-      strategy.primaryQueries[1],
-      strategy.strictAcceptTerms[1],
-    ]);
-    expect(keywords).toContain(strategy.primaryQueries[4]);
-  });
-
-  it("keeps vertical and broad-vertical keyword sets distinct without standalone intent filler", () => {
-    const strategy = {
-      primaryQueries: [
-        "动漫新番吐槽", "游戏课金避坑", "理财翻车实录", "动漫神作推荐", "游戏价格对比",
-        "主机游戏测评", "独立游戏推荐", "手游课金争议", "动漫剧情讨论", "新番制作质量",
-        "游戏更新体验", "动漫角色塑造", "游戏社区争议", "动画制作对比", "主机价格争议",
-      ],
-      ecosystemQueries: ["二次元社区热点", "线上娱乐消费"],
-      broadQueries: ["数码娱乐消费", "流行文化讨论", "线上娱乐趋势"],
-      requiredAnchorTerms: ["动漫", "游戏", "理财"],
-      normalAnchorTerms: ["二次元", "线上娱乐", "数码娱乐"],
-      strictAcceptTerms: ["韭菜", "价格", "真实", "动漫", "游戏", "理财"],
-      normalAcceptTerms: ["搞笑", "吐槽", "娱乐消费", "流行文化", "数码娱乐"],
-      rejectTerms: [],
-      personaGuardTerms: [],
-      domainSummary: "动漫、游戏与个人理财",
-    } as any;
-
-    const vertical = resolveSentimentHotModelStrategyKeywords(strategy, "strict");
-    const broadVertical = resolveSentimentHotModelStrategyKeywords(strategy, "normal");
-
-    expect(vertical.length).toBeGreaterThan(12);
-    expect(vertical.every((keyword) => !keyword.includes("韭菜"))).toBe(true);
-    expect(vertical).not.toContain("价格");
-    expect(vertical).not.toContain("真实");
-    expect(vertical).toContain("动漫新番吐槽");
-    expect(broadVertical).toContain("数码娱乐消费");
-    expect(vertical).not.toContain("数码娱乐消费");
-    expect(broadVertical.length).toBeGreaterThan(vertical.length);
-  });
-
-  it("keeps a Reader result tied to its own vertical query inside a mixed persona batch", () => {
-    const candidate = {
-      id: "reader-investment-scam",
-      platform: "threads",
-      sourceUrl: "https://www.threads.com/@finance/post/scam",
-      author: "finance",
-      content: "一則詐騙貼文騙到一堆想考 CFA 的人，這些人連分析真偽的能力都沒有，真的確定能分析金融投資嗎？大家遇到投資詐騙一定要先查證來源。",
-      media: [],
-      hotScore: 594,
-      metrics: {
-        source: "threads-reader-search",
-        query: "投資詐騙",
-        matchedKeywords: ["投資詐騙"],
-      },
-      engagement: {},
-      publishedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-      capturedAt: new Date().toISOString(),
-      warnings: [],
-    } as any;
-    const mixedVerticalKeywords = ["理財心得", "動漫神作", "遊戲外掛", "投資詐騙"];
-
-    expect(candidateMatchesCurrentKeywords(candidate, mixedVerticalKeywords, "strict")).toBe(true);
-    expect(finalizeSentimentHotCandidatesForDisplay([candidate], 10, {
-      keywords: mixedVerticalKeywords,
-      searchMode: "strict",
-      freshnessDays: 30,
-    })).toHaveLength(1);
+    expect(resolveSentimentHotModelQueryKeywords(strategy, "strict")).toContain("染发烫发价格踩雷");
   });
 
   it("derives core search terms from model generated concrete keywords", () => {
@@ -679,7 +432,7 @@ describe("sentiment hot importer", () => {
     const acceptanceKeywords = resolveSentimentHotModelStrategyKeywords(strategy, "strict");
     const queryKeywords = resolveSentimentHotModelQueryKeywords(strategy, "strict");
 
-    expect(acceptanceKeywords).toContain("\u7406\u53d1");
+    expect(acceptanceKeywords.slice(0, 5)).toEqual(strategy.primaryQueries);
     expect(queryKeywords.slice(0, 8)).toContain("\u7406\u53d1");
     expect(queryKeywords.indexOf("\u7406\u53d1")).toBeLessThan(queryKeywords.indexOf("\u7406\u53d1\u907f\u5751"));
   });
@@ -748,7 +501,7 @@ describe("sentiment hot importer", () => {
       "\u526a\u9aee\u75db\u9ede",
       "\u7406\u9aee\u4e92\u52d5",
     ]);
-    const firstBrowserWindow = queries.slice(0, 12);
+    const firstBrowserWindow = queries.slice(0, 24);
 
     expect(firstBrowserWindow).toContain("\u7406\u53d1\u907f\u5751");
     expect(firstBrowserWindow).toContain("\u7406\u53d1\u5e97\u63a8\u8350");
@@ -809,7 +562,7 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(false);
   });
 
-  it("uses only controller-issued keywords without cached model expansion", () => {
+  it("keeps manually edited strict keywords before cached model query terms", () => {
     const strategy = {
       primaryQueries: ["理发店", "剪头发", "发型设计", "剪发", "理发前后"],
       ecosystemQueries: ["男士发型", "短发发型", "刘海翻车", "烫发避坑"],
@@ -825,7 +578,10 @@ describe("sentiment hot importer", () => {
 
     const queries = resolveSentimentHotManualQueryKeywords(["理发店趣事", "顾客互动"], strategy, "strict");
 
-    expect(queries).toEqual(["理发店趣事", "顾客互动"]);
+    expect(queries).toContain("染发烫发价格踩雷");
+    expect(queries).toContain("男士发型");
+    expect(queries).toContain("理发店趣事");
+    expect(queries.indexOf("理发店趣事")).toBeLessThan(queries.indexOf("染发烫发价格踩雷"));
   });
 
   it("preserves an explicit high-volume core term as the first normal search query", () => {
@@ -850,12 +606,11 @@ describe("sentiment hot importer", () => {
     expect(queries.indexOf("\u7406\u53d1")).toBeLessThan(queries.indexOf("\u7406\u53d1\u907f\u5751"));
   });
 
-  it("keeps the default supported freshness window at thirty days", () => {
+  it("clamps custom freshness to fifteen days", () => {
     expect(normalizeSentimentHotFreshnessDays(0)).toBe(0);
     expect(normalizeSentimentHotFreshnessDays(7)).toBe(7);
     expect(normalizeSentimentHotFreshnessDays(15)).toBe(15);
-    expect(normalizeSentimentHotFreshnessDays(30)).toBe(30);
-    expect(normalizeSentimentHotFreshnessDays(60)).toBe(30);
+    expect(normalizeSentimentHotFreshnessDays(30)).toBe(15);
   });
 
   it("keeps freshness policy explicit so strict tests cannot silently use legacy backfill", () => {
@@ -926,12 +681,7 @@ describe("sentiment hot importer", () => {
     expect(resolveSentimentHotStrategyTimeoutMs(true, 5_000)).toBe(5_000);
   });
 
-  it("uses dedicated hot-topic text models when no runtime priority is configured", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sentiment-hot-empty-config-"));
-    const configPath = path.join(dir, "api_config.json");
-    fs.writeFileSync(configPath, "{}");
-    vi.stubEnv("AUTO_TWEET_API_CONFIG_PATH", configPath);
-
+  it("uses dedicated hot-topic text models before the configured global models", () => {
     const models = resolveSentimentHotTextModelPreference().split(",");
     expect(models.slice(0, 2)).toEqual(["xai/grok-4.3", "xai/grok-4.5"]);
   });
@@ -949,47 +699,6 @@ describe("sentiment hot importer", () => {
       normalAcceptTerms: [],
       domainSummary: "",
     } as any, "strict")).toEqual([]);
-  });
-
-  it("rejects generic content topics that are not bound to a model domain anchor", () => {
-    const strategy = {
-      primaryQueries: ["职场趣事", "理发师职场趣事", "理发店趣事", "理发避坑", "理发价格", "理发体验"],
-      broadQueries: ["生活日常", "理发师日常", "理发店日常", "理发工具"],
-      ecosystemQueries: ["搞笑", "美发行业趣事", "理发行业吐槽"],
-      requiredAnchorTerms: ["职场趣事", "理发师", "理发店", "理发"],
-      normalAnchorTerms: ["生活日常", "美发行业", "美发店", "发型"],
-      strictAcceptTerms: ["理发师", "理发店", "理发", "剪发", "发型"],
-      normalAcceptTerms: ["美发行业", "发型", "理发师", "理发店", "剪发"],
-      rejectTerms: [],
-      domainSummary: "理发师和理发店职场内容",
-    } as any;
-
-    applyPersonaGuardToSentimentHotStrategy({ strategy });
-    const keywords = resolveSentimentHotModelStrategyKeywords(strategy, "strict");
-
-    expect(keywords).not.toContain("职场趣事");
-    expect(keywords).toContain("理发师职场趣事");
-  });
-
-  it("returns no persona keywords when keyword-model execution is disabled", async () => {
-    vi.stubEnv("TG_HOT_DISABLE_KEYWORD_MODEL", "1");
-
-    const result = await prepareSentimentHotKeywords({
-      archive: {
-        id: `model-only-keywords-${Date.now()}`,
-        name: "理发师",
-        content: "理发师分享真实理发店工作经历",
-        setup: {
-          genres: ["职场趣事", "理发"],
-          trendTopics: [],
-        },
-      } as any,
-      searchMode: "strict",
-      refresh: true,
-    });
-
-    expect(result.keywords).toEqual([]);
-    expect(result.warnings.join(" ")).toContain("模型");
   });
 
   it("does not change the source pipeline when custom freshness is disabled", () => {
@@ -1117,133 +826,6 @@ describe("sentiment hot importer", () => {
       ...base,
       content: "理发店分享剪发与染发设计案例，整理顾客常见需求。",
     } as any, ["理发师", "剪发"], "strict")).toBe(true);
-  });
-
-  it("trusts cheap keyword-search evidence without a whole-content model review", () => {
-    const candidate = {
-      id: "spider-japan-property",
-      platform: "threads",
-      sourceUrl: "https://www.threads.com/@property/post/example",
-      author: "property",
-      content: "小樽這間房子有庭院和五房格局，陽台可以看到港町與海灣方向。室內與土地面積都已列清楚，但房子是現狀交屋，停車位目前未設，庭院施工後是否可規劃仍要確認，老屋狀況、交易文件與後續維護成本也應逐項查驗。這類物件是否值得研究，應先把這份檢查方向完整保存。",
-      media: [],
-      hotScore: 2344,
-      publishedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
-      metrics: {
-        source: "threads-reader-search",
-        crawler: "spider-http-hydration",
-        publicSearch: true,
-        query: "日本置產",
-      },
-      capturedAt: new Date().toISOString(),
-    };
-
-    const controllerBatch = [
-      "日本買房避坑", "日本置產避坑", "日本買房", "日本不動產",
-      "日本置產", "東京豪宅開箱", "東京豪宅", "日本置產真實收益",
-    ];
-    expect(candidateMatchesCurrentKeywords(candidate as any, controllerBatch, "strict")).toBe(false);
-    expect(finalizeSentimentHotCandidatesForDisplay([candidate] as any, 1, {
-      keywords: controllerBatch,
-      searchMode: "strict",
-      freshnessDays: 30,
-    })).toHaveLength(0);
-    const keywordSearchHit = {
-      ...candidate,
-      metrics: { ...candidate.metrics, matchedKeywords: ["source-query-hit"] },
-    };
-    expect(finalizeSentimentHotCandidatesForDisplay([keywordSearchHit] as any, 1, {
-      keywords: controllerBatch,
-      searchMode: "strict",
-      freshnessDays: 30,
-    })).toHaveLength(1);
-  });
-
-  it("keeps a current Spider result when the post matches a concrete part of its compound query", () => {
-    const candidate = {
-      id: "spider-tire-service",
-      platform: "threads",
-      sourceUrl: "https://www.threads.com/@garage/post/tire-service",
-      author: "garage",
-      content: "跑了一萬公里結果要大保養，固定機油套組七百五十，耐磨後輪輪胎一千，火星塞二百五十，檢測一千八，總共花了四千元，耗時兩小時。",
-      media: [],
-      hotScore: 522,
-      publishedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
-      metrics: {
-        source: "threads-reader-search",
-        crawler: "spider-http-hydration",
-        publicSearch: true,
-        query: "輪胎更換",
-        matchedKeywords: [],
-      },
-      capturedAt: new Date().toISOString(),
-    };
-    const controllerBatch = ["汽車維修", "汽車保養", "輪胎更換", "煞車維修"];
-
-    expect(candidateMatchesCurrentKeywords(candidate as any, controllerBatch, "strict")).toBe(true);
-    expect(finalizeSentimentHotCandidatesForDisplay([candidate] as any, 1, {
-      keywords: controllerBatch,
-      searchMode: "strict",
-      freshnessDays: 30,
-    })).toHaveLength(1);
-  });
-
-  it("filters public Reader hotspots with fewer than twenty Chinese characters", () => {
-    const candidate = (id: string, hanCount: number) => ({
-      id,
-      platform: "threads",
-      sourceUrl: `https://www.threads.com/@football/post/${id}`,
-      author: "football",
-      content: `${"足球賽事".repeat(6).slice(0, hanCount)} ${"match analysis details ".repeat(4)}`,
-      media: [],
-      hotScore: 800,
-      engagement: { likeCount: 800 },
-      publishedAt: new Date().toISOString(),
-      metrics: {
-        source: "threads-reader-search",
-        crawler: "spider-http-hydration",
-        publicSearch: true,
-        query: "足球賽事",
-        matchedKeywords: ["足球賽事"],
-      },
-      capturedAt: new Date().toISOString(),
-    });
-
-    expect(finalizeSentimentHotCandidatesForDisplay([
-      candidate("nineteen-han", 19),
-      candidate("twenty-han", 20),
-    ] as any, 10, {
-      keywords: ["足球賽事"],
-      searchMode: "strict",
-      freshnessDays: 30,
-    }).map((item) => item.id)).toEqual(["twenty-han"]);
-  });
-
-  it("rejects stale cache evidence from a generic query outside the current batch", () => {
-    const candidate = {
-      id: "stale-generic-system-query",
-      platform: "threads",
-      sourceUrl: "https://www.threads.com/@frontend/post/stale-system",
-      author: "frontend",
-      content: "前端系统最近调整了登录流程与刷新令牌机制，这篇内容完整讨论浏览器缓存、并发请求、接口错误处理、页面状态管理、线上监控和发布回滚流程。",
-      media: [],
-      hotScore: 1800,
-      publishedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-      metrics: {
-        source: "threads-reader-search",
-        query: "系统",
-        matchedKeywords: ["系统"],
-        crawler: "spider-http-hydration",
-        publicSearch: true,
-      },
-      capturedAt: new Date().toISOString(),
-    };
-
-    expect(finalizeSentimentHotCandidatesForDisplay([candidate] as any, 10, {
-      keywords: ["修车避坑指南", "汽车发动机维修", "汽车维修", "汽车底盘异响检修"],
-      searchMode: "strict",
-      freshnessDays: 30,
-    })).toHaveLength(0);
   });
 
   it("does not treat a generic live-stream word as strict persona relevance", () => {
@@ -1474,7 +1056,7 @@ describe("sentiment hot importer", () => {
     expect(getSentimentHotExcludedIds(archiveId).has("candidate-a")).toBe(true);
   });
 
-  it("prioritizes recent publication time before heat for display", () => {
+  it("prioritizes heat before publish time for gap filling", () => {
     const content = "海外信貸市場最近整理信用卡週轉、銀行貸款、收入證明和負債比例，內容包含完整申請流程、利率比較、還款安排與風險提醒，適合金融人設改寫成實用推文。";
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
@@ -1503,7 +1085,7 @@ describe("sentiment hot importer", () => {
       },
     ] as any, 10, { keywords: ["海外信貸", "銀行貸款", "信用卡"] });
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["fresh-hot-30d", "old-hot"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["old-hot", "fresh-hot-30d"]);
   });
 
   it("filters candidates by the requested freshness window", () => {
@@ -1550,7 +1132,7 @@ describe("sentiment hot importer", () => {
     expect(candidates).toEqual([]);
   });
 
-  it("prioritizes a fresher lower-heat candidate over an older hotter candidate", () => {
+  it("prioritizes a hotter older candidate over a fresher lower-heat candidate", () => {
     const now = Date.now();
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
@@ -1584,7 +1166,7 @@ describe("sentiment hot importer", () => {
       searchMode: "normal",
     });
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["recent-lower-heat", "older-higher-heat"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["older-higher-heat", "recent-lower-heat"]);
   });
 
   it("uses publish time and then text length when candidate heat is equal", () => {
@@ -1993,33 +1575,6 @@ describe("sentiment hot importer", () => {
     }, strategy, "strict")).toBe(true);
   });
 
-  it("reuses a foreign-query global candidate when two concrete vertical anchors are in the article", () => {
-    const strategy = {
-      primaryQueries: ["台湾美食", "夜市小吃"],
-      broadQueries: ["餐厅活动"],
-      ecosystemQueries: ["美食趋势"],
-      requiredAnchorTerms: ["台湾美食"],
-      normalAnchorTerms: ["夜市小吃"],
-      rejectTerms: [],
-      strictAcceptTerms: ["台湾美食", "夜市小吃"],
-      normalAcceptTerms: ["餐厅活动"],
-      personaGuardTerms: ["美食"],
-      domainSummary: "台湾美食与夜市小吃",
-    } as any;
-    const candidate = {
-      id: "foreign-query-relevant-article",
-      platform: "threads",
-      sourceUrl: "https://www.threads.com/@demo/post/foreign-query-relevant-article",
-      author: "demo",
-      content: "这篇台湾美食长文系统整理夜市小吃的摊位选择、排队时间、价格差异、食材特点、卫生观察和交通安排，并补充不同商圈的实际体验与避坑建议。",
-      media: [],
-      hotScore: 5_000,
-      metrics: { globalPersonaBackfill: true, query: "周末旅行" },
-    } as any;
-
-    expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "strict")).toBe(true);
-  });
-
   it("requires a specific topic phrase instead of a shared short action word in strict mode", () => {
     const keywords = [
       "\u8001\u94a2\u7b14\u4fee\u590d",
@@ -2048,25 +1603,25 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesCurrentKeywords(relevant, keywords, "strict")).toBe(true);
   });
 
-  it("uses a twenty Chinese character floor for all hot candidates", () => {
+  it("does not display hot candidates shorter than 25 Chinese characters", () => {
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
-        id: "nineteen-han",
+        id: "short-hot",
         platform: "threads",
-        sourceUrl: "https://www.threads.net/@demo/post/nineteen-han",
+        sourceUrl: "https://www.threads.net/@demo/post/short",
         author: "demo",
-        content: "\u7406".repeat(19),
+        content: "海外信貸最近討論很多，信用卡和銀行貸款都很熱門。",
         media: [],
         hotScore: 90000,
         metrics: {},
         capturedAt: new Date().toISOString(),
       },
       {
-        id: "twenty-han",
+        id: "long-hot",
         platform: "threads",
-        sourceUrl: "https://www.threads.net/@demo/post/twenty-han",
+        sourceUrl: "https://www.threads.net/@demo/post/long",
         author: "demo",
-        content: "\u7406".repeat(20),
+        content: "海外信貸最近討論很多，信用卡和銀行貸款都很熱門。有人整理收入證明、負債比、利率審核、還款節奏和現金流安排，提醒工薪族不要只看額度，也要確認長期風險。這種長文更適合改寫成人設乾貨。",
         media: [],
         hotScore: 80000,
         metrics: {},
@@ -2074,10 +1629,10 @@ describe("sentiment hot importer", () => {
       },
     ] as any, 10);
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["twenty-han"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["long-hot"]);
   });
 
-  it("uses a twenty readable character floor for hot candidates", () => {
+  it("uses a 25 Chinese character floor for hot candidates", () => {
     const base = {
       platform: "threads",
       author: "demo",
@@ -2089,22 +1644,22 @@ describe("sentiment hot importer", () => {
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
         ...base,
-        id: "under-20",
-        sourceUrl: "https://www.threads.net/@demo/post/under-20",
-        content: "\u7406".repeat(19),
+        id: "under-25",
+        sourceUrl: "https://www.threads.net/@demo/post/under-25",
+        content: "\u7406".repeat(24),
       },
       {
         ...base,
-        id: "at-20",
-        sourceUrl: "https://www.threads.net/@demo/post/at-20",
-        content: "\u7406".repeat(20),
+        id: "at-25",
+        sourceUrl: "https://www.threads.net/@demo/post/at-25",
+        content: "\u7406".repeat(25),
       },
     ] as any, 10);
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["at-20"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["at-25"]);
   });
 
-  it("rejects concise authenticated Threads posts even when heat is high", () => {
+  it("keeps concise authenticated Threads search posts above the hard heat floor", () => {
     const candidates = finalizeSentimentHotCandidatesForDisplay([{
       id: "short-threads-search",
       platform: "threads",
@@ -2117,7 +1672,7 @@ describe("sentiment hot importer", () => {
       capturedAt: new Date().toISOString(),
     }] as any, 10);
 
-    expect(candidates).toEqual([]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["short-threads-search"]);
   });
 
   it("rejects marked recent fallbacks when they are still below the heat gate", () => {
@@ -2325,6 +1880,27 @@ Search • Threads
     expect(candidates.length).toBe(1);
     expect(candidates[0].metrics.raw_engagement_signals).toEqual([12000, 340, 88]);
     expect(candidates[0].engagement?.rawSignals).toEqual([12000, 340, 88]);
+  });
+
+  it("keeps off-persona Threads reader rows only when collecting for the global pool", () => {
+    const input = {
+      query: "汽車維修",
+      keywords: ["汽車維修", "煞車保養"],
+      sourceUrl: "https://www.threads.com/search?q=%E6%B1%BD%E8%BB%8A%E7%B6%AD%E4%BF%AE",
+      text: `
+Search Threads
+[Demo Cook](https://www.threads.com/@demo_cook)
+[08/14/2026](https://www.threads.com/@demo_cook/post/global123)
+今天分享餐厅后厨的备料流程和厨师排班经验，完整记录食材采购、烹饪火候以及高峰期团队协作方法。
+1200
+80
+`,
+    };
+    expect(parseThreadsReaderSearchMarkdownCandidates(input)).toHaveLength(0);
+    const recycled = parseThreadsReaderSearchMarkdownCandidates({ ...input, includeUnmatched: true });
+    expect(recycled).toHaveLength(1);
+    expect(recycled[0].metrics.matchedKeywords).toEqual([]);
+    expect(recycled[0].hotScore).toBeGreaterThanOrEqual(500);
   });
 
   it("parses Threads reader links returned over plain http", () => {
@@ -2721,7 +2297,7 @@ Demo post body
       metrics: { source: "threads-reader-search" },
     } as const;
     const keyword = "热点";
-    const content = "热点内容完整展示并包含足够长度的中文说明，确保通过内容质量和语言筛选，同时补充真实案例、执行过程、结果差异、常见误区和可复用的处理建议。";
+    const content = "热点内容完整展示并包含足够长度的中文说明，确保通过内容质量和语言筛选。";
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       { ...base, id: "standard", author: "standard-author", sourceUrl: "https://www.threads.net/@demo/post/standard", content, hotScore: 1200 },
       { ...base, id: "fallback-700", author: "fallback-author", sourceUrl: "https://www.threads.net/@demo/post/fallback-700", content: `${content} 补足候选，包含不同的实操建议与案例细节。`, hotScore: 700 },
@@ -2744,7 +2320,7 @@ Demo post body
       publishedAt: new Date().toISOString(),
       metrics: { source: "threads-reader-search" },
     } as const;
-    const content = "热点内容完整展示并包含足够长度的中文说明，确保通过内容质量和语言筛选，同时补充真实案例、执行过程、结果差异、常见误区和可复用的处理建议。";
+    const content = "热点内容完整展示并包含足够长度的中文说明，确保通过内容质量和语言筛选。";
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       { ...base, id: "standard", sourceUrl: "https://www.threads.net/@demo/post/standard", content, hotScore: 1200 },
       { ...base, id: "standard-copy", sourceUrl: "https://www.threads.net/@demo/post/standard-copy", content, hotScore: 1150 },
@@ -2777,6 +2353,25 @@ Title: Instagram
     expect(candidates[0].engagement?.likeCount).toBe(1100);
     expect(candidates[0].engagement?.commentCount).toBe(82);
     expect(candidates[0].media.map((item) => item.url)).toEqual(["https://cdn.example.com/ig-a.jpg"]);
+  });
+
+  it("keeps off-persona Instagram reader rows only when collecting for the global pool", () => {
+    const input = {
+      query: "汽車維修",
+      keywords: ["汽車維修", "煞車保養"],
+      sourceUrl: "https://www.instagram.com/explore/tags/car/",
+      text: `
+Title: Instagram
+[demo_cook](https://www.instagram.com/demo_cook/)
+[View post](https://www.instagram.com/p/DbdDxdkzbnq/)
+今天分享餐厅后厨的备料流程和厨师排班经验，完整记录食材采购、烹饪火候以及高峰期团队协作方法。 1.2K likes
+`,
+    };
+    expect(parseInstagramReaderSearchMarkdownCandidates(input)).toHaveLength(0);
+    const recycled = parseInstagramReaderSearchMarkdownCandidates({ ...input, includeUnmatched: true });
+    expect(recycled).toHaveLength(1);
+    expect(recycled[0].metrics.matchedKeywords).toEqual([]);
+    expect(recycled[0].hotScore).toBeGreaterThanOrEqual(500);
   });
 
   it("derives the original Instagram publication time from a public shortcode", () => {
