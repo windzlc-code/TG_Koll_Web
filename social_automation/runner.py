@@ -11707,10 +11707,13 @@ def _threads_sidebar_compose_opener(page):
         '[aria-label*="建立串文" i]',
         '[aria-label*="新規スレッド" i]',
         '[aria-label*="새 스레드" i]',
+        '[aria-label*="ланцюжок" i]',
+        '[aria-label*="Новий" i]',
         'text="New thread"',
         'text="新串文"',
         'text="撰寫串文"',
         'text="建立串文"',
+        'text="Новий ланцюжок"',
     ]
     try:
         viewport_width = float(page.evaluate("() => window.innerWidth") or 1920)
@@ -11779,13 +11782,40 @@ def _threads_compose_opener_by_structure(page):
                 const nameOf = node => String(
                     node.getAttribute('aria-label') || node.getAttribute('title') || node.innerText || node.textContent || ''
                 ).replace(/\\s+/g, ' ').trim();
+                const composeWords = [
+                    'new thread', 'start a thread', 'create', 'compose',
+                    '发帖', '發文', '新贴文', '新貼文', '新串文', '撰写', '撰寫', '建立串',
+                    'ланцюжок', 'новий', 'поток', 'ветк', 'hilo', '스레드', 'スレッド'
+                ];
                 const plusLike = node => {
                     const name = nameOf(node);
                     const svg = node.querySelector('svg');
                     const markup = svg ? String(svg.innerHTML || '') : '';
-                    return name === '+' || name.includes('＋') || /plus|add|M11|line x1/i.test(markup);
+                    return name.includes('+') || name.includes('＋') || /plus|add|M11|line x1/i.test(markup);
+                };
+                const looksCompose = node => {
+                    const name = nameOf(node).toLowerCase();
+                    return plusLike(node) || composeWords.some(word => name.includes(word));
                 };
                 const nodes = Array.from(document.querySelectorAll('a, button, [role="button"], [role="link"], [tabindex="0"]')).filter(visible);
+                const leftItems = [];
+                for (const node of nodes) {
+                    const rect = node.getBoundingClientRect();
+                    if (rect.left > width * 0.30 || rect.top < 48 || rect.top > height * 0.78) continue;
+                    if (rect.height < 28 || rect.height > 72 || rect.width < 28 || rect.width > 380) continue;
+                    leftItems.push({
+                        node,
+                        y: rect.top,
+                        plus: plusLike(node),
+                        compose: looksCompose(node),
+                    });
+                }
+                leftItems.sort((a, b) => a.y - b.y);
+                const leftPick = leftItems.find(item => item.plus || item.compose);
+                if (leftPick) {
+                    leftPick.node.setAttribute('data-vecto-compose-opener', '1');
+                    return 'left-rail';
+                }
                 let fab = null;
                 let fabCorner = Infinity;
                 for (const node of nodes) {
@@ -11803,21 +11833,6 @@ def _threads_compose_opener_by_structure(page):
                 if (fab) {
                     fab.setAttribute('data-vecto-compose-opener', '1');
                     return 'fab';
-                }
-                const leftIcons = [];
-                for (const node of nodes) {
-                    const rect = node.getBoundingClientRect();
-                    const centerX = rect.left + rect.width / 2;
-                    if (centerX > Math.max(110, width * 0.18)) continue;
-                    if (!node.querySelector('svg') || !square(rect) || !iconSize(rect)) continue;
-                    leftIcons.push({ node, y: rect.top, plus: plusLike(node) });
-                }
-                leftIcons.sort((a, b) => a.y - b.y);
-                const leftPlus = leftIcons.find(item => item.plus);
-                const leftPick = leftPlus || (leftIcons.length >= 3 ? leftIcons[2] : null);
-                if (leftPick) {
-                    leftPick.node.setAttribute('data-vecto-compose-opener', '1');
-                    return 'left-rail';
                 }
                 return '';
             }"""

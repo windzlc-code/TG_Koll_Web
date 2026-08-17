@@ -4238,6 +4238,16 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             "reject",
         )
 
+    def test_threads_compose_opener_prefers_left_plus_row_over_right_fab(self):
+        source = Path(runner.__file__).read_text(encoding="utf-8")
+        opener = source.split("def _threads_compose_opener_by_structure(", 1)[1].split("def _ensure_threads_compose_ready(", 1)[0]
+        self.assertLess(opener.index("return 'left-rail'"), opener.index("return 'fab'"))
+        self.assertIn("ланцюжок", opener)
+        self.assertIn("name.includes('+')", opener)
+        self.assertIn("rect.width > 380", opener)
+        sidebar = source.split("def _threads_sidebar_compose_opener(", 1)[1].split("def _threads_compose_opener_by_structure(", 1)[0]
+        self.assertIn('text="Новий ланцюжок"', sidebar)
+
     def test_threads_compose_opener_uses_bottom_right_plus_structure(self):
         empty = mock.Mock()
         empty.count.return_value = 0
