@@ -16848,10 +16848,19 @@ function bindPublishAssistanceContext(options = {}) {
   if (personaId) state.publishAssistancePersonaId = personaId;
 }
 
+function isPublishAssistanceOpen() {
+  return Boolean(document.getElementById("loginAssistanceModal")?.classList.contains("is-publish-assistance"));
+}
+
 function shouldShowPublishAssistanceRestore() {
   if (!state.publishAssistanceDismissed) return false;
-  if (document.getElementById("loginAssistanceModal")) return false;
+  if (isPublishAssistanceOpen()) return false;
   return Boolean(mobilePublishingTask());
+}
+
+function hidePublishAssistanceRestore() {
+  state.publishAssistanceDismissed = false;
+  document.querySelectorAll("[data-restore-publish-assistance]").forEach((node) => node.remove());
 }
 
 function renderPublishAssistanceRestoreButton() {
@@ -16863,7 +16872,7 @@ function restorePublishAssistanceView() {
   const task = mobilePublishingTask();
   const taskId = String(task?.id || state.mobilePublishingTaskId || "").trim();
   if (!taskId) return;
-  state.publishAssistanceDismissed = false;
+  hidePublishAssistanceRestore();
   openPublishAssistanceView(taskId, {
     accountId: state.publishAssistanceAccountId || task?.account_id || "",
     personaId: state.publishAssistancePersonaId || task?.persona_id || "",
@@ -27098,7 +27107,7 @@ function openTaskAssistanceView(taskId = "", options) {
   const mode = String(options.mode || "login").trim() || "login";
   const existing = document.getElementById("loginAssistanceModal");
   if (existing) closeConsoleModal(null, existing);
-  if (mode === "publish") state.publishAssistanceDismissed = false;
+  if (mode === "publish") hidePublishAssistanceRestore();
   const account = selectedSocialAccount(accountId)
     || (state.socialAccounts || []).find((item) => String(item?.id || "") === String(accountId || ""))
     || {};

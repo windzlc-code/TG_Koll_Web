@@ -233,7 +233,10 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn("state.mobilePublishingTaskStartedAt = 0;", SCRIPT)
         self.assertIn("function renderPublishAssistanceRestoreButton", SCRIPT)
         self.assertIn("function restorePublishAssistanceView", SCRIPT)
+        self.assertIn("function hidePublishAssistanceRestore", SCRIPT)
+        self.assertIn("isPublishAssistanceOpen()", SCRIPT)
         self.assertIn("data-restore-publish-assistance", SCRIPT)
+        self.assertIn("body:has(.login-assistance-modal.is-publish-assistance) .publish-assistance-restore", STYLES)
         self.assertIn('renderBusyButtonContent(moduleId === "publishing" ? "任务执行中"', SCRIPT)
         self.assertIn(
             "!deferMobilePublishingBrowserView(immediateTaskIds, state.simpleFlowPendingStartedAt)",
