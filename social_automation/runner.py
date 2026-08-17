@@ -1032,17 +1032,17 @@ def _run_publish_task_in_context(
                 _resume_after_manual_takeover(context_control)
         if login.get("status") != "ready":
             shot = _screenshot(page, screenshot_dir, task, "login_not_ready", logger)
+            reason = str(login.get("reason") or f"{_platform_name(platform)} 账号登录未完成，无法继续发布。")
             _set_task_assistance(
                 context_control,
-                phase="attention",
-                kind="takeover",
-                title="发布前需要人工处理",
-                message=str(login.get("reason") or "账号登录未完成，点击接受后将打开实时浏览器继续。"),
+                phase="error",
+                kind="error",
+                title="发布前登录未完成",
+                message=reason,
                 screenshot_path=shot,
-                submit_label="接受并接管",
             )
-            raise NeedManualError(
-                str(login.get("reason") or f"{_platform_name(platform)} requires login verification."),
+            raise AutoLoginFailedError(
+                reason,
                 str(login.get("status") or "need_verification"),
                 shot,
             )
@@ -12404,7 +12404,7 @@ def _wait_for_manual_threads_publish_completion(
         phase="attention",
         kind="takeover",
         title="需要人工接管发布",
-        message="自动发布遇到需要人工处理的步骤。点击接受后将打开实时浏览器，由你继续操作。",
+        message="自动发布遇到需要人工处理的步骤。点击接受后将打开实时浏览器，由你继续操作。超时后会自动关闭浏览器。",
         content=_task_assistance_caption(task, payload),
         screenshot_path=shot,
         submit_label="接受并接管",
@@ -12509,6 +12509,39 @@ def _wait_for_manual_threads_publish_completion(
         "manual_publish_timeout",
         timeout_shot,
         account_status="ready",
+    )
+
+
+def _offer_manual_threads_publish_takeover(
+    page,
+    task: dict[str, Any],
+    payload: dict[str, Any],
+    screenshot_dir: Path,
+    logger: AutomationLogger,
+    account: dict[str, Any] | None,
+    profile_url: str,
+    previous_permalinks: set[str],
+    cancel_event: Any | None,
+    context_control: dict[str, Any] | None,
+    reason: str,
+) -> dict[str, Any]:
+    logger.log(
+        "warn",
+        "publish_needs_takeover",
+        reason,
+        {"profile_url": profile_url},
+    )
+    return _wait_for_manual_threads_publish_completion(
+        page,
+        task,
+        payload,
+        screenshot_dir,
+        logger,
+        account,
+        profile_url,
+        previous_permalinks,
+        cancel_event,
+        context_control,
     )
 
 
@@ -12688,7 +12721,11 @@ def _run_threads_publish_post(
             {"error": str(exc)[:500], "url": _safe_navigation_url(getattr(page, "url", ""))},
             shot,
         )
-        raise
+        return _offer_manual_threads_publish_takeover(
+            page, task, payload, screenshot_dir, logger, account, profile_url,
+            previous_permalinks, cancel_event, context_control,
+            f"自动打开发布页失败，请在实时浏览器中继续。{str(exc)[:180]}",
+        )
     manual_result = _pause_for_requested_threads_publish_takeover(
         page, task, payload, screenshot_dir, logger, account, profile_url,
         previous_permalinks, cancel_event, context_control,
@@ -12710,7 +12747,11 @@ def _run_threads_publish_post(
             _sleep_between(0.8, 1.4)
             dialog_text = _threads_active_dialog_text(page)
         if caption not in dialog_text:
-            raise RuntimeError("Threads 发帖内容没有写入当前弹窗。")
+            return _offer_manual_threads_publish_takeover(
+                page, task, payload, screenshot_dir, logger, account, profile_url,
+                previous_permalinks, cancel_event, context_control,
+                "自动填写正文失败，请在实时浏览器中继续完成发布。",
+            )
     manual_result = _pause_for_requested_threads_publish_takeover(
         page, task, payload, screenshot_dir, logger, account, profile_url,
         previous_permalinks, cancel_event, context_control,
@@ -12735,7 +12776,11 @@ def _run_threads_publish_post(
                 _sleep_between(0.8, 1.4)
                 file_input = _threads_media_input(page)
         if file_input is None:
-            raise RuntimeError("Unable to locate the media input in the active Threads composer.")
+            return _offer_manual_threads_publish_takeover(
+                page, task, payload, screenshot_dir, logger, account, profile_url,
+                previous_permalinks, cancel_event, context_control,
+                "自动找不到媒体上传入口，请在实时浏览器中继续完成发布。",
+            )
         file_input.wait_for(state="attached", timeout=30000)
         logger.log("info", "threads_publish_upload", "正在上传 Threads 媒体文件。", {"count": len(media_paths)})
         file_input.set_input_files(media_paths)
@@ -12826,7 +12871,11 @@ def _run_threads_publish_post(
         click_uncertain = True
     post_button = None if post_clicked else (_threads_dialog_post_button(page) or _threads_post_button(page))
     if not post_clicked and post_button is None:
-        raise RuntimeError("未找到 Threads 发布按钮。")
+        return _offer_manual_threads_publish_takeover(
+            page, task, payload, screenshot_dir, logger, account, profile_url,
+            previous_permalinks, cancel_event, context_control,
+            "自动找不到发布按钮，请在实时浏览器中继续完成发布。",
+        )
     if not post_clicked:
         def submit_fallback() -> None:
             persist_confirmation_before_click()
@@ -13310,7 +13359,16 @@ def _run_publish_post(
     if bool(payload.get("warmup", False)):
         _warmup_scroll(page, logger, 1)
     if not _click_text_button(page, logger, ["Create", "New post", "Create new post"], "publish_create"):
-        raise RuntimeError("未找到 Instagram 创建/新建帖子按钮。")
+        reason = "未找到 Instagram 创建/新建帖子按钮。"
+        _set_task_assistance(
+            context_control,
+            phase="error",
+            kind="error",
+            title="发布未完成",
+            message=reason,
+            content=caption,
+        )
+        raise RuntimeError(reason)
     file_input = page.locator('input[type="file"]').first
     file_input.wait_for(state="attached", timeout=30000)
     logger.log("info", "publish_upload", "正在上传媒体文件。", {"count": len(media_paths)})
@@ -13339,7 +13397,16 @@ def _run_publish_post(
 
     def submit_instagram() -> None:
         if not _click_text_button(page, logger, ["Share"], "publish_share"):
-            raise RuntimeError("未找到 Instagram 分享按钮。")
+            reason = "未找到 Instagram 分享按钮。"
+            _set_task_assistance(
+                context_control,
+                phase="error",
+                kind="error",
+                title="发布未完成",
+                message=reason,
+                content=caption,
+            )
+            raise RuntimeError(reason)
 
     _set_task_assistance(
         context_control,

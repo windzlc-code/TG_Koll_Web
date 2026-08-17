@@ -1336,6 +1336,121 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("function openPublishAssistanceView", self.source)
         self.assertIn('data-login-assistance-accept', self.source)
         self.assertIn('kind: "takeover"', self._function_source("publishAssistanceViewModel"))
+        self.assertIn("function loginAssistanceMappedInputAllowed", self.source)
+        self.assertIn("loginAssistanceMappedInputAllowed(session)", self._function_source("renderLoginAssistanceAction"))
+        self.assertIn('data-login-assistance-accept', self._function_source("renderLoginAssistanceAction"))
+        self.assertNotIn("session?.input_allowed", self._function_source("renderLoginAssistanceAction"))
+
+    def test_publish_assistance_closed_loop_states_stay_in_the_assistant(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const state = {{ socialAccounts: [] }};
+            function selectedSocialAccount() {{ return {{}}; }}
+            function adminWorkspaceUrl(value) {{ return String(value || ""); }}
+            function adminWorkspacePageUrl(value) {{ return String(value || ""); }}
+            function directMediaPreviewUrl(value) {{ return String(value || "").trim(); }}
+            function esc(value) {{ return String(value || ""); }}
+            {self._function_source("liveBrowserSessionId")}
+            {self._function_source("automationScreenshotUrlFromPath")}
+            {self._function_source("latestSocialTaskScreenshot")}
+            {self._function_source("loginAssistanceTaskStatus")}
+            {self._function_source("taskAssistancePayload")}
+            {self._function_source("loginAssistanceViewModel")}
+            {self._function_source("publishAssistanceViewModel")}
+            {self._function_source("taskAssistanceViewModel")}
+            {self._function_source("loginAssistanceMappedInputAllowed")}
+            {self._function_source("renderLoginAssistanceChoices")}
+            {self._function_source("renderLoginAssistanceAction")}
+            {self._function_source("renderTaskAssistanceDetails")}
+
+            const caption = "今日发布闭环测试";
+            const permalink = "https://www.threads.net/@demo/post/abc123";
+            const shotPath = "/data/social_automation/screenshots/shot_success.png";
+
+            const starting = publishAssistanceViewModel(
+              {{ task_type: "publish_post", status: "running", payload: {{ caption }} }},
+              {{ login_assistance: {{ phase: "running", kind: "progress", title: "正在启动发布" }} }}
+            );
+            assert.strictEqual(starting.kind, "progress");
+            assert.strictEqual(starting.content, caption);
+            assert.ok(!String(starting.title).includes("实时浏览器"));
+
+            const composing = publishAssistanceViewModel(
+              {{ task_type: "publish_post", status: "running", payload: {{ caption }} }},
+              {{ browser_ready: true, login_assistance: {{ phase: "running", kind: "progress", title: "正在撰写发布内容", content: caption }} }}
+            );
+            assert.strictEqual(composing.title, "正在撰写发布内容");
+            assert.strictEqual(composing.content, caption);
+
+            const session = {{
+              id: "live_task-1",
+              input_allowed: false,
+              browser_ready: true,
+              login_assistance: {{
+                phase: "attention",
+                kind: "verification_code",
+                title: "输入短信验证码",
+                field_label: "短信验证码",
+                submit_label: "提交验证码",
+                content: caption,
+              }},
+            }};
+            const code = publishAssistanceViewModel(
+              {{ task_type: "publish_post", status: "running", payload: {{ caption }} }},
+              session,
+            );
+            assert.strictEqual(code.kind, "verification_code");
+            assert.strictEqual(loginAssistanceMappedInputAllowed(session), true);
+            const codeAction = renderLoginAssistanceAction(code, session);
+            assert.ok(codeAction.includes("data-login-assistance-form"));
+            assert.ok(!codeAction.includes("disabled"));
+            assert.ok(!codeAction.includes("正在开放输入"));
+
+            const verifying = publishAssistanceViewModel(
+              {{ task_type: "publish_post", status: "running", payload: {{ caption }} }},
+              {{ id: "live_task-1", login_assistance: {{ phase: "running", kind: "progress", title: "正在验证", content: caption }} }}
+            );
+            assert.strictEqual(verifying.title, "正在验证");
+            assert.ok(!renderLoginAssistanceAction(verifying, session).includes("data-login-assistance-form"));
+
+            const takeover = publishAssistanceViewModel(
+              {{ task_type: "publish_post", status: "running", payload: {{ caption }} }},
+              {{ id: "live_task-1", input_allowed: false, login_assistance: {{ phase: "attention", kind: "takeover", title: "需要人工接管发布", submit_label: "接受并接管", content: caption }} }}
+            );
+            assert.strictEqual(takeover.kind, "takeover");
+            assert.ok(renderLoginAssistanceAction(takeover, session).includes("data-login-assistance-accept"));
+
+            const human = publishAssistanceViewModel(
+              {{ task_type: "publish_post", status: "running", payload: {{ caption }} }},
+              {{ id: "live_task-1", input_allowed: false, login_assistance: {{ phase: "attention", kind: "browser_interaction", title: "需要真人验证", submit_label: "接受并接管" }} }}
+            );
+            assert.ok(renderLoginAssistanceAction(human, session).includes("data-login-assistance-accept"));
+
+            const finishedTask = {{
+              task_type: "publish_post",
+              status: "success",
+              payload: {{ caption }},
+              result: {{ published_url: permalink, screenshot_path: shotPath }},
+            }};
+            const success = publishAssistanceViewModel(finishedTask, null);
+            assert.strictEqual(success.phase, "success");
+            assert.strictEqual(success.permalink, permalink);
+            assert.ok(String(success.screenshotUrl).includes("shot_success.png"));
+            const details = renderTaskAssistanceDetails(success);
+            assert.ok(details.includes(caption));
+            assert.ok(details.includes("login-assistance-shot"));
+            assert.ok(details.includes("查看发布链接"));
+
+            const timeout = publishAssistanceViewModel(
+              {{ task_type: "publish_post", status: "failed", error: "人工发布接管已超过 10 分钟", payload: {{ caption }} }},
+              null,
+            );
+            assert.strictEqual(timeout.phase, "error");
+            assert.ok(String(timeout.message).includes("超过"));
+            """
+        )
+        self._run_node(harness)
 
     def test_live_browser_polling_preserves_unchanged_placeholder_nodes(self):
         browser_render = self._function_source("renderLiveBrowserSessions")

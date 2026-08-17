@@ -26876,8 +26876,12 @@ function renderLoginAssistanceVisual(model = {}) {
   return `<span class="login-assistance-spinner" aria-hidden="true"></span>`;
 }
 
+function loginAssistanceMappedInputAllowed(session = null) {
+  return Boolean(liveBrowserSessionId(session));
+}
+
 function renderLoginAssistanceChoices(model = {}, session = null) {
-  const inputAllowed = Boolean(session?.input_allowed);
+  const inputAllowed = loginAssistanceMappedInputAllowed(session);
   const actions = Array.isArray(model.actions) ? model.actions : [];
   if (!actions.length) return "";
   return `<div class="login-assistance-choices" role="group" aria-label="页面可用操作">
@@ -26886,14 +26890,14 @@ function renderLoginAssistanceChoices(model = {}, session = null) {
 }
 
 function renderLoginAssistanceAction(model = {}, session = null) {
-  const inputAllowed = Boolean(session?.input_allowed);
+  const inputAllowed = loginAssistanceMappedInputAllowed(session);
   const choices = renderLoginAssistanceChoices(model, session);
   if (model.kind === "verification_code") {
     return `<form class="login-assistance-form" data-login-assistance-form data-login-assistance-kind="verification_code">
       <label>${esc(model.fieldLabel)}
         <input name="verification_code" type="text" inputmode="${model.inputMode === "numeric" ? "numeric" : "text"}" autocomplete="one-time-code" maxlength="64" placeholder="请输入${esc(model.fieldLabel)}" required />
       </label>
-      <button type="submit" class="primary" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在开放输入")}</button>
+      <button type="submit" class="primary" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在连接浏览器")}</button>
     </form>${choices}`;
   }
   if (model.kind === "credentials") {
@@ -26904,17 +26908,17 @@ function renderLoginAssistanceAction(model = {}, session = null) {
       <label>登录密码
         <input name="login_password" type="password" autocomplete="current-password" maxlength="512" placeholder="请输入登录密码" required />
       </label>
-      <button type="submit" class="primary" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在开放输入")}</button>
+      <button type="submit" class="primary" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在连接浏览器")}</button>
     </form>${choices}`;
   }
   if (model.kind === "confirm") {
-    return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-submit="confirm" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在开放操作")}</button>${choices}`;
+    return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-submit="confirm" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在连接浏览器")}</button>${choices}`;
   }
   if (model.kind === "choice") {
-    return `${choices || `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-live>${esc(model.submitLabel || "查看验证页面")}</button>`}`;
+    return `${choices || `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-accept>${esc(model.submitLabel || "接受并接管")}</button>`}`;
   }
   if (model.kind === "browser_interaction") {
-    return `${choices}<button type="button" class="primary login-assistance-wide-action" data-login-assistance-live>${esc(model.submitLabel || "查看验证页面")}</button>`;
+    return `${choices}<button type="button" class="primary login-assistance-wide-action" data-login-assistance-accept>${esc(model.submitLabel || "接受并接管")}</button>`;
   }
   if (model.kind === "takeover") {
     return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-accept>${esc(model.submitLabel || "接受并接管")}</button>`;
@@ -26963,6 +26967,7 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
     model.screenshotUrl || "",
     taskStatus,
     Boolean(session?.input_allowed),
+    Boolean(loginAssistanceMappedInputAllowed(session)),
   ]);
   if (modal.dataset.loginAssistanceRenderKey === renderKey) {
     updateLoginAssistanceDeadline(modal, model.remainingSeconds, model.phase);

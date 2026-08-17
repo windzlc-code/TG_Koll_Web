@@ -62,7 +62,7 @@ def test_login_assistance_queue_accepts_only_the_current_prompt_and_never_echoes
     }
     payload = social_automation_api.LiveBrowserLoginAssistancePayload(kind="verification_code", verification_code="314159")
     with (
-        mock.patch.object(social_automation_api, "_require_live_browser_manual_session", return_value="task-1"),
+        mock.patch.object(social_automation_api, "_require_live_browser_assistance_session", return_value="task-1"),
         mock.patch.object(social_automation_api, "_running_control_for_live_browser_session", return_value=control),
     ):
         result = social_automation_api.queue_live_browser_login_assistance("live-task-1", payload)
@@ -84,7 +84,7 @@ def test_login_assistance_queue_accepts_visible_page_choices():
     }
     payload = social_automation_api.LiveBrowserLoginAssistancePayload(kind="choice", action_label="Text message")
     with (
-        mock.patch.object(social_automation_api, "_require_live_browser_manual_session", return_value="task-1"),
+        mock.patch.object(social_automation_api, "_require_live_browser_assistance_session", return_value="task-1"),
         mock.patch.object(social_automation_api, "_running_control_for_live_browser_session", return_value=control),
     ):
         result = social_automation_api.queue_live_browser_login_assistance("live-task-1", payload)
@@ -104,7 +104,7 @@ def test_login_assistance_queue_preserves_alphanumeric_email_code_exactly():
         kind="verification_code", verification_code="Ab7-X9"
     )
     with (
-        mock.patch.object(social_automation_api, "_require_live_browser_manual_session", return_value="task-email"),
+        mock.patch.object(social_automation_api, "_require_live_browser_assistance_session", return_value="task-email"),
         mock.patch.object(social_automation_api, "_running_control_for_live_browser_session", return_value=control),
     ):
         result = social_automation_api.queue_live_browser_login_assistance("live-email", payload)
@@ -122,11 +122,30 @@ def test_login_assistance_queue_rejects_stale_prompt_kind():
     }
     payload = social_automation_api.LiveBrowserLoginAssistancePayload(kind="verification_code", verification_code="123456")
     with (
-        mock.patch.object(social_automation_api, "_require_live_browser_manual_session", return_value="task-1"),
+        mock.patch.object(social_automation_api, "_require_live_browser_assistance_session", return_value="task-1"),
         mock.patch.object(social_automation_api, "_running_control_for_live_browser_session", return_value=control),
         pytest.raises(Exception) as exc_info,
     ):
         social_automation_api.queue_live_browser_login_assistance("live-task-1", payload)
+    assert getattr(exc_info.value, "status_code", None) == 409
+
+
+def test_login_assistance_queue_is_allowed_during_auto_publish_without_vnc_input():
+    row = {"id": "task-1", "status": "running", "task_type": "publish_post"}
+    control = {"live_browser_session_id": "live_task-1", "current_task_id": "task-1"}
+    conn = mock.Mock()
+    conn.execute.return_value.fetchone.return_value = row
+    db_cm = mock.MagicMock()
+    db_cm.__enter__.return_value = conn
+    db_cm.__exit__.return_value = False
+    with (
+        mock.patch.dict(social_automation_api._RUNNING_TASK_CONTROLS, {"task-1": control}, clear=True),
+        mock.patch.object(social_automation_api, "db", return_value=db_cm),
+        mock.patch.object(social_automation_api, "_live_browser_task_input_allowed", return_value=False),
+    ):
+        assert social_automation_api._require_live_browser_assistance_session("live_task-1") == "task-1"
+        with pytest.raises(Exception) as exc_info:
+            social_automation_api._require_live_browser_manual_session("live_task-1")
     assert getattr(exc_info.value, "status_code", None) == 409
 
 
@@ -144,7 +163,7 @@ def test_login_assistance_queue_rejects_a_second_submission_until_browser_comple
         kind="credentials", login_username="second", login_password="secret-2"
     )
     with (
-        mock.patch.object(social_automation_api, "_require_live_browser_manual_session", return_value="task-1"),
+        mock.patch.object(social_automation_api, "_require_live_browser_assistance_session", return_value="task-1"),
         mock.patch.object(social_automation_api, "_running_control_for_live_browser_session", return_value=control),
     ):
         social_automation_api.queue_live_browser_login_assistance("live-task-1", first)

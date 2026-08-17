@@ -185,6 +185,24 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(control["login_assistance_state"]["permalink"], "https://www.threads.net/@demo/post/abc")
         self.assertEqual(control["login_assistance_state"]["screenshot_path"], "/data/shot.png")
 
+    def test_publish_login_not_ready_finishes_as_error_instead_of_fake_takeover(self):
+        source = Path(runner.__file__).read_text(encoding="utf-8")
+        publish_login = source.split("def _run_publish_task_in_context(", 1)[1].split("def _report_account_login_status(", 1)[0]
+        self.assertIn('title="发布前登录未完成"', publish_login)
+        self.assertIn("raise AutoLoginFailedError(", publish_login)
+        self.assertNotIn('kind="takeover"', publish_login)
+        self.assertNotIn("raise NeedManualError(", publish_login)
+
+    def test_threads_compose_failures_offer_assistant_takeover(self):
+        source = Path(runner.__file__).read_text(encoding="utf-8")
+        self.assertIn("def _offer_manual_threads_publish_takeover(", source)
+        threads_publish = source.split("def _run_threads_publish_post(", 1)[1].split("def _run_publish_post(", 1)[0]
+        self.assertGreaterEqual(threads_publish.count("_offer_manual_threads_publish_takeover("), 4)
+        self.assertIn("自动打开发布页失败", threads_publish)
+        self.assertIn("自动填写正文失败", threads_publish)
+        self.assertIn("自动找不到媒体上传入口", threads_publish)
+        self.assertIn("自动找不到发布按钮", threads_publish)
+
     def test_submitted_verification_code_stays_hidden_until_rejected(self):
         control = {
             "login_assistance_submitted_kind": "verification_code",

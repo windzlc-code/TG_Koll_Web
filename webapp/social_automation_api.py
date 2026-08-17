@@ -5308,6 +5308,37 @@ def request_live_browser_manual_takeover(session_id: str) -> dict[str, Any]:
     }
 
 
+def _require_live_browser_assistance_session(session_id: str) -> str:
+    """Allow mapped assistant submissions while auto login/publish is still running.
+
+    This is not VNC typing. The runner injects the mapped action through Playwright,
+    so it must work before the live browser is switched to manual input.
+    """
+    clean_id = str(session_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少实时浏览器会话")
+    task_id = ""
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        for candidate_task_id, control in _RUNNING_TASK_CONTROLS.items():
+            if str(control.get("live_browser_session_id") or "") == clean_id:
+                task_id = str(control.get("current_task_id") or candidate_task_id or "")
+                break
+    if not task_id:
+        raise HTTPException(status_code=409, detail="当前登录任务已结束，请重新打开登录")
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id, status, task_type FROM social_automation_tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=409, detail="当前登录任务已结束，请重新打开登录")
+    status = str(row["status"] or "").strip().lower()
+    task_type = str(row["task_type"] or "").strip()
+    if status not in {"running", "need_manual"} or task_type not in {"open_login", "publish_post"}:
+        raise HTTPException(status_code=409, detail="当前任务不接受助手输入")
+    return task_id
+
+
 def _require_live_browser_manual_session(session_id: str) -> str:
     clean_id = str(session_id or "").strip()
     if not clean_id:
@@ -5345,7 +5376,7 @@ def press_live_browser_session_key(session_id: str, key: str) -> dict[str, Any]:
 
 
 def queue_live_browser_login_assistance(session_id: str, payload: LiveBrowserLoginAssistancePayload) -> dict[str, Any]:
-    task_id = _require_live_browser_manual_session(session_id)
+    task_id = _require_live_browser_assistance_session(session_id)
     control = _running_control_for_live_browser_session(session_id)
     if not isinstance(control, dict):
         raise HTTPException(status_code=409, detail="当前登录任务已结束，请重新打开登录")
