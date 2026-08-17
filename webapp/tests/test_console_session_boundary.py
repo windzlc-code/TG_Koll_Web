@@ -509,7 +509,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("renderLoginAssistanceChoices", self.source)
         self.assertIn("data-login-assistance-choice", self.source)
         self.assertIn('kind: "choice"', self.source)
-        poll = self._function_source("openLoginAssistanceView")
+        poll = self._function_source("openTaskAssistanceView")
         self.assertIn("item?.account_id", poll)
         self.assertIn("refreshLiveBrowserSessionsOnly()", poll)
 
@@ -1330,9 +1330,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("syncLiveBrowserAutoRefresh()", panel_switch)
         self.assertIn("refreshLiveBrowserSessionsSoon(taskId, 40, 500)", self._function_source("submitPersonaPublishTask"))
         self.assertIn("refreshLiveBrowserSessionsSoon(String(task.id), 40, 500)", self._function_source("submitPublishContentTasks"))
-        self.assertIn("openLiveBrowserTaskView(taskId)", self._function_source("submitPersonaPublishTask"))
-        self.assertIn("openLiveBrowserTaskView(immediateTaskId)", self._function_source("executeSimpleFlow"))
-        self.assertIn("openLiveBrowserTaskView(firstImmediateTaskId)", self._function_source("submitMatrixPublishTask"))
+        self.assertIn("openPublishAssistanceView(taskId, { accountId: account.id, personaId: persona.id })", self._function_source("submitPersonaPublishTask"))
+        self.assertIn("openPublishAssistanceView(immediateTaskId, { accountId })", self._function_source("executeSimpleFlow"))
+        self.assertIn("openPublishAssistanceView(firstImmediateTaskId)", self._function_source("submitMatrixPublishTask"))
+        self.assertIn("function openPublishAssistanceView", self.source)
+        self.assertIn('data-login-assistance-accept', self.source)
+        self.assertIn('kind: "takeover"', self._function_source("publishAssistanceViewModel"))
 
     def test_live_browser_polling_preserves_unchanged_placeholder_nodes(self):
         browser_render = self._function_source("renderLiveBrowserSessions")

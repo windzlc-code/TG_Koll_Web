@@ -29050,6 +29050,39 @@ body.console-page {
   text-underline-offset: 3px;
 }
 
+.login-assistance-details {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.login-assistance-content {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f4f7fa;
+  color: #17324d;
+  font-size: 13px;
+  line-height: 1.55;
+  text-align: left;
+  white-space: pre-wrap;
+}
+
+.login-assistance-shot {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid #d7e1ea;
+}
+
+.login-assistance-permalink {
+  color: #196f9f;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .login-assistance-progress-note {
   display: inline-flex;
   align-items: center;

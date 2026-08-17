@@ -976,6 +976,12 @@ def _run_publish_task_in_context(
     *,
     verify_login: bool,
 ) -> dict[str, Any]:
+    _set_task_assistance(
+        context_control,
+        title="正在准备发布",
+        message="正在检查账号登录状态，通过后会自动撰写并发布。",
+        content=_task_assistance_caption(task, payload),
+    )
     if verify_login:
         login = _check_platform_login(page, platform, logger)
         if login.get("status") != "ready":
@@ -1026,6 +1032,15 @@ def _run_publish_task_in_context(
                 _resume_after_manual_takeover(context_control)
         if login.get("status") != "ready":
             shot = _screenshot(page, screenshot_dir, task, "login_not_ready", logger)
+            _set_task_assistance(
+                context_control,
+                phase="attention",
+                kind="takeover",
+                title="发布前需要人工处理",
+                message=str(login.get("reason") or "账号登录未完成，点击接受后将打开实时浏览器继续。"),
+                screenshot_path=shot,
+                submit_label="接受并接管",
+            )
             raise NeedManualError(
                 str(login.get("reason") or f"{_platform_name(platform)} requires login verification."),
                 str(login.get("status") or "need_verification"),
@@ -1033,8 +1048,14 @@ def _run_publish_task_in_context(
             )
         _report_account_login_status(context_control, "ready", logger)
 
+    _set_task_assistance(
+        context_control,
+        title="正在撰写发布内容",
+        message="账号已就绪，正在打开发布页并填写内容。",
+        content=_task_assistance_caption(task, payload),
+    )
     _raise_if_cancelled(cancel_event)
-    return _run_publish_post(
+    result = _run_publish_post(
         page,
         task,
         payload,
@@ -1045,6 +1066,19 @@ def _run_publish_task_in_context(
         cancel_event=cancel_event,
         context_control=context_control,
     )
+    if isinstance(result, dict) and result.get("ok"):
+        permalink = str(result.get("url") or result.get("permalink") or "").strip()
+        _set_task_assistance(
+            context_control,
+            phase="success",
+            kind="success",
+            title="发布成功",
+            message="帖子已发布，可在助手中查看截图和链接。",
+            content=_task_assistance_caption(task, payload),
+            permalink=permalink,
+            screenshot_path=str(result.get("screenshot_path") or ""),
+        )
+    return result
 
 
 def _report_account_login_status(
@@ -3949,6 +3983,54 @@ def _publish_login_assistance_state(
     session_id = str(context_control.get("live_browser_session_id") or "").strip()
     if not session_id:
         task = context_control.get("task") if isinstance(context_control.get("task"), dict) else {}
+        task_id = str(context_control.get("current_task_id") or task.get("id") or "").strip()
+        if task_id:
+            session_id = f"live_{task_id}"
+    if session_id:
+        with contextlib.suppress(Exception):
+            from social_automation.live_browser import update_live_browser_login_assistance
+
+            update_live_browser_login_assistance(session_id, presentation)
+
+
+def _task_assistance_caption(task: dict[str, Any] | None = None, payload: dict[str, Any] | None = None) -> str:
+    data = dict(payload or {})
+    if not data and isinstance(task, dict):
+        raw = task.get("payload")
+        if isinstance(raw, dict):
+            data = raw
+    return str(data.get("caption") or data.get("content") or data.get("text") or "").strip()
+
+
+def _set_task_assistance(
+    context_control: dict[str, Any] | None,
+    *,
+    phase: str = "running",
+    kind: str = "progress",
+    title: str = "",
+    message: str = "",
+    **extra: Any,
+) -> None:
+    if not isinstance(context_control, dict):
+        return
+    task = context_control.get("task") if isinstance(context_control.get("task"), dict) else {}
+    content = str(extra.pop("content", "") or _task_assistance_caption(task)).strip()
+    presentation = {
+        "phase": phase,
+        "kind": kind,
+        "title": title,
+        "message": message,
+        "updated_at": int(time.time()),
+    }
+    if content:
+        presentation["content"] = content[:800]
+    for key, value in extra.items():
+        if value in (None, "", [], {}):
+            continue
+        presentation[key] = value
+    context_control["login_assistance_state"] = presentation
+    session_id = str(context_control.get("live_browser_session_id") or "").strip()
+    if not session_id:
         task_id = str(context_control.get("current_task_id") or task.get("id") or "").strip()
         if task_id:
             session_id = f"live_{task_id}"
@@ -12317,6 +12399,17 @@ def _wait_for_manual_threads_publish_completion(
         min(timeout_seconds, MAX_MANUAL_LOGIN_TIMEOUT_SECONDS),
     )
     shot = _screenshot(page, screenshot_dir, task, "manual_publish_takeover", logger)
+    _set_task_assistance(
+        context_control,
+        phase="attention",
+        kind="takeover",
+        title="需要人工接管发布",
+        message="自动发布遇到需要人工处理的步骤。点击接受后将打开实时浏览器，由你继续操作。",
+        content=_task_assistance_caption(task, payload),
+        screenshot_path=shot,
+        submit_label="接受并接管",
+        expires_at=int(time.time()) + timeout_seconds,
+    )
     logger.log(
         "warn",
         "manual_publish_takeover",
@@ -12401,6 +12494,15 @@ def _wait_for_manual_threads_publish_completion(
     message = (
         f"人工发布接管已超过 {timeout_seconds // 60} 分钟，"
         f"系统仍未识别到新的帖子链接。{last_reason}"
+    )
+    _set_task_assistance(
+        context_control,
+        phase="error",
+        kind="error",
+        title="发布处理超时",
+        message=message,
+        screenshot_path=timeout_shot,
+        content=_task_assistance_caption(task, payload),
     )
     raise ManualTimeoutError(
         message,
@@ -12504,6 +12606,12 @@ def _run_threads_publish_post(
 
     media_paths = [str(p) for p in (payload.get("media_paths") or []) if str(p or "").strip()]
     caption = str(payload.get("caption") or payload.get("content") or payload.get("text") or "").strip()
+    _set_task_assistance(
+        context_control,
+        title="正在撰写发布内容",
+        message="正在打开 Threads 发布页并填写内容。",
+        content=caption,
+    )
     if not caption and not media_paths:
         raise ValueError("Threads 发布任务需要正文或媒体文件。")
     missing = [p for p in media_paths if not Path(p).exists()]
@@ -12691,6 +12799,12 @@ def _run_threads_publish_post(
         confirmation_persisted = True
 
     click_uncertain = False
+    _set_task_assistance(
+        context_control,
+        title="正在发布",
+        message="内容已填好，正在提交发布。",
+        content=caption,
+    )
     manual_result = _pause_for_requested_threads_publish_takeover(
         page, task, payload, screenshot_dir, logger, account, profile_url,
         previous_permalinks, cancel_event, context_control,
@@ -13171,6 +13285,12 @@ def _run_publish_post(
     missing = [p for p in media_paths if not Path(p).exists()]
     if missing:
         raise FileNotFoundError(f"媒体文件不存在：{missing[0]}")
+    _set_task_assistance(
+        context_control,
+        title="正在撰写发布内容",
+        message="正在打开 Instagram 发布页并填写内容。",
+        content=caption,
+    )
     _goto(page, INSTAGRAM_HOME, logger, "publish_open")
     profile_url = _instagram_profile_url(account)
     if not profile_url:
@@ -13221,6 +13341,12 @@ def _run_publish_post(
         if not _click_text_button(page, logger, ["Share"], "publish_share"):
             raise RuntimeError("未找到 Instagram 分享按钮。")
 
+    _set_task_assistance(
+        context_control,
+        title="正在发布",
+        message="内容已填好，正在提交发布。",
+        content=caption,
+    )
     _run_publish_submit_action(context_control, cancel_event, submit_instagram)
     success = _wait_for_publish_success(page, logger, cancel_event=cancel_event)
     if not success.get("confirmed"):

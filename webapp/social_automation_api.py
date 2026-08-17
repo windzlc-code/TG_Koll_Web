@@ -4580,7 +4580,7 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
         if current_task_type in {"open_login", "publish_post"}:
             session["login_mode"] = _live_browser_open_login_mode(row)
             session["takeover_waiting_for"] = _running_task_takeover_waiting_for(str(row["id"] or ""))
-        if current_task_type == "open_login":
+        if current_task_type in {"open_login", "publish_post"}:
             session_id = str(session.get("id") or session.get("session_id") or "")
             task_key = str(session.get("task_id") or row["id"] or "")
             control = controls_by_session.get(session_id) or controls_by_task.get(task_key) or {}
@@ -4591,19 +4591,24 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
                 assistance = {
                     "phase": "running",
                     "kind": "progress",
-                    "title": "正在启动登录",
-                    "message": "正在连接指纹浏览器并检查账号状态。",
+                    "title": "正在启动发布" if current_task_type == "publish_post" else "正在启动登录",
+                    "message": "正在连接指纹浏览器并准备发布内容。" if current_task_type == "publish_post" else "正在连接指纹浏览器并检查账号状态。",
                 }
             elif (
-                str(assistance.get("title") or "") == "正在启动登录"
+                str(assistance.get("title") or "") in {"正在启动登录", "正在启动发布"}
                 and bool(session.get("browser_ready"))
                 and str(assistance.get("kind") or "progress") == "progress"
             ):
                 assistance = {
                     **assistance,
-                    "title": "正在执行登录",
-                    "message": "指纹浏览器已打开，正在检查页面并同步登录状态。",
+                    "title": "正在执行发布" if current_task_type == "publish_post" else "正在执行登录",
+                    "message": "指纹浏览器已打开，正在同步发布状态。" if current_task_type == "publish_post" else "指纹浏览器已打开，正在检查页面并同步登录状态。",
                 }
+            screenshot_path = str(assistance.get("screenshot_path") or "")
+            if screenshot_path and not assistance.get("screenshot_url"):
+                name = Path(screenshot_path).name
+                if name:
+                    assistance["screenshot_url"] = f"/api/persona_dashboard/automation/screenshots/{name}"
             session["login_assistance"] = dict(assistance)
         if str(row["error"] or "").strip():
             session["task_error"] = str(row["error"] or "")
@@ -9951,7 +9956,11 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         "login_assistance_queue": queue.Queue(maxsize=2),
         "login_assistance_lock": threading.Lock(),
         "login_assistance_pending": False,
-        "login_assistance_state": {"phase": "running", "kind": "progress", "title": "正在启动登录", "message": "正在连接指纹浏览器并检查账号状态。"},
+        "login_assistance_state": (
+            {"phase": "running", "kind": "progress", "title": "正在启动发布", "message": "正在连接指纹浏览器并准备发布内容。"}
+            if str(task.get("task_type") or "") == "publish_post"
+            else {"phase": "running", "kind": "progress", "title": "正在启动登录", "message": "正在连接指纹浏览器并检查账号状态。"}
+        ),
         "publish_submit_lock": threading.RLock(),
         "resource_snapshot_provider": _browser_runtime_resource_snapshot,
         "resource_metrics_lock": threading.RLock(),

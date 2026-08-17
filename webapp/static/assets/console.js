@@ -15767,7 +15767,7 @@ async function submitPersonaPublishTask() {
       updatePersonaPublishResultView(persona.id);
     });
     await loadSocial();
-    if (taskId && !waitingForSchedule) openLiveBrowserTaskView(taskId);
+    if (taskId && !waitingForSchedule) openPublishAssistanceView(taskId, { accountId: account.id, personaId: persona.id });
   } finally {
     setActionLocked(lockParts, false);
     if (isPersonaWorkspaceModule()) renderPersonaDetail();
@@ -16868,7 +16868,7 @@ async function executeSimpleFlow() {
           .map((task) => String(task.id || "").trim())
           .filter(Boolean);
         const immediateTaskId = immediateTaskIds[0] || "";
-        if (immediateTaskId && !deferMobilePublishingBrowserView(immediateTaskIds, state.simpleFlowPendingStartedAt)) openLiveBrowserTaskView(immediateTaskId);
+        if (immediateTaskId && !deferMobilePublishingBrowserView(immediateTaskIds, state.simpleFlowPendingStartedAt)) openPublishAssistanceView(immediateTaskId, { accountId });
         return;
       }
     }
@@ -16891,7 +16891,7 @@ async function executeSimpleFlow() {
         taskPanel: personaId ? "persona" : "regular",
         personaId,
       });
-      if (taskType === "publish_post" && !isFutureScheduledSocialTask(result?.task) && !deferMobilePublishingBrowserView(taskId)) openLiveBrowserTaskView(taskId);
+      if (taskType === "publish_post" && !isFutureScheduledSocialTask(result?.task) && !deferMobilePublishingBrowserView(taskId)) openPublishAssistanceView(taskId, { accountId, personaId });
     }
     return;
   }
@@ -26676,6 +26676,87 @@ function loginAssistanceTaskStatus(task = {}) {
   return String(task?.status || "queued").trim().toLowerCase() || "queued";
 }
 
+function taskAssistancePayload(task = {}) {
+  let payload = task?.payload || task?.payload_json || {};
+  if (typeof payload === "string") {
+    try { payload = JSON.parse(payload || "{}"); } catch (_) { payload = {}; }
+  }
+  return payload && typeof payload === "object" ? payload : {};
+}
+
+function taskAssistanceViewModel(task = {}, session = null) {
+  const taskType = String(task?.task_type || session?.task_type || "").trim();
+  if (taskType === "publish_post") return publishAssistanceViewModel(task, session);
+  return loginAssistanceViewModel(task, session);
+}
+
+function publishAssistanceViewModel(task = {}, session = null) {
+  const taskStatus = loginAssistanceTaskStatus(task);
+  const assistance = session?.login_assistance && typeof session.login_assistance === "object"
+    ? session.login_assistance
+    : {};
+  const payload = taskAssistancePayload(task);
+  const result = task?.result && typeof task.result === "object" ? task.result : {};
+  const permalink = String(
+    assistance.permalink || result.published_url || result.publishedUrl || result.url || result.post_url || result.permalink || "",
+  ).trim();
+  const screenshotUrl = String(assistance.screenshot_url || "").trim()
+    || latestSocialTaskScreenshot(task, [])
+    || "";
+  const content = String(assistance.content || payload.caption || payload.content || payload.text || "").trim();
+  const expiresAt = Number(assistance.expires_at || 0);
+  const remainingSeconds = expiresAt > 0
+    ? Math.max(0, Math.ceil(expiresAt - (Date.now() / 1000)))
+    : 0;
+  const loginLike = loginAssistanceViewModel(task, session);
+  if (["verification_code", "credentials", "confirm", "choice", "browser_interaction"].includes(String(assistance.kind || ""))) {
+    return { ...loginLike, content, permalink, screenshotUrl };
+  }
+  if (taskStatus === "success" || assistance.phase === "success") {
+    return {
+      phase: "success",
+      kind: "success",
+      title: "发布成功",
+      message: permalink ? "帖子已发布，可查看截图和链接。" : "发布已完成。",
+      content,
+      permalink,
+      screenshotUrl,
+    };
+  }
+  if (["failed", "cancelled"].includes(taskStatus) || assistance.phase === "error") {
+    return {
+      phase: "error",
+      kind: "error",
+      title: String(assistance.title || (taskStatus === "cancelled" ? "发布已停止" : "发布未完成")),
+      message: String(assistance.message || task?.error || "本次发布没有完成，请稍后重试。"),
+      content,
+      screenshotUrl,
+    };
+  }
+  if (taskStatus === "need_manual" || assistance.kind === "takeover") {
+    return {
+      phase: "attention",
+      kind: "takeover",
+      title: String(assistance.title || "需要人工接管"),
+      message: String(assistance.message || "自动发布遇到需要人工处理的步骤，接受后将打开实时浏览器。"),
+      submitLabel: String(assistance.submit_label || "接受并接管"),
+      content,
+      screenshotUrl,
+      remainingSeconds,
+    };
+  }
+  const bootstrapStarting = String(assistance.title || "") === "正在启动发布"
+    && String(assistance.kind || "progress") === "progress";
+  return {
+    phase: "running",
+    kind: "progress",
+    title: String(assistance.title || (session?.browser_ready || !bootstrapStarting ? "正在发布" : "正在启动发布")),
+    message: String(assistance.message || (session ? "正在同步发布进度，无需打开浏览器。" : "正在连接指纹浏览器，请稍候。")),
+    content,
+    remainingSeconds,
+  };
+}
+
 function loginAssistanceViewModel(task = {}, session = null) {
   const taskStatus = loginAssistanceTaskStatus(task);
   let assistance = session?.login_assistance && typeof session.login_assistance === "object"
@@ -26835,6 +26916,9 @@ function renderLoginAssistanceAction(model = {}, session = null) {
   if (model.kind === "browser_interaction") {
     return `${choices}<button type="button" class="primary login-assistance-wide-action" data-login-assistance-live>${esc(model.submitLabel || "查看验证页面")}</button>`;
   }
+  if (model.kind === "takeover") {
+    return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-accept>${esc(model.submitLabel || "接受并接管")}</button>`;
+  }
   if (model.phase === "success") {
     return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-close>完成</button>`;
   }
@@ -26844,9 +26928,25 @@ function renderLoginAssistanceAction(model = {}, session = null) {
   return `<div class="login-assistance-progress-note"><span></span>页面状态会自动更新，无需刷新</div>`;
 }
 
+function renderTaskAssistanceDetails(model = {}) {
+  const permalink = String(model.permalink || "").trim();
+  const screenshotUrl = String(model.screenshotUrl || "").trim();
+  const content = String(model.content || "").trim();
+  if (!permalink && !screenshotUrl && !content) return "";
+  const shotHref = screenshotUrl.startsWith("http") || screenshotUrl.startsWith("/")
+    ? adminWorkspaceUrl(screenshotUrl)
+    : screenshotUrl;
+  const linkHref = permalink ? adminWorkspacePageUrl(permalink) : "";
+  return `<div class="login-assistance-details">
+    ${content ? `<p class="login-assistance-content">${esc(content)}</p>` : ""}
+    ${screenshotUrl ? `<img class="login-assistance-shot" src="${esc(shotHref)}" alt="任务截图" />` : ""}
+    ${linkHref ? `<a class="login-assistance-permalink" href="${esc(linkHref)}" target="_blank" rel="noopener">查看发布链接</a>` : ""}
+  </div>`;
+}
+
 function updateLoginAssistanceModal(modal, task = {}, session = null) {
   if (!modal?.isConnected) return;
-  const model = loginAssistanceViewModel(task, session);
+  const model = taskAssistanceViewModel(task, session);
   const taskStatus = loginAssistanceTaskStatus(task);
   const canStop = !["success", "failed", "cancelled"].includes(taskStatus);
   const renderKey = JSON.stringify([
@@ -26858,6 +26958,9 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
     model.inputMode,
     model.submitLabel,
     JSON.stringify(model.actions || []),
+    model.content || "",
+    model.permalink || "",
+    model.screenshotUrl || "",
     taskStatus,
     Boolean(session?.input_allowed),
   ]);
@@ -26878,6 +26981,7 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
         ? `<small class="login-assistance-deadline">${esc(loginAssistanceTimeLimitLabel(model.remainingSeconds))}</small>`
         : ""}
     </div>
+    ${renderTaskAssistanceDetails(model)}
     <div class="login-assistance-action">${renderLoginAssistanceAction(model, session)}</div>
     ${session && model.kind !== "browser_interaction" && model.phase !== "success"
       ? `<button type="button" class="login-assistance-live-link" data-login-assistance-live>查看实时画面</button>`
@@ -26921,9 +27025,21 @@ async function submitLoginAssistance(modal, session, payload = {}) {
   }
 }
 
+function openPublishAssistanceView(taskId = "", options) {
+  options = options || {};
+  return openTaskAssistanceView(taskId, { ...options, mode: "publish" });
+}
+
 function openLoginAssistanceView(taskId = "", accountId = "") {
+  return openTaskAssistanceView(taskId, { accountId });
+}
+
+function openTaskAssistanceView(taskId = "", options) {
+  options = options || {};
   const cleanTaskId = String(taskId || "").trim();
   if (!cleanTaskId) return;
+  const accountId = String(options.accountId || "").trim();
+  const mode = String(options.mode || "login").trim() || "login";
   const existing = document.getElementById("loginAssistanceModal");
   if (existing) closeConsoleModal(null, existing);
   const account = selectedSocialAccount(accountId)
@@ -26932,13 +27048,13 @@ function openLoginAssistanceView(taskId = "", accountId = "") {
   const modal = document.createElement("div");
   modal.id = "loginAssistanceModal";
   modal.className = "console-modal login-assistance-modal";
-  modal.dataset.modalKey = "login-assistance";
+  modal.dataset.modalKey = mode === "publish" ? "publish-assistance" : "login-assistance";
   modal.innerHTML = `
     <div class="console-modal-backdrop"></div>
     <section class="console-modal-dialog login-assistance-dialog" role="dialog" aria-modal="true" aria-labelledby="loginAssistanceTitle">
       <div class="console-modal-head login-assistance-head">
         <div>
-          <strong id="loginAssistanceTitle">登录助手</strong>
+          <strong id="loginAssistanceTitle">${mode === "publish" ? "发布助手" : "登录助手"}</strong>
           <span>${esc(platformLabel(account?.platform || ""))} · ${esc(account?.username || account?.login_username || "当前账号")}</span>
         </div>
         ${renderModalCloseButton("data-login-assistance-close")}
@@ -27004,6 +27120,19 @@ function openLoginAssistanceView(taskId = "", accountId = "") {
     if (event.target.closest("[data-login-assistance-live]")) {
       closeConsoleModal(null, modal);
       openLiveBrowserTaskView(cleanTaskId);
+      return;
+    }
+    if (event.target.closest("[data-login-assistance-accept]")) {
+      const acceptButton = event.target.closest("[data-login-assistance-accept]");
+      acceptButton.disabled = true;
+      acceptButton.textContent = "正在打开浏览器…";
+      const sessionId = liveBrowserSessionId(currentSession);
+      Promise.resolve(sessionId ? setLiveBrowserMode(sessionId, "manual") : null)
+        .catch((error) => showToast(error?.detail || error?.message || "切换人工接管失败", false))
+        .finally(() => {
+          closeConsoleModal(null, modal);
+          openLiveBrowserTaskView(cleanTaskId);
+        });
       return;
     }
     if (event.target.closest("[data-login-assistance-submit='confirm']") && currentSession) {
@@ -32562,7 +32691,7 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
       });
     });
     await loadSocial();
-    if (firstImmediateTaskId && !deferMobilePublishingBrowserView(firstImmediateTaskId)) openLiveBrowserTaskView(firstImmediateTaskId);
+    if (firstImmediateTaskId && !deferMobilePublishingBrowserView(firstImmediateTaskId)) openPublishAssistanceView(firstImmediateTaskId);
     return result;
   } finally {
     setActionLocked(lockParts, false);

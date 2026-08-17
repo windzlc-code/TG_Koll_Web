@@ -163,6 +163,28 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(control["login_assistance_state"]["kind"], "verification_code")
         self.assertEqual(control["login_assistance_state"]["expires_at"], 1_900_000_000)
 
+    def test_publish_assistance_reports_takeover_and_success_nodes(self):
+        control = {"task": {"payload": {"caption": "今日发布测试"}}}
+        runner._set_task_assistance(
+            control,
+            phase="attention",
+            kind="takeover",
+            title="需要人工接管发布",
+            message="点击接受后打开实时浏览器",
+        )
+        self.assertEqual(control["login_assistance_state"]["kind"], "takeover")
+        self.assertEqual(control["login_assistance_state"]["content"], "今日发布测试")
+        runner._set_task_assistance(
+            control,
+            phase="success",
+            kind="success",
+            title="发布成功",
+            permalink="https://www.threads.net/@demo/post/abc",
+            screenshot_path="/data/shot.png",
+        )
+        self.assertEqual(control["login_assistance_state"]["permalink"], "https://www.threads.net/@demo/post/abc")
+        self.assertEqual(control["login_assistance_state"]["screenshot_path"], "/data/shot.png")
+
     def test_submitted_verification_code_stays_hidden_until_rejected(self):
         control = {
             "login_assistance_submitted_kind": "verification_code",
