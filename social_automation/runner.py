@@ -11799,8 +11799,8 @@ def _threads_compose_opener_by_structure(page):
                 const leftRows = [];
                 for (const node of nodes) {
                     const rect = node.getBoundingClientRect();
-                    if (rect.left > Math.min(320, width * 0.28) || rect.top < 56 || rect.top > height * 0.72) continue;
-                    if (rect.height < 28 || rect.height > 68 || rect.width < 28 || rect.width > 400) continue;
+                    if (rect.left > Math.min(280, width * 0.24) || rect.top < 84 || rect.top > height * 0.70) continue;
+                    if (rect.height < 32 || rect.height > 58 || rect.width < 32 || rect.width > 360) continue;
                     if (isSearchHref(hrefOf(node))) continue;
                     const last = leftRows[leftRows.length - 1];
                     if (last && Math.abs(last.y - rect.top) < 12) {
@@ -11814,14 +11814,13 @@ def _threads_compose_opener_by_structure(page):
                     leftRows.push({ node, rect, y: rect.top });
                 }
                 leftRows.sort((a, b) => a.y - b.y);
-                const leftPlus = leftRows.find(item => isPlusIcon(leadingSvg(item.node)));
-                const secondRow = leftRows.length >= 3 ? leftRows[1] : null;
-                const leftPick = leftPlus || (secondRow && !isSearchIcon(leadingSvg(secondRow.node)) ? secondRow : null);
-                if (leftPick) {
-                    leftPick.node.setAttribute('data-vecto-compose-opener', '1');
-                    return 'left-rail';
-                }
-                return '';
+                if (leftRows.length < 3) return '';
+                const composeRow = leftRows[1];
+                const composeSvg = leadingSvg(composeRow.node);
+                if (isSearchIcon(composeSvg)) return '';
+                const clickTarget = composeSvg || composeRow.node;
+                clickTarget.setAttribute('data-vecto-compose-opener', '1');
+                return 'left-rail-2';
             }"""
         )
     except Exception:
@@ -11849,6 +11848,18 @@ def _ensure_threads_compose_ready(
         return compose
     sidebar_opener = _threads_sidebar_compose_opener(page)
     if sidebar_opener is not None:
+        box = None
+        with contextlib.suppress(Exception):
+            box = sidebar_opener.bounding_box()
+        logger.log(
+            "info",
+            "threads_publish_open_target",
+            "将点击左侧栏第 2 项发帖加号。",
+            {
+                "x": None if not box else round(float(box.get("x") or 0) + float(box.get("width") or 0) / 2, 1),
+                "y": None if not box else round(float(box.get("y") or 0) + float(box.get("height") or 0) / 2, 1),
+            },
+        )
         _click_threads_compose_opener(page, sidebar_opener, logger)
         _sleep_between(0.8, 1.6)
         compose = _threads_dialog_compose_box(page)
