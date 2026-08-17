@@ -26715,6 +26715,7 @@ function loginAssistanceViewModel(task = {}, session = null) {
     || {};
   if (
     String(assistance.kind || "progress") === "progress"
+    && String(assistance.title || "") !== "正在验证"
     && String(account?.status || "").trim() === "need_verification"
   ) {
     return {

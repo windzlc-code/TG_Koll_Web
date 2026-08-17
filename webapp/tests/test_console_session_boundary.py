@@ -504,6 +504,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('String(assistance.title || "") === "正在启动登录"', view_model)
         self.assertIn("session?.browser_ready", view_model)
         self.assertIn('account?.status || "").trim() === "need_verification"', view_model)
+        self.assertIn('assistance.title || "") !== "正在验证"', view_model)
         self.assertIn('assistance.phase === "error"', view_model)
         self.assertIn("renderLoginAssistanceChoices", self.source)
         self.assertIn("data-login-assistance-choice", self.source)

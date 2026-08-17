@@ -3831,6 +3831,58 @@ def _login_assistance_is_milestone(presentation: dict[str, Any] | None) -> bool:
     return kind in {"credentials", "verification_code", "confirm", "choice", "browser_interaction", "success", "error"}
 
 
+def _login_assistance_code_rejected(page: Any) -> bool:
+    text = ""
+    with contextlib.suppress(Exception):
+        text = _page_body_text_lower(page, timeout_ms=1000)
+    return any(
+        marker in text
+        for marker in (
+            "incorrect code",
+            "code you entered is incorrect",
+            "invalid code",
+            "code isn't valid",
+            "code is not valid",
+            "wrong code",
+            "code has expired",
+            "code expired",
+            "expired code",
+            "验证码不正确",
+            "验证码无效",
+            "验证码错误",
+            "验证码已过期",
+            "请重新输入验证码",
+        )
+    )
+
+
+def _login_assistance_submission_rejected(page: Any, submitted_kind: str, status: dict[str, Any] | None) -> bool:
+    kind = str(submitted_kind or "").strip().lower()
+    current = dict(status or {})
+    if kind == "verification_code":
+        return _login_assistance_code_rejected(page)
+    if kind == "credentials":
+        return str(current.get("status") or "").strip().lower() == "invalid_credentials"
+    return False
+
+
+def _login_assistance_same_prompt_after_submit(
+    submitted_kind: str,
+    submitted_challenge: str,
+    presentation: dict[str, Any] | None,
+) -> bool:
+    current = dict(presentation or {})
+    next_kind = str(current.get("kind") or "").strip().lower()
+    next_challenge = str(current.get("challenge_type") or "").strip().lower()
+    kind = str(submitted_kind or "").strip().lower()
+    if kind == "verification_code":
+        if next_kind != "verification_code":
+            return False
+        previous = str(submitted_challenge or "").strip().lower()
+        return not previous or not next_challenge or previous == next_challenge
+    return kind == next_kind and kind in {"credentials", "confirm", "choice"}
+
+
 def _login_assistance_signature(presentation: dict[str, Any] | None) -> tuple[str, ...]:
     current = dict(presentation or {})
     actions = _login_assistance_normalize_actions(current.get("actions"))
@@ -3864,6 +3916,19 @@ def _publish_login_assistance_state(
         with contextlib.suppress(Exception):
             current["actions"] = _login_assistance_collect_choices(page, current)
     presentation = _login_assistance_presentation(current)
+    submitted_kind = str(context_control.get("login_assistance_submitted_kind") or "").strip().lower()
+    submitted_challenge = str(context_control.get("login_assistance_submitted_challenge") or "").strip().lower()
+    if submitted_kind and _login_assistance_same_prompt_after_submit(submitted_kind, submitted_challenge, presentation):
+        if not _login_assistance_submission_rejected(page, submitted_kind, current):
+            return
+        context_control.pop("login_assistance_submitted_kind", None)
+        context_control.pop("login_assistance_submitted_challenge", None)
+        if submitted_kind == "verification_code" and not str(current.get("reason") or "").strip():
+            current["reason"] = "验证码不正确，请重新输入。"
+            presentation = _login_assistance_presentation(current)
+    elif submitted_kind and str(presentation.get("kind") or "") not in {submitted_kind, "progress"}:
+        context_control.pop("login_assistance_submitted_kind", None)
+        context_control.pop("login_assistance_submitted_challenge", None)
     if not _login_assistance_is_milestone(presentation):
         return
     expires_at = context_control.get("login_assistance_expires_at")
@@ -4042,11 +4107,30 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
         else:
             raise RuntimeError("当前登录步骤不支持该操作")
     except Exception as exc:
+        context_control.pop("login_assistance_submitted_kind", None)
+        context_control.pop("login_assistance_submitted_challenge", None)
         context_control["login_assistance_state"] = {"phase": "attention", "kind": kind or "browser_interaction", "prompt_kind": kind, "action_error": True, "title": "暂时无法提交", "message": str(exc)[:240], "submit_label": "重试", "updated_at": int(time.time()), **({"expires_at": int(expires_at)} if expires_at else {})}
         _set_login_assistance_pending(context_control, False)
         logger.log("warn", "login_assistance_submit_failed", "登录映射页提交失败。", {"kind": kind, "error": str(exc)[:240]})
         return True
-    context_control["login_assistance_state"] = {"phase": "running", "kind": "progress", "title": "正在验证", "message": message, "updated_at": int(time.time()), **({"expires_at": int(expires_at)} if expires_at else {})}
+    previous = context_control.get("login_assistance_state") if isinstance(context_control.get("login_assistance_state"), dict) else {}
+    context_control["login_assistance_submitted_kind"] = kind
+    context_control["login_assistance_submitted_challenge"] = str(previous.get("challenge_type") or "")
+    progress = {
+        "phase": "running",
+        "kind": "progress",
+        "title": "正在验证",
+        "message": message,
+        "updated_at": int(time.time()),
+        **({"expires_at": int(expires_at)} if expires_at else {}),
+    }
+    context_control["login_assistance_state"] = progress
+    session_id = str(context_control.get("live_browser_session_id") or "").strip()
+    if session_id:
+        with contextlib.suppress(Exception):
+            from social_automation.live_browser import update_live_browser_login_assistance
+
+            update_live_browser_login_assistance(session_id, progress)
     _set_login_assistance_pending(context_control, False)
     logger.log("info", "login_assistance_submitted", message, {"kind": kind, "platform": platform})
     return True

@@ -163,6 +163,32 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(control["login_assistance_state"]["kind"], "verification_code")
         self.assertEqual(control["login_assistance_state"]["expires_at"], 1_900_000_000)
 
+    def test_submitted_verification_code_stays_hidden_until_rejected(self):
+        control = {
+            "login_assistance_submitted_kind": "verification_code",
+            "login_assistance_submitted_challenge": "sms_code",
+            "login_assistance_state": {"phase": "running", "kind": "progress", "title": "正在验证"},
+        }
+        page = mock.Mock()
+        with mock.patch.object(runner, "_login_assistance_code_rejected", return_value=False):
+            runner._publish_login_assistance_state(
+                page,
+                control,
+                {"status": "need_verification", "challenge_type": "sms_code"},
+                handoff=True,
+            )
+        self.assertEqual(control["login_assistance_state"]["kind"], "progress")
+        self.assertEqual(control["login_assistance_state"]["title"], "正在验证")
+        with mock.patch.object(runner, "_login_assistance_code_rejected", return_value=True):
+            runner._publish_login_assistance_state(
+                page,
+                control,
+                {"status": "need_verification", "challenge_type": "sms_code"},
+                handoff=True,
+            )
+        self.assertEqual(control["login_assistance_state"]["kind"], "verification_code")
+        self.assertIn("请重新输入", control["login_assistance_state"]["message"])
+
     def test_choice_clicks_are_sent_to_the_visible_page_button(self):
         actions = queue.Queue(maxsize=2)
         actions.put_nowait({"kind": "choice", "action_label": "Text message"})
