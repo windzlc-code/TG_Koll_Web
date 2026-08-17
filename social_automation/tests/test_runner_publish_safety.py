@@ -4224,6 +4224,38 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertIs(result, sidebar_opener)
 
+    def test_threads_compose_href_accepts_new_and_compose_routes(self):
+        self.assertEqual(
+            runner._threads_compose_href_kind("https://www.threads.com/new", "https://www.threads.com/"),
+            "compose",
+        )
+        self.assertEqual(
+            runner._threads_compose_href_kind("/compose", "https://www.threads.com/"),
+            "compose",
+        )
+        self.assertEqual(
+            runner._threads_compose_href_kind("https://www.orientaldaily.com.my/news/x", "https://www.threads.com/"),
+            "reject",
+        )
+
+    def test_threads_compose_opener_uses_bottom_right_plus_structure(self):
+        empty = mock.Mock()
+        empty.count.return_value = 0
+        marked = mock.Mock()
+        marked.count.return_value = 1
+        marked.is_visible.return_value = True
+        marked_group = mock.Mock()
+        marked_group.first = marked
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+        page.evaluate.side_effect = [1920, True]
+        page.locator.side_effect = lambda selector: marked_group if selector == '[data-vecto-compose-opener="1"]' else empty
+
+        result = runner._threads_sidebar_compose_opener(page)
+
+        self.assertIs(result, marked)
+        self.assertGreaterEqual(page.evaluate.call_count, 2)
+
     def test_threads_sidebar_compose_opener_accepts_traditional_chinese_sidebar_text(self):
         text_span = mock.Mock()
         text_span.is_visible.return_value = True

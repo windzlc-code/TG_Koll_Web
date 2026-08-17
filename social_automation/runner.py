@@ -11662,10 +11662,45 @@ def _dismiss_threads_compose_dialogs(page, logger: AutomationLogger) -> None:
         _sleep_between(0.5, 0.9)
 
 
+_THREADS_COMPOSE_LABELS = (
+    "new thread", "start a thread", "create", "compose", "what's new",
+    "发帖", "發文", "新贴文", "新貼文", "新串文", "撰写新", "撰寫新",
+    "撰寫串文", "撰写串文", "建立串文", "開始新串文", "开始新串文",
+    "新規スレッド", "새 스레드",
+)
+
+
+def _threads_compose_href_kind(href: str, page_url: str) -> str:
+    raw = str(href or "").strip()
+    if not raw:
+        return "unknown"
+    parsed = urlparse(urljoin(str(page_url or THREADS_HOME), raw))
+    host = str(parsed.hostname or "").lower()
+    if host not in {"threads.net", "www.threads.net", "threads.com", "www.threads.com"}:
+        return "reject"
+    path = str(parsed.path or "").rstrip("/").lower()
+    query = str(parsed.query or "").lower()
+    if path in {"/new", "/compose", "/intent/post"} or path.endswith("/new") or path.endswith("/compose"):
+        return "compose"
+    if "composer" in query or "compose" in query:
+        return "compose"
+    if path in {"", "/"} or path.startswith("/search") or path.startswith("/@") or path in {
+        "/activity",
+        "/notifications",
+        "/login",
+        "/explore",
+    }:
+        return "reject"
+    return "unknown"
+
+
 def _threads_sidebar_compose_opener(page):
     selectors = [
         'a[href]',
         '[aria-label*="New thread" i]',
+        '[aria-label*="Start a thread" i]',
+        '[aria-label*="Create" i]',
+        '[aria-label*="Compose" i]',
         '[aria-label*="发帖" i]',
         '[aria-label*="發文" i]',
         '[aria-label*="新贴文" i]',
@@ -11673,17 +11708,21 @@ def _threads_sidebar_compose_opener(page):
         '[aria-label*="新串文" i]',
         '[aria-label*="撰写新" i]',
         '[aria-label*="撰寫新" i]',
+        '[aria-label*="撰寫串文" i]',
+        '[aria-label*="建立串文" i]',
         '[aria-label*="新規スレッド" i]',
         '[aria-label*="새 스레드" i]',
         'text="New thread"',
         'text="新串文"',
+        'text="撰寫串文"',
+        'text="建立串文"',
     ]
     try:
         viewport_width = float(page.evaluate("() => window.innerWidth") or 1920)
     except Exception:
         viewport_width = 1920.0
     left_edge_limit = max(320.0, viewport_width * 0.35)
-    allowed_hosts = {"threads.net", "www.threads.net", "threads.com", "www.threads.com"}
+    page_url = str(getattr(page, "url", "") or THREADS_HOME)
     best = None
     best_center_x = float("inf")
     for selector in selectors:
@@ -11705,23 +11744,107 @@ def _threads_sidebar_compose_opener(page):
                     if clickable.count() and clickable.is_visible(timeout=500):
                         locator = clickable
                         href = str(locator.get_attribute("href", timeout=500) or "").strip()
-                if href:
-                    parsed = urlparse(urljoin(str(getattr(page, "url", "") or THREADS_HOME), href))
-                    if str(parsed.hostname or "").lower() not in allowed_hosts:
-                        continue
-                    if str(parsed.path or "").rstrip("/") != "/new":
-                        continue
+                href_kind = _threads_compose_href_kind(href, page_url)
+                if href_kind == "reject":
+                    continue
+                if href and href_kind != "compose":
+                    continue
                 box = locator.bounding_box()
                 if not box:
                     continue
                 center_x = float(box.get("x") or 0) + float(box.get("width") or 0) / 2
-                if center_x > left_edge_limit or center_x >= best_center_x:
+                if href_kind != "compose" and (center_x > left_edge_limit or center_x >= best_center_x):
+                    continue
+                if href_kind == "compose" and best is not None and center_x >= best_center_x:
                     continue
                 best = locator
                 best_center_x = center_x
             except Exception:
                 continue
-    return best
+    if best is not None:
+        return best
+    return _threads_compose_opener_by_structure(page)
+
+
+def _threads_compose_opener_by_structure(page):
+    try:
+        marked = page.evaluate(
+            """labels => {
+                document.querySelectorAll('[data-vecto-compose-opener]').forEach(node => node.removeAttribute('data-vecto-compose-opener'));
+                const wanted = (labels || []).map(item => String(item || '').toLowerCase()).filter(Boolean);
+                const width = window.innerWidth || 0;
+                const height = window.innerHeight || 0;
+                const visible = node => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 16 && rect.height > 16
+                        && style.visibility !== 'hidden'
+                        && style.display !== 'none'
+                        && style.pointerEvents !== 'none';
+                };
+                const accessibleName = node => String(
+                    node.getAttribute('aria-label')
+                    || node.getAttribute('title')
+                    || node.innerText
+                    || node.textContent
+                    || ''
+                ).replace(/\\s+/g, ' ').trim();
+                const hrefOf = node => String(node.getAttribute('href') || node.closest('a')?.getAttribute('href') || '');
+                const hrefKind = href => {
+                    try {
+                        const url = new URL(href, window.location.href);
+                        const host = String(url.hostname || '').toLowerCase();
+                        if (!['threads.net', 'www.threads.net', 'threads.com', 'www.threads.com'].includes(host)) return 'reject';
+                        const path = String(url.pathname || '').replace(/\\/+$/, '').toLowerCase();
+                        const query = String(url.search || '').toLowerCase();
+                        if (['/new', '/compose', '/intent/post'].includes(path) || path.endsWith('/new') || path.endsWith('/compose')) return 'compose';
+                        if (query.includes('compose') || query.includes('composer')) return 'compose';
+                        if (!path || path === '/' || path.startsWith('/search') || path.startsWith('/@') || ['/activity', '/notifications', '/login', '/explore'].includes(path)) return 'reject';
+                    } catch (error) {
+                        return 'unknown';
+                    }
+                    return 'unknown';
+                };
+                let best = null;
+                let bestScore = 0;
+                const nodes = Array.from(document.querySelectorAll('a, button, [role="button"], [role="link"]'));
+                for (const node of nodes) {
+                    if (!visible(node)) continue;
+                    const rect = node.getBoundingClientRect();
+                    const href = hrefOf(node);
+                    const kind = hrefKind(href);
+                    if (kind === 'reject') continue;
+                    const name = accessibleName(node).toLowerCase();
+                    const hasSvg = Boolean(node.querySelector('svg'));
+                    const iconOnly = hasSvg && name.length <= 2;
+                    const leftRail = rect.left + rect.width / 2 <= width * 0.32;
+                    const bottomRight = rect.left >= width * 0.62 && rect.top >= height * 0.58;
+                    let score = 0;
+                    if (kind === 'compose') score += 120;
+                    if (wanted.some(label => name.includes(label))) score += 90;
+                    if (bottomRight && (iconOnly || hasSvg)) score += 100;
+                    if (leftRail && (iconOnly || hasSvg)) score += 45;
+                    if (iconOnly) score += 15;
+                    if (score > bestScore) {
+                        best = node;
+                        bestScore = score;
+                    }
+                }
+                if (!best || bestScore < 90) return false;
+                best.setAttribute('data-vecto-compose-opener', '1');
+                return true;
+            }""",
+            list(_THREADS_COMPOSE_LABELS),
+        )
+    except Exception:
+        marked = False
+    if not marked:
+        return None
+    try:
+        locator = page.locator('[data-vecto-compose-opener="1"]').first
+        return locator if locator.count() and locator.is_visible(timeout=800) else None
+    except Exception:
+        return None
 
 
 def _ensure_threads_compose_ready(
