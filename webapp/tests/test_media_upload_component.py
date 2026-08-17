@@ -592,6 +592,8 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         )[0]
         self.assertIn('data-persona-media-preview-surface', inline)
         self.assertIn("任务结果预览", inline)
+        self.assertIn("currentItems: postMediaItems", inline)
+        self.assertIn("function renderPersonaCurrentDraftMediaPreview", self.script)
         self.assertNotIn("renderPersonaMediaOperationTabs(", inline)
         self.assertNotIn("自定义上传", inline)
         self.assertLess(inline.index("任务结果预览"), inline.index('renderUploadDropzone("personaMediaTaskFiles"'))
@@ -715,7 +717,7 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             "setPersonaCustomMediaModifySource({ input, index, scrollToComposer: false })",
             selection_toggle,
         )
-        self.assertIn('mediaModifyItem?.inputId !== "personaMediaTaskFiles"', self.script)
+        self.assertIn('mediaModifyItem?.inputId === "personaMediaEditSourceFile"', self.script)
 
     def test_public_media_edit_menu_reuses_outside_click_dropdown_behavior(self):
         menu_renderer = self.script.split("function renderPersonaPublicMediaEditMenu", 1)[1].split(
