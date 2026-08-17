@@ -1757,6 +1757,10 @@ export async function warmSentimentHotSearchStrategy(archive: PersonaArchive): P
   return sentimentHotStrategyHasModelTerms(strategy);
 }
 
+export async function shutdownSentimentSpiderProcesses(): Promise<void> {
+  // Compatibility export for older collector workflow CLIs.
+}
+
 export async function prepareSentimentHotKeywords(args: {
   archive?: PersonaArchive;
   prompt?: string;
