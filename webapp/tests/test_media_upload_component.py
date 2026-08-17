@@ -707,6 +707,8 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('modifyAttribute: ""', editable_renderer)
         self.assertNotIn("form.operationMode = \"generate\"", self.script.split("async function setPersonaCustomMediaModifySource", 1)[1].split("function applyPersonaImageEditSourceReplacement", 1)[0])
         self.assertIn("function setPersonaCustomMediaModifySource", self.script)
+        self.assertIn("const sameDraft = Boolean(", self.script)
+        self.assertIn("const sameSource = sameDraft || sameUpload;", self.script)
         self.assertIn("function autoAttachPersonaGeneratedMedia", self.script)
         self.assertIn("function personaCustomMediaModifyItem", self.script)
         self.assertIn('image_edit_mode: Boolean(modifyItem)', self.script)

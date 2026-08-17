@@ -22587,16 +22587,24 @@ async function setPersonaCustomMediaModifySource({ item = null, input = null, in
     showMsg("commandMsg", "请先选中一条草稿。", false);
     return;
   }
+  const form = personaFormState(persona.id).media;
+  const current = form.customModifySource;
+  const sameDraft = Boolean(
+    !input
+    && current
+    && String(current.postId || "") === String(post.id || "")
+    && String(current.source || "posts") === (source === "favorites" ? "favorites" : "posts")
+    && Number(current.index) === Number(index)
+  );
   let file = input ? currentUploadDropzoneFiles(input)[Number(index)] : null;
-  if (!file && item) file = await personaCustomMediaFile(item, `media-${Number(index) + 1}`);
-  if (!file || fileKind(file) !== "image") {
+  if (!sameDraft && !file && item) file = await personaCustomMediaFile(item, `media-${Number(index) + 1}`);
+  if (!sameDraft && (!file || fileKind(file) !== "image")) {
     showMsg("commandMsg", "媒体修改当前只支持图片。", false);
     return;
   }
   snapshotPersonaCurrentForm();
-  const form = personaFormState(persona.id).media;
-  const current = form.customModifySource;
-  const sameSource = current?.file && uploadFileSignature(current.file) === uploadFileSignature(file);
+  const sameUpload = Boolean(current?.file && file && uploadFileSignature(current.file) === uploadFileSignature(file));
+  const sameSource = sameDraft || sameUpload;
   if (sameSource) delete form.customModifySource;
   else {
     const previewUrl = URL.createObjectURL(file);
@@ -28664,29 +28672,40 @@ function setAccountProxyPoolSort(modal, sort = "time_desc") {
   refreshAccountProxyPickerOptions(modal);
 }
 
-function updateAccountProxyChoice(modal, proxyId = "") {
-  if (!modal) return;
+function resolveAccountProxyChoice(modal, proxyId = "") {
   const selectedId = String(proxyId || "").trim();
-  const proxy = socialProxyById(selectedId);
-  if (selectedId && !accountProxyEligibility(proxy).eligible) return false;
+  if (!selectedId) return null;
+  const poolProxy = (Array.isArray(modal?.__accountProxyPoolData?.options) ? modal.__accountProxyPoolData.options : [])
+    .find((option) => String(option?.social_proxy_id || "").trim() === selectedId);
+  return socialProxyById(selectedId) || poolProxy || null;
+}
+
+function setAccountProxyPickerNotice(modal, text = "", ok = true) {
+  const node = modal?.querySelector?.("[data-account-proxy-notice]");
+  if (!node) return;
+  const message = String(text || "").trim();
+  node.hidden = !message;
+  node.textContent = message;
+  node.dataset.ok = ok ? "true" : "false";
+}
+
+function updateAccountProxyChoice(modal, proxyId = "") {
+  if (!modal) return false;
+  const selectedId = String(proxyId || "").trim();
+  const proxy = resolveAccountProxyChoice(modal, selectedId);
   modal.dataset.selectedProxyId = selectedId;
-  const selectedMarketItemId = String(proxy?.market_item_id || "").trim();
-  modal.querySelectorAll("[data-account-proxy-card]").forEach((card) => {
-    const selected = selectedMarketItemId
-      && String(card.dataset.accountProxyCard || "").trim() === selectedMarketItemId;
-    card.classList.toggle("is-selected", Boolean(selected));
-    card.toggleAttribute("aria-current", Boolean(selected));
-    const button = card.querySelector("[data-account-proxy-owned-choice]");
-    if (button) button.disabled = Boolean(selected);
-  });
-  modal.querySelectorAll("[data-account-proxy-choice]").forEach((button) => {
-    const selected = String(button.dataset.accountProxyChoice || "").trim() === selectedId;
-    button.setAttribute("aria-pressed", selected ? "true" : "false");
+  refreshAccountProxyPickerOptions(modal);
+  modal.querySelectorAll(".account-proxy-clear, [data-account-proxy-choice='']").forEach((button) => {
+    if (!(button instanceof HTMLElement)) return;
+    if (button.closest("[data-account-proxy-card]")) return;
+    button.setAttribute("aria-pressed", selectedId ? "false" : "true");
   });
   const summary = modal.querySelector("[data-account-proxy-selection-summary]");
   if (summary) {
-    const exitIp = proxy ? proxyExitIp(proxy) : "";
-    summary.textContent = proxy ? `已选择：${proxy.name || (exitIp !== "-" ? exitIp : "") || proxy.host}` : "已选择：不使用代理";
+    const host = String(proxy?.exit_ip || proxy?.host || "").trim();
+    summary.textContent = selectedId
+      ? `已选择：${proxy?.name || host || selectedId}`
+      : "已选择：不使用代理";
   }
   return true;
 }
@@ -28723,6 +28742,7 @@ function accountProxyPickerReadyHtml(selectedProxyId = "") {
   return `<div class="account-proxy-picker-toolbar account-proxy-picker-filter-toolbar">
     <div class="account-proxy-picker-controls">${accountProxyPoolFiltersHtml("modal", selectedProxyId)}</div>
   </div>
+  <div class="account-proxy-picker-notice" data-account-proxy-notice hidden></div>
   ${accountProxyOptionCardsHtml(selectedProxyId, { scope: "modal" })}`;
 }
 
@@ -28763,7 +28783,8 @@ function invalidateAccountProxyPoolCache() {
   state.accountProxyPoolCache = null;
 }
 
-async function fetchAccountProxyPickerPool({ force = false } = {}) {
+async function fetchAccountProxyPickerPool(options = {}) {
+  const force = Boolean(options && options.force);
   if (!force) {
     const cached = readAccountProxyPoolCache();
     if (cached) return cached;
@@ -28848,35 +28869,17 @@ async function selectOwnedAccountProxyOption(modal, proxyId = "") {
   const existingOption = (Array.isArray(modal.__accountProxyPoolData?.options) ? modal.__accountProxyPoolData.options : [])
     .find((option) => String(option?.social_proxy_id || "").trim() === cleanProxyId
       && String(option?.ownership_type || "").toLowerCase() === "owned");
-  if (!existingOption) return false;
-  const confirmation = await openConsoleModal({
-    title: "确认使用代理",
-    message: `确定将 ${systemProxyPoolLocation(existingOption)} 的代理用于当前账号吗？`,
-    confirmText: "确定使用",
-    cancelText: "暂不使用",
-    modalKey: "account-proxy-confirm",
-    stack: true,
-  });
-  if (!confirmation || !modal.isConnected) return false;
-  modal.dataset.accountProxySelecting = "true";
-  modal.querySelectorAll("[data-account-proxy-owned-choice]").forEach((button) => { button.disabled = true; });
-  try {
-    if (!Number(existingOption.last_check_at) || String(existingOption.health_status || "pending") !== "healthy") {
-      const checked = await api(`/api/persona_dashboard/automation/proxies/${encodeURIComponent(cleanProxyId)}/check`, { method: "POST" });
-      if (!checked?.check_ok) throw { detail: "该代理尚未通过真实网络检测，请稍后重试。" };
-      await fetchSocialDataShared({ force: true });
-      await loadAccountProxyPickerPool(modal);
-    }
-    updateAccountProxyChoice(modal, cleanProxyId);
-    return cleanProxyId;
-  } catch (error) {
-    showMsg("socialMsg", error.detail || error.message || "代理检测失败", false);
+  if (!existingOption) {
+    setAccountProxyPickerNotice(modal, "没有找到可选择的代理，请稍后重试。", false);
     return false;
+  }
+  modal.dataset.accountProxySelecting = "true";
+  try {
+    updateAccountProxyChoice(modal, cleanProxyId);
+    setAccountProxyPickerNotice(modal, "已选中该代理 IP。", true);
+    return cleanProxyId;
   } finally {
-    if (modal.isConnected) {
-      delete modal.dataset.accountProxySelecting;
-      modal.querySelectorAll("[data-account-proxy-owned-choice]").forEach((button) => { button.disabled = false; });
-    }
+    if (modal.isConnected) delete modal.dataset.accountProxySelecting;
   }
 }
 
@@ -28967,20 +28970,29 @@ async function updateAccountProxyRenewal(modal, button) {
   const orderId = String(button?.dataset.accountProxyRenewalOrder || "").trim();
   if (!modal?.isConnected || !orderId || button.disabled) return false;
   const enabled = button.dataset.renewalEnabled !== "true";
+  const previous = button.dataset.renewalEnabled === "true";
   button.disabled = true;
+  button.dataset.renewalEnabled = enabled ? "true" : "false";
+  button.setAttribute("aria-pressed", enabled ? "true" : "false");
+  setAccountProxyPickerNotice(modal, enabled ? "正在开启自动续费…" : "正在关闭自动续费…", true);
   try {
     await api(`/api/proxy-purchases/orders/${encodeURIComponent(orderId)}/renewal`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }),
     });
-    button.dataset.renewalEnabled = enabled ? "true" : "false";
-    button.setAttribute("aria-pressed", enabled ? "true" : "false");
-    await loadAccountProxyPickerPool(modal);
+    const option = (Array.isArray(modal.__accountProxyPoolData?.options) ? modal.__accountProxyPoolData.options : [])
+      .find((item) => String(item?.purchase_order_id || "") === orderId);
+    if (option) option.renewal_enabled = enabled;
+    setAccountProxyPickerNotice(modal, enabled ? "自动续费已开启。" : "自动续费已关闭。", true);
     showMsg("socialMsg", enabled ? "自动续费已开启。" : "自动续费已关闭。", true);
     return true;
   } catch (error) {
-    showMsg("socialMsg", error.detail || error.message || "自动续费设置失败", false);
+    button.dataset.renewalEnabled = previous ? "true" : "false";
+    button.setAttribute("aria-pressed", previous ? "true" : "false");
+    const message = error.detail || error.message || "自动续费设置失败";
+    setAccountProxyPickerNotice(modal, message, false);
+    showMsg("socialMsg", message, false);
     return false;
   } finally {
     if (button.isConnected) button.disabled = false;
@@ -29016,10 +29028,11 @@ async function saveAccountProxyBinding(accountId = "", proxyId = "", expectedPro
       : { clear_residential_proxy: true, expected_proxy_id: String(expectedProxyId || "").trim() }),
   });
   state.accountPoolAccountId = String(result.account?.id || cleanAccountId);
-  await loadSocial({ force: true });
-  renderSocialAccounts();
-  if (isPersonaWorkspaceModule()) renderPersonaDetail();
   showMsg("socialMsg", selectedProxyId ? "代理 IP 已绑定。" : "代理 IP 已解绑。", true);
+  void loadSocial({ force: true }).then(() => {
+    renderSocialAccounts();
+    if (isPersonaWorkspaceModule()) renderPersonaDetail();
+  }).catch(() => {});
   return true;
 }
 
@@ -29167,18 +29180,17 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
   else modalRoot.__close = close;
   const completeSelection = async (proxyId = "") => {
     const cleanProxyId = String(proxyId || "").trim();
-    const poolData = modalRoot.__accountProxyPoolData || {};
+    updateAccountProxyChoice(modalRoot, cleanProxyId);
+    setAccountProxyPickerNotice(modalRoot, cleanProxyId ? "已选中该代理 IP。" : "已解除代理。", true);
     if (mode === "create") {
       state.accountPoolCreateDraft = { ...(state.accountPoolCreateDraft || {}), proxy_id: cleanProxyId };
-      updateAccountProxyChoice(modalRoot, cleanProxyId);
-      close(cleanProxyId);
-      if (cleanProxyId) await openAccountProxySelectionSuccess(cleanProxyId, poolData);
       return true;
     }
     const saved = await commitAccountProxyPickerSelection(modalRoot, cleanAccountId, cleanProxyId);
-    if (saved) {
-      close(cleanProxyId);
-      if (cleanProxyId) await openAccountProxySelectionSuccess(cleanProxyId, poolData);
+    if (saved) modalRoot.dataset.originalProxyId = cleanProxyId;
+    else {
+      updateAccountProxyChoice(modalRoot, modalRoot.dataset.originalProxyId || "");
+      setAccountProxyPickerNotice(modalRoot, "代理绑定失败，已恢复原来的选择。", false);
     }
     return saved;
   };
@@ -29261,6 +29273,17 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
       if (ownedChoice && !ownedChoice.disabled) {
         const selectedOwnedProxyId = await selectOwnedAccountProxyOption(modalRoot, ownedChoice.dataset.accountProxyOwnedChoice || "");
         if (selectedOwnedProxyId) await completeSelection(selectedOwnedProxyId);
+        return;
+      }
+      const selectedCard = event.target.closest("[data-account-proxy-card]");
+      if (selectedCard && !event.target.closest("button")) {
+        const selectedButton = selectedCard.querySelector("[data-account-proxy-owned-choice]");
+        const unbindButton = selectedCard.querySelector(".account-proxy-unbind");
+        if (unbindButton) await completeSelection("");
+        else if (selectedButton && !selectedButton.disabled) {
+          const selectedOwnedProxyId = await selectOwnedAccountProxyOption(modalRoot, selectedButton.dataset.accountProxyOwnedChoice || "");
+          if (selectedOwnedProxyId) await completeSelection(selectedOwnedProxyId);
+        }
         return;
       }
       const renewal = event.target.closest("[data-account-proxy-renewal-order]");
