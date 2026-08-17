@@ -11829,13 +11829,12 @@ function renderUploadDropzone(id, {
   imageEditSource = false,
   publicMediaCards = false,
   embeddedPreview = false,
-  directMediaInput = false,
 } = {}) {
   queueMicrotask(() => restoreUploadDropzoneFiles(id));
   const stateKey = uploadDropzoneStateKey(id);
   return `
     <div class="upload-zone ${embeddedPreview ? "upload-zone--embedded-preview" : ""}" data-upload-dropzone>
-      <input class="upload-zone-input" id="${esc(id)}" data-upload-state-key="${esc(stateKey)}" type="file" ${multiple ? "multiple" : ""} accept="${esc(accept)}" ${imageEditSource ? "data-persona-image-edit-source" : ""} ${publicMediaCards ? "data-public-media-cards" : ""} ${directMediaInput ? "data-persona-direct-media-input" : ""} />
+      <input class="upload-zone-input" id="${esc(id)}" data-upload-state-key="${esc(stateKey)}" type="file" ${multiple ? "multiple" : ""} accept="${esc(accept)}" ${imageEditSource ? "data-persona-image-edit-source" : ""} ${publicMediaCards ? "data-public-media-cards" : ""} />
       ${embeddedPreview ? "" : `<label class="upload-zone-picker" for="${esc(id)}">
         <strong>${esc(label)}</strong>
         <p>${esc(hint || "拖动文件到这里，或点击选择文件。")}</p>
@@ -12087,23 +12086,6 @@ function personaAiUploadSelectionControlsModify(input) {
     && input.matches?.("[data-public-media-cards]")
     && personaDraftMediaTargetIsEditing()
   );
-}
-
-function filterPersonaEditableMediaFiles(files = []) {
-  const incoming = Array.from(files || []).filter(Boolean);
-  const allowed = incoming.filter((file) => {
-    const kind = fileKind(file);
-    return kind === "image" || kind === "video";
-  });
-  if (!incoming.length) return [];
-  if (!allowed.length) {
-    showMsg("commandMsg", "仅支持图片或视频文件。", false);
-    return [];
-  }
-  if (allowed.length !== incoming.length) {
-    showMsg("commandMsg", "已忽略不支持的文件类型，仅添加图片或视频。", false);
-  }
-  return allowed;
 }
 
 function clearUploadPreviewResources(input, { deferRevoke = false } = {}) {
@@ -21605,28 +21587,10 @@ function resetPersonaDraftEditor(personaId) {
   resetPersonaNewDraftComposer(personaId);
 }
 
-function clearPersonaMediaModifyState(personaId, postId = "") {
-  const form = personaFormState(personaId)?.media;
-  if (form?.customModifySource) {
-    if (String(form.customModifySource.previewUrl || "").startsWith("blob:")) {
-      URL.revokeObjectURL(form.customModifySource.previewUrl);
-    }
-    delete form.customModifySource;
-  }
-  const taskPostId = String(postId || "").trim();
-  if (taskPostId) {
-    const taskState = personaMediaTaskState(personaId, taskPostId);
-    if (taskState) taskState.modifyMediaKey = "";
-  }
-  clearUploadDropzoneState("personaMediaEditSourceFile");
-}
-
 function discardPersonaDraftEdit(personaId) {
   const form = personaFormState(personaId);
-  const editingPostId = String(form.draft?.editingPostId || "").trim();
   form.generate.mode = "custom";
   form.draft = defaultPersonaDraftForm();
-  clearPersonaMediaModifyState(personaId, editingPostId);
 }
 
 function clearPersonaDraftEdit(personaId) {
@@ -21638,15 +21602,6 @@ function clearPersonaDraftEdit(personaId) {
   form.draft = normalizePersonaDraftForm(form.draft);
   form.draft.title = "";
   form.draft.content = "";
-  const editingPostId = String(form.draft.editingPostId || "").trim();
-  if (Array.isArray(form.draft.mediaItems) && form.draft.mediaItems.length) {
-    if (!Array.isArray(form.draft.mediaOps)) form.draft.mediaOps = [];
-    form.draft.mediaItems.forEach((_, index) => {
-      form.draft.mediaOps.push({ type: "delete", index });
-    });
-    form.draft.mediaItems = [];
-  }
-  clearPersonaMediaModifyState(personaId, editingPostId);
   if ($("personaDraftTitle")) $("personaDraftTitle").value = "";
   if ($("personaDraftContent")) $("personaDraftContent").value = "";
   syncPersonaDraftDirty(form.draft);
@@ -21677,7 +21632,6 @@ function cancelPersonaDraftEditChanges(personaId) {
     mediaOps: [],
     dirty: false,
   });
-  clearPersonaMediaModifyState(personaId, post.id);
   return true;
 }
 
@@ -21749,7 +21703,6 @@ function openPersonaDraftEditor(postId) {
     mediaOps: [],
     dirty: false,
   });
-  clearPersonaMediaModifyState(persona.id, post.id);
   setPersonaPostSource(source, persona);
   setSelectedPersonaPostId(post.id || state.selectedPersonaPostId || "");
   state.personaGroup = "content";
@@ -22581,27 +22534,6 @@ async function attachPersonaTaskMediaToPost() {
   showMsg("commandMsg", "任务结果已添加至草稿。", true);
 }
 
-function togglePersonaTaskMediaSelectionAndModify(mediaKey) {
-  const persona = selectedPersona();
-  const { post } = personaMediaTargetPost(persona);
-  const taskState = persona && post ? personaMediaTaskState(persona.id, post.id) : null;
-  if (!persona || !post || !taskState) return;
-  const items = personaTaskMediaItems(taskState);
-  const cleanKey = String(mediaKey || "").trim();
-  if (!cleanKey) return;
-  const item = items.find((row) => personaTaskMediaKey(row) === cleanKey);
-  const selected = new Set(selectedPersonaTaskMediaKeys(taskState, items));
-  if (selected.has(cleanKey)) selected.delete(cleanKey);
-  else selected.add(cleanKey);
-  taskState.selectedMediaKeys = Array.from(selected);
-  taskState.selectedMediaIndexes = null;
-  if (item?.type === "image") {
-    setPersonaTaskMediaModifySource(cleanKey);
-    return;
-  }
-  syncPersonaTaskMediaSelectionState(taskState, items, document);
-}
-
 function setPersonaTaskMediaModifySource(mediaKey) {
   const persona = selectedPersona();
   const { post } = personaMediaTargetPost(persona);
@@ -22674,10 +22606,7 @@ async function setPersonaCustomMediaModifySource({ item = null, input = null, in
   if (taskState) taskState.modifyMediaKey = "";
   const editSourceStateKey = uploadDropzoneStateKey("personaMediaEditSourceFile");
   if (editSourceStateKey) {
-    uploadFilesById.set(
-      editSourceStateKey,
-      sameSource || !input || input.id === "personaMediaTaskFiles" ? [] : [file],
-    );
+    uploadFilesById.set(editSourceStateKey, sameSource || input?.id === "personaMediaTaskFiles" ? [] : [file]);
   }
   renderPersonaDetail();
   renderConfirmSummary();
@@ -22802,7 +22731,7 @@ function queuePersonaDraftMediaChange(action, {
     draft.mediaItems = personaEditablePostMediaItems(persona.id, post).map(clonePersonaDraftMediaItem);
   }
   if (!Array.isArray(draft.mediaOps)) draft.mediaOps = [];
-  const mediaFiles = filterPersonaEditableMediaFiles(files);
+  const mediaFiles = Array.from(files || []).filter(Boolean);
   const current = draft.mediaItems;
   if (action === "append") {
     if (!mediaFiles.length) {
@@ -22918,7 +22847,7 @@ async function uploadPersonaPostMedia(replaceIndex = null, filesOverride = null)
 }
 
 function acceptPersonaDirectMediaFiles(input, files) {
-  const mediaFiles = filterPersonaEditableMediaFiles(files);
+  const mediaFiles = Array.from(files || []).filter(Boolean);
   if (!input?.matches?.("[data-persona-direct-media-input]") || !mediaFiles.length) return false;
   input.value = "";
   uploadPersonaPostMedia(null, mediaFiles).catch((error) => {
@@ -24175,7 +24104,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
   const mediaTaskState = personaMediaTaskState(persona.id, post.id);
   const mediaModifyItem = personaTaskMediaModifyItem(mediaTaskState);
   const mediaModifyActive = Boolean(mediaModifyItem);
-  const mediaEditSourceUploadActive = mediaModifyActive && mediaModifyItem?.inputId === "personaMediaEditSourceFile";
+  const mediaEditSourceUploadActive = mediaModifyActive && mediaModifyItem?.inputId !== "personaMediaTaskFiles";
   const aiUploadSelectsModify = personaDraftMediaTargetIsEditing(persona);
   const mediaUploadInputId = mediaEditSourceUploadActive ? "personaMediaEditSourceFile" : "personaMediaTaskFiles";
   return `
@@ -24235,12 +24164,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
                 publicMediaCards: true,
                 embeddedPreview: true,
               })}
-              ${renderPersonaMediaTaskResult(persona.id, post.id, {
-                mediaBusy,
-                mediaBusyStartedAt,
-                addMediaInputId: mediaUploadInputId,
-                currentItems: postMediaItems,
-              })}
+              ${renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt, addMediaInputId: mediaUploadInputId })}
             </div>
           </div>
         `}
@@ -24445,54 +24369,6 @@ function renderPersonaPublicMediaFooter(displayIndex, actions = "") {
   </div>`;
 }
 
-function renderPersonaCurrentDraftMediaPreview(items = [], { postId = "", modifyIndex = -1 } = {}) {
-  const rows = Array.isArray(items) ? items : [];
-  if (!rows.length) return "";
-  const groupId = registerMediaPreviewGroup(rows.filter((item) => item && item.previewUrl && !item.unavailable));
-  let previewIndex = 0;
-  const activeIndex = Number(modifyIndex);
-  return `<div class="persona-media-grid persona-task-media-grid" role="list" aria-label="当前草稿媒体">
-    ${rows.map((item, index) => {
-      const itemPreviewIndex = item?.previewUrl && !item?.unavailable ? previewIndex++ : -1;
-      const isModifySource = Number.isInteger(activeIndex) && activeIndex === index;
-      const preview = item.unavailable || !item.previewUrl ? `
-        <div class="persona-media-frame persona-media-frame--empty">
-          <strong>媒体不可预览</strong>
-          <small>${esc(item.reason || "原始文件已失效")}</small>
-        </div>
-      ` : renderMediaPreviewButton(item, groupId, itemPreviewIndex, {
-        className: "persona-media-card",
-        frameClass: "persona-media-frame",
-        showCaption: false,
-        interactive: false,
-      });
-      return `
-        <div class="persona-public-media-card persona-task-media-card ${isModifySource ? "is-selected is-modify-source" : ""}" data-persona-current-media-index="${esc(index)}" data-persona-current-media-post="${esc(postId)}" role="listitem">
-          <div class="persona-public-media-preview-shell">
-            ${renderPersonaPublicMediaSelectionButton({
-              selected: isModifySource,
-              displayIndex: index,
-              dataAttribute: `data-persona-current-media-select="${esc(index)}"`,
-            })}
-            ${renderPersonaPublicMediaOrder(index)}
-            ${preview}
-          </div>
-          ${renderPersonaPublicMediaFooter(index, `
-            ${itemPreviewIndex >= 0 ? `<button type="button" data-media-preview-group="${esc(groupId)}" data-media-preview-index="${esc(itemPreviewIndex)}" title="查看" aria-label="查看第 ${esc(index + 1)} 个媒体">${renderEyeIcon()}</button>` : ""}
-            ${renderPersonaPublicMediaEditMenu({
-              displayIndex: index,
-              modifyAttribute: "",
-              modifyActive: isModifySource,
-              replaceAttribute: `data-persona-edit-post-media="${esc(index)}"`,
-              deleteAttribute: `data-persona-delete-post-media="${esc(index)}"`,
-            })}
-          `)}
-        </div>
-      `;
-    }).join("")}
-  </div>`;
-}
-
 function renderPersonaTaskMediaPreview(taskState, items = personaTaskMediaItems(taskState)) {
   const rows = Array.isArray(items) ? items : [];
   if (!rows.length) return "";
@@ -24557,10 +24433,7 @@ function syncPersonaTaskMediaSelectionState(taskState, items = [], root = docume
 function renderPersonaMediaPromptField(mediaForm, taskState = null) {
   const items = taskState ? personaTaskMediaItems(taskState) : [];
   const modifyItem = personaTaskMediaModifyItem(taskState, items);
-  const customIndex = Number(selectedPersona() ? personaFormState(selectedPersona().id).media?.customModifySource?.index : NaN);
-  const modifyIndex = modifyItem?.customSource && Number.isInteger(customIndex)
-    ? customIndex
-    : (modifyItem ? items.indexOf(modifyItem) : -1);
+  const modifyIndex = modifyItem ? items.indexOf(modifyItem) : -1;
   const editing = Boolean(modifyItem);
   const displayIndex = modifyIndex >= 0 ? modifyIndex : 0;
   const label = editing ? `图片局部修改提示词（第 ${displayIndex + 1} 张）` : "补充提示词（可选）";
@@ -24755,27 +24628,15 @@ function renderPersonaImageLibraryGrid(library, selectedImageId = "") {
   }).join("")}${renderPersonaImageUploadPlaceholderCard()}</div>`;
 }
 
-function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, mediaBusyStartedAt = 0, addMediaInputId = "", currentItems = [] } = {}) {
+function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, mediaBusyStartedAt = 0, addMediaInputId = "" } = {}) {
   const taskState = personaMediaTaskState(personaId, postId);
   const items = taskState ? personaTaskMediaItems(taskState) : [];
-  const currentRows = Array.isArray(currentItems) ? currentItems : [];
-  const customSource = personaFormState(personaId).media?.customModifySource;
-  const customIndex = customSource && String(customSource.postId || "") === String(postId || "")
-    ? Number(customSource.index)
-    : NaN;
-  const currentPreview = renderPersonaCurrentDraftMediaPreview(currentRows, {
-    postId,
-    modifyIndex: Number.isInteger(customIndex) ? customIndex : -1,
-  });
-  const hasCards = currentRows.length > 0 || items.length > 0;
   const modifying = Boolean(personaTaskMediaModifyItem(taskState, items));
   const actionKind = taskState?.taskId ? "regenerate" : "generate";
   const runButton = `<button type="button" class="primary" data-persona-run-media-task data-persona-media-action="${actionKind}" aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (modifying ? "重生成图片" : (taskState?.taskId ? "重新生成" : "生成预览"))}</button>`;
   if (!taskState?.taskId) return `
     <div class="persona-media-task-result-preview">
-      ${hasCards
-        ? `${currentPreview}${renderUploadAddMediaButton(addMediaInputId)}`
-        : renderModuleEmptyState({
+      ${renderModuleEmptyState({
         icon: "media",
         title: "等待生成结果",
         detail: "提交任务后，结果预览会显示在这里并可直接添加至草稿",
@@ -24796,15 +24657,14 @@ function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, me
   const missingPersonaImage = /人设图/.test(String(detail.error || "")) && !items.length;
   return `
     <div class="persona-media-task-result-preview">
-      ${hasCards ? "" : renderModuleEmptyState({
+      ${items.length ? "" : renderModuleEmptyState({
         icon: "media",
         title: terminal ? "任务已结束，暂无可预览媒体" : "正在等待媒体结果",
         detail: terminal ? "可从任务日志确认生成情况" : "结果返回后会自动显示在这里",
         action: renderUploadAddMediaButton(addMediaInputId),
       })}
-      ${currentPreview}
       ${renderPersonaTaskMediaPreview(taskState, items)}
-      ${hasCards ? renderUploadAddMediaButton(addMediaInputId) : ""}
+      ${items.length ? renderUploadAddMediaButton(addMediaInputId) : ""}
     </div>
     <div class="row-actions persona-media-task-actions">
       ${runButton}
@@ -26050,7 +25910,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
     const mediaTaskState = post ? personaMediaTaskState(persona.id, post.id) : null;
     const mediaModifyItem = personaTaskMediaModifyItem(mediaTaskState);
     const mediaModifyActive = Boolean(mediaModifyItem);
-    const mediaEditSourceUploadActive = mediaModifyActive && mediaModifyItem?.inputId === "personaMediaEditSourceFile";
+    const mediaEditSourceUploadActive = mediaModifyActive && mediaModifyItem?.inputId !== "personaMediaTaskFiles";
     const aiUploadSelectsModify = personaDraftMediaTargetIsEditing(persona);
     const mediaUploadInputId = mediaEditSourceUploadActive ? "personaMediaEditSourceFile" : "personaMediaTaskFiles";
     return `
@@ -33413,48 +33273,32 @@ function bindEvents() {
       removePersonaTaskMediaResult(taskMediaDelete.dataset.personaTaskMediaDelete || "");
       return;
     }
-    const currentMediaSelect = event.target.closest("[data-persona-current-media-select]");
-    if (currentMediaSelect) {
-      const persona = selectedPersona();
-      const { source, post } = personaMediaTargetPost(persona);
-      const items = persona && post ? personaDraftMediaPreviewItems(persona, source, post) : [];
-      const index = Number(currentMediaSelect.dataset.personaCurrentMediaSelect);
-      const item = items[index];
-      if (item) {
-        setPersonaCustomMediaModifySource({ item, index, scrollToComposer: false })
-          .catch((error) => showMsg("commandMsg", error.detail || error.message || "图片无法进入媒体修改", false));
-      }
-      return;
-    }
-    const currentMediaCard = event.target.closest(".persona-task-media-card[data-persona-current-media-index]");
-    if (
-      currentMediaCard
-      && !event.target.closest("button, a, input, label, [role=\"button\"]")
-      && !event.target.closest(".persona-public-media-card-actions")
-    ) {
-      const persona = selectedPersona();
-      const { source, post } = personaMediaTargetPost(persona);
-      const items = persona && post ? personaDraftMediaPreviewItems(persona, source, post) : [];
-      const index = Number(currentMediaCard.dataset.personaCurrentMediaIndex);
-      const item = items[index];
-      if (item) {
-        setPersonaCustomMediaModifySource({ item, index, scrollToComposer: false })
-          .catch((error) => showMsg("commandMsg", error.detail || error.message || "图片无法进入媒体修改", false));
-      }
-      return;
-    }
     const taskMediaSelect = event.target.closest("[data-persona-task-media-select]");
     if (taskMediaSelect) {
-      togglePersonaTaskMediaSelectionAndModify(taskMediaSelect.dataset.personaTaskMediaSelect || "");
-      return;
-    }
-    const taskMediaCard = event.target.closest(".persona-task-media-card[data-persona-task-media-key]");
-    if (
-      taskMediaCard
-      && !event.target.closest("button, a, input, label, [role=\"button\"]")
-      && !event.target.closest(".persona-public-media-card-actions")
-    ) {
-      togglePersonaTaskMediaSelectionAndModify(taskMediaCard.dataset.personaTaskMediaKey || "");
+      const persona = selectedPersona();
+      const { post } = personaMediaTargetPost(persona);
+      const taskState = persona && post ? personaMediaTaskState(persona.id, post.id) : null;
+      if (!persona || !post || !taskState) return;
+      const items = personaTaskMediaItems(taskState);
+      const mediaKey = String(taskMediaSelect.dataset.personaTaskMediaSelect || "").trim();
+      if (!mediaKey) return;
+      const selected = new Set(selectedPersonaTaskMediaKeys(taskState, items));
+      if (selected.has(mediaKey)) selected.delete(mediaKey);
+      else selected.add(mediaKey);
+      taskState.selectedMediaKeys = Array.from(selected);
+      taskState.selectedMediaIndexes = null;
+      const item = items.find((row) => personaTaskMediaKey(row) === mediaKey);
+      if (item?.type === "image") {
+        setPersonaTaskMediaModifySource(mediaKey);
+        return;
+      }
+      syncPersonaTaskMediaSelectionState(
+        taskState,
+        items,
+        taskMediaSelect.closest(".persona-media-operation-pane")
+          || taskMediaSelect.closest(".persona-compose-media-side")
+          || document,
+      );
       return;
     }
     if (event.target.closest("[data-persona-attach-task-media]")) {
