@@ -125,7 +125,7 @@ const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 8_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
-const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 39;
+const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 40;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 28;
@@ -1302,7 +1302,7 @@ function filterConflictingSearchKeywords(keywords: string[]): string[] {
     && !isHollowSearchKeyword(term)
     && !isGenericPersonaContentTopic(term)
   )))];
-  const fluffSuffix = /(?:大叔|愛好者|爱好者|經驗|经验|攻略|生活|周邊商品|周边商品)$/u;
+  const fluffSuffix = /(?:大叔|愛好者|爱好者|經驗|经验|攻略|生活|購物|购物|周邊商品|周边商品)$/u;
   const withoutFluff = cleaned.filter((term) => {
     if (!fluffSuffix.test(term) || term.length <= 4) return true;
     const stem = term.replace(fluffSuffix, "");
@@ -1530,7 +1530,7 @@ function normalizeStrategyAnchorTermList(value: unknown, args: { archiveName?: s
 
 function isGenericPersonaContentTopic(value: unknown): boolean {
   const text = cleanText(value).replace(/\s+/g, "");
-  return /^(?:职场趣事|職場趣事|生活日常|日常生活|生活故事|職場故事|职场故事|搞笑|幽默|趣事|故事|经验|經驗|分享|日常)$/u.test(text);
+  return /^(?:职场趣事|職場趣事|生活日常|日常生活|生活故事|生活分享|市井生活|市井|職場故事|职场故事|搞笑|幽默|趣事|故事|经验|經驗|分享|日常)$/u.test(text);
 }
 
 function filterModelQueriesByDomainAnchors(queries: string[], anchors: string[]): string[] {
@@ -1692,7 +1692,12 @@ export function applyPersonaGuardToSentimentHotStrategy(args: {
   const cleanModelTerms = (terms: string[]) => [...new Set(
     terms
       .map((term) => normalizeSentimentSearchKeyword(term))
-      .filter((term) => isConcreteSearchKeyword(term) && !isGenericPersonaRoleTerm(term)),
+      .filter((term) => (
+        isConcreteSearchKeyword(term)
+        && !isGenericPersonaRoleTerm(term)
+        && !isHollowSearchKeyword(term)
+        && !isGenericPersonaContentTopic(term)
+      )),
   )];
   args.strategy.requiredAnchorTerms = cleanModelTerms(args.strategy.requiredAnchorTerms).filter((term) => !isGenericPersonaContentTopic(term));
   args.strategy.normalAnchorTerms = cleanModelTerms(args.strategy.normalAnchorTerms).filter((term) => !isGenericPersonaContentTopic(term));
@@ -2075,7 +2080,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
         role: "user",
         parts: [{
           text: [
-            "你是 Threads / Instagram 热点搜索策略模型。你必须为任意新建人设生成可执行搜索策略，不依赖固定行业锚点。",
+            "你是 Threads / Instagram 热点搜索策略模型。必须只根据当前人设资料为任意人设生成搜索策略，不得套用固定行业词表，也不得把某类人设的对象词套到其他人设上。",
             "只输出 JSON 对象，不要解释，不要 Markdown。",
             "JSON 结构：",
             "{\"primaryQueries\":[\"...\"],\"broadQueries\":[\"...\"],\"ecosystemQueries\":[\"...\"],\"requiredAnchorTerms\":[\"...\"],\"normalAnchorTerms\":[\"...\"],\"strictAcceptTerms\":[\"...\"],\"normalAcceptTerms\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
@@ -2097,7 +2102,8 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
             "严格模式关键词数量不能少，只用主领域同义词和场景词收口；普通模式可扩展到直接父领域，但不能漂移到无关产业。",
             "每个搜索词脱离上下文后仍应明确属于该领域。细分职业优先覆盖普通受众高频讨论的实体词、场景词、经验词、互动词和真实痛点，避免只有内部从业者才会搜索的低流量长短语。",
             "不要把 3 个以上意图词硬拼成一句搜索词；primaryQueries 和 broadQueries 每项优先 2-8 个汉字，最多 12 个汉字，必要时用短词而不是长句。",
-            "必须按当前人设简介里的不同事物扩词，禁止只把两三个核心词来回换皮，也禁止引入人设资料里不存在的行业对象。",
+            "扩词步骤对任何人都一样：先从名称和简介归纳 1 个主领域和最多 2 个子主题；再为每个主题列出该领域用户会搜的具体名词（物、产品、服务、场所、工具、作品）；主题名本身最多保留 1 次，其余必须更具体。",
+            "两个主题并存时必须分别扩词，禁止把两个主题名拼成一个搜索词，也禁止引入人设资料里不存在的行业对象。",
             "同一主题词最多保留 3 个与不同对象的组合；primaryQueries、broadQueries、strictAcceptTerms 合计必须给出至少 20 个互不重复、且都属于当前人设领域的具体搜索词。",
             "禁止输出脱离任何领域都没有搜索意义的空洞词：便宜、大叔、烟火气、好物、攻略、经验、爱好者、生活、日常、气氛。",
             "禁止输出「核心词 + 真实体验 / 对比 / 吐槽 / 使用经验 / 前后变化」这类模板句。",

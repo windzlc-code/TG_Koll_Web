@@ -826,6 +826,25 @@ describe("sentiment hot importer", () => {
     expect(fitness).not.toContain("健身 吐槽");
   });
 
+  it("strips hollow atmosphere anchors so they cannot pin every query", () => {
+    const strategy = {
+      primaryQueries: ["基金定投", "市井生活", "指數基金"],
+      broadQueries: ["指數基金"],
+      ecosystemQueries: [],
+      requiredAnchorTerms: ["基金", "市井生活"],
+      normalAnchorTerms: ["理財", "購物"],
+      strictAcceptTerms: ["真實體驗", "基金定投"],
+      normalAcceptTerms: ["基金定投"],
+      rejectTerms: [],
+    } as any;
+    applyPersonaGuardToSentimentHotStrategy({ strategy });
+    expect(strategy.requiredAnchorTerms).toContain("基金");
+    expect(strategy.requiredAnchorTerms).not.toContain("市井生活");
+    expect(strategy.normalAnchorTerms).not.toContain("購物");
+    expect(strategy.strictAcceptTerms).not.toContain("真實體驗");
+    expect(strategy.primaryQueries).not.toContain("市井生活");
+  });
+
   it("does not reject concrete objects just because another persona once overused them", () => {
     const keywords = resolveSentimentHotManualQueryKeywords(["環保袋", "動漫文化", "手辦"], null, "strict");
     expect(keywords).toContain("環保袋");
