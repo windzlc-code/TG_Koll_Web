@@ -2239,6 +2239,9 @@ def list_owned_assets(
                item.owner_user_id AS user_id,
                user.username,
                user.full_name,
+               COALESCE(orders.user_id, 0) AS purchaser_user_id,
+               COALESCE(purchaser.username, '') AS purchaser_username,
+               COALESCE(purchaser.full_name, '') AS purchaser_full_name,
                item.display_name,
                item.provider_key,
                item.provider_proxy_id,
@@ -2268,6 +2271,8 @@ def list_owned_assets(
           ON orders.id = item.provider_purchase_order_id
         LEFT JOIN users user
           ON user.id = item.owner_user_id
+        LEFT JOIN users purchaser
+          ON purchaser.id = orders.user_id
         LEFT JOIN social_proxies proxy
           ON proxy.market_item_id = item.id AND proxy.user_id = item.owner_user_id
         LEFT JOIN proxy_renewal_schedules renewal
@@ -2286,6 +2291,9 @@ def list_owned_assets(
             "user_id": int(row["user_id"] or 0),
             "username": str(row["username"] or ""),
             "full_name": str(row["full_name"] or ""),
+            "purchaser_user_id": int(row["purchaser_user_id"] or 0),
+            "purchaser_username": str(row["purchaser_username"] or ""),
+            "purchaser_full_name": str(row["purchaser_full_name"] or ""),
             "display_name": str(row["display_name"] or ""),
             "provider_key": str(row["provider_key"] or ""),
             "provider_proxy_id": str(row["provider_proxy_id"] or ""),

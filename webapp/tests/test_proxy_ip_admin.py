@@ -93,6 +93,155 @@ class ProxyIpAdminTests(unittest.TestCase):
         route_paths = {route.path for route in self.app.routes}
         self.assertNotIn("/api/proxy-market/catalog", route_paths)
         self.assertNotIn("/api/proxy-market/me", route_paths)
+        self.assertIn("/api/admin/proxy-market/items/{item_id}/purge", route_paths)
+        self.assertIn("/api/admin/proxy-market/items/{item_id}/assign", route_paths)
+
+    def _create_user(self, username: str, *, is_admin: int = 0) -> int:
+        from webapp.db import db
+
+        with db() as conn:
+            conn.execute(
+                "INSERT INTO users(username, password_hash, is_admin, created_at, updated_at) VALUES (?, 'x', ?, 1, 1)",
+                (username, int(is_admin)),
+            )
+            return int(conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()[0])
+
+    def test_shared_inventory_can_be_purged_but_purchased_item_cannot(self):
+        created = self.client.post(
+            "/api/admin/proxy-market/items",
+            json={
+                "sku": "TW-TPE-PURGE-1",
+                "display_name": "待删除共享代理",
+                "proxy_type": "socks5",
+                "host": "203.0.113.20",
+                "port": 1080,
+                "username": "proxy-user",
+                "password": "proxy-password",
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        item = created.json()["item"]
+        self.assertTrue(item["can_purge"])
+        self.assertFalse(item["can_assign"])
+
+        purged = self.client.post(f"/api/admin/proxy-market/items/{item['id']}/purge", json={"confirm_impact": True})
+        self.assertEqual(purged.status_code, 200, purged.text)
+        self.assertTrue(purged.json()["deleted"])
+
+        listed = self.client.get("/api/admin/proxy-market/items")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(listed.json()["items"], [])
+
+        from webapp.db import db
+
+        owner_id = self._create_user("purchase-owner")
+        with db() as conn:
+            conn.execute(
+                """
+                INSERT INTO proxy_market_items(
+                  id, sku, display_name, provider_key, proxy_type, host, port,
+                  credential_owner_user_id, status, health_status, ownership_type,
+                  owner_user_id, provider_purchase_order_id, provider_proxy_id,
+                  created_at, updated_at
+                ) VALUES (
+                  'owned_proxy_item_test1', 'owned-1', '已购代理', 'proxycheap', 'http',
+                  '198.51.100.10', 8000, ?, 'allocated', 'healthy', 'owned', ?,
+                  'proxy_order_test1', '2311533', 1, 1
+                )
+                """,
+                (owner_id, owner_id),
+            )
+        refused = self.client.post("/api/admin/proxy-market/items/owned_proxy_item_test1/purge", json={"confirm_impact": True})
+        self.assertEqual(refused.status_code, 409, refused.text)
+        self.assertIn("已购代理", refused.json()["detail"])
+
+    def test_admin_can_assign_purchased_proxy_to_a_customer(self):
+        from webapp.db import db
+        from webapp.system_proxy_pool import list_system_proxy_pool_options
+
+        owner_id = self._create_user("proxy-buyer", is_admin=1)
+        target_id = self._create_user("proxy-receiver")
+        with db() as conn:
+            conn.execute(
+                """
+                INSERT INTO proxy_market_items(
+                  id, sku, display_name, provider_key, proxy_type, host, port,
+                  credential_owner_user_id, status, health_status, last_check_at,
+                  last_check_result_json, ownership_type, owner_user_id,
+                  provider_purchase_order_id, provider_proxy_id, created_at, updated_at
+                ) VALUES (
+                  'owned_proxy_item_assign1', 'owned-assign-1', '已购葡萄牙代理', 'proxycheap',
+                  'http', '198.51.100.21', 48859, ?, 'allocated', 'healthy', 1,
+                  '{"ok":true,"exit_ip":"198.51.100.21"}', 'owned', ?,
+                  'proxy_order_assign1', '2311999', 1, 1
+                )
+                """,
+                (owner_id, owner_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO social_proxies(
+                  id, user_id, name, proxy_type, host, port, source, purchase_status,
+                  status, market_item_id, created_at, updated_at
+                ) VALUES (
+                  'social_proxy_assign1', ?, '已购葡萄牙代理', 'http', '198.51.100.21', 48859,
+                  'provider_purchase', 'owned', 'active', 'owned_proxy_item_assign1', 1, 1
+                )
+                """,
+                (owner_id,),
+            )
+
+        assigned = self.client.post(
+            "/api/admin/proxy-market/items/owned_proxy_item_assign1/assign",
+            json={"user_id": target_id, "confirm_impact": True},
+        )
+        self.assertEqual(assigned.status_code, 200, assigned.text)
+        payload = assigned.json()
+        self.assertTrue(payload["assigned"])
+        self.assertEqual(payload["user_id"], target_id)
+        self.assertEqual(payload["social_proxy_id"], "social_proxy_assign1")
+
+        with db() as conn:
+            item = conn.execute(
+                "SELECT owner_user_id, status FROM proxy_market_items WHERE id = ?",
+                ("owned_proxy_item_assign1",),
+            ).fetchone()
+            proxy = conn.execute(
+                "SELECT user_id, purchase_status FROM social_proxies WHERE id = ?",
+                ("social_proxy_assign1",),
+            ).fetchone()
+            receiver_options = list_system_proxy_pool_options(conn, owner_user_id=target_id)
+            buyer_options = list_system_proxy_pool_options(conn, owner_user_id=owner_id)
+        self.assertEqual(int(item["owner_user_id"]), target_id)
+        self.assertEqual(int(proxy["user_id"]), target_id)
+        self.assertEqual(str(proxy["purchase_status"]), "owned")
+        self.assertEqual(
+            [row["market_item_id"] for row in receiver_options if row["ownership_type"] == "owned"],
+            ["owned_proxy_item_assign1"],
+        )
+        self.assertEqual(
+            [row["market_item_id"] for row in buyer_options if row["ownership_type"] == "owned"],
+            [],
+        )
+
+        shared = self.client.post(
+            "/api/admin/proxy-market/items",
+            json={
+                "sku": "SHARED-NO-ASSIGN",
+                "display_name": "共享不可分配",
+                "proxy_type": "socks5",
+                "host": "203.0.113.30",
+                "port": 1080,
+                "username": "proxy-user",
+                "password": "proxy-password",
+            },
+        )
+        self.assertEqual(shared.status_code, 200, shared.text)
+        refused = self.client.post(
+            f"/api/admin/proxy-market/items/{shared.json()['item']['id']}/assign",
+            json={"user_id": target_id, "confirm_impact": True},
+        )
+        self.assertEqual(refused.status_code, 409, refused.text)
 
 
 if __name__ == "__main__":

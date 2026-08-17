@@ -8770,7 +8770,8 @@ function renderProxyMarketItems(payload = {}) {
   }
   rows.forEach((item) => {
     const row = document.createElement("tr");
-    appendCell(row, item.sku || item.id, item.display_name || "未设置显示名称");
+    const ownershipLabel = String(item.ownership_type || "shared") === "owned" ? "已购代理" : "共享库存";
+    appendCell(row, item.sku || item.id, `${item.display_name || "未设置显示名称"} · ${ownershipLabel}`);
 
     const endpointCell = document.createElement("td");
     const endpoint = document.createElement("strong");
@@ -8863,6 +8864,16 @@ function renderProxyMarketItems(payload = {}) {
     );
     archive.disabled = String(item.status) === "archived";
     actionRow.append(publish, status, archive);
+    if (item.can_purge !== false && String(item.ownership_type || "shared") !== "owned") {
+      const purge = createProxyMarketIconButton(
+        "彻底删除",
+        "purge",
+        item.id,
+        '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"></path>',
+        "danger",
+      );
+      actionRow.appendChild(purge);
+    }
     actionCell.appendChild(actionRow);
     row.appendChild(actionCell);
     body.appendChild(row);
@@ -9006,20 +9017,27 @@ function renderProxyPurchasedAssets(payload = {}) {
   const rows = Array.isArray(payload.items) ? payload.items : [];
   adminState.proxyPurchasedAssetRows = rows;
   setText("proxyMarketPurchasedTabCount", rows.length);
-  setText("proxyMarketPurchasedSummary", `显示 ${rows.length} 个用户自购代理`);
+  setText("proxyMarketPurchasedSummary", `显示 ${rows.length} 个已购代理`);
   body.replaceChildren();
   if (!rows.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 5;
-    cell.appendChild(markAdminDynamicUiElement(createEmptyState("当前筛选条件下没有用户自购代理")));
+    cell.colSpan = 6;
+    cell.appendChild(markAdminDynamicUiElement(createEmptyState("当前筛选条件下没有已购代理")));
     row.appendChild(cell);
     body.appendChild(row);
     return;
   }
   rows.forEach((item) => {
     const row = document.createElement("tr");
-    appendCell(row, item.full_name || item.username || `用户 ${item.user_id || "-"}`, `${item.username || ""} · ID ${item.user_id || "-"}`);
+    const ownerLabel = item.full_name || item.username || `用户 ${item.user_id || "-"}`;
+    const purchaserId = Number(item.purchaser_user_id || 0);
+    const ownerId = Number(item.user_id || 0);
+    const purchaserLabel = item.purchaser_full_name || item.purchaser_username || "";
+    const ownerMeta = purchaserId && purchaserId !== ownerId && purchaserLabel
+      ? `${item.username || ""} · ID ${item.user_id || "-"} · 购买人 ${purchaserLabel}`
+      : `${item.username || ""} · ID ${item.user_id || "-"}`;
+    appendCell(row, ownerLabel, ownerMeta);
     appendCell(
       row,
       `${String(item.proxy_type || "").toUpperCase()} ${item.host || "-"}:${Number(item.port || 0) || "-"}`,
@@ -9036,6 +9054,16 @@ function renderProxyPurchasedAssets(payload = {}) {
       `${Number(item.bound_account_count || 0)} 个账号`,
       item.expires_at ? `到期 ${formatTime(item.expires_at)}` : "未返回到期时间",
     );
+    const actionCell = document.createElement("td");
+    const assign = createProxyMarketIconButton(
+      "分配给用户",
+      "assign",
+      item.market_item_id,
+      '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M19 8v6M22 11h-6"></path>',
+      "primary",
+    );
+    actionCell.appendChild(assign);
+    row.appendChild(actionCell);
     body.appendChild(row);
   });
 }
@@ -9056,7 +9084,7 @@ async function loadProxyPurchasedAssets() {
     setMsg("proxyMarketPurchasedMsg", "");
     return payload;
   } catch (error) {
-    setMsg("proxyMarketPurchasedMsg", `用户自购代理读取失败：${getErrorMessage(error)}`, false);
+    setMsg("proxyMarketPurchasedMsg", `已购代理读取失败：${getErrorMessage(error)}`, false);
     throw error;
   } finally {
     body?.removeAttribute("aria-busy");
@@ -9744,6 +9772,114 @@ async function archiveProxyMarketItem(itemId, button) {
     const result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/archive`, { method: "POST" });
     applyProxyMarketItemLocally(result?.item, { ...item, status: "archived", available: false });
     await refreshProxyMarketItemsAfterWrite("proxyMarketMsg", `${item.sku || item.id} 已归档`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function lookupAdminCustomerForProxyAssign(query) {
+  const raw = String(query || "").trim();
+  if (!raw) throw new Error("请输入用户名或用户 ID");
+  if (/^\d+$/.test(raw)) {
+    try {
+      const detail = await api(`/api/admin/users/${encodeURIComponent(raw)}`);
+      const user = detail?.user || detail;
+      if (user && Number(user.id || 0) > 0) {
+        if (user.is_admin) throw new Error("请分配给客户账号，不要分配给管理员账号");
+        return user;
+      }
+    } catch (error) {
+      if (!String(getErrorMessage(error) || "").includes("请分配给客户")) {
+        /* fall through to search */
+      } else {
+        throw error;
+      }
+    }
+  }
+  const payload = await api(`/api/admin/users?role=customer&query=${encodeURIComponent(raw)}&limit=20`);
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  const exact = items.filter((item) => String(item.username || "").toLowerCase() === raw.toLowerCase());
+  if (exact.length === 1) return exact[0];
+  if (items.length === 1) return items[0];
+  if (!items.length) throw new Error("没有找到匹配的客户账号");
+  throw new Error("匹配到多个用户，请输入完整用户名或用户 ID");
+}
+
+async function purgeProxyMarketItem(itemId, button) {
+  const item = proxyMarketItemById(itemId);
+  if (!item) return;
+  const decision = await requestAdminPublicAction({
+    title: "彻底删除共享代理",
+    message: `确认彻底删除 ${item.display_name || item.sku || item.id}（${item.host || "-"}:${item.port || "-"}）吗？此操作不可恢复，会回收领取记录、解绑账号并停止相关任务。`,
+    confirmLabel: "确认删除",
+    tone: "danger",
+  });
+  if (!decision.confirmed) return;
+  button.disabled = true;
+  try {
+    await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/purge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm_impact: true }),
+    });
+    adminState.proxyMarketItemRows = (adminState.proxyMarketItemRows || []).filter((row) => String(row.id || "") !== String(itemId));
+    await Promise.all([loadProxyMarketItems(), loadProxyMarketAllocations()]);
+    setMsg("proxyMarketMsg", `${item.sku || item.id} 已彻底删除`, true);
+    showAdminPublicPrompt({
+      title: "共享代理已删除",
+      message: `${item.display_name || item.sku || item.id} 已从库存彻底删除。`,
+      ok: true,
+    });
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function assignPurchasedProxyToUser(itemId, button) {
+  const item = (adminState.proxyPurchasedAssetRows || []).find((row) => String(row.market_item_id || "") === String(itemId || ""));
+  if (!item) return;
+  const lookup = await requestAdminPublicAction({
+    title: "分配已购代理",
+    message: `把 ${item.host || "-"}:${item.port || "-"} 指定给哪个客户？分配后该用户可在选择代理页面直接使用。`,
+    confirmLabel: "查找用户",
+    inputLabel: "用户名或用户 ID",
+    inputValue: "",
+    inputPlaceholder: "例如 nick1073 或 45",
+  });
+  if (!lookup.confirmed) return;
+  let target;
+  try {
+    target = await lookupAdminCustomerForProxyAssign(lookup.value);
+  } catch (error) {
+    showAdminPublicPrompt({ title: "未找到用户", message: getErrorMessage(error), ok: false });
+    try { error.adminPublicPromptShown = true; } catch (_) {}
+    throw error;
+  }
+  const currentOwner = item.username || item.user_id || "未分配";
+  const confirm = await requestAdminPublicAction({
+    title: "确认分配已购代理",
+    message: `确认把 ${item.host || "-"}:${item.port || "-"} 从「${currentOwner}」改分给「${target.full_name || target.username}」（ID ${target.id}）吗？原用户账号上的绑定会被解除。`,
+    confirmLabel: "确认分配",
+    tone: "danger",
+  });
+  if (!confirm.confirmed) return;
+  button.disabled = true;
+  try {
+    const result = await api(`/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/assign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: Number(target.id), confirm_impact: true }),
+    });
+    await loadProxyPurchasedAssets();
+    const assignedName = result?.username || target.username || target.id;
+    setMsg("proxyMarketPurchasedMsg", result?.already_assigned ? `该代理已在 ${assignedName} 的账户中` : `已分配给 ${assignedName}`, true);
+    showAdminPublicPrompt({
+      title: result?.already_assigned ? "无需重复分配" : "已购代理已分配",
+      message: result?.already_assigned
+        ? `${item.host || "该代理"} 已经在 ${assignedName} 的账户中，用户可直接在选择代理页面使用。`
+        : `${item.host || "该代理"} 已进入 ${assignedName} 的账户，用户可直接在选择代理页面使用。`,
+      ok: true,
+    });
   } finally {
     button.disabled = false;
   }
@@ -10607,6 +10743,7 @@ function bindActions() {
     try {
       if (button.dataset.proxyMarketAction === "publish") await publishProxyMarketRow(itemId, button);
       if (button.dataset.proxyMarketAction === "archive") await archiveProxyMarketItem(itemId, button);
+      if (button.dataset.proxyMarketAction === "purge") await purgeProxyMarketItem(itemId, button);
     } catch (error) {
       setMsg("proxyMarketMsg", getErrorMessage(error), false);
       if (!error?.adminPublicPromptShown) {
@@ -10670,6 +10807,18 @@ function bindActions() {
       await revokeProxyMarketAllocation(button.dataset.id || "", button);
     } catch (error) {
       setMsg("proxyMarketAllocationMsg", getErrorMessage(error), false);
+    }
+  });
+  el("proxyMarketPurchasedBody")?.addEventListener("click", async (event) => {
+    const button = event.target instanceof Element ? event.target.closest("button[data-proxy-market-action='assign']") : null;
+    if (!(button instanceof HTMLButtonElement)) return;
+    try {
+      await assignPurchasedProxyToUser(button.dataset.id || "", button);
+    } catch (error) {
+      setMsg("proxyMarketPurchasedMsg", getErrorMessage(error), false);
+      if (!error?.adminPublicPromptShown) {
+        showAdminPublicPrompt({ title: "分配失败", message: getErrorMessage(error), ok: false });
+      }
     }
   });
   el("proxyMarketSettingsForm")?.addEventListener("submit", async (event) => {

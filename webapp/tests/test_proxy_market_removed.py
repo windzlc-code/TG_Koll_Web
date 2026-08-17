@@ -55,8 +55,15 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn('data-page="proxyMarket"', self.admin_markup)
         self.assertIn('data-page-view="proxyMarket"', self.admin_markup)
         self.assertIn("/api/admin/proxy-market/items", self.admin_script)
+        self.assertIn("/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/purge", self.admin_script)
+        self.assertIn("/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/assign", self.admin_script)
+        self.assertIn("彻底删除", self.admin_script)
+        self.assertIn("分配给用户", self.admin_script)
+        self.assertIn("已购代理", self.admin_markup)
         self.assertIn("register_proxy_ip_admin_routes(app)", self.server_source)
         self.assertIn('@app.get("/api/admin/proxy-market/items")', self.proxy_admin_source)
+        self.assertIn("def purge_shared_market_item", self.proxy_admin_source)
+        self.assertIn("def assign_owned_market_item", self.proxy_admin_source)
 
     def test_admin_proxy_inventory_uses_automatic_recognition_only(self):
         self.assertIn('id="proxyMarketSmartInput"', self.admin_markup)

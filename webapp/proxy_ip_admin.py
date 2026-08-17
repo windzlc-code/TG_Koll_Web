@@ -136,6 +136,15 @@ class ProxyMarketRevokePayload(BaseModel):
     confirm_impact: bool = False
 
 
+class ProxyMarketPurgePayload(BaseModel):
+    confirm_impact: bool = False
+
+
+class ProxyMarketAssignPayload(BaseModel):
+    user_id: int = Field(..., ge=1)
+    confirm_impact: bool = False
+
+
 def _now() -> int:
     return int(time.time())
 
@@ -419,6 +428,58 @@ def stop_proxy_market_health_monitor(*, timeout_seconds: float = 5.0) -> None:
         _HEALTH_MONITOR_THREAD = None
 
 
+def _is_purchased_item(item: dict[str, Any]) -> bool:
+    ownership_type = str(item.get("ownership_type") or "shared").strip().lower()
+    return ownership_type == "owned" or bool(str(item.get("provider_purchase_order_id") or "").strip())
+
+
+def _proxy_usage_impact(conn: sqlite3.Connection, proxy_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    clean_ids = [str(proxy_id or "").strip() for proxy_id in proxy_ids if str(proxy_id or "").strip()]
+    if not clean_ids:
+        return {"bound_accounts": [], "running_tasks": []}
+    placeholders = ",".join("?" for _ in clean_ids)
+    accounts = conn.execute(
+        f"""
+        SELECT id, username, platform, proxy_id
+        FROM social_accounts
+        WHERE proxy_id IN ({placeholders})
+        ORDER BY username
+        """,
+        tuple(clean_ids),
+    ).fetchall()
+    tasks = conn.execute(
+        f"""
+        SELECT task.*, account.username
+        FROM social_automation_tasks task
+        JOIN social_accounts account ON account.id = task.account_id
+        WHERE account.proxy_id IN ({placeholders})
+          AND task.status IN ('preparing', 'queued', 'running', 'need_manual')
+        ORDER BY task.created_at
+        """,
+        tuple(clean_ids),
+    ).fetchall()
+    return {
+        "bound_accounts": [
+            {
+                "id": str(row["id"] or ""),
+                "username": str(row["username"] or ""),
+                "platform": str(row["platform"] or ""),
+                "proxy_id": str(row["proxy_id"] or ""),
+            }
+            for row in accounts
+        ],
+        "running_tasks": [
+            {
+                "id": str(row["id"] or ""),
+                "task_type": str(row["task_type"] or ""),
+                "status": str(row["status"] or ""),
+                "username": str(row["username"] or ""),
+            }
+            for row in tasks
+        ],
+    }
+
+
 def _require_enabled_user(conn: sqlite3.Connection, user_id: int) -> dict[str, Any]:
     row = conn.execute("SELECT * FROM users WHERE id = ?", (int(user_id),)).fetchone()
     if row is None:
@@ -530,6 +591,8 @@ def _admin_public(item: dict[str, Any]) -> dict[str, Any]:
         now=_now(),
         health_max_age_seconds=_settings_for_item_admin(),
     )
+    ownership_type = str(item.get("ownership_type") or "shared").strip().lower() or "shared"
+    purchased = _is_purchased_item(item)
     result.update(
         {
             "host": str(item.get("host") or ""),
@@ -537,6 +600,11 @@ def _admin_public(item: dict[str, Any]) -> dict[str, Any]:
             "username_configured": bool(str(item.get("username_ciphertext") or "")),
             "password_configured": bool(str(item.get("password_ciphertext") or "")),
             "status": str(item.get("status") or "draft"),
+            "ownership_type": ownership_type,
+            "owner_user_id": int(item.get("owner_user_id") or 0),
+            "provider_purchase_order_id": str(item.get("provider_purchase_order_id") or ""),
+            "can_purge": not purchased,
+            "can_assign": purchased,
             "last_check_result": _safe_check_result(item.get("last_check_result_json")),
             "version": int(item.get("version") or 1),
             "created_at": int(item.get("created_at") or 0),
@@ -904,6 +972,282 @@ def release_market_proxy(
                 risk_level="medium" if revoked else "low",
             )
     return {"released": True, "allocation_id": allocation_id, "item_id": item_id}
+
+
+def _ensure_owned_social_proxy(
+    conn: sqlite3.Connection,
+    *,
+    item: dict[str, Any],
+    owner_user_id: int,
+    now: int,
+) -> str:
+    item_id = str(item.get("id") or "")
+    existing = conn.execute(
+        "SELECT id FROM social_proxies WHERE market_item_id = ? AND user_id = ? LIMIT 1",
+        (item_id, int(owner_user_id)),
+    ).fetchone()
+    if existing is not None:
+        return str(existing["id"])
+    proxy_id = _new_id("social_proxy")
+    conn.execute(
+        """
+        INSERT INTO social_proxies(
+          id, user_id, name, proxy_type, host, port, username, password,
+          country, region, city, isp, source, ip_type, purchase_status,
+          note, expires_at, status, last_check_at, last_check_result,
+          client_request_id, market_item_id, market_allocation_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, ?, 'provider_purchase',
+                  ?, 'owned', ?, ?, 'active', ?, ?, '', ?, '', ?, ?)
+        """,
+        (
+            proxy_id,
+            int(owner_user_id),
+            str(item.get("display_name") or item.get("sku") or "已购代理"),
+            str(item.get("proxy_type") or "http"),
+            str(item.get("host") or ""),
+            int(item.get("port") or 0),
+            str(item.get("country") or ""),
+            str(item.get("region") or ""),
+            str(item.get("city") or ""),
+            str(item.get("isp") or ""),
+            str(item.get("ip_type") or "static_residential"),
+            str(item.get("description") or item.get("provider_purchase_order_id") or "管理员分配的已购代理"),
+            int(item.get("expires_at") or 0),
+            int(item.get("last_check_at") or 0),
+            str(item.get("last_check_result_json") or "{}"),
+            item_id,
+            now,
+            now,
+        ),
+    )
+    return proxy_id
+
+
+def purge_shared_market_item(
+    item_id: str,
+    *,
+    actor_user_id: int,
+    request: Request | None = None,
+    confirm_impact: bool = False,
+) -> dict[str, Any]:
+    clean_item_id = str(item_id or "").strip()
+    now = _now()
+    cancelled_task_ids: list[str] = []
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM proxy_market_items WHERE id = ?", (clean_item_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="代理不存在")
+        item = dict(row)
+        if _is_purchased_item(item):
+            raise HTTPException(status_code=409, detail="已购代理不能从共享库存彻底删除")
+        proxy_rows = conn.execute(
+            "SELECT id FROM social_proxies WHERE market_item_id = ?",
+            (clean_item_id,),
+        ).fetchall()
+        proxy_ids = [str(proxy_row["id"] or "") for proxy_row in proxy_rows if str(proxy_row["id"] or "")]
+        impact = _proxy_usage_impact(conn, proxy_ids)
+        if (impact["bound_accounts"] or impact["running_tasks"]) and not confirm_impact:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "proxy_market_purge_confirmation_required",
+                    "message": "该代理仍有关联账号或运行任务，确认影响后才能彻底删除",
+                    "impact": impact,
+                },
+            )
+        tasks = conn.execute(
+            """
+            SELECT task.*
+            FROM social_automation_tasks task
+            JOIN social_accounts account ON account.id = task.account_id
+            WHERE account.proxy_id IN ({placeholders})
+              AND task.status IN ('preparing', 'queued', 'running', 'need_manual')
+            """.format(placeholders=",".join("?" for _ in proxy_ids) or "''"),
+            tuple(proxy_ids),
+        ).fetchall() if proxy_ids else []
+        cancelled_task_ids = cancel_social_tasks_in_transaction(
+            conn,
+            list(tasks),
+            reason="管理员彻底删除共享代理",
+            now=now,
+        )
+        if proxy_ids:
+            placeholders = ",".join("?" for _ in proxy_ids)
+            conn.execute(
+                f"UPDATE social_accounts SET proxy_id = '', updated_at = ? WHERE proxy_id IN ({placeholders})",
+                (now, *proxy_ids),
+            )
+            conn.execute(
+                f"DELETE FROM social_proxies WHERE id IN ({placeholders})",
+                tuple(proxy_ids),
+            )
+        conn.execute(
+            """
+            UPDATE proxy_market_allocations
+            SET status = 'revoked', released_at = ?, updated_at = ?
+            WHERE item_id = ? AND status = 'active'
+            """,
+            (now, now, clean_item_id),
+        )
+        conn.execute("DELETE FROM proxy_market_allocations WHERE item_id = ?", (clean_item_id,))
+        conn.execute("DELETE FROM proxy_market_item_checks WHERE item_id = ?", (clean_item_id,))
+        conn.execute("DELETE FROM proxy_market_publish_receipts WHERE item_id = ?", (clean_item_id,))
+        deleted = conn.execute("DELETE FROM proxy_market_items WHERE id = ?", (clean_item_id,)).rowcount
+        if deleted != 1:
+            raise HTTPException(status_code=409, detail="代理库存已发生变化，请刷新后重试")
+        if request is not None:
+            _record_audit(
+                conn,
+                request,
+                actor_user_id=actor_user_id,
+                action="proxy_market.item.purge",
+                resource_type="proxy_market_item",
+                resource_id=clean_item_id,
+                after={
+                    "sku": str(item.get("sku") or ""),
+                    "host": str(item.get("host") or ""),
+                    "deleted_proxy_count": len(proxy_ids),
+                    "revoked_allocation": True,
+                },
+                risk_level="high",
+            )
+    cleanup_cancelled_social_tasks_runtime(cancelled_task_ids)
+    return {"ok": True, "deleted": True, "item_id": clean_item_id, "impact": impact}
+
+
+def assign_owned_market_item(
+    item_id: str,
+    *,
+    target_user_id: int,
+    actor_user_id: int,
+    request: Request | None = None,
+    confirm_impact: bool = False,
+) -> dict[str, Any]:
+    clean_item_id = str(item_id or "").strip()
+    now = _now()
+    cancelled_task_ids: list[str] = []
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM proxy_market_items WHERE id = ?", (clean_item_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="代理不存在")
+        item = dict(row)
+        if not _is_purchased_item(item):
+            raise HTTPException(status_code=409, detail="只能把已购代理分配给指定用户")
+        target = _require_enabled_user(conn, int(target_user_id))
+        previous_owner_id = int(item.get("owner_user_id") or 0)
+        if previous_owner_id == int(target["id"]):
+            proxy_id = _ensure_owned_social_proxy(
+                conn,
+                item=item,
+                owner_user_id=int(target["id"]),
+                now=now,
+            )
+            return {
+                "ok": True,
+                "assigned": False,
+                "already_assigned": True,
+                "item_id": clean_item_id,
+                "social_proxy_id": proxy_id,
+                "user_id": int(target["id"]),
+                "username": str(target.get("username") or ""),
+            }
+        current_proxy = conn.execute(
+            """
+            SELECT * FROM social_proxies
+            WHERE market_item_id = ?
+            ORDER BY CASE WHEN user_id = ? THEN 0 ELSE 1 END, updated_at DESC
+            LIMIT 1
+            """,
+            (clean_item_id, previous_owner_id),
+        ).fetchone()
+        current_proxy_id = str(current_proxy["id"] or "") if current_proxy is not None else ""
+        impact = _proxy_usage_impact(conn, [current_proxy_id] if current_proxy_id else [])
+        if (impact["bound_accounts"] or impact["running_tasks"]) and not confirm_impact:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "proxy_market_assign_confirmation_required",
+                    "message": "该已购代理仍有关联账号或运行任务，确认影响后才能改分给其他用户",
+                    "impact": impact,
+                },
+            )
+        if current_proxy_id:
+            tasks = conn.execute(
+                """
+                SELECT task.*
+                FROM social_automation_tasks task
+                JOIN social_accounts account ON account.id = task.account_id
+                WHERE account.proxy_id = ?
+                  AND task.status IN ('preparing', 'queued', 'running', 'need_manual')
+                """,
+                (current_proxy_id,),
+            ).fetchall()
+            cancelled_task_ids = cancel_social_tasks_in_transaction(
+                conn,
+                list(tasks),
+                reason="管理员改分已购代理",
+                now=now,
+            )
+            conn.execute(
+                "UPDATE social_accounts SET proxy_id = '', updated_at = ? WHERE proxy_id = ?",
+                (now, current_proxy_id),
+            )
+            conn.execute(
+                """
+                UPDATE social_proxies
+                SET user_id = ?, status = 'active', updated_at = ?
+                WHERE id = ?
+                """,
+                (int(target["id"]), now, current_proxy_id),
+            )
+            proxy_id = current_proxy_id
+        else:
+            proxy_id = _ensure_owned_social_proxy(
+                conn,
+                item=item,
+                owner_user_id=int(target["id"]),
+                now=now,
+            )
+        conn.execute(
+            """
+            UPDATE proxy_market_items
+            SET owner_user_id = ?, status = 'allocated', updated_at = ?, updated_by = ?, version = version + 1
+            WHERE id = ?
+            """,
+            (int(target["id"]), now, int(actor_user_id), clean_item_id),
+        )
+        if request is not None:
+            _record_audit(
+                conn,
+                request,
+                actor_user_id=actor_user_id,
+                target_user_id=int(target["id"]),
+                action="proxy_market.item.assign",
+                resource_type="proxy_market_item",
+                resource_id=clean_item_id,
+                after={
+                    "previous_owner_user_id": previous_owner_id,
+                    "owner_user_id": int(target["id"]),
+                    "social_proxy_id": proxy_id,
+                },
+                risk_level="high",
+            )
+        updated = conn.execute("SELECT * FROM proxy_market_items WHERE id = ?", (clean_item_id,)).fetchone()
+    cleanup_cancelled_social_tasks_runtime(cancelled_task_ids)
+    return {
+        "ok": True,
+        "assigned": True,
+        "already_assigned": False,
+        "item": _admin_public(dict(updated)) if updated is not None else None,
+        "item_id": clean_item_id,
+        "social_proxy_id": proxy_id,
+        "user_id": int(target["id"]),
+        "username": str(target.get("username") or ""),
+        "previous_owner_user_id": previous_owner_id,
+        "impact": impact,
+    }
 
 
 def _scrub_legacy_market_proxy_plaintext() -> None:
@@ -1469,6 +1813,35 @@ def register_proxy_ip_admin_routes(app: FastAPI) -> None:
     ):
         payload = ProxyMarketItemPatch(status="archived")
         return api_admin_proxy_market_patch(item_id, payload, request, admin)
+
+    @app.post("/api/admin/proxy-market/items/{item_id}/purge")
+    def api_admin_proxy_market_purge(
+        item_id: str,
+        request: Request,
+        payload: ProxyMarketPurgePayload | None = None,
+        admin: dict[str, Any] = Depends(require_admin),
+    ):
+        return purge_shared_market_item(
+            item_id,
+            actor_user_id=_actor_user_id(admin),
+            request=request,
+            confirm_impact=bool(payload and payload.confirm_impact),
+        )
+
+    @app.post("/api/admin/proxy-market/items/{item_id}/assign")
+    def api_admin_proxy_market_assign(
+        item_id: str,
+        payload: ProxyMarketAssignPayload,
+        request: Request,
+        admin: dict[str, Any] = Depends(require_admin),
+    ):
+        return assign_owned_market_item(
+            item_id,
+            target_user_id=int(payload.user_id),
+            actor_user_id=_actor_user_id(admin),
+            request=request,
+            confirm_impact=bool(payload.confirm_impact),
+        )
 
     @app.get("/api/admin/proxy-market/allocations")
     def api_admin_proxy_market_allocations(

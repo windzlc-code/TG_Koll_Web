@@ -1188,7 +1188,7 @@
           <div class="proxy-market-admin-band-head proxy-market-records-head">
             <div>
               <h3>代理资产管理</h3>
-              <div class="small">分别管理管理员库存、共享分配记录和用户自行购买的代理。</div>
+              <div class="small">分别管理共享库存、领取记录和已购代理。共享库存可彻底删除；已购代理可指定分配到某个用户账户。</div>
             </div>
             <div class="proxy-market-record-tabs" id="proxyMarketRecordsTabs" role="tablist" aria-label="代理 IP 记录视图">
               <button id="proxyMarketInventoryTab" class="proxy-market-record-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="proxyMarketInventoryPanel" tabindex="0" data-proxy-market-records-view="inventory">
@@ -1198,7 +1198,7 @@
                 分配记录 <span class="proxy-market-record-tab-count" id="proxyMarketAllocationTabCount">0</span>
               </button>
               <button id="proxyMarketPurchasedTab" class="proxy-market-record-tab" type="button" role="tab" aria-selected="false" aria-controls="proxyMarketPurchasedPanel" tabindex="-1" data-proxy-market-records-view="purchased">
-                用户自购 <span class="proxy-market-record-tab-count" id="proxyMarketPurchasedTabCount">0</span>
+                已购代理 <span class="proxy-market-record-tab-count" id="proxyMarketPurchasedTabCount">0</span>
               </button>
             </div>
           </div>
@@ -1281,7 +1281,7 @@
           <div class="proxy-market-record-panel" id="proxyMarketPurchasedPanel" role="tabpanel" aria-labelledby="proxyMarketPurchasedTab" hidden>
             <div class="proxy-market-admin-band-head">
               <div>
-                <h3>用户自购代理</h3>
+                <h3>已购代理</h3>
                 <div class="small" id="proxyMarketPurchasedSummary">尚未加载</div>
               </div>
               <div class="proxy-market-admin-filters">
@@ -1299,9 +1299,9 @@
             </div>
             <div class="table-wrap admin-table-shell admin-governance-table-shell">
               <table class="table admin-governance-table proxy-market-admin-table">
-                <thead><tr><th>用户</th><th>代理 / 地区</th><th>订单</th><th>状态 / 续费</th><th>绑定 / 到期</th></tr></thead>
+                <thead><tr><th>当前用户</th><th>代理 / 地区</th><th>订单</th><th>状态 / 续费</th><th>绑定 / 到期</th><th>操作</th></tr></thead>
                 <tbody id="proxyMarketPurchasedBody">
-                  <tr><td colspan="5">进入页面后加载用户自购代理...</td></tr>
+                  <tr><td colspan="6">进入页面后加载已购代理...</td></tr>
                 </tbody>
               </table>
             </div>
