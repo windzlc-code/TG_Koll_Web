@@ -6,6 +6,7 @@ import time
 import unittest
 from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -147,6 +148,24 @@ class EmailDeliveryGovernanceTests(unittest.TestCase):
             report_call.kwargs["params"]["startDate"],
             report_call.kwargs["params"]["endDate"],
         )
+
+    def test_sync_uses_brevo_utc_day_before_shanghai_8am(self):
+        now = int(
+            datetime(2026, 8, 16, 22, 30, tzinfo=timezone.utc).timestamp()
+        )
+        with closing(self.connect()) as conn, mock.patch.object(
+            governance.requests,
+            "get",
+            side_effect=self.sync_responses(),
+        ) as get:
+            result = governance.sync_brevo_usage(conn, now=now)
+
+        report_call = get.call_args_list[1]
+        self.assertEqual(
+            report_call.kwargs["params"],
+            {"startDate": "2026-08-16", "endDate": "2026-08-16"},
+        )
+        self.assertEqual(result["report_day"], "2026-08-17")
 
     def test_manual_policy_can_only_tighten_provider_limit(self):
         now = int(time.time())

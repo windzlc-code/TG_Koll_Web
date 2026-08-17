@@ -87,6 +87,10 @@ def _quota_day(now: int) -> str:
     return datetime.fromtimestamp(int(now), tz=_quota_timezone()).date().isoformat()
 
 
+def _brevo_report_day(now: int) -> str:
+    return datetime.fromtimestamp(int(now), tz=timezone.utc).date().isoformat()
+
+
 def _snapshot_ttl_seconds() -> int:
     return _bounded_env_int(
         "BREVO_QUOTA_SYNC_TTL_SECONDS",
@@ -591,6 +595,7 @@ def _sync_brevo_usage_impl(
         headers = _brevo_headers(api_key)
         timeout = (min(timeout_seconds, 5.0), timeout_seconds)
         day = _quota_day(now_ts)
+        report_day = _brevo_report_day(now_ts)
         account_response = requests.get(
             BREVO_ACCOUNT_URL,
             headers=headers,
@@ -604,7 +609,7 @@ def _sync_brevo_usage_impl(
         report_response = requests.get(
             BREVO_AGGREGATED_REPORT_URL,
             headers=headers,
-            params={"startDate": day, "endDate": day},
+            params={"startDate": report_day, "endDate": report_day},
             timeout=timeout,
             allow_redirects=False,
         )
