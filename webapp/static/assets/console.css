@@ -17595,12 +17595,8 @@ body.persona-media-sorting {
 .account-proxy-picker-location-row {
   position: relative;
   z-index: 3;
-  grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(92px, 112px);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: start;
-}
-
-.account-proxy-picker-location-row > .account-proxy-filter-menu {
-  margin-top: 22px;
 }
 
 .account-proxy-picker-filters label,
@@ -17687,6 +17683,12 @@ body.persona-media-sorting {
 .account-proxy-select-menu > summary:focus-visible {
   outline: 3px solid rgba(85, 198, 215, .24);
   border-color: var(--proxy-purchase-blue, var(--accent));
+}
+
+.account-proxy-select-menu[data-disabled] > summary,
+.account-proxy-select-menu > summary[aria-disabled="true"] {
+  opacity: .55;
+  cursor: not-allowed;
 }
 
 .account-proxy-select-menu-options {
@@ -18147,10 +18149,9 @@ body.persona-media-sorting {
   .account-proxy-picker-modal .account-proxy-type-tabs button[data-account-proxy-type] { padding: 0 25px 0 10px; }
   .account-proxy-type-tabs button[data-account-proxy-type]::after { right: 7px; font-size: 8px; }
   .account-proxy-picker-location-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 74px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 5px;
   }
-  .account-proxy-picker-location-row > .account-proxy-filter-menu { margin-top: 16px; }
   .account-proxy-picker-filters label,
   .account-proxy-picker-filter-field { gap: 4px; }
   .account-proxy-picker-filters label > span,

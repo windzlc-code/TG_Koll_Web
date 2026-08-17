@@ -28140,7 +28140,30 @@ function openAccountProxySelectionSuccess(proxyId = "", poolData = {}) {
   });
 }
 
+function accountProxySelectMenuHtml({
+  name = "",
+  label = "",
+  ariaLabel = "",
+  placeholder = "",
+  hiddenInput = true,
+  optionsHtml = "",
+} = {}) {
+  return `<div class="account-proxy-picker-filter-field">
+    <span>${esc(label)}</span>
+    ${hiddenInput ? `<input type="hidden" data-account-proxy-filter="${esc(name)}" value="" />` : ""}
+    <details class="account-proxy-select-menu" data-console-dropdown data-account-proxy-filter-menu="${esc(name)}">
+      <summary aria-label="${esc(ariaLabel)}"><span data-account-proxy-filter-label="${esc(name)}">${esc(placeholder)}</span><i aria-hidden="true"></i></summary>
+      <div class="account-proxy-select-menu-options" data-account-proxy-filter-options="${esc(name)}" role="listbox" aria-label="${esc(ariaLabel)}" popover="auto">${optionsHtml}</div>
+    </details>
+  </div>`;
+}
+
 function accountProxyPoolFiltersHtml(scope = "modal", selectedProxyId = "") {
+  const sortOptionsHtml = [
+    '<button type="button" role="option" data-account-proxy-sort-option="time_desc" aria-selected="true" class="is-active">最新加入</button>',
+    '<button type="button" role="option" data-account-proxy-sort-option="name_asc" aria-selected="false">名称 A - Z</button>',
+    '<button type="button" role="option" data-account-proxy-sort-option="health_first" aria-selected="false">可用优先</button>',
+  ].join("");
   return `<div class="account-proxy-picker-filters" data-account-proxy-filters>
     <div class="account-proxy-source-row">
       <div class="account-proxy-type-tabs" role="tablist" aria-label="代理来源">
@@ -28150,33 +28173,36 @@ function accountProxyPoolFiltersHtml(scope = "modal", selectedProxyId = "") {
       <button type="button" class="account-proxy-clear" data-account-proxy-choice="" data-account-proxy-choice-scope="${esc(scope)}" aria-pressed="${selectedProxyId ? "false" : "true"}">${renderNoProxyIcon()}<span>不使用代理</span></button>
     </div>
     <div class="account-proxy-picker-location-row">
-      <div class="account-proxy-region-filter account-proxy-picker-filter-field">
-        <span>代理地区</span>
-        <input type="hidden" data-account-proxy-filter="country" value="" />
-        <details class="account-proxy-select-menu" data-console-dropdown data-account-proxy-filter-menu="country">
-          <summary aria-label="选择代理地区"><span data-account-proxy-filter-label="country">请选择地区</span><i aria-hidden="true"></i></summary>
-          <div class="account-proxy-select-menu-options" data-account-proxy-filter-options="country" role="listbox" aria-label="代理地区" popover="auto"></div>
-        </details>
-      </div>
-      <label class="account-proxy-city-filter"><span>城市</span><select data-account-proxy-filter="city" aria-label="城市" title="城市" disabled><option value="">请先选择地区</option></select></label>
-      <details class="account-proxy-filter-menu" data-console-dropdown>
-        <summary title="筛选和排序" aria-label="筛选和排序">${renderTaskQueueFilterIcon()}<span>筛选</span></summary>
-        <div class="account-proxy-filter-menu-options" role="listbox" aria-label="排序">
-          <button type="button" role="option" data-account-proxy-sort-option="time_desc" aria-selected="true">最新加入</button>
-          <button type="button" role="option" data-account-proxy-sort-option="name_asc" aria-selected="false">名称 A - Z</button>
-          <button type="button" role="option" data-account-proxy-sort-option="health_first" aria-selected="false">可用优先</button>
-        </div>
-      </details>
+      ${accountProxySelectMenuHtml({
+        name: "country",
+        label: "代理地区",
+        ariaLabel: "选择代理地区",
+        placeholder: "请选择地区",
+      })}
+      ${accountProxySelectMenuHtml({
+        name: "city",
+        label: "城市",
+        ariaLabel: "选择城市",
+        placeholder: "请先选择地区",
+      })}
+      ${accountProxySelectMenuHtml({
+        name: "sort",
+        label: "筛选",
+        ariaLabel: "筛选和排序",
+        placeholder: "最新加入",
+        hiddenInput: false,
+        optionsHtml: sortOptionsHtml,
+      })}
     </div>
   </div>`;
 }
 
-function bindAccountProxyCountryMenu(modal) {
-  const menu = modal?.querySelector('[data-account-proxy-filter-menu="country"]');
+function bindAccountProxyFloatingMenu(menu, modal) {
   const summary = menu?.querySelector("summary");
-  const options = menu?.querySelector('[data-account-proxy-filter-options="country"]');
+  const options = menu?.querySelector(".account-proxy-select-menu-options");
   if (!menu || !summary || !options || typeof options.showPopover !== "function") return () => {};
 
+  const isDisabled = () => menu.matches("[data-disabled]") || summary.getAttribute("aria-disabled") === "true";
   const position = () => {
     if (!menu.open || !options.matches(":popover-open")) return;
     const rect = summary.getBoundingClientRect();
@@ -28196,8 +28222,15 @@ function bindAccountProxyCountryMenu(modal) {
   const hide = () => {
     if (options.matches(":popover-open")) options.hidePopover();
   };
+  const onSummaryClick = (event) => {
+    if (!isDisabled()) return;
+    event.preventDefault();
+    menu.removeAttribute("open");
+    hide();
+  };
   const onMenuToggle = () => {
-    if (!menu.open) {
+    if (!menu.open || isDisabled()) {
+      if (isDisabled()) menu.removeAttribute("open");
       hide();
       return;
     }
@@ -28208,17 +28241,25 @@ function bindAccountProxyCountryMenu(modal) {
     if (event.newState === "closed" && menu.open) menu.removeAttribute("open");
   };
   const modalScroller = modal.querySelector(".console-modal-content");
+  summary.addEventListener("click", onSummaryClick);
   menu.addEventListener("toggle", onMenuToggle);
   options.addEventListener("toggle", onPopoverToggle);
   modalScroller?.addEventListener("scroll", position, { passive: true });
   window.addEventListener("resize", position);
   return () => {
     hide();
+    summary.removeEventListener("click", onSummaryClick);
     menu.removeEventListener("toggle", onMenuToggle);
     options.removeEventListener("toggle", onPopoverToggle);
     modalScroller?.removeEventListener("scroll", position);
     window.removeEventListener("resize", position);
   };
+}
+
+function bindAccountProxyCountryMenu(modal) {
+  const menus = Array.from(modal?.querySelectorAll("[data-account-proxy-filter-menu]") || []);
+  const releases = menus.map((menu) => bindAccountProxyFloatingMenu(menu, modal));
+  return () => releases.forEach((release) => release());
 }
 
 function accountProxyPickerFilters(modal) {
@@ -28319,8 +28360,16 @@ function accountProxyPoolFilterOptions(modal, poolData = {}) {
   });
   const cities = [...cityMap.values()].sort((left, right) => left.label.localeCompare(right.label, "zh-Hans-CN"));
   select("city", cities, selectedCountry ? "全部城市" : "请先选择地区");
-  const cityControl = modal?.querySelector('[data-account-proxy-filter="city"]');
-  if (cityControl) cityControl.disabled = !selectedCountry;
+  const cityMenu = modal?.querySelector('[data-account-proxy-filter-menu="city"]');
+  const citySummary = cityMenu?.querySelector("summary");
+  if (cityMenu) {
+    cityMenu.toggleAttribute("data-disabled", !selectedCountry);
+    if (!selectedCountry) cityMenu.removeAttribute("open");
+  }
+  if (citySummary) {
+    if (selectedCountry) citySummary.removeAttribute("aria-disabled");
+    else citySummary.setAttribute("aria-disabled", "true");
+  }
 }
 
 function accountProxyPoolMatches(proxy = {}, filters = {}, purchaseOptions = {}) {
@@ -28464,6 +28513,9 @@ function setAccountProxyPoolSort(modal, sort = "time_desc") {
     option.setAttribute("aria-selected", selected ? "true" : "false");
     option.classList.toggle("is-active", selected);
   });
+  const sortLabel = modal.querySelector('[data-account-proxy-filter-label="sort"]');
+  const sortLabels = { time_desc: "最新加入", name_asc: "名称 A - Z", health_first: "可用优先" };
+  if (sortLabel) sortLabel.textContent = sortLabels[nextSort] || "最新加入";
   refreshAccountProxyPickerOptions(modal);
 }
 
