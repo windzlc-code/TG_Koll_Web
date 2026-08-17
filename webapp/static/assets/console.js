@@ -29119,6 +29119,26 @@ function accountProxyPurchaseErrorText(error) {
   return mapped[text] || mapped[String(error?.code || error?.detail?.code || "")] || text || "平台代理选择失败";
 }
 
+function presentPurchasedAccountProxy(modal, proxyId = "") {
+  const cleanProxyId = String(proxyId || "").trim();
+  if (!modal || !cleanProxyId) return false;
+  modal.dataset.highlightedProxyId = cleanProxyId;
+  modal.dataset.accountProxyType = "selected";
+  modal.querySelectorAll("[data-account-proxy-type]").forEach((button) => {
+    const selected = String(button.dataset.accountProxyType || "") === "selected";
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-selected", selected ? "true" : "false");
+  });
+  const countryFilter = modal.querySelector('[data-account-proxy-filter="country"]');
+  const cityFilter = modal.querySelector('[data-account-proxy-filter="city"]');
+  if (countryFilter) countryFilter.value = "";
+  if (cityFilter) cityFilter.value = "";
+  accountProxyPoolFilterOptions(modal, modal.__accountProxyPoolData || {});
+  refreshAccountProxyPickerOptions(modal);
+  highlightAccountProxyCard(modal, cleanProxyId);
+  return true;
+}
+
 function setAccountProxyPurchaseProgress(modal, text = "") {
   const message = String(text || "").trim();
   setAccountProxyPickerNotice(modal, message, true);
@@ -29226,14 +29246,15 @@ async function purchaseAccountProxySupplierOption(modal, button) {
       await loadAccountProxyPickerPool(modal);
       return false;
     }
-    setAccountProxyPurchaseProgress(modal, "代理已就绪，正在同步到账号…");
+    setAccountProxyPurchaseProgress(modal, "代理已就绪，正在加入「已选择」…");
     await fetchSocialDataShared({ force: true });
     if (!modal.isConnected) return false;
     invalidateAccountProxyPoolCache();
     await loadAccountProxyPickerPool(modal);
-    updateAccountProxyChoice(modal, String(order.social_proxy_id));
+    presentPurchasedAccountProxy(modal, String(order.social_proxy_id));
     setAccountProxyPurchaseProgress(modal, "");
-    showMsg("socialMsg", monthlyFree ? "免费平台代理已选择。" : "平台代理已选择。", true);
+    setAccountProxyPickerNotice(modal, "购买成功，请点击「选择使用」完成绑定。", true);
+    showMsg("socialMsg", monthlyFree ? "免费平台代理已就绪，请选择使用。" : "平台代理已就绪，请选择使用。", true);
     return String(order.social_proxy_id);
   } catch (error) {
     const message = accountProxyPurchaseErrorText(error);
@@ -29593,10 +29614,7 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
       const supplierChoice = event.target.closest("[data-account-proxy-supplier-choice]");
       if (supplierChoice && !supplierChoice.disabled) {
         const purchasedProxyId = await purchaseAccountProxySupplierOption(modalRoot, supplierChoice);
-        if (purchasedProxyId) {
-          await completeSelection(purchasedProxyId);
-          void openAccountProxySelectionSuccess(purchasedProxyId, modalRoot.__accountProxyPoolData || {});
-        }
+        if (purchasedProxyId) presentPurchasedAccountProxy(modalRoot, purchasedProxyId);
         return;
       }
       const ownedChoice = event.target.closest("[data-account-proxy-owned-choice]");

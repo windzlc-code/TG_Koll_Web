@@ -3452,7 +3452,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("modal.remove()", commit)
         self.assertIn("await selectOwnedAccountProxyOption", picker)
         self.assertIn("await completeSelection(selectedOwnedProxyId)", picker)
-        self.assertIn("await completeSelection(purchasedProxyId)", picker)
+        self.assertIn("presentPurchasedAccountProxy(modalRoot, purchasedProxyId)", picker)
+        self.assertNotIn("await completeSelection(purchasedProxyId)", picker)
         self.assertIn("dismissAll()", picker)
         self.assertIn('event.target.closest("[data-account-proxy-picker-cancel]")', picker)
         self.assertNotIn("[data-account-proxy-picker-cancel], [data-account-proxy-picker-back]", picker)
@@ -3462,7 +3463,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("data-account-proxy-picker-save", picker)
         self.assertNotIn('<div class="console-modal-actions">', picker)
         self.assertIn("reconcileAccountProxyBindingConflict", commit)
-        self.assertIn("openAccountProxySelectionSuccess", picker)
+        self.assertIn("presentPurchasedAccountProxy", picker)
         self.assertIn('const selectedProxyId = String(account?.proxy_id || "").trim()', modal)
         self.assertIn("modal.dataset.selectedProxyId = selectedProxyId", modal)
         self.assertIn("modal.dataset.originalProxyId = selectedProxyId", modal)
@@ -3786,6 +3787,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             async function loadAccountProxyPickerPool() {{}}
             async function fetchSocialDataShared() {{}}
             function updateAccountProxyChoice() {{}}
+            function presentPurchasedAccountProxy() {{ return true; }}
             async function openConsoleModal() {{ return true; }}
             {self._function_source("accountProxyPurchaseErrorText")}
             {self._function_source("setAccountProxyPurchaseProgress")}
@@ -3843,6 +3845,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               assert.ok(requests.every((item) => item.path !== "/api/proxy-purchases/quotes"));
               assert.ok(requests[0].body.includes('"city":"纽约"'));
               assert.ok(notices.some((item) => item.includes("正在提交免费选择")));
+              assert.ok(notices.some((item) => item.includes("请点击「选择使用」")));
 
               requests.length = 0;
               notices.length = 0;

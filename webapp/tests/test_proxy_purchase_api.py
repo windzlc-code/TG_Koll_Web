@@ -669,6 +669,46 @@ class ProxyPurchaseApiTests(unittest.TestCase):
         self.assertEqual(len(owned), 1)
         self.assertEqual(owned[0]["ownership_type"], "owned")
 
+    def test_purchase_then_select_use_binds_ready_proxy(self):
+        from webapp.proxy_market_credentials import resolve_market_proxy_credentials
+        from webapp.social_automation_api import _proxy_has_verified_check, _require_proxy
+        from webapp.system_proxy_pool import list_system_proxy_pool_options
+
+        bought = self.client.post(
+            "/api/proxy-purchases/monthly-free",
+            json={
+                "country": "US",
+                "city": "纽约",
+                "period_months": 1,
+                "auto_renew": False,
+                "client_request_id": "closed-loop-bind",
+            },
+        )
+        self.assertEqual(bought.status_code, 200, bought.text)
+        order = bought.json()["order"]
+        proxy_id = order["social_proxy_id"]
+        self.assertTrue(proxy_id)
+
+        with app_db.db() as conn:
+            pool = list_system_proxy_pool_options(conn, owner_user_id=self.user_id)
+            selectable = [item for item in pool if item.get("social_proxy_id") == proxy_id]
+            self.assertEqual(len(selectable), 1)
+            self.assertEqual(selectable[0]["ownership_type"], "owned")
+            now = 1_700_000_500
+            conn.execute(
+                "INSERT INTO social_accounts(id,user_id,persona_id,platform,username,display_name,profile_dir,"
+                "proxy_id,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                ("acct-bind-1", self.user_id, "persona-1", "threads", "demo_user", "Demo", "profile-1", "", "pending_login", now, now),
+            )
+            conn.execute("UPDATE social_accounts SET proxy_id=?, updated_at=? WHERE id=?", (proxy_id, now + 1, "acct-bind-1"))
+            account = conn.execute("SELECT proxy_id FROM social_accounts WHERE id=?", ("acct-bind-1",)).fetchone()
+            proxy = _require_proxy(conn, proxy_id, owner_user_id=self.user_id)
+            resolved = resolve_market_proxy_credentials(conn, proxy, owner_user_id=self.user_id)
+        self.assertEqual(str(account["proxy_id"]), proxy_id)
+        self.assertTrue(_proxy_has_verified_check(proxy))
+        self.assertTrue(resolved["username"])
+        self.assertTrue(resolved["password"])
+
     def test_worker_jobs_have_separate_exception_boundaries(self):
         calls = []
 
