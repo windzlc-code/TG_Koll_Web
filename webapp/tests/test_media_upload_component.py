@@ -689,37 +689,21 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             self.styles,
         )
 
-    def test_edit_draft_ai_upload_selection_is_the_media_modify_state(self):
-        upload_renderer = self.script.split("function syncUploadDropzone", 1)[1].split(
-            "function syncUploadDropzoneSelectionState", 1
-        )[0]
+    def test_edit_draft_allows_upload_append_without_media_modify_or_regenerate(self):
         editable_renderer = self.script.split("function renderPersonaEditableMediaGrid", 1)[1].split(
             "function renderPersonaImageLibraryPreview", 1
         )[0]
-        self.assertIn("personaAiUploadSelectionControlsModify(input)", upload_renderer)
-        self.assertIn("selectedIndexes.clear();", upload_renderer)
-        self.assertIn('data-upload-media-modify="${esc(index)}"', upload_renderer)
-        self.assertIn("modifyAttribute: type === \"image\"", upload_renderer)
-        self.assertNotIn("!selectionControlsModify ? `<button type=\"button\"", upload_renderer)
-        self.assertIn('data-persona-post-media-modify="${esc(index)}"', editable_renderer)
-        self.assertIn("modifyAttribute:", editable_renderer)
-        self.assertIn('item.type === "image"', editable_renderer)
-        self.assertNotIn("form.operationMode = \"generate\"", self.script.split("async function setPersonaCustomMediaModifySource", 1)[1].split("function applyPersonaImageEditSourceReplacement", 1)[0])
-        self.assertIn("function setPersonaCustomMediaModifySource", self.script)
-        self.assertIn("function autoAttachPersonaGeneratedMedia", self.script)
-        self.assertIn("function personaCustomMediaModifyItem", self.script)
-        self.assertIn('image_edit_mode: Boolean(modifyItem)', self.script)
-        self.assertIn('data-persona-post-media-modify]', self.script)
-        selection_toggle = self.script.split("function toggleUploadDropzoneSelection", 1)[1].split(
-            "function handleUploadDropzoneAction", 1
+        inline = self.script.split("function renderPersonaInlineMediaComposer", 1)[1].split(
+            "function taskOutputMediaItems", 1
         )[0]
-        self.assertIn("personaAiUploadSelectionControlsModify(input)", selection_toggle)
-        self.assertIn(
-            "setPersonaCustomMediaModifySource({ input, index, scrollToComposer: false })",
-            selection_toggle,
-        )
-        self.assertIn('mediaModifyItem?.inputId !== "personaMediaTaskFiles"', self.script)
-        self.assertIn('data-upload-media-modify]', self.script)
+        self.assertIn("function personaEditingMediaAcceptsUploadOnly", self.script)
+        self.assertIn("function filterPersonaEditableMediaFiles", self.script)
+        self.assertIn("personaEditingMediaAcceptsUploadOnly()", editable_renderer)
+        self.assertIn("personaEditingMediaAcceptsUploadOnly()", inline)
+        self.assertIn("编辑草稿时只能上传图片或视频，不能重新生成媒体。", self.script)
+        self.assertIn("image/*,video/*", self.script)
+        self.assertIn('data-persona-direct-media-input', self.script)
+        self.assertIn("queuePersonaDraftMediaChange(replaceIndex !== null", self.script)
 
     def test_public_media_edit_menu_reuses_outside_click_dropdown_behavior(self):
         menu_renderer = self.script.split("function renderPersonaPublicMediaEditMenu", 1)[1].split(

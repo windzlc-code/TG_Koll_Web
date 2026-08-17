@@ -11829,12 +11829,13 @@ function renderUploadDropzone(id, {
   imageEditSource = false,
   publicMediaCards = false,
   embeddedPreview = false,
+  directMediaInput = false,
 } = {}) {
   queueMicrotask(() => restoreUploadDropzoneFiles(id));
   const stateKey = uploadDropzoneStateKey(id);
   return `
     <div class="upload-zone ${embeddedPreview ? "upload-zone--embedded-preview" : ""}" data-upload-dropzone>
-      <input class="upload-zone-input" id="${esc(id)}" data-upload-state-key="${esc(stateKey)}" type="file" ${multiple ? "multiple" : ""} accept="${esc(accept)}" ${imageEditSource ? "data-persona-image-edit-source" : ""} ${publicMediaCards ? "data-public-media-cards" : ""} />
+      <input class="upload-zone-input" id="${esc(id)}" data-upload-state-key="${esc(stateKey)}" type="file" ${multiple ? "multiple" : ""} accept="${esc(accept)}" ${imageEditSource ? "data-persona-image-edit-source" : ""} ${publicMediaCards ? "data-public-media-cards" : ""} ${directMediaInput ? "data-persona-direct-media-input" : ""} />
       ${embeddedPreview ? "" : `<label class="upload-zone-picker" for="${esc(id)}">
         <strong>${esc(label)}</strong>
         <p>${esc(hint || "拖动文件到这里，或点击选择文件。")}</p>
@@ -12081,11 +12082,28 @@ function personaDraftMediaTargetIsEditing(persona = selectedPersona()) {
 }
 
 function personaAiUploadSelectionControlsModify(input) {
-  return Boolean(
-    input?.id === "personaMediaTaskFiles"
-    && input.matches?.("[data-public-media-cards]")
-    && personaDraftMediaTargetIsEditing()
-  );
+  return false;
+}
+
+function personaEditingMediaAcceptsUploadOnly() {
+  return personaDraftMediaTargetIsEditing();
+}
+
+function filterPersonaEditableMediaFiles(files = []) {
+  const incoming = Array.from(files || []).filter(Boolean);
+  const allowed = incoming.filter((file) => {
+    const kind = fileKind(file);
+    return kind === "image" || kind === "video";
+  });
+  if (!incoming.length) return [];
+  if (!allowed.length) {
+    showMsg("commandMsg", "仅支持图片或视频文件。", false);
+    return [];
+  }
+  if (allowed.length !== incoming.length) {
+    showMsg("commandMsg", "已忽略不支持的文件类型，仅添加图片或视频。", false);
+  }
+  return allowed;
 }
 
 function clearUploadPreviewResources(input, { deferRevoke = false } = {}) {
@@ -12192,7 +12210,7 @@ function syncUploadDropzone(input) {
           </button>` : ""}
         ${renderPersonaPublicMediaEditMenu({
           displayIndex: index,
-          modifyAttribute: type === "image" ? `data-upload-media-modify="${esc(index)}"` : "",
+          modifyAttribute: type === "image" && !personaEditingMediaAcceptsUploadOnly() ? `data-upload-media-modify="${esc(index)}"` : "",
           modifyActive: isModifySource,
           replaceAttribute: `data-upload-edit-index="${esc(index)}"`,
           deleteAttribute: `data-upload-remove-index="${esc(index)}"`,
@@ -22311,6 +22329,10 @@ async function submitPersonaMediaTask() {
     : String(allowedTaskTypes[0] || "persona_post_image");
   form.taskType = taskType;
   const lockParts = ["media_task", persona.id, post.id, taskType];
+  if (personaEditingMediaAcceptsUploadOnly()) {
+    showMsg("commandMsg", "编辑草稿时只能上传图片或视频，不能重新生成媒体。", false);
+    return;
+  }
   if (isActionLocked(...lockParts) || personaMediaTaskIsActive(persona.id, post.id, taskType)) {
     showMsg("commandMsg", "当前草稿已有同类型配图任务在队列或执行中，请等待完成后再提交。", false);
     return;
@@ -22731,7 +22753,7 @@ function queuePersonaDraftMediaChange(action, {
     draft.mediaItems = personaEditablePostMediaItems(persona.id, post).map(clonePersonaDraftMediaItem);
   }
   if (!Array.isArray(draft.mediaOps)) draft.mediaOps = [];
-  const mediaFiles = Array.from(files || []).filter(Boolean);
+  const mediaFiles = filterPersonaEditableMediaFiles(files);
   const current = draft.mediaItems;
   if (action === "append") {
     if (!mediaFiles.length) {
@@ -22847,7 +22869,7 @@ async function uploadPersonaPostMedia(replaceIndex = null, filesOverride = null)
 }
 
 function acceptPersonaDirectMediaFiles(input, files) {
-  const mediaFiles = Array.from(files || []).filter(Boolean);
+  const mediaFiles = filterPersonaEditableMediaFiles(files);
   if (!input?.matches?.("[data-persona-direct-media-input]") || !mediaFiles.length) return false;
   input.value = "";
   uploadPersonaPostMedia(null, mediaFiles).catch((error) => {
@@ -24128,6 +24150,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
           </div>
         ` : `
           <div class="persona-media-operation-pane">
+            ${personaEditingMediaAcceptsUploadOnly() ? "" : `
             <div class="form-grid persona-detail-controls persona-media-generation-controls">
               <label>生成张数
                 <select id="personaMediaImageCount" ${mediaModifyActive ? "disabled title=\"局部修改每次只生成 1 张图片\"" : ""}>
@@ -24144,28 +24167,39 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
                   <option value="16:9" ${String(mediaForm.aspectRatio || "") === "16:9" ? "selected" : ""}>16:9</option>
                 </select>
               </label>` : ""}
-            </div>
-            ${renderPersonaMediaPromptField(mediaForm, mediaTaskState)}
-            <div class="persona-inline-panel persona-inline-panel--nested persona-media-preview-surface" data-persona-media-preview-surface>
-              <strong>任务结果预览</strong>
-              ${mediaEditSourceUploadActive ? renderUploadDropzone("personaMediaEditSourceFile", {
-                label: "上传替换编辑图片",
-                accept: "image/*",
-                hint: "可用一张自定义图片替换当前编辑源；仅支持图片。",
-                multiple: false,
-                imageEditSource: true,
-                publicMediaCards: true,
-                embeddedPreview: true,
-              }) : renderUploadDropzone("personaMediaTaskFiles", {
-                label: "添加媒体",
-                accept: "image/*",
-                hint: "仅支持图片；可作为 AI 生成的参考素材。",
-                multiple: !aiUploadSelectsModify,
-                publicMediaCards: true,
-                embeddedPreview: true,
-              })}
-              ${renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt, addMediaInputId: mediaUploadInputId })}
-            </div>
+            </div>`}
+            ${personaEditingMediaAcceptsUploadOnly() ? `
+              ${postMediaItems.length
+                ? renderPersonaEditableMediaGrid(postMediaItems, {
+                  personaId: persona.id,
+                  source: "posts",
+                  postId: post.id,
+                  sourceLabel,
+                })
+                : renderPersonaCompactMediaUpload(persona, post)}
+            ` : `
+              ${renderPersonaMediaPromptField(mediaForm, mediaTaskState)}
+              <div class="persona-inline-panel persona-inline-panel--nested persona-media-preview-surface" data-persona-media-preview-surface>
+                <strong>任务结果预览</strong>
+                ${mediaEditSourceUploadActive ? renderUploadDropzone("personaMediaEditSourceFile", {
+                  label: "上传替换编辑图片",
+                  accept: "image/*",
+                  hint: "可用一张自定义图片替换当前编辑源；仅支持图片。",
+                  multiple: false,
+                  imageEditSource: true,
+                  publicMediaCards: true,
+                  embeddedPreview: true,
+                }) : renderUploadDropzone("personaMediaTaskFiles", {
+                  label: "添加媒体",
+                  accept: "image/*",
+                  hint: "仅支持图片；可作为 AI 生成的参考素材。",
+                  multiple: true,
+                  publicMediaCards: true,
+                  embeddedPreview: true,
+                })}
+                ${renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt, addMediaInputId: mediaUploadInputId })}
+              </div>
+            `}
           </div>
         `}
       </div>
@@ -24400,7 +24434,7 @@ function renderPersonaTaskMediaPreview(taskState, items = personaTaskMediaItems(
               <button type="button" data-media-preview-group="${esc(groupId)}" data-media-preview-index="${esc(index)}" title="查看" aria-label="查看第 ${esc(index + 1)} 张图片">${renderEyeIcon()}</button>
               ${renderPersonaPublicMediaEditMenu({
                 displayIndex: index,
-                modifyAttribute: `data-persona-task-media-modify="${esc(mediaKey)}"`,
+                modifyAttribute: personaEditingMediaAcceptsUploadOnly() ? "" : `data-persona-task-media-modify="${esc(mediaKey)}"`,
                 modifyActive: isModifySource,
                 replaceAttribute: `data-persona-task-media-replace="${esc(mediaKey)}"`,
                 deleteAttribute: `data-persona-task-media-delete="${esc(mediaKey)}"`,
@@ -24519,7 +24553,7 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
       >${renderEyeIcon()}</button>` : ""}
       ${renderPersonaPublicMediaEditMenu({
         displayIndex: index,
-        modifyAttribute: !hotMode && item.type === "image" && !item.unavailable
+        modifyAttribute: !hotMode && !personaEditingMediaAcceptsUploadOnly() && item.type === "image" && !item.unavailable
           ? `data-persona-post-media-modify="${esc(index)}"`
           : "",
         modifyActive: isModifySource,
@@ -33240,6 +33274,10 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-run-media-task]")) {
+      if (personaEditingMediaAcceptsUploadOnly()) {
+        showMsg("commandMsg", "编辑草稿时只能上传图片或视频，不能重新生成媒体。", false);
+        return;
+      }
       submitPersonaMediaTask().catch(() => {});
       return;
     }
