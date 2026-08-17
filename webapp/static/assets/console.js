@@ -21605,10 +21605,28 @@ function resetPersonaDraftEditor(personaId) {
   resetPersonaNewDraftComposer(personaId);
 }
 
+function clearPersonaMediaModifyState(personaId, postId = "") {
+  const form = personaFormState(personaId)?.media;
+  if (form?.customModifySource) {
+    if (String(form.customModifySource.previewUrl || "").startsWith("blob:")) {
+      URL.revokeObjectURL(form.customModifySource.previewUrl);
+    }
+    delete form.customModifySource;
+  }
+  const taskPostId = String(postId || "").trim();
+  if (taskPostId) {
+    const taskState = personaMediaTaskState(personaId, taskPostId);
+    if (taskState) taskState.modifyMediaKey = "";
+  }
+  clearUploadDropzoneState("personaMediaEditSourceFile");
+}
+
 function discardPersonaDraftEdit(personaId) {
   const form = personaFormState(personaId);
+  const editingPostId = String(form.draft?.editingPostId || "").trim();
   form.generate.mode = "custom";
   form.draft = defaultPersonaDraftForm();
+  clearPersonaMediaModifyState(personaId, editingPostId);
 }
 
 function clearPersonaDraftEdit(personaId) {
@@ -21620,6 +21638,15 @@ function clearPersonaDraftEdit(personaId) {
   form.draft = normalizePersonaDraftForm(form.draft);
   form.draft.title = "";
   form.draft.content = "";
+  const editingPostId = String(form.draft.editingPostId || "").trim();
+  if (Array.isArray(form.draft.mediaItems) && form.draft.mediaItems.length) {
+    if (!Array.isArray(form.draft.mediaOps)) form.draft.mediaOps = [];
+    form.draft.mediaItems.forEach((_, index) => {
+      form.draft.mediaOps.push({ type: "delete", index });
+    });
+    form.draft.mediaItems = [];
+  }
+  clearPersonaMediaModifyState(personaId, editingPostId);
   if ($("personaDraftTitle")) $("personaDraftTitle").value = "";
   if ($("personaDraftContent")) $("personaDraftContent").value = "";
   syncPersonaDraftDirty(form.draft);
@@ -21650,6 +21677,7 @@ function cancelPersonaDraftEditChanges(personaId) {
     mediaOps: [],
     dirty: false,
   });
+  clearPersonaMediaModifyState(personaId, post.id);
   return true;
 }
 
@@ -21721,10 +21749,7 @@ function openPersonaDraftEditor(postId) {
     mediaOps: [],
     dirty: false,
   });
-  delete form.media.customModifySource;
-  const taskState = personaMediaTaskState(persona.id, post.id);
-  if (taskState) taskState.modifyMediaKey = "";
-  clearUploadDropzoneState("personaMediaEditSourceFile");
+  clearPersonaMediaModifyState(persona.id, post.id);
   setPersonaPostSource(source, persona);
   setSelectedPersonaPostId(post.id || state.selectedPersonaPostId || "");
   state.personaGroup = "content";
@@ -23279,26 +23304,6 @@ function togglePersonaMediaBulkSelection(trigger, rawIndex) {
   if (selected.has(index)) selected.delete(index);
   else selected.add(index);
   setPersonaMediaBulkSelection(context.personaId, context.source, context.postId, selected);
-  if (!context.editor.hasAttribute("data-persona-hot-editor-media")) {
-    const persona = selectedPersona();
-    const { source, post } = personaMediaTargetPost(persona);
-    const items = persona && post ? personaDraftMediaPreviewItems(persona, source, post) : [];
-    const item = items[index];
-    if (
-      persona
-      && post
-      && String(persona.id) === context.personaId
-      && source === context.source
-      && String(post.id) === context.postId
-      && item
-      && item.type === "image"
-      && !item.unavailable
-    ) {
-      setPersonaCustomMediaModifySource({ item, index, scrollToComposer: false })
-        .catch((error) => showMsg("commandMsg", error.detail || error.message || "图片无法进入媒体修改", false));
-      return true;
-    }
-  }
   syncPersonaMediaBulkSelectionState(context.editor);
   return true;
 }
@@ -24230,15 +24235,11 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
                 publicMediaCards: true,
                 embeddedPreview: true,
               })}
-              ${renderPersonaCurrentDraftMediaPreview(postMediaItems, {
-                postId: post.id,
-                modifyIndex: mediaModifyItem?.customSource ? Number(personaFormState(persona.id).media?.customModifySource?.index) : -1,
-              })}
               ${renderPersonaMediaTaskResult(persona.id, post.id, {
                 mediaBusy,
                 mediaBusyStartedAt,
                 addMediaInputId: mediaUploadInputId,
-                hideEmpty: postMediaItems.length > 0,
+                currentItems: postMediaItems,
               })}
             </div>
           </div>
@@ -24754,15 +24755,27 @@ function renderPersonaImageLibraryGrid(library, selectedImageId = "") {
   }).join("")}${renderPersonaImageUploadPlaceholderCard()}</div>`;
 }
 
-function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, mediaBusyStartedAt = 0, addMediaInputId = "", hideEmpty = false } = {}) {
+function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, mediaBusyStartedAt = 0, addMediaInputId = "", currentItems = [] } = {}) {
   const taskState = personaMediaTaskState(personaId, postId);
   const items = taskState ? personaTaskMediaItems(taskState) : [];
+  const currentRows = Array.isArray(currentItems) ? currentItems : [];
+  const customSource = personaFormState(personaId).media?.customModifySource;
+  const customIndex = customSource && String(customSource.postId || "") === String(postId || "")
+    ? Number(customSource.index)
+    : NaN;
+  const currentPreview = renderPersonaCurrentDraftMediaPreview(currentRows, {
+    postId,
+    modifyIndex: Number.isInteger(customIndex) ? customIndex : -1,
+  });
+  const hasCards = currentRows.length > 0 || items.length > 0;
   const modifying = Boolean(personaTaskMediaModifyItem(taskState, items));
   const actionKind = taskState?.taskId ? "regenerate" : "generate";
   const runButton = `<button type="button" class="primary" data-persona-run-media-task data-persona-media-action="${actionKind}" aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (modifying ? "重生成图片" : (taskState?.taskId ? "重新生成" : "生成预览"))}</button>`;
   if (!taskState?.taskId) return `
     <div class="persona-media-task-result-preview">
-      ${hideEmpty ? "" : renderModuleEmptyState({
+      ${hasCards
+        ? `${currentPreview}${renderUploadAddMediaButton(addMediaInputId)}`
+        : renderModuleEmptyState({
         icon: "media",
         title: "等待生成结果",
         detail: "提交任务后，结果预览会显示在这里并可直接添加至草稿",
@@ -24783,14 +24796,15 @@ function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, me
   const missingPersonaImage = /人设图/.test(String(detail.error || "")) && !items.length;
   return `
     <div class="persona-media-task-result-preview">
-      ${items.length ? "" : renderModuleEmptyState({
+      ${hasCards ? "" : renderModuleEmptyState({
         icon: "media",
         title: terminal ? "任务已结束，暂无可预览媒体" : "正在等待媒体结果",
         detail: terminal ? "可从任务日志确认生成情况" : "结果返回后会自动显示在这里",
         action: renderUploadAddMediaButton(addMediaInputId),
       })}
+      ${currentPreview}
       ${renderPersonaTaskMediaPreview(taskState, items)}
-      ${items.length ? renderUploadAddMediaButton(addMediaInputId) : ""}
+      ${hasCards ? renderUploadAddMediaButton(addMediaInputId) : ""}
     </div>
     <div class="row-actions persona-media-task-actions">
       ${runButton}
