@@ -4243,7 +4243,9 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         opener = source.split("def _threads_compose_opener_by_structure(", 1)[1].split("def _ensure_threads_compose_ready(", 1)[0]
         sidebar = source.split("def _threads_sidebar_compose_opener(", 1)[1].split("def _threads_compose_opener_by_structure(", 1)[0]
         self.assertLess(opener.index("return 'left-rail'"), opener.index("return 'fab'"))
-        self.assertIn("plusLike(node)", opener)
+        self.assertIn("isPlusIcon(node)", opener)
+        self.assertIn("/search", opener)
+        self.assertNotIn("M11", opener)
         self.assertNotIn("ланцюжок", source)
         self.assertNotIn("Новий", source)
         self.assertNotIn("composeWords", opener)
@@ -4305,15 +4307,16 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         click_opener.assert_not_called()
 
-    def test_threads_compose_ready_reloads_stale_home_once_before_retry(self):
-        state = {"reloaded": False, "clicked": False}
+    def test_threads_compose_ready_retries_recognition_without_reloading_home(self):
+        state = {"lookups": 0, "clicked": False}
         opener = _Locator()
         compose = _Locator()
         page = mock.Mock()
         page.url = "https://www.threads.com/"
 
-        def recover(*_args, **_kwargs):
-            state["reloaded"] = True
+        def lookup(_page):
+            state["lookups"] += 1
+            return opener if state["lookups"] > 1 else None
 
         def click(*_args, **_kwargs):
             state["clicked"] = True
@@ -4325,25 +4328,31 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 "_threads_dialog_compose_box",
                 side_effect=lambda _page: compose if state["clicked"] else None,
             ),
-            mock.patch.object(
-                runner,
-                "_threads_sidebar_compose_opener",
-                side_effect=lambda _page: opener if state["reloaded"] else None,
-            ),
+            mock.patch.object(runner, "_threads_sidebar_compose_opener", side_effect=lookup),
             mock.patch.object(runner, "_click_threads_compose_opener", side_effect=click) as click_opener,
-            mock.patch.object(runner, "_goto", side_effect=recover) as goto,
+            mock.patch.object(runner, "_goto") as goto,
             mock.patch.object(runner, "_sleep_between"),
         ):
             result = runner._ensure_threads_compose_ready(page, _Logger())
 
         self.assertIs(result, compose)
-        goto.assert_called_once_with(
-            page,
-            runner.THREADS_HOME,
-            mock.ANY,
-            "threads_publish_open_recovery",
-        )
+        goto.assert_not_called()
         click_opener.assert_called_once()
+
+    def test_threads_compose_ready_does_not_refresh_after_a_missed_click(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+        with (
+            mock.patch.object(runner, "_threads_dialog_compose_box", return_value=None),
+            mock.patch.object(runner, "_threads_sidebar_compose_opener", return_value=_Locator()),
+            mock.patch.object(runner, "_click_threads_compose_opener", return_value=True),
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "未打开输入框"):
+                runner._ensure_threads_compose_ready(page, _Logger())
+
+        goto.assert_not_called()
 
     def test_threads_compose_ready_recovery_does_not_loop(self):
         page = mock.Mock()
@@ -4352,11 +4361,12 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             mock.patch.object(runner, "_threads_dialog_compose_box", return_value=None),
             mock.patch.object(runner, "_threads_sidebar_compose_opener", return_value=None),
             mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_sleep_between"),
         ):
             with self.assertRaisesRegex(RuntimeError, "Threads"):
                 runner._ensure_threads_compose_ready(page, _Logger())
 
-        goto.assert_called_once()
+        goto.assert_not_called()
 
     def test_threads_compose_opener_does_not_click_twice_when_dialog_appears_after_timeout(self):
         page = mock.Mock()

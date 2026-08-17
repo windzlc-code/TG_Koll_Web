@@ -11757,19 +11757,35 @@ def _threads_compose_opener_by_structure(page):
                 };
                 const square = rect => Math.abs(rect.width - rect.height) <= 14;
                 const iconSize = rect => rect.width >= 32 && rect.width <= 88 && rect.height >= 32 && rect.height <= 88;
-                const plusLike = node => {
+                const hrefOf = node => String(node.getAttribute('href') || node.closest('a')?.getAttribute('href') || '');
+                const rejectedHref = href => {
+                    try {
+                        const path = new URL(href, window.location.href).pathname.replace(/\\/+$/, '').toLowerCase();
+                        return !path || path === '/' || path.startsWith('/search') || path.startsWith('/@')
+                            || ['/activity', '/notifications', '/login', '/explore', '/direct/inbox'].includes(path);
+                    } catch (error) {
+                        return false;
+                    }
+                };
+                const isPlusIcon = node => {
+                    if (rejectedHref(hrefOf(node))) return false;
+                    const smallPlus = el => {
+                        const text = String(el.textContent || '').replace(/\\s+/g, '');
+                        const rect = el.getBoundingClientRect();
+                        return (text === '+' || text === '＋') && rect.width <= 44 && rect.height <= 44;
+                    };
+                    if (Array.from(node.childNodes).some(child => child.nodeType === Node.TEXT_NODE && String(child.textContent || '').replace(/\\s+/g, '') === '+')) return true;
+                    if (Array.from(node.querySelectorAll('span, i')).some(smallPlus)) return true;
                     const svg = node.querySelector('svg');
-                    const markup = svg ? String(svg.innerHTML || '') : '';
-                    const glyph = Array.from(node.childNodes).some(child => {
-                        if (child.nodeType !== Node.TEXT_NODE) return false;
-                        const text = String(child.textContent || '').replace(/\\s+/g, '');
-                        return text === '+' || text === '＋';
-                    });
-                    const iconChild = Array.from(node.querySelectorAll('span, i, svg')).some(child => {
-                        const text = String(child.textContent || '').replace(/\\s+/g, '');
-                        return text === '+' || text === '＋';
-                    });
-                    return glyph || iconChild || /plus|M11|line x1/i.test(markup);
+                    if (!svg) return false;
+                    if (svg.querySelector('circle')) return false;
+                    const d = Array.from(svg.querySelectorAll('path')).map(item => item.getAttribute('d') || '').join(' ');
+                    if (/[aAcCqQ]/.test(d)) return false;
+                    const lines = Array.from(svg.querySelectorAll('line'));
+                    const horiz = lines.some(line => Math.abs(Number(line.getAttribute('y1')) - Number(line.getAttribute('y2'))) <= 1);
+                    const vert = lines.some(line => Math.abs(Number(line.getAttribute('x1')) - Number(line.getAttribute('x2'))) <= 1);
+                    if (horiz && vert) return true;
+                    return d.length > 0 && d.length < 160 && /[hH]/.test(d) && /[vV]/.test(d);
                 };
                 const nodes = Array.from(document.querySelectorAll('a, button, [role="button"], [role="link"], [tabindex="0"]')).filter(visible);
                 const leftItems = [];
@@ -11777,10 +11793,11 @@ def _threads_compose_opener_by_structure(page):
                     const rect = node.getBoundingClientRect();
                     if (rect.left > width * 0.30 || rect.top < 48 || rect.top > height * 0.78) continue;
                     if (rect.height < 28 || rect.height > 72 || rect.width < 28 || rect.width > 380) continue;
+                    if (rejectedHref(hrefOf(node))) continue;
                     leftItems.push({
                         node,
                         y: rect.top,
-                        plus: plusLike(node),
+                        plus: isPlusIcon(node),
                     });
                 }
                 leftItems.sort((a, b) => a.y - b.y);
@@ -11840,14 +11857,21 @@ def _ensure_threads_compose_ready(
         compose = _threads_dialog_compose_box(page)
         if compose is not None:
             return compose
+        logger.log(
+            "warn",
+            "threads_publish_open_no_dialog",
+            "已点击识别到的发帖入口，但编辑框未出现，不再刷新页面。",
+            {"url": _safe_navigation_url(getattr(page, "url", ""))},
+        )
+        raise RuntimeError("已点击发帖入口，但未打开输入框。")
     if not _home_recovery_attempted:
         logger.log(
             "warn",
-            "threads_publish_open_recovery",
-            "Threads 主页发帖按钮未点开输入框，正在重载主页后按固定位置再点一次。",
+            "threads_publish_open_retry",
+            "尚未识别到左侧加号发帖图标，等待页面稳定后只再识别一次，不会刷新主页。",
             {"url": _safe_navigation_url(getattr(page, "url", ""))},
         )
-        _goto(page, THREADS_HOME, logger, "threads_publish_open_recovery")
+        _sleep_between(0.8, 1.2)
         return _ensure_threads_compose_ready(
             page,
             logger,
