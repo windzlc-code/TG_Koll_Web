@@ -715,7 +715,48 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
     def _javascript_function_source(self, source, name):
         marker = f"function {name}("
         start = source.index(marker)
-        brace = source.index("{", start)
+        index = source.index("(", start)
+        paren = 0
+        quote = None
+        escaped = False
+        line_comment = False
+        block_comment = False
+        brace = None
+        while index < len(source):
+            char = source[index]
+            next_char = source[index + 1] if index + 1 < len(source) else ""
+            if line_comment:
+                if char == "\n":
+                    line_comment = False
+            elif block_comment:
+                if char == "*" and next_char == "/":
+                    block_comment = False
+                    index += 1
+            elif quote:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = None
+            elif char in {'"', "'", "`"}:
+                quote = char
+            elif char == "/" and next_char == "/":
+                line_comment = True
+                index += 1
+            elif char == "/" and next_char == "*":
+                block_comment = True
+                index += 1
+            elif char == "(":
+                paren += 1
+            elif char == ")":
+                paren -= 1
+                if paren == 0:
+                    brace = source.index("{", index + 1)
+                    break
+            index += 1
+        if brace is None:
+            self.fail(f"Could not extract JavaScript function {name}")
         depth = 0
         quote = None
         escaped = False
@@ -3403,7 +3444,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
         self.assertIn('data-account-proxy-picker="${esc(accountId)}"', card)
         self.assertIn('class="console-modal-dialog account-proxy-picker-modal', picker)
-        self.assertIn("accountProxyOptionCardsHtml(selectedProxyId", picker)
+        self.assertIn("accountProxyPickerReadyHtml", picker)
+        self.assertIn("accountProxyOptionCardsHtml(selectedProxyId", self.source)
         self.assertIn("commitAccountProxyPickerSelection", picker)
         self.assertIn("saveAccountProxyBinding", commit)
         self.assertIn("accountProxyBindingChanged(expectedProxyId, selectedProxyId)", commit)
@@ -3658,8 +3700,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('initialProxyId === null || initialProxyId === undefined', picker)
         self.assertNotIn("openProxyModal", picker)
         select_owned = self._function_source("selectOwnedAccountProxyOption")
-        self.assertIn('/api/persona_dashboard/automation/proxies/${encodeURIComponent(cleanProxyId)}/check', select_owned)
-        self.assertIn("fetchSocialDataShared({ force: true })", select_owned)
+        self.assertIn("updateAccountProxyChoice(modal, cleanProxyId)", select_owned)
+        self.assertIn("setAccountProxyPickerNotice", select_owned)
+        self.assertIn("paintAccountProxySelection", self.source)
+        self.assertNotIn("fetchSocialDataShared({ force: true })", select_owned)
         self.assertIn("data-account-proxy-picker-open", editor_modal)
         self.assertNotIn("saveAccountInlineCustomProxy", editor_modal)
         self.assertIn("accountProxyEntryCardHtml", picker_panel)
@@ -3694,6 +3738,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('class="proxy-market-mini-stock"', cards)
         self.assertNotIn('供应商', cards)
         self.assertIn('/api/proxy-purchases/orders/${encodeURIComponent(orderId)}/renewal', renewal)
+        self.assertIn('setAttribute("aria-busy", "true")', renewal)
+        self.assertIn("setAccountProxyPickerNotice(modal, pendingText, true)", renewal)
+        self.assertIn('showMsg("socialMsg", pendingText, true)', renewal)
         self.assertNotIn("function accountProxyPurchaseDialogHtml", self.source)
         self.assertNotIn("account-proxy-purchase-modal", self.styles)
 

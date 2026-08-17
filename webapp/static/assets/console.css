@@ -17920,10 +17920,11 @@ body.persona-media-sorting {
   overflow: hidden;
   display: grid;
   grid-auto-rows: auto;
+  box-sizing: border-box;
   min-height: 190px;
   gap: 8px;
   padding: 14px;
-  border-color: #bfd0de;
+  border: 1px solid #bfd0de;
   border-radius: 10px;
   background: rgba(255, 255, 255, .96);
   box-shadow: 0 8px 22px rgba(16, 44, 71, .07);
@@ -17956,9 +17957,13 @@ body.persona-media-sorting {
 
 .proxy-market-mini-card[aria-current="true"],
 .proxy-market-mini-card.is-selected {
-  border: 2px solid #126eaa;
-  background: #f3fbff;
-  box-shadow: 0 0 0 4px rgba(18, 110, 170, .16), 0 14px 28px rgba(16, 44, 71, .14);
+  z-index: 1;
+  overflow: visible;
+  border: 2px solid #0a6aa8;
+  background: #e8f6ff;
+  box-shadow: 0 0 0 3px rgba(18, 110, 170, .24), 0 14px 28px rgba(16, 44, 71, .16);
+  outline: 2px solid #126eaa;
+  outline-offset: 2px;
 }
 
 .proxy-market-mini-card[aria-current="true"] .proxy-market-mini-stock,
@@ -17971,6 +17976,32 @@ body.persona-media-sorting {
   color: #126eaa;
   border-color: #8cb9d4;
   background: #fff;
+}
+
+.account-proxy-picker-notice {
+  min-height: 34px;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid #b7d7ea;
+  border-radius: 8px;
+  color: #0b4d73;
+  background: #eef8fd;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.account-proxy-picker-notice[data-ok="false"] {
+  border-color: #f0b4b0;
+  color: #9b1c16;
+  background: #fff1ef;
+}
+
+.account-proxy-picker-notice[hidden] {
+  display: none;
+}
+
+.account-proxy-options .proxy-market-mini-card {
+  cursor: pointer;
 }
 
 .proxy-market-mini-card-head {
@@ -19412,6 +19443,11 @@ body.persona-media-sorting {
 
 .proxy-market-mini-card > .proxy-market-mini-renewal[aria-pressed="true"] i { background: #126eaa; }
 .proxy-market-mini-card > .proxy-market-mini-renewal[aria-pressed="true"] i::after { transform: translateX(18px); }
+
+.proxy-market-mini-card > .proxy-market-mini-renewal[aria-busy="true"] {
+  opacity: .72;
+  pointer-events: none;
+}
 
 @media (max-width: 640px) {
   .account-proxy-picker-modal .proxy-market-mini-card > .proxy-market-mini-renewal {
