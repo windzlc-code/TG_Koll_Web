@@ -709,6 +709,7 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("function setPersonaCustomMediaModifySource", self.script)
         self.assertIn("const sameDraft = Boolean(", self.script)
         self.assertIn("function syncPersonaCurrentMediaModifyUi", self.script)
+        self.assertIn("视频文件不支持重生成图片", self.script)
         self.assertIn("pendingItem: item", self.script)
         self.assertIn("function autoAttachPersonaGeneratedMedia", self.script)
         self.assertIn("function personaCustomMediaModifyItem", self.script)
