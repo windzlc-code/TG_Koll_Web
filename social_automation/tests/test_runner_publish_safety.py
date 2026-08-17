@@ -4242,10 +4242,11 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         source = Path(runner.__file__).read_text(encoding="utf-8")
         opener = source.split("def _threads_compose_opener_by_structure(", 1)[1].split("def _ensure_threads_compose_ready(", 1)[0]
         sidebar = source.split("def _threads_sidebar_compose_opener(", 1)[1].split("def _threads_compose_opener_by_structure(", 1)[0]
-        self.assertLess(opener.index("return 'left-rail'"), opener.index("return 'fab'"))
-        self.assertIn("isPlusIcon(node)", opener)
-        self.assertIn("/search", opener)
-        self.assertNotIn("M11", opener)
+        self.assertIn("return 'left-rail'", opener)
+        self.assertNotIn("return 'fab'", opener)
+        self.assertIn("leftRows[1]", opener)
+        self.assertIn("isPlusIcon", opener)
+        self.assertIn("isSearchIcon", opener)
         self.assertNotIn("ланцюжок", source)
         self.assertNotIn("Новий", source)
         self.assertNotIn("composeWords", opener)

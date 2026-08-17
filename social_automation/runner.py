@@ -11755,74 +11755,71 @@ def _threads_compose_opener_by_structure(page):
                         && style.display !== 'none'
                         && style.pointerEvents !== 'none';
                 };
-                const square = rect => Math.abs(rect.width - rect.height) <= 14;
-                const iconSize = rect => rect.width >= 32 && rect.width <= 88 && rect.height >= 32 && rect.height <= 88;
                 const hrefOf = node => String(node.getAttribute('href') || node.closest('a')?.getAttribute('href') || '');
-                const rejectedHref = href => {
+                const pathOf = href => {
                     try {
-                        const path = new URL(href, window.location.href).pathname.replace(/\\/+$/, '').toLowerCase();
-                        return !path || path === '/' || path.startsWith('/search') || path.startsWith('/@')
-                            || ['/activity', '/notifications', '/login', '/explore', '/direct/inbox'].includes(path);
+                        return new URL(href, window.location.href).pathname.replace(/\\/+$/, '').toLowerCase();
                     } catch (error) {
-                        return false;
+                        return '';
                     }
                 };
-                const isPlusIcon = node => {
-                    if (rejectedHref(hrefOf(node))) return false;
-                    const smallPlus = el => {
-                        const text = String(el.textContent || '').replace(/\\s+/g, '');
-                        const rect = el.getBoundingClientRect();
-                        return (text === '+' || text === '＋') && rect.width <= 44 && rect.height <= 44;
-                    };
-                    if (Array.from(node.childNodes).some(child => child.nodeType === Node.TEXT_NODE && String(child.textContent || '').replace(/\\s+/g, '') === '+')) return true;
-                    if (Array.from(node.querySelectorAll('span, i')).some(smallPlus)) return true;
-                    const svg = node.querySelector('svg');
+                const isSearchHref = href => {
+                    const path = pathOf(href);
+                    return path.startsWith('/search') || path === '/explore';
+                };
+                const leadingSvg = node => {
+                    const rect = node.getBoundingClientRect();
+                    const svgs = Array.from(node.querySelectorAll('svg')).filter(svg => {
+                        const box = svg.getBoundingClientRect();
+                        return box.width >= 10 && box.height >= 10 && box.left <= rect.left + 56;
+                    });
+                    return svgs[0] || null;
+                };
+                const svgPath = svg => Array.from(svg.querySelectorAll('path')).map(item => item.getAttribute('d') || '').join(' ');
+                const isSearchIcon = svg => {
                     if (!svg) return false;
-                    if (svg.querySelector('circle')) return false;
-                    const d = Array.from(svg.querySelectorAll('path')).map(item => item.getAttribute('d') || '').join(' ');
-                    if (/[aAcCqQ]/.test(d)) return false;
+                    if (svg.querySelector('circle')) return true;
+                    const d = svgPath(svg);
+                    return /[aA]\\s*\\d{2,}/.test(d);
+                };
+                const isPlusIcon = svg => {
+                    if (!svg || isSearchIcon(svg)) return false;
                     const lines = Array.from(svg.querySelectorAll('line'));
                     const horiz = lines.some(line => Math.abs(Number(line.getAttribute('y1')) - Number(line.getAttribute('y2'))) <= 1);
                     const vert = lines.some(line => Math.abs(Number(line.getAttribute('x1')) - Number(line.getAttribute('x2'))) <= 1);
                     if (horiz && vert) return true;
-                    return d.length > 0 && d.length < 160 && /[hH]/.test(d) && /[vV]/.test(d);
+                    const d = svgPath(svg);
+                    const hasH = /[hH]/.test(d);
+                    const hasV = /[vV]/.test(d);
+                    const hasCrossBars = hasH && hasV;
+                    const simple = d.length > 0 && d.length < 280;
+                    return simple && hasCrossBars;
                 };
                 const nodes = Array.from(document.querySelectorAll('a, button, [role="button"], [role="link"], [tabindex="0"]')).filter(visible);
-                const leftItems = [];
+                const leftRows = [];
                 for (const node of nodes) {
                     const rect = node.getBoundingClientRect();
-                    if (rect.left > width * 0.30 || rect.top < 48 || rect.top > height * 0.78) continue;
-                    if (rect.height < 28 || rect.height > 72 || rect.width < 28 || rect.width > 380) continue;
-                    if (rejectedHref(hrefOf(node))) continue;
-                    leftItems.push({
-                        node,
-                        y: rect.top,
-                        plus: isPlusIcon(node),
-                    });
+                    if (rect.left > Math.min(320, width * 0.28) || rect.top < 56 || rect.top > height * 0.72) continue;
+                    if (rect.height < 28 || rect.height > 68 || rect.width < 28 || rect.width > 400) continue;
+                    if (isSearchHref(hrefOf(node))) continue;
+                    const last = leftRows[leftRows.length - 1];
+                    if (last && Math.abs(last.y - rect.top) < 12) {
+                        if (rect.width > last.rect.width) {
+                            last.node = node;
+                            last.rect = rect;
+                            last.y = rect.top;
+                        }
+                        continue;
+                    }
+                    leftRows.push({ node, rect, y: rect.top });
                 }
-                leftItems.sort((a, b) => a.y - b.y);
-                const leftPick = leftItems.find(item => item.plus);
+                leftRows.sort((a, b) => a.y - b.y);
+                const leftPlus = leftRows.find(item => isPlusIcon(leadingSvg(item.node)));
+                const secondRow = leftRows.length >= 3 ? leftRows[1] : null;
+                const leftPick = leftPlus || (secondRow && !isSearchIcon(leadingSvg(secondRow.node)) ? secondRow : null);
                 if (leftPick) {
                     leftPick.node.setAttribute('data-vecto-compose-opener', '1');
                     return 'left-rail';
-                }
-                let fab = null;
-                let fabCorner = Infinity;
-                for (const node of nodes) {
-                    const rect = node.getBoundingClientRect();
-                    const fromRight = width - (rect.left + rect.width);
-                    const fromBottom = height - (rect.top + rect.height);
-                    if (fromRight > 150 || fromBottom > 170) continue;
-                    if (!node.querySelector('svg') || !square(rect) || !iconSize(rect)) continue;
-                    const corner = fromRight + fromBottom;
-                    if (corner < fabCorner) {
-                        fab = node;
-                        fabCorner = corner;
-                    }
-                }
-                if (fab) {
-                    fab.setAttribute('data-vecto-compose-opener', '1');
-                    return 'fab';
                 }
                 return '';
             }"""
