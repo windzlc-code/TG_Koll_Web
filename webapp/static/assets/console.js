@@ -24187,6 +24187,14 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
           </div>
         ` : `
           <div class="persona-media-operation-pane">
+            ${postMediaItems.length || personaDraftMediaTargetIsEditing(persona)
+              ? renderPersonaEditableMediaGrid(postMediaItems, {
+                personaId: persona.id,
+                source: "posts",
+                postId: post.id,
+                sourceLabel,
+              })
+              : ""}
             <div class="form-grid persona-detail-controls persona-media-generation-controls">
               <label>生成张数
                 <select id="personaMediaImageCount" ${mediaModifyActive ? "disabled title=\"局部修改每次只生成 1 张图片\"" : ""}>
