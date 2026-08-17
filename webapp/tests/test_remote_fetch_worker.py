@@ -713,6 +713,40 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                 }
             )
 
+    def test_keyword_job_uses_local_archive_without_leasing_account(self) -> None:
+        class FakePool:
+            def acquire(self, **_kwargs):
+                raise AssertionError("keyword prep must not lease an account")
+
+        class FakeProcess:
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+            def communicate(self):
+                return json.dumps({"ok": True, "keywords": ["理发师"], "archiveName": "理发师"}), ""
+
+        with (
+            patch("webapp.worker_server._configured_collector_pool", return_value=FakePool()),
+            patch("webapp.worker_server.subprocess.Popen", return_value=FakeProcess()) as popen,
+        ):
+            result = run_tool_r18_job(
+                {
+                    "_workerCapability": "persona.hot_keywords.v1",
+                    "action": "prepare-hot-keywords",
+                    "archiveId": "archive_12345678",
+                    "searchMode": "strict",
+                },
+                threading.Event(),
+            )
+
+        self.assertEqual(result["keywords"], ["理发师"])
+        sent = json.loads(popen.call_args.args[0][-1])
+        self.assertEqual(sent["action"], "prepare-hot-keywords")
+        self.assertEqual(sent["archiveId"], "archive_12345678")
+        self.assertNotIn("archiveSnapshot", sent)
+
     def test_keyword_capability_uses_local_archive_id_only(self) -> None:
         capability, unit_id, payload = _validate_envelope(
             {

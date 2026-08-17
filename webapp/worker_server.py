@@ -1172,6 +1172,13 @@ def run_tool_r18_job(
     timeout_seconds: int = 120,
 ) -> dict[str, Any]:
     capability = str(payload.get("_workerCapability") or "").strip()
+    if capability == "persona.hot_keywords.v1":
+        return _run_tool_r18_job_once(
+            payload,
+            cancel_event,
+            timeout_seconds=timeout_seconds,
+            use_collector_profile=False,
+        )
     if capability not in {"persona.hot_candidates.v1", "crm.threads_live_search.v1"}:
         return _run_tool_r18_job_once(payload, cancel_event, timeout_seconds=timeout_seconds)
 
